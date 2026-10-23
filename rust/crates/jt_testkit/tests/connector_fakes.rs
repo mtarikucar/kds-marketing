@@ -8,7 +8,7 @@ use std::sync::Arc;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::connectors::{
     AdInsights, AdSet, Asset, ConsentRow, DeliveryState, DeliveryStatus, InboundEventDraft,
-    OAuthApp, PostMetrics, PublishReceipt, PublishRequest, SendReceipt, Url, XApp,
+    OAuthApp, OAuthCallback, PostMetrics, PublishReceipt, PublishRequest, SendReceipt, Url, XApp,
 };
 use jt_app::ports::{
     EventOrder, EventQuery, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, SecretBox,
@@ -111,6 +111,7 @@ fn pending(
         workspace_id: ws,
         provider: Provider::Meta,
         kind_key: "facebook_page".into(),
+        app: OAuthCallback::Meta,
         state_hash: hash.into(),
         started_by: user,
         capability_id: None,

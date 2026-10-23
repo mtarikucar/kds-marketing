@@ -12,14 +12,17 @@
 //! do); no log line, ledger entry or report ever holds a credential (a provider's reasons are
 //! redacted when its errors are built).
 //!
-//! **Which workspaces.** `probe_all` and the two NetGSM polls run for `active` workspaces only:
-//! they act and take in on the tenant's behalf, which a workspace waiting for payment or a
-//! suspended one does not get (its NetGSM webhook is closed too). `refresh_tokens` runs for
-//! `active` and `pending_payment` workspaces: renewing only keeps an existing grant alive, and a
-//! payment hold must not turn into reconnecting every account. A suspended workspace is left
-//! alone. The NetGSM polls go only to the workspaces holding a verified SMS line, found with one
-//! platform-wide read before any of their transactions opens. The purges run for every
-//! workspace.
+//! **Which workspaces.** `probe_all` and the NetGSM delivery-report poll run for `active`
+//! workspaces only: they act at the provider on the tenant's behalf, which a workspace waiting
+//! for payment or a suspended one does not get. The NetGSM inbox poll runs for `active` and
+//! `pending_payment` workspaces, as the webhooks take in for them (NetGSM's hook and Meta's
+//! routing both accept `active` and `pending_payment` and refuse `suspended`): it backs up the
+//! inbound messages its webhook missed, so a payment hold does not lose them. `refresh_tokens`
+//! runs for `active` and `pending_payment` workspaces too: renewing only keeps an existing grant
+//! alive, and a payment hold must not turn into reconnecting every account. A suspended
+//! workspace is left alone. The NetGSM polls go only to the workspaces holding a verified SMS
+//! line, found with one platform-wide read before any of their transactions opens. The purges
+//! run for every workspace.
 //!
 //! **Who.** What a job writes to the ledger is written by `Actor::System` with the component
 //! `scheduler:<job name>`.
@@ -73,6 +76,10 @@ const ACTIVE: &[WorkspaceStatus] = &[WorkspaceStatus::Active];
 
 /// The workspaces `refresh_tokens` runs for: a payment hold keeps its grants alive.
 const RENEWING: &[WorkspaceStatus] = &[WorkspaceStatus::Active, WorkspaceStatus::PendingPayment];
+
+/// The workspaces the NetGSM inbox poll runs for: those whose webhooks take in events
+/// (`webhook::takes_routed_events`), so a payment hold keeps its inbound messages.
+const RECEIVING: &[WorkspaceStatus] = &[WorkspaceStatus::Active, WorkspaceStatus::PendingPayment];
 
 /// Every workspace (the purges).
 const EVERY: &[WorkspaceStatus] = &[
@@ -373,7 +380,14 @@ async fn write_fresh(
     };
     let was_down = reconnect_required(&current) || current.status == StoredStatus::Unreachable;
     let mut public = object(&current.connector_public);
-    public.insert("access".to_owned(), access.clone());
+    // The renewal is the same app's token: the app that issued it stays recorded.
+    let mut access = access.clone();
+    if let Some(app) = current.connector_public["access"].get("app").cloned()
+        && let Value::Object(fields) = &mut access
+    {
+        fields.insert("app".to_owned(), app);
+    }
+    public.insert("access".to_owned(), access);
     public.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
     current.connector_public = Value::Object(public);
     current.updated_at = ctx.now;
@@ -555,7 +569,7 @@ pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport
     let Some(reports) = deps.connectors.delivery_reports(Provider::Netgsm) else {
         return finish(job, report);
     };
-    for ws in netgsm_workspaces(deps, job, &mut report).await {
+    for ws in netgsm_workspaces(deps, job, ACTIVE, &mut report).await {
         let pending = match pending_jobs(deps, ws).await {
             Ok(pending) => pending,
             Err(e) => {
@@ -641,8 +655,9 @@ async fn record_statuses(
     repos.commit().await
 }
 
-/// Reads NetGSM's inbox backup, in every active workspace holding a verified SMS line (found as
-/// for [`run_netgsm_dlr_poll`]), for each such line (with sealed credentials): the messages that
+/// Reads NetGSM's inbox backup, in every active or pending-payment workspace (those whose
+/// webhooks take in events, [`webhook::takes_routed_events`]) holding a verified SMS line (found as for [`run_netgsm_dlr_poll`]),
+/// for each such line (with sealed credentials): the messages that
 /// arrived in the [`INBOX_WINDOW`] ending at `now`, both ends always given. Each is stored as an
 /// inbound event of NetGSM attached to that line, received at `now`, under the id NetGSM's
 /// webhook gives the same message (`netgsm-mo:<gorevid>`), so a message the webhook (or an
@@ -657,7 +672,7 @@ pub async fn run_netgsm_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobRepor
     let Some(reports) = deps.connectors.delivery_reports(Provider::Netgsm) else {
         return finish(job, report);
     };
-    for ws in netgsm_workspaces(deps, job, &mut report).await {
+    for ws in netgsm_workspaces(deps, job, RECEIVING, &mut report).await {
         let lines = match live_connector_capabilities(deps, ws).await {
             Ok(capabilities) => verified_lines(&capabilities),
             Err(e) => {
@@ -718,23 +733,28 @@ async fn poll_inbox(
     Ok(out)
 }
 
-/// The active workspaces holding a verified SMS line with sealed credentials, read in one
-/// platform-wide transaction; none (and one failure counted) when they cannot be read.
-async fn netgsm_workspaces(deps: &Deps, job: Job, report: &mut JobReport) -> Vec<WorkspaceId> {
+/// The workspaces in one of `statuses` holding a verified SMS line with sealed credentials, read
+/// in one platform-wide transaction; none (and one failure counted) when they cannot be read.
+async fn netgsm_workspaces(
+    deps: &Deps,
+    job: Job,
+    statuses: &[WorkspaceStatus],
+    report: &mut JobReport,
+) -> Vec<WorkspaceId> {
     let listed = async {
         let mut platform = deps.uow.platform().await?;
-        let active: BTreeSet<WorkspaceId> = platform
+        let taken: BTreeSet<WorkspaceId> = platform
             .workspaces_list()
             .await?
             .into_iter()
-            .filter(|w| ACTIVE.contains(&w.status))
+            .filter(|w| statuses.contains(&w.status))
             .map(|w| w.id)
             .collect();
         let with_line = platform.workspaces_with_verified(&[SMS_LINE]).await?;
         Ok::<_, AppError>(
             with_line
                 .into_iter()
-                .filter(|ws| active.contains(ws))
+                .filter(|ws| taken.contains(ws))
                 .collect(),
         )
     };

@@ -98,7 +98,7 @@ async fn concurrent_replays_store_one_row() {
     assert_eq!(external_ids(&deps, ws).await, WHATSAPP_IDS);
     // One raw body for the delivery, no more: the purge counts what it removes.
     let far = OffsetDateTime::now_utc() + Duration::days(365);
-    assert_eq!(webhook::purge_raw(&deps, far).await.unwrap(), 1);
+    assert_eq!(webhook::purge_raw(&deps, far).await.unwrap().removed, 1);
 }
 
 /// The ids of the WhatsApp fixture's first number, in the order they are written.
@@ -196,20 +196,23 @@ async fn the_raw_purge_clears_old_bodies_in_every_workspace() {
     assert_eq!(
         webhook::purge_raw(&deps, webhook::raw_cutoff(now))
             .await
-            .unwrap(),
+            .unwrap()
+            .removed,
         0
     );
     let later = now + webhook::RAW_RETENTION + Duration::minutes(1);
     assert_eq!(
         webhook::purge_raw(&deps, webhook::raw_cutoff(later))
             .await
-            .unwrap(),
+            .unwrap()
+            .removed,
         2
     );
     assert_eq!(
         webhook::purge_raw(&deps, webhook::raw_cutoff(later))
             .await
-            .unwrap(),
+            .unwrap()
+            .removed,
         0
     );
     assert_eq!(external_ids(&deps, alpha).await.len(), 4);

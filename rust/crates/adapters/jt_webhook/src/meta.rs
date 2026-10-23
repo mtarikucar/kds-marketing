@@ -1,7 +1,7 @@
 //! `GET /hooks/meta` (the verification handshake) and `POST /hooks/meta` (signed deliveries); see
 //! the crate docs for the answers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 
 use axum::body::Body;
@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use jt_app::usecases::webhook::{self, AccountEvent, Delivery};
 use jt_connector::{META_SIGNATURE_HEADER, Provider, meta_signature_ok, meta_verify_token_ok};
-use jt_meta::webhook::{ParseError, kinds_of_hint, parse};
+use jt_meta::webhook::{Origin, ParseError, kinds_of_hint, parse, scoped_body};
 
 use crate::{META_BODY_LIMIT, UNPARSEABLE_META, UNROUTED_META, WebhookState, raw};
 
@@ -105,6 +105,15 @@ pub(crate) async fn receive(
         }
     };
     let hints: Vec<&'static str> = parsed.iter().map(|p| p.kind_hint).collect();
+    let origins: Vec<Origin> = parsed.iter().map(|p| p.origin).collect();
+    // Each workspace keeps only the part of the body its own events came from.
+    let scoped = |own: &[usize]| {
+        let keep: BTreeSet<Origin> = own
+            .iter()
+            .filter_map(|&i| origins.get(i).copied())
+            .collect();
+        scoped_body(&raw, &keep)
+    };
     let events = parsed
         .into_iter()
         .map(|p| AccountEvent {
@@ -113,7 +122,7 @@ pub(crate) async fn receive(
             draft: p.event,
         })
         .collect();
-    match webhook::receive_for_accounts(deps, Provider::Meta, events, &raw).await {
+    match webhook::receive_for_accounts(deps, Provider::Meta, events, &scoped).await {
         Ok(deliveries) => {
             // One warning per reason and kind of account, however many events a delivery drops.
             let mut dropped: BTreeMap<(&'static str, &'static str), u64> = BTreeMap::new();

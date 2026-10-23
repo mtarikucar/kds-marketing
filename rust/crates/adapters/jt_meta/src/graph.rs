@@ -9,7 +9,8 @@
 //! token in use, the app secret, and the secret fields of a token exchange's query or form: the
 //! code, the client secret, the token to exchange, the PKCE verifier) and takes each out of the
 //! provider's text, as every span that decodes to it ([`strip_secrets`]: as is, percent-encoded
-//! with any bytes escaped in any hex case, `+` for a space, a `%` escaped again), **before** the
+//! with any bytes escaped in any hex case, `+` for a space, encoded again up to three rounds
+//! deep), **before** the
 //! reason is cut to its length (a secret straddling the cut would otherwise leave its first
 //! characters behind); the generic redaction then runs on what remains, when the error is built.
 
@@ -48,6 +49,10 @@ const PUBLIC_PARAMS: &[&str] = &["client_id", "redirect_uri", "grant_type"];
 
 /// What a secret taken out of provider text is replaced with.
 const SECRET_MASK: &str = "***";
+
+/// How many rounds of URL or form decoding a secret's spelling in provider text is undone
+/// ([`strip_secrets`]): a value quoted, quoted again inside another URL, and once more.
+const MAX_ENCODINGS: usize = 3;
 
 /// The longest wait a throttle asks for: a provider's longer (or absurd) wait is cut to it, so
 /// a scheduler adding it to the clock can never overflow.
@@ -464,11 +469,13 @@ fn call_secrets(auth: Auth<'_>, url: &Url, body: &Body) -> Vec<String> {
 }
 
 /// `text` with every spelling of a secret of `secrets` replaced by [`SECRET_MASK`], the text
-/// around it kept: every span that decodes to the secret byte for byte ([`spelled_at`]), so the
-/// secret as is, percent-encoded with any set of bytes escaped (RFC 3986 keeping `-._~`, every
-/// byte but letters and digits, or any mix), escapes in upper-, lower- or mixed-case hex, a
-/// space written `+` (form encoding), and a `%` itself escaped (`%25`, a URL quoted inside
-/// another). The longest secrets go first, so a secret inside another goes with it.
+/// around it kept: every span that decodes to the secret byte for byte in up to
+/// [`MAX_ENCODINGS`] rounds of decoding ([`spelled_at`]), so the secret as is, percent-encoded
+/// with any set of bytes escaped (RFC 3986 keeping `-._~`, every byte but letters and digits, or
+/// any mix), escapes in upper-, lower- or mixed-case hex, a space written `+` (form encoding),
+/// and any of these applied again over the result (a value quoted in a URL that is itself quoted:
+/// `%252F` for `/`, `%2B` for a space form-encoded twice). The longest secrets go first, so a
+/// secret inside another goes with it.
 ///
 /// No other form is looked for because none is sent: the adapter puts a secret on the wire only
 /// as is (the `Authorization` header) or URL- or form-encoded (a query or a form); the
@@ -512,40 +519,31 @@ fn strip_secret(text: &str, secret: &[u8]) -> String {
     out
 }
 
-/// The end of the longest span of `text` from `start` that decodes to `secret`, if one does.
-/// Each byte of the secret may be written as is, as a percent escape (`%XX`, hex digits in any
-/// case), as an escape whose `%` is itself escaped once or more (`%25XX`, `%2525XX`, …), and a
-/// space also as `+`. The spellings of every byte are followed side by side (a set of ends, not
-/// a backtracking search), so the time is bounded by the secret's length times the span's.
+/// The end of the longest span of `text` from `start` that decodes to `secret` in up to
+/// [`MAX_ENCODINGS`] rounds ([`decoded_at`]), if one does. The spellings of every byte are
+/// followed side by side (a set of ends, not a backtracking search).
 fn spelled_at(text: &[u8], start: usize, secret: &[u8]) -> Option<usize> {
     let first = *secret.first()?;
     let lead = *text.get(start)?;
-    // Most positions start no spelling: skip them without allocating.
+    // A spelling starts with its byte as is, with `%` (an escape) or with `+` (a space): skip
+    // every other position without allocating.
     if lead != first && lead != b'%' && !(lead == b'+' && first == b' ') {
         return None;
     }
     let mut ends = vec![start];
     let mut next = Vec::new();
+    let mut units = Vec::new();
     for &want in secret {
         next.clear();
         for &at in &ends {
-            let Some(&got) = text.get(at) else { continue };
-            if got == want || (got == b'+' && want == b' ') {
-                next.push(at + 1);
-            }
-            if got == b'%' {
-                // `%` then any number of `25`, then the escaped byte's two hex digits.
-                let mut digits = at + 1;
-                while let Some(byte) = hex_byte(text, digits) {
-                    if byte == want {
-                        next.push(digits + 2);
-                    }
-                    if byte != b'%' {
-                        break;
-                    }
-                    digits += 2;
-                }
-            }
+            units.clear();
+            decoded_at(text, at, MAX_ENCODINGS, &mut units);
+            next.extend(
+                units
+                    .iter()
+                    .filter(|(byte, _)| *byte == want)
+                    .map(|(_, end)| *end),
+            );
         }
         if next.is_empty() {
             return None;
@@ -557,15 +555,52 @@ fn spelled_at(text: &[u8], start: usize, secret: &[u8]) -> Option<usize> {
     ends.last().copied()
 }
 
-/// The byte written by the two hex digits (any case) at `at` in `text`, if there are two.
-fn hex_byte(text: &[u8], at: usize) -> Option<u8> {
-    let digit = |i: usize| -> Option<u8> {
-        let c = *text.get(i)?;
-        char::from(c)
-            .to_digit(16)
-            .and_then(|d| u8::try_from(d).ok())
-    };
-    Some(digit(at)? * 16 + digit(at + 1)?)
+/// Adds to `out` every byte the text at `at` may stand for once decoded up to `rounds` times,
+/// each with the end of its spelling. One round of decoding reads, over what the round before
+/// left, `%` and two hex digits (in any case) as the byte they write and `+` as a space, and
+/// leaves every other character as it is; a round may also leave a `%` or a `+` as it is (a
+/// literal one). So `%2B` is `+` after one round and a space after two, and `%252F` is `%2F`
+/// after one round and `/` after two.
+fn decoded_at(text: &[u8], at: usize, rounds: usize, out: &mut Vec<(u8, usize)>) {
+    if rounds == 0 {
+        if let Some(&byte) = text.get(at) {
+            out.push((byte, at + 1));
+        }
+        return;
+    }
+    let mut before = Vec::new();
+    decoded_at(text, at, rounds - 1, &mut before);
+    for &(byte, end) in &before {
+        out.push((byte, end));
+        if byte == b'+' {
+            out.push((b' ', end));
+        }
+        if byte == b'%' {
+            let mut highs = Vec::new();
+            decoded_at(text, end, rounds - 1, &mut highs);
+            for &(high, middle) in &highs {
+                let Some(high) = hex_value(high) else {
+                    continue;
+                };
+                let mut lows = Vec::new();
+                decoded_at(text, middle, rounds - 1, &mut lows);
+                for &(low, last) in &lows {
+                    if let Some(low) = hex_value(low) {
+                        out.push((high * 16 + low, last));
+                    }
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+}
+
+/// The value of the hex digit `byte` (any case), if it is one.
+fn hex_value(byte: u8) -> Option<u8> {
+    char::from(byte)
+        .to_digit(16)
+        .and_then(|d| u8::try_from(d).ok())
 }
 
 /// An egress failure as a [`ConnectorError`] (no URL in it).
@@ -1001,6 +1036,51 @@ mod tests {
             Some("HTTP 400 OAuthException (#190): The token *** is invalid")
         );
         assert_hidden(&e, &[ECHOED, quoted, "echo"]);
+    }
+
+    #[test]
+    fn a_secret_form_encoded_two_and_three_times_is_masked() {
+        // `quote_plus(quote_plus(secret))`: the space is `+` after one round, `%2B` after two.
+        let secret = "EAAB echo~tok/en+key==";
+        for quoted in [
+            "EAAB%2Becho~tok%252Fen%252Bkey%253D%253D",
+            "EAAB%2becho~tok%252fen%252bkey%253d%253d",
+            // A third round over that.
+            "EAAB%252Becho~tok%25252Fen%25252Bkey%25253D%25253D",
+            // Rounds mixed byte by byte.
+            "EAAB%2Becho%7Etok/en%2Bkey%253D=",
+        ] {
+            let e = quoting(
+                &format!("The token {quoted} is invalid"),
+                &[secret.to_owned()],
+            );
+            assert_eq!(
+                e.reason(),
+                Some("HTTP 400 OAuthException (#190): The token *** is invalid"),
+                "{quoted}"
+            );
+            assert_hidden(&e, &[secret, quoted, "echo", "EAAB%2B"]);
+            // And where the reason is cut (see the test below for the arithmetic).
+            let e = quoting(
+                &format!("{}{quoted} tail", "x".repeat(260)),
+                &[secret.to_owned()],
+            );
+            let reason = e.reason().unwrap();
+            assert!(reason.ends_with("x*** tail"), "{quoted}: {reason}");
+            assert_hidden(&e, &[secret, quoted, "EAAB", "echo"]);
+        }
+        // One byte off, in any round, and nothing is masked.
+        for near in [
+            // The last `=` is `>` (`%3E`).
+            "EAAB%2Becho~tok%252Fen%252Bkey%253D%253E",
+            // The space is `,` (`%2C`).
+            "EAAB%2Cecho~tok%252Fen%252Bkey%253D%253D",
+            // The `/` is `.` (`%2E`), two rounds deep.
+            "EAAB%2Becho~tok%252Een%252Bkey%253D%253D",
+        ] {
+            let text = format!("The token {near} is invalid");
+            assert_eq!(strip_secrets(&text, &[secret.to_owned()]), text, "{near}");
+        }
     }
 
     #[test]

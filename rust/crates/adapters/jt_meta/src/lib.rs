@@ -27,8 +27,9 @@
 //! (never a body, a URL or a token). The provider's message has every secret of the call (the
 //! token in use, the app secret, a token exchange's code, client secret or token) taken out
 //! before the reason is cut to its length, whatever words carry it: every span that decodes to
-//! the secret, so as is, percent-encoded with any bytes escaped in any hex case, with `+` for a
-//! space, or with its `%` escaped again; the text around it is kept.
+//! the secret in up to three rounds of URL or form decoding, so as is, percent-encoded with any
+//! bytes escaped in any hex case, with `+` for a space, or encoded again over that; the text
+//! around it is kept.
 //! The mapping, first match wins:
 //!
 //! | Answer | Error |
@@ -86,7 +87,8 @@ use url::Url;
 pub use graph::DEFAULT_GRAPH_VERSION;
 pub use oauth::{FACEBOOK_SCOPES, INSTAGRAM_SCOPES, PAGE_SUBSCRIBED_FIELDS};
 pub use webhook::{
-    InboundEventDraft, ParseError, ParsedEvent, WebhookError, parse, verify_and_parse,
+    InboundEventDraft, Origin, ParseError, ParsedEvent, WebhookError, parse, scoped_body,
+    verify_and_parse,
 };
 
 /// The hosts the adapter reaches, exactly the `meta` entries of `jt_outbound::FIXED_HOSTS`: the

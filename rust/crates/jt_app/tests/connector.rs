@@ -66,7 +66,8 @@ const SECRETS: &[&str] = &[
 // The rig
 // ---------------------------------------------------------------------------------------------
 
-/// The world with every provider app configured and a scripted adapter per provider.
+/// The world, its workspace active (as the gate asks of every connection), with every provider
+/// app configured and a scripted adapter per provider.
 struct Rig {
     w: World,
     meta: Arc<ScriptedConnector>,
@@ -77,6 +78,7 @@ struct Rig {
 
 async fn rig() -> Rig {
     let mut w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
     let meta = Arc::new(ScriptedConnector::new(Provider::Meta).with_hosts(META_HOSTS));
     let netgsm = Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(NETGSM_HOSTS));
     let x = Arc::new(ScriptedConnector::new(Provider::X).with_hosts(X_HOSTS));
@@ -195,7 +197,7 @@ impl Rig {
             .pending_rows()
             .into_iter()
             .find(|p| p.state_hash == hash_token(state))
-            .and_then(|p| OAuthCallback::of_flow(p.provider, &p.kind_key))
+            .map(|p| p.app)
             .unwrap_or(OAuthCallback::Meta);
         connector::complete_oauth(
             deps,
@@ -1035,9 +1037,10 @@ async fn confirm_seals_credentials_and_outputs_never_contain_them() {
         assert_eq!(public["provider"], "meta");
         assert_eq!(public["name"], name);
         assert_eq!(public["hosts"], json!(META_HOSTS));
+        // The credential's public facts, and the app that issued it (Facebook Login).
         assert_eq!(
             public["access"],
-            json!({ "kind": "page_token", "page_id": id })
+            json!({ "kind": "page_token", "page_id": id, "app": "meta" })
         );
         assert_eq!(public["asset"], json!({ "category": "Cafe" }));
         assert_eq!(public["health"]["ok"], true);
@@ -1865,6 +1868,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
         ig.connector_public["access"],
         json!({
             "kind": "oauth",
+            "app": "instagram",
             "expires_at": expires.format(&Rfc3339).unwrap(),
             "scopes": ["instagram_business_basic"],
         })
@@ -2123,6 +2127,159 @@ impl Rig {
             pending_id: pending.pending_id,
             selected: selected.iter().map(|s| (*s).to_owned()).collect(),
         }
+    }
+}
+
+/// A reconnection signs in with the app that issued the capability's credential, recorded as
+/// `connector_public.access.app` when the flow's assets were confirmed: an `instagram`
+/// capability connected through Facebook Login (with its Page's token) comes back through the
+/// Meta app, also when no Instagram app is configured; one connected through Instagram Login
+/// comes back through the Instagram app, and without that app it cannot. The flow keeps its app
+/// to the callback: the other app's callback is `FORBIDDEN`. A capability that names no app (a
+/// declared one) signs in with the Meta app when it is configured, else the Instagram app.
+#[tokio::test]
+async fn reconnect_signs_in_with_the_app_that_issued_the_credential() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let owner = r.owner().await;
+    let mut meta_only = r.w.deps.clone();
+    meta_only.apps = Arc::new(FakeAppConfig {
+        instagram: None,
+        ..FakeAppConfig::with_all_apps()
+    });
+    let mut instagram_only = r.w.deps.clone();
+    instagram_only.apps = Arc::new(FakeAppConfig {
+        meta: None,
+        ..FakeAppConfig::with_all_apps()
+    });
+    let through_page = |token: &str| Asset {
+        kind_key: "instagram".into(),
+        external_id: "ig-fb".into(),
+        name: "@kahve".into(),
+        credential: Credential::PageToken {
+            page_id: "page-1".into(),
+            token: token.into(),
+        },
+        public: json!({ "username": "kahve", "page_id": "page-1", "login": "facebook" }),
+    };
+    let app_of = |id: CapabilityId| r.capability(id).connector_public["access"]["app"].clone();
+    let flow_app = |out: &StartOut| {
+        r.pending_rows()
+            .into_iter()
+            .find(|p| p.id == out.pending_id)
+            .unwrap()
+            .app
+    };
+
+    // Through Facebook Login: the Meta app issued it.
+    let (_, pending) = r.completed_with(vec![through_page("EAAB-page-1")]).await;
+    r.meta.push_probe(ok_probe("ig-fb"));
+    let fb = r.confirm(&pending, &["ig-fb"]).await.remove(0).capability;
+    assert_eq!(app_of(fb.id), json!("meta"));
+    // Its token stops working; only the Meta app is configured: it reconnects through it.
+    r.meta
+        .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
+    r.probe(fb.id).await;
+    let out = connector::reconnect(&meta_only, o, fb.id).await.unwrap();
+    assert_eq!(flow_app(&out), OAuthCallback::Meta);
+    assert_eq!(redirect_of(&out), "https://panel.test/oauth/callback/meta");
+    assert_eq!(query(&out, "client_id").as_deref(), Some("meta-app-id"));
+    // Brought back to the Instagram app's callback, it is refused, the provider not asked.
+    let calls = r.meta_oauth.calls().len();
+    let e = err(connector::complete_oauth(
+        &meta_only,
+        CompleteOAuth {
+            callback: OAuthCallback::Instagram,
+            state: state_of(&out),
+            code: "code-2".into(),
+            principal: &owner,
+        },
+    )
+    .await);
+    assert_eq!(e.code, ErrorCode::Forbidden);
+    assert_eq!(r.meta_oauth.calls().len(), calls);
+    // At its own callback it completes, and the renewal stays the Meta app's.
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth
+        .push_assets(Ok(vec![through_page("EAAB-page-1-v2")]));
+    let pending = r
+        .complete_as(&meta_only, &owner, &state_of(&out), "code-2")
+        .await
+        .unwrap();
+    r.meta.push_probe(ok_probe("ig-fb"));
+    let renewed = r.confirm(&pending, &["ig-fb"]).await;
+    assert_eq!(renewed[0].capability.id, fb.id);
+    assert_eq!(renewed[0].capability.status, StoredStatus::Verified);
+    assert_eq!(app_of(fb.id), json!("meta"));
+
+    // Through Instagram Login: the Instagram app issued it.
+    let out = r.start("instagram").await;
+    r.meta_oauth.push_exchange(Ok(Credential::OAuth {
+        access_token: "IGQ-ig-token".into(),
+        refresh_token: None,
+        expires_at: Some(FIXED_NOW + Duration::days(60)),
+        scopes: vec!["instagram_business_basic".into()],
+    }));
+    r.meta_oauth.push_assets(Ok(vec![Asset {
+        kind_key: "instagram".into(),
+        external_id: "ig-login".into(),
+        name: "@cay".into(),
+        credential: Credential::OAuth {
+            access_token: "IGQ-ig-token".into(),
+            refresh_token: None,
+            expires_at: Some(FIXED_NOW + Duration::days(60)),
+            scopes: vec!["instagram_business_basic".into()],
+        },
+        public: json!({ "username": "cay", "login": "instagram" }),
+    }]));
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&out), "code-1")
+        .await
+        .unwrap();
+    r.meta.push_probe(ok_probe("ig-login"));
+    let ig = r
+        .confirm(&pending, &["ig-login"])
+        .await
+        .remove(0)
+        .capability;
+    assert_eq!(app_of(ig.id), json!("instagram"));
+    let out = connector::reconnect(&r.w.deps, o, ig.id).await.unwrap();
+    assert_eq!(flow_app(&out), OAuthCallback::Instagram);
+    assert_eq!(
+        redirect_of(&out),
+        "https://panel.test/oauth/callback/instagram"
+    );
+    assert_eq!(
+        query(&out, "client_id").as_deref(),
+        Some("instagram-app-id")
+    );
+    let out = connector::reconnect(&instagram_only, o, ig.id)
+        .await
+        .unwrap();
+    assert_eq!(flow_app(&out), OAuthCallback::Instagram);
+    // Without the Instagram app it cannot: the Meta app did not issue it.
+    let e = err(connector::reconnect(&meta_only, o, ig.id).await);
+    assert_eq!(e.details["reason"], "provider_app_not_configured");
+
+    // Declared, no app named: the Meta app when it is configured, else the Instagram app.
+    let declared = r.w.declare("instagram", "Instagram").await.capability.id;
+    let out = connector::reconnect(&r.w.deps, o, declared).await.unwrap();
+    assert_eq!(flow_app(&out), OAuthCallback::Meta);
+    let out = connector::reconnect(&instagram_only, o, declared)
+        .await
+        .unwrap();
+    assert_eq!(flow_app(&out), OAuthCallback::Instagram);
+    // Every other kind keeps its own app.
+    let page = r.connect_page().await;
+    assert_eq!(app_of(page.id), json!("meta"));
+    let out = connector::reconnect(&r.w.deps, o, page.id).await.unwrap();
+    assert_eq!(flow_app(&out), OAuthCallback::Meta);
+    // The recorded app is a public fact, beside no secret.
+    for id in [fb.id, ig.id, page.id] {
+        assert_no_secret(
+            "the public facts",
+            &r.capability(id).connector_public.to_string(),
+        );
     }
 }
 

@@ -6,9 +6,12 @@ mod support;
 use hmac::{Hmac, KeyInit, Mac};
 use jt_connector::EventKind;
 use jt_meta::webhook::{KIND_HINT_INSTAGRAM, KIND_HINT_PAGE, KIND_HINT_WHATSAPP};
-use jt_meta::{ParseError, ParsedEvent, WebhookError, parse, verify_and_parse};
-use serde_json::json;
+use jt_meta::{
+    Origin, ParseError, ParsedEvent, WebhookError, parse, scoped_body, verify_and_parse,
+};
+use serde_json::{Value, json};
 use sha2::Sha256;
+use std::collections::BTreeSet;
 use support::fixture_text;
 use time::OffsetDateTime;
 
@@ -309,4 +312,101 @@ fn each_hint_names_the_kinds_that_may_hold_its_account() {
             assert!(!kinds_of_hint(event.kind_hint).is_empty(), "{name}");
         }
     }
+}
+
+/// Each event names where in the body it came from: its entry, and for WhatsApp its change.
+/// What one workspace keeps is cut along these: its entries whole, of a WhatsApp entry only its
+/// changes; the body as received only when that is all of it; nothing when it names nothing.
+#[test]
+fn a_scoped_body_keeps_only_the_items_its_events_came_from() {
+    let change = |number: &str, wamid: &str, from: &str| {
+        json!({
+            "field": "messages",
+            "value": {
+                "messaging_product": "whatsapp",
+                "metadata": { "phone_number_id": number },
+                "messages": [{ "from": from, "id": wamid, "timestamp": "1790000000",
+                               "type": "text", "text": { "body": "selam" } }],
+            },
+        })
+    };
+    let a = change("NUMBER-A", "wamid.A", "905551111111");
+    let b = change("NUMBER-B", "wamid.B", "905552222222");
+    let other = json!({ "field": "account_update", "value": { "event": "VERIFIED" } });
+    let body = json!({
+        "object": "whatsapp_business_account",
+        "entry": [{ "id": "WABA-1", "changes": [a.clone(), b.clone(), other] }],
+    });
+    let raw = serde_json::to_vec(&body).unwrap();
+    let events = parse(&raw).unwrap();
+    let origins: Vec<Origin> = events.iter().map(|e| e.origin).collect();
+    assert_eq!(
+        origins,
+        [
+            Origin {
+                entry: 0,
+                change: Some(0)
+            },
+            Origin {
+                entry: 0,
+                change: Some(1)
+            }
+        ]
+    );
+    let of = |account: &str| -> BTreeSet<Origin> {
+        events
+            .iter()
+            .filter(|e| e.external_account_id == account)
+            .map(|e| e.origin)
+            .collect()
+    };
+    // One number's part: its change only, in its entry.
+    let kept: Value = serde_json::from_slice(&scoped_body(&raw, &of("NUMBER-A")).unwrap()).unwrap();
+    assert_eq!(
+        kept,
+        json!({
+            "object": "whatsapp_business_account",
+            "entry": [{ "id": "WABA-1", "changes": [a.clone()] }],
+        })
+    );
+    let text = kept.to_string();
+    for theirs in ["NUMBER-B", "wamid.B", "905552222222", "VERIFIED"] {
+        assert!(!text.contains(theirs), "keeps {theirs}: {text}");
+    }
+    // Both numbers: still not all of it (the account update made no event).
+    let both: BTreeSet<Origin> = origins.iter().copied().collect();
+    let kept: Value = serde_json::from_slice(&scoped_body(&raw, &both).unwrap()).unwrap();
+    assert_eq!(kept["entry"][0]["changes"], json!([a, b]));
+    // All of it: as received, byte for byte.
+    let all = BTreeSet::from([
+        Origin {
+            entry: 0,
+            change: Some(0),
+        },
+        Origin {
+            entry: 0,
+            change: Some(1),
+        },
+        Origin {
+            entry: 0,
+            change: Some(2),
+        },
+    ]);
+    assert_eq!(scoped_body(&raw, &all), Some(raw.clone()));
+    let page = fixture_text("messenger_messaging.json").into_bytes();
+    let whole: BTreeSet<Origin> = parse(&page).unwrap().iter().map(|e| e.origin).collect();
+    assert_eq!(scoped_body(&page, &whole), Some(page.clone()));
+    // Nothing named, or not a webhook body: nothing kept.
+    assert_eq!(scoped_body(&raw, &BTreeSet::new()), None);
+    assert_eq!(
+        scoped_body(
+            &raw,
+            &BTreeSet::from([Origin {
+                entry: 7,
+                change: None
+            }])
+        ),
+        None
+    );
+    assert_eq!(scoped_body(b"not json", &all), None);
 }

@@ -11,7 +11,7 @@ use jt_app::error::AppError;
 use jt_app::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, DeliveryState,
     DeliveryStatus, InboundEventDraft, InsightsReader, LeadGenFetcher, MessagingSender,
-    OAuthProvider, Publisher, SmsSender, Telephony,
+    OAuthCallback, OAuthProvider, Publisher, SmsSender, Telephony,
 };
 use jt_app::ports::{
     OAuthPendingId, OAuthPendingRow, PlatformRepos, ProbeRun, ProbeRunId, SecretBox, TenantRepos,
@@ -437,6 +437,34 @@ async fn refresh_x_always_rotates() {
     // A renewal is routine: no ledger entry.
     assert!(r.w.ledger("connector.").is_empty());
     r.assert_no_secret_leaked();
+}
+
+/// A renewal keeps the app that issued the credential (`connector_public.access.app`), which a
+/// reconnection signs in with again.
+#[tokio::test]
+async fn refresh_keeps_the_app_that_issued_the_credential() {
+    let r = rig().await;
+    let old = x_token("x-access-old", "x-refresh-old", NOW + Duration::days(30));
+    let mut public = with_access(&old, json!({}));
+    public["access"]["app"] = json!("x");
+    let account = r
+        .store(
+            r.ws(),
+            "x",
+            "x-user-1",
+            StoredStatus::Verified,
+            public,
+            Some(sealed(r.ws(), &old)),
+        )
+        .await;
+    let new = x_token("x-access-new", "x-refresh-new", NOW + Duration::hours(2));
+    r.x.push_refresh(Ok(Some(new.clone())));
+
+    let out = jobs::run_refresh_tokens(&r.w.deps, NOW).await;
+    assert_eq!(out, report(1, 1, 0, 0));
+    let mut expected = new.redact_for_public();
+    expected["app"] = json!("x");
+    assert_eq!(r.capability(account).connector_public["access"], expected);
 }
 
 #[tokio::test]
@@ -891,8 +919,11 @@ async fn workspace(r: &Rig, name: &str, status: WorkspaceStatus) -> WorkspaceId 
     ws
 }
 
+/// Renewals and the NetGSM inbox poll cover a workspace on a payment hold (its grants stay alive,
+/// and its inbound messages are taken in as its webhooks take them); probes and the
+/// delivery-report poll act for active workspaces only; a suspended workspace gets none.
 #[tokio::test]
-async fn refresh_covers_pending_payment_workspaces_and_the_other_jobs_active_ones_only() {
+async fn refresh_and_the_inbox_poll_cover_pending_payment_workspaces_the_rest_active_ones_only() {
     let r = rig().await;
     // A workspace on a payment hold and a suspended one, each with a due token and a stale
     // verified line.
@@ -934,13 +965,9 @@ async fn refresh_covers_pending_payment_workspaces_and_the_other_jobs_active_one
     );
     assert_eq!(r.meta.calls().len(), 1);
     assert_eq!(r.credential(held_token.unwrap()), renewed);
-    // Probes and polls act for active workspaces only.
+    // Probes and the delivery-report poll act for active workspaces only.
     assert_eq!(
         jobs::run_probe_all(&r.w.deps, NOW).await,
-        report(0, 0, 0, 0)
-    );
-    assert_eq!(
-        jobs::run_netgsm_inbox_poll(&r.w.deps, NOW).await,
         report(0, 0, 0, 0)
     );
     r.w.uow.add_outbound_job(held, "J-held");
@@ -950,6 +977,17 @@ async fn refresh_covers_pending_payment_workspaces_and_the_other_jobs_active_one
     );
     assert_eq!(r.meta.calls().len(), 1);
     assert!(r.netgsm.calls().is_empty());
+    // The inbox poll takes in for the payment hold (its line only), not the suspended one.
+    r.netgsm.push_inbox(Ok(vec![mo("301", "Ödeme beklerken")]));
+    assert_eq!(
+        jobs::run_netgsm_inbox_poll(&r.w.deps, NOW).await,
+        report(1, 1, 0, 0)
+    );
+    assert_eq!(r.netgsm.calls().len(), 1);
+    let stored = r.w.uow.snapshot().inbound_events;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].event.workspace_id, held);
+    assert_eq!(stored[0].event.external_id, "netgsm-mo:301");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1261,6 +1299,7 @@ async fn purges_remove_only_what_is_past_its_time() {
                 workspace_id: ws,
                 provider: Provider::Meta,
                 kind_key: "facebook_page".into(),
+                app: OAuthCallback::Meta,
                 state_hash: format!("hash-{state}"),
                 started_by: r.w.owner,
                 capability_id: None,
@@ -1352,6 +1391,7 @@ async fn purges_go_on_past_a_failing_workspace_and_cover_every_status() {
                 workspace_id: ws,
                 provider: Provider::Meta,
                 kind_key: "facebook_page".into(),
+                app: OAuthCallback::Meta,
                 state_hash: format!("hash-{ws}"),
                 started_by: r.w.owner,
                 capability_id: None,
@@ -1408,6 +1448,38 @@ async fn purges_go_on_past_a_failing_workspace_and_cover_every_status() {
     ] {
         assert_eq!(out, report(2, 2, 0, 1));
     }
+    // The raw-body purge use case does as the job does: the failing workspace counted, the
+    // others purged all the same.
+    for ws in [held, suspended] {
+        let mut t = r.w.uow.tenant(ws).await.unwrap();
+        t.inbound_events()
+            .insert_if_new(
+                InboundEvent {
+                    id: InboundEventId::new_v7(),
+                    workspace_id: ws,
+                    provider: Provider::Netgsm,
+                    capability_id: None,
+                    external_id: format!("netgsm-mo:again:{ws}"),
+                    kind: EventKind::Message,
+                    payload: json!({}),
+                    received_at: NOW - Duration::days(31),
+                    processed_at: None,
+                },
+                Some(b"raw".to_vec()),
+            )
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+    assert_eq!(
+        webhook::purge_raw(&deps, webhook::raw_cutoff(NOW))
+            .await
+            .unwrap(),
+        webhook::RawPurge {
+            removed: 2,
+            failed: 1
+        }
+    );
     let state = r.w.uow.snapshot();
     let left = |ws: WorkspaceId| {
         (

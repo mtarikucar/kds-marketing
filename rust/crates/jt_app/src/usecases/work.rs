@@ -22,6 +22,13 @@
 //!   see an item they could never clear;
 //! - `DeclareFirstCapability` (3): no capability that is not retired.
 //!
+//! Only the items the workspace's status lets be acted on are listed: each item is cleared by a
+//! use case ([`WorkKind::cleared_by`]), and an item whose use case the workspace-status check
+//! would refuse (`WORKSPACE_INACTIVE`) is left out. So while the workspace awaits payment only
+//! the strategy's items are listed (`strategy.*` runs then; capabilities, connections and events
+//! wait for the payment, though webhooks keep storing events meanwhile, which are listed once it
+//! is active).
+//!
 //! Each item carries a hint in English, for the agent; the panel shows its own copy.
 //!
 //! **Check-in.** Waking the agent is the tenant's job, never the system's (spec §4.2 rule 3): the
@@ -44,6 +51,7 @@ use time::{Duration, OffsetDateTime};
 use super::capabilities::CapabilityOut;
 use super::strategy::{self, StrategyOut};
 use super::{Deps, agents, connector, events, invalid, ledger_entry};
+use crate::catalog::status_exemption;
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{
@@ -141,6 +149,22 @@ pub enum WorkKind {
     InboundEvents { count: u32 },
 }
 
+impl WorkKind {
+    /// The use case that clears the item (the first step of it, for a consultation or a
+    /// connection): an item is listed only while the workspace's status lets it run.
+    pub fn cleared_by(&self) -> &'static str {
+        match self {
+            WorkKind::ConsultStrategy => "strategy.start_consultation",
+            WorkKind::ApproveStrategy => "strategy.approve",
+            WorkKind::VerifyCapability { .. } => "capability.verify",
+            WorkKind::DeclareFirstCapability => "capability.declare",
+            WorkKind::ConnectConnector { .. } => "connector.start_oauth",
+            WorkKind::ReconnectConnector { .. } => "connector.reconnect",
+            WorkKind::InboundEvents { .. } => "events.ack",
+        }
+    }
+}
+
 /// The workspace's agent check-in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct AgentState {
@@ -182,8 +206,12 @@ async fn pending_as_seen(
         .map(|c| CapabilityOut::at(c, ctx.now))
         .collect();
     let agent = agent_state(repos.as_mut(), ctx.now, seen_now).await?;
-    // Only who may acknowledge the events is asked to handle them.
-    let inbound = if ctx.permissions.contains(&events::ACK_PERMISSION) {
+    let status = repos.workspace().get().await?.status;
+    let actionable = |kind: &WorkKind| status_exemption(kind.cleared_by()).allows(status);
+    // Only who may acknowledge the events is asked to handle them, and only while they can be.
+    let inbound = if ctx.permissions.contains(&events::ACK_PERMISSION)
+        && actionable(&WorkKind::InboundEvents { count: 0 })
+    {
         repos
             .inbound_events()
             .count_pending(INBOUND_EVENTS_COUNT_CAP)
@@ -197,6 +225,7 @@ async fn pending_as_seen(
     let mut items = strategy_items(&state, may_approve(ctx));
     items.extend(capability_items(&capabilities));
     items.extend(inbound_items(inbound));
+    items.retain(|item| actionable(&item.kind));
     items.sort_by_key(|item| item.priority);
     Ok(PendingOut {
         strategy: state,

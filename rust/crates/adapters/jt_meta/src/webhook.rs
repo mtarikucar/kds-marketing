@@ -14,6 +14,12 @@
 //! | `page` | each entry's `id` (the page) | `page` (`facebook_page`, `messenger`) |
 //! | `instagram` | each entry's `id` (the Instagram account) | `instagram` (`instagram`, `instagram_dm`) |
 //!
+//! **Where an event came from.** One body may batch items of several accounts, which may belong
+//! to several workspaces. Each event names its [`Origin`] in the body: its entry, and for a
+//! WhatsApp entry (whose changes each name a number of their own) its change. What a workspace
+//! keeps of the body is cut along these ([`scoped_body`]): only the entries (and changes) its own
+//! events came from, so no workspace keeps another's items or an item no workspace took.
+//!
 //! **Events**, by family, with their `external_id` (unique per provider: the dedupe key) and
 //! their `payload` (the provider's item as sent, under a key naming its family):
 //!
@@ -32,8 +38,10 @@
 //! `created_time`), when it has one.
 
 pub use jt_app::ports::connectors::InboundEventDraft;
+use std::collections::BTreeSet;
+
 use jt_connector::{EventKind, meta_signature_ok};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
 /// The `kind_hint` of a Facebook Page's events.
@@ -66,9 +74,21 @@ pub struct ParsedEvent {
     /// Which kinds of capability may hold the account: [`KIND_HINT_PAGE`],
     /// [`KIND_HINT_INSTAGRAM`] or [`KIND_HINT_WHATSAPP`].
     pub kind_hint: &'static str,
+    /// Where in the body it came from (see the module docs).
+    pub origin: Origin,
     /// The event; its `payload` is the provider's item under a key naming its family (see the
     /// module docs).
     pub event: InboundEventDraft,
+}
+
+/// Where in a webhook body an event came from: the index of its entry in `entry[]` and, for an
+/// event routed by its change (WhatsApp: each change names its number), the index of that change
+/// in the entry's `changes[]`. Every event of one origin is of one account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Origin {
+    pub entry: usize,
+    /// `None` when the whole entry is one account's (a Page, an Instagram account).
+    pub change: Option<usize>,
 }
 
 /// Why a body could not be parsed.
@@ -131,14 +151,66 @@ pub fn parse(raw: &[u8]) -> Result<Vec<ParsedEvent>, ParseError> {
         }
     };
     let mut out = Vec::new();
-    for entry in entries {
+    for (index, entry) in entries.into_iter().enumerate() {
         if hint == KIND_HINT_WHATSAPP {
-            whatsapp_entry(entry, &mut out);
+            whatsapp_entry(index, entry, &mut out);
         } else {
-            messaging_entry(entry, hint, &mut out);
+            messaging_entry(index, entry, hint, &mut out);
         }
     }
     Ok(out)
+}
+
+/// What a workspace keeps of the webhook body `raw` beside the events it stores from it, given
+/// their origins `keep` (see the module docs): `raw` itself, byte for byte, when they are all of
+/// it (every entry whole, or every one of its changes); else a body of the same `object` holding
+/// only those entries, of a WhatsApp entry only those changes, in their order, serialised again
+/// (derived: Meta's signature covered the original, not this); `None` when they name nothing of
+/// it, or `raw` is not a webhook body. Nothing else of the body is kept: an entry or a change no
+/// event of `keep` came from (another workspace's, an account no workspace holds, an item no
+/// event is made of) is left out.
+pub fn scoped_body(raw: &[u8], keep: &BTreeSet<Origin>) -> Option<Vec<u8>> {
+    let body: Value = serde_json::from_slice(raw).ok()?;
+    let object = body.get("object")?;
+    let entries = body.get("entry")?.as_array()?;
+    let mut whole = true;
+    let mut kept = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let wanted = |change: Option<usize>| {
+            keep.contains(&Origin {
+                entry: index,
+                change,
+            })
+        };
+        if wanted(None) {
+            kept.push(entry.clone());
+            continue;
+        }
+        let changes = entry.get("changes").and_then(Value::as_array);
+        let chosen: Vec<Value> = changes
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(change, _)| wanted(Some(*change)))
+            .map(|(_, change)| change.clone())
+            .collect();
+        whole &= changes.is_some_and(|all| !all.is_empty() && chosen.len() == all.len());
+        if chosen.is_empty() {
+            continue;
+        }
+        let mut scoped = entry.clone();
+        if let Value::Object(fields) = &mut scoped {
+            fields.insert("changes".to_owned(), Value::Array(chosen));
+        }
+        kept.push(scoped);
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    if whole {
+        return Some(raw.to_vec());
+    }
+    serde_json::to_vec(&json!({ "object": object, "entry": kept })).ok()
 }
 
 /// A non-empty string, or an integer as text.
@@ -189,9 +261,13 @@ fn object<const N: usize>(fields: [(&str, Value); N]) -> Value {
     )
 }
 
-/// The events of one WhatsApp entry: per `messages` change, routed by its number.
-fn whatsapp_entry(mut entry: Value, out: &mut Vec<ParsedEvent>) {
-    for mut change in take_array(&mut entry, "changes") {
+/// The events of entry `index`, a WhatsApp one: per `messages` change, routed by its number.
+fn whatsapp_entry(index: usize, mut entry: Value, out: &mut Vec<ParsedEvent>) {
+    for (change_index, mut change) in take_array(&mut entry, "changes").into_iter().enumerate() {
+        let origin = Origin {
+            entry: index,
+            change: Some(change_index),
+        };
         if change["field"] != "messages" {
             continue;
         }
@@ -213,6 +289,7 @@ fn whatsapp_entry(mut entry: Value, out: &mut Vec<ParsedEvent>) {
             out.push(ParsedEvent {
                 external_account_id: number.clone(),
                 kind_hint: KIND_HINT_WHATSAPP,
+                origin,
                 event: InboundEventDraft {
                     external_id: wamid,
                     kind: EventKind::Message,
@@ -230,6 +307,7 @@ fn whatsapp_entry(mut entry: Value, out: &mut Vec<ParsedEvent>) {
             out.push(ParsedEvent {
                 external_account_id: number.clone(),
                 kind_hint: KIND_HINT_WHATSAPP,
+                origin,
                 event: InboundEventDraft {
                     external_id,
                     kind: EventKind::Status,
@@ -241,15 +319,20 @@ fn whatsapp_entry(mut entry: Value, out: &mut Vec<ParsedEvent>) {
     }
 }
 
-/// The events of one Page or Instagram entry, routed by the entry's id.
-fn messaging_entry(mut entry: Value, hint: &'static str, out: &mut Vec<ParsedEvent>) {
+/// The events of entry `index`, a Page or Instagram one, routed by the entry's id.
+fn messaging_entry(index: usize, mut entry: Value, hint: &'static str, out: &mut Vec<ParsedEvent>) {
     let Some(account) = id(&entry["id"]) else {
         return;
+    };
+    let origin = Origin {
+        entry: index,
+        change: None,
     };
     let mut push = |external_id: String, kind: EventKind, payload: Value, at| {
         out.push(ParsedEvent {
             external_account_id: account.clone(),
             kind_hint: hint,
+            origin,
             event: InboundEventDraft {
                 external_id,
                 kind,

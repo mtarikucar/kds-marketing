@@ -167,9 +167,24 @@ async fn a_whatsapp_delivery_stores_one_event_per_message_and_a_replay_none() {
     );
     assert_eq!(first.payload["contact"]["profile"]["name"], "Test Kişi");
     assert_eq!(first.payload["occurred_at"], "2026-09-21T14:13:20Z");
-    // The body as received is kept once, beside the first event stored.
+    // A body is kept once, beside the first event stored: the workspace's own part of it. The
+    // second number (held by no workspace) and the template update (no event) are left out.
     let raws: Vec<Option<Vec<u8>>> = w.stored().into_iter().map(|s| s.raw).collect();
-    assert_eq!(raws, [Some(body.clone()), None, None, None]);
+    assert!(matches!(raws[..], [Some(_), None, None, None]), "{raws:?}");
+    let kept: serde_json::Value = serde_json::from_slice(raws[0].as_deref().unwrap()).unwrap();
+    let mut whole: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let first_change = whole["entry"][0]["changes"][0].take();
+    whole["entry"][0]["changes"] = json!([first_change]);
+    assert_eq!(kept, whole);
+    let kept = String::from_utf8(raws[0].clone().unwrap()).unwrap();
+    for elsewhere in [
+        "5555555556",
+        "TEST-OTHER-NUMBER",
+        "905553333333",
+        "APPROVED",
+    ] {
+        assert!(!kept.contains(elsewhere), "keeps {elsewhere}: {kept}");
+    }
 
     // Meta redelivers: acknowledged, nothing new (Review Focus 2).
     let (status, text) = answer(&w.app(), signed(&body)).await;
@@ -300,6 +315,94 @@ async fn an_instagram_delivery_signed_with_the_instagram_app_secret_is_accepted(
     // The Meta secret still signs too.
     let (status, _) = answer(&meta_only.app(), signed(&body)).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// One body batching two workspaces' pages (and a page no workspace holds): each workspace keeps
+/// only its own entries, re-serialised from the body, so neither keeps the other's page, sender,
+/// message or text, and the unrouted page is kept nowhere. A body that is all one workspace's is
+/// kept as received, byte for byte.
+#[tokio::test]
+async fn a_body_batching_two_workspaces_keeps_each_ones_own_entries() {
+    let w = World::new().await;
+    let beta = w.other_workspace().await;
+    w.connected(w.ws, "facebook_page", "PAGE-A").await;
+    w.connected(beta, "messenger", "PAGE-B").await;
+    let entry = |page: &str, sender: &str, mid: &str, text: &str| {
+        json!({
+            "id": page,
+            "time": 1_790_000_000_000_u64,
+            "messaging": [{
+                "sender": { "id": sender },
+                "recipient": { "id": page },
+                "timestamp": 1_790_000_000_000_u64,
+                "message": { "mid": mid, "text": text },
+            }],
+        })
+    };
+    let a1 = entry("PAGE-A", "PSID-A1", "m_A1", "Alfa'nın müşterisi");
+    let b = entry("PAGE-B", "PSID-B", "m_B", "Beta'nın müşterisi");
+    let nobody = entry("PAGE-X", "PSID-X", "m_X", "kimsenin değil");
+    let a2 = entry("PAGE-A", "PSID-A2", "m_A2", "Alfa yine");
+    let body = serde_json::to_vec(&json!({
+        "object": "page",
+        "entry": [a1.clone(), b.clone(), nobody, a2.clone()],
+    }))
+    .unwrap();
+    let (status, _) = answer(&w.app(), signed(&body)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let kept = |ws| -> Vec<Vec<u8>> {
+        w.stored()
+            .into_iter()
+            .filter(|s| s.event.workspace_id == ws)
+            .filter_map(|s| s.raw)
+            .collect()
+    };
+    let alpha = kept(w.ws);
+    let beta_kept = kept(beta);
+    assert_eq!((alpha.len(), beta_kept.len()), (1, 1));
+    let parsed = |raw: &[u8]| -> serde_json::Value { serde_json::from_slice(raw).unwrap() };
+    assert_eq!(
+        parsed(&alpha[0]),
+        json!({ "object": "page", "entry": [a1, a2] })
+    );
+    assert_eq!(
+        parsed(&beta_kept[0]),
+        json!({ "object": "page", "entry": [b] })
+    );
+    let text = |raw: &[u8]| String::from_utf8(raw.to_vec()).unwrap();
+    for theirs in [
+        "PAGE-B",
+        "PSID-B",
+        "m_B",
+        "Beta'nın",
+        "PAGE-X",
+        "PSID-X",
+        "m_X",
+        "kimsenin",
+    ] {
+        assert!(!text(&alpha[0]).contains(theirs), "alpha keeps {theirs}");
+    }
+    for theirs in [
+        "PAGE-A", "PSID-A", "m_A", "Alfa", "PAGE-X", "PSID-X", "m_X", "kimsenin",
+    ] {
+        assert!(!text(&beta_kept[0]).contains(theirs), "beta keeps {theirs}");
+    }
+
+    // All of a body one workspace's: kept as received.
+    let own = serde_json::to_vec(&json!({
+        "object": "page",
+        "entry": [entry("PAGE-A", "PSID-A3", "m_A3", "tek alan")],
+    }))
+    .unwrap();
+    let (status, _) = answer(&w.app(), signed(&own)).await;
+    assert_eq!(status, StatusCode::OK);
+    let third = w
+        .stored()
+        .into_iter()
+        .find(|s| s.event.external_id == "m_A3")
+        .unwrap();
+    assert_eq!(third.raw.as_deref(), Some(&own[..]));
 }
 
 #[tokio::test]

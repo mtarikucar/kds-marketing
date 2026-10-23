@@ -6,6 +6,7 @@
 alter table if exists budget_items drop column if exists retired_at;
 drop index if exists capabilities_connected_account_idx;
 drop index if exists inbound_events_raw_received_idx;
+drop index if exists inbound_events_history_idx;
 drop table if exists probe_runs;
 drop table if exists oauth_pending;
 drop table if exists inbound_events;

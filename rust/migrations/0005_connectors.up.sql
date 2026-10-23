@@ -16,7 +16,9 @@
 -- (`pkce_verifier_sealed`). Once the provider calls back, the assets the account can reach are
 -- stored sealed (`assets_sealed`, credentials included) and as their public facts
 -- (`assets_public`, a JSON array). A reconnection names the capability it renews
--- (`capability_id`, null for a new connection). Rows are short-lived: confirmed or abandoned
+-- (`capability_id`, null for a new connection). A flow keeps the app it signs in with (`app`:
+-- the Meta app's Facebook Login, the Instagram app's Instagram Login, or the X app) from start
+-- to completion. Rows are short-lived: confirmed or abandoned
 -- flows are deleted (`delete`, `purge_expired`).
 --
 -- A probe run records one probe of a connector capability; the log is append-only, read newest
@@ -64,6 +66,9 @@ create index if not exists inbound_events_pending_idx
 create index if not exists inbound_events_raw_received_idx
     on inbound_events (received_at)
     where raw is not null;
+-- The history (`events.list`): a workspace's events newest first, by `(received_at, id)`.
+create index if not exists inbound_events_history_idx
+    on inbound_events (workspace_id, received_at desc, id desc);
 
 create or replace function inbound_events_guard() returns trigger
 language plpgsql as $$
@@ -99,6 +104,7 @@ create table if not exists oauth_pending (
     workspace_id uuid not null references workspaces (id) on delete cascade,
     provider text not null check (provider in ('meta', 'netgsm', 'x')),
     kind_key text not null,
+    app text not null check (app in ('meta', 'instagram', 'x')),
     state_hash text not null unique,
     started_by uuid not null references users (id) on delete cascade,
     capability_id uuid,

@@ -103,6 +103,72 @@ pub trait PlatformAppConfig: Send + Sync {
     fn public_base_url(&self) -> Option<Url>;
 }
 
+/// The app an OAuth flow signs in with, as the last segment of its redirect URI names it
+/// (`{public base URL}/oauth/callback/{key}`): each provider app registers its own redirect URI.
+/// A flow keeps its app from start to completion (`OAuthPendingRow::app`), and a credential an
+/// OAuth flow issued records it (`connector_public.access.app`), so a reconnection signs in with
+/// the app that issued the credential.
+///
+/// | callback | app | a new connection of | a reconnection of |
+/// |---|---|---|---|
+/// | `meta` | the Meta app (Facebook Login) | every Meta kind but `instagram` | every Meta capability the Meta app issued, `instagram` ones included (through their Page) |
+/// | `instagram` | the Instagram app (Instagram Login) | `instagram` | an `instagram` capability the Instagram app issued |
+/// | `x` | the X app | `x` | `x` |
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthCallback {
+    Meta,
+    Instagram,
+    X,
+}
+
+impl OAuthCallback {
+    /// Every callback, in a fixed order.
+    pub fn all() -> &'static [OAuthCallback] {
+        &[
+            OAuthCallback::Meta,
+            OAuthCallback::Instagram,
+            OAuthCallback::X,
+        ]
+    }
+
+    /// The redirect URI's last segment, also what is stored: `meta`, `instagram` or `x`.
+    pub fn key(self) -> &'static str {
+        match self {
+            OAuthCallback::Meta => "meta",
+            OAuthCallback::Instagram => "instagram",
+            OAuthCallback::X => "x",
+        }
+    }
+
+    /// The callback whose key is `key`, if one is.
+    pub fn parse(key: &str) -> Option<OAuthCallback> {
+        OAuthCallback::all()
+            .iter()
+            .copied()
+            .find(|c| c.key() == key)
+    }
+
+    /// The provider whose flows come back here: Instagram Login is a Meta flow.
+    pub fn provider(self) -> Provider {
+        match self {
+            OAuthCallback::Meta | OAuthCallback::Instagram => Provider::Meta,
+            OAuthCallback::X => Provider::X,
+        }
+    }
+
+    /// The app a new connection of `kind_key` with `provider` signs in with (see the table
+    /// above); `None` for a provider without OAuth (NetGSM).
+    pub fn of_flow(provider: Provider, kind_key: &str) -> Option<OAuthCallback> {
+        match provider {
+            Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
+            Provider::Meta => Some(OAuthCallback::Meta),
+            Provider::X => Some(OAuthCallback::X),
+            Provider::Netgsm => None,
+        }
+    }
+}
+
 /// The app an OAuth flow runs under. Meta serves two login flows: Facebook Login with the Meta
 /// app, and Instagram Login with the Instagram app; the variant tells the adapter which.
 #[derive(Clone, Debug, PartialEq, Eq)]

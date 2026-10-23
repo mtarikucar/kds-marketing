@@ -40,10 +40,12 @@ const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
 const CONNECTOR_FUNCTIONS: [&str; 2] = ["inbound_events_guard", "probe_runs_immutable"];
 
 /// The indexes `0005_connectors` adds on tables of earlier migrations or beside its tables' own:
-/// the connected-account lookup on `capabilities` and the raw-body purge on `inbound_events`.
-const CONNECTOR_INDEXES: [&str; 2] = [
+/// the connected-account lookup on `capabilities`, and the raw-body purge and the newest-first
+/// history on `inbound_events`.
+const CONNECTOR_INDEXES: [&str; 3] = [
     "capabilities_connected_account_idx",
     "inbound_events_raw_received_idx",
+    "inbound_events_history_idx",
 ];
 
 /// The column `0005_connectors` adds to a table of an earlier migration: a budget item's

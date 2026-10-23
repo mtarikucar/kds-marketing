@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::connectors::OAuthCallback;
 use jt_app::ports::{OAuthPendingId, OAuthPendingRepo, OAuthPendingRow};
 use jt_capability::CapabilityId;
 use jt_connector::Provider;
@@ -21,7 +22,7 @@ use super::capabilities::ensure_capability;
 use super::{map_sqlx, same_workspace, stored};
 use crate::uow::PgTenantRepos;
 
-const COLUMNS: &str = "id, workspace_id, provider, kind_key, state_hash, started_by, \
+const COLUMNS: &str = "id, workspace_id, provider, kind_key, app, state_hash, started_by, \
                        capability_id, pkce_verifier_sealed, assets_sealed, assets_public, \
                        expires_at, created_at";
 
@@ -31,6 +32,7 @@ struct PendingRecord {
     workspace_id: Uuid,
     provider: String,
     kind_key: String,
+    app: String,
     state_hash: String,
     started_by: Uuid,
     capability_id: Option<Uuid>,
@@ -48,6 +50,7 @@ impl PendingRecord {
             workspace_id: WorkspaceId(self.workspace_id),
             provider: stored(Provider::parse(&self.provider), "oauth_pending.provider")?,
             kind_key: self.kind_key,
+            app: stored(OAuthCallback::parse(&self.app), "oauth_pending.app")?,
             state_hash: self.state_hash,
             started_by: UserId(self.started_by),
             capability_id: self.capability_id.map(CapabilityId),
@@ -71,15 +74,17 @@ impl OAuthPendingRepo for PgTenantRepos {
             ensure_capability(self.tx.conn(), ws, capability).await?;
         }
         let done = sqlx::query(
-            "insert into oauth_pending (id, workspace_id, provider, kind_key, state_hash, \
+            "insert into oauth_pending (id, workspace_id, provider, kind_key, app, state_hash, \
              started_by, capability_id, pkce_verifier_sealed, assets_sealed, assets_public, \
-             expires_at, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             expires_at, created_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
              on conflict do nothing",
         )
         .bind(row.id.as_uuid())
         .bind(ws.as_uuid())
         .bind(row.provider.key())
         .bind(&row.kind_key)
+        .bind(row.app.key())
         .bind(&row.state_hash)
         .bind(row.started_by.as_uuid())
         .bind(row.capability_id.map(|c| c.as_uuid()))

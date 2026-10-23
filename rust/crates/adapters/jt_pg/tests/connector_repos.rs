@@ -4,6 +4,7 @@
 //! scoping, and the platform-wide lookup of a live capability by its external account.
 
 use jt_app::error::{AppError, ErrorCode};
+use jt_app::ports::connectors::OAuthCallback;
 use jt_app::ports::{
     EventOrder, EventQuery, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, UnitOfWork,
 };
@@ -83,6 +84,7 @@ fn pending(
         workspace_id: ws,
         provider: Provider::X,
         kind_key: "x".into(),
+        app: OAuthCallback::X,
         state_hash: state_hash.into(),
         started_by: user,
         capability_id: None,

@@ -28,6 +28,14 @@ use time::{Duration, OffsetDateTime};
 // Helpers
 // ---------------------------------------------------------------------------------------------
 
+/// The world, its workspace active: every item's use case runs (see
+/// `a_workspace_awaiting_payment_lists_only_what_it_can_act_on` for the others).
+async fn active_world() -> World {
+    let w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    w
+}
+
 /// An agent of the owner acting through a new key with `scopes`, whose client `client` first
 /// connected at `seen_at`; its context at the fixed time.
 async fn connected(w: &World, scopes: &[&str], client: &str, seen_at: OffsetDateTime) -> Ctx {
@@ -119,7 +127,7 @@ async fn pending(w: &World, ctx: &Ctx) -> PendingOut {
 
 #[tokio::test]
 async fn pending_needs_workspace_read() {
-    let w = world().await;
+    let w = active_world().await;
     let auditor = w.agent(&["ledger.read"]).await;
     assert_forbidden(
         &err(work::pending(&w.deps, &auditor).await),
@@ -129,7 +137,7 @@ async fn pending_needs_workspace_read() {
 
 #[tokio::test]
 async fn pending_lists_consult_when_no_strategy() {
-    let w = world().await;
+    let w = active_world().await;
     let rep = w.member("rep").await;
     let out = pending(&w, &rep).await;
 
@@ -171,7 +179,7 @@ async fn pending_lists_consult_when_no_strategy() {
 
 #[tokio::test]
 async fn an_open_draft_asks_to_continue_the_consultation_with_its_gaps() {
-    let w = world().await;
+    let w = active_world().await;
     strategy::start_consultation(&w.deps, &w.owner_ctx)
         .await
         .unwrap();
@@ -193,7 +201,7 @@ async fn an_open_draft_asks_to_continue_the_consultation_with_its_gaps() {
 
 #[tokio::test]
 async fn a_submitted_draft_is_listed_for_approval_only_to_who_may_approve() {
-    let w = world().await;
+    let w = active_world().await;
     let id = draft(&w, 1, true).await;
     let submitted = StrategyState::Submitted {
         version_id: id,
@@ -235,7 +243,7 @@ async fn a_submitted_draft_is_listed_for_approval_only_to_who_may_approve() {
 
 #[tokio::test]
 async fn an_approved_strategy_leaves_nothing_to_do_about_it() {
-    let w = world().await;
+    let w = active_world().await;
     w.approve_strategy().await;
     let out = pending(&w, &w.owner_ctx).await;
     assert_eq!(out.strategy, StrategyState::Approved { number: 1 });
@@ -262,7 +270,7 @@ async fn an_approved_strategy_leaves_nothing_to_do_about_it() {
 
 #[tokio::test]
 async fn pending_lists_stale_devices() {
-    let w = world().await;
+    let w = active_world().await;
     // Verified 40 days ago under the default 30-day policy: stale.
     let phone = w.declare("phone", "Saha telefonu").await.capability.id;
     capabilities::verify(
@@ -353,7 +361,7 @@ async fn pending_lists_stale_devices() {
 
 #[tokio::test]
 async fn pending_lists_connect_connector_for_declared_connector_kinds() {
-    let w = world().await;
+    let w = active_world().await;
     let declared = w.declare("mailbox", "Destek").await.capability.id;
     // Probed already (as a connector will in M1b): connected.
     let probed = w.declare("instagram", "Marka").await.capability.id;
@@ -393,9 +401,70 @@ async fn pending_lists_connect_connector_for_declared_connector_kinds() {
     assert_eq!(wire["name"], "Destek");
 }
 
+/// While the workspace awaits payment, only the items it can act on are listed: the strategy's
+/// (`strategy.*` runs then). Verifying, declaring, connecting and the inbound events wait for
+/// the payment (their use cases answer `WORKSPACE_INACTIVE`), though the events are stored
+/// meanwhile and listed once the workspace is active. Each item names the use case that clears
+/// it, and is listed exactly when the workspace's status lets that use case run.
+#[tokio::test]
+async fn a_workspace_awaiting_payment_lists_only_what_it_can_act_on() {
+    let w = world().await;
+    let device = w.declare("shell", "Kabuk").await.capability.id;
+    let mailbox = w.declare("mailbox", "Destek").await.capability.id;
+    inbound(&w, 2).await;
+    assert_eq!(
+        kinds(&pending(&w, &w.owner_ctx).await),
+        [WorkKind::ConsultStrategy]
+    );
+
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let out = pending(&w, &w.owner_ctx).await;
+    for kind in [
+        WorkKind::ConsultStrategy,
+        WorkKind::VerifyCapability {
+            capability_id: device,
+            name: "Kabuk".to_owned(),
+            stale: false,
+        },
+        WorkKind::ConnectConnector {
+            capability_id: mailbox,
+            name: "Destek".to_owned(),
+        },
+        WorkKind::InboundEvents { count: 2 },
+    ] {
+        item(&out, &kind);
+    }
+    for kind in kinds(&out) {
+        let exemption = jt_app::catalog::status_exemption(kind.cleared_by());
+        assert!(
+            exemption.allows(jt_tenancy::WorkspaceStatus::Active),
+            "{kind:?}"
+        );
+        // Strategy items alone run while the workspace awaits payment.
+        let strategy = kind.cleared_by().starts_with("strategy.");
+        assert_eq!(
+            exemption.allows(jt_tenancy::WorkspaceStatus::PendingPayment),
+            strategy,
+            "{kind:?}"
+        );
+    }
+    // Every item's use case is a catalogued one.
+    for kind in [
+        WorkKind::ConsultStrategy,
+        WorkKind::ApproveStrategy,
+        WorkKind::DeclareFirstCapability,
+        WorkKind::InboundEvents { count: 1 },
+    ] {
+        assert!(
+            jt_app::catalog::find(kind.cleared_by()).is_some(),
+            "{kind:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn declare_first_capability_until_a_live_one_exists() {
-    let w = world().await;
+    let w = active_world().await;
     assert!(kinds(&pending(&w, &w.owner_ctx).await).contains(&WorkKind::DeclareFirstCapability));
 
     let shell = w.declare("shell", "Kabuk").await.capability.id;
@@ -442,7 +511,7 @@ async fn inbound(w: &World, n: usize) -> Vec<InboundEventId> {
 
 #[tokio::test]
 async fn pending_lists_inbound_events_while_some_are_unprocessed() {
-    let w = world().await;
+    let w = active_world().await;
     assert!(
         !kinds(&pending(&w, &w.owner_ctx).await)
             .iter()
@@ -502,7 +571,7 @@ async fn pending_lists_inbound_events_while_some_are_unprocessed() {
 /// The count stops at [`work::INBOUND_EVENTS_COUNT_CAP`]: past it the item says "at least".
 #[tokio::test]
 async fn the_inbound_events_count_stops_at_its_cap() {
-    let w = world().await;
+    let w = active_world().await;
     assert_eq!(work::INBOUND_EVENTS_COUNT_CAP, 1_000);
     inbound(&w, 1_001).await;
     let out = pending(&w, &w.owner_ctx).await;
@@ -515,7 +584,7 @@ async fn the_inbound_events_count_stops_at_its_cap() {
 
 #[tokio::test]
 async fn overdue_when_no_connection_or_all_late() {
-    let w = world().await;
+    let w = active_world().await;
     let day = i64::from(DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES);
 
     // No agent has ever connected.
@@ -564,7 +633,7 @@ async fn overdue_when_no_connection_or_all_late() {
 
 #[tokio::test]
 async fn overdue_flag_on_agents_list() {
-    let w = world().await;
+    let w = active_world().await;
     let late = connected(&w, &[], "late-agent", FIXED_NOW - Duration::hours(25)).await;
     let fresh = connected(&w, &[], "fresh-agent", FIXED_NOW - Duration::hours(1)).await;
 
@@ -588,7 +657,7 @@ async fn overdue_flag_on_agents_list() {
 
 #[tokio::test]
 async fn checkin_is_agent_only_and_ledgers_at_most_hourly() {
-    let w = world().await;
+    let w = active_world().await;
 
     // A person cannot check in.
     let e = err(work::checkin(&w.deps, &w.owner_ctx).await);
@@ -644,7 +713,7 @@ async fn checkin_is_agent_only_and_ledgers_at_most_hourly() {
 
 #[tokio::test]
 async fn checkin_ledgers_the_strategy_version_in_force() {
-    let w = world().await;
+    let w = active_world().await;
     let version = w.approve_strategy().await;
     let agent = connected(&w, &[], "acme-agent", FIXED_NOW).await;
     work::checkin(&w.deps, &agent).await.unwrap();
@@ -655,7 +724,7 @@ async fn checkin_ledgers_the_strategy_version_in_force() {
 
 #[tokio::test]
 async fn late_agent_checking_in_is_not_overdue() {
-    let w = world().await;
+    let w = active_world().await;
     let seen = FIXED_NOW - Duration::hours(30);
     let agent = connected(&w, &["workspace.read"], "late-agent", seen).await;
 
@@ -692,7 +761,7 @@ async fn late_agent_checking_in_is_not_overdue() {
 
 #[tokio::test]
 async fn set_checkin_interval_needs_team_manage() {
-    let w = world().await;
+    let w = active_world().await;
     let rep = w.member("rep").await;
     assert_forbidden(
         &err(work::set_checkin_interval(&w.deps, &rep, 60).await),
@@ -708,7 +777,7 @@ async fn set_checkin_interval_needs_team_manage() {
 
 #[tokio::test]
 async fn set_checkin_interval_takes_a_quarter_hour_to_a_week() {
-    let w = world().await;
+    let w = active_world().await;
     for minutes in [0, 14, 10_081, u32::MAX] {
         assert_invalid(
             &err(work::set_checkin_interval(&w.deps, &w.owner_ctx, minutes).await),
@@ -763,7 +832,7 @@ async fn set_checkin_interval_takes_a_quarter_hour_to_a_week() {
 #[tokio::test]
 async fn capability_ids_in_items_are_the_capabilities() {
     // Guards the item's id field against a mix-up with another id.
-    let w = world().await;
+    let w = active_world().await;
     let phone = w.declare("phone", "Telefon").await.capability.id;
     let out = pending(&w, &w.owner_ctx).await;
     let ids: Vec<CapabilityId> = out

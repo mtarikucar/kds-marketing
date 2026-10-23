@@ -12,7 +12,7 @@ use jt_app::ports::connectors::InboundEventDraft;
 use jt_app::usecases::connector::{self, HooksOut, MetaHook, NetgsmHook, VERIFY_TOKEN_HINT};
 use jt_app::usecases::webhook::{
     self, AccountEvent, Delivery, META_HOOK_PATH, NETGSM_HOOK_PATH, NETGSM_HOOK_PURPOSE,
-    RAW_RETENTION,
+    RAW_RETENTION, RawPurge,
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, NetgsmPurpose, Provider, netgsm_hook_token};
@@ -20,7 +20,7 @@ use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use jt_testkit::fakes::{FIXED_NOW, FakeAppConfig, StoredInboundEvent};
 use jt_testkit::flows::activate_workspace;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use support::*;
 use time::Duration;
 
@@ -63,6 +63,13 @@ async fn capability(
 /// A connected capability: sealed, verified by a probe.
 async fn connected(w: &World, ws: WorkspaceId, kind: &str, external_id: &str) -> CapabilityId {
     capability(w, ws, kind, external_id, StoredStatus::Verified, true).await
+}
+
+/// A raw body kept whole, whichever of a delivery's events it is asked for. (What the gate keeps
+/// of a real body for one workspace is cut by the provider's adapter: see `jt_meta::scoped_body`
+/// and `jt_webhook`'s tests.)
+fn whole(raw: &'static [u8]) -> impl Fn(&[usize]) -> Option<Vec<u8>> + Sync {
+    move |_| Some(raw.to_vec())
 }
 
 fn draft(external_id: &str, kind: EventKind) -> InboundEventDraft {
@@ -116,7 +123,7 @@ async fn an_event_for_a_connected_account_is_stored_once_in_its_workspace() {
         )]
     };
 
-    let first = webhook::receive_for_accounts(&w.deps, Provider::Meta, delivery(), body)
+    let first = webhook::receive_for_accounts(&w.deps, Provider::Meta, delivery(), &whole(body))
         .await
         .unwrap();
     let [Delivery::Stored(id)] = first[..] else {
@@ -137,7 +144,7 @@ async fn an_event_for_a_connected_account_is_stored_once_in_its_workspace() {
     assert_eq!(stored(&w)[0].raw.as_deref(), Some(&body[..]));
 
     // A replayed delivery is acknowledged and ignored (Review Focus 2).
-    let replay = webhook::receive_for_accounts(&w.deps, Provider::Meta, delivery(), body)
+    let replay = webhook::receive_for_accounts(&w.deps, Provider::Meta, delivery(), &whole(body))
         .await
         .unwrap();
     assert_eq!(replay, [Delivery::Duplicate]);
@@ -158,7 +165,7 @@ async fn events_route_to_the_workspace_that_holds_each_account() {
             for_account(PAGE, "2222", draft("mid.b", EventKind::Message)),
             for_account(PAGE, "1111", draft("mid.c", EventKind::MessageEcho)),
         ],
-        b"{}",
+        &whole(b"{}"),
     )
     .await
     .unwrap();
@@ -237,7 +244,7 @@ async fn an_event_for_an_account_no_workspace_holds_connected_writes_nothing() {
                 )
             })
             .collect(),
-        b"{}",
+        &whole(b"{}"),
     )
     .await
     .unwrap();
@@ -261,7 +268,8 @@ async fn meta_events_for_a_suspended_workspace_are_dropped() {
     let w = world().await;
     let number = connected(&w, w.ws, "whatsapp_cloud", "5555").await;
     let event = |id: &str| vec![for_account(WHATSAPP, "5555", draft(id, EventKind::Message))];
-    let receive = |events| webhook::receive_for_accounts(&w.deps, Provider::Meta, events, b"{}");
+    let body = whole(b"{}");
+    let receive = |events| webhook::receive_for_accounts(&w.deps, Provider::Meta, events, &body);
 
     // A new workspace awaits payment: its events are kept.
     let out = receive(event("wamid.pending")).await.unwrap();
@@ -327,7 +335,7 @@ async fn an_unreachable_connection_proved_once_keeps_its_events() {
             "7777",
             draft("mid.7", EventKind::Message),
         )],
-        b"{}",
+        &whole(b"{}"),
     )
     .await
     .unwrap();
@@ -358,7 +366,7 @@ async fn the_time_an_event_happened_is_kept_in_its_payload() {
             for_account(WHATSAPP, "5555", own),
             for_account(WHATSAPP, "5555", bare),
         ],
-        b"{}",
+        &whole(b"{}"),
     )
     .await
     .unwrap();
@@ -380,70 +388,115 @@ async fn the_time_an_event_happened_is_kept_in_its_payload() {
     assert_eq!(payload("wamid.b"), json!("delivered"));
 }
 
-/// A delivery's raw body is kept once per workspace: beside the first event it newly stores
-/// there; its other events, in that workspace, keep none. A redelivery that brings one new event
-/// keeps the body beside that one.
+/// The raw body a delivery keeps in a workspace is that workspace's own: it is asked for with
+/// exactly the indexes of the events routed there (once per workspace and delivery), never with
+/// another workspace's, nor with an event no workspace took (an account no workspace holds, or a
+/// suspended workspace's); and it is kept once, beside the first event newly stored there. So a
+/// body naming its events by id (as the gate's cut of a real body names its items) keeps none of
+/// another workspace's identifiers. A redelivery that brings one new event keeps its body beside
+/// that one.
 #[tokio::test]
 async fn a_delivery_keeps_its_raw_body_once_per_workspace() {
     let w = world().await;
     let (beta, _) = w.other_workspace().await;
     connected(&w, w.ws, "whatsapp_cloud", "1").await;
     connected(&w, beta, "whatsapp_cloud", "2").await;
-    let delivery = |ids: &[&str]| {
+    // Each event's id and account; `b.` events are beta's, `u.` events no workspace's.
+    let delivery = |ids: &[&'static str]| {
         ids.iter()
             .map(|id| {
-                let account = if id.starts_with("b.") { "2" } else { "1" };
+                let account = match id.split('.').next() {
+                    Some("b") => "2",
+                    Some("u") => "9",
+                    _ => "1",
+                };
                 for_account(WHATSAPP, account, draft(id, EventKind::Message))
             })
             .collect::<Vec<_>>()
     };
-    webhook::receive_for_accounts(
-        &w.deps,
-        Provider::Meta,
-        delivery(&["wamid.3", "wamid.1", "b.1", "wamid.2"]),
-        b"one delivery",
-    )
-    .await
-    .unwrap();
-    let raws = |ws: WorkspaceId| -> Vec<(String, bool)> {
+    // A body naming the events it is asked for, and every ask recorded.
+    let asks: Arc<Mutex<Vec<Vec<usize>>>> = Arc::default();
+    let naming = |ids: &'static [&'static str]| {
+        let asks = asks.clone();
+        move |own: &[usize]| {
+            asks.lock().unwrap().push(own.to_vec());
+            let named: Vec<&str> = own.iter().map(|&i| ids[i]).collect();
+            Some(named.join(",").into_bytes())
+        }
+    };
+    const FIRST: &[&str] = &["wamid.3", "wamid.1", "b.1", "u.1", "wamid.2"];
+    let out =
+        webhook::receive_for_accounts(&w.deps, Provider::Meta, delivery(FIRST), &naming(FIRST))
+            .await
+            .unwrap();
+    assert_eq!(out[3], Delivery::Unrouted);
+    let mut asked = asks.lock().unwrap().clone();
+    asked.sort();
+    assert_eq!(asked, [vec![0, 1, 4], vec![2]]);
+    let raws = |ws: WorkspaceId| -> Vec<(String, Option<String>)> {
         stored(&w)
             .into_iter()
             .filter(|s| s.event.workspace_id == ws)
-            .map(|s| (s.event.external_id, s.raw.is_some()))
+            .map(|s| {
+                let raw = s.raw.map(|r| String::from_utf8(r).unwrap());
+                (s.event.external_id, raw)
+            })
             .collect()
     };
-    // Stored in the order of their ids, the body beside the first one only.
+    // Stored in the order of their ids, the workspace's own body beside the first one only.
     assert_eq!(
         raws(w.ws),
         [
-            ("wamid.1".to_owned(), true),
-            ("wamid.2".to_owned(), false),
-            ("wamid.3".to_owned(), false)
+            (
+                "wamid.1".to_owned(),
+                Some("wamid.3,wamid.1,wamid.2".to_owned())
+            ),
+            ("wamid.2".to_owned(), None),
+            ("wamid.3".to_owned(), None)
         ]
     );
-    assert_eq!(raws(beta), [("b.1".to_owned(), true)]);
+    assert_eq!(raws(beta), [("b.1".to_owned(), Some("b.1".to_owned()))]);
+    // No workspace's body names another's event, nor the one no workspace took.
+    for s in stored(&w) {
+        let raw = String::from_utf8(s.raw.unwrap_or_default()).unwrap();
+        for id in FIRST {
+            let theirs = events_of(&w, s.event.workspace_id)
+                .iter()
+                .all(|e| e.external_id != *id);
+            if theirs {
+                assert!(
+                    !raw.contains(id),
+                    "{} keeps {id}: {raw}",
+                    s.event.workspace_id
+                );
+            }
+        }
+    }
 
-    let out = webhook::receive_for_accounts(
-        &w.deps,
-        Provider::Meta,
-        delivery(&["wamid.1", "wamid.4", "wamid.2"]),
-        b"the redelivery",
-    )
-    .await
-    .unwrap();
+    // A redelivery bringing one new event in each workspace, beta now suspended: beta's event is
+    // dropped and never asked for; the active workspace keeps its own body beside its new one.
+    set_status(&w, beta, WorkspaceStatus::Suspended).await;
+    asks.lock().unwrap().clear();
+    const SECOND: &[&str] = &["wamid.1", "b.2", "wamid.4", "wamid.2"];
+    let out =
+        webhook::receive_for_accounts(&w.deps, Provider::Meta, delivery(SECOND), &naming(SECOND))
+            .await
+            .unwrap();
     assert!(matches!(
         out[..],
         [
             Delivery::Duplicate,
+            Delivery::Inactive,
             Delivery::Stored(_),
             Delivery::Duplicate
         ]
     ));
+    assert_eq!(*asks.lock().unwrap(), [vec![0, 2, 3]]);
     let fourth = stored(&w)
         .into_iter()
         .find(|s| s.event.external_id == "wamid.4")
         .unwrap();
-    assert_eq!(fourth.raw.as_deref(), Some(&b"the redelivery"[..]));
+    assert_eq!(fourth.raw.as_deref(), Some(&b"wamid.1,wamid.4,wamid.2"[..]));
     assert_eq!(stored(&w).iter().filter(|s| s.raw.is_some()).count(), 3);
 }
 
@@ -461,7 +514,7 @@ async fn a_delivery_is_written_in_the_order_of_its_event_ids() {
             .into_iter()
             .map(|id| for_account(WHATSAPP, "1", draft(id, EventKind::Message)))
             .collect(),
-        b"{}",
+        &whole(b"{}"),
     )
     .await
     .unwrap();
@@ -676,24 +729,33 @@ async fn purge_raw_clears_old_bodies_in_every_workspace() {
             for_account(WHATSAPP, "1", draft("wamid.a", EventKind::Message)),
             for_account(WHATSAPP, "2", draft("wamid.b", EventKind::Message)),
         ],
-        b"body",
+        &whole(b"body"),
     )
     .await
     .unwrap();
     assert_eq!(RAW_RETENTION, Duration::days(30));
     // Nothing is older than the cutoff yet.
-    assert_eq!(webhook::purge_raw(&w.deps, FIXED_NOW).await.unwrap(), 0);
+    assert_eq!(
+        webhook::purge_raw(&w.deps, FIXED_NOW).await.unwrap(),
+        RawPurge::default()
+    );
     let later = FIXED_NOW + RAW_RETENTION + Duration::seconds(1);
     assert_eq!(
         webhook::purge_raw(&w.deps, webhook::raw_cutoff(later))
             .await
             .unwrap(),
-        2
+        RawPurge {
+            removed: 2,
+            failed: 0
+        }
     );
     assert!(stored(&w).iter().all(|s| s.raw.is_none()));
     // The events stay.
     assert_eq!(stored(&w).len(), 2);
-    assert_eq!(webhook::purge_raw(&w.deps, later).await.unwrap(), 0);
+    assert_eq!(
+        webhook::purge_raw(&w.deps, later).await.unwrap(),
+        RawPurge::default()
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

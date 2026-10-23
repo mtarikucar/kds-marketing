@@ -30,13 +30,17 @@
 //! and cannot deadlock.
 //!
 //! **What is stored.** Each event with its parsed payload, the time it was received (the clock)
-//! and the capability it arrived through when known; and the raw body as received, **once per
-//! delivery and workspace**: beside the first event the delivery newly stores there (a body of a
-//! thousand events is not kept a thousand times; its siblings share its `received_at`). The body
-//! is kept for [`RAW_RETENTION`] and then removed by [`purge_raw`]. When the provider said when the event
-//! happened, the payload (an object) also carries `occurred_at` (RFC 3339), unless the provider's
-//! item already names that key. Inbound events are records of the outside world: no ledger
-//! entry.
+//! and the capability it arrived through when known; and a raw body, **once per delivery and
+//! workspace**: beside the first event the delivery newly stores there (a body of a thousand
+//! events is not kept a thousand times; its siblings share its `received_at`). The raw body is
+//! **the workspace's own**: a NetGSM body names one workspace and is kept as received; a Meta
+//! body may batch several workspaces' accounts, so each workspace keeps only the part of it its
+//! own events came from ([`ScopedRaw`]: the body as received when that is all of it), and an
+//! item no workspace took (unrouted, or of a suspended workspace) is kept nowhere. The body is
+//! kept for [`RAW_RETENTION`] and then removed by the daily purge ([`purge_raw`]). When the
+//! provider said when the event happened, the payload (an object) also carries `occurred_at`
+//! (RFC 3339), unless the provider's item already names that key. Inbound events are records of
+//! the outside world: no ledger entry.
 
 use std::collections::BTreeMap;
 
@@ -85,6 +89,14 @@ pub fn takes_routed_events(status: WorkspaceStatus) -> bool {
     }
 }
 
+/// What a delivery keeps as the raw body beside the events one workspace stores from it, given
+/// their indexes among the delivery's events (ascending): the part of the body those events came
+/// from, never another workspace's items nor those of an event no workspace took (the gate cuts
+/// the body, which only the provider's adapter can read: `jt_meta::scoped_body`); `None` keeps
+/// none. Asked at most once per workspace and delivery, and only while an event may be newly
+/// stored there.
+pub type ScopedRaw<'a> = dyn Fn(&[usize]) -> Option<Vec<u8>> + Sync + 'a;
+
 /// One event of a provider that names its account: which capability kinds may hold the account
 /// (`kind_keys`), the provider's id of the account, and the event.
 #[derive(Clone, Debug, PartialEq)]
@@ -95,15 +107,17 @@ pub struct AccountEvent {
 }
 
 /// Stores each of `events` of `provider` in the workspace that holds its account connected (see
-/// the module docs), with the raw body `raw`, and answers what became of each, in order: an event
-/// whose workspace is suspended is [`Delivery::Inactive`] and written nowhere. Each workspace's
-/// events are written in one transaction of their own, so a failure leaves the workspaces written
-/// before it stored: the provider's redelivery then finds those as duplicates.
+/// the module docs), each workspace's with the raw body `raw` gives for its own events (asked
+/// with exactly their indexes, never another workspace's nor a dropped event's), and answers what
+/// became of each, in order: an event whose workspace is suspended is [`Delivery::Inactive`] and
+/// written nowhere. Each workspace's events are written in one transaction of their own, so a
+/// failure leaves the workspaces written before it stored: the provider's redelivery then finds
+/// those as duplicates.
 pub async fn receive_for_accounts(
     deps: &Deps,
     provider: Provider,
     events: Vec<AccountEvent>,
-    raw: &[u8],
+    raw: &ScopedRaw<'_>,
 ) -> Result<Vec<Delivery>, AppError> {
     let mut out = vec![Delivery::Unrouted; events.len()];
     let mut by_workspace: BTreeMap<WorkspaceId, Vec<(usize, CapabilityId, InboundEventDraft)>> =
@@ -146,6 +160,9 @@ pub async fn receive_for_accounts(
     // two deliveries of the same events take their locks in the same order.
     for (ws, drafts) in by_workspace {
         let mut repos = deps.uow.tenant(ws).await?;
+        // This workspace's events only (ascending: pushed in the delivery's order).
+        let own: Vec<usize> = drafts.iter().map(|(i, _, _)| *i).collect();
+        let scoped = || raw(&own);
         let items = drafts
             .into_iter()
             .map(|(i, capability, draft)| (i, Some(capability), draft))
@@ -155,7 +172,7 @@ pub async fn receive_for_accounts(
             provider,
             received_at,
         };
-        store_all(deps, repos.as_mut(), at, items, Some(raw), &mut out).await?;
+        store_all(deps, repos.as_mut(), at, items, Some(&scoped), &mut out).await?;
         repos.commit().await?;
     }
     Ok(out)
@@ -234,7 +251,9 @@ pub async fn receive_netgsm(
         provider: Provider::Netgsm,
         received_at,
     };
-    store_all(deps, repos.as_mut(), at, items, Some(raw), &mut out).await?;
+    // The body names this workspace alone: kept as received.
+    let whole = || Some(raw.to_vec());
+    store_all(deps, repos.as_mut(), at, items, Some(&whole), &mut out).await?;
     repos.commit().await?;
     Ok(out)
 }
@@ -284,21 +303,40 @@ pub fn raw_cutoff(now: OffsetDateTime) -> OffsetDateTime {
     now - RAW_RETENTION
 }
 
+/// What [`purge_raw`] did: how many bodies it removed, and in how many workspaces it could not
+/// (each logged; the others are purged all the same).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RawPurge {
+    pub removed: u64,
+    pub failed: u32,
+}
+
 /// Removes the raw body of every event received before `cutoff`, in every workspace (one
-/// transaction per workspace, [`purge_raw_in`]), and answers how many bodies it removed. The
-/// events themselves stay. Stops at the first workspace that fails; the scheduler's daily purge
-/// (`super::jobs::run_purge_raw_bodies`) calls [`purge_raw_in`] for each workspace itself, so one
-/// failing workspace does not hold the others back.
-pub async fn purge_raw(deps: &Deps, cutoff: OffsetDateTime) -> Result<u64, AppError> {
+/// transaction per workspace, [`purge_raw_in`]); the events themselves stay. As the scheduler's
+/// daily purge (`super::jobs::run_purge_raw_bodies`) does: a workspace that cannot be purged is
+/// logged and counted, and the others are purged all the same. Only a failure to list the
+/// workspaces is an error (nothing could be purged then).
+pub async fn purge_raw(deps: &Deps, cutoff: OffsetDateTime) -> Result<RawPurge, AppError> {
     let workspaces = {
         let mut platform = deps.uow.platform().await?;
         platform.workspaces_list().await?
     };
-    let mut removed = 0;
+    let mut out = RawPurge::default();
     for workspace in workspaces {
-        removed += purge_raw_in(deps, workspace.id, cutoff).await?;
+        match purge_raw_in(deps, workspace.id, cutoff).await {
+            Ok(removed) => out.removed += removed,
+            Err(e) => {
+                out.failed += 1;
+                tracing::warn!(
+                    workspace_id = %workspace.id,
+                    code = e.code.as_str(),
+                    error = %e,
+                    "the raw bodies of a workspace could not be purged; the others are"
+                );
+            }
+        }
     }
-    Ok(removed)
+    Ok(out)
 }
 
 /// Removes the raw body of every event of workspace `ws` received before `cutoff`, in one
@@ -331,21 +369,25 @@ struct Stamp {
 /// The events are written in the order of their provider ids (stable, so a repeated id keeps
 /// its place), whatever their order in the body: two transactions storing overlapping events
 /// then take the unique-key locks in the same order and never wait on each other in a circle.
-/// The raw body, when there is one (a poll has none), is kept once: beside the first event this
-/// call newly stores; every later event of the delivery in this workspace keeps none (they share
-/// its `received_at`).
+/// The raw body, when there is one (a poll has none), is made by `raw` when first needed (once)
+/// and kept once: beside the first event this call newly stores; every later event of the
+/// delivery in this workspace keeps none (they share its `received_at`).
 async fn store_all(
     deps: &Deps,
     repos: &mut dyn TenantRepos,
     at: Stamp,
     mut items: Vec<(usize, Option<CapabilityId>, InboundEventDraft)>,
-    raw: Option<&[u8]>,
+    raw: Option<&(dyn Fn() -> Option<Vec<u8>> + Sync)>,
     out: &mut [Delivery],
 ) -> Result<(), AppError> {
     items.sort_by(|a, b| a.2.external_id.cmp(&b.2.external_id));
+    let mut made: Option<Option<Vec<u8>>> = None;
     let mut raw_kept = false;
     for (i, capability, draft) in items {
-        let body = raw.filter(|_| !raw_kept).map(<[u8]>::to_vec);
+        let body = match raw {
+            Some(raw) if !raw_kept => made.get_or_insert_with(raw).clone(),
+            _ => None,
+        };
         let delivery = store(deps, repos, at, capability, draft, body).await?;
         raw_kept |= matches!(delivery, Delivery::Stored(_));
         out[i] = delivery;

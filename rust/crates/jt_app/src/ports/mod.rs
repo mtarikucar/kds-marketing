@@ -1130,6 +1130,10 @@ pub struct OAuthPendingRow {
     pub provider: Provider,
     /// The capability kind being connected, e.g. `"facebook_page"`.
     pub kind_key: String,
+    /// The app the flow signs in with, start to completion: for a new connection the kind's
+    /// ([`connectors::OAuthCallback::of_flow`]); for a reconnection the one that issued the
+    /// capability's credential.
+    pub app: connectors::OAuthCallback,
     /// The hash of the signed state, unique across every workspace.
     pub state_hash: String,
     /// The user who started it (for an agent, the user who issued its key).
@@ -1155,6 +1159,7 @@ impl std::fmt::Debug for OAuthPendingRow {
             .field("id", &self.id)
             .field("workspace_id", &self.workspace_id)
             .field("provider", &self.provider)
+            .field("app", &self.app)
             .field("kind_key", &self.kind_key)
             .field("state_hash", &Masked)
             .field("started_by", &self.started_by)

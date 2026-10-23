@@ -781,9 +781,9 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
 
-        // The three provider adapters are served; no provider app is configured here, so an
-        // OAuth flow cannot start (and nothing reaches a provider); nor is a public address, so
-        // no webhook address is shown.
+        // The three provider adapters are served; no provider app is configured here, nor a
+        // public address: an OAuth flow cannot start (the missing address is named first, before
+        // any app, and nothing reaches a provider), and no webhook address is shown.
         for provider in jt_connector::Provider::all() {
             let connector = deps.connectors.connector(*provider).expect("an adapter");
             assert_eq!(connector.provider(), *provider);
@@ -812,7 +812,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
-        assert_eq!(body["message"], "provider app not configured");
+        assert_eq!(body["message"], "public base url not configured");
+        assert_eq!(body["details"]["reason"], "public_base_url_not_configured");
         let (status, _, body) = call(&app, panel_get("/api/connectors/hooks", session)).await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
         assert_eq!(body["details"]["reason"], "public_base_url_not_configured");

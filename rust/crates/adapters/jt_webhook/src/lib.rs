@@ -22,20 +22,26 @@
 //! active or awaits payment; an event no workspace holds connected (Review Focus 1), or whose
 //! workspace is suspended, is dropped with nothing written, with a warning naming only the
 //! provider, the reason (`unrouted` or `inactive`), the kind of account and how many (one warning
-//! per reason, kind and delivery), and counted ([`counters`]`().unrouted_meta`, both reasons). A
+//! per reason, kind and delivery), and counted ([`counters`]`().unrouted_meta`, both reasons).
+//! Each workspace keeps, beside the first event it newly stores, only its own part of the body
+//! (`jt_meta::scoped_body`: the entries, and of a WhatsApp entry the changes, its events came
+//! from; the body as received when that is all of it): one body batching several workspaces'
+//! accounts leaves none of them another's items, and an item no workspace took is kept nowhere. A
 //! signed body that is not a webhook the parser knows is
 //! acknowledged, counted and stored as nothing (Meta would only redeliver it). A database
 //! failure is `500`: Meta redelivers.
 //!
 //! **NetGSM** (unsigned: the URL carries the workspace's token per purpose): a path segment that
 //! does not decode, an unknown purpose, a malformed workspace id, a token that is not the
-//! workspace's for the purpose (constant time), and a workspace that does not exist or is not
-//! active are all a bare `404`, before the body is read and with nothing stored, so a refusal
-//! reveals nothing. A body over
+//! workspace's for the purpose (constant time), and a workspace that does not exist or is
+//! suspended are all a bare `404`, before the body is read and with nothing stored, so a refusal
+//! reveals nothing (an active workspace and one awaiting payment take their events, as Meta's
+//! routing does). A body over
 //! [`NETGSM_BODY_LIMIT`] is `413`. A body the parser cannot read is `202` with nothing stored,
 //! a warning (the purpose only) and a count ([`counters`]`().unparseable_netgsm`): NetGSM retries
 //! anything else, and retrying cannot improve it. The events are stored synchronously in the
-//! URL's workspace (`receive_netgsm`); a database failure is `503`, which NetGSM redelivers.
+//! URL's workspace (`receive_netgsm`), the body kept as received (it names that workspace alone);
+//! a database failure is `503`, which NetGSM redelivers.
 //!
 //! Replays store nothing new (Review Focus 2): events are unique per workspace, provider and
 //! provider id. No answer, log line or counter carries a body, an account id or a token.

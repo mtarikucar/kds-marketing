@@ -29,7 +29,9 @@
 //!   which the workspace's tenant tier is given once the change is committed;
 //! - `access`: `Credential::redact_for_public` of the sealed credential (its kind, and for an
 //!   OAuth token its `expires_at` and `scopes`), written when it is sealed, so the token's expiry
-//!   is read without opening anything ([`health`]);
+//!   is read without opening anything ([`health`]); and, for a credential an OAuth flow issued,
+//!   `app`: the app that flow signed in with (`meta`, `instagram` or `x`), which a reconnection
+//!   signs in with again and a token renewal keeps (a credential entered by hand names none);
 //! - `asset`: the provider's public facts of an asset connected through OAuth;
 //! - `health`: the last probe, `{ok, at, latency_ms, error_kind}`, and `on_connected_error` while
 //!   the adapter's connection step last failed (see below); `facts`: what the last successful
@@ -106,6 +108,7 @@ use super::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH, netgsm_hook_token};
 use super::{Deps, acting_user, hash_token, invalid};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
+pub use crate::ports::connectors::OAuthCallback;
 use crate::ports::connectors::{Asset, AssetPublic, Connector, OAuthApp, PlatformAppConfig, Url};
 use crate::ports::{
     CapabilityFilter, Masked, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, TenantRepos,
@@ -179,61 +182,6 @@ pub struct StartOut {
     pub pending_id: OAuthPendingId,
     #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
-}
-
-/// The app an OAuth flow signs in with, as the last segment of its redirect URI names it
-/// (`{public base URL}/oauth/callback/{key}`): each provider app registers its own redirect URI.
-///
-/// | callback | app | kinds |
-/// |---|---|---|
-/// | `meta` | the Meta app (Facebook Login) | every Meta kind but `instagram` |
-/// | `instagram` | the Instagram app (Instagram Login) | `instagram` |
-/// | `x` | the X app | `x` |
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OAuthCallback {
-    Meta,
-    Instagram,
-    X,
-}
-
-impl OAuthCallback {
-    /// Every callback, in a fixed order.
-    pub fn all() -> &'static [OAuthCallback] {
-        &[
-            OAuthCallback::Meta,
-            OAuthCallback::Instagram,
-            OAuthCallback::X,
-        ]
-    }
-
-    /// The redirect URI's last segment: `meta`, `instagram` or `x`.
-    pub fn key(self) -> &'static str {
-        match self {
-            OAuthCallback::Meta => "meta",
-            OAuthCallback::Instagram => "instagram",
-            OAuthCallback::X => "x",
-        }
-    }
-
-    /// The provider whose flows come back here: Instagram Login is a Meta flow.
-    pub fn provider(self) -> Provider {
-        match self {
-            OAuthCallback::Meta | OAuthCallback::Instagram => Provider::Meta,
-            OAuthCallback::X => Provider::X,
-        }
-    }
-
-    /// The callback of a flow of `provider` for `kind_key` (see the table above); `None` for a
-    /// provider without OAuth (NetGSM).
-    pub fn of_flow(provider: Provider, kind_key: &str) -> Option<OAuthCallback> {
-        match provider {
-            Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
-            Provider::Meta => Some(OAuthCallback::Meta),
-            Provider::X => Some(OAuthCallback::X),
-            Provider::Netgsm => None,
-        }
-    }
 }
 
 /// The provider's callback: the callback it was addressed to (the redirect URI's last segment,
@@ -525,7 +473,8 @@ pub async fn complete_oauth(
             && flow.assets_sealed.is_none()
             && flow.provider == signed.provider
             && flow.kind_key == signed.kind_key
-            && OAuthCallback::of_flow(flow.provider, &flow.kind_key) == Some(callback);
+            && flow.app.provider() == flow.provider
+            && flow.app == callback;
         if !usable {
             return Err(refused_state());
         }
@@ -553,8 +502,8 @@ pub async fn complete_oauth(
 
     // The public base URL first, as when the flow started; then the app and its adapter.
     let redirect = callback_url(deps.apps.as_ref(), callback)?;
-    let app = oauth_app(deps.apps.as_ref(), flow.provider, &flow.kind_key)
-        .ok_or_else(|| app_not_configured(flow.provider))?;
+    let app =
+        oauth_app(deps.apps.as_ref(), flow.app).ok_or_else(|| app_not_configured(flow.provider))?;
     let oauth = deps
         .connectors
         .oauth(flow.provider)
@@ -891,7 +840,7 @@ pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<Start
         find(repos.as_mut(), id).await?
     };
     reconnectable(&capability)?;
-    begin_oauth(deps, ctx, &capability.kind_key, Some(id)).await
+    begin_oauth(deps, ctx, &capability.kind_key, Some(&capability)).await
 }
 
 /// The webhook addresses to register at the providers, under the public base URL (its path kept,
@@ -951,20 +900,26 @@ pub(crate) fn retired_public(capability: &Capability) -> Value {
 // ---------------------------------------------------------------------------------------------
 
 /// Starts a flow for `kind_key`, bound to capability `bound` for a reconnection (which is locked
-/// and checked again in the bundle that writes the flow).
+/// and checked again in the bundle that writes the flow). A new connection signs in with the
+/// kind's app ([`OAuthCallback::of_flow`]), a reconnection with the one that issued the
+/// capability's credential ([`reconnect_app`]); the flow keeps it to its completion.
 async fn begin_oauth(
     deps: &Deps,
     ctx: &Ctx,
     kind_key: &str,
-    bound: Option<CapabilityId>,
+    bound: Option<&Capability>,
 ) -> Result<StartOut, AppError> {
     let provider = oauth_kind(kind_key)?;
-    let callback =
-        OAuthCallback::of_flow(provider, kind_key).ok_or_else(|| app_not_configured(provider))?;
+    let callback = match bound {
+        Some(capability) => reconnect_app(deps.apps.as_ref(), provider, capability),
+        None => OAuthCallback::of_flow(provider, kind_key),
+    }
+    .ok_or_else(|| app_not_configured(provider))?;
     // The public base URL first: without it no flow can start, whichever apps are configured.
     let redirect = callback_url(deps.apps.as_ref(), callback)?;
-    let app = oauth_app(deps.apps.as_ref(), provider, kind_key)
-        .ok_or_else(|| app_not_configured(provider))?;
+    let app =
+        oauth_app(deps.apps.as_ref(), callback).ok_or_else(|| app_not_configured(provider))?;
+    let bound = bound.map(|capability| capability.id);
     let oauth = deps
         .connectors
         .oauth(provider)
@@ -1011,6 +966,7 @@ async fn begin_oauth(
             workspace_id: ws,
             provider,
             kind_key: kind_key.to_owned(),
+            app: callback,
             state_hash: hash_token(&token),
             started_by,
             capability_id: bound,
@@ -1071,15 +1027,50 @@ fn connector_kind(kind_key: &str) -> Result<&'static CapabilityKind, AppError> {
     Ok(kind)
 }
 
-/// The app the flow for `kind_key` runs under, when configured: Instagram Login for
-/// `instagram`, the Meta app for the other Meta kinds, the X app for `x`.
-fn oauth_app(apps: &dyn PlatformAppConfig, provider: Provider, kind_key: &str) -> Option<OAuthApp> {
-    match provider {
-        Provider::Meta if kind_key == "instagram" => apps.instagram_app().map(OAuthApp::Instagram),
-        Provider::Meta => apps.meta_app().map(OAuthApp::Meta),
-        Provider::X => apps.x_app().map(OAuthApp::X),
-        Provider::Netgsm => None,
+/// The configured app a flow signed in with `app` runs under, if it is configured.
+fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback) -> Option<OAuthApp> {
+    match app {
+        OAuthCallback::Meta => apps.meta_app().map(OAuthApp::Meta),
+        OAuthCallback::Instagram => apps.instagram_app().map(OAuthApp::Instagram),
+        OAuthCallback::X => apps.x_app().map(OAuthApp::X),
     }
+}
+
+/// The app a reconnection of `capability`, of `provider`, signs in with: the one that issued its
+/// credential (`connector_public.access.app`, written when an OAuth flow's credential is sealed),
+/// so an `instagram` capability connected through Facebook Login (its Page) comes back through
+/// the Meta app and one connected through Instagram Login through the Instagram app. A
+/// capability that names none (declared and never connected, given credentials by hand, or
+/// sealed before the app was recorded) signs in, when it is `instagram`, with the Meta app when
+/// that is configured and the Instagram app otherwise; with its kind's app for every other kind
+/// ([`OAuthCallback::of_flow`]). `None` for a provider without OAuth.
+fn reconnect_app(
+    apps: &dyn PlatformAppConfig,
+    provider: Provider,
+    capability: &Capability,
+) -> Option<OAuthCallback> {
+    let instagram = provider == Provider::Meta && capability.kind_key == "instagram";
+    let issued = capability.connector_public["access"]["app"]
+        .as_str()
+        .and_then(OAuthCallback::parse)
+        .filter(|app| app.provider() == provider)
+        .filter(|app| *app != OAuthCallback::Instagram || instagram);
+    match issued {
+        Some(app) => Some(app),
+        None if instagram && apps.meta_app().is_some() => Some(OAuthCallback::Meta),
+        None => OAuthCallback::of_flow(provider, &capability.kind_key),
+    }
+}
+
+/// The public facts of `credential`, issued by an OAuth flow signed in with `app`: its own
+/// (`Credential::redact_for_public`) and the app's key under `app`, so a reconnection signs in
+/// with the same app ([`reconnect_app`]).
+fn issued_access(credential: &Credential, app: OAuthCallback) -> Value {
+    let mut access = credential.redact_for_public();
+    if let Value::Object(fields) = &mut access {
+        fields.insert("app".to_owned(), json!(app.key()));
+    }
+    access
 }
 
 /// The redirect URI of the flows that come back to `callback`: the public base URL (its path
@@ -1271,7 +1262,7 @@ async fn create(
             flow.provider,
             Some(&asset.name),
             hosts,
-            asset.credential.redact_for_public(),
+            issued_access(&asset.credential, flow.app),
             Some(&asset.public),
         );
         let mut capability = Capability::new(
@@ -1363,7 +1354,7 @@ async fn renew(
         flow.provider,
         Some(&asset.name),
         hosts,
-        asset.credential.redact_for_public(),
+        issued_access(&asset.credential, flow.app),
         Some(&asset.public),
     );
     capability.updated_at = ctx.now;
