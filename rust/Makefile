@@ -1,6 +1,11 @@
 # Developer entry points for the Rust workspace. Run from rust/.
 
-.PHONY: fmt lint doc deny test check dev panel-install panel-test panel-build
+.PHONY: fmt lint doc deny test check dev panel-install panel-test panel-build sweep
+
+# Disk hygiene. Every distinct cargo invocation shape (package set, feature set, profile) gets its
+# own metadata hash and therefore its own copy of every dependency and test binary under target/.
+# Use exactly the invocations below — `--workspace` for tests and clippy, and the one
+# production_build run — rather than `-p` subsets, which mint a third copy of the whole tree.
 
 # Every cargo command here, `dev` included, runs `--locked`, as CI's do; fmt alone takes no such
 # flag. Cargo.lock is used as committed, and a manifest change that needs a new lock file fails
@@ -26,6 +31,11 @@ test:
 	cargo test --locked -p jt_outbound --test production_build
 
 check: fmt lint doc deny test
+
+# Removes target/ artifacts older than a day (install once: cargo install cargo-sweep). Run at the
+# end of a working day; `cargo clean` is the heavier alternative.
+sweep:
+	cargo sweep --time 1
 
 # Reads rust/.env (see .env.example).
 dev:

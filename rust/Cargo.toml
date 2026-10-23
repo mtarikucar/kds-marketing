@@ -101,3 +101,9 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = "warn"
+
+# Debug info is kept to line tables only: backtraces still show file:line, while test binaries
+# shrink three to five times (full DWARF made each one 100–270 MB and rust/target grew past 90 GB).
+# `test` inherits from `dev`.
+[profile.dev]
+debug = "line-tables-only"
