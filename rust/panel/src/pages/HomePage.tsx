@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
 import { getStrategy, startConsultation } from '@/api/strategy';
 import {
+  INBOUND_EVENTS_COUNT_CAP,
   MAX_CHECKIN_INTERVAL_MINUTES,
   MIN_CHECKIN_INTERVAL_MINUTES,
   type AgentState,
@@ -287,19 +288,29 @@ function itemText(t: TFunction, item: WorkItem): string {
       return t('home.pending.connect_connector', { name: item.name });
     case 'reconnect_connector':
       return t('home.pending.reconnect_connector', { name: item.name });
+    case 'inbound_events':
+      // A count of the cap means at least that many.
+      return t('home.pending.inbound_events', {
+        n: item.count >= INBOUND_EVENTS_COUNT_CAP ? `${INBOUND_EVENTS_COUNT_CAP}+` : String(item.count),
+      });
     default:
       return t(`home.pending.${item.kind}`);
   }
 }
 
-/** Where an item is acted on: a capability to reconnect goes straight to its reconnection. */
-function itemLink(item: WorkItem): string {
+/**
+ * Where an item is acted on: a capability to reconnect goes straight to its reconnection; the
+ * inbound events are the agent's to read and acknowledge, so nothing opens for them.
+ */
+function itemLink(item: WorkItem): string | null {
   switch (item.kind) {
     case 'consult_strategy':
     case 'approve_strategy':
       return '/strategy';
     case 'reconnect_connector':
       return `/connect?capability=${encodeURIComponent(item.capability_id)}`;
+    case 'inbound_events':
+      return null;
     default:
       return '/capabilities';
   }
@@ -319,19 +330,27 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
           <p className="text-sm text-muted-foreground">{t('home.pending.empty')}</p>
         ) : (
           <ul className="flex flex-col divide-y divide-border">
-            {items.map((item, i) => (
-              <li key={`${item.kind}-${'capability_id' in item ? item.capability_id : i}`} className="flex items-center gap-3 py-2.5">
-                <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm">
-                  {t('home.pending.priority', { priority: item.priority })}
-                </Badge>
-                <span className="min-w-0 flex-1 text-sm text-foreground">{itemText(t, item)}</span>
-                <Button asChild variant="ghost" size="sm">
-                  <Link to={itemLink(item)}>
-                    {item.kind === 'reconnect_connector' ? t('home.pending.reconnect') : t('home.pending.open')}
-                  </Link>
-                </Button>
-              </li>
-            ))}
+            {items.map((item, i) => {
+              const link = itemLink(item);
+              return (
+                <li
+                  key={`${item.kind}-${'capability_id' in item ? item.capability_id : i}`}
+                  className="flex items-center gap-3 py-2.5"
+                >
+                  <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm">
+                    {t('home.pending.priority', { priority: item.priority })}
+                  </Badge>
+                  <span className="min-w-0 flex-1 text-sm text-foreground">{itemText(t, item)}</span>
+                  {link && (
+                    <Button asChild variant="ghost" size="sm">
+                      <Link to={link}>
+                        {item.kind === 'reconnect_connector' ? t('home.pending.reconnect') : t('home.pending.open')}
+                      </Link>
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </CardContent>

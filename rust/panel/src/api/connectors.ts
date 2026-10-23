@@ -3,6 +3,7 @@ import type {
   CapabilityOut,
   ConnectorHealth,
   CredentialInput,
+  HooksOut,
   PendingAssetsOut,
   ProbeOut,
   SetCredentialsInput,
@@ -82,4 +83,12 @@ export function connectorHealth(): Promise<ConnectorHealth[]> {
 /** `POST /api/connectors/{id}/reconnect`: a flow bound to the capability, as `startOAuth` answers. */
 export function reconnectConnector(id: string): Promise<StartOut> {
   return request('POST', `/api/connectors/${seg(id)}/reconnect`);
+}
+
+/**
+ * `GET /api/connectors/hooks`: the webhook addresses to register at the providers. The NetGSM ones
+ * carry the workspace's hook tokens; the server answers only `capabilities.manage`.
+ */
+export function connectorHooks(): Promise<HooksOut> {
+  return request('GET', '/api/connectors/hooks');
 }

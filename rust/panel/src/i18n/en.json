@@ -291,6 +291,7 @@
       "declare_first_capability": "Declare the first capability the workspace can act through.",
       "connect_connector": "{{name}} awaits its connection.",
       "reconnect_connector": "{{name}} must be reconnected: its provider no longer accepts its login.",
+      "inbound_events": "{{n}} inbound events (messages, statuses, leads, calls, consent changes) await your agent.",
       "open": "Open",
       "priority": "Priority {{priority}}",
       "reconnect": "Reconnect"
@@ -828,6 +829,23 @@
       },
       "probing": "Probing…",
       "redirecting": "Taking you to the provider…"
+    },
+    "hooks": {
+      "title": "Webhook addresses",
+      "description": "Where the providers send this workspace's events (incoming messages, statuses, calls, consent changes). Paste each one into the provider's dashboard.",
+      "netgsmTitle": "NetGSM",
+      "netgsmHelp": "Each address carries a key of this workspace's own: paste it into the NetGSM dashboard only, and do not share it.",
+      "purposes": {
+        "mo": "Incoming SMS",
+        "events": "PBX call events",
+        "iys": "İYS consent changes",
+        "voice-report": "Voice message reports",
+        "autocall-report": "Auto-call reports"
+      },
+      "metaTitle": "Meta",
+      "metaUrl": "Meta webhook address",
+      "verifyTokenHint": "The verify token is set in the dashboard of the platform's Meta app; it is not shown here.",
+      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is."
     }
   },
   "connect": {

@@ -729,7 +729,9 @@ export type WorkKind =
   | { kind: 'verify_capability'; capability_id: Uuid; name: string; stale: boolean }
   | { kind: 'declare_first_capability' }
   | { kind: 'connect_connector'; capability_id: Uuid; name: string }
-  | { kind: 'reconnect_connector'; capability_id: Uuid; name: string };
+  | { kind: 'reconnect_connector'; capability_id: Uuid; name: string }
+  /** Unprocessed inbound events, counted up to `INBOUND_EVENTS_COUNT_CAP`. */
+  | { kind: 'inbound_events'; count: number };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {
@@ -752,6 +754,12 @@ export interface PendingOut {
   items: WorkItem[];
   agent: AgentState;
 }
+
+/**
+ * `jt_app::usecases::work::INBOUND_EVENTS_COUNT_CAP`: an `inbound_events` count of the cap means at
+ * least that many.
+ */
+export const INBOUND_EVENTS_COUNT_CAP = 1000;
 
 /** `jt_app::ports::{MIN,MAX}_AGENT_CHECKIN_INTERVAL_MINUTES`. */
 export const MIN_CHECKIN_INTERVAL_MINUTES = 15;
@@ -818,6 +826,28 @@ export interface ProbeResultPublic {
 export interface ProbeOut {
   result: ProbeResultPublic;
   status: StoredStatus;
+}
+
+/** The purposes of NetGSM's callback URLs (`jt_connector::NetgsmPurpose`), in the server's order. */
+export const NETGSM_PURPOSES = ['mo', 'events', 'iys', 'voice-report', 'autocall-report'] as const;
+export type NetgsmPurpose = (typeof NETGSM_PURPOSES)[number];
+
+/** `jt_app::usecases::connector::MetaHook`: the verify token itself is never sent. */
+export interface MetaHook {
+  url: string;
+  verify_token_hint: string;
+}
+
+/** `jt_app::usecases::connector::NetgsmHook`: the URL carries the workspace's hook token. */
+export interface NetgsmHook {
+  purpose: NetgsmPurpose;
+  url: string;
+}
+
+/** `jt_app::usecases::connector::HooksOut`; `meta` is `null` while the platform has no Meta app. */
+export interface HooksOut {
+  meta: MetaHook | null;
+  netgsm: NetgsmHook[];
 }
 
 /** `jt_app::usecases::connector::ConnectorHealth`. */

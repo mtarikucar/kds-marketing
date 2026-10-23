@@ -291,6 +291,7 @@
       "declare_first_capability": "Çalışma alanının kullanabileceği ilk kabiliyeti bildirin.",
       "connect_connector": "{{name}} bağlanmayı bekliyor.",
       "reconnect_connector": "{{name}} yeniden bağlanmalı: sağlayıcı girişini artık kabul etmiyor.",
+      "inbound_events": "{{n}} gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.",
       "open": "Aç",
       "priority": "Öncelik {{priority}}",
       "reconnect": "Yeniden bağla"
@@ -828,6 +829,23 @@
       },
       "probing": "Yoklanıyor…",
       "redirecting": "Sağlayıcıya yönlendiriliyorsunuz…"
+    },
+    "hooks": {
+      "title": "Webhook adresleri",
+      "description": "Sağlayıcıların bu çalışma alanına olay (gelen mesaj, durum, arama, izin) göndereceği adresler. Her birini sağlayıcının paneline yapıştırın.",
+      "netgsmTitle": "NetGSM",
+      "netgsmHelp": "Her adres bu çalışma alanına özel bir anahtar taşır: yalnızca NetGSM paneline yapıştırın, başkasıyla paylaşmayın.",
+      "purposes": {
+        "mo": "Gelen SMS",
+        "events": "Santral çağrı olayları",
+        "iys": "İYS izin değişiklikleri",
+        "voice-report": "Sesli mesaj raporları",
+        "autocall-report": "Otomatik arama raporları"
+      },
+      "metaTitle": "Meta",
+      "metaUrl": "Meta webhook adresi",
+      "verifyTokenHint": "Doğrulama anahtarı platformun Meta uygulamasının panelinde ayarlıdır; burada gösterilmez.",
+      "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür."
     }
   },
   "connect": {

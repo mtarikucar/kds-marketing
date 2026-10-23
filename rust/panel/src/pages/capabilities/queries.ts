@@ -5,6 +5,7 @@ export const CAPABILITIES_KEY = ['capabilities'] as const;
 export const GROUPS_KEY = ['capability-groups'] as const;
 export const BUDGET_ITEMS_KEY = ['budget', 'items'] as const;
 export const CONNECTOR_HEALTH_KEY = ['connectors', 'health'] as const;
+export const HOOKS_KEY = ['connectors', 'hooks'] as const;
 
 /**
  * After a capability, group or connection change: the lists, the connectors' health, the pending

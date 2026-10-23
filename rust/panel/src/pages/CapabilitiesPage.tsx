@@ -40,6 +40,7 @@ import {
   VerifyDialog,
 } from './capabilities/dialogs';
 import { GroupsPanel } from './capabilities/GroupsPanel';
+import { WebhookPanel } from './capabilities/WebhookPanel';
 import {
   BUDGET_ITEMS_KEY,
   CAPABILITIES_KEY,
@@ -259,6 +260,8 @@ export function CapabilitiesPage() {
       <QueryState query={groups}>
         <GroupsPanel groups={groups.data ?? []} capabilities={all.data ?? []} canManage={canManage} />
       </QueryState>
+      {/* The NetGSM addresses carry the workspace's hook tokens: only who may manage capabilities. */}
+      {canManage && <WebhookPanel />}
 
       {canManage && (
         <>

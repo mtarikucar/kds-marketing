@@ -14,6 +14,7 @@ import {
   capabilities,
   connectorHealth,
   groups,
+  hooks,
   lostPage,
   me,
   repMe,
@@ -27,6 +28,7 @@ const routes = {
   'GET /api/capability-groups': groups,
   'GET /api/budget/items': budgetItems,
   'GET /api/connectors/health': connectorHealth,
+  'GET /api/connectors/hooks': hooks,
 };
 
 /** Every fixture capability plus a verified NetGSM line and a Facebook page to reconnect. */
@@ -320,5 +322,44 @@ describe('CapabilitiesPage', () => {
     const instagram = await cardOf('Atölye Instagram');
     expect(within(instagram).queryByRole('button', { name: tr.capabilities.connector.connect })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: tr.connect.open })).not.toBeInTheDocument();
+  });
+
+  it('shows the webhook addresses to register at the providers, each one to copy', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    mockFetch(routes);
+    renderAt('/capabilities');
+    const section = (await screen.findByRole('heading', { name: tr.capabilities.hooks.title })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(await within(section).findByText(tr.capabilities.hooks.netgsmHelp)).toBeInTheDocument();
+    for (const hook of hooks.netgsm) {
+      const field = within(section).getByRole('textbox', {
+        name: i18n.t(`capabilities.hooks.purposes.${hook.purpose}`),
+      });
+      expect(field).toHaveValue(hook.url);
+    }
+    const meta = within(section).getByRole('textbox', { name: tr.capabilities.hooks.metaUrl });
+    expect(meta).toHaveValue(hooks.meta?.url);
+    expect(within(section).getByText(tr.capabilities.hooks.verifyTokenHint)).toBeInTheDocument();
+    // The first copy button copies the incoming-SMS address.
+    await user.click(within(section).getAllByRole('button', { name: tr.common.copy })[0]);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(hooks.netgsm[0].url));
+  });
+
+  it('says so when the platform has no Meta app yet', async () => {
+    mockFetch({ ...routes, 'GET /api/connectors/hooks': { ...hooks, meta: null } });
+    renderAt('/capabilities');
+    expect(await screen.findByText(tr.capabilities.hooks.metaMissing)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.metaUrl })).not.toBeInTheDocument();
+  });
+
+  it('never shows nor asks for the hook tokens without capabilities.manage', async () => {
+    const calls = mockFetch({ ...routes, 'GET /api/auth/me': repMe });
+    renderAt('/capabilities');
+    expect(await screen.findByRole('heading', { name: 'Atölye Instagram' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: tr.capabilities.hooks.title })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path === '/api/connectors/hooks')).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import type {
   ConnectorHealth,
   ConsultationEntry,
   GroupOut,
+  HooksOut,
   KeySummary,
   LedgerEntryOut,
   MeOut,
@@ -537,4 +538,19 @@ export const pendingAssets: PendingAssetsOut = {
       public: { username: 'kahveevi', expires_at: '2026-12-21T09:00:00Z' },
     },
   ],
+};
+
+/** A synthetic hook token: 64 hex digits, not any workspace's. */
+const HOOK_TOKEN = 'a1'.repeat(32);
+
+/** The webhook addresses of a workspace on a platform whose Meta app is configured. */
+export const hooks: HooksOut = {
+  meta: {
+    url: 'https://panel.example.invalid/hooks/meta',
+    verify_token_hint: 'set in the Meta app dashboard',
+  },
+  netgsm: (['mo', 'events', 'iys', 'voice-report', 'autocall-report'] as const).map((purpose) => ({
+    purpose,
+    url: `https://panel.example.invalid/hooks/netgsm/${WS_ID}/${HOOK_TOKEN}/${purpose}`,
+  })),
 };

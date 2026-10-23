@@ -193,4 +193,22 @@ describe('HomePage', () => {
     expect(screen.queryByText(tr.home.agent.overdueTitle)).not.toBeInTheDocument();
     expect(screen.getByText(tr.home.agent.onTime)).toBeInTheDocument();
   });
+
+  it('counts the inbound events awaiting the agent, a full count as at least that many', async () => {
+    const withEvents = (count: number) => ({
+      ...pendingOverdue,
+      items: [{ kind: 'inbound_events' as const, count, priority: 2, hint: 'read them' }],
+    });
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': withEvents(3) });
+    const { unmount } = renderAt('/');
+    const item = await screen.findByText(i18n.t('home.pending.inbound_events', { n: '3' }));
+    // The agent handles them: nothing for the person to open.
+    expect(within(item.closest('li') as HTMLElement).queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.queryByText('read them')).not.toBeInTheDocument();
+    unmount();
+
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': withEvents(1000) });
+    renderAt('/');
+    expect(await screen.findByText(i18n.t('home.pending.inbound_events', { n: '1000+' }))).toBeInTheDocument();
+  });
 });
