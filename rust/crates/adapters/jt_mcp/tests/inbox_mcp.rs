@@ -5,7 +5,7 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
         .into_iter()
         .filter(|s| s.name.starts_with("jeeta.inbox."))
         .collect();
-    assert_eq!(tools.len(), 35);
+    assert_eq!(tools.len(), 41);
     for tool in tools {
         assert_eq!(tool.input_schema.as_value()["additionalProperties"], false);
         let manage = matches!(
@@ -35,6 +35,12 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
 fn merge_task_and_note_schemas_share_panel_inputs_with_path_ids() {
     use jt_app::usecases::inbox::schema;
     for (action, path_id) in [
+        ("quotes.send", Some("journey_id")),
+        ("quotes.accept", Some("quote_id")),
+        ("quotes.list", Some("journey_id")),
+        ("appointments.book", Some("journey_id")),
+        ("appointments.cancel", Some("appointment_id")),
+        ("appointments.held", Some("appointment_id")),
         ("pending", None),
         ("context", Some("conversation_id")),
         ("conversations.list", None),

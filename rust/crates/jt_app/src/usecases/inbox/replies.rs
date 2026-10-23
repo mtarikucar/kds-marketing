@@ -141,7 +141,7 @@ pub async fn send(
         Enqueued::New(id) => send_step(deps, ctx, id).await,
     }
 }
-enum Target {
+pub(super) enum Target {
     Conversation(ConversationId),
     Person(PersonId, Channel),
 }
@@ -155,6 +155,33 @@ async fn enqueue_target(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
+    let result = enqueue_in(deps, ctx, r.as_mut(), target, input, Purpose::Reply).await;
+    if result.is_ok()
+        || result
+            .as_ref()
+            .is_err_and(|e| e.code == ErrorCode::Forbidden)
+    {
+        r.commit().await?;
+    }
+    result
+}
+
+pub(super) enum Purpose<'a> {
+    Reply,
+    Quote(&'a crate::ports::compliance::QuoteRow, Option<&'a str>),
+    Appointment(&'a crate::ports::compliance::AppointmentRow),
+}
+
+/// Shared phase A: caller owns the workspace lock and commits related business rows atomically.
+pub(super) async fn enqueue_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    target: Target,
+    input: ReplyInput,
+    purpose: Purpose<'_>,
+) -> Result<Enqueued, AppError> {
+    ctx.require(Permission::InboxWork)?;
     let key = input
         .request_key
         .as_deref()
@@ -173,7 +200,7 @@ async fn enqueue_target(
         ));
     }
     let c = match target {
-        Target::Conversation(id) => lock_conversation(r.as_mut(), id).await?,
+        Target::Conversation(id) => lock_conversation(r, id).await?,
         Target::Person(person, channel) => {
             let kind = match channel {
                 Channel::Sms => "sms_line",
@@ -223,15 +250,15 @@ async fn enqueue_target(
         }
     };
     let id = c.id;
-    let j = lock_current_journey(r.as_mut(), c.person_id).await?;
+    let j = lock_current_journey(r, c.person_id).await?;
     let author = match ctx.actor {
         Actor::Human { user_id } => Author::Human(user_id),
         Actor::Agent { .. } => Author::Agent,
         Actor::System { .. } => Author::System,
     };
-    let cap = capability(r.as_mut(), &c).await?;
+    let cap = capability(r, &c).await?;
     if let Err(error) = fence(
-        r.as_mut(),
+        r,
         ctx,
         &c,
         j.as_ref(),
@@ -243,7 +270,7 @@ async fn enqueue_target(
     {
         if error.code == ErrorCode::Forbidden {
             record(
-                r.as_mut(),
+                r,
                 ctx,
                 "inbox.send.refused",
                 "person",
@@ -251,7 +278,6 @@ async fn enqueue_target(
                 json!({"person_id":c.person_id,"reason":error.message}),
             )
             .await?;
-            r.commit().await?;
         }
         return Err(error);
     }
@@ -260,10 +286,20 @@ async fn enqueue_target(
         r.conversations().insert_for_send(c.clone()).await?;
     }
     // Validate recipient ambiguity before creating any durable outbound intent.
-    let recipient = recipient(r.as_mut(), &c, &cap).await?;
+    let recipient = recipient(r, &c, &cap).await?;
     let message_id = MessageId::from(deps.ids.uuid());
     let outbox_id = deps.ids.uuid();
     let mut intent = json!({"kind":input.intent,"request_key":key});
+    match &purpose {
+        Purpose::Reply => {}
+        Purpose::Quote(quote, key) => {
+            intent["quote_id"] = json!(quote.id);
+            intent["quote_response"] = serde_json::to_value(quote)?;
+            intent["request_key"] = json!(key);
+        }
+        Purpose::Appointment(appointment) => intent["appointment_id"] = json!(appointment.id),
+    }
+
     if cap.kind_key == "mailbox" {
         let base = deps
             .apps
@@ -313,6 +349,31 @@ async fn enqueue_target(
         }
         intent["mail_account"] = json!(cap.external_id);
         intent["mail_hosts"] = cap.connector_public["hosts"].clone();
+        let attachments = if let Purpose::Appointment(appointment) = &purpose {
+            let sealed = r
+                .capabilities()
+                .read_sealed(cap.id)
+                .await?
+                .ok_or_else(|| AppError::conflict("mailbox credentials unavailable"))?;
+            let Credential::Mailbox { from_address, .. } =
+                open_credential(deps, ctx.workspace_id, &sealed)?
+            else {
+                return Err(AppError::conflict("mailbox credentials required"));
+            };
+            vec![crate::ports::connectors::Attachment {
+                filename: "appointment.ics".into(),
+                mime: "text/calendar".into(),
+                bytes: ics(
+                    &appointment.appointment,
+                    &from_address,
+                    &recipient,
+                    &appointment.id.to_string(),
+                )
+                .into_bytes(),
+            }]
+        } else {
+            vec![]
+        };
         intent["mail"] = serde_json::to_value(MailMessage {
             to: recipient,
             subject,
@@ -320,7 +381,7 @@ async fn enqueue_target(
             message_id: format!("<{outbox_id}@{host}>"),
             in_reply_to,
             references,
-            attachments: vec![],
+            attachments,
         })?;
     } else if input.subject.is_some() || input.in_reply_to.is_some() || !input.references.is_empty()
     {
@@ -370,7 +431,7 @@ async fn enqueue_target(
         .await?;
     r.outbox().insert(row.clone()).await?;
     record(
-        r.as_mut(),
+        r,
         ctx,
         "inbox.reply.queued",
         "outbox",
@@ -378,7 +439,6 @@ async fn enqueue_target(
         json!({"conversation_id":id,"message_id":message_id}),
     )
     .await?;
-    r.commit().await?;
     Ok(Enqueued::New(row.id))
 }
 async fn lock_conversation(
@@ -514,6 +574,32 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         .await?
         .ok_or_else(|| AppError::not_found("no such message"))?;
     let cap = capability(r.as_mut(), &c).await?;
+    if let Some(appointment_id) = row.intent.get("appointment_id") {
+        let appointment_id = serde_json::from_value(appointment_id.clone())?;
+        let booked = r
+            .appointments()
+            .get(appointment_id)
+            .await?
+            .is_some_and(|a| a.appointment.state == AppointmentState::Booked);
+        if !booked {
+            row.state = "refused".into();
+            row.last_error = Some("appointment_not_booked".into());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(
+                    row.message_id,
+                    MsgStatus::Refused {
+                        reason: "appointment_not_booked".into(),
+                    },
+                    None,
+                    None,
+                )
+                .await?;
+            save_result(r.as_mut(), ctx, &row).await?;
+            r.commit().await?;
+            return Ok(Claim::Done(output(&row)));
+        }
+    }
     if let Err(e) = fence(
         r.as_mut(),
         ctx,
@@ -871,6 +957,16 @@ pub(super) async fn record_result_in(
                     }
                 }
             }
+            if let Some(quote_id) = row.intent.get("quote_id") {
+                super::quotes::sent_in(
+                    deps,
+                    ctx,
+                    r,
+                    serde_json::from_value(quote_id.clone())?,
+                    sent_at,
+                )
+                .await?;
+            }
             if terminal {
                 record(
                     r,
@@ -955,14 +1051,21 @@ pub(super) async fn save_result(
             message_id: row.message_id,
             state: "unknown".into(),
         };
-        let response = serde_json::to_value(output(row))?;
+        let response_value = |delivery: ReplyOut| -> Result<Value, AppError> {
+            let delivery = serde_json::to_value(delivery)?;
+            Ok(match row.intent.get("quote_response") {
+                Some(quote) => json!({"quote":quote,"delivery":delivery}),
+                None => delivery,
+            })
+        };
+        let response = response_value(output(row))?;
         if !r
             .request_keys()
-            .complete(key, serde_json::to_value(queued)?, response.clone())
+            .complete(key, response_value(queued)?, response.clone())
             .await?
         {
             r.request_keys()
-                .complete(key, serde_json::to_value(unknown)?, response)
+                .complete(key, response_value(unknown)?, response)
                 .await?;
         }
     }

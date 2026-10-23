@@ -170,6 +170,9 @@ pub async fn report(
         "idempotency_key",
         input.idempotency_key.as_deref().unwrap_or_default(),
     )?;
+    if key.starts_with("quote:") || key.starts_with("appointment:") {
+        return Err(invalid("idempotency_key", "reserved business event key"));
+    }
     let kind = parse_kind(&input.kind, input.payload)?;
     let reopen = matches!(kind, JourneyEventKind::Reopened);
     if reopen {

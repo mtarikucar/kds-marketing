@@ -20,6 +20,48 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "inbox.quotes.send",
+            description: "quotes.send for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("quotes.send")).expect("inbox schema"),
+            run: quotes_send,
+        },
+        ToolDef {
+            use_case: "inbox.quotes.accept",
+            description: "quotes.accept for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("quotes.accept")).expect("inbox schema"),
+            run: quotes_accept,
+        },
+        ToolDef {
+            use_case: "inbox.quotes.list",
+            description: "quotes.list for an internal journey. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("quotes.list")).expect("inbox schema"),
+            run: quotes_list,
+        },
+        ToolDef {
+            use_case: "inbox.appointments.book",
+            description: "appointments.book for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("appointments.book")).expect("inbox schema"),
+            run: appointments_book,
+        },
+        ToolDef {
+            use_case: "inbox.appointments.cancel",
+            description: "appointments.cancel for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("appointments.cancel")).expect("inbox schema"),
+            run: appointments_cancel,
+        },
+        ToolDef {
+            use_case: "inbox.appointments.held",
+            description: "appointments.held for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("appointments.held")).expect("inbox schema"),
+            run: appointments_held,
+        },
+        ToolDef {
             use_case: "inbox.consent.record",
             description: "consent.record for a workspace person. [risk: WRITE]",
             permission: Permission::InboxWork,
@@ -491,5 +533,47 @@ fn send<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         let id: PersonId = take_id(&mut raw, "person_id")?;
         to_json(&replies::send(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+use jt_app::usecases::inbox::{appointments, quotes};
+fn quotes_send<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: JourneyId = take_id(&mut raw, "journey_id")?;
+        to_json(&quotes::send(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn quotes_accept<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "quote_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&quotes::accept(deps, ctx, id).await?)
+    })
+}
+fn quotes_list<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: JourneyId = take_id(&mut raw, "journey_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&quotes::list(deps, ctx, id).await?)
+    })
+}
+fn appointments_book<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: JourneyId = take_id(&mut raw, "journey_id")?;
+        to_json(&appointments::book(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn appointments_cancel<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "appointment_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&appointments::cancel(deps, ctx, id).await?)
+    })
+}
+fn appointments_held<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "appointment_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&appointments::held(deps, ctx, id).await?)
     })
 }

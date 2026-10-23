@@ -253,7 +253,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (95 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (101 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -270,7 +270,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 95 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 101 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -1285,7 +1285,7 @@ Görevlerde varsayılan `queue=due_24h`, şu andan 24 saat sonrasına kadar olan
 gösterir; `overdue` şu andan önceki görevleri, `all` zaman sınırı olmadan görevleri getirir.
 `assignee` isteğe bağlı kullanıcı filtresidir. Not metni işlem defterine yazılmaz.
 
-Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply",request_key?,subject?,in_reply_to?,references?}`; commercial intent is reserved for M2b. Human replies preserve the executor.
+Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply"|"commercial",request_key?,subject?,in_reply_to?,references?}`; commercial intent requires effective consent and no suppression. Human replies preserve the executor.
 
 ### Gelen olay tüketicisi (`inbox@1`)
 
@@ -1365,7 +1365,7 @@ its down migration removes only the added policy column.
 
 ### M2a inbox core: model, reducer and surfaces
 
-The catalog contains **95 MCP tools: the M1b 60 plus 35 inbox tools**. Every inbox tool
+The catalog contains **101 MCP tools: the M1b 60 plus 41 inbox tools**. Every inbox tool
 has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
 are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
 check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
@@ -1591,3 +1591,48 @@ consent retry attempts. Provisioning can be retried without replacing the SMS cr
 The capabilities page offers İYS setup for live SMS lines with credentials, including verified
 lines; verified lines show only the İYS form. Retirement clears both sealed slots, and rebinding
 a line clears its İYS slot and brand metadata along with the old account credentials.
+
+## M2b quotes and internal appointments
+
+Six additional strategy-gated `InboxWork` operations bring the release to **101 MCP tools**
+(**41 inbox tools**). Each operation uses the same input, output and permission on HTTP and MCP:
+
+| Use case | MCP tool | HTTP route |
+|---|---|---|
+| `inbox.quotes.send` | `jeeta.inbox.quotes_send` | POST `/api/inbox/journeys/{journey_id}/quotes` |
+| `inbox.quotes.list` | `jeeta.inbox.quotes_list` | GET `/api/inbox/journeys/{journey_id}/quotes` |
+| `inbox.quotes.accept` | `jeeta.inbox.quotes_accept` | POST `/api/inbox/quotes/{id}/accept` |
+| `inbox.appointments.book` | `jeeta.inbox.appointments_book` | POST `/api/inbox/journeys/{journey_id}/appointments` |
+| `inbox.appointments.cancel` | `jeeta.inbox.appointments_cancel` | POST `/api/inbox/appointments/{id}/cancel` |
+| `inbox.appointments.held` | `jeeta.inbox.appointments_held` | POST `/api/inbox/appointments/{id}/held` |
+
+MCP uses `journey_id`, `quote_id` or `appointment_id` for the corresponding path identifier.
+Quote send accepts `{amount_minor,currency,valid_until,file_ref?,channel,text,intent,request_key?}`.
+Business event key prefixes `quote:` and `appointment:` are reserved; client `events.report`
+cannot manufacture delivery or booking evidence. Amounts must be nonnegative, currency must be
+an assigned uppercase ISO 4217 code, and validity
+must end in the future. The quote, message, outbox and optional 24-hour workspace request-key
+response commit together. The response is `{quote,delivery:{message_id,state}}`; `delivery.state`
+is authoritative for delivery, separately from the quote's business lifecycle. Reusing a key
+returns the stored quote and response without another send. Unknown delivery is never resent;
+provider acceptance or later evidence records `quote_sent` once. Late receipts after Won/Lost
+remain historical and never reopen or change the closed journey. Accept requires confirmed
+delivery, refuses an expired quote, and atomically records `quote_accepted` (Pending).
+`file_ref` is opaque and agent-owned: the platform does not fetch, host or delete its asset.
+
+Book accepts `{starts_at,ends_at,location,intent}` with RFC3339 times and `ends_at > starts_at`.
+It atomically records `appointment_booked` and an automatic task due **one hour before** start,
+assigned to the journey owner (or unassigned). The reminder uses the appointment UUID in the
+separate task table. Held records `meeting_held` and completes the reminder; cancel cancels only
+that booking's reminder. Repeating the same final state is idempotent; a different final state
+conflicts. The result contains `{appointment,reminder,notification:{state,message_id}}`.
+
+When a verified mailbox and active email identity are available, booking includes an
+`appointment.ics` attachment in the ordinary durable mail outbox. The explicit Reply/Commercial
+intent obeys both enqueue and provider fences, including the reply window and commercial consent/
+suppression checks. A missing mailbox or email identity gives notification `unavailable`;
+an enqueue fence refusal gives `refused` and a ledger entry while retaining the internal booking.
+Unknown mail is ledgered and reconciled through the same Message-ID recovery, without resending.
+Cancelling or holding a booking before its mail is claimed refuses the pending confirmation.
+Attachment bytes and personal location/text are excluded from ledger entries. These are internal
+appointments; external calendar availability, OAuth, events and public booking remain deferred.

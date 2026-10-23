@@ -2545,3 +2545,285 @@ async fn inbox_consent_suppressions_and_send_have_http_mcp_parity() {
         1
     );
 }
+
+#[tokio::test]
+async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("quote-appointment-parity").await;
+    let sender =
+        Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(&["api.netgsm.com.tr"]));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(sender.clone())),
+    );
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    sender.push_probe(ProbeResult::success(42, json!({"account_id":"8508001234"})));
+    ok(send(&app,panel(Method::POST,"/api/connectors/credentials",Some(&cookie),Some(json!({"kind_key":"sms_line","name":"SMS","credential":{"kind":"netgsm_sms","usercode":"8508001234","password":"test-secret","msgheader":"ALFA"}})))).await).await;
+    let created = ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})))).await).await;
+    let person = created["person"]["id"].as_str().unwrap();
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let j = r
+        .journeys()
+        .open_for(serde_json::from_value(json!(person)).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(r);
+    let base = format!("/api/inbox/journeys/{}", j.id);
+    ok(send(&app,panel(Method::POST,&format!("/api/inbox/people/{person}/consents"),Some(&cookie),Some(json!({"channel":"sms","kind":"explicit","source":"agent","at":"2020-01-01T00:00:00Z"})))).await).await;
+    let quote_input = json!({"amount_minor":12500,"currency":"TRY","valid_until":"2099-01-01T00:00:00Z","file_ref":"opaque:owner-reference","channel":"sms","text":"Quote details","intent":"commercial","request_key":"quote-parity"});
+    sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
+        provider_id: "quote-parity".into(),
+        cost_minor: None,
+    }));
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/quotes"),
+            Some(&cookie),
+            Some(quote_input.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let mut args = quote_input;
+    args["journey_id"] = json!(j.id);
+    assert_eq!(
+        human,
+        call_tool(&app, &key, &session, "jeeta.inbox.quotes_send", args).await
+    );
+    assert_eq!(human["delivery"]["state"], "sent");
+    let quote_id = human["quote"]["id"].as_str().unwrap();
+    let human = ok(send(
+        &app,
+        panel(Method::GET, &format!("{base}/quotes"), Some(&cookie), None),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.quotes_list",
+            json!({"journey_id":j.id})
+        )
+        .await
+    );
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/quotes/{quote_id}/accept"),
+            Some(&cookie),
+            Some(json!({})),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.quotes_accept",
+            json!({"quote_id":quote_id})
+        )
+        .await
+    );
+    assert_eq!(human["state"], "accepted");
+
+    let booking = json!({"starts_at":"2099-01-01T12:00:00Z","ends_at":"2099-01-01T13:00:00Z","location":"Office","intent":"reply"});
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/appointments"),
+            Some(&cookie),
+            Some(booking.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let mut args = booking.clone();
+    args["journey_id"] = json!(j.id);
+    let agent = call_tool(&app, &key, &session, "jeeta.inbox.appointments_book", args).await;
+    assert_ne!(human["appointment"]["id"], agent["appointment"]["id"]);
+    for field in [
+        "journey_id",
+        "starts_at",
+        "ends_at",
+        "location",
+        "state",
+        "created_at",
+    ] {
+        assert_eq!(
+            human["appointment"][field], agent["appointment"][field],
+            "{field}"
+        );
+    }
+    assert_eq!(human["notification"], agent["notification"]);
+    assert_eq!(human["reminder"]["due_at"], "2099-01-01T11:00:00Z");
+    let held_id = human["appointment"]["id"].as_str().unwrap();
+    let cancel_id = agent["appointment"]["id"].as_str().unwrap();
+    for (id, action) in [(held_id, "held"), (cancel_id, "cancel")] {
+        let human = ok(send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/appointments/{id}/{action}"),
+                Some(&cookie),
+                Some(json!({})),
+            ),
+        )
+        .await)
+        .await;
+        assert_eq!(
+            human,
+            call_tool(
+                &app,
+                &key,
+                &session,
+                &format!("jeeta.inbox.appointments_{action}"),
+                json!({"appointment_id":id})
+            )
+            .await
+        );
+    }
+    let mut invalid = booking;
+    invalid["ends_at"] = json!("2099-01-01T11:00:00Z");
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("{base}/appointments"),
+                Some(&cookie),
+                Some(invalid.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    invalid["journey_id"] = json!(j.id);
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.appointments_book",
+        invalid,
+    )
+    .await;
+    assert_eq!(human["code"], "VALIDATION");
+    assert_eq!(human, agent["structuredContent"]);
+    // A late provider receipt is historical even on the actual PostgreSQL repositories.
+    ok(send(
+        &app,
+        panel(
+            Method::PUT,
+            "/api/inbox/lost-reasons",
+            Some(&cookie),
+            Some(json!({"key":"fiyat","label":"Fiyat","active":true})),
+        ),
+    )
+    .await)
+    .await;
+    sender.push_sms(Err(ConnectorError::unknown(
+        "provider acknowledgement lost",
+    )));
+    let late = ok(send(&app,panel(Method::POST,&format!("{base}/quotes"),Some(&cookie),Some(json!({"amount_minor":100,"currency":"TRY","valid_until":"2099-01-01T00:00:00Z","channel":"sms","text":"Revised quote","intent":"commercial","request_key":"late-quote"})))).await).await;
+    assert_eq!(late["delivery"]["state"], "unknown");
+    ok(send(&app,panel(Method::POST,&format!("{base}/events"),Some(&cookie),Some(json!({"kind":"lost","idempotency_key":"close-late-quote","payload":{"reason_key":"fiyat"}})))).await).await;
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let closed = r.journeys().get(j.id).await.unwrap().unwrap();
+    let rows = r
+        .outbox()
+        .list_pending(
+            "unknown",
+            deps.clock.now() + std::time::Duration::from_secs(1),
+            100,
+        )
+        .await
+        .unwrap();
+    let outbox = rows
+        .iter()
+        .find(|row| json!(row.message_id) == late["delivery"]["message_id"])
+        .unwrap()
+        .id;
+    drop(r);
+    let ctx = jt_app::ctx::Ctx {
+        workspace_id: ws,
+        actor: jt_ledger::Actor::System {
+            component: "quote-evidence".into(),
+        },
+        permissions: Default::default(),
+        role_key: None,
+        now: deps.clock.now(),
+        agent_connection_id: None,
+    };
+    for _ in 0..2 {
+        jt_app::usecases::inbox::replies::record_result(
+            &deps,
+            &ctx,
+            outbox,
+            Ok(jt_app::ports::connectors::SendReceipt {
+                provider_id: "late-quote".into(),
+                cost_minor: None,
+            }),
+        )
+        .await
+        .unwrap();
+    }
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(r.journeys().get(j.id).await.unwrap().unwrap(), closed);
+    assert!(
+        r.journeys()
+            .event_by_key(&format!(
+                "quote:{}:sent",
+                late["quote"]["id"].as_str().unwrap()
+            ))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    drop(r);
+    // Missing identifiers must have the same error on both surfaces.
+    let missing = jt_inbox::JourneyId::new_v7();
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/quotes/{missing}/accept"),
+                Some(&cookie),
+                Some(json!({})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.quotes_accept",
+        json!({"quote_id":missing}),
+    )
+    .await;
+    assert_eq!(human["code"], "NOT_FOUND");
+    assert_eq!(human, agent["structuredContent"]);
+}

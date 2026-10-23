@@ -4,8 +4,14 @@ fn inbox_routes_are_registered_for_both_reads_and_mutations() {
         .iter()
         .filter(|(_, path)| path.starts_with("/api/inbox/"))
         .collect();
-    assert_eq!(routes.len(), 35);
+    assert_eq!(routes.len(), 41);
     for route in [
+        ("POST", "/api/inbox/journeys/{journey_id}/quotes"),
+        ("POST", "/api/inbox/quotes/{id}/accept"),
+        ("GET", "/api/inbox/journeys/{journey_id}/quotes"),
+        ("POST", "/api/inbox/journeys/{journey_id}/appointments"),
+        ("POST", "/api/inbox/appointments/{id}/cancel"),
+        ("POST", "/api/inbox/appointments/{id}/held"),
         ("POST", "/api/inbox/people/{person_id}/consents"),
         ("GET", "/api/inbox/people/{person_id}/consents"),
         ("POST", "/api/inbox/people/{person_id}/suppressions"),

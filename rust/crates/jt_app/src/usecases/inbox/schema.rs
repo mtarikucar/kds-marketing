@@ -10,6 +10,21 @@ pub fn input(action: &str) -> Value {
         &["channel", "value"],
     );
     match action {
+        "quotes.send" => object(
+            json!({"amount_minor":{"type":"integer","minimum":0},"currency":{"type":"string","pattern":"^[A-Z]{3}$"},"valid_until":{"type":"string","format":"date-time"},"file_ref":{"type":["string","null"]},"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["reply","commercial"]},"request_key":{"type":["string","null"]}}),
+            &[
+                "amount_minor",
+                "currency",
+                "valid_until",
+                "channel",
+                "text",
+                "intent",
+            ],
+        ),
+        "appointments.book" => object(
+            json!({"starts_at":{"type":"string","format":"date-time"},"ends_at":{"type":"string","format":"date-time"},"location":{"type":"string","minLength":1},"intent":{"enum":["reply","commercial"]}}),
+            &["starts_at", "ends_at", "location", "intent"],
+        ),
         "consent.record" => object(
             json!({"channel":{"enum":["sms","email","phone","whats_app","messenger","instagram_dm","webchat"]},"kind":{"enum":["explicit","implied_by_contract","withdrawn"]},"source":{"enum":["form","agent","import","iys_sync","customer"]},"at":{"type":"string","format":"date-time"}}),
             &["channel", "kind", "source", "at"],
@@ -109,13 +124,18 @@ pub fn tool(action: &str) -> Value {
         | "suppressions.add"
         | "suppressions.remove"
         | "send" => Some("person_id"),
-        "journeys.get"
+        "quotes.send"
+        | "quotes.list"
+        | "appointments.book"
+        | "journeys.get"
         | "journeys.assign_owner"
         | "events.report"
         | "tasks.create"
         | "notes.add" => Some("journey_id"),
         "merges.apply" | "merges.undo" | "merges.refuse" => Some("merge_id"),
         "tasks.complete" => Some("task_id"),
+        "quotes.accept" => Some("quote_id"),
+        "appointments.cancel" | "appointments.held" => Some("appointment_id"),
         _ => None,
     };
     if let Some(id) = id {

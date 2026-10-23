@@ -147,6 +147,12 @@ fn catalog_is_the_release_table() {
         ("inbox.suppressions.add", Some("jeeta.inbox.suppressions_add"), Some(("POST", "/api/inbox/people/{person_id}/suppressions")), false, Risk::Write),
         ("inbox.suppressions.remove", Some("jeeta.inbox.suppressions_remove"), Some(("DELETE", "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}")), false, Risk::Write),
         ("inbox.send", Some("jeeta.inbox.send"), Some(("POST", "/api/inbox/people/{person_id}/send")), false, Risk::Write),
+        ("inbox.quotes.send", Some("jeeta.inbox.quotes_send"), Some(("POST", "/api/inbox/journeys/{journey_id}/quotes")), false, Risk::Write),
+        ("inbox.quotes.accept", Some("jeeta.inbox.quotes_accept"), Some(("POST", "/api/inbox/quotes/{id}/accept")), false, Risk::Write),
+        ("inbox.quotes.list", Some("jeeta.inbox.quotes_list"), Some(("GET", "/api/inbox/journeys/{journey_id}/quotes")), false, Risk::Read),
+        ("inbox.appointments.book", Some("jeeta.inbox.appointments_book"), Some(("POST", "/api/inbox/journeys/{journey_id}/appointments")), false, Risk::Write),
+        ("inbox.appointments.cancel", Some("jeeta.inbox.appointments_cancel"), Some(("POST", "/api/inbox/appointments/{id}/cancel")), false, Risk::Write),
+        ("inbox.appointments.held", Some("jeeta.inbox.appointments_held"), Some(("POST", "/api/inbox/appointments/{id}/held")), false, Risk::Write),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
@@ -219,7 +225,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 105);
+    assert_eq!(CATALOG.len(), 111);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

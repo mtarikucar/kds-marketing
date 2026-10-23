@@ -299,3 +299,49 @@ pub async fn send(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&jt_app::usecases::inbox::replies::send(&state.deps, &ctx, id, input).await?)
 }
+
+use jt_app::usecases::inbox::{appointments, quotes};
+pub async fn quotes_send(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<JourneyId>,
+    ApiJson(input): ApiJson<quotes::SendInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&quotes::send(&state.deps, &ctx, id, input).await?)
+}
+pub async fn quotes_accept(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&quotes::accept(&state.deps, &ctx, id).await?)
+}
+pub async fn quotes_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<JourneyId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&quotes::list(&state.deps, &ctx, id).await?)
+}
+pub async fn appointments_book(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<JourneyId>,
+    ApiJson(input): ApiJson<appointments::BookInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&appointments::book(&state.deps, &ctx, id, input).await?)
+}
+pub async fn appointments_cancel(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&appointments::cancel(&state.deps, &ctx, id).await?)
+}
+pub async fn appointments_held(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&appointments::held(&state.deps, &ctx, id).await?)
+}

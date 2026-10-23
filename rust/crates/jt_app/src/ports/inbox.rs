@@ -217,7 +217,8 @@ pub trait JourneyRepo: Send + Sync {
     /// or historical receipts. Read while holding the journey lock.
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError>;
 
-    /// Append only a system Replied receipt whose original send predates newer journey changes.
+    /// Append a system Replied or QuoteSent receipt whose send predates newer journey changes.
+    /// The legacy method name covers both evidenced outbound receipt kinds.
     /// Records current from/to status, preserving every reducer-owned field; unique event key.
     async fn append_historical_reply(&mut self, event: JourneyEvent) -> Result<(), AppError>;
 

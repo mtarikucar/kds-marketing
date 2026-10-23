@@ -964,9 +964,14 @@ impl JourneyRepo for MemTenant {
         self.call(|t| {
             let ws = t.ws;
             same_workspace(ws, event.workspace_id)?;
-            if event.source != EventSource::System || event.kind != JourneyEventKind::Replied {
+            if event.source != EventSource::System
+                || !matches!(
+                    event.kind,
+                    JourneyEventKind::Replied | JourneyEventKind::QuoteSent
+                )
+            {
                 return Err(AppError::validation(
-                    "only system replied receipts may be historical",
+                    "only system outbound receipts may be historical",
                     serde_json::json!({}),
                 ));
             }
