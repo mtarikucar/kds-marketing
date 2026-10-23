@@ -2,16 +2,25 @@
 //! (spec §4.2 rule 2: deterministic jobs only).
 //!
 //! Every tick of a job asks for the job's lock (`Deps::job_lock`, a Postgres advisory lock named
-//! [`Job::lock_name`]) and skips the run when another instance holds it, so several servers on
-//! one database never run a job twice at once; otherwise it runs the job once and gives the lock
-//! back. A job's first tick comes after a random delay of up to [`Intervals::first_run_jitter`],
-//! so instances started together do not all ask at the same moment, and later ticks follow its
-//! interval (a run longer than the interval delays the next tick instead of piling ticks up).
+//! [`Job::lock_name`]) and skips the run when another runner holds it: two runs of the same job
+//! never overlap, on one instance or across instances sharing the database. The lock does not
+//! make instances take turns, though: each instance ticks on its own schedule, so with several
+//! instances a job runs (one at a time) as often as each of them ticks it; run the jobs on one
+//! instance only ([`JOBS_ENABLED`](crate::config::JOBS_ENABLED) `false` on the others). A job's
+//! first tick comes after a random delay of up to [`Intervals::first_run_jitter`], so instances
+//! started together do not all ask at the same moment, and later ticks follow its interval (a run
+//! longer than the interval delays the next tick instead of piling ticks up).
 //!
 //! Each run is a task of its own: a run that panics is logged, its lock given back, and the next
 //! tick runs the job again. Each job's loop is a task of its own too, watched by a supervisor
-//! that starts it again, one interval later, should it ever stop by panicking. Dropping (or
-//! shutting down) the returned [`JoinSet`] stops every loop and every run in flight.
+//! that starts it again, one interval later, should it ever stop by panicking.
+//!
+//! **Stopping.** [`Scheduler::stop`] (on SIGINT or SIGTERM) lets no new run start; a run already
+//! going finishes, gives its lock back, and its loop ends. [`Scheduler::shutdown`] stops and
+//! waits for those runs for at most a grace period ([`SHUTDOWN_GRACE`] in the server), then aborts
+//! what is left. A run is not cut short lightly: a token renewal between the provider's answer
+//! and the commit of the new credential is the one step that cannot simply be repeated (X has
+//! already retired the old refresh token by then).
 //!
 //! [`JOBS_ENABLED`](crate::config::JOBS_ENABLED) set to `false` starts nothing ([`start`]).
 
@@ -24,10 +33,15 @@ use std::time::Duration;
 use jt_app::usecases::Deps;
 use jt_app::usecases::jobs::{Job, JobReport};
 use time::OffsetDateTime;
+use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::config::{self, Config};
+
+/// How long the server waits, once it stops, for the runs in flight to finish before it aborts
+/// them.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 /// How often each job runs, and how long a job may wait for its first run. The default is the
 /// production schedule; tests shorten it.
@@ -81,25 +95,79 @@ impl Intervals {
     }
 }
 
+/// The running jobs: one supervised loop per job. Dropping it aborts every loop and every run in
+/// flight at once; [`Scheduler::shutdown`] lets the runs finish first.
+pub struct Scheduler {
+    tasks: JoinSet<()>,
+    stop: watch::Sender<bool>,
+}
+
+impl Scheduler {
+    /// A scheduler running nothing.
+    fn idle() -> Scheduler {
+        Scheduler {
+            tasks: JoinSet::new(),
+            stop: watch::channel(false).0,
+        }
+    }
+
+    /// How many job loops run (none when the jobs are disabled).
+    pub fn job_count(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Lets no new run start: each loop ends once the run it is in (if any) has finished and
+    /// given its lock back. Returns at once; stopping twice is stopping once.
+    pub fn stop(&self) {
+        self.stop.send_replace(true);
+    }
+
+    /// A handle that [`Scheduler::stop`]s these jobs, for whoever sees the shutdown signal.
+    pub fn stopper(&self) -> impl FnOnce() + Send + 'static {
+        let stop = self.stop.clone();
+        move || {
+            stop.send_replace(true);
+        }
+    }
+
+    /// Stops the jobs ([`Scheduler::stop`]) and waits for the runs in flight to finish, for at
+    /// most `grace`; whatever still runs then is aborted (its lock given back by its dropped
+    /// guard).
+    pub async fn shutdown(mut self, grace: Duration) {
+        self.stop();
+        let finished = tokio::time::timeout(grace, async {
+            while self.tasks.join_next().await.is_some() {}
+        })
+        .await;
+        if finished.is_err() {
+            tracing::warn!(
+                grace_secs = grace.as_secs(),
+                "scheduled jobs still running after the grace period; aborting them"
+            );
+            self.tasks.shutdown().await;
+        }
+    }
+}
+
 /// Starts every job on the production schedule when `config.jobs_enabled`, and logs that it did;
 /// otherwise starts nothing and logs that the jobs are off.
-pub fn start(config: &Config, deps: Arc<Deps>) -> JoinSet<()> {
+pub fn start(config: &Config, deps: Arc<Deps>) -> Scheduler {
     if !config.jobs_enabled {
         tracing::info!(
             "scheduled jobs are disabled ({}=false): no token renewal, probe, poll or purge runs \
              in this instance",
             config::JOBS_ENABLED
         );
-        return JoinSet::new();
+        return Scheduler::idle();
     }
     let jobs = spawn(deps, Intervals::default());
-    tracing::info!(jobs = jobs.len(), "scheduled jobs started");
+    tracing::info!(jobs = jobs.job_count(), "scheduled jobs started");
     jobs
 }
 
 /// Starts every job of [`Job::ALL`] on `intervals`, each under its own lock; one task per job.
-pub fn spawn(deps: Arc<Deps>, intervals: Intervals) -> JoinSet<()> {
-    let mut set = JoinSet::new();
+pub fn spawn(deps: Arc<Deps>, intervals: Intervals) -> Scheduler {
+    let mut scheduler = Scheduler::idle();
     for job in Job::ALL {
         let schedule = Schedule {
             name: job.name(),
@@ -110,9 +178,9 @@ pub fn spawn(deps: Arc<Deps>, intervals: Intervals) -> JoinSet<()> {
         let run: Run = Arc::new(move |deps: Arc<Deps>, now| {
             Box::pin(async move { job.run(&deps, now).await })
         });
-        set.spawn(supervise(Arc::clone(&deps), schedule, run));
+        scheduler.add(Arc::clone(&deps), schedule, run);
     }
-    set
+    scheduler
 }
 
 /// One run of a job, at the time given, with the shared ports.
@@ -130,6 +198,14 @@ struct Schedule {
     every: Duration,
     /// The delay before the first run.
     first: Duration,
+}
+
+impl Scheduler {
+    /// Starts one job's supervised loop.
+    fn add(&mut self, deps: Arc<Deps>, schedule: Schedule, run: Run) {
+        let stop = self.stop.subscribe();
+        self.tasks.spawn(supervise(deps, schedule, run, stop));
+    }
 }
 
 /// A random delay of at most `max`, different per job and per process.
@@ -153,8 +229,8 @@ impl Drop for AbortOnDrop {
 }
 
 /// Runs the job's loop as a task of its own, and starts it again one interval later if it ever
-/// stops by panicking.
-async fn supervise(deps: Arc<Deps>, schedule: Schedule, run: Run) {
+/// stops by panicking. Ends when the loop ends (stopped).
+async fn supervise(deps: Arc<Deps>, schedule: Schedule, run: Run, stop: watch::Receiver<bool>) {
     let mut first = schedule.first;
     loop {
         let task = tokio::spawn(job_loop(
@@ -162,8 +238,9 @@ async fn supervise(deps: Arc<Deps>, schedule: Schedule, run: Run) {
             schedule.clone(),
             first,
             Arc::clone(&run),
+            stop.clone(),
         ));
-        let _stop = AbortOnDrop(task.abort_handle());
+        let _abort = AbortOnDrop(task.abort_handle());
         match task.await {
             Err(e) if e.is_panic() => {
                 tracing::error!(
@@ -172,21 +249,39 @@ async fn supervise(deps: Arc<Deps>, schedule: Schedule, run: Run) {
                 );
                 first = schedule.every;
             }
-            // The loop never ends on its own; cancelled, it was stopped on purpose.
+            // Stopped, or cancelled on purpose.
             _ => return,
         }
     }
 }
 
 /// The job's ticks: the first after `first`, then one per interval (at least a millisecond: a
-/// zero interval would never let the loop wait).
-async fn job_loop(deps: Arc<Deps>, schedule: Schedule, first: Duration, run: Run) {
+/// zero interval would never let the loop wait), until `stop` turns `true`. A run under way is
+/// never interrupted by the stop: the loop ends after it.
+async fn job_loop(
+    deps: Arc<Deps>,
+    schedule: Schedule,
+    first: Duration,
+    run: Run,
+    mut stop: watch::Receiver<bool>,
+) {
     let every = schedule.every.max(Duration::from_millis(1));
     let mut ticks = tokio::time::interval_at(Instant::now() + first, every);
     ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
-        ticks.tick().await;
-        tick(&deps, &schedule, &run).await;
+        if *stop.borrow_and_update() {
+            return;
+        }
+        tokio::select! {
+            biased;
+            changed = stop.changed() => {
+                // A dropped sender (the scheduler is gone) stops the loop as well.
+                if changed.is_err() || *stop.borrow() {
+                    return;
+                }
+            }
+            _ = ticks.tick() => tick(&deps, &schedule, &run).await,
+        }
     }
 }
 
@@ -197,7 +292,7 @@ async fn tick(deps: &Arc<Deps>, schedule: &Schedule, run: &Run) {
         Ok(None) => {
             tracing::debug!(
                 job = schedule.name,
-                "skipped: another instance is running this job"
+                "skipped: another runner holds this job's lock"
             );
             return;
         }
@@ -211,7 +306,7 @@ async fn tick(deps: &Arc<Deps>, schedule: &Schedule, run: &Run) {
         }
     };
     let task = tokio::spawn(run(Arc::clone(deps), deps.clock.now()));
-    let stop = AbortOnDrop(task.abort_handle());
+    let abort = AbortOnDrop(task.abort_handle());
     match task.await {
         // The job logged its own summary.
         Ok(_) => {}
@@ -221,7 +316,7 @@ async fn tick(deps: &Arc<Deps>, schedule: &Schedule, run: &Run) {
         ),
         Err(_) => {}
     }
-    drop(stop);
+    drop(abort);
     if let Err(e) = guard.release().await {
         tracing::warn!(
             job = schedule.name,
@@ -234,11 +329,15 @@ async fn tick(deps: &Arc<Deps>, schedule: &Schedule, run: &Run) {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeSet, HashMap};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    use jt_app::error::AppError;
+    use jt_app::ports::{JobGuard, JobLock};
     use jt_testkit::fakes::{FakeJobLock, InMemoryUow, deps};
 
     use super::*;
+
+    const LOCK: &str = "jeeta.jobs.test_job";
 
     fn config(extra: &[(&str, &str)]) -> Config {
         let mut vars: HashMap<String, String> = [
@@ -254,9 +353,9 @@ mod tests {
     }
 
     /// Fake ports over an empty in-memory database, with `lock` as the job lock.
-    fn fake_deps(lock: &FakeJobLock) -> Arc<Deps> {
+    fn fake_deps(lock: Arc<dyn JobLock>) -> Arc<Deps> {
         let mut deps = deps(Arc::new(InMemoryUow::new()));
-        deps.job_lock = Arc::new(lock.clone());
+        deps.job_lock = lock;
         Arc::new(deps)
     }
 
@@ -285,41 +384,62 @@ mod tests {
         done()
     }
 
-    /// One schedule of `run`, every `every`, starting at once, under the lock `lock`.
-    fn one(deps: Arc<Deps>, lock: &str, every: Duration, run: Run) -> JoinSet<()> {
-        let mut set = JoinSet::new();
-        set.spawn(supervise(
+    /// A scheduler of one job running `run` every `every`, at once, under [`LOCK`].
+    fn one(deps: Arc<Deps>, every: Duration, run: Run) -> Scheduler {
+        let mut scheduler = Scheduler::idle();
+        scheduler.add(
             deps,
             Schedule {
                 name: "test_job",
-                lock: lock.to_owned(),
+                lock: LOCK.to_owned(),
                 every,
                 first: Duration::ZERO,
             },
             run,
-        ));
-        set
+        );
+        scheduler
+    }
+
+    /// A run that counts its starts, takes `takes`, then counts its ends.
+    fn counted(takes: Duration) -> (Run, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let (started, ended) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (s, e) = (Arc::clone(&started), Arc::clone(&ended));
+        let run: Run = Arc::new(move |_, _| {
+            let (s, e) = (Arc::clone(&s), Arc::clone(&e));
+            Box::pin(async move {
+                s.fetch_add(1, Ordering::SeqCst);
+                if !takes.is_zero() {
+                    tokio::time::sleep(takes).await;
+                }
+                e.fetch_add(1, Ordering::SeqCst);
+                JobReport::default()
+            })
+        });
+        (run, started, ended)
     }
 
     #[tokio::test]
     async fn disabled_flag_spawns_nothing() {
         let lock = FakeJobLock::new();
-        let set = start(
+        let jobs = start(
             &config(&[(config::JOBS_ENABLED, "false")]),
-            fake_deps(&lock),
+            fake_deps(Arc::new(lock.clone())),
         );
-        assert!(set.is_empty());
+        assert_eq!(jobs.job_count(), 0);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(lock.granted().is_empty(), "nothing ran");
+        jobs.shutdown(Duration::from_secs(1)).await;
     }
 
     #[tokio::test]
     async fn enabled_starts_one_task_per_job() {
         let lock = FakeJobLock::new();
-        let mut set = start(&config(&[]), fake_deps(&lock));
-        assert_eq!(set.len(), Job::ALL.len());
-        set.shutdown().await;
-        assert!(set.is_empty());
+        let jobs = start(&config(&[]), fake_deps(Arc::new(lock)));
+        assert_eq!(jobs.job_count(), Job::ALL.len());
+        // Stopped before any first run (each waits its jitter), it ends at once.
+        tokio::time::timeout(Duration::from_secs(2), jobs.shutdown(SHUTDOWN_GRACE))
+            .await
+            .expect("idle loops stop at once");
     }
 
     #[test]
@@ -333,6 +453,7 @@ mod tests {
         assert_eq!(i.of(Job::PurgeOAuthPending), HOUR);
         assert_eq!(i.of(Job::PurgeProbeRuns), DAY);
         assert_eq!(i.first_run_jitter, Duration::from_secs(30));
+        assert_eq!(SHUTDOWN_GRACE, Duration::from_secs(30));
         // The jitter stays within its bound, and none is none.
         for job in Job::ALL {
             assert!(jitter(job.name(), i.first_run_jitter) <= i.first_run_jitter);
@@ -343,45 +464,40 @@ mod tests {
     #[tokio::test]
     async fn every_job_runs_under_its_own_lock_and_gives_it_back() {
         let lock = FakeJobLock::new();
-        let mut set = spawn(fake_deps(&lock), every(Duration::from_millis(20)));
+        let jobs = spawn(
+            fake_deps(Arc::new(lock.clone())),
+            every(Duration::from_millis(20)),
+        );
         let names: BTreeSet<String> = Job::ALL.iter().map(Job::lock_name).collect();
         assert!(
             eventually(|| lock.granted().into_iter().collect::<BTreeSet<_>>() == names).await,
             "granted: {:?}",
             lock.granted()
         );
-        set.shutdown().await;
+        jobs.shutdown(SHUTDOWN_GRACE).await;
         // Every lock taken was given back.
-        assert!(eventually(|| names.iter().all(|n| !lock.is_held(n))).await);
+        assert!(names.iter().all(|n| !lock.is_held(n)));
+        assert_eq!(lock.granted().len(), lock.released().len());
     }
 
     #[tokio::test]
     async fn a_tick_skips_while_another_runner_holds_the_lock() {
         let lock = FakeJobLock::new();
-        let runs = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&runs);
-        let run: Run = Arc::new(move |_, _| {
-            let counted = Arc::clone(&counted);
-            Box::pin(async move {
-                counted.fetch_add(1, Ordering::SeqCst);
-                JobReport::default()
-            })
-        });
-        // Another instance holds the lock: ticks come and go, the job never runs.
-        lock.hold("jeeta.jobs.test_job");
-        let mut set = one(
-            fake_deps(&lock),
-            "jeeta.jobs.test_job",
+        let (run, started, _) = counted(Duration::ZERO);
+        // Another runner holds the lock: ticks come and go, the job never runs.
+        lock.hold(LOCK);
+        let jobs = one(
+            fake_deps(Arc::new(lock.clone())),
             Duration::from_millis(10),
             run,
         );
         tokio::time::sleep(Duration::from_millis(80)).await;
-        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        assert_eq!(started.load(Ordering::SeqCst), 0);
         assert!(lock.granted().is_empty());
         // Once it lets go, the next tick runs the job.
-        lock.free("jeeta.jobs.test_job");
-        assert!(eventually(|| runs.load(Ordering::SeqCst) >= 2).await);
-        set.shutdown().await;
+        lock.free(LOCK);
+        assert!(eventually(|| started.load(Ordering::SeqCst) >= 2).await);
+        jobs.shutdown(SHUTDOWN_GRACE).await;
     }
 
     #[tokio::test]
@@ -398,17 +514,93 @@ mod tests {
                 JobReport::default()
             })
         });
-        let mut set = one(
-            fake_deps(&lock),
-            "jeeta.jobs.test_job",
+        let jobs = one(
+            fake_deps(Arc::new(lock.clone())),
             Duration::from_millis(10),
             run,
         );
         assert!(eventually(|| runs.load(Ordering::SeqCst) >= 3).await);
-        set.shutdown().await;
+        jobs.shutdown(SHUTDOWN_GRACE).await;
         // Each run took the lock and gave it back, the panicking one included.
-        assert!(eventually(|| !lock.is_held("jeeta.jobs.test_job")).await);
+        assert!(!lock.is_held(LOCK));
         assert_eq!(lock.granted().len(), lock.released().len());
         assert!(lock.granted().len() >= 3);
+    }
+
+    /// A job lock whose first request panics (a bug in the loop itself), granting afterwards.
+    struct PanicsOnce {
+        inner: FakeJobLock,
+        panicked: AtomicBool,
+    }
+
+    // The port's async method, written out as the port's macro expands it.
+    impl JobLock for PanicsOnce {
+        fn try_acquire<'a, 'b, 'f>(
+            &'a self,
+            name: &'b str,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Box<dyn JobGuard>>, AppError>> + Send + 'f>>
+        where
+            'a: 'f,
+            'b: 'f,
+            Self: 'f,
+        {
+            Box::pin(async move {
+                if !self.panicked.swap(true, Ordering::SeqCst) {
+                    panic!("the loop fails");
+                }
+                self.inner.try_acquire(name).await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_panicking_loop_is_started_again_after_one_interval() {
+        let lock = Arc::new(PanicsOnce {
+            inner: FakeJobLock::new(),
+            panicked: AtomicBool::new(false),
+        });
+        let (run, started, _) = counted(Duration::ZERO);
+        let jobs = one(fake_deps(lock.clone()), Duration::from_millis(20), run);
+        assert!(eventually(|| started.load(Ordering::SeqCst) >= 2).await);
+        assert!(lock.panicked.load(Ordering::SeqCst));
+        jobs.shutdown(SHUTDOWN_GRACE).await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_a_running_job_within_grace() {
+        let lock = FakeJobLock::new();
+        let (run, started, ended) = counted(Duration::from_millis(300));
+        let jobs = one(
+            fake_deps(Arc::new(lock.clone())),
+            Duration::from_millis(10),
+            run,
+        );
+        assert!(eventually(|| started.load(Ordering::SeqCst) == 1).await);
+        let asked = std::time::Instant::now();
+        jobs.shutdown(Duration::from_secs(5)).await;
+        // The run under way finished (not cut short), no other started, and the lock is back.
+        assert_eq!(ended.load(Ordering::SeqCst), 1);
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        assert!(asked.elapsed() < Duration::from_secs(5));
+        assert!(!lock.is_held(LOCK));
+        assert_eq!(lock.released(), [LOCK]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_aborts_a_run_that_outlives_the_grace() {
+        let lock = FakeJobLock::new();
+        let (run, started, ended) = counted(Duration::from_secs(30));
+        let jobs = one(
+            fake_deps(Arc::new(lock.clone())),
+            Duration::from_millis(10),
+            run,
+        );
+        assert!(eventually(|| started.load(Ordering::SeqCst) == 1).await);
+        let asked = std::time::Instant::now();
+        jobs.shutdown(Duration::from_millis(100)).await;
+        assert!(asked.elapsed() < Duration::from_secs(5));
+        assert_eq!(ended.load(Ordering::SeqCst), 0, "the run was aborted");
+        // Its dropped guard gave the lock back.
+        assert!(eventually(|| !lock.is_held(LOCK)).await);
     }
 }

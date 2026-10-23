@@ -257,6 +257,9 @@ impl CapabilityRepo for MemTenant {
     ) -> Result<(), AppError> {
         self.call(|this| {
             let ws = this.ws;
+            if this.tx.set_sealed_fails() {
+                return Err(AppError::internal("injected failure: set_sealed"));
+            }
             ensure_capability(this.state(), ws, id)?;
             this.tx.write(move |s| {
                 if let Some(stored) = s

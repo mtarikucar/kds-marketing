@@ -1,6 +1,8 @@
 //! The platform-wide bundle: operators, their sessions, every workspace and lookups by secret
 //! hash.
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
@@ -200,6 +202,25 @@ impl PlatformRepos for MemPlatform {
                 (c.status == StoredStatus::Verified, c.created_at, c.id)
             })
             .map(|s| state.capability_view(s)))
+    }
+
+    async fn workspaces_with_verified(
+        &mut self,
+        kind_keys: &[&str],
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        let ids: BTreeSet<WorkspaceId> = self
+            .state()
+            .capabilities
+            .iter()
+            .filter(|s| {
+                let c = &s.capability;
+                c.status == StoredStatus::Verified
+                    && s.sealed.is_some()
+                    && kind_keys.contains(&c.kind_key.as_str())
+            })
+            .map(|s| s.capability.workspace_id)
+            .collect();
+        Ok(ids.into_iter().collect())
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

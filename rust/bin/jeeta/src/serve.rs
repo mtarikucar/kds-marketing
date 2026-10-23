@@ -6,8 +6,10 @@
 //! does not bind ([`check_database_role`]), apply pending migrations, build the shared ports once
 //! and refill the egress tenant tier from the capability records ([`boot`]), create the first
 //! platform operator when configured, bind the listener, start the scheduled jobs
-//! ([`crate::scheduler`], unless `JEETA_JOBS_ENABLED=false`), then serve until SIGINT or SIGTERM,
-//! drain open connections for at most [`DRAIN_TIMEOUT`] and stop the jobs.
+//! ([`crate::scheduler`], unless `JEETA_JOBS_ENABLED=false`), then serve until SIGINT or SIGTERM.
+//! On the signal no new job run starts; open connections drain for at most [`DRAIN_TIMEOUT`], then
+//! the job runs still going get up to [`scheduler::SHUTDOWN_GRACE`] to finish before they are
+//! aborted.
 
 use std::future::IntoFuture;
 use std::net::SocketAddr;
@@ -84,9 +86,9 @@ pub async fn run(config: Config) -> Result<()> {
         "jeeta is listening"
     );
 
-    let mut jobs = scheduler::start(&config, Arc::new(deps));
-    let served = serve(listener, app).await;
-    jobs.shutdown().await;
+    let jobs = scheduler::start(&config, Arc::new(deps));
+    let served = serve(listener, app, jobs.stopper()).await;
+    jobs.shutdown(scheduler::SHUTDOWN_GRACE).await;
     served?;
     pool.close().await;
     tracing::info!("stopped");
@@ -366,9 +368,14 @@ fn panel_status(dir: Option<&Path>) -> String {
     }
 }
 
-/// Serves until SIGINT or SIGTERM, then stops accepting and lets open connections finish for
-/// at most [`DRAIN_TIMEOUT`].
-async fn serve(listener: TcpListener, app: Router) -> Result<()> {
+/// Serves until SIGINT or SIGTERM, then calls `on_signal` (which stops the scheduled jobs from
+/// starting new runs), stops accepting and lets open connections finish for at most
+/// [`DRAIN_TIMEOUT`].
+async fn serve(
+    listener: TcpListener,
+    app: Router,
+    on_signal: impl FnOnce() + Send + 'static,
+) -> Result<()> {
     let mut signals = Signals::install()?;
     let (stop, stopped) = oneshot::channel::<()>();
     let server = axum::serve(listener, app)
@@ -392,6 +399,7 @@ async fn serve(listener: TcpListener, app: Router) -> Result<()> {
             );
         }
     }
+    on_signal();
     let _ = stop.send(());
     match tokio::time::timeout(DRAIN_TIMEOUT, &mut server).await {
         Ok(ended) => ended

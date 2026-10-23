@@ -1487,6 +1487,14 @@ pub trait PlatformRepos: Send + Sync {
         kind_keys: &[&str],
         external_id: &str,
     ) -> Result<Option<Capability>, AppError>;
+    /// The workspaces, in id order, holding at least one capability of one of `kind_keys` that
+    /// is `Verified` and has sealed credentials: those a poll of the kinds' provider has a
+    /// connected account to ask with (the NetGSM polls ask with a verified `sms_line`). Lets a
+    /// job skip every other workspace without opening a transaction in it.
+    async fn workspaces_with_verified(
+        &mut self,
+        kind_keys: &[&str],
+    ) -> Result<Vec<WorkspaceId>, AppError>;
     /// Appends a ledger entry to `entry.workspace_id` on behalf of the platform.
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;

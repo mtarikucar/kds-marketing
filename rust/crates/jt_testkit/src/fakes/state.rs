@@ -1,7 +1,7 @@
 //! The in-memory tables, the checks shared by the bundles, and the unit of work with its
 //! transactions.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
@@ -392,6 +392,9 @@ pub(super) fn actor_kind(actor: &Actor) -> &'static str {
 pub struct InMemoryUow {
     state: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
+    /// How many of the next `CapabilityRepo::set_sealed` calls fail
+    /// ([`InMemoryUow::fail_set_sealed`]).
+    set_sealed_faults: Arc<AtomicUsize>,
 }
 
 impl InMemoryUow {
@@ -402,6 +405,13 @@ impl InMemoryUow {
     /// A copy of the committed tables, for assertions.
     pub fn snapshot(&self) -> MemState {
         lock(&self.state).clone()
+    }
+
+    /// Makes the next `times` calls of `CapabilityRepo::set_sealed`, in any bundle, fail with
+    /// `INTERNAL` (spoiling their bundle, as a failed statement aborts a Postgres transaction):
+    /// a database failing at the moment a credential is written.
+    pub fn fail_set_sealed(&self, times: usize) {
+        self.set_sealed_faults.store(times, Ordering::SeqCst);
     }
 
     /// Records a message of workspace `ws` sent as the provider's job `job_id`, awaiting its
@@ -421,6 +431,7 @@ type Op = Box<dyn Fn(&mut MemState) + Send + Sync>;
 pub(super) struct MemTx {
     shared: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
+    set_sealed_faults: Arc<AtomicUsize>,
     pub(super) work: MemState,
     ops: Vec<Op>,
     /// Set once a call on the bundle has failed; `commit` then refuses.
@@ -432,6 +443,7 @@ impl MemTx {
         MemTx {
             shared: Arc::clone(&uow.state),
             ledger_seq: Arc::clone(&uow.ledger_seq),
+            set_sealed_faults: Arc::clone(&uow.set_sealed_faults),
             work: lock(&uow.state).clone(),
             ops: Vec::new(),
             spoiled: false,
@@ -493,6 +505,13 @@ impl MemTx {
             }
         });
         Ok(())
+    }
+
+    /// Whether this `set_sealed` call is one [`InMemoryUow::fail_set_sealed`] asked to fail.
+    pub(super) fn set_sealed_fails(&self) -> bool {
+        self.set_sealed_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 
     pub(super) fn append_ledger(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

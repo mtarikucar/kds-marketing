@@ -7,12 +7,16 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use jt_app::error::AppError;
 use jt_app::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, DeliveryState,
     DeliveryStatus, InboundEventDraft, InsightsReader, LeadGenFetcher, MessagingSender,
     OAuthProvider, Publisher, SmsSender, Telephony,
 };
-use jt_app::ports::{OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, SecretBox, UnitOfWork};
+use jt_app::ports::{
+    OAuthPendingId, OAuthPendingRow, PlatformRepos, ProbeRun, ProbeRunId, SecretBox, TenantRepos,
+    UnitOfWork, UserRepos,
+};
 use jt_app::usecases::jobs::{self, Job, JobReport};
 use jt_app::usecases::webhook;
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
@@ -21,7 +25,7 @@ use jt_connector::{
     ProbeResult, Provider,
 };
 use jt_ledger::Actor;
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use jt_testkit::fakes::{
     ConnectorCall, FIXED_NOW, InMemoryUow, PlainSecretBox, ScriptedConnector, ScriptedRegistry,
     StoredCapability,
@@ -435,6 +439,141 @@ async fn refresh_x_always_rotates() {
     r.assert_no_secret_leaked();
 }
 
+#[tokio::test]
+async fn refresh_keeps_trying_flagged_x_and_clears_flag_on_success() {
+    let r = rig().await;
+    // A probe made after the two-hour access token lapsed (the server was down) left the X
+    // account unreachable and flagged, while its refresh token still holds.
+    let old = x_token("x-access-old", "x-refresh-old", NOW - Duration::hours(1));
+    let account = r
+        .connected(
+            "x",
+            "x-user-1",
+            StoredStatus::Unreachable,
+            &old,
+            json!({
+                "reconnect_required": true,
+                "health": { "ok": false, "at": rfc3339(NOW - Duration::minutes(5)),
+                            "latency_ms": 9, "error_kind": "auth" },
+            }),
+        )
+        .await;
+    // A flagged Meta token is still left to its owner (it has nothing to renew with).
+    let meta_token = instagram_token("IGQ-old", NOW + Duration::days(1));
+    r.connected(
+        "instagram",
+        "ig-1",
+        StoredStatus::Unreachable,
+        &meta_token,
+        json!({ "reconnect_required": true }),
+    )
+    .await;
+    let new = x_token("x-access-new", "x-refresh-new", NOW + Duration::hours(2));
+    r.x.push_refresh(Ok(Some(new.clone())));
+    r.x.push_probe(ProbeResult::success(
+        15,
+        json!({ "account_id": "x-user-1" }),
+    ));
+
+    let out = jobs::run_refresh_tokens(&r.w.deps, NOW).await;
+    assert_eq!(out, report(1, 1, 0, 0));
+    assert!(r.meta.calls().is_empty());
+    let calls = r.x.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[0],
+        ConnectorCall::Refresh {
+            credential: old.clone()
+        }
+    );
+    // The new credential is sealed, the flag cleared, and a probe with it brings the status back
+    // the usual way.
+    assert!(matches!(&calls[1], ConnectorCall::Probe { credential, .. } if *credential == new));
+    assert_eq!(r.credential(account), new);
+    let c = r.capability(account);
+    assert_eq!(c.connector_public["reconnect_required"], json!(false));
+    assert_eq!(c.status, StoredStatus::Verified);
+    assert_eq!(c.last_verified_at, Some(NOW));
+    let probes = r.w.entries("connector.probe");
+    assert_eq!(probes.len(), 1);
+    assert_eq!(
+        probes[0].actor,
+        Actor::System {
+            component: "scheduler:refresh_tokens".into()
+        }
+    );
+    assert!(r.w.entries("connector.refresh_failed").is_empty());
+    r.assert_no_secret_leaked();
+}
+
+#[tokio::test]
+async fn refresh_failed_is_ledgered_once() {
+    let r = rig().await;
+    let old = x_token("x-access-old", "x-refresh-old", NOW + Duration::hours(1));
+    let account = r
+        .connected("x", "x-user-1", StoredStatus::Verified, &old, json!({}))
+        .await;
+    for _ in 0..3 {
+        r.x.push_refresh(Err(ConnectorError::auth("refresh token revoked")));
+    }
+
+    // The first refusal flips the flag and is ledgered.
+    let first = jobs::run_refresh_tokens(&r.w.deps, NOW).await;
+    assert_eq!(first, report(1, 1, 0, 1));
+    let c = r.capability(account);
+    assert_eq!(c.status, StoredStatus::Unreachable);
+    assert_eq!(c.connector_public["reconnect_required"], json!(true));
+    assert_eq!(r.w.entries("connector.refresh_failed").len(), 1);
+
+    // X is asked again every hour (its refresh token may come back to life after a platform
+    // misconfiguration), but a refusal of a capability already flagged writes nothing.
+    for hours in [1, 2] {
+        let again = jobs::run_refresh_tokens(&r.w.deps, NOW + Duration::hours(hours)).await;
+        assert_eq!(again, report(1, 0, 0, 1));
+    }
+    assert_eq!(r.x.calls().len(), 3);
+    assert_eq!(r.w.entries("connector.refresh_failed").len(), 1);
+    assert_eq!(r.credential(account), old);
+}
+
+#[tokio::test]
+async fn a_renewed_credential_is_saved_on_a_second_try_and_counted_failed_after_two() {
+    let r = rig().await;
+    let old = x_token("x-access-old", "x-refresh-old", NOW + Duration::hours(1));
+    let account = r
+        .connected("x", "x-user-1", StoredStatus::Verified, &old, json!({}))
+        .await;
+
+    // The first write fails (the database hiccups): the second one saves it.
+    let new = x_token("x-access-new", "x-refresh-new", NOW + Duration::hours(2));
+    r.x.push_refresh(Ok(Some(new.clone())));
+    r.w.uow.fail_set_sealed(1);
+    assert_eq!(
+        jobs::run_refresh_tokens(&r.w.deps, NOW).await,
+        report(1, 1, 0, 0)
+    );
+    assert_eq!(r.credential(account), new);
+
+    // Both writes fail: logged as an error, counted as a failure, nothing half-written.
+    let newer = x_token(
+        "x-access-newer",
+        "x-refresh-newer",
+        NOW + Duration::hours(3),
+    );
+    r.x.push_refresh(Ok(Some(newer)));
+    r.w.uow.fail_set_sealed(2);
+    assert_eq!(
+        jobs::run_refresh_tokens(&r.w.deps, NOW + Duration::hours(1)).await,
+        report(1, 0, 0, 1)
+    );
+    assert_eq!(r.credential(account), new);
+    assert_eq!(
+        r.capability(account).connector_public["access"],
+        new.redact_for_public()
+    );
+    r.assert_no_secret_leaked();
+}
+
 /// A Meta adapter whose refresh, while it runs, has another writer replace the capability's
 /// credential (an owner reconnecting at that moment), then answers `answer`.
 struct Racing {
@@ -740,36 +879,62 @@ async fn one_failing_capability_does_not_abort_the_job() {
     assert!(r.w.entries("connector.refresh_failed").is_empty());
 }
 
-#[tokio::test]
-async fn provider_jobs_skip_workspaces_that_are_not_active() {
-    let r = rig().await;
-    // A second workspace, still waiting for payment, with a due token and a stale line.
-    let (beta, _) = r.w.other_workspace().await;
-    let token = instagram_token("IGQ-old", NOW + Duration::days(1));
-    let line = netgsm_line("BETA");
-    r.store(
-        beta,
-        "instagram",
-        "ig-beta",
-        StoredStatus::Verified,
-        with_access(&token, json!({})),
-        Some(sealed(beta, &token)),
-    )
-    .await;
-    r.store(
-        beta,
-        "sms_line",
-        "BETA",
-        StoredStatus::Verified,
-        json!({}),
-        Some(sealed(beta, &line)),
-    )
-    .await;
+/// Workspace `name` created straight in the tables with `status` (no owner or roles: the jobs
+/// need none).
+async fn workspace(r: &Rig, name: &str, status: WorkspaceStatus) -> WorkspaceId {
+    let ws = WorkspaceId::new_v7();
+    let mut u = r.w.uow.user().await.unwrap();
+    u.workspaces_create(ws, name, name, status, NOW - Duration::days(30))
+        .await
+        .unwrap();
+    u.commit().await.unwrap();
+    ws
+}
 
+#[tokio::test]
+async fn refresh_covers_pending_payment_workspaces_and_the_other_jobs_active_ones_only() {
+    let r = rig().await;
+    // A workspace on a payment hold and a suspended one, each with a due token and a stale
+    // verified line.
+    let held = workspace(&r, "held", WorkspaceStatus::PendingPayment).await;
+    let suspended = workspace(&r, "suspended", WorkspaceStatus::Suspended).await;
+    let token = instagram_token("IGQ-old", NOW + Duration::days(1));
+    let mut held_token = None;
+    for (ws, suffix) in [(held, "held"), (suspended, "suspended")] {
+        let id = r
+            .store(
+                ws,
+                "instagram",
+                &format!("ig-{suffix}"),
+                StoredStatus::Verified,
+                with_access(&token, json!({})),
+                Some(sealed(ws, &token)),
+            )
+            .await;
+        if ws == held {
+            held_token = Some(id);
+        }
+        r.store(
+            ws,
+            "sms_line",
+            &format!("LINE-{suffix}"),
+            StoredStatus::Verified,
+            json!({}),
+            Some(sealed(ws, &netgsm_line("HELD"))),
+        )
+        .await;
+    }
+    let renewed = instagram_token("IGQ-new", NOW + Duration::days(60));
+    r.meta.push_refresh(Ok(Some(renewed.clone())));
+
+    // The payment hold keeps its grant alive; the suspended workspace is left alone.
     assert_eq!(
         jobs::run_refresh_tokens(&r.w.deps, NOW).await,
-        report(0, 0, 0, 0)
+        report(1, 1, 0, 0)
     );
+    assert_eq!(r.meta.calls().len(), 1);
+    assert_eq!(r.credential(held_token.unwrap()), renewed);
+    // Probes and polls act for active workspaces only.
     assert_eq!(
         jobs::run_probe_all(&r.w.deps, NOW).await,
         report(0, 0, 0, 0)
@@ -778,8 +943,59 @@ async fn provider_jobs_skip_workspaces_that_are_not_active() {
         jobs::run_netgsm_inbox_poll(&r.w.deps, NOW).await,
         report(0, 0, 0, 0)
     );
-    assert!(r.meta.calls().is_empty());
+    r.w.uow.add_outbound_job(held, "J-held");
+    assert_eq!(
+        jobs::run_netgsm_dlr_poll(&r.w.deps, NOW).await,
+        report(0, 0, 0, 0)
+    );
+    assert_eq!(r.meta.calls().len(), 1);
     assert!(r.netgsm.calls().is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Watching transactions
+// ---------------------------------------------------------------------------------------------
+
+/// The in-memory unit of work, recording the workspaces it opens a tenant transaction in, and
+/// failing every tenant transaction of the workspace `broken`.
+#[derive(Clone)]
+struct Watched {
+    inner: InMemoryUow,
+    broken: Option<WorkspaceId>,
+    opened: Arc<Mutex<Vec<WorkspaceId>>>,
+}
+
+impl Watched {
+    fn over(r: &Rig, broken: Option<WorkspaceId>) -> Watched {
+        Watched {
+            inner: r.w.uow.clone(),
+            broken,
+            opened: Arc::default(),
+        }
+    }
+
+    fn opened(&self) -> Vec<WorkspaceId> {
+        self.opened.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl UnitOfWork for Watched {
+    async fn tenant(&self, ws: WorkspaceId) -> Result<Box<dyn TenantRepos>, AppError> {
+        self.opened.lock().unwrap().push(ws);
+        if self.broken == Some(ws) {
+            return Err(AppError::internal("the database refused this workspace"));
+        }
+        self.inner.tenant(ws).await
+    }
+
+    async fn platform(&self) -> Result<Box<dyn PlatformRepos>, AppError> {
+        self.inner.platform().await
+    }
+
+    async fn user(&self) -> Result<Box<dyn UserRepos>, AppError> {
+        self.inner.user().await
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1109,4 +1325,166 @@ async fn purges_remove_only_what_is_past_its_time() {
     assert_eq!(flows, ["hash-open"]);
     let runs: Vec<OffsetDateTime> = state.probe_runs.iter().map(|r| r.at).collect();
     assert_eq!(runs, [NOW - Duration::days(29)]);
+}
+
+#[tokio::test]
+async fn purges_go_on_past_a_failing_workspace_and_cover_every_status() {
+    let r = rig().await;
+    let broken = r.ws();
+    let held = workspace(&r, "held", WorkspaceStatus::PendingPayment).await;
+    let suspended = workspace(&r, "suspended", WorkspaceStatus::Suspended).await;
+    // Something past its time in each workspace: an expired flow, an old raw body, an old run.
+    for (n, ws) in [broken, held, suspended].into_iter().enumerate() {
+        let line = r
+            .store(
+                ws,
+                "sms_line",
+                &format!("LINE{n}"),
+                StoredStatus::Verified,
+                json!({}),
+                Some(sealed(ws, &netgsm_line("L"))),
+            )
+            .await;
+        let mut t = r.w.uow.tenant(ws).await.unwrap();
+        t.oauth_pending()
+            .insert(OAuthPendingRow {
+                id: OAuthPendingId::new_v7(),
+                workspace_id: ws,
+                provider: Provider::Meta,
+                kind_key: "facebook_page".into(),
+                state_hash: format!("hash-{ws}"),
+                started_by: r.w.owner,
+                capability_id: None,
+                pkce_verifier_sealed: None,
+                assets_sealed: None,
+                assets_public: json!([]),
+                expires_at: NOW - Duration::minutes(1),
+                created_at: NOW - Duration::minutes(30),
+            })
+            .await
+            .unwrap();
+        t.inbound_events()
+            .insert_if_new(
+                InboundEvent {
+                    id: InboundEventId::new_v7(),
+                    workspace_id: ws,
+                    provider: Provider::Netgsm,
+                    capability_id: None,
+                    external_id: format!("netgsm-mo:{ws}"),
+                    kind: EventKind::Message,
+                    payload: json!({}),
+                    received_at: NOW - Duration::days(31),
+                    processed_at: None,
+                },
+                Some(b"raw".to_vec()),
+            )
+            .await
+            .unwrap();
+        t.probe_runs()
+            .append(ProbeRun {
+                id: ProbeRunId::new_v7(),
+                workspace_id: ws,
+                capability_id: line,
+                at: NOW - Duration::days(31),
+                ok: true,
+                error_kind: None,
+                latency_ms: 10,
+                facts: json!({}),
+            })
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+    // The first workspace listed cannot be reached.
+    let watched = Watched::over(&r, Some(broken));
+    let mut deps = r.w.deps.clone();
+    deps.uow = Arc::new(watched.clone());
+
+    // Each purge counts the failure and still purges the other two, whatever their status.
+    for out in [
+        jobs::run_purge_raw_bodies(&deps, NOW).await,
+        jobs::run_purge_oauth_pending(&deps, NOW).await,
+        jobs::run_purge_probe_runs(&deps, NOW).await,
+    ] {
+        assert_eq!(out, report(2, 2, 0, 1));
+    }
+    let state = r.w.uow.snapshot();
+    let left = |ws: WorkspaceId| {
+        (
+            state
+                .oauth_pending
+                .iter()
+                .filter(|p| p.workspace_id == ws)
+                .count(),
+            state
+                .inbound_events
+                .iter()
+                .filter(|e| e.event.workspace_id == ws && e.raw.is_some())
+                .count(),
+            state
+                .probe_runs
+                .iter()
+                .filter(|p| p.workspace_id == ws)
+                .count(),
+        )
+    };
+    assert_eq!(left(broken), (1, 1, 1));
+    assert_eq!(left(held), (0, 0, 0));
+    assert_eq!(left(suspended), (0, 0, 0));
+}
+
+#[tokio::test]
+async fn netgsm_polls_open_no_transaction_in_workspaces_without_a_verified_line() {
+    let r = rig().await;
+    // The rig's workspace has a Meta page and a line not yet verified; another active workspace
+    // has a verified line.
+    let page = Credential::PageToken {
+        page_id: "page-1".into(),
+        token: "EAAB-page".into(),
+    };
+    r.connected(
+        "facebook_page",
+        "page-1",
+        StoredStatus::Verified,
+        &page,
+        json!({}),
+    )
+    .await;
+    r.connected(
+        "sms_line",
+        "NEW",
+        StoredStatus::Declared,
+        &netgsm_line("NEW"),
+        json!({}),
+    )
+    .await;
+    let other = workspace(&r, "other", WorkspaceStatus::Active).await;
+    let creds = netgsm_line("OTHER");
+    r.store(
+        other,
+        "sms_line",
+        "OTHER",
+        StoredStatus::Verified,
+        json!({}),
+        Some(sealed(other, &creds)),
+    )
+    .await;
+    let watched = Watched::over(&r, None);
+    let mut deps = r.w.deps.clone();
+    deps.uow = Arc::new(watched.clone());
+    r.netgsm.push_inbox(Ok(vec![]));
+
+    jobs::run_netgsm_dlr_poll(&deps, NOW).await;
+    jobs::run_netgsm_inbox_poll(&deps, NOW).await;
+    // Only the workspace with a verified line was entered.
+    let opened: std::collections::BTreeSet<WorkspaceId> = watched.opened().into_iter().collect();
+    assert_eq!(opened, [other].into_iter().collect());
+    assert_eq!(
+        r.netgsm.calls(),
+        [ConnectorCall::Inbox {
+            credential: creds,
+            from: NOW - Duration::hours(2),
+            to: NOW,
+        }]
+    );
 }

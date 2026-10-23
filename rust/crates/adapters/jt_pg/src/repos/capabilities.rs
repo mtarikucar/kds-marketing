@@ -151,6 +151,25 @@ pub(crate) async fn by_external(
     record.map(CapabilityRecord::into_capability).transpose()
 }
 
+/// The workspaces holding a verified capability with sealed credentials of one of `kind_keys`,
+/// in id order (see `PlatformRepos::workspaces_with_verified`).
+pub(crate) async fn workspaces_with_verified(
+    tx: &mut PlatformTx<'_>,
+    kind_keys: &[&str],
+) -> Result<Vec<WorkspaceId>, AppError> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        // archtest: platform-wide
+        "select distinct c.workspace_id from capabilities c \
+         where c.kind_key = any($1) and c.status = 'verified' \
+         and c.connector_sealed is not null order by c.workspace_id",
+    )
+    .bind(kind_keys.to_vec())
+    .fetch_all(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "list workspaces with a verified capability"))?;
+    Ok(ids.into_iter().map(WorkspaceId).collect())
+}
+
 /// `NOT_FOUND` unless capability `id` belongs to workspace `ws`. Writes that hang a row off a
 /// capability check it first: the composite foreign key `(capability_id, workspace_id)` would
 /// refuse another workspace's capability too, but as a violation that aborts the transaction and

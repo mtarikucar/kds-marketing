@@ -5,7 +5,7 @@
 use std::time::Duration as StdDuration;
 
 use jt_app::ports::{JobLock, ProbeRun, ProbeRunId, UnitOfWork};
-use jt_capability::{Capability, CapabilityId, NewCapability};
+use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_pg::{JOB_LOCK_APPLICATION_NAME, PgJobLock, PgUnitOfWork, TenantTx};
 use jt_tenancy::WorkspaceId;
 use jt_testkit::TestDb;
@@ -245,4 +245,55 @@ async fn purge_probe_runs_keeps_thirty_days_and_trigger_refuses_young_deletes() 
         .unwrap();
     assert_eq!(done.rows_affected(), 1);
     tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn workspaces_with_verified_lists_only_workspaces_holding_a_verified_sealed_kind() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let (a, _) = db.seed_workspace("a").await;
+    let (b, _) = db.seed_workspace("b").await;
+    let (_c, _) = db.seed_workspace("c").await;
+    // (workspace, kind, external id, status, sealed)
+    for (ws, kind, external_id, status, sealed) in [
+        (a, "sms_line", "A1", StoredStatus::Verified, true),
+        (b, "sms_line", "B1", StoredStatus::Declared, true),
+        (b, "sms_line", "B2", StoredStatus::Verified, false),
+        (b, "sms_line", "B3", StoredStatus::Retired, true),
+        (b, "facebook_page", "page-b", StoredStatus::Verified, true),
+    ] {
+        let mut c = Capability::new(
+            CapabilityId::new_v7(),
+            ws,
+            NewCapability {
+                kind_key: kind.into(),
+                name: external_id.into(),
+                external_id: Some(external_id.into()),
+                ..NewCapability::default()
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        c.status = status;
+        let mut t = uow.tenant(ws).await.unwrap();
+        t.capabilities()
+            .insert(c, sealed.then(|| b"sealed".to_vec()))
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+    let mut p = uow.platform().await.unwrap();
+    assert_eq!(
+        p.workspaces_with_verified(&["sms_line"]).await.unwrap(),
+        [a]
+    );
+    let mut both = vec![a, b];
+    both.sort();
+    assert_eq!(
+        p.workspaces_with_verified(&["sms_line", "facebook_page"])
+            .await
+            .unwrap(),
+        both
+    );
+    assert!(p.workspaces_with_verified(&["x"]).await.unwrap().is_empty());
 }

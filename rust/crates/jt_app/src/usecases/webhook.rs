@@ -249,9 +249,10 @@ pub fn raw_cutoff(now: OffsetDateTime) -> OffsetDateTime {
 }
 
 /// Removes the raw body of every event received before `cutoff`, in every workspace (one
-/// transaction per workspace), and answers how many bodies it removed. The events themselves
-/// stay. Not a catalog use case: the scheduler runs it daily with [`raw_cutoff`]
-/// (`super::jobs::run_purge_raw_bodies`).
+/// transaction per workspace, [`purge_raw_in`]), and answers how many bodies it removed. The
+/// events themselves stay. Stops at the first workspace that fails; the scheduler's daily purge
+/// (`super::jobs::run_purge_raw_bodies`) calls [`purge_raw_in`] for each workspace itself, so one
+/// failing workspace does not hold the others back.
 pub async fn purge_raw(deps: &Deps, cutoff: OffsetDateTime) -> Result<u64, AppError> {
     let workspaces = {
         let mut platform = deps.uow.platform().await?;
@@ -259,12 +260,22 @@ pub async fn purge_raw(deps: &Deps, cutoff: OffsetDateTime) -> Result<u64, AppEr
     };
     let mut removed = 0;
     for workspace in workspaces {
-        let mut repos = deps.uow.tenant(workspace.id).await?;
-        let n = repos.inbound_events().purge_raw_before(cutoff).await?;
-        if n > 0 {
-            repos.commit().await?;
-            removed += n;
-        }
+        removed += purge_raw_in(deps, workspace.id, cutoff).await?;
+    }
+    Ok(removed)
+}
+
+/// Removes the raw body of every event of workspace `ws` received before `cutoff`, in one
+/// transaction, and answers how many bodies it removed.
+pub async fn purge_raw_in(
+    deps: &Deps,
+    ws: WorkspaceId,
+    cutoff: OffsetDateTime,
+) -> Result<u64, AppError> {
+    let mut repos = deps.uow.tenant(ws).await?;
+    let removed = repos.inbound_events().purge_raw_before(cutoff).await?;
+    if removed > 0 {
+        repos.commit().await?;
     }
     Ok(removed)
 }

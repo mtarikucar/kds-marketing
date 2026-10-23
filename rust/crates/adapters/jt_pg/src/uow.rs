@@ -312,6 +312,13 @@ impl PlatformRepos for PgPlatformRepos {
         capabilities::by_external(&mut self.tx, kind_keys, external_id).await
     }
 
+    async fn workspaces_with_verified(
+        &mut self,
+        kind_keys: &[&str],
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        capabilities::workspaces_with_verified(&mut self.tx, kind_keys).await
+    }
+
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
         ledger::insert(self.tx.conn(), &entry).await
     }
