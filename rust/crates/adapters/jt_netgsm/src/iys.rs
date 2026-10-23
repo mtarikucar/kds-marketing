@@ -96,6 +96,7 @@ pub(crate) async fn add(
     if wire.is_empty() {
         return Ok(SendReceipt {
             provider_id: String::new(),
+            cost_minor: None,
         });
     }
     let chunks: Vec<&[Value]> = wire.chunks(ADD_CHUNK).collect();
@@ -127,6 +128,7 @@ pub(crate) async fn add(
     }
     Ok(SendReceipt {
         provider_id: refids.join(","),
+        cost_minor: None,
     })
 }
 

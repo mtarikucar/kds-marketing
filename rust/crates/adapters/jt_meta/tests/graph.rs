@@ -1733,6 +1733,7 @@ async fn messenger_send_body() {
             .await
             .unwrap();
         assert_eq!(receipt.provider_id, "m_TEST-SENT-1");
+        assert_eq!(receipt.cost_minor, None);
     }
     let sent = m.requests("POST", "/fb/v19.0/me/messages");
     assert_eq!(sent.len(), 2);
@@ -1790,6 +1791,7 @@ async fn whatsapp_send_body() {
         .await
         .unwrap();
     assert_eq!(receipt.provider_id, "wamid.TEST-SENT-9");
+    assert_eq!(receipt.cost_minor, None);
     let sent = m.request("POST", "/fb/v19.0/5555555555/messages");
     assert_eq!(
         sent.json(),
@@ -2435,4 +2437,65 @@ async fn a_skipped_listing_part_logs_no_echoed_secret() {
         "{logged}"
     );
     assert_no_echo("the log", &logged, &[USER_TOKEN, META_APP_SECRET]);
+}
+
+#[tokio::test]
+async fn post_write_transport_failure_is_unknown() {
+    for after_headers in [false, true] {
+        let addr = broken_response(after_headers).await;
+        let base = Url::parse(&format!("http://{addr}/")).unwrap();
+        let meta = MetaConnector::new(
+            Arc::new(
+                jt_outbound::Egress::new(FIXED_HOSTS).with_test_hosts([("meta", addr.to_string())]),
+            ),
+            MetaBases {
+                graph: base.clone(),
+                instagram_graph: base.clone(),
+                instagram_api: base,
+                ..MetaBases::production()
+            },
+            Arc::new(TestApps::default()),
+        );
+        for media in [vec![], vec!["https://images.test/photo.jpg"]] {
+            let e = meta
+                .publish(
+                    &page_cred(),
+                    &public("facebook_page", Some(PAGE)),
+                    &post("hello", &media, None),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind(), "unknown", "{e}");
+            assert!(!e.is_retriable());
+        }
+        for kind in ["messenger", "instagram_dm"] {
+            let e = meta
+                .send_text(
+                    &page_cred(),
+                    &public(kind, Some(PAGE)),
+                    "2000000000000001",
+                    "hello",
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind(), "unknown", "{e}");
+            assert!(!e.is_retriable());
+        }
+        let e = meta
+            .send_text(
+                &wa_cred(None),
+                &public("whatsapp_cloud", Some(PHONE)),
+                "905000000001",
+                "hello",
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind(), "unknown", "{e}");
+        let e = meta
+            .probe(&page_cred(), &public("facebook_page", Some(PAGE)))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(e.kind(), "transient", "{e}");
+    }
 }

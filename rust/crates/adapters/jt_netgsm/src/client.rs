@@ -343,7 +343,7 @@ impl NetgsmConnector {
                 request = request.json(json);
             }
             match request.send(SCOPE).await {
-                Ok(response) => return read(response).await,
+                Ok(response) => return read(response, retry).await,
                 Err(EgressError::Transport(err)) if attempt < attempts => {
                     tracing::warn!(
                         attempt,
@@ -376,7 +376,7 @@ fn egress_error(e: EgressError, retry: Retry) -> ConnectorError {
             } else {
                 "got no answer"
             };
-            ConnectorError::transient(format!(
+            ConnectorError::unknown(format!(
                 "the call to NetGSM {what} after the request may have reached it: the outcome \
                  is unknown, so it was not sent again"
             ))
@@ -396,7 +396,7 @@ fn egress_error(e: EgressError, retry: Retry) -> ConnectorError {
 }
 
 /// Reads `response` (up to [`MAX_BODY_BYTES`]) into an [`Answer`]. The body is never logged.
-async fn read(mut response: Response) -> Result<Answer, ConnectorError> {
+async fn read(mut response: Response, retry: Retry) -> Result<Answer, ConnectorError> {
     let status = response.status();
     let retry_after = retry_after(response.headers());
     let mut body = Vec::new();
@@ -411,7 +411,12 @@ async fn read(mut response: Response) -> Result<Answer, ConnectorError> {
             Ok(None) => break,
             // An answer arrived (it may have been acted on): never sent again.
             Err(_) => {
-                return Err(ConnectorError::transient(
+                let error = if retry == Retry::Never {
+                    ConnectorError::unknown
+                } else {
+                    ConnectorError::transient
+                };
+                return Err(error(
                     "NetGSM's answer broke off in transit: whether the request took effect is \
                      unknown",
                 ));

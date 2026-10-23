@@ -348,8 +348,10 @@ Her başarısız çağrı, panelden de MCP'den de aynı yapıyı döndürür:
 | `STRATEGY_REQUIRED` | 409 | kapılı bir iş onaylı strateji ister |
 | `WORKSPACE_INACTIVE` | 423 | alan etkin değil (`details.status`) |
 | `HOST_NOT_ALLOWED` | 403 | dışarıya izinsiz bir adrese gidilmek istendi |
-| `UPSTREAM_UNAVAILABLE` | 503 | sağlayıcı meşgul ya da ulaşılamıyor; sonra yeniden denenebilir |
+| `UPSTREAM_UNAVAILABLE` | 503 | sağlayıcı meşgul ya da ulaşılamıyor; yalnız `details.retryable: true` ise yeniden denenebilir |
 | `INTERNAL` | 500 | beklenmeyen hata; ileti ve ayrıntılar yalnızca günlüğe yazılır, yanıt `"internal error"` ve boş `details` taşır |
+
+`ConnectorError::Unknown`, yazmanın sağlayıcıya ulaşmış olabileceğini belirtir ve `UPSTREAM_UNAVAILABLE`, `retryable: false`, `reason: "outcome unknown"` olarak döner; körlemesine yeniden gönderilmez.
 
 `UPSTREAM_UNAVAILABLE` ayrıntıları olduğu gibi iletilir:
 `{"code":"UPSTREAM_UNAVAILABLE","message":"the provider is unavailable; try again later","details":{"provider":"meta","retryable":true,"retry_after_s":30,"reason":"rate limited"}}`
@@ -866,6 +868,8 @@ Sunucu (`jeeta serve` ve `jeeta mcp-stdio`) üç sağlayıcının gerçek bağda
 adreslerine ulaşır. Her biri yalnızca uyguladığı işlemler için sunulur: Meta bağlantı, OAuth, yayın, sayaçlar,
 mesajlaşma, reklam bütçesi ve potansiyel müşteri formları; NetGSM bağlantı, SMS, arama, İYS izni ve iletim
 raporları (OAuth yok); X bağlantı, OAuth, yayın ve sayaçlar.
+
+`SendReceipt`, `provider_id` yanında sağlayıcı bildirdiğinde en küçük para birimi cinsinden `cost_minor: Option<i64>` taşır; NetGSM gönderim yanıtındaki `cost_minor` okunur, bildirilmeyen tutar (Meta dahil) `None` kalır.
 
 ## Zamanlanmış işler
 

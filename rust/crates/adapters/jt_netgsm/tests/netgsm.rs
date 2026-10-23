@@ -425,7 +425,7 @@ async fn reads_retry_when_no_answer_arrived() {
 }
 
 #[tokio::test]
-async fn sends_and_calls_never_retry_even_on_a_timeout() {
+async fn post_write_transport_failure_is_unknown() {
     let r = rig_with_timeout(SHORT_TIMEOUT).await;
     let stalled = |name: &str| rest(name).delayed(STALL);
     r.mock.on("POST", SEND, stalled("send"));
@@ -453,7 +453,8 @@ async fn sends_and_calls_never_retry_even_on_a_timeout() {
     ];
     for e in errors {
         let e = e.expect_err("a timeout");
-        assert_eq!(e.kind(), "transient", "{e}");
+        assert_eq!(e.kind(), "unknown", "{e}");
+        assert!(!e.is_retriable());
         assert!(e.reason().unwrap().contains("outcome is unknown"), "{e}");
         assert_no_password(&format!("{e} {e:?}"));
     }
@@ -1355,5 +1356,76 @@ async fn the_budgeter_is_shared_by_clones_of_its_handle() {
     assert_eq!(
         kind_of(a.inbox(&sms_cred(), window.0, window.1).await),
         "throttle"
+    );
+}
+
+#[tokio::test]
+async fn broken_response_body_preserves_write_uncertainty() {
+    let addr = broken_response(true).await;
+    let netgsm = connector_at(addr, RetryPolicy::default(), StdDuration::from_secs(5));
+    let mut linkup = public("netgsm_pbx");
+    linkup["call_mode"] = json!("linkup");
+    for result in [
+        netgsm
+            .send(&sms_cred(), "905000000001", "hello", None)
+            .await
+            .map(drop),
+        netgsm
+            .click_to_call(&pbx_cred(), &public("netgsm_pbx"), "101", "905000000021")
+            .await
+            .map(drop),
+        netgsm
+            .click_to_call(&pbx_cred(), &linkup, "905000000022", "905000000021")
+            .await
+            .map(drop),
+        netgsm.hangup(&pbx_cred(), "1700000000.9").await,
+        netgsm.add(&iys_cred(), &[consent_row(0)]).await.map(drop),
+    ] {
+        let e = result.unwrap_err();
+        assert_eq!(e.kind(), "unknown", "{e}");
+        assert!(!e.is_retriable());
+    }
+    assert_eq!(
+        netgsm
+            .probe(&sms_cred(), &public("sms_line"))
+            .await
+            .error
+            .unwrap()
+            .kind(),
+        "transient"
+    );
+}
+
+#[tokio::test]
+async fn send_receipt_carries_only_reported_minor_unit_cost() {
+    let r = rig().await;
+    for (cost, expected) in [
+        (json!(23), Some(23)),
+        (json!("42"), Some(42)),
+        (json!(0), Some(0)),
+        (Value::Null, None),
+        (json!("unknown"), None),
+        (json!(1.25), None),
+    ] {
+        r.mock.set(
+            "POST",
+            SEND,
+            ok(json!({ "code": "00", "jobid": "job-1", "cost_minor": cost })),
+        );
+        let receipt = r
+            .netgsm
+            .send(&sms_cred(), "905000000001", "hello", None)
+            .await
+            .unwrap();
+        assert_eq!(receipt.cost_minor, expected);
+    }
+    r.mock.set("POST", SEND, rest("send"));
+    assert_eq!(
+        r.netgsm
+            .send(&sms_cred(), "905000000001", "hello", None)
+            .await
+            .unwrap()
+            .cost_minor,
+        None
     );
 }

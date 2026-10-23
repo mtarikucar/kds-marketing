@@ -330,6 +330,7 @@ impl ScriptedConnector {
         self.on_connected.push(result);
     }
 
+    /// Queue the exact outcome, including uncertain writes and an optional reported cost.
     pub fn push_sms(&self, result: Result<SendReceipt, ConnectorError>) {
         self.sms.push(result);
     }

@@ -988,6 +988,7 @@ async fn scripted_connector_answers_in_order_and_records_calls() {
     ));
     netgsm.push_sms(Ok(SendReceipt {
         provider_id: "job-1".into(),
+        cost_minor: None,
     }));
     netgsm.push_sms(Err(ConnectorError::throttle(None)));
 
@@ -1098,6 +1099,7 @@ async fn scripted_connector_covers_every_operation() {
     meta.push_account_metrics(Err(ConnectorError::permission("no insights")));
     meta.push_send_text(Ok(SendReceipt {
         provider_id: "mid.1".into(),
+        cost_minor: None,
     }));
     meta.push_set_daily_budget(Ok(()));
     meta.push_list_adsets(Ok(vec![AdSet {
@@ -1200,10 +1202,12 @@ async fn scripted_connector_covers_every_operation() {
     let netgsm = Arc::new(ScriptedConnector::new(Provider::Netgsm));
     netgsm.push_click_to_call(Ok(SendReceipt {
         provider_id: "crm-1".into(),
+        cost_minor: None,
     }));
     netgsm.push_hangup(Ok(()));
     netgsm.push_consent_add(Ok(SendReceipt {
         provider_id: "iys-1".into(),
+        cost_minor: None,
     }));
     let delivered = DeliveryStatus {
         job_id: "job-1".into(),
@@ -1425,4 +1429,52 @@ fn testkit_deps_have_no_apps_and_an_empty_scripted_registry() {
         );
         assert!(deps.connectors.oauth(*provider).is_none(), "{provider:?}");
     }
+}
+
+#[test]
+fn send_receipt_unknown_cost_is_none() {
+    let receipt: SendReceipt = serde_json::from_value(json!({ "provider_id": "job-1" })).unwrap();
+    assert_eq!(receipt.cost_minor, None);
+    assert_eq!(
+        serde_json::to_value(&receipt).unwrap()["cost_minor"],
+        Value::Null
+    );
+}
+
+#[tokio::test]
+async fn scripted_connector_preserves_unknown_outcomes_and_costs() {
+    use jt_app::ports::connectors::{MessagingSender, SmsSender};
+    let connector = ScriptedConnector::new(Provider::Netgsm);
+    let error = ConnectorError::unknown("connection lost after write");
+    connector.push_sms(Err(error.clone()));
+    connector.push_sms(Ok(SendReceipt {
+        provider_id: "job".into(),
+        cost_minor: Some(23),
+    }));
+    connector.push_send_text(Err(error.clone()));
+    let credential = Credential::NetgsmSms {
+        usercode: "850".into(),
+        password: "secret".into(),
+        msgheader: "TEST".into(),
+    };
+    assert_eq!(
+        connector
+            .send(&credential, "905550000000", "hello", None)
+            .await,
+        Err(error.clone())
+    );
+    assert_eq!(
+        connector
+            .send(&credential, "905550000000", "hello", None)
+            .await
+            .unwrap()
+            .cost_minor,
+        Some(23)
+    );
+    assert_eq!(
+        connector
+            .send_text(&credential, &json!({}), "recipient", "hello")
+            .await,
+        Err(error)
+    );
 }

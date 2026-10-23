@@ -1145,6 +1145,8 @@ fn refused_state() -> AppError {
 /// - `Throttle`, `Transient` (the provider is busy or unreachable): `UPSTREAM_UNAVAILABLE` with
 ///   `details = {provider, retryable: true, retry_after_s?, reason}` ([`AppError::upstream_unavailable`]).
 ///
+/// - `Unknown`: `UPSTREAM_UNAVAILABLE`, `retryable: false`, reason `outcome unknown`.
+///
 /// A probe's failure is never such an error: it is the probe's result.
 fn provider_error(provider: Provider, e: ConnectorError) -> AppError {
     match &e {
@@ -1156,6 +1158,11 @@ fn provider_error(provider: Provider, e: ConnectorError) -> AppError {
         ConnectorError::Transient { reason, .. } => {
             AppError::upstream_unavailable(provider.key(), reason, None)
         }
+        ConnectorError::Unknown { .. } => AppError {
+            code: ErrorCode::UpstreamUnavailable,
+            message: "the provider outcome is unknown; do not retry blindly".into(),
+            details: json!({ "provider": provider.key(), "retryable": false, "reason": "outcome unknown" }),
+        },
         ConnectorError::Auth { .. }
         | ConnectorError::Permission { .. }
         | ConnectorError::Permanent { .. } => AppError::validation(

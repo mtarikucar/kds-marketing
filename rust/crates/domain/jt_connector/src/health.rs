@@ -52,8 +52,8 @@ impl ProbeResult {
 /// - success makes it `Verified`;
 /// - `Auth`, `Permission` and `Permanent` make it `Unreachable`, and so does a failure the
 ///   adapter did not explain (`ok == false` without an error);
-/// - `Throttle` and `Transient` leave it as it was: the provider was busy, which says nothing
-///   about the connection.
+/// - `Throttle`, `Transient` and `Unknown` leave it as it was: a busy provider or uncertain
+///   outcome says nothing about the connection.
 pub fn status_after_probe(prev: StoredStatus, r: &ProbeResult) -> StoredStatus {
     if prev == StoredStatus::Retired {
         return StoredStatus::Retired;
@@ -62,7 +62,11 @@ pub fn status_after_probe(prev: StoredStatus, r: &ProbeResult) -> StoredStatus {
         return StoredStatus::Verified;
     }
     match &r.error {
-        Some(ConnectorError::Throttle { .. } | ConnectorError::Transient { .. }) => prev,
+        Some(
+            ConnectorError::Throttle { .. }
+            | ConnectorError::Transient { .. }
+            | ConnectorError::Unknown { .. },
+        ) => prev,
         Some(
             ConnectorError::Auth { .. }
             | ConnectorError::Permission { .. }

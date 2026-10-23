@@ -3,7 +3,7 @@
 //!
 //! | Call | Request | Answer read |
 //! |---|---|---|
-//! | send | `POST /sms/rest/v2/send {msgheader, messages: [{msg, no, referansID?}], encoding?: "TR", iysfilter: "0"}` | `jobid` (a string, or a number kept digit for digit) |
+//! | send | `POST /sms/rest/v2/send {msgheader, messages: [{msg, no, referansID?}], encoding?: "TR", iysfilter: "0"}` | `jobid` (a string, or a number kept digit for digit), optional integer `cost_minor` |
 //! | report | `POST /sms/rest/v2/report {jobids}`, at most 50 per call | `jobs[] {jobid, telno, status, deliveredDate, errorCode}` |
 //! | inbox | `GET /sms/rest/v2/inbox?startdate&stopdate`, always both (`ddMMyyyyHHmm`, Turkish time) | `messages[] {msg, no, date, id}` |
 //! | balance | `POST /balance {stip: 3}` | rows `{balance_name, amount}`, bare or under `balance` |
@@ -257,7 +257,10 @@ pub(crate) async fn send(
     let json = outcome(answer, "the send", false)?;
     let job = text(&json["jobid"])
         .ok_or_else(|| ConnectorError::permanent("NetGSM accepted the send but named no job id"))?;
-    Ok(SendReceipt { provider_id: job })
+    Ok(SendReceipt {
+        provider_id: job,
+        cost_minor: text(&json["cost_minor"]).and_then(|cost| cost.parse().ok()),
+    })
 }
 
 /// The delivery reports of `job_ids`, 50 per call; the calls are taken from the account's

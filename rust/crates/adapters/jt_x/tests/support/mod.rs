@@ -568,3 +568,54 @@ pub fn assert_no_secret(text: &str) {
         assert!(!text.contains(secret), "a secret leaked ({secret}): {text}");
     }
 }
+
+/// Read the entire request, then close before or during the response.
+pub async fn broken_response(after_headers: bool) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                loop {
+                    socket.readable().await.unwrap();
+                    let mut buf = [0; 4096];
+                    match socket.try_read(&mut buf) {
+                        Ok(0) => return,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                        Err(e) => panic!("{e}"),
+                    }
+                    if let Some(end) = request.windows(4).position(|s| s == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                if after_headers {
+                    let mut response =
+                        &b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{"[..];
+                    while !response.is_empty() {
+                        socket.writable().await.unwrap();
+                        match socket.try_write(response) {
+                            Ok(n) => response = &response[n..],
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                            Err(e) => panic!("{e}"),
+                        }
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
