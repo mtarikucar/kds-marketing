@@ -8,9 +8,10 @@ use lettre::{
     transport::smtp::{
         Error,
         authentication::{Credentials, Mechanism},
-        client::{AsyncSmtpConnection, AsyncTokioStream},
+        client::AsyncSmtpConnection,
         commands::{Data, Mail, Rcpt},
-        extension::ClientId,
+        extension::{ClientId, Extension, MailParameter, ServerInfo},
+        response::Response,
     },
 };
 
@@ -28,22 +29,20 @@ pub(crate) async fn authenticated(
     ws: WorkspaceId,
     cred: &MailCred<'_>,
 ) -> Result<AsyncSmtpConnection, ConnectorError> {
-    let socket = socket::open(connector, ws, cred.smtp_host, cred.smtp_port).await?;
-    let transport: Box<dyn AsyncTokioStream> = match cred.tls {
-        MailTls::Implicit => Box::new(socket::SmtpTls(
-            socket::encrypt(connector, cred.smtp_host, socket).await?,
-        )),
-        MailTls::StartTls => Box::new(socket),
+    let stream = socket::open(connector, ws, cred.smtp_host, cred.smtp_port).await?;
+    let (stream, greeting) = if cred.tls == MailTls::StartTls {
+        starttls(stream).await?
+    } else {
+        (stream, Vec::new())
     };
+    let transport = socket::SmtpRead::new(socket::SmtpTls {
+        stream: socket::encrypt(connector, cred.smtp_host, stream).await?,
+        greeting: std::io::Cursor::new(greeting),
+    });
     let hello = ClientId::Domain("localhost".into());
-    let mut smtp = AsyncSmtpConnection::connect_with_transport(transport, &hello)
+    let mut smtp = AsyncSmtpConnection::connect_with_transport(Box::new(transport), &hello)
         .await
         .map_err(error)?;
-    if cred.tls == MailTls::StartTls {
-        smtp.starttls(socket::smtp_tls(connector, cred.smtp_host)?, &hello)
-            .await
-            .map_err(|_| ConnectorError::permanent("SMTP requires verified STARTTLS"))?;
-    }
     smtp.auth(
         &[Mechanism::Plain, Mechanism::Login],
         &Credentials::new(cred.username.into(), cred.password.into()),
@@ -58,15 +57,106 @@ pub(crate) async fn authenticated(
     })?;
     Ok(smtp)
 }
+// Negotiate STARTTLS ourselves so the read limiter stays ABOVE TLS in both modes.
+// No credentials or envelope commands are sent before verified encryption.
+async fn starttls(
+    stream: jt_outbound::TcpStream,
+) -> Result<(jt_outbound::TcpStream, Vec<u8>), ConnectorError> {
+    use tokio::io::{AsyncWriteExt, BufReader};
+    let refused = || ConnectorError::permanent("SMTP requires verified STARTTLS");
+    let mut stream = BufReader::new(socket::SmtpRead::new(stream));
+    let (greeting, response) = pre_tls_response(&mut stream).await?;
+    if !response.has_code(220) {
+        return Err(refused());
+    }
+    stream
+        .write_all(b"EHLO localhost\r\n")
+        .await
+        .map_err(|_| ConnectorError::transient("SMTP transport failed"))?;
+    let (_, response) = pre_tls_response(&mut stream).await?;
+    let info = ServerInfo::from_response(&response).map_err(|_| refused())?;
+    if !response.has_code(250) || !info.supports_feature(Extension::StartTls) {
+        return Err(refused());
+    }
+    stream
+        .write_all(b"STARTTLS\r\n")
+        .await
+        .map_err(|_| ConnectorError::transient("SMTP transport failed"))?;
+    let (_, response) = pre_tls_response(&mut stream).await?;
+    if !response.has_code(220) || !stream.buffer().is_empty() {
+        return Err(refused());
+    }
+    Ok((stream.into_inner().into_inner(), greeting.into_bytes()))
+}
+async fn pre_tls_response(
+    stream: &mut tokio::io::BufReader<socket::SmtpRead<jt_outbound::TcpStream>>,
+) -> Result<(String, Response), ConnectorError> {
+    use tokio::io::AsyncBufReadExt;
+    let invalid = || ConnectorError::permanent("invalid SMTP STARTTLS response");
+    let mut response = String::new();
+    loop {
+        let start = response.len();
+        if stream.read_line(&mut response).await.map_err(|err| {
+            if err.kind() == std::io::ErrorKind::InvalidData {
+                invalid()
+            } else {
+                ConnectorError::transient("SMTP transport failed")
+            }
+        })? == 0
+        {
+            return Err(ConnectorError::transient("SMTP connection closed"));
+        }
+        let line = &response.as_bytes()[start..];
+        if !line.ends_with(b"\n") {
+            return Err(ConnectorError::transient(
+                "SMTP connection closed during response",
+            ));
+        }
+        if line.len() < 5 || !line[..3].iter().all(u8::is_ascii_digit) || !line.ends_with(b"\r\n") {
+            return Err(invalid());
+        }
+        match line[3] {
+            b'-' => {}
+            b' ' => {
+                let parsed: Response = response.parse().map_err(|_| invalid())?;
+                match u16::from(parsed.code()) / 100 {
+                    4 => {
+                        return Err(ConnectorError::transient(
+                            "SMTP temporarily refused request",
+                        ));
+                    }
+                    5 => return Err(ConnectorError::permanent("SMTP request refused")),
+                    _ => {}
+                }
+                return Ok((response, parsed));
+            }
+            _ => return Err(invalid()),
+        }
+    }
+}
 pub(crate) async fn sender(
     smtp: &mut AsyncSmtpConnection,
     cred: &MailCred<'_>,
 ) -> Result<(), ConnectorError> {
+    sender_with_utf8(smtp, cred, !cred.from_address.is_ascii()).await
+}
+async fn sender_with_utf8(
+    smtp: &mut AsyncSmtpConnection,
+    cred: &MailCred<'_>,
+    needs_utf8: bool,
+) -> Result<(), ConnectorError> {
+    let mut options = vec![];
+    if needs_utf8 {
+        if !smtp.server_info().supports_feature(Extension::SmtpUtfEight) {
+            return Err(ConnectorError::permanent("smtputf8 not supported"));
+        }
+        options.push(MailParameter::SmtpUtfEight);
+    }
     let address = cred
         .from_address
         .parse()
         .map_err(|_| ConnectorError::permanent("invalid mail sender"))?;
-    smtp.command(Mail::new(Some(address), vec![]))
+    smtp.command(Mail::new(Some(address), options))
         .await
         .map_err(|e| {
             if e.is_permanent() {
@@ -150,7 +240,15 @@ pub(crate) async fn send(
     let mut post_data = false;
     let result = tokio::time::timeout(IO_TIMEOUT, async {
         let mut smtp = authenticated(connector, ws, cred).await?;
-        sender(&mut smtp, cred).await?;
+        let header_end = bytes
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .unwrap_or(bytes.len());
+        // RFC 2047 encoded words are ASCII on the wire and do not need SMTPUTF8.
+        let needs_utf8 = !cred.from_address.is_ascii()
+            || !recipient.to_string().is_ascii()
+            || !bytes[..header_end].is_ascii();
+        sender_with_utf8(&mut smtp, cred, needs_utf8).await?;
         smtp.command(Rcpt::new(recipient, vec![]))
             .await
             .map_err(error)?;

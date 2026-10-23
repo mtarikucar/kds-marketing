@@ -54,6 +54,12 @@ pub struct SmtpMode {
     pub reject_sender: bool,
     pub reject_auth: bool,
     pub wrong_host: bool,
+    pub smtputf8: bool,
+    pub utf8_from: bool,
+    pub utf8_to: bool,
+    pub pre_tls_failure: Option<(bool, &'static str)>, // (EHLO rather than greeting, reply)
+    pub bare_lf: bool,
+    pub oversized: Option<(bool, bool)>, // (before TLS, multiline)
 }
 pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -69,9 +75,21 @@ pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
             };
             BufReader::new(Box::new(tls))
         };
+        if let Some((false, response)) = mode.pre_tls_failure {
+            reply(&mut stream, response).await;
+            return vec![];
+        }
+        if let Some((true, multiline)) = mode.oversized {
+            oversized_smtp(&mut stream, multiline, mode.bare_lf).await;
+            return vec![];
+        }
         reply(&mut stream, "220 localhost ESMTP\r\n").await;
         assert!(line(&mut stream).await.starts_with("EHLO "));
         if mode.starttls {
+            if let Some((true, response)) = mode.pre_tls_failure {
+                reply(&mut stream, response).await;
+                return vec![];
+            }
             if mode.no_tls {
                 reply(&mut stream, "250-localhost\r\n250 AUTH PLAIN\r\n").await;
                 let next = line(&mut stream).await;
@@ -90,7 +108,16 @@ pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
             stream = BufReader::new(Box::new(tls));
             assert!(line(&mut stream).await.starts_with("EHLO "));
         }
-        reply(&mut stream, "250-localhost\r\n250 AUTH PLAIN LOGIN\r\n").await;
+        if let Some((_, multiline)) = mode.oversized {
+            oversized_smtp(&mut stream, multiline, mode.bare_lf).await;
+            return vec![];
+        }
+        let capabilities = if mode.smtputf8 {
+            "250-localhost\r\n250-SMTPUTF8\r\n250 AUTH PLAIN LOGIN\r\n"
+        } else {
+            "250-localhost\r\n250 AUTH PLAIN LOGIN\r\n"
+        };
+        reply(&mut stream, capabilities).await;
         assert!(line(&mut stream).await.starts_with("AUTH PLAIN "));
         if mode.reject_auth {
             reply(
@@ -101,10 +128,25 @@ pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
             return vec![];
         }
         reply(&mut stream, "235 authenticated\r\n").await;
-        assert_eq!(
-            line(&mut stream).await,
-            "MAIL FROM:<sender@example.com>\r\n"
-        );
+        let needs_utf8 = mode.utf8_from || mode.utf8_to;
+        if needs_utf8 && !mode.smtputf8 {
+            let mut command = String::new();
+            let read = stream.read_line(&mut command).await;
+            assert!(
+                matches!(read, Ok(0))
+                    || matches!(read, Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof)
+            );
+            assert!(command.is_empty(), "must refuse before MAIL: {command}");
+            return vec![];
+        }
+        let command = line(&mut stream).await;
+        let from = if mode.utf8_from {
+            "çağrı@example.com"
+        } else {
+            "sender@example.com"
+        };
+        let option = if needs_utf8 { " SMTPUTF8" } else { "" };
+        assert_eq!(command, format!("MAIL FROM:<{from}>{option}\r\n"));
         if mode.reject_sender {
             reply(&mut stream, "550 mail-password sender refused\r\n").await;
             return vec![];
@@ -115,7 +157,12 @@ pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
             reply(&mut stream, "221 bye\r\n").await;
             return vec![];
         }
-        assert_eq!(next, "RCPT TO:<person@example.com>\r\n");
+        let to = if mode.utf8_to {
+            "çağrı@example.com"
+        } else {
+            "person@example.com"
+        };
+        assert_eq!(next, format!("RCPT TO:<{to}>\r\n"));
         reply(&mut stream, "250 recipient accepted\r\n").await;
         assert_eq!(line(&mut stream).await, "DATA\r\n");
         reply(&mut stream, "354 send message\r\n").await;
@@ -143,6 +190,21 @@ pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
         message
     });
     (port, task)
+}
+
+// Send only the bytes needed to cross the bound, then keep the connection open.
+// A reader that waits for a newline/complete response will stall instead of rejecting.
+async fn oversized_smtp(stream: &mut Stream, multiline: bool, bare_lf: bool) {
+    let bytes = if bare_lf {
+        "250 x\n".repeat(700)
+    } else if multiline {
+        (format!("250-{}\r\n", "x".repeat(3000))).repeat(22)
+    } else {
+        format!("250 {}", "x".repeat(4096))
+    };
+    let _ = stream.get_mut().write_all(bytes.as_bytes()).await;
+    let _ = stream.get_mut().flush().await;
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 }
 
 pub async fn imap(

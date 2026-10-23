@@ -3,7 +3,7 @@ use crate::{IO_TIMEOUT, MailConnector};
 use jt_connector::ConnectorError;
 use jt_outbound::{EgressError, EgressScope, TcpStream};
 use jt_tenancy::WorkspaceId;
-use lettre::transport::smtp::client::{AsyncTokioStream, Certificate, TlsParameters};
+use lettre::transport::smtp::client::AsyncTokioStream;
 use std::{
     io,
     pin::Pin,
@@ -59,24 +59,12 @@ pub(crate) async fn encrypt(
         .await
         .map_err(|_| ConnectorError::permanent("mail TLS verification failed"))
 }
-pub(crate) fn smtp_tls(
-    connector: &MailConnector,
-    host: &str,
-) -> Result<TlsParameters, ConnectorError> {
-    let mut builder = TlsParameters::builder(host.to_owned());
-    for root in &connector.roots {
-        builder = builder.add_root_certificate(
-            Certificate::from_der(root.clone())
-                .map_err(|_| ConnectorError::permanent("invalid mail CA certificate"))?,
-        );
-    }
-    builder
-        .build_rustls()
-        .map_err(|_| ConnectorError::permanent("mail TLS configuration failed"))
+/// Adapts verified TLS to lettre. STARTTLS replays only the already validated greeting:
+/// lettre then sends a fresh EHLO over TLS and forgets the pre-upgrade capabilities.
+pub(crate) struct SmtpTls {
+    pub(crate) stream: TlsStream<TcpStream>,
+    pub(crate) greeting: io::Cursor<Vec<u8>>,
 }
-
-/// Adapts an already encrypted stream to the SMTP library's transport interface.
-pub(crate) struct SmtpTls(pub TlsStream<TcpStream>);
 impl std::fmt::Debug for SmtpTls {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SmtpTls")
@@ -84,7 +72,7 @@ impl std::fmt::Debug for SmtpTls {
 }
 impl AsyncTokioStream for SmtpTls {
     fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
-        self.0.get_ref().0.peer_addr()
+        self.stream.get_ref().0.peer_addr()
     }
 }
 impl AsyncRead for SmtpTls {
@@ -93,7 +81,10 @@ impl AsyncRead for SmtpTls {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.0).poll_read(cx, buf)
+        if self.greeting.position() < self.greeting.get_ref().len() as u64 {
+            return Pin::new(&mut self.greeting).poll_read(cx, buf);
+        }
+        Pin::new(&mut self.stream).poll_read(cx, buf)
     }
 }
 impl AsyncWrite for SmtpTls {
@@ -102,13 +93,13 @@ impl AsyncWrite for SmtpTls {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.0).poll_write(cx, buf)
+        Pin::new(&mut self.stream).poll_write(cx, buf)
     }
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.0).poll_flush(cx)
+        Pin::new(&mut self.stream).poll_flush(cx)
     }
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.0).poll_shutdown(cx)
+        Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
 
@@ -215,5 +206,115 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for LimitedRead<T> {
     }
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// Limits plaintext before lettre's read_line can allocate an unbounded String.
+/// Keep only counters and the reply prefix, never a second response buffer.
+#[derive(Debug)]
+pub(crate) struct SmtpRead<T> {
+    inner: T,
+    line_bytes: usize,
+    response_bytes: usize,
+    prefix: [u8; 4],
+    last_byte: u8,
+    failed: bool,
+}
+impl<T> SmtpRead<T> {
+    pub(crate) fn new(inner: T) -> Self {
+        Self {
+            inner,
+            line_bytes: 0,
+            response_bytes: 0,
+            prefix: [0; 4],
+            last_byte: 0,
+            failed: false,
+        }
+    }
+    pub(crate) fn into_inner(self) -> T {
+        self.inner
+    }
+
+    fn inspect(&mut self, bytes: &[u8]) -> io::Result<()> {
+        for &byte in bytes {
+            if self.line_bytes < 4 {
+                self.prefix[self.line_bytes] = byte;
+            }
+            self.line_bytes += 1;
+            self.response_bytes += 1;
+            if self.line_bytes > 4096 || self.response_bytes > 65536 {
+                self.failed = true;
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "SMTP response limit exceeded",
+                ));
+            }
+            if byte == b'\n' && self.last_byte == b'\r' {
+                // Match SMTP's CRLF framing; bare LF must not reset either budget.
+                // Only a valid final reply line resets the response budget.
+                if self.line_bytes >= 4
+                    && self.prefix[..3].iter().all(u8::is_ascii_digit)
+                    && self.prefix[3] == b' '
+                {
+                    self.response_bytes = 0;
+                }
+                self.line_bytes = 0;
+                self.prefix = [0; 4];
+            }
+            self.last_byte = byte;
+        }
+        Ok(())
+    }
+}
+impl<T: AsyncRead + Unpin> AsyncRead for SmtpRead<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        if self.failed {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "SMTP response limit exceeded",
+            )));
+        }
+        let mut scratch = [0u8; 4096];
+        let count = buf
+            .remaining()
+            .min(scratch.len())
+            .min(4097 - self.line_bytes)
+            .min(65537 - self.response_bytes);
+        let mut incoming = ReadBuf::new(&mut scratch[..count]);
+        match Pin::new(&mut self.inner).poll_read(cx, &mut incoming) {
+            Poll::Ready(Ok(())) => {
+                self.inspect(incoming.filled())?;
+                buf.put_slice(incoming.filled());
+                Poll::Ready(Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+impl<T: AsyncWrite + Unpin> AsyncWrite for SmtpRead<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+impl<T: AsyncTokioStream> AsyncTokioStream for SmtpRead<T> {
+    fn peer_addr(&self) -> io::Result<std::net::SocketAddr> {
+        self.inner.peer_addr()
     }
 }

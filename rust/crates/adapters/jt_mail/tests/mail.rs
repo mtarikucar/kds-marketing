@@ -863,3 +863,181 @@ async fn mail_probe_and_connection_step_require_a_valid_workspace() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn smtp_line_longer_than_limit_is_refused_without_buffering() {
+    assert_oversized_smtp_is_refused(false, false).await;
+}
+
+#[tokio::test]
+async fn smtp_multiline_response_longer_than_limit_is_refused() {
+    assert_oversized_smtp_is_refused(true, false).await;
+}
+
+#[tokio::test]
+async fn smtp_bare_lf_cannot_reset_the_read_limit() {
+    assert_oversized_smtp_is_refused(false, true).await;
+}
+
+async fn assert_oversized_smtp_is_refused(multiline: bool, bare_lf: bool) {
+    for (starttls, before_tls) in [(false, true), (false, false), (true, true), (true, false)] {
+        let (port, task) = smtp(SmtpMode {
+            starttls,
+            oversized: Some((before_tls, multiline)),
+            bare_lf,
+            ..Default::default()
+        })
+        .await;
+        let tls = if starttls {
+            MailTls::StartTls
+        } else {
+            MailTls::Implicit
+        };
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            connector().send(workspace(), &credential(port, 993, tls), message()),
+        )
+        .await;
+        task.await.unwrap();
+        assert!(
+            result
+                .expect("reject before server sends a terminator")
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn smtputf8_negotiated_for_international_addresses() {
+    check_smtputf8(true).await;
+}
+
+#[tokio::test]
+async fn smtputf8_missing_is_permanent_error() {
+    check_smtputf8(false).await;
+}
+
+async fn check_smtputf8(advertised: bool) {
+    for starttls in [false, true] {
+        for variant in 0..2 {
+            let (port, task) = smtp(SmtpMode {
+                starttls,
+                smtputf8: advertised,
+                utf8_from: variant == 0,
+                utf8_to: variant == 1,
+                ..Default::default()
+            })
+            .await;
+            let tls = if starttls {
+                MailTls::StartTls
+            } else {
+                MailTls::Implicit
+            };
+            let mut cred = credential(port, 993, tls);
+            let mut mail = message();
+            match variant {
+                0 => {
+                    let jt_connector::Credential::Mailbox { from_address, .. } = &mut cred else {
+                        unreachable!()
+                    };
+                    *from_address = "çağrı@example.com".into();
+                }
+                _ => mail.to = "çağrı@example.com".into(),
+            }
+            let result = connector().send(workspace(), &cred, mail).await;
+            if advertised {
+                result.unwrap();
+            } else {
+                assert!(
+                    matches!(result, Err(ConnectorError::Permanent { ref reason, .. }) if reason == "smtputf8 not supported")
+                );
+            }
+            task.await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn smtp_encoded_unicode_headers_do_not_require_smtputf8() {
+    use mailparse::MailHeaderMap;
+    for starttls in [false, true] {
+        let (port, task) = smtp(SmtpMode {
+            starttls,
+            ..Default::default()
+        })
+        .await;
+        let tls = if starttls {
+            MailTls::StartTls
+        } else {
+            MailTls::Implicit
+        };
+        let mut mail = message();
+        mail.to = "Çağrı <person@example.com>".into();
+        mail.subject = "Merhaba dünya".into();
+        mail.message_id = "<çağrı@example.com>".into();
+        mail.in_reply_to = Some("<önceki@example.com>".into());
+        mail.references = vec!["<önceki@example.com>".into()];
+        let receipt = connector()
+            .send(workspace(), &credential(port, 993, tls), mail)
+            .await
+            .unwrap();
+        assert_eq!(receipt.provider_id, "<çağrı@example.com>");
+        let bytes = task.await.unwrap();
+        let header_end = bytes.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        assert!(
+            bytes[..header_end].is_ascii(),
+            "encoded headers require no SMTPUTF8"
+        );
+        let parsed = mailparse::parse_mail(&bytes).unwrap();
+        assert_eq!(
+            parsed.headers.get_first_value("Subject").as_deref(),
+            Some("Merhaba dünya")
+        );
+        assert_eq!(
+            parsed.headers.get_first_value("To").as_deref(),
+            Some("Çağrı <person@example.com>")
+        );
+    }
+}
+
+#[tokio::test]
+async fn smtp_starttls_setup_preserves_transient_failures() {
+    for ehlo in [false, true] {
+        for (response, transient) in [
+            ("421 temporarily unavailable\r\n", true),
+            ("451 try later\r\n", true),
+            ("", true),
+            ("220 interrupted reply", true),
+            ("220 bare newline\n", false),
+            ("550 refused\r\n", false),
+            ("invalid reply\r\n", false),
+        ] {
+            let (port, task) = smtp(SmtpMode {
+                starttls: true,
+                pre_tls_failure: Some((ehlo, response)),
+                ..Default::default()
+            })
+            .await;
+            let err = connector()
+                .send(
+                    workspace(),
+                    &credential(port, 993, MailTls::StartTls),
+                    message(),
+                )
+                .await
+                .unwrap_err();
+            if transient {
+                assert!(
+                    matches!(err, ConnectorError::Transient { .. }),
+                    "{response:?}: {err:?}"
+                );
+            } else {
+                assert!(
+                    matches!(err, ConnectorError::Permanent { .. }),
+                    "{response:?}: {err:?}"
+                );
+            }
+            task.await.unwrap();
+        }
+    }
+}

@@ -1,5 +1,6 @@
 //! Authorized raw sockets share the HTTP client's tenant registry and DNS filter.
 use std::time::Duration;
+use tokio::time::{Instant, timeout_at};
 
 use crate::{Egress, EgressError, EgressScope, HostError, TcpStream, Url};
 
@@ -27,7 +28,8 @@ impl Egress {
             return Err(refused());
         }
         let host = parsed.to_string();
-        tokio::time::timeout(timeout.min(Duration::from_secs(10)), async {
+        let deadline = Instant::now() + timeout.min(Duration::from_secs(10));
+        timeout_at(deadline, async {
             let addresses = self
                 .resolver
                 .addresses(&host, port)
@@ -36,11 +38,20 @@ impl Egress {
                     HostError::Unresolvable(_) => EgressError::Socket,
                     _ => EgressError::NotPublic { host: host.clone() },
                 })?;
-            for address in addresses {
+            for (index, address) in addresses.iter().enumerate() {
                 if !self.permits(scope, &url) {
                     return Err(refused());
                 }
-                if let Ok(stream) = TcpStream::connect(address).await {
+                // Share the remaining budget so a blackholed address cannot consume
+                // the whole deadline before an alternate address gets a turn.
+                let now = Instant::now();
+                let remaining = deadline.saturating_duration_since(now);
+                let left = u32::try_from(addresses.len() - index).unwrap_or(u32::MAX);
+                let budget = (remaining / left).max(Duration::from_secs(1));
+                let attempt_deadline = deadline.min(now + budget);
+                if let Ok(Ok(stream)) =
+                    timeout_at(attempt_deadline, TcpStream::connect(address)).await
+                {
                     // A retirement racing the TCP handshake must not release a usable socket.
                     if !self.permits(scope, &url) {
                         return Err(refused());
