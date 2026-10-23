@@ -4,11 +4,10 @@
 //!
 //! The ad account is `public["external_id"]` (its number, `act_` optional). Budgets are in the
 //! account currency's minor units, as Meta takes and gives them; a budget of `0` reads as none.
-//! Meta gives `spend` in major units with two decimals: `spend_minor` is it times 100, which is
-//! exact for currencies with two decimals (TRY, EUR, USD); currencies with another exponent are
-//! M3's to handle.
+//! Spend uses the verified account currency exponent. Unsupported currencies and malformed
+//! money refuse; absent ad-set counters stay absent. Campaign reads require complete counters.
 
-use jt_app::ports::connectors::{AdInsights, AdSet};
+use jt_app::ports::connectors::{AdAccountContext, AdInsights, AdSet, AdSetInsights, AdStatus};
 use jt_connector::{ConnectorError, Credential};
 use serde_json::{Value, json};
 use time::Date;
@@ -66,7 +65,7 @@ pub(crate) async fn set_daily_budget(
             json!({ "daily_budget": minor }),
         )
         .await?;
-    if answer["success"] == false {
+    if answer["success"] != true {
         return Err(ConnectorError::permanent(
             "the budget change was not accepted",
         ));
@@ -75,8 +74,8 @@ pub(crate) async fn set_daily_budget(
 }
 
 /// A budget in minor units; `0` and an absent one read as none.
-fn budget(value: &Value) -> Option<i64> {
-    integer(value).filter(|b| *b > 0)
+fn budget(value: &Value) -> Result<Option<i64>, ConnectorError> {
+    Ok(optional_counter(value)?.filter(|b| *b > 0))
 }
 
 /// The ad account's ad sets.
@@ -103,8 +102,8 @@ pub(crate) async fn list_adsets(
                 name: row["name"].as_str().unwrap_or_default().to_owned(),
                 status: row["status"].as_str().unwrap_or_default().to_owned(),
                 campaign_id: text(&row["campaign_id"]),
-                daily_budget_minor: budget(&row["daily_budget"]),
-                lifetime_budget_minor: budget(&row["lifetime_budget"]),
+                daily_budget_minor: budget(&row["daily_budget"])?,
+                lifetime_budget_minor: budget(&row["lifetime_budget"])?,
             })
         })
         .collect()
@@ -112,6 +111,7 @@ pub(crate) async fn list_adsets(
 
 /// A decimal amount in major units (`"12.34"`, `"12.3"`, `"12"`) as minor units (×100), exactly;
 /// `None` for anything else (more than two decimals included).
+#[cfg(test)]
 pub(crate) fn minor_units(value: &Value) -> Option<i64> {
     let raw = match value {
         Value::String(s) => s.trim().to_owned(),
@@ -147,6 +147,7 @@ pub(crate) async fn insights(
     if until < since {
         return Err(ConnectorError::permanent("the range ends before it starts"));
     }
+    let context = account_context(connector, cred, public).await?;
     let token = ads_token(cred)?;
     let account = act(public)?;
     let app = connector.graph_app()?;
@@ -180,12 +181,215 @@ pub(crate) async fn insights(
                 campaign_id: text(&row["campaign_id"]).ok_or_else(|| missing("campaign id"))?,
                 campaign_name: row["campaign_name"].as_str().map(str::to_owned),
                 date,
-                spend_minor: minor_units(&row["spend"]).unwrap_or(0),
-                impressions: integer(&row["impressions"]).unwrap_or(0),
-                clicks: integer(&row["clicks"]).unwrap_or(0),
+                spend_minor: optional_money(&row["spend"], context.minor_unit_exponent)?
+                    .ok_or_else(|| missing("spend"))?,
+                impressions: optional_counter(&row["impressions"])?
+                    .ok_or_else(|| missing("impressions"))?,
+                clicks: optional_counter(&row["clicks"])?.ok_or_else(|| missing("clicks"))?,
             })
         })
         .collect()
+}
+
+/// Safety pause/resume is a status write, never a zero budget or a create operation.
+pub(crate) async fn set_status(
+    connector: &MetaConnector,
+    cred: &Credential,
+    entity_id: &str,
+    status: AdStatus,
+) -> Result<(), ConnectorError> {
+    let token = ads_token(cred)?;
+    let app = connector.graph_app()?;
+    let status = match status {
+        AdStatus::Paused => "PAUSED",
+        AdStatus::Active => "ACTIVE",
+    };
+    let answer = connector
+        .graph_post(
+            &app,
+            token,
+            &[node(entity_id)?],
+            &[],
+            json!({"status":status}),
+        )
+        .await?;
+    if answer["success"] != true {
+        return Err(ConnectorError::permanent(
+            "the status change was not confirmed",
+        ));
+    }
+    Ok(())
+}
+
+/// Explicit supported currency units; unknown currencies refuse instead of assuming cents.
+fn exponent(currency: &str) -> Result<u8, ConnectorError> {
+    match currency {
+        "JPY" | "KRW" | "VND" | "CLP" | "PYG" => Ok(0),
+        "TRY" | "EUR" | "USD" | "GBP" | "CAD" | "AUD" | "CHF" => Ok(2),
+        _ => Err(ConnectorError::permanent("unsupported ad account currency")),
+    }
+}
+pub(crate) async fn account_context(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+) -> Result<AdAccountContext, ConnectorError> {
+    let account = act(public)?;
+    let app = connector.graph_app()?;
+    let row = connector
+        .graph_get(
+            &app,
+            ads_token(cred)?,
+            &[&account],
+            &[("fields", "account_id,currency,timezone_name")],
+        )
+        .await?;
+    let account_id = text(&row["account_id"]).ok_or_else(|| missing("account id"))?;
+    if format!("act_{account_id}") != account {
+        return Err(ConnectorError::permanent(
+            "ad account does not match capability",
+        ));
+    }
+    let currency = text(&row["currency"]).ok_or_else(|| missing("currency"))?;
+    let timezone = text(&row["timezone_name"])
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| missing("account timezone"))?;
+    Ok(AdAccountContext {
+        account_id,
+        minor_unit_exponent: exponent(&currency)?,
+        currency,
+        timezone,
+    })
+}
+
+fn optional_counter(value: &Value) -> Result<Option<i64>, ConnectorError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    integer(value)
+        .filter(|n| *n >= 0)
+        .map(Some)
+        .ok_or_else(|| ConnectorError::permanent("invalid ad insight counter"))
+}
+fn optional_money(value: &Value, exponent: u8) -> Result<Option<i64>, ConnectorError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let invalid = || ConnectorError::permanent("invalid provider money");
+    let raw = match value {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => return Err(invalid()),
+    };
+    let (whole, fraction) = raw.split_once('.').unwrap_or((&raw, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+        || fraction.len() > usize::from(exponent)
+    {
+        return Err(invalid());
+    }
+    let factor = 10_i64
+        .checked_pow(u32::from(exponent))
+        .ok_or_else(invalid)?;
+    let whole = whole
+        .parse::<i64>()
+        .ok()
+        .and_then(|n| n.checked_mul(factor))
+        .ok_or_else(invalid)?;
+    let fraction = if fraction.is_empty() {
+        0
+    } else {
+        fraction
+            .parse::<i64>()
+            .map_err(|_| invalid())?
+            .checked_mul(10_i64.pow(u32::from(exponent) - fraction.len() as u32))
+            .ok_or_else(invalid)?
+    };
+    Ok(Some(whole.checked_add(fraction).ok_or_else(invalid)?))
+}
+
+pub(crate) async fn adset_insights(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    since: Date,
+    until: Date,
+) -> Result<Vec<AdSetInsights>, ConnectorError> {
+    if until < since {
+        return Err(ConnectorError::permanent("the range ends before it starts"));
+    }
+    let context = account_context(connector, cred, public).await?;
+    let account = act(public)?;
+    let app = connector.graph_app()?;
+    let day = format_description!("[year]-[month]-[day]");
+    let range = json!({"since":since.format(&day).map_err(|_| missing("date"))?, "until":until.format(&day).map_err(|_| missing("date"))?}).to_string();
+    let rows = connector
+        .graph_pages(
+            &app,
+            ads_token(cred)?,
+            &[&account, "insights"],
+            &[
+                ("level", "adset"),
+                ("time_increment", "1"),
+                ("limit", "500"),
+                (
+                    "fields",
+                    "account_id,adset_id,campaign_id,date_start,spend,impressions,clicks",
+                ),
+                ("time_range", &range),
+            ],
+        )
+        .await?;
+    rows.iter()
+        .map(|row| {
+            let account_id =
+                text(&row["account_id"]).ok_or_else(|| missing("insight account id"))?;
+            if account_id != context.account_id {
+                return Err(ConnectorError::permanent("insight account mismatch"));
+            }
+            let date = row["date_start"]
+                .as_str()
+                .and_then(|s| Date::parse(s, &day).ok())
+                .ok_or_else(|| missing("result date"))?;
+            if date < since || date > until {
+                return Err(ConnectorError::permanent(
+                    "insight date outside requested range",
+                ));
+            }
+            Ok(AdSetInsights {
+                account_id,
+                adset_id: text(&row["adset_id"]).ok_or_else(|| missing("ad set id"))?,
+                campaign_id: text(&row["campaign_id"]),
+                date,
+                spend_minor: optional_money(&row["spend"], context.minor_unit_exponent)?,
+                impressions: optional_counter(&row["impressions"])?,
+                clicks: optional_counter(&row["clicks"])?,
+            })
+        })
+        .collect()
+}
+pub(crate) async fn resolve_adset(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    ad_id: &str,
+) -> Result<Option<String>, ConnectorError> {
+    let account = act(public)?;
+    let app = connector.graph_app()?;
+    let row = connector
+        .graph_get(
+            &app,
+            ads_token(cred)?,
+            &[node(ad_id)?],
+            &[("fields", "account_id,adset_id")],
+        )
+        .await?;
+    let account_id = text(&row["account_id"]).ok_or_else(|| missing("ad account id"))?;
+    if format!("act_{account_id}") != account {
+        return Err(ConnectorError::permanent("ad belongs to another account"));
+    }
+    Ok(text(&row["adset_id"]))
 }
 
 #[cfg(test)]

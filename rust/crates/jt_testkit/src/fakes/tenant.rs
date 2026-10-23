@@ -51,6 +51,18 @@ impl MemBundle for MemTenant {
 
 #[async_trait]
 impl TenantRepos for MemTenant {
+    fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
+        self
+    }
+
+    fn studio_budget(&mut self) -> &mut dyn jt_app::ports::studio::StudioBudgetRepo {
+        self
+    }
+
+    fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
+        self
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
     }
@@ -687,3 +699,9 @@ impl WorkspaceRepo for MemTenant {
         })
     }
 }
+
+impl jt_app::ports::studio::StudioRepo for MemTenant {}
+
+impl jt_app::ports::studio::StudioBudgetRepo for MemTenant {}
+
+impl jt_app::ports::studio::StudioControlRepo for MemTenant {}

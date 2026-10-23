@@ -307,3 +307,6 @@ fn gate_mode_and_risk_serialise_snake_case() {
         assert_eq!(serde_json::to_value(risk).unwrap(), name);
     }
 }
+
+#[path = "studio_contracts.rs"]
+mod studio_contracts;

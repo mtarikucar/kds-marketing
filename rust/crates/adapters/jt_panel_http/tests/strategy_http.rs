@@ -76,7 +76,7 @@ fn hypotheses() -> Value {
         "angle": "gece açık",
         "channel": "any",
         "metric": "dm",
-        "confidence": 0.6,
+        "prior_confidence": 0.6,
     }])
 }
 

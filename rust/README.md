@@ -92,6 +92,7 @@ döndürür. Sekiz göç vardır:
 | `0006_inbox` | Gelen kutusu için 13 alan tablosu (36 toplam): kişiler, kimlikler, konuşmalar, mesajlar, yolculuklar ve olayları, görevler, notlar, birleştirmeler, kayıp nedenleri, tüketici kayıtları, gönderim kuyruğu ve 24 saatlik istek anahtarları. FORCE RLS ve bileşik yabancı anahtarlar; varsayılan kayıp nedenleri ve sistem rollerinin gelen kutusu izinleri geriye dönük eklenir. |
 | `0007_inbox_policy` | Alan politikalarına `inbox_policy` sütunu ekler; mevcut durum etiketlerini korur, yeni tablo eklemez. |
 | `0008_inbox_compliance` | İzinler, engellemeler, teklifler, randevular, komisyonlar, silme kayıtları ve kimlik özetleri, gönderim işleri, posta imleçleri, varsayılan/kullanıcı komisyon oranları ve değişmez yolculuk atfı: 12 yeni alan tablosu, toplam 48. FORCE RLS, bileşik alan anahtarları ve yinelenebilir up/down. |
+| `0009_studio` | M3 controller prerequisites: hypothesis cadence/prior, nullable unit price and stable learning evidence; 1 new table, current total 49. T2 extends this unreleased reversible pair. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -1820,3 +1821,50 @@ cd panel && pnpm test && pnpm build
 ```
 
 The wider `make check`/CI checks documented above remain the release checks.
+
+### M3 Task 0 — controller contracts and baseline
+
+The integrated M2b baseline is **106 tools, 48 tables, migrations 0001–0008**.
+`journey_attribution` is in **0008** (0007 is inbox policy); `Deps::attribution()`
+already supplies the tenant-scoped `AttributionReader`. `jt_inbox::sms_segments`
+already supplies the Q2 fixtures: ASCII 160/161 → 1/2 and ş/ğ 70/71 → 1/2;
+a segment price of 3 therefore reserves 3/6/3/6 minor units.
+
+Task 0 adds **zero tools**. Existing strategy and budget HTTP/MCP twins carry
+strict per-hypothesis/lane cadence and nullable `unit_cost_minor`. An absent lane
+has no slots; exploration defaults to zero; weekly scheduling uses Europe/Istanbul.
+Editable `prior_confidence` replaces legacy `confidence`; read-only
+`derived_confidence` is projected from stable tenant/hypothesis evidence. The panel
+shows derived confidence when present, otherwise the prior, and draft edits keep
+cadence and authoritative learning. Explicit null clears a price to unknown; zero
+is a known price, and negative prices refuse. Manual historical spend is unchanged.
+
+`0009_studio` is reserved for unreleased M3. To keep these existing Pg operations
+usable in this commit, it already migrates the cadence/prior/price columns and
+creates `studio_learning_applications`: **49 current tables**. Its tested idempotent
+up/down/up preserves baseline rows and prior confidence; down removes M3 evidence
+and columns. T2 extends this pair in place with the remaining **13** Studio tables
+and the reversible existing-role grant backfill. Final M3 remains **62 tables and
+124 tools**. Migrations 0001–0008 are unchanged. New owner/manager seeds include
+`studio.work` and `studio.manage`; rep has neither, and agent scopes cannot exceed
+the issuer's authority.
+
+Strategy approval/archive acquire `lock_execution_frame` before the draft lock,
+including when there is no approved version, then invoke `StrategyTransitionHook`
+inside their transaction. Hook failure rolls back the transition and its writes.
+The existing post-commit archive hook is preserved. T3 supplies Studio cancellation;
+T0's default hook has no queue to cancel. Studio repository accessors and FileStore
+are wired everywhere and explicitly refuse while their T2/T5 adapters are absent.
+Contract rows currently live in `jt_app::ports::studio`; T1 owns their pure domain
+behavior and final domain placement. No new public Studio routes are exposed yet.
+
+Meta adds pause/active status writes, verified account currency/timezone context,
+ad-set/day insights, and account-checked ad→ad-set resolution. Missing ad-set
+counters remain `None`; malformed money and unsupported currencies refuse.
+Supported currency exponents are explicit: JPY/KRW/VND/CLP/PYG (0) and
+TRY/EUR/USD/GBP/CAD/AUD/CHF (2). See Meta's
+[account field definitions](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/adaccount.py).
+There is no ad creation API and no zero-budget pause. `BUDGET_CAP` maps to HTTP 409
+with the same MCP structured code and details. Atomic reservations and connector
+spend enforcement remain T8's implementation task; this baseline does not claim
+that enforcement has shipped.

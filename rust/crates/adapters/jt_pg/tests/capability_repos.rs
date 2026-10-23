@@ -71,6 +71,7 @@ fn budget_item(ws: WorkspaceId, name: &str, kind: BudgetKind, at: OffsetDateTime
         BudgetItemId::new_v7(),
         ws,
         NewBudgetItem {
+            unit_cost_minor: None,
             name: name.into(),
             kind,
             unit: Unit::Currency("TRY".into()),

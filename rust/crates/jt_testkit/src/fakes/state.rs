@@ -128,6 +128,7 @@ pub struct MemState {
     pub platform_sessions: Vec<PlatformSessionRow>,
     pub strategy_versions: Vec<StrategyVersion>,
     pub hypotheses: Vec<StoredHypothesis>,
+    pub studio_learning: Vec<(WorkspaceId, jt_strategy::HypothesisId, String, f32)>,
     pub consultation: Vec<StoredConsultationEntry>,
     pub capabilities: Vec<StoredCapability>,
     pub capability_groups: Vec<StoredCapabilityGroup>,

@@ -69,6 +69,8 @@ fn capabilities_and_budget_permissions_belong_to_owner_and_manager_only() {
             "budget.manage",
             "inbox.work",
             "inbox.manage",
+            "studio.work",
+            "studio.manage",
         ]
     );
 }
@@ -211,6 +213,8 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             Permission::BudgetManage,
             Permission::InboxWork,
             Permission::InboxManage,
+            Permission::StudioWork,
+            Permission::StudioManage,
         ]),
     });
     // A custom lead may neither demote nor remove a manager.
@@ -336,6 +340,8 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
             Permission::BudgetManage,
             Permission::InboxWork,
             Permission::InboxManage,
+            Permission::StudioWork,
+            Permission::StudioManage,
         ]),
     });
     assert_eq!(

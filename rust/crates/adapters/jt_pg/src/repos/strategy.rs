@@ -166,6 +166,16 @@ async fn not_a_draft(conn: &mut PgConnection, ws: WorkspaceId, id: StrategyVersi
 
 #[async_trait]
 impl StrategyRepo for PgTenantRepos {
+    async fn lock_execution_frame(&mut self) -> Result<Option<StrategyVersion>, AppError> {
+        let ws = self.workspace_id();
+        sqlx::query("select id from workspaces where id = $1 for update")
+            .bind(ws.as_uuid())
+            .fetch_optional(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "lock strategy execution frame"))?;
+        self.current_approved().await
+    }
+
     /// `on conflict do nothing` covers the id, the number and both partial indexes, so a refused
     /// version leaves the transaction usable; a concurrent transaction holding a conflicting row
     /// is waited for, and loses only if it commits.

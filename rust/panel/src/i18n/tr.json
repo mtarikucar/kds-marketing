@@ -117,6 +117,10 @@
     "inbox": {
       "work": "Gelen kutusunda çalışma",
       "manage": "Gelen kutusunu yönetme"
+    },
+    "studio": {
+      "work": "Stüdyoda çalış",
+      "manage": "Stüdyoyu yönet"
     }
   },
   "roleNames": {

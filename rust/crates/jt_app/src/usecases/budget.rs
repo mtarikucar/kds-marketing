@@ -52,6 +52,8 @@ pub struct BudgetItemInput {
     /// The most that may be spent per period, in `unit` (minor units of a currency); not
     /// negative.
     pub cap: i64,
+    #[serde(default)]
+    pub unit_cost_minor: Option<i64>,
     pub period: Period,
 }
 
@@ -67,6 +69,9 @@ pub struct UpdateBudgetItem {
     /// The new cap per period, in the item's unit; not negative.
     #[serde(default)]
     pub cap: Option<i64>,
+    /// Omitted keeps the price; null clears it to unknown.
+    #[serde(default, deserialize_with = "nullable_price")]
+    pub unit_cost_minor: Option<Option<i64>>,
     /// The new period.
     #[serde(default)]
     pub period: Option<Period>,
@@ -107,8 +112,10 @@ pub async fn create_item(
         kind,
         unit,
         cap,
+        unit_cost_minor,
         period,
     } = input;
+    validate_price(unit_cost_minor)?;
     let mut item = BudgetItem::new(
         BudgetItemId(deps.ids.uuid()),
         ctx.workspace_id,
@@ -117,6 +124,7 @@ pub async fn create_item(
             kind,
             unit,
             cap,
+            unit_cost_minor,
             period,
         },
         ctx.now,
@@ -148,6 +156,7 @@ pub async fn create_item(
             "kind": item.kind,
             "unit": item.unit,
             "cap": item.cap,
+            "unit_cost_minor": item.unit_cost_minor,
             "period": item.period,
         }),
     )
@@ -178,9 +187,22 @@ pub async fn update_item(
     input: UpdateBudgetItem,
 ) -> Result<BudgetItemOut, AppError> {
     ctx.require(Permission::BudgetManage)?;
-    let UpdateBudgetItem { name, cap, period } = input;
-    if name.is_none() && cap.is_none() && period.is_none() {
-        return Err(nothing_to_change(&["name", "cap", "period"]));
+    let UpdateBudgetItem {
+        name,
+        cap,
+        period,
+        unit_cost_minor,
+    } = input;
+    if let Some(price) = unit_cost_minor {
+        validate_price(price)?;
+    }
+    if name.is_none() && cap.is_none() && period.is_none() && unit_cost_minor.is_none() {
+        return Err(nothing_to_change(&[
+            "name",
+            "cap",
+            "period",
+            "unit_cost_minor",
+        ]));
     }
     let name = match name {
         Some(name) => {
@@ -211,6 +233,11 @@ pub async fn update_item(
         previous.insert("period".into(), json!(item.period));
         changed.insert("period".into(), json!(period));
         item.period = period;
+    }
+    if let Some(price) = unit_cost_minor.filter(|p| *p != item.unit_cost_minor) {
+        previous.insert("unit_cost_minor".into(), json!(item.unit_cost_minor));
+        changed.insert("unit_cost_minor".into(), json!(price));
+        item.unit_cost_minor = price;
     }
     if changed.is_empty() {
         return item_out(repos.as_mut(), item, ctx.now).await;
@@ -465,4 +492,20 @@ async fn spent_in_period(
 ) -> Result<i64, AppError> {
     let (from, to) = period_window(item.period, now);
     repos.budget().spent_between(item.id, from, to).await
+}
+
+/// Preserve explicit null on a partial price update.
+pub fn nullable_price<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<i64>>, D::Error> {
+    Option::<i64>::deserialize(d).map(Some)
+}
+fn validate_price(price: Option<i64>) -> Result<(), AppError> {
+    if price.is_some_and(|p| p < 0) {
+        return Err(invalid(
+            "unit_cost_minor",
+            "unit price must not be negative",
+        ));
+    }
+    Ok(())
 }

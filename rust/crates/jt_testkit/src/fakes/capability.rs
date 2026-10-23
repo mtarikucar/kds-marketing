@@ -523,7 +523,7 @@ impl BudgetRepo for MemTenant {
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, item.workspace_id)?;
-            if item.cap < 0 {
+            if item.cap < 0 || item.unit_cost_minor.is_some_and(|p| p < 0) {
                 return Err(AppError::internal("budget_items.cap must not be negative"));
             }
             let state = this.state();
@@ -564,7 +564,7 @@ impl BudgetRepo for MemTenant {
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, item.workspace_id)?;
-            if item.cap < 0 {
+            if item.cap < 0 || item.unit_cost_minor.is_some_and(|p| p < 0) {
                 return Err(AppError::internal("budget_items.cap must not be negative"));
             }
             ensure_item(this.state(), ws, item.id)?;
@@ -576,6 +576,7 @@ impl BudgetRepo for MemTenant {
                 {
                     stored.name = item.name.clone();
                     stored.cap = item.cap;
+                    stored.unit_cost_minor = item.unit_cost_minor;
                     stored.period = item.period;
                     stored.retired_at = item.retired_at;
                 }

@@ -67,15 +67,17 @@ fn sections(product: &str) -> Sections {
     }
 }
 
-fn hypothesis(title: &str, confidence: f32) -> Hypothesis {
+fn hypothesis(title: &str, prior_confidence: f32) -> Hypothesis {
     Hypothesis {
+        cadence: Default::default(),
+        derived_confidence: None,
         id: HypothesisId::new_v7(),
         title: title.into(),
         segment_key: "esnaf".into(),
         angle: "zaman kazancı".into(),
         channel: "instagram".into(),
         metric: "dm_replies".into(),
-        confidence,
+        prior_confidence,
         state: HypothesisState::Kept,
     }
 }
@@ -676,7 +678,7 @@ async fn hypotheses_replace_and_set_state() {
     };
     t.hypotheses().upsert(v2.id, h4.clone()).await.unwrap();
     let h3_edited = Hypothesis {
-        confidence: 0.0,
+        prior_confidence: 0.0,
         ..h3.clone()
     };
     t.hypotheses()
@@ -1010,7 +1012,7 @@ async fn the_schema_ties_hypotheses_and_entries_to_a_version_of_their_own_worksp
     // cannot hang off a version of `b`.
     for statement in [
         "insert into strategy_hypotheses (version_id, workspace_id, hypothesis_id, title, \
-         segment_key, angle, channel, metric, confidence, state, position) \
+         segment_key, angle, channel, metric, prior_confidence, state, position) \
          values ($1, $2, $3, 't', 's', 'a', 'c', 'm', 0.5, 'kept', 0)",
         "insert into consultation_entries (version_id, workspace_id, id, kind, text, \
          actor_kind, actor_component, at) values ($1, $2, $3, 'note', 't', 'system', 'x', now())",
@@ -1133,4 +1135,132 @@ async fn strategy_gate_flips_when_a_version_is_approved() {
         .unwrap();
     t.commit().await.unwrap();
     assert!(!gate.has_approved_strategy(a).await.unwrap());
+}
+
+#[tokio::test]
+async fn derived_confidence_cannot_edit_hypothesis_content() {
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-confidence").await;
+    let u = uow(&db);
+    let approved = version(ws, 1, VersionStatus::Approved, human(user));
+    insert(&u, &approved).await;
+    let mut h = hypothesis("Original", 0.2);
+    h.cadence.insert(
+        jt_strategy::LaneKind::Organic,
+        jt_strategy::HypothesisCadence {
+            slots_per_week: 7,
+            exploration_bps: 1000,
+            content_types: vec![jt_strategy::ContentTypeShare {
+                key: "image".into(),
+                min_bps: 0,
+                max_bps: 10000,
+            }],
+        },
+    );
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .upsert(approved.id, h.clone())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let draft = version(ws, 2, VersionStatus::Draft, human(user));
+    insert(&u, &draft).await;
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .replace_all(draft.id, vec![h.clone()])
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .set_derived_confidence(h.id, 0.8, "post:one:24h")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut edited = h.clone();
+    edited.title = "Edited".into();
+    edited.prior_confidence = 0.1;
+    edited.derived_confidence = Some(0.99); // content writes cannot author learning.
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .replace_all(draft.id, vec![edited])
+        .await
+        .unwrap();
+    let row = tx.hypotheses().list(draft.id).await.unwrap().remove(0);
+    assert_eq!(row.cadence, h.cadence);
+    assert_eq!(
+        (
+            row.title.as_str(),
+            row.prior_confidence,
+            row.derived_confidence
+        ),
+        ("Edited", 0.1, Some(0.8))
+    );
+    assert_eq!(
+        tx.hypotheses().list(approved.id).await.unwrap()[0].title,
+        "Original"
+    );
+    tx.commit().await.unwrap();
+    let (other, _) = db.seed_workspace("studio-other").await;
+    let mut tx = u.tenant(other).await.unwrap();
+    assert_eq!(
+        tx.hypotheses()
+            .set_derived_confidence(h.id, 0.9, "foreign")
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    drop(tx);
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .set_derived_confidence(h.id, 0.8, "post:one:24h")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = u.tenant(ws).await.unwrap();
+    assert_eq!(
+        tx.hypotheses()
+            .set_derived_confidence(h.id, 0.9, "post:one:24h")
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+}
+
+#[tokio::test]
+async fn execution_frame_serializes_even_without_an_approved_version() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("studio-frame").await;
+    let u = uow(&db);
+    let mut first = u.tenant(ws).await.unwrap();
+    assert!(
+        first
+            .strategy()
+            .lock_execution_frame()
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut second = u.tenant(ws).await.unwrap();
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            second.strategy().lock_execution_frame()
+        )
+        .await
+        .is_err()
+    );
+    first.commit().await.unwrap();
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            second.strategy().lock_execution_frame()
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .is_none()
+    );
 }

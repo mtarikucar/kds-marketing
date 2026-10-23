@@ -340,6 +340,30 @@ pub struct AdInsights {
     pub clicks: i64,
 }
 
+/// Account metadata used to interpret provider money and daily reporting buckets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdAccountContext {
+    pub account_id: String,
+    pub currency: String,
+    pub minor_unit_exponent: u8,
+    pub timezone: String,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdStatus {
+    Paused,
+    Active,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdSetInsights {
+    pub account_id: String,
+    pub adset_id: String,
+    pub campaign_id: Option<String>,
+    pub date: Date,
+    pub spend_minor: Option<i64>,
+    pub impressions: Option<i64>,
+    pub clicks: Option<i64>,
+}
+
 /// A lead-gen form submission: where it came from and the answers, by field name (a field may
 /// carry several values).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -619,6 +643,43 @@ pub trait MailboxPoller: Send + Sync {
 /// Reads and changes ad budgets.
 #[async_trait]
 pub trait AdBudgetWriter: Send + Sync {
+    async fn set_status(
+        &self,
+        _cred: &Credential,
+        _entity_id: &str,
+        _status: AdStatus,
+    ) -> Result<(), ConnectorError> {
+        Err(ConnectorError::permanent("ad status is unsupported"))
+    }
+    async fn account_context(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+    ) -> Result<AdAccountContext, ConnectorError> {
+        Err(ConnectorError::permanent(
+            "ad account context is unsupported",
+        ))
+    }
+    async fn adset_insights(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        _since: Date,
+        _until: Date,
+    ) -> Result<Vec<AdSetInsights>, ConnectorError> {
+        Err(ConnectorError::permanent("ad set insights are unsupported"))
+    }
+    async fn resolve_adset(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        _ad_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        Err(ConnectorError::permanent(
+            "ad set resolution is unsupported",
+        ))
+    }
+
     /// Sets the daily budget of the ad set or campaign `entity_id`, in the ad account's
     /// currency's minor units.
     async fn set_daily_budget(

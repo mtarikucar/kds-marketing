@@ -40,7 +40,7 @@ export function HypothesisTable({
         </THead>
         <TBody>
           {hypotheses.map((h) => {
-            const pct = Math.round(h.confidence * 100);
+            const pct = Math.round((h.derived_confidence ?? h.prior_confidence) * 100);
             return (
               <TR key={h.id} className={cn(h.state === 'retired' && 'opacity-60')}>
                 <TD className="font-medium text-foreground">{h.title}</TD>

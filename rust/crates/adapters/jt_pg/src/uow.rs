@@ -94,6 +94,18 @@ impl PgTenantRepos {
 
 #[async_trait]
 impl TenantRepos for PgTenantRepos {
+    fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
+        self
+    }
+
+    fn studio_budget(&mut self) -> &mut dyn jt_app::ports::studio::StudioBudgetRepo {
+        self
+    }
+
+    fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
+        self
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
     }
@@ -394,3 +406,9 @@ impl PlatformRepos for PgPlatformRepos {
         this.tx.commit().await.map_err(|e| map_sqlx(e, "commit"))
     }
 }
+
+impl jt_app::ports::studio::StudioRepo for PgTenantRepos {}
+
+impl jt_app::ports::studio::StudioBudgetRepo for PgTenantRepos {}
+
+impl jt_app::ports::studio::StudioControlRepo for PgTenantRepos {}

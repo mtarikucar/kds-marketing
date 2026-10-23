@@ -212,7 +212,9 @@ async fn create_refuses_bad_input_with_structured_errors() {
             "capabilities.manage",
             "budget.manage",
             "inbox.work",
-            "inbox.manage"
+            "inbox.manage",
+            "studio.work",
+            "studio.manage",
         ])
     );
 }

@@ -51,6 +51,8 @@ impl World {
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
+            files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+            transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),

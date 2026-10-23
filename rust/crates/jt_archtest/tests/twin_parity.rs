@@ -87,6 +87,8 @@ fn deps_with(db: &TestDb, connectors: Arc<dyn ConnectorRegistry>) -> Deps {
         hasher: Arc::new(PlainHasher),
         seal: Arc::new(PlainSecretBox),
         channels: Arc::new(UowChannelCatalog::new(uow)),
+        files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+        transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
@@ -275,7 +277,9 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
             "capabilities.manage",
             "budget.manage",
             "inbox.work",
-            "inbox.manage"
+            "inbox.manage",
+            "studio.work",
+            "studio.manage",
         ])
     );
 
@@ -332,7 +336,7 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
         "angle": "gece açık",
         "channel": "any",
         "metric": "dm",
-        "confidence": 0.6,
+        "prior_confidence": 0.6,
     }]);
     ok(put("/api/strategy/draft/hypotheses".to_owned(), hypotheses).await).await;
     let as_read = |draft: &Value| {
@@ -840,7 +844,7 @@ async fn capability_update_answers_the_same_over_the_panel_and_mcp() {
 }
 
 #[tokio::test]
-async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
+async fn budget_unit_cost_schema_and_twins() {
     let db = TestDb::new().await;
     let (_, user) = db.seed_workspace("alpha").await;
     let deps = deps(&db);
@@ -873,6 +877,7 @@ async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
             "kind": "cash",
             "unit": { "kind": "currency", "value": "TRY" },
             "cap": 100000,
+            "unit_cost_minor": 3,
             "period": "monthly",
         });
         let out = ok(post("/api/budget/items".into(), body).await).await;
@@ -899,7 +904,7 @@ async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
     // Editing: each gate's answer is the item as the other gate then lists it.
     let human = ok(patch(
         format!("/api/budget/items/{first}"),
-        json!({ "cap": 5000, "period": "weekly" }),
+        json!({ "cap": 5000, "period": "weekly", "unit_cost_minor": 6 }),
     )
     .await)
     .await;
@@ -917,11 +922,32 @@ async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
         &key,
         &session,
         "jeeta.budget.items_update",
-        json!({ "budget_item_id": second, "cap": 5000, "period": "weekly" }),
+        json!({ "budget_item_id": second, "cap": 5000, "period": "weekly", "unit_cost_minor": 6 }),
     )
     .await;
     let listed = ok(list().await).await;
     assert_eq!(agent, entry(&listed, &second));
+
+    assert_eq!(agent["item"]["unit_cost_minor"], 6);
+    let cleared = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.budget.items_update",
+        json!({"budget_item_id":second,"unit_cost_minor":null}),
+    )
+    .await;
+    assert!(cleared["item"]["unit_cost_minor"].is_null());
+    assert_eq!(cleared, entry(&ok(list().await).await, &second));
+    let human = ok(patch(
+        format!("/api/budget/items/{first}"),
+        json!({"unit_cost_minor":null}),
+    )
+    .await)
+    .await;
+    assert!(human["item"]["unit_cost_minor"].is_null());
+    let listed = call_tool(&app, &key, &session, "jeeta.budget.items_list", json!({})).await;
+    assert_eq!(human, entry(&listed["items"], &first));
 
     // Retiring: the same, with its retirement time; the phone's link goes.
     let human = ok(post(
@@ -1350,7 +1376,7 @@ async fn approve_inbox_strategy(app: &Router, cookie: &str) {
         .await)
         .await;
     }
-    ok(send(app,panel(Method::PUT,"/api/strategy/draft/hypotheses",Some(cookie),Some(json!([{"title":"Contact","segment_key":"all","angle":"Help","channel":"any","metric":"dm","confidence":0.6}])))).await).await;
+    ok(send(app,panel(Method::PUT,"/api/strategy/draft/hypotheses",Some(cookie),Some(json!([{"title":"Contact","segment_key":"all","angle":"Help","channel":"any","metric":"dm","prior_confidence":0.6}])))).await).await;
     let draft = ok(send(
         app,
         panel(
@@ -3310,4 +3336,22 @@ async fn leadgen_people_and_journey_results_have_http_mcp_parity() {
             assert_eq!(human["person"]["first_touch"]["source"], "meta_ads");
         }
     }
+}
+
+#[tokio::test]
+async fn budget_cap_http_409_mcp_parity() {
+    use axum::response::IntoResponse;
+    let error =
+        jt_app::error::AppError::budget_cap(json!({"remaining_minor":2,"requested_minor":3}));
+    let http = jt_panel_http::error::ApiError(error.clone()).into_response();
+    assert_eq!(http.status(), StatusCode::CONFLICT);
+    let body = json_body(http).await;
+    let mcp = jt_mcp::errors::tool_error(error);
+    assert_eq!(mcp.is_error, Some(true));
+    assert_eq!(mcp.structured_content, Some(body.clone()));
+    assert_eq!(body["code"], "BUDGET_CAP");
+    assert_eq!(
+        body["details"],
+        json!({"remaining_minor":2,"requested_minor":3})
+    );
 }

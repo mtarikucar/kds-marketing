@@ -240,6 +240,8 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
         seal: Arc::new(AesSecretBox::new(*config.secret_key.bytes())),
         channels: Arc::new(UowChannelCatalog::new(uow)),
         // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
+        files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+        transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(EgressTenantHosts::new(Arc::clone(&egress))),
         connectors: connectors::registry(Arc::clone(&egress), Arc::clone(&apps)),
@@ -493,6 +495,8 @@ mod tests {
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
+            files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+            transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),

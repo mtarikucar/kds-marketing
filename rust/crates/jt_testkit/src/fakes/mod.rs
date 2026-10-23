@@ -17,7 +17,7 @@
 //! - a workspace has at most one draft and one approved strategy version (`CONFLICT`, as the
 //!   partial unique indexes of migration 0002 answer), versions move only forward, and a
 //!   hypothesis or consultation entry must hang off a version of the bundle's own workspace
-//!   (`NOT_FOUND`); a hypothesis confidence outside `0.0..=1.0` breaks the check constraint
+//!   (`NOT_FOUND`); a hypothesis prior_confidence outside `0.0..=1.0` breaks the check constraint
 //!   (`INTERNAL`);
 //! - one external account (kind and external id) is held by at most one capability that is not
 //!   retired (`CONFLICT`, as the partial unique index of migration 0003 answers); group members,

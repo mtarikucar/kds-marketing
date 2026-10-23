@@ -34,6 +34,10 @@ pub enum Permission {
     /// Manage the inbox dictionary and privileged journey changes.
     #[serde(rename = "inbox.manage")]
     InboxManage,
+    #[serde(rename = "studio.work")]
+    StudioWork,
+    #[serde(rename = "studio.manage")]
+    StudioManage,
 }
 
 const ALL_PERMISSIONS: &[Permission] = &[
@@ -45,12 +49,16 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::BudgetManage,
     Permission::InboxWork,
     Permission::InboxManage,
+    Permission::StudioWork,
+    Permission::StudioManage,
 ];
 
 impl Permission {
     /// The stable key, e.g. `"team.manage"`.
     pub fn key(&self) -> &'static str {
         match self {
+            Permission::StudioWork => "studio.work",
+            Permission::StudioManage => "studio.manage",
             Permission::WorkspaceRead => "workspace.read",
             Permission::TeamManage => "team.manage",
             Permission::ApiKeysManage => "api_keys.manage",

@@ -45,6 +45,7 @@ fn mailbox(name: &str, external_id: &str, hosts: &[&str]) -> DeclareInput {
 
 fn item(name: &str, kind: BudgetKind) -> BudgetItemInput {
     BudgetItemInput {
+        unit_cost_minor: None,
         name: name.into(),
         kind,
         unit: Unit::Currency("TRY".into()),

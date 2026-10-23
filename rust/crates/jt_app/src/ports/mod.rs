@@ -21,7 +21,9 @@
 
 pub mod compliance;
 pub mod connectors;
+pub mod files;
 pub mod inbox;
+pub mod studio;
 use inbox::*;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -668,6 +670,8 @@ pub const MAX_CONSULTATION_PAGE: u32 = 500;
 /// approve sections it did not validate, and two edits cannot lose each other's change.
 #[async_trait]
 pub trait StrategyRepo: Send + Sync {
+    /// Workspace serialization point, acquired before draft/control locks, even with no approved row.
+    async fn lock_execution_frame(&mut self) -> Result<Option<StrategyVersion>, AppError>;
     /// Stores a version. A `version.workspace_id` other than the bundle's is `INTERNAL`; a taken
     /// id or number, or a second `Draft` or `Approved` version in the workspace, is `CONFLICT`;
     /// an `approved_by` that names no user is `NOT_FOUND`.
@@ -737,12 +741,23 @@ pub trait StrategyRepo: Send + Sync {
 /// The hypotheses of the workspace's strategy versions, each version's in its own order.
 ///
 /// A hypothesis id is stable across versions, so the same id appears once per version. Writes
-/// name a version of the bundle's workspace, else `NOT_FOUND`. A confidence outside `0.0..=1.0`
+/// name a version of the bundle's workspace, else `NOT_FOUND`. A prior_confidence outside `0.0..=1.0`
 /// (or NaN) breaks a check constraint and is `INTERNAL`: callers validate first. A write to the
 /// draft's hypotheses is a draft mutation: the caller holds the draft lock
 /// ([`StrategyRepo::lock_draft`]).
 #[async_trait]
 pub trait HypothesisRepo: Send + Sync {
+    async fn set_derived_confidence(
+        &mut self,
+        hypothesis_id: HypothesisId,
+        confidence: f32,
+        evidence_key: &str,
+    ) -> Result<(), AppError>;
+    async fn append_draft_hypothesis(
+        &mut self,
+        draft_id: StrategyVersionId,
+        input: jt_strategy::HypothesisInput,
+    ) -> Result<HypothesisId, AppError>;
     /// Makes `hypotheses`, in this order, the version's whole list. An id listed twice is
     /// `CONFLICT`. The caller holds the draft lock ([`StrategyRepo::lock_draft`]).
     async fn replace_all(
@@ -1450,6 +1465,10 @@ pub trait PlatformSessionRepo: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait TenantRepos: Send + Sync {
+    fn studio(&mut self) -> &mut dyn crate::ports::studio::StudioRepo;
+    fn studio_budget(&mut self) -> &mut dyn crate::ports::studio::StudioBudgetRepo;
+    fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
+
     fn consents(&mut self) -> &mut dyn ConsentRepo;
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;
     fn quotes(&mut self) -> &mut dyn QuoteRepo;

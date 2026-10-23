@@ -98,6 +98,8 @@ impl Panel {
             hasher,
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(UowChannelCatalog::new(shared)),
+            files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+            transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps,

@@ -383,12 +383,12 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         (
             "jeeta.capability.update",
             "capability_id",
-            ["name", "description", "external_id"],
+            &["name", "description", "external_id"][..],
         ),
         (
             "jeeta.budget.items_update",
             "budget_item_id",
-            ["name", "cap", "period"],
+            &["name", "cap", "period", "unit_cost_minor"][..],
         ),
     ] {
         let schema = find(name).input_schema.clone().to_value();
@@ -399,7 +399,7 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
             .keys()
             .map(String::as_str)
             .collect();
-        let mut expected = BTreeSet::from(fields);
+        let mut expected: BTreeSet<&str> = fields.iter().copied().collect();
         expected.insert(id);
         assert_eq!(keys, expected, "{name}");
         assert_eq!(schema["additionalProperties"], false, "{name}");

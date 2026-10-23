@@ -128,6 +128,39 @@ impl LeadGenFetcher for MetaConnector {
 
 #[async_trait]
 impl AdBudgetWriter for MetaConnector {
+    async fn set_status(
+        &self,
+        cred: &Credential,
+        entity_id: &str,
+        status: jt_app::ports::connectors::AdStatus,
+    ) -> Result<(), ConnectorError> {
+        ads::set_status(self, cred, entity_id, status).await
+    }
+    async fn account_context(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<jt_app::ports::connectors::AdAccountContext, ConnectorError> {
+        ads::account_context(self, cred, public).await
+    }
+    async fn adset_insights(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        since: Date,
+        until: Date,
+    ) -> Result<Vec<jt_app::ports::connectors::AdSetInsights>, ConnectorError> {
+        ads::adset_insights(self, cred, public, since, until).await
+    }
+    async fn resolve_adset(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        ad_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        ads::resolve_adset(self, cred, public, ad_id).await
+    }
+
     async fn set_daily_budget(
         &self,
         cred: &Credential,

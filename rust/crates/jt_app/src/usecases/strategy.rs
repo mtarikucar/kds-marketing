@@ -444,7 +444,7 @@ pub async fn write_section(
 /// and stays `added` when only this draft has it; any other id is a gap. An entry without an id
 /// is a new hypothesis with a fresh id, `added`. Then every hypothesis in force in the approved
 /// version that the list leaves out follows as `retired`, as the draft last had it; an added one
-/// left out is dropped. An id listed twice and a confidence outside `0.0..=1.0` are gaps too;
+/// left out is dropped. An id listed twice and a prior_confidence outside `0.0..=1.0` are gaps too;
 /// any gap is `VALIDATION` with `details.gaps` (paths `hypotheses[i].<field>`), and nothing is
 /// written. Without a draft, `CONFLICT` "no draft". A submitted draft is withdrawn from
 /// approval. Writes `strategy.set_hypotheses` (payload `added`, `retired`, `kept`: how many of
@@ -553,7 +553,8 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
     require_owner_or_manager(ctx)?;
     let known = channel_kinds(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    // The draft lock first, then the approved version: the order every use case keeps.
+    let previous = repos.strategy().lock_execution_frame().await?;
+    // Frame before draft; dispatch and archive use the same serialization point.
     let draft = locked_draft(repos.as_mut()).await?;
     if draft.submitted_at.is_none() {
         return Err(conflict("not submitted", "not_submitted"));
@@ -568,7 +569,7 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
         return Err(not_ready(gaps));
     }
     let by = acting_user(&ctx.actor);
-    if let Some(previous) = repos.strategy().current_approved().await? {
+    if let Some(previous) = &previous {
         let moved = repos
             .strategy()
             .set_status(previous.id, VersionStatus::Archived, ctx.now, by)
@@ -617,6 +618,27 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
         json!({ "number": draft.number, "hypotheses": in_force }),
     )
     .await?;
+    let change = crate::ports::studio::StrategyChange {
+        previous: previous.map(|v| v.id),
+        current: Some(draft.id),
+        at: ctx.now,
+        kept: hypotheses
+            .iter()
+            .filter(|h| h.state == HypothesisState::Kept)
+            .map(|h| h.id)
+            .collect(),
+        retired: hypotheses
+            .iter()
+            .filter(|h| h.state == HypothesisState::Retired)
+            .map(|h| h.id)
+            .collect(),
+        added: hypotheses
+            .iter()
+            .filter(|h| h.state == HypothesisState::Added)
+            .map(|h| h.id)
+            .collect(),
+    };
+    deps.transition_hook.apply(repos.as_mut(), &change).await?;
     let out = reread(repos.as_mut(), draft.id, &known).await?;
     repos.commit().await?;
     Ok(out)
@@ -643,14 +665,13 @@ pub async fn archive(deps: &Deps, ctx: &Ctx, input: ArchiveInput) -> Result<(), 
         ));
     }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    // The draft lock first, as approving takes it: an archive and an approval may wait for each
-    // other's locks, but never in opposite orders, so they cannot deadlock.
-    repos.strategy().lock_draft().await?;
+    // Frame before draft, matching approval and future execution dispatch.
     let approved = repos
         .strategy()
-        .current_approved()
+        .lock_execution_frame()
         .await?
         .ok_or_else(|| conflict("no approved version", "no_approved_version"))?;
+    repos.strategy().lock_draft().await?;
     if approved.id != input.version_id {
         return Err(AppError {
             code: ErrorCode::Conflict,
@@ -687,6 +708,23 @@ pub async fn archive(deps: &Deps, ctx: &Ctx, input: ArchiveInput) -> Result<(), 
         json!({ "number": approved.number, "version_id": approved.id }),
     )
     .await?;
+    let retired = repos
+        .hypotheses()
+        .list(approved.id)
+        .await?
+        .into_iter()
+        .filter(|h| h.state.is_live())
+        .map(|h| h.id)
+        .collect();
+    let change = crate::ports::studio::StrategyChange {
+        previous: Some(approved.id),
+        current: None,
+        kept: Vec::new(),
+        added: Vec::new(),
+        retired,
+        at: ctx.now,
+    };
+    deps.transition_hook.apply(repos.as_mut(), &change).await?;
     repos.commit().await?;
     deps.archived_hook
         .on_archived(ctx.workspace_id, approved.id)
@@ -929,17 +967,23 @@ fn plan_hypotheses(
         if !listed.insert(id) {
             gap(i, "id", "the hypothesis is listed more than once");
         }
-        if !(0.0..=1.0).contains(&input.confidence) {
-            gap(i, "confidence", "the confidence must be between 0 and 1");
+        if !(0.0..=1.0).contains(&input.prior_confidence) {
+            gap(
+                i,
+                "prior_confidence",
+                "the prior_confidence must be between 0 and 1",
+            );
         }
         list.push(Hypothesis {
+            cadence: input.cadence.clone(),
+            derived_confidence: None,
             id,
             title: input.title,
             segment_key: input.segment_key,
             angle: input.angle,
             channel: input.channel,
             metric: input.metric,
-            confidence: input.confidence,
+            prior_confidence: input.prior_confidence,
             state,
         });
     }
@@ -1143,6 +1187,41 @@ fn not_ready(gaps: Vec<Gap>) -> AppError {
     gaps_error("the draft is not ready for approval", gaps)
 }
 
+/// Shared strict write schema; semantic cadence constraints are checked by the parser.
+pub fn hypotheses_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": ["string", "null"],
+                    "format": "uuid",
+                    "description": "The id of a hypothesis to keep; leave it out (or null) to \
+                                    add one.",
+                },
+                "title": { "type": "string" },
+                "segment_key": {
+                    "type": "string",
+                    "description": "The key of one of the audience's segments.",
+                },
+                "angle": {
+                    "type": "string",
+                    "description": "What the segment is expected to respond to.",
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "One of the strategy's channels, or \"any\".",
+                },
+                "metric": { "type": "string", "description": "The measure that decides it." },
+                "prior_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                "cadence": {"type":"object","properties":{"organic":{"type":"object","properties":{"slots_per_week":{"type":"integer","minimum":0,"maximum":65535},"exploration_bps":{"type":"integer","minimum":0,"maximum":10000,"default":0},"content_types":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string","minLength":1},"min_bps":{"type":"integer","minimum":0,"maximum":10000},"max_bps":{"type":"integer","minimum":0,"maximum":10000}},"required":["key","min_bps","max_bps"],"additionalProperties":false}}},"required":["slots_per_week","content_types"],"additionalProperties":false},"paid":{"type":"object","properties":{"slots_per_week":{"type":"integer","minimum":0,"maximum":65535},"exploration_bps":{"type":"integer","minimum":0,"maximum":10000,"default":0},"content_types":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string","minLength":1},"min_bps":{"type":"integer","minimum":0,"maximum":10000},"max_bps":{"type":"integer","minimum":0,"maximum":10000}},"required":["key","min_bps","max_bps"],"additionalProperties":false}}},"required":["slots_per_week","content_types"],"additionalProperties":false}},"additionalProperties":false},
+            },
+            "additionalProperties": false,
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1173,13 +1252,15 @@ mod tests {
 
     fn h(id: u128, state: HypothesisState) -> Hypothesis {
         Hypothesis {
+            cadence: Default::default(),
+            derived_confidence: None,
             id: HypothesisId(uuid::Uuid::from_u128(id)),
             title: format!("h{id}"),
             segment_key: "s".into(),
             angle: "a".into(),
             channel: "any".into(),
             metric: "m".into(),
-            confidence: 0.5,
+            prior_confidence: 0.5,
             state,
         }
     }
@@ -1188,7 +1269,7 @@ mod tests {
         HypothesisInput {
             id: id.map(|n| HypothesisId(uuid::Uuid::from_u128(n))),
             title: "t".into(),
-            confidence: 0.5,
+            prior_confidence: 0.5,
             ..HypothesisInput::default()
         }
     }

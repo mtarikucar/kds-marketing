@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 /// The machine-readable kind of an `AppError`. Serialised as its `as_str()` name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
+    /// A hard connector spend ceiling would be exceeded.
+    BudgetCap,
     /// No valid session, key or token was presented.
     Unauthenticated,
     /// The caller is known but may not do this.
@@ -36,6 +38,7 @@ impl ErrorCode {
     /// The wire name, e.g. `"STRATEGY_REQUIRED"`.
     pub fn as_str(&self) -> &'static str {
         match self {
+            ErrorCode::BudgetCap => "BUDGET_CAP",
             ErrorCode::Unauthenticated => "UNAUTHENTICATED",
             ErrorCode::Forbidden => "FORBIDDEN",
             ErrorCode::NotFound => "NOT_FOUND",
@@ -95,6 +98,15 @@ impl AppError {
     /// `NOT_FOUND`.
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::NotFound, message, json!({}))
+    }
+
+    /// A hard connector ceiling, with the refused cap evidence.
+    pub fn budget_cap(details: Value) -> Self {
+        Self::new(
+            ErrorCode::BudgetCap,
+            "connector budget cap exceeded",
+            details,
+        )
     }
 
     /// `CONFLICT`.

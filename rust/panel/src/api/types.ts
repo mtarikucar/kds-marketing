@@ -20,7 +20,9 @@ export type Permission =
   | 'capabilities.manage'
   | 'budget.manage'
   | 'inbox.work'
-  | 'inbox.manage';
+  | 'inbox.manage'
+  | 'studio.work'
+  | 'studio.manage';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -30,6 +32,8 @@ export const PERMISSIONS: readonly Permission[] = [
   'budget.manage',
   'inbox.work',
   'inbox.manage',
+  'studio.work',
+  'studio.manage',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */
@@ -310,6 +314,12 @@ export const ANY_CHANNEL = 'any';
 export type HypothesisState = 'kept' | 'retired' | 'added';
 
 /** `jt_strategy::Hypothesis`: `id` is stable across versions; `confidence` is 0 to 1. */
+export interface HypothesisCadence {
+  slots_per_week: number;
+  exploration_bps?: number;
+  content_types: { key: string; min_bps: number; max_bps: number }[];
+}
+
 export interface Hypothesis {
   id: Uuid;
   title: string;
@@ -317,19 +327,22 @@ export interface Hypothesis {
   angle: string;
   channel: string;
   metric: string;
-  confidence: number;
+  prior_confidence: number;
   state: HypothesisState;
+  derived_confidence: number | null;
+  cadence: Partial<Record<LaneKind, HypothesisCadence>>;
 }
 
 /** `jt_strategy::HypothesisInput`: no state; no `id` when the hypothesis is new. */
 export interface HypothesisInput {
+  cadence?: Partial<Record<LaneKind, HypothesisCadence>>;
   id?: Uuid;
   title: string;
   segment_key: string;
   angle: string;
   channel: string;
   metric: string;
-  confidence: number;
+  prior_confidence: number;
 }
 
 /** `jt_strategy::Gap`: a dotted field path and what is wrong with it (in English). */
@@ -664,6 +677,7 @@ export interface BudgetItem {
   created_at: Rfc3339;
   /** When it was retired: it then takes no links and no spend. `null` while it is live. */
   retired_at: Rfc3339 | null;
+  unit_cost_minor: number | null;
 }
 
 /** `jt_app::usecases::budget::BudgetItemInput`. */

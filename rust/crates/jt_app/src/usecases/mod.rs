@@ -47,6 +47,8 @@ use crate::ports::{
 /// adapter.
 #[derive(Clone)]
 pub struct Deps {
+    pub files: Arc<dyn crate::ports::files::FileStore>,
+    pub transition_hook: Arc<dyn crate::ports::studio::StrategyTransitionHook>,
     pub uow: Arc<dyn UnitOfWork>,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdGen>,
