@@ -114,6 +114,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_meta",
         "jt_netgsm",
         "jt_x",
+        "jt_webhook",
         "jt_testkit",
         "jeeta",
     ] {
@@ -223,6 +224,60 @@ fn connector_adapters_never_name_an_http_client() {
                     );
                 }
             }
+        }
+    }
+}
+
+// The webhook gate: an inbound HTTP adapter like the panel's, so axum (and `http-body-util`, to
+// tell a body over its limit) is allowed here; the application core and the domain crates it
+// speaks; the provider adapters for their pure body parsers; `url` for the query of Meta's
+// verification; logging. No HTTP client, no database crate: it stores through `jt_app`'s use
+// cases only.
+const WEBHOOK_ALLOW: &[&str] = &[
+    "jt_app",
+    "jt_connector",
+    "jt_tenancy",
+    "jt_meta",
+    "jt_netgsm",
+    "axum",
+    "http-body-util",
+    "url",
+    "tracing",
+];
+
+#[test]
+fn the_webhook_gate_depends_on_its_allowlist_and_names_no_http_client() {
+    let deps = direct_deps("jt_webhook");
+    for d in &deps {
+        assert!(
+            WEBHOOK_ALLOW.contains(&d.as_str()),
+            "jt_webhook depends on {d}, which is not on its allowlist"
+        );
+    }
+    // Not vacuous: it is an axum adapter over the use cases.
+    assert!(deps.contains("axum") && deps.contains("jt_app"));
+    let dir = workspace_dir().join("crates/adapters/jt_webhook");
+    let mut files = vec![dir.join("Cargo.toml")];
+    let mut pending = vec![dir.join("src")];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).expect("a readable directory") {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    assert!(files.len() > 1, "jt_webhook has no sources to check");
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a readable file");
+        for name in ["reqwest", "hyper", "ureq", "isahc", "surf", "sqlx"] {
+            assert!(
+                !mentions_word(&text, name),
+                "{} names {name}: the webhook gate neither calls out nor queries the database",
+                file.display()
+            );
         }
     }
 }

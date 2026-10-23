@@ -1123,6 +1123,7 @@ dependencies = [
  "jt_pg",
  "jt_seal",
  "jt_testkit",
+ "jt_webhook",
  "jt_x",
  "serde_json",
  "sqlx",
@@ -1419,6 +1420,33 @@ dependencies = [
  "tower",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "jt_webhook"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "hex",
+ "hmac 0.13.0",
+ "http-body-util",
+ "jt_app",
+ "jt_capability",
+ "jt_connector",
+ "jt_meta",
+ "jt_netgsm",
+ "jt_pg",
+ "jt_tenancy",
+ "jt_testkit",
+ "serde_json",
+ "sha2 0.11.1",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

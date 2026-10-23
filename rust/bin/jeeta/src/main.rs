@@ -1,6 +1,7 @@
 //! The `jeeta` binary.
 //!
-//! - `jeeta serve`: the HTTP server (panel, its API and the MCP endpoint at `/mcp`).
+//! - `jeeta serve`: the HTTP server (panel, its API, the MCP endpoint at `/mcp` and the
+//!   providers' webhooks at `/hooks/*`).
 //! - `jeeta mcp-stdio`: the MCP tools over stdin/stdout, as the key in `JEETA_STDIO_API_KEY`.
 //!
 //! Configuration comes from `JEETA_*` environment variables ([`config`]). A configuration,
@@ -25,7 +26,8 @@ const USAGE: &str = "\
 Usage: jeeta <command>
 
 Commands:
-  serve       Run the HTTP server: the panel, its API and the MCP endpoint at /mcp
+  serve       Run the HTTP server: the panel, its API, the MCP endpoint at /mcp and the
+              providers' webhooks at /hooks
   mcp-stdio   Serve MCP over stdin/stdout as the API key in JEETA_STDIO_API_KEY
   --help      Show this help
 

@@ -1,5 +1,5 @@
-//! `jeeta serve`: the HTTP server. The panel's API and files, `/healthz` and the MCP endpoint
-//! at `/mcp`, on one listener.
+//! `jeeta serve`: the HTTP server. The panel's API and files, `/healthz`, the MCP endpoint at
+//! `/mcp` and the providers' webhooks at `/hooks/*`, on one listener.
 //!
 //! Start order: refuse a binary built with `jt_outbound`'s test-only loopback paths
 //! ([`check_test_loopback`]), connect to the database, refuse a role that row-level security
@@ -32,6 +32,7 @@ use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS};
 use jt_panel_http::AppState;
 use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_seal::AesSecretBox;
+use jt_webhook::WebhookState;
 use sqlx::PgPool;
 use sqlx::migrate::Migrate;
 use sqlx::postgres::PgConnectOptions;
@@ -255,8 +256,9 @@ async fn bootstrap_operator(deps: &Deps, bootstrap: &Bootstrap) -> Result<()> {
 }
 
 /// The server's single router: the panel's (API, `/healthz`, files) merged with the MCP
-/// endpoint's, both behind the one strategy `gate`, with the security headers on every response
-/// and a one-line access log.
+/// endpoint's, both behind the one strategy `gate`, and the webhook gate's (`/hooks/*`, which
+/// providers call: outside the panel's session and request-header checks, which live inside the
+/// panel's own router), with the security headers on every response and a one-line access log.
 pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> Router {
     let panel = AppState {
         deps: deps.clone(),
@@ -264,11 +266,15 @@ pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> R
         cookie_secure: config.cookie_secure,
         panel_dir: config.panel_dir.clone(),
     };
+    let hooks = WebhookState {
+        deps: Arc::new(deps.clone()),
+    };
     let mcp = McpState::new(deps, gate).with_allowed_hosts(mcp_hosts(&config.allowed_hosts));
     jt_panel_http::router(panel)
         .merge(jt_mcp::http_service(mcp))
+        .merge(jt_webhook::router(hooks))
         // The panel's router sets them on its own responses already (idempotently); this
-        // covers the MCP endpoint too.
+        // covers the MCP endpoint and the webhook gate too.
         .layer(middleware::from_fn(jt_panel_http::security_headers))
         .layer(middleware::from_fn(access_log))
 }
@@ -574,6 +580,43 @@ mod tests {
         }
     }
 
+    /// The webhook gate is merged into the one router outside the panel's checks (a provider
+    /// carries no session and no panel request header), with the security headers on its
+    /// answers too.
+    #[tokio::test]
+    async fn the_webhook_gate_is_served_outside_the_panel_checks() {
+        let mut deps = test_deps();
+        deps.apps = Arc::new(FakeAppConfig::with_all_apps());
+        let app = app(deps, Arc::new(NoStrategyYet), &test_config(&[]));
+
+        let verify = Request::get(
+            "/hooks/meta?hub.mode=subscribe&hub.verify_token=meta-verify-token&hub.challenge=42",
+        )
+        .body(Body::empty())
+        .unwrap();
+        let resp = app.clone().oneshot(verify).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        for (name, value) in jt_panel_http::headers::SECURITY_HEADERS {
+            let all: Vec<_> = resp.headers().get_all(*name).iter().collect();
+            assert_eq!(all, [*value], "{name}");
+        }
+        let text = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&text[..], b"42");
+
+        // No panel request header, no session: the gate's own answers, not the panel's 403/401.
+        let unsigned = Request::post("/hooks/meta").body(Body::from("{}")).unwrap();
+        let resp = app.clone().oneshot(unsigned).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let netgsm = Request::post(format!(
+            "/hooks/netgsm/0192f0c4-0000-7000-8000-000000000000/{}/mo",
+            "0".repeat(64)
+        ))
+        .body(Body::from("mesaj=x"))
+        .unwrap();
+        let resp = app.clone().oneshot(netgsm).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
     #[tokio::test]
     async fn mcp_accepts_loopback_hosts_and_the_configured_public_ones() {
         let deps = test_deps();
@@ -784,6 +827,11 @@ mod tests {
             "/api/team/{membership_id}"
         );
         assert_eq!(loggable_route(Some("/mcp")), "/mcp");
+        // A NetGSM callback is logged by its template: never the workspace's hook token.
+        assert_eq!(
+            loggable_route(Some("/hooks/netgsm/{workspace_id}/{token}/{purpose}")),
+            "/hooks/netgsm/{workspace_id}/{token}/{purpose}"
+        );
         // Pages and files (including `/invite/<token>`) match no route: no path at all.
         assert_eq!(loggable_route(None), "-");
         assert_eq!(loggable_route(Some("/api/platform/login")), "<redacted>");

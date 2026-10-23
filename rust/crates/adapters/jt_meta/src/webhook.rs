@@ -43,6 +43,18 @@ pub const KIND_HINT_INSTAGRAM: &str = "instagram";
 /// The `kind_hint` of a WhatsApp number's events.
 pub const KIND_HINT_WHATSAPP: &str = "whatsapp_cloud";
 
+/// The capability kinds that may hold the account of an event whose `kind_hint` is `hint` (see
+/// the module docs): the kinds the webhook use case looks the account up under. An unknown hint
+/// names none, so its events route nowhere.
+pub fn kinds_of_hint(hint: &str) -> &'static [&'static str] {
+    match hint {
+        KIND_HINT_WHATSAPP => &["whatsapp_cloud"],
+        KIND_HINT_PAGE => &["facebook_page", "messenger"],
+        KIND_HINT_INSTAGRAM => &["instagram", "instagram_dm"],
+        _ => &[],
+    }
+}
+
 /// The longest unknown object name repeated in a [`ParseError`].
 const MAX_OBJECT_CHARS: usize = 64;
 

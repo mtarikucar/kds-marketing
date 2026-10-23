@@ -274,3 +274,39 @@ fn webhook_signature_mismatch_is_rejected() {
         WebhookError::Parse(ParseError::NotJson)
     );
 }
+
+/// The kinds a hint routes to: the capabilities that may hold its account, all Meta kinds; an
+/// unknown hint names none.
+#[test]
+fn each_hint_names_the_kinds_that_may_hold_its_account() {
+    use jt_connector::{Provider, provider_for_kind};
+    use jt_meta::webhook::kinds_of_hint;
+
+    assert_eq!(kinds_of_hint(KIND_HINT_WHATSAPP), ["whatsapp_cloud"]);
+    assert_eq!(
+        kinds_of_hint(KIND_HINT_PAGE),
+        ["facebook_page", "messenger"]
+    );
+    assert_eq!(
+        kinds_of_hint(KIND_HINT_INSTAGRAM),
+        ["instagram", "instagram_dm"]
+    );
+    assert!(kinds_of_hint("ads").is_empty());
+    for hint in [KIND_HINT_WHATSAPP, KIND_HINT_PAGE, KIND_HINT_INSTAGRAM] {
+        for kind in kinds_of_hint(hint) {
+            assert_eq!(provider_for_kind(kind), Some(Provider::Meta), "{kind}");
+        }
+    }
+    // Every event of every fixture names a hint that routes somewhere.
+    for name in [
+        "whatsapp_messages.json",
+        "whatsapp_statuses.json",
+        "messenger_messaging.json",
+        "instagram_messaging.json",
+        "page_leadgen.json",
+    ] {
+        for event in parsed(name) {
+            assert!(!kinds_of_hint(event.kind_hint).is_empty(), "{name}");
+        }
+    }
+}

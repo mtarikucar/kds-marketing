@@ -10,6 +10,8 @@ jt_app.workspace = true
 jt_pg.workspace = true
 jt_panel_http.workspace = true
 jt_mcp.workspace = true
+# The webhook gate (`/hooks/*`), merged into the server's router.
+jt_webhook.workspace = true
 jt_outbound.workspace = true
 jt_seal.workspace = true
 # The provider adapters the server runs (`src/connectors.rs`) and the provider keys they serve.

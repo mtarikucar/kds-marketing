@@ -21,6 +21,13 @@ pub fn meta_signature_ok(app_secret: &[u8], raw: &[u8], header: &str) -> bool {
     ct_eq(&hmac_sha256(app_secret, raw), &given)
 }
 
+/// Whether `given`, the `hub.verify_token` of Meta's webhook verification request, is the
+/// platform's verify token `expected`, compared in constant time. An unset (empty) `expected`
+/// matches nothing.
+pub fn meta_verify_token_ok(expected: &str, given: &str) -> bool {
+    !expected.is_empty() && ct_eq(expected.as_bytes(), given.as_bytes())
+}
+
 /// What a NetGSM callback URL is for. NetGSM signs nothing, so each URL carries a token of its
 /// own ([`netgsm_hook_token`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

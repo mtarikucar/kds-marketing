@@ -1,0 +1,279 @@
+//! Meta's webhooks through the gate, over the in-memory fakes: the verification handshake
+//! (`GET /hooks/meta`), the signature checked before anything is read (`POST /hooks/meta`), one
+//! event per item stored in the workspace that holds its account connected, a replay stored once
+//! (Review Focus 2), an event for an account no workspace holds connected dropped with a warning
+//! and nothing written anywhere (Review Focus 1), and the answers Meta redelivers on.
+
+mod support;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode, header};
+use jt_app::usecases::Deps;
+use jt_capability::StoredStatus;
+use jt_connector::{EventKind, Provider};
+use jt_webhook::{META_BODY_LIMIT, counters};
+use serde_json::json;
+use std::sync::Arc;
+use support::*;
+
+const WHATSAPP_NUMBER: &str = "5555555555";
+
+fn verify(query: &str) -> Request<Body> {
+    Request::get(format!("/hooks/meta?{query}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+// ---------------------------------------------------------------------------------------------
+// The verification handshake
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn meta_get_echoes_the_challenge_for_the_verify_token() {
+    let w = World::new().await;
+    let resp = send(
+        &w.app(),
+        verify("hub.mode=subscribe&hub.verify_token=meta-verify-token&hub.challenge=1158201444"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()[header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    let (_, body) = answer(
+        &w.app(),
+        verify("hub.mode=subscribe&hub.verify_token=meta-verify-token&hub.challenge=1158201444"),
+    )
+    .await;
+    assert_eq!(body, "1158201444");
+}
+
+#[tokio::test]
+async fn meta_get_with_another_token_or_mode_is_403() {
+    let w = World::new().await;
+    for query in [
+        "hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=1",
+        "hub.mode=subscribe&hub.verify_token=META-VERIFY-TOKEN&hub.challenge=1",
+        "hub.mode=unsubscribe&hub.verify_token=meta-verify-token&hub.challenge=1",
+        "hub.verify_token=meta-verify-token&hub.challenge=1",
+        "hub.mode=subscribe&hub.challenge=1",
+        "",
+    ] {
+        let (status, body) = answer(&w.app(), verify(query)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{query}");
+        assert!(!body.contains('1'), "{query}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn meta_get_without_app_is_404() {
+    let w = World::new().await.without_apps();
+    let (status, _) = answer(
+        &w.app(),
+        verify("hub.mode=subscribe&hub.verify_token=meta-verify-token&hub.challenge=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Signed deliveries
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn meta_post_without_app_is_401() {
+    let w = World::new().await;
+    w.connected(w.ws, "whatsapp_cloud", WHATSAPP_NUMBER).await;
+    let w = w.without_apps();
+    let body = fixture("meta/whatsapp_messages.json");
+    let (status, _) = answer(&w.app(), signed(&body)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(w.stored().is_empty());
+}
+
+#[tokio::test]
+async fn meta_post_with_a_bad_or_missing_signature_is_401_and_stores_nothing() {
+    let w = World::new().await;
+    w.connected(w.ws, "whatsapp_cloud", WHATSAPP_NUMBER).await;
+    let body = fixture("meta/whatsapp_messages.json");
+    let mut tampered = body.clone();
+    tampered.extend_from_slice(b" ");
+    for req in [
+        meta_post(&body, None),
+        meta_post(&body, Some("")),
+        meta_post(&body, Some("sha256=00")),
+        meta_post(&body, Some(&signature("another-secret", &body))),
+        meta_post(&tampered, Some(&signature(APP_SECRET, &body))),
+        meta_post(
+            &body,
+            Some(&signature(APP_SECRET, &body).replace("sha256=", "sha1=")),
+        ),
+    ] {
+        let (status, _) = answer(&w.app(), req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    assert!(w.stored().is_empty());
+}
+
+#[tokio::test]
+async fn meta_post_over_one_megabyte_is_413() {
+    let w = World::new().await;
+    assert_eq!(META_BODY_LIMIT, 1024 * 1024);
+    let big = vec![b' '; META_BODY_LIMIT + 1];
+    let (status, _) = answer(&w.app(), signed(&big)).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    // Exactly the limit is read (and, not being a webhook body, stored as nothing).
+    let at_limit = vec![b' '; META_BODY_LIMIT];
+    let (status, _) = answer(&w.app(), signed(&at_limit)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(w.stored().is_empty());
+}
+
+#[tokio::test]
+async fn a_whatsapp_delivery_stores_one_event_per_message_and_a_replay_none() {
+    let w = World::new().await;
+    let number = w.connected(w.ws, "whatsapp_cloud", WHATSAPP_NUMBER).await;
+    let body = fixture("meta/whatsapp_messages.json");
+
+    let (status, text) = answer(&w.app(), signed(&body)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(text, "EVENT_RECEIVED");
+    let events = w.events_of(w.ws);
+    let ids: Vec<&str> = events.iter().map(|e| e.external_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "wamid.TEST-TEXT-1",
+            "wamid.TEST-BUTTON-1",
+            "wamid.TEST-INTERACTIVE-1",
+            "wamid.TEST-REFERRAL-1"
+        ]
+    );
+    let first = &events[0];
+    assert_eq!(first.provider, Provider::Meta);
+    assert_eq!(first.kind, EventKind::Message);
+    assert_eq!(first.capability_id, Some(number));
+    assert_eq!(
+        first.payload["message"]["text"]["body"],
+        "Merhaba, açık mısınız?"
+    );
+    assert_eq!(first.payload["contact"]["profile"]["name"], "Test Kişi");
+    assert_eq!(first.payload["occurred_at"], "2026-09-21T14:13:20Z");
+    // The body as received is kept beside each event.
+    assert!(
+        w.stored()
+            .iter()
+            .all(|s| s.raw.as_deref() == Some(&body[..]))
+    );
+
+    // Meta redelivers: acknowledged, nothing new (Review Focus 2).
+    let (status, text) = answer(&w.app(), signed(&body)).await;
+    assert_eq!((status, text.as_str()), (StatusCode::OK, "EVENT_RECEIVED"));
+    assert_eq!(w.stored().len(), 4);
+}
+
+/// Review Focus 1: the second number of the delivery is held by no workspace; a page held
+/// connected elsewhere does not take WhatsApp events; a number another workspace holds only
+/// declared, or retired, takes nothing either. Nothing is written for them, anywhere, and the
+/// warning names the provider and the kind of account only.
+#[tokio::test]
+async fn an_event_for_an_account_no_workspace_holds_connected_is_dropped_with_a_warning() {
+    let w = World::new().await;
+    let beta = w.other_workspace().await;
+    w.capability(
+        beta,
+        "whatsapp_cloud",
+        "5555555556",
+        StoredStatus::Declared,
+        false,
+    )
+    .await;
+    w.capability(
+        beta,
+        "whatsapp_cloud",
+        WHATSAPP_NUMBER,
+        StoredStatus::Retired,
+        true,
+    )
+    .await;
+    w.connected(beta, "facebook_page", WHATSAPP_NUMBER).await;
+    let body = fixture("meta/whatsapp_messages.json");
+    let before = counters().unrouted_meta;
+
+    let logs = Logs::capture();
+    let (status, text) = answer(&w.app(), signed(&body)).await;
+    assert_eq!((status, text.as_str()), (StatusCode::OK, "EVENT_RECEIVED"));
+    assert!(w.stored().is_empty());
+    // Five messages, none routed.
+    assert!(counters().unrouted_meta >= before + 5);
+    let logs = logs.text();
+    assert!(logs.contains("WARN"), "{logs}");
+    assert!(logs.contains("provider=\"meta\""), "{logs}");
+    assert!(logs.contains("kind_hint=\"whatsapp_cloud\""), "{logs}");
+    for private in [
+        WHATSAPP_NUMBER,
+        "5555555556",
+        "wamid",
+        "Merhaba",
+        "905551111111",
+    ] {
+        assert!(!logs.contains(private), "the log names {private}: {logs}");
+    }
+}
+
+#[tokio::test]
+async fn messenger_events_go_to_the_workspace_holding_the_page() {
+    let w = World::new().await;
+    let beta = w.other_workspace().await;
+    let page = w.connected(beta, "messenger", "1234567890").await;
+    let body = fixture("meta/messenger_messaging.json");
+    let (status, _) = answer(&w.app(), signed(&body)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(w.events_of(w.ws).is_empty());
+    let events = w.events_of(beta);
+    assert!(!events.is_empty());
+    assert!(events.iter().all(|e| e.capability_id == Some(page)));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.external_id == "m_TEST-ECHO-1" && e.kind == EventKind::MessageEcho)
+    );
+}
+
+#[tokio::test]
+async fn a_signed_body_that_is_not_a_known_webhook_is_acknowledged_and_stores_nothing() {
+    let w = World::new().await;
+    for body in [
+        b"not json".to_vec(),
+        json!({ "object": "permissions", "entry": [] })
+            .to_string()
+            .into_bytes(),
+        json!({ "entry": [] }).to_string().into_bytes(),
+    ] {
+        let (status, text) = answer(&w.app(), signed(&body)).await;
+        assert_eq!((status, text.as_str()), (StatusCode::OK, "EVENT_RECEIVED"));
+    }
+    assert!(w.stored().is_empty());
+}
+
+/// Meta redelivers whatever is not answered `200`: a database failure is `500`, so nothing is
+/// lost.
+#[tokio::test]
+async fn a_database_failure_is_500_so_meta_redelivers() {
+    let w = World::new().await;
+    w.connected(w.ws, "whatsapp_cloud", WHATSAPP_NUMBER).await;
+    let deps = Deps {
+        uow: Arc::new(FailingInserts(w.uow.clone())),
+        ..w.deps.clone()
+    };
+    let body = fixture("meta/whatsapp_messages.json");
+    let (status, text) = answer(&w.app_with(deps), signed(&body)).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_ne!(text, "EVENT_RECEIVED");
+    assert!(w.stored().is_empty());
+    // Once the database is back, the redelivery stores everything.
+    let (status, _) = answer(&w.app(), signed(&body)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(w.stored().len(), 4);
+}

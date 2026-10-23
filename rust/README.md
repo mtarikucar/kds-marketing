@@ -224,7 +224,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 56 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 60 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -296,6 +296,10 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | | `jeeta.connector.probe` | Bağlayıcı kabiliyeti sağlayıcısına karşı yoklar: sonuç ve sonraki durum | WRITE |
 | | `jeeta.connector.health` | Bütün bağlayıcıların sağlığı: durum, son yoklama, jetonun bitişi, yeniden bağlama gereği | READ |
 | | `jeeta.connector.reconnect` | Girişi düşen ya da hiç bağlanmamış (`declared`) Meta ya da X kabiliyeti için ona bağlı bir giriş başlatır (`handoff` ile); onayda ilk seçilen varlık o kabiliyet olur | WRITE |
+| | `jeeta.connector.hooks` | Sağlayıcılara girilecek webhook adresleri: alanın her amaç için NetGSM adresi (alanın anahtarıyla) ve platformun Meta adresi (doğrulama anahtarı asla) | READ |
+| olaylar | `jeeta.events.pending` | İşlenmemiş gelen olaylar, en eskisi başta, sayfa sayfa (`next` ile ileri) | READ |
+| | `jeeta.events.ack` | İşlenen olayları işaretler (1–200 kimlik, hepsi ya da hiçbiri); `{acked}` | WRITE |
+| | `jeeta.events.list` | Bütün gelen olaylar, en yenisi başta; işlenenler dahil, sağlayıcı ve tür süzgeçleri | READ |
 | iş | `jeeta.work.pending` | Bekleyen işler, stratejinin durumu, ajanın gecikmesi | READ |
 | | `jeeta.work.checkin` | Ajanın yoklaması: kaydedilir ve bekleyen işleri döndürür (yalnızca MCP) | WRITE |
 | | `jeeta.work.set_checkin_interval` | Beklenen yoklama aralığını değiştirir | WRITE |
@@ -601,6 +605,66 @@ Sağlayıcının hata dönüşü (`error`, `error_description`) panelde kendi me
 Platform uygulamaları yapılandırılmadıkça (M1b'nin son adımı) OAuth türleri `409 CONFLICT` ("provider
 app not configured") alır; NetGSM elle girişi bundan bağımsızdır.
 
+### Webhook'lar
+
+Sağlayıcılar olaylarını (gelen mesaj, iletim durumu, potansiyel müşteri formu, arama, İYS izni) sunucunun
+webhook kapısına (`jt_webhook`, `/hooks/*`) gönderir. Kapı panelin oturum ve istek başlığı denetimlerinin
+dışındadır (sağlayıcının oturumu yoktur), güvenlik başlıkları ve erişim günlüğü içindedir; günlük rotayı
+şablonuyla yazar, bu yüzden adresteki anahtar günlüğe hiç düşmez. Adresler genel adresin altındadır;
+panelde **Kabiliyetler** sayfasının "Webhook adresleri" bölümü (yalnız `capabilities.manage` taşıyana)
+her birini kopyalanacak biçimde gösterir, ajan aynı listeyi `jeeta.connector.hooks` ile okur
+(`GET /api/connectors/hooks`, yanıt `{meta, netgsm: [{purpose, url}]}`).
+
+- **NetGSM**: her amaç için ayrı bir adres, `{genel adres}/hooks/netgsm/{workspace_id}/{anahtar}/{amaç}`;
+  amaç `mo` (gelen SMS), `events` (santral çağrı olayları), `iys` (İYS izin değişiklikleri), `voice-report`
+  (sesli mesaj raporları) ya da `autocall-report` (otomatik arama raporları). Anahtar, alanın gizli
+  anahtarından o amaç için türetilen HMAC'tir (saklanmaz, her istekte yeniden hesaplanır, sabit zamanda
+  karşılaştırılır); adresi NetGSM panelinde ilgili geri çağırma alanına yapıştırın ve başkasıyla
+  paylaşmayın. Bilinmeyen amaç, bozuk alan kimliği, yanlış anahtar, var olmayan ya da etkin olmayan alan:
+  hepsi gövde okunmadan çıplak `404` alır ve hiçbir şey yazılmaz. Gövde en çok 256 KB'tır (`413`).
+  Okunamayan bir gövde `202` alır, hiçbir şey yazılmaz, yalnız amaç günlüğe yazılır ve sayılır (NetGSM
+  başka her yanıtı yeniden denerdi). Olaylar alanın o amaca ait tek canlı kabiliyetine bağlanır (`mo` ve
+  `iys` → `sms_line`, ötekiler → `netgsm_pbx`; hiç ya da birden çok varsa hiçbirine). Başarı `202`'dir;
+  yazma başarısız olursa `503` (NetGSM yeniden gönderir).
+- **Meta**: platformun tek adresi `{genel adres}/hooks/meta`; Meta uygulamasının panelinde (Webhooks)
+  geri çağırma adresi olarak bu, doğrulama anahtarı olarak platformun doğrulama anahtarı girilir
+  (`JEETA_META_VERIFY_TOKEN`, sağlayıcı yapılandırmasıyla M1b'nin son adımında gelir; platform
+  operatörünün işidir ve anahtar hiçbir yanıtta görünmez). `GET` doğrulaması `hub.mode=subscribe` ve doğru
+  `hub.verify_token` için `hub.challenge`'ı düz metin olarak döndürür, değilse `403`; Meta uygulaması
+  yoksa `404`. `POST` teslimleri eşzamanlıdır: imza başlığı (`X-Hub-Signature-256`) yoksa ya da uygulama
+  yoksa gövde okunmadan `401`; gövde en çok 1 MB'tır (`413`); imza, ham gövde üzerinde uygulama sırrıyla
+  her şeyden önce doğrulanır (`401`, hiçbir şey yazılmaz). Her olay hesabıyla (sayfa, Instagram hesabı,
+  WhatsApp numarası) bütün alanlarda aranır ve hesabı **bağlı** tutan tek alana yazılır (mühürlü kimlik
+  bilgisi, en az bir kez yoklamayla doğrulanmış, emekli değil). Hesabı bağlı tutan alan yoksa olay
+  **atılır**: hiçbir alana satır yazılmaz, günlüğe yalnız sağlayıcı ve hesap türü yazılır ve sayılır.
+  Her şey yazıldıktan sonra `200 EVENT_RECEIVED`; veritabanı hatası `500` (Meta yeniden gönderir).
+
+Bir olay alan, sağlayıcı ve sağlayıcı kimliği (`wamid`, `mid`, `netgsm-mo:<gorevid>` …) başına bir kez
+saklanır: yeniden gönderim ve aynı anda gelen kopyalar tek satır bırakır. Ham gövde olayın yanında 30
+gün tutulur ve hiçbir yanıtta görünmez; daha eskilerini bütün alanlarda `webhook::purge_raw` siler,
+olaylar kalır (zamanlayıcı onu günde bir çalıştıracak: M1b'nin sonraki adımı). Olaylar günlüğe
+(ledger) yazılmaz: dış dünyanın kayıtlarıdır.
+
+### Gelen olaylar
+
+Ajan gelen olayları okur ve işlediklerini işaretler; sonraki aşamalar olayları konuşmalara ve
+ölçümlere çevirene dek tüketicisi odur. Araçlar strateji kapısından muaftır (olaylar gözlemdir,
+planlanmış iş değil), çalışma alanı durumu denetiminden muaf değildir. Bir olay `{id, provider,
+capability_id, external_id, kind, payload, received_at, processed_at}` olarak döner; `payload`
+sağlayıcının ögesidir (bağdaştırıcının ayıkladığı haliyle), sağlayıcı olayın ne zaman olduğunu söylediyse
+`occurred_at` da taşır; ham gövde asla. Sayfalar `{events, next}`'tir: `next` boş değilse bir sonraki
+sayfanın imlecidir ve olduğu gibi geri gönderilir.
+
+| Adım | Panel | MCP aracı | İzin |
+|---|---|---|---|
+| İşlenmemişler, en eskisi başta (`limit` varsayılan 50, en çok 200; `after_at`, `after_id`) | `GET /api/events/pending` | `jeeta.events.pending` | `workspace.read` |
+| İşaretleme (gövde `{"ids": [...]}`, 1–200; bilinmeyen kimlik `404` ve hiçbiri işaretlenmez; yanıt `{acked}`; günlük `events.acked {n}`) | `POST /api/events/ack` | `jeeta.events.ack` | `capabilities.manage` |
+| Hepsi, en yenisi başta (`limit`, `before_at`, `before_id`, `include_processed` varsayılan `true`, `kind`, `provider`) | `GET /api/events` | `jeeta.events.list` | `workspace.read` |
+| Webhook adresleri | `GET /api/connectors/hooks` | `jeeta.connector.hooks` | `capabilities.manage` |
+
+İşaretleme `capabilities.manage` ister: olayların geldiği bağlantıları yöneten izindir ve daha hafif bir
+yazma izni yoktur; `workspace.read` olayları yalnız okur.
+
 | Adım | Panel | MCP aracı | İzin |
 |---|---|---|---|
 | OAuth başlatma (gövde `{"kind_key": …}`; yanıt `{authorize_url, pending_id, expires_at}`, araç ayrıca `handoff`) | `POST /api/connectors/oauth/start` | `jeeta.connector.start_oauth` | `capabilities.manage` |
@@ -648,6 +712,7 @@ neyin beklediğini sorabilir; askıya alınmış bir alanda `work.*` de `WORKSPA
 | `verify_capability` (`capability_id`, `name`, `stale`) | 2 | ajan ya da cihazla ulaşılan, `declared` ya da `stale` okunan her kabiliyet |
 | `reconnect_connector` (`capability_id`, `name`) | 1 | bağlayıcıyla ulaşılan, sağlayıcısı girişini artık kabul etmediği için (yoklama `auth` hatası, `connector_public.reconnect_required`) `unreachable` okunan her kabiliyet |
 | `connect_connector` (`capability_id`, `name`) | 2 | bağlayıcıyla ulaşılan, `declared` okunan her kabiliyet (bkz. [Bağlayıcılar](#bağlayıcılar)) |
+| `inbound_events` (`count`) | 2 | işlenmemiş gelen olaylar var; `count` en çok 1000'e kadar sayılır, 1000 "en az 1000" demektir (bkz. [Gelen olaylar](#gelen-olaylar)) |
 | `declare_first_capability` | 3 | emekliye ayrılmamış hiçbir kabiliyet yok |
 
 - **`agent`**: `last_seen_at` (alanın ajan bağlantılarından en son görüleni, hiç yoksa `null`),
@@ -826,11 +891,14 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
   (`aes-gcm`, `hkdf`) yalnızca `jt_seal`'de bulunur; `jt_outbound`'un `test-loopback` özelliğini yalnız
   `[dev-dependencies]` bölümleri açar, `bin/jeeta` hiç açmaz. Aynı crate kapı kurallarını da sabitler: strateji
   kapısından yalnızca `auth.`, `workspace.`, `team.`, `roles.`, `api_keys.`, `agents.`, `platform.`,
-  `strategy.`, `capability.`, `budget.`, `work.` önekli kullanım durumları ve `ledger.list` muaf olabilir;
+  `strategy.`, `capability.`, `budget.`, `work.`, `connector.`, `events.` önekli kullanım durumları ve
+  `ledger.list` muaf olabilir;
   çalışma alanı durumu denetiminden her durumda tam olarak `auth.`, `workspace.`, `platform.` önekliler,
   yalnız `pending_payment` iken de tam olarak `strategy.`, `work.` önekliler muaftır; panel rotaları ve
   MCP araçları kataloğun tam karşılığıdır, MCP'ye özgü tek kullanım durumu `work.checkin`'dir ve kayıt
-  56 araç tutar.
+  60 araç tutar. Webhook kapısı (`jt_webhook`) panel gibi bir axum adaptörüdür: izin listesi `jt_app`,
+  alan crate'leri, sağlayıcı bağdaştırıcılarının ayrıştırıcıları, `axum`, `http-body-util`, `url` ve
+  `tracing`'dir; hiçbir HTTP istemcisi ya da veritabanı crate'i adlandırmaz.
 - `deny.toml`: aynı HTTP istemcisi ve `sqlx` kuralları (`reqwest` dışında hiçbir HTTP istemcisi, `ureq`,
   `isahc`, `surf`, `attohttpc`, `curl`, ağacın hiçbir yerinde bulunmaz) ile yapay zekâ, medya üretimi, ses
   tanıma ve ses sentezi sağlayıcı kütüphanelerinin bağımlılık ağacının hiçbir yerinde bulunmaması; lisans,

@@ -443,6 +443,17 @@ fn meta_signature_constant_time_examples() {
     assert!(!meta_signature_ok(b"", body, &empty_key_sig));
 }
 
+/// Meta's webhook verification echoes the challenge only for the platform's verify token: an
+/// exact, constant-time match; an unset (empty) token matches nothing.
+#[test]
+fn meta_verify_token_matches_exactly() {
+    assert!(meta_verify_token_ok("verify-me", "verify-me"));
+    for wrong in ["", "verify-m", "verify-me ", "VERIFY-ME", "verify-me2"] {
+        assert!(!meta_verify_token_ok("verify-me", wrong), "{wrong:?}");
+    }
+    assert!(!meta_verify_token_ok("", ""));
+}
+
 #[test]
 fn netgsm_token_matches_reference_vector() {
     // Reference values computed outside this crate (python hmac and openssl dgst agree).
