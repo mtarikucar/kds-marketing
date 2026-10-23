@@ -23,3 +23,9 @@ npm-debug.log*
 *.tsbuildinfo
 .playwright-mcp/
 .superpowers/
+
+# Rust workspace
+rust/target/
+rust/panel/node_modules/
+rust/panel/dist/
+rust/.env

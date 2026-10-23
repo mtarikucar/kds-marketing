@@ -1,0 +1,330 @@
+{
+  "app": {
+    "name": "Jeeta",
+    "tagline": "Workspace panel"
+  },
+  "common": {
+    "loading": "Loading…",
+    "retry": "Try again",
+    "cancel": "Cancel",
+    "close": "Close",
+    "save": "Save",
+    "create": "Create",
+    "delete": "Delete",
+    "edit": "Edit",
+    "done": "Done",
+    "copy": "Copy",
+    "copied": "Copied to the clipboard.",
+    "copyFailed": "Could not copy; select the text and copy it by hand.",
+    "actions": "Actions",
+    "none": "—",
+    "loadError": "Could not load. Please try again."
+  },
+  "kit": {
+    "close": "Close",
+    "loading": "Loading",
+    "notifications": "Notifications",
+    "language": {
+      "change": "Change language"
+    },
+    "theme": {
+      "label": "Theme",
+      "system": "System",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "disclosure": {
+      "show": "Show",
+      "hide": "Hide"
+    }
+  },
+  "nav": {
+    "label": "Main menu",
+    "home": "Home",
+    "team": "Team",
+    "roles": "Roles",
+    "apiKeys": "API keys",
+    "agents": "Agents",
+    "ledger": "Ledger"
+  },
+  "shell": {
+    "workspace": "Workspace",
+    "switchWorkspace": "Switch workspace",
+    "switched": "Workspace switched.",
+    "noWorkspace": "No workspace",
+    "noWorkspaceBody": "You are not an active member of any workspace yet. You can join one with an invite link.",
+    "chooseWorkspace": "Choose a workspace",
+    "chooseWorkspaceBody": "Pick the workspace you want to work in from the list above.",
+    "logout": "Sign out",
+    "signedInAs": "Signed in as {{name}}"
+  },
+  "status": {
+    "workspace": {
+      "pending_payment": "Awaiting payment",
+      "active": "Active",
+      "suspended": "Suspended"
+    },
+    "member": {
+      "invited": "Invited",
+      "active": "Active",
+      "removed": "Removed"
+    },
+    "key": {
+      "active": "Active",
+      "revoked": "Revoked"
+    }
+  },
+  "actor": {
+    "human": "Human",
+    "agent": "Agent",
+    "system": "System"
+  },
+  "permissions": {
+    "workspace": {
+      "read": "View the workspace"
+    },
+    "team": {
+      "manage": "Manage the team"
+    },
+    "api_keys": {
+      "manage": "Manage API keys"
+    },
+    "ledger": {
+      "read": "Read the ledger"
+    }
+  },
+  "roleNames": {
+    "owner": "Owner",
+    "manager": "Manager",
+    "rep": "Representative"
+  },
+  "fields": {
+    "email": "Email",
+    "password": "Password",
+    "passwordHint": "At least {{min}} characters.",
+    "display_name": "Your name",
+    "workspace_name": "Workspace name",
+    "key": "Key",
+    "name": "Name",
+    "role_key": "Role",
+    "permissions": "Permissions",
+    "scopes": "Scopes",
+    "token": "Invite",
+    "status": "Status",
+    "actor_kind": "Actor kind"
+  },
+  "errors": {
+    "UNAUTHENTICATED": "You need to sign in.",
+    "FORBIDDEN": "You are not allowed to do this.",
+    "NOT_FOUND": "We could not find that.",
+    "CONFLICT": "This conflicts with the current state.",
+    "VALIDATION": "Some of the details are not valid.",
+    "STRATEGY_REQUIRED": "This needs an approved strategy first.",
+    "WORKSPACE_INACTIVE": "The workspace is not active.",
+    "HOST_NOT_ALLOWED": "Access to this address is not allowed.",
+    "INTERNAL": "Something unexpected went wrong. Please try again shortly.",
+    "NETWORK": "Could not reach the server. Check your connection.",
+    "unknown": "Something went wrong.",
+    "invalidField": "Invalid field: {{field}}.",
+    "lastOwner": "The workspace's last owner cannot be removed or given another role.",
+    "ownerOnly": "Only an owner can do this.",
+    "exceedsAuthority": "You cannot grant a permission you do not hold yourself."
+  },
+  "login": {
+    "title": "Sign in",
+    "description": "Sign in to your workspace with your email and password.",
+    "submit": "Sign in",
+    "invalid": "The email or password is wrong.",
+    "noAccount": "No account yet?",
+    "registerLink": "Sign up"
+  },
+  "register": {
+    "title": "Sign up",
+    "description": "Create your account and your first workspace.",
+    "submit": "Create account",
+    "haveAccount": "Already have an account?",
+    "loginLink": "Sign in"
+  },
+  "invite": {
+    "title": "Accept invite",
+    "description": "You have been invited to a workspace.",
+    "signedInAs": "You are signed in as {{email}}. You can accept the invite with this account.",
+    "accept": "Accept invite",
+    "newUser": "No account yet? Join by entering your name and a password.",
+    "submitNew": "Create account and join",
+    "haveAccount": "Already have an account with this email?",
+    "loginLink": "Sign in",
+    "signInRequired": "An account with this email already exists. Sign in first to accept the invite.",
+    "forbidden": "This invite is not valid: it may have expired, been used, or been sent to another email address.",
+    "alreadyMember": "You are already a member of this workspace.",
+    "accepted": "Invite accepted. You have joined the workspace.",
+    "goHome": "Go to the panel"
+  },
+  "home": {
+    "title": "Home",
+    "description": "An overview of your workspace.",
+    "slug": "Slug",
+    "status": "Status",
+    "myRole": "Your role",
+    "myPermissions": "Your permissions",
+    "strategy": {
+      "title": "Waiting for a strategy",
+      "body": "Your workspace's strategy will appear here once it is approved."
+    },
+    "inactive": {
+      "pending_payment": "Your workspace becomes active once payment is received.",
+      "active": "Your workspace is active.",
+      "suspended": "Your workspace is suspended. Contact us for details."
+    }
+  },
+  "team": {
+    "title": "Team",
+    "description": "The workspace's members and pending invites.",
+    "invite": "Invite member",
+    "columns": {
+      "member": "Member",
+      "role": "Role",
+      "status": "Status",
+      "since": "Added"
+    },
+    "changeRole": "Role for {{email}}",
+    "roleChanged": "Role updated.",
+    "remove": "Remove",
+    "cancelInvite": "Cancel invite",
+    "removeTitle": "Remove member",
+    "removeBody": "{{email}} will be removed from this workspace.",
+    "cancelInviteTitle": "Cancel invite",
+    "cancelInviteBody": "The invite sent to {{email}} will stop working.",
+    "removed": "Member removed.",
+    "empty": "No members yet.",
+    "emptyBody": "Invite your first teammate.",
+    "dialog": {
+      "title": "Invite member",
+      "description": "An invite link is created; you pass it on to the person you invite.",
+      "submit": "Create invite link",
+      "linkTitle": "Invite link",
+      "linkWarning": "This link is shown only now. Copy it and send it to the person you invited; once closed you cannot see it again.",
+      "expiresAt": "Valid until {{date}}"
+    }
+  },
+  "roles": {
+    "title": "Roles",
+    "description": "System roles are fixed; custom roles carry their own permissions.",
+    "create": "Create role",
+    "columns": {
+      "name": "Name",
+      "key": "Key",
+      "permissions": "Permissions",
+      "type": "Type"
+    },
+    "system": "System",
+    "custom": "Custom",
+    "edit": "Edit",
+    "delete": "Delete",
+    "deleteTitle": "Delete role",
+    "deleteBody": "The role {{name}} will be deleted.",
+    "saved": "Role saved.",
+    "deleted": "Role deleted.",
+    "noPermissions": "No permissions",
+    "empty": "No roles yet.",
+    "dialog": {
+      "createTitle": "Create role",
+      "editTitle": "Edit role {{name}}",
+      "description": "Choose the permissions the role grants.",
+      "keyHint": "2–32 characters: lowercase letters, digits and underscores."
+    }
+  },
+  "apiKeys": {
+    "title": "API keys",
+    "description": "Agents connect to this workspace with these keys.",
+    "create": "Create key",
+    "columns": {
+      "name": "Name",
+      "prefix": "Prefix",
+      "scopes": "Scopes",
+      "status": "Status",
+      "created": "Created",
+      "lastUsed": "Last used"
+    },
+    "neverUsed": "Never used",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke key",
+    "revokeBody": "The key {{name}} will be revoked; agents using it will no longer connect.",
+    "revoked": "Key revoked.",
+    "empty": "No API keys yet.",
+    "emptyBody": "Create a key to connect an agent.",
+    "dialog": {
+      "title": "Create API key",
+      "description": "Name the key and, if you like, narrow its scope.",
+      "scopesHint": "If you choose none, the key carries all of your permissions.",
+      "submit": "Create key",
+      "plaintextTitle": "Your new key",
+      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again."
+    }
+  },
+  "agents": {
+    "title": "Agents",
+    "description": "Clients that have connected to this workspace with its API keys.",
+    "columns": {
+      "client": "Client",
+      "version": "Version",
+      "protocol": "Protocol",
+      "key": "API key",
+      "firstSeen": "First seen",
+      "lastSeen": "Last seen",
+      "toolCalls": "Tool calls"
+    },
+    "empty": "No agent has connected yet.",
+    "emptyBody": "The first client to connect with an API key will show up here."
+  },
+  "ledger": {
+    "title": "Ledger",
+    "description": "Everything that happens in the workspace; agent and human actions side by side.",
+    "filter": "Action filter",
+    "filterPlaceholder": "e.g. team.",
+    "apply": "Filter",
+    "clear": "Clear",
+    "columns": {
+      "at": "Time",
+      "actor": "Actor",
+      "action": "Action",
+      "subject": "Subject",
+      "payload": "Details"
+    },
+    "payload": "Details",
+    "redactedNote": "Secret values are masked.",
+    "loadMore": "Load more",
+    "empty": "The ledger is empty.",
+    "emptyBody": "Things that happen in the workspace will show up here."
+  },
+  "platform": {
+    "console": "Platform console",
+    "login": {
+      "title": "Platform sign in",
+      "description": "Sign in as a platform operator.",
+      "submit": "Sign in",
+      "invalid": "The email or password is wrong."
+    },
+    "workspaces": {
+      "title": "Workspaces",
+      "description": "Every workspace, newest first.",
+      "columns": {
+        "name": "Name",
+        "slug": "Slug",
+        "owner": "Owner",
+        "members": "Members",
+        "status": "Status",
+        "created": "Created"
+      },
+      "activate": "Activate",
+      "suspend": "Suspend",
+      "changed": "Status updated.",
+      "empty": "No workspaces yet."
+    }
+  },
+  "notFound": {
+    "title": "Page not found",
+    "body": "The page you are looking for does not exist or has moved.",
+    "home": "Back to home"
+  }
+}

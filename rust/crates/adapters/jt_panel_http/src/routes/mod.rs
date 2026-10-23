@@ -1,0 +1,289 @@
+//! The route table: [`ROUTES`] lists every method and path the router serves, and the router
+//! registers exactly the entries of [`api_routes`] and [`root_routes`], whose methods and paths
+//! must equal it (pinned by `router_matches_routes_table`).
+//!
+//! Every API route names the catalog use case behind it. The router resolves each name in the
+//! catalog when it is built, panicking on a name the catalog does not know or whose catalog
+//! route differs, and wraps the route in the gate layer of the resolved [`UseCase`]
+//! ([`crate::gate`]).
+
+pub mod agents;
+pub mod api_keys;
+pub mod auth;
+pub mod ledger;
+pub mod platform;
+pub mod roles;
+pub mod team;
+pub mod workspace;
+
+use axum::Json;
+use axum::handler::Handler;
+use axum::http::Method;
+use axum::routing::{MethodFilter, MethodRouter, on};
+use jt_app::catalog::UseCase;
+use serde_json::{Value, json};
+
+use crate::API_PREFIX;
+use crate::state::AppState;
+
+/// Every route the panel HTTP adapter serves, as (method, path), in axum's path syntax as
+/// `CATALOG.panel_route` writes it. The twin-rule test compares it with the catalog.
+pub const ROUTES: &[(&str, &str)] = &[
+    ("POST", "/api/auth/register"),
+    ("POST", "/api/auth/login"),
+    ("POST", "/api/auth/logout"),
+    ("GET", "/api/auth/me"),
+    ("POST", "/api/auth/switch-workspace"),
+    ("GET", "/api/workspace"),
+    ("GET", "/api/team"),
+    ("POST", "/api/team/invites"),
+    ("POST", "/api/team/invites/accept"),
+    ("PATCH", "/api/team/{membership_id}/role"),
+    ("DELETE", "/api/team/{membership_id}"),
+    ("GET", "/api/roles"),
+    ("POST", "/api/roles"),
+    ("PATCH", "/api/roles/{role_id}"),
+    ("DELETE", "/api/roles/{role_id}"),
+    ("POST", "/api/api-keys"),
+    ("GET", "/api/api-keys"),
+    ("DELETE", "/api/api-keys/{key_id}"),
+    ("GET", "/api/agents"),
+    ("GET", "/api/whoami"),
+    ("GET", "/api/ledger"),
+    ("POST", "/api/platform/login"),
+    ("GET", "/api/platform/workspaces"),
+    ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
+    ("GET", "/healthz"),
+];
+
+/// A JSON API route: its method, its path relative to [`API_PREFIX`], the catalog id of its use
+/// case and its handler. A `GET` route also answers `HEAD`, with the same use case.
+pub struct ApiRoute {
+    pub method: &'static str,
+    pub path: &'static str,
+    pub use_case: &'static str,
+    pub handler: MethodRouter<AppState>,
+}
+
+/// A route outside the API, which no use case stands behind (e.g. `/healthz`).
+pub struct RootRoute {
+    pub method: &'static str,
+    pub path: &'static str,
+    pub handler: MethodRouter<AppState>,
+}
+
+/// A method router answering only `method` (a standard method name; `GET` includes `HEAD`).
+fn only<H, T>(method: &'static str, handler: H) -> MethodRouter<AppState>
+where
+    H: Handler<T, AppState>,
+    T: 'static,
+{
+    let filter = Method::from_bytes(method.as_bytes())
+        .ok()
+        .and_then(|m| MethodFilter::try_from(m).ok())
+        .unwrap_or_else(|| panic!("route method {method} is not a standard method"));
+    on(filter, handler)
+}
+
+/// An API route for use case `use_case`.
+pub fn api_route<H, T>(
+    method: &'static str,
+    path: &'static str,
+    use_case: &'static str,
+    handler: H,
+) -> ApiRoute
+where
+    H: Handler<T, AppState>,
+    T: 'static,
+{
+    ApiRoute {
+        method,
+        path,
+        use_case,
+        handler: only(method, handler),
+    }
+}
+
+fn root_route<H, T>(method: &'static str, path: &'static str, handler: H) -> RootRoute
+where
+    H: Handler<T, AppState>,
+    T: 'static,
+{
+    RootRoute {
+        method,
+        path,
+        handler: only(method, handler),
+    }
+}
+
+/// The JSON API's routes.
+pub fn api_routes() -> Vec<ApiRoute> {
+    vec![
+        api_route("POST", "/auth/register", "auth.register", auth::register),
+        api_route("POST", "/auth/login", "auth.login", auth::login),
+        api_route("POST", "/auth/logout", "auth.logout", auth::logout),
+        api_route("GET", "/auth/me", "auth.me", auth::me),
+        api_route(
+            "POST",
+            "/auth/switch-workspace",
+            "workspace.switch",
+            auth::switch_workspace,
+        ),
+        api_route("GET", "/workspace", "workspace.info", workspace::info),
+        api_route("GET", "/team", "team.list", team::list),
+        api_route("POST", "/team/invites", "team.invite", team::invite),
+        api_route(
+            "POST",
+            "/team/invites/accept",
+            "team.accept_invite",
+            team::accept,
+        ),
+        api_route(
+            "PATCH",
+            "/team/{membership_id}/role",
+            "team.set_role",
+            team::set_role,
+        ),
+        api_route(
+            "DELETE",
+            "/team/{membership_id}",
+            "team.remove",
+            team::remove,
+        ),
+        api_route("GET", "/roles", "roles.list", roles::list),
+        api_route("POST", "/roles", "roles.create", roles::create),
+        api_route("PATCH", "/roles/{role_id}", "roles.update", roles::update),
+        api_route("DELETE", "/roles/{role_id}", "roles.delete", roles::delete),
+        api_route("POST", "/api-keys", "api_keys.create", api_keys::create),
+        api_route("GET", "/api-keys", "api_keys.list", api_keys::list),
+        api_route(
+            "DELETE",
+            "/api-keys/{key_id}",
+            "api_keys.revoke",
+            api_keys::revoke,
+        ),
+        api_route("GET", "/agents", "agents.list", agents::list),
+        api_route("GET", "/whoami", "agents.whoami", agents::whoami),
+        api_route("GET", "/ledger", "ledger.list", ledger::list),
+        api_route("POST", "/platform/login", "platform.login", platform::login),
+        api_route(
+            "GET",
+            "/platform/workspaces",
+            "platform.workspaces.list",
+            platform::list_workspaces,
+        ),
+        api_route(
+            "PATCH",
+            "/platform/workspaces/{workspace_id}/status",
+            "platform.workspaces.set_status",
+            platform::set_status,
+        ),
+    ]
+}
+
+/// The routes outside the API.
+pub fn root_routes() -> Vec<RootRoute> {
+    vec![root_route("GET", "/healthz", healthz)]
+}
+
+/// The catalog entry of `route`'s use case.
+///
+/// # Panics
+///
+/// When `catalog` has no use case with the route's id, or that use case's panel route is not
+/// the route's method and full path, so a route the catalog does not describe stops the server
+/// at startup instead of failing its requests.
+pub fn resolve(route: &ApiRoute, catalog: &[UseCase]) -> UseCase {
+    let (method, path, id) = (
+        route.method,
+        format!("{API_PREFIX}{}", route.path),
+        route.use_case,
+    );
+    let Some(use_case) = catalog.iter().find(|uc| uc.id == id) else {
+        panic!("route {method} {path} names use case `{id}`, which is not in the catalog");
+    };
+    if use_case.panel_route != Some((method, path.as_str())) {
+        panic!(
+            "route {method} {path} names use case `{id}`, whose catalog panel route is {:?}",
+            use_case.panel_route
+        );
+    }
+    *use_case
+}
+
+/// `200 {"ok":true}` while the process serves requests.
+async fn healthz() -> Json<Value> {
+    Json(json!({ "ok": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use jt_app::gate::NoStrategyYet;
+    use jt_app::usecases::Deps;
+    use jt_testkit::fakes::{FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, SeqIdGen};
+    use time::macros::datetime;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::router;
+
+    fn registered() -> Vec<(&'static str, String)> {
+        let api = api_routes()
+            .into_iter()
+            .map(|r| (r.method, format!("{API_PREFIX}{}", r.path)));
+        let root = root_routes()
+            .into_iter()
+            .map(|r| (r.method, r.path.to_owned()));
+        api.chain(root).collect()
+    }
+
+    #[tokio::test]
+    async fn router_matches_routes_table() {
+        // The router registers exactly the table's entries, each once.
+        let table: Vec<(&str, String)> =
+            ROUTES.iter().map(|(m, p)| (*m, (*p).to_owned())).collect();
+        assert_eq!(registered(), table);
+        let unique: BTreeSet<_> = table.iter().collect();
+        assert_eq!(unique.len(), table.len(), "no route is listed twice");
+
+        // And each entry is really served with its method (a `GET` also with `HEAD`): no 404
+        // or 405 from the fallbacks. Building the router also resolves every API route's use
+        // case in the catalog.
+        let state = AppState {
+            deps: Deps {
+                uow: Arc::new(InMemoryUow::new()),
+                clock: Arc::new(FixedClock(datetime!(2026-10-22 09:00 UTC))),
+                ids: Arc::new(SeqIdGen::new()),
+                tokens: Arc::new(FixedTokenGen::new(["t1", "t2", "t3"])),
+                hasher: Arc::new(PlainHasher),
+            },
+            gate: Arc::new(NoStrategyYet),
+            cookie_secure: false,
+            panel_dir: None,
+        };
+        let app = router(state);
+        let with_head = ROUTES.iter().flat_map(|&(method, path)| {
+            let head = (method == "GET").then_some(("HEAD", path));
+            std::iter::once((method, path)).chain(head)
+        });
+        for (method, path) in with_head {
+            let req = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("x-requested-with", "jeeta-panel")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap();
+            let status = app.clone().oneshot(req).await.unwrap().status();
+            assert!(
+                status != StatusCode::NOT_FOUND && status != StatusCode::METHOD_NOT_ALLOWED,
+                "{method} {path} answered {status}"
+            );
+        }
+    }
+}

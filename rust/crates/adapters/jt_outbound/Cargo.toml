@@ -1,0 +1,30 @@
+[package]
+name = "jt_outbound"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+# `tests/egress.rs` is compiled into the library's own unit-test build (see `src/lib.rs`), because
+# plain http to a loopback literal is tolerated only under `cfg(test)`, which an ordinary
+# integration test does not see. `tests/production_build.rs` is an ordinary integration test, so
+# it sees the library exactly as a production build does.
+autotests = false
+
+[dependencies]
+jt_tenancy.workspace = true
+jt_app.workspace = true
+reqwest.workspace = true
+url.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["net", "time"] }
+
+[[test]]
+name = "production_build"
+path = "tests/production_build.rs"
+
+[lints]
+workspace = true

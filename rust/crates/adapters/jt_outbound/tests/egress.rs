@@ -1,0 +1,356 @@
+//! Egress allowlist tests.
+//!
+//! This file is compiled into the library's own unit-test build: `src/lib.rs` includes it under
+//! `cfg(test)`, and `autotests = false` keeps Cargo from also building it as an integration test.
+//! That is deliberate. Plain http to a loopback literal is tolerated only under `cfg(test)`, and
+//! the tests that must complete a request talk to a local plain-http server. Only the crate's
+//! public API is used. No test here reaches the public network.
+
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
+
+use axum::Router;
+use axum::routing::get;
+use jt_app::error::{AppError, ErrorCode};
+use jt_tenancy::WorkspaceId;
+use tokio::net::TcpListener;
+
+use crate::{
+    AllowedHost, Egress, EgressError, EgressScope, Method, Request, Response, StatusCode, Url,
+    header,
+};
+
+/// Serves `app` on an ephemeral 127.0.0.1 port for the rest of the test.
+async fn serve(app: Router) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    addr
+}
+
+/// A server that answers `GET /` with `200 hello`.
+async fn hello_server() -> SocketAddr {
+    serve(Router::new().route("/", get(|| async { "hello" }))).await
+}
+
+fn get_req(url: &str) -> Request {
+    Request::new(Method::GET, Url::parse(url).unwrap())
+}
+
+async fn assert_hello(result: Result<Response, EgressError>) {
+    let resp = result.expect("the request should pass the allowlist and complete");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.text().await.unwrap(), "hello");
+}
+
+fn assert_refused(result: Result<Response, EgressError>, expected_host: &str) {
+    match result {
+        Err(EgressError::HostNotAllowed { host }) => assert_eq!(host, expected_host),
+        other => panic!("expected HostNotAllowed({expected_host}), got {other:?}"),
+    }
+}
+
+/// Asserts nothing connected to `listener` within a short grace period.
+async fn assert_no_connection(listener: &TcpListener) {
+    let accepted = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+    assert!(
+        accepted.is_err(),
+        "a refused request must not open a socket"
+    );
+}
+
+#[tokio::test]
+async fn disallowed_host_is_refused_without_network() {
+    let egress = Egress::new(&[]);
+    let started = Instant::now();
+    let url = "https://203.0.113.1.invalid/";
+    assert_refused(
+        egress
+            .send(EgressScope::Tenant(WorkspaceId::new_v7()), get_req(url))
+            .await,
+        "203.0.113.1.invalid",
+    );
+    assert_refused(
+        egress
+            .send(EgressScope::Connector("meta"), get_req(url))
+            .await,
+        "203.0.113.1.invalid",
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "a refusal must not wait on DNS or a socket"
+    );
+}
+
+#[tokio::test]
+async fn refused_request_opens_no_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let egress = Egress::new(&[]);
+    egress.allow_tenant_host(WorkspaceId::new_v7(), "127.0.0.1");
+
+    let url = format!("http://127.0.0.1:{port}/");
+    assert_refused(
+        egress
+            .send(EgressScope::Tenant(WorkspaceId::new_v7()), get_req(&url))
+            .await,
+        "127.0.0.1",
+    );
+    assert_refused(
+        egress
+            .send(EgressScope::Connector("meta"), get_req(&url))
+            .await,
+        "127.0.0.1",
+    );
+    assert_no_connection(&listener).await;
+}
+
+#[tokio::test]
+async fn fixed_host_allowed_for_its_connector_only() {
+    let addr = hello_server().await;
+    let egress = Egress::new(&[AllowedHost {
+        connector: "meta",
+        host: "127.0.0.1",
+    }]);
+    let url = format!("http://{addr}/");
+
+    assert_hello(
+        egress
+            .send(EgressScope::Connector("meta"), get_req(&url))
+            .await,
+    )
+    .await;
+    assert_refused(
+        egress
+            .send(EgressScope::Connector("netgsm"), get_req(&url))
+            .await,
+        "127.0.0.1",
+    );
+}
+
+#[tokio::test]
+async fn tenant_host_allowed_only_for_that_workspace() {
+    let addr = hello_server().await;
+    let egress = Egress::new(&[]);
+    let (mine, theirs) = (WorkspaceId::new_v7(), WorkspaceId::new_v7());
+    egress.allow_tenant_host(mine, "127.0.0.1");
+    let url = format!("http://{addr}/");
+
+    assert_hello(egress.send(EgressScope::Tenant(mine), get_req(&url)).await).await;
+    assert_refused(
+        egress
+            .send(EgressScope::Tenant(theirs), get_req(&url))
+            .await,
+        "127.0.0.1",
+    );
+}
+
+#[tokio::test]
+async fn tiers_do_not_cross() {
+    let addr = hello_server().await;
+    let port = addr.port();
+    let egress = Egress::new(&[AllowedHost {
+        connector: "meta",
+        host: "127.0.0.1",
+    }]);
+    let ws = WorkspaceId::new_v7();
+    egress.allow_tenant_host(ws, "localhost");
+    let fixed_url = format!("http://127.0.0.1:{port}/");
+    let tenant_url = format!("http://localhost:{port}/");
+
+    // Each scope reaches its own tier...
+    assert_hello(
+        egress
+            .send(EgressScope::Connector("meta"), get_req(&fixed_url))
+            .await,
+    )
+    .await;
+    assert_hello(
+        egress
+            .send(EgressScope::Tenant(ws), get_req(&tenant_url))
+            .await,
+    )
+    .await;
+    // ...and never the other one.
+    assert_refused(
+        egress
+            .send(EgressScope::Tenant(ws), get_req(&fixed_url))
+            .await,
+        "127.0.0.1",
+    );
+    assert_refused(
+        egress
+            .send(EgressScope::Connector("meta"), get_req(&tenant_url))
+            .await,
+        "localhost",
+    );
+}
+
+#[tokio::test]
+async fn http_scheme_refused_outside_tests_for_public_hosts() {
+    let egress = Egress::new(&[
+        AllowedHost {
+            connector: "meta",
+            host: "example.com",
+        },
+        AllowedHost {
+            connector: "meta",
+            host: "10.0.0.1",
+        },
+    ]);
+    let ws = WorkspaceId::new_v7();
+    egress.allow_tenant_host(ws, "example.com");
+    egress.allow_tenant_host(ws, "10.0.0.1");
+
+    for scope in [EgressScope::Connector("meta"), EgressScope::Tenant(ws)] {
+        // The host is allowed, but plain http is tolerated only for loopback literals.
+        assert_refused(
+            egress.send(scope, get_req("http://example.com/")).await,
+            "example.com",
+        );
+        assert_refused(
+            egress.send(scope, get_req("http://10.0.0.1/")).await,
+            "10.0.0.1",
+        );
+        // Any other scheme is never accepted.
+        assert_refused(
+            egress.send(scope, get_req("ftp://example.com/")).await,
+            "example.com",
+        );
+        assert_refused(egress.send(scope, get_req("file:///etc/passwd")).await, "");
+    }
+}
+
+#[tokio::test]
+async fn allowed_local_host_round_trip() {
+    let addr = hello_server().await;
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    egress.allow_tenant_host(ws, "127.0.0.1");
+
+    assert_hello(
+        egress
+            .send(EgressScope::Tenant(ws), get_req(&format!("http://{addr}/")))
+            .await,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn redirects_are_not_followed() {
+    let addr = serve(Router::new().route(
+        "/",
+        get(|| async {
+            (
+                StatusCode::FOUND,
+                [(header::LOCATION, "https://disallowed.example/landing")],
+            )
+        }),
+    ))
+    .await;
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    egress.allow_tenant_host(ws, "127.0.0.1");
+
+    let resp = egress
+        .send(EgressScope::Tenant(ws), get_req(&format!("http://{addr}/")))
+        .await
+        .expect("the 302 itself is a normal response");
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(
+        resp.headers()[header::LOCATION],
+        "https://disallowed.example/landing"
+    );
+    assert_eq!(resp.url().host_str(), Some("127.0.0.1"));
+}
+
+#[tokio::test]
+async fn revoked_tenant_host_is_refused() {
+    let addr = hello_server().await;
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    let url = format!("http://{addr}/");
+
+    egress.allow_tenant_host(ws, "127.0.0.1");
+    assert_hello(egress.send(EgressScope::Tenant(ws), get_req(&url)).await).await;
+
+    egress.revoke_tenant_host(ws, "127.0.0.1");
+    assert_refused(
+        egress.send(EgressScope::Tenant(ws), get_req(&url)).await,
+        "127.0.0.1",
+    );
+
+    // Revoking what was never allowed is a no-op.
+    egress.revoke_tenant_host(ws, "127.0.0.1");
+    egress.revoke_tenant_host(WorkspaceId::new_v7(), "never.example");
+    egress.revoke_tenant_host(ws, "not a host");
+}
+
+#[tokio::test]
+async fn tenant_entry_with_port_must_match_the_url_port() {
+    let addr = hello_server().await;
+    let port = addr.port();
+    let egress = Egress::new(&[]);
+    let (exact, other) = (WorkspaceId::new_v7(), WorkspaceId::new_v7());
+    egress.allow_tenant_host(exact, &format!("127.0.0.1:{port}"));
+    egress.allow_tenant_host(other, &format!("127.0.0.1:{}", port.wrapping_add(1)));
+    let url = format!("http://{addr}/");
+
+    assert_hello(egress.send(EgressScope::Tenant(exact), get_req(&url)).await).await;
+    assert_refused(
+        egress.send(EgressScope::Tenant(other), get_req(&url)).await,
+        "127.0.0.1",
+    );
+}
+
+#[tokio::test]
+async fn host_match_is_case_insensitive() {
+    let addr = hello_server().await;
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    egress.allow_tenant_host(ws, "LocalHost");
+
+    assert_hello(
+        egress
+            .send(
+                EgressScope::Tenant(ws),
+                get_req(&format!("http://LOCALHOST:{}/", addr.port())),
+            )
+            .await,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn errors_map_to_app_error_codes() {
+    let refused: AppError = EgressError::HostNotAllowed {
+        host: "evil.example".into(),
+    }
+    .into();
+    assert_eq!(refused.code, ErrorCode::HostNotAllowed);
+    assert_eq!(refused.details["host"], "evil.example");
+
+    // A closed local port gives a real transport failure.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    egress.allow_tenant_host(ws, "127.0.0.1");
+    let err = egress
+        .send(
+            EgressScope::Tenant(ws),
+            get_req(&format!("http://127.0.0.1:{port}/?token=secret")),
+        )
+        .await
+        .expect_err("nothing listens on the port");
+    assert!(matches!(err, EgressError::Transport(_)), "{err:?}");
+    let internal: AppError = err.into();
+    assert_eq!(internal.code, ErrorCode::Internal);
+    assert!(
+        !internal.message.contains("secret"),
+        "the URL must not leak into the error: {}",
+        internal.message
+    );
+}

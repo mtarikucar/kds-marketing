@@ -1,0 +1,207 @@
+/*
+  Design tokens and base styles copied from the v1 frontend's src/index.css (the design kit's
+  light and dark tokens, base layer, scrollbars and the responsive DataTable). The RTL rules are
+  left out: the panel ships Turkish and English only. Keep the tokens in step with v1.
+*/
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    /* Console tokens (light). Legacy keys kept for back-compat; new semantic
+       tokens (surface*, border-strong, danger, info, *-subtle, chart) added. */
+    --background: #fbfbfc;
+    --foreground: #14151a;
+    --surface: #ffffff;
+    --surface-muted: #f4f5f7;
+    --surface-raised: #ffffff;
+    --card: #ffffff;
+    --card-foreground: #14151a;
+    --popover: #ffffff;
+    --popover-foreground: #14151a;
+    --primary: #2458e6;
+    --primary-foreground: #ffffff;
+    --primary-hover: #1d48c4;
+    /* Jeeta brand accents: navy (structure/brand-dark) + orange (growth/CTA). */
+    --brand-navy: #0f2350;
+    --brand-navy-foreground: #ffffff;
+    --brand-accent: #f5620f;
+    --brand-accent-foreground: #ffffff;
+    --brand-accent-hover: #da560d;
+    --brand-accent-subtle: #fff2ea;
+    --secondary: #f4f5f7;
+    --secondary-foreground: #14151a;
+    --muted: #f4f5f7;
+    --muted-foreground: #5b5e68;
+    --accent: #f1f3f5;
+    --accent-foreground: #14151a;
+    --destructive: #e11d48;
+    --destructive-foreground: #ffffff;
+    --danger: #e11d48;
+    --danger-subtle: #fff1f2;
+    --danger-foreground: #ffffff;
+    --success: #059669;
+    --success-subtle: #ecfdf5;
+    --success-foreground: #ffffff;
+    --warning: #d97706;
+    --warning-subtle: #fffbeb;
+    --warning-foreground: #ffffff;
+    --info: #0284c7;
+    --info-subtle: #f0f9ff;
+    --info-foreground: #ffffff;
+    --border: #e7e8ec;
+    --border-strong: #d5d7de;
+    --input: #d5d7de;
+    --ring: #2458e6;
+    --chart-1:#2458e6;--chart-2:#f5620f;--chart-3:#0f2350;--chart-4:#059669;
+    --chart-5:#e11d48;--chart-6:#7c3aed;--chart-7:#0d9488;--chart-8:#64748b;
+    --radius: 0.5rem;
+  }
+  :root.dark {
+    color-scheme: dark;
+    --background: #0b0c11;
+    --foreground: #ecedf1;
+    --surface: #12131a;
+    --surface-muted: #171922;
+    --surface-raised: #1b1d27;
+    --card: #12131a;
+    --card-foreground: #ecedf1;
+    --popover: #1b1d27;
+    --popover-foreground: #ecedf1;
+    --primary: #6e8ff5;
+    --primary-foreground: #0b0c11;
+    --primary-hover: #86a0f7;
+    --brand-navy: #1b2e5e;
+    --brand-navy-foreground: #ffffff;
+    --brand-accent: #fb7a2e;
+    --brand-accent-foreground: #0b0c11;
+    --brand-accent-hover: #fc8f4c;
+    --brand-accent-subtle: #2a1608;
+    --secondary: #171922;
+    --secondary-foreground: #ecedf1;
+    --muted: #171922;
+    --muted-foreground: #9498a6;
+    --accent: #1b1d27;
+    --accent-foreground: #ecedf1;
+    --destructive: #fb7185;
+    --destructive-foreground: #0b0c11;
+    --danger: #fb7185;
+    --danger-subtle: #2a0f16;
+    --danger-foreground: #0b0c11;
+    --success: #10b981;
+    --success-subtle: #06281f;
+    --success-foreground: #06281f;
+    --warning: #f59e0b;
+    --warning-subtle: #2a1e05;
+    --warning-foreground: #2a1e05;
+    --info: #38bdf8;
+    --info-subtle: #06222e;
+    --info-foreground: #06222e;
+    --border: #262936;
+    --border-strong: #343847;
+    --input: #343847;
+    --ring: #6e8ff5;
+    /*
+      Re-stepped 2026-08 when the first real charts landed (Growth Studio).
+      Slots 1/2/4/5/6 — the categorical ORDER the charts actually assign, see
+      components/charts/palette.ts — were each a little too light for a dark
+      surface: measured in OKLCH they sat at L 0.67–0.72 against a band of
+      0.48–0.67, so a five-series chart read as five equally shouty pastels with
+      no hierarchy. These steps are the same hues pulled into band, verified for
+      the lightness band, the chroma floor, adjacent CVD separation (protan /
+      deutan / tritan), the normal-vision floor and 3:1 contrast against this
+      file's own --surface. Slots 3/7/8 are unchanged and deliberately NOT in the
+      categorical order: #93a7d6 and #94a3b8 are below the chroma floor (they
+      read as gray) and cannot be told apart from each other under deuteranopia.
+      They remain available for non-identity roles.
+    */
+    --chart-1:#5b84f0;--chart-2:#e8681c;--chart-3:#93a7d6;--chart-4:#0da271;
+    --chart-5:#ef4f68;--chart-6:#9575f2;--chart-7:#2dd4bf;--chart-8:#94a3b8;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Smooth transitions for interactive elements */
+  button, a, input, select, textarea {
+    @apply transition-colors duration-200;
+  }
+}
+
+/* Custom scrollbar — token-driven so it follows light/dark mode (was hard-coded
+   slate, which left a jarringly light scrollbar on the dark console). */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: var(--surface-muted);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) var(--surface-muted);
+}
+
+/* Responsive DataTable: below the md breakpoint, reflow each table row into a
+   stacked label:value card (labels come from each cell's data-label = its
+   column header) so data-dense tables stay scannable on phones instead of
+   side-scrolling a wide grid. Single DOM (no duplicated markup). */
+@media (max-width: 767px) {
+  table.dt-responsive thead {
+    display: none;
+  }
+  table.dt-responsive,
+  table.dt-responsive tbody,
+  table.dt-responsive tr,
+  table.dt-responsive td {
+    display: block;
+    width: 100%;
+  }
+  table.dt-responsive tr {
+    padding: 0.25rem 0;
+  }
+  table.dt-responsive td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.375rem 1rem;
+    text-align: right;
+  }
+  table.dt-responsive td:not([data-label]) {
+    justify-content: flex-end;
+  }
+  table.dt-responsive td[data-label]::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    text-align: left;
+    text-transform: uppercase;
+    font-size: 0.6875rem;
+    letter-spacing: 0.02em;
+    color: var(--muted-foreground);
+  }
+}
+

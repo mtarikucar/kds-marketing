@@ -1,0 +1,23 @@
+[package]
+name = "jt_testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+jt_tenancy.workspace = true
+jt_ledger.workspace = true
+jt_app.workspace = true
+jt_pg.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+time.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true
