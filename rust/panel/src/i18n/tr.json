@@ -112,6 +112,10 @@
     },
     "budget": {
       "manage": "Bütçeyi yönetme"
+    },
+    "inbox": {
+      "work": "Gelen kutusunda çalışma",
+      "manage": "Gelen kutusunu yönetme"
     }
   },
   "roleNames": {

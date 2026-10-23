@@ -18,7 +18,9 @@ export type Permission =
   | 'api_keys.manage'
   | 'ledger.read'
   | 'capabilities.manage'
-  | 'budget.manage';
+  | 'budget.manage'
+  | 'inbox.work'
+  | 'inbox.manage';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -26,6 +28,8 @@ export const PERMISSIONS: readonly Permission[] = [
   'ledger.read',
   'capabilities.manage',
   'budget.manage',
+  'inbox.work',
+  'inbox.manage',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */

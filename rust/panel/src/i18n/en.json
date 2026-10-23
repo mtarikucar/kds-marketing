@@ -112,6 +112,10 @@
     },
     "budget": {
       "manage": "Manage the budget"
+    },
+    "inbox": {
+      "work": "Work in the inbox",
+      "manage": "Manage the inbox"
     }
   },
   "roleNames": {
