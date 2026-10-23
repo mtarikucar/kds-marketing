@@ -9,6 +9,7 @@ drop table if exists request_keys;
 drop index if exists messages_external_lookup;
 drop index if exists messages_echo_candidates;
 drop index if exists outbox_message_lookup;
+-- Dropping the outbox also removes its conversation_merged receipt fence.
 drop table if exists outbox;
 drop table if exists event_consumption;
 drop table if exists lost_reasons;

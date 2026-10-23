@@ -438,8 +438,11 @@ impl MergeRepo for MemTenant {
                     {
                         let target = targets[&o.conversation_id];
                         if target != o.conversation_id
-                            && matches!(r.state.as_str(), "queued" | "sending")
+                            && matches!(r.state.as_str(), "sending" | "unknown")
                         {
+                            r.conversation_merged = true;
+                        }
+                        if target != o.conversation_id && r.state == "queued" {
                             r.state = "refused".into();
                             r.last_error = Some("conversation_merged".into());
                             r.updated_at = at;

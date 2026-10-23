@@ -108,8 +108,15 @@ async fn merge_and_undo_late_failures_roll_back() {
 }
 
 #[tokio::test]
-async fn coalescing_refuses_moved_live_outbox_without_undo_resurrection() {
-    jt_testkit::inbox_merge_contract::coalescing_refuses_moved_live_outbox_without_undo_resurrection(
+async fn coalescing_refuses_moved_queued_outbox_without_undo_resurrection() {
+    jt_testkit::inbox_merge_contract::coalescing_refuses_moved_queued_outbox_without_undo_resurrection(
+        std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new()),
+    ).await;
+}
+
+#[tokio::test]
+async fn merge_during_provider_io_reconciles_without_conversation_effects() {
+    jt_testkit::inbox_merge_contract::merge_during_provider_io_reconciles_without_conversation_effects(
         std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new()),
     ).await;
 }

@@ -107,7 +107,7 @@ pub async fn apply(
                 .lock(parent.id)
                 .await?
                 .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
-            if matches!(outbox.state.as_str(), "queued" | "sending") {
+            if outbox.state == "queued" {
                 invalidated.push(parent.id);
             }
         }

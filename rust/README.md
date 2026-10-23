@@ -76,6 +76,8 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 ### Göçler
 
+`0005`/`0006`, #360/#361 birleştirilene kadar yerinde değişebilir; yerel veritabanları yeniden oluşturulur.
+
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
 döndürür. Beş göç vardır:
@@ -1420,9 +1422,12 @@ It parses a scripted WhatsApp fixture, consumes it into person/journey/conversat
 context, sends a scripted successful reply, checks the system Replied event and acknowledges
 inbound events. Everything runs in process without PostgreSQL, network access or provider secrets.
 
-Merging conversations refuses every moved queued/sending outbox entry with
-`conversation_merged`, completes its request-key response and records the refusal in the ledger.
-Undo restores parent bindings but never revives those sends. Replies, context and pending queues
+Merging conversations refuses moved queued outbox entries with `conversation_merged`, completes
+their request-key responses and records refusals in the ledger. Moved sending/unknown entries keep
+their state and gain a durable `conversation_merged` flag: provider outcomes, request-key responses
+and journey Replied events reconcile normally, but never change conversation state or activity.
+Undo preserves both refusals and the flag. Sending entries older than two minutes still recover to
+Unknown without resending. Replies, context and pending queues
 prefer the open journey over newer closed history. A successful receipt still establishes contact
 when inbound or other events leave the journey rank unchanged; newer milestones or any intervening
 closure keep historical-only bookkeeping. Closure is retained in the outbox fence across reopening;

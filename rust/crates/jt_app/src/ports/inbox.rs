@@ -440,6 +440,10 @@ pub struct OutboxRow {
     pub intent: Value,
     pub expected_generation: u32,
     pub fence_snapshot: Option<Value>,
+    /// Set by merge when an in-flight/uncertain send moves; persists across undo and recovery.
+    /// Receipt reconciliation remains valid but must never affect a conversation.
+    #[serde(default)]
+    pub conversation_merged: bool,
     pub state: String,
     pub attempts: u32,
     pub last_error: Option<String>,

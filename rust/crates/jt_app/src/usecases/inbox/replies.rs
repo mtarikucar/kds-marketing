@@ -141,6 +141,7 @@ pub async fn enqueue(
         intent: json!({"kind":input.intent,"request_key":key}),
         expected_generation: c.executor_generation,
         fence_snapshot: None,
+        conversation_merged: false,
         state: "queued".into(),
         attempts: 0,
         last_error: None,
@@ -519,7 +520,10 @@ pub async fn record_result(
         .lock(id)
         .await?
         .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
-    if row.state != "sending" && !(row.state == "unknown" && result.is_ok()) {
+    // Recovery may time out a live provider future. Its eventual result still resolves that
+    // interrupted claim, including a definite failure; completed failures are never replayed.
+    let recovered = row.last_error.as_deref() == Some("send_interrupted");
+    if row.state != "sending" && !(row.state == "unknown" && (result.is_ok() || recovered)) {
         return Ok(output(&row));
     }
     let (status, external, cost) = match result {
@@ -604,7 +608,9 @@ pub async fn record_result(
                     json!({"message_id":row.message_id,"journey_id":journey_id}),
                 )
                 .await?;
-            } else {
+            } else if !row.conversation_merged {
+                // Coalesced sends reconcile receipts and journeys but never conversation activity,
+                // even if undo has restored the original conversation before this receipt.
                 // A moved outbox must not compare revisions from different conversations.
                 // Send/message bookkeeping never invalidates this independent activity fence.
                 let revision = row

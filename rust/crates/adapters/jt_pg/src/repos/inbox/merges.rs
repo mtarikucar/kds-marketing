@@ -73,7 +73,7 @@ impl MergeRepo for PgTenantRepos {
                 let mut row = OutboxRepo::lock(self, o.id)
                     .await?
                     .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
-                if matches!(row.state.as_str(), "queued" | "sending") {
+                if row.state == "queued" {
                     row.state = "refused".into();
                     row.last_error = Some("conversation_merged".into());
                     row.updated_at = at;
@@ -90,7 +90,7 @@ impl MergeRepo for PgTenantRepos {
                     OutboxRepo::update(self, row).await?;
                 }
             }
-            sqlx::query("update outbox set conversation_id=$3 where workspace_id=$1 and id=$2")
+            sqlx::query("update outbox set conversation_merged=conversation_merged or (conversation_id<>$3 and state in ('sending','unknown')),conversation_id=$3 where workspace_id=$1 and id=$2")
                 .bind(ws)
                 .bind(o.id)
                 .bind(targets[&o.conversation_id].as_uuid())

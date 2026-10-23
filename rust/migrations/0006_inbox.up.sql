@@ -139,6 +139,9 @@ create table if not exists outbox (
     foreign key (capability_id, workspace_id) references capabilities (id, workspace_id)
 );
 
+-- Receipt reconciliation survives coalescing an in-flight conversation, including undo.
+alter table outbox add column if not exists conversation_merged boolean not null default false;
+
 create table if not exists request_keys (
     workspace_id uuid not null references workspaces (id),
     key text not null, response jsonb not null, at timestamptz not null,

@@ -95,6 +95,7 @@ impl MergeFixture {
                     intent: json!({"text":"Private intent"}),
                     expected_generation: c.executor_generation,
                     fence_snapshot: None,
+                    conversation_merged: false,
                     state: "queued".into(),
                     attempts: 0,
                     last_error: None,
@@ -636,89 +637,390 @@ pub async fn merge_and_undo_late_failures_roll_back(uow: Arc<dyn UnitOfWork>) {
     );
 }
 
-pub async fn coalescing_refuses_moved_live_outbox_without_undo_resurrection(
+pub async fn coalescing_refuses_moved_queued_outbox_without_undo_resurrection(
     uow: Arc<dyn UnitOfWork>,
 ) {
     use jt_app::usecases::inbox::replies;
-    for state in ["queued", "sending"] {
-        let w = MergeFixture::new(uow.clone()).await;
-        let mut r = uow.tenant(w.f.ws).await.unwrap();
-        let snapshot = r.merges().snapshot(w.source.id, w.keep.id).await.unwrap();
-        let moved = snapshot
-            .outbox
-            .iter()
-            .find(|o| o.conversation_id == w.newer.id)
+    let w = MergeFixture::new(uow.clone()).await;
+    let mut r = uow.tenant(w.f.ws).await.unwrap();
+    let snapshot = r.merges().snapshot(w.source.id, w.keep.id).await.unwrap();
+    let moved = snapshot
+        .outbox
+        .iter()
+        .find(|o| o.conversation_id == w.newer.id)
+        .unwrap();
+    let retained = snapshot
+        .outbox
+        .iter()
+        .find(|o| o.conversation_id == w.older.id)
+        .unwrap();
+    let mut row = r.outbox().get(moved.id).await.unwrap().unwrap();
+    row.state = "queued".into();
+    r.outbox().update(row).await.unwrap();
+    r.commit().await.unwrap();
+    w.apply().await;
+    let mut r = uow.tenant(w.f.ws).await.unwrap();
+    let refused = r.outbox().get(moved.id).await.unwrap().unwrap();
+    assert_eq!(refused.state, "refused");
+    assert_eq!(refused.last_error.as_deref(), Some("conversation_merged"));
+    assert_eq!(
+        r.messages()
+            .get(refused.message_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        MsgStatus::Refused {
+            reason: "conversation_merged".into()
+        }
+    );
+    assert_eq!(
+        r.outbox().get(retained.id).await.unwrap().unwrap().state,
+        "queued"
+    );
+    let ledger = r
+        .ledger()
+        .list(jt_app::ports::LedgerFilter {
+            action_prefix: Some("inbox.reply.result".into()),
+            actor_kind: None,
+            agent_connection_id: None,
+            limit: 10,
+            before_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].entry.payload["reason"], "conversation_merged");
+    drop(r);
+    assert_eq!(
+        replies::send_step(&w.deps, &w.ctx, moved.id)
+            .await
+            .unwrap()
+            .state,
+        "refused"
+    );
+    assert!(
+        !replies::recover_sending(&w.deps, &w.ctx, moved.id)
+            .await
+            .unwrap()
+    );
+    w.undo().await;
+    let mut r = uow.tenant(w.f.ws).await.unwrap();
+    let restored = r.outbox().get(moved.id).await.unwrap().unwrap();
+    assert_eq!(restored.conversation_id, w.newer.id);
+    assert_eq!(restored.state, "refused");
+    assert_eq!(
+        r.messages()
+            .get(restored.message_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        MsgStatus::Refused {
+            reason: "conversation_merged".into()
+        }
+    );
+}
+
+/// Provider I/O is already underway when a merge moves the outbound message.
+/// Reconciliation must preserve the receipt, request response and journey effect, without
+/// touching either the survivor or a conversation restored by undo.
+pub async fn merge_during_provider_io_reconciles_without_conversation_effects(
+    uow: Arc<dyn UnitOfWork>,
+) {
+    use crate::fakes::{ScriptedConnector, ScriptedRegistry};
+    use jt_app::{ports::connectors::SendReceipt, usecases::inbox::replies};
+    use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
+    use jt_connector::{ConnectorError, Credential, Provider};
+    let base_deps = deps(uow.clone());
+    for scenario in [
+        "sent",
+        "failed",
+        "unknown",
+        "recovered",
+        "recovered_failed",
+        "recovered_unknown",
+        "undone",
+    ] {
+        let f = Fixture::new(uow.clone()).await;
+        let mut deps = base_deps.clone();
+        let connector = Arc::new(ScriptedConnector::new(Provider::Netgsm));
+        deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(connector.clone()));
+        let source = f.insert_person("Source").await;
+        let keeper = f.insert_person("Keeper").await;
+        let journey = f.journey(source.id);
+        let mut cap = Capability::new(
+            CapabilityId::new_v7(),
+            f.ws,
+            NewCapability {
+                kind_key: "sms_line".into(),
+                name: "SMS".into(),
+                ..Default::default()
+            },
+            FIXED_NOW,
+        )
+        .unwrap();
+        cap.status = StoredStatus::Verified;
+        cap.last_verified_at = Some(FIXED_NOW);
+        let sealed = deps
+            .seal
+            .seal(
+                f.ws,
+                &serde_json::to_vec(&Credential::NetgsmSms {
+                    usercode: "test".into(),
+                    password: "secret".into(),
+                    msgheader: "ACME".into(),
+                })
+                .unwrap(),
+            )
             .unwrap();
-        let retained = snapshot
-            .outbox
-            .iter()
-            .find(|o| o.conversation_id == w.older.id)
-            .unwrap();
-        let mut row = r.outbox().get(moved.id).await.unwrap().unwrap();
-        row.state = state.into();
-        r.outbox().update(row).await.unwrap();
-        r.commit().await.unwrap();
-        w.apply().await;
-        let mut r = uow.tenant(w.f.ws).await.unwrap();
-        let refused = r.outbox().get(moved.id).await.unwrap().unwrap();
-        assert_eq!(refused.state, "refused", "{state}");
-        assert_eq!(refused.last_error.as_deref(), Some("conversation_merged"));
-        assert_eq!(
-            r.messages()
-                .get(refused.message_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .status,
-            MsgStatus::Refused {
-                reason: "conversation_merged".into()
-            }
-        );
-        assert_eq!(
-            r.outbox().get(retained.id).await.unwrap().unwrap().state,
-            "queued"
-        );
-        let ledger = r
-            .ledger()
-            .list(jt_app::ports::LedgerFilter {
-                action_prefix: Some("inbox.reply.result".into()),
-                actor_kind: None,
-                agent_connection_id: None,
-                limit: 10,
-                before_id: None,
+        let mut r = uow.tenant(f.ws).await.unwrap();
+        let cid = cap.id;
+        r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+        r.identities()
+            .insert(Identity {
+                id: IdentityId::new_v7(),
+                workspace_id: f.ws,
+                person_id: source.id,
+                channel: IdentityChannel::Phone,
+                value_normalized: "+905321234567".into(),
+                value_display: "test".into(),
+                active: true,
+                first_seen_at: FIXED_NOW,
             })
             .await
             .unwrap();
-        assert_eq!(ledger.len(), 1);
-        assert_eq!(ledger[0].entry.payload["reason"], "conversation_merged");
-        drop(r);
+        r.strategy()
+            .insert(jt_strategy::StrategyVersion {
+                id: jt_strategy::StrategyVersionId::new_v7(),
+                workspace_id: f.ws,
+                number: 1,
+                status: jt_strategy::VersionStatus::Approved,
+                sections: Default::default(),
+                created_at: FIXED_NOW,
+                created_by: Actor::Human { user_id: f.user },
+                submitted_at: Some(FIXED_NOW),
+                approved_at: Some(FIXED_NOW),
+                approved_by: Some(f.user),
+                archived_at: None,
+            })
+            .await
+            .unwrap();
+        f.insert_journey(r.as_mut(), &journey).await.unwrap();
+        r.people()
+            .set_write_time(FIXED_NOW - Duration::minutes(1))
+            .await
+            .unwrap();
+        let older = r
+            .conversations()
+            .upsert_on_inbound(f.conversation(keeper.id, cid))
+            .await
+            .unwrap();
+        let snoozed = ConvState::Snoozed {
+            until: FIXED_NOW + Duration::days(1),
+        };
+        r.conversations()
+            .update_state(older.id, snoozed.clone(), None)
+            .await
+            .unwrap();
+        r.people().set_write_time(FIXED_NOW).await.unwrap();
+        let newer = r
+            .conversations()
+            .upsert_on_inbound(f.conversation(source.id, cid))
+            .await
+            .unwrap();
+        let row = MergeRow {
+            id: MergeId::new_v7(),
+            workspace_id: f.ws,
+            source_id: source.id,
+            target_id: keeper.id,
+            decision: MergeDecision::Suggest(vec![MergeConflict::DisplayName]),
+            conflicts: vec![MergeConflict::DisplayName],
+            status: "suggested".into(),
+            moved_snapshot: json!({}),
+            at: FIXED_NOW,
+            applied_by: None,
+            undone_at: None,
+        };
+        r.merges().insert(row.clone()).await.unwrap();
+        r.commit().await.unwrap();
+        let ctx = Ctx {
+            workspace_id: f.ws,
+            actor: Actor::Human { user_id: f.user },
+            permissions: SystemRole::Owner.permissions(),
+            role_key: Some("owner".into()),
+            now: FIXED_NOW,
+            agent_connection_id: None,
+        };
+        let input = || {
+            serde_json::from_value(
+                json!({"text":"Hello", "intent":"reply", "request_key":"merge-send"}),
+            )
+            .unwrap()
+        };
+        let q = match replies::enqueue(&deps, &ctx, newer.id, input())
+            .await
+            .unwrap()
+        {
+            replies::Enqueued::New(id) => id,
+            _ => panic!("new reply expected"),
+        };
+        let (hook_deps, hook_ctx) = (deps.clone(), ctx.clone());
+        connector.push_send_hook(move || async move {
+            merge::apply(
+                &hook_deps,
+                &hook_ctx,
+                row.id,
+                merge::ApplyInput { keep: keeper.id },
+            )
+            .await
+            .unwrap();
+            let mut r = hook_deps.uow.tenant(hook_ctx.workspace_id).await.unwrap();
+            let moved = r.outbox().get(q).await.unwrap().unwrap();
+            assert_eq!(moved.state, "sending", "{scenario}");
+            assert!(moved.conversation_merged);
+            assert_eq!(
+                moved.updated_at, FIXED_NOW,
+                "merge must not restart recovery timeout"
+            );
+            assert_eq!(moved.attempts, 1);
+            assert_eq!(moved.conversation_id, older.id);
+            assert_eq!(
+                r.messages()
+                    .get(moved.message_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                MsgStatus::Queued
+            );
+            assert_eq!(
+                r.request_keys()
+                    .get("merge-send", FIXED_NOW)
+                    .await
+                    .unwrap()
+                    .unwrap()["state"],
+                "queued"
+            );
+            drop(r);
+            if scenario.starts_with("recovered") {
+                let mut later = hook_ctx.clone();
+                later.now += Duration::minutes(3);
+                assert!(
+                    replies::recover_sending(&hook_deps, &later, q)
+                        .await
+                        .unwrap()
+                );
+                assert_eq!(
+                    replies::send_step(&hook_deps, &later, q)
+                        .await
+                        .unwrap()
+                        .state,
+                    "unknown"
+                );
+            }
+            if scenario == "undone" {
+                merge::undo(
+                    &hook_deps,
+                    &hook_ctx,
+                    row.id,
+                    merge::UndoInput { confirm: true },
+                )
+                .await
+                .unwrap();
+            }
+        });
+        connector.push_sms(match scenario {
+            "failed" | "recovered_failed" => Err(ConnectorError::auth("rejected")),
+            "unknown" | "recovered_unknown" => Err(ConnectorError::unknown("uncertain write")),
+            _ => Ok(SendReceipt {
+                provider_id: "merge-receipt".into(),
+                cost_minor: Some(17),
+            }),
+        });
+        let expected = match scenario {
+            "failed" | "recovered_failed" => "failed",
+            "unknown" | "recovered_unknown" => "unknown",
+            _ => "sent",
+        };
+        let response = replies::send_step(&deps, &ctx, q).await.unwrap();
+        assert_eq!(response.state, expected, "{scenario}");
+        assert_eq!(connector.calls().len(), 1);
+        let mut r = uow.tenant(f.ws).await.unwrap();
+        let stored = r.outbox().get(q).await.unwrap().unwrap();
+        assert_eq!(stored.state, expected);
         assert_eq!(
-            replies::send_step(&w.deps, &w.ctx, moved.id)
-                .await
-                .unwrap()
-                .state,
-            "refused"
-        );
-        assert!(
-            !replies::recover_sending(&w.deps, &w.ctx, moved.id)
-                .await
-                .unwrap()
-        );
-        w.undo().await;
-        let mut r = uow.tenant(w.f.ws).await.unwrap();
-        let restored = r.outbox().get(moved.id).await.unwrap().unwrap();
-        assert_eq!(restored.conversation_id, w.newer.id);
-        assert_eq!(restored.state, "refused");
-        assert_eq!(
-            r.messages()
-                .get(restored.message_id)
-                .await
-                .unwrap()
-                .unwrap()
-                .status,
-            MsgStatus::Refused {
-                reason: "conversation_merged".into()
+            stored.last_error.as_deref(),
+            match expected {
+                "failed" => Some("auth"),
+                "unknown" => Some("unknown"),
+                _ => None,
             }
         );
+        assert!(
+            stored.conversation_merged,
+            "merge flag survives receipt, recovery and undo"
+        );
+        let message = r
+            .messages()
+            .get(response.message_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            message.status,
+            match expected {
+                "failed" => MsgStatus::Failed,
+                "unknown" => MsgStatus::Unknown,
+                _ => MsgStatus::Sent,
+            }
+        );
+        let successful = expected == "sent";
+        assert_eq!(
+            message.external_id.as_deref(),
+            successful.then_some("merge-receipt")
+        );
+        assert_eq!(message.cost_minor, successful.then_some(17));
+        assert_eq!(
+            r.request_keys().get("merge-send", FIXED_NOW).await.unwrap(),
+            Some(serde_json::to_value(&response).unwrap())
+        );
+        let j = r.journeys().get(journey.id).await.unwrap().unwrap();
+        assert_eq!(
+            j.status,
+            if successful {
+                JourneyStatus::Contacted
+            } else {
+                JourneyStatus::New
+            }
+        );
+        let events = r.journeys().events(j.id, 20).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.kind == JourneyEventKind::Replied)
+                .count(),
+            usize::from(successful)
+        );
+        let survivor = r.conversations().get(older.id).await.unwrap().unwrap();
+        assert_eq!(survivor.state, snoozed);
+        assert_eq!(survivor.last_outbound_at, None);
+        if scenario == "undone" {
+            let restored = r.conversations().get(newer.id).await.unwrap().unwrap();
+            assert_eq!(restored.state, newer.state);
+            assert_eq!(restored.last_outbound_at, None);
+        }
+        drop(r);
+        assert_eq!(replies::send_step(&deps, &ctx, q).await.unwrap(), response);
+        let replay = replies::reply(&deps, &ctx, stored.conversation_id, input())
+            .await
+            .unwrap();
+        assert_eq!(replay, response);
+        let report =
+            jt_app::usecases::jobs::run_outbox_recover(&deps, FIXED_NOW + Duration::minutes(6))
+                .await;
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.touched, 0);
+        assert_eq!(connector.calls().len(), 1);
     }
 }
