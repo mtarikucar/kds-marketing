@@ -271,12 +271,12 @@ async fn deferred_reclaimed_by_next_version() {
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     let candidates = r
         .inbound_events()
-        .list_for_consumer("inbox@2", None, 100)
+        .list_for_consumer("inbox@3", None, 100)
         .await
         .unwrap();
     assert_eq!(candidates.len(), s.consumption.len());
     for e in candidates {
-        assert!(r.consumption().try_claim("inbox@2", e.id).await.unwrap());
+        assert!(r.consumption().try_claim("inbox@3", e.id).await.unwrap());
     }
 }
 #[tokio::test]
@@ -1160,4 +1160,97 @@ async fn call_events_are_scoped_bounded_ordered_and_uncapped() {
         std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new()),
     )
     .await;
+}
+
+#[tokio::test]
+async fn email_matches_normalized_identity() {
+    let w = world().await;
+    let c = cap(&w, "mailbox").await;
+    for (n, sender) in ["ADA@Example.com", "ada@example.com"].iter().enumerate() {
+        put(&w, Some(c), Provider::Mail, InboundEventDraft {
+            external_id: format!("imap:account:INBOX:1:{n}"),
+            kind: EventKind::Message,
+            payload: json!({"from":sender,"to":["support@example.com"],"subject":"Help","text":"Hello","message_id":format!("<in-{n}@example.com>")}),
+            occurred_at: None,
+        }, n as i64).await;
+    }
+    let report = run(&w).await;
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.changed, 2);
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.people.len(), 1);
+    assert_eq!(s.inbox.identities[0].value_normalized, "ada@example.com");
+    assert_eq!(s.inbox.messages.len(), 2);
+    assert_eq!(s.inbox.conversations.len(), 1);
+    assert_eq!(run(&w).await.changed, 0);
+}
+
+#[tokio::test]
+async fn iys_hook_and_bounce_use_adapter_fixtures() {
+    let mut w = world().await;
+    w.owner_ctx.now += Duration::days(2);
+    let c = cap(&w, "sms_line").await;
+    let p=jt_app::usecases::inbox::people::create(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"+905000000061"},{"channel":"email","value":"ada@example.com"}],"source":"form"})).unwrap()).await.unwrap().person;
+    let mut draft = netgsm("iys", NetgsmPurpose::Iys).remove(0);
+    draft.payload["occurred_at"] = json!(
+        draft
+            .occurred_at
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    );
+    let id = put(&w, Some(c), Provider::Netgsm, draft, 0).await;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.consumption().try_claim("inbox@1", id).await.unwrap();
+    r.consumption()
+        .record(
+            "inbox@1",
+            id,
+            jt_app::ports::inbox::ConsumptionOutcome {
+                consumed_at: w.owner_ctx.now,
+                outcome: "deferred".into(),
+            },
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    assert_eq!(run(&w).await.changed, 1);
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let rows = r.consents().list(p.id).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, ConsentKind::Explicit);
+    assert_eq!(rows[0].sync_state, SyncState::Sent);
+    drop(r);
+    let mail = cap(&w, "mailbox").await;
+    let raw = include_bytes!("../../adapters/jt_mail/tests/fixtures/withdrawal.eml");
+    let draft = jt_mail::parse_message("account", "INBOX", 42, 1, raw, false).unwrap();
+    // Fixture sender is retained: create exactly the identity produced by the adapter.
+    jt_app::usecases::inbox::people::add_identity(
+        &w.deps,
+        &w.owner_ctx,
+        p.id,
+        serde_json::from_value(json!({"channel":"email","value":draft.payload["from"]})).unwrap(),
+    )
+    .await
+    .unwrap();
+    put(&w, Some(mail), Provider::Mail, draft, 1).await;
+    assert_eq!(run(&w).await.changed, 1);
+    assert_eq!(run(&w).await.changed, 0);
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    assert!(
+        r.consents()
+            .list(p.id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|c| c.kind == ConsentKind::Withdrawn && c.channel == Channel::Email)
+    );
+    assert!(
+        r.suppressions()
+            .list(p.id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|s| s.reason == SuppressionReason::Unsubscribe)
+    );
 }

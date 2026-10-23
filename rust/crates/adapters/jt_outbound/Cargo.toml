@@ -43,5 +43,10 @@ path = "tests/production_build.rs"
 name = "public_host"
 path = "tests/public_host.rs"
 
+[[test]]
+name = "socket"
+path = "tests/socket.rs"
+required-features = ["test-loopback"]
+
 [lints]
 workspace = true

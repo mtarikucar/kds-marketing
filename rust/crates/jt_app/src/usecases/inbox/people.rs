@@ -107,6 +107,7 @@ pub(crate) async fn match_or_create(
     let mut matches = Vec::new();
     for identity in &input.identities {
         let value = normalize(r, identity).await?;
+        super::erasure::check_identity(r, identity.channel, &value).await?;
         let found = r
             .people()
             .find_by_identity(identity.channel, &value)
@@ -295,6 +296,17 @@ async fn suggest(
     b: &Person,
     split: bool,
 ) -> Result<Value, AppError> {
+    // Unresolved form retries must keep one actionable review item for this pair.
+    if split
+        && let Some(existing) = r.merges().list_all().await?.into_iter().find(|row| {
+            row.status == "suggested"
+                && row.moved_snapshot["reason"] == "identity_split"
+                && ((row.source_id == a.id && row.target_id == b.id)
+                    || (row.source_id == b.id && row.target_id == a.id))
+        })
+    {
+        return Ok(json!({"id":existing.id,"person_ids":[a.id,b.id],"decision":existing.decision}));
+    }
     let decision = decide_merge(&view(r, a).await?, &view(r, b).await?);
     let conflicts = match &decision {
         MergeDecision::Suggest(c) => c.clone(),
@@ -326,6 +338,7 @@ pub async fn add_identity(
     r.people().lock_workspace().await?;
     let person = resolve(r.as_mut(), id).await?;
     let value = normalize(r.as_mut(), &input).await?;
+    super::erasure::check_identity(r.as_mut(), input.channel, &value).await?;
     let out = if let Some(other) = r.people().find_by_identity(input.channel, &value).await? {
         if other.id == person.id {
             json!({"status":"added","person_id":person.id})

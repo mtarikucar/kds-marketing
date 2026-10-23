@@ -812,6 +812,7 @@
       "actionsLabel": "Bağlantı işlemleri",
       "connect": "Bağla",
       "reconnect": "Yeniden bağla",
+      "iys": "İYS ayarla",
       "probe": "Yokla",
       "health": {
         "ok": "Yoklama başarılı · {{when}}",
@@ -860,12 +861,34 @@
     }
   },
   "connect": {
+    "iys": {
+      "title": "İYS bağlantısı (isteğe bağlı)",
+      "body": "İYS izinlerini eşitlemek için SMS hattınızla aynı kullanıcı kodunu ve İYS parolanızı girin. SMS bağlantınız korunur.",
+      "usercode": "İYS kullanıcı kodu",
+      "password": "İYS parolası",
+      "brandCode": "İYS marka kodu",
+      "submit": "İYS bağlantısını kaydet",
+      "saved": "İYS bağlantısı kaydedildi.",
+      "first": "İYS bağlantısını eklemek için önce SMS hattını kaydedin."
+    },
+    "mail": {
+      "title": "E-posta kutusu bağla",
+      "body": "SMTP ve IMAP bilgilerinizi girin. Bağlantı, hesabınızı ve gönderici adresinizi TLS ile doğrular.",
+      "name": "Posta kutusu adı",
+      "smtp_host": "SMTP sunucusu",
+      "imap_host": "IMAP sunucusu",
+      "username": "Posta kutusu kullanıcı adı",
+      "password": "Posta kutusu parolası",
+      "from_address": "Gönderici e-posta adresi",
+      "tls": "TLS modu"
+    },
     "title": "Hesap bağla",
     "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta ve X için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
     "open": "Hesap bağla",
     "kindsLabel": "Bağlanacak hesap türü",
     "chooseKind": "Önce bağlanacak hesap türünü seçin.",
     "providers": {
+      "mail": "E-posta",
       "meta": "Meta",
       "netgsm": "NetGSM",
       "x": "X"
@@ -1023,6 +1046,39 @@
     }
   },
   "inbox": {
+    "erasure": {
+      "open": "Kişisel verileri sil",
+      "description": "İletişim kimlikleri, mesaj ve not metinleri, randevu bilgileri ve dosya referansları kalıcı olarak silinir. Anonim yolculuk, olay ve komisyon kayıtları ile tutarlar korunur. Ajanınızın sakladığı dosyalar silinmez.",
+      "confirm": "Onaylamak için “{{phrase}}” yazın.",
+      "submit": "Kalıcı olarak sil",
+      "phrase": "SİL"
+    },
+    "commissions": {
+      "title": "Komisyonlar",
+      "description": "Kazanılan yolculukların insan temsilci komisyonları.",
+      "filterState": "Komisyon durumu",
+      "all": "Tümü",
+      "payee": "Hak sahibi",
+      "unassigned": "Atanmamış",
+      "snapshotRate": "Kazanıldığı andaki oran: %{{rate}}",
+      "noPayeeHelp": "Kazanıldığı anda hak sahibi yoktu. Bu kayıt ödenemez; atanmamış takip görevi oluşturuldu.",
+      "approve": "Onayla",
+      "pay": "Ödendi olarak işaretle",
+      "rates": "Komisyon oranı ayarla",
+      "rateHelp": "100 baz puan = %1. Temsilci oranı varsayılanın önüne geçer. Değişiklikler yalnız sonraki kazanımlara uygulanır.",
+      "rateTarget": "Oranın kapsamı",
+      "defaultRate": "Çalışma alanı varsayılanı",
+      "rate": "Oran (baz puan)",
+      "save": "Oranı kaydet",
+      "saved": "Oran kaydedildi.",
+      "state": {
+        "no_payee": "Hak sahibi yok",
+        "pending": "Onay bekliyor",
+        "approved": "Onaylandı",
+        "paid": "Ödendi"
+      }
+    },
+    "emailSubject": "E-posta konusu",
     "title": "Gelen kutusu",
     "description": "Konuşmaları yanıtlayın, yolculukları ve takip işlerini yönetin.",
     "queues": "Kuyruklar",
@@ -1174,6 +1230,96 @@
         "email": "E-posta adresleri farklı",
         "phone": "Telefon numaraları farklı",
         "company": "Şirketler farklı"
+      }
+    },
+    "compliance": {
+      "channels": {
+        "email": "E-posta",
+        "sms": "SMS",
+        "phone": "Telefon",
+        "whats_app": "WhatsApp",
+        "messenger": "Messenger",
+        "instagram_dm": "Instagram DM",
+        "webchat": "Webchat"
+      },
+      "kinds": {
+        "explicit": "Açık izin",
+        "implied_by_contract": "Sözleşmeye dayalı izin",
+        "withdrawn": "Geri çekildi"
+      },
+      "sources": {
+        "form": "Form",
+        "agent": "Ajan",
+        "import": "İçe aktarma",
+        "iys_sync": "İYS",
+        "customer": "Müşteri"
+      },
+      "reasons": {
+        "manual": "Elle engelleme",
+        "unsubscribe": "Abonelikten çıkma",
+        "bounce": "Geri sıçrama",
+        "complaint": "Şikâyet"
+      },
+      "sync": {
+        "pending": "İYS bekliyor",
+        "sent": "İYS eşitlendi",
+        "failed": "İYS yeniden denenecek",
+        "failed_final": "İYS için insan müdahalesi gerekiyor"
+      },
+      "intents": {
+        "reply": "Müşteriye yanıt",
+        "commercial": "Ticari ileti"
+      },
+      "title": "İzin ve engellemeler",
+      "channel": "Kanal",
+      "kind": "Karar",
+      "source": "Kaynak",
+      "at": "Karar zamanı",
+      "record": "İzin kaydet",
+      "add": "Seçili kanalı engelle",
+      "remove": "Engeli kaldır",
+      "removeNamed": "Engeli kaldır: {{channel}} / {{reason}}",
+      "send": "Ticari mesaj gönder",
+      "intent": "Gönderim amacı",
+      "sendHint": "Ticari ileti için geçerli izin gerekir. Engellemeler gönderimden hemen önce yeniden denetlenir."
+    },
+    "offers": {
+      "quotes": "Teklifler",
+      "send": "Teklif gönder",
+      "accept": "Teklifi kabul et",
+      "validUntil": "Geçerlilik sonu",
+      "file": "Dosya referansı (isteğe bağlı)",
+      "fileHint": "Dosya referansı ajana aittir; dosya burada yüklenmez veya indirilmez.",
+      "text": "Mesaj",
+      "delivery": "Teslim durumu",
+      "notification": "Bildirim",
+      "deliveryState": {
+        "queued": "Sırada",
+        "sending": "Gönderiliyor",
+        "sent": "Gönderildi",
+        "delivered": "Teslim edildi",
+        "failed": "Gönderilemedi",
+        "unknown": "Belirsiz; tekrar göndermeyin.",
+        "refused": "Reddedildi",
+        "unavailable": "E-posta bağlantısı veya adresi yok"
+      },
+      "quoteState": {
+        "sent": "Gönderim kaydı",
+        "accepted": "Kabul edildi",
+        "expired": "Süresi doldu"
+      },
+      "appointments": "Randevular",
+      "book": "Randevu oluştur",
+      "start": "Başlangıç",
+      "end": "Bitiş",
+      "location": "Yer",
+      "cancel": "Randevuyu iptal et",
+      "held": "Görüşme yapıldı",
+      "internal": "Dahili randevu; uygun e-posta bağlantısıyla ICS bildirimi gönderilir. Hatırlatma bir saat öncedir. Takvim uygunluğu denetlenmez. Saatler yerel saat diliminizdedir.",
+      "appointmentState": {
+        "booked": "Planlandı",
+        "held": "Yapıldı",
+        "cancelled": "İptal edildi"
       }
     }
   }

@@ -265,6 +265,31 @@ impl UnitOfWork for FailingInserts {
 
 #[async_trait]
 impl TenantRepos for FailingTenant {
+    fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
+        self.0.consents()
+    }
+    fn suppressions(&mut self) -> &mut dyn jt_app::ports::inbox::SuppressionRepo {
+        self.0.suppressions()
+    }
+    fn quotes(&mut self) -> &mut dyn jt_app::ports::inbox::QuoteRepo {
+        self.0.quotes()
+    }
+    fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
+        self.0.appointments()
+    }
+    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
+        self.0.commissions()
+    }
+    fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {
+        self.0.erasure()
+    }
+    fn mail_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::MailCursorRepo {
+        self.0.mail_cursors()
+    }
+    fn attribution(&mut self) -> &mut dyn jt_app::ports::inbox::AttributionRepo {
+        self.0.attribution()
+    }
+
     fn people(&mut self) -> &mut dyn jt_app::ports::inbox::PersonRepo {
         self.0.people()
     }

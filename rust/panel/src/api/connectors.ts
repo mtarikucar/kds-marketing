@@ -36,8 +36,14 @@ export function confirmAssets(pendingId: string, selected: string[]): Promise<Ca
 }
 
 /** The credential exactly as the server reads it: its kind and fields, an optional one only when set. */
-function credentialBody(credential: CredentialInput): Record<string, string> {
+function credentialBody(credential: CredentialInput): Record<string, string | number> {
   switch (credential.kind) {
+    case 'mailbox':
+      return { kind: credential.kind, smtp_host: credential.smtp_host, smtp_port: credential.smtp_port,
+        imap_host: credential.imap_host, imap_port: credential.imap_port, username: credential.username,
+        password: credential.password, from_address: credential.from_address, tls: credential.tls };
+    case 'netgsm_iys':
+      return { kind: credential.kind, usercode: credential.usercode, password: credential.password, brand_code: credential.brand_code };
     case 'netgsm_sms':
       return {
         kind: credential.kind,

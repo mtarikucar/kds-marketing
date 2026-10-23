@@ -95,7 +95,7 @@ async fn two_concurrent_first_messages_one_person_journey() {
     assert_eq!(r.journeys().events(j.id, 100).await.unwrap().len(), 2);
     assert!(
         r.inbound_events()
-            .list_for_consumer("inbox@1", None, 100)
+            .list_for_consumer("inbox@2", None, 100)
             .await
             .unwrap()
             .is_empty()
@@ -147,7 +147,7 @@ async fn claim_effect_completion_rollback_and_retry() {
     assert_eq!(r.people().search("", 100).await.unwrap().len(), 1);
     assert!(
         r.inbound_events()
-            .list_for_consumer("inbox@1", None, 100)
+            .list_for_consumer("inbox@2", None, 100)
             .await
             .unwrap()
             .is_empty()

@@ -19,6 +19,7 @@
 //! The provider adapters and the platform's provider apps have their own module,
 //! [`connectors`].
 
+pub mod compliance;
 pub mod connectors;
 pub mod inbox;
 use inbox::*;
@@ -123,7 +124,7 @@ pub trait ChannelCatalog: Send + Sync {
 /// The tier is one set of hosts per workspace, not counted per capability: a caller revoking a
 /// host first makes sure no other capability of the workspace still needs it. It lives in memory,
 /// so every method is synchronous, and it starts empty: it is rebuilt from the capability records
-/// at start-up (`rebuild_from`).
+/// at start-up and before mail calls (`rebuild_from`).
 pub trait TenantHostRegistry: Send + Sync {
     /// `Ok` when `host` (`host` or `host:port`, an IPv6 literal in brackets) may enter a tenant
     /// tier, else `VALIDATION` "host is not public" naming it in `details.host`. Changes nothing:
@@ -818,6 +819,14 @@ pub struct CapabilityFilter {
     pub group_id: Option<CapabilityGroupId>,
 }
 
+/// One locked capability-row snapshot for IYS sync. Kept internal to credential use cases;
+/// never serialized or debug-printed because both slots contain sealed secrets.
+pub struct IysCapabilitySnapshot {
+    pub capability: Capability,
+    pub sms_sealed: Option<Vec<u8>>,
+    pub iys_sealed: Option<Vec<u8>>,
+}
+
 /// The workspace's capabilities.
 ///
 /// A kind may have many capabilities (B10), but one external account (the same `kind_key` and
@@ -885,6 +894,23 @@ pub trait CapabilityRepo: Send + Sync {
     /// Only the connector use cases call it, to open the blob with the `SecretBox`; no use case
     /// returns what it gives back.
     async fn read_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError>;
+    /// Replaces only the separate IYS sealed slot and advances updated_at; unknown/foreign ids
+    /// are NOT_FOUND. Never changes the primary SMS credential or has_sealed_config.
+    async fn set_iys_sealed(
+        &mut self,
+        id: CapabilityId,
+        sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// Reads the capability and BOTH sealed slots in one statement under a row lock, held
+    /// until commit/drop. Unknown/foreign ids return None. A list result is only an ID hint:
+    /// callers recheck liveness and use the brand INSIDE the sealed IYS credential.
+    async fn lock_iys_snapshot(
+        &mut self,
+        id: CapabilityId,
+    ) -> Result<Option<IysCapabilitySnapshot>, AppError>;
+    /// Reads the separate IYS slot; unknown/foreign ids are NOT_FOUND. Never returned publicly.
+    async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError>;
     /// Sets the stored status and `updated_at = at`. An unknown id is `NOT_FOUND`; bringing a
     /// retired capability back while another live one holds its external account is `CONFLICT`
     /// (in Postgres the transaction is then aborted).
@@ -1121,6 +1147,7 @@ pub trait InboundEventRepo: Send + Sync {
 
     /// Consumer-specific traversal, oldest (received_at,id) first; filters claims BEFORE limit,
     /// ignoring processed_at. Restart without a cursor each sweep so rolled-back events retry.
+    /// Includes inbox@2 Meta LeadGen rows previously marked deferred, matching try_claim.
     async fn list_for_consumer(
         &mut self,
         consumer: &str,
@@ -1359,25 +1386,32 @@ pub const MAX_PENDING_JOBS: u32 = 50;
 /// The workspace's sent messages whose delivery is not final yet, by the provider's job id (the
 /// `provider_id` of a [`connectors::SendReceipt`]), and what the delivery reports said of them.
 ///
-/// The messages themselves are the next milestone's (M2 stores them in its own table); until
-/// then the Postgres bundle holds none: `pending_job_ids` answers nothing and `record_status`
-/// writes nothing, so the delivery-report poll runs and never reaches a provider.
+/// Only queued/sent jobs created less than 72 hours ago are polled. Missing provider IDs and
+/// unknown submissions are excluded. Reads and updates always include the capability scope.
 #[async_trait]
 pub trait OutboundJobRepo: Send + Sync {
-    /// The job ids of workspace `ws`'s messages whose delivery is not final, oldest first, at
-    /// most `limit` (clamped to `1..=MAX_PENDING_JOBS`). `ws` must be the bundle's workspace,
+    async fn insert(&mut self, row: OutboundJobRow) -> Result<(), AppError>;
+    async fn get(
+        &mut self,
+        capability: CapabilityId,
+        id: Uuid,
+    ) -> Result<Option<OutboundJobRow>, AppError>;
+    /// The pending job ids of capability `capability_id` in workspace `ws`, oldest first,
+    /// at most `limit` (clamped to `1..=MAX_PENDING_JOBS`). `ws` must be the bundle's workspace,
     /// else `INTERNAL`.
     async fn pending_job_ids(
         &mut self,
         ws: WorkspaceId,
+        capability_id: CapabilityId,
         limit: u32,
     ) -> Result<Vec<String>, AppError>;
-    /// Records each status against the job it names in workspace `ws`; a status naming a job
-    /// the workspace does not hold is ignored. `ws` must be the bundle's workspace, else
-    /// `INTERNAL`.
+    /// Records each status against the job it names in capability `capability_id` and workspace
+    /// `ws`; a status naming a job outside that pair is ignored. `ws` must be the bundle's
+    /// workspace, else `INTERNAL`.
     async fn record_status(
         &mut self,
         ws: WorkspaceId,
+        capability_id: CapabilityId,
         statuses: Vec<connectors::DeliveryStatus>,
     ) -> Result<(), AppError>;
 }
@@ -1416,6 +1450,15 @@ pub trait PlatformSessionRepo: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait TenantRepos: Send + Sync {
+    fn consents(&mut self) -> &mut dyn ConsentRepo;
+    fn suppressions(&mut self) -> &mut dyn SuppressionRepo;
+    fn quotes(&mut self) -> &mut dyn QuoteRepo;
+    fn appointments(&mut self) -> &mut dyn AppointmentRepo;
+    fn commissions(&mut self) -> &mut dyn CommissionRepo;
+    fn erasure(&mut self) -> &mut dyn ErasureRepo;
+    fn mail_cursors(&mut self) -> &mut dyn MailCursorRepo;
+    fn attribution(&mut self) -> &mut dyn AttributionRepo;
+
     fn people(&mut self) -> &mut dyn PersonRepo;
     fn identities(&mut self) -> &mut dyn IdentityRepo;
     fn conversations(&mut self) -> &mut dyn ConversationRepo;

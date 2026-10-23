@@ -6,7 +6,7 @@ use crate::{
 };
 use axum::{Json, extract::State};
 use jt_app::usecases::inbox::{
-    JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, tasks,
+    JourneyId, MergeId, PersonId, TaskId, commissions, dictionaries, journeys, merge, people, tasks,
 };
 use serde_json::Value;
 
@@ -246,4 +246,140 @@ pub async fn context(
     ApiPath(id): ApiPath<jt_app::usecases::inbox::ConversationId>,
 ) -> Result<Json<Value>, ApiError> {
     to_json(&jt_app::usecases::inbox::context::context(&state.deps, &ctx, id).await?)
+}
+
+use jt_app::usecases::inbox::consent;
+pub async fn consent_record(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<consent::RecordInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&consent::record_consent(&state.deps, &ctx, id, input).await?)
+}
+pub async fn consent_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&consent::list(&state.deps, &ctx, id).await?)
+}
+pub async fn suppressions_add(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<consent::SuppressionInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&consent::add_suppression(&state.deps, &ctx, id, input).await?)
+}
+pub async fn suppressions_remove(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath((id, channel, reason)): ApiPath<(
+        PersonId,
+        consent::Channel,
+        consent::SuppressionReason,
+    )>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(
+        &consent::remove_suppression(
+            &state.deps,
+            &ctx,
+            id,
+            consent::SuppressionInput { channel, reason },
+        )
+        .await?,
+    )
+}
+pub async fn send(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<jt_app::usecases::inbox::replies::SendInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&jt_app::usecases::inbox::replies::send(&state.deps, &ctx, id, input).await?)
+}
+
+use jt_app::usecases::inbox::{appointments, quotes};
+pub async fn quotes_send(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<JourneyId>,
+    ApiJson(input): ApiJson<quotes::SendInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&quotes::send(&state.deps, &ctx, id, input).await?)
+}
+pub async fn quotes_accept(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&quotes::accept(&state.deps, &ctx, id).await?)
+}
+pub async fn quotes_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<JourneyId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&quotes::list(&state.deps, &ctx, id).await?)
+}
+pub async fn appointments_book(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<JourneyId>,
+    ApiJson(input): ApiJson<appointments::BookInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&appointments::book(&state.deps, &ctx, id, input).await?)
+}
+pub async fn appointments_cancel(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&appointments::cancel(&state.deps, &ctx, id).await?)
+}
+pub async fn appointments_held(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&appointments::held(&state.deps, &ctx, id).await?)
+}
+
+pub async fn commissions_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(input): ApiQuery<commissions::ListInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&commissions::list(&state.deps, &ctx, input).await?)
+}
+pub async fn commission_rates_set(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(input): ApiJson<commissions::RateInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&commissions::set_rate(&state.deps, &ctx, input).await?)
+}
+pub async fn commissions_approve(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&commissions::approve(&state.deps, &ctx, id).await?)
+}
+pub async fn commissions_pay(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&commissions::pay(&state.deps, &ctx, id).await?)
+}
+
+pub async fn people_erase(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<jt_app::usecases::inbox::erasure::EraseInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&jt_app::usecases::inbox::erasure::erase(&state.deps, &ctx, id, input).await?)
 }

@@ -833,3 +833,59 @@ async fn a_declared_page_connects_through_a_flow_bound_to_it() {
     let ledger = body_text(p.get("/api/ledger?action_prefix=connector.", &owner).await).await;
     assert_no_secret("the ledger", &ledger);
 }
+
+#[tokio::test]
+async fn iys_provisioning_attaches_to_sms_line_and_refuses_mismatched_usercode() {
+    let r = rig().await;
+    let (owner, _) = r.p.register(OWNER, "Alpha").await;
+    r.netgsm.push_probe(ok_probe("8508001234"));
+    let sms = ok_json(
+        post(
+            &r.p,
+            "/api/connectors/credentials",
+            &owner,
+            netgsm_body("netgsm-pass-1"),
+        )
+        .await,
+    )
+    .await;
+    let id = sms["capability"]["id"].clone();
+    let iys = json!({"capability_id":id,"credential":{"kind":"netgsm_iys","usercode":"8508001234","password":"iys-private","brand_code":"brand-42"}});
+    let out = ok_json(post(&r.p, "/api/connectors/credentials", &owner, iys.clone()).await).await;
+    assert_eq!(out["capability"]["id"], id);
+    assert_eq!(
+        out["capability"]["connector_public"]["iys"]["brand_code"],
+        "brand-42"
+    );
+    assert_eq!(out["capability"]["status"], "verified");
+    assert!(!out.to_string().contains("iys-private"));
+    let mut wrong = iys.clone();
+    wrong["credential"]["usercode"] = json!("different");
+    let refused = post(&r.p, "/api/connectors/credentials", &owner, wrong).await;
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let error = body_json(refused).await;
+    assert_eq!(error["details"]["reason"], "iys_usercode_mismatch");
+    r.netgsm.push_probe(ok_probe("8508001234"));
+    ok_json(
+        post_empty(
+            &r.p,
+            &format!("/api/connectors/{}/probe", id.as_str().unwrap()),
+            &owner,
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        matches!(r.netgsm.calls().last().unwrap(),ConnectorCall::Probe { credential:Credential::NetgsmSms {password,..},..} if password=="netgsm-pass-1")
+    );
+    let mut no_id = iys;
+    no_id.as_object_mut().unwrap().remove("capability_id");
+    no_id["kind_key"] = json!("sms_line");
+    no_id["name"] = json!("IYS");
+    assert_eq!(
+        post(&r.p, "/api/connectors/credentials", &owner, no_id)
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}

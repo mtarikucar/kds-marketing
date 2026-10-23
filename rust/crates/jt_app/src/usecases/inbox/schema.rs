@@ -10,6 +10,45 @@ pub fn input(action: &str) -> Value {
         &["channel", "value"],
     );
     match action {
+        "commissions.list" => object(
+            json!({"state":{"enum":["no_payee","pending","approved","paid",null]},"payee":{"type":["string","null"],"format":"uuid"}}),
+            &[],
+        ),
+        "commission_rates.set" => object(
+            json!({"user_id":{"type":["string","null"],"format":"uuid"},"rate_bp":{"type":"integer","minimum":0,"maximum":65535}}),
+            &["rate_bp"],
+        ),
+        "quotes.send" => object(
+            json!({"amount_minor":{"type":"integer","minimum":0},"currency":{"type":"string","pattern":"^[A-Z]{3}$"},"valid_until":{"type":"string","format":"date-time"},"file_ref":{"type":["string","null"]},"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["reply","commercial"]},"request_key":{"type":["string","null"]}}),
+            &[
+                "amount_minor",
+                "currency",
+                "valid_until",
+                "channel",
+                "text",
+                "intent",
+            ],
+        ),
+        "appointments.book" => object(
+            json!({"starts_at":{"type":"string","format":"date-time"},"ends_at":{"type":"string","format":"date-time"},"location":{"type":"string","minLength":1},"intent":{"enum":["reply","commercial"]}}),
+            &["starts_at", "ends_at", "location", "intent"],
+        ),
+        "consent.record" => object(
+            json!({"channel":{"enum":["sms","email","phone","whats_app","messenger","instagram_dm","webchat"]},"kind":{"enum":["explicit","implied_by_contract","withdrawn"]},"source":{"enum":["form","agent","import","iys_sync","customer"]},"at":{"type":"string","format":"date-time"}}),
+            &["channel", "kind", "source", "at"],
+        ),
+        "suppressions.add" => object(
+            json!({"channel":{"enum":["sms","email","phone","whats_app","messenger","instagram_dm","webchat"]},"reason":{"enum":["manual"]}}),
+            &["channel", "reason"],
+        ),
+        "suppressions.remove" => object(
+            json!({"channel":{"enum":["sms","email","phone","whats_app","messenger","instagram_dm","webchat"]},"reason":{"enum":["manual","unsubscribe","bounce","complaint"]}}),
+            &["channel", "reason"],
+        ),
+        "send" => object(
+            json!({"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["commercial"]},"request_key":{"type":["string","null"]}}),
+            &["channel", "text", "intent"],
+        ),
         "conversations.list" => object(
             json!({"queue":{"type":"string","enum":["ours","unassigned","snoozed","all"],"default":"ours"},"cursor":{"type":["string","null"]},"limit":{"type":["integer","null"],"minimum":1,"maximum":499,"default":50}}),
             &[],
@@ -23,11 +62,13 @@ pub fn input(action: &str) -> Value {
             &["until"],
         ),
         "reply" => object(
-            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]}}),
+            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}}}),
             &["text", "intent"],
         ),
         "merges.apply" => object(json!({"keep":{"type":"string","format":"uuid"}}), &["keep"]),
-        "merges.undo" => object(json!({"confirm":{"type":"boolean","default":false}}), &[]),
+        "people.erase" | "merges.undo" => {
+            object(json!({"confirm":{"type":"boolean","default":false}}), &[])
+        }
         "tasks.create" => object(
             json!({"title":{"type":"string","minLength":1},"due_at":{"type":"string","format":"date-time"},"assignee":{"type":["string","null"],"format":"uuid"}}),
             &["title", "due_at"],
@@ -85,14 +126,28 @@ pub fn tool(action: &str) -> Value {
     let id = match action {
         "context" | "conversations.get" | "messages.list" | "take_over" | "hand_to_agent"
         | "snooze" | "unsnooze" | "close" | "reply" => Some("conversation_id"),
-        "people.get" | "identities.add" | "journeys.open" => Some("person_id"),
-        "journeys.get"
+        "people.get"
+        | "identities.add"
+        | "journeys.open"
+        | "people.erase"
+        | "consent.record"
+        | "consent.list"
+        | "suppressions.add"
+        | "suppressions.remove"
+        | "send" => Some("person_id"),
+        "quotes.send"
+        | "quotes.list"
+        | "appointments.book"
+        | "journeys.get"
         | "journeys.assign_owner"
         | "events.report"
         | "tasks.create"
         | "notes.add" => Some("journey_id"),
         "merges.apply" | "merges.undo" | "merges.refuse" => Some("merge_id"),
         "tasks.complete" => Some("task_id"),
+        "quotes.accept" => Some("quote_id"),
+        "commissions.approve" | "commissions.pay" => Some("commission_id"),
+        "appointments.cancel" | "appointments.held" => Some("appointment_id"),
         _ => None,
     };
     if let Some(id) = id {

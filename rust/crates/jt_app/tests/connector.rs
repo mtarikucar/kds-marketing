@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::connectors::{
     AdBudgetWriter, Asset, AssetPublic, Connector, ConnectorRegistry, ConsentSync, DeliveryReports,
-    InsightsReader, LeadGenFetcher, MessagingSender, OAuthApp, OAuthProvider, Publisher, SmsSender,
-    Telephony, Url,
+    InsightsReader, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthApp,
+    OAuthProvider, Publisher, SmsSender, Telephony, Url,
 };
 use jt_app::ports::{OAuthPendingRow, SecretBox, UnitOfWork};
 use jt_app::usecases::Deps;
@@ -1422,7 +1422,8 @@ async fn set_credentials_rejects_malformed_shapes() {
     // From JSON: unknown shapes, unknown and missing fields are refused, and the error never
     // repeats a value.
     for body in [
-        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_iys", "usercode": "u", "password": "netgsm-pass-1", "brand_code": "b" } }),
+        json!({"capability_id":CapabilityId::new_v7(),"credential":{"kind":"netgsm_iys","usercode":"u","password":"netgsm-pass-1"}}),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_unknown", "usercode": "u", "password": "netgsm-pass-1", "brand_code": "b" } }),
         json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "password": "netgsm-pass-1", "msgheader": "K", "extra": "x" } }),
         json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "msgheader": "K" } }),
         json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "password": 98765432, "msgheader": "K" } }),
@@ -1447,6 +1448,11 @@ async fn set_credentials_rejects_malformed_shapes() {
     .unwrap();
     assert_no_secret("SetCredentials Debug", &format!("{input:?}"));
     for credential in [
+        CredentialInput::NetgsmIys {
+            usercode: "u".into(),
+            password: "netgsm-pass-1".into(),
+            brand_code: "b".into(),
+        },
         CredentialInput::NetgsmPbx {
             username: "u".into(),
             password: "pbx-pass-1".into(),
@@ -1581,8 +1587,12 @@ async fn set_credentials_refuses_oauth_only_kinds() {
     )
     .await);
     assert_invalid(&e, "kind_key");
+    // Mail has its own credential shape; a pasted Meta token cannot configure it.
+    let e = err(connector::set_credentials(&r.w.deps, o, creating("mailbox", "H", token())).await);
+    assert_invalid(&e, "credential.kind");
+    assert_eq!(e.details["expected"], "mailbox");
     // Kinds no provider serves, and capabilities reached otherwise, take no credentials.
-    for kind in ["mailbox", "phone", "claude_code", "nope"] {
+    for kind in ["phone", "claude_code", "nope"] {
         let e = err(connector::set_credentials(&r.w.deps, o, creating(kind, "H", token())).await);
         assert_invalid(&e, "kind_key");
     }
@@ -1924,7 +1934,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 capability_id: mailbox.id,
                 kind_key: "mailbox".into(),
                 name: "Kutu".into(),
-                provider: None,
+                provider: Some(Provider::Mail),
                 status: EffectiveStatus::Declared,
                 last_probe_at: None,
                 ok: None,
@@ -3198,6 +3208,14 @@ impl ConnectorRegistry for RacingRegistry {
         (provider == Provider::Meta).then(|| self.oauth.clone() as Arc<dyn OAuthProvider>)
     }
 
+    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
+        None
+    }
+
+    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
+        None
+    }
+
     fn sms(&self, provider: Provider) -> Option<Arc<dyn SmsSender>> {
         self.inner.sms(provider)
     }
@@ -3291,6 +3309,7 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
     // The adapter is handed the capability's kind and account, which are not stored.
     r.meta.push_on_connected(Ok(json!({
         "subscribed": true,
+        "workspace_id": jt_tenancy::WorkspaceId::new_v7(),
         "health": { "ok": false },
         "kind_key": "messenger",
         "hosts": ["evil.example"],
@@ -3326,6 +3345,7 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
         } => {
             assert_eq!(token, "EAAB-page-1");
             assert_eq!(public["kind_key"], "facebook_page");
+            assert_eq!(public["workspace_id"], json!(r.w.ws));
             assert_eq!(public["external_id"], "page-1");
         }
         other => panic!("expected the connection step first, got {other:?}"),
@@ -3333,6 +3353,7 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
     match &calls[1] {
         ConnectorCall::Probe { public, .. } => {
             assert_eq!(public["kind_key"], "facebook_page");
+            assert_eq!(public["workspace_id"], json!(r.w.ws));
             assert_eq!(public["external_id"], "page-1");
         }
         other => panic!("expected the probe second, got {other:?}"),
@@ -3346,6 +3367,14 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
         Some(ConnectorCall::Probe { .. })
     ));
     assert_eq!(r.meta.calls().len(), 3);
+    match r.meta.calls().last().unwrap() {
+        ConnectorCall::Probe { public, .. } => assert_eq!(
+            public["workspace_id"],
+            json!(r.w.ws),
+            "stored metadata cannot choose a foreign workspace"
+        ),
+        other => panic!("expected a probe, got {other:?}"),
+    }
 
     // By hand: the step fails. The line is still connected and probed; the failure is recorded
     // in its health, redacted, and outlives the probe that follows it.
@@ -3365,6 +3394,7 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
     match &r.netgsm.calls()[0] {
         ConnectorCall::OnConnected { public, .. } => {
             assert_eq!(public["kind_key"], "sms_line");
+            assert_eq!(public["workspace_id"], json!(r.w.ws));
             assert!(public.get("external_id").is_none(), "no account yet");
         }
         other => panic!("expected the connection step first, got {other:?}"),
@@ -3592,4 +3622,112 @@ async fn meta_ads_external_ids_drop_the_act_prefix() {
     .unwrap()
     .capability;
     assert_eq!(page.external_id.as_deref(), Some("act_5"));
+}
+
+#[test]
+fn mailbox_credentials_are_typed_and_secret_free() {
+    let input: SetCredentials = serde_json::from_value(json!({
+        "kind_key":"mailbox", "name":"Support",
+        "credential":{"kind":"mailbox", "smtp_host":"smtp.example.com", "smtp_port":465,
+        "imap_host":"imap.example.com", "imap_port":993, "username":"support@example.com",
+        "password":"mail-private-password", "from_address":"support@example.com", "tls":"implicit"}
+    }))
+    .unwrap();
+    assert_eq!(input.credential.kind(), "mailbox");
+    assert!(!format!("{input:?}").contains("mail-private-password"));
+}
+
+#[tokio::test]
+async fn mailbox_rebind_revokes_hosts_and_resets_cursor() {
+    use jt_app::ports::connectors::{MailboxCursor, MailboxPosition};
+    let mut w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(mail.clone()));
+    capabilities::declare(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"kind_key":"notion","name":"Agent tool","connector_public":{"hosts":["agent-only.example.com"]}})).unwrap()).await.unwrap();
+    mail.push_probe(ok_probe("support@example.com"));
+    let out = connector::set_credentials(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"kind_key":"mailbox","name":"Mail","credential":{"kind":"mailbox","smtp_host":"smtp.example.com","smtp_port":465,"imap_host":"imap.example.com","imap_port":993,"username":"support@example.com","password":"secret","from_address":"support@example.com","tls":"implicit"}})).unwrap()).await.unwrap();
+    let id = out.capability.id;
+    assert!(w.hosts.calls().iter().all(|c| !matches!(c, HostCall::Rebuild(_, hosts) if hosts.iter().any(|h| h == "agent-only.example.com"))));
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.mail_cursors()
+        .store(
+            id,
+            MailboxCursor {
+                mailboxes: [
+                    (
+                        "INBOX".into(),
+                        MailboxPosition {
+                            uidvalidity: 7,
+                            last_uid: 100,
+                        },
+                    ),
+                    (
+                        "Sent".into(),
+                        MailboxPosition {
+                            uidvalidity: 7,
+                            last_uid: 50,
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        UpdateCapability {
+            name: None,
+            description: None,
+            external_id: Some("other@example.com".into()),
+        },
+    )
+    .await
+    .unwrap();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let cursor = r.mail_cursors().get(id).await.unwrap();
+    assert!(
+        cursor
+            .mailboxes
+            .values()
+            .all(|p| p.uidvalidity == 0 && p.last_uid == 0)
+    );
+    assert_eq!(
+        w.hosts.calls().last(),
+        Some(&HostCall::Rebuild(w.ws, vec![]))
+    );
+    let c = r.capabilities().find(id).await.unwrap().unwrap();
+    assert!(c.connector_public.get("hosts").is_none());
+}
+
+#[tokio::test]
+async fn host_mutations_wait_for_workspace_guard() {
+    let w = world().await;
+    let guard = w
+        .deps
+        .job_lock
+        .try_acquire(&format!("jeeta.hosts.{}", w.ws))
+        .await
+        .unwrap()
+        .unwrap();
+    let pending = capabilities::declare(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"kind_key":"mailbox","name":"Mailbox","connector_public":{"hosts":["imap.example.com"]}})).unwrap());
+    tokio::pin!(pending);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(30), &mut pending)
+            .await
+            .is_err()
+    );
+    assert!(w.hosts.calls().is_empty());
+    guard.release().await.unwrap();
+    pending.await.unwrap();
+    assert!(
+        w.hosts
+            .calls()
+            .contains(&HostCall::Allow(w.ws, "imap.example.com".into()))
+    );
 }

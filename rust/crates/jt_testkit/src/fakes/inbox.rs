@@ -3,14 +3,27 @@
 use super::state::{MemBundle, MemState, exists, same_workspace, unique};
 use super::tenant::MemTenant;
 use async_trait::async_trait;
+use jt_app::ports::connectors::MailboxCursor;
 use jt_app::{error::AppError, ports::inbox::*};
 use jt_capability::CapabilityId;
-use jt_connector::InboundEventId;
+use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
 use jt_inbox::*;
 use jt_tenancy::{UserId, WorkspaceId};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
+
+/// Upgrade exception shared by claim and traversal; every other consumption remains final.
+pub(super) fn deferred_leadgen(
+    consumer: &str,
+    event: &InboundEvent,
+    outcome: Option<&ConsumptionOutcome>,
+) -> bool {
+    consumer == "inbox@2"
+        && event.provider == Provider::Meta
+        && event.kind == EventKind::LeadGen
+        && outcome.is_some_and(|o| o.outcome == "deferred")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredConsumption {
@@ -28,6 +41,17 @@ pub struct StoredRequestKey {
 }
 #[derive(Clone, Debug, Default)]
 pub struct MemInbox {
+    pub consents: Vec<(WorkspaceId, Consent)>,
+    pub suppressions: Vec<(WorkspaceId, Suppression)>,
+    pub quotes: Vec<QuoteRow>,
+    pub appointments: Vec<AppointmentRow>,
+    pub commissions: Vec<CommissionRow>,
+    pub commission_defaults: Vec<(WorkspaceId, u16)>,
+    pub commission_user_rates: Vec<(WorkspaceId, UserId, u16)>,
+    pub erasure_logs: Vec<ErasureLog>,
+    pub erased_identities: Vec<(WorkspaceId, IdentityChannel, String)>,
+    pub mail_cursors: Vec<(WorkspaceId, CapabilityId, MailboxCursor)>,
+    pub attribution: Vec<JourneyAttribution>,
     pub journey_reducer_revisions: std::collections::BTreeMap<JourneyId, i64>,
     pub conversation_send_states: std::collections::BTreeMap<ConversationId, ConversationSendState>,
     pub message_senders: std::collections::BTreeMap<MessageId, IdentityId>,
@@ -70,7 +94,7 @@ fn found(ok: bool) -> Result<(), AppError> {
         Err(AppError::not_found("no such inbox reference"))
     }
 }
-fn person(s: &MemState, ws: WorkspaceId, id: PersonId) -> Result<(), AppError> {
+pub(super) fn person(s: &MemState, ws: WorkspaceId, id: PersonId) -> Result<(), AppError> {
     found(
         s.inbox
             .people
@@ -78,7 +102,7 @@ fn person(s: &MemState, ws: WorkspaceId, id: PersonId) -> Result<(), AppError> {
             .any(|r| r.workspace_id == ws && r.id == id),
     )
 }
-fn journey(s: &MemState, ws: WorkspaceId, id: JourneyId) -> Result<(), AppError> {
+pub(super) fn journey(s: &MemState, ws: WorkspaceId, id: JourneyId) -> Result<(), AppError> {
     found(
         s.inbox
             .journeys
@@ -364,6 +388,39 @@ impl IdentityRepo for MemTenant {
 }
 #[async_trait]
 impl ConversationRepo for MemTenant {
+    async fn insert_for_send(&mut self, row: Conversation) -> Result<(), AppError> {
+        self.call(|t| {
+            same_workspace(t.ws, row.workspace_id)?;
+            if row.last_inbound_at.is_some()
+                || row.executor != Executor::Agent
+                || row.state != ConvState::Open
+                || row.executor_generation != 0
+                || row.last_outbound_at.is_some()
+            {
+                return Err(AppError::validation(
+                    "invalid outbound conversation",
+                    serde_json::json!({}),
+                ));
+            }
+            person(t.state(), t.ws, row.person_id)?;
+            capability(t.state(), t.ws, row.capability_id)?;
+            unique(
+                !t.state().inbox.conversations.iter().any(|c| {
+                    c.id == row.id
+                        || (c.workspace_id == t.ws
+                            && c.person_id == row.person_id
+                            && c.capability_id == row.capability_id)
+                }),
+                "conversation already exists",
+            )?;
+            t.tx.write(move |s| {
+                s.inbox.conversation_send_states.entry(row.id).or_default();
+                s.inbox.conversations.push(row.clone());
+            });
+            Ok(())
+        })
+    }
+
     async fn send_state(&mut self, id: ConversationId) -> Result<ConversationSendState, AppError> {
         conversation(self.state(), self.ws, id)?;
         Ok(self
@@ -919,9 +976,14 @@ impl JourneyRepo for MemTenant {
         self.call(|t| {
             let ws = t.ws;
             same_workspace(ws, event.workspace_id)?;
-            if event.source != EventSource::System || event.kind != JourneyEventKind::Replied {
+            if event.source != EventSource::System
+                || !matches!(
+                    event.kind,
+                    JourneyEventKind::Replied | JourneyEventKind::QuoteSent
+                )
+            {
                 return Err(AppError::validation(
-                    "only system replied receipts may be historical",
+                    "only system outbound receipts may be historical",
                     serde_json::json!({}),
                 ));
             }
@@ -1317,13 +1379,36 @@ impl ConsumptionRepo for MemTenant {
                     .iter()
                     .any(|r| r.event.workspace_id == ws && r.event.id == id),
             )?;
-            if t.state()
+            if let Some(existing) = t
+                .state()
                 .inbox
                 .consumption
                 .iter()
-                .any(|r| r.workspace_id == ws && r.consumer == consumer && r.event_id == id)
+                .find(|r| r.workspace_id == ws && r.consumer == consumer && r.event_id == id)
             {
-                return Ok(false);
+                let event = &t
+                    .state()
+                    .inbound_events
+                    .iter()
+                    .find(|r| r.event.workspace_id == ws && r.event.id == id)
+                    .expect("checked event")
+                    .event;
+                if !deferred_leadgen(consumer, event, existing.outcome.as_ref()) {
+                    return Ok(false);
+                }
+                let consumer = consumer.to_owned();
+                t.tx.write(move |s| {
+                    let row = s
+                        .inbox
+                        .consumption
+                        .iter_mut()
+                        .find(|r| {
+                            r.workspace_id == ws && r.consumer == consumer && r.event_id == id
+                        })
+                        .expect("checked claim");
+                    row.outcome = None;
+                });
+                return Ok(true);
             }
             let row = StoredConsumption {
                 workspace_id: ws,

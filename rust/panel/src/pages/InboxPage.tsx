@@ -7,7 +7,9 @@ import type { InboxConversationRow, InboxQueue } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { can } from '@/lib/roles';
 import { QueryState } from '@/components/QueryState';
-import { Button, Callout, Input, PageHeader } from '@/components/ui';
+import { Button, Callout, Disclosure, Input, PageHeader } from '@/components/ui';
+import { InboxCompliance } from './InboxCompliance';
+import { InboxErasure } from './InboxErasure';
 import { InboxConversation } from './InboxConversation';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
 import { columnClass, useInboxKey } from './InboxShared';
@@ -83,11 +85,12 @@ export function InboxPage() {
         title={t('inbox.title')}
         description={t('inbox.description')}
         actions={
-          manage ? (
-            <Button asChild variant="outline">
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline"><Link to="/inbox/commissions">{t('inbox.commissions.title')}</Link></Button>
+            {manage && <Button asChild variant="outline">
               <Link to="/inbox/merges">{t('inbox.merges.title')}</Link>
-            </Button>
-          ) : undefined
+            </Button>}
+          </div>
         }
       />
       <div
@@ -163,6 +166,10 @@ export function InboxPage() {
                 {selectedPerson.data?.person.display_name || t('inbox.thread')}
               </h2>
               <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>
+              {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into && <>
+                <Disclosure key={selectedPerson.data.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={selectedPerson.data.person.id} /></Disclosure>
+                <InboxErasure key={`erase:${selectedPerson.data.person.id}`} personId={selectedPerson.data.person.id} />
+              </>}
               {personId && (
                 <QueryState query={selectedPerson}>
                   {selectedPerson.data?.conversations.map((row) => (

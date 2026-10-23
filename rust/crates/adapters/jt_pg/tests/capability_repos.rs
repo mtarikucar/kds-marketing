@@ -1563,3 +1563,12 @@ async fn group_names_are_unique_ignoring_case_in_the_database() {
         .unwrap();
     t.commit().await.unwrap();
 }
+
+#[tokio::test]
+async fn iys_slot_contract() {
+    let db = TestDb::new().await;
+    jt_testkit::compliance_contract::iys_slot_is_separate_and_tenant_scoped(std::sync::Arc::new(
+        uow(&db),
+    ))
+    .await;
+}

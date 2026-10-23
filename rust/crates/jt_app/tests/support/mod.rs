@@ -262,3 +262,5 @@ pub fn wire(value: &impl serde::Serialize) -> String {
 pub fn payload(entry: &LedgerEntry) -> Value {
     entry.payload.clone()
 }
+
+pub mod outbound;

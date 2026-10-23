@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jt_connector::{ConnectorError, Credential, EventKind, ProbeResult, Provider};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{Date, OffsetDateTime};
@@ -164,7 +165,7 @@ impl OAuthCallback {
             Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
             Provider::Meta => Some(OAuthCallback::Meta),
             Provider::X => Some(OAuthCallback::X),
-            Provider::Netgsm => None,
+            Provider::Netgsm | Provider::Mail => None,
         }
     }
 }
@@ -210,6 +211,52 @@ pub struct SendReceipt {
     /// Cost in minor currency units when reported by the provider; unknown stays `None`.
     #[serde(default)]
     pub cost_minor: Option<i64>,
+}
+
+/// A mail attachment. Bytes are transport-only: never log or write them to the ledger.
+/// `Debug` exposes only the filename, MIME type and byte count.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attachment {
+    pub filename: String,
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for Attachment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Attachment")
+            .field("filename", &self.filename)
+            .field("mime", &self.mime)
+            .field("bytes", &format_args!("<{} bytes>", self.bytes.len()))
+            .finish()
+    }
+}
+
+/// A typed outgoing mail, with credentials supplied separately. The caller persists metadata
+/// and the stable Message-ID before sending; attachment bytes never enter logs or the ledger.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailMessage {
+    pub to: String,
+    pub subject: String,
+    pub text: String,
+    pub message_id: String,
+    pub in_reply_to: Option<String>,
+    pub references: Vec<String>,
+    pub attachments: Vec<Attachment>,
+}
+
+/// The last seen UID within one mailbox's UIDVALIDITY generation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailboxPosition {
+    pub uidvalidity: u32,
+    pub last_uid: u32,
+}
+
+/// Independent positions for mailbox names (INBOX and Sent). The caller persists the returned
+/// cursor atomically with the inbound drafts, so a failed transaction can safely poll again.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailboxCursor {
+    pub mailboxes: BTreeMap<String, MailboxPosition>,
 }
 
 /// A post to publish: its text, the media to attach and an optional link.
@@ -434,9 +481,10 @@ pub struct AssetPublic {
 
 /// A provider adapter: what every provider supports, whatever it is used for. The credential is
 /// the opened sealed one of a capability; `public` is the capability's `connector_public` as the
-/// use cases hand it to adapters: with `kind_key` (the capability's kind) and, when the capability
+/// use cases hand it to adapters: with `workspace_id` (the capability's workspace),
+/// `kind_key` (the capability's kind) and, when the capability
 /// holds one, `external_id` (its account) set from the capability itself, whatever the stored
-/// fields say (neither is stored in `connector_public`). The kind tells an adapter serving
+/// fields say (these authoritative values are supplied at call time). The kind tells an adapter serving
 /// several kinds which call to make (a Meta Page token reaches a page, its Messenger inbox and its
 /// Instagram account).
 #[async_trait]
@@ -490,13 +538,15 @@ pub trait Connector: Send + Sync {
 #[async_trait]
 pub trait SmsSender: Send + Sync {
     /// Sends `text` to `to` (a phone number), with the caller's `reference` for correlating
-    /// delivery reports when given.
+    /// delivery reports when given. `commercial` enables the provider's commercial consent
+    /// filter (NetGSM İYS); informational replies pass `false`.
     async fn send(
         &self,
         cred: &Credential,
         to: &str,
         text: &str,
         reference: Option<&str>,
+        commercial: bool,
     ) -> Result<SendReceipt, ConnectorError>;
 }
 
@@ -540,6 +590,30 @@ pub trait MessagingSender: Send + Sync {
         recipient_id: &str,
         text: &str,
     ) -> Result<SendReceipt, ConnectorError>;
+}
+
+/// Sends typed mail within `ws`, preserving the caller's Message-ID, thread headers and attachments.
+#[async_trait]
+pub trait MailSender: Send + Sync {
+    async fn send(
+        &self,
+        ws: WorkspaceId,
+        cred: &Credential,
+        message: MailMessage,
+    ) -> Result<SendReceipt, ConnectorError>;
+}
+
+/// Polls mailboxes within `ws`, independently of SMS delivery reports. No cursor storage happens here.
+/// The explicit workspace controls authorization; `public` cannot override it.
+#[async_trait]
+pub trait MailboxPoller: Send + Sync {
+    async fn poll(
+        &self,
+        ws: WorkspaceId,
+        cred: &Credential,
+        public: &Value,
+        cursor: &MailboxCursor,
+    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>;
 }
 
 /// Reads and changes ad budgets.
@@ -664,6 +738,8 @@ pub trait ConnectorRegistry: Send + Sync {
     fn connector(&self, provider: Provider) -> Option<Arc<dyn Connector>>;
     fn oauth(&self, provider: Provider) -> Option<Arc<dyn OAuthProvider>>;
     fn sms(&self, provider: Provider) -> Option<Arc<dyn SmsSender>>;
+    fn mail_sender(&self, provider: Provider) -> Option<Arc<dyn MailSender>>;
+    fn mailbox_poller(&self, provider: Provider) -> Option<Arc<dyn MailboxPoller>>;
     fn publisher(&self, provider: Provider) -> Option<Arc<dyn Publisher>>;
     fn insights(&self, provider: Provider) -> Option<Arc<dyn InsightsReader>>;
     fn messaging(&self, provider: Provider) -> Option<Arc<dyn MessagingSender>>;

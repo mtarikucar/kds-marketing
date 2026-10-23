@@ -20,9 +20,25 @@ const TOOLS: &[&str] = &[
     "jeeta.inbox.unsnooze",
     "jeeta.inbox.close",
     "jeeta.inbox.reply",
+    "jeeta.inbox.consent_record",
+    "jeeta.inbox.consent_list",
+    "jeeta.inbox.suppressions_add",
+    "jeeta.inbox.suppressions_remove",
+    "jeeta.inbox.send",
+    "jeeta.inbox.quotes_send",
+    "jeeta.inbox.quotes_accept",
+    "jeeta.inbox.quotes_list",
+    "jeeta.inbox.appointments_book",
+    "jeeta.inbox.appointments_cancel",
+    "jeeta.inbox.appointments_held",
+    "jeeta.inbox.commissions_list",
+    "jeeta.inbox.commissions_approve",
+    "jeeta.inbox.commissions_pay",
+    "jeeta.inbox.commission_rates_set",
     "jeeta.inbox.people_search",
     "jeeta.inbox.people_get",
     "jeeta.inbox.people_create",
+    "jeeta.inbox.people_erase",
     "jeeta.inbox.identities_add",
     "jeeta.inbox.journeys_open",
     "jeeta.inbox.events_report",
@@ -106,7 +122,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 90);
+    assert_eq!(TOOLS.len(), 106);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -551,7 +567,17 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
         .collect();
     assert_eq!(
         shapes,
-        BTreeSet::from(["netgsm_sms", "netgsm_pbx", "meta_token"])
+        BTreeSet::from([
+            "mailbox",
+            "netgsm_sms",
+            "netgsm_iys",
+            "netgsm_pbx",
+            "meta_token"
+        ])
+    );
+    assert_eq!(
+        schema["allOf"][0]["then"]["required"],
+        serde_json::json!(["capability_id"])
     );
     for name in ["jeeta.connector.probe", "jeeta.connector.reconnect"] {
         let schema = find(name).input_schema.clone().to_value();

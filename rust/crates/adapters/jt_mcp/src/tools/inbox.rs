@@ -7,8 +7,8 @@ use jt_app::{
     usecases::{
         Deps,
         inbox::{
-            JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, schema,
-            tasks,
+            JourneyId, MergeId, PersonId, TaskId, commissions, dictionaries, journeys, merge,
+            people, schema, tasks,
         },
     },
 };
@@ -19,6 +19,120 @@ use serde_json::Value;
 
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
+        ToolDef {
+            use_case: "inbox.people.erase",
+            description: "Permanently erase personal data, retain anonymous financial references. Requires confirm: true. [risk: DESTRUCTIVE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("people.erase")).expect("inbox schema"),
+            run: people_erase,
+        },
+        ToolDef {
+            use_case: "inbox.commissions.list",
+            description: "commissions.list for workspace commissions. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("commissions.list")).expect("inbox schema"),
+            run: commissions_list,
+        },
+        ToolDef {
+            use_case: "inbox.commissions.approve",
+            description: "commissions.approve for workspace commissions. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("commissions.approve")).expect("inbox schema"),
+            run: commissions_approve,
+        },
+        ToolDef {
+            use_case: "inbox.commissions.pay",
+            description: "commissions.pay for workspace commissions. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("commissions.pay")).expect("inbox schema"),
+            run: commissions_pay,
+        },
+        ToolDef {
+            use_case: "inbox.commission_rates.set",
+            description: "commission_rates.set for workspace commissions. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || {
+                Schema::try_from(schema::tool("commission_rates.set")).expect("inbox schema")
+            },
+            run: commission_rates_set,
+        },
+        ToolDef {
+            use_case: "inbox.quotes.send",
+            description: "quotes.send for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("quotes.send")).expect("inbox schema"),
+            run: quotes_send,
+        },
+        ToolDef {
+            use_case: "inbox.quotes.accept",
+            description: "quotes.accept for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("quotes.accept")).expect("inbox schema"),
+            run: quotes_accept,
+        },
+        ToolDef {
+            use_case: "inbox.quotes.list",
+            description: "quotes.list for an internal journey. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("quotes.list")).expect("inbox schema"),
+            run: quotes_list,
+        },
+        ToolDef {
+            use_case: "inbox.appointments.book",
+            description: "appointments.book for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("appointments.book")).expect("inbox schema"),
+            run: appointments_book,
+        },
+        ToolDef {
+            use_case: "inbox.appointments.cancel",
+            description: "appointments.cancel for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("appointments.cancel")).expect("inbox schema"),
+            run: appointments_cancel,
+        },
+        ToolDef {
+            use_case: "inbox.appointments.held",
+            description: "appointments.held for an internal journey. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("appointments.held")).expect("inbox schema"),
+            run: appointments_held,
+        },
+        ToolDef {
+            use_case: "inbox.consent.record",
+            description: "consent.record for a workspace person. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("consent.record")).expect("inbox schema"),
+            run: consent_record,
+        },
+        ToolDef {
+            use_case: "inbox.consent.list",
+            description: "consent.list for a workspace person. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("consent.list")).expect("inbox schema"),
+            run: consent_list,
+        },
+        ToolDef {
+            use_case: "inbox.suppressions.add",
+            description: "suppressions.add for a workspace person. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("suppressions.add")).expect("inbox schema"),
+            run: suppressions_add,
+        },
+        ToolDef {
+            use_case: "inbox.suppressions.remove",
+            description: "suppressions.remove for a workspace person. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("suppressions.remove")).expect("inbox schema"),
+            run: suppressions_remove,
+        },
+        ToolDef {
+            use_case: "inbox.send",
+            description: "send for a workspace person. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("send")).expect("inbox schema"),
+            run: send,
+        },
         ToolDef {
             use_case: "inbox.pending",
             description: "Read the executor-visible inbox queues. [risk: READ]",
@@ -423,5 +537,108 @@ fn context<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
         let id: ConversationId = take_id(&mut raw, "conversation_id")?;
         let _: NoArgs = args(raw)?;
         to_json(&jt_app::usecases::inbox::context::context(deps, ctx, id).await?)
+    })
+}
+
+use jt_app::usecases::inbox::consent;
+fn consent_record<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&consent::record_consent(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn consent_list<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&consent::list(deps, ctx, id).await?)
+    })
+}
+fn suppressions_add<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&consent::add_suppression(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn suppressions_remove<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&consent::remove_suppression(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn send<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&replies::send(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+use jt_app::usecases::inbox::{appointments, quotes};
+fn quotes_send<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: JourneyId = take_id(&mut raw, "journey_id")?;
+        to_json(&quotes::send(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn quotes_accept<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "quote_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&quotes::accept(deps, ctx, id).await?)
+    })
+}
+fn quotes_list<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: JourneyId = take_id(&mut raw, "journey_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&quotes::list(deps, ctx, id).await?)
+    })
+}
+fn appointments_book<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: JourneyId = take_id(&mut raw, "journey_id")?;
+        to_json(&appointments::book(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn appointments_cancel<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "appointment_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&appointments::cancel(deps, ctx, id).await?)
+    })
+}
+fn appointments_held<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "appointment_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&appointments::held(deps, ctx, id).await?)
+    })
+}
+
+fn commissions_list<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&commissions::list(deps, ctx, args(raw)?).await?) })
+}
+fn commission_rates_set<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&commissions::set_rate(deps, ctx, args(raw)?).await?) })
+}
+fn commissions_approve<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "commission_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&commissions::approve(deps, ctx, id).await?)
+    })
+}
+fn commissions_pay<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "commission_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&commissions::pay(deps, ctx, id).await?)
+    })
+}
+
+fn people_erase<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&jt_app::usecases::inbox::erasure::erase(deps, ctx, id, args(raw)?).await?)
     })
 }

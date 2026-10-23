@@ -1,11 +1,17 @@
 //! Inbox operations shared by the panel, MCP and trusted inbound consumers.
+pub mod appointments;
+pub mod commissions;
+pub mod consent;
 pub mod consumer;
 pub mod context;
 pub mod conversations;
 pub mod dictionaries;
+pub mod erasure;
 pub mod journeys;
+mod leadgen;
 pub mod merge;
 pub mod people;
+pub mod quotes;
 pub mod replies;
 pub mod tasks;
 

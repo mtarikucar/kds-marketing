@@ -168,6 +168,7 @@ impl CapabilityRepo for MemTenant {
                     ..capability
                 },
                 sealed,
+                iys_sealed: None,
             };
             this.tx.write(move |s| s.capabilities.push(row.clone()));
             Ok(())
@@ -209,6 +210,7 @@ impl CapabilityRepo for MemTenant {
             .filter(|c| filter.group_id.is_none_or(|g| in_group(c, g)))
             .collect();
         rows.sort_by_key(|c| (c.created_at, c.id));
+        self.tx.commit_capability_after_list(ws);
         Ok(rows)
     }
 
@@ -280,6 +282,55 @@ impl CapabilityRepo for MemTenant {
             this.state()
                 .capability_in(this.ws, id)
                 .map(|c| c.sealed.clone())
+                .ok_or_else(|| AppError::not_found("no such capability"))
+        })
+    }
+
+    async fn set_iys_sealed(
+        &mut self,
+        id: CapabilityId,
+        sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            if this.tx.set_sealed_fails() {
+                return Err(AppError::internal("injected failure: set_iys_sealed"));
+            }
+            ensure_capability(this.state(), ws, id)?;
+            this.tx.write(move |s| {
+                if let Some(stored) = s
+                    .capabilities
+                    .iter_mut()
+                    .find(|c| c.capability.workspace_id == ws && c.capability.id == id)
+                {
+                    stored.iys_sealed = sealed.clone();
+                    stored.capability.updated_at = at;
+                }
+            });
+            Ok(())
+        })
+    }
+
+    async fn lock_iys_snapshot(
+        &mut self,
+        id: CapabilityId,
+    ) -> Result<Option<jt_app::ports::IysCapabilitySnapshot>, AppError> {
+        let state = self.state();
+        Ok(state
+            .capability_in(self.ws, id)
+            .map(|row| jt_app::ports::IysCapabilitySnapshot {
+                capability: state.capability_view(row),
+                sms_sealed: row.sealed.clone(),
+                iys_sealed: row.iys_sealed.clone(),
+            }))
+    }
+
+    async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {
+        self.call(|this| {
+            this.state()
+                .capability_in(this.ws, id)
+                .map(|c| c.iys_sealed.clone())
                 .ok_or_else(|| AppError::not_found("no such capability"))
         })
     }

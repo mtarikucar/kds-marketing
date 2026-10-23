@@ -5,7 +5,9 @@ import * as api from '@/api/inbox';
 import { isApiError } from '@/api/client';
 import { QueryState } from '@/components/QueryState';
 import { ErrorCallout } from '@/components/ErrorCallout';
-import { Badge, Button, Callout, Input, Textarea } from '@/components/ui';
+import { Badge, Button, Callout, Disclosure, Input, Textarea } from '@/components/ui';
+import { InboxCompliance } from './InboxCompliance';
+import { InboxErasure } from './InboxErasure';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
 import { columnClass, InboxActorLabel, InboxTime, useInboxKey, useInboxMutation } from './InboxShared';
 
@@ -24,16 +26,19 @@ export function InboxConversation({ id }: { id: string }) {
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
   const [text, setText] = useState('');
+  const [subject, setSubject] = useState('');
   const [until, setUntil] = useState('');
-  const request = useRef<{ text: string; key: string }>();
+  const request = useRef<{ text: string; subject?: string; key: string }>();
   const send = useInboxMutation(
     async () => {
-      if (!request.current || request.current.text !== text.trim())
-        request.current = { text: text.trim(), key: crypto.randomUUID() };
-      return api.reply(id, request.current.text, request.current.key);
+      const emailSubject = conversation.data?.kind_key === 'mailbox' ? subject.trim() || 'Re:' : undefined;
+      if (!request.current || request.current.text !== text.trim() || request.current.subject !== emailSubject)
+        request.current = { text: text.trim(), subject: emailSubject, key: crypto.randomUUID() };
+      return api.reply(id, request.current.text, request.current.key, request.current.subject);
     },
     () => {
       setText('');
+      setSubject('');
       request.current = undefined;
     },
   );
@@ -63,6 +68,10 @@ export function InboxConversation({ id }: { id: string }) {
   return (
     <>
       <section className={columnClass} aria-label={t('inbox.thread')}>
+        {ctx && !ctx.person.erased_at && !ctx.person.merged_into && <>
+          <Disclosure key={ctx.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={ctx.person.id} /></Disclosure>
+          <InboxErasure key={`erase:${ctx.person.id}`} personId={ctx.person.id} />
+        </>}
         <QueryState query={conversation}>
           {row && (
             <>
@@ -171,6 +180,7 @@ export function InboxConversation({ id }: { id: string }) {
                   if (text.trim() && !disabled && ctx) send.mutate();
                 }}
               >
+                  {row.kind_key === 'mailbox' && <Input aria-label={t('inbox.emailSubject')} placeholder={t('inbox.emailSubject')} value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={998} />}
                 <label className="text-sm font-medium">
                   {t('inbox.reply')}
                   <Textarea

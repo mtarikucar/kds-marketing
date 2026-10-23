@@ -80,7 +80,7 @@ impl InboundEventRepo for PgTenantRepos {
         limit: u32,
     ) -> Result<Vec<InboundEvent>, AppError> {
         let records: Vec<EventRecord> = sqlx::query_as(&format!(
-            "select {COLUMNS} from inbound_events e where workspace_id=$1 and ($3::timestamptz is null or (received_at,id)>($3,$4)) and not exists (select 1 from event_consumption c where c.workspace_id=e.workspace_id and c.event_id=e.id and c.consumer=$2) order by received_at,id limit $5"
+            "select {COLUMNS} from inbound_events e where workspace_id=$1 and ($3::timestamptz is null or (received_at,id)>($3,$4)) and not exists (select 1 from event_consumption c where c.workspace_id=e.workspace_id and c.event_id=e.id and c.consumer=$2 and not (c.consumer='inbox@2' and e.provider='meta' and e.kind='lead_gen' and c.outcome is not distinct from 'deferred')) order by received_at,id limit $5"
         )).bind(self.workspace_id().as_uuid()).bind(consumer).bind(cursor.map(|(at,_)|at)).bind(cursor.map(|(_,id)|id.as_uuid())).bind(i64::from(limit.clamp(1,MAX_EVENT_PAGE)))
         .fetch_all(self.tx.conn()).await.map_err(|e| map_sqlx(e,"list events for consumer"))?;
         records.into_iter().map(EventRecord::into_event).collect()
@@ -93,13 +93,23 @@ impl InboundEventRepo for PgTenantRepos {
     /// bundle's row and would answer `CONFLICT` for a replay.
     async fn insert_if_new(
         &mut self,
-        event: InboundEvent,
-        raw: Option<Vec<u8>>,
+        mut event: InboundEvent,
+        mut raw: Option<Vec<u8>>,
     ) -> Result<Option<InboundEventId>, AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, event.workspace_id)?;
         if let Some(capability) = event.capability_id {
             ensure_capability(self.tx.conn(), ws, capability).await?;
+        }
+        jt_app::ports::inbox::PersonRepo::lock_workspace(self).await?;
+        if jt_app::usecases::inbox::erasure::scrub_inbound(
+            self,
+            event.capability_id,
+            &mut event.payload,
+        )
+        .await?
+        {
+            raw = None;
         }
         let done = sqlx::query(
             "insert into inbound_events (id, workspace_id, provider, capability_id, external_id, \

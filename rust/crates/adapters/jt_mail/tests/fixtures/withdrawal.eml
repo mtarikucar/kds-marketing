@@ -1,0 +1,7 @@
+From: person@example.com
+To: sender@example.com
+Subject: Unsubscribe
+Message-ID: <withdraw@example.com>
+Content-Type: text/plain
+
+unsubscribe

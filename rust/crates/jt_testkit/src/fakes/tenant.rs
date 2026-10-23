@@ -51,6 +51,31 @@ impl MemBundle for MemTenant {
 
 #[async_trait]
 impl TenantRepos for MemTenant {
+    fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
+        self
+    }
+    fn suppressions(&mut self) -> &mut dyn jt_app::ports::inbox::SuppressionRepo {
+        self
+    }
+    fn quotes(&mut self) -> &mut dyn jt_app::ports::inbox::QuoteRepo {
+        self
+    }
+    fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
+        self
+    }
+    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
+        self
+    }
+    fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {
+        self
+    }
+    fn mail_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::MailCursorRepo {
+        self
+    }
+    fn attribution(&mut self) -> &mut dyn jt_app::ports::inbox::AttributionRepo {
+        self
+    }
+
     fn people(&mut self) -> &mut dyn PersonRepo {
         self
     }
@@ -620,6 +645,14 @@ impl LedgerRepo for MemTenant {
             })
             .cloned()
             .collect();
+        for row in &mut rows {
+            if self.state().inbox.erasure_logs.iter().any(|e| {
+                e.workspace_id == self.ws
+                    && row.entry.payload["person_id"] == serde_json::json!(e.person_id)
+            }) {
+                jt_app::usecases::inbox::erasure::mask_personal(&mut row.entry.payload);
+            }
+        }
         rows.sort_by_key(|r| std::cmp::Reverse(r.id));
         rows.truncate(filter.limit as usize);
         Ok(rows)

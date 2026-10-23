@@ -46,6 +46,7 @@
 //! bundles' repos.
 
 mod capability;
+mod compliance;
 mod connector;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
@@ -72,3 +73,5 @@ pub use state::{
 };
 
 mod inbox_merge;
+
+mod erasure;

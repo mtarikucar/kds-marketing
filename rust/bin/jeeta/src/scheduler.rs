@@ -48,9 +48,12 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Intervals {
     pub refresh_tokens: Duration,
+    pub refresh_tenant_hosts: Duration,
     pub probe_all: Duration,
     pub netgsm_dlr_poll: Duration,
     pub netgsm_inbox_poll: Duration,
+    pub mail_inbox_poll: Duration,
+    pub iys_sync: Duration,
     pub purge_raw_bodies: Duration,
     pub purge_oauth_pending: Duration,
     pub purge_probe_runs: Duration,
@@ -73,9 +76,12 @@ impl Default for Intervals {
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
+            refresh_tenant_hosts: MINUTE,
             probe_all: 15 * MINUTE,
             netgsm_dlr_poll: MINUTE,
             netgsm_inbox_poll: HOUR,
+            mail_inbox_poll: 2 * MINUTE,
+            iys_sync: HOUR,
             purge_raw_bodies: DAY,
             purge_oauth_pending: HOUR,
             purge_probe_runs: DAY,
@@ -93,9 +99,12 @@ impl Intervals {
     pub fn of(&self, job: Job) -> Duration {
         match job {
             Job::RefreshTokens => self.refresh_tokens,
+            Job::RefreshTenantHosts => self.refresh_tenant_hosts,
             Job::ProbeAll => self.probe_all,
             Job::NetgsmDlrPoll => self.netgsm_dlr_poll,
             Job::NetgsmInboxPoll => self.netgsm_inbox_poll,
+            Job::MailInboxPoll => self.mail_inbox_poll,
+            Job::IysSync => self.iys_sync,
             Job::PurgeRawBodies => self.purge_raw_bodies,
             Job::PurgeOAuthPending => self.purge_oauth_pending,
             Job::PurgeProbeRuns => self.purge_probe_runs,
@@ -375,9 +384,12 @@ mod tests {
     fn every(every: Duration) -> Intervals {
         Intervals {
             refresh_tokens: every,
+            refresh_tenant_hosts: every,
             probe_all: every,
             netgsm_dlr_poll: every,
             netgsm_inbox_poll: every,
+            mail_inbox_poll: every,
+            iys_sync: every,
             purge_raw_bodies: every,
             purge_oauth_pending: every,
             purge_probe_runs: every,
@@ -462,9 +474,12 @@ mod tests {
     fn the_production_schedule() {
         let i = Intervals::default();
         assert_eq!(i.of(Job::RefreshTokens), HOUR);
+        assert_eq!(i.of(Job::RefreshTenantHosts), MINUTE);
         assert_eq!(i.of(Job::ProbeAll), Duration::from_secs(15 * 60));
         assert_eq!(i.of(Job::NetgsmDlrPoll), MINUTE);
         assert_eq!(i.of(Job::NetgsmInboxPoll), HOUR);
+        assert_eq!(i.of(Job::MailInboxPoll), 2 * MINUTE);
+        assert_eq!(i.of(Job::IysSync), HOUR);
         assert_eq!(i.of(Job::PurgeRawBodies), DAY);
         assert_eq!(i.of(Job::PurgeOAuthPending), HOUR);
         assert_eq!(i.of(Job::PurgeProbeRuns), DAY);

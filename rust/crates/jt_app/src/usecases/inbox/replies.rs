@@ -4,7 +4,11 @@ use super::record;
 use crate::{
     ctx::Ctx,
     error::{AppError, ErrorCode},
-    ports::{TenantRepos, connectors::SendReceipt, inbox::OutboxRow},
+    ports::{
+        TenantRepos,
+        connectors::{MailMessage, SendReceipt},
+        inbox::OutboxRow,
+    },
     usecases::{
         Deps,
         connector::{adapter_public, open_credential},
@@ -21,12 +25,7 @@ use serde_json::{Value, json};
 use time::Duration;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SendIntent {
-    Reply,
-    Commercial,
-}
+pub use jt_inbox::SendIntent;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplyInput {
@@ -34,6 +33,12 @@ pub struct ReplyInput {
     pub intent: SendIntent,
     #[serde(default)]
     pub request_key: Option<String>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    #[serde(default)]
+    pub references: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplyOut {
@@ -90,10 +95,93 @@ pub async fn enqueue(
     id: ConversationId,
     input: ReplyInput,
 ) -> Result<Enqueued, AppError> {
+    enqueue_target(deps, ctx, Target::Conversation(id), input).await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SendInput {
+    pub channel: Channel,
+    pub text: String,
+    pub intent: SendIntent,
+    #[serde(default)]
+    pub request_key: Option<String>,
+}
+
+pub async fn send(
+    deps: &Deps,
+    ctx: &Ctx,
+    person: PersonId,
+    input: SendInput,
+) -> Result<ReplyOut, AppError> {
+    ctx.require(Permission::InboxWork)?;
+    if input.intent != SendIntent::Commercial {
+        return Err(AppError::validation(
+            "send requires commercial intent",
+            json!({"field":"intent"}),
+        ));
+    }
+    let input_reply = ReplyInput {
+        text: input.text,
+        intent: input.intent,
+        request_key: input.request_key,
+        subject: None,
+        in_reply_to: None,
+        references: vec![],
+    };
+    match enqueue_target(
+        deps,
+        ctx,
+        Target::Person(person, input.channel),
+        input_reply,
+    )
+    .await?
+    {
+        Enqueued::Existing(out) => Ok(out),
+        Enqueued::New(id) => send_step(deps, ctx, id).await,
+    }
+}
+pub(super) enum Target {
+    Conversation(ConversationId),
+    Person(PersonId, Channel),
+}
+async fn enqueue_target(
+    deps: &Deps,
+    ctx: &Ctx,
+    target: Target,
+    input: ReplyInput,
+) -> Result<Enqueued, AppError> {
     ctx.require(Permission::InboxWork)?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
+    let result = enqueue_in(deps, ctx, r.as_mut(), target, input, Purpose::Reply).await;
+    if result.is_ok()
+        || result
+            .as_ref()
+            .is_err_and(|e| e.code == ErrorCode::Forbidden)
+    {
+        r.commit().await?;
+    }
+    result
+}
+
+pub(super) enum Purpose<'a> {
+    Reply,
+    Quote(&'a crate::ports::compliance::QuoteRow, Option<&'a str>),
+    Appointment(&'a crate::ports::compliance::AppointmentRow),
+}
+
+/// Shared phase A: caller owns the workspace lock and commits related business rows atomically.
+pub(super) async fn enqueue_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    target: Target,
+    input: ReplyInput,
+    purpose: Purpose<'_>,
+) -> Result<Enqueued, AppError> {
+    ctx.require(Permission::InboxWork)?;
     let key = input
         .request_key
         .as_deref()
@@ -104,41 +192,211 @@ pub async fn enqueue(
     {
         return Ok(Enqueued::Existing(serde_json::from_value(out)?));
     }
-    if input.intent != SendIntent::Reply {
+    let text = required("text", &input.text)?;
+    if text.len() > 1_000_000 {
         return Err(AppError::validation(
-            "commercial sending is not available",
-            json!({"field":"intent"}),
+            "message too large",
+            json!({"field":"text"}),
         ));
     }
-    let text = required("text", &input.text)?;
-    let c = lock_conversation(r.as_mut(), id).await?;
-    let j = lock_current_journey(r.as_mut(), c.person_id).await?;
+    let c = match target {
+        Target::Conversation(id) => lock_conversation(r, id).await?,
+        Target::Person(person, channel) => {
+            let kind = match channel {
+                Channel::Sms => "sms_line",
+                Channel::Email => "mailbox",
+                Channel::WhatsApp => "whatsapp_cloud",
+                Channel::Messenger => "messenger",
+                Channel::InstagramDm => "instagram_dm",
+                _ => {
+                    return Err(AppError::validation(
+                        "unsupported send channel",
+                        json!({"field":"channel"}),
+                    ));
+                }
+            };
+            let mut caps = r
+                .capabilities()
+                .list(crate::ports::CapabilityFilter {
+                    kind: Some(kind),
+                    ..Default::default()
+                })
+                .await?
+                .into_iter()
+                .filter(|c| {
+                    effective_status(c, ctx.now) == EffectiveStatus::Verified && c.has_sealed_config
+                });
+            let cap = caps.next().ok_or_else(|| refused("capability_down"))?;
+            if caps.next().is_some() {
+                return Err(AppError::conflict("ambiguous send capability"));
+            }
+            match r.conversations().find(person, cap.id).await? {
+                Some(c) => c,
+                None => Conversation {
+                    id: ConversationId::from(deps.ids.uuid()),
+                    workspace_id: ctx.workspace_id,
+                    person_id: person,
+                    capability_id: cap.id,
+                    kind_key: kind.into(),
+                    state: ConvState::Open,
+                    executor: Executor::Agent,
+                    executor_generation: 0,
+                    last_inbound_at: None,
+                    last_outbound_at: None,
+                    created_at: ctx.now,
+                    updated_at: ctx.now,
+                },
+            }
+        }
+    };
+    let id = c.id;
+    let j = lock_current_journey(r, c.person_id).await?;
     let author = match ctx.actor {
         Actor::Human { user_id } => Author::Human(user_id),
         Actor::Agent { .. } => Author::Agent,
         Actor::System { .. } => Author::System,
     };
-    let cap = capability(r.as_mut(), &c).await?;
-    fence(
-        r.as_mut(),
+    let cap = capability(r, &c).await?;
+    if let Err(error) = fence(
+        r,
         ctx,
         &c,
         j.as_ref(),
         &cap,
         c.executor_generation,
-        author,
+        (author, input.intent),
     )
-    .await?;
+    .await
+    {
+        if error.code == ErrorCode::Forbidden {
+            record(
+                r,
+                ctx,
+                "inbox.send.refused",
+                "person",
+                c.person_id,
+                json!({"person_id":c.person_id,"reason":error.message}),
+            )
+            .await?;
+        }
+        return Err(error);
+    }
+    // Only an accepted send may create a conversation. No inbound time is manufactured.
+    if r.conversations().get(id).await?.is_none() {
+        r.conversations().insert_for_send(c.clone()).await?;
+    }
     // Validate recipient ambiguity before creating any durable outbound intent.
-    recipient(r.as_mut(), &c, &cap).await?;
+    let recipient = recipient(r, &c, &cap).await?;
     let message_id = MessageId::from(deps.ids.uuid());
+    let outbox_id = deps.ids.uuid();
+    let mut intent = json!({"kind":input.intent,"request_key":key});
+    match &purpose {
+        Purpose::Reply => {}
+        Purpose::Quote(quote, key) => {
+            intent["quote_id"] = json!(quote.id);
+            intent["quote_response"] = serde_json::to_value(quote)?;
+            intent["request_key"] = json!(key);
+        }
+        Purpose::Appointment(appointment) => intent["appointment_id"] = json!(appointment.id),
+    }
+
+    if cap.kind_key == "mailbox" {
+        let base = deps
+            .apps
+            .public_base_url()
+            .ok_or_else(|| AppError::conflict("public base URL required for mail"))?;
+        let host = base
+            .host_str()
+            .ok_or_else(|| AppError::conflict("public base host required for mail"))?;
+        let header = |value: &str| -> Result<(), AppError> {
+            if value.len() > 998 || value.chars().any(char::is_control) {
+                return Err(AppError::validation(
+                    "invalid mail header",
+                    json!({"field":"mail"}),
+                ));
+            }
+            Ok(())
+        };
+        let subject = input.subject.unwrap_or_else(|| "Re:".into());
+        header(&subject)?;
+        let in_reply_to = match input.in_reply_to {
+            Some(id) => Some(id),
+            None => r
+                .messages()
+                .recent(c.id, 500)
+                .await?
+                .into_iter()
+                .rev()
+                .find(|m| m.direction == Direction::Inbound)
+                .and_then(|m| m.external_id)
+                .filter(|id| id.starts_with('<') && id.ends_with('>')),
+        };
+        let mut references = input.references;
+        if let Some(id) = &in_reply_to {
+            header(id)?;
+            if !references.contains(id) {
+                references.push(id.clone());
+            }
+        }
+        if references.len() > 50 {
+            return Err(AppError::validation(
+                "too many mail references",
+                json!({"field":"references"}),
+            ));
+        }
+        for reference in &references {
+            header(reference)?;
+        }
+        intent["mail_account"] = json!(cap.external_id);
+        intent["mail_hosts"] = cap.connector_public["hosts"].clone();
+        let attachments = if let Purpose::Appointment(appointment) = &purpose {
+            let sealed = r
+                .capabilities()
+                .read_sealed(cap.id)
+                .await?
+                .ok_or_else(|| AppError::conflict("mailbox credentials unavailable"))?;
+            let Credential::Mailbox { from_address, .. } =
+                open_credential(deps, ctx.workspace_id, &sealed)?
+            else {
+                return Err(AppError::conflict("mailbox credentials required"));
+            };
+            vec![crate::ports::connectors::Attachment {
+                filename: "appointment.ics".into(),
+                mime: "text/calendar".into(),
+                bytes: ics(
+                    &appointment.appointment,
+                    &from_address,
+                    &recipient,
+                    &appointment.id.to_string(),
+                )
+                .into_bytes(),
+            }]
+        } else {
+            vec![]
+        };
+        intent["mail"] = serde_json::to_value(MailMessage {
+            to: recipient,
+            subject,
+            text: text.clone(),
+            message_id: format!("<{outbox_id}@{host}>"),
+            in_reply_to,
+            references,
+            attachments,
+        })?;
+    } else if input.subject.is_some() || input.in_reply_to.is_some() || !input.references.is_empty()
+    {
+        return Err(AppError::validation(
+            "mail headers require an email conversation",
+            json!({"field":"subject"}),
+        ));
+    }
     let row = OutboxRow {
-        id: deps.ids.uuid(),
+        id: outbox_id,
         workspace_id: ctx.workspace_id,
         conversation_id: id,
         message_id,
         capability_id: c.capability_id,
-        intent: json!({"kind":input.intent,"request_key":key}),
+        intent,
         expected_generation: c.executor_generation,
         fence_snapshot: None,
         conversation_merged: false,
@@ -173,7 +431,7 @@ pub async fn enqueue(
         .await?;
     r.outbox().insert(row.clone()).await?;
     record(
-        r.as_mut(),
+        r,
         ctx,
         "inbox.reply.queued",
         "outbox",
@@ -181,7 +439,6 @@ pub async fn enqueue(
         json!({"conversation_id":id,"message_id":message_id}),
     )
     .await?;
-    r.commit().await?;
     Ok(Enqueued::New(row.id))
 }
 async fn lock_conversation(
@@ -215,16 +472,39 @@ async fn fence(
     j: Option<&Journey>,
     cap: &Capability,
     generation: u32,
-    author: Author,
+    purpose: (Author, SendIntent),
 ) -> Result<(), AppError> {
+    let (author, intent) = purpose;
     let person = r
         .people()
         .get(c.person_id)
         .await?
         .ok_or_else(|| AppError::not_found("no such person"))?;
+    let channel =
+        channel_for_kind(&c.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
+    let history = super::consent::history(r, c.person_id).await?;
+    let consents: Vec<_> = history
+        .consents
+        .into_iter()
+        .map(|mut row| {
+            row.person_id = c.person_id;
+            row
+        })
+        .collect();
+    let suppressions: Vec<_> = history
+        .suppressions
+        .into_iter()
+        .map(|mut row| {
+            row.person_id = c.person_id;
+            row
+        })
+        .collect();
     may_send(
         &FenceCtx {
             journey_status: j.map(|j| j.status),
+            suppressed: suppressions.iter().any(|s| s.channel == channel),
+            consent_ok: commercial_allowed(&consents, &suppressions, channel).is_ok(),
+            intent,
             person_erased: person.erased_at.is_some(),
             person_merged: person.merged_into.is_some(),
             conversation_state: c.state.clone(),
@@ -237,10 +517,26 @@ async fn fence(
         matches!(author, Author::Agent),
     )
     .map_err(|e| refused(e.to_string()))?;
-    if !c.last_inbound_at.is_some_and(|at| {
+    let window_open = c.last_inbound_at.is_some_and(|at| {
         at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
-    }) {
-        return Err(refused("reply_window_closed"));
+    });
+    if !window_open {
+        if intent == SendIntent::Commercial
+            && matches!(
+                channel,
+                Channel::WhatsApp | Channel::Messenger | Channel::InstagramDm
+            )
+        {
+            // Templates and message tags are deferred to M2c; ordinary Meta sends require
+            // the provider's window even when local commercial consent is present.
+            return Err(AppError::validation(
+                "provider_window_closed",
+                json!({"reason": "provider_window_closed"}),
+            ));
+        }
+        if intent == SendIntent::Reply {
+            return Err(refused("reply_window_closed"));
+        }
     }
     // Recovery must honor the same workspace gate as the public surfaces.
     if r.workspace().get().await?.status != WorkspaceStatus::Active {
@@ -292,6 +588,59 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         .await?
         .ok_or_else(|| AppError::not_found("no such message"))?;
     let cap = capability(r.as_mut(), &c).await?;
+    if let Some(quote_id) = row.intent.get("quote_id") {
+        let quote_id = serde_json::from_value(quote_id.clone())?;
+        let quote = r
+            .quotes()
+            .get(quote_id)
+            .await?
+            .ok_or_else(|| AppError::internal("outbox quote missing"))?;
+        if quote.quote.valid_until <= ctx.now || quote.quote.state == QuoteState::Expired {
+            r.quotes().set_state(quote_id, QuoteState::Expired).await?;
+            row.state = "refused".into();
+            row.last_error = Some("quote_expired".into());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(
+                    row.message_id,
+                    MsgStatus::Refused {
+                        reason: "quote_expired".into(),
+                    },
+                    None,
+                    None,
+                )
+                .await?;
+            save_result(r.as_mut(), ctx, &row).await?;
+            r.commit().await?;
+            return Ok(Claim::Done(output(&row)));
+        }
+    }
+    if let Some(appointment_id) = row.intent.get("appointment_id") {
+        let appointment_id = serde_json::from_value(appointment_id.clone())?;
+        let booked = r
+            .appointments()
+            .get(appointment_id)
+            .await?
+            .is_some_and(|a| a.appointment.state == AppointmentState::Booked);
+        if !booked {
+            row.state = "refused".into();
+            row.last_error = Some("appointment_not_booked".into());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(
+                    row.message_id,
+                    MsgStatus::Refused {
+                        reason: "appointment_not_booked".into(),
+                    },
+                    None,
+                    None,
+                )
+                .await?;
+            save_result(r.as_mut(), ctx, &row).await?;
+            r.commit().await?;
+            return Ok(Claim::Done(output(&row)));
+        }
+    }
     if let Err(e) = fence(
         r.as_mut(),
         ctx,
@@ -299,11 +648,14 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         j.as_ref(),
         &cap,
         row.expected_generation,
-        message.author,
+        (
+            message.author,
+            serde_json::from_value(row.intent["kind"].clone())?,
+        ),
     )
     .await
     {
-        if e.code != ErrorCode::Forbidden {
+        if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) {
             return Err(e);
         }
         row.state = "refused".into();
@@ -312,16 +664,42 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         r.messages()
             .set_status(
                 row.message_id,
-                MsgStatus::Refused { reason: e.message },
+                MsgStatus::Refused {
+                    reason: e.message.clone(),
+                },
                 None,
                 None,
             )
             .await?;
         save_result(r.as_mut(), ctx, &row).await?;
         r.commit().await?;
+        if e.code == ErrorCode::Validation {
+            return Err(e);
+        }
         return Ok(Claim::Done(output(&row)));
     }
-    let prepared = prepare(deps, r.as_mut(), &c, &cap).await;
+    let prepared = prepare(deps, r.as_mut(), &c, &cap)
+        .await
+        .and_then(|prepared| {
+            if cap.kind_key == "mailbox" {
+                let reason = if row.intent["mail_account"] != json!(cap.external_id)
+                    || row.intent["mail_hosts"] != cap.connector_public["hosts"]
+                {
+                    Some("mailbox_binding_changed")
+                } else if row.intent["mail"]["to"].as_str() != Some(prepared.1.as_str()) {
+                    Some("reply_recipient_changed")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    return Err(AppError::validation(
+                        "email binding changed after enqueue",
+                        json!({"reason":reason}),
+                    ));
+                }
+            }
+            Ok(prepared)
+        });
     let (credential, recipient, provider) = match prepared {
         Ok(p) => p,
         Err(e) if e.code == ErrorCode::Validation => {
@@ -386,7 +764,9 @@ async fn prepare(
     let provider =
         provider_for_kind(&cap.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
     if (cap.kind_key == "sms_line" && deps.connectors.sms(provider).is_none())
-        || (cap.kind_key != "sms_line" && deps.connectors.messaging(provider).is_none())
+        || (cap.kind_key == "mailbox" && deps.connectors.mail_sender(provider).is_none())
+        || (!matches!(cap.kind_key.as_str(), "sms_line" | "mailbox")
+            && deps.connectors.messaging(provider).is_none())
     {
         return Err(refused("connector_unavailable"));
     }
@@ -406,6 +786,7 @@ async fn recipient(
 ) -> Result<String, AppError> {
     let channel = match cap.kind_key.as_str() {
         "sms_line" | "whatsapp_cloud" => IdentityChannel::Phone,
+        "mailbox" => IdentityChannel::Email,
         "instagram_dm" => IdentityChannel::InstagramDm,
         "messenger" => IdentityChannel::Messenger,
         _ => return Err(refused("unsupported_reply_channel")),
@@ -423,7 +804,7 @@ async fn recipient(
         .into_iter()
         .filter(|i| i.active && i.channel == channel)
         .filter_map(|i| {
-            let value = if channel == IdentityChannel::Phone {
+            let value = if matches!(channel, IdentityChannel::Phone | IdentityChannel::Email) {
                 Some(i.value_normalized)
             } else {
                 prefix
@@ -456,12 +837,31 @@ async fn recipient(
 
 /// Claim at most once. A sending or terminal entry is never put to the provider again.
 pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, AppError> {
+    // Mail intent is stored only by enqueue's mailbox branch. Release this discovery read
+    // before refreshing: never wait for another pooled connection while holding inbox locks.
+    let mail_queued = {
+        let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+        r.outbox()
+            .get(id)
+            .await?
+            .is_some_and(|row| row.state == "queued" && row.intent.get("mail").is_some())
+    };
+    if mail_queued {
+        crate::usecases::connector::refresh_tenant_hosts(deps, ctx.workspace_id).await?;
+    }
     let ctx = fresh(deps, ctx);
     let p = match claim(deps, &ctx, id).await? {
         Claim::Done(out) => return Ok(out),
         Claim::Ready(p) => p,
     };
-    let result = if p.capability.kind_key == "sms_line" {
+    let result = if p.capability.kind_key == "mailbox" {
+        let mail: MailMessage = serde_json::from_value(p.row.intent["mail"].clone())?;
+        deps.connectors
+            .mail_sender(p.provider)
+            .ok_or_else(|| AppError::internal("sender disappeared"))?
+            .send(ctx.workspace_id, &p.credential, mail)
+            .await
+    } else if p.capability.kind_key == "sms_line" {
         deps.connectors
             .sms(p.provider)
             .ok_or_else(|| AppError::internal("sender disappeared"))?
@@ -470,6 +870,7 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
                 &p.recipient,
                 &p.message.body,
                 Some(&id.to_string()),
+                p.row.intent["kind"] == "commercial",
             )
             .await
     } else {
@@ -498,12 +899,26 @@ pub async fn record_result(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
+    let out = record_result_in(deps, ctx, r.as_mut(), id, result, false).await?;
+    r.commit().await?;
+    Ok(out)
+}
+
+/// Consumer reconciliation runs inside its event-claim transaction.
+pub(super) async fn record_result_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    id: Uuid,
+    result: Result<SendReceipt, ConnectorError>,
+    evidence: bool,
+) -> Result<ReplyOut, AppError> {
     let hint = r
         .outbox()
         .get(id)
         .await?
         .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
-    let c = lock_conversation(r.as_mut(), hint.conversation_id).await?;
+    let c = lock_conversation(r, hint.conversation_id).await?;
     let journey_id = hint
         .fence_snapshot
         .as_ref()
@@ -523,7 +938,9 @@ pub async fn record_result(
     // Recovery may time out a live provider future. Its eventual result still resolves that
     // interrupted claim, including a definite failure; completed failures are never replayed.
     let recovered = row.last_error.as_deref() == Some("send_interrupted");
-    if row.state != "sending" && !(row.state == "unknown" && (result.is_ok() || recovered)) {
+    if row.state != "sending"
+        && !(row.state == "unknown" && (result.is_ok() || recovered || evidence))
+    {
         return Ok(output(&row));
     }
     let (status, external, cost) = match result {
@@ -598,9 +1015,22 @@ pub async fn record_result(
                     }
                 }
             }
+            if let Some(quote_id) = row.intent.get("quote_id") {
+                super::quotes::sent_in(
+                    deps,
+                    ctx,
+                    r,
+                    serde_json::from_value(quote_id.clone())?,
+                    sent_at,
+                    row.fence_snapshot
+                        .as_ref()
+                        .is_some_and(|s| s["journey_closed"] == true),
+                )
+                .await?;
+            }
             if terminal {
                 record(
-                    r.as_mut(),
+                    r,
                     ctx,
                     "inbox.sent_after_terminal",
                     "outbox",
@@ -664,8 +1094,7 @@ pub async fn record_result(
     r.messages()
         .set_status(row.message_id, status, external, cost)
         .await?;
-    save_result(r.as_mut(), ctx, &row).await?;
-    r.commit().await?;
+    save_result(r, ctx, &row).await?;
     Ok(output(&row))
 }
 pub(super) async fn save_result(
@@ -683,14 +1112,21 @@ pub(super) async fn save_result(
             message_id: row.message_id,
             state: "unknown".into(),
         };
-        let response = serde_json::to_value(output(row))?;
+        let response_value = |delivery: ReplyOut| -> Result<Value, AppError> {
+            let delivery = serde_json::to_value(delivery)?;
+            Ok(match row.intent.get("quote_response") {
+                Some(quote) => json!({"quote":quote,"delivery":delivery}),
+                None => delivery,
+            })
+        };
+        let response = response_value(output(row))?;
         if !r
             .request_keys()
-            .complete(key, serde_json::to_value(queued)?, response.clone())
+            .complete(key, response_value(queued)?, response.clone())
             .await?
         {
             r.request_keys()
-                .complete(key, serde_json::to_value(unknown)?, response)
+                .complete(key, response_value(unknown)?, response)
                 .await?;
         }
     }

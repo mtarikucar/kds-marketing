@@ -170,7 +170,7 @@ describe('api wrappers: connectors', () => {
         password: 'p',
         msgheader: 'H',
         stray: 'x',
-      } as unknown as Parameters<typeof setCredentials>[0]['credential'],
+      } as unknown as Extract<Parameters<typeof setCredentials>[0]['credential'], { kind: 'netgsm_sms' }>,
     });
     expect(calls.map((c) => c.body)).toEqual([
       { capability_id: CAP, credential: { kind: 'netgsm_pbx', username: 'u', password: 'p', pbxnum: '9' } },

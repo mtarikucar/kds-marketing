@@ -12,3 +12,5 @@ pub use db::TestDb;
 pub mod inbox_contract;
 
 pub mod inbox_merge_contract;
+
+pub mod compliance_contract;

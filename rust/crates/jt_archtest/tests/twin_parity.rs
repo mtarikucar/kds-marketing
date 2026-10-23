@@ -2072,6 +2072,7 @@ async fn panel_mcp_consumer_effect_parity() {
             "{}",
             json_body(response).await
         );
+        let original_task = json_body(response).await;
         let input = json!({"kind":"won", "idempotency_key":format!("won-{i}"), "payload":{"product":"Service","amount_minor":12500,"currency":"TRY"}});
         let output = match i {
             0 => {
@@ -2146,8 +2147,32 @@ async fn panel_mcp_consumer_effect_parity() {
         assert_eq!(human["status_labels"]["won"], "Satış tamamlandı");
         assert_eq!(human["status_labels"]["new"], "Yeni");
         assert_eq!(human["journey"]["status"], "won");
-        assert_eq!(human["tasks"].as_array().unwrap().len(), 1);
-        assert_eq!(human["tasks"][0]["status"], "done");
+        let tasks = human["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 2);
+        let closed = tasks
+            .iter()
+            .find(|t| t["id"] == original_task["id"])
+            .unwrap();
+        assert_eq!(closed["status"], "done");
+        let mut r = deps.uow.tenant(ws).await.unwrap();
+        let commission = r
+            .commissions()
+            .by_journey(journey.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            commission.commission.state,
+            jt_inbox::CommissionState::NoPayee
+        );
+        assert_eq!(commission.commission.payee, None);
+        let followup = tasks
+            .iter()
+            .find(|t| t["id"] == json!(commission.id))
+            .unwrap();
+        assert_eq!(followup["status"], "open");
+        assert_eq!(followup["assignee"], Value::Null);
+        drop(r);
         assert_eq!(human["events"].as_array().unwrap().len(), 1);
         let mut state = human["journey"].clone();
         for key in ["id", "person_id", "updated_at"] {
@@ -2157,4 +2182,1132 @@ async fn panel_mcp_consumer_effect_parity() {
     }
     assert_eq!(results[0], results[1]);
     assert_eq!(results[1], results[2]);
+}
+
+#[tokio::test]
+async fn email_reply_headers_and_request_key_have_http_mcp_parity() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    use jt_inbox::{ConvState, Conversation, ConversationId, Executor};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("conversation-parity").await;
+    let sender = Arc::new(ScriptedConnector::new(Provider::Mail));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(sender.clone())),
+    );
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    sender.push_probe(ProbeResult::success(
+        42,
+        json!({"account_id":"support@example.com"}),
+    ));
+    let cap=ok(send(&app,panel(Method::POST,"/api/connectors/credentials",Some(&cookie),Some(json!({"kind_key":"mailbox","name":"Mail","credential":{"kind":"mailbox","smtp_host":"smtp.example.com","smtp_port":465,"imap_host":"imap.example.com","imap_port":993,"username":"support@example.com","password":"test-secret","from_address":"support@example.com","tls":"implicit"}})))).await).await;
+    let person=ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"email","value":"ada@example.com"}],"source":"form"})))).await).await;
+    let id = ConversationId::new_v7();
+    let now = deps.clock.now();
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    r.people().set_write_time(now).await.unwrap();
+    r.conversations()
+        .upsert_on_inbound(Conversation {
+            id,
+            workspace_id: ws,
+            person_id: serde_json::from_value(person["person"]["id"].clone()).unwrap(),
+            capability_id: serde_json::from_value(cap["capability"]["id"].clone()).unwrap(),
+            kind_key: "mailbox".into(),
+            state: ConvState::Ours,
+            executor: Executor::Agent,
+            executor_generation: 0,
+            last_inbound_at: Some(now),
+            last_outbound_at: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/inbox/conversations/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.conversations_get",
+        json!({"conversation_id":id}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    sender.push_mail(Ok(jt_app::ports::connectors::SendReceipt {
+        provider_id: "receipt-1".into(),
+        cost_minor: None,
+    }));
+    let input = json!({"text":"Hello","intent":"reply","request_key":"parity-reply","subject":"Re: Question","in_reply_to":"<question@example.com>","references":["<question@example.com>"]});
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/conversations/{id}/reply"),
+            Some(&cookie),
+            Some(input.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let mut args = input;
+    args["conversation_id"] = json!(id);
+    let agent = call_tool(&app, &key, &session, "jeeta.inbox.reply", args).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["state"], "sent");
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(r.messages().list(id, 50).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn mailbox_hosts_probe_and_retire_surface_parity() {
+    use jt_testkit::fakes::HostCall;
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("mailbox-parity").await;
+    let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(mail.clone())),
+    );
+    let hosts = RecordingTenantHosts::new();
+    deps.hosts = Arc::new(hosts.clone());
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    for surface in ["panel", "mcp"] {
+        let account = format!("{surface}@example.com");
+        let smtp = format!("smtp.{surface}.example.com");
+        let imap = format!("imap.{surface}.example.com");
+        let body = json!({"kind_key":"mailbox","name":"Mail","credential":{"kind":"mailbox","smtp_host":smtp,"smtp_port":465,"imap_host":imap,"imap_port":993,"username":account,"password":"mail-private","from_address":account,"tls":"implicit"}});
+        mail.push_probe(ProbeResult::success(42, json!({"account_id":account})));
+        let created = if surface == "panel" {
+            let response = send(
+                &app,
+                panel(
+                    Method::POST,
+                    "/api/connectors/credentials",
+                    Some(&cookie),
+                    Some(body),
+                ),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await
+        } else {
+            call_tool(
+                &app,
+                &key,
+                &session,
+                "jeeta.connector.set_credentials",
+                body,
+            )
+            .await
+        };
+        assert_eq!(created["capability"]["status"], "verified", "{created}");
+        assert!(!created.to_string().contains("mail-private"));
+        assert_eq!(
+            created["capability"]["connector_public"]["hosts"],
+            json!([imap, smtp])
+        );
+        assert!(hosts.calls().iter().any(|c| matches!(c,HostCall::Rebuild(w,hs) if *w == ws && hs.contains(&smtp) && hs.contains(&imap))));
+        let id = created["capability"]["id"].as_str().unwrap();
+        mail.push_probe(ProbeResult::success(42, json!({"account_id":account})));
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("/api/connectors/{id}/probe"),
+                    Some(&cookie),
+                    None,
+                ),
+            )
+            .await,
+        )
+        .await;
+        mail.push_probe(ProbeResult::success(42, json!({"account_id":account})));
+        let agent = call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.connector.probe",
+            json!({"capability_id":id}),
+        )
+        .await;
+        assert_eq!(human, agent);
+        let retired = if surface == "panel" {
+            json_body(
+                send(
+                    &app,
+                    panel(
+                        Method::POST,
+                        &format!("/api/capabilities/{id}/retire"),
+                        Some(&cookie),
+                        Some(json!({"confirm":true})),
+                    ),
+                )
+                .await,
+            )
+            .await
+        } else {
+            call_tool(
+                &app,
+                &key,
+                &session,
+                "jeeta.capability.retire",
+                json!({"capability_id":id,"confirm":true}),
+            )
+            .await
+        };
+        assert_eq!(retired["capability"]["status"], "retired", "{retired}");
+        for host in [smtp, imap] {
+            assert!(hosts.calls().contains(&HostCall::Revoke(ws, host)));
+        }
+    }
+}
+
+#[tokio::test]
+async fn inbox_consent_suppressions_and_send_have_http_mcp_parity() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("consent-parity").await;
+    let sender =
+        Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(&["api.netgsm.com.tr"]));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(sender.clone())),
+    );
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    sender.push_probe(ProbeResult::success(42, json!({"account_id":"8508001234"})));
+    ok(send(&app,panel(Method::POST,"/api/connectors/credentials",Some(&cookie),Some(json!({"kind_key":"sms_line","name":"SMS","credential":{"kind":"netgsm_sms","usercode":"8508001234","password":"test-secret","msgheader":"ALFA"}})))).await).await;
+    let created=ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})))).await).await;
+    let person = created["person"]["id"].as_str().unwrap();
+    let base = format!("/api/inbox/people/{person}");
+    let input = json!({"channel":"sms","text":"Offer","intent":"commercial","request_key":"commercial-parity"});
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("{base}/send"),
+                Some(&cookie),
+                Some(input.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let mut args = input.clone();
+    args["person_id"] = json!(person);
+    let agent = tool_result(&app, &key, &session, "jeeta.inbox.send", args.clone()).await;
+    assert_eq!(human["code"], "FORBIDDEN");
+    assert_eq!(human["message"], "IZIN_YOK");
+    assert_eq!(agent["structuredContent"], human);
+    let consent =
+        json!({"channel":"sms","kind":"explicit","source":"agent","at":"2020-01-01T00:00:00Z"});
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/consents"),
+            Some(&cookie),
+            Some(consent.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let mut record_args = consent;
+    record_args["person_id"] = json!(person);
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.consent_record",
+        record_args,
+    )
+    .await;
+    assert_ne!(human["id"], agent["id"]);
+    for field in [
+        "person_id",
+        "channel",
+        "kind",
+        "source",
+        "at",
+        "sync_state",
+        "attempts",
+    ] {
+        assert_eq!(human[field], agent[field], "{field}");
+    }
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("{base}/consents"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.consent_list",
+            json!({"person_id":person})
+        )
+        .await
+    );
+    assert_eq!(human["consents"].as_array().unwrap().len(), 2);
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/suppressions"),
+            Some(&cookie),
+            Some(json!({"channel":"sms","reason":"manual"})),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.suppressions_add",
+            json!({"person_id":person,"channel":"sms","reason":"manual"})
+        )
+        .await
+    );
+    let human = ok(send(
+        &app,
+        panel(
+            Method::DELETE,
+            &format!("{base}/suppressions/sms/manual"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.suppressions_remove",
+            json!({"person_id":person,"channel":"sms","reason":"manual"})
+        )
+        .await
+    );
+    sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
+        provider_id: "commercial-1".into(),
+        cost_minor: None,
+    }));
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/send"),
+            Some(&cookie),
+            Some(input),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(&app, &key, &session, "jeeta.inbox.send", args).await
+    );
+    assert_eq!(human["state"], "sent");
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let person = serde_json::from_value(json!(person)).unwrap();
+    let conversations = r.conversations().list(Some(person), 10).await.unwrap();
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(conversations[0].last_inbound_at, None);
+    assert_eq!(
+        r.messages()
+            .list(conversations[0].id, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("quote-appointment-parity").await;
+    let sender =
+        Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(&["api.netgsm.com.tr"]));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(sender.clone())),
+    );
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    sender.push_probe(ProbeResult::success(42, json!({"account_id":"8508001234"})));
+    ok(send(&app,panel(Method::POST,"/api/connectors/credentials",Some(&cookie),Some(json!({"kind_key":"sms_line","name":"SMS","credential":{"kind":"netgsm_sms","usercode":"8508001234","password":"test-secret","msgheader":"ALFA"}})))).await).await;
+    let created = ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})))).await).await;
+    let person = created["person"]["id"].as_str().unwrap();
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let j = r
+        .journeys()
+        .open_for(serde_json::from_value(json!(person)).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(r);
+    let base = format!("/api/inbox/journeys/{}", j.id);
+    ok(send(&app,panel(Method::POST,&format!("/api/inbox/people/{person}/consents"),Some(&cookie),Some(json!({"channel":"sms","kind":"explicit","source":"agent","at":"2020-01-01T00:00:00Z"})))).await).await;
+    let quote_input = json!({"amount_minor":12500,"currency":"TRY","valid_until":"2099-01-01T00:00:00Z","file_ref":"opaque:owner-reference","channel":"sms","text":"Quote details","intent":"commercial","request_key":"quote-parity"});
+    sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
+        provider_id: "quote-parity".into(),
+        cost_minor: None,
+    }));
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/quotes"),
+            Some(&cookie),
+            Some(quote_input.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let mut args = quote_input;
+    args["journey_id"] = json!(j.id);
+    assert_eq!(
+        human,
+        call_tool(&app, &key, &session, "jeeta.inbox.quotes_send", args).await
+    );
+    assert_eq!(human["delivery"]["state"], "sent");
+    let quote_id = human["quote"]["id"].as_str().unwrap();
+    let human = ok(send(
+        &app,
+        panel(Method::GET, &format!("{base}/quotes"), Some(&cookie), None),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.quotes_list",
+            json!({"journey_id":j.id})
+        )
+        .await
+    );
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/quotes/{quote_id}/accept"),
+            Some(&cookie),
+            Some(json!({})),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.quotes_accept",
+            json!({"quote_id":quote_id})
+        )
+        .await
+    );
+    assert_eq!(human["state"], "accepted");
+
+    let booking = json!({"starts_at":"2099-01-01T12:00:00Z","ends_at":"2099-01-01T13:00:00Z","location":"Office","intent":"reply"});
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/appointments"),
+            Some(&cookie),
+            Some(booking.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let mut args = booking.clone();
+    args["journey_id"] = json!(j.id);
+    let agent = call_tool(&app, &key, &session, "jeeta.inbox.appointments_book", args).await;
+    assert_ne!(human["appointment"]["id"], agent["appointment"]["id"]);
+    for field in [
+        "journey_id",
+        "starts_at",
+        "ends_at",
+        "location",
+        "state",
+        "created_at",
+    ] {
+        assert_eq!(
+            human["appointment"][field], agent["appointment"][field],
+            "{field}"
+        );
+    }
+    assert_eq!(human["notification"], agent["notification"]);
+    assert_eq!(human["reminder"]["due_at"], "2099-01-01T11:00:00Z");
+    // Existing journey reads expose persisted bookings on both surfaces after reload.
+    let read = ok(send(&app, panel(Method::GET, &base, Some(&cookie), None)).await).await;
+    assert_eq!(read["appointments"].as_array().unwrap().len(), 2);
+    assert!(
+        read["appointments"]
+            .as_array()
+            .unwrap()
+            .contains(&human["appointment"])
+    );
+    assert!(
+        read["appointments"]
+            .as_array()
+            .unwrap()
+            .contains(&agent["appointment"])
+    );
+    assert_eq!(
+        read,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.journeys_get",
+            json!({"journey_id":j.id})
+        )
+        .await
+    );
+    let held_id = human["appointment"]["id"].as_str().unwrap();
+    let cancel_id = agent["appointment"]["id"].as_str().unwrap();
+    for (id, action) in [(held_id, "held"), (cancel_id, "cancel")] {
+        let human = ok(send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/appointments/{id}/{action}"),
+                Some(&cookie),
+                Some(json!({})),
+            ),
+        )
+        .await)
+        .await;
+        assert_eq!(
+            human,
+            call_tool(
+                &app,
+                &key,
+                &session,
+                &format!("jeeta.inbox.appointments_{action}"),
+                json!({"appointment_id":id})
+            )
+            .await
+        );
+    }
+    let mut invalid = booking;
+    invalid["ends_at"] = json!("2099-01-01T11:00:00Z");
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("{base}/appointments"),
+                Some(&cookie),
+                Some(invalid.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    invalid["journey_id"] = json!(j.id);
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.appointments_book",
+        invalid,
+    )
+    .await;
+    assert_eq!(human["code"], "VALIDATION");
+    assert_eq!(human, agent["structuredContent"]);
+    // A late provider receipt is historical even on the actual PostgreSQL repositories.
+    ok(send(
+        &app,
+        panel(
+            Method::PUT,
+            "/api/inbox/lost-reasons",
+            Some(&cookie),
+            Some(json!({"key":"fiyat","label":"Fiyat","active":true})),
+        ),
+    )
+    .await)
+    .await;
+    sender.push_sms(Err(ConnectorError::unknown(
+        "provider acknowledgement lost",
+    )));
+    let late = ok(send(&app,panel(Method::POST,&format!("{base}/quotes"),Some(&cookie),Some(json!({"amount_minor":100,"currency":"TRY","valid_until":"2099-01-01T00:00:00Z","channel":"sms","text":"Revised quote","intent":"commercial","request_key":"late-quote"})))).await).await;
+    assert_eq!(late["delivery"]["state"], "unknown");
+    ok(send(&app,panel(Method::POST,&format!("{base}/events"),Some(&cookie),Some(json!({"kind":"lost","idempotency_key":"close-late-quote","payload":{"reason_key":"fiyat"}})))).await).await;
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let closed = r.journeys().get(j.id).await.unwrap().unwrap();
+    let rows = r
+        .outbox()
+        .list_pending(
+            "unknown",
+            deps.clock.now() + std::time::Duration::from_secs(1),
+            100,
+        )
+        .await
+        .unwrap();
+    let outbox = rows
+        .iter()
+        .find(|row| json!(row.message_id) == late["delivery"]["message_id"])
+        .unwrap()
+        .id;
+    drop(r);
+    let ctx = jt_app::ctx::Ctx {
+        workspace_id: ws,
+        actor: jt_ledger::Actor::System {
+            component: "quote-evidence".into(),
+        },
+        permissions: Default::default(),
+        role_key: None,
+        now: deps.clock.now(),
+        agent_connection_id: None,
+    };
+    for _ in 0..2 {
+        jt_app::usecases::inbox::replies::record_result(
+            &deps,
+            &ctx,
+            outbox,
+            Ok(jt_app::ports::connectors::SendReceipt {
+                provider_id: "late-quote".into(),
+                cost_minor: None,
+            }),
+        )
+        .await
+        .unwrap();
+    }
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(r.journeys().get(j.id).await.unwrap().unwrap(), closed);
+    assert!(
+        r.journeys()
+            .event_by_key(&format!(
+                "quote:{}:sent",
+                late["quote"]["id"].as_str().unwrap()
+            ))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    drop(r);
+    // Missing identifiers must have the same error on both surfaces.
+    let missing = jt_inbox::JourneyId::new_v7();
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/quotes/{missing}/accept"),
+                Some(&cookie),
+                Some(json!({})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.quotes_accept",
+        json!({"quote_id":missing}),
+    )
+    .await;
+    assert_eq!(human["code"], "NOT_FOUND");
+    assert_eq!(human, agent["structuredContent"]);
+}
+
+#[tokio::test]
+async fn inbox_commissions_have_http_mcp_parity_and_atomic_won() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("commission-parity").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    for input in [
+        json!({"rate_bp":1000}),
+        json!({"user_id":user,"rate_bp":100}),
+    ] {
+        let human = ok(send(
+            &app,
+            panel(
+                Method::PUT,
+                "/api/inbox/commission-rates",
+                Some(&cookie),
+                Some(input.clone()),
+            ),
+        )
+        .await)
+        .await;
+        assert_eq!(
+            human,
+            call_tool(
+                &app,
+                &key,
+                &session,
+                "jeeta.inbox.commission_rates_set",
+                input
+            )
+            .await
+        );
+    }
+    let mut commission_ids = vec![];
+    for n in 0..3 {
+        let person = ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Commission example","identities":[{"channel":"email","value":format!("commission-{n}@example.test")}],"source":"form"})))).await).await;
+        let mut r = deps.uow.tenant(ws).await.unwrap();
+        let j = r
+            .journeys()
+            .open_for(serde_json::from_value(person["person"]["id"].clone()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(r);
+        let base = format!("/api/inbox/journeys/{}", j.id);
+        if n != 2 {
+            ok(send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("{base}/owner"),
+                    Some(&cookie),
+                    Some(json!({"user_id":user})),
+                ),
+            )
+            .await)
+            .await;
+        }
+        let won = json!({"kind":"won","idempotency_key":format!("won-{n}"),"payload":{"product":"Private product","amount_minor":150,"currency":"TRY"}});
+        ok(send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("{base}/events"),
+                Some(&cookie),
+                Some(won.clone()),
+            ),
+        )
+        .await)
+        .await;
+        let mut args = won.clone();
+        args["journey_id"] = json!(j.id);
+        assert_eq!(
+            call_tool(&app, &key, &session, "jeeta.inbox.events_report", args).await["duplicate"],
+            true
+        );
+        let mut terminal = won;
+        terminal["idempotency_key"] = json!(format!("terminal-{n}"));
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("{base}/events"),
+                    Some(&cookie),
+                    Some(terminal.clone()),
+                ),
+            )
+            .await,
+        )
+        .await;
+        terminal["journey_id"] = json!(j.id);
+        let agent = tool_result(&app, &key, &session, "jeeta.inbox.events_report", terminal).await;
+        assert_eq!(human["code"], "CONFLICT");
+        assert_eq!(human["details"]["reason"], "terminal");
+        assert_eq!(human, agent["structuredContent"]);
+        let mut r = deps.uow.tenant(ws).await.unwrap();
+        let row = r.commissions().by_journey(j.id).await.unwrap().unwrap();
+        assert_eq!(row.commission.rate_bp, if n == 2 { 1000 } else { 100 });
+        assert_eq!(row.commission.amount_minor, if n == 2 { 15 } else { 2 });
+        if n == 2 {
+            assert_eq!(row.commission.state, jt_inbox::CommissionState::NoPayee);
+            let tasks = r.tasks().list(j.id).await.unwrap();
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].assignee, None);
+            assert_eq!(tasks[0].status, jt_inbox::TaskStatus::Open);
+        }
+        commission_ids.push(row.id);
+    }
+    for (query, args, count) in [
+        (String::new(), json!({}), 3),
+        (
+            format!("?state=pending&payee={user}"),
+            json!({"state":"pending","payee":user}),
+            2,
+        ),
+        ("?state=no_payee".into(), json!({"state":"no_payee"}), 1),
+    ] {
+        let human = ok(send(
+            &app,
+            panel(
+                Method::GET,
+                &format!("/api/inbox/commissions{query}"),
+                Some(&cookie),
+                None,
+            ),
+        )
+        .await)
+        .await;
+        assert_eq!(human.as_array().unwrap().len(), count);
+        assert_eq!(
+            human,
+            call_tool(&app, &key, &session, "jeeta.inbox.commissions_list", args).await
+        );
+    }
+    // NoPayee can never be approved or paid; Pending cannot be paid directly.
+    for (id, action) in [
+        (commission_ids[2], "approve"),
+        (commission_ids[2], "pay"),
+        (commission_ids[0], "pay"),
+    ] {
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("/api/inbox/commissions/{id}/{action}"),
+                    Some(&cookie),
+                    None,
+                ),
+            )
+            .await,
+        )
+        .await;
+        let agent = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.inbox.commissions_{action}"),
+            json!({"commission_id":id}),
+        )
+        .await;
+        assert_eq!(human["code"], "CONFLICT");
+        assert_eq!(human, agent["structuredContent"]);
+    }
+    // Separate commissions allow each surface to perform the same strict transition once.
+    for (action, state) in [("approve", "approved"), ("pay", "paid")] {
+        let human = ok(send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/commissions/{}/{action}", commission_ids[0]),
+                Some(&cookie),
+                None,
+            ),
+        )
+        .await)
+        .await;
+        let agent = call_tool(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.inbox.commissions_{action}"),
+            json!({"commission_id":commission_ids[1]}),
+        )
+        .await;
+        assert_eq!(human["state"], state);
+        for field in [
+            "workspace_id",
+            "payee",
+            "amount_minor",
+            "rate_bp",
+            "currency",
+            "state",
+            "created_at",
+        ] {
+            assert_eq!(human[field], agent[field], "{field}");
+        }
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("/api/inbox/commissions/{}/{action}", commission_ids[0]),
+                    Some(&cookie),
+                    None,
+                ),
+            )
+            .await,
+        )
+        .await;
+        let agent = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.inbox.commissions_{action}"),
+            json!({"commission_id":commission_ids[0]}),
+        )
+        .await;
+        assert_eq!(human["code"], "CONFLICT");
+        assert_eq!(human, agent["structuredContent"]);
+    }
+    // A snapshot failure after apply_transition rolls back the event, journey and commission.
+    let person = ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Overflow example","identities":[{"channel":"email","value":"overflow@example.test"}],"source":"form"})))).await).await;
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let j = r
+        .journeys()
+        .open_for(serde_json::from_value(person["person"]["id"].clone()).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(r);
+    call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.commission_rates_set",
+        json!({"rate_bp":65535}),
+    )
+    .await;
+    let error = tool_result(&app,&key,&session,"jeeta.inbox.events_report",json!({"journey_id":j.id,"kind":"won","idempotency_key":"overflow","payload":{"product":"Private product","amount_minor":i64::MAX,"currency":"TRY"}})).await;
+    assert_eq!(error["structuredContent"]["code"], "VALIDATION");
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        r.journeys().get(j.id).await.unwrap().unwrap().status,
+        jt_inbox::JourneyStatus::New
+    );
+    assert!(
+        r.journeys()
+            .event_by_key("overflow")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(r.commissions().by_journey(j.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn inbox_erasure_has_http_mcp_parity() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("erasure-parity").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let p = call_tool(&app,&key,&session,"jeeta.inbox.people_create",json!({"display_name":"Private Name","source":"form","identities":[{"channel":"email","value":"private@example.test"}]})).await;
+    let id = p["person"]["id"].as_str().unwrap();
+    for body in [json!({}), json!({"confirm":false})] {
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("/api/inbox/people/{id}/erase"),
+                    Some(&cookie),
+                    Some(body.clone()),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let mut args = body;
+        args["person_id"] = json!(id);
+        let agent = tool_result(&app, &key, &session, "jeeta.inbox.people_erase", args).await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(human, agent["structuredContent"]);
+    }
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/people/{id}/erase"),
+                Some(&cookie),
+                Some(json!({"confirm":true})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human, json!({"person_id":id,"erased":true}));
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.people_erase",
+        json!({"person_id":id,"confirm":true}),
+    )
+    .await;
+    assert_eq!(human, agent);
+}
+
+#[tokio::test]
+async fn leadgen_people_and_journey_results_have_http_mcp_parity() {
+    use jt_app::ports::connectors::LeadGenRecord;
+    use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
+    use jt_connector::{Credential, EventKind, InboundEvent, InboundEventId};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("leadgen-parity").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let connector = Arc::new(ScriptedConnector::new(Provider::Meta));
+    deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(connector.clone()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let now = deps.clock.now();
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        ws,
+        NewCapability {
+            kind_key: "facebook_page".into(),
+            name: "Page".into(),
+            ..Default::default()
+        },
+        now,
+    )
+    .unwrap();
+    cap.status = StoredStatus::Verified;
+    cap.external_id = Some("page".into());
+    let credential = Credential::PageToken {
+        page_id: "page".into(),
+        token: "page-secret".into(),
+    };
+    let sealed = deps
+        .seal
+        .seal(ws, &serde_json::to_vec(&credential).unwrap())
+        .unwrap();
+    let event = InboundEvent {
+        id: InboundEventId::new_v7(),
+        workspace_id: ws,
+        capability_id: Some(cap.id),
+        provider: Provider::Meta,
+        external_id: "leadgen:lead".into(),
+        kind: EventKind::LeadGen,
+        payload: json!({"leadgen":{"page_id":"page","leadgen_id":"lead"}}),
+        received_at: now,
+        processed_at: None,
+    };
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+    r.inbound_events().insert_if_new(event, None).await.unwrap();
+    r.commit().await.unwrap();
+    connector.push_leadgen(Ok(LeadGenRecord {
+        leadgen_id: "lead".into(),
+        form_id: Some("form".into()),
+        ad_id: Some("ad".into()),
+        campaign_id: None,
+        campaign_name: None,
+        created_time: Some(now - time::Duration::days(1)),
+        fields: [("email".into(), vec!["lead@example.test".into()])].into(),
+    }));
+    assert_eq!(
+        jt_app::usecases::inbox::consumer::consume_workspace(&deps, ws, now)
+            .await
+            .changed,
+        1
+    );
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let p = r
+        .people()
+        .find_by_identity(jt_inbox::IdentityChannel::Email, "lead@example.test")
+        .await
+        .unwrap()
+        .unwrap();
+    let j = r.journeys().open_for(p.id).await.unwrap().unwrap();
+    drop(r);
+    for (path, tool, args) in [
+        (
+            format!("/api/inbox/people/{}", p.id),
+            "jeeta.inbox.people_get",
+            json!({"person_id":p.id}),
+        ),
+        (
+            format!("/api/inbox/journeys/{}", j.id),
+            "jeeta.inbox.journeys_get",
+            json!({"journey_id":j.id}),
+        ),
+    ] {
+        let response = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let human = json_body(response).await;
+        let agent = call_tool(&app, &key, &session, tool, args).await;
+        assert_eq!(human, agent);
+        if tool.ends_with("journeys_get") {
+            assert_eq!(human["attribution"]["leadgen_id"], "lead");
+            assert_eq!(human["attribution"]["adset_id"], Value::Null);
+            assert_eq!(human["tasks"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                human["events"][0]["kind"]["lead_received"]["leadgen_id"],
+                "lead"
+            );
+        } else {
+            assert_eq!(human["person"]["first_touch"]["source"], "meta_ads");
+        }
+    }
 }

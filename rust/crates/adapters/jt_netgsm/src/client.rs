@@ -391,6 +391,7 @@ fn egress_error(e: EgressError, retry: Retry) -> ConnectorError {
         EgressError::HostNotAllowed { .. } => {
             ConnectorError::permanent("the NetGSM host is not allowed for the netgsm connector")
         }
+        EgressError::Socket => ConnectorError::transient("outbound socket failed"),
         EgressError::Build(_) => ConnectorError::permanent("the call to NetGSM could not be built"),
     }
 }

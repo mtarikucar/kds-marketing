@@ -8,7 +8,8 @@ import { useSession } from '@/auth/useSession';
 import { can, isOwnerOrManager } from '@/lib/roles';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
-import { Badge, Button, Input, Textarea } from '@/components/ui';
+import { Badge, Button, Disclosure, Input, Textarea } from '@/components/ui';
+import { InboxQuotes, InboxAppointments } from './InboxOffers';
 import { InboxMergeBanner } from './InboxMerges';
 import {
   columnClass,
@@ -333,6 +334,8 @@ export function InboxJourneyPanel({
                 <p className="text-sm text-muted-foreground">{t('inbox.noEvents')}</p>
               )}
             </section>
+            <Disclosure title={t('inbox.offers.quotes')}><InboxQuotes journeyId={journeyId} terminal={journey.status === 'lost' || journey.status === 'won'} /></Disclosure>
+            <Disclosure title={t('inbox.offers.appointments')}><InboxAppointments journeyId={journeyId} appointments={data.data?.appointments ?? []} terminal={journey.status === 'lost' || journey.status === 'won'} /></Disclosure>
             {journey.status !== 'lost' && journey.status !== 'won' && <EventForm journeyId={journeyId} />}
             <section className="flex flex-col gap-3 border-t pt-4">
               <h3 className="font-medium">{t('inbox.tasks')}</h3>

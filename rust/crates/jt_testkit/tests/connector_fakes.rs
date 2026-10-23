@@ -1010,14 +1010,14 @@ async fn scripted_connector_answers_in_order_and_records_calls() {
     assert!(!connector.probe(&cred, &json!({})).await.ok);
     let sms = registry.sms(Provider::Netgsm).expect("netgsm sends sms");
     assert_eq!(
-        sms.send(&cred, "905550000000", "Merhaba", Some("ref-1"))
+        sms.send(&cred, "905550000000", "Merhaba", Some("ref-1"), false)
             .await
             .unwrap()
             .provider_id,
         "job-1"
     );
     assert_eq!(
-        sms.send(&cred, "905550000001", "Selam", None).await,
+        sms.send(&cred, "905550000001", "Selam", None, true).await,
         Err(ConnectorError::throttle(None))
     );
     assert_eq!(
@@ -1036,12 +1036,14 @@ async fn scripted_connector_answers_in_order_and_records_calls() {
                 to: "905550000000".into(),
                 text: "Merhaba".into(),
                 reference: Some("ref-1".into()),
+                commercial: false,
             },
             ConnectorCall::SendSms {
                 credential: cred.clone(),
                 to: "905550000001".into(),
                 text: "Selam".into(),
                 reference: None,
+                commercial: true,
             },
         ]
     );
@@ -1459,13 +1461,13 @@ async fn scripted_connector_preserves_unknown_outcomes_and_costs() {
     };
     assert_eq!(
         connector
-            .send(&credential, "905550000000", "hello", None)
+            .send(&credential, "905550000000", "hello", None, false)
             .await,
         Err(error.clone())
     );
     assert_eq!(
         connector
-            .send(&credential, "905550000000", "hello", None)
+            .send(&credential, "905550000000", "hello", None, false)
             .await
             .unwrap()
             .cost_minor,
@@ -1476,5 +1478,231 @@ async fn scripted_connector_preserves_unknown_outcomes_and_costs() {
             .send_text(&credential, &json!({}), "recipient", "hello")
             .await,
         Err(error)
+    );
+}
+
+fn mail_message() -> jt_app::ports::connectors::MailMessage {
+    use jt_app::ports::connectors::{Attachment, MailMessage};
+    MailMessage {
+        to: "guest@example.com".into(),
+        subject: "Appointment".into(),
+        text: "See you soon".into(),
+        message_id: "<stable@example.com>".into(),
+        in_reply_to: Some("<parent@example.com>".into()),
+        references: vec!["<root@example.com>".into(), "<parent@example.com>".into()],
+        attachments: vec![Attachment {
+            filename: "invite.ics".into(),
+            mime: "text/calendar".into(),
+            bytes: b"PRIVATE-ATTACHMENT-CONTENT".to_vec(),
+        }],
+    }
+}
+
+#[test]
+fn attachment_debug_hides_bytes() {
+    let message = mail_message();
+    let printed = format!("{:?} {message:?}", message.attachments[0]);
+    assert!(printed.contains("invite.ics"));
+    assert!(printed.contains("text/calendar"));
+    assert!(printed.contains(&format!("{} bytes", message.attachments[0].bytes.len())));
+    assert!(!printed.contains("PRIVATE-ATTACHMENT-CONTENT"));
+    assert!(!printed.contains(&format!("{:?}", message.attachments[0].bytes)));
+}
+
+#[tokio::test]
+async fn mail_message_metadata_and_attachment_contract() {
+    use jt_app::ports::connectors::MailSender;
+    let ws = jt_tenancy::WorkspaceId::new_v7();
+    let connector = ScriptedConnector::new(Provider::Mail);
+    let cred = Credential::NetgsmSms {
+        usercode: "test".into(),
+        password: "private-token".into(),
+        msgheader: "TEST".into(),
+    };
+    let message = mail_message();
+    let receipt = SendReceipt {
+        provider_id: message.message_id.clone(),
+        cost_minor: Some(12),
+    };
+    connector.push_mail(Ok(receipt.clone()));
+    let uncertain = ConnectorError::unknown("connection lost after DATA");
+    connector.push_mail(Err(uncertain.clone()));
+    assert_eq!(
+        MailSender::send(&connector, ws, &cred, message.clone()).await,
+        Ok(receipt)
+    );
+    assert_eq!(
+        MailSender::send(&connector, ws, &cred, message.clone()).await,
+        Err(uncertain)
+    );
+    assert_eq!(
+        connector.calls(),
+        vec![
+            ConnectorCall::SendMail {
+                workspace_id: ws,
+                credential: cred.clone(),
+                message: message.clone()
+            };
+            2
+        ]
+    );
+    let printed = format!("{:?}", connector.calls());
+    assert!(!printed.contains("PRIVATE-ATTACHMENT-CONTENT"));
+    assert!(!printed.contains("private-token"));
+}
+
+#[tokio::test]
+async fn mailbox_cursor_and_scripted_poller_contract() {
+    use jt_app::ports::connectors::{MailboxCursor, MailboxPoller, MailboxPosition};
+    let cursor = MailboxCursor {
+        mailboxes: [
+            (
+                "INBOX".into(),
+                MailboxPosition {
+                    uidvalidity: 123,
+                    last_uid: 10,
+                },
+            ),
+            (
+                "Sent".into(),
+                MailboxPosition {
+                    uidvalidity: 456,
+                    last_uid: 20,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    assert!(MailboxCursor::default().mailboxes.is_empty());
+    let encoded = serde_json::to_value(&cursor).unwrap();
+    assert_eq!(
+        encoded,
+        json!({"mailboxes": {"INBOX": {"uidvalidity":123,"last_uid":10}, "Sent":{"uidvalidity":456,"last_uid":20}}})
+    );
+    assert_eq!(
+        serde_json::from_value::<MailboxCursor>(encoded).unwrap(),
+        cursor
+    );
+    let mut next = cursor.clone();
+    next.mailboxes.get_mut("INBOX").unwrap().last_uid = 11;
+    let drafts = vec![InboundEventDraft {
+        external_id: "imap:account:INBOX:123:11".into(),
+        kind: EventKind::Message,
+        payload: json!({"text":"hello"}),
+        occurred_at: Some(FIXED_NOW),
+    }];
+    let ws = jt_tenancy::WorkspaceId::new_v7();
+    let connector = ScriptedConnector::new(Provider::Mail);
+    let cred = Credential::NetgsmSms {
+        usercode: "test".into(),
+        password: "secret".into(),
+        msgheader: "TEST".into(),
+    };
+    let public = json!({"external_id":"account"});
+    connector.push_mailbox_poll(Ok((drafts.clone(), next.clone())));
+    let err = ConnectorError::transient("offline");
+    connector.push_mailbox_poll(Err(err.clone()));
+    assert_eq!(
+        connector.poll(ws, &cred, &public, &cursor).await,
+        Ok((drafts, next.clone()))
+    );
+    assert_eq!(connector.poll(ws, &cred, &public, &next).await, Err(err));
+    assert_eq!(
+        connector.calls(),
+        vec![
+            ConnectorCall::MailboxPoll {
+                workspace_id: ws,
+                credential: cred.clone(),
+                public: public.clone(),
+                cursor: cursor.clone()
+            },
+            ConnectorCall::MailboxPoll {
+                workspace_id: ws,
+                credential: cred,
+                public,
+                cursor: next
+            },
+        ]
+    );
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 10);
+}
+
+#[test]
+fn only_mail_provider_offers_mail_ports() {
+    use jt_app::ports::connectors::ConnectorRegistry;
+    for provider in Provider::all() {
+        let registry =
+            ScriptedRegistry::new().with_connector(Arc::new(ScriptedConnector::new(*provider)));
+        assert_eq!(
+            registry.mail_sender(*provider).is_some(),
+            *provider == Provider::Mail
+        );
+        assert_eq!(
+            registry.mailbox_poller(*provider).is_some(),
+            *provider == Provider::Mail
+        );
+        let empty = jt_app::std_impls::EmptyConnectorRegistry;
+        assert!(empty.mail_sender(*provider).is_none());
+        assert!(empty.mailbox_poller(*provider).is_none());
+    }
+}
+
+#[tokio::test]
+async fn outbound_job_repo_is_scoped_by_workspace_and_capability() {
+    let (uow, deps) = setup();
+    let (ws, _) = workspace(&deps, "jobs-one").await;
+    let (other, _) = workspace(&deps, "jobs-two").await;
+    let a = CapabilityId::new_v7();
+    let b = CapabilityId::new_v7();
+    for (w, cap, job) in [
+        (ws, a, "shared"),
+        (ws, b, "shared"),
+        (other, a, "shared"),
+        (ws, a, "second"),
+    ] {
+        uow.add_outbound_job(w, cap, job);
+    }
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.outbound_jobs().pending_job_ids(ws, a, 50).await.unwrap(),
+        ["shared", "second"]
+    );
+    assert_eq!(
+        t.outbound_jobs().pending_job_ids(ws, b, 50).await.unwrap(),
+        ["shared"]
+    );
+    assert_eq!(
+        t.outbound_jobs().pending_job_ids(ws, a, 0).await.unwrap(),
+        ["shared"]
+    );
+    let status = DeliveryStatus {
+        job_id: "shared".into(),
+        recipient: "phone".into(),
+        status: DeliveryState::Delivered,
+        at: None,
+        raw_code: "1".into(),
+    };
+    t.outbound_jobs()
+        .record_status(ws, a, vec![status.clone()])
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let stored = uow.snapshot().outbound_jobs;
+    assert_eq!(stored[0].status, Some(status));
+    assert!(stored[1..].iter().all(|job| job.status.is_none()));
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.outbound_jobs().pending_job_ids(ws, a, 50).await.unwrap(),
+        ["second"]
+    );
+    assert_eq!(
+        code(t.outbound_jobs().pending_job_ids(other, a, 50).await),
+        ErrorCode::Internal
+    );
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        code(t.outbound_jobs().record_status(other, a, vec![]).await),
+        ErrorCode::Internal
     );
 }

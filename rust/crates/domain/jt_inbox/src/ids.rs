@@ -38,3 +38,7 @@ define_id!(
     /// A recorded merge of two people.
     MergeId
 );
+define_id!(
+    /// A decision in a person's consent history.
+    ConsentId
+);

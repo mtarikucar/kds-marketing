@@ -778,8 +778,8 @@ export const MAX_CHECKIN_INTERVAL_MINUTES = 10_080;
 // ---------------------------------------------------------------------------------------------
 
 /** `jt_connector::Provider`. */
-export type Provider = 'meta' | 'netgsm' | 'x';
-export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x'];
+export type Provider = 'meta' | 'netgsm' | 'x' | 'mail';
+export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail'];
 
 /** `jt_app::usecases::connector::StartOut`: where to send the browser, until when. */
 export interface StartOut {
@@ -805,6 +805,8 @@ export interface PendingAssetsOut {
 
 /** `jt_app::usecases::connector::CredentialInput`, tagged by `kind`. */
 export type CredentialInput =
+  | { kind: 'mailbox'; smtp_host: string; smtp_port: number; imap_host: string; imap_port: number; username: string; password: string; from_address: string; tls: 'implicit' | 'start_tls' }
+  | { kind: 'netgsm_iys'; usercode: string; password: string; brand_code: string }
   | { kind: 'netgsm_sms'; usercode: string; password: string; msgheader: string }
   | { kind: 'netgsm_pbx'; username: string; password: string; trunk?: string; pbxnum?: string }
   | { kind: 'meta_token'; access_token: string };
@@ -816,8 +818,8 @@ export type CredentialKind = CredentialInput['kind'];
  */
 export type SetCredentialsInput = ({ capability_id: Uuid } | { kind_key: string; name: string }) & {
   external_id?: string;
-  credential: CredentialInput;
-};
+  credential: Exclude<CredentialInput, { kind: 'netgsm_iys' }>;
+} | { capability_id: Uuid; external_id?: never; credential: Extract<CredentialInput, { kind: 'netgsm_iys' }> };
 
 /** `jt_app::usecases::connector::ProbeResultPublic`: never the credential. */
 export interface ProbeResultPublic {
@@ -995,6 +997,7 @@ export interface InboxNote {
   at: Rfc3339;
 }
 export interface InboxJourneyOut {
+  appointments: InboxAppointment[];
   status_labels: Record<JourneyStatus, string>;
   journey: InboxJourney;
   events: InboxEvent[];
@@ -1077,4 +1080,61 @@ export interface InboxReportOut {
   } | null;
   effects: InboxJourneyEffect[];
   duplicate: boolean;
+}
+
+export type CommissionState = 'no_payee' | 'pending' | 'approved' | 'paid';
+export interface InboxCommission {
+  id: string;
+  workspace_id: string;
+  journey_id: string;
+  payee: string | null;
+  amount_minor: number;
+  currency: string;
+  rate_bp: number;
+  state: CommissionState;
+  created_at: string;
+}
+
+// Mirrors usecases/inbox/schema.rs; both transports validate these same request fields.
+export type ContactChannel = 'sms' | 'email' | 'phone' | 'whats_app' | 'messenger' | 'instagram_dm' | 'webchat';
+export type SendChannel = Exclude<ContactChannel, 'phone' | 'webchat'>;
+export type SendIntent = 'reply' | 'commercial';
+export interface ConsentInput {
+  channel: ContactChannel;
+  kind: 'explicit' | 'implied_by_contract' | 'withdrawn';
+  source: 'form' | 'agent' | 'import' | 'iys_sync' | 'customer';
+  at: string;
+}
+export type SuppressionReason = 'manual' | 'unsubscribe' | 'bounce' | 'complaint';
+export interface ConsentList {
+  consents: (ConsentInput & { id: string; sync_state: 'pending' | 'sent' | 'failed' | 'failed_final' })[];
+  suppressions: { channel: ContactChannel; reason: SuppressionReason }[];
+}
+export interface QuoteInput {
+  amount_minor: number;
+  currency: string;
+  valid_until: string;
+  file_ref: string | null;
+  channel: SendChannel;
+  text: string;
+  intent: SendIntent;
+  request_key?: string;
+}
+export interface InboxQuote {
+  id: string;
+  amount_minor: number;
+  currency: string;
+  valid_until: string;
+  file_ref: string | null;
+  state: 'sent' | 'accepted' | 'expired';
+}
+export interface AppointmentInput {
+  starts_at: string;
+  ends_at: string;
+  location: string;
+  intent: SendIntent;
+}
+export interface InboxAppointment extends Omit<AppointmentInput, 'intent'> {
+  id: string;
+  state: 'booked' | 'held' | 'cancelled';
 }

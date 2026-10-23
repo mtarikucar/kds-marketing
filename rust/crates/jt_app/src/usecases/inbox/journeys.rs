@@ -28,8 +28,10 @@ pub struct ReportOut {
 }
 #[derive(Debug, Serialize)]
 pub struct JourneyOut {
+    pub appointments: Vec<crate::ports::compliance::AppointmentRow>,
     pub status_labels: std::collections::BTreeMap<String, String>,
     pub journey: Journey,
+    pub attribution: Option<crate::ports::inbox::JourneyAttribution>,
     pub events: Vec<JourneyEvent>,
     pub tasks: Vec<Task>,
     pub notes: Vec<Note>,
@@ -107,7 +109,9 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: JourneyId) -> Result<JourneyOut, Ap
         .ok_or_else(|| AppError::not_found("no such journey"))?;
     let events = r.journeys().events(id, 50).await?;
     Ok(JourneyOut {
+        appointments: r.appointments().list(id).await?,
         status_labels: super::dictionaries::effective_status_labels(r.as_mut()).await?,
+        attribution: r.attribution().by_journey(id).await?,
         journey,
         events,
         tasks: r.tasks().list(id).await?,
@@ -170,6 +174,9 @@ pub async fn report(
         "idempotency_key",
         input.idempotency_key.as_deref().unwrap_or_default(),
     )?;
+    if key.starts_with("quote:") || key.starts_with("appointment:") {
+        return Err(invalid("idempotency_key", "reserved business event key"));
+    }
     let kind = parse_kind(&input.kind, input.payload)?;
     let reopen = matches!(kind, JourneyEventKind::Reopened);
     if reopen {
@@ -193,6 +200,7 @@ pub async fn report(
         .await?
         .ok_or_else(|| AppError::not_found("no such journey"))?
         .person_id;
+    super::erasure::check_person(r.as_mut(), person).await?;
     r.conversations().lock_for_person(person).await?;
     let mut journey = r
         .journeys()
@@ -260,7 +268,7 @@ pub async fn report(
         duplicate: false,
     };
     r.journeys().apply_transition(id, transition, event).await?;
-    apply_effects(r.as_mut(), &journey, &out.effects).await?;
+    apply_effects(deps, ctx, r.as_mut(), &journey, &out.effects).await?;
     // Only status/effect metadata, never product, customer content or identity values.
     record(r.as_mut(), ctx, "inbox.event.reported", "journey", id, json!({"kind":input.kind,"from":journey.status,"to":out.transition.as_ref().map(Transition::to)})).await?;
     r.commit().await?;
@@ -268,10 +276,13 @@ pub async fn report(
 }
 
 pub(crate) async fn apply_effects(
+    deps: &Deps,
+    ctx: &Ctx,
     r: &mut dyn TenantRepos,
     journey: &Journey,
     effects: &[JourneyEffect],
 ) -> Result<(), AppError> {
+    let mut unassigned = None;
     for effect in effects {
         match effect {
             JourneyEffect::CloseTasks | JourneyEffect::CancelOpenTasks => {
@@ -286,7 +297,17 @@ pub(crate) async fn apply_effects(
                     }
                 }
             }
-            JourneyEffect::CommissionDue { .. } => { /* M2b consumes the stored Won event. */ }
+            JourneyEffect::CommissionDue {
+                amount_minor,
+                currency,
+            } => {
+                let row =
+                    super::commissions::snapshot(deps, ctx, r, journey, *amount_minor, currency)
+                        .await?;
+                if row.commission.state == CommissionState::NoPayee {
+                    unassigned = Some(row.id);
+                }
+            }
             other => {
                 let state = match other {
                     JourneyEffect::CloseConversations => ConvState::Closed,
@@ -304,6 +325,20 @@ pub(crate) async fn apply_effects(
                 }
             }
         }
+    }
+    // Won closes the old work first; this new human follow-up must remain open.
+    if let Some(id) = unassigned {
+        r.tasks()
+            .insert(Task {
+                id: TaskId::from(id),
+                workspace_id: ctx.workspace_id,
+                journey_id: journey.id,
+                title: "Commission has no payee".into(),
+                due_at: ctx.now,
+                assignee: None,
+                status: TaskStatus::Open,
+            })
+            .await?;
     }
     Ok(())
 }

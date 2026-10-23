@@ -106,9 +106,12 @@ pub struct JobReport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Job {
     RefreshTokens,
+    RefreshTenantHosts,
     ProbeAll,
     NetgsmDlrPoll,
     NetgsmInboxPoll,
+    MailInboxPoll,
+    IysSync,
     PurgeRawBodies,
     PurgeOAuthPending,
     PurgeProbeRuns,
@@ -120,11 +123,14 @@ pub enum Job {
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 11] = [
+    pub const ALL: [Job; 14] = [
         Job::RefreshTokens,
+        Job::RefreshTenantHosts,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
         Job::NetgsmInboxPoll,
+        Job::MailInboxPoll,
+        Job::IysSync,
         Job::PurgeRawBodies,
         Job::PurgeOAuthPending,
         Job::PurgeProbeRuns,
@@ -139,9 +145,12 @@ impl Job {
     pub fn name(&self) -> &'static str {
         match self {
             Job::RefreshTokens => "refresh_tokens",
+            Job::RefreshTenantHosts => "refresh_tenant_hosts",
             Job::ProbeAll => "probe_all",
             Job::NetgsmDlrPoll => "netgsm_dlr_poll",
             Job::NetgsmInboxPoll => "netgsm_inbox_poll",
+            Job::MailInboxPoll => "mail_inbox_poll",
+            Job::IysSync => "iys_sync",
             Job::PurgeRawBodies => "purge_raw_bodies",
             Job::PurgeOAuthPending => "purge_oauth_pending",
             Job::PurgeProbeRuns => "purge_probe_runs",
@@ -161,9 +170,12 @@ impl Job {
     pub async fn run(&self, deps: &Deps, now: OffsetDateTime) -> JobReport {
         match self {
             Job::RefreshTokens => run_refresh_tokens(deps, now).await,
+            Job::RefreshTenantHosts => run_refresh_tenant_hosts(deps, now).await,
             Job::ProbeAll => run_probe_all(deps, now).await,
             Job::NetgsmDlrPoll => run_netgsm_dlr_poll(deps, now).await,
             Job::NetgsmInboxPoll => run_netgsm_inbox_poll(deps, now).await,
+            Job::MailInboxPoll => run_mail_inbox_poll(deps, now).await,
+            Job::IysSync => run_iys_sync(deps, now).await,
             Job::PurgeRawBodies => run_purge_raw_bodies(deps, now).await,
             Job::PurgeOAuthPending => run_purge_oauth_pending(deps, now).await,
             Job::PurgeProbeRuns => run_purge_probe_runs(deps, now).await,
@@ -567,18 +579,13 @@ fn due_for_probe(capability: &Capability, now: OffsetDateTime) -> bool {
 // NetGSM polls
 // ---------------------------------------------------------------------------------------------
 
-/// Asks NetGSM how the messages sent earlier fared, in every active workspace holding a verified
-/// SMS line (found with one platform-wide read; no other workspace's transaction is opened): the
-/// job ids of the workspace's messages whose delivery is not final yet
-/// ([`crate::ports::OutboundJobRepo`], at most [`MAX_PENDING_JOBS`]) are put to its delivery
-/// reports with the credentials of each of its verified SMS lines, and every status heard is
-/// recorded. A workspace with nothing waiting asks nothing. (Until the next milestone stores
-/// sent messages, nothing ever waits: the Postgres repository is a stub. M2 also ties each job to
-/// the line that sent it, so that a line is asked about its own jobs only.)
+/// Asks each verified SMS capability in active workspaces about its own pending jobs only.
+/// Both the pending read and status write are scoped by workspace and capability, even when
+/// different accounts use the same provider job id. Provider I/O holds no transaction.
+/// The Postgres repository remains a stub until M2b adds outbound job storage.
 ///
-/// `touched` counts the jobs asked about, `changed` the statuses recorded, `skipped` the jobs
-/// waiting in a workspace whose lines changed meanwhile, `failed` the lines whose report could
-/// not be had (and the workspaces that could not be read or written).
+/// `touched` counts jobs asked about, `changed` statuses recorded, and `failed` the capabilities
+/// whose pending jobs, reports or statuses could not be read or written.
 pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport {
     let job = Job::NetgsmDlrPoll;
     let mut report = JobReport::default();
@@ -586,17 +593,6 @@ pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport
         return finish(job, report);
     };
     for ws in netgsm_workspaces(deps, job, ACTIVE, &mut report).await {
-        let pending = match pending_jobs(deps, ws).await {
-            Ok(pending) => pending,
-            Err(e) => {
-                report.failed += 1;
-                step_failed(job, ws, None, &Failure::App(e));
-                continue;
-            }
-        };
-        if pending.is_empty() {
-            continue;
-        }
         let lines = match live_connector_capabilities(deps, ws).await {
             Ok(capabilities) => verified_lines(&capabilities),
             Err(e) => {
@@ -605,42 +601,53 @@ pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport
                 continue;
             }
         };
-        if lines.is_empty() {
-            report.skipped += pending.len() as u64;
-            continue;
-        }
-        report.touched += pending.len() as u64;
-        let mut statuses = Vec::new();
         for line in lines {
-            match report_for(deps, reports.as_ref(), ws, line, &pending).await {
-                Ok(heard) => statuses.extend(heard),
+            let pending = match pending_jobs(deps, ws, line).await {
+                Ok(pending) => pending,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(line), &Failure::App(e));
+                    continue;
+                }
+            };
+            if pending.is_empty() {
+                continue;
+            }
+            report.touched += pending.len() as u64;
+            let statuses = match report_for(deps, reports.as_ref(), ws, line, &pending).await {
+                Ok(heard) => heard,
                 Err(e) => {
                     report.failed += 1;
                     step_failed(job, ws, Some(line), &e);
+                    continue;
                 }
+            };
+            if statuses.is_empty() {
+                continue;
             }
-        }
-        if statuses.is_empty() {
-            continue;
-        }
-        let heard = statuses.len() as u64;
-        match record_statuses(deps, ws, statuses).await {
-            Ok(()) => report.changed += heard,
-            Err(e) => {
-                report.failed += 1;
-                step_failed(job, ws, None, &Failure::App(e));
+            let heard = statuses.len() as u64;
+            match record_statuses(deps, ws, line, statuses).await {
+                Ok(()) => report.changed += heard,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(line), &Failure::App(e));
+                }
             }
         }
     }
     finish(job, report)
 }
 
-/// The job ids awaiting a delivery report in `ws`.
-async fn pending_jobs(deps: &Deps, ws: WorkspaceId) -> Result<Vec<String>, AppError> {
+/// The job ids awaiting a delivery report for `capability_id` in `ws`.
+async fn pending_jobs(
+    deps: &Deps,
+    ws: WorkspaceId,
+    capability_id: CapabilityId,
+) -> Result<Vec<String>, AppError> {
     let mut repos = deps.uow.tenant(ws).await?;
     repos
         .outbound_jobs()
-        .pending_job_ids(ws, MAX_PENDING_JOBS)
+        .pending_job_ids(ws, capability_id, MAX_PENDING_JOBS)
         .await
 }
 
@@ -660,14 +667,18 @@ async fn report_for(
     heard.map_err(Failure::Provider)
 }
 
-/// Records `statuses` in `ws`.
+/// Records `statuses` for `capability_id` in `ws`.
 async fn record_statuses(
     deps: &Deps,
     ws: WorkspaceId,
+    capability_id: CapabilityId,
     statuses: Vec<DeliveryStatus>,
 ) -> Result<(), AppError> {
     let mut repos = deps.uow.tenant(ws).await?;
-    repos.outbound_jobs().record_status(ws, statuses).await?;
+    repos
+        .outbound_jobs()
+        .record_status(ws, capability_id, statuses)
+        .await?;
     repos.commit().await
 }
 
@@ -1198,4 +1209,397 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
         }
     }
     finish(job, report)
+}
+
+/// Refresh this instance's full tenant egress tier for active/pending-payment workspaces.
+/// The scheduler holds `jeeta.jobs.refresh_tenant_hosts`; per-workspace guards serialize
+/// replacements with live host mutations. Mail calls also refresh on demand on every instance.
+pub async fn run_refresh_tenant_hosts(deps: &Deps, _now: OffsetDateTime) -> JobReport {
+    let job = Job::RefreshTenantHosts;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, RECEIVING, &mut report).await {
+        report.touched += 1;
+        match super::connector::refresh_tenant_hosts(deps, ws).await {
+            Ok(()) => report.changed += 1,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// Poll each receiving workspace's verified mailboxes. Network I/O owns no transaction;
+/// cursor and drafts commit together only if the account, credential and cursor still match.
+pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::MailInboxPoll;
+    let mut report = JobReport::default();
+    let Some(poller) = deps.connectors.mailbox_poller(Provider::Mail) else {
+        return finish(job, report);
+    };
+    for ws in workspaces(deps, job, RECEIVING, &mut report).await {
+        let capabilities = match live_connector_capabilities(deps, ws).await {
+            Ok(caps) => caps,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for cap in capabilities
+            .into_iter()
+            .filter(|c| c.kind_key == "mailbox" && c.status == StoredStatus::Verified)
+        {
+            report.touched += 1;
+            let outcome = async {
+                super::connector::refresh_tenant_hosts(deps, ws).await?;
+                let (sealed, cursor) = {
+                    let mut r = deps.uow.tenant(ws).await?;
+                    (
+                        r.capabilities().read_sealed(cap.id).await?,
+                        r.mail_cursors().get(cap.id).await?,
+                    )
+                };
+                let Some(sealed) = sealed else {
+                    return Ok::<_, Failure>(vec![]);
+                };
+                let credential = open_credential(deps, ws, &sealed)?;
+                let (drafts, next) = poller
+                    .poll(
+                        ws,
+                        &credential,
+                        &super::connector::adapter_public(&cap),
+                        &cursor,
+                    )
+                    .await
+                    .map_err(Failure::Provider)?;
+                drop(credential);
+                let mut r = deps.uow.tenant(ws).await?;
+                r.people().lock_workspace().await?;
+                let current = r.capabilities().lock(cap.id).await?;
+                if !RECEIVING.contains(&r.workspace().get().await?.status)
+                    || !current.is_some_and(|c| {
+                        c.status == StoredStatus::Verified
+                            && c.external_id == cap.external_id
+                            && c.updated_at == cap.updated_at
+                    })
+                    || r.capabilities().read_sealed(cap.id).await?.as_ref() != Some(&sealed)
+                    || r.mail_cursors().get(cap.id).await? != cursor
+                {
+                    return Ok(vec![]);
+                }
+                let stored = webhook::store_polled(
+                    deps,
+                    r.as_mut(),
+                    ws,
+                    Provider::Mail,
+                    Some(cap.id),
+                    drafts,
+                    now,
+                )
+                .await?;
+                r.mail_cursors().store(cap.id, next).await?;
+                r.commit().await?;
+                Ok(stored)
+            }
+            .await;
+            match outcome {
+                Ok(stored) => {
+                    for delivery in stored {
+                        if matches!(delivery, Delivery::Stored(_)) {
+                            report.changed += 1;
+                        } else {
+                            report.skipped += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(cap.id), &e);
+                }
+            }
+        }
+        let consumed = super::inbox::consumer::consume_workspace(deps, ws, now).await;
+        report.failed += consumed.failed;
+    }
+    finish(job, report)
+}
+
+/// Hourly retry, serialized by the scheduler's iys_sync advisory lock. A lost acknowledgement
+/// may repeat a submission. Sync metadata never changes the underlying local consent decision.
+pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use jt_inbox::{Channel, ConsentKind, SyncState, Task, TaskId, TaskStatus};
+    let job = Job::IysSync;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let result = async {
+            let (credential, rows) = {
+                let mut r = deps.uow.tenant(ws).await?;
+                // Match commercial sends: inbox workspace before capability/FK row locks.
+                // Provisioning may need this lock too; never acquire it in reverse order.
+                r.people().lock_workspace().await?;
+                let rows = r.consents().pending_sync(1000).await?;
+                if rows.is_empty() {
+                    return Ok::<_, AppError>(());
+                }
+                let mut credentials = Vec::new();
+                for hint in r.capabilities().list(CapabilityFilter::default()).await? {
+                    if hint.kind_key != "sms_line" {
+                        continue;
+                    }
+                    let Some(snapshot) = r.capabilities().lock_iys_snapshot(hint.id).await? else {
+                        continue;
+                    };
+                    let cap = snapshot.capability;
+                    if cap.status == StoredStatus::Retired
+                        || cap.reach != jt_capability::Reach::Connector
+                        || cap.kind_key != "sms_line"
+                    {
+                        continue;
+                    }
+                    let (Some(sealed), Some(sms)) = (snapshot.iys_sealed, snapshot.sms_sealed)
+                    else {
+                        continue;
+                    };
+                    let Credential::NetgsmSms {
+                        usercode: line_user,
+                        ..
+                    } = open_credential(deps, ws, &sms)?
+                    else {
+                        continue;
+                    };
+                    let credential = open_credential(deps, ws, &sealed)?;
+                    if let Credential::NetgsmIys {
+                        usercode,
+                        brand_code,
+                        ..
+                    } = &credential
+                        && usercode == &line_user
+                        && !brand_code.trim().is_empty()
+                    {
+                        credentials.push(credential);
+                    }
+                }
+                // No usable slot (or ambiguous brands) must leave consent pending and ask the owner.
+                if credentials.len() != 1 {
+                    request_iys_provisioning(deps, r.as_mut(), ws, &rows, now).await?;
+                    r.commit().await?;
+                    return Ok(());
+                }
+                (credentials.remove(0), rows)
+            };
+            let Some(sync) = deps.connectors.consent(Provider::Netgsm) else {
+                return Ok(());
+            };
+            for chunk in rows.chunks(500) {
+                let mut wire = Vec::new();
+                let mut valid = std::collections::BTreeSet::new();
+                {
+                    let mut r = deps.uow.tenant(ws).await?;
+                    for row in chunk {
+                        let channel = match row.channel {
+                            Channel::Sms => "MESAJ",
+                            Channel::Phone => "ARAMA",
+                            Channel::Email => "EPOSTA",
+                            _ => continue,
+                        };
+                        let Some(person) =
+                            consent_recipient_person(r.as_mut(), row.person_id).await?
+                        else {
+                            continue;
+                        };
+                        if person.erased_at.is_some() {
+                            continue;
+                        }
+                        let identities = r.identities().list(person.id).await?;
+                        let candidates: Vec<_> = identities
+                            .iter()
+                            .filter(|i| i.active && i.channel == row.channel.identity_channel())
+                            .collect();
+                        if candidates.len() != 1 {
+                            continue;
+                        }
+                        wire.push(crate::ports::connectors::ConsentRow {
+                            recipient: candidates[0].value_normalized.clone(),
+                            channel: channel.into(),
+                            granted: row.kind != ConsentKind::Withdrawn,
+                            source: "HS_WEB".into(),
+                            at: row.at,
+                        });
+                        valid.insert(row.id);
+                    }
+                }
+                // A full page uses at most two provider requests, not one request per decision.
+                // No tenant transaction or row lock crosses the provider call.
+                let result = if wire.is_empty() {
+                    Ok(crate::ports::connectors::SendReceipt {
+                        provider_id: String::new(),
+                        cost_minor: None,
+                    })
+                } else {
+                    sync.add(&credential, &wire).await
+                };
+                for row in chunk {
+                    report.touched += 1;
+                    if valid.contains(&row.id)
+                        && matches!(result, Err(ConnectorError::Throttle { .. }))
+                    {
+                        report.skipped += 1;
+                        continue;
+                    }
+                    // Unresolvable recipients also consume the bounded validation retry budget.
+                    let ok = valid.contains(&row.id) && result.is_ok();
+                    let mut r = deps.uow.tenant(ws).await?;
+                    r.people().lock_workspace().await?;
+                    let current = r
+                        .consents()
+                        .list(row.person_id)
+                        .await?
+                        .into_iter()
+                        .find(|c| c.id == row.id);
+                    if !current.is_some_and(|c| {
+                        c.sync_state == row.sync_state && c.attempts == row.attempts
+                    }) {
+                        report.skipped += 1;
+                        continue;
+                    }
+                    let attempts = row.attempts + 1;
+                    let state = if ok {
+                        SyncState::Sent
+                    } else if attempts >= 5 {
+                        SyncState::FailedFinal
+                    } else {
+                        SyncState::Failed
+                    };
+                    r.consents().set_sync(row.id, state, attempts).await?;
+                    if state == SyncState::FailedFinal {
+                        let person = consent_recipient_person(r.as_mut(), row.person_id)
+                            .await?
+                            .ok_or_else(|| AppError::not_found("consent person missing"))?;
+                        let journey =
+                            r.journeys().latest_for(person.id).await?.ok_or_else(|| {
+                                AppError::conflict("consent requires a human follow-up journey")
+                            })?;
+                        let assignee = r
+                            .memberships()
+                            .list()
+                            .await?
+                            .into_iter()
+                            .find(|m| {
+                                m.status == jt_tenancy::MembershipStatus::Active
+                                    && matches!(m.role_key.as_str(), "owner" | "manager")
+                            })
+                            .and_then(|m| m.user_id);
+                        r.tasks()
+                            .insert(Task {
+                                id: TaskId::from(deps.ids.uuid()),
+                                workspace_id: ws,
+                                journey_id: journey.id,
+                                title: format!(
+                                    "Review failed IYS consent synchronization {}",
+                                    row.id
+                                ),
+                                due_at: now,
+                                assignee,
+                                status: TaskStatus::Open,
+                            })
+                            .await?;
+                    }
+                    super::inbox::record(
+                        r.as_mut(),
+                        &system_ctx(job, ws, now),
+                        "inbox.consent.synced",
+                        "consent",
+                        row.id,
+                        json!({"person_id":row.person_id,"state":state,"attempts":attempts}),
+                    )
+                    .await?;
+                    r.commit().await?;
+                    if ok {
+                        report.changed += 1;
+                    } else {
+                        report.failed += 1;
+                    }
+                }
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = result {
+            report.failed += 1;
+            step_failed(job, ws, None, &Failure::App(e));
+        }
+    }
+    finish(job, report)
+}
+
+/// One open owner task per workspace, shared by the pending backlog; hourly retries do not spam.
+async fn request_iys_provisioning(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ws: WorkspaceId,
+    rows: &[jt_inbox::Consent],
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    use jt_inbox::{Task, TaskId, TaskStatus};
+    const TITLE: &str = "Provision IYS on the SMS line (select one brand)";
+    r.people().lock_workspace().await?;
+    if r.tasks()
+        .query(crate::ports::inbox::TaskQueue::All, None, now)
+        .await?
+        .iter()
+        .any(|t| t.title == TITLE)
+    {
+        return Ok(());
+    }
+    let owner = r
+        .memberships()
+        .list()
+        .await?
+        .into_iter()
+        .find(|m| m.status == jt_tenancy::MembershipStatus::Active && m.role_key == "owner")
+        .and_then(|m| m.user_id)
+        .ok_or_else(|| AppError::conflict("IYS provisioning requires an active owner"))?;
+    for row in rows {
+        let Some(person) = consent_recipient_person(r, row.person_id).await? else {
+            continue;
+        };
+        let Some(journey) = r.journeys().latest_for(person.id).await? else {
+            continue;
+        };
+        r.tasks()
+            .insert(Task {
+                id: TaskId::from(deps.ids.uuid()),
+                workspace_id: ws,
+                journey_id: journey.id,
+                title: TITLE.into(),
+                due_at: now,
+                assignee: Some(owner),
+                status: TaskStatus::Open,
+            })
+            .await?;
+        break;
+    }
+    Ok(())
+}
+
+async fn consent_recipient_person(
+    r: &mut dyn TenantRepos,
+    mut id: jt_inbox::PersonId,
+) -> Result<Option<jt_inbox::Person>, AppError> {
+    let mut visited = BTreeSet::new();
+    loop {
+        if !visited.insert(id) {
+            return Err(AppError::conflict("cyclic person merge"));
+        }
+        let Some(person) = r.people().get(id).await? else {
+            return Ok(None);
+        };
+        if let Some(target) = person.merged_into {
+            id = target;
+        } else {
+            return Ok(Some(person));
+        }
+    }
 }

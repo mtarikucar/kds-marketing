@@ -2,6 +2,8 @@
 //! return NOT_FOUND; duplicate keys return CONFLICT unless a method explicitly returns a boolean
 //! or optional id. Locks last until the enclosing bundle commits or rolls back.
 
+pub use super::compliance::*;
+
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
 use jt_connector::InboundEventId;
@@ -97,6 +99,8 @@ pub struct ConversationSendState {
 
 #[async_trait]
 pub trait ConversationRepo: Send + Sync {
+    /// Create an outbound-only conversation without inbound activity. Existing pair is a conflict.
+    async fn insert_for_send(&mut self, conversation: Conversation) -> Result<(), AppError>;
     async fn send_state(&mut self, id: ConversationId) -> Result<ConversationSendState, AppError>;
     /// Set Theirs/clear snooze only when no newer inbound/operator activity occurred. Always
     /// record the greatest outbound time. Does not advance activity_revision.
@@ -213,7 +217,8 @@ pub trait JourneyRepo: Send + Sync {
     /// or historical receipts. Read while holding the journey lock.
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError>;
 
-    /// Append only a system Replied receipt whose original send predates newer journey changes.
+    /// Append a system Replied or QuoteSent receipt whose send predates newer journey changes.
+    /// The legacy method name covers both evidenced outbound receipt kinds.
     /// Records current from/to status, preserving every reducer-owned field; unique event key.
     async fn append_historical_reply(&mut self, event: JourneyEvent) -> Result<(), AppError>;
 
@@ -394,6 +399,8 @@ pub struct ConsumptionOutcome {
 pub trait ConsumptionRepo: Send + Sync {
     /// Claim within the same transaction as the effects. False on a duplicate. Rollback removes
     /// the claim, permitting retry. Always record before committing; never commit an empty claim.
+    /// Upgrade exception: inbox@2 may reclaim its deferred Meta LeadGen rows atomically.
+    /// Rollback restores the deferral; other kinds/providers/outcomes/consumers stay final.
     async fn try_claim(
         &mut self,
         consumer: &str,

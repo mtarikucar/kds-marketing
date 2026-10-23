@@ -12,18 +12,25 @@ use std::sync::Arc;
 use support::*;
 
 async fn setup() -> (World, ConversationId, Arc<ScriptedConnector>) {
+    setup_channel("whatsapp_cloud").await
+}
+async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedConnector>) {
     let mut w = world().await;
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
     w.approve_strategy().await;
-    let connector = Arc::new(ScriptedConnector::new(Provider::Meta));
+    let connector = Arc::new(ScriptedConnector::new(match kind {
+        "mailbox" => Provider::Mail,
+        "sms_line" => Provider::Netgsm,
+        _ => Provider::Meta,
+    }));
     w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(connector.clone()));
-    let p = people::create(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})).unwrap()).await.unwrap().person;
+    let p = people::create(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"display_name":"Ada","identities":[{"channel":if kind == "mailbox" { "email" } else { "phone" },"value":if kind == "mailbox" { "ada@example.com" } else { "05321234567" }}],"source":"form"})).unwrap()).await.unwrap().person;
     let now = w.owner_ctx.now;
     let mut cap = Capability::new(
         CapabilityId::new_v7(),
         w.ws,
         NewCapability {
-            kind_key: "whatsapp_cloud".into(),
+            kind_key: kind.into(),
             name: "Support".into(),
             ..Default::default()
         },
@@ -37,6 +44,24 @@ async fn setup() -> (World, ConversationId, Arc<ScriptedConnector>) {
         token: "private-token".into(),
         waba_id: None,
         expires_at: None,
+    };
+    let cred = match kind {
+        "mailbox" => Credential::Mailbox {
+            smtp_host: "smtp.example.com".into(),
+            smtp_port: 465,
+            imap_host: "imap.example.com".into(),
+            imap_port: 993,
+            username: "support@example.com".into(),
+            password: "private-mail".into(),
+            from_address: "support@example.com".into(),
+            tls: jt_connector::MailTls::Implicit,
+        },
+        "sms_line" => Credential::NetgsmSms {
+            usercode: "user".into(),
+            password: "private-sms".into(),
+            msgheader: "Support".into(),
+        },
+        _ => cred,
     };
     let sealed = w
         .deps
@@ -426,7 +451,13 @@ async fn sms_optional_cost() {
     let s = w.uow.snapshot();
     assert_eq!(s.inbox.messages[0].cost_minor, None);
     match &sms.calls()[0] {
-        jt_testkit::fakes::ConnectorCall::SendSms { reference, to, .. } => {
+        jt_testkit::fakes::ConnectorCall::SendSms {
+            reference,
+            to,
+            commercial,
+            ..
+        } => {
+            assert!(!commercial);
             assert_eq!(
                 reference.as_deref(),
                 Some(s.inbox.outbox[0].id.to_string().as_str())
@@ -1067,4 +1098,143 @@ async fn late_receipt_after_closure_and_reopen_preserves_newer_attempts() {
     assert_eq!(after, before);
     assert_eq!(after.status, JourneyStatus::Unreachable);
     assert_eq!(after.unreachable_attempts, 3);
+}
+
+#[tokio::test]
+async fn sent_evidence_applies_success_effect_once() {
+    use jt_connector::{ConnectorError, EventKind, InboundEvent, InboundEventId};
+    let (w, id, c) = setup_channel("mailbox").await;
+    c.push_mail(Err(ConnectorError::unknown("answer lost")));
+    let args = || {
+        serde_json::from_value(json!({"text":"Email reply", "intent":"reply", "request_key":"mail-key", "subject":"Re: Help", "in_reply_to":"<original@example.com>", "references":["<original@example.com>"]})).unwrap()
+    };
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, args())
+        .await
+        .unwrap();
+    assert_eq!(out.state, "unknown");
+    let s = w.uow.snapshot();
+    let row = &s.inbox.outbox[0];
+    let mid = row.intent["mail"]["message_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(mid, format!("<{}@panel.test>", row.id));
+    match &c.calls()[0] {
+        jt_testkit::fakes::ConnectorCall::SendMail {
+            workspace_id,
+            message,
+            ..
+        } => {
+            assert_eq!(*workspace_id, w.ws);
+            assert_eq!(message.message_id, mid);
+            assert_eq!(message.to, "ada@example.com");
+            assert_eq!(message.subject, "Re: Help");
+            assert_eq!(
+                message.in_reply_to.as_deref(),
+                Some("<original@example.com>")
+            );
+        }
+        other => panic!("mail expected: {other:?}"),
+    }
+    lose(&w).await;
+    for n in 0..2 {
+        let mut r = w.uow.tenant(w.ws).await.unwrap();
+        r.inbound_events()
+            .insert_if_new(
+                InboundEvent {
+                    id: InboundEventId::new_v7(),
+                    workspace_id: w.ws,
+                    capability_id: Some(row.capability_id),
+                    provider: Provider::Mail,
+                    external_id: format!("imap:account:Sent:1:{n}"),
+                    kind: EventKind::Status,
+                    payload: json!({"status":"sent", "message_id":mid}),
+                    received_at: w.owner_ctx.now,
+                    processed_at: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+        let report = jt_app::usecases::jobs::run_inbox_consume(&w.deps, w.owner_ctx.now).await;
+        assert_eq!(report.failed, 0);
+    }
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.outbox[0].state, "sent");
+    assert_eq!(s.inbox.journeys[0].status, JourneyStatus::Lost);
+    assert_eq!(
+        s.inbox
+            .events
+            .iter()
+            .filter(|e| e.kind == JourneyEventKind::Replied)
+            .count(),
+        1
+    );
+    assert_eq!(w.entries("inbox.sent_after_terminal").len(), 1);
+    assert_eq!(
+        replies::reply(&w.deps, &w.owner_ctx, id, args())
+            .await
+            .unwrap()
+            .state,
+        "sent"
+    );
+    assert_eq!(c.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn unknown_sms_without_job_id_stays_unknown() {
+    let (w, id, c) = setup_channel("sms_line").await;
+    c.push_sms(Err(jt_connector::ConnectorError::unknown("answer lost")));
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, input(Some("sms-key")))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "unknown");
+    for minutes in [3, 6, 60] {
+        jt_app::usecases::jobs::run_outbox_recover(
+            &w.deps,
+            w.owner_ctx.now + time::Duration::minutes(minutes),
+        )
+        .await;
+        jt_app::usecases::jobs::run_netgsm_dlr_poll(
+            &w.deps,
+            w.owner_ctx.now + time::Duration::minutes(minutes),
+        )
+        .await;
+    }
+    assert_eq!(w.uow.snapshot().inbox.outbox[0].state, "unknown");
+    assert!(w.uow.snapshot().inbox.messages[0].external_id.is_none());
+    assert_eq!(
+        c.calls()
+            .iter()
+            .filter(|c| matches!(c, jt_testkit::fakes::ConnectorCall::SendSms { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        !c.calls()
+            .iter()
+            .any(|c| matches!(c, jt_testkit::fakes::ConnectorCall::Report { .. }))
+    );
+}
+
+#[tokio::test]
+async fn email_rebound_account_refuses_persisted_send() {
+    let (w, id, c) = setup_channel("mailbox").await;
+    let q = queued(&w, id).await;
+    let cap_id = w.uow.snapshot().inbox.outbox[0].capability_id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let mut cap = r.capabilities().find(cap_id).await.unwrap().unwrap();
+    cap.external_id = Some("other-account".into());
+    r.capabilities().update(cap).await.unwrap();
+    r.commit().await.unwrap();
+    assert_eq!(
+        replies::send_step(&w.deps, &w.owner_ctx, q)
+            .await
+            .unwrap_err()
+            .details["reason"],
+        "mailbox_binding_changed"
+    );
+    assert!(c.calls().is_empty());
+    assert_eq!(w.uow.snapshot().inbox.outbox[0].state, "refused");
 }

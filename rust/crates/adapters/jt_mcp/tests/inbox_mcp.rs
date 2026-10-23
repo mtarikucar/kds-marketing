@@ -5,12 +5,18 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
         .into_iter()
         .filter(|s| s.name.starts_with("jeeta.inbox."))
         .collect();
-    assert_eq!(tools.len(), 30);
+    assert_eq!(tools.len(), 46);
     for tool in tools {
         assert_eq!(tool.input_schema.as_value()["additionalProperties"], false);
         let manage = matches!(
             tool.use_case,
-            "inbox.journeys.assign_owner"
+            "inbox.people.erase"
+                | "inbox.commissions.approve"
+                | "inbox.commissions.pay"
+                | "inbox.commission_rates.set"
+                | "inbox.suppressions.add"
+                | "inbox.suppressions.remove"
+                | "inbox.journeys.assign_owner"
                 | "inbox.lost_reasons.set"
                 | "inbox.status_labels.set"
                 | "inbox.merges.list"
@@ -33,6 +39,16 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
 fn merge_task_and_note_schemas_share_panel_inputs_with_path_ids() {
     use jt_app::usecases::inbox::schema;
     for (action, path_id) in [
+        ("commissions.list", None),
+        ("commission_rates.set", None),
+        ("commissions.approve", Some("commission_id")),
+        ("commissions.pay", Some("commission_id")),
+        ("quotes.send", Some("journey_id")),
+        ("quotes.accept", Some("quote_id")),
+        ("quotes.list", Some("journey_id")),
+        ("appointments.book", Some("journey_id")),
+        ("appointments.cancel", Some("appointment_id")),
+        ("appointments.held", Some("appointment_id")),
         ("pending", None),
         ("context", Some("conversation_id")),
         ("conversations.list", None),
@@ -44,6 +60,11 @@ fn merge_task_and_note_schemas_share_panel_inputs_with_path_ids() {
         ("unsnooze", Some("conversation_id")),
         ("close", Some("conversation_id")),
         ("reply", Some("conversation_id")),
+        ("consent.record", Some("person_id")),
+        ("consent.list", Some("person_id")),
+        ("suppressions.add", Some("person_id")),
+        ("suppressions.remove", Some("person_id")),
+        ("send", Some("person_id")),
         ("merges.list", None),
         ("merges.apply", Some("merge_id")),
         ("merges.undo", Some("merge_id")),

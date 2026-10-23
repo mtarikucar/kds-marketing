@@ -60,6 +60,7 @@ pub struct StoredConsultationEntry {
 pub struct StoredCapability {
     pub capability: Capability,
     pub sealed: Option<Vec<u8>>,
+    pub iys_sealed: Option<Vec<u8>>,
 }
 
 /// A capability group together with when it was created.
@@ -92,12 +93,13 @@ pub struct StoredInboundEvent {
     pub raw: Option<Vec<u8>>,
 }
 
-/// A message sent from a workspace, by the provider's job id, with the last delivery report
-/// recorded for it (`None` until one is). Only tests queue them
-/// ([`InMemoryUow::add_outbound_job`]): the messages are M2's.
+/// An outbound row plus the original provider-job and status views used by job assertions.
+/// Both views are updated together when a delivery report is recorded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredOutboundJob {
+    pub row: jt_app::ports::compliance::OutboundJobRow,
     pub workspace_id: WorkspaceId,
+    pub capability_id: CapabilityId,
     pub job_id: String,
     pub status: Option<jt_app::ports::connectors::DeliveryStatus>,
 }
@@ -398,6 +400,8 @@ pub struct InMemoryUow {
     set_sealed_faults: Arc<AtomicUsize>,
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
+    mail_cursor_faults: Arc<AtomicUsize>,
+    capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
 }
 
 impl InMemoryUow {
@@ -408,6 +412,16 @@ impl InMemoryUow {
     /// A copy of the committed tables, for assertions.
     pub fn snapshot(&self) -> MemState {
         lock(&self.state).clone()
+    }
+
+    /// Model an attach committing after a capability list under READ COMMITTED. The next
+    /// list returns the old row; subsequent reads see this committed replacement.
+    pub fn replace_capability_after_list(&self, row: StoredCapability) {
+        *lock(&self.capability_after_list) = Some(row);
+    }
+
+    pub fn fail_mail_cursor(&self, times: usize) {
+        self.mail_cursor_faults.store(times, Ordering::SeqCst);
     }
 
     /// Fail completion after consumer effects to exercise atomic rollback.
@@ -426,11 +440,23 @@ impl InMemoryUow {
         self.set_sealed_faults.store(times, Ordering::SeqCst);
     }
 
-    /// Records a message of workspace `ws` sent as the provider's job `job_id`, awaiting its
-    /// delivery report (the messages are M2's; until then only tests add them).
-    pub fn add_outbound_job(&self, ws: WorkspaceId, job_id: &str) {
+    /// Seeds a queued provider job at the current time for delivery-poll tests.
+    pub fn add_outbound_job(&self, ws: WorkspaceId, capability_id: CapabilityId, job_id: &str) {
+        let now = OffsetDateTime::now_utc();
         lock(&self.state).outbound_jobs.push(StoredOutboundJob {
+            row: jt_app::ports::compliance::OutboundJobRow {
+                id: uuid::Uuid::now_v7(),
+                workspace_id: ws,
+                capability_id,
+                provider_job_id: Some(job_id.to_owned()),
+                message_id: None,
+                state: jt_app::ports::compliance::OutboundJobState::Queued,
+                last_status: None,
+                created_at: now,
+                updated_at: now,
+            },
             workspace_id: ws,
+            capability_id,
             job_id: job_id.to_owned(),
             status: None,
         });
@@ -446,6 +472,8 @@ pub(super) struct MemTx {
     set_sealed_faults: Arc<AtomicUsize>,
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
+    mail_cursor_faults: Arc<AtomicUsize>,
+    capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
     ops: Vec<Op>,
@@ -461,10 +489,31 @@ impl MemTx {
             set_sealed_faults: Arc::clone(&uow.set_sealed_faults),
             inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
             inbox_consumption_faults: Arc::clone(&uow.inbox_consumption_faults),
+            mail_cursor_faults: Arc::clone(&uow.mail_cursor_faults),
+            capability_after_list: Arc::clone(&uow.capability_after_list),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
             ops: Vec::new(),
             spoiled: false,
+        }
+    }
+
+    pub(super) fn commit_capability_after_list(&mut self, ws: WorkspaceId) {
+        let mut pending = lock(&self.capability_after_list);
+        if pending
+            .as_ref()
+            .is_none_or(|r| r.capability.workspace_id != ws)
+        {
+            return;
+        }
+        let row = pending.take().expect("checked above");
+        for state in [&mut *lock(&self.shared), &mut self.work] {
+            let stored = state
+                .capabilities
+                .iter_mut()
+                .find(|c| c.capability.id == row.capability.id)
+                .expect("existing capability");
+            *stored = row.clone();
         }
     }
 
@@ -523,6 +572,12 @@ impl MemTx {
             }
         });
         Ok(())
+    }
+
+    pub(super) fn mail_cursor_fails(&self) -> bool {
+        self.mail_cursor_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 
     pub(super) fn inbox_consumption_fails(&self) -> bool {

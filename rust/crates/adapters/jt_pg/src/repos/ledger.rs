@@ -146,7 +146,24 @@ impl LedgerRepo for PgTenantRepos {
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "list ledger entries"))?;
-        records.into_iter().map(LedgerRecord::into_row).collect()
+        let mut rows = Vec::with_capacity(records.len());
+        for record in records {
+            let mut row = record.into_row()?;
+            if let Some(person) = row
+                .entry
+                .payload
+                .get("person_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|p| p.parse::<jt_inbox::PersonId>().ok())
+                && jt_app::ports::inbox::ErasureRepo::get(self, person)
+                    .await?
+                    .is_some()
+            {
+                jt_app::usecases::inbox::erasure::mask_personal(&mut row.entry.payload);
+            }
+            rows.push(row);
+        }
+        Ok(rows)
     }
 
     /// The action is a literal, as in the predicate of `ledger_entries_agent_connection_idx`

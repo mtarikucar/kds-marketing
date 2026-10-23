@@ -80,7 +80,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. Beş göç vardır:
+döndürür. Sekiz göç vardır:
 
 | Göç | Ne yapar |
 |---|---|
@@ -90,6 +90,21 @@ döndürür. Beş göç vardır:
 | `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan kısmi dizini (`ledger_entries_agent_connection_idx`, yalnız `action = 'work.checkin'` satırları) açar |
 | `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez; geçmiş için en yenisi başta bir dizin), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; akışın oturum açtığı uygulama `app`; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir; bir tetikleyici her değişikliği ve 30 günden genç bir kaydın silinmesini reddeder); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
 | `0006_inbox` | Gelen kutusu için 13 alan tablosu (36 toplam): kişiler, kimlikler, konuşmalar, mesajlar, yolculuklar ve olayları, görevler, notlar, birleştirmeler, kayıp nedenleri, tüketici kayıtları, gönderim kuyruğu ve 24 saatlik istek anahtarları. FORCE RLS ve bileşik yabancı anahtarlar; varsayılan kayıp nedenleri ve sistem rollerinin gelen kutusu izinleri geriye dönük eklenir. |
+| `0007_inbox_policy` | Alan politikalarına `inbox_policy` sütunu ekler; mevcut durum etiketlerini korur, yeni tablo eklemez. |
+| `0008_inbox_compliance` | İzinler, engellemeler, teklifler, randevular, komisyonlar, silme kayıtları ve kimlik özetleri, gönderim işleri, posta imleçleri, varsayılan/kullanıcı komisyon oranları ve değişmez yolculuk atfı: 12 yeni alan tablosu, toplam 48. FORCE RLS, bileşik alan anahtarları ve yinelenebilir up/down. |
+
+`0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
+`meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
+alma istisnası uygulama verisini silmez ve tekrar çalıştırılabilir.
+
+Silme altyapısında `jeeta.erasure = 'on'` ve `jeeta.erasure_person_id` yalnız işlem içinde
+`SET LOCAL` ile ayarlanır; hedefin aynı alandaki `erasure_log` kaydı da gerekir. Yolculuk olaylarının
+kişisel metni temizlenebilir, olay kimlikleri, geçişler ve tutarlar korunur. Gelen olayların
+`payload.person_id`, prob kayıtlarının `facts.person_id` bağı kullanılır; silme izni başka kişinin
+satırını açmaz. `ledger_entries` ve `journey_attribution` bu istisnaya dahil değildir; atıf hiçbir
+şekilde değiştirilemez veya silinemez. Tam silme akışı aşağıdaki kişi silme bölümünde açıklanır; bu göç korumaları ve kalıcı veri
+sözleşmesini sağlar.
+
 
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
 değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
@@ -238,7 +253,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (90 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (106 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -255,13 +270,14 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 90 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 106 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
 emekliye ayırır) ve `jeeta.budget.items_retire` (bütçe kalemini kesin olarak emekliye ayırır), ayrıca
 `confirm: true` ister, yoksa `VALIDATION`. Birleştirmeyi geri alan
-`jeeta.inbox.merges_undo` da `DESTRUCTIVE` olarak işaretlidir ve `confirm: true` ister.
+`jeeta.inbox.merges_undo` ve `jeeta.inbox.people_erase` de `DESTRUCTIVE` olarak işaretlidir
+ve `confirm: true` ister. Panel, silme onayı için Türkçe `SİL`, İngilizce `ERASE` yazılmasını ister.
 Öteki yıkıcı araçlar istemez, çünkü
 etkileri onarılabilir: çıkarılan üye yeniden davet edilir, silinen rol ya da grup yeniden açılır, iptal
 edilen anahtarın yerine yenisi çıkarılır; bir grup ancak strateji ona başvurmuyorsa silinir (başvuruyorsa
@@ -890,6 +906,9 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `probe_all` | 15 dakika | Son yoklaması (`connector_public.health.at`) en az bir saatlik olan ya da hiç yoklanmamış her canlı bağlayıcı kabiliyetini (mühürlü kimlik bilgisi olan; kimlik bilgisi olmayan bir `declared` kabiliyet asla) `connector.probe`'un yaptığının aynısıyla yoklar; en çok dördü aynı anda (yoklama sağlayıcıyı beklerken kabiliyetin satır kilidini ve bir veritabanı bağlantısını tutar) | `jeeta.jobs.probe_all` |
 | `netgsm_dlr_poll` | 1 dakika | İletimi kesinleşmemiş gönderilerin iş kimliklerini (en çok 50) alanın doğrulanmış SMS hatlarının kimlik bilgisiyle NetGSM iletim raporuna sorar ve duyduğu durumları kaydeder. Gönderiler M2'nin tablosundadır; o gelene dek bekleyen iş yoktur ve sağlayıcıya hiç gidilmez | `jeeta.jobs.netgsm_dlr_poll` |
 | `netgsm_inbox_poll` | 1 saat | Her doğrulanmış SMS hattının NetGSM gelen kutusunu son iki saat için okur (başlangıç ve bitiş tarihi her zaman verilir) ve webhook'un kaçırdığı mesajları o hatta bağlı gelen olay olarak saklar. Kimlik webhook'unkiyle aynıdır (`netgsm-mo:<gorevid>`): webhook'un ya da önceki yoklamanın sakladığı mesaj ikinci kez yazılmaz. Yoklamanın ham gövdesi yoktur | `jeeta.jobs.netgsm_inbox_poll` |
+| `iys_sync` | 1 saat | İYS izin kararlarını eşitler; beş hatadan sonra insan takip görevi açar | `jeeta.jobs.iys_sync` |
+| `refresh_tenant_hosts` | 1 dakika | Active/pending_payment çalışma alanlarının canlı connector host listesinden bu instance'ın tenant egress katmanını yeniler | `jeeta.jobs.refresh_tenant_hosts` |
+| `mail_inbox_poll` | 2 dakika | Doğrulanmış posta kutularında INBOX/Sent UID imleçlerini okur; olaylarla imleçleri aynı işlemde kaydeder ve gelen kutusu tüketicisini çalıştırır | `jeeta.jobs.mail_inbox_poll` |
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
@@ -1221,7 +1240,7 @@ birleştirme işlemleri `inbox.manage` gerektirir.
 | `close` | `POST /api/inbox/conversations/{conversation_id}/close` | `jeeta.inbox.close` | WRITE / `inbox.work` |
 | `reply` | `POST /api/inbox/conversations/{conversation_id}/reply` | `jeeta.inbox.reply` | WRITE / `inbox.work` |
 
-`reply`: `{text,intent:"reply",request_key?}`. M2a'da `commercial` doğrulama hatasıdır.
+`reply`: `{text,intent:"reply"|"commercial",request_key?}`. Ticari gönderim güncel izin ve bastırma kayıtlarını iki çitte denetler.
 Yanıt penceresi aynı konuşmadaki son gelen mesajdan itibaren 24 saattir. İki gönderim çiti
 kayıp yolculuk, silinmiş/birleştirilmiş kişi, canlı kabiliyet ve yürütücü neslini denetler.
 İnsan yanıtı yürütücüyü değiştirmez. Niyet, sağlayıcı çağrısından önce kalıcıdır; çağrı sırasında
@@ -1268,7 +1287,7 @@ Görevlerde varsayılan `queue=due_24h`, şu andan 24 saat sonrasına kadar olan
 gösterir; `overdue` şu andan önceki görevleri, `all` zaman sınırı olmadan görevleri getirir.
 `assignee` isteğe bağlı kullanıcı filtresidir. Not metni işlem defterine yazılmaz.
 
-Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply",request_key?}`; commercial intent is reserved for M2b. Human replies preserve the executor.
+Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply"|"commercial",request_key?,subject?,in_reply_to?,references?}`; commercial intent requires effective consent and no suppression. Human replies preserve the executor.
 
 ### Gelen olay tüketicisi (`inbox@1`)
 
@@ -1316,9 +1335,10 @@ sırasından bağımsız olarak çalışma alanı/sağlayıcı/`unique_id` ile i
 Bağlantı yalnız Hangup'a kadar saklanan Answer ile doğrulanır; Hangup'ın
 durum/metin/süre alanı bağlantı kanıtı değildir. Sonradan gelen olay sonucu değiştirmez.
 
-LeadGen, Consent, Unknown, yönlendirilmemiş/desteklenmeyen kabiliyet olayları,
-eşleşmeyen raporlar ve henüz konuşması bulunmayan echo'lar `deferred` kaydedilir.
-Bu kayıtlar `inbox@2` tarafından tekrar talep edilebilir; mesaj ve yolculuk anahtarları
+M2a `inbox@1`, LeadGen ve Consent olaylarını ertelerdi; M2b `inbox@2` bu türleri işler.
+Unknown, yönlendirilmemiş/desteklenmeyen kabiliyet olayları, eşleşmeyen raporlar ve
+henüz konuşması bulunmayan echo'lar `deferred` kaydedilir.
+Önceki tüketicinin kayıtları `inbox@2` tarafından tekrar talep edilebilir; mesaj ve yolculuk anahtarları
 sürümler arasında sabit kalır. Konuşmasız echo için gelen temas zamanı uydurulmaz.
 
 T014 inceleme notu: Lost yolculuktaki PBX olayları şu anda yan etki olmadan ertelenir;
@@ -1348,7 +1368,7 @@ its down migration removes only the added policy column.
 
 ### M2a inbox core: model, reducer and surfaces
 
-The catalog contains **90 MCP tools: the M1b 60 plus 30 inbox tools**. Every inbox tool
+The catalog contains **106 MCP tools: the M1b 60 plus 46 inbox tools**. Every inbox tool
 has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
 are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
 check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
@@ -1369,7 +1389,7 @@ when the keeper has changed since the merge.
 | `replied`, connected `call_made` | New/Unreachable → Contacted; reset failed attempts. Reply also makes conversation Theirs. |
 | Failed `call_made` | Count attempts; default third failure enters Unreachable only at rank ≤ 1. |
 | `appointment_booked`, `meeting_held`, `quote_sent`, `quote_accepted` | Advance to Appointment, Met, Quoted, Pending respectively without regressing a later stage. |
-| `won` | Close journey and open tasks; emit CommissionDue (commission accounting is M2b). |
+| `won` | Close journey and open tasks; consume CommissionDue and snapshot the human owner’s commission in the same transaction. |
 | `lost` | Snapshot active loss-reason label; close conversations and cancel open tasks. |
 | `snoozed` | Snooze conversation until the given instant. |
 | `reopened` | Human owner/manager with inbox.manage: Lost → Contacted; clear closure, loss and attempts. |
@@ -1441,3 +1461,362 @@ use the call key as an index condition under forced RLS. The BEFORE append-only 
 the database-generated key; rollback drops the key/index and restores the original guard. Shared
 fake/PostgreSQL contracts cover time/tenant/provider/kind boundaries and processing updates; a tenant
 EXPLAIN regression verifies the indexed lookup and a schema test checks up → down → up.
+
+
+### M2b connector port prerequisites
+
+`SmsSender::send` takes `commercial: bool`: NetGSM sends `iysfilter="11"` for commercial SMS
+to individuals and `"0"` for informational messages; `"12"` for business recipients is not used yet.
+M2a reply callers explicitly pass `false`; commercial
+consent enforcement is supplied by the later M2b use cases.
+
+`MailSender` accepts a typed `MailMessage` with recipient, subject, text, stable Message-ID,
+thread headers and `Attachment` values. Credentials remain a separate argument. Attachment
+`Debug` includes only filename, MIME type and byte count; attachment bytes are never logged or
+written to the ledger. The message and attachment types deliberately do not implement serde.
+`MailboxPoller` returns inbound drafts and a `MailboxCursor` with a `MailboxPosition`
+(`uidvalidity`, `last_uid`) for each mailbox name (INBOX/Sent). The caller must persist the cursor
+atomically with drafts. The `mail_sender` and
+`mailbox_poller` registry getters offer the [mail adapter](crates/adapters/jt_mail/README.md) for
+`Provider::Mail` in production and scripted registries. Both ports take a workspace per call and
+use tenant-authorized SMTP/IMAP sockets with mandatory TLS. Probe and connection hooks receive
+the capability's authoritative `workspace_id` through public metadata. Scripted connectors
+record workspaces, arguments and queued outcomes for tests.
+
+`OutboundJobRepo::pending_job_ids` and `record_status` both require a capability ID. The NetGSM
+DLR job reads pending jobs, polls and records statuses separately for each verified SMS capability;
+provider job IDs shared by different capabilities cannot update one another. PostgreSQL and the
+in-memory adapter persist jobs and poll only queued/sent rows younger than 72 hours, with a known
+provider job ID. Unknown submissions are not automatically polled or resent.
+
+Compliance repository getters on `TenantRepos` share the transaction with inbound event inserts,
+mailbox cursor updates, journey changes and ledger writes. `consents` preserves effective history
+while updating only synchronization state; suppression inserts are idempotent; commissions are
+unique per journey. `commission_default` and `commission_user_rates` store independent rate settings.
+`erasure` records first requests and channel-scoped identity hashes for replay protection.
+
+`attribution().insert_once` preserves the first acquisition record on replay or later touches.
+`Deps::attribution()` supplies the application-owned `AttributionReader` over the configured Pg or
+in-memory unit of work. Reads establish the workspace context, use the half-open acquisition window
+`[from,to)` and order by `(acquired_at,journey_id)`. No update or delete API exists.
+
+### Mailbox connection and email replies (M2b Task 4)
+
+The existing `connector.set_credentials` operation accepts a `mailbox` credential on both
+`POST /api/connectors/credentials` and `jeeta.connector.set_credentials`:
+`smtp_host`, `smtp_port`, `imap_host`, `imap_port`, `username`, `password`, `from_address`,
+`tls` (`implicit`: 465/993; `start_tls`: 587/143). The panel Connect page offers the same form
+in Turkish and English. Credentials are sealed; committed public hosts authorize the initial
+probe, which verifies the IMAP account and SMTP sender. Connection, declaration, rebind and
+retirement serialize host changes per workspace, preserving shared live connector hosts and
+excluding agent/device metadata. Rebinding removes old hosts and resets mailbox cursors;
+credential replacement also resets cursors before polling the new server.
+
+Mail polling runs every two minutes for active/pending-payment workspaces. Network I/O runs
+outside the cursor transaction; the account, credential and previous cursor are rechecked
+before drafts and both mailbox positions commit atomically. The normal inbox consumer matches
+normalized email identities, including MIME senders with display names.
+
+`inbox.reply` / `POST /api/inbox/conversations/{id}/reply` / `jeeta.inbox.reply` accept optional
+`subject`, `in_reply_to`, `references` and `request_key`. Email replies persist the full typed
+mail and stable `<outbox-uuid@public-base-host>` Message-ID before sending through MailSender;
+they require the configured public base URL, the same 24-hour inbound window and both normal
+outbox fences. If omitted, threading uses the latest inbound Message-ID; the default subject is
+`Re:`. Account/host or recipient changes refuse a queued email instead of sending stale bindings.
+
+Sent evidence is correlated by exact persisted Message-ID and capability, in the consumer's
+claim transaction. It resolves an unknown send once, reuses the request-key response, and
+records `inbox.sent_after_terminal` without reopening a terminal journey. DSNs record failure.
+Unknown SMS without a provider job ID stays unknown: no reference lookup or automatic resend.
+Mailbox flows add no catalog rows. The completed M2b release has 106 tools, including the five
+compliance tools below.
+Commercial sending/consent ingestion remain Task 5; calendar integration, archive, HTML mail
+composition and webchat remain M2c.
+
+
+## M2b consent, suppression and commercial sending
+
+Five strategy-gated compliance operations are included in the 46 inbox tools (106 total):
+
+| Row | Panel route | MCP tool | Permission |
+|---|---|---|---|
+| `inbox.consent.record` | POST `/api/inbox/people/{person_id}/consents` | `jeeta.inbox.consent_record` | InboxWork |
+| `inbox.consent.list` | GET `/api/inbox/people/{person_id}/consents` | `jeeta.inbox.consent_list` | InboxWork |
+| `inbox.suppressions.add` | POST `/api/inbox/people/{person_id}/suppressions` | `jeeta.inbox.suppressions_add` | InboxManage |
+| `inbox.suppressions.remove` | DELETE `/api/inbox/people/{person_id}/suppressions/{channel}/{reason}` | `jeeta.inbox.suppressions_remove` | InboxManage |
+| `inbox.send` | POST `/api/inbox/people/{person_id}/send` | `jeeta.inbox.send` | InboxWork |
+
+Consent input is `{channel,kind,source,at}`; `at` is RFC3339 and cannot be future dated.
+The latest effective decision wins, with withdrawal winning equal-time ties. SMS and call
+consent are separate. Lists include both consent history and active suppressions. Manual
+suppression insertion is idempotent; removal removes only the selected reason/channel.
+Applied merge aliases contribute their immutable consent/suppression history to the survivor.
+Undo excludes that alias again; compliance mutations advance the person edit guard.
+
+`send` takes `{channel,text,intent:"commercial",request_key?}` and selects the single verified,
+configured capability for that channel; ambiguous capability or recipient selection is refused.
+It creates an outbound conversation without manufacturing inbound activity. Both enqueue and
+provider fences read current consent and suppression; missing permission or suppression returns
+FORBIDDEN `IZIN_YOK`, ledgered without message/identity text. Reply intent keeps its same-conversation
+24-hour inbound window. Commercial sends require consent; WhatsApp, Messenger and Instagram
+also require an open provider 24-hour window at enqueue and send time, otherwise returning
+VALIDATION `provider_window_closed`. Templates and message-tag sends are deferred to M2c.
+SMS and email commercial sends have no inbound-window requirement. SMS commercial sends use
+`iysfilter=1`; Reply uses 0. Both send/reply share the 24-hour workspace request-key response cache
+and existing outbox recovery, including never automatically retrying unknown sends.
+
+The `inbox@2` consumer reclaims deferred consent callbacks. NetGSM adapter decisions use the
+provider's effective timestamp; undated, invalid or future grants are deferred instead of
+using arrival time. Incoming mail withdrawals suppress the matched person.
+Correlated mail bounces and ARF abuse/fraud/virus complaints add email suppression and refuse subsequent queued commercial
+mail at its provider fence. Unknown identities are deferred without creating a person.
+
+Mail sends, polls and probes refresh the instance's tenant egress registry from the workspace's
+committed live connector host declarations before provider I/O, including on instances with jobs
+disabled. `refresh_tenant_hosts` also runs every minute for active/pending_payment workspaces under
+the scheduler advisory lock. Both refresh paths use the workspace host-mutation guard, replace the
+whole tenant tier, preserve hosts shared by live connectors, and remove obsolete hosts. This keeps
+a mailbox connected on one instance usable on the next mail call on another instance.
+
+The hourly `iys_sync` job uses the existing advisory-lock scheduler. It submits pending/failed
+SMS (`MESAJ`), telephone (`ARAMA`) and email (`EPOSTA`) decisions. Withdrawals send `granted=false`.
+Submissions batch up to 500 rows; throttling does not spend the retry budget. Unsupported
+channels and erased people are excluded before pagination. Merged aliases synchronize through
+the survivor’s identities, retaining the original decision and effective time. Missing or ambiguous recipients
+consume bounded validation retries so they cannot permanently block later withdrawals.
+An acknowledgement marks sent; errors increment attempts, and attempt five marks failed_final
+and creates a human follow-up task. Sent/failed_final rows are not retried. Provider I/O holds
+no tenant transaction. Lost acknowledgements may repeat submissions: there is no exactly-once
+provider guarantee. As with other jobs, enable scheduling on one server instance.
+
+Provision İYS through `POST /api/connectors/credentials` or `jeeta.connector.set_credentials`:
+`{"capability_id":"<existing SMS line>","credential":{"kind":"netgsm_iys","usercode":"<same SMS usercode>","password":"<IYS password>","brand_code":"<brand>"}}`.
+The line must be live and hold SMS credentials; a mismatched usercode returns `VALIDATION`
+with reason `iys_usercode_mismatch`. İYS credentials are sealed in the line's separate
+`iys_sealed` slot; SMS credentials, probe state and account binding are preserved. The public
+brand is `connector_public.iys.brand_code`; `iys` is reserved against ordinary capability edits.
+Migration 0008 adds the nullable slot and its down removes only that added column.
+The optional İYS section on ConnectPage attaches to an existing SMS line, including immediately
+after saving a new line. Its password is cleared after success and excluded from query caches.
+Sync reads each candidate capability and both sealed slots in one row-locked snapshot, rechecks
+liveness, and takes the brand from inside the sealed İYS credential; the public brand is display only.
+It checks the usercode against the SMS credential and leaves consent pending when none or multiple
+are usable. The row lock is released before provider I/O.
+One open owner task asks for provisioning; repeated hourly runs do not duplicate it or spend
+consent retry attempts. Provisioning can be retried without replacing the SMS credential.
+The capabilities page offers İYS setup for live SMS lines with credentials, including verified
+lines; verified lines show only the İYS form. Retirement clears both sealed slots, and rebinding
+a line clears its İYS slot and brand metadata along with the old account credentials.
+
+## M2b quotes and internal appointments
+
+Six strategy-gated `InboxWork` operations handle quotes and appointments. Each operation uses the same input, output and permission on HTTP and MCP:
+
+| Use case | MCP tool | HTTP route |
+|---|---|---|
+| `inbox.quotes.send` | `jeeta.inbox.quotes_send` | POST `/api/inbox/journeys/{journey_id}/quotes` |
+| `inbox.quotes.list` | `jeeta.inbox.quotes_list` | GET `/api/inbox/journeys/{journey_id}/quotes` |
+| `inbox.quotes.accept` | `jeeta.inbox.quotes_accept` | POST `/api/inbox/quotes/{id}/accept` |
+| `inbox.appointments.book` | `jeeta.inbox.appointments_book` | POST `/api/inbox/journeys/{journey_id}/appointments` |
+| `inbox.appointments.cancel` | `jeeta.inbox.appointments_cancel` | POST `/api/inbox/appointments/{id}/cancel` |
+| `inbox.appointments.held` | `jeeta.inbox.appointments_held` | POST `/api/inbox/appointments/{id}/held` |
+
+MCP uses `journey_id`, `quote_id` or `appointment_id` for the corresponding path identifier.
+Quote send accepts `{amount_minor,currency,valid_until,file_ref?,channel,text,intent,request_key?}`.
+Business event key prefixes `quote:` and `appointment:` are reserved; client `events.report`
+cannot manufacture delivery or booking evidence. Amounts must be nonnegative, currency must be
+an assigned uppercase ISO 4217 code, and validity
+must end in the future. The quote, message, outbox and optional 24-hour workspace request-key
+response commit together. The response is `{quote,delivery:{message_id,state}}`; `delivery.state`
+is authoritative for delivery, separately from the quote's business lifecycle. Reusing a key
+returns the stored quote and response without another send. Unknown delivery is never resent;
+provider acceptance or later evidence records `quote_sent` once. Late receipts after Won/Lost
+remain historical, including after a Lost journey is reopened: the persisted closure fence
+prevents old receipts from advancing its new lifecycle. Accept requires confirmed
+delivery, refuses an expired quote, and atomically records `quote_accepted` (Pending).
+`file_ref` is opaque and agent-owned: the platform does not fetch, host or delete its asset.
+
+Book accepts `{starts_at,ends_at,location,intent}` with RFC3339 times and `ends_at > starts_at`.
+It atomically records `appointment_booked` and an automatic task due **one hour before** start,
+assigned to the journey owner (or unassigned). The reminder uses the appointment UUID in the
+separate task table. Held records `meeting_held` and completes the reminder; cancel cancels only
+that booking's reminder. Cancellation also works on Won/Lost journeys without a journey
+transition; it cancels the reminder even if closure already completed it. Repeating the same final state is idempotent; a different final state
+conflicts. The result contains `{appointment,reminder,notification:{state,message_id}}`.
+
+When a verified mailbox and active email identity are available, booking includes an
+`appointment.ics` attachment in the ordinary durable mail outbox. The explicit Reply/Commercial
+intent obeys both enqueue and provider fences, including the reply window and commercial consent/
+suppression checks. A missing mailbox or email identity gives notification `unavailable`;
+an enqueue fence refusal gives `refused` and a ledger entry while retaining the internal booking.
+Unknown mail is ledgered and reconciled through the same Message-ID recovery, without resending.
+Cancelling or holding a booking before its mail is claimed refuses the pending confirmation.
+Attachment bytes and personal location/text are excluded from ledger entries. These are internal
+appointments; external calendar availability, OAuth, events and public booking remain deferred.
+
+
+## M2b human commissions
+
+The release has **106 MCP tools**, including **46 inbox tools**. Commissions are part of the
+inbox (`/inbox/commissions` in the panel), with shared strict request schemas on both surfaces:
+
+| Use case | MCP tool | HTTP route | Permission |
+| --- | --- | --- | --- |
+| `inbox.commissions.list` | `jeeta.inbox.commissions_list` | GET `/api/inbox/commissions?state&payee` | `inbox.work` |
+| `inbox.commissions.approve` | `jeeta.inbox.commissions_approve` | POST `/api/inbox/commissions/{id}/approve` | `inbox.manage`, owner/manager authority |
+| `inbox.commissions.pay` | `jeeta.inbox.commissions_pay` | POST `/api/inbox/commissions/{id}/pay` | `inbox.manage`, owner/manager authority |
+| `inbox.commission_rates.set` | `jeeta.inbox.commission_rates_set` | PUT `/api/inbox/commission-rates` | `inbox.manage` |
+
+All four operations require an approved strategy and an active workspace. MCP approval/payment
+uses the issuer's owner/manager authority and effective `inbox.manage` scope. Payment records a
+human payment decision; it does not transfer funds. Only Pending → Approved → Paid is allowed;
+repeated or out-of-order decisions return CONFLICT and do not duplicate ledger entries.
+
+Won consumes CommissionDue inside the journey/event/effects/ledger transaction. Its payee is the
+active human journey owner at that instant, independent of the reporting actor or conversation
+executor. `commission_user_rates` overrides `commission_default`, including a zero override;
+a missing default means zero basis points. PUT accepts `{user_id?, rate_bp}`: omit/null user_id
+for the workspace default, or name an active member for an override. Rates are unsigned 16-bit
+basis points (100 = 1%). The amount uses integer round-half-even; unrepresentable amounts return
+VALIDATION and roll back Won. Amount, currency, rate and payee remain fixed after later rate or
+owner changes. Same-key Won repeats produce one commission; another key on Won returns terminal
+CONFLICT. Workspace locking serializes Won, rate changes and commission decisions.
+
+Without an active owner, the snapshot is NoPayee and can never be approved or paid. Existing open
+tasks close on Won; a new unassigned follow-up task remains open and due immediately. Assigning
+an owner later does not rewrite that financial snapshot. The panel lists state/payee filters,
+shows snapshot rates and amounts, and offers only permitted next actions and future-rate settings.
+
+
+### Person erasure and replay protection
+
+`POST /api/inbox/people/{person_id}/erase` and `jeeta.inbox.people_erase` require
+`inbox.manage`, the strategy gate and explicit `{ "confirm": true }`. The panel provides
+this action on the selected person's page and conversation, with a typed confirmation dialog:
+`SİL` in Turkish, `ERASE` in English. Dismissal/reopening clears the typed confirmation.
+The operation is atomic and repeatable: it keeps the person as `silinmiş kişi` with
+`erased_at`, keeps journey/event/commission IDs and financial amounts, and removes identities
+while retaining tenant-scoped hashes of their normalized, account-scoped values.
+
+Erasure clears personal message/note/event text, task titles, quote file references,
+appointment locations, merge restoration snapshots, queued mail bodies/recipients/attachments,
+matching request-key responses and person-linked probe facts. Provider delivery jobs enter terminal
+`erased` state; polling skips them and late delivery reports cannot restore recipient numbers.
+Queued sends are refused and
+conversation generations advance to invalidate outstanding send claims. The non-personal stable
+mail Message-ID remains available for late Sent-folder evidence to reconcile unknown sends. An already submitted
+provider request cannot be recalled. File references are forgotten; agent-owned assets are
+not fetched or deleted by the platform.
+
+Inbound events match by person reference, normalized adapter identity, or the original outbound
+mail Message-ID within the same capability (including bounce and complaint reports). Matching payloads are
+scrubbed, and every copy of their raw delivery batch in that workspace is nulled; unrelated
+parsed payloads and other tenants remain unchanged. PostgreSQL's non-ledger history guards
+permit only person-scoped erasure using transaction-local settings, with ordinary append-only
+protection restored when the transaction ends. Migration 0008 remains an up/down pair.
+
+Ledger rows remain physically append-only. All ledger reads recursively mask personal keys
+when `payload.person_id` appears in that tenant's erasure log. Webhook and IMAP intake check
+tombstones under the same workspace lock as erasure, before storing payloads or raw batches.
+A batch containing an erased identity retains no raw body, even on an unrelated sibling event.
+Consumer identity checks also run before person matching; each dropped event is durably
+counted by its `event_consumption.outcome = 'erased_identity_drop'`, without recreating a person.
+Manual creation and identity attachment reject these hashes as well. Erased journeys reject
+new tasks, notes and reports with `CONFLICT` / `person_erased`; repeat erasure scrubs any late
+legacy writes. Scrubbed mail status evidence still reconciles uncertain sends.
+
+The commissions panel formats amounts using the currency's minor units (including JPY and KWD).
+
+## M2b lead-gen intake and attribution
+
+The `inbox@2` system consumer now processes Meta Page lead-form webhooks, including events
+previously deferred by `inbox@1` or earlier `inbox@2` builds. Only deferred Meta LeadGen
+claims are reclaimable within `inbox@2`; other kinds, providers, outcomes, and consumers stay
+final. Reclaiming a claim and applying effects share the same transaction. Page webhooks routed to either `facebook_page` or `messenger`
+fetch the submission with that capability's bound `PageToken` credential,
+then matches all `LeadGenRecord.fields` email/phone values in one identity operation. The
+provider read holds no transaction or domain locks; intake locks and rechecks the Page binding
+before applying the fetched data. Provider errors leave the event unclaimed for retry.
+
+New people have `first_touch.source = meta_ads`. Existing people retain their original first
+touch and gain a `lead_received` journey event. An open journey is reused; a Won journey leads
+to a new Repeat journey; a Lost journey stays Lost and receives a review follow-up. Each accepted
+submission creates one task due one hour after intake, assigned to the journey owner or the
+unassigned queue. Forms create no conversation, inbound message, consent, or reply window.
+
+Person/identity changes, the journey event, initial attribution, task, ledger, and consumer claim
+commit together. Replays cannot duplicate their effects. An email/phone split returns
+`CONFLICT` with `reason: identity_split`, both person IDs, and a durable merge suggestion. This conflict commits only its review
+suggestion and ledger entry, leaves the event unclaimed, and creates no intake effects. Repeated
+unresolved attempts reuse the suggestion; a caller can resolve the split and retry with one identity.
+
+`journey_attribution` records only the submission that opens a journey. Existing-journey later
+touches never fill or replace its original attribution. `acquired_at` is the provider's form
+acquisition time (fetched `created_time`, or the webhook's acquisition timestamp), never the
+processing time. Missing ad, campaign, and form IDs remain null; `adset_id` stays null rather
+than inferring it from `adgroup_id`. PostgreSQL and the fake preserve the first row; PostgreSQL
+also rejects direct updates/deletes. Anonymous provenance survives raw-event retention and
+person erasure. Erased email/phone hashes prevent later forms from recreating the person.
+
+The existing people-get and journeys-get panel/MCP operations expose the results; journeys-get
+includes `attribution` (or null), touch events, and follow-up tasks. This system consumer adds
+no public catalog row, route, permission, or tool, so release counts remain unchanged.
+`Deps::attribution()` provides tenant-scoped journey reads and half-open `[from,to)` ad reads,
+ordered by acquisition time and journey ID. The historical Task 9 migration-test name mentions
+0007; the compliance schema lives in unreleased **0008**, whose reversible round trip retains
+unrelated inbox rows.
+
+
+## M2b panel and architecture completion
+
+The inbox has **46 tools**, of which **16** are new in M2b: consent/suppression/commercial send
+(5), quotes/internal appointments (6), commissions/rates (4), and person erasure (1).
+Together with M1b's 60 tools, the release has **106**. Catalog rows, panel HTTP routes, MCP
+registry entries and shared input schemas have exact-set parity checks. Only `inbox.pending`
+and `inbox.context` bypass the strategy gate; workspace-status checks remain on every inbox row.
+Both `inbox.merges.undo` and `inbox.people.erase` require explicit confirmation.
+
+The panel exposes consent history, effective time/source, İYS synchronization status and active
+suppressions in the person's or conversation's **Consent and suppressions** disclosure.
+`inbox.work` records consent and sends commercial messages; `inbox.manage` adds manual blocks,
+removes a specific reason/channel, and erases personal data. Commercial sends always declare
+Commercial intent; neither changing a form nor removing one suppression substitutes for consent.
+Quote and appointment forms use the same fields validated by the HTTP/MCP shared schemas.
+Quote sends retain the request key across transport retries and report delivery state separately
+from business state. An unknown delivery must not be resent. File references are opaque text,
+never fetched or rendered as asset links.
+
+Journey disclosures list quotes and internal bookings, accept a quote, book an appointment,
+cancel a booking or mark it held. `journeys.get` now includes persisted `appointments` on both
+surfaces so those actions remain available after reloading. A booking remains recorded when its
+ICS notification is refused or unavailable; the panel shows that outcome explicitly. Cancellation
+remains available on a closed journey. Input times use the browser's local timezone and are sent
+as RFC3339 instants. The commission page and mailbox/optional İYS connection forms retain their
+existing permission checks and secret-clearing lifecycle. Panel strings and forms have TR/EN parity.
+
+`mail_crate_has_no_direct_dns_or_connect` is a **supplementary source scan**, backed by the mail
+adapter's real socket tests (including a public hostname resolving into private space and DNS
+timeouts). Dependency allowlists keep domain/application code independent of mail libraries;
+only `jt_mail` uses the mail protocol libraries and its sockets come from authorized outbound
+egress. Tests also cover commercial consent at both fences, identity replay after erasure,
+and duplicate Won events/commission creation.
+
+Q4 retention keeps a `silinmiş kişi` tombstone and accounting IDs/amounts; it scrubs personal
+content and masks append-only ledger payloads at read time. Migration 0008's conditional CHECK
+downgrade retains the widened provider constraint if mail rows exist. Unknown SMS without a
+provider job ID stays unknown, without correlation or automatic resend; İYS synchronization has
+bounded retries and no exactly-once guarantee. External calendar OAuth/availability/events,
+HTML mail, webchat and an inbox archive command remain **M2c**. Erasure, Lost and archive are
+not interchangeable operations; no erase/lost/archive parity is claimed.
+
+Task verification (from `rust/`, with `JEETA_TEST_DATABASE_URL` configured):
+
+```sh
+cargo test --locked --workspace --test inbox_rules --test twin_rule --test gate_rule
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+cd panel && pnpm test && pnpm build
+```
+
+The wider `make check`/CI checks documented above remain the release checks.

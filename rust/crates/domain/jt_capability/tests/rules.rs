@@ -1426,6 +1426,7 @@ fn reserved_public_keys_are_the_ones_connectors_write() {
             "asset",
             "facts",
             "health",
+            "iys",
             "provider",
             "reconnect_required"
         ]

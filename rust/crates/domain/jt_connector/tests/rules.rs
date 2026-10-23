@@ -50,6 +50,7 @@ const EXPECTED_PROVIDERS: &[(&str, Provider)] = &[
     ("sms_line", Provider::Netgsm),
     ("netgsm_pbx", Provider::Netgsm),
     ("x", Provider::X),
+    ("mailbox", Provider::Mail),
 ];
 
 #[test]
@@ -93,7 +94,7 @@ fn provider_for_every_connector_kind() {
 
     // Keys: stable, round trip through `parse` and serde, case-sensitive.
     let keys: Vec<&str> = Provider::all().iter().map(Provider::key).collect();
-    assert_eq!(keys, ["meta", "netgsm", "x"]);
+    assert_eq!(keys, ["meta", "netgsm", "x", "mail"]);
     for p in Provider::all() {
         assert_eq!(Provider::parse(p.key()), Some(*p));
         assert_eq!(serde_json::to_value(p).unwrap(), json!(p.key()));
@@ -142,7 +143,6 @@ fn unsupported_connector_kinds_are_listed_explicitly() {
         "pinterest",
         "youtube",
         "google_business",
-        "mailbox",
         "webchat",
         "discord",
         "reddit",

@@ -187,6 +187,7 @@ function Result({ out, onAnother }: { out: CapabilityOut; onAnother: () => void 
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {callout}
+        {out.capability.kind_key === 'sms_line' && <IysForm capability={out.capability} />}
         <div className="flex flex-wrap gap-2">
           <Button asChild>
             <Link to="/capabilities">{t('connect.result.toCapabilities')}</Link>
@@ -304,9 +305,68 @@ function NetgsmForm({
             </Button>
           </div>
         </form>
+        {shape === 'netgsm_sms' && <div className="mt-4">
+          {capability ? <IysForm capability={capability} /> : <p className="text-sm text-muted-foreground">{t('connect.iys.first')}</p>}
+        </div>}
       </CardContent>
     </Card>
   );
+}
+
+/** A separate optional form: attaching IYS never resubmits or replaces SMS credentials. */
+function IysForm({ capability }: { capability: Capability }) {
+  const { t } = useTranslation();
+  const empty = { usercode: capability.external_id ?? '', password: '', brand_code: '' };
+  const [form, setForm] = useState(empty);
+  const [saved, setSaved] = useState(false);
+  const save = useCredentialsMutation(() => { setForm(empty); setSaved(true); });
+  const complete = form.usercode.trim() !== '' && form.password !== '' && form.brand_code.trim() !== '';
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (complete) save.mutate({ capability_id: capability.id, credential: {
+      kind: 'netgsm_iys', usercode: form.usercode.trim(), password: form.password, brand_code: form.brand_code.trim(),
+    } });
+  };
+  return <Disclosure title={t('connect.iys.title')}>
+    {saved ? <Callout tone="success">{t('connect.iys.saved')}</Callout> :
+      <form className="flex flex-col gap-4" onSubmit={submit} autoComplete="off">
+        <p className="text-sm text-muted-foreground">{t('connect.iys.body')}</p>
+        <ErrorCallout error={save.error} />
+        <TextField label={t('connect.iys.usercode')} value={form.usercode} onChange={(usercode) => setForm((f) => ({ ...f, usercode }))} />
+        <TextField label={t('connect.iys.password')} value={form.password} secret onChange={(password) => setForm((f) => ({ ...f, password }))} />
+        <TextField label={t('connect.iys.brandCode')} value={form.brand_code} onChange={(brand_code) => setForm((f) => ({ ...f, brand_code }))} />
+        <Button type="submit" loading={save.isPending} disabled={!complete}>{t('connect.iys.submit')}</Button>
+      </form>}
+  </Disclosure>;
+}
+
+/** SMTP/IMAP credentials use the same mutation and secret-clearing lifecycle. */
+function MailboxForm({ capability, onDone }: { capability: Capability | null; onDone: (out: CapabilityOut) => void }) {
+  const { t } = useTranslation();
+  const empty = { name: '', smtp_host: '', imap_host: '', username: '', password: '', from_address: '' };
+  const [form, setForm] = useState(empty);
+  const [tls, setTls] = useState<'implicit' | 'start_tls'>('implicit');
+  const save = useCredentialsMutation((out) => { setForm(empty); onDone(out); });
+  const complete = Object.entries(form).every(([key, value]) => (key === 'name' && capability !== null) || value.trim() !== '');
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!complete) return;
+    save.mutate({ ...target('mailbox', capability, form.name), credential: {
+      kind: 'mailbox', smtp_host: form.smtp_host.trim(), smtp_port: tls === 'implicit' ? 465 : 587,
+      imap_host: form.imap_host.trim(), imap_port: tls === 'implicit' ? 993 : 143,
+      username: form.username.trim(), password: form.password, from_address: form.from_address.trim(), tls,
+    } });
+  };
+  return <Card><CardHeader><CardTitle>{t('connect.mail.title')}</CardTitle><CardDescription>{t('connect.mail.body')}</CardDescription></CardHeader>
+    <CardContent><form className="flex flex-col gap-4" onSubmit={submit} autoComplete="off">
+      <ErrorCallout error={save.error} />
+      {(Object.keys(empty) as (keyof typeof empty)[]).filter((key) => key !== 'name' || capability === null).map((key) =>
+        <TextField key={key} label={t(`connect.mail.${key}`)} value={form[key]} secret={key === 'password'} onChange={(value) => setForm((f) => ({ ...f, [key]: value }))} />)}
+      <Field label={t('connect.mail.tls')}>{(ids) => <select id={ids.id} className="rounded-md border border-border bg-surface p-2" value={tls} onChange={(e) => setTls(e.target.value as typeof tls)}>
+        <option value="implicit">TLS (SMTP 465 / IMAP 993)</option><option value="start_tls">STARTTLS (SMTP 587 / IMAP 143)</option>
+      </select>}</Field>
+      <Button type="submit" loading={save.isPending} disabled={!complete}>{t('connect.credentials.submit')}</Button>
+    </form></CardContent></Card>;
 }
 
 /** A Meta access token pasted by hand: an advanced way in, kept out of sight until asked for. */
@@ -383,6 +443,8 @@ function ConnectKind({
   onDone: (out: CapabilityOut) => void;
 }) {
   const { t } = useTranslation();
+  if (kind === 'sms_line' && capability?.status === 'verified') return <IysForm capability={capability} />;
+  if (kind === 'mailbox') return <MailboxForm capability={capability} onDone={onDone} />;
   if (netgsmCredentialKind(kind)) return <NetgsmForm kind={kind} capability={capability} onDone={onDone} />;
   if (!connectsByOAuth(kind)) return <Callout tone="info">{t('connect.unsupported')}</Callout>;
   return (

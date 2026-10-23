@@ -68,6 +68,13 @@ pub struct Deps {
     pub job_lock: Arc<dyn JobLock>,
 }
 
+impl Deps {
+    /// Read committed, tenant-scoped intake provenance through the configured persistence adapter.
+    pub fn attribution(&self) -> crate::ports::inbox::UowAttributionReader {
+        crate::ports::inbox::UowAttributionReader(self.uow.clone())
+    }
+}
+
 /// The stored form of a secret token (a session, invite or API-key token): the lowercase hex
 /// SHA-256 of its text. A fast hash suffices because the tokens are long random values, and a
 /// deterministic one is needed so the token can be looked up by it.

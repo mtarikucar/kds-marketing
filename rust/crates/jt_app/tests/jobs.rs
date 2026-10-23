@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, DeliveryState,
-    DeliveryStatus, InboundEventDraft, InsightsReader, LeadGenFetcher, MessagingSender,
-    OAuthCallback, OAuthProvider, Publisher, SmsSender, Telephony,
+    DeliveryStatus, InboundEventDraft, InsightsReader, LeadGenFetcher, MailSender, MailboxPoller,
+    MessagingSender, OAuthCallback, OAuthProvider, Publisher, SmsSender, Telephony,
 };
 use jt_app::ports::{
     OAuthPendingId, OAuthPendingRow, PlatformRepos, ProbeRun, ProbeRunId, SecretBox, TenantRepos,
@@ -270,9 +270,12 @@ fn every_job_has_a_lock_named_after_it() {
         names,
         [
             "refresh_tokens",
+            "refresh_tenant_hosts",
             "probe_all",
             "netgsm_dlr_poll",
             "netgsm_inbox_poll",
+            "mail_inbox_poll",
+            "iys_sync",
             "purge_raw_bodies",
             "purge_oauth_pending",
             "purge_probe_runs",
@@ -652,6 +655,14 @@ impl ConnectorRegistry for Only {
     fn oauth(&self, _: Provider) -> Option<Arc<dyn OAuthProvider>> {
         None
     }
+    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
+        None
+    }
+
+    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
+        None
+    }
+
     fn sms(&self, _: Provider) -> Option<Arc<dyn SmsSender>> {
         None
     }
@@ -935,6 +946,7 @@ async fn refresh_and_the_inbox_poll_cover_pending_payment_workspaces_the_rest_ac
     let suspended = workspace(&r, "suspended", WorkspaceStatus::Suspended).await;
     let token = instagram_token("IGQ-old", NOW + Duration::days(1));
     let mut held_token = None;
+    let mut held_line = None;
     for (ws, suffix) in [(held, "held"), (suspended, "suspended")] {
         let id = r
             .store(
@@ -949,15 +961,19 @@ async fn refresh_and_the_inbox_poll_cover_pending_payment_workspaces_the_rest_ac
         if ws == held {
             held_token = Some(id);
         }
-        r.store(
-            ws,
-            "sms_line",
-            &format!("LINE-{suffix}"),
-            StoredStatus::Verified,
-            json!({}),
-            Some(sealed(ws, &netgsm_line("HELD"))),
-        )
-        .await;
+        let line = r
+            .store(
+                ws,
+                "sms_line",
+                &format!("LINE-{suffix}"),
+                StoredStatus::Verified,
+                json!({}),
+                Some(sealed(ws, &netgsm_line("HELD"))),
+            )
+            .await;
+        if ws == held {
+            held_line = Some(line);
+        }
     }
     let renewed = instagram_token("IGQ-new", NOW + Duration::days(60));
     r.meta.push_refresh(Ok(Some(renewed.clone())));
@@ -974,7 +990,7 @@ async fn refresh_and_the_inbox_poll_cover_pending_payment_workspaces_the_rest_ac
         jobs::run_probe_all(&r.w.deps, NOW).await,
         report(0, 0, 0, 0)
     );
-    r.w.uow.add_outbound_job(held, "J-held");
+    r.w.uow.add_outbound_job(held, held_line.unwrap(), "J-held");
     assert_eq!(
         jobs::run_netgsm_dlr_poll(&r.w.deps, NOW).await,
         report(0, 0, 0, 0)
@@ -1195,14 +1211,15 @@ async fn inbox_poll_failure_is_counted_and_the_next_line_polled() {
 async fn dlr_poll_asks_only_when_jobs_wait_and_records_what_it_hears() {
     let r = rig().await;
     let creds = netgsm_line("ACME");
-    r.connected(
-        "sms_line",
-        "ACME",
-        StoredStatus::Verified,
-        &creds,
-        json!({}),
-    )
-    .await;
+    let line = r
+        .connected(
+            "sms_line",
+            "ACME",
+            StoredStatus::Verified,
+            &creds,
+            json!({}),
+        )
+        .await;
     // Nothing waits: no provider is asked.
     assert_eq!(
         jobs::run_netgsm_dlr_poll(&r.w.deps, NOW).await,
@@ -1210,8 +1227,8 @@ async fn dlr_poll_asks_only_when_jobs_wait_and_records_what_it_hears() {
     );
     assert!(r.netgsm.calls().is_empty());
 
-    r.w.uow.add_outbound_job(r.ws(), "J1");
-    r.w.uow.add_outbound_job(r.ws(), "J2");
+    r.w.uow.add_outbound_job(r.ws(), line, "J1");
+    r.w.uow.add_outbound_job(r.ws(), line, "J2");
     let delivered = DeliveryStatus {
         job_id: "J1".into(),
         recipient: "905550000000".into(),
@@ -1563,4 +1580,272 @@ async fn netgsm_polls_open_no_transaction_in_workspaces_without_a_verified_line(
             to: NOW,
         }]
     );
+}
+
+#[tokio::test]
+async fn dlr_never_crosses_capabilities() {
+    let r = rig().await;
+    let mut lines = Vec::new();
+    for header in ["ONE", "TWO", "EMPTY"] {
+        let cred = netgsm_line(header);
+        let id = r
+            .connected("sms_line", header, StoredStatus::Verified, &cred, json!({}))
+            .await;
+        lines.push((id, cred));
+    }
+    for (id, _) in &lines[..2] {
+        r.w.uow.add_outbound_job(r.ws(), *id, "shared-id");
+    }
+    r.w.uow.add_outbound_job(r.ws(), lines[0].0, "one-only");
+    r.w.uow.add_outbound_job(r.ws(), lines[1].0, "two-only");
+    // Same provider job id on two accounts, with conflicting outcomes. A response also
+    // contains a job belonging only to the other account: it must never update that job.
+    let outcome = |job: &str, status| DeliveryStatus {
+        job_id: job.into(),
+        recipient: "905550000000".into(),
+        status,
+        at: Some(NOW),
+        raw_code: "test".into(),
+    };
+    r.netgsm.push_report(Ok(vec![
+        outcome("shared-id", DeliveryState::Delivered),
+        outcome("one-only", DeliveryState::Failed),
+        outcome("two-only", DeliveryState::Failed),
+    ]));
+    r.netgsm
+        .push_report(Ok(vec![outcome("shared-id", DeliveryState::Pending)]));
+    let out = jobs::run_netgsm_dlr_poll(&r.w.deps, NOW).await;
+    assert_eq!(out.failed, 0);
+    assert_eq!(out.touched, 4);
+    let calls = r.netgsm.calls();
+    assert_eq!(calls.len(), 2);
+    // Capability listing order need not match insertion order.
+    let mut first_line = None;
+    for (index, call) in calls.iter().enumerate() {
+        let ConnectorCall::Report {
+            credential,
+            job_ids,
+        } = call
+        else {
+            panic!("unexpected call")
+        };
+        let (line, only) = if credential == &lines[0].1 {
+            (lines[0].0, "one-only")
+        } else {
+            assert_eq!(credential, &lines[1].1);
+            (lines[1].0, "two-only")
+        };
+        assert_eq!(job_ids, &["shared-id", only]);
+        if index == 0 {
+            first_line = Some(line);
+        }
+    }
+    let stored = r.w.uow.snapshot().outbound_jobs;
+    for job in stored.iter().filter(|j| j.job_id == "shared-id") {
+        let expected = if Some(job.capability_id) == first_line {
+            DeliveryState::Delivered
+        } else {
+            DeliveryState::Pending
+        };
+        assert_eq!(job.status.as_ref().unwrap().status, expected);
+    }
+    // Whichever line was polled first, its response cannot update the other line's job.
+    for job in stored.iter().filter(|j| j.job_id.ends_with("-only")) {
+        if Some(job.capability_id) == first_line {
+            assert_eq!(job.status.as_ref().unwrap().status, DeliveryState::Failed);
+        } else {
+            assert!(job.status.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn dlr_failure_does_not_stop_other_capabilities() {
+    let r = rig().await;
+    let mut lines = Vec::new();
+    for header in ["ONE", "TWO"] {
+        let cred = netgsm_line(header);
+        let line = r
+            .connected("sms_line", header, StoredStatus::Verified, &cred, json!({}))
+            .await;
+        r.w.uow.add_outbound_job(r.ws(), line, "shared");
+        lines.push((line, cred));
+    }
+    r.netgsm
+        .push_report(Err(ConnectorError::transient("offline")));
+    r.netgsm.push_report(Ok(vec![DeliveryStatus {
+        job_id: "shared".into(),
+        recipient: "phone".into(),
+        status: DeliveryState::Delivered,
+        at: None,
+        raw_code: "1".into(),
+    }]));
+    assert_eq!(
+        jobs::run_netgsm_dlr_poll(&r.w.deps, NOW).await,
+        report(2, 1, 0, 1)
+    );
+    let calls = r.netgsm.calls();
+    assert_eq!(calls.len(), 2);
+    let ConnectorCall::Report { credential, .. } = &calls[1] else {
+        panic!("unexpected call")
+    };
+    let delivered_line = lines.iter().find(|(_, cred)| cred == credential).unwrap().0;
+    for job in r.w.uow.snapshot().outbound_jobs {
+        if job.capability_id == delivered_line {
+            assert_eq!(job.status.unwrap().status, DeliveryState::Delivered);
+        } else {
+            assert!(job.status.is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn poll_crash_keeps_cursor_and_events_consistent() {
+    use jt_app::ports::connectors::{MailboxCursor, MailboxPosition};
+    let mut rig = rig().await;
+    let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
+    rig.w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(mail.clone()));
+    let cred = Credential::Mailbox {
+        smtp_host: "smtp.example.com".into(),
+        smtp_port: 465,
+        imap_host: "imap.example.com".into(),
+        imap_port: 993,
+        username: "support@example.com".into(),
+        password: "secret".into(),
+        from_address: "support@example.com".into(),
+        tls: jt_connector::MailTls::Implicit,
+    };
+    let cap = rig
+        .store(
+            rig.w.ws,
+            "mailbox",
+            "support@example.com",
+            StoredStatus::Verified,
+            json!({}),
+            Some(sealed(rig.w.ws, &cred)),
+        )
+        .await;
+    let draft = InboundEventDraft {
+        external_id: "imap:support@example.com:INBOX:7:1".into(),
+        kind: EventKind::Message,
+        payload: json!({"from":"ada@example.com","text":"Hello","message_id":"<hello@example.com>"}),
+        occurred_at: None,
+    };
+    let cursor = MailboxCursor {
+        mailboxes: [(
+            "INBOX".into(),
+            MailboxPosition {
+                uidvalidity: 7,
+                last_uid: 1,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    };
+    let job = *Job::ALL
+        .iter()
+        .find(|j| j.name() == "mail_inbox_poll")
+        .expect("mail poll must be scheduled");
+    rig.w.uow.fail_mail_cursor(1);
+    mail.push_mailbox_poll(Ok((vec![draft.clone()], cursor.clone())));
+    assert_eq!(job.run(&rig.w.deps, NOW).await.failed, 1);
+    let mut r = rig.w.uow.tenant(rig.w.ws).await.unwrap();
+    assert_eq!(
+        r.mail_cursors().get(cap).await.unwrap(),
+        MailboxCursor::default()
+    );
+    drop(r);
+    assert!(rig.w.uow.snapshot().inbound_events.is_empty());
+    mail.push_mailbox_poll(Ok((vec![draft.clone()], cursor.clone())));
+    assert_eq!(job.run(&rig.w.deps, NOW).await.failed, 0);
+    let mut r = rig.w.uow.tenant(rig.w.ws).await.unwrap();
+    assert_eq!(r.mail_cursors().get(cap).await.unwrap(), cursor);
+    drop(r);
+    assert_eq!(rig.w.uow.snapshot().inbound_events.len(), 1);
+    assert_eq!(rig.w.uow.snapshot().inbox.messages.len(), 1);
+    mail.push_mailbox_poll(Ok((vec![draft], cursor.clone())));
+    assert_eq!(job.run(&rig.w.deps, NOW).await.failed, 0);
+    assert_eq!(rig.w.uow.snapshot().inbox.messages.len(), 1);
+    let calls = mail.calls();
+    for (n, call) in calls.iter().enumerate() {
+        let ConnectorCall::MailboxPoll {
+            workspace_id,
+            public,
+            cursor: seen,
+            ..
+        } = call
+        else {
+            panic!("poll expected");
+        };
+        assert_eq!(*workspace_id, rig.w.ws);
+        assert_eq!(public["external_id"], "support@example.com");
+        assert_eq!(
+            *seen,
+            if n < 2 {
+                MailboxCursor::default()
+            } else {
+                cursor.clone()
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn tenant_host_refresh_covers_receiving_workspaces_and_live_connector_hosts() {
+    let rig = rig().await;
+    let pending = workspace(&rig, "pending-hosts", WorkspaceStatus::PendingPayment).await;
+    let suspended = workspace(&rig, "suspended-hosts", WorkspaceStatus::Suspended).await;
+    for ws in [rig.ws(), pending, suspended] {
+        rig.store(
+            ws,
+            "mailbox",
+            "live",
+            StoredStatus::Verified,
+            json!({"hosts":["smtp.example.com", "imap.example.com"]}),
+            None,
+        )
+        .await;
+        rig.store(
+            ws,
+            "mailbox",
+            "retired",
+            StoredStatus::Retired,
+            json!({"hosts":["retired.example.com"]}),
+            None,
+        )
+        .await;
+        rig.store(
+            ws,
+            "notion",
+            "agent",
+            StoredStatus::Declared,
+            json!({"hosts":["agent.example.com"]}),
+            None,
+        )
+        .await;
+    }
+    assert_eq!(
+        jobs::run_refresh_tenant_hosts(&rig.w.deps, NOW).await,
+        report(2, 2, 0, 0)
+    );
+    let calls = rig.w.hosts.calls();
+    assert_eq!(calls.len(), 2);
+    for ws in [rig.ws(), pending] {
+        let hosts = calls
+            .iter()
+            .find_map(|c| match c {
+                jt_testkit::fakes::HostCall::Rebuild(id, hosts) if *id == ws => Some(hosts),
+                _ => None,
+            })
+            .expect("receiving workspace refreshed");
+        assert_eq!(
+            hosts
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["imap.example.com", "smtp.example.com"]
+                .into_iter()
+                .collect()
+        );
+    }
 }

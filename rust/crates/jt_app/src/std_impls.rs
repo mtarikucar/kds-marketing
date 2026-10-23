@@ -19,8 +19,8 @@ use jt_connector::Provider;
 use crate::error::AppError;
 use crate::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
-    InstagramApp, LeadGenFetcher, MessagingSender, MetaApp, OAuthProvider, PlatformAppConfig,
-    Publisher, SmsSender, Telephony, Url, XApp,
+    InstagramApp, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, MetaApp,
+    OAuthProvider, PlatformAppConfig, Publisher, SmsSender, Telephony, Url, XApp,
 };
 use crate::ports::{Clock, IdGen, PasswordHasher, TokenGen};
 
@@ -186,6 +186,14 @@ impl ConnectorRegistry for EmptyConnectorRegistry {
     }
 
     fn oauth(&self, _provider: Provider) -> Option<Arc<dyn OAuthProvider>> {
+        None
+    }
+
+    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
+        None
+    }
+
+    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
         None
     }
 

@@ -404,7 +404,7 @@ fn inbox_catalog_schemas_match_both_surfaces() {
         .iter()
         .filter(|r| r.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 30);
+    assert_eq!(rows.len(), 46);
     for row in rows {
         let tool = tools.iter().find(|t| Some(t.name) == row.mcp_tool).unwrap();
         assert_eq!(
@@ -485,4 +485,82 @@ fn initial_journey_has_only_domain_defined_start_state() {
     let mut copy = row.clone();
     copy.status = JourneyStatus::Won;
     assert_eq!(initial.journey().status, JourneyStatus::New);
+}
+
+/// Supplementary source scan; jt_mail's socket tests exercise DNS/allowlist refusal at runtime.
+#[test]
+fn mail_crate_has_no_direct_dns_or_connect() {
+    let mut files = Vec::new();
+    rust_files(&root().join("crates/adapters/jt_mail/src"), &mut files);
+    assert!(files.len() >= 6);
+    let mut uses_egress = false;
+    for path in files {
+        let source = fs::read_to_string(&path).unwrap();
+        let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+        for bypass in [
+            "lookup_host",
+            "ToSocketAddrs",
+            "TcpStream::connect",
+            "TcpSocket",
+            "UdpSocket",
+            "Socket::",
+            "connect_tokio1",
+            "SmtpTransport",
+            "dangerous_accept_invalid",
+            "with_custom_certificate_verifier",
+        ] {
+            assert!(!compact.contains(bypass), "{}: {bypass}", path.display());
+        }
+        uses_egress |= compact.contains(".connect_public(");
+    }
+    assert!(uses_egress);
+}
+
+#[tokio::test]
+async fn journey_read_exposes_persisted_appointments_after_reloading() {
+    use jt_app::{
+        ctx::Ctx,
+        usecases::{
+            auth,
+            inbox::{appointments, journeys, people},
+        },
+    };
+    use jt_testkit::fakes::{FIXED_NOW, InMemoryUow, deps};
+    use serde_json::json;
+    let deps = deps(std::sync::Arc::new(InMemoryUow::new()));
+    let registered = auth::register(
+        &deps,
+        auth::RegisterInput {
+            email: "appointments@example.com".into(),
+            password: "correct horse battery".into(),
+            display_name: "Owner".into(),
+            workspace_name: "Bookings".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let ctx = Ctx {
+        workspace_id: registered.me.current_workspace.unwrap(),
+        actor: jt_ledger::Actor::Human {
+            user_id: registered.me.user_id,
+        },
+        permissions: jt_tenancy::SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    let person = people::create(&deps, &ctx, serde_json::from_value(json!({
+        "display_name":"Customer", "identities":[{"channel":"email","value":"customer@example.com"}], "source":"form"
+    })).unwrap()).await.unwrap();
+    let id = people::get(&deps, &ctx, person.person.id)
+        .await
+        .unwrap()
+        .open_journey
+        .unwrap()
+        .id;
+    let booking = appointments::book(&deps, &ctx, id, serde_json::from_value(json!({
+        "starts_at":"2099-01-01T10:00:00Z", "ends_at":"2099-01-01T11:00:00Z", "location":"Office", "intent":"reply"
+    })).unwrap()).await.unwrap();
+    let read = serde_json::to_value(journeys::get(&deps, &ctx, id).await.unwrap()).unwrap();
+    assert_eq!(read["appointments"], json!([booking.appointment]));
 }

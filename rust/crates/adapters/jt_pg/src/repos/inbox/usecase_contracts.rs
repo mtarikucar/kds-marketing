@@ -184,9 +184,10 @@ async fn concurrent_first_contacts_and_event_keys_are_serialized() {
     assert_eq!(a.person.id, b.person.id);
     let mut r = uow.tenant(ws).await.unwrap();
     let j = r.journeys().open_for(a.person.id).await.unwrap().unwrap();
+    let original_task = TaskId::new_v7();
     r.tasks()
         .insert(Task {
-            id: TaskId::new_v7(),
+            id: original_task,
             workspace_id: ws,
             journey_id: j.id,
             title: "Call".into(),
@@ -207,10 +208,27 @@ async fn concurrent_first_contacts_and_event_keys_are_serialized() {
     assert_ne!(a.unwrap().duplicate, b.unwrap().duplicate);
     let mut r = uow.tenant(ws).await.unwrap();
     assert_eq!(r.journeys().events(j.id, 50).await.unwrap().len(), 1);
+    let tasks = r.tasks().list(j.id).await.unwrap();
+    assert_eq!(tasks.len(), 2);
     assert_eq!(
-        r.tasks().list(j.id).await.unwrap()[0].status,
+        tasks.iter().find(|t| t.id == original_task).unwrap().status,
         TaskStatus::Done
     );
+    let commissions = r.commissions().list().await.unwrap();
+    assert_eq!(commissions.len(), 1);
+    let commission = &commissions[0];
+    assert_eq!(commission.commission.journey_id, j.id);
+    assert_eq!(
+        commission.commission.state,
+        jt_inbox::CommissionState::NoPayee
+    );
+    assert_eq!(commission.commission.payee, None);
+    let followup = tasks
+        .iter()
+        .find(|t| t.id == TaskId::from(commission.id))
+        .unwrap();
+    assert_eq!(followup.status, TaskStatus::Open);
+    assert_eq!(followup.assignee, None);
 }
 
 #[tokio::test]

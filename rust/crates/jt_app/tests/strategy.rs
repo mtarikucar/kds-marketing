@@ -116,6 +116,31 @@ struct SpyTenant {
 
 #[async_trait]
 impl TenantRepos for SpyTenant {
+    fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
+        self.inner.consents()
+    }
+    fn suppressions(&mut self) -> &mut dyn jt_app::ports::inbox::SuppressionRepo {
+        self.inner.suppressions()
+    }
+    fn quotes(&mut self) -> &mut dyn jt_app::ports::inbox::QuoteRepo {
+        self.inner.quotes()
+    }
+    fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
+        self.inner.appointments()
+    }
+    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
+        self.inner.commissions()
+    }
+    fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {
+        self.inner.erasure()
+    }
+    fn mail_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::MailCursorRepo {
+        self.inner.mail_cursors()
+    }
+    fn attribution(&mut self) -> &mut dyn jt_app::ports::inbox::AttributionRepo {
+        self.inner.attribution()
+    }
+
     fn people(&mut self) -> &mut dyn jt_app::ports::inbox::PersonRepo {
         self.inner.people()
     }

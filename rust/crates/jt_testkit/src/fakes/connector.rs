@@ -1,13 +1,12 @@
 //! The tenant bundle's connector repos: inbound events, pending OAuth flows and probe runs,
 //! answering as `jt_pg` does over migration 0005, with the checks in the order Postgres makes
 //! them: the repo's own pre-checks (workspace, capability), then check constraints, then the
-//! unique keys (`on conflict do nothing`), then the foreign keys. And the messages awaiting a
-//! delivery report, which `jt_pg` does not hold yet (M2's table): here a test can queue some
-//! ([`super::InMemoryUow::add_outbound_job`]); with none queued the repo answers nothing, as the
-//! Postgres stub does.
+//! unique keys (`on conflict do nothing`), then the foreign keys. Outbound jobs retain their
+//! tenant/capability scope and only poll queued or sent rows within the last 72 hours.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::compliance::{OutboundJobRow, OutboundJobState};
 use jt_app::ports::connectors::{DeliveryState, DeliveryStatus};
 use jt_app::ports::{
     EventOrder, EventQuery, InboundEventRepo, MAX_EVENT_PAGE, MAX_PENDING_JOBS, MAX_PROBE_PAGE,
@@ -18,10 +17,13 @@ use jt_capability::CapabilityId;
 use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
 use jt_tenancy::WorkspaceId;
 use serde_json::Value;
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
+use uuid::Uuid;
 
 use super::capability::ensure_capability;
-use super::state::{MemBundle, StoredInboundEvent, exists, same_workspace, unique};
+use super::state::{
+    MemBundle, StoredInboundEvent, StoredOutboundJob, exists, same_workspace, unique,
+};
 use super::tenant::MemTenant;
 
 /// The `error_kind` values the check constraint of `probe_runs` accepts (migration 0005): the
@@ -69,7 +71,10 @@ impl InboundEventRepo for MemTenant {
             })
             .filter(|e| {
                 !self.state().inbox.consumption.iter().any(|c| {
-                    c.workspace_id == self.ws && c.consumer == consumer && c.event_id == e.id
+                    c.workspace_id == self.ws
+                        && c.consumer == consumer
+                        && c.event_id == e.id
+                        && !super::inbox::deferred_leadgen(consumer, e, c.outcome.as_ref())
                 })
             })
             .cloned()
@@ -81,9 +86,20 @@ impl InboundEventRepo for MemTenant {
 
     async fn insert_if_new(
         &mut self,
-        event: InboundEvent,
-        raw: Option<Vec<u8>>,
+        mut event: InboundEvent,
+        mut raw: Option<Vec<u8>>,
     ) -> Result<Option<InboundEventId>, AppError> {
+        same_workspace(self.ws, event.workspace_id)?;
+        jt_app::ports::inbox::PersonRepo::lock_workspace(self).await?;
+        if jt_app::usecases::inbox::erasure::scrub_inbound(
+            self,
+            event.capability_id,
+            &mut event.payload,
+        )
+        .await?
+        {
+            raw = None;
+        }
         self.call(|this| {
             same_workspace(this.ws, event.workspace_id)?;
             let (ws, state) = (this.ws, this.state());
@@ -390,49 +406,113 @@ impl ProbeRunRepo for MemTenant {
     }
 }
 
-/// Whether a job whose last report is `status` still awaits a final one.
-fn awaiting(status: Option<&DeliveryStatus>) -> bool {
-    match status {
-        None => true,
-        Some(s) => matches!(s.status, DeliveryState::Pending | DeliveryState::Unknown(_)),
-    }
-}
-
 #[async_trait]
 impl OutboundJobRepo for MemTenant {
+    async fn insert(&mut self, row: OutboundJobRow) -> Result<(), AppError> {
+        self.call(|t| {
+            same_workspace(t.ws, row.workspace_id)?;
+            ensure_capability(t.state(), t.ws, row.capability_id)?;
+            if let Some(message) = row.message_id
+                && !t
+                    .state()
+                    .inbox
+                    .messages
+                    .iter()
+                    .any(|r| r.workspace_id == t.ws && r.id == message)
+            {
+                return Err(AppError::not_found("no such message"));
+            }
+            unique(
+                !t.state().outbound_jobs.iter().any(|j| {
+                    j.row.id == row.id
+                        || (j.workspace_id == row.workspace_id
+                            && j.capability_id == row.capability_id
+                            && row.provider_job_id.is_some()
+                            && j.row.provider_job_id == row.provider_job_id)
+                }),
+                "outbound job id or provider job id is taken",
+            )?;
+            let stored = StoredOutboundJob {
+                workspace_id: row.workspace_id,
+                capability_id: row.capability_id,
+                job_id: row.provider_job_id.clone().unwrap_or_default(),
+                status: row.last_status.clone(),
+                row,
+            };
+            t.tx.write(move |s| s.outbound_jobs.push(stored.clone()));
+            Ok(())
+        })
+    }
+    async fn get(
+        &mut self,
+        capability: CapabilityId,
+        id: Uuid,
+    ) -> Result<Option<OutboundJobRow>, AppError> {
+        Ok(self
+            .state()
+            .outbound_jobs
+            .iter()
+            .find(|j| j.workspace_id == self.ws && j.capability_id == capability && j.row.id == id)
+            .map(|j| j.row.clone()))
+    }
     async fn pending_job_ids(
         &mut self,
         ws: WorkspaceId,
+        capability_id: CapabilityId,
         limit: u32,
     ) -> Result<Vec<String>, AppError> {
-        self.call(|this| {
-            same_workspace(this.ws, ws)?;
-            Ok(this
+        self.call(|t| {
+            same_workspace(t.ws, ws)?;
+            let now = t.tx.inbox_write_at.unwrap_or_else(OffsetDateTime::now_utc);
+            let mut rows: Vec<_> = t
                 .state()
                 .outbound_jobs
                 .iter()
-                .filter(|j| j.workspace_id == ws && awaiting(j.status.as_ref()))
-                .map(|j| j.job_id.clone())
+                .filter(|j| {
+                    j.workspace_id == ws
+                        && j.capability_id == capability_id
+                        && matches!(
+                            j.row.state,
+                            OutboundJobState::Queued | OutboundJobState::Sent
+                        )
+                        && j.row.provider_job_id.is_some()
+                        && j.row.created_at > now - Duration::hours(72)
+                        && j.row.created_at <= now
+                })
+                .collect();
+            rows.sort_by_key(|j| (j.row.created_at, j.row.id));
+            Ok(rows
+                .into_iter()
                 .take(limit.clamp(1, MAX_PENDING_JOBS) as usize)
+                .map(|j| j.job_id.clone())
                 .collect())
         })
     }
-
     async fn record_status(
         &mut self,
         ws: WorkspaceId,
+        capability_id: CapabilityId,
         statuses: Vec<DeliveryStatus>,
     ) -> Result<(), AppError> {
-        self.call(|this| {
-            same_workspace(this.ws, ws)?;
-            this.tx.write(move |s| {
+        self.call(|t| {
+            same_workspace(t.ws, ws)?;
+            let now = t.tx.inbox_write_at.unwrap_or_else(OffsetDateTime::now_utc);
+            t.tx.write(move |s| {
                 for status in &statuses {
-                    for job in s
-                        .outbound_jobs
-                        .iter_mut()
-                        .filter(|j| j.workspace_id == ws && j.job_id == status.job_id)
-                    {
+                    for job in s.outbound_jobs.iter_mut().filter(|j| {
+                        j.workspace_id == ws
+                            && j.capability_id == capability_id
+                            && j.row.provider_job_id.as_deref() == Some(status.job_id.as_str())
+                            && j.row.state != OutboundJobState::Erased
+                    }) {
                         job.status = Some(status.clone());
+                        job.row.last_status = Some(status.clone());
+                        job.row.state = match status.status {
+                            DeliveryState::Delivered => OutboundJobState::Delivered,
+                            DeliveryState::Failed => OutboundJobState::Failed,
+                            DeliveryState::Pending | DeliveryState::Unknown(_) => job.row.state,
+                        };
+                        job.row.updated_at = now;
                     }
                 }
             });

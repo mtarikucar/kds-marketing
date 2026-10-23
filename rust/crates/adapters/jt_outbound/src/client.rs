@@ -49,6 +49,10 @@ pub enum EgressError {
     /// Nothing was checked or sent.
     #[error("outbound request could not be built")]
     Build(#[source] reqwest::Error),
+    /// A raw socket could not resolve/connect within its deadline. No provider text is kept.
+    #[error("outbound socket failed")]
+    Socket,
+
     /// The request was allowed but failed in transit (DNS, connect, TLS, timeout, body).
     #[error("outbound transport failed")]
     Transport(#[source] reqwest::Error),
@@ -66,6 +70,7 @@ impl From<EgressError> for AppError {
                 err.details["reason"] = json!("no_public_address");
                 err
             }
+            EgressError::Socket => AppError::internal("outbound socket failed"),
             EgressError::Build(_) => AppError::internal("outbound request could not be built"),
             EgressError::Transport(err) => {
                 let what = if err.is_timeout() {
@@ -101,6 +106,7 @@ impl From<EgressError> for AppError {
 pub struct Egress {
     client: reqwest::Client,
     allowlist: Allowlist,
+    pub(crate) resolver: PublicResolver,
 }
 
 impl Egress {
@@ -125,6 +131,16 @@ impl Egress {
         Egress::build(fixed, PublicResolver::with_lookup(lookup))
     }
 
+    /// Scripted resolution for deterministic socket security tests. Answers still pass the
+    /// production address filter; this cannot grant access to private answers.
+    #[cfg(feature = "test-loopback")]
+    pub fn with_test_lookup(
+        fixed: &'static [AllowedHost],
+        lookup: crate::dns_guard::Lookup,
+    ) -> Egress {
+        Egress::build(fixed, PublicResolver::with_lookup(lookup))
+    }
+
     fn build(fixed: &'static [AllowedHost], resolver: PublicResolver) -> Egress {
         let client = reqwest::Client::builder()
             .use_rustls_tls()
@@ -139,6 +155,7 @@ impl Egress {
         Egress {
             client,
             allowlist: Allowlist::new(fixed),
+            resolver,
         }
     }
 

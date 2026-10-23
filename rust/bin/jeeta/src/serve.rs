@@ -787,6 +787,14 @@ mod tests {
         for provider in jt_connector::Provider::all() {
             let connector = deps.connectors.connector(*provider).expect("an adapter");
             assert_eq!(connector.provider(), *provider);
+            assert_eq!(
+                deps.connectors.mail_sender(*provider).is_some(),
+                *provider == jt_connector::Provider::Mail
+            );
+            assert_eq!(
+                deps.connectors.mailbox_poller(*provider).is_some(),
+                *provider == jt_connector::Provider::Mail
+            );
         }
         assert!(
             deps.connectors

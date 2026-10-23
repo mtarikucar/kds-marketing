@@ -96,6 +96,31 @@ struct SpyTenant {
 
 #[async_trait]
 impl TenantRepos for SpyTenant {
+    fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
+        self.inner.consents()
+    }
+    fn suppressions(&mut self) -> &mut dyn jt_app::ports::inbox::SuppressionRepo {
+        self.inner.suppressions()
+    }
+    fn quotes(&mut self) -> &mut dyn jt_app::ports::inbox::QuoteRepo {
+        self.inner.quotes()
+    }
+    fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
+        self.inner.appointments()
+    }
+    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
+        self.inner.commissions()
+    }
+    fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {
+        self.inner.erasure()
+    }
+    fn mail_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::MailCursorRepo {
+        self.inner.mail_cursors()
+    }
+    fn attribution(&mut self) -> &mut dyn jt_app::ports::inbox::AttributionRepo {
+        self.inner.attribution()
+    }
+
     fn people(&mut self) -> &mut dyn jt_app::ports::inbox::PersonRepo {
         self.inner.people()
     }
@@ -245,6 +270,32 @@ impl CapabilityRepo for SpyTenant {
     async fn read_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {
         self.spy.push("capabilities.read_sealed");
         self.inner.capabilities().read_sealed(id).await
+    }
+
+    async fn set_iys_sealed(
+        &mut self,
+        id: CapabilityId,
+        sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.spy.push("capabilities.set_iys_sealed");
+        self.inner
+            .capabilities()
+            .set_iys_sealed(id, sealed, at)
+            .await
+    }
+
+    async fn lock_iys_snapshot(
+        &mut self,
+        id: CapabilityId,
+    ) -> Result<Option<jt_app::ports::IysCapabilitySnapshot>, AppError> {
+        self.spy.push("capabilities.lock_iys_snapshot");
+        self.inner.capabilities().lock_iys_snapshot(id).await
+    }
+
+    async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {
+        self.spy.push("capabilities.read_iys_sealed");
+        self.inner.capabilities().read_iys_sealed(id).await
     }
 
     async fn set_status(

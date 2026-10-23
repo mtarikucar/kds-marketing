@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["time"] }
 [dev-dependencies]
 # Exercise connector use cases with the real adapter and the in-memory application ports.
 jt_testkit.workspace = true
+jt_capability.workspace = true
 # Plain http to the in-process mock on 127.0.0.1, for the tests only (see jt_outbound's docs).
 jt_outbound = { workspace = true, features = ["test-loopback"] }
 axum.workspace = true

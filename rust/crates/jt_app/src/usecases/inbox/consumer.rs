@@ -14,7 +14,7 @@ use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub const CONSUMER: &str = "inbox@1";
+pub const CONSUMER: &str = "inbox@2";
 // Stable across inbox consumer versions: activity must not reopen a conversation twice.
 const PBX_ACTIVITY: &str = "inbox.pbx_activity";
 
@@ -50,7 +50,7 @@ pub async fn consume_workspace(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime
         for event in events {
             cursor = Some((event.received_at, event.id));
             report.touched += 1;
-            match consume(deps, &event, now).await {
+            match consume_event(deps, &event, now).await {
                 Ok("consumed") => report.changed += 1,
                 Ok(_) => report.skipped += 1,
                 Err(e) => {
@@ -64,13 +64,15 @@ pub async fn consume_workspace(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime
 }
 fn warn(ws: WorkspaceId, e: &AppError) {
     // Adapter errors can contain SQL or personal data: only a structured code reaches logs.
-    tracing::warn!(job="inbox_consume",workspace_id=%ws,code=e.code.as_str(),"inbound consumption rolled back");
+    tracing::warn!(job="inbox_consume",workspace_id=%ws,code=e.code.as_str(),"inbound consumption failed");
 }
-async fn consume(
+/// Trusted system entry point; transport callers must use the authenticated event intake.
+pub async fn consume_event(
     deps: &Deps,
     event: &InboundEvent,
     now: OffsetDateTime,
 ) -> Result<&'static str, AppError> {
+    let lead = super::leadgen::fetch(deps, event).await?;
     let mut r = deps.uow.tenant(event.workspace_id).await?;
     r.people().lock_workspace().await?;
     if !matches!(
@@ -80,7 +82,11 @@ async fn consume(
         return Ok("deferred");
     }
     r.people().set_write_time(now).await?;
-    if !r.consumption().try_claim(CONSUMER, event.id).await? {
+    // Form splits must leave an actionable review suggestion but remain retryable. The
+    // workspace lock serializes matching; successful form effects and their claim still
+    // commit in this one transaction. Duplicate claims roll back all tentative effects.
+    let claim_after_intake = lead.is_some();
+    if !claim_after_intake && !r.consumption().try_claim(CONSUMER, event.id).await? {
         return Ok("duplicate");
     }
     let ctx = Ctx {
@@ -93,7 +99,19 @@ async fn consume(
         now,
         agent_connection_id: None,
     };
-    let outcome = route(deps, &ctx, r.as_mut(), event).await?;
+    let outcome = match route(deps, &ctx, r.as_mut(), event, lead.as_ref()).await {
+        Err(e) if claim_after_intake && e.details["reason"] == "identity_split" => {
+            // match_or_create detects a split before mutating any person or identity.
+            // Only its idempotent review suggestion and ledger entry have been written.
+            r.commit().await?;
+            return Err(e);
+        }
+        Err(e) if e.details["reason"] == "erased_identity" => "erased_identity_drop",
+        result => result?,
+    };
+    if claim_after_intake && !r.consumption().try_claim(CONSUMER, event.id).await? {
+        return Ok("duplicate");
+    }
     r.consumption()
         .record(
             CONSUMER,
@@ -112,7 +130,19 @@ async fn route(
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
     event: &InboundEvent,
+    lead: Option<&super::leadgen::Fetched>,
 ) -> Result<&'static str, AppError> {
+    let mut erased = event.payload["erased_identity"] == true;
+    if let Some(person) = event.payload["person_id"]
+        .as_str()
+        .and_then(|s| s.parse::<PersonId>().ok())
+    {
+        erased |= r.erasure().get(person).await?.is_some();
+    }
+    // Scrubbed mail delivery facts remain useful; they must reconcile uncertain sends.
+    if erased && !(event.provider == Provider::Mail && event.kind == EventKind::Status) {
+        return Ok("erased_identity_drop");
+    }
     let Some(id) = event.capability_id else {
         return Ok("deferred");
     };
@@ -150,9 +180,24 @@ async fn route(
         };
         cap = sibling;
     }
+    if event.kind == EventKind::LeadGen {
+        return match lead {
+            Some(lead) => super::leadgen::intake(deps, ctx, r, &cap, lead).await,
+            None => Ok("deferred"),
+        };
+    }
+    if event.kind == EventKind::Consent {
+        return consent_event(deps, ctx, r, event, &cap).await;
+    }
     let Some(channel) = channel_for_kind(&cap.kind_key) else {
         return Ok("deferred");
     };
+    if event.provider == Provider::Mail
+        && channel == Channel::Email
+        && event.kind == EventKind::Status
+    {
+        return mail_evidence(deps, ctx, r, event, &cap).await;
+    }
     match event.kind {
         EventKind::Message
             if matches!(
@@ -161,6 +206,7 @@ async fn route(
                     Provider::Meta,
                     Channel::WhatsApp | Channel::Messenger | Channel::InstagramDm
                 ) | (Provider::Netgsm, Channel::Sms)
+                    | (Provider::Mail, Channel::Email)
             ) =>
         {
             message(deps, ctx, r, event, &cap, channel).await
@@ -231,6 +277,12 @@ fn decode(event: &InboundEvent, channel: Channel, echo: bool) -> Result<Content,
                 None,
             )
         }
+        (Provider::Mail, Channel::Email) => (
+            text(p, "from"),
+            text(p, "text"),
+            text(p, "message_id").or(Some(event.external_id.as_str())),
+            None,
+        ),
         (Provider::Netgsm, Channel::Sms) => (
             text(p, "from"),
             text(p, "text"),
@@ -297,7 +349,7 @@ async fn conversation(
         })
         .await
 }
-async fn journey(
+pub(super) async fn journey(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
@@ -357,7 +409,7 @@ async fn apply(
     r.journeys()
         .apply_transition(j.id, transition, event)
         .await?;
-    journeys::apply_effects(r, &j, &effects).await?;
+    journeys::apply_effects(deps, ctx, r, &j, &effects).await?;
     record(
         r,
         ctx,
@@ -381,6 +433,12 @@ async fn message(
         return Ok("duplicate");
     }
     let content = decode(event, channel, false)?;
+    super::erasure::check_identity(
+        r,
+        channel.identity_channel(),
+        &sender_key(cap, channel, &content.sender)?,
+    )
+    .await?;
     // Check message identity before reopening or fencing: replay has no domain effects.
     if r.messages()
         .find_by_external_id(cap.id, &content.external_id)
@@ -624,5 +682,180 @@ async fn call(
             )
             .await?;
     }
+    Ok("consumed")
+}
+
+/// Correlation requires the exact persisted Message-ID and capability. Never match text, an
+/// arbitrary UUID, or a different mailbox's evidence. Claim + result commit together.
+async fn mail_evidence(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    cap: &Capability,
+) -> Result<&'static str, AppError> {
+    let Some(mid) = text(&event.payload, "message_id") else {
+        return Ok("deferred");
+    };
+    let Some(id) = mid
+        .strip_prefix('<')
+        .and_then(|s| s.split_once('@'))
+        .and_then(|(id, _)| uuid::Uuid::parse_str(id).ok())
+    else {
+        return Ok("deferred");
+    };
+    let Some(row) = r.outbox().get(id).await? else {
+        return Ok("deferred");
+    };
+    if row.capability_id != cap.id || row.intent["mail"]["message_id"].as_str() != Some(mid) {
+        return Ok("deferred");
+    }
+    let result = match text(&event.payload, "status") {
+        Some("sent") => Ok(crate::ports::connectors::SendReceipt {
+            provider_id: mid.into(),
+            cost_minor: None,
+        }),
+        Some("failed" | "complaint") => Err(jt_connector::ConnectorError::permanent(
+            "mail delivery failed",
+        )),
+        _ => return Ok("deferred"),
+    };
+    if row.state == "queued" {
+        return Ok("deferred");
+    }
+    super::replies::record_result_in(deps, ctx, r, id, result, true).await?;
+    if matches!(text(&event.payload, "status"), Some("failed" | "complaint")) {
+        let conversation = r
+            .conversations()
+            .get(row.conversation_id)
+            .await?
+            .ok_or_else(malformed)?;
+        let reason = if text(&event.payload, "status") == Some("complaint") {
+            SuppressionReason::Complaint
+        } else {
+            SuppressionReason::Bounce
+        };
+        r.suppressions()
+            .insert(Suppression {
+                person_id: conversation.person_id,
+                channel: Channel::Email,
+                reason,
+            })
+            .await?;
+        record(
+            r,
+            ctx,
+            "inbox.suppression.received",
+            "person",
+            conversation.person_id,
+            json!({"person_id":conversation.person_id,"channel":"email","reason":reason}),
+        )
+        .await?;
+        let m = r
+            .messages()
+            .get(row.message_id)
+            .await?
+            .ok_or_else(malformed)?;
+        r.messages()
+            .set_status(m.id, MsgStatus::Failed, m.external_id, m.cost_minor)
+            .await?;
+    }
+    Ok("consumed")
+}
+
+async fn consent_event(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    cap: &Capability,
+) -> Result<&'static str, AppError> {
+    let p = &event.payload;
+    let (channel, recipient, kind, source) = match event.provider {
+        Provider::Netgsm if matches!(cap.kind_key.as_str(), "sms_line" | "netgsm_pbx") => {
+            let channel = match text(p, "channel") {
+                Some("MESAJ") => Channel::Sms,
+                Some("ARAMA") => Channel::Phone,
+                Some("EPOSTA") => Channel::Email,
+                _ => return Ok("deferred"),
+            };
+            let kind = match (text(p, "status"), p["granted"].as_bool()) {
+                (Some("ONAY"), Some(true)) => ConsentKind::Explicit,
+                (Some("RET"), Some(false)) => ConsentKind::Withdrawn,
+                _ => return Err(malformed()),
+            };
+            (
+                channel,
+                text(p, "recipient").ok_or_else(malformed)?,
+                kind,
+                ConsentSource::IysSync,
+            )
+        }
+        Provider::Mail
+            if cap.kind_key == "mailbox" && p["withdrawn"] == true && p["channel"] == "email" =>
+        {
+            (
+                Channel::Email,
+                text(p, "from").ok_or_else(malformed)?,
+                ConsentKind::Withdrawn,
+                ConsentSource::Customer,
+            )
+        }
+        _ => return Ok("deferred"),
+    };
+    let at = if kind == ConsentKind::Explicit {
+        // Arrival time is not proof of a grant's effective time: delayed callbacks must
+        // never manufacture permission newer than a recorded withdrawal.
+        let Some(at) = text(p, "occurred_at")
+            .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+            .filter(|at| *at <= event.received_at && *at <= ctx.now)
+        else {
+            return Ok("deferred");
+        };
+        at
+    } else {
+        activity_at(event)
+    };
+    let normalized = normalise(channel.identity_channel(), recipient).map_err(|_| malformed())?;
+    let Some(person) = r
+        .people()
+        .find_by_identity(channel.identity_channel(), &normalized)
+        .await?
+    else {
+        return Ok("deferred");
+    };
+    let row = Consent {
+        id: ConsentId::from(deps.ids.uuid()),
+        person_id: person.id,
+        channel,
+        kind,
+        source,
+        at,
+        sync_state: if source == ConsentSource::IysSync {
+            SyncState::Sent
+        } else {
+            SyncState::Pending
+        },
+        attempts: 0,
+    };
+    r.consents().insert(row.clone()).await?;
+    if kind == ConsentKind::Withdrawn {
+        r.suppressions()
+            .insert(Suppression {
+                person_id: person.id,
+                channel,
+                reason: SuppressionReason::Unsubscribe,
+            })
+            .await?;
+    }
+    record(
+        r,
+        ctx,
+        "inbox.consent.received",
+        "person",
+        person.id,
+        json!({"person_id":person.id,"consent_id":row.id,"channel":channel,"kind":kind}),
+    )
+    .await?;
     Ok("consumed")
 }

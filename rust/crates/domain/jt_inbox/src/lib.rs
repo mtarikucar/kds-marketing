@@ -1,10 +1,19 @@
-//! Pure inbox domain: people, conversations, journey reduction, send fences and merges. No I/O.
+//! Pure inbox domain: people, conversations, journeys, compliance and commercial records. No I/O.
 //!
 //! Stored records ignore unknown fields and default missing non-identity fields. Required
 //! identity and relationship fields are never invented on read. Deserialisation is for storage,
 //! not input validation: application code normalises identities before writing or matching.
+//!
+//! Consent/suppression govern commercial fences; quotes validate assigned ISO 4217 codes,
+//! appointments export escaped/folded UTC ICS, commissions use integer half-even rounding,
+//! and scoped identity hashes prevent erased identities from reappearing. `sms_segments`
+//! counts GSM-7 septets or UTF-16 units; send boundaries must validate body size first.
 
+mod appointment;
+mod commission;
+mod consent;
 mod conversation;
+mod erasure;
 mod fence;
 mod identity;
 mod ids;
@@ -13,16 +22,25 @@ mod merge;
 mod message;
 mod note;
 mod person;
+mod quote;
+mod sms;
+mod suppression;
 mod task;
 
+pub use appointment::{Appointment, AppointmentError, AppointmentState, ics};
+pub use commission::{Commission, CommissionState, commission_for};
+pub use consent::{
+    Consent, ConsentKind, ConsentSource, IzinYok, SyncState, commercial_allowed, effective_consent,
+};
 pub use conversation::{ConvState, Conversation, Executor};
-pub use fence::{FenceCtx, FenceRefusal, may_send};
+pub use erasure::identity_hash;
+pub use fence::{FenceCtx, FenceRefusal, SendIntent, may_send};
 pub use identity::{
     Channel, Identity, IdentityChannel, IdentityError, channel_for_kind, normalise, scope_opaque,
 };
 pub use ids::{
-    ConversationId, IdentityId, JourneyEventId, JourneyId, MergeId, MessageId, NoteId, PersonId,
-    TaskId,
+    ConsentId, ConversationId, IdentityId, JourneyEventId, JourneyId, MergeId, MessageId, NoteId,
+    PersonId, TaskId,
 };
 pub use journey::{
     InitialJourney, Journey, JourneyEffect, JourneyEvent, JourneyEventKind, JourneyPatch,
@@ -33,6 +51,9 @@ pub use merge::{MergeConflict, MergeDecision, PersonView, decide_merge};
 pub use message::{Author, Direction, Message, MsgStatus};
 pub use note::Note;
 pub use person::{EventSource, FirstTouch, Person, Source};
+pub use quote::{Quote, QuoteError, QuoteState};
+pub use sms::sms_segments;
+pub use suppression::{Suppression, SuppressionReason};
 pub use task::{Task, TaskStatus};
 
 fn epoch() -> time::OffsetDateTime {

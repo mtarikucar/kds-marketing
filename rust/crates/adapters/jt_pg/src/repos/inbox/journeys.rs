@@ -24,10 +24,13 @@ impl JourneyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         same_workspace(ws, event.workspace_id)?;
         if event.source != jt_inbox::EventSource::System
-            || event.kind != jt_inbox::JourneyEventKind::Replied
+            || !matches!(
+                event.kind,
+                jt_inbox::JourneyEventKind::Replied | jt_inbox::JourneyEventKind::QuoteSent
+            )
         {
             return Err(AppError::validation(
-                "only system replied receipts may be historical",
+                "only system outbound receipts may be historical",
                 serde_json::json!({}),
             ));
         }

@@ -18,14 +18,14 @@ const DOMAIN_ALLOW: &[&str] = &[
 
 // The connector domain also uses `jt_capability` (capability ids, kinds, statuses and the
 // secret-key predicate), and it computes webhook signatures, the OAuth state's MAC and the PKCE
-// challenge itself (pure functions over bytes, no I/O), so it alone may use the HMAC, SHA-256,
-// base64 and constant-time comparison crates. No cipher: sealing stays behind the `SecretBox`
+// challenge itself (pure functions over bytes, no I/O). HMAC, base64 and constant-time
+// comparison stay connector-only; inbox also uses SHA-256 below. No cipher: sealing stays behind `SecretBox`
 // port.
 const CONNECTOR_EXTRA_ALLOW: &[&str] = &["jt_capability", "hmac", "sha2", "base64", "subtle"];
 
-// Inbox records refer to capabilities and may speak connector domain types. Only this crate
-// gets these additions; the shared domain and application allowlists remain unchanged.
-const INBOX_EXTRA_ALLOW: &[&str] = &["jt_capability", "jt_connector"];
+// Inbox records refer to capabilities and may speak connector domain types. SHA-256 produces
+// pure erasure replay keys; no I/O. The shared domain/application allowlists remain unchanged.
+const INBOX_EXTRA_ALLOW: &[&str] = &["jt_capability", "jt_connector", "sha2"];
 
 /// Every domain crate, with what it may depend on beyond [`DOMAIN_ALLOW`].
 const DOMAIN_CRATES: &[(&str, &[&str])] = &[
@@ -50,16 +50,16 @@ fn domain_crates_depend_only_on_pure_crates() {
 }
 
 /// Read from each domain crate's manifest: the connector and inbox use capability types,
-/// while only the connector uses its crypto crates (so the rule is not vacuous either).
+/// both hash bytes, while the other crypto crates remain connector-only (non-vacuous).
 #[test]
-fn only_connector_and_inbox_use_capability_and_only_connector_uses_crypto() {
+fn only_connector_and_inbox_use_capability_and_sha2_other_crypto_stays_connector_only() {
     for krate in CONNECTOR_EXTRA_ALLOW {
         let users: BTreeSet<&str> = DOMAIN_CRATES
             .iter()
             .map(|(c, _)| *c)
             .filter(|c| direct_deps(c).contains(*krate))
             .collect();
-        let expected = if *krate == "jt_capability" {
+        let expected = if matches!(*krate, "jt_capability" | "sha2") {
             BTreeSet::from(["jt_connector", "jt_inbox"])
         } else {
             BTreeSet::from(["jt_connector"])
@@ -271,8 +271,20 @@ const CONNECTOR_ADAPTER_ALLOW: &[&str] = &[
     "tokio",
 ];
 
+const MAIL_ADAPTER_EXTRA_ALLOW: &[&str] = &[
+    "lettre",
+    "async-imap",
+    "tokio-rustls",
+    "mailparse",
+    "html5gum",
+    "webpki-roots",
+    "futures-util",
+    "log",
+    "nom",
+];
+
 /// The provider adapter crates.
-const CONNECTOR_ADAPTERS: &[&str] = &["jt_meta", "jt_netgsm", "jt_x"];
+const CONNECTOR_ADAPTERS: &[&str] = &["jt_meta", "jt_netgsm", "jt_x", "jt_mail"];
 
 #[test]
 fn connector_adapters_reach_out_only_through_the_egress_client() {
@@ -280,7 +292,8 @@ fn connector_adapters_reach_out_only_through_the_egress_client() {
         let deps = direct_deps(c);
         for d in &deps {
             assert!(
-                CONNECTOR_ADAPTER_ALLOW.contains(&d.as_str()),
+                CONNECTOR_ADAPTER_ALLOW.contains(&d.as_str())
+                    || (*c == "jt_mail" && MAIL_ADAPTER_EXTRA_ALLOW.contains(&d.as_str())),
                 "{c} depends on {d}, which is not on its allowlist"
             );
         }
@@ -335,7 +348,8 @@ fn connector_adapters_never_name_an_http_client() {
                     "TcpListener",
                 ] {
                     assert!(
-                        !mentions_word(&text, socket),
+                        !mentions_word(&text, socket)
+                            || (*c == "jt_mail" && matches!(socket, "TcpStream" | "std::net")),
                         "{} names {socket}: an adapter reaches out only through jt_outbound",
                         file.display()
                     );
@@ -494,4 +508,72 @@ fn test_loopback_feature_is_dev_only() {
         !manifest.contains(FEATURE),
         "bin/jeeta/Cargo.toml mentions `{FEATURE}`"
     );
+}
+
+/// Mail protocol libraries are named only by the mail adapter; other adapters may not grow a
+/// second path around the outbound registry. The transport crates already used transitively
+/// by HTTP are still not direct dependencies of any other workspace package.
+#[test]
+fn only_mail_names_mail_protocol_libraries() {
+    for library in ["lettre", "async-imap", "tokio-rustls", "mailparse"] {
+        let users: BTreeSet<_> = workspace_packages()
+            .into_iter()
+            .filter(|p| direct_deps(p).contains(library))
+            .collect();
+        assert_eq!(
+            users,
+            BTreeSet::from(["jt_mail".to_owned()]),
+            "direct users of {library}"
+        );
+        for package in metadata()["packages"].as_array().unwrap() {
+            let name = package["name"].as_str().unwrap();
+            if ["jt_mail", "jt_archtest"].contains(&name) {
+                continue;
+            }
+            let manifest = std::path::PathBuf::from(package["manifest_path"].as_str().unwrap());
+            let mut files = rust_files_under(manifest.parent().unwrap());
+            files.push(manifest);
+            for file in files {
+                let source = std::fs::read_to_string(&file).unwrap();
+                assert!(
+                    !mentions_word(&source, library)
+                        && !mentions_word(&source, &library.replace('-', "_")),
+                    "{} names {library}",
+                    file.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn mail_opens_sockets_only_through_authorized_egress() {
+    let dir = workspace_dir().join("crates/adapters/jt_mail/src");
+    let files = rust_files_under(&dir);
+    assert!(files.len() >= 6);
+    let mut guarded = false;
+    for file in files {
+        let source = std::fs::read_to_string(&file).unwrap();
+        let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+        for forbidden in [
+            "lookup_host",
+            "ToSocketAddrs",
+            "TcpStream::connect",
+            "TcpSocket",
+            "UdpSocket",
+            "Socket::",
+            "connect_tokio1",
+            "SmtpTransport",
+            "dangerous_accept_invalid",
+            "with_custom_certificate_verifier",
+        ] {
+            assert!(
+                !compact.contains(forbidden),
+                "{} bypasses egress/TLS: {forbidden}",
+                file.display()
+            );
+        }
+        guarded |= compact.contains(".connect_public(");
+    }
+    assert!(guarded, "mail must use the authorized opener");
 }

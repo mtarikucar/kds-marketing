@@ -9,6 +9,14 @@ use time::{Duration, OffsetDateTime};
 
 use crate::Masked;
 
+/// Mandatory mailbox encryption mode; there is no plaintext variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MailTls {
+    Implicit,
+    StartTls,
+}
+
 /// What an adapter authenticates with, one variant per credential shape (spec §6.1: "kimlik
 /// bilgileri mühürlü").
 ///
@@ -23,6 +31,18 @@ use crate::Masked;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Credential {
+    /// SMTP/IMAP credentials, sealed together. The login and password are private.
+    #[serde(rename = "mailbox")]
+    Mailbox {
+        smtp_host: String,
+        smtp_port: u16,
+        imap_host: String,
+        imap_port: u16,
+        username: String,
+        password: String,
+        from_address: String,
+        tls: MailTls,
+    },
     /// A user access token from an OAuth flow (Meta user token, Instagram login, X).
     #[serde(rename = "oauth")]
     OAuth {
@@ -88,6 +108,7 @@ impl Credential {
     /// `"netgsm_iys"`.
     pub fn kind(&self) -> &'static str {
         match self {
+            Credential::Mailbox { .. } => "mailbox",
             Credential::OAuth { .. } => "oauth",
             Credential::PageToken { .. } => "page_token",
             Credential::WhatsAppCloud { .. } => "whatsapp_cloud",
@@ -130,6 +151,20 @@ impl Credential {
             facts.insert(key.to_owned(), value);
         };
         match self {
+            Credential::Mailbox {
+                smtp_host,
+                smtp_port,
+                imap_host,
+                imap_port,
+                from_address,
+                ..
+            } => {
+                put("smtp_host", json!(smtp_host));
+                put("smtp_port", json!(smtp_port));
+                put("imap_host", json!(imap_host));
+                put("imap_port", json!(imap_port));
+                put("from_address", json!(from_address));
+            }
             Credential::OAuth {
                 expires_at, scopes, ..
             } => {
@@ -196,6 +231,25 @@ fn masked(secret: &Option<String>) -> Option<Masked> {
 impl fmt::Debug for Credential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Credential::Mailbox {
+                smtp_host,
+                smtp_port,
+                imap_host,
+                imap_port,
+                from_address,
+                tls,
+                ..
+            } => f
+                .debug_struct("Mailbox")
+                .field("smtp_host", smtp_host)
+                .field("smtp_port", smtp_port)
+                .field("imap_host", imap_host)
+                .field("imap_port", imap_port)
+                .field("username", &Masked)
+                .field("password", &Masked)
+                .field("from_address", from_address)
+                .field("tls", tls)
+                .finish(),
             Credential::OAuth {
                 access_token: _,
                 refresh_token,
