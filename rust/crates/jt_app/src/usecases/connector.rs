@@ -139,7 +139,7 @@ const PKCE_VERIFIER_BYTES: usize = 48;
 const NONCE_BYTES: usize = 16;
 
 /// The `connector_public` key of the reconnection flag.
-const RECONNECT_REQUIRED: &str = "reconnect_required";
+pub(crate) const RECONNECT_REQUIRED: &str = "reconnect_required";
 
 /// The key, inside `connector_public.health`, of the connection step's last failure.
 const ON_CONNECTED_ERROR: &str = "on_connected_error";
@@ -1711,8 +1711,9 @@ fn credential_strict<'de, D: Deserializer<'de>>(d: D) -> Result<CredentialInput,
 // ---------------------------------------------------------------------------------------------
 
 /// [`probe`] without its permission check: also run for capabilities just connected, which
-/// first run the adapter's connection step (`connected`; see the module docs).
-async fn probe_locked(
+/// first run the adapter's connection step (`connected`; see the module docs), and by the
+/// scheduler's `probe_all` job (`super::jobs`), under a system context.
+pub(crate) async fn probe_locked(
     deps: &Deps,
     ctx: &Ctx,
     id: CapabilityId,
@@ -2057,7 +2058,7 @@ fn connected_public(
 }
 
 /// `value`'s fields, or none when it is not an object.
-fn object(value: &Value) -> Map<String, Value> {
+pub(crate) fn object(value: &Value) -> Map<String, Value> {
     match value {
         Value::Object(map) => map.clone(),
         _ => Map::new(),
@@ -2116,7 +2117,11 @@ fn merge_connection_step(capability: &mut Capability, step: Result<Value, Connec
 }
 
 /// `credential` sealed for the context's workspace.
-fn seal_credential(deps: &Deps, ctx: &Ctx, credential: &Credential) -> Result<Vec<u8>, AppError> {
+pub(crate) fn seal_credential(
+    deps: &Deps,
+    ctx: &Ctx,
+    credential: &Credential,
+) -> Result<Vec<u8>, AppError> {
     let plain = Zeroizing::new(
         serde_json::to_vec(credential)
             .map_err(|_| AppError::internal("the credentials cannot be sealed"))?,
@@ -2125,7 +2130,7 @@ fn seal_credential(deps: &Deps, ctx: &Ctx, credential: &Credential) -> Result<Ve
 }
 
 /// The credential sealed in `sealed`, opened for `ws`.
-fn open_credential(
+pub(crate) fn open_credential(
     deps: &Deps,
     ws: jt_tenancy::WorkspaceId,
     sealed: &[u8],

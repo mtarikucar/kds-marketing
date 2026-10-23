@@ -120,7 +120,7 @@ pub async fn receive_for_accounts(
             provider,
             received_at,
         };
-        store_all(deps, repos.as_mut(), at, items, raw, &mut out).await?;
+        store_all(deps, repos.as_mut(), at, items, Some(raw), &mut out).await?;
         repos.commit().await?;
     }
     Ok(out)
@@ -198,8 +198,37 @@ pub async fn receive_netgsm(
         provider: Provider::Netgsm,
         received_at,
     };
-    store_all(deps, repos.as_mut(), at, items, raw, &mut out).await?;
+    store_all(deps, repos.as_mut(), at, items, Some(raw), &mut out).await?;
     repos.commit().await?;
+    Ok(out)
+}
+
+/// Stores the `drafts` a poll of `provider` found (NetGSM's inbox backup), attached to
+/// `capability`, in the open bundle `repos` of workspace `ws`, received at `received_at`, and
+/// answers what became of each, in order. As a delivery's events are: once per provider id, so a
+/// message the webhook already stored (or an earlier poll did) is a [`Delivery::Duplicate`], and
+/// written in the order of their provider ids; a poll has no raw body, so none is kept.
+pub(crate) async fn store_polled(
+    deps: &Deps,
+    repos: &mut dyn TenantRepos,
+    ws: WorkspaceId,
+    provider: Provider,
+    capability: Option<CapabilityId>,
+    drafts: Vec<InboundEventDraft>,
+    received_at: OffsetDateTime,
+) -> Result<Vec<Delivery>, AppError> {
+    let mut out = vec![Delivery::Duplicate; drafts.len()];
+    let items = drafts
+        .into_iter()
+        .enumerate()
+        .map(|(i, draft)| (i, capability, draft))
+        .collect();
+    let at = Stamp {
+        ws,
+        provider,
+        received_at,
+    };
+    store_all(deps, repos, at, items, None, &mut out).await?;
     Ok(out)
 }
 
@@ -221,7 +250,8 @@ pub fn raw_cutoff(now: OffsetDateTime) -> OffsetDateTime {
 
 /// Removes the raw body of every event received before `cutoff`, in every workspace (one
 /// transaction per workspace), and answers how many bodies it removed. The events themselves
-/// stay. Not a catalog use case: the scheduler runs it daily with [`raw_cutoff`].
+/// stay. Not a catalog use case: the scheduler runs it daily with [`raw_cutoff`]
+/// (`super::jobs::run_purge_raw_bodies`).
 pub async fn purge_raw(deps: &Deps, cutoff: OffsetDateTime) -> Result<u64, AppError> {
     let workspaces = {
         let mut platform = deps.uow.platform().await?;
@@ -254,20 +284,21 @@ struct Stamp {
 /// The events are written in the order of their provider ids (stable, so a repeated id keeps
 /// its place), whatever their order in the body: two transactions storing overlapping events
 /// then take the unique-key locks in the same order and never wait on each other in a circle.
-/// The raw body is kept once: beside the first event this call newly stores; every later event of
-/// the delivery in this workspace keeps none (they share its `received_at`).
+/// The raw body, when there is one (a poll has none), is kept once: beside the first event this
+/// call newly stores; every later event of the delivery in this workspace keeps none (they share
+/// its `received_at`).
 async fn store_all(
     deps: &Deps,
     repos: &mut dyn TenantRepos,
     at: Stamp,
     mut items: Vec<(usize, Option<CapabilityId>, InboundEventDraft)>,
-    raw: &[u8],
+    raw: Option<&[u8]>,
     out: &mut [Delivery],
 ) -> Result<(), AppError> {
     items.sort_by(|a, b| a.2.external_id.cmp(&b.2.external_id));
     let mut raw_kept = false;
     for (i, capability, draft) in items {
-        let body = (!raw_kept).then(|| raw.to_vec());
+        let body = raw.filter(|_| !raw_kept).map(<[u8]>::to_vec);
         let delivery = store(deps, repos, at, capability, draft, body).await?;
         raw_kept |= matches!(delivery, Delivery::Stored(_));
         out[i] = delivery;

@@ -82,7 +82,7 @@ döndürür. Beş göç vardır:
 | `0002_strategy` | strateji sürümleri, hipotezler, istişare kaydı |
 | `0003_capabilities` | kabiliyetler (bildiren ajan bağlantısı `declared_by_connection` dahil), gruplar (adı alan içinde büyük/küçük harf ayırmadan tek: `capability_groups_name_ci`, `lower(name)` üzerinde), bütçe kalemleri ve bağları, harcama kaydı, çalışma alanı politikaları |
 | `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan kısmi dizini (`ledger_entries_agent_connection_idx`, yalnız `action = 'work.checkin'` satırları) açar |
-| `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
+| `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir; bir tetikleyici her değişikliği ve 30 günden genç bir kaydın silinmesini reddeder); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
 
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
 değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
@@ -120,6 +120,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_LOG` | `info,rmcp=warn` | `tracing` süzgeci, ör. `info,rmcp=warn,jeeta=debug`. Kendi süzgecinizde `rmcp=warn`'u koruyun: rmcp her yeni MCP oturum kimliğini (`Mcp-Session-Id`) `info` düzeyinde yazar |
 | `JEETA_LOG_FORMAT` | `compact` | `compact` ya da `json`. Günlükler stderr'e yazılır |
 | `JEETA_ALLOW_SUPERUSER` | `false` | `true` ise veritabanı rolü süper kullanıcı ya da `BYPASSRLS` olsa da açılır ve bir `WARN` satırı yazar (çalışma alanı yalıtımı uygulanmaz). **Yalnızca yerel geliştirme için**; üretimde asla |
+| `JEETA_JOBS_ENABLED` | `true` | `false` ise `jeeta serve` zamanlanmış işleri (jeton yenileme, yoklamalar, NetGSM yoklamaları, temizlik) hiç başlatmaz ve açılışta bunu günlüğe yazar (bkz. [Zamanlanmış işler](#zamanlanmış-işler)) |
 | `JEETA_ALLOW_TEST_LOOPBACK` | kapalı | `1` (ya da `true`) ise `jt_outbound`'un `test-loopback` özelliğiyle derlenmiş bir ikili de açılır ve bir `WARN` satırı yazar; kapalıyken böyle bir ikili açılışı reddeder (bkz. [Üretim notları](#üretim-notları)). **Yalnızca yerel test için**; üretimde asla |
 
 Erişim günlüğü her istek için yalnızca yöntemi, rota şablonunu (`/api/team/{membership_id}`), durumu ve
@@ -648,7 +649,7 @@ alanda sağlayıcı kimliklerinin sırasıyla yazılır (alanlar da kimlik sıra
 farklı sırada taşıyan iki teslim kilitleri aynı sırada alır ve birbirini kilitlemez. Ham gövde teslim ve
 alan başına bir kez, oraya yeni yazılan ilk olayın yanında tutulur (bin olaylı bir gövde bin kez
 saklanmaz; kardeş olaylar aynı `received_at`'i taşır); 30 gün tutulur ve hiçbir yanıtta görünmez; daha eskilerini bütün alanlarda `webhook::purge_raw` siler,
-olaylar kalır (zamanlayıcı onu günde bir çalıştıracak: M1b'nin sonraki adımı). Olaylar günlüğe
+olaylar kalır (zamanlayıcı onu günde bir çalıştırır: `purge_raw_bodies`, bkz. [Zamanlanmış işler](#zamanlanmış-işler)). Olaylar günlüğe
 (ledger) yazılmaz: dış dünyanın kayıtlarıdır.
 
 ### Gelen olaylar
@@ -696,6 +697,46 @@ Sunucu (`jeeta serve` ve `jeeta mcp-stdio`) üç sağlayıcının gerçek bağda
 adreslerine ulaşır. Her biri yalnızca uyguladığı işlemler için sunulur: Meta bağlantı, OAuth, yayın, sayaçlar,
 mesajlaşma, reklam bütçesi ve potansiyel müşteri formları; NetGSM bağlantı, SMS, arama, İYS izni ve iletim
 raporları (OAuth yok); X bağlantı, OAuth, yayın ve sayaçlar.
+
+## Zamanlanmış işler
+
+`jeeta serve` bağlantıları canlı, kayıtları derli toplu tutan sabit aralıklı işler çalıştırır (yalnız
+belirlenimci işler: içerik kararı vermezler). Her iş `jt_app::usecases::jobs` içinde bir fonksiyondur;
+zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altında çağırır.
+
+| İş | Aralık | Ne yapar | Kilit |
+|---|---|---|---|
+| `refresh_tokens` | 1 saat | Süresi 7 gün içinde dolan (`connector_public.access.expires_at`; seçmek için hiçbir mühür açılmaz) her canlı bağlayıcı jetonunu ve her X jetonunu (yenileme jetonu her kullanımda döner) sağlayıcıda yeniler; yenisini eskisinin yerine mühürler, `access`'i (bitiş, kapsamlar) ondan yeniden yazar. Karşılaştır-ve-değiştir: sağlayıcıya sorulurken kabiliyetin mühürlü baytları değiştiyse (sahip yeniden bağladı, yeni kimlik bilgisi girdi, emekliye ayırdı) hiçbir şey yazılmaz. Sağlayıcı girişi artık kabul etmezse (`auth`) kabiliyet `unreachable` olur, `reconnect_required` işaretlenir ve günlüğe `connector.refresh_failed` (`{kind_key, error_kind}`) yazılır; böyle bir kabiliyet sahibi yeniden bağlayana dek bir daha sorulmaz. Başka bir hata hiçbir şeyi değiştirmez; olağan bir yenileme günlüğe yazılmaz | `jeeta.jobs.refresh_tokens` |
+| `probe_all` | 15 dakika | Son yoklaması (`connector_public.health.at`) en az bir saatlik olan ya da hiç yoklanmamış her canlı bağlayıcı kabiliyetini (mühürlü kimlik bilgisi olan; kimlik bilgisi olmayan bir `declared` kabiliyet asla) `connector.probe`'un yaptığının aynısıyla yoklar; en çok dördü aynı anda (yoklama sağlayıcıyı beklerken kabiliyetin satır kilidini ve bir veritabanı bağlantısını tutar) | `jeeta.jobs.probe_all` |
+| `netgsm_dlr_poll` | 1 dakika | İletimi kesinleşmemiş gönderilerin iş kimliklerini (en çok 50) alanın doğrulanmış SMS hatlarının kimlik bilgisiyle NetGSM iletim raporuna sorar ve duyduğu durumları kaydeder. Gönderiler M2'nin tablosundadır; o gelene dek bekleyen iş yoktur ve sağlayıcıya hiç gidilmez | `jeeta.jobs.netgsm_dlr_poll` |
+| `netgsm_inbox_poll` | 1 saat | Her doğrulanmış SMS hattının NetGSM gelen kutusunu son iki saat için okur (başlangıç ve bitiş tarihi her zaman verilir) ve webhook'un kaçırdığı mesajları o hatta bağlı gelen olay olarak saklar. Kimlik webhook'unkiyle aynıdır (`netgsm-mo:<gorevid>`): webhook'un ya da önceki yoklamanın sakladığı mesaj ikinci kez yazılmaz. Yoklamanın ham gövdesi yoktur | `jeeta.jobs.netgsm_inbox_poll` |
+| `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini bütün alanlarda siler (`webhook::purge_raw`); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
+| `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
+| `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
+
+- **Tek koşucu.** Her tıkta iş kendi kilidini ister (`pg_try_advisory_lock(hashtext('<kilit>'))`); başka
+  bir örnek tutuyorsa o tık atlanır, beklenmez. Kilit, işlere ayrılmış küçük bir havuzdaki
+  (`application_name = jeeta-jobs`, en çok iş sayısı kadar bağlantı, ilk kilit istendiğinde açılır) bir
+  bağlantının oturumuna aittir ve iş bitince bırakılır; süreç ölürse Postgres kilidi oturumla birlikte
+  bırakır. Bu havuz sunucunun kendi havuzundan ayrıdır: kilit tutan bir iş panelin bağlantısını almaz.
+- **İlk çalışma** açılıştan sonra 0–30 saniyelik rastgele bir gecikmeyle gelir (birlikte açılan örnekler
+  kilidi aynı anda istemesin); sonraki tıklar aralığı izler, aralıktan uzun süren bir çalışma bir sonrakini
+  erteler.
+- **Hatalar.** Her çalışma kendi görevinde koşar: panik olursa günlüğe yazılır, kilit bırakılır, bir sonraki
+  tık işi yeniden çalıştırır. Bir kabiliyetin, hattın ya da alanın başarısızlığı işi durdurmaz: sayılır ve
+  nedeniyle günlüğe yazılır. Her çalışma tek bir `info` satırıyla biter (`job`, `touched`, `changed`,
+  `skipped`, `failed`); hiçbir günlük satırı, günlük kaydı ya da rapor kimlik bilgisi taşımaz.
+- **Hangi alanlar.** Sağlayıcıya giden işler (`refresh_tokens`, `probe_all` ve iki NetGSM yoklaması) yalnız
+  etkin (`active`) alanlar için çalışır: ödeme bekleyen bir alan hesap bağlayamaz, askıya alınmış bir alan
+  adına sistem sağlayıcılarda iş yapmaz (NetGSM webhook'u da kapalıdır). Temizlik işleri bütün alanlar için
+  çalışır. İşlerin yazdığı günlük kayıtlarının yazarı sistemdir (`system`, `scheduler:<iş>`).
+- **Kapatma.** `JEETA_JOBS_ENABLED=false` iken hiçbir iş başlamaz ve açılış bunu günlüğe yazar; kilitler
+  aynı veritabanındaki ikinci bir örneği zaten atlattığı için bu yalnız işleri bir örnekte hiç
+  çalıştırmamak içindir. `jeeta mcp-stdio` iş çalıştırmaz.
+- **Açılışta** her komut (`serve` ve `mcp-stdio`) istek almadan önce çıkış izin listesinin kiracı katmanını
+  kabiliyet kayıtlarından yeniden kurar: yalnız canlı bağlayıcı kabiliyetlerinin adresleri girer, emekli bir
+  kabiliyetin adresleri kaydında dursa da girmez (açılış günlüğündeki `rebuilt the tenant egress tier`
+  satırı alan ve adres sayısını yazar).
 
 ## Sırada ne var
 

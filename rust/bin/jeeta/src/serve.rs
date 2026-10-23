@@ -3,9 +3,11 @@
 //!
 //! Start order: refuse a binary built with `jt_outbound`'s test-only loopback paths
 //! ([`check_test_loopback`]), connect to the database, refuse a role that row-level security
-//! does not bind ([`check_database_role`]), apply pending migrations, create the first platform operator when
-//! configured, build the shared ports once, then serve until SIGINT or SIGTERM and drain open
-//! connections for at most [`DRAIN_TIMEOUT`].
+//! does not bind ([`check_database_role`]), apply pending migrations, build the shared ports once
+//! and refill the egress tenant tier from the capability records ([`boot`]), create the first
+//! platform operator when configured, bind the listener, start the scheduled jobs
+//! ([`crate::scheduler`], unless `JEETA_JOBS_ENABLED=false`), then serve until SIGINT or SIGTERM,
+//! drain open connections for at most [`DRAIN_TIMEOUT`] and stop the jobs.
 
 use std::future::IntoFuture;
 use std::net::SocketAddr;
@@ -25,10 +27,11 @@ use jt_app::ports::connectors::PlatformAppConfig;
 use jt_app::ports::connectors::Url;
 use jt_app::std_impls::{Argon2Hasher, NoPlatformApps, RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::capabilities::UowChannelCatalog;
+use jt_app::usecases::jobs::Job;
 use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_app::usecases::{Deps, platform};
 use jt_mcp::{LOOPBACK_HOSTS, McpState};
-use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS};
+use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS, rebuild_tenant_hosts};
 use jt_panel_http::AppState;
 use jt_pg::{PgJobLock, PgStrategyGate, PgUnitOfWork};
 use jt_seal::AesSecretBox;
@@ -40,14 +43,14 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::config::{self, Bootstrap, Config};
-use crate::connectors;
+use crate::{connectors, scheduler};
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The most job locks held at once (one per scheduled job), each on a connection of the job-lock
 /// pool, which is apart from the server's own (`PgJobLock::with_own_pool`).
-const JOB_LOCK_CONNECTIONS: u32 = 7;
+const JOB_LOCK_CONNECTIONS: u32 = Job::ALL.len() as u32;
 
 /// The operator console's login route, which the access log does not name.
 const PLATFORM_LOGIN: &str = "/api/platform/login";
@@ -63,13 +66,13 @@ pub async fn run(config: Config) -> Result<()> {
     let (applied, total) = migrate(&pool).await?;
     tracing::info!(applied, total, "migrations are up to date");
 
-    let deps = deps(pool.clone(), &config);
+    let (deps, _egress) = boot(pool.clone(), &config).await?;
     if let Some(bootstrap) = &config.bootstrap {
         bootstrap_operator(&deps, bootstrap).await?;
     }
     let gate = strategy_gate(pool.clone());
 
-    let app = app(deps, gate, &config);
+    let app = app(deps.clone(), gate, &config);
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("cannot listen on {} ({})", config.bind, config::BIND))?;
@@ -81,7 +84,10 @@ pub async fn run(config: Config) -> Result<()> {
         "jeeta is listening"
     );
 
-    serve(listener, app).await?;
+    let mut jobs = scheduler::start(&config, Arc::new(deps));
+    let served = serve(listener, app).await;
+    jobs.shutdown().await;
+    served?;
     pool.close().await;
     tracing::info!("stopped");
     Ok(())
@@ -179,6 +185,20 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
     Ok(applied.len())
 }
 
+/// The production ports over `pool` ([`ports`]), ready to serve: the egress client's tenant
+/// tier, which lives in memory and so starts empty, refilled from the capability records
+/// (`jt_outbound::rebuild_tenant_hosts`: the hosts of live connector capabilities only, so a
+/// retired capability's hosts stay out; it logs what it rebuilt). Every command runs it before it
+/// serves anything, so no request or job reaches out before the tier is whole. Returns the ports
+/// and the egress client they share.
+pub(crate) async fn boot(pool: PgPool, config: &Config) -> Result<(Deps, Arc<Egress>)> {
+    let (deps, egress) = ports(pool, config);
+    rebuild_tenant_hosts(&egress, deps.uow.as_ref())
+        .await
+        .context("cannot rebuild the egress tenant tier from the capability records")?;
+    Ok((deps, egress))
+}
+
 /// The production ports over `pool`, sealing secrets under the configured secret key. One
 /// [`Argon2Hasher`] for the whole process: its concurrency permits are per instance, and every
 /// clone of the returned `Deps` shares it. Likewise one egress client, built here so that a bad
@@ -191,20 +211,24 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
 /// unit of work: a workspace has a channel kind while it has a capability of that kind that is
 /// not retired.
 ///
+/// The scheduled jobs' locks are Postgres advisory locks on a small pool of their own
+/// ([`PgJobLock::with_own_pool`], [`JOB_LOCK_CONNECTIONS`] connections opened only when a lock is
+/// asked for), so a job holding its lock never takes a connection the server needs.
+///
 /// No provider app is configured yet: [`NoPlatformApps`] (public address
 /// [`placeholder_public_base_url`]) stands in until the provider configuration lands (M1b Task
 /// 11), so an OAuth flow answers `CONFLICT` "provider app not configured" until then; NetGSM
 /// credentials entered by hand need no app.
-pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
-    // TODO(Task 11): refill the tenant tier from the capability records at start-up, before the
-    // server takes requests, with `jt_outbound::rebuild_tenant_hosts(&egress, uow.as_ref())`.
+///
+/// The tenant tier starts empty: [`boot`] refills it.
+pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
     let egress = Arc::new(Egress::new(FIXED_HOSTS));
     let apps: Arc<dyn PlatformAppConfig> = Arc::new(NoPlatformApps::new(
         placeholder_public_base_url(config.bind),
     ));
     let job_lock = Arc::new(PgJobLock::with_own_pool(&pool, JOB_LOCK_CONNECTIONS));
     let uow = Arc::new(PgUnitOfWork::new(pool));
-    Deps {
+    let deps = Deps {
         uow: uow.clone(),
         clock: Arc::new(SystemClock),
         ids: Arc::new(UuidV7Gen),
@@ -215,10 +239,11 @@ pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
         // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(EgressTenantHosts::new(Arc::clone(&egress))),
-        connectors: connectors::registry(egress, Arc::clone(&apps)),
+        connectors: connectors::registry(Arc::clone(&egress), Arc::clone(&apps)),
         job_lock,
         apps,
-    }
+    };
+    (deps, egress)
 }
 
 /// The public address the ports report until one is configured: plain HTTP on the bound socket
@@ -661,7 +686,7 @@ mod tests {
         // The production ports over a test database; only the hasher is swapped for speed.
         let db = jt_testkit::TestDb::new().await;
         let config = test_config(&[]);
-        let mut deps = deps(db.pool.clone(), &config);
+        let (mut deps, _) = ports(db.pool.clone(), &config);
         deps.hasher = Arc::new(PlainHasher);
         let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
 
@@ -768,6 +793,89 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
         assert_eq!(body["message"], "provider app not configured");
+    }
+
+    /// Review Focus 5 end to end: after a restart the egress tenant tier holds the hosts of live
+    /// connector capabilities only, a retired capability's hosts staying out although its record
+    /// still names them.
+    #[tokio::test]
+    async fn boot_rebuilds_the_tenant_tier_with_live_connector_hosts_only() {
+        let db = jt_testkit::TestDb::new().await;
+        let config = test_config(&[]);
+        let (mut deps, _) = boot(db.pool.clone(), &config).await.unwrap();
+        deps.hasher = Arc::new(PlainHasher);
+        let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
+
+        // Before the restart: the owner declares two mailboxes naming their hosts, and retires
+        // one.
+        let (status, cookie, me) = call(
+            &app,
+            panel_post(
+                "/api/auth/register",
+                None,
+                json!({
+                    "email": "owner@example.test",
+                    "password": "correct horse battery",
+                    "display_name": "Owner",
+                    "workspace_name": "Acme"
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let ws = jt_testkit::panel::workspace_of(&me);
+        jt_testkit::flows::activate_workspace(&deps, ws).await;
+        let cookie = cookie.unwrap();
+        let session = cookie.split(';').next().unwrap();
+        let mut ids = Vec::new();
+        for (name, host) in [
+            ("Destek", "imap.live.example"),
+            ("Eski", "imap.retired.example"),
+        ] {
+            let (status, _, body) = call(
+                &app,
+                panel_post(
+                    "/api/capabilities",
+                    Some(session),
+                    json!({
+                        "kind_key": "mailbox",
+                        "name": name,
+                        "connector_public": { "hosts": [host] },
+                    }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "{body}");
+            ids.push(body["capability"]["id"].as_str().unwrap().to_owned());
+        }
+        let (status, _, body) = call(
+            &app,
+            panel_post(
+                &format!("/api/capabilities/{}/retire", ids[1]),
+                Some(session),
+                json!({ "confirm": true }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["capability"]["status"], "retired");
+
+        // The restart: a new process, whose tier starts empty, boots on the same database.
+        let (_, egress) = boot(db.pool.clone(), &config).await.unwrap();
+        let reaches = |url: &str| {
+            egress.permits(
+                jt_outbound::EgressScope::Tenant(ws),
+                &Url::parse(url).unwrap(),
+            )
+        };
+        assert!(reaches("https://imap.live.example/"));
+        assert!(!reaches("https://imap.retired.example/"));
+        // Without the boot step, the tier would be empty.
+        let (_, cold) = ports(db.pool.clone(), &config);
+        assert!(!cold.permits(
+            jt_outbound::EgressScope::Tenant(ws),
+            &Url::parse("https://imap.live.example/").unwrap(),
+        ));
     }
 
     #[test]

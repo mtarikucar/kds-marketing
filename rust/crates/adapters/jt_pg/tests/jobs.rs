@@ -14,12 +14,16 @@ use time::{Duration, OffsetDateTime};
 
 const PROBE_ALL: &str = "jeeta.jobs.probe_all";
 
-/// How many advisory locks the database holds now, by any session.
+/// How many advisory locks are held now in this test's database (`pg_locks` covers the whole
+/// server, where other tests' migrations take advisory locks of their own).
 async fn advisory_locks(db: &TestDb) -> i64 {
-    sqlx::query_scalar("select count(*) from pg_locks where locktype = 'advisory' and granted")
-        .fetch_one(&db.pool)
-        .await
-        .unwrap()
+    sqlx::query_scalar(
+        "select count(*) from pg_locks where locktype = 'advisory' and granted \
+         and database = (select oid from pg_database where datname = current_database())",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap()
 }
 
 /// Waits (up to two seconds) until `lock` grants `name`, as a dropped guard gives it back in
@@ -91,7 +95,7 @@ async fn second_runner_skips_while_first_holds() {
         .expect("granted");
     let names: Vec<String> = sqlx::query_scalar(
         "select a.application_name from pg_locks l join pg_stat_activity a on a.pid = l.pid \
-         where l.locktype = 'advisory' and l.granted",
+         where l.locktype = 'advisory' and l.granted and a.datname = current_database()",
     )
     .fetch_all(&db.pool)
     .await

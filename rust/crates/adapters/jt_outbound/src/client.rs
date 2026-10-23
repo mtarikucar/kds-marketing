@@ -192,9 +192,9 @@ impl Egress {
         self.allowlist.replace_tenant(ws, hosts)
     }
 
-    /// Whether `url` passes the allowlist for `scope`, without sending anything.
-    #[cfg(test)]
-    pub(crate) fn permits(&self, scope: EgressScope, url: &Url) -> bool {
+    /// Whether `url` passes the allowlist for `scope`, without sending anything (no DNS lookup
+    /// either): what the start-up rebuild of the tenant tier left in it can be checked.
+    pub fn permits(&self, scope: EgressScope, url: &Url) -> bool {
         self.allowlist.check(scope, url).is_ok()
     }
 

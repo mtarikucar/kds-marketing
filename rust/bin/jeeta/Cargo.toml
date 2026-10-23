@@ -27,6 +27,8 @@ tracing-subscriber.workspace = true
 dotenvy.workspace = true
 anyhow.workspace = true
 hex.workspace = true
+# The scheduler hands each job the clock's time (`src/scheduler.rs`).
+time.workspace = true
 
 [dev-dependencies]
 jt_testkit = { workspace = true, features = ["panel"] }

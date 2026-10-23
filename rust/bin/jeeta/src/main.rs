@@ -1,7 +1,7 @@
 //! The `jeeta` binary.
 //!
 //! - `jeeta serve`: the HTTP server (panel, its API, the MCP endpoint at `/mcp` and the
-//!   providers' webhooks at `/hooks/*`).
+//!   providers' webhooks at `/hooks/*`) and the scheduled jobs ([`scheduler`]).
 //! - `jeeta mcp-stdio`: the MCP tools over stdin/stdout, as the key in `JEETA_STDIO_API_KEY`.
 //!
 //! Configuration comes from `JEETA_*` environment variables ([`config`]). A configuration,
@@ -10,6 +10,7 @@
 
 mod config;
 mod connectors;
+mod scheduler;
 mod serve;
 mod stdio;
 

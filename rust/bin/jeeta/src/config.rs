@@ -42,6 +42,8 @@ pub const ALLOW_SUPERUSER: &str = "JEETA_ALLOW_SUPERUSER";
 /// Whether a binary built with `jt_outbound`'s `test-loopback` feature may start (`1` or `true`;
 /// default off; local testing only).
 pub const ALLOW_TEST_LOOPBACK: &str = "JEETA_ALLOW_TEST_LOOPBACK";
+/// Whether `jeeta serve` runs the scheduled jobs (default `true`).
+pub const JOBS_ENABLED: &str = "JEETA_JOBS_ENABLED";
 
 /// Every variable the binary reads.
 const VARS: &[&str] = &[
@@ -58,6 +60,7 @@ const VARS: &[&str] = &[
     LOG_FORMAT,
     ALLOW_SUPERUSER,
     ALLOW_TEST_LOOPBACK,
+    JOBS_ENABLED,
 ];
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -161,6 +164,8 @@ pub struct Config {
     /// Start even when `jt_outbound` was built with its `test-loopback` feature, with a warning;
     /// for local testing only.
     pub allow_test_loopback: bool,
+    /// Run the scheduled jobs (token renewal, probes, NetGSM polls, purges) in `jeeta serve`.
+    pub jobs_enabled: bool,
 }
 
 impl fmt::Debug for Config {
@@ -178,6 +183,7 @@ impl fmt::Debug for Config {
             .field("log_format", &self.log_format)
             .field("allow_superuser", &self.allow_superuser)
             .field("allow_test_loopback", &self.allow_test_loopback)
+            .field("jobs_enabled", &self.jobs_enabled)
             .finish()
     }
 }
@@ -241,6 +247,7 @@ impl Config {
         let cookie_secure = parse_bool(COOKIE_SECURE, get(COOKIE_SECURE), true)?;
         let allow_superuser = parse_bool(ALLOW_SUPERUSER, get(ALLOW_SUPERUSER), false)?;
         let allow_test_loopback = parse_flag(ALLOW_TEST_LOOPBACK, get(ALLOW_TEST_LOOPBACK))?;
+        let jobs_enabled = parse_bool(JOBS_ENABLED, get(JOBS_ENABLED), true)?;
 
         let allowed_hosts = parse_allowed_hosts(get(ALLOWED_HOSTS))?;
         if !bind.ip().is_loopback() && allowed_hosts.is_empty() {
@@ -300,6 +307,7 @@ impl Config {
             log_format,
             allow_superuser,
             allow_test_loopback,
+            jobs_enabled,
         })
     }
 }
@@ -455,6 +463,7 @@ mod tests {
         assert_eq!(config.log_format, LogFormat::Compact);
         assert!(!config.allow_superuser, "off unless asked for");
         assert!(!config.allow_test_loopback, "off unless asked for");
+        assert!(config.jobs_enabled, "on unless turned off");
     }
 
     #[test]
@@ -486,9 +495,11 @@ mod tests {
             (LOG, "jeeta=debug,info"),
             (LOG_FORMAT, "json"),
             (ALLOW_SUPERUSER, "TRUE"),
+            (JOBS_ENABLED, " false "),
         ]))
         .unwrap();
         assert!(config.allow_superuser);
+        assert!(!config.jobs_enabled);
         assert_eq!(config.bind, "127.0.0.1:9090".parse::<SocketAddr>().unwrap());
         assert_eq!(config.panel_dir, Some(PathBuf::from("panel/dist")));
         assert!(!config.cookie_secure);
@@ -508,6 +519,7 @@ mod tests {
             (LOG_FORMAT, ""),
             (ALLOW_SUPERUSER, ""),
             (ALLOW_TEST_LOOPBACK, ""),
+            (JOBS_ENABLED, ""),
         ]))
         .unwrap();
         assert_eq!(blank, Config::from_map(&with(&[])).unwrap());
@@ -517,6 +529,7 @@ mod tests {
             (BIND, "127.0.0.1"),
             (COOKIE_SECURE, "yes"),
             (ALLOW_SUPERUSER, "1"),
+            (JOBS_ENABLED, "no"),
             (LOG_FORMAT, "pretty"),
             (LOG, "jeeta=loud"),
         ] {

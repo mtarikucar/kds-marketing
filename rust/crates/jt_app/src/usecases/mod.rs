@@ -13,6 +13,7 @@ pub mod capabilities;
 pub mod connector;
 pub mod events;
 pub mod groups;
+pub mod jobs;
 pub mod ledger;
 pub mod platform;
 pub mod roles;
@@ -62,7 +63,7 @@ pub struct Deps {
     pub apps: Arc<dyn PlatformAppConfig>,
     /// The provider adapters.
     pub connectors: Arc<dyn ConnectorRegistry>,
-    /// Keeps each scheduled job to one runner across the server's instances.
+    /// Keeps each scheduled job ([`jobs`]) to one runner across the server's instances.
     pub job_lock: Arc<dyn JobLock>,
 }
 
