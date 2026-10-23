@@ -512,12 +512,12 @@ async fn netgsm_hook_tokens_are_per_workspace_and_purpose() {
 }
 
 #[tokio::test]
-async fn a_netgsm_hook_opens_only_with_its_token_for_an_active_workspace() {
+async fn a_netgsm_hook_opens_with_its_token_while_active_or_pending_payment() {
     let w = world().await;
     let mo = webhook::netgsm_hook_token(&w.deps, w.ws, NetgsmPurpose::Mo).unwrap();
-    // A new workspace awaits payment: closed whatever the token.
+    // A new workspace awaits payment: its hook is already open.
     assert!(
-        !webhook::netgsm_hook_open(&w.deps, w.ws, NetgsmPurpose::Mo, &mo)
+        webhook::netgsm_hook_open(&w.deps, w.ws, NetgsmPurpose::Mo, &mo)
             .await
             .unwrap()
     );
@@ -539,6 +539,13 @@ async fn a_netgsm_hook_opens_only_with_its_token_for_an_active_workspace() {
             "{wrong}"
         );
     }
+    set_status(&w, w.ws, WorkspaceStatus::Suspended).await;
+    assert!(
+        !webhook::netgsm_hook_open(&w.deps, w.ws, NetgsmPurpose::Mo, &mo)
+            .await
+            .unwrap()
+    );
+    assert!(stored(&w).is_empty());
     let stranger = WorkspaceId::new_v7();
     let theirs = webhook::netgsm_hook_token(&w.deps, stranger, NetgsmPurpose::Mo).unwrap();
     assert!(

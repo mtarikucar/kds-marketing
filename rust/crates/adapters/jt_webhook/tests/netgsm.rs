@@ -168,17 +168,15 @@ async fn a_malformed_path_segment_is_404() {
     assert!(w.stored().is_empty());
 }
 
-/// A workspace that is suspended or awaits payment, an unknown one and a malformed id all read
+/// A suspended workspace, an unknown one and a malformed id all read
 /// alike: `404`, never saying which.
 #[tokio::test]
 async fn netgsm_suspended_workspace_is_404() {
     let w = World::new().await;
     let body = fixture("netgsm/mo_object.json");
-    for status in [WorkspaceStatus::Suspended, WorkspaceStatus::PendingPayment] {
-        w.set_status(w.ws, status).await;
-        let (answered, _) = answer(&w.app(), mo(&w, w.ws, &body)).await;
-        assert_eq!(answered, StatusCode::NOT_FOUND, "{status:?}");
-    }
+    w.set_status(w.ws, WorkspaceStatus::Suspended).await;
+    let (answered, _) = answer(&w.app(), mo(&w, w.ws, &body)).await;
+    assert_eq!(answered, StatusCode::NOT_FOUND);
     let stranger = WorkspaceId::new_v7();
     let (answered, _) = answer(&w.app(), mo(&w, stranger, &body)).await;
     assert_eq!(answered, StatusCode::NOT_FOUND);
@@ -193,6 +191,21 @@ async fn netgsm_suspended_workspace_is_404() {
     w.set_status(w.ws, WorkspaceStatus::Active).await;
     let (answered, _) = answer(&w.app(), mo(&w, w.ws, &body)).await;
     assert_eq!(answered, StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn netgsm_pending_payment_workspace_is_202_and_stores_the_event() {
+    let w = World::new().await;
+    let line = w.connected(w.ws, "sms_line", "ACME").await;
+    w.set_status(w.ws, WorkspaceStatus::PendingPayment).await;
+    let body = fixture("netgsm/mo_object.json");
+    let (status, _) = answer(&w.app(), mo(&w, w.ws, &body)).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let events = w.events_of(w.ws);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].external_id, "netgsm-mo:990000001");
+    assert_eq!(events[0].capability_id, Some(line));
+    assert_eq!(w.stored()[0].raw.as_deref(), Some(&body[..]));
 }
 
 /// NetGSM would keep retrying a refused body it cannot improve: an unreadable one is accepted,

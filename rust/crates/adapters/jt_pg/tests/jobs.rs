@@ -236,6 +236,77 @@ async fn an_acquisition_cancelled_mid_answer_leaves_no_lock_behind() {
     through_proxy.close().await;
 }
 
+/// The first release on a connection prepares its unlock statement before executing it. Hold
+/// that preparation's answer so release is awaiting while Postgres still holds the lock, then
+/// cancel: returning the connection to the pool here would strand the lock without a guard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_cancelled_mid_await_does_not_leak_the_session_lock() {
+    let db = TestDb::new().await;
+    let options = (*db.pool.connect_options()).clone();
+    let proxy = Proxy::start((options.get_host().to_owned(), options.get_port())).await;
+    let through_proxy = PgPoolOptions::new()
+        .max_connections(1)
+        .min_connections(0)
+        .test_before_acquire(false)
+        .connect_lazy_with(
+            options
+                .host("127.0.0.1")
+                .port(proxy.port)
+                .ssl_mode(PgSslMode::Disable),
+        );
+    let lock = PgJobLock::new(through_proxy.clone());
+    let guard = lock.try_acquire(PROBE_ALL).await.unwrap().expect("granted");
+    let holder: i32 = sqlx::query_scalar(
+        "select pid from pg_locks where locktype = 'advisory' and granted \
+         and database = (select oid from pg_database where datname = current_database())",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+
+    // Do not warm up release: its first preparation must await the held response before the
+    // unlock can execute. Holding an already executed unlock's answer would not test a leak.
+    proxy.hold(true);
+    let releasing = tokio::spawn(async move { guard.release().await });
+    let mut preparing = false;
+    for _ in 0..500 {
+        preparing = sqlx::query_scalar(
+            "select exists(select 1 from pg_stat_activity \
+             where pid = $1 and query = 'select pg_advisory_unlock(hashtext($1))')",
+        )
+        .bind(holder)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        if preparing {
+            break;
+        }
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
+    assert!(preparing, "release never reached its unlock preparation");
+    assert!(!releasing.is_finished(), "release must still be awaiting");
+    assert_eq!(advisory_locks(&db).await, 1, "unlock has not executed");
+    releasing.abort();
+    assert!(releasing.await.unwrap_err().is_cancelled());
+    proxy.hold(false);
+
+    // Keep the original pool alive: closing it here would hide a leaked session lock.
+    let other = PgJobLock::with_own_pool(&db.pool, 1);
+    assert!(
+        eventually_granted(&other, PROBE_ALL).await,
+        "the cancelled release left its lock behind"
+    );
+    assert_eq!(advisory_locks(&db).await, 0);
+    let holder_alive: bool =
+        sqlx::query_scalar("select exists(select 1 from pg_stat_activity where pid = $1)")
+            .bind(holder)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(!holder_alive, "the unsettled lock session must be closed");
+    through_proxy.close().await;
+}
+
 /// A capability of `ws` to hang probe runs off.
 async fn capability(uow: &PgUnitOfWork, ws: WorkspaceId) -> CapabilityId {
     let c = Capability::new(

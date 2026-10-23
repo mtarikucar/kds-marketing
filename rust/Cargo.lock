@@ -1265,6 +1265,7 @@ dependencies = [
  "jt_app",
  "jt_connector",
  "jt_outbound",
+ "jt_testkit",
  "serde_json",
  "sha2 0.11.1",
  "thiserror",

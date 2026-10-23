@@ -732,15 +732,15 @@ Genel adres yapılandırılmamışsa liste `409 CONFLICT`'tır (`details.reason 
 |---|---|
 | `GET /hooks/meta` (doğrulama) | `hub.mode=subscribe` ve doğru `hub.verify_token` için `hub.challenge` düz metin olarak, `200`; başka her şey `403`; Meta uygulaması yapılandırılmamışsa `404` |
 | `POST /hooks/meta` | imza başlığı yoksa ya da Meta uygulaması yoksa gövde okunmadan `401`; 3 MB üstü `413`; imza tutmazsa `401`; olaylar yazılınca (ya da kurala göre atılınca) `200 EVENT_RECEIVED`; veritabanı hatası `500` (Meta yeniden gönderir) |
-| `POST /hooks/netgsm/{workspace_id}/{anahtar}/{amaç}` | bozuk ya da bilinmeyen parça, yanlış anahtar, var olmayan ya da etkin (`active`) olmayan alan: gövde okunmadan çıplak `404`; 256 KB üstü `413`; okunamayan gövde `202` (hiçbir şey yazılmaz); olaylar yazılınca `202`; veritabanı hatası `503` (NetGSM yeniden gönderir) |
+| `POST /hooks/netgsm/{workspace_id}/{anahtar}/{amaç}` | bozuk ya da bilinmeyen parça, yanlış anahtar, var olmayan ya da askıya alınmış (`suspended`) alan: gövde okunmadan çıplak `404`; 256 KB üstü `413`; okunamayan gövde `202` (hiçbir şey yazılmaz); olaylar yazılınca `202`; veritabanı hatası `503` (NetGSM yeniden gönderir) |
 
 **Alanın durumu.** Meta olayları hesaba göre yönlendirilir ve hesabı tutan alan **etkin** ya da **ödeme
 bekliyor** (`pending_payment`) ise yazılır: ödeme beklerken bağlı hesapların olayları kaybolmaz. Alan
 **askıya alınmışsa** (`suspended`) olay atılır: hiçbir yere satır yazılmaz, `unrouted_meta` sayacı
 artar ve günlüğe yalnız sağlayıcı, neden (`reason="inactive"`), hesap türü ve sayı yazılır (gövde, hesap
 kimliği ya da mesaj asla); Meta'ya yine `200` döner (yeniden gönderim bir şey değiştirmezdi). NetGSM'in
-adresi alanı kendisi adlar ve yalnız etkin bir alan için açıktır (ödeme bekleyen ya da askıdaki alanın
-adresi `404`).
+adresi alanı kendisi adlar; Meta gibi etkin (`active`) ve ödeme bekleyen (`pending_payment`) alanların
+olaylarını saklar, askıdaki (`suspended`) alanın adresi ise `404` döner.
 
 - **NetGSM**: her amaç için ayrı bir adres, `{genel adres}/hooks/netgsm/{workspace_id}/{anahtar}/{amaç}`;
   amaç `mo` (gelen SMS), `events` (santral çağrı olayları), `iys` (İYS izin değişiklikleri), `voice-report`
@@ -749,7 +749,7 @@ adresi `404`).
   karşılaştırılır); adresi elle kurmayın, paneldeki "Webhook adresleri" bölümünden kopyalayıp NetGSM
   panelinde ilgili geri çağırma alanına yapıştırın ve başkasıyla paylaşmayın (adres alanın anahtarını
   taşır; şimdilik döndürülemez). Çözülemeyen bir adres parçası (bozuk yüzde kodlaması), bilinmeyen amaç, bozuk alan
-  kimliği, yanlış anahtar, var olmayan ya da etkin olmayan alan: hepsi gövde okunmadan çıplak `404` alır
+  kimliği, yanlış anahtar, var olmayan ya da askıya alınmış alan: hepsi gövde okunmadan çıplak `404` alır
   ve hiçbir şey yazılmaz. Gövde en çok 256 KB'tır (`413`).
   Okunamayan bir gövde `202` alır, hiçbir şey yazılmaz, yalnız amaç günlüğe yazılır ve sayılır (NetGSM
   başka her yanıtı yeniden denerdi). Olaylar alanın o amaca ait tek canlı kabiliyetine bağlanır (`mo` ve
@@ -889,10 +889,10 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
   bir şey bulmadıysa `debug` (her dakika çalışan yoklama günlüğü doldurmasın); hiçbir günlük satırı,
   günlük kaydı ya da rapor kimlik bilgisi taşımaz.
 - **Hangi alanlar.** `probe_all` ve iki NetGSM yoklaması yalnız etkin (`active`) alanlar için çalışır:
-  ödeme bekleyen ya da askıya alınmış bir alan adına sistem sağlayıcılarda iş yapmaz ve dışarıdan bir şey
-  almaz (NetGSM webhook'u da kapalıdır). `refresh_tokens` etkin ve ödeme bekleyen (`pending_payment`)
-  alanlar için çalışır: yenileme yalnız var olan bir izni canlı tutar, bir ödeme beklemesi bütün
-  hesapların yeniden bağlanmasına dönüşmemeli; askıya alınmış alan dışarıda kalır. NetGSM yoklamaları
+  ödeme bekleyen ya da askıya alınmış bir alan adına bu işler sağlayıcıları yoklamaz. Webhook girişleri
+  ise etkin ve ödeme bekleyen alanların olaylarını saklar; askıdaki alanların olaylarını almaz.
+  `refresh_tokens` etkin ve ödeme bekleyen (`pending_payment`) alanlar için çalışır: yenileme yalnız
+  var olan bir izni canlı tutar, bir ödeme beklemesi bütün hesapların yeniden bağlanmasına dönüşmemeli; askıya alınmış alan dışarıda kalır. NetGSM yoklamaları
   yalnız doğrulanmış bir SMS hattı olan alanlara girer: bu alanlar platform genelinde tek bir okumayla
   bulunur, ötekilerde hiçbir işlem (transaction) açılmaz. Temizlik işleri bütün alanlar için çalışır.
   İşlerin yazdığı günlük kayıtlarının yazarı sistemdir (`system`, `scheduler:<iş>`).

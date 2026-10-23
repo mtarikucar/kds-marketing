@@ -18,7 +18,8 @@
 //! the payment is settled), a suspended one receives nothing. NetGSM signs nothing: each
 //! workspace's callback URL carries a token of its own (HMAC under the workspace's MAC key for
 //! [`NETGSM_HOOK_PURPOSE`]), so a NetGSM event is stored in the workspace its URL names, and only
-//! once the token matched and while that workspace is active ([`netgsm_hook_open`]).
+//! once the token matched and while that workspace is active or awaits payment
+//! ([`netgsm_hook_open`]).
 //!
 //! **Deduplication (Review Focus 2).** An event is stored once per `(workspace, provider,
 //! external_id)`: a replayed delivery, or the same item twice in one body, is
@@ -175,7 +176,8 @@ pub fn netgsm_hook_token(
 
 /// Whether a NetGSM callback naming workspace `ws`, `token` and `purpose` is taken: the token is
 /// the workspace's for that purpose (compared in constant time, before anything is read from the
-/// database), and the workspace exists and is `active`. `false` tells the caller nothing more:
+/// database), and the workspace exists and is `active` or `pending_payment`. `false` tells the
+/// caller nothing more:
 /// the gate answers every refusal alike.
 pub async fn netgsm_hook_open(
     deps: &Deps,
@@ -189,7 +191,7 @@ pub async fn netgsm_hook_open(
     }
     let mut platform = deps.uow.platform().await?;
     let workspace = platform.workspace_get(ws).await?;
-    Ok(workspace.is_some_and(|w| w.status == WorkspaceStatus::Active))
+    Ok(workspace.is_some_and(|w| takes_routed_events(w.status)))
 }
 
 /// Stores NetGSM's `drafts` for `purpose` in workspace `ws` (whose hook must have opened, see
