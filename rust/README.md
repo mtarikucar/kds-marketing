@@ -601,6 +601,13 @@ günlük kaydı `connector.credentials_set` yalnızca türü ve girenin ajan olu
 Doğrulanmış bir kabiliyet kimlik bilgilerini bir yoklama düşene dek tutar (`409`). Bir NetGSM kabiliyeti
 yeniden bağlanmaz, yeni kimlik bilgisi alır (`422`, `details.reason = "use_set_credentials"`).
 
+Sunucu (`jeeta serve` ve `jeeta mcp-stdio`) üç sağlayıcının gerçek bağdaştırıcılarını (`jt_meta`,
+`jt_netgsm`, `jt_x`) üretim adresleriyle ve tek bir çıkış istemcisiyle (`jt_outbound::Egress`) kurar
+(`bin/jeeta/src/connectors.rs`); bağdaştırıcılar yalnızca o istemciyle, yalnızca sağlayıcılarının sabit
+adreslerine ulaşır. Her biri yalnızca uyguladığı işlemler için sunulur: Meta bağlantı, OAuth, yayın, sayaçlar,
+mesajlaşma, reklam bütçesi ve potansiyel müşteri formları; NetGSM bağlantı, SMS, arama, İYS izni ve iletim
+raporları (OAuth yok); X bağlantı, OAuth, yayın ve sayaçlar.
+
 ## Sırada ne var
 
 Ajanın giriş noktası `jeeta.work.pending`'dir (panelde `GET /api/work/pending`, ana sayfanın verisi): stratejinin

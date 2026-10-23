@@ -8,6 +8,7 @@
 //! command prints the usage and exits with code 2.
 
 mod config;
+mod connectors;
 mod serve;
 mod stdio;
 

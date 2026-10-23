@@ -12,6 +12,11 @@ jt_panel_http.workspace = true
 jt_mcp.workspace = true
 jt_outbound.workspace = true
 jt_seal.workspace = true
+# The provider adapters the server runs (`src/connectors.rs`) and the provider keys they serve.
+jt_connector.workspace = true
+jt_meta.workspace = true
+jt_netgsm.workspace = true
+jt_x.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 axum.workspace = true
@@ -23,7 +28,6 @@ hex.workspace = true
 
 [dev-dependencies]
 jt_testkit = { workspace = true, features = ["panel"] }
-jt_connector.workspace = true
 serde_json.workspace = true
 tower = { workspace = true, features = ["util"] }
 

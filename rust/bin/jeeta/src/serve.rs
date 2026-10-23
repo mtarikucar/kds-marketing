@@ -21,10 +21,9 @@ use axum::middleware::{self, Next};
 use axum::response::Response;
 use jt_app::error::ErrorCode;
 use jt_app::gate::StrategyGate;
+use jt_app::ports::connectors::PlatformAppConfig;
 use jt_app::ports::connectors::Url;
-use jt_app::std_impls::{
-    Argon2Hasher, EmptyConnectorRegistry, NoPlatformApps, RandTokenGen, SystemClock, UuidV7Gen,
-};
+use jt_app::std_impls::{Argon2Hasher, NoPlatformApps, RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::capabilities::UowChannelCatalog;
 use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_app::usecases::{Deps, platform};
@@ -40,6 +39,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::config::{self, Bootstrap, Config};
+use crate::connectors;
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -177,21 +177,26 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
 /// The production ports over `pool`, sealing secrets under the configured secret key. One
 /// [`Argon2Hasher`] for the whole process: its concurrency permits are per instance, and every
 /// clone of the returned `Deps` shares it. Likewise one egress client, built here so that a bad
-/// fixed-tier entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`. The
-/// connectors M1b adds must share this same client, so that what the registry allows is what they
-/// reach; the tier lives in memory, so it starts empty at every start.
+/// fixed-tier entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`, and
+/// the provider adapters ([`connectors::registry`]: Meta, NetGSM and X) send through this same
+/// client, so that what the registry allows is what they reach; the tier lives in memory, so it
+/// starts empty at every start.
 ///
 /// The channel kinds a strategy may name are read from the capability registry, through the same
 /// unit of work: a workspace has a channel kind while it has a capability of that kind that is
 /// not retired.
 ///
-/// No provider app or adapter is wired yet: [`NoPlatformApps`] (public address
-/// [`placeholder_public_base_url`]) and [`EmptyConnectorRegistry`] stand in until the provider
-/// configuration and the real registry land (M1b Task 11).
+/// No provider app is configured yet: [`NoPlatformApps`] (public address
+/// [`placeholder_public_base_url`]) stands in until the provider configuration lands (M1b Task
+/// 11), so an OAuth flow answers `CONFLICT` "provider app not configured" until then; NetGSM
+/// credentials entered by hand need no app.
 pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
     // TODO(Task 11): refill the tenant tier from the capability records at start-up, before the
     // server takes requests, with `jt_outbound::rebuild_tenant_hosts(&egress, uow.as_ref())`.
     let egress = Arc::new(Egress::new(FIXED_HOSTS));
+    let apps: Arc<dyn PlatformAppConfig> = Arc::new(NoPlatformApps::new(
+        placeholder_public_base_url(config.bind),
+    ));
     let uow = Arc::new(PgUnitOfWork::new(pool));
     Deps {
         uow: uow.clone(),
@@ -203,18 +208,16 @@ pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
         channels: Arc::new(UowChannelCatalog::new(uow)),
         // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
         archived_hook: Arc::new(NoopArchivedHook),
-        hosts: Arc::new(EgressTenantHosts::new(egress)),
-        apps: Arc::new(NoPlatformApps::new(placeholder_public_base_url(
-            config.bind,
-        ))),
-        connectors: Arc::new(EmptyConnectorRegistry),
+        hosts: Arc::new(EgressTenantHosts::new(Arc::clone(&egress))),
+        connectors: connectors::registry(egress, Arc::clone(&apps)),
+        apps,
     }
 }
 
 /// The public address the ports report until one is configured: plain HTTP on the bound socket
 /// (`http://<bind>/`), or `http://localhost:<port>/` when the server listens on every interface
-/// (`0.0.0.0`, `::`), an address no one can reach and that must never be shown. Nothing builds a
-/// redirect or webhook URL from it yet.
+/// (`0.0.0.0`, `::`), an address no one can reach and that must never be shown. The OAuth redirect
+/// URI is built from it, but no flow starts without a provider app, which is not configured yet.
 // TODO(Task 11): replace with the configured `JEETA_PUBLIC_BASE_URL`, required whenever a
 // redirect or hook URL can be shown; this placeholder must not survive as a fallback.
 fn placeholder_public_base_url(bind: SocketAddr) -> Url {
@@ -680,18 +683,41 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
 
-        // No provider app or adapter yet; the public address is the bound socket.
+        // The three provider adapters are served; no provider app is configured yet, so an
+        // OAuth flow cannot start (and nothing reaches a provider). The public address is the
+        // bound socket.
+        for provider in jt_connector::Provider::all() {
+            let connector = deps.connectors.connector(*provider).expect("an adapter");
+            assert_eq!(connector.provider(), *provider);
+        }
+        assert!(
+            deps.connectors
+                .oauth(jt_connector::Provider::Meta)
+                .is_some()
+        );
+        assert!(deps.connectors.oauth(jt_connector::Provider::X).is_some());
+        assert!(
+            deps.connectors
+                .sms(jt_connector::Provider::Netgsm)
+                .is_some()
+        );
         assert_eq!(deps.apps.meta_app(), None);
         assert_eq!(deps.apps.x_app(), None);
         assert_eq!(
             deps.apps.public_base_url(),
             placeholder_public_base_url(config.bind)
         );
-        assert!(
-            deps.connectors
-                .connector(jt_connector::Provider::Meta)
-                .is_none()
-        );
+        let (status, _, body) = call(
+            &app,
+            panel_post(
+                "/api/connectors/oauth/start",
+                Some(session),
+                json!({ "kind_key": "facebook_page" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["message"], "provider app not configured");
     }
 
     #[test]

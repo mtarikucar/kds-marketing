@@ -772,8 +772,8 @@ impl OAuthProvider for ScriptedOAuth {
 // ---------------------------------------------------------------------------------------------
 
 // The operation matrix below restates which operations the real adapters offer (M1b Tasks 5 to
-// 7); the real registry (Task 11) should be tested against the same matrix, so this fake never
-// offers more than production does.
+// 7); the binary's real registry (`bin/jeeta/src/connectors.rs`) is tested against this fake, so
+// this fake never offers more than production does.
 
 /// The providers whose adapters publish posts and read their counters (Meta, X).
 const PUBLISHING: &[Provider] = &[Provider::Meta, Provider::X];
