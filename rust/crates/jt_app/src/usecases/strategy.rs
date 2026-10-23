@@ -19,10 +19,10 @@
 //!
 //! **The draft lock.** Every use case that changes the draft reads it through
 //! `StrategyRepo::lock_draft` first, in its one tenant bundle, and decides on what that returns;
-//! approving then moves the approved version, so the locks are always taken draft first, then
-//! the approved version. A move that finds the version already moved (`set_status` changed no
-//! row) is `CONFLICT` "the version has already moved"; an approval refused by the one-approved
-//! rule is `CONFLICT` "another approval won".
+//! approval and archival then lock the workspace execution frame before moving the approved
+//! version. The lock order is draft → workspace frame → approved version. A move that finds the
+//! version already moved (`set_status` changed no row) is `CONFLICT` "the version has already
+//! moved"; an approval refused by the one-approved rule is `CONFLICT` "another approval won".
 //!
 //! **Writing is strict, reading is not.** A section or a hypothesis list is parsed with
 //! `jt_strategy`'s strict parsers, so an unknown key at any depth or a wrong type is `VALIDATION`
@@ -553,9 +553,9 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
     require_owner_or_manager(ctx)?;
     let known = channel_kinds(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let previous = repos.strategy().lock_execution_frame().await?;
-    // Frame before draft; dispatch and archive use the same serialization point.
+    // Draft before frame, matching draft edits and archival.
     let draft = locked_draft(repos.as_mut()).await?;
+    let previous = repos.strategy().lock_execution_frame().await?;
     if draft.submitted_at.is_none() {
         return Err(conflict("not submitted", "not_submitted"));
     }
@@ -665,13 +665,13 @@ pub async fn archive(deps: &Deps, ctx: &Ctx, input: ArchiveInput) -> Result<(), 
         ));
     }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    // Frame before draft, matching approval and future execution dispatch.
+    // Draft before frame, including when there is no draft to lock.
+    repos.strategy().lock_draft().await?;
     let approved = repos
         .strategy()
         .lock_execution_frame()
         .await?
         .ok_or_else(|| conflict("no approved version", "no_approved_version"))?;
-    repos.strategy().lock_draft().await?;
     if approved.id != input.version_id {
         return Err(AppError {
             code: ErrorCode::Conflict,

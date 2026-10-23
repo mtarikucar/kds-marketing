@@ -168,7 +168,9 @@ async fn not_a_draft(conn: &mut PgConnection, ws: WorkspaceId, id: StrategyVersi
 impl StrategyRepo for PgTenantRepos {
     async fn lock_execution_frame(&mut self) -> Result<Option<StrategyVersion>, AppError> {
         let ws = self.workspace_id();
-        sqlx::query("select id from workspaces where id = $1 for update")
+        // Serialize frame users without blocking the KEY SHARE locks taken by workspace
+        // foreign keys (notably ledger inserts). Callers needing the draft lock take it first.
+        sqlx::query("select id from workspaces where id = $1 for no key update")
             .bind(ws.as_uuid())
             .fetch_optional(self.tx.conn())
             .await

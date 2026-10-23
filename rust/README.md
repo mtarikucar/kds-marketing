@@ -1849,9 +1849,12 @@ and the reversible existing-role grant backfill. Final M3 remains **62 tables an
 `studio.work` and `studio.manage`; rep has neither, and agent scopes cannot exceed
 the issuer's authority.
 
-Strategy approval/archive acquire `lock_execution_frame` before the draft lock,
+Strategy approval/archive lock the draft before acquiring `lock_execution_frame`,
 including when there is no approved version, then invoke `StrategyTransitionHook`
-inside their transaction. Hook failure rolls back the transition and its writes.
+inside their transaction. The workspace frame uses `FOR NO KEY UPDATE` to serialize
+frame users while allowing the `FOR KEY SHARE` checks taken by ledger foreign keys.
+Any frame user that also needs the draft must take the draft lock first; Studio
+control locks follow the frame. Hook failure rolls back the transition and its writes.
 The existing post-commit archive hook is preserved. T3 supplies Studio cancellation;
 T0's default hook has no queue to cancel. Studio repository accessors and FileStore
 are wired everywhere and explicitly refuse while their T2/T5 adapters are absent.

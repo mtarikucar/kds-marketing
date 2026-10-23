@@ -670,7 +670,9 @@ pub const MAX_CONSULTATION_PAGE: u32 = 500;
 /// approve sections it did not validate, and two edits cannot lose each other's change.
 #[async_trait]
 pub trait StrategyRepo: Send + Sync {
-    /// Workspace serialization point, acquired before draft/control locks, even with no approved row.
+    /// Workspace serialization point, even with no approved row. If the transaction needs a
+    /// draft lock, acquire it first; acquire control locks after the frame. The frame lock must
+    /// allow workspace foreign-key checks (Postgres `FOR NO KEY UPDATE`).
     async fn lock_execution_frame(&mut self) -> Result<Option<StrategyVersion>, AppError>;
     /// Stores a version. A `version.workspace_id` other than the bundle's is `INTERNAL`; a taken
     /// id or number, or a second `Draft` or `Approved` version in the workspace, is `CONFLICT`;

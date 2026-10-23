@@ -2301,7 +2301,7 @@ async fn every_draft_mutation_locks_the_draft() {
         if matches!(name, "approve" | "archive") {
             assert_eq!(
                 &strategy_calls[..2],
-                &["strategy.lock_execution_frame", "strategy.lock_draft"],
+                &["strategy.lock_draft", "strategy.lock_execution_frame"],
                 "{name}: {calls:?}"
             );
         } else {
