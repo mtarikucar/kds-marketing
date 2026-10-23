@@ -226,7 +226,7 @@ pub struct ConfirmAssets {
 /// of an `sms_line`, the Netsantral user of a `netgsm_pbx`, or a Meta access token pasted for a
 /// Meta kind (a Page token for `facebook_page`, a WhatsApp Cloud token for `whatsapp_cloud`, a
 /// user token otherwise). Mirrors [`Credential`]'s shapes; X has none (it connects through OAuth
-/// only), and neither has İYS, which no capability kind takes yet.
+/// only). İYS attaches to an existing SMS line in its separate sealed slot.
 ///
 /// Read strictly: an unknown shape or field is refused, and so is a field that is not a string,
 /// without the refusal repeating any value. `Debug` masks the secrets.
@@ -248,6 +248,11 @@ pub enum CredentialInput {
         password: String,
         msgheader: String,
     },
+    NetgsmIys {
+        usercode: String,
+        password: String,
+        brand_code: String,
+    },
     NetgsmPbx {
         username: String,
         password: String,
@@ -267,6 +272,7 @@ impl CredentialInput {
         match self {
             CredentialInput::Mailbox { .. } => "mailbox",
             CredentialInput::NetgsmSms { .. } => "netgsm_sms",
+            CredentialInput::NetgsmIys { .. } => "netgsm_iys",
             CredentialInput::NetgsmPbx { .. } => "netgsm_pbx",
             CredentialInput::MetaToken { .. } => "meta_token",
         }
@@ -289,6 +295,10 @@ impl fmt::Debug for CredentialInput {
                 .field("usercode", usercode)
                 .field("password", &Masked)
                 .field("msgheader", msgheader)
+                .finish(),
+            CredentialInput::NetgsmIys { .. } => f
+                .debug_struct("NetgsmIys")
+                .field("credential", &Masked)
                 .finish(),
             CredentialInput::NetgsmPbx {
                 username,
@@ -728,6 +738,9 @@ async fn confirm_assets_with_hosts(
 
 /// Enters credentials by hand for an existing capability or a new one, probes them, and returns
 /// the capability. Needs `capabilities.manage`.
+/// IYS is an attachment: netgsm_iys requires capability_id of a live SMS line and matching
+/// usercode. Its password is sealed separately, its brand_code is public/reserved, and neither
+/// SMS credentials nor probe status change. No provider probe is made for this attachment.
 ///
 /// The target is `capability_id`, or `kind_key` and `name` for a new capability; both or
 /// neither is `VALIDATION` (naming `capability_id`, or `kind_key`, or `name` when only the name
@@ -785,6 +798,22 @@ async fn set_credentials_with_hosts(
         None => None,
     };
     let credential = normalised(credential)?;
+    if let CredentialInput::NetgsmIys {
+        usercode,
+        password,
+        brand_code,
+    } = credential
+    {
+        let id = capability_id
+            .ok_or_else(|| invalid("capability_id", "IYS attaches to an existing SMS line"))?;
+        if kind_key.is_some() || name.is_some() || external_id.is_some() {
+            return Err(invalid(
+                "capability_id",
+                "IYS takes only an existing capability_id and credential",
+            ));
+        }
+        return attach_iys(deps, ctx, id, usercode, password, brand_code).await;
+    }
     match (capability_id, kind_key, name) {
         (Some(id), None, None) => credentials_for(deps, ctx, id, external_id, credential).await,
         (Some(_), _, _) => Err(invalid(
@@ -802,6 +831,58 @@ async fn set_credentials_with_hosts(
              name)",
         )),
     }
+}
+
+/// Attach IYS to the locked live SMS line. No SMS probe, credential replacement or status change.
+async fn attach_iys(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    usercode: String,
+    password: String,
+    brand_code: String,
+) -> Result<CapabilityOut, AppError> {
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut cap = locked(r.as_mut(), id).await?;
+    not_retired(&cap)?;
+    if cap.kind_key != "sms_line" || cap.reach != Reach::Connector {
+        return Err(invalid("capability_id", "IYS requires a live SMS line"));
+    }
+    let sealed = r
+        .capabilities()
+        .read_sealed(id)
+        .await?
+        .ok_or_else(|| invalid("capability_id", "provision SMS credentials first"))?;
+    let Credential::NetgsmSms {
+        usercode: line_user,
+        ..
+    } = open_credential(deps, ctx.workspace_id, &sealed)?
+    else {
+        return Err(invalid("capability_id", "provision SMS credentials first"));
+    };
+    if usercode != line_user {
+        return Err(AppError::validation(
+            "IYS usercode must equal the SMS line usercode",
+            json!({"field":"credential.usercode","reason":"iys_usercode_mismatch"}),
+        ));
+    }
+    let credential = Credential::NetgsmIys {
+        usercode,
+        password,
+        brand_code: brand_code.clone(),
+    };
+    let sealed = seal_credential(deps, ctx, &credential)?;
+    cap.connector_public["iys"] = json!({"brand_code":brand_code});
+    cap.updated_at = ctx.now;
+    r.capabilities().update(cap.clone()).await?;
+    r.capabilities()
+        .set_iys_sealed(id, Some(sealed), ctx.now)
+        .await?;
+    let version = version_in_force(r.as_mut()).await?;
+    record_credentials(r.as_mut(), ctx, &cap, version).await?;
+    let out = current_in(r.as_mut(), ctx, id).await?;
+    r.commit().await?;
+    Ok(out)
 }
 
 /// Probes connector capability `id` with its sealed credentials and returns the outcome and its
@@ -1779,6 +1860,15 @@ fn normalised(input: CredentialInput) -> Result<CredentialInput, AppError> {
             password: secret("password", &password)?,
             msgheader: field("msgheader", &msgheader)?,
         },
+        CredentialInput::NetgsmIys {
+            usercode,
+            password,
+            brand_code,
+        } => CredentialInput::NetgsmIys {
+            usercode: field("usercode", &usercode)?,
+            password: secret("password", &password)?,
+            brand_code: field("brand_code", &brand_code)?,
+        },
         CredentialInput::NetgsmPbx {
             username,
             password,
@@ -1938,7 +2028,7 @@ fn credential_strict<'de, D: Deserializer<'de>>(d: D) -> Result<CredentialInput,
         {
             format!("invalid credential: {message}")
         } else if message.starts_with("unknown variant") {
-            "invalid credential: `kind` must be mailbox, netgsm_sms, netgsm_pbx or meta_token"
+            "invalid credential: `kind` must be mailbox, netgsm_sms, netgsm_iys, netgsm_pbx or meta_token"
                 .to_owned()
         } else {
             "invalid credential: it must be an object with a `kind` and string fields".to_owned()
@@ -2190,6 +2280,13 @@ pub(crate) async fn rebind_account(
     let mut public = object(&capability.connector_public);
     for key in OLD_ACCOUNT_FACTS {
         public.remove(*key);
+    }
+    if capability.kind_key == "sms_line" {
+        public.remove("iys");
+        repos
+            .capabilities()
+            .set_iys_sealed(capability.id, None, at)
+            .await?;
     }
     if sealed.is_none() {
         if capability.kind_key == "mailbox" {

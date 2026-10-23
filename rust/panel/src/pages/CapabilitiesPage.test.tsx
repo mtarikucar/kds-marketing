@@ -379,3 +379,15 @@ describe('CapabilitiesPage', () => {
     await waitFor(() => expect(client.getQueryCache().find({ queryKey: HOOKS_KEY })).toBeUndefined());
   });
 });
+
+ it('opens IYS setup from a verified SMS line without offering SMS credential replacement', async () => {
+    const user=userEvent.setup();
+    mockFetch({...withConnectors,[`GET /api/capabilities/${SMS_LINE_ID}`]:smsLine});
+    renderAt('/capabilities');
+    const line=await cardOf('Kampanya hattı');
+    await user.click(within(line).getByRole('button',{name:'İYS ayarla'}));
+    await user.click(await screen.findByRole('button',{name:/İYS bağlantısı \(isteğe bağlı\)/}));
+    expect(screen.getByLabelText('İYS parolası')).toBeInTheDocument();
+    expect(screen.queryByLabelText(tr.connect.credentials.password)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:tr.connect.credentials.submit})).not.toBeInTheDocument();
+  });

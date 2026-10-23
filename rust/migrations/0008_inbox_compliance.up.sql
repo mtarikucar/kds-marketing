@@ -2,6 +2,8 @@
 -- Every tenant reference uses the tenant key. Global users retain their global FK.
 select set_config('app.platform', 'on', true);
 
+alter table capabilities add column if not exists iys_sealed bytea null;
+
 create table if not exists consents (
     workspace_id uuid not null references workspaces (id),
     id uuid primary key, person_id uuid not null,

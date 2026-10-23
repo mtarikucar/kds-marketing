@@ -690,6 +690,12 @@ async fn retire_with_hosts(
     if capability.has_sealed_config {
         repos.capabilities().set_sealed(id, None, ctx.now).await?;
     }
+    if capability.kind_key == "sms_line" {
+        repos
+            .capabilities()
+            .set_iys_sealed(id, None, ctx.now)
+            .await?;
+    }
     if connector::reconnect_required(&capability) {
         repos
             .capabilities()

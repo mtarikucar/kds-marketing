@@ -530,3 +530,84 @@ pub async fn attribution_by_ad_half_open_window_and_tenant_isolation(uow: Arc<dy
     drop(t);
     assert!(reader.by_journey(f.ws, j.id).await.unwrap().is_none());
 }
+
+/// Both sealed slots are tenant scoped, transactional and independent of public projections.
+pub async fn iys_slot_is_separate_and_tenant_scoped(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let id = f.capability().await;
+    let mut r = f.uow.tenant(f.ws).await.unwrap();
+    r.capabilities()
+        .set_iys_sealed(id, Some(b"iys-secret-blob".to_vec()), FIXED_NOW)
+        .await
+        .unwrap();
+    assert!(
+        !r.capabilities()
+            .find(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .has_sealed_config
+    );
+    r.capabilities()
+        .set_sealed(id, Some(b"sms-blob".to_vec()), FIXED_NOW)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut r = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        r.capabilities().read_iys_sealed(id).await.unwrap(),
+        Some(b"iys-secret-blob".to_vec())
+    );
+    assert_eq!(
+        r.capabilities().read_sealed(id).await.unwrap(),
+        Some(b"sms-blob".to_vec())
+    );
+    assert!(
+        !serde_json::to_string(&r.capabilities().find(id).await.unwrap())
+            .unwrap()
+            .contains("iys-secret-blob")
+    );
+    r.capabilities()
+        .set_iys_sealed(id, None, FIXED_NOW)
+        .await
+        .unwrap();
+    drop(r); // rollback must preserve the slot
+    let mut other = f.uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        other
+            .capabilities()
+            .read_iys_sealed(id)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    drop(other);
+    let mut other = f.uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        other
+            .capabilities()
+            .set_iys_sealed(id, None, FIXED_NOW)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    drop(other);
+    let mut r = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        r.capabilities().read_iys_sealed(id).await.unwrap(),
+        Some(b"iys-secret-blob".to_vec())
+    );
+    r.capabilities()
+        .set_iys_sealed(id, None, FIXED_NOW)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut r = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(r.capabilities().read_iys_sealed(id).await.unwrap(), None);
+    assert_eq!(
+        r.capabilities().read_sealed(id).await.unwrap(),
+        Some(b"sms-blob".to_vec())
+    );
+}

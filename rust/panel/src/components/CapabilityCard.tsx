@@ -12,7 +12,7 @@ import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/for
 export type CapabilityAction = 'verify' | 'edit' | 'policy' | 'unreachable' | 'link' | 'retire';
 
 /** What can be done about a connector capability's connection. */
-export type ConnectorAction = 'connect' | 'reconnect' | 'probe';
+export type ConnectorAction = 'connect' | 'reconnect' | 'probe' | 'iys';
 
 /**
  * The connection actions that fit `item` for someone who may manage capabilities (`canManage`)
@@ -27,6 +27,7 @@ export function connectorActions(item: CapabilityOut, canManage: boolean, canPro
   if (canManage && c.status === 'declared') actions.push('connect');
   const renewable = connectsByOAuth(c.kind_key) ? c.external_id !== null : c.status !== 'verified';
   if (canManage && c.status !== 'declared' && renewable) actions.push('reconnect');
+  if (canManage && c.kind_key === 'sms_line' && c.has_sealed_config) actions.push('iys');
   if (canProbe && c.has_sealed_config) actions.push('probe');
   return actions;
 }

@@ -60,6 +60,7 @@ pub struct StoredConsultationEntry {
 pub struct StoredCapability {
     pub capability: Capability,
     pub sealed: Option<Vec<u8>>,
+    pub iys_sealed: Option<Vec<u8>>,
 }
 
 /// A capability group together with when it was created.

@@ -230,3 +230,21 @@ describe('ConnectPage', () => {
     expect(document.body.innerHTML).not.toContain('private-mail-password');
     expect(JSON.stringify(client.getQueryCache().getAll().map((q) => q.state.data))).not.toContain('private-mail-password');
   });
+
+ it('attaches optional IYS credentials to the existing SMS line without replacing SMS', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch({ 'GET /api/auth/me': me, [`GET /api/capabilities/${SMS_LINE_ID}`]: smsLine, 'POST /api/connectors/credentials': smsLine });
+    const { client } = renderAt(`/connect?capability=${SMS_LINE_ID}`);
+    await user.click(await screen.findByRole('button', { name: /İYS bağlantısı \(isteğe bağlı\)/ }));
+    const code=screen.getByLabelText('İYS kullanıcı kodu');
+    await user.clear(code);
+    await user.type(code, '8508001234');
+    await user.type(screen.getByLabelText('İYS parolası'), 'private-iys-password');
+    await user.type(screen.getByLabelText('İYS marka kodu'), 'brand-42');
+    expect(screen.getByLabelText('İYS parolası')).toHaveAttribute('type', 'password');
+    await user.click(screen.getByRole('button', { name: 'İYS bağlantısını kaydet' }));
+    expect(await screen.findByText('İYS bağlantısı kaydedildi.')).toBeInTheDocument();
+    expect(calls.filter((c)=>c.method==='POST').map((c)=>c.body)).toEqual([{capability_id:SMS_LINE_ID,credential:{kind:'netgsm_iys',usercode:'8508001234',password:'private-iys-password',brand_code:'brand-42'}}]);
+    expect(document.body.innerHTML).not.toContain('private-iys-password');
+    await waitFor(()=>expect(JSON.stringify(client.getMutationCache().getAll().map((m)=>m.state.variables))).not.toContain('private-iys-password'));
+  });

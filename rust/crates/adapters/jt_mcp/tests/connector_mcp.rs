@@ -490,3 +490,23 @@ async fn set_credentials_arguments_are_strict_and_never_echoed() {
     assert_ne!(result["isError"], json!(true), "{result}");
     assert!(!result.to_string().contains("netgsm-pass-1"), "{result}");
 }
+
+#[tokio::test]
+async fn agent_provisions_iys_on_existing_sms_line() {
+    let w = World::new().await;
+    let key = w.key(&[]).await;
+    let session = w.session(&key).await;
+    w.netgsm
+        .push_probe(ProbeResult::success(12, json!({"account_id":"8508001234"})));
+    let sms=w.ok(&key,&session,"jeeta.connector.set_credentials",json!({"kind_key":"sms_line","name":"SMS","credential":{"kind":"netgsm_sms","usercode":"8508001234","password":"sms-secret","msgheader":"ALFA"}})).await;
+    let out=w.ok(&key,&session,"jeeta.connector.set_credentials",json!({"capability_id":sms["capability"]["id"],"credential":{"kind":"netgsm_iys","usercode":"8508001234","password":"iys-private","brand_code":"brand-42"}})).await;
+    assert_eq!(out["capability"]["id"], sms["capability"]["id"]);
+    assert_eq!(
+        out["capability"]["connector_public"]["iys"]["brand_code"],
+        "brand-42"
+    );
+    assert!(!out.to_string().contains("iys-private"));
+    let error=w.refused(&key,&session,"jeeta.connector.set_credentials",json!({"capability_id":sms["capability"]["id"],"credential":{"kind":"netgsm_iys","usercode":"wrong","password":"iys-private","brand_code":"brand-42"}}),"VALIDATION").await;
+    assert_eq!(error["details"]["reason"], "iys_usercode_mismatch");
+    assert!(!error.to_string().contains("iys-private"));
+}

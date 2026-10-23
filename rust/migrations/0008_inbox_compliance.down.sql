@@ -1,5 +1,6 @@
 -- Restore guards before dropping their erasure authorization data. No ledger guard changed.
 select set_config('app.platform', 'on', true);
+alter table capabilities drop column if exists iys_sealed;
 create or replace function journey_events_immutable() returns trigger language plpgsql as $$
 begin
     raise exception 'journey_events is append-only';

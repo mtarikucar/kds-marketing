@@ -272,6 +272,24 @@ impl CapabilityRepo for SpyTenant {
         self.inner.capabilities().read_sealed(id).await
     }
 
+    async fn set_iys_sealed(
+        &mut self,
+        id: CapabilityId,
+        sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.spy.push("capabilities.set_iys_sealed");
+        self.inner
+            .capabilities()
+            .set_iys_sealed(id, sealed, at)
+            .await
+    }
+
+    async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {
+        self.spy.push("capabilities.read_iys_sealed");
+        self.inner.capabilities().read_iys_sealed(id).await
+    }
+
     async fn set_status(
         &mut self,
         id: CapabilityId,

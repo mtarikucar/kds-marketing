@@ -886,6 +886,16 @@ pub trait CapabilityRepo: Send + Sync {
     /// Only the connector use cases call it, to open the blob with the `SecretBox`; no use case
     /// returns what it gives back.
     async fn read_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError>;
+    /// Replaces only the separate IYS sealed slot and advances updated_at; unknown/foreign ids
+    /// are NOT_FOUND. Never changes the primary SMS credential or has_sealed_config.
+    async fn set_iys_sealed(
+        &mut self,
+        id: CapabilityId,
+        sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// Reads the separate IYS slot; unknown/foreign ids are NOT_FOUND. Never returned publicly.
+    async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError>;
     /// Sets the stored status and `updated_at = at`. An unknown id is `NOT_FOUND`; bringing a
     /// retired capability back while another live one holds its external account is `CONFLICT`
     /// (in Postgres the transaction is then aborted).

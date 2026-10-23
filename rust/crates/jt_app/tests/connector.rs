@@ -1422,7 +1422,8 @@ async fn set_credentials_rejects_malformed_shapes() {
     // From JSON: unknown shapes, unknown and missing fields are refused, and the error never
     // repeats a value.
     for body in [
-        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_iys", "usercode": "u", "password": "netgsm-pass-1", "brand_code": "b" } }),
+        json!({"capability_id":CapabilityId::new_v7(),"credential":{"kind":"netgsm_iys","usercode":"u","password":"netgsm-pass-1"}}),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_unknown", "usercode": "u", "password": "netgsm-pass-1", "brand_code": "b" } }),
         json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "password": "netgsm-pass-1", "msgheader": "K", "extra": "x" } }),
         json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "msgheader": "K" } }),
         json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "password": 98765432, "msgheader": "K" } }),
@@ -1447,6 +1448,11 @@ async fn set_credentials_rejects_malformed_shapes() {
     .unwrap();
     assert_no_secret("SetCredentials Debug", &format!("{input:?}"));
     for credential in [
+        CredentialInput::NetgsmIys {
+            usercode: "u".into(),
+            password: "netgsm-pass-1".into(),
+            brand_code: "b".into(),
+        },
         CredentialInput::NetgsmPbx {
             username: "u".into(),
             password: "pbx-pass-1".into(),

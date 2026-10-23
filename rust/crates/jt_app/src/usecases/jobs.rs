@@ -1307,35 +1307,65 @@ pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
     use jt_inbox::{Channel, ConsentKind, SyncState, Task, TaskId, TaskStatus};
     let job = Job::IysSync;
     let mut report = JobReport::default();
-    let Some(sync) = deps.connectors.consent(Provider::Netgsm) else {
-        return finish(job, report);
-    };
     for ws in workspaces(deps, job, ACTIVE, &mut report).await {
         let result = async {
             let (credential, rows) = {
                 let mut r = deps.uow.tenant(ws).await?;
+                let rows = r.consents().pending_sync(1000).await?;
+                if rows.is_empty() {
+                    return Ok::<_, AppError>(());
+                }
                 let mut credentials = Vec::new();
                 for cap in r.capabilities().list(CapabilityFilter::default()).await? {
-                    if cap.status != StoredStatus::Verified
-                        || provider_for_kind(&cap.kind_key) != Some(Provider::Netgsm)
+                    if cap.status == StoredStatus::Retired
+                        || cap.reach != jt_capability::Reach::Connector
+                        || cap.kind_key != "sms_line"
                     {
                         continue;
                     }
-                    if let Some(sealed) = r.capabilities().read_sealed(cap.id).await? {
-                        let cred = open_credential(deps, ws, &sealed)?;
-                        if matches!(cred, Credential::NetgsmIys { .. }) {
-                            credentials.push(cred);
-                        }
+                    let Some(sealed) = r.capabilities().read_iys_sealed(cap.id).await? else {
+                        continue;
+                    };
+                    let Some(sms) = r.capabilities().read_sealed(cap.id).await? else {
+                        continue;
+                    };
+                    let Credential::NetgsmSms {
+                        usercode: line_user,
+                        ..
+                    } = open_credential(deps, ws, &sms)?
+                    else {
+                        continue;
+                    };
+                    let Credential::NetgsmIys {
+                        usercode, password, ..
+                    } = open_credential(deps, ws, &sealed)?
+                    else {
+                        continue;
+                    };
+                    let Some(brand) = cap.connector_public["iys"]["brand_code"]
+                        .as_str()
+                        .filter(|b| !b.trim().is_empty())
+                    else {
+                        continue;
+                    };
+                    if usercode == line_user {
+                        credentials.push(Credential::NetgsmIys {
+                            usercode,
+                            password,
+                            brand_code: brand.into(),
+                        });
                     }
                 }
-                // A tenant with multiple brands needs an explicit binding; never guess a brand.
+                // No usable slot (or ambiguous brands) must leave consent pending and ask the owner.
                 if credentials.len() != 1 {
-                    return Ok::<_, AppError>(());
+                    request_iys_provisioning(deps, r.as_mut(), ws, &rows, now).await?;
+                    r.commit().await?;
+                    return Ok(());
                 }
-                (
-                    credentials.remove(0),
-                    r.consents().pending_sync(1000).await?,
-                )
+                (credentials.remove(0), rows)
+            };
+            let Some(sync) = deps.connectors.consent(Provider::Netgsm) else {
+                return Ok(());
             };
             for chunk in rows.chunks(500) {
                 let mut wire = Vec::new();
@@ -1477,6 +1507,56 @@ pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
         }
     }
     finish(job, report)
+}
+
+/// One open owner task per workspace, shared by the pending backlog; hourly retries do not spam.
+async fn request_iys_provisioning(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ws: WorkspaceId,
+    rows: &[jt_inbox::Consent],
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    use jt_inbox::{Task, TaskId, TaskStatus};
+    const TITLE: &str = "Provision IYS on the SMS line (select one brand)";
+    r.people().lock_workspace().await?;
+    if r.tasks()
+        .query(crate::ports::inbox::TaskQueue::All, None, now)
+        .await?
+        .iter()
+        .any(|t| t.title == TITLE)
+    {
+        return Ok(());
+    }
+    let owner = r
+        .memberships()
+        .list()
+        .await?
+        .into_iter()
+        .find(|m| m.status == jt_tenancy::MembershipStatus::Active && m.role_key == "owner")
+        .and_then(|m| m.user_id)
+        .ok_or_else(|| AppError::conflict("IYS provisioning requires an active owner"))?;
+    for row in rows {
+        let Some(person) = consent_recipient_person(r, row.person_id).await? else {
+            continue;
+        };
+        let Some(journey) = r.journeys().latest_for(person.id).await? else {
+            continue;
+        };
+        r.tasks()
+            .insert(Task {
+                id: TaskId::from(deps.ids.uuid()),
+                workspace_id: ws,
+                journey_id: journey.id,
+                title: TITLE.into(),
+                due_at: now,
+                assignee: Some(owner),
+                status: TaskStatus::Open,
+            })
+            .await?;
+        break;
+    }
+    Ok(())
 }
 
 async fn consent_recipient_person(

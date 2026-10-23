@@ -812,6 +812,7 @@
       "actionsLabel": "Connection actions",
       "connect": "Connect",
       "reconnect": "Reconnect",
+      "iys": "Set up IYS",
       "probe": "Probe",
       "health": {
         "ok": "Probe succeeded · {{when}}",
@@ -860,6 +861,16 @@
     }
   },
   "connect": {
+    "iys": {
+      "title": "IYS connection (optional)",
+      "body": "Use the same user code as your SMS line and your IYS password to synchronize consent. Your SMS connection is preserved.",
+      "usercode": "IYS user code",
+      "password": "IYS password",
+      "brandCode": "IYS brand code",
+      "submit": "Save IYS connection",
+      "saved": "IYS connection saved.",
+      "first": "Save the SMS line first to add its IYS connection."
+    },
     "mail": {
       "title": "Connect an email mailbox",
       "body": "Enter your SMTP and IMAP settings. The connection checks your account and sender address using TLS.",

@@ -531,6 +531,7 @@ async fn migration_round_trip_36_48_36_48() {
     for sql in [down, down] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, 36);
+        assert!(!sqlx::query_scalar::<_,bool>("select exists(select 1 from information_schema.columns where table_name='capabilities' and column_name='iys_sealed')").fetch_one(&db.pool).await.unwrap());
         assert!(!function_exists(&db.pool, "inbox_erasure_matches").await);
         assert!(!function_exists(&db.pool, "journey_attribution_immutable").await);
         assert!(!index_exists(&db.pool, "journey_attribution_ad_idx").await);
@@ -538,6 +539,8 @@ async fn migration_round_trip_36_48_36_48() {
     for sql in [up, up] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, 48);
+        let slot:(String,String)=sqlx::query_as("select data_type,is_nullable from information_schema.columns where table_name='capabilities' and column_name='iys_sealed'").fetch_one(&db.pool).await.unwrap();
+        assert_eq!(slot, ("bytea".into(), "YES".into()));
         assert!(index_exists(&db.pool, "journey_attribution_ad_idx").await);
     }
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();

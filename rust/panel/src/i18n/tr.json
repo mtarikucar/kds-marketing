@@ -812,6 +812,7 @@
       "actionsLabel": "Bağlantı işlemleri",
       "connect": "Bağla",
       "reconnect": "Yeniden bağla",
+      "iys": "İYS ayarla",
       "probe": "Yokla",
       "health": {
         "ok": "Yoklama başarılı · {{when}}",
@@ -860,6 +861,16 @@
     }
   },
   "connect": {
+    "iys": {
+      "title": "İYS bağlantısı (isteğe bağlı)",
+      "body": "İYS izinlerini eşitlemek için SMS hattınızla aynı kullanıcı kodunu ve İYS parolanızı girin. SMS bağlantınız korunur.",
+      "usercode": "İYS kullanıcı kodu",
+      "password": "İYS parolası",
+      "brandCode": "İYS marka kodu",
+      "submit": "İYS bağlantısını kaydet",
+      "saved": "İYS bağlantısı kaydedildi.",
+      "first": "İYS bağlantısını eklemek için önce SMS hattını kaydedin."
+    },
     "mail": {
       "title": "E-posta kutusu bağla",
       "body": "SMTP ve IMAP bilgilerinizi girin. Bağlantı, hesabınızı ve gönderici adresinizi TLS ile doğrular.",

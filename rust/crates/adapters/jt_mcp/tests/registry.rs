@@ -556,7 +556,17 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
         .collect();
     assert_eq!(
         shapes,
-        BTreeSet::from(["mailbox", "netgsm_sms", "netgsm_pbx", "meta_token"])
+        BTreeSet::from([
+            "mailbox",
+            "netgsm_sms",
+            "netgsm_iys",
+            "netgsm_pbx",
+            "meta_token"
+        ])
+    );
+    assert_eq!(
+        schema["allOf"][0]["then"]["required"],
+        serde_json::json!(["capability_id"])
     );
     for name in ["jeeta.connector.probe", "jeeta.connector.reconnect"] {
         let schema = find(name).input_schema.clone().to_value();

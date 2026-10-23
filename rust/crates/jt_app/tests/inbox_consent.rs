@@ -233,35 +233,7 @@ async fn send_request_key_reuses_response() {
 
 async fn iys_setup() -> (World, Arc<ScriptedConnector>) {
     let (w, _, c) = setup().await;
-    let mut r = w.uow.tenant(w.ws).await.unwrap();
-    let mut cap = Capability::new(
-        CapabilityId::new_v7(),
-        w.ws,
-        NewCapability {
-            kind_key: "sms_line".into(),
-            name: "IYS".into(),
-            ..Default::default()
-        },
-        w.owner_ctx.now,
-    )
-    .unwrap();
-    cap.status = StoredStatus::Verified;
-    cap.last_verified_at = Some(w.owner_ctx.now);
-    let sealed = w
-        .deps
-        .seal
-        .seal(
-            w.ws,
-            &serde_json::to_vec(&Credential::NetgsmIys {
-                usercode: "u".into(),
-                password: "secret".into(),
-                brand_code: "b".into(),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
-    r.commit().await.unwrap();
+    provision_iys(&w).await;
     (w, c)
 }
 #[tokio::test]
@@ -287,7 +259,10 @@ async fn iys_success_marks_sent_without_resubmission() {
         SyncState::Sent
     );
     match &c.calls()[0] {
-        jt_testkit::fakes::ConnectorCall::ConsentAdd { rows, .. } => {
+        jt_testkit::fakes::ConnectorCall::ConsentAdd { rows, credential } => {
+            assert!(
+                matches!(credential,Credential::NetgsmIys {brand_code,..} if brand_code=="brand-42")
+            );
             assert_eq!(rows[0].channel, "MESAJ");
             assert!(!rows[0].granted);
         }
@@ -654,35 +629,7 @@ async fn merged_withdrawal_is_honored_by_both_commercial_fences() {
     );
     assert!(c.calls().is_empty());
     // A pre-merge withdrawal must also reach IYS via the survivor's current identity.
-    let mut r = w.uow.tenant(w.ws).await.unwrap();
-    let mut cap = Capability::new(
-        CapabilityId::new_v7(),
-        w.ws,
-        NewCapability {
-            kind_key: "sms_line".into(),
-            name: "IYS".into(),
-            ..Default::default()
-        },
-        w.owner_ctx.now,
-    )
-    .unwrap();
-    cap.status = StoredStatus::Verified;
-    cap.last_verified_at = Some(w.owner_ctx.now);
-    let sealed = w
-        .deps
-        .seal
-        .seal(
-            w.ws,
-            &serde_json::to_vec(&Credential::NetgsmIys {
-                usercode: "u".into(),
-                password: "secret".into(),
-                brand_code: "b".into(),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
-    r.commit().await.unwrap();
+    provision_iys(&w).await;
     c.push_consent_add(accepted());
     assert_eq!(
         jt_app::usecases::jobs::run_iys_sync(&w.deps, w.owner_ctx.now)
@@ -873,4 +820,94 @@ async fn inherited_suppression_removal_blocks_merge_undo() {
         .details["reason"],
         "edited_after_merge"
     );
+}
+
+#[tokio::test]
+async fn missing_iys_slot_keeps_pending_and_asks_owner_once() {
+    let (w, _, c) = setup().await;
+    grant(&w, ConsentKind::Withdrawn, w.owner_ctx.now).await;
+    for n in 0..2 {
+        jt_app::usecases::jobs::run_iys_sync(&w.deps, w.owner_ctx.now + time::Duration::hours(n))
+            .await;
+    }
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.consents[0].1.sync_state, SyncState::Pending);
+    assert_eq!(s.inbox.consents[0].1.attempts, 0);
+    assert!(c.calls().is_empty());
+    assert_eq!(s.inbox.tasks.len(), 1);
+    assert!(s.inbox.tasks[0].title.contains("Provision IYS"));
+    assert_eq!(s.inbox.tasks[0].assignee, Some(w.owner));
+}
+
+async fn provision_iys(w: &World) {
+    let cap = w
+        .uow
+        .snapshot()
+        .capabilities
+        .iter()
+        .find(|c| c.capability.kind_key == "sms_line")
+        .unwrap()
+        .capability
+        .id;
+    jt_app::usecases::connector::set_credentials(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"capability_id":cap,"credential":{"kind":"netgsm_iys","usercode":"user","password":"iys-secret","brand_code":"brand-42"}})).unwrap()).await.unwrap();
+}
+
+#[tokio::test]
+async fn missing_iys_slot_requests_owner_even_without_adapter() {
+    let (mut w, _, _) = setup().await;
+    grant(&w, ConsentKind::Withdrawn, w.owner_ctx.now).await;
+    w.deps.connectors = Arc::new(ScriptedRegistry::new());
+    jt_app::usecases::jobs::run_iys_sync(&w.deps, w.owner_ctx.now).await;
+    assert_eq!(w.uow.snapshot().inbox.tasks.len(), 1);
+}
+
+#[tokio::test]
+async fn iys_slot_on_live_unreachable_sms_line_still_syncs() {
+    let (w, _, c) = setup().await;
+    let cap = w.uow.snapshot().capabilities[0].capability.id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.capabilities()
+        .set_status(cap, StoredStatus::Unreachable, w.owner_ctx.now)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    provision_iys(&w).await;
+    grant(&w, ConsentKind::Withdrawn, w.owner_ctx.now).await;
+    c.push_consent_add(accepted());
+    let report = jt_app::usecases::jobs::run_iys_sync(&w.deps, w.owner_ctx.now).await;
+    assert_eq!(report.changed, 1);
+    assert_eq!(
+        w.uow.snapshot().capabilities[0].capability.status,
+        StoredStatus::Unreachable
+    );
+}
+
+#[tokio::test]
+async fn retiring_sms_line_clears_both_credential_slots() {
+    let (w, _) = iys_setup().await;
+    let id = w.uow.snapshot().capabilities[0].capability.id;
+    jt_app::usecases::capabilities::retire(&w.deps, &w.owner_ctx, id, true)
+        .await
+        .unwrap();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    assert_eq!(r.capabilities().read_sealed(id).await.unwrap(), None);
+    assert_eq!(r.capabilities().read_iys_sealed(id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn rebinding_sms_line_clears_iys_slot_and_brand() {
+    let (w, _) = iys_setup().await;
+    let id = w.uow.snapshot().capabilities[0].capability.id;
+    let out = jt_app::usecases::capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        serde_json::from_value(json!({"external_id":"different-line"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(out.current.capability.connector_public.get("iys").is_none());
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    assert_eq!(r.capabilities().read_sealed(id).await.unwrap(), None);
+    assert_eq!(r.capabilities().read_iys_sealed(id).await.unwrap(), None);
 }

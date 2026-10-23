@@ -260,7 +260,7 @@ pub fn validate_external_id(external_id: &str) -> Result<(), CapabilityError> {
 /// The top-level keys of `connector_public` that the system's connectors write: the provider
 /// (`provider`), the sealed credential's public facts (`access`), an OAuth asset's facts
 /// (`asset`), the account a probe proved (`account`), the last probe (`health`, `facts`) and the
-/// reconnection flag (`reconnect_required`). Nobody declares or edits them
+/// reconnection flag (`reconnect_required`), and the IYS brand binding (`iys`). Nobody declares or edits them
 /// ([`check_reserved_public_keys`]): public fields claiming a health, an expiry or a reconnection
 /// would read as what no probe found.
 ///
@@ -272,6 +272,7 @@ pub const RESERVED_PUBLIC_KEYS: &[&str] = &[
     "asset",
     "facts",
     "health",
+    "iys",
     "provider",
     "reconnect_required",
 ];

@@ -84,12 +84,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           password, msgheader}), the NetGSM PBX (netgsm_pbx, {kind: netgsm_pbx, \
                           username, password, trunk?, pbxnum?}) or a pasted Meta token ({kind: \
                           meta_token, access_token}; a Page or WhatsApp token needs external_id). \
-                          A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). X connects through OAuth only. The credentials are sealed and probed \
+                          IYS attaches to an existing SMS line only (capability_id required), using credential {kind: netgsm_iys, usercode, password, brand_code}; its usercode must match the SMS line and it never replaces SMS credentials. A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). X connects through OAuth only. The credentials are sealed and probed \
                           at once; they are never shown again, and the ledger notes that you \
                           entered them. A verified capability keeps its credentials until a \
                           probe fails (CONFLICT). Returns the capability. [risk: WRITE]",
             permission: Permission::CapabilitiesManage,
-            schema: schema_for::<SetCredentialsArgs>,
+            schema: set_credentials_schema,
             run: set_credentials,
         },
         ToolDef {
@@ -204,6 +204,15 @@ fn oauth_kind_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({ "type": "string", "enum": kinds })
 }
 
+fn set_credentials_schema() -> Schema {
+    let mut schema = schema_for::<SetCredentialsArgs>();
+    schema.as_object_mut().expect("object schema").insert("allOf".into(),json!([{
+        "if":{"properties":{"credential":{"properties":{"kind":{"const":"netgsm_iys"}},"required":["kind"]}},"required":["credential"]},
+        "then":{"required":["capability_id"],"properties":{"capability_id":{"type":"string","format":"uuid"}},"not":{"anyOf":[{"required":["kind_key"]},{"required":["name"]},{"required":["external_id"]}]}}
+    }]));
+    schema
+}
+
 /// The JSON Schema of the credentials entered by hand, one shape per `kind`.
 fn credential_schema(_: &mut SchemaGenerator) -> Schema {
     let field = |description: &str| json!({ "type": "string", "description": description });
@@ -235,6 +244,14 @@ fn credential_schema(_: &mut SchemaGenerator) -> Schema {
                 },
                 "required": ["kind", "usercode", "password", "msgheader"],
                 "additionalProperties": false,
+            },
+            {
+                "type":"object", "properties": {
+                    "kind":{"const":"netgsm_iys"},
+                    "usercode":field("Must equal the existing SMS line usercode; capability_id is required."),
+                    "password":field("IYS password, sealed separately from SMS."),
+                    "brand_code":field("IYS brand code, stored publicly on the line.")
+                }, "required":["kind","usercode","password","brand_code"], "additionalProperties":false
             },
             {
                 "type": "object",

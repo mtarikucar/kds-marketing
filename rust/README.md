@@ -1575,8 +1575,19 @@ and creates a human follow-up task. Sent/failed_final rows are not retried. Prov
 no tenant transaction. Lost acknowledgements may repeat submissions: there is no exactly-once
 provider guarantee. As with other jobs, enable scheduling on one server instance.
 
-**Provisioning decision pending:** sync requires exactly one verified capability with a sealed
-`Credential::NetgsmIys`. The current public `connector.set_credentials` input does not provision
-this variant or bind a brand to a sending capability. The job and tests support the credential,
-but enabling production provisioning requires the coordinator's use-case contract decision;
-SMS credentials alone are never guessed to contain an İYS brand. No migration was changed.
+Provision İYS through `POST /api/connectors/credentials` or `jeeta.connector.set_credentials`:
+`{"capability_id":"<existing SMS line>","credential":{"kind":"netgsm_iys","usercode":"<same SMS usercode>","password":"<IYS password>","brand_code":"<brand>"}}`.
+The line must be live and hold SMS credentials; a mismatched usercode returns `VALIDATION`
+with reason `iys_usercode_mismatch`. İYS credentials are sealed in the line's separate
+`iys_sealed` slot; SMS credentials, probe state and account binding are preserved. The public
+brand is `connector_public.iys.brand_code`; `iys` is reserved against ordinary capability edits.
+Migration 0008 adds the nullable slot and its down removes only that added column.
+The optional İYS section on ConnectPage attaches to an existing SMS line, including immediately
+after saving a new line. Its password is cleared after success and excluded from query caches.
+Sync reads the slot and public brand on exactly one live SMS line, checks its usercode
+against the SMS credential, and leaves consent pending when none or multiple are usable.
+One open owner task asks for provisioning; repeated hourly runs do not duplicate it or spend
+consent retry attempts. Provisioning can be retried without replacing the SMS credential.
+The capabilities page offers İYS setup for live SMS lines with credentials, including verified
+lines; verified lines show only the İYS form. Retirement clears both sealed slots, and rebinding
+a line clears its İYS slot and brand metadata along with the old account credentials.

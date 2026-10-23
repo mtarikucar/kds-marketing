@@ -744,3 +744,11 @@ async fn workspace_policy_defaults_and_bounds() {
         assert_eq!(code(r), ErrorCode::Internal);
     }
 }
+
+#[tokio::test]
+async fn iys_slot_contract() {
+    jt_testkit::compliance_contract::iys_slot_is_separate_and_tenant_scoped(Arc::new(
+        InMemoryUow::new(),
+    ))
+    .await;
+}
