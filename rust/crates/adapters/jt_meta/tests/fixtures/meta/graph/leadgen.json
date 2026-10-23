@@ -1,0 +1,13 @@
+{
+  "id": "6666666666",
+  "created_time": "2026-10-01T12:00:00+0000",
+  "form_id": "7777777777",
+  "ad_id": "8888888888",
+  "campaign_id": "1212121212",
+  "campaign_name": "Test Kampanya",
+  "field_data": [
+    { "name": "email", "values": ["test@example.com"] },
+    { "name": "full_name", "values": ["Test Kişi"] },
+    { "name": "interests", "values": ["kahve", "çay"] }
+  ]
+}

@@ -1249,6 +1249,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_meta"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "hmac 0.13.0",
+ "jt_app",
+ "jt_connector",
+ "jt_outbound",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "jt_outbound"
 version = "0.1.0"
 dependencies = [

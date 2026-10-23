@@ -1062,6 +1062,7 @@ fn containers_oauth_names_and_bare_pairs_are_masked() {
 fn event_kinds_round_trip_and_unknown_is_kept() {
     let known = [
         (EventKind::Message, "message"),
+        (EventKind::MessageEcho, "message_echo"),
         (EventKind::Status, "status"),
         (EventKind::LeadGen, "lead_gen"),
         (EventKind::CallEvent, "call_event"),

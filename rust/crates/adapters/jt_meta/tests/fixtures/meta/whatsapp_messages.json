@@ -1,0 +1,75 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "4444444444",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "905550000000", "phone_number_id": "5555555555" },
+            "contacts": [
+              { "profile": { "name": "Test Kişi" }, "wa_id": "905551111111" },
+              { "profile": { "name": "Test Başka" }, "wa_id": "905552222222" }
+            ],
+            "messages": [
+              {
+                "from": "905551111111",
+                "id": "wamid.TEST-TEXT-1",
+                "timestamp": "1790000000",
+                "type": "text",
+                "text": { "body": "Merhaba, açık mısınız?" }
+              },
+              {
+                "from": "905552222222",
+                "id": "wamid.TEST-BUTTON-1",
+                "timestamp": "1790000001",
+                "type": "button",
+                "context": { "from": "905550000000", "id": "wamid.TEST-SENT-1" },
+                "button": { "payload": "EVET", "text": "Evet" }
+              },
+              {
+                "from": "905551111111",
+                "id": "wamid.TEST-INTERACTIVE-1",
+                "timestamp": "1790000002",
+                "type": "interactive",
+                "interactive": { "type": "button_reply", "button_reply": { "id": "menu-1", "title": "Menü" } }
+              },
+              {
+                "from": "905551111111",
+                "id": "wamid.TEST-REFERRAL-1",
+                "timestamp": "1790000003",
+                "type": "text",
+                "text": { "body": "Reklamdan geldim" },
+                "referral": {
+                  "source_url": "https://fb.me/test",
+                  "source_id": "8888888888",
+                  "source_type": "ad",
+                  "headline": "Test Reklam",
+                  "ctwa_clid": "TESTCLID"
+                }
+              },
+              { "from": "905551111111", "timestamp": "1790000004", "type": "text", "text": { "body": "no id: left out" } }
+            ]
+          }
+        },
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "905550000001", "phone_number_id": "5555555556" },
+            "contacts": [ { "profile": { "name": "Test Üç" }, "wa_id": "905553333333" } ],
+            "messages": [
+              { "from": "905553333333", "id": "wamid.TEST-OTHER-NUMBER-1", "timestamp": "1790000005", "type": "text", "text": { "body": "İkinci numara" } }
+            ]
+          }
+        },
+        {
+          "field": "message_template_status_update",
+          "value": { "event": "APPROVED", "message_template_id": 123, "message_template_name": "test" }
+        }
+      ]
+    }
+  ]
+}

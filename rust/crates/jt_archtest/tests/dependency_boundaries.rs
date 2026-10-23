@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use jt_archtest::{direct_deps, metadata, workspace_dir, workspace_packages};
+use jt_archtest::{direct_deps, mentions_word, metadata, workspace_dir, workspace_packages};
 
 // What every domain crate may depend on: serialisation, ids, time, error derives, and the two
 // foundational domain crates. `jt_ledger` uses the ids of `jt_tenancy`, `jt_strategy` uses both
@@ -111,6 +111,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_panel_http",
         "jt_mcp",
         "jt_seal",
+        "jt_meta",
         "jt_testkit",
         "jeeta",
     ] {
@@ -118,6 +119,89 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         assert!(!deps.contains("reqwest"), "{c} must not depend on reqwest");
         if c != "jt_testkit" && c != "jeeta" {
             assert!(!deps.contains("sqlx"), "{c} must not depend on sqlx");
+        }
+    }
+}
+
+// A provider adapter: the application core (its ports) and the domain crates it speaks, the
+// egress client (its only way out), serialisation, time, ids and URLs, logging, async traits and
+// error derives, the HMAC crates (Meta's `appsecret_proof`) and `tokio` (for timers: the pause
+// between polls). No HTTP client of its own, no database, no web framework: every call goes
+// through `jt_outbound::Egress` under the connector's scope. (A test-only mock server may use a
+// web framework as a dev-dependency.)
+const CONNECTOR_ADAPTER_ALLOW: &[&str] = &[
+    "jt_app",
+    "jt_connector",
+    "jt_capability",
+    "jt_tenancy",
+    "jt_ledger",
+    "jt_outbound",
+    "serde",
+    "serde_json",
+    "time",
+    "uuid",
+    "url",
+    "tracing",
+    "async-trait",
+    "thiserror",
+    "hmac",
+    "sha2",
+    "base64",
+    "tokio",
+];
+
+/// The provider adapter crates (NetGSM and X join them in their tasks).
+const CONNECTOR_ADAPTERS: &[&str] = &["jt_meta"];
+
+#[test]
+fn connector_adapters_reach_out_only_through_the_egress_client() {
+    for c in CONNECTOR_ADAPTERS {
+        let deps = direct_deps(c);
+        for d in &deps {
+            assert!(
+                CONNECTOR_ADAPTER_ALLOW.contains(&d.as_str()),
+                "{c} depends on {d}, which is not on its allowlist"
+            );
+        }
+        // Not vacuous: the egress client is how it reaches its provider.
+        assert!(
+            deps.contains("jt_outbound"),
+            "{c} must call out through jt_outbound"
+        );
+    }
+}
+
+/// A provider adapter neither lists nor names an HTTP client crate, in its manifest or in any of
+/// its sources (tests included): no `reqwest` type can be reached around the egress client.
+#[test]
+fn connector_adapters_never_name_an_http_client() {
+    for c in CONNECTOR_ADAPTERS {
+        let dir = workspace_dir().join("crates/adapters").join(c);
+        let mut files = vec![dir.join("Cargo.toml")];
+        let mut pending = vec![dir.join("src"), dir.join("tests")];
+        while let Some(next) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&next) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        assert!(files.len() > 1, "{c} has no sources to check");
+        for file in files {
+            let text = std::fs::read_to_string(&file).expect("a readable file");
+            for client in ["reqwest", "hyper", "ureq", "isahc", "surf"] {
+                assert!(
+                    !mentions_word(&text, client),
+                    "{} names {client}: an adapter reaches out only through jt_outbound",
+                    file.display()
+                );
+            }
         }
     }
 }

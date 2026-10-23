@@ -22,6 +22,9 @@ define_id!(
 pub enum EventKind {
     /// A message from a person (an SMS, a DM, a WhatsApp message).
     Message,
+    /// A copy of a message the account itself sent, coming back (Messenger's and Instagram's
+    /// `is_echo`): what the business sent, from this system or from the provider's own app.
+    MessageEcho,
     /// A delivery or read status of a message sent earlier.
     Status,
     /// A lead-gen form submission.
@@ -39,6 +42,7 @@ impl EventKind {
     pub fn key(&self) -> &str {
         match self {
             EventKind::Message => "message",
+            EventKind::MessageEcho => "message_echo",
             EventKind::Status => "status",
             EventKind::LeadGen => "lead_gen",
             EventKind::CallEvent => "call_event",
@@ -52,6 +56,7 @@ impl EventKind {
     pub fn parse(key: &str) -> EventKind {
         match key {
             "message" => EventKind::Message,
+            "message_echo" => EventKind::MessageEcho,
             "status" => EventKind::Status,
             "lead_gen" => EventKind::LeadGen,
             "call_event" => EventKind::CallEvent,

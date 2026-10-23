@@ -12,6 +12,7 @@ members = [
     "crates/adapters/jt_mcp",
     "crates/adapters/jt_outbound",
     "crates/adapters/jt_seal",
+    "crates/adapters/jt_meta",
     "crates/jt_testkit",
     "crates/jt_archtest",
     "bin/jeeta",
@@ -36,6 +37,7 @@ jt_panel_http = { path = "crates/adapters/jt_panel_http" }
 jt_mcp = { path = "crates/adapters/jt_mcp" }
 jt_outbound = { path = "crates/adapters/jt_outbound" }
 jt_seal = { path = "crates/adapters/jt_seal" }
+jt_meta = { path = "crates/adapters/jt_meta" }
 jt_testkit = { path = "crates/jt_testkit" }
 jt_archtest = { path = "crates/jt_archtest" }
 
