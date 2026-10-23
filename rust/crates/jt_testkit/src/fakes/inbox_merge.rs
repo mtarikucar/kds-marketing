@@ -451,6 +451,7 @@ impl MergeRepo for MemTenant {
                     r.person_id = keep;
                     r.updated_at = at;
                 }
+                refresh_inbound_senders(s, ws, &snap, at);
                 for r in s
                     .inbox
                     .people
@@ -550,6 +551,7 @@ impl MergeRepo for MemTenant {
                         r.journey_id = note.journey_id;
                     }
                 }
+                refresh_inbound_senders(s, ws, &snap, at);
                 for r in s
                     .inbox
                     .people
@@ -561,5 +563,37 @@ impl MergeRepo for MemTenant {
             });
             Ok(())
         })
+    }
+}
+
+fn refresh_inbound_senders(
+    s: &mut MemState,
+    ws: WorkspaceId,
+    snap: &MergeSnapshot,
+    at: OffsetDateTime,
+) {
+    for c in s
+        .inbox
+        .conversations
+        .iter_mut()
+        .filter(|c| c.workspace_id == ws && snap.conversations.iter().any(|old| old.id == c.id))
+    {
+        let latest = s
+            .inbox
+            .messages
+            .iter()
+            .filter(|m| {
+                m.workspace_id == ws
+                    && m.conversation_id == c.id
+                    && m.direction == Direction::Inbound
+            })
+            .max_by_key(|m| (m.at, m.id));
+        let meta = s.inbox.conversation_send_states.entry(c.id).or_default();
+        meta.activity_revision =
+            (meta.activity_revision + 1).max((at.unix_timestamp_nanos() / 1_000).max(0) as i64);
+        meta.last_inbound_identity_id = latest
+            .filter(|m| c.last_inbound_at.is_none_or(|old| m.at >= old))
+            .and_then(|m| s.inbox.message_senders.get(&m.id).copied());
+        c.last_inbound_at = c.last_inbound_at.max(latest.map(|m| m.at));
     }
 }

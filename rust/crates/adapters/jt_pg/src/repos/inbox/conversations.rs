@@ -3,7 +3,7 @@ use crate::uow::PgTenantRepos;
 use async_trait::async_trait;
 use jt_app::{
     error::AppError,
-    ports::inbox::{ConversationQueue, ConversationRepo, MAX_INBOX_PAGE},
+    ports::inbox::{ConversationQueue, ConversationRepo, ConversationSendState, MAX_INBOX_PAGE},
 };
 use jt_capability::CapabilityId;
 use jt_inbox::{ConvState, Conversation, ConversationId, Executor, PersonId};
@@ -21,6 +21,22 @@ fn state_columns(state: &ConvState) -> (&'static str, Option<OffsetDateTime>) {
 }
 #[async_trait]
 impl ConversationRepo for PgTenantRepos {
+    async fn send_state(&mut self, id: ConversationId) -> Result<ConversationSendState, AppError> {
+        one!(sqlx::query_scalar("select jsonb_build_object('last_inbound_identity_id',last_inbound_identity_id,'activity_revision',activity_revision) from conversations where workspace_id=$1 and id=$2").bind(self.workspace_id().as_uuid()).bind(id.as_uuid()),self,ConversationSendState)?
+            .ok_or_else(||AppError::not_found("no such conversation"))
+    }
+    async fn record_outbound(
+        &mut self,
+        id: ConversationId,
+        expected_activity_revision: i64,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        changed(sqlx::query("update conversations set state=case when activity_revision=$3 then 'theirs' else state end,snoozed_until=case when activity_revision=$3 then null else snoozed_until end,last_outbound_at=greatest(last_outbound_at,$4) where workspace_id=$1 and id=$2")
+            .bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(expected_activity_revision).bind(at)
+            .execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"record outbound activity"))?)?;
+        super::touch_conversation(self, id).await
+    }
+
     async fn page(
         &mut self,
         queue: ConversationQueue,
@@ -90,7 +106,7 @@ impl ConversationRepo for PgTenantRepos {
             Executor::Agent => ("agent", None),
             Executor::Human { user_id } => ("human", user_id.map(|u| u.as_uuid())),
         };
-        sqlx::query("insert into conversations (id,workspace_id,person_id,capability_id,kind_key,state,executor_kind,executor_user_id,executor_generation,last_inbound_at,last_outbound_at,created_at,updated_at) values ($1,$2,$3,$4,$5,'ours',$6,$7,$8,$9,$10,$11,$11) on conflict (workspace_id,person_id,capability_id) do update set state='ours',snoozed_until=null,last_inbound_at=greatest(conversations.last_inbound_at,excluded.last_inbound_at)")
+        sqlx::query("insert into conversations (id,workspace_id,person_id,capability_id,kind_key,state,executor_kind,executor_user_id,executor_generation,last_inbound_at,last_outbound_at,created_at,updated_at) values ($1,$2,$3,$4,$5,'ours',$6,$7,$8,$9,$10,$11,$11) on conflict (workspace_id,person_id,capability_id) do update set state='ours',snoozed_until=null,activity_revision=conversations.activity_revision+1,last_inbound_identity_id=case when conversations.last_inbound_at is null or excluded.last_inbound_at>=conversations.last_inbound_at then null else conversations.last_inbound_identity_id end,last_inbound_at=greatest(conversations.last_inbound_at,excluded.last_inbound_at)")
             .bind(row.id.as_uuid()).bind(ws.as_uuid()).bind(row.person_id.as_uuid()).bind(row.capability_id.as_uuid()).bind(&row.kind_key).bind(kind).bind(user).bind(i64::from(row.executor_generation)).bind(at).bind(row.last_outbound_at).bind(write_at)
             .execute(self.tx.conn()).await.map_err(|e| map_sqlx(e,"upsert inbound conversation"))?;
         let stored = ConversationRepo::find(self, row.person_id, row.capability_id)
@@ -108,7 +124,7 @@ impl ConversationRepo for PgTenantRepos {
         outbound_at: Option<OffsetDateTime>,
     ) -> Result<(), AppError> {
         let (state, until) = state_columns(&state);
-        changed(sqlx::query("update conversations set state=$3,snoozed_until=$4,last_outbound_at=coalesce($5,last_outbound_at) where workspace_id=$1 and id=$2")
+        changed(sqlx::query("update conversations set activity_revision=activity_revision+1,state=$3,snoozed_until=$4,last_outbound_at=coalesce($5,last_outbound_at) where workspace_id=$1 and id=$2")
             .bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(state).bind(until).bind(outbound_at).execute(self.tx.conn()).await.map_err(|e| map_sqlx(e,"set conversation state"))?)?;
         super::touch_conversation(self, id).await
     }

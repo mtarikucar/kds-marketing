@@ -87,8 +87,26 @@ pub enum ConversationQueue {
     All,
 }
 
+/// Send metadata deliberately separate from aggregate timestamps and public conversation DTOs.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationSendState {
+    pub last_inbound_identity_id: Option<IdentityId>,
+    /// Inbound/operator state changes only; never outbound message bookkeeping.
+    pub activity_revision: i64,
+}
+
 #[async_trait]
 pub trait ConversationRepo: Send + Sync {
+    async fn send_state(&mut self, id: ConversationId) -> Result<ConversationSendState, AppError>;
+    /// Set Theirs/clear snooze only when no newer inbound/operator activity occurred. Always
+    /// record the greatest outbound time. Does not advance activity_revision.
+    async fn record_outbound(
+        &mut self,
+        id: ConversationId,
+        expected_activity_revision: i64,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+
     /// Stable ascending (created_at,id) keyset page; queue filtering precedes the limit.
     async fn page(
         &mut self,
@@ -133,6 +151,16 @@ pub trait ConversationRepo: Send + Sync {
 
 #[async_trait]
 pub trait MessageRepo: Send + Sync {
+    /// Consumer contract: after a NEW inbound insert, call in the SAME transaction with the
+    /// normalized/scoped identity that matched its sender. Stores sender_identity_id on the
+    /// message and updates the conversation's last_inbound_identity_id only for its latest
+    /// inbound (at,id). Older messages cannot replace the latest sender; replays are immutable.
+    async fn record_inbound_sender(
+        &mut self,
+        message: MessageId,
+        sender: IdentityId,
+    ) -> Result<(), AppError>;
+
     async fn get(&mut self, id: MessageId) -> Result<Option<Message>, AppError>;
     /// Stable ascending (at,id) keyset page.
     async fn page(
@@ -159,6 +187,14 @@ pub trait MessageRepo: Send + Sync {
 
 #[async_trait]
 pub trait JourneyRepo: Send + Sync {
+    /// Advances only when a reducer transition is persisted, never for notes/tasks/owner edits
+    /// or historical receipts. Read while holding the journey lock.
+    async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError>;
+
+    /// Append only a system Replied receipt whose original send predates newer journey changes.
+    /// Records current from/to status, preserving every reducer-owned field; unique event key.
+    async fn append_historical_reply(&mut self, event: JourneyEvent) -> Result<(), AppError>;
+
     /// Durable workspace-wide key lookup, including events on other journeys.
     async fn event_by_key(&mut self, key: &str) -> Result<Option<JourneyEvent>, AppError>;
     /// Change only the commission owner, never reducer-owned fields.

@@ -86,7 +86,8 @@ impl MergeRepo for PgTenantRepos {
                     .map_err(|e| map_sqlx(e, "coalesce conversation"))?;
             }
         }
-        sqlx::query("update conversations set person_id=$3,updated_at=$4 where workspace_id=$1 and person_id=any($2)").bind(ws).bind(&ids).bind(keep.as_uuid()).bind(at).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"merge conversations"))?;
+        sqlx::query("update conversations set person_id=$3,updated_at=$4,activity_revision=activity_revision+1 where workspace_id=$1 and person_id=any($2)").bind(ws).bind(&ids).bind(keep.as_uuid()).bind(at).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"merge conversations"))?;
+        refresh_inbound_senders(self, snapshot).await?;
         normalize_people(self, snapshot, at).await
     }
     async fn restore_snapshot(
@@ -106,7 +107,7 @@ impl MergeRepo for PgTenantRepos {
                 .map_err(|e| map_sqlx(e, "restore conversation parent"))?;
         }
         for c in &snapshot.conversations {
-            restore_conversation(self, c).await?;
+            restore_conversation(self, c, at).await?;
         }
         clear_external_ids(self, snapshot).await?;
         for m in &snapshot.messages {
@@ -171,6 +172,7 @@ impl MergeRepo for PgTenantRepos {
                 .await
                 .map_err(|e| map_sqlx(e, "touch restored conversation"))?;
         }
+        refresh_inbound_senders(self, snapshot).await?;
         normalize_people(self, snapshot, at).await
     }
     async fn insert(&mut self, row: MergeRow) -> Result<(), AppError> {
@@ -246,8 +248,14 @@ async fn normalize_people(
         .map_err(|e| map_sqlx(e, "touch merge people"))?;
     Ok(())
 }
-async fn restore_conversation(r: &mut PgTenantRepos, c: &Conversation) -> Result<(), AppError> {
+async fn restore_conversation(
+    r: &mut PgTenantRepos,
+    c: &Conversation,
+    at: OffsetDateTime,
+) -> Result<(), AppError> {
     let mut data = value!(c);
+    // A restored row must not reuse a revision captured before the merge.
+    data["activity_revision"] = value!((at.unix_timestamp_nanos() / 1_000).max(0) as i64);
     let (state, until) = match c.state {
         ConvState::Open => ("open", None),
         ConvState::Ours => ("ours", None),
@@ -269,6 +277,21 @@ async fn restore_conversation(r: &mut PgTenantRepos, c: &Conversation) -> Result
     };
     data["executor_kind"] = value!(kind);
     data["executor_user_id"] = value!(user);
-    sqlx::query("insert into conversations select * from jsonb_populate_record(null::conversations,$1) where workspace_id=$2 on conflict(id) do update set person_id=excluded.person_id,state=excluded.state,snoozed_until=excluded.snoozed_until,executor_kind=excluded.executor_kind,executor_user_id=excluded.executor_user_id,executor_generation=excluded.executor_generation,last_inbound_at=excluded.last_inbound_at,last_outbound_at=excluded.last_outbound_at,created_at=excluded.created_at,updated_at=excluded.updated_at where conversations.workspace_id=$2").bind(data).bind(r.workspace_id().as_uuid()).execute(r.tx.conn()).await.map_err(|e|map_sqlx(e,"restore conversation"))?;
+    sqlx::query("insert into conversations select * from jsonb_populate_record(null::conversations,$1) where workspace_id=$2 on conflict(id) do update set activity_revision=greatest(conversations.activity_revision+1,excluded.activity_revision),person_id=excluded.person_id,state=excluded.state,snoozed_until=excluded.snoozed_until,executor_kind=excluded.executor_kind,executor_user_id=excluded.executor_user_id,executor_generation=excluded.executor_generation,last_inbound_at=excluded.last_inbound_at,last_outbound_at=excluded.last_outbound_at,created_at=excluded.created_at,updated_at=excluded.updated_at where conversations.workspace_id=$2").bind(data).bind(r.workspace_id().as_uuid()).execute(r.tx.conn()).await.map_err(|e|map_sqlx(e,"restore conversation"))?;
+    Ok(())
+}
+
+// Message sender bindings survive movement and undo; recompute the conversation cache.
+async fn refresh_inbound_senders(
+    r: &mut PgTenantRepos,
+    snapshot: &MergeSnapshot,
+) -> Result<(), AppError> {
+    let ids: Vec<Uuid> = snapshot
+        .conversations
+        .iter()
+        .map(|c| c.id.as_uuid())
+        .collect();
+    sqlx::query("update conversations c set last_inbound_at=greatest(c.last_inbound_at,(select max(m.at) from messages m where m.workspace_id=c.workspace_id and m.conversation_id=c.id and m.direction='inbound')),last_inbound_identity_id=(select m.sender_identity_id from messages m where m.workspace_id=c.workspace_id and m.conversation_id=c.id and m.direction='inbound' and (c.last_inbound_at is null or m.at>=c.last_inbound_at) order by m.at desc,m.id desc limit 1) where c.workspace_id=$1 and c.id=any($2)")
+        .bind(r.workspace_id().as_uuid()).bind(ids).execute(r.tx.conn()).await.map_err(|e|map_sqlx(e,"refresh merged inbound sender"))?;
     Ok(())
 }

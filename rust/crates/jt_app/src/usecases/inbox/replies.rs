@@ -129,6 +129,8 @@ pub async fn enqueue(
         author,
     )
     .await?;
+    // Validate recipient ambiguity before creating any durable outbound intent.
+    recipient(r.as_mut(), &c, &cap).await?;
     let message_id = MessageId::from(deps.ids.uuid());
     let row = OutboxRow {
         id: deps.ids.uuid(),
@@ -322,6 +324,23 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
     let prepared = prepare(deps, r.as_mut(), &c, &cap).await;
     let (credential, recipient, provider) = match prepared {
         Ok(p) => p,
+        Err(e) if e.code == ErrorCode::Validation => {
+            let reason = e
+                .details
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("reply_recipient_unavailable")
+                .to_owned();
+            row.state = "refused".into();
+            row.last_error = Some(reason.clone());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(row.message_id, MsgStatus::Refused { reason }, None, None)
+                .await?;
+            save_result(r.as_mut(), ctx, &row).await?;
+            r.commit().await?;
+            return Err(e);
+        }
         Err(e) => {
             row.state = "failed".into();
             row.last_error = Some("send_configuration_invalid".into());
@@ -336,11 +355,16 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             return Ok(Claim::Done(output(&row)));
         }
     };
+    let activity_revision = r.conversations().send_state(c.id).await?.activity_revision;
+    let journey_reducer_revision = match &j {
+        Some(j) => Some(r.journeys().reducer_revision(j.id).await?),
+        None => None,
+    };
     row.state = "sending".into();
     row.attempts += 1;
     row.updated_at = ctx.now;
     row.fence_snapshot = Some(
-        json!({"journey_id":j.as_ref().map(|j|j.id),"journey_updated_at":j.as_ref().map(|j|j.updated_at.unix_timestamp_nanos().to_string()),"executor_generation":c.executor_generation,"conversation_updated_at":c.updated_at.unix_timestamp_nanos().to_string(),"send_at":ctx.now.unix_timestamp_nanos().to_string(),"person_erased":false,"person_merged":false}),
+        json!({"conversation_id":c.id,"journey_id":j.as_ref().map(|j|j.id),"journey_updated_at":j.as_ref().map(|j|j.updated_at.unix_timestamp_nanos().to_string()),"journey_reducer_revision":journey_reducer_revision,"executor_generation":c.executor_generation,"activity_revision":activity_revision,"send_at":ctx.now.unix_timestamp_nanos().to_string(),"person_erased":false,"person_merged":false}),
     );
     r.outbox().update(row.clone()).await?;
     r.commit().await?;
@@ -359,12 +383,6 @@ async fn prepare(
     c: &Conversation,
     cap: &Capability,
 ) -> Result<(Credential, String, Provider), AppError> {
-    let channel = match cap.kind_key.as_str() {
-        "whatsapp_cloud" | "sms_line" => IdentityChannel::Phone,
-        "instagram_dm" => IdentityChannel::InstagramDm,
-        "messenger" => IdentityChannel::Messenger,
-        _ => return Err(refused("unsupported_reply_channel")),
-    };
     let provider =
         provider_for_kind(&cap.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
     if (cap.kind_key == "sms_line" && deps.connectors.sms(provider).is_none())
@@ -372,24 +390,7 @@ async fn prepare(
     {
         return Err(refused("connector_unavailable"));
     }
-    let prefix = cap.external_id.as_ref().map(|id| format!("{id}:"));
-    let recipient = r
-        .identities()
-        .list(c.person_id)
-        .await?
-        .into_iter()
-        .filter(|i| i.channel == channel && i.active)
-        .find_map(|i| {
-            if channel == IdentityChannel::Phone {
-                Some(i.value_normalized)
-            } else {
-                prefix
-                    .as_ref()
-                    .and_then(|p| i.value_normalized.strip_prefix(p))
-                    .map(str::to_owned)
-            }
-        })
-        .ok_or_else(|| AppError::not_found("no recipient for this capability"))?;
+    let recipient = recipient(r, c, cap).await?;
     let sealed = r
         .capabilities()
         .read_sealed(cap.id)
@@ -398,6 +399,61 @@ async fn prepare(
     let credential = open_credential(deps, c.workspace_id, &sealed)?;
     Ok((credential, recipient, provider))
 }
+async fn recipient(
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    cap: &Capability,
+) -> Result<String, AppError> {
+    let channel = match cap.kind_key.as_str() {
+        "sms_line" | "whatsapp_cloud" => IdentityChannel::Phone,
+        "instagram_dm" => IdentityChannel::InstagramDm,
+        "messenger" => IdentityChannel::Messenger,
+        _ => return Err(refused("unsupported_reply_channel")),
+    };
+    let binding = r
+        .conversations()
+        .send_state(c.id)
+        .await?
+        .last_inbound_identity_id;
+    let prefix = cap.external_id.as_ref().map(|id| format!("{id}:"));
+    let mut candidates = r
+        .identities()
+        .list(c.person_id)
+        .await?
+        .into_iter()
+        .filter(|i| i.active && i.channel == channel)
+        .filter_map(|i| {
+            let value = if channel == IdentityChannel::Phone {
+                Some(i.value_normalized)
+            } else {
+                prefix
+                    .as_ref()
+                    .and_then(|p| i.value_normalized.strip_prefix(p))
+                    .map(str::to_owned)
+            };
+            value.map(|value| (i.id, value))
+        });
+    let invalid = |reason: &str| {
+        AppError::validation(
+            "reply recipient cannot be determined",
+            json!({"reason":reason}),
+        )
+    };
+    if let Some(binding) = binding {
+        return candidates
+            .find(|(id, _)| *id == binding)
+            .map(|(_, value)| value)
+            .ok_or_else(|| invalid("reply_recipient_unavailable"));
+    }
+    let first = candidates
+        .next()
+        .ok_or_else(|| invalid("reply_recipient_unavailable"))?;
+    if candidates.next().is_some() {
+        return Err(invalid("ambiguous_reply_recipient"));
+    }
+    Ok(first.1)
+}
+
 /// Claim at most once. A sending or terminal entry is never put to the provider again.
 pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, AppError> {
     let ctx = fresh(deps, ctx);
@@ -495,9 +551,27 @@ pub async fn record_result(
                         reason_label: None,
                         at: sent_at,
                     };
-                    let t = reduce(j, &event, &ReducePolicy::default())
-                        .map_err(|_| AppError::internal("system reply reduction failed"))?;
-                    r.journeys().apply_transition(j.id, t, event).await?;
+                    let unchanged = row
+                        .fence_snapshot
+                        .as_ref()
+                        .and_then(|s| s.get("journey_updated_at"))
+                        .and_then(Value::as_str)
+                        == Some(j.updated_at.unix_timestamp_nanos().to_string().as_str());
+                    // Notes, task edits and owner assignment touch updated_at but do not
+                    // supersede a reply's domain transition. Legacy snapshots stay conservative.
+                    let domain_unchanged = row
+                        .fence_snapshot
+                        .as_ref()
+                        .and_then(|s| s.get("journey_reducer_revision"))
+                        .and_then(Value::as_i64)
+                        == Some(r.journeys().reducer_revision(j.id).await?);
+                    if unchanged || domain_unchanged {
+                        let t = reduce(j, &event, &ReducePolicy::default())
+                            .map_err(|_| AppError::internal("system reply reduction failed"))?;
+                        r.journeys().apply_transition(j.id, t, event).await?;
+                    } else {
+                        r.journeys().append_historical_reply(event).await?;
+                    }
                 }
             }
             if terminal {
@@ -511,19 +585,17 @@ pub async fn record_result(
                 )
                 .await?;
             } else {
-                // Acceptance belongs to the original send, not the later reconciliation.
-                // New inbound/operator activity must keep its state and any newer send time.
-                let state = if conversation_unchanged(&row, &c) {
-                    ConvState::Theirs
-                } else {
-                    c.state.clone()
-                };
+                // A moved outbox must not compare revisions from different conversations.
+                // Send/message bookkeeping never invalidates this independent activity fence.
+                let revision = row
+                    .fence_snapshot
+                    .as_ref()
+                    .filter(|s| s.get("conversation_id") == Some(&json!(c.id)))
+                    .and_then(|s| s.get("activity_revision"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(-1);
                 r.conversations()
-                    .update_state(
-                        c.id,
-                        state,
-                        Some(c.last_outbound_at.map_or(sent_at, |at| at.max(sent_at))),
-                    )
+                    .record_outbound(c.id, revision, sent_at)
                     .await?;
             }
             (
@@ -547,9 +619,6 @@ pub async fn record_result(
     r.messages()
         .set_status(row.message_id, status, external, cost)
         .await?;
-    if row.state == "unknown" {
-        advance_own_status_write(r.as_mut(), &mut row, &c).await?;
-    }
     save_result(r.as_mut(), ctx, &row).await?;
     r.commit().await?;
     Ok(output(&row))
@@ -614,36 +683,7 @@ pub async fn recover_sending(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<bool, A
     r.messages()
         .set_status(row.message_id, MsgStatus::Unknown, None, None)
         .await?;
-    advance_own_status_write(r.as_mut(), &mut row, &c).await?;
     save_result(r.as_mut(), ctx, &row).await?;
     r.commit().await?;
     Ok(true)
-}
-
-// Aggregate timestamps include message status writes. Advance the revision for our own
-// Unknown bookkeeping only if no newer activity preceded it; otherwise retain the mismatch.
-fn conversation_unchanged(row: &OutboxRow, c: &Conversation) -> bool {
-    row.fence_snapshot
-        .as_ref()
-        .and_then(|s| s.get("conversation_updated_at"))
-        .and_then(Value::as_str)
-        == Some(c.updated_at.unix_timestamp_nanos().to_string().as_str())
-}
-async fn advance_own_status_write(
-    r: &mut dyn TenantRepos,
-    row: &mut OutboxRow,
-    before: &Conversation,
-) -> Result<(), AppError> {
-    if conversation_unchanged(row, before) {
-        let current = r
-            .conversations()
-            .get(before.id)
-            .await?
-            .ok_or_else(|| AppError::not_found("no such conversation"))?;
-        if let Some(snapshot) = row.fence_snapshot.as_mut() {
-            snapshot["conversation_updated_at"] =
-                json!(current.updated_at.unix_timestamp_nanos().to_string());
-        }
-    }
-    Ok(())
 }

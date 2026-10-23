@@ -417,6 +417,10 @@ async fn migration_round_trip_23_36_23_36() {
     assert_eq!(table_count(&db.pool).await, 36);
     assert!(column_exists(&db.pool, ("conversations", "created_at")).await);
     assert!(column_exists(&db.pool, ("conversations", "updated_at")).await);
+    assert!(column_exists(&db.pool, ("conversations", "activity_revision")).await);
+    assert!(column_exists(&db.pool, ("conversations", "last_inbound_identity_id")).await);
+    assert!(column_exists(&db.pool, ("messages", "sender_identity_id")).await);
+    assert!(column_exists(&db.pool, ("journeys", "reducer_revision")).await);
     assert!(column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
     let (ws, _) = db.seed_workspace("inbox-policy-roundtrip").await;
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
@@ -431,6 +435,10 @@ async fn migration_round_trip_23_36_23_36() {
         assert_eq!(table_count(&db.pool).await, 23);
         assert!(!column_exists(&db.pool, ("conversations", "created_at")).await);
         assert!(!column_exists(&db.pool, ("conversations", "updated_at")).await);
+        assert!(!column_exists(&db.pool, ("conversations", "activity_revision")).await);
+        assert!(!column_exists(&db.pool, ("conversations", "last_inbound_identity_id")).await);
+        assert!(!column_exists(&db.pool, ("messages", "sender_identity_id")).await);
+        assert!(!column_exists(&db.pool, ("journeys", "reducer_revision")).await);
         assert!(!column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
         assert!(!column_exists(&db.pool, ("lost_reasons", "key")).await);
         let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
@@ -448,6 +456,10 @@ async fn migration_round_trip_23_36_23_36() {
         assert_eq!(table_count(&db.pool).await, 36);
         assert!(column_exists(&db.pool, ("conversations", "created_at")).await);
         assert!(column_exists(&db.pool, ("conversations", "updated_at")).await);
+        assert!(column_exists(&db.pool, ("conversations", "activity_revision")).await);
+        assert!(column_exists(&db.pool, ("conversations", "last_inbound_identity_id")).await);
+        assert!(column_exists(&db.pool, ("messages", "sender_identity_id")).await);
+        assert!(column_exists(&db.pool, ("journeys", "reducer_revision")).await);
         assert!(column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
         let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
         let labels: serde_json::Value = sqlx::query_scalar(

@@ -26,6 +26,9 @@ create table if not exists conversations (
     workspace_id uuid not null references workspaces (id),
     id uuid primary key, person_id uuid not null, capability_id uuid not null,
     kind_key text not null, state text not null default 'open', snoozed_until timestamptz,
+    activity_revision bigint not null default 0 check (activity_revision >= 0),
+    last_inbound_identity_id uuid,
+    foreign key (last_inbound_identity_id, workspace_id) references identities (id, workspace_id),
     executor_kind text not null default 'agent' check (executor_kind in ('agent', 'human')),
     executor_user_id uuid references users (id), executor_generation bigint not null default 0
     check (executor_generation between 0 and 4294967295), last_inbound_at timestamptz, last_outbound_at timestamptz,
@@ -39,12 +42,15 @@ create table if not exists messages (
     id uuid primary key, conversation_id uuid not null, direction text not null,
     author jsonb not null, body text not null default '', external_id text, status jsonb not null,
     cost_minor bigint, at timestamptz not null, unique (id, workspace_id),
+    sender_identity_id uuid,
+    foreign key (sender_identity_id, workspace_id) references identities (id, workspace_id),
     foreign key (conversation_id, workspace_id) references conversations (id, workspace_id)
 );
 
 create table if not exists journeys (
     workspace_id uuid not null references workspaces (id),
     id uuid primary key, person_id uuid not null, status text not null default 'new',
+    reducer_revision bigint not null default 0 check (reducer_revision >= 0),
     owner_id uuid references users (id), opened_at timestamptz not null, closed_at timestamptz,
     lost_reason jsonb, unreachable_attempts smallint not null default 0 check (unreachable_attempts between 0 and 255),
     source jsonb not null, updated_at timestamptz not null, unique (id, workspace_id),

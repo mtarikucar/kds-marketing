@@ -28,6 +28,9 @@ pub struct StoredRequestKey {
 }
 #[derive(Clone, Debug, Default)]
 pub struct MemInbox {
+    pub journey_reducer_revisions: std::collections::BTreeMap<JourneyId, i64>,
+    pub conversation_send_states: std::collections::BTreeMap<ConversationId, ConversationSendState>,
+    pub message_senders: std::collections::BTreeMap<MessageId, IdentityId>,
     pub people: Vec<Person>,
     pub identities: Vec<Identity>,
     pub conversations: Vec<Conversation>,
@@ -361,6 +364,49 @@ impl IdentityRepo for MemTenant {
 }
 #[async_trait]
 impl ConversationRepo for MemTenant {
+    async fn send_state(&mut self, id: ConversationId) -> Result<ConversationSendState, AppError> {
+        conversation(self.state(), self.ws, id)?;
+        Ok(self
+            .state()
+            .inbox
+            .conversation_send_states
+            .get(&id)
+            .cloned()
+            .unwrap_or_default())
+    }
+    async fn record_outbound(
+        &mut self,
+        id: ConversationId,
+        expected_activity_revision: i64,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            conversation(t.state(), ws, id)?;
+            let write_at = t.inbox_write_at();
+            t.tx.write(move |s| {
+                let revision = s
+                    .inbox
+                    .conversation_send_states
+                    .get(&id)
+                    .map_or(0, |m| m.activity_revision);
+                if let Some(c) = s
+                    .inbox
+                    .conversations
+                    .iter_mut()
+                    .find(|c| c.workspace_id == ws && c.id == id)
+                {
+                    if revision == expected_activity_revision {
+                        c.state = ConvState::Theirs;
+                    }
+                    c.last_outbound_at = Some(c.last_outbound_at.map_or(at, |old| old.max(at)));
+                }
+                touch_conversation(s, ws, id, write_at);
+            });
+            Ok(())
+        })
+    }
+
     async fn page(
         &mut self,
         queue: ConversationQueue,
@@ -441,6 +487,13 @@ impl ConversationRepo for MemTenant {
             if let Executor::Human { user_id } = row.executor {
                 user(t.state(), user_id)?;
             }
+            let prior = t.state().inbox.conversations.iter().find(|r| {
+                r.workspace_id == ws
+                    && r.person_id == row.person_id
+                    && r.capability_id == row.capability_id
+            });
+            let existed = prior.is_some();
+            let clear_sender = prior.is_none_or(|c| c.last_inbound_at.is_none_or(|old| at >= old));
             if let Some(old) = t.state().inbox.conversations.iter().find(|r| {
                 r.workspace_id == ws
                     && r.person_id == row.person_id
@@ -471,6 +524,13 @@ impl ConversationRepo for MemTenant {
                 } else {
                     s.inbox.conversations.push(row.clone());
                 }
+                let metadata = s.inbox.conversation_send_states.entry(row.id).or_default();
+                if existed {
+                    metadata.activity_revision += 1;
+                }
+                if clear_sender {
+                    metadata.last_inbound_identity_id = None;
+                }
                 touch_person(s, ws, row.person_id, write_at);
             });
             Ok(out)
@@ -498,6 +558,11 @@ impl ConversationRepo for MemTenant {
                         r.last_outbound_at = outbound_at;
                     }
                 }
+                s.inbox
+                    .conversation_send_states
+                    .entry(id)
+                    .or_default()
+                    .activity_revision += 1;
                 touch_conversation(s, ws, id, at);
             });
             Ok(())
@@ -560,6 +625,75 @@ impl ConversationRepo for MemTenant {
 }
 #[async_trait]
 impl MessageRepo for MemTenant {
+    async fn record_inbound_sender(
+        &mut self,
+        message: MessageId,
+        sender: IdentityId,
+    ) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            let m = t
+                .state()
+                .inbox
+                .messages
+                .iter()
+                .find(|m| {
+                    m.workspace_id == ws && m.id == message && m.direction == Direction::Inbound
+                })
+                .ok_or_else(|| AppError::not_found("no matching inbound sender"))?;
+            let c = t
+                .state()
+                .inbox
+                .conversations
+                .iter()
+                .find(|c| c.workspace_id == ws && c.id == m.conversation_id)
+                .ok_or_else(|| AppError::not_found("no such conversation"))?;
+            let i = t
+                .state()
+                .inbox
+                .identities
+                .iter()
+                .find(|i| {
+                    i.workspace_id == ws && i.id == sender && i.person_id == c.person_id && i.active
+                })
+                .ok_or_else(|| AppError::not_found("no matching inbound sender"))?;
+            if channel_for_kind(&c.kind_key).map(|ch| ch.identity_channel()) != Some(i.channel) {
+                return Err(AppError::not_found("no matching inbound sender"));
+            }
+            if t.state()
+                .inbox
+                .message_senders
+                .get(&message)
+                .is_some_and(|id| *id != sender)
+            {
+                return Err(AppError::conflict("inbound sender is immutable"));
+            }
+            let cid = c.id;
+            let inbound_at = c.last_inbound_at;
+            t.tx.write(move |s| {
+                s.inbox.message_senders.insert(message, sender);
+                let latest = s
+                    .inbox
+                    .messages
+                    .iter()
+                    .filter(|m| {
+                        m.workspace_id == ws
+                            && m.conversation_id == cid
+                            && m.direction == Direction::Inbound
+                            && Some(m.at) == inbound_at
+                    })
+                    .max_by_key(|m| m.id);
+                let sender = latest.and_then(|m| s.inbox.message_senders.get(&m.id).copied());
+                s.inbox
+                    .conversation_send_states
+                    .entry(cid)
+                    .or_default()
+                    .last_inbound_identity_id = sender;
+            });
+            Ok(())
+        })
+    }
+
     async fn get(&mut self, id: MessageId) -> Result<Option<Message>, AppError> {
         Ok(self
             .state()
@@ -683,6 +817,50 @@ impl MessageRepo for MemTenant {
 }
 #[async_trait]
 impl JourneyRepo for MemTenant {
+    async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError> {
+        journey(self.state(), self.ws, id)?;
+        Ok(*self
+            .state()
+            .inbox
+            .journey_reducer_revisions
+            .get(&id)
+            .unwrap_or(&0))
+    }
+
+    async fn append_historical_reply(&mut self, event: JourneyEvent) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            same_workspace(ws, event.workspace_id)?;
+            if event.source != EventSource::System || event.kind != JourneyEventKind::Replied {
+                return Err(AppError::validation(
+                    "only system replied receipts may be historical",
+                    serde_json::json!({}),
+                ));
+            }
+            let j = t
+                .state()
+                .inbox
+                .journeys
+                .iter()
+                .find(|j| j.workspace_id == ws && j.id == event.journey_id)
+                .ok_or_else(|| AppError::not_found("no such journey"))?;
+            unique(
+                !t.state().inbox.events.iter().any(|e| {
+                    e.id == event.id
+                        || (e.workspace_id == ws && e.idempotency_key == event.idempotency_key)
+                }),
+                "journey event key is taken",
+            )?;
+            let person = j.person_id;
+            let at = t.inbox_write_at();
+            t.tx.write(move |s| {
+                s.inbox.events.push(event.clone());
+                touch_person(s, ws, person, at);
+            });
+            Ok(())
+        })
+    }
+
     async fn event_by_key(&mut self, key: &str) -> Result<Option<JourneyEvent>, AppError> {
         Ok(self
             .state()
@@ -838,6 +1016,7 @@ impl JourneyRepo for MemTenant {
                         .updated_at
                         .max(r.updated_at + Duration::microseconds(1));
                 }
+                *s.inbox.journey_reducer_revisions.entry(id).or_default() += 1;
                 s.inbox.events.push(event.clone());
                 touch_person(s, ws, person_id, at);
             });
@@ -1037,6 +1216,7 @@ impl LostReasonRepo for MemTenant {
         })
     }
 }
+
 #[async_trait]
 impl ConsumptionRepo for MemTenant {
     async fn try_claim(&mut self, consumer: &str, id: InboundEventId) -> Result<bool, AppError> {

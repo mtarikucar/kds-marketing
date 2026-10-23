@@ -573,3 +573,165 @@ async fn late_acceptance_preserves_newer_conversation_activity() {
         assert_eq!(s.inbox.events.len(), 1);
     }
 }
+
+#[tokio::test]
+async fn overlapping_successful_replies_end_theirs() {
+    let (w, id, c) = setup().await;
+    let a_started = Arc::new(tokio::sync::Notify::new());
+    let b_started = Arc::new(tokio::sync::Notify::new());
+    let a_recorded = Arc::new(tokio::sync::Notify::new());
+    let (a, b) = (a_started.clone(), b_started.clone());
+    c.push_send_hook(move || async move {
+        a.notify_one();
+        b.notified().await;
+    });
+    let (b, a) = (b_started.clone(), a_recorded.clone());
+    c.push_send_hook(move || async move {
+        b.notify_one();
+        a.notified().await;
+    });
+    for provider_id in ["one", "two"] {
+        c.push_send_text(Ok(SendReceipt {
+            provider_id: provider_id.into(),
+            cost_minor: None,
+        }));
+    }
+    let (deps, ctx) = (w.deps.clone(), w.owner_ctx.clone());
+    let a =
+        tokio::spawn(async move { replies::reply(&deps, &ctx, id, input(None)).await.unwrap() });
+    a_started.notified().await;
+    let (deps, ctx) = (w.deps.clone(), w.owner_ctx.clone());
+    let b =
+        tokio::spawn(async move { replies::reply(&deps, &ctx, id, input(None)).await.unwrap() });
+    assert_eq!(a.await.unwrap().state, "sent");
+    a_recorded.notify_one();
+    assert_eq!(b.await.unwrap().state, "sent");
+    let s = w.uow.snapshot();
+    assert!(s.inbox.outbox.iter().all(|o| o.state == "sent"));
+    assert_eq!(s.inbox.conversations[0].state, ConvState::Theirs);
+}
+
+#[tokio::test]
+async fn late_acceptance_preserves_three_newer_failed_calls() {
+    let (w, id, c) = setup().await;
+    c.push_send_text(Err(jt_connector::ConnectorError::unknown("after write")));
+    replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    let s = w.uow.snapshot();
+    let q = s.inbox.outbox[0].id;
+    let j = s.inbox.journeys[0].id;
+    let later = at(&w.owner_ctx, w.owner_ctx.now + time::Duration::minutes(10));
+    for n in 0..3 {
+        jt_app::usecases::inbox::journeys::report(&w.deps,&later,j,serde_json::from_value(json!({"kind":"call_made","idempotency_key":format!("failed-{n}"),"payload":{"connected":false}})).unwrap()).await.unwrap();
+    }
+    replies::record_result(&w.deps, &later, q, accepted())
+        .await
+        .unwrap();
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.journeys[0].unreachable_attempts, 3);
+    assert_eq!(s.inbox.journeys[0].status, JourneyStatus::Unreachable);
+    assert_eq!(s.inbox.messages[0].status, MsgStatus::Sent);
+    let event = s
+        .inbox
+        .events
+        .iter()
+        .find(|e| e.kind == JourneyEventKind::Replied)
+        .unwrap();
+    assert_eq!(event.at, w.owner_ctx.now);
+}
+
+async fn add_second_phone(w: &World, id: ConversationId) -> IdentityId {
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let p = r.conversations().get(id).await.unwrap().unwrap().person_id;
+    let identity = Identity {
+        id: IdentityId::new_v7(),
+        workspace_id: w.ws,
+        person_id: p,
+        channel: IdentityChannel::Phone,
+        value_normalized: "+905551234567".into(),
+        value_display: "second".into(),
+        active: true,
+        first_seen_at: w.owner_ctx.now + time::Duration::seconds(1),
+    };
+    r.identities().insert(identity.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    identity.id
+}
+#[tokio::test]
+async fn ambiguous_legacy_recipient_is_validation() {
+    let (w, id, c) = setup().await;
+    add_second_phone(&w, id).await;
+    c.push_send_text(accepted());
+    let e = replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::Validation);
+    assert_eq!(e.details["reason"], "ambiguous_reply_recipient");
+    assert!(c.calls().is_empty());
+}
+#[tokio::test]
+async fn reply_reaches_last_inbound_sender_with_two_phone_identities() {
+    let (w, id, c) = setup().await;
+    let sender = add_second_phone(&w, id).await;
+    let m = Message {
+        id: MessageId::new_v7(),
+        workspace_id: w.ws,
+        conversation_id: id,
+        direction: Direction::Inbound,
+        author: Author::Customer,
+        body: "second number".into(),
+        external_id: Some("inbound-second".into()),
+        status: MsgStatus::Received,
+        cost_minor: None,
+        at: w.owner_ctx.now,
+    };
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.messages().insert_if_new(m.clone()).await.unwrap();
+    r.messages()
+        .record_inbound_sender(m.id, sender)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    c.push_send_text(accepted());
+    replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    match &c.calls()[0] {
+        jt_testkit::fakes::ConnectorCall::SendText { recipient_id, .. } => {
+            assert_eq!(recipient_id, "+905551234567")
+        }
+        _ => panic!(),
+    }
+}
+
+#[tokio::test]
+async fn note_during_send_does_not_suppress_reply_transition() {
+    let (w, id, connector) = setup().await;
+    let (deps, ctx) = (w.deps.clone(), w.owner_ctx.clone());
+    let jid = w.uow.snapshot().inbox.journeys[0].id;
+    connector.push_send_text(accepted());
+    connector.push_send_hook(move || async move {
+        jt_app::usecases::inbox::tasks::add_note(
+            &deps,
+            &ctx,
+            jid,
+            jt_app::usecases::inbox::tasks::NoteInput {
+                text: "Internal note".into(),
+            },
+        )
+        .await
+        .unwrap();
+    });
+    assert_eq!(
+        replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+            .await
+            .unwrap()
+            .state,
+        "sent"
+    );
+    assert_eq!(
+        w.uow.snapshot().inbox.journeys[0].status,
+        JourneyStatus::Contacted
+    );
+}

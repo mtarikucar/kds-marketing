@@ -12,6 +12,7 @@ drop table if exists merges;
 drop table if exists notes;
 drop table if exists tasks;
 drop table if exists journey_events;
+-- Dropping these task-owned tables also removes sender bindings and activity/reducer revisions.
 drop table if exists journeys;
 drop table if exists messages;
 drop table if exists conversations;
