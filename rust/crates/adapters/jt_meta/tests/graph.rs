@@ -55,11 +55,13 @@ fn ig_login_cred() -> Credential {
     }
 }
 
+/// A WhatsApp credential with a system user's token (no expiry).
 fn wa_cred(waba: Option<&str>) -> Credential {
     Credential::WhatsAppCloud {
         phone_number_id: PHONE.into(),
         token: WA_TOKEN.into(),
         waba_id: waba.map(str::to_owned),
+        expires_at: None,
     }
 }
 
@@ -133,9 +135,29 @@ async fn authorize_urls_carry_scopes_or_config_id() {
     assert_eq!(get(&fb, "state").as_deref(), Some("state-1"));
     assert_eq!(get(&fb, "response_type").as_deref(), Some("code"));
     assert_eq!(get(&fb, "scope"), Some(FACEBOOK_SCOPES.join(",")));
+    assert_eq!(
+        get(&fb, "scope").unwrap().split(',').collect::<Vec<_>>(),
+        vec![
+            "pages_show_list",
+            "pages_manage_posts",
+            "pages_read_engagement",
+            "business_management",
+            "pages_messaging",
+            "pages_manage_metadata",
+            "instagram_basic",
+            "instagram_manage_messages",
+            "instagram_content_publish",
+            "whatsapp_business_management",
+            "whatsapp_business_messaging",
+            "ads_read",
+            "read_insights",
+            "instagram_manage_insights",
+            "leads_retrieval",
+            "ads_management",
+        ]
+    );
     assert_eq!(get(&fb, "config_id"), None);
     assert!(!fb.as_str().contains(META_APP_SECRET));
-    assert_eq!(FACEBOOK_SCOPES.len(), 14);
 
     // A login configuration replaces the scopes; the app's Graph version is used.
     let mut configured = meta_app();
@@ -402,14 +424,21 @@ async fn list_assets_composes_pages_instagram_ads_and_whatsapp() {
         assert_eq!(asset.credential, page_cred(), "{asset:?}");
     }
     assert_eq!(assets[6].credential, user);
+    // The WhatsApp number carries the user's token and so its expiry (renewed like it).
     assert_eq!(assets[7].credential, {
-        let Credential::OAuth { access_token, .. } = &user else {
+        let Credential::OAuth {
+            access_token,
+            expires_at,
+            ..
+        } = &user
+        else {
             unreachable!()
         };
         Credential::WhatsAppCloud {
             phone_number_id: PHONE.into(),
             token: access_token.clone(),
             waba_id: Some("4444444444".into()),
+            expires_at: *expires_at,
         }
     });
     assert_eq!(
@@ -1982,8 +2011,47 @@ async fn refresh_renews_only_expiring_tokens() {
     assert_eq!(call.param("fb_exchange_token"), Some(USER_TOKEN));
     assert_eq!(call.param("client_id"), Some(META_APP_ID));
 
-    // Not expiring soon, no known expiry, a Page token, a WhatsApp token: nothing to do.
+    // A WhatsApp token from a Facebook Login user, expiring: renewed like the user's token,
+    // the number and its account kept.
+    m.set(
+        "GET",
+        "/fb/v19.0/oauth/access_token",
+        ok(json!({ "access_token": "EAAB-wa-renewed-test", "expires_in": 5183944 })),
+    );
+    let wa_user = Credential::WhatsAppCloud {
+        phone_number_id: PHONE.into(),
+        token: WA_TOKEN.into(),
+        waba_id: Some("4444444444".into()),
+        expires_at: soon,
+    };
+    let renewed = r.meta.refresh(&wa_user).await.unwrap().unwrap();
+    let Credential::WhatsAppCloud {
+        phone_number_id,
+        token,
+        waba_id,
+        expires_at,
+    } = &renewed
+    else {
+        panic!("{renewed:?}");
+    };
+    assert_eq!(
+        (phone_number_id.as_str(), token.as_str(), waba_id.as_deref()),
+        (PHONE, "EAAB-wa-renewed-test", Some("4444444444"))
+    );
+    assert!(expires_at.unwrap() > OffsetDateTime::now_utc() + Duration::days(59));
+    let call = &m.requests("GET", "/fb/v19.0/oauth/access_token")[1];
+    assert_eq!(call.param("grant_type"), Some("fb_exchange_token"));
+    assert_eq!(call.param("fb_exchange_token"), Some(WA_TOKEN));
+
+    // Not expiring soon, no known expiry, a Page token, a system user's WhatsApp token: nothing
+    // to do.
     m.clear();
+    let wa_later = Credential::WhatsAppCloud {
+        phone_number_id: PHONE.into(),
+        token: WA_TOKEN.into(),
+        waba_id: Some("4444444444".into()),
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(40)),
+    };
     let pasted = Credential::OAuth {
         access_token: USER_TOKEN.into(),
         refresh_token: None,
@@ -1993,6 +2061,7 @@ async fn refresh_renews_only_expiring_tokens() {
     for cred in [
         user_cred(),
         ig_login_cred(),
+        wa_later,
         pasted,
         page_cred(),
         wa_cred(None),
@@ -2007,4 +2076,92 @@ async fn refresh_renews_only_expiring_tokens() {
         status(400, graph_fixture(m, "error_token_expired")),
     );
     assert_eq!(kind_of(r.meta.refresh(&ig).await), "auth");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The kind is never guessed
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_missing_or_foreign_kind_is_refused_without_a_call() {
+    let r = rig().await;
+    let request = post("x", &["https://cdn.test/a.jpg"], None);
+    let missing = json!({ "provider": "meta", "external_id": PAGE });
+    let foreign = public("sms_line", Some(PAGE));
+    for p in [&missing, &foreign] {
+        for cred in [page_cred(), user_cred(), ig_login_cred(), wa_cred(None)] {
+            let reason = |e: ConnectorError| e.reason().map(str::to_owned);
+            let e = r.meta.publish(&cred, p, &request).await.unwrap_err();
+            assert_eq!(reason(e).as_deref(), Some("kind_key missing"), "{p}");
+            let e = r
+                .meta
+                .post_metrics(&cred, p, "1234567890_1")
+                .await
+                .unwrap_err();
+            assert_eq!(reason(e).as_deref(), Some("kind_key missing"), "{p}");
+            let e = r.meta.account_metrics(&cred, p).await.unwrap_err();
+            assert_eq!(reason(e).as_deref(), Some("kind_key missing"), "{p}");
+            let e = r.meta.send_text(&cred, p, "1", "x").await.unwrap_err();
+            assert_eq!(reason(e).as_deref(), Some("kind_key missing"), "{p}");
+            let e = r.meta.on_connected(&cred, p).await.unwrap_err();
+            assert_eq!(reason(e).as_deref(), Some("kind_key missing"), "{p}");
+            let probe = r.meta.probe(&cred, p).await;
+            assert!(!probe.ok);
+            assert_eq!(
+                probe
+                    .error
+                    .and_then(|e| e.reason().map(str::to_owned))
+                    .as_deref(),
+                Some("kind_key missing"),
+                "{p}"
+            );
+        }
+    }
+    assert!(r.mock.recorded().is_empty(), "nothing was sent");
+}
+
+#[tokio::test]
+async fn a_refused_media_publish_surfaces_the_mapped_error() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "900" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/900",
+        ok(json!({ "status_code": "FINISHED" })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        status(400, graph_fixture(m, "error_throttle")),
+    );
+    let e = r
+        .meta
+        .publish(
+            &page_cred(),
+            &public("instagram", Some(IG)),
+            &post("x", &["https://cdn.test/a.jpg"], None),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), "throttle");
+    m.set(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        status(400, graph_fixture(m, "error_token_expired")),
+    );
+    let e = r
+        .meta
+        .publish(
+            &page_cred(),
+            &public("instagram", Some(IG)),
+            &post("x", &["https://cdn.test/a.jpg"], None),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), "auth");
 }

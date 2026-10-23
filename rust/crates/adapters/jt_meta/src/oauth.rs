@@ -13,8 +13,8 @@ use crate::graph::{Auth, Body, GraphApp, graph_version, integer, join, missing};
 
 /// The scopes Facebook Login asks for when the Meta app has no login configuration: Pages
 /// (listing, posting, engagement, messaging, webhooks), Instagram through the Page (basic,
-/// messages, publishing, insights), WhatsApp Business, ads reading, insights and business
-/// management.
+/// messages, publishing, insights), WhatsApp Business, ads (reading, and managing: budgets),
+/// insights, lead-gen submissions (`leads_retrieval`) and business management.
 pub const FACEBOOK_SCOPES: &[&str] = &[
     "pages_show_list",
     "pages_manage_posts",
@@ -30,6 +30,8 @@ pub const FACEBOOK_SCOPES: &[&str] = &[
     "ads_read",
     "read_insights",
     "instagram_manage_insights",
+    "leads_retrieval",
+    "ads_management",
 ];
 
 /// The scopes Instagram Login asks for.
@@ -129,11 +131,12 @@ pub(crate) async fn exchange(
     }
 }
 
-/// `now + expires_in` seconds, when the answer names it.
+/// `now + expires_in` seconds, when the answer names a positive one that `now` can be moved by;
+/// `None` otherwise (never a panic, whatever the provider says).
 fn expiry(answer: &Value, now: OffsetDateTime) -> Option<OffsetDateTime> {
     integer(&answer["expires_in"])
         .filter(|s| *s > 0)
-        .map(|s| now + Duration::seconds(s))
+        .and_then(|s| now.checked_add(Duration::seconds(s)))
 }
 
 /// The access token of an answer.
@@ -299,8 +302,11 @@ fn permissions(value: &Value) -> Vec<String> {
 /// A renewed credential, when `cred` should be renewed now:
 /// - an Instagram Login token expiring within seven days: `refresh_access_token`;
 /// - a Facebook user token expiring within seven days: `fb_exchange_token`;
+/// - a WhatsApp Cloud token from a Facebook Login user (it has an `expires_at`) expiring within
+///   seven days: `fb_exchange_token` too, the number and its account kept;
 /// - anything else (a token not expiring soon, one without a known expiry, a Page token, which
-///   does not expire when it comes from a long-lived user token, a WhatsApp token): `None`.
+///   does not expire when it comes from a long-lived user token, a system user's WhatsApp token,
+///   which has no expiry): `None`.
 pub(crate) async fn refresh(
     connector: &MetaConnector,
     cred: &Credential,
@@ -336,9 +342,55 @@ pub(crate) async fn refresh(
                 scopes: scopes.clone(),
             }))
         }
+        Credential::WhatsAppCloud {
+            phone_number_id,
+            token,
+            waba_id,
+            ..
+        } if cred.expires_soon(now, REFRESH_WINDOW) => {
+            let meta = connector.meta_app()?;
+            let app = GraphApp::of(&meta)?;
+            let answer = long_lived(connector, &meta, &app, token).await?;
+            Ok(Some(Credential::WhatsAppCloud {
+                phone_number_id: phone_number_id.clone(),
+                token: token_of(&answer)?,
+                waba_id: waba_id.clone(),
+                expires_at: expiry(&answer, OffsetDateTime::now_utc()),
+            }))
+        }
         Credential::OAuth { .. }
         | Credential::PageToken { .. }
         | Credential::WhatsAppCloud { .. } => Ok(None),
         other => Err(crate::graph::wrong_credential(other, "be refreshed")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use time::macros::datetime;
+
+    use super::*;
+
+    #[test]
+    fn expiry_never_panics() {
+        let now = datetime!(2026-10-23 12:00:00 UTC);
+        assert_eq!(
+            expiry(&json!({ "expires_in": 60 }), now),
+            Some(datetime!(2026-10-23 12:01:00 UTC))
+        );
+        assert_eq!(
+            expiry(&json!({ "expires_in": "3600" }), now),
+            Some(datetime!(2026-10-23 13:00:00 UTC))
+        );
+        for absurd in [
+            json!({ "expires_in": i64::MAX }),
+            json!({ "expires_in": 0 }),
+            json!({ "expires_in": -5 }),
+            json!({ "expires_in": "soon" }),
+            json!({}),
+        ] {
+            assert_eq!(expiry(&absurd, now), None, "{absurd}");
+        }
     }
 }

@@ -2,6 +2,8 @@
 //! following paging links, and mapping Graph errors to [`ConnectorError`] (the crate docs hold the
 //! table).
 
+use std::fmt;
+
 use hmac::{Hmac, KeyInit, Mac};
 use jt_app::ports::connectors::MetaApp;
 use jt_connector::{ConnectorError, Credential};
@@ -11,7 +13,7 @@ use sha2::Sha256;
 use time::Duration;
 use url::Url;
 
-use crate::MetaConnector;
+use crate::{Masked, MetaConnector};
 
 /// The Graph API version used when the Meta app names none.
 pub const DEFAULT_GRAPH_VERSION: &str = "v19.0";
@@ -28,6 +30,10 @@ pub(crate) const MAX_PAGES: usize = 100;
 /// The longest error reason kept, in characters.
 const MAX_REASON_CHARS: usize = 300;
 
+/// The longest wait a throttle asks for: a provider's longer (or absurd) wait is cut to it, so
+/// a scheduler adding it to the clock can never overflow.
+pub(crate) const MAX_RETRY_AFTER: Duration = Duration::hours(1);
+
 /// Graph codes that ask to slow down.
 const THROTTLE_CODES: &[i64] = &[4, 17, 32, 613, 130_429, 131_048, 131_056];
 /// Graph codes of a missing permission (beside the 200–299 range).
@@ -40,7 +46,7 @@ const AUTH_SUBCODES: &[i64] = &[458, 459, 460, 463, 464, 467];
 /// Graph codes of a temporary failure.
 const TRANSIENT_CODES: &[i64] = &[1, 2];
 
-/// How a call authenticates.
+/// How a call authenticates. `Debug` masks the token and the secret.
 #[derive(Clone, Copy)]
 pub(crate) enum Auth<'a> {
     /// No token (an OAuth code or token exchange, which carries the app's own credentials).
@@ -51,17 +57,57 @@ pub(crate) enum Auth<'a> {
     Bearer(&'a str),
 }
 
-/// A request body.
+impl fmt::Debug for Auth<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Auth::None => f.write_str("None"),
+            Auth::Graph { .. } => f
+                .debug_struct("Graph")
+                .field("token", &Masked)
+                .field("secret", &Masked)
+                .finish(),
+            Auth::Bearer(_) => f.debug_tuple("Bearer").field(&Masked).finish(),
+        }
+    }
+}
+
+/// A request body. `Debug` shows its shape only: a form may carry a client secret or a code, a
+/// JSON body a message.
 pub(crate) enum Body {
     Empty,
     Json(Value),
     Form(Vec<(String, String)>),
 }
 
-/// The Meta app's secret and Graph version, as one call needs them.
+impl fmt::Debug for Body {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Body::Empty => f.write_str("Empty"),
+            Body::Json(_) => f.debug_tuple("Json").field(&Masked).finish(),
+            Body::Form(fields) => {
+                let names: Vec<&str> = fields.iter().map(|(name, _)| name.as_str()).collect();
+                f.debug_struct("Form")
+                    .field("fields", &names)
+                    .field("values", &Masked)
+                    .finish()
+            }
+        }
+    }
+}
+
+/// The Meta app's secret and Graph version, as one call needs them. `Debug` masks the secret.
 pub(crate) struct GraphApp {
     pub(crate) secret: String,
     pub(crate) version: String,
+}
+
+impl fmt::Debug for GraphApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GraphApp")
+            .field("secret", &Masked)
+            .field("version", &self.version)
+            .finish()
+    }
 }
 
 impl GraphApp {
@@ -523,13 +569,15 @@ pub(crate) fn classify(status: StatusCode, json: &Value, wait: Option<Duration>)
 
 /// How long the provider asks to wait: `Retry-After` in seconds, else the longest wait the usage
 /// headers name (`X-Business-Use-Case-Usage`'s `estimated_time_to_regain_access`, in minutes,
-/// and `X-Ad-Account-Usage`'s `reset_time_duration`, in seconds). `None` when none names one.
+/// and `X-Ad-Account-Usage`'s `reset_time_duration`, in seconds), at most [`MAX_RETRY_AFTER`].
+/// `None` when none names one.
 pub(crate) fn retry_after(headers: &header::HeaderMap) -> Option<Duration> {
+    let cap = MAX_RETRY_AFTER.whole_seconds();
     let value = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     if let Some(seconds) = value("retry-after").and_then(|v| v.trim().parse::<i64>().ok())
         && seconds > 0
     {
-        return Some(Duration::seconds(seconds));
+        return Some(Duration::seconds(seconds.min(cap)));
     }
     let mut longest: i64 = 0;
     if let Some(usage) =
@@ -550,7 +598,7 @@ pub(crate) fn retry_after(headers: &header::HeaderMap) -> Option<Duration> {
     {
         longest = longest.max(seconds);
     }
-    (longest > 0).then(|| Duration::seconds(longest))
+    (longest > 0).then(|| Duration::seconds(longest.min(cap)))
 }
 
 #[cfg(test)]
@@ -703,5 +751,54 @@ mod tests {
         assert_eq!(retry_after(&headers), Some(Duration::seconds(900)));
         headers.insert("retry-after", "30".parse().unwrap());
         assert_eq!(retry_after(&headers), Some(Duration::seconds(30)));
+    }
+
+    #[test]
+    fn waits_are_capped_at_an_hour() {
+        let mut headers = header::HeaderMap::new();
+        headers.insert("retry-after", "99999999999".parse().unwrap());
+        assert_eq!(retry_after(&headers), Some(MAX_RETRY_AFTER));
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            "x-business-use-case-usage",
+            format!(
+                r#"{{"1":[{{"estimated_time_to_regain_access":{}}}]}}"#,
+                i64::MAX
+            )
+            .parse()
+            .unwrap(),
+        );
+        assert_eq!(retry_after(&headers), Some(MAX_RETRY_AFTER));
+        assert_eq!(MAX_RETRY_AFTER, Duration::hours(1));
+    }
+
+    #[test]
+    fn debug_masks_tokens_secrets_and_bodies() {
+        let app = GraphApp {
+            secret: "app-SECRET".into(),
+            version: "v19.0".into(),
+        };
+        let printed = [
+            format!("{:?}", app.auth("EAAB-token-SECRET")),
+            format!("{:?}", Auth::Bearer("IGAA-token-SECRET")),
+            format!("{:?}", Auth::None),
+            format!("{app:?}"),
+            format!(
+                "{:?}",
+                Body::Form(vec![
+                    ("client_secret".into(), "client-SECRET".into()),
+                    ("code".into(), "code-SECRET".into()),
+                ])
+            ),
+            format!(
+                "{:?}",
+                Body::Json(serde_json::json!({ "text": "message-SECRET" }))
+            ),
+        ];
+        for text in &printed {
+            assert!(!text.contains("SECRET"), "{text}");
+        }
+        assert!(printed[3].contains("v19.0"), "{}", printed[3]);
+        assert!(printed[4].contains("client_secret"), "{}", printed[4]);
     }
 }

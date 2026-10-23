@@ -6,7 +6,7 @@
 //!
 //! | Kind | Credential | Call | `account_id` |
 //! |---|---|---|---|
-//! | `facebook_page`, `messenger` (or none) | Page or pasted token | `GET /me?fields=id,name` | the page (the token's own identity) |
+//! | `facebook_page`, `messenger` | Page or pasted token | `GET /me?fields=id,name` | the page (the token's own identity) |
 //! | `instagram`, `instagram_dm` | Page or pasted token | `GET /me?fields=id,instagram_business_account{id,username}` | the Instagram account linked to the token's own page |
 //! | any | Instagram Login token | `GET graph.instagram.com/me?fields=user_id,username` | the token's own account (`user_id`) |
 //! | `whatsapp_cloud` | WhatsApp Cloud | `GET /{phone_number_id}?fields=id,verified_name,quality_rating,display_phone_number` | the number, as Graph names it |
@@ -22,6 +22,9 @@
 //!
 //! An ad account without `public["external_id"]` is the token's only active ad account, when it
 //! has exactly one; otherwise the probe fails `Permanent` ("name the ad account").
+//!
+//! The kind is never guessed: without a Meta kind in `public["kind_key"]`, the probe and the
+//! connection step fail `Permanent` ("kind_key missing") and call nothing.
 
 use std::time::Instant;
 
@@ -56,8 +59,8 @@ async fn facts(
     cred: &Credential,
     public: &Value,
 ) -> Result<Value, ConnectorError> {
+    let kind = kind_of(public)?;
     let cred = MetaCred::of(cred, "be probed")?;
-    let kind = kind_of(public);
     if let MetaCred::Instagram { token } = cred {
         let me = connector
             .instagram_get(token, &["me"], &[("fields", "user_id,username")])
@@ -96,7 +99,7 @@ async fn facts(
                 "display_phone_number": number["display_phone_number"],
             }))
         }
-        (_, Some("instagram" | "instagram_dm")) => {
+        (_, "instagram" | "instagram_dm") => {
             let me = connector
                 .graph_get(
                     &app,
@@ -115,7 +118,7 @@ async fn facts(
                 "page_id": text(&me["id"]),
             }))
         }
-        (MetaCred::User { token }, Some("meta_ads")) => {
+        (MetaCred::User { token }, "meta_ads") => {
             ad_account_facts(connector, &app, token, account_of(public)).await
         }
         (MetaCred::Page { token, .. } | MetaCred::User { token }, kind) => {
@@ -126,7 +129,7 @@ async fn facts(
             let mut facts = Map::new();
             facts.insert("account_id".into(), json!(id));
             facts.insert("name".into(), me["name"].clone());
-            let page_kind = matches!(kind, None | Some("facebook_page" | "messenger"));
+            let page_kind = matches!(kind, "facebook_page" | "messenger");
             if page_kind && let Some(subscribed) = subscribed(connector, &app, token).await {
                 facts.insert("subscribed".into(), json!(subscribed));
             }
@@ -214,23 +217,24 @@ async fn ad_account_facts(
 ///   (`POST /{waba}/subscribed_apps`) and registers the number for the Cloud API
 ///   (`POST /{phone_number_id}/register`), each best effort, and reports
 ///   `{"subscribed": bool, "registered": bool}`;
-/// - any other kind: nothing (`Null`).
+/// - any other Meta kind: nothing (`Null`);
+/// - no Meta kind in `public["kind_key"]`: `Permanent` ("kind_key missing"), nothing called.
 pub(crate) async fn on_connected(
     connector: &MetaConnector,
     cred: &Credential,
     public: &Value,
 ) -> Result<Value, ConnectorError> {
+    let kind = kind_of(public)?;
     let cred = MetaCred::of(cred, "be connected")?;
-    match (kind_of(public), cred) {
-        (
-            Some("facebook_page" | "messenger" | "instagram_dm"),
-            MetaCred::Page { page_id, token },
-        ) => subscribe_page(connector, node(page_id)?, token).await,
-        (Some("facebook_page" | "messenger" | "instagram_dm"), MetaCred::User { token }) => {
+    match (kind, cred) {
+        ("facebook_page" | "messenger" | "instagram_dm", MetaCred::Page { page_id, token }) => {
+            subscribe_page(connector, node(page_id)?, token).await
+        }
+        ("facebook_page" | "messenger" | "instagram_dm", MetaCred::User { token }) => {
             subscribe_page(connector, "me", token).await
         }
         (
-            Some("whatsapp_cloud"),
+            "whatsapp_cloud",
             MetaCred::WhatsApp {
                 phone_number_id,
                 token,

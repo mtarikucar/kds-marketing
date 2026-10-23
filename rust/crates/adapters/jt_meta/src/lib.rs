@@ -198,3 +198,12 @@ impl MetaConnector {
         &self.bases
     }
 }
+
+/// Stands in for a secret in `Debug` output.
+pub(crate) struct Masked;
+
+impl fmt::Debug for Masked {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("***")
+    }
+}

@@ -96,8 +96,8 @@ use zeroize::Zeroizing;
 
 use super::auth::{self, Principal};
 use super::capabilities::{
-    CapabilityOut, append, capability_error, checked_external_id, find, locked, not_retired,
-    version_in_force,
+    CapabilityOut, append, capability_error, checked_external_id, checked_external_id_of, find,
+    locked, not_retired, version_in_force,
 };
 use super::{Deps, acting_user, hash_token, invalid};
 use crate::ctx::Ctx;
@@ -631,13 +631,14 @@ pub async fn confirm_assets(
 /// holds one. An existing capability without an external id given one is rebound
 /// (`rebind_account`: back to `declared`, its verification and evidence dropped) before the
 /// new binding is probed; an account another live capability of the kind holds is `CONFLICT`
-/// naming `kind_key` and `external_id`.
+/// naming `kind_key` and `external_id`, before the provider is asked anything. A `meta_ads`
+/// external id loses a leading `act_` (`jt_capability::canonical_external_id`).
 ///
-/// The adapter's connection step runs with the credential (see the module docs), then the
-/// credential is probed with the adapter ([`probe`]'s rules, account binding included: the
-/// probe must reach the given or held external id; without one, the probe's account becomes
-/// it), sealed (which clears `reconnect_required`), and written in one transaction with the
-/// capability and its probe. Writes
+/// The credential is sealed, the adapter's connection step runs with it (see the module docs),
+/// then it is probed with the adapter ([`probe`]'s rules, account binding included: the probe
+/// must reach the given or held external id; without one, the probe's account becomes it), and
+/// written (which clears `reconnect_required`) in one transaction with the capability and its
+/// probe. Writes
 /// `connector.credentials_set` (payload `kind_key` and `by_agent`; never a value), and
 /// `connector.probe` when the status changed. Once committed, the adapter's hosts are allowed for
 /// the workspace.
@@ -1226,6 +1227,9 @@ async fn credentials_for_new(
 ) -> Result<CapabilityOut, AppError> {
     let kind = connector_kind(kind_key)?;
     let provider = manual_provider(kind)?;
+    let external_id = external_id
+        .map(|e| checked_external_id_of(kind.key, &e))
+        .transpose()?;
     let credential = built_credential(kind.key, provider, input, external_id.as_deref())?;
     let connector = adapter(deps, provider)?;
     let hosts = adapter_hosts(deps, connector.as_ref())?;
@@ -1254,11 +1258,19 @@ async fn credentials_for_new(
     .map_err(capability_error)?;
     capability.declared_by_connection = ctx.agent_connection_id;
 
+    // An account another live capability of the kind holds is refused before the provider is
+    // asked anything (the insert catches a race with another connection).
+    if let Some(account) = &capability.external_id {
+        let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+        if account_held_elsewhere(repos.as_mut(), &capability, account).await? {
+            return Err(account_taken(&capability.kind_key, account));
+        }
+    }
+    let sealed = seal_credential(deps, ctx, &credential)?;
     // A new row has no one to wait for: the provider is asked before the transaction opens.
     let public = adapter_public(&capability);
     let step = connector.on_connected(&credential, &public).await;
     let result = connector.probe(&credential, &public).await;
-    let sealed = seal_credential(deps, ctx, &credential)?;
     drop(credential);
     merge_connection_step(&mut capability, step);
 
@@ -1302,6 +1314,9 @@ async fn credentials_for(
     }
     not_retired(&capability)?;
     let kind = connector_kind(&capability.kind_key)?;
+    let external_id = external_id
+        .map(|e| checked_external_id_of(kind.key, &e))
+        .transpose()?;
     let provider = manual_provider(kind)?;
     if capability.status == StoredStatus::Verified {
         return Err(AppError::conflict(
@@ -1345,10 +1360,10 @@ async fn credentials_for(
         external_id: bound.clone(),
         ..capability.clone()
     };
+    let sealed = seal_credential(deps, ctx, &credential)?;
     let public = adapter_public(&probing);
     let step = connector.on_connected(&credential, &public).await;
     let result = connector.probe(&credential, &public).await;
-    let sealed = seal_credential(deps, ctx, &credential)?;
     drop(credential);
 
     if rebinding {
@@ -1508,10 +1523,12 @@ fn built_credential(
             })
         }
         (Provider::Meta, "whatsapp_cloud", CredentialInput::MetaToken { access_token }) => {
+            // A pasted token's expiry is not known (a system user's token has none).
             Ok(Credential::WhatsAppCloud {
                 phone_number_id: account("WhatsApp phone number")?,
                 token: access_token,
                 waba_id: None,
+                expires_at: None,
             })
         }
         (Provider::Meta, _, CredentialInput::MetaToken { access_token }) => Ok(Credential::OAuth {

@@ -172,7 +172,8 @@ fn connector_adapters_reach_out_only_through_the_egress_client() {
 }
 
 /// A provider adapter neither lists nor names an HTTP client crate, in its manifest or in any of
-/// its sources (tests included): no `reqwest` type can be reached around the egress client.
+/// its sources (tests included), and its library sources open no socket of their own: no
+/// `reqwest` type, and no `tokio::net` or `std::net` socket, can reach around the egress client.
 #[test]
 fn connector_adapters_never_name_an_http_client() {
     for c in CONNECTOR_ADAPTERS {
@@ -193,6 +194,7 @@ fn connector_adapters_never_name_an_http_client() {
             }
         }
         assert!(files.len() > 1, "{c} has no sources to check");
+        let src = dir.join("src");
         for file in files {
             let text = std::fs::read_to_string(&file).expect("a readable file");
             for client in ["reqwest", "hyper", "ureq", "isahc", "surf"] {
@@ -201,6 +203,22 @@ fn connector_adapters_never_name_an_http_client() {
                     "{} names {client}: an adapter reaches out only through jt_outbound",
                     file.display()
                 );
+            }
+            // Nor a socket of its own (its tests may run a mock server on one).
+            if file.starts_with(&src) {
+                for socket in [
+                    "tokio::net",
+                    "std::net",
+                    "TcpStream",
+                    "UdpSocket",
+                    "TcpListener",
+                ] {
+                    assert!(
+                        !mentions_word(&text, socket),
+                        "{} names {socket}: an adapter reaches out only through jt_outbound",
+                        file.display()
+                    );
+                }
             }
         }
     }

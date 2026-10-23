@@ -2623,3 +2623,181 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
         again.connector_public
     );
 }
+
+#[tokio::test]
+async fn set_credentials_checks_the_account_before_the_connection_step() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let page = r.connect_page().await;
+    let asked = r.meta.calls().len();
+
+    // A new capability for an account another live capability holds: refused before the
+    // provider is asked anything (no connection step, no probe).
+    let e = err(connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            external_id: Some("page-1".into()),
+            ..creating(
+                "facebook_page",
+                "Kopya",
+                CredentialInput::MetaToken {
+                    access_token: "EAAB-page-2".into(),
+                },
+            )
+        },
+    )
+    .await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(
+        e.details,
+        json!({ "kind_key": "facebook_page", "external_id": "page-1" })
+    );
+    // An existing capability bound to it by hand: likewise.
+    let other = capabilities::declare(&r.w.deps, o, declaring("facebook_page", "Boş"))
+        .await
+        .unwrap()
+        .capability;
+    let e = err(connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            capability_id: Some(other.id),
+            kind_key: None,
+            name: None,
+            external_id: Some("page-1".into()),
+            credential: CredentialInput::MetaToken {
+                access_token: "EAAB-page-2".into(),
+            },
+        },
+    )
+    .await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(r.meta.calls().len(), asked, "the provider was not asked");
+    assert_eq!(r.capability(page.id).status, StoredStatus::Verified);
+}
+
+#[tokio::test]
+async fn meta_ads_external_ids_drop_the_act_prefix() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+
+    // Declared by hand with Graph's node id: held by its number, as its probe names it.
+    let ads = capabilities::declare(
+        &r.w.deps,
+        o,
+        DeclareInput {
+            external_id: Some(" act_1111 ".into()),
+            ..declaring("meta_ads", "Reklam")
+        },
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(ads.external_id.as_deref(), Some("1111"));
+
+    // Edited: the same.
+    let edited = capabilities::update(
+        &r.w.deps,
+        o,
+        ads.id,
+        UpdateCapability {
+            name: None,
+            description: None,
+            external_id: Some("act_2222".into()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        edited.current.capability.external_id.as_deref(),
+        Some("2222")
+    );
+    assert!(edited.verification_reset);
+    // The same account again, written either way, changes nothing.
+    let same = capabilities::update(
+        &r.w.deps,
+        o,
+        ads.id,
+        UpdateCapability {
+            name: None,
+            description: None,
+            external_id: Some("2222".into()),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!same.verification_reset);
+
+    // Credentials entered by hand for it, the account given with act_: the probe's number
+    // verifies it.
+    r.meta.push_probe(ok_probe("2222"));
+    let verified = connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            capability_id: Some(ads.id),
+            kind_key: None,
+            name: None,
+            external_id: Some("act_2222".into()),
+            credential: CredentialInput::MetaToken {
+                access_token: "EAAB-user-1".into(),
+            },
+        },
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(verified.status, StoredStatus::Verified);
+    assert_eq!(verified.external_id.as_deref(), Some("2222"));
+
+    // A new one likewise; the adapter is handed the bare number.
+    r.meta.push_probe(ok_probe("3333"));
+    let created = connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            external_id: Some("act_3333".into()),
+            ..creating(
+                "meta_ads",
+                "Reklam 2",
+                CredentialInput::MetaToken {
+                    access_token: "EAAB-user-2".into(),
+                },
+            )
+        },
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(created.external_id.as_deref(), Some("3333"));
+    assert_eq!(created.status, StoredStatus::Verified);
+    match r.meta.calls().last() {
+        Some(ConnectorCall::Probe { public, .. }) => assert_eq!(public["external_id"], "3333"),
+        other => panic!("{other:?}"),
+    }
+
+    // Nothing but the prefix is no account; another kind keeps its id as given.
+    let e = err(capabilities::declare(
+        &r.w.deps,
+        o,
+        DeclareInput {
+            external_id: Some("act_".into()),
+            ..declaring("meta_ads", "Boş")
+        },
+    )
+    .await);
+    assert_eq!(e.code, ErrorCode::Validation);
+    let page = capabilities::declare(
+        &r.w.deps,
+        o,
+        DeclareInput {
+            external_id: Some("act_5".into()),
+            ..declaring("facebook_page", "Sayfa")
+        },
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(page.external_id.as_deref(), Some("act_5"));
+}

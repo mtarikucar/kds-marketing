@@ -16,18 +16,24 @@
 //!   `appsecret_proof` (the account is `public["external_id"]`, else `me`). A link is appended to
 //!   the caption (Instagram does not link captions).
 //!
+//! The kind is `public["kind_key"]`, never guessed: without a Meta kind the post is refused
+//! (`Permanent`, "kind_key missing") before anything is sent, so a Page token of an Instagram
+//! capability can never post to the Page by default.
+//!
 //! Media are public URLs handed to Meta as they are (M3 supplies them); nothing is fetched here.
 //! A URL is a video when its path ends in `.mp4`, `.mov`, `.m4v`, `.webm` or `.avi`, an image
 //! otherwise.
+
+use std::fmt;
 
 use jt_app::ports::connectors::{PublishReceipt, PublishRequest};
 use jt_connector::{ConnectorError, Credential};
 use serde_json::{Value, json};
 use url::Url;
 
-use crate::MetaConnector;
 use crate::credential::{MetaCred, account_of, kind_of};
 use crate::graph::{GraphApp, join, missing, node, text};
+use crate::{Masked, MetaConnector};
 
 /// The most media one post carries.
 const MAX_MEDIA: usize = 10;
@@ -57,18 +63,19 @@ pub(crate) async fn publish(
     public: &Value,
     request: &PublishRequest,
 ) -> Result<PublishReceipt, ConnectorError> {
+    let kind = kind_of(public)?;
     if request.media_urls.len() > MAX_MEDIA {
         return Err(ConnectorError::permanent(format!(
             "a post carries at most {MAX_MEDIA} media"
         )));
     }
     let cred = MetaCred::of(cred, "publish")?;
-    match (kind_of(public), cred) {
-        (Some("instagram") | None, MetaCred::Instagram { token }) => {
+    match (kind, cred) {
+        ("instagram", MetaCred::Instagram { token }) => {
             let account = account_of(public).unwrap_or("me");
             instagram(connector, &Ig::Login { token }, node(account)?, request).await
         }
-        (Some("instagram"), MetaCred::Page { token, .. } | MetaCred::User { token }) => {
+        ("instagram", MetaCred::Page { token, .. } | MetaCred::User { token }) => {
             let app = connector.graph_app()?;
             let account = match account_of(public) {
                 Some(account) => account.to_owned(),
@@ -77,10 +84,10 @@ pub(crate) async fn publish(
             let ig = Ig::Graph { app: &app, token };
             instagram(connector, &ig, node(&account)?, request).await
         }
-        (Some("facebook_page") | None, MetaCred::Page { page_id, token }) => {
+        ("facebook_page", MetaCred::Page { page_id, token }) => {
             facebook(connector, node(page_id)?, token, request).await
         }
-        (Some("facebook_page"), MetaCred::User { token }) => {
+        ("facebook_page", MetaCred::User { token }) => {
             facebook(connector, "me", token, request).await
         }
         _ => Err(ConnectorError::permanent(
@@ -195,10 +202,23 @@ async fn facebook(
 // ---------------------------------------------------------------------------------------------
 
 /// Where Instagram calls go: the Graph API with a Page token (and the proof), or the Instagram
-/// Graph API with an Instagram Login token (no proof).
+/// Graph API with an Instagram Login token (no proof). `Debug` masks the token.
 enum Ig<'a> {
     Graph { app: &'a GraphApp, token: &'a str },
     Login { token: &'a str },
+}
+
+impl fmt::Debug for Ig<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Ig::Graph { app, .. } => f
+                .debug_struct("Graph")
+                .field("app", app)
+                .field("token", &Masked)
+                .finish(),
+            Ig::Login { .. } => f.debug_struct("Login").field("token", &Masked).finish(),
+        }
+    }
 }
 
 impl Ig<'_> {
@@ -339,4 +359,30 @@ async fn wait_finished(
     Err(ConnectorError::transient(format!(
         "the media container did not finish after {attempts} reads"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_masks_the_token() {
+        let app = GraphApp {
+            secret: "app-SECRET".into(),
+            version: "v19.0".into(),
+        };
+        for ig in [
+            Ig::Graph {
+                app: &app,
+                token: "EAAB-page-SECRET",
+            },
+            Ig::Login {
+                token: "IGAA-login-SECRET",
+            },
+        ] {
+            let printed = format!("{ig:?}");
+            assert!(!printed.contains("SECRET"), "{printed}");
+            assert!(printed.contains("***"), "{printed}");
+        }
+    }
 }

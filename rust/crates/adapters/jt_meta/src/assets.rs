@@ -59,17 +59,28 @@ async fn facebook_assets(
     let app = connector.graph_app()?;
     let mut assets = pages(connector, &app, token).await?;
     assets.extend(ad_accounts(connector, &app, cred, token).await?);
-    assets.extend(whatsapp_numbers(connector, &app, token).await?);
+    assets.extend(whatsapp_numbers(connector, &app, cred, token).await?);
     Ok(assets)
 }
 
-/// Whether a part of the listing may be left out: the user did not grant its permission (or the
-/// account has no such thing to list). Every other failure fails the listing.
-fn skippable(e: &ConnectorError) -> bool {
-    matches!(
+/// Whether the part `part` of the listing may be left out after `e`: the user did not grant its
+/// permission (or the account has no such thing to list). Every other failure fails the listing.
+/// A part left out is logged at `debug`, with the error's kind and its reason (redacted when the
+/// error was built), so nothing goes missing without a trace.
+fn skippable(e: &ConnectorError, part: &'static str) -> bool {
+    let skip = matches!(
         e,
         ConnectorError::Permission { .. } | ConnectorError::Permanent { .. }
-    )
+    );
+    if skip {
+        tracing::debug!(
+            part,
+            error_kind = e.kind(),
+            reason = e.reason().unwrap_or_default(),
+            "a part of the Meta asset listing was left out"
+        );
+    }
+    skip
 }
 
 /// Each Page (`/me/accounts`) as `facebook_page` and `messenger`, with its Page token; and its
@@ -118,7 +129,7 @@ async fn pages(
             .await;
         let linked = match linked {
             Ok(linked) => linked,
-            Err(e) if skippable(&e) => continue,
+            Err(e) if skippable(&e, "instagram_account") => continue,
             Err(e) => return Err(e),
         };
         let account = &linked["instagram_business_account"];
@@ -165,7 +176,7 @@ async fn ad_accounts(
         .await
     {
         Ok(rows) => rows,
-        Err(e) if skippable(&e) => return Ok(Vec::new()),
+        Err(e) if skippable(&e, "ad_accounts") => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
     Ok(rows
@@ -196,18 +207,24 @@ pub(crate) fn ad_account_number(row: &Value) -> Option<String> {
 
 /// Each WhatsApp number of each WhatsApp Business Account of each business the user manages
 /// (`/me/businesses` → `/{business}/owned_whatsapp_business_accounts` → `/{waba}/phone_numbers`)
-/// as `whatsapp_cloud`, with the user token and the account's id.
+/// as `whatsapp_cloud`, with the user token (and its expiry, from the user credential `user`, so
+/// it is renewed as the user's is) and the account's id.
 async fn whatsapp_numbers(
     connector: &MetaConnector,
     app: &GraphApp,
+    user: &Credential,
     token: &str,
 ) -> Result<Vec<Asset>, ConnectorError> {
+    let expires_at = match user {
+        Credential::OAuth { expires_at, .. } => *expires_at,
+        _ => None,
+    };
     let businesses = match connector
         .graph_pages(app, token, &["me", "businesses"], &[("fields", "id,name")])
         .await
     {
         Ok(rows) => rows,
-        Err(e) if skippable(&e) => return Ok(Vec::new()),
+        Err(e) if skippable(&e, "businesses") => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
     let mut assets = Vec::new();
@@ -225,7 +242,7 @@ async fn whatsapp_numbers(
             .await
         {
             Ok(rows) => rows,
-            Err(e) if skippable(&e) => continue,
+            Err(e) if skippable(&e, "whatsapp_business_accounts") => continue,
             Err(e) => return Err(e),
         };
         for waba in wabas {
@@ -245,7 +262,7 @@ async fn whatsapp_numbers(
                 .await
             {
                 Ok(rows) => rows,
-                Err(e) if skippable(&e) => continue,
+                Err(e) if skippable(&e, "phone_numbers") => continue,
                 Err(e) => return Err(e),
             };
             for number in numbers {
@@ -267,6 +284,7 @@ async fn whatsapp_numbers(
                         phone_number_id: phone_id,
                         token: token.to_owned(),
                         waba_id: Some(waba_id.clone()),
+                        expires_at,
                     },
                     public: json!({
                         "waba_id": waba_id,

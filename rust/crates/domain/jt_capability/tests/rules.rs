@@ -1481,3 +1481,18 @@ fn reserved_public_keys_are_the_ones_connectors_write() {
     .unwrap();
     assert_eq!(c.connector_public["health"]["ok"], true);
 }
+
+#[test]
+fn a_meta_ad_account_is_held_by_its_number() {
+    assert_eq!(canonical_external_id("meta_ads", "act_1234"), "1234");
+    assert_eq!(canonical_external_id("meta_ads", "1234"), "1234");
+    assert_eq!(canonical_external_id("meta_ads", "act_"), "");
+    // Only a leading prefix, only for that kind, nothing trimmed.
+    assert_eq!(canonical_external_id("meta_ads", "12act_34"), "12act_34");
+    assert_eq!(canonical_external_id("meta_ads", " act_1"), " act_1");
+    assert_eq!(
+        canonical_external_id("facebook_page", "act_1234"),
+        "act_1234"
+    );
+    assert_eq!(META_AD_ACCOUNT_PREFIX, "act_");
+}

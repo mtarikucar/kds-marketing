@@ -15,9 +15,10 @@ const MAX_WHATSAPP_TEXT: usize = 4096;
 /// The longest Messenger text, in characters.
 const MAX_MESSENGER_TEXT: usize = 2000;
 
-/// Sends `text` to `recipient` (see the module docs): by the credential's variant, a WhatsApp
-/// credential sending through its number, a Page token (or a pasted token) through Messenger,
-/// for `messenger`, `instagram_dm` and `facebook_page`.
+/// Sends `text` to `recipient` (see the module docs), by the capability's kind: `whatsapp_cloud`
+/// through its number (a WhatsApp credential), `messenger`, `instagram_dm` and `facebook_page`
+/// through Messenger (a Page token, or a pasted one). Without a Meta kind, `Permanent`
+/// ("kind_key missing") before anything is sent.
 pub(crate) async fn send_text(
     connector: &MetaConnector,
     cred: &Credential,
@@ -25,6 +26,7 @@ pub(crate) async fn send_text(
     recipient: &str,
     text_body: &str,
 ) -> Result<SendReceipt, ConnectorError> {
+    let kind = kind_of(public)?;
     if recipient.trim().is_empty() {
         return Err(ConnectorError::permanent("no recipient"));
     }
@@ -33,9 +35,9 @@ pub(crate) async fn send_text(
     }
     let cred = MetaCred::of(cred, "send messages")?;
     let app = connector.graph_app()?;
-    match (kind_of(public), cred) {
+    match (kind, cred) {
         (
-            Some("whatsapp_cloud") | None,
+            "whatsapp_cloud",
             MetaCred::WhatsApp {
                 phone_number_id,
                 token,
@@ -70,7 +72,7 @@ pub(crate) async fn send_text(
             Ok(SendReceipt { provider_id: id })
         }
         (
-            Some("messenger" | "instagram_dm" | "facebook_page") | None,
+            "messenger" | "instagram_dm" | "facebook_page",
             MetaCred::Page { token, .. } | MetaCred::User { token },
         ) => {
             if text_body.chars().count() > MAX_MESSENGER_TEXT {

@@ -126,6 +126,23 @@ pub struct CapabilityKind {
     pub key: &'static str,
 }
 
+/// The kind whose external id drops [`META_AD_ACCOUNT_PREFIX`].
+const META_ADS: &str = "meta_ads";
+
+/// The prefix Graph puts on an ad account's number in its node id (`act_1234`).
+pub const META_AD_ACCOUNT_PREFIX: &str = "act_";
+
+/// The external id of a capability of kind `kind_key` in the one form it is stored and compared
+/// in: a Meta ad account (`meta_ads`) is held by its number, which is how its probe names it, so
+/// a leading `act_` (Graph's node id, `act_1234`) is dropped; every other kind keeps `id` as
+/// given. Trims nothing and checks nothing: callers trim first and validate the result.
+pub fn canonical_external_id(kind_key: &str, id: &str) -> String {
+    match id.strip_prefix(META_AD_ACCOUNT_PREFIX) {
+        Some(number) if kind_key == META_ADS => number.to_owned(),
+        _ => id.to_owned(),
+    }
+}
+
 /// The key of the third-party kind that stands for any other tool; it needs a `key_detail`.
 const OTHER_THIRD_PARTY: &str = "other";
 
@@ -156,6 +173,8 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::Community, "reddit"),
     k(KindGroup::Community, "review_google"),
     k(KindGroup::Community, "review_facebook"),
+    // A Meta ad account is held by its number; `act_<number>` (Graph's node id) is accepted and
+    // stored without the prefix ([`canonical_external_id`]).
     k(KindGroup::Ads, "meta_ads"),
     k(KindGroup::Ads, "tiktok_ads"),
     k(KindGroup::Ads, "linkedin_ads"),

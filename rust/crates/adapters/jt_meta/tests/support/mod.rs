@@ -126,6 +126,8 @@ impl Recorded {
 struct Script {
     routes: HashMap<(String, String), VecDeque<Reply>>,
     recorded: Vec<Recorded>,
+    /// Requests that broke the proof invariant (see [`Mock::violations`]).
+    violations: Vec<String>,
 }
 
 /// The mock server.
@@ -197,6 +199,42 @@ impl Mock {
     pub fn clear(&self) {
         self.script.lock().unwrap().recorded.clear();
     }
+
+    /// The requests so far that broke the invariant every test holds: a request to the Graph
+    /// API (`/fb/`) carrying a bearer token carries `appsecret_proof` = HMAC of that very token
+    /// under the app secret, and no `access_token` in its query; a request to the Instagram
+    /// Graph API (`/ig/`) carries no proof. [`Rig`] asserts there are none when it is dropped.
+    pub fn violations(&self) -> Vec<String> {
+        self.script.lock().unwrap().violations.clone()
+    }
+}
+
+/// Why `r` breaks the proof invariant, if it does (see [`Mock::violations`]).
+fn violation(r: &Recorded) -> Option<String> {
+    let proofs: Vec<&str> = r
+        .query
+        .iter()
+        .filter(|(k, _)| k == "appsecret_proof")
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if r.path.starts_with("/fb/") {
+        let token = r.bearer()?;
+        if proofs != [proof(token).as_str()] {
+            return Some(format!(
+                "{}: proof {proofs:?} does not sign its token",
+                r.line()
+            ));
+        }
+        if r.query.iter().any(|(k, _)| k == "access_token") {
+            return Some(format!("{}: access_token in the query", r.line()));
+        }
+    } else if r.path.starts_with("/ig/") && !proofs.is_empty() {
+        return Some(format!(
+            "{}: appsecret_proof on graph.instagram.com",
+            r.line()
+        ));
+    }
+    None
 }
 
 async fn handle(
@@ -226,6 +264,9 @@ async fn handle(
     };
     let reply = {
         let mut script = script.lock().unwrap();
+        if let Some(broken) = violation(&recorded) {
+            script.violations.push(broken);
+        }
         script.recorded.push(recorded.clone());
         let key = (recorded.method.clone(), recorded.path.clone());
         match script.routes.get_mut(&key) {
@@ -333,10 +374,20 @@ impl PlatformAppConfig for TestApps {
     }
 }
 
-/// The mock and an adapter sending to it.
+/// The mock and an adapter sending to it. Dropping it asserts that no request broke the proof
+/// invariant ([`Mock::violations`]), so every test checks it.
 pub struct Rig {
     pub mock: Mock,
     pub meta: MetaConnector,
+}
+
+impl Drop for Rig {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            let broken = self.mock.violations();
+            assert!(broken.is_empty(), "proof invariant broken: {broken:#?}");
+        }
+    }
 }
 
 /// The bases of an adapter sending to `mock`.

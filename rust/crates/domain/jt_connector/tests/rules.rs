@@ -604,9 +604,10 @@ fn every_credential() -> Vec<(Credential, Vec<&'static str>, Vec<&'static str>)>
                 phone_number_id: "109876543210".to_owned(),
                 token: "wa-token-SECRET".to_owned(),
                 waba_id: Some("2233445566".to_owned()),
+                expires_at: Some(datetime!(2026-12-22 10:00:00 UTC)),
             },
             vec!["wa-token-SECRET"],
-            vec!["109876543210", "2233445566"],
+            vec!["109876543210", "2233445566", "2026-12-22T10:00:00Z"],
         ),
         (
             Credential::NetgsmSms {
@@ -719,6 +720,15 @@ fn credential_public_facts_never_contain_secrets() {
         })
     );
     assert_eq!(
+        creds[2].0.redact_for_public(),
+        json!({
+            "kind": "whatsapp_cloud",
+            "phone_number_id": "109876543210",
+            "waba_id": "2233445566",
+            "expires_at": "2026-12-22T10:00:00Z",
+        })
+    );
+    assert_eq!(
         creds[4].0.redact_for_public(),
         json!({
             "kind": "netgsm_pbx",
@@ -759,7 +769,25 @@ fn credential_expiry_and_tolerant_sealed_read() {
     );
     assert!(!oauth(Some(NOW + within + Duration::seconds(1))).expires_soon(NOW, within));
     assert!(!oauth(None).expires_soon(NOW, within), "no known expiry");
-    for (cred, _, _) in every_credential().into_iter().skip(1) {
+    // A WhatsApp Cloud token from a Facebook Login user expires like the user's token; a system
+    // user's token (no expiry) never does.
+    let whatsapp = |expires_at| Credential::WhatsAppCloud {
+        phone_number_id: "1".to_owned(),
+        token: "t".to_owned(),
+        waba_id: None,
+        expires_at,
+    };
+    assert!(whatsapp(Some(NOW + Duration::days(3))).expires_soon(NOW, within));
+    assert!(!whatsapp(Some(NOW + Duration::days(30))).expires_soon(NOW, within));
+    assert!(!whatsapp(None).expires_soon(NOW, Duration::days(10_000)));
+    assert_eq!(
+        whatsapp(None).redact_for_public(),
+        json!({ "kind": "whatsapp_cloud", "phone_number_id": "1" })
+    );
+    for (cred, _, _) in every_credential()
+        .into_iter()
+        .filter(|(c, _, _)| !matches!(c.kind(), "oauth" | "whatsapp_cloud"))
+    {
         assert!(!cred.expires_soon(NOW, Duration::days(10_000)), "{cred:?}");
     }
 
@@ -776,6 +804,7 @@ fn credential_expiry_and_tolerant_sealed_read() {
             phone_number_id: "1".to_owned(),
             token: "t".to_owned(),
             waba_id: None,
+            expires_at: None,
         }
     );
     assert_eq!(

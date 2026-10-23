@@ -153,7 +153,17 @@ fn messenger_messages_echoes_postbacks_and_deliveries() {
         first.occurred_at,
         Some(OffsetDateTime::from_unix_timestamp_nanos(1_790_000_020_123_000_000).unwrap())
     );
-    assert_eq!(events[4].event.payload["mid"], "m_TEST-ECHO-1");
+    // A delivery is one small event per message, not a copy of the whole item per mid.
+    assert_eq!(
+        events[4].event.payload,
+        json!({
+            "mid": "m_TEST-ECHO-1",
+            "watermark": 1_790_000_022_900_i64,
+            "sender": { "id": "2000000000000001" },
+            "recipient": { "id": "1234567890" },
+        })
+    );
+    assert_eq!(events[5].event.payload["mid"], "m_TEST-ECHO-0");
 }
 
 #[test]

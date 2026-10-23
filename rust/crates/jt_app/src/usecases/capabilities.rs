@@ -47,8 +47,9 @@ use async_trait::async_trait;
 use jt_capability::{
     BudgetItemId, Capability, CapabilityError, CapabilityGroupId, CapabilityId, CapabilityKind,
     DEFAULT_VERIFY_MAX_AGE_DAYS, EffectiveStatus, Evidence, Gap, Hours, KindGroup, NewCapability,
-    Policy, Reach, StoredStatus, can_link_budget, check_reserved_public_keys, effective_status,
-    validate_description, validate_evidence, validate_external_id, validate_name, validate_policy,
+    Policy, Reach, StoredStatus, can_link_budget, canonical_external_id,
+    check_reserved_public_keys, effective_status, validate_description, validate_evidence,
+    validate_external_id, validate_name, validate_policy,
 };
 use jt_ledger::Actor;
 use jt_strategy::StrategyVersionId;
@@ -240,7 +241,9 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<CapabilityO
 /// Declares a capability and returns it. Needs `capabilities.manage`. The name, the description
 /// and the external id are trimmed.
 ///
-/// The capability is `declared`, reached as its kind is (`CapabilityKind::default_reach`), with
+/// The external id is trimmed, and a `meta_ads` one loses a leading `act_` (it is held by the ad
+/// account's number: `jt_capability::canonical_external_id`). The capability is `declared`,
+/// reached as its kind is (`CapabilityKind::default_reach`), with
 /// the policy given (or the default), the strategy version in force, if any, and, when an agent
 /// declares it, the agent's connection (`declared_by_connection`). Refused with
 /// `VALIDATION`: an unknown kind (naming `kind_key`), a missing, malformed or unexpected
@@ -272,8 +275,9 @@ pub async fn declare(
         connector_public,
         policy,
     } = input;
-    // What a person or an agent types is trimmed here (the name by `Capability::new`); a
-    // provider's id is never trimmed, since its probe names it verbatim.
+    // What a person or an agent types is trimmed here (the name by `Capability::new`), and a
+    // Meta ad account loses its `act_` prefix (`canonical_external_id`).
+    let external_id = external_id.map(|e| canonical_external_id(&kind_key, e.trim()));
     let mut capability = Capability::new(
         CapabilityId(deps.ids.uuid()),
         ctx.workspace_id,
@@ -282,7 +286,7 @@ pub async fn declare(
             key_detail,
             name,
             description: description.trim().to_owned(),
-            external_id: external_id.map(|e| e.trim().to_owned()),
+            external_id,
             connector_public,
             policy: policy.unwrap_or_default(),
         },
@@ -343,8 +347,8 @@ pub async fn declare(
 /// Checked as at declaration, before anything is read, each field trimmed: an edit naming no
 /// field is `VALIDATION` (`details.fields` lists the editable ones); a bad `name`, an over-long
 /// `description` and a blank, over-long or control-character `external_id` are `VALIDATION`
-/// naming the field. Then an id that is not
-/// this workspace's is `NOT_FOUND`, a retired capability `CONFLICT` "capability is retired", and
+/// naming the field (a `meta_ads` external id loses a leading `act_`, as at declaration). Then an
+/// id that is not this workspace's is `NOT_FOUND`, a retired capability `CONFLICT` "capability is retired", and
 /// an external account another live capability of the kind holds `CONFLICT` naming `kind_key`
 /// and `external_id`. A field given as it already is changes nothing; when nothing changes,
 /// nothing is written and the capability is answered as it stands.
@@ -408,7 +412,10 @@ pub async fn update(
         fields.push("description");
         capability.description = description;
     }
-    let account = external_id.filter(|e| capability.external_id.as_deref() != Some(e.as_str()));
+    let account = external_id
+        .map(|e| checked_external_id_of(&capability.kind_key, &e))
+        .transpose()?
+        .filter(|e| capability.external_id.as_deref() != Some(e.as_str()));
     if let Some(account) = &account {
         fields.push("external_id");
         payload.insert("external_id".into(), json!(account));
@@ -945,6 +952,14 @@ pub(crate) fn checked_external_id(raw: &str) -> Result<String, AppError> {
     let id = raw.trim();
     validate_external_id(id).map_err(capability_error)?;
     Ok(id.to_owned())
+}
+
+/// [`checked_external_id`] for a capability of kind `kind_key`: trimmed, in the kind's canonical
+/// form (a Meta ad account without its `act_` prefix, [`canonical_external_id`]), then checked.
+pub(crate) fn checked_external_id_of(kind_key: &str, raw: &str) -> Result<String, AppError> {
+    let id = canonical_external_id(kind_key, raw.trim());
+    validate_external_id(&id).map_err(capability_error)?;
+    Ok(id)
 }
 
 /// `VALIDATION` with `message`, listing `gaps` in `details.gaps`.
