@@ -1225,6 +1225,7 @@ async fn narrowed_owner_key_cannot_see_or_call_strategy_mutations() {
 /// permission each needs.
 const CAPABILITY_MUTATIONS: &[(&str, &str)] = &[
     ("jeeta.capability.declare", "capabilities.manage"),
+    ("jeeta.capability.update", "capabilities.manage"),
     ("jeeta.capability.mark_unreachable", "capabilities.manage"),
     ("jeeta.capability.set_policy", "capabilities.manage"),
     ("jeeta.capability.retire", "capabilities.manage"),
@@ -1239,6 +1240,8 @@ const CAPABILITY_MUTATIONS: &[(&str, &str)] = &[
         "capabilities.manage",
     ),
     ("jeeta.budget.items_create", "budget.manage"),
+    ("jeeta.budget.items_update", "budget.manage"),
+    ("jeeta.budget.items_retire", "budget.manage"),
 ];
 
 #[tokio::test]
@@ -1260,8 +1263,8 @@ async fn narrowed_key_cannot_see_capability_mutations() {
         names
     };
 
-    // The full key sees every mutation; the one holding capabilities.manage all but creating a
-    // budget item; the reader none.
+    // The full key sees every mutation; the one holding capabilities.manage all but creating,
+    // editing and retiring a budget item; the reader none.
     let all = names(connect(&url, &full.plaintext, "acme-agent").await).await;
     let managing = names(connect(&url, &manager.plaintext, "acme-agent").await).await;
     let reading = names(connect(&url, &reader.plaintext, "acme-agent").await).await;
@@ -1294,6 +1297,7 @@ async fn narrowed_key_cannot_see_capability_mutations() {
     for (tool, permission) in CAPABILITY_MUTATIONS {
         let args = match *tool {
             "jeeta.capability.declare" => json!({ "kind_key": "phone", "name": "Telefon" }),
+            "jeeta.capability.update" => json!({ "capability_id": some_id, "name": "Telefon" }),
             "jeeta.capability.mark_unreachable" => {
                 json!({ "capability_id": some_id, "reason": "kapalı" })
             }
@@ -1315,6 +1319,10 @@ async fn narrowed_key_cannot_see_capability_mutations() {
                 "cap": 1000,
                 "period": "total",
             }),
+            "jeeta.budget.items_update" => json!({ "budget_item_id": some_id, "cap": 1 }),
+            "jeeta.budget.items_retire" => {
+                json!({ "budget_item_id": some_id, "confirm": true })
+            }
             other => panic!("no arguments for {other}"),
         };
         let refused = err(&call(&client, tool, args).await);

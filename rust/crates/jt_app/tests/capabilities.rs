@@ -13,13 +13,13 @@ use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::{ChannelCatalog, TenantHostRegistry, UnitOfWork};
 use jt_app::usecases::budget::{self, BudgetItemInput};
 use jt_app::usecases::capabilities::{
-    self, CapabilityQuery, DeclareInput, UowChannelCatalog, parse_policy_strict,
+    self, CapabilityQuery, DeclareInput, UowChannelCatalog, UpdateCapability, parse_policy_strict,
 };
 use jt_app::usecases::groups;
 use jt_app::usecases::strategy;
 use jt_capability::{
     BudgetItemId, BudgetKind, CapabilityGroupId, CapabilityId, EffectiveStatus, Evidence, Hours,
-    Period, Policy, Reach, StoredStatus, Unit,
+    MAX_DESCRIPTION_CHARS, Period, Policy, RESERVED_PUBLIC_KEYS, Reach, StoredStatus, Unit,
 };
 use jt_ledger::Actor;
 use jt_strategy::{ChannelChoice, Sections, StrategyVersion, StrategyVersionId, VersionStatus};
@@ -885,6 +885,374 @@ async fn retired_capability_cannot_be_grouped_or_linked() {
     let snapshot = w.uow.snapshot();
     assert!(snapshot.capability_group_members.is_empty());
     assert!(snapshot.capability_budget_links.is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Editing
+// ---------------------------------------------------------------------------------------------
+
+fn edit(
+    name: Option<&str>,
+    description: Option<&str>,
+    external_id: Option<&str>,
+) -> UpdateCapability {
+    UpdateCapability {
+        name: name.map(Into::into),
+        description: description.map(Into::into),
+        external_id: external_id.map(Into::into),
+    }
+}
+
+#[tokio::test]
+async fn update_changes_only_the_named_fields_and_ledgers_them() {
+    let w = world().await;
+    let declared = capabilities::declare(
+        &w.deps,
+        &w.owner_ctx,
+        DeclareInput {
+            description: "eski açıklama".into(),
+            external_id: Some("SN-1".into()),
+            policy: Some(Policy {
+                daily_ops_cap: Some(40),
+                ..Policy::default()
+            }),
+            ..declaring("phone", "Telefon")
+        },
+    )
+    .await
+    .unwrap();
+    let id = declared.capability.id;
+    capabilities::verify(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        evidence("adb devices: SN-1", &[]),
+    )
+    .await
+    .unwrap();
+    let before = capabilities::get(&w.deps, &w.owner_ctx, id).await.unwrap();
+    let version = w.approve_strategy().await;
+
+    // Only the name: trimmed, the rest as it was, the verification kept.
+    let later = at(&w.owner_ctx, days_later(1));
+    let out = capabilities::update(
+        &w.deps,
+        &later,
+        id,
+        edit(Some("  Saha telefonu  "), None, None),
+    )
+    .await
+    .unwrap();
+    assert!(!out.verification_reset);
+    let c = &out.current.capability;
+    assert_eq!(c.name, "Saha telefonu");
+    assert_eq!(c.updated_at, days_later(1));
+    assert_eq!(
+        json_without(c, &["name", "updated_at"]),
+        json_without(&before.capability, &["name", "updated_at"]),
+    );
+    assert_eq!(out.current.effective_status, EffectiveStatus::Verified);
+    let wire = serde_json::to_value(&out).unwrap();
+    assert_eq!(wire["verification_reset"], false);
+    assert_eq!(wire["capability"]["name"], "Saha telefonu");
+    assert_eq!(wire["effective_status"], "verified");
+    let entries = w.entries("capability.update");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].payload,
+        json!({ "fields": ["name"], "name": "Saha telefonu" })
+    );
+    assert_eq!(entries[0].strategy_version_id, Some(version.as_uuid()));
+    let subject = entries[0].subject.as_ref().unwrap();
+    assert_eq!(
+        (subject.kind.as_str(), subject.id.clone()),
+        ("capability", id.to_string())
+    );
+
+    // The description and the external id: the description's text is never ledgered, and a
+    // device's account changes without touching its verification.
+    let out = capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        edit(None, Some("yeni açıklama"), Some("SN-2")),
+    )
+    .await
+    .unwrap();
+    assert!(!out.verification_reset);
+    let c = &out.current.capability;
+    assert_eq!(
+        (c.description.as_str(), c.external_id.as_deref()),
+        ("yeni açıklama", Some("SN-2"))
+    );
+    assert_eq!(c.status, StoredStatus::Verified);
+    assert_eq!(c.last_verified_at, before.capability.last_verified_at);
+    assert_eq!(c.evidence, before.capability.evidence);
+    assert_eq!(c.policy.daily_ops_cap, Some(40));
+    let entries = w.entries("capability.update");
+    assert_eq!(
+        entries[1].payload,
+        json!({ "fields": ["description", "external_id"], "external_id": "SN-2" })
+    );
+    assert!(!wire_of(&entries[1]).contains("yeni açıklama"));
+
+    // Naming what it already is changes nothing and writes nothing.
+    let same = capabilities::update(
+        &w.deps,
+        &at(&w.owner_ctx, days_later(2)),
+        id,
+        edit(Some("Saha telefonu"), Some("yeni açıklama"), Some("SN-2")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(same.current.capability.updated_at, FIXED_NOW);
+    assert!(!same.verification_reset);
+    assert_eq!(w.entries("capability.update").len(), 2);
+
+    // An edit naming nothing, or a field the way a declaration refuses it, is VALIDATION.
+    let e = err(capabilities::update(&w.deps, &w.owner_ctx, id, edit(None, None, None)).await);
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(
+        e.details,
+        json!({ "fields": ["name", "description", "external_id"] })
+    );
+    let too_long = "d".repeat(MAX_DESCRIPTION_CHARS + 1);
+    for (input, field) in [
+        (edit(Some("   "), None, None), "name"),
+        (edit(Some("a\nb"), None, None), "name"),
+        (edit(None, Some(too_long.as_str()), None), "description"),
+        (edit(None, None, Some("  ")), "external_id"),
+    ] {
+        assert_invalid(
+            &err(capabilities::update(&w.deps, &w.owner_ctx, id, input).await),
+            field,
+        );
+    }
+    // From JSON an unknown field is refused: the kind, the reach, the public fields and the
+    // policy are not edited here.
+    for body in [
+        json!({ "name": "x", "kind_key": "printer" }),
+        json!({ "status": "verified" }),
+        json!({ "connector_public": { "hosts": [] } }),
+        json!({ "policy": {} }),
+    ] {
+        assert!(
+            serde_json::from_value::<UpdateCapability>(body.clone()).is_err(),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        serde_json::from_value::<UpdateCapability>(json!({ "name": "x" })).unwrap(),
+        edit(Some("x"), None, None)
+    );
+
+    // Only capabilities.manage edits; an id not this workspace's is NOT_FOUND.
+    let rep = w.member("rep").await;
+    let reader = w.agent(&["workspace.read"]).await;
+    for ctx in [&rep, &reader] {
+        assert_forbidden(
+            &err(capabilities::update(&w.deps, ctx, id, edit(Some("x"), None, None)).await),
+            "capabilities.manage",
+        );
+    }
+    let (_, beta) = w.other_workspace().await;
+    for (ctx, id) in [(&w.owner_ctx, CapabilityId::new_v7()), (&beta, id)] {
+        let e = err(capabilities::update(&w.deps, ctx, id, edit(Some("x"), None, None)).await);
+        assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    }
+    assert_eq!(w.entries("capability.update").len(), 2);
+}
+
+/// `c` as JSON without `fields`, for comparing what else an edit kept.
+fn json_without(c: &jt_capability::Capability, fields: &[&str]) -> Value {
+    let mut v = serde_json::to_value(c).unwrap();
+    for f in fields {
+        v.as_object_mut().unwrap().remove(*f);
+    }
+    v
+}
+
+fn wire_of(entry: &jt_ledger::LedgerEntry) -> String {
+    serde_json::to_string(entry).unwrap()
+}
+
+#[tokio::test]
+async fn update_refuses_a_retired_capability_and_a_taken_external_account() {
+    let w = world().await;
+    let phone = |name: &str, serial: &str| DeclareInput {
+        external_id: Some(serial.into()),
+        ..declaring("phone", name)
+    };
+    capabilities::declare(&w.deps, &w.owner_ctx, phone("Bir", "SN-1"))
+        .await
+        .unwrap();
+    let second = capabilities::declare(&w.deps, &w.owner_ctx, phone("İki", "SN-2"))
+        .await
+        .unwrap()
+        .capability
+        .id;
+    let gone = capabilities::declare(&w.deps, &w.owner_ctx, phone("Eski", "SN-3"))
+        .await
+        .unwrap()
+        .capability
+        .id;
+    retire(&w, gone).await;
+    // A connector capability holding an account, and another of its kind.
+    capabilities::declare(
+        &w.deps,
+        &w.owner_ctx,
+        mailbox("Destek", "destek@acme.example", &[]),
+    )
+    .await
+    .unwrap();
+    let sales = capabilities::declare(
+        &w.deps,
+        &w.owner_ctx,
+        mailbox("Satış", "satis@acme.example", &[]),
+    )
+    .await
+    .unwrap()
+    .capability
+    .id;
+
+    // An account another live capability of the kind holds is CONFLICT, naming it; nothing is
+    // written.
+    for (id, kind, account) in [
+        (second, "phone", "SN-1"),
+        (sales, "mailbox", "destek@acme.example"),
+    ] {
+        let e = err(capabilities::update(
+            &w.deps,
+            &w.owner_ctx,
+            id,
+            edit(Some("Yeni"), None, Some(account)),
+        )
+        .await);
+        assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+        assert_eq!(
+            e.details,
+            json!({ "kind_key": kind, "external_id": account })
+        );
+    }
+    let snapshot = w.uow.snapshot();
+    let stored = |id: CapabilityId| {
+        snapshot
+            .capabilities
+            .iter()
+            .find(|c| c.capability.id == id)
+            .unwrap()
+            .capability
+            .clone()
+    };
+    assert_eq!(stored(second).name, "İki");
+    assert_eq!(stored(second).external_id.as_deref(), Some("SN-2"));
+    assert_eq!(
+        stored(sales).external_id.as_deref(),
+        Some("satis@acme.example")
+    );
+    assert!(w.entries("capability.update").is_empty());
+
+    // A retired capability holds no account; another kind may hold the same one.
+    let out = capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        second,
+        edit(None, None, Some("SN-3")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.current.capability.external_id.as_deref(), Some("SN-3"));
+    let printer = w.declare("printer", "Yazıcı").await.capability.id;
+    capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        printer,
+        edit(None, None, Some("SN-1")),
+    )
+    .await
+    .unwrap();
+
+    // A retired capability is not edited.
+    let e = err(
+        capabilities::update(&w.deps, &w.owner_ctx, gone, edit(Some("Yeni"), None, None)).await,
+    );
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert_eq!(e.message, "capability is retired");
+    assert_eq!(stored(gone).name, "Eski");
+    assert_eq!(w.entries("capability.update").len(), 2);
+}
+
+#[tokio::test]
+async fn declare_and_update_refuse_reserved_public_keys() {
+    let w = world().await;
+    // Every key a connector writes is refused at declaration, for any kind, naming the key;
+    // nothing is written.
+    for key in RESERVED_PUBLIC_KEYS {
+        for kind in ["instagram", "mailbox", "phone"] {
+            let e = err(capabilities::declare(
+                &w.deps,
+                &w.owner_ctx,
+                DeclareInput {
+                    connector_public: json!({ "page_name": "Acme", *key: { "ok": true } }),
+                    ..declaring(kind, "Hesap")
+                },
+            )
+            .await);
+            assert_eq!(e.code, ErrorCode::Validation, "{key} {kind}");
+            assert_eq!(e.message, "reserved public key", "{key} {kind}");
+            assert_eq!(
+                gap_fields(&e),
+                [format!("connector_public.{key}")],
+                "{key} {kind}"
+            );
+        }
+    }
+    assert!(w.uow.snapshot().capabilities.is_empty());
+    assert!(w.entries("capability.declare").is_empty());
+    // A secret-looking key is still the secret rule's refusal, checked first.
+    let e = err(capabilities::declare(
+        &w.deps,
+        &w.owner_ctx,
+        DeclareInput {
+            connector_public: json!({ "health": true, "page_token": "x" }),
+            ..declaring("instagram", "Hesap")
+        },
+    )
+    .await);
+    assert_eq!(gap_fields(&e), ["connector_public.page_token"]);
+    // The hosts a connector reaches, and public settings of its own, are declared as before.
+    let declared = capabilities::declare(
+        &w.deps,
+        &w.owner_ctx,
+        DeclareInput {
+            connector_public: json!({ "hosts": ["imap.acme.example"], "page": { "health": 1 } }),
+            ..declaring("mailbox", "Destek")
+        },
+    )
+    .await
+    .unwrap();
+
+    // An edit carries no public fields at all: a body naming them is refused before any use
+    // case runs, on both gates.
+    for key in RESERVED_PUBLIC_KEYS {
+        let body = json!({ "name": "Yeni", "connector_public": { *key: true } });
+        assert!(
+            serde_json::from_value::<UpdateCapability>(body).is_err(),
+            "{key}"
+        );
+    }
+    let out = capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        declared.capability.id,
+        edit(Some("Destek kutusu"), None, None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out.current.capability.connector_public,
+        json!({ "hosts": ["imap.acme.example"], "page": { "health": 1 } })
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

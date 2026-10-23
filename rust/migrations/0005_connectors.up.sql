@@ -35,8 +35,13 @@
 -- never verified, or verified on an agent's word without credentials, is not in it and never
 -- receives events).
 --
+-- A budget item can be retired (`budget_items.retired_at`, null while it is live): it keeps its
+-- row and its spend, loses its links, and takes no more links or spend.
+--
 -- Every table is a tenant table with forced row-level security, like those of 0001 to 0003.
 -- Every statement is idempotent: running this file twice leaves the same schema.
+
+alter table budget_items add column if not exists retired_at timestamptz;
 
 create table if not exists inbound_events (
     id uuid primary key,

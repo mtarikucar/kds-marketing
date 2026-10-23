@@ -232,6 +232,8 @@ pub static CATALOG: &[UseCase] = &[
     twin("capability.list", Exempt, "jeeta.capability.list", ("GET", "/api/capabilities"), Read),
     twin("capability.get", Exempt, "jeeta.capability.get", ("GET", "/api/capabilities/{capability_id}"), Read),
     twin("capability.declare", Exempt, "jeeta.capability.declare", ("POST", "/api/capabilities"), Write),
+    // Body and arguments `{ name?, description?, external_id? }`: at least one.
+    twin("capability.update", Exempt, "jeeta.capability.update", ("PATCH", "/api/capabilities/{capability_id}"), Write),
     twin("capability.verify", Exempt, "jeeta.capability.verify", ("POST", "/api/capabilities/{capability_id}/verify"), Write),
     twin("capability.mark_unreachable", Exempt, "jeeta.capability.mark_unreachable", ("POST", "/api/capabilities/{capability_id}/unreachable"), Write),
     twin("capability.set_policy", Exempt, "jeeta.capability.set_policy", ("PUT", "/api/capabilities/{capability_id}/policy"), Write),
@@ -247,6 +249,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("capability.groups.remove_member", Exempt, "jeeta.capability.groups_remove_member", ("DELETE", "/api/capability-groups/{group_id}/members/{capability_id}"), Write),
     twin("budget.items.list", Exempt, "jeeta.budget.items_list", ("GET", "/api/budget/items"), Read),
     twin("budget.items.create", Exempt, "jeeta.budget.items_create", ("POST", "/api/budget/items"), Write),
+    // Body and arguments `{ name?, cap?, period? }`: at least one; the kind and unit never change.
+    twin("budget.items.update", Exempt, "jeeta.budget.items_update", ("PATCH", "/api/budget/items/{budget_item_id}"), Write),
+    // Body and arguments `{ confirm }`.
+    twin("budget.items.retire", Exempt, "jeeta.budget.items_retire", ("POST", "/api/budget/items/{budget_item_id}/retire"), Destructive),
     twin("budget.spend.record", Exempt, "jeeta.budget.spend_record", ("POST", "/api/budget/items/{budget_item_id}/spend"), Spend),
     twin("budget.spend.list", Exempt, "jeeta.budget.spend_list", ("GET", "/api/budget/items/{budget_item_id}/spend"), Read),
     // Connecting accounts: exempt from the strategy gate (the consultation needs the accounts),

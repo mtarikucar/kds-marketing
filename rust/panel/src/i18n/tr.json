@@ -673,6 +673,7 @@
     "noGroups": "Grupta değil",
     "keyDetail": "Araç: {{detail}}",
     "actions": {
+      "edit": "Düzenle",
       "verify": "Doğrula",
       "policy": "Politika",
       "unreachable": "Ulaşılamıyor işaretle",
@@ -693,6 +694,14 @@
       "settingValue": "Değer",
       "submit": "Bildir",
       "declared": "Kabiliyet bildirildi."
+    },
+    "editDialog": {
+      "title": "{{name}}: düzenle",
+      "description": "Adı, açıklamayı ya da hesabı değiştirin. Tür, ayarlar ve politika olduğu gibi kalır.",
+      "externalIdHint": "Sağlayıcının hesap, sayfa ya da hat kimliği; boş bırakılamaz.",
+      "connectorWarning": "Hesabı değiştirmek doğrulamayı sıfırlar ve saklanan kimlik bilgilerini siler: ardından hesabı yeniden bağlayın.",
+      "saved": "Kabiliyet güncellendi.",
+      "savedReset": "Kabiliyet güncellendi; doğrulaması sıfırlandı ve kimlik bilgileri silindi. Hesabı yeniden bağlayın."
     },
     "verifyDialog": {
       "title": "{{name}} doğrula",
@@ -799,7 +808,12 @@
     },
     "minutesValue": "{{value}} dk",
     "overCap": "Sınır aşıldı",
+    "retiredOn": "Emekliye ayrıldı: {{date}}",
     "spend": "Harcamalar",
+    "actions": {
+      "edit": "Düzenle",
+      "retire": "Emekliye ayır"
+    },
     "empty": "Henüz bütçe kalemi yok.",
     "emptyBody": "Reklam bütçesi, SMS ya da ajan kotası gibi bir kalem oluşturun; ajan harcadıkça buraya yazar.",
     "dialog": {
@@ -815,10 +829,21 @@
       "submit": "Oluştur",
       "created": "Bütçe kalemi oluşturuldu."
     },
+    "editDialog": {
+      "title": "{{name}}: düzenle",
+      "description": "Adı, üst sınırı ya da dönemi değiştirin; tür ve birim değişmez. Harcanmış tutarın altında bir sınır da verilebilir: kalem o zaman sınırı aşmış görünür.",
+      "saved": "Bütçe kalemi güncellendi."
+    },
+    "retireDialog": {
+      "title": "Bütçe kalemini emekliye ayır",
+      "body": "{{name}} artık bağ ve harcama kabul etmeyecek: ona bağlı her kabiliyetin bağı kaldırılır. Harcama geçmişi kalır.",
+      "retired": "Bütçe kalemi emekliye ayrıldı."
+    },
     "spendSheet": {
       "title": "{{name}}: harcamalar",
       "description": "En yenisi önce; bir harcama kaydı silinmez.",
       "summary": "Bu dönem {{spent}} harcandı, kalan {{remaining}}.",
+      "retired": "Bu kalem emekliye ayrıldı: artık harcama kabul etmez.",
       "record": "Harcama kaydet",
       "amountHint": "{{unit}} cinsinden, sıfırdan büyük.",
       "referenceHint": "Fatura numarası, kampanya kimliği…",

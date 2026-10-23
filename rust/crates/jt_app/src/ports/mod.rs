@@ -922,9 +922,22 @@ pub trait BudgetRepo: Send + Sync {
     /// Stores a budget item. An `item.workspace_id` other than the bundle's is `INTERNAL`; a
     /// taken id is `CONFLICT`.
     async fn insert_item(&mut self, item: BudgetItem) -> Result<(), AppError>;
-    /// Every budget item, oldest (`created_at`, then id) first.
+    /// Every budget item, retired ones included, oldest (`created_at`, then id) first.
     async fn list_items(&mut self) -> Result<Vec<BudgetItem>, AppError>;
     async fn find_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError>;
+    /// Budget item `id`, locked until the bundle ends (`select … for update` in `jt_pg`), or
+    /// `None` when it is not the workspace's. Editing or retiring an item, linking a capability
+    /// to it and recording a spend from it read it through here first, so a retirement and a
+    /// link or a spend take turns: neither lands on an item retired meanwhile. Whoever also locks
+    /// a capability locks it first (`CapabilityRepo::lock`), then the item.
+    async fn lock_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError>;
+    /// Writes the item's name, cap, period and retirement time (`retired_at`); its kind, unit,
+    /// strategy version and creation time never change. An item that is not the workspace's is
+    /// `NOT_FOUND`; an `item.workspace_id` other than the bundle's is `INTERNAL`.
+    async fn update_item(&mut self, item: BudgetItem) -> Result<(), AppError>;
+    /// Removes every capability's link to the item and answers how many there were (none for an
+    /// item that is not the workspace's).
+    async fn unlink_item(&mut self, item: BudgetItemId) -> Result<u64, AppError>;
     /// Links the capability to the budget item it spends from; linking again changes nothing. A
     /// capability or an item that is not the bundle's workspace's is `NOT_FOUND` (Review Focus
     /// 3). Whether the kinds fit (`can_link_budget`) is the caller's rule.

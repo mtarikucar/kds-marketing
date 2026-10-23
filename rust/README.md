@@ -82,12 +82,13 @@ döndürür. Beş göç vardır:
 | `0002_strategy` | strateji sürümleri, hipotezler, istişare kaydı |
 | `0003_capabilities` | kabiliyetler (bildiren ajan bağlantısı `declared_by_connection` dahil), gruplar (adı alan içinde büyük/küçük harf ayırmadan tek: `capability_groups_name_ci`, `lower(name)` üzerinde), bütçe kalemleri ve bağları, harcama kaydı, çalışma alanı politikaları |
 | `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan kısmi dizini (`ledger_entries_agent_connection_idx`, yalnız `action = 'work.checkin'` satırları) açar |
-| `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir) |
+| `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
 
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
 değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
 harf ayırmayan benzersiz dizini eklendi, `0004`'ün yoklama dizini yalnız `work.checkin` satırlarını
-tutar oldu). Bu göçlerin eski
+tutar oldu); `0005` de M1b sırasında yayımlanmadan önce değişiyor (en son: `budget_items.retired_at`
+sütunu eklendi). Bu göçlerin eski
 bir hâlini uygulamış bir veritabanında `jeeta serve` sağlama toplamı (checksum) uyuşmazlığıyla durur
 (`migration 3 was previously applied but has been modified`). Veritabanını yönetici olarak silip
 yeniden açın, `jeeta serve` göçleri baştan uygular:
@@ -223,11 +224,12 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 47 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 50 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
-risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan iki araç,
-`jeeta.strategy.archive` (strateji kapısını kapatır) ve `jeeta.capability.retire` (kabiliyeti kesin olarak
-emekliye ayırır), ayrıca `confirm: true` ister, yoksa `VALIDATION`. Öteki yıkıcı araçlar istemez, çünkü
+risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
+`jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
+emekliye ayırır) ve `jeeta.budget.items_retire` (bütçe kalemini kesin olarak emekliye ayırır), ayrıca
+`confirm: true` ister, yoksa `VALIDATION`. Öteki yıkıcı araçlar istemez, çünkü
 etkileri onarılabilir: çıkarılan üye yeniden davet edilir, silinen rol ya da grup yeniden açılır, iptal
 edilen anahtarın yerine yenisi çıkarılır; bir grup ancak strateji ona başvurmuyorsa silinir (başvuruyorsa
 `CONFLICT`), bu yüzden silinen grup yeniden kurulabilir. Yetki onaydan değil rolden gelir: anahtar, çıkaran insanın
@@ -267,6 +269,7 @@ ajanın yoklaması (`jeeta.work.checkin`) hariç. Ajanın giriş noktası `jeeta
 | kabiliyet | `jeeta.capability.list` | Kabiliyetler, etkin durumlarıyla; grup, tür, durum ve kabiliyet grubu süzgeçleri | READ |
 | | `jeeta.capability.get` | Tek bir kabiliyet | READ |
 | | `jeeta.capability.declare` | Bir kabiliyet bildirir (`declared` başlar) | WRITE |
+| | `jeeta.capability.update` | Kabiliyetin adını, açıklamasını ya da dış hesap kimliğini değiştirir; bağlayıcı kabiliyetin hesabı değişirse doğrulaması sıfırlanır ve mühürlü kimlik bilgileri silinir (`verification_reset: true`) | WRITE |
 | | `jeeta.capability.verify` | Ajan ya da cihaz kabiliyetini kanıtıyla doğrular (ajan, kendi bağlantısının bildirdiğini `workspace.read` ile) | WRITE |
 | | `jeeta.capability.mark_unreachable` | Kabiliyeti nedeniyle ulaşılamaz işaretler | WRITE |
 | | `jeeta.capability.set_policy` | Çalışma saatleri, günlük işlem ve harcama tavanı, insan onayı, doğrulama yaşı | WRITE |
@@ -281,6 +284,8 @@ ajanın yoklaması (`jeeta.work.checkin`) hariç. Ajanın giriş noktası `jeeta
 | | `jeeta.capability.groups_remove_member` | Gruptan bir kabiliyeti çıkarır | WRITE |
 | bütçe | `jeeta.budget.items_list` | Bütçe kalemleri, dönemdeki harcama ve kalanla | READ |
 | | `jeeta.budget.items_create` | Bütçe kalemi açar (tür, birim, tavan, dönem) | WRITE |
+| | `jeeta.budget.items_update` | Kalemin adını, tavanını ya da dönemini değiştirir; tür ve birim değişmez | WRITE |
+| | `jeeta.budget.items_retire` | Kalemi kesin olarak emekliye ayırır (`confirm: true`): bağları kalkar, bağ ve harcama almaz, harcama geçmişi kalır | DESTRUCTIVE |
 | | `jeeta.budget.spend_record` | Bir kaleme harcama yazar; tavan aşılsa da kaydedilir ve işaretlenir | SPEND |
 | | `jeeta.budget.spend_list` | Bir kalemin harcamaları, sayfa sayfa | READ |
 | iş | `jeeta.work.pending` | Bekleyen işler, stratejinin durumu, ajanın gecikmesi | READ |
@@ -447,6 +452,7 @@ açmaz.
 | Liste (`group`, `kind`, `status`, `group_id` süzgeçleri) | `GET /api/capabilities` | `jeeta.capability.list` | `workspace.read` |
 | Okuma | `GET /api/capabilities/{capability_id}` | `jeeta.capability.get` | `workspace.read` |
 | Bildirme | `POST /api/capabilities` | `jeeta.capability.declare` | `capabilities.manage` |
+| Düzenleme (`{"name"?, "description"?, "external_id"?}`, en az biri; yanıt: kabiliyet ve `verification_reset`) | `PATCH /api/capabilities/{capability_id}` | `jeeta.capability.update` | `capabilities.manage` |
 | Doğrulama (gövde `{"evidence": {"text": …, "refs": […]}}`) | `POST /api/capabilities/{capability_id}/verify` | `jeeta.capability.verify` | ajan: kendi bağlantısının bildirdiğine `workspace.read`, başkasınınkine `capabilities.manage`; kişi: `capabilities.manage` |
 | Ulaşılamaz işaretleme (`{"reason": …}`) | `POST /api/capabilities/{capability_id}/unreachable` | `jeeta.capability.mark_unreachable` | `capabilities.manage` |
 | Politika (gövde politikanın kendisi) | `PUT /api/capabilities/{capability_id}/policy` | `jeeta.capability.set_policy` | `capabilities.manage` |
@@ -459,6 +465,8 @@ açmaz.
 | Grup üyeliği (yanıt: grubun kendisi) | `POST /api/capability-groups/{group_id}/members`, `DELETE …/members/{capability_id}` | `jeeta.capability.groups_add_member`, `groups_remove_member` | `capabilities.manage` |
 | Bütçe kalemleri | `GET /api/budget/items` | `jeeta.budget.items_list` | `workspace.read` |
 | Bütçe kalemi açma | `POST /api/budget/items` | `jeeta.budget.items_create` | `budget.manage` |
+| Bütçe kalemi düzenleme (`{"name"?, "cap"?, "period"?}`, en az biri) | `PATCH /api/budget/items/{budget_item_id}` | `jeeta.budget.items_update` | `budget.manage` |
+| Bütçe kalemini emekliye ayırma (`{"confirm": true}`) | `POST /api/budget/items/{budget_item_id}/retire` | `jeeta.budget.items_retire` | `budget.manage` |
 | Harcama bildirme (`{"amount": …, "reference": …}`) | `POST /api/budget/items/{budget_item_id}/spend` | `jeeta.budget.spend_record` | `workspace.read` |
 | Harcamalar (`limit`, `before_at` + `before_id`) | `GET /api/budget/items/{budget_item_id}/spend` | `jeeta.budget.spend_list` | `workspace.read` |
 
@@ -476,9 +484,30 @@ hesabı reklam bütçesine ya da nakde, SMS hattı SMS bütçesine ya da nakde, 
 da çalışma saatine, yazıcılar sarf malzemeye ya da nakde, gerisi nakde). Harcama tavanı aşsa da kaydedilir
 ve `budget.over_cap` kaydıyla işaretlenir; bağlayıcıların harcamasında tavan M3'te sert sınır olur.
 
+**Düzenleme.** Bir kabiliyetin adı, açıklaması ve dış hesap kimliği (`external_id`) bildirimdeki
+kurallarla değiştirilir; verilmeyen alan olduğu gibi kalır, hiçbir alan vermeyen düzenleme `422 VALIDATION`
+(`details.fields`). Türü, ulaşılma yolu, bağlayıcı ayarları (`connector_public`) ve politikası bu yolla
+değişmez; gövdede başka bir alan `422`. Türünün başka bir canlı kabiliyetinin tuttuğu hesap `409 CONFLICT`
+(`details.kind_key`, `details.external_id`). Bağlayıcıyla ulaşılan bir kabiliyetin hesabı değişirse eski
+hesabı kanıtlayan hiçbir şey yenisini kanıtlamaz: kabiliyet yeniden `declared` okunur, doğrulama zamanı ve
+kanıtı silinir, mühürlü kimlik bilgileri düşer ve yanıt `verification_reset: true` taşır; hesap yeniden
+bağlanır, sonra yoklanır. Bir ajan ya da cihaz kabiliyetinin kimliği değişince doğrulaması kalır. Günlük
+kaydı `capability.update` değişen alanların adlarını (`fields`), değiştiyse yeni adı ve dış kimliği, hesap
+değişimi doğrulamayı sıfırladıysa `rebind: true` taşır; açıklamanın metnini asla. Bağlayıcıların yazdığı
+`connector_public` anahtarları (`access`, `account`, `asset`, `facts`, `health`, `provider`,
+`reconnect_required`) bildirimde reddedilir (`422 VALIDATION`, "reserved public key", `details.gaps`);
+`hosts` bildirilebilir, bağlayıcı kendi adreslerini ona ekler.
+
+Bir bütçe kaleminin adı, tavanı ve dönemi değiştirilir; türü ve birimi değişmez (gövdede `kind` ya da `unit`
+`422`). Dönemde harcanandan düşük bir tavan kabul edilir: harcama kayıtlı kalır, kalem tavanı aşmış okunur.
+Günlük kaydı `budget.items.update` değişen alanları ve önceki değerlerini (`previous`) taşır. Bir kalemi
+emekliye ayırmak (`confirm: true` ister) kesindir: bütün bağları aynı işlemde kalkar (`budget.items.retire`,
+`links_removed`), harcama geçmişi kalır, listede `retired_at` ile görünmeye devam eder; artık bir kabiliyete
+bağlanamaz, harcama almaz ve düzenlenemez (`409 CONFLICT`, "budget item is retired").
+
 Emekliye ayırma kesindir: kabiliyet gruplarından ve bütçe kalemlerinden aynı işlemde çıkar, kaydı kalır;
-emekliye ayrılmış bir kabiliyet artık doğrulanamaz, ulaşılamaz işaretlenemez, bir gruba eklenemez, bir
-kaleme bağlanamaz ve politikası değişmez (`409 CONFLICT`, "capability is retired"). Politikanın çalışma
+emekliye ayrılmış bir kabiliyet artık düzenlenemez, doğrulanamaz, ulaşılamaz işaretlenemez, bir gruba
+eklenemez, bir kaleme bağlanamaz ve politikası değişmez (`409 CONFLICT`, "capability is retired"). Politikanın çalışma
 saatleri yarı açık bir aralıktır: `from` 0–23, `to` 1–24 (`24` gün sonundaki gece yarısı; `18`–`24`
 akşam, `0`–`24` bütün gün), `from < to`; gece yarısını aşan bir pencere iki günün pencereleri olarak
 yazılır.
@@ -492,7 +521,7 @@ Sistem rollerinin izinleri:
 | `api_keys.manage` | ✓ | ✓ | — |
 | `ledger.read` | ✓ | ✓ | — |
 | `capabilities.manage` (kabiliyetleri ve grupları değiştirme) | ✓ | ✓ | — |
-| `budget.manage` (bütçe kalemi açma) | ✓ | ✓ | — |
+| `budget.manage` (bütçe kalemi açma, düzenleme, emekliye ayırma) | ✓ | ✓ | — |
 
 `capabilities.manage` ve `budget.manage` M1a ile geldi. Yeni bir alanın sahip ve yönetici rolleri onları
 açılışta alır; M1a'dan önce açılmış alanlarınkine `0004_role_permissions_backfill` göçü ekler (bkz.

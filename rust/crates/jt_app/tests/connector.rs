@@ -15,7 +15,7 @@ use jt_app::ports::connectors::{
 use jt_app::ports::{OAuthPendingRow, SecretBox, UnitOfWork};
 use jt_app::usecases::Deps;
 use jt_app::usecases::auth::{self, LoginInput, Principal};
-use jt_app::usecases::capabilities::{self, CapabilityOut, DeclareInput};
+use jt_app::usecases::capabilities::{self, CapabilityOut, DeclareInput, UpdateCapability};
 use jt_app::usecases::connector::{
     self, CompleteOAuth, ConfirmAssets, ConnectorHealth, CredentialInput, OAUTH_STATE_PURPOSE,
     PendingAssetsOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
@@ -2013,6 +2013,96 @@ async fn binding_a_new_account_resets_the_verification() {
         r.capability(line.id).last_verified_at,
         Some(FIXED_NOW + Duration::minutes(1))
     );
+}
+
+#[tokio::test]
+async fn update_external_account_resets_verification_and_drops_credentials() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let page = r.connect_page().await;
+    assert_eq!(page.status, StoredStatus::Verified);
+    assert!(r.stored(page.id).sealed.is_some());
+    let edit = |name: Option<&str>, external_id: Option<&str>| UpdateCapability {
+        name: name.map(Into::into),
+        description: None,
+        external_id: external_id.map(Into::into),
+    };
+
+    // A new name alone keeps the connection as it is.
+    let out = capabilities::update(&r.w.deps, o, page.id, edit(Some("Kahve Dükkanı"), None))
+        .await
+        .unwrap();
+    assert!(!out.verification_reset);
+    assert_eq!(out.current.capability.status, StoredStatus::Verified);
+    assert!(out.current.capability.has_sealed_config);
+    assert!(r.stored(page.id).sealed.is_some());
+
+    // Another account: whatever proved the old binding proves nothing about this one. The
+    // capability reads declared again, without verification or evidence, its credential is
+    // dropped, and the answer says so; the name changes in the same edit.
+    let later = at(o, FIXED_NOW + Duration::hours(1));
+    let out = capabilities::update(
+        &r.w.deps,
+        &later,
+        page.id,
+        edit(Some("Çay"), Some("page-2")),
+    )
+    .await
+    .unwrap();
+    assert!(out.verification_reset);
+    let c = &out.current.capability;
+    assert_eq!(c.external_id.as_deref(), Some("page-2"));
+    assert_eq!(c.name, "Çay");
+    assert_eq!(c.status, StoredStatus::Declared);
+    assert_eq!(out.current.effective_status, EffectiveStatus::Declared);
+    assert_eq!(c.last_verified_at, None);
+    assert_eq!(c.evidence, None);
+    assert!(!c.has_sealed_config);
+    assert_eq!(c.connector_public["reconnect_required"], false);
+    assert_eq!(c.updated_at, FIXED_NOW + Duration::hours(1));
+    assert_eq!(r.stored(page.id).sealed, None);
+    let wire = serde_json::to_string(&out).unwrap();
+    assert!(wire.contains("\"verification_reset\":true"), "{wire}");
+    assert_no_secret("the edit's answer", &wire);
+    let entries = r.w.entries("capability.update");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[1].payload,
+        json!({
+            "fields": ["name", "external_id"],
+            "name": "Çay",
+            "external_id": "page-2",
+            "rebind": true,
+        })
+    );
+    assert_no_secret("the ledger", &serde_json::to_string(&entries).unwrap());
+
+    // The old credential is gone, so nothing probes the new binding until the account is
+    // connected again: the provider is not asked.
+    let asked = r.meta.calls().len();
+    let e = err(connector::probe(&r.w.deps, &later, page.id).await);
+    assert_eq!(
+        (e.code, e.message.as_str()),
+        (ErrorCode::Conflict, "no credentials")
+    );
+    assert_eq!(r.meta.calls().len(), asked);
+    assert_eq!(r.capability(page.id).status, StoredStatus::Declared);
+
+    // The page connected again holds page-1: binding the first one back to it is CONFLICT,
+    // and nothing changes.
+    let again = r.connect_page().await;
+    assert_eq!(again.external_id.as_deref(), Some("page-1"));
+    let before = r.stored(page.id);
+    let e = err(capabilities::update(&r.w.deps, o, page.id, edit(None, Some("page-1"))).await);
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert_eq!(
+        e.details,
+        json!({ "kind_key": "facebook_page", "external_id": "page-1" })
+    );
+    assert_eq!(r.stored(page.id), before);
+    assert_eq!(r.capability(again.id).status, StoredStatus::Verified);
+    assert!(r.stored(again.id).sealed.is_some());
+    assert_eq!(r.w.entries("capability.update").len(), 2);
 }
 
 #[tokio::test]

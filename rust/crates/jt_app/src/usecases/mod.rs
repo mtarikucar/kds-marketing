@@ -140,6 +140,15 @@ pub(crate) fn invalid(field: &str, message: &str) -> AppError {
     AppError::validation(message, json!({ "field": field }))
 }
 
+/// `VALIDATION` for an edit that names none of the editable `fields`, listing them in
+/// `details.fields`.
+pub(crate) fn nothing_to_change(fields: &[&str]) -> AppError {
+    AppError::validation(
+        format!("an edit names at least one of {}", fields.join(", ")),
+        json!({ "fields": fields }),
+    )
+}
+
 /// A keyset cursor `(at, id)` from the two halves a caller sends: `before_at`, an RFC 3339 time
 /// as the previous page's last entry's `at` reads, and `before_id`, that entry's id. Both or
 /// neither, else `VALIDATION` naming the missing one; a `before_at` that does not parse is

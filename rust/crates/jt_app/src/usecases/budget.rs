@@ -1,28 +1,36 @@
 //! The workspace's budget items and their spend (spec §6.2 "Bütçe kalemi"): `budget.items.list`,
-//! `budget.items.create`, `budget.spend.record` and `budget.spend.list`. The tenant's own money
-//! and caps, never the system's credit (K4).
+//! `budget.items.create`, `budget.items.update`, `budget.items.retire`, `budget.spend.record`
+//! and `budget.spend.list`. The tenant's own money and caps, never the system's credit (K4).
 //!
-//! Creating an item needs `budget.manage`; everything else `workspace.read`, so an agent (or a
-//! person) can report what it spent. Spend is append-only. Recording over the cap is allowed: the
-//! spend is recorded, what remains goes negative, and a `budget.over_cap` entry flags it (the hard
-//! cap applies to the spend connectors report, in M3). An item's spend in its period is counted
-//! over the UTC window of `period_window` that holds the time of the call.
+//! Creating, editing and retiring an item need `budget.manage`; everything else
+//! `workspace.read`, so an agent (or a person) can report what it spent. Spend is append-only.
+//! Recording over the cap is allowed: the spend is recorded, what remains goes negative, and a
+//! `budget.over_cap` entry flags it (the hard cap applies to the spend connectors report, in M3).
+//! An item's spend in its period is counted over the UTC window of `period_window` that holds the
+//! time of the call.
+//!
+//! **Retired is final.** A retired item keeps its row and its spend history for the record, and
+//! is still listed (with its `retired_at`), but takes no more links or spend and is not edited
+//! (`CONFLICT` "budget item is retired"). Every change of an item, and every link to it or spend
+//! from it, reads it through `BudgetRepo::lock_item` first, so a retirement and a link or a
+//! spend take turns.
 //!
 //! Each change writes ledger entries about the item (`subject.kind = "budget_item"`) or the spend
 //! (`"budget_spend"`) under the strategy version in force, if any.
 
 use jt_capability::{
     BudgetItem, BudgetItemId, BudgetKind, BudgetSpend, BudgetSpendId, NewBudgetItem,
-    NewBudgetSpend, Period, SpendSource, Unit, period_window, remaining, unit_fits,
+    NewBudgetSpend, Period, SpendSource, Unit, period_window, remaining, unit_fits, validate_cap,
+    validate_name,
 };
 use jt_ledger::Actor;
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
 use super::capabilities::{append, capability_error, version_in_force};
-use super::{Deps, keyset_cursor};
+use super::{Deps, invalid, keyset_cursor, nothing_to_change};
 use crate::ctx::Ctx;
 use crate::error::AppError;
 use crate::ports::TenantRepos;
@@ -45,6 +53,23 @@ pub struct BudgetItemInput {
     /// negative.
     pub cap: i64,
     pub period: Period,
+}
+
+/// What an edit of a budget item changes: each field given replaces the item's, each left out
+/// (or `null`) stays. Its kind and unit never change. From JSON, an unknown field (`kind` and
+/// `unit` among them) is refused.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateBudgetItem {
+    /// The new name, trimmed; 1 to 64 characters.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The new cap per period, in the item's unit; not negative.
+    #[serde(default)]
+    pub cap: Option<i64>,
+    /// The new period.
+    #[serde(default)]
+    pub period: Option<Period>,
 }
 
 /// A budget item with what was spent from it in its current period and what remains (negative
@@ -135,20 +160,132 @@ pub async fn create_item(
     })
 }
 
+/// Edits budget item `id`: each field `input` names replaces the item's. Needs `budget.manage`.
+///
+/// Checked before anything is read: an edit naming no field is `VALIDATION` (`details.fields`
+/// lists the editable ones); a bad name or a negative cap is `VALIDATION` naming `name` or `cap`.
+/// Then an item that is not this workspace's is `NOT_FOUND`, a retired one `CONFLICT` "budget
+/// item is retired". A cap below what was already spent in the period is allowed: the spend
+/// stays recorded and the item reads over its cap. A field given as it already is changes
+/// nothing; when nothing changes, nothing is written and the item is answered as it stands.
+///
+/// Writes `budget.items.update` (payload: `name`, `cap` and `period` when they changed, and
+/// `previous`, their values before).
+pub async fn update_item(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: BudgetItemId,
+    input: UpdateBudgetItem,
+) -> Result<BudgetItemOut, AppError> {
+    ctx.require(Permission::BudgetManage)?;
+    let UpdateBudgetItem { name, cap, period } = input;
+    if name.is_none() && cap.is_none() && period.is_none() {
+        return Err(nothing_to_change(&["name", "cap", "period"]));
+    }
+    let name = match name {
+        Some(name) => {
+            validate_name(&name).map_err(capability_error)?;
+            Some(name.trim().to_owned())
+        }
+        None => None,
+    };
+    if let Some(cap) = cap {
+        validate_cap(cap).map_err(capability_error)?;
+    }
+
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut item = locked_item(repos.as_mut(), id).await?;
+    item_not_retired(&item)?;
+    let (mut changed, mut previous) = (Map::new(), Map::new());
+    if let Some(name) = name.filter(|n| *n != item.name) {
+        previous.insert("name".into(), json!(item.name));
+        changed.insert("name".into(), json!(name));
+        item.name = name;
+    }
+    if let Some(cap) = cap.filter(|c| *c != item.cap) {
+        previous.insert("cap".into(), json!(item.cap));
+        changed.insert("cap".into(), json!(cap));
+        item.cap = cap;
+    }
+    if let Some(period) = period.filter(|p| *p != item.period) {
+        previous.insert("period".into(), json!(item.period));
+        changed.insert("period".into(), json!(period));
+        item.period = period;
+    }
+    if changed.is_empty() {
+        return item_out(repos.as_mut(), item, ctx.now).await;
+    }
+    repos.budget().update_item(item.clone()).await?;
+    changed.insert("previous".into(), Value::Object(previous));
+    let in_force = version_in_force(repos.as_mut()).await?;
+    append(
+        repos.as_mut(),
+        ctx,
+        "budget.items.update",
+        "budget_item",
+        id,
+        in_force,
+        Value::Object(changed),
+    )
+    .await?;
+    let out = reread_item(repos.as_mut(), id, ctx.now).await?;
+    repos.commit().await?;
+    Ok(out)
+}
+
+/// Retires budget item `id` for good, at `ctx.now`, and returns it. Needs `budget.manage` and
+/// `confirm` (else `VALIDATION` naming `confirm`).
+///
+/// An item that is not this workspace's is `NOT_FOUND`; one already retired `CONFLICT` "budget
+/// item is already retired". In one transaction every capability's link to it is removed and it
+/// becomes retired (`retired_at`): it takes no more links or spend and is not edited; its spend
+/// history stays. Writes `budget.items.retire` (payload `links_removed`: how many links went).
+pub async fn retire_item(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: BudgetItemId,
+    confirm: bool,
+) -> Result<BudgetItemOut, AppError> {
+    ctx.require(Permission::BudgetManage)?;
+    if !confirm {
+        return Err(invalid(
+            "confirm",
+            "confirm must be true to retire a budget item",
+        ));
+    }
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut item = locked_item(repos.as_mut(), id).await?;
+    if item.retired_at.is_some() {
+        return Err(AppError::conflict("budget item is already retired"));
+    }
+    let links_removed = repos.budget().unlink_item(id).await?;
+    item.retired_at = Some(ctx.now);
+    repos.budget().update_item(item).await?;
+    let in_force = version_in_force(repos.as_mut()).await?;
+    append(
+        repos.as_mut(),
+        ctx,
+        "budget.items.retire",
+        "budget_item",
+        id,
+        in_force,
+        json!({ "links_removed": links_removed }),
+    )
+    .await?;
+    let out = reread_item(repos.as_mut(), id, ctx.now).await?;
+    repos.commit().await?;
+    Ok(out)
+}
+
 /// Every budget item, oldest first, with what was spent from it in its period at `ctx.now`.
-/// Needs `workspace.read`.
+/// Retired items are listed too, with their `retired_at`. Needs `workspace.read`.
 pub async fn list_items(deps: &Deps, ctx: &Ctx) -> Result<Vec<BudgetItemOut>, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let items = repos.budget().list_items().await?;
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        let spent_in_period = spent_in_period(repos.as_mut(), &item, ctx.now).await?;
-        out.push(BudgetItemOut {
-            remaining: remaining(item.cap, spent_in_period),
-            spent_in_period,
-            item,
-        });
+        out.push(item_out(repos.as_mut(), item, ctx.now).await?);
     }
     Ok(out)
 }
@@ -159,7 +296,8 @@ pub async fn list_items(deps: &Deps, ctx: &Ctx) -> Result<Vec<BudgetItemOut>, Ap
 /// The source is the caller: an agent, a person, or a system component (recorded as the
 /// connector named by its component). The reference is trimmed; blank is none. An amount that is
 /// not positive is `VALIDATION` naming `amount`, a reference over 256 characters naming
-/// `reference`; an item that is not this workspace's is `NOT_FOUND`. Writes `budget.spend.record`
+/// `reference`; an item that is not this workspace's is `NOT_FOUND`, a retired one `CONFLICT`
+/// "budget item is retired" (the item is locked first). Writes `budget.spend.record`
 /// (payload `item_id`, `amount`, `source` and, when given, `reference`) and, when the spend takes
 /// the item over its cap for the period, `budget.over_cap` about the item (payload `item_id`,
 /// `remaining`).
@@ -192,11 +330,8 @@ pub async fn record_spend(
     )
     .map_err(capability_error)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let budget_item = repos
-        .budget()
-        .find_item(item)
-        .await?
-        .ok_or_else(|| AppError::not_found(NO_SUCH_BUDGET_ITEM))?;
+    let budget_item = locked_item(repos.as_mut(), item).await?;
+    item_not_retired(&budget_item)?;
     repos.budget().append_spend(spend.clone()).await?;
     let spent = spent_in_period(repos.as_mut(), &budget_item, ctx.now).await?;
     let remaining = remaining(budget_item.cap, spent);
@@ -263,6 +398,54 @@ pub fn spend_cursor(
     before_id: Option<BudgetSpendId>,
 ) -> Result<Option<(OffsetDateTime, BudgetSpendId)>, AppError> {
     keyset_cursor(before_at, before_id)
+}
+
+/// Budget item `id`, locked until the bundle ends (see `BudgetRepo::lock_item`: every change of
+/// an item, and every link to it or spend from it, reads it through it first), or `NOT_FOUND`
+/// when it is not this workspace's.
+pub(crate) async fn locked_item(
+    repos: &mut dyn TenantRepos,
+    id: BudgetItemId,
+) -> Result<BudgetItem, AppError> {
+    repos
+        .budget()
+        .lock_item(id)
+        .await?
+        .ok_or_else(|| AppError::not_found(NO_SUCH_BUDGET_ITEM))
+}
+
+/// `CONFLICT` "budget item is retired" for a retired item.
+pub(crate) fn item_not_retired(item: &BudgetItem) -> Result<(), AppError> {
+    if item.retired_at.is_some() {
+        return Err(AppError::conflict("budget item is retired"));
+    }
+    Ok(())
+}
+
+/// `item` with what was spent from it in its period at `now`, and what remains.
+async fn item_out(
+    repos: &mut dyn TenantRepos,
+    item: BudgetItem,
+    now: OffsetDateTime,
+) -> Result<BudgetItemOut, AppError> {
+    let spent_in_period = spent_in_period(repos, &item, now).await?;
+    Ok(BudgetItemOut {
+        remaining: remaining(item.cap, spent_in_period),
+        spent_in_period,
+        item,
+    })
+}
+
+/// Budget item `id` as it now stands in this bundle, as [`item_out`] answers it at `now`.
+async fn reread_item(
+    repos: &mut dyn TenantRepos,
+    id: BudgetItemId,
+    now: OffsetDateTime,
+) -> Result<BudgetItemOut, AppError> {
+    let item = repos.budget().find_item(id).await?.ok_or_else(|| {
+        AppError::internal("a budget item written in this transaction is missing")
+    })?;
+    item_out(repos, item, now).await
 }
 
 /// What `unit` counts, in words, for a message.

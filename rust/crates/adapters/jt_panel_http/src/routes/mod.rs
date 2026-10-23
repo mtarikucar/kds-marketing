@@ -68,6 +68,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/capabilities"),
     ("GET", "/api/capabilities/{capability_id}"),
     ("POST", "/api/capabilities"),
+    ("PATCH", "/api/capabilities/{capability_id}"),
     ("POST", "/api/capabilities/{capability_id}/verify"),
     ("POST", "/api/capabilities/{capability_id}/unreachable"),
     ("PUT", "/api/capabilities/{capability_id}/policy"),
@@ -88,6 +89,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ),
     ("GET", "/api/budget/items"),
     ("POST", "/api/budget/items"),
+    ("PATCH", "/api/budget/items/{budget_item_id}"),
+    ("POST", "/api/budget/items/{budget_item_id}/retire"),
     ("POST", "/api/budget/items/{budget_item_id}/spend"),
     ("GET", "/api/budget/items/{budget_item_id}/spend"),
     ("GET", "/api/work/pending"),
@@ -281,6 +284,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             capabilities::declare,
         ),
         api_route(
+            "PATCH",
+            "/capabilities/{capability_id}",
+            "capability.update",
+            capabilities::update,
+        ),
+        api_route(
             "POST",
             "/capabilities/{capability_id}/verify",
             "capability.verify",
@@ -363,6 +372,18 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/budget/items",
             "budget.items.create",
             budget::create_item,
+        ),
+        api_route(
+            "PATCH",
+            "/budget/items/{budget_item_id}",
+            "budget.items.update",
+            budget::update_item,
+        ),
+        api_route(
+            "POST",
+            "/budget/items/{budget_item_id}/retire",
+            "budget.items.retire",
+            budget::retire_item,
         ),
         api_route(
             "POST",

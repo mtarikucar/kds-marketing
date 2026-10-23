@@ -17,6 +17,11 @@
 //! - `capability.unlink_budget`, `capability.groups.remove_member`, `capability.groups.delete`:
 //!   the panel's `DELETE` routes answer the JSON their MCP tools answer for the same ids (the
 //!   capability, the group, the deletion confirmed), and the same error once the group is gone.
+//! - `capability.update`, `budget.items.update`, `budget.items.retire`: an edit on either gate
+//!   answers what the other gate then reads (with `verification_reset` for a capability, a
+//!   connector's changed account resetting it on both), and both gates give the same refusals:
+//!   an edit naming nothing, a taken account, a retired item, a missing confirmation, and a body
+//!   naming a field an edit does not take.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -662,4 +667,338 @@ async fn capability_mutations_answer_the_same_over_the_panel_and_mcp() {
     assert_eq!(agent["isError"], json!(true));
     assert_eq!(human, agent["structuredContent"]);
     assert_eq!(human["code"], "NOT_FOUND");
+}
+
+/// `read` (a capability as `capability.get` answers it) with `verification_reset`, as
+/// `capability.update` answers it.
+fn with_reset(read: &Value, reset: bool) -> Value {
+    let mut out = read.clone();
+    out["verification_reset"] = json!(reset);
+    out
+}
+
+/// The entry of budget item `id` in a list of budget items.
+fn entry(items: &Value, id: &str) -> Value {
+    items
+        .as_array()
+        .unwrap_or_else(|| panic!("not a list: {items}"))
+        .iter()
+        .find(|e| e["item"]["id"] == id)
+        .unwrap_or_else(|| panic!("no item {id} in {items}"))
+        .clone()
+}
+
+#[tokio::test]
+async fn capability_update_answers_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("alpha").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    let ok = |resp: Response| async move {
+        let status = resp.status();
+        let body = json_body(resp).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    };
+    let post = |path: String, body: Value| {
+        send(&app, panel(Method::POST, &path, Some(&cookie), Some(body)))
+    };
+    let patch = |path: String, body: Value| {
+        send(&app, panel(Method::PATCH, &path, Some(&cookie), Some(body)))
+    };
+    let get = |path: String| send(&app, panel(Method::GET, &path, Some(&cookie), None));
+    let declare = |body: Value| async {
+        let out = ok(post("/api/capabilities".into(), body).await).await;
+        out["capability"]["id"].as_str().unwrap().to_owned()
+    };
+
+    // A device: the panel renames it and answers what the agent then reads; the agent edits its
+    // description and answers what the panel then reads.
+    let phone =
+        declare(json!({ "kind_key": "phone", "name": "Telefon", "external_id": "SN-1" })).await;
+    let human = ok(patch(
+        format!("/api/capabilities/{phone}"),
+        json!({ "name": "Saha telefonu" }),
+    )
+    .await)
+    .await;
+    let read = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.get",
+        json!({ "capability_id": phone }),
+    )
+    .await;
+    assert_eq!(human, with_reset(&read, false));
+    assert_eq!(human["capability"]["name"], "Saha telefonu");
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.update",
+        json!({ "capability_id": phone, "description": "Kampanya telefonu" }),
+    )
+    .await;
+    let read = ok(get(format!("/api/capabilities/{phone}")).await).await;
+    assert_eq!(agent, with_reset(&read, false));
+    assert_eq!(agent["capability"]["description"], "Kampanya telefonu");
+
+    // A connector's account changes the same way on both: its verification is reset.
+    let inbox = declare(json!({
+        "kind_key": "mailbox",
+        "name": "Destek",
+        "external_id": "destek@alpha.example",
+    }))
+    .await;
+    let human = ok(patch(
+        format!("/api/capabilities/{inbox}"),
+        json!({ "external_id": "yardim@alpha.example" }),
+    )
+    .await)
+    .await;
+    let read = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.get",
+        json!({ "capability_id": inbox }),
+    )
+    .await;
+    assert_eq!(human, with_reset(&read, true));
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.update",
+        json!({ "capability_id": inbox, "external_id": "info@alpha.example" }),
+    )
+    .await;
+    let read = ok(get(format!("/api/capabilities/{inbox}")).await).await;
+    assert_eq!(agent, with_reset(&read, true));
+    assert_eq!(agent["capability"]["status"], "declared");
+
+    // The same refusals on both gates: an edit naming nothing, an account another phone holds.
+    let other =
+        declare(json!({ "kind_key": "phone", "name": "Yedek", "external_id": "SN-2" })).await;
+    for (body, code) in [
+        (json!({}), "VALIDATION"),
+        (json!({ "external_id": "SN-1" }), "CONFLICT"),
+    ] {
+        let resp = patch(format!("/api/capabilities/{other}"), body.clone()).await;
+        let status = resp.status();
+        let human = json_body(resp).await;
+        let mut args = body.clone();
+        args["capability_id"] = json!(other);
+        let agent = tool_result(&app, &key, &session, "jeeta.capability.update", args).await;
+        assert_eq!(agent["isError"], json!(true), "{body}");
+        assert_eq!(human, agent["structuredContent"], "{body}");
+        assert_eq!(human["code"], code, "{status} {body}");
+    }
+    // A body naming the public fields (a key only connectors write among them), or any other
+    // field an edit does not take, is VALIDATION on both before the use case runs.
+    for body in [
+        json!({ "connector_public": { "health": { "ok": true } } }),
+        json!({ "name": "x", "kind_key": "printer" }),
+    ] {
+        let resp = patch(format!("/api/capabilities/{other}"), body.clone()).await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        let human = json_body(resp).await;
+        let mut args = body.clone();
+        args["capability_id"] = json!(other);
+        let agent = tool_result(&app, &key, &session, "jeeta.capability.update", args).await;
+        assert_eq!(human["code"], "VALIDATION", "{body}");
+        assert_eq!(agent["structuredContent"]["code"], "VALIDATION", "{body}");
+    }
+    let read = ok(get(format!("/api/capabilities/{other}")).await).await;
+    assert_eq!(read["capability"]["name"], "Yedek");
+    assert_eq!(read["capability"]["external_id"], "SN-2");
+}
+
+#[tokio::test]
+async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("alpha").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    let ok = |resp: Response| async move {
+        let status = resp.status();
+        let body = json_body(resp).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    };
+    let post = |path: String, body: Value| {
+        send(&app, panel(Method::POST, &path, Some(&cookie), Some(body)))
+    };
+    let patch = |path: String, body: Value| {
+        send(&app, panel(Method::PATCH, &path, Some(&cookie), Some(body)))
+    };
+    let list = || {
+        send(
+            &app,
+            panel(Method::GET, "/api/budget/items", Some(&cookie), None),
+        )
+    };
+    let create = |name: &'static str| async move {
+        let body = json!({
+            "name": name,
+            "kind": "cash",
+            "unit": { "kind": "currency", "value": "TRY" },
+            "cap": 100000,
+            "period": "monthly",
+        });
+        let out = ok(post("/api/budget/items".into(), body).await).await;
+        out["item"]["id"].as_str().unwrap().to_owned()
+    };
+    let first = create("Nakit A").await;
+    let second = create("Nakit B").await;
+    let third = create("Nakit C").await;
+    // The first item is spent from by a phone, so retiring it removes a link.
+    let phone = ok(post(
+        "/api/capabilities".into(),
+        json!({ "kind_key": "phone", "name": "Telefon" }),
+    )
+    .await)
+    .await;
+    let phone_id = phone["capability"]["id"].as_str().unwrap().to_owned();
+    ok(post(
+        format!("/api/capabilities/{phone_id}/budget-links"),
+        json!({ "budget_item_id": first }),
+    )
+    .await)
+    .await;
+
+    // Editing: each gate's answer is the item as the other gate then lists it.
+    let human = ok(patch(
+        format!("/api/budget/items/{first}"),
+        json!({ "cap": 5000, "period": "weekly" }),
+    )
+    .await)
+    .await;
+    let listed = call_tool(&app, &key, &session, "jeeta.budget.items_list", json!({})).await;
+    assert_eq!(human, entry(&listed["items"], &first));
+    assert_eq!(
+        (
+            human["item"]["cap"].clone(),
+            human["item"]["period"].clone()
+        ),
+        (json!(5000), json!("weekly"))
+    );
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.budget.items_update",
+        json!({ "budget_item_id": second, "cap": 5000, "period": "weekly" }),
+    )
+    .await;
+    let listed = ok(list().await).await;
+    assert_eq!(agent, entry(&listed, &second));
+
+    // Retiring: the same, with its retirement time; the phone's link goes.
+    let human = ok(post(
+        format!("/api/budget/items/{first}/retire"),
+        json!({ "confirm": true }),
+    )
+    .await)
+    .await;
+    assert!(human["item"]["retired_at"].is_string(), "{human}");
+    let listed = call_tool(&app, &key, &session, "jeeta.budget.items_list", json!({})).await;
+    assert_eq!(human, entry(&listed["items"], &first));
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.budget.items_retire",
+        json!({ "budget_item_id": second, "confirm": true }),
+    )
+    .await;
+    let listed = ok(list().await).await;
+    assert_eq!(agent, entry(&listed, &second));
+    let phone = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.capability.get",
+        json!({ "capability_id": phone_id }),
+    )
+    .await;
+    assert_eq!(phone["capability"]["budget_item_ids"], json!([]));
+
+    // The same refusals on both gates: retiring again, editing or spending from a retired item,
+    // retiring without the confirmation, an edit naming nothing.
+    let refusals: Vec<(Method, String, Value, &str, Value, &str)> = vec![
+        (
+            Method::POST,
+            format!("/api/budget/items/{first}/retire"),
+            json!({ "confirm": true }),
+            "jeeta.budget.items_retire",
+            json!({ "budget_item_id": first, "confirm": true }),
+            "CONFLICT",
+        ),
+        (
+            Method::PATCH,
+            format!("/api/budget/items/{first}"),
+            json!({ "cap": 1 }),
+            "jeeta.budget.items_update",
+            json!({ "budget_item_id": first, "cap": 1 }),
+            "CONFLICT",
+        ),
+        (
+            Method::POST,
+            format!("/api/budget/items/{first}/spend"),
+            json!({ "amount": 1 }),
+            "jeeta.budget.spend_record",
+            json!({ "budget_item_id": first, "amount": 1 }),
+            "CONFLICT",
+        ),
+        (
+            Method::POST,
+            format!("/api/budget/items/{third}/retire"),
+            json!({}),
+            "jeeta.budget.items_retire",
+            json!({ "budget_item_id": third }),
+            "VALIDATION",
+        ),
+        (
+            Method::PATCH,
+            format!("/api/budget/items/{third}"),
+            json!({}),
+            "jeeta.budget.items_update",
+            json!({ "budget_item_id": third }),
+            "VALIDATION",
+        ),
+    ];
+    for (method, path, body, tool, args, code) in refusals {
+        let resp = send(&app, panel(method, &path, Some(&cookie), Some(body))).await;
+        let human = json_body(resp).await;
+        let agent = tool_result(&app, &key, &session, tool, args).await;
+        assert_eq!(agent["isError"], json!(true), "{tool}");
+        assert_eq!(human, agent["structuredContent"], "{tool}");
+        assert_eq!(human["code"], code, "{tool}: {human}");
+    }
+    // A body naming the kind or the unit is VALIDATION on both before the use case runs.
+    for body in [
+        json!({ "kind": "ad_budget" }),
+        json!({ "unit": { "kind": "minutes" } }),
+    ] {
+        let resp = patch(format!("/api/budget/items/{third}"), body.clone()).await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        let mut args = body.clone();
+        args["budget_item_id"] = json!(third);
+        let agent = tool_result(&app, &key, &session, "jeeta.budget.items_update", args).await;
+        assert_eq!(agent["structuredContent"]["code"], "VALIDATION", "{body}");
+    }
+    let listed = ok(list().await).await;
+    let untouched = entry(&listed, &third);
+    assert_eq!(untouched["item"]["kind"], "cash");
+    assert_eq!(untouched["item"]["retired_at"], Value::Null);
 }

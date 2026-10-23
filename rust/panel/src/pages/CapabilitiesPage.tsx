@@ -11,7 +11,14 @@ import { QueryState } from '@/components/QueryState';
 import { Button, ConfirmDialog, EmptyState, PageHeader, cn, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 import { can } from '@/lib/roles';
-import { DeclareDialog, LinkBudgetDialog, PolicyDialog, UnreachableDialog, VerifyDialog } from './capabilities/dialogs';
+import {
+  DeclareDialog,
+  EditDialog,
+  LinkBudgetDialog,
+  PolicyDialog,
+  UnreachableDialog,
+  VerifyDialog,
+} from './capabilities/dialogs';
 import { GroupsPanel } from './capabilities/GroupsPanel';
 import { BUDGET_ITEMS_KEY, CAPABILITIES_KEY, GROUPS_KEY, invalidateCapabilities } from './capabilities/queries';
 
@@ -128,6 +135,7 @@ export function CapabilitiesPage() {
       {canManage && (
         <>
           <DeclareDialog open={declaring} onOpenChange={setDeclaring} />
+          <EditDialog target={target('edit')} onClose={close} />
           <VerifyDialog target={target('verify')} onClose={close} />
           <PolicyDialog target={target('policy')} onClose={close} />
           <UnreachableDialog target={target('unreachable')} onClose={close} />

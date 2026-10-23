@@ -2,7 +2,15 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Receipt } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { SPEND_PAGE_SIZE, createBudgetItem, listBudgetItems, listSpend, recordSpend } from '@/api/budget';
+import {
+  SPEND_PAGE_SIZE,
+  createBudgetItem,
+  listBudgetItems,
+  listSpend,
+  recordSpend,
+  retireBudgetItem,
+  updateBudgetItem,
+} from '@/api/budget';
 import {
   BUDGET_KINDS,
   BUDGET_PERIODS,
@@ -11,6 +19,7 @@ import {
   type BudgetPeriod,
   type Unit,
   type UnitKind,
+  type UpdateBudgetItemInput,
 } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
@@ -19,6 +28,7 @@ import { MoneyInput, WholeNumberInput } from '@/components/forms';
 import {
   Badge,
   Button,
+  ConfirmDialog,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -50,10 +60,13 @@ import {
 } from '@/components/ui';
 import { formatAmount, sourceLabel, unitLabel } from '@/lib/budget';
 import { unitKindsFor } from '@/lib/capabilities';
+import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import { can } from '@/lib/roles';
 
 const ITEMS_KEY = ['budget', 'items'] as const;
+/** The capability lists show each capability's budget items, so an item's change refreshes them. */
+const CAPABILITIES_KEY = ['capabilities'] as const;
 
 function spendKey(itemId: string) {
   return ['budget', 'spend', itemId] as const;
@@ -245,7 +258,119 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   );
 }
 
-/** One item's spend, newest first and paged by keyset, with the form that records a spend. */
+/** What an edit of `item` sends: each field that differs from it, the name trimmed. */
+function budgetItemEdit(
+  item: BudgetItemOut['item'],
+  form: { name: string; cap: number | null; period: BudgetPeriod },
+): UpdateBudgetItemInput {
+  const input: UpdateBudgetItemInput = {};
+  const name = form.name.trim();
+  if (name !== item.name) input.name = name;
+  if (form.cap !== null && form.cap !== item.cap) input.cap = form.cap;
+  if (form.period !== item.period) input.period = form.period;
+  return input;
+}
+
+/** Edits an item's name, cap and period; its kind and unit never change. */
+function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClose: () => void }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [name, setName] = useState('');
+  const [cap, setCap] = useState<number | null>(null);
+  const [period, setPeriod] = useState<BudgetPeriod>('monthly');
+  const save = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateBudgetItemInput }) => updateBudgetItem(id, input),
+    onSuccess: async () => {
+      toast.success(t('budget.editDialog.saved'));
+      onClose();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
+        queryClient.invalidateQueries({ queryKey: CAPABILITIES_KEY }),
+      ]);
+    },
+  });
+
+  useEffect(() => {
+    setName(entry?.item.name ?? '');
+    setCap(entry?.item.cap ?? null);
+    setPeriod(entry?.item.period ?? 'monthly');
+    save.reset();
+  }, [entry?.item.id]);
+
+  if (!entry) return null;
+  const { item } = entry;
+  const input = budgetItemEdit(item, { name, cap, period });
+  const changed = Object.keys(input).length > 0;
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (changed) save.mutate({ id: item.id, input });
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('budget.editDialog.title', { name: item.name })}</DialogTitle>
+          <DialogDescription>{t('budget.editDialog.description')}</DialogDescription>
+        </DialogHeader>
+        <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
+          <ErrorCallout error={save.error} />
+          <Field label={t('fields.name')} required>
+            {(ids) => <Input id={ids.id} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />}
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field
+              label={t('budget.dialog.cap')}
+              hint={
+                item.unit.kind === 'currency'
+                  ? t('budget.dialog.capHintCurrency', { currency: item.unit.value })
+                  : undefined
+              }
+              required
+            >
+              {(ids) => (
+                <AmountInput id={ids.id} unit={item.unit} value={cap} onChange={setCap} describedBy={ids.describedBy} />
+              )}
+            </Field>
+            <Field label={t('fields.period')} required>
+              {(ids) => (
+                <Select value={period} onValueChange={(v) => setPeriod(v as BudgetPeriod)}>
+                  <SelectTrigger id={ids.id}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BUDGET_PERIODS.map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {t(`budget.periods.${p}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </Field>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              type="submit"
+              loading={save.isPending}
+              disabled={!changed || name.trim() === '' || cap === null}
+            >
+              {t('common.save')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * One item's spend, newest first and paged by keyset, with the form that records a spend; a
+ * retired item shows its spend but takes no more.
+ */
 function SpendSheet({ entry, onClose }: { entry: BudgetItemOut | null; onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -305,46 +430,50 @@ function SpendSheet({ entry, onClose }: { entry: BudgetItemOut | null; onClose: 
             remaining: formatAmount(t, entry.remaining, item.unit, i18n.language),
           })}
         </p>
-        <form className="flex flex-col gap-3 rounded-lg border border-border p-3" onSubmit={onSubmit} noValidate>
-          <ErrorCallout error={record.error} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field
-              label={t('fields.amount')}
-              hint={t('budget.spendSheet.amountHint', { unit: unitLabel(t, item.unit) })}
-              required
+        {item.retired_at !== null ? (
+          <p className="text-sm text-muted-foreground">{t('budget.spendSheet.retired')}</p>
+        ) : (
+          <form className="flex flex-col gap-3 rounded-lg border border-border p-3" onSubmit={onSubmit} noValidate>
+            <ErrorCallout error={record.error} />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field
+                label={t('fields.amount')}
+                hint={t('budget.spendSheet.amountHint', { unit: unitLabel(t, item.unit) })}
+                required
+              >
+                {(ids) => (
+                  <AmountInput
+                    id={ids.id}
+                    unit={item.unit}
+                    value={amount}
+                    onChange={setAmount}
+                    describedBy={ids.describedBy}
+                  />
+                )}
+              </Field>
+              <Field label={t('fields.reference')} hint={t('budget.spendSheet.referenceHint')}>
+                {(ids) => (
+                  <Input
+                    id={ids.id}
+                    aria-describedby={ids.describedBy}
+                    maxLength={256}
+                    autoComplete="off"
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value)}
+                  />
+                )}
+              </Field>
+            </div>
+            <Button
+              type="submit"
+              className="self-end"
+              loading={record.isPending}
+              disabled={amount === null || amount <= 0}
             >
-              {(ids) => (
-                <AmountInput
-                  id={ids.id}
-                  unit={item.unit}
-                  value={amount}
-                  onChange={setAmount}
-                  describedBy={ids.describedBy}
-                />
-              )}
-            </Field>
-            <Field label={t('fields.reference')} hint={t('budget.spendSheet.referenceHint')}>
-              {(ids) => (
-                <Input
-                  id={ids.id}
-                  aria-describedby={ids.describedBy}
-                  maxLength={256}
-                  autoComplete="off"
-                  value={reference}
-                  onChange={(e) => setReference(e.target.value)}
-                />
-              )}
-            </Field>
-          </div>
-          <Button
-            type="submit"
-            className="self-end"
-            loading={record.isPending}
-            disabled={amount === null || amount <= 0}
-          >
-            {t('budget.spendSheet.record')}
-          </Button>
-        </form>
+              {t('budget.spendSheet.record')}
+            </Button>
+          </form>
+        )}
         <QueryState query={spend}>
           {rows.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('budget.spendSheet.empty')}</p>
@@ -394,11 +523,26 @@ function SpendSheet({ entry, onClose }: { entry: BudgetItemOut | null; onClose: 
 
 export function BudgetPage() {
   const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
   const session = useSession();
   const canManage = can(session.data, 'budget.manage');
   const items = useQuery({ queryKey: ITEMS_KEY, queryFn: listBudgetItems });
   const [creating, setCreating] = useState(false);
   const [spendFor, setSpendFor] = useState<BudgetItemOut | null>(null);
+  const [editing, setEditing] = useState<BudgetItemOut | null>(null);
+  const [retiring, setRetiring] = useState<BudgetItemOut | null>(null);
+  const retire = useMutation({
+    mutationFn: (id: string) => retireBudgetItem(id),
+    onSuccess: async () => {
+      setRetiring(null);
+      toast.success(t('budget.retireDialog.retired'));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
+        queryClient.invalidateQueries({ queryKey: CAPABILITIES_KEY }),
+      ]);
+    },
+    onError: (err) => toast.error(errorMessage(t, err)),
+  });
   // The open sheet follows the list as it is read again (after a spend is recorded).
   const current = spendFor ? (items.data?.find((e) => e.item.id === spendFor.item.id) ?? spendFor) : null;
 
@@ -440,9 +584,23 @@ export function BudgetPage() {
                 {items.data?.map((entry) => {
                   const { item } = entry;
                   const over = entry.remaining < 0;
+                  const retired = item.retired_at !== null;
                   return (
-                    <TR key={item.id}>
-                      <TD className="font-medium text-foreground">{item.name}</TD>
+                    <TR
+                      key={item.id}
+                      data-retired={retired || undefined}
+                      className={cn(retired && 'text-muted-foreground opacity-60')}
+                    >
+                      <TD className={cn('font-medium', retired ? 'text-muted-foreground' : 'text-foreground')}>
+                        <span className="flex flex-col gap-0.5">
+                          {item.name}
+                          {retired && (
+                            <span className="text-caption font-normal">
+                              {t('budget.retiredOn', { date: formatDateTime(item.retired_at, i18n.language) })}
+                            </span>
+                          )}
+                        </span>
+                      </TD>
                       <TD>{t(`budget.kinds.${item.kind}`)}</TD>
                       <TD className="font-mono text-caption">{unitLabel(t, item.unit)}</TD>
                       <TD className="whitespace-nowrap text-end tabular-nums">
@@ -466,10 +624,22 @@ export function BudgetPage() {
                         </span>
                       </TD>
                       <TD className="text-end">
-                        <Button variant="ghost" size="sm" onClick={() => setSpendFor(entry)}>
-                          <Receipt className="h-3.5 w-3.5" aria-hidden="true" />
-                          {t('budget.spend')}
-                        </Button>
+                        <span className="flex justify-end gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => setSpendFor(entry)}>
+                            <Receipt className="h-3.5 w-3.5" aria-hidden="true" />
+                            {t('budget.spend')}
+                          </Button>
+                          {canManage && !retired && (
+                            <>
+                              <Button variant="ghost" size="sm" onClick={() => setEditing(entry)}>
+                                {t('budget.actions.edit')}
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => setRetiring(entry)}>
+                                {t('budget.actions.retire')}
+                              </Button>
+                            </>
+                          )}
+                        </span>
                       </TD>
                     </TR>
                   );
@@ -479,7 +649,23 @@ export function BudgetPage() {
           </div>
         )}
       </QueryState>
-      {canManage && <CreateItemDialog open={creating} onOpenChange={setCreating} />}
+      {canManage && (
+        <>
+          <CreateItemDialog open={creating} onOpenChange={setCreating} />
+          <EditItemDialog entry={editing} onClose={() => setEditing(null)} />
+          <ConfirmDialog
+            open={retiring !== null}
+            onOpenChange={(open) => !open && setRetiring(null)}
+            title={t('budget.retireDialog.title')}
+            description={retiring ? t('budget.retireDialog.body', { name: retiring.item.name }) : undefined}
+            confirmLabel={t('budget.actions.retire')}
+            cancelLabel={t('common.cancel')}
+            tone="danger"
+            loading={retire.isPending}
+            onConfirm={() => retiring && retire.mutate(retiring.item.id)}
+          />
+        </>
+      )}
       <SpendSheet entry={current} onClose={() => setSpendFor(null)} />
     </>
   );

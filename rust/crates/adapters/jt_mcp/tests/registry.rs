@@ -37,6 +37,7 @@ const TOOLS: &[&str] = &[
     "jeeta.capability.list",
     "jeeta.capability.get",
     "jeeta.capability.declare",
+    "jeeta.capability.update",
     "jeeta.capability.verify",
     "jeeta.capability.mark_unreachable",
     "jeeta.capability.set_policy",
@@ -51,6 +52,8 @@ const TOOLS: &[&str] = &[
     "jeeta.capability.groups_remove_member",
     "jeeta.budget.items_list",
     "jeeta.budget.items_create",
+    "jeeta.budget.items_update",
+    "jeeta.budget.items_retire",
     "jeeta.budget.spend_record",
     "jeeta.budget.spend_list",
     "jeeta.work.pending",
@@ -72,7 +75,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
             "jeeta.connector.reconnect",
         ]
     );
-    assert_eq!(TOOLS.len(), 47);
+    assert_eq!(TOOLS.len(), 50);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -245,7 +248,7 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         .into_iter()
         .filter(|s| s.use_case.starts_with("capability.") || s.use_case.starts_with("budget."))
         .collect();
-    assert_eq!(specs.len(), 19);
+    assert_eq!(specs.len(), 22);
     for spec in &specs {
         let expected = match spec.name {
             // Reading, and what an agent reports about its own hands and spend: the use cases
@@ -257,7 +260,9 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
             | "jeeta.budget.items_list"
             | "jeeta.budget.spend_record"
             | "jeeta.budget.spend_list" => Permission::WorkspaceRead,
-            "jeeta.budget.items_create" => Permission::BudgetManage,
+            "jeeta.budget.items_create"
+            | "jeeta.budget.items_update"
+            | "jeeta.budget.items_retire" => Permission::BudgetManage,
             _ => Permission::CapabilitiesManage,
         };
         assert_eq!(spec.permission, expected, "{}", spec.name);
@@ -269,7 +274,11 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         .collect();
     assert_eq!(
         destructive,
-        BTreeSet::from(["jeeta.capability.retire", "jeeta.capability.groups_delete"])
+        BTreeSet::from([
+            "jeeta.capability.retire",
+            "jeeta.capability.groups_delete",
+            "jeeta.budget.items_retire",
+        ])
     );
 
     let find = |name: &str| specs.iter().find(|s| s.name == name).unwrap();
@@ -319,6 +328,49 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         required(&create),
         BTreeSet::from(["name", "kind", "unit", "cap", "period"])
     );
+
+    // The edits: only the id is required, every other field is optional, nothing else is
+    // allowed; the kind and the unit of a budget item, and a capability's public fields, are not
+    // fields of an edit.
+    for (name, id, fields) in [
+        (
+            "jeeta.capability.update",
+            "capability_id",
+            ["name", "description", "external_id"],
+        ),
+        (
+            "jeeta.budget.items_update",
+            "budget_item_id",
+            ["name", "cap", "period"],
+        ),
+    ] {
+        let schema = find(name).input_schema.clone().to_value();
+        assert_eq!(required(&schema), BTreeSet::from([id]), "{name}");
+        let keys: BTreeSet<&str> = schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut expected = BTreeSet::from(fields);
+        expected.insert(id);
+        assert_eq!(keys, expected, "{name}");
+        assert_eq!(schema["additionalProperties"], false, "{name}");
+    }
+    let update = find("jeeta.capability.update");
+    assert!(
+        update
+            .description
+            .contains("resets its verification and drops its stored credentials"),
+        "{}",
+        update.description
+    );
+    let retire = find("jeeta.budget.items_retire")
+        .input_schema
+        .clone()
+        .to_value();
+    assert_eq!(retire["properties"]["confirm"]["type"], "boolean");
+    assert_eq!(required(&retire), BTreeSet::from(["budget_item_id"]));
 }
 
 /// The `required` property names of an object schema.

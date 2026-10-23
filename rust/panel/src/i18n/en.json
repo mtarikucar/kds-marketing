@@ -673,6 +673,7 @@
     "noGroups": "In no group",
     "keyDetail": "Tool: {{detail}}",
     "actions": {
+      "edit": "Edit",
       "verify": "Verify",
       "policy": "Policy",
       "unreachable": "Mark unreachable",
@@ -693,6 +694,14 @@
       "settingValue": "Value",
       "submit": "Declare",
       "declared": "Capability declared."
+    },
+    "editDialog": {
+      "title": "Edit {{name}}",
+      "description": "Change the name, the description or the account. The kind, the settings and the policy stay as they are.",
+      "externalIdHint": "The provider's id of the account, page or line; it cannot be emptied.",
+      "connectorWarning": "Changing the account resets the verification and drops the stored credentials: connect the account again afterwards.",
+      "saved": "Capability updated.",
+      "savedReset": "Capability updated; its verification was reset and its credentials dropped. Connect the account again."
     },
     "verifyDialog": {
       "title": "Verify {{name}}",
@@ -799,7 +808,12 @@
     },
     "minutesValue": "{{value}} min",
     "overCap": "Over the cap",
+    "retiredOn": "Retired {{date}}",
     "spend": "Spend",
+    "actions": {
+      "edit": "Edit",
+      "retire": "Retire"
+    },
     "empty": "No budget items yet.",
     "emptyBody": "Create an item such as an ad budget, SMS or an agent quota; the agent records what it spends here.",
     "dialog": {
@@ -815,10 +829,21 @@
       "submit": "Create",
       "created": "Budget item created."
     },
+    "editDialog": {
+      "title": "Edit {{name}}",
+      "description": "Change the name, the cap or the period; the kind and the unit stay. A cap below what was already spent is allowed: the item then reads over its cap.",
+      "saved": "Budget item updated."
+    },
+    "retireDialog": {
+      "title": "Retire the budget item",
+      "body": "{{name}} will stop taking links and spend: every capability linked to it is unlinked. Its spend history stays.",
+      "retired": "Budget item retired."
+    },
     "spendSheet": {
       "title": "{{name}}: spend",
       "description": "Newest first; a spend record is never deleted.",
       "summary": "{{spent}} spent this period, {{remaining}} remaining.",
+      "retired": "This item is retired: it takes no more spend.",
       "record": "Record spend",
       "amountHint": "In {{unit}}, greater than zero.",
       "referenceHint": "An invoice number, a campaign id…",

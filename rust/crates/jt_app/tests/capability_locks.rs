@@ -1,6 +1,8 @@
 //! Every capability mutation reads the capability through `CapabilityRepo::lock` before it reads
 //! it any other way and before any write, in the bundle that writes, so concurrent mutations of
-//! one capability take turns instead of writing back what the other changed.
+//! one capability take turns instead of writing back what the other changed. Likewise every
+//! change of a budget item, and every link to it or spend from it, reads the item through
+//! `BudgetRepo::lock_item` first (after the capability, when it locks one too).
 //!
 //! The fakes sit behind a [`Spy`] that records, in order, every capability, group and budget repo
 //! call each tenant bundle makes.
@@ -19,8 +21,8 @@ use jt_app::ports::{
     UserRepos, WorkspacePolicyRepo, WorkspaceRepo,
 };
 use jt_app::usecases::Deps;
-use jt_app::usecases::budget::{self, BudgetItemInput};
-use jt_app::usecases::capabilities;
+use jt_app::usecases::budget::{self, BudgetItemInput, UpdateBudgetItem};
+use jt_app::usecases::capabilities::{self, UpdateCapability};
 use jt_app::usecases::connector::{self, CredentialInput, SetCredentials};
 use jt_app::usecases::groups;
 use jt_capability::{
@@ -46,8 +48,10 @@ const WRITES: &[&str] = &[
     "groups.add_member",
     "groups.remove_member",
     "budget.insert_item",
+    "budget.update_item",
     "budget.link",
     "budget.unlink",
+    "budget.unlink_item",
     "budget.append_spend",
 ];
 
@@ -291,6 +295,21 @@ impl BudgetRepo for SpyTenant {
         self.inner.budget().find_item(id).await
     }
 
+    async fn lock_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError> {
+        self.spy.push("budget.lock_item");
+        self.inner.budget().lock_item(id).await
+    }
+
+    async fn update_item(&mut self, item: BudgetItem) -> Result<(), AppError> {
+        self.spy.push("budget.update_item");
+        self.inner.budget().update_item(item).await
+    }
+
+    async fn unlink_item(&mut self, item: BudgetItemId) -> Result<u64, AppError> {
+        self.spy.push("budget.unlink_item");
+        self.inner.budget().unlink_item(item).await
+    }
+
     async fn link(&mut self, capability: CapabilityId, item: BudgetItemId) -> Result<(), AppError> {
         self.spy.push("budget.link");
         self.inner.budget().link(capability, item).await
@@ -351,6 +370,28 @@ fn locked_first(what: &str, calls: &[&str]) {
     assert!(lock < first_write, "{what}: {calls:?}");
 }
 
+/// Asserts that `calls`, one mutation's repo calls, read the budget item through `lock_item`
+/// before reading it any other way and before every write, and after locking the capability when
+/// it locks one too.
+fn item_locked_first(what: &str, calls: &[&str]) {
+    let item_reads = ["budget.find_item", "budget.lock_item"];
+    let first_item_read = calls.iter().find(|c| item_reads.contains(c));
+    assert_eq!(
+        first_item_read,
+        Some(&"budget.lock_item"),
+        "{what}: {calls:?}"
+    );
+    let lock = calls.iter().position(|c| *c == "budget.lock_item").unwrap();
+    let first_write = calls
+        .iter()
+        .position(|c| WRITES.contains(c))
+        .unwrap_or_else(|| panic!("{what} wrote nothing: {calls:?}"));
+    assert!(lock < first_write, "{what}: {calls:?}");
+    if let Some(capability_lock) = calls.iter().position(|c| *c == "capabilities.lock") {
+        assert!(capability_lock < lock, "{what}: {calls:?}");
+    }
+}
+
 #[tokio::test]
 async fn every_capability_mutation_locks_the_capability_before_writing() {
     let w = world().await;
@@ -403,6 +444,18 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
         .await
         .unwrap();
     locked_first("mark_unreachable", &spy.take());
+    capabilities::update(
+        &deps,
+        o,
+        phone,
+        UpdateCapability {
+            name: Some("Saha telefonu".into()),
+            ..UpdateCapability::default()
+        },
+    )
+    .await
+    .unwrap();
+    locked_first("update", &spy.take());
     capabilities::link_budget(&deps, o, ads, cash)
         .await
         .unwrap();
@@ -415,6 +468,57 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
     locked_first("groups::add_member", &spy.take());
     capabilities::retire(&deps, o, ads, true).await.unwrap();
     locked_first("retire", &spy.take());
+}
+
+#[tokio::test]
+async fn budget_item_mutations_lock_the_item_before_writing() {
+    let w = world().await;
+    let spy = Spy {
+        inner: w.uow.clone(),
+        log: Arc::default(),
+    };
+    let deps = Deps {
+        uow: Arc::new(spy.clone()),
+        ..w.deps.clone()
+    };
+    let o = &w.owner_ctx;
+    let ads = w.declare("meta_ads", "Meta reklam").await.capability.id;
+    let cash = budget::create_item(
+        &w.deps,
+        o,
+        BudgetItemInput {
+            name: "Kasa".into(),
+            kind: BudgetKind::Cash,
+            unit: Unit::Currency("TRY".into()),
+            cap: 1_000,
+            period: Period::Monthly,
+        },
+    )
+    .await
+    .unwrap()
+    .item
+    .id;
+    spy.take();
+
+    capabilities::link_budget(&deps, o, ads, cash)
+        .await
+        .unwrap();
+    item_locked_first("link_budget", &spy.take());
+    budget::record_spend(&deps, o, cash, 10, None)
+        .await
+        .unwrap();
+    item_locked_first("record_spend", &spy.take());
+    let edit = UpdateBudgetItem {
+        cap: Some(2_000),
+        ..UpdateBudgetItem::default()
+    };
+    budget::update_item(&deps, o, cash, edit).await.unwrap();
+    item_locked_first("update_item", &spy.take());
+    budget::retire_item(&deps, o, cash, true).await.unwrap();
+    let calls = spy.take();
+    item_locked_first("retire_item", &calls);
+    // The links go in the retiring bundle.
+    assert!(calls.contains(&"budget.unlink_item"), "{calls:?}");
 }
 
 #[tokio::test]

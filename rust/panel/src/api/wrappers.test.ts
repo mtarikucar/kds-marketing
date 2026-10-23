@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { mockFetch } from '@/test/render';
-import { listSpend, recordSpend } from './budget';
+import { listSpend, recordSpend, retireBudgetItem, updateBudgetItem } from './budget';
 import {
   deleteGroup,
   listCapabilities,
   removeGroupMember,
   retireCapability,
   unlinkBudget,
+  updateCapability,
   type CapabilityQuery,
 } from './capabilities';
 import { archiveVersion, listConsultation, recordEntry, writeSection } from './strategy';
@@ -100,6 +101,37 @@ describe('api wrappers: bodies and answers', () => {
     await recordEntry({ kind: 'note', text: 'kısa not' });
     expect(calls[0].body).toBe(true);
     expect(calls[1].body).toEqual({ kind: 'note', text: 'kısa not' });
+  });
+
+  it('edits with only the fields given, never the ones an edit does not take', async () => {
+    const calls = mockFetch({
+      [`PATCH /api/capabilities/${CAP}`]: { capability: {}, effective_status: 'declared', verification_reset: false },
+      [`PATCH /api/budget/items/${ITEM}`]: { item: {}, spent_in_period: 0, remaining: 0 },
+    });
+    await updateCapability(CAP, { name: 'Telefon' });
+    await updateCapability(CAP, {
+      description: '',
+      external_id: 'SN-2',
+      connector_public: { health: true },
+    } as unknown as Parameters<typeof updateCapability>[1]);
+    await updateBudgetItem(ITEM, { cap: 0 });
+    await updateBudgetItem(ITEM, {
+      name: 'Kasa',
+      period: 'weekly',
+      kind: 'cash',
+    } as unknown as Parameters<typeof updateBudgetItem>[1]);
+    expect(calls.map((c) => c.body)).toEqual([
+      { name: 'Telefon' },
+      { description: '', external_id: 'SN-2' },
+      { cap: 0 },
+      { name: 'Kasa', period: 'weekly' },
+    ]);
+  });
+
+  it('retires a budget item with an explicit confirmation', async () => {
+    const calls = mockFetch({ [`POST /api/budget/items/${ITEM}/retire`]: { item: {}, spent_in_period: 0, remaining: 0 } });
+    await retireBudgetItem(ITEM);
+    expect(calls[0].body).toEqual({ confirm: true });
   });
 
   it('records spend without an empty reference', async () => {

@@ -842,6 +842,156 @@ async fn group_member_from_another_workspace_is_not_found() {
 // ---------------------------------------------------------------------------------------------
 
 #[tokio::test]
+async fn budget_items_are_edited_retired_and_unlinked_within_the_workspace() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("a").await;
+    let (b, _) = db.seed_workspace("b").await;
+    let ours = budget_item(a, "Nakit", BudgetKind::Cash, T0);
+    let theirs = budget_item(b, "Onların", BudgetKind::Cash, T0);
+    let (phone, printer) = (
+        capability(a, "phone", Some("SN-1"), T0),
+        capability(a, "printer", Some("SN-2"), T0),
+    );
+    insert(&uow, &phone, None).await;
+    insert(&uow, &printer, None).await;
+    let mut t = uow.tenant(a).await.unwrap();
+    t.budget().insert_item(ours.clone()).await.unwrap();
+    for c in [&phone, &printer] {
+        t.budget().link(c.id, ours.id).await.unwrap();
+    }
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(b).await.unwrap();
+    t.budget().insert_item(theirs.clone()).await.unwrap();
+    t.commit().await.unwrap();
+
+    // A new item is live; a lock reads as `find_item` does.
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(ours.retired_at, None);
+    assert_eq!(
+        t.budget().lock_item(ours.id).await.unwrap(),
+        Some(ours.clone())
+    );
+    assert_eq!(t.budget().lock_item(theirs.id).await.unwrap(), None);
+    drop(t);
+
+    // Only the name, cap, period and retirement time are written; the rest stays.
+    let retired_at = T0 + Duration::days(1);
+    let mut t = uow.tenant(a).await.unwrap();
+    t.budget()
+        .update_item(BudgetItem {
+            name: "Nakit 2".into(),
+            cap: 5,
+            period: Period::Weekly,
+            retired_at: Some(retired_at),
+            kind: BudgetKind::AdBudget,
+            unit: Unit::Minutes,
+            created_at: T0 + Duration::days(9),
+            strategy_version_id: Some(Uuid::now_v7()),
+            ..ours.clone()
+        })
+        .await
+        .unwrap();
+    assert_eq!(t.budget().unlink_item(ours.id).await.unwrap(), 2);
+    assert_eq!(t.budget().unlink_item(ours.id).await.unwrap(), 0);
+    assert_eq!(t.budget().unlink_item(theirs.id).await.unwrap(), 0);
+    t.commit().await.unwrap();
+    let stored = BudgetItem {
+        name: "Nakit 2".into(),
+        cap: 5,
+        period: Period::Weekly,
+        retired_at: Some(retired_at),
+        ..ours.clone()
+    };
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        t.budget().find_item(ours.id).await.unwrap(),
+        Some(stored.clone())
+    );
+    assert_eq!(t.budget().list_items().await.unwrap(), vec![stored.clone()]);
+    drop(t);
+    for c in [&phone, &printer] {
+        assert!(find(&uow, a, c.id).await.budget_item_ids.is_empty());
+    }
+    let mut t = uow.tenant(b).await.unwrap();
+    assert_eq!(
+        t.budget().find_item(theirs.id).await.unwrap(),
+        Some(theirs.clone())
+    );
+    drop(t);
+
+    // Another workspace's item, an unknown one: NOT_FOUND; a row for another workspace and a
+    // negative cap: INTERNAL.
+    for id in [theirs.id, BudgetItemId::new_v7()] {
+        let mut t = uow.tenant(a).await.unwrap();
+        let r = t
+            .budget()
+            .update_item(BudgetItem {
+                id,
+                ..stored.clone()
+            })
+            .await;
+        assert_eq!(code(r), ErrorCode::NotFound);
+    }
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        code(t.budget().update_item(theirs.clone()).await),
+        ErrorCode::Internal
+    );
+    drop(t);
+    let mut t = uow.tenant(a).await.unwrap();
+    let r = t
+        .budget()
+        .update_item(BudgetItem {
+            cap: -1,
+            ..stored.clone()
+        })
+        .await;
+    assert_eq!(code(r), ErrorCode::Internal);
+}
+
+#[tokio::test]
+async fn budget_item_lock_blocks_a_second_locker_until_commit() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("a").await;
+    let item = budget_item(a, "Nakit", BudgetKind::Cash, T0);
+    let mut t = uow.tenant(a).await.unwrap();
+    t.budget().insert_item(item.clone()).await.unwrap();
+    t.commit().await.unwrap();
+
+    // A locks the item and retires it; B's lock waits for A and then reads the retirement.
+    let mut first = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        first.budget().lock_item(item.id).await.unwrap(),
+        Some(item.clone())
+    );
+    first
+        .budget()
+        .update_item(BudgetItem {
+            retired_at: Some(T0 + Duration::hours(1)),
+            ..item.clone()
+        })
+        .await
+        .unwrap();
+    let second = {
+        let uow = uow.clone();
+        let id = item.id;
+        tokio::spawn(async move {
+            let mut t = uow.tenant(a).await.unwrap();
+            let seen = t.budget().lock_item(id).await.unwrap();
+            t.commit().await.unwrap();
+            seen
+        })
+    };
+    wait_for_a_lock_waiter(&db).await;
+    assert!(!second.is_finished(), "the second locker did not wait");
+    first.commit().await.unwrap();
+    let seen = second.await.unwrap().expect("the item");
+    assert_eq!(seen.retired_at, Some(T0 + Duration::hours(1)));
+}
+
+#[tokio::test]
 async fn budget_link_and_spend_window_sum() {
     let db = TestDb::new().await;
     let uow = uow(&db);

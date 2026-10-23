@@ -1,8 +1,9 @@
 //! The workspace's capabilities (spec §6): `capability.list`, `capability.get`,
-//! `capability.declare`, `capability.verify`, `capability.mark_unreachable`,
-//! `capability.set_policy`, `capability.retire`, `capability.link_budget` and
-//! `capability.unlink_budget`; and [`UowChannelCatalog`], the channel catalog the strategy reads
-//! from them. The groups are in [`super::groups`], the budget items in [`super::budget`].
+//! `capability.declare`, `capability.update`, `capability.verify`,
+//! `capability.mark_unreachable`, `capability.set_policy`, `capability.retire`,
+//! `capability.link_budget` and `capability.unlink_budget`; and [`UowChannelCatalog`], the
+//! channel catalog the strategy reads from them. The groups are in [`super::groups`], the budget
+//! items in [`super::budget`].
 //!
 //! **Who may do what.** Reading needs `workspace.read`. Every change needs `capabilities.manage`,
 //! except verifying: an agent may verify a capability reached through an agent or a device with
@@ -13,9 +14,14 @@
 //! for everyone.
 //!
 //! **Retired is final.** A retired capability keeps its row for the record and can no longer be
-//! verified, marked unreachable, given a policy, grouped or linked to a budget item (`CONFLICT`
-//! "capability is retired"); retiring it again is `CONFLICT` too. Retiring detaches it from its
-//! groups and budget items and drops its sealed credentials in the same transaction.
+//! edited, verified, marked unreachable, given a policy, grouped or linked to a budget item
+//! (`CONFLICT` "capability is retired"); retiring it again is `CONFLICT` too. Retiring detaches
+//! it from its groups and budget items and drops its sealed credentials in the same transaction.
+//!
+//! **Connector-owned public fields.** The keys of `connector_public` a connector writes
+//! ([`jt_capability::RESERVED_PUBLIC_KEYS`]: its health, its credential's expiry, the
+//! reconnection flag …) are refused at declaration (`VALIDATION` "reserved public key"), and an
+//! edit carries no public fields at all, so only a connector ever writes them.
 //!
 //! **Tenant hosts.** A connector capability may name the hosts its connector reaches in
 //! `connector_public.hosts` (an array of `host` or `host:port` strings). Declaring one checks
@@ -41,19 +47,20 @@ use async_trait::async_trait;
 use jt_capability::{
     BudgetItemId, Capability, CapabilityError, CapabilityGroupId, CapabilityId, CapabilityKind,
     DEFAULT_VERIFY_MAX_AGE_DAYS, EffectiveStatus, Evidence, Gap, Hours, KindGroup, NewCapability,
-    Policy, Reach, StoredStatus, can_link_budget, effective_status, validate_evidence,
-    validate_policy,
+    Policy, Reach, StoredStatus, can_link_budget, check_reserved_public_keys, effective_status,
+    validate_description, validate_evidence, validate_external_id, validate_name, validate_policy,
 };
 use jt_ledger::Actor;
 use jt_strategy::StrategyVersionId;
 use jt_tenancy::{Permission, WorkspaceId};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
-use super::{Deps, connector, invalid, ledger_entry};
+use super::budget::{item_not_retired, locked_item};
+use super::{Deps, connector, invalid, ledger_entry, nothing_to_change};
 use crate::ctx::Ctx;
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::ports::{CapabilityFilter, ChannelCatalog, TenantRepos, UnitOfWork};
 
 /// The longest reason a capability may be marked unreachable for, in characters.
@@ -63,7 +70,6 @@ pub const MAX_REASON_CHARS: usize = 500;
 pub const MAX_HOSTS: usize = 20;
 
 const NO_SUCH_CAPABILITY: &str = "no such capability";
-const NO_SUCH_BUDGET_ITEM: &str = "no such budget item";
 
 // ---------------------------------------------------------------------------------------------
 // Inputs and outputs
@@ -112,6 +118,35 @@ pub struct DeclareInput {
     /// The policy; none is [`Policy::default`].
     #[serde(default, deserialize_with = "strict_policy")]
     pub policy: Option<Policy>,
+}
+
+/// What an edit of a capability changes: each field given replaces the capability's, each left
+/// out (or `null`) stays. Its kind, reach, public connector fields and policy are not edited here
+/// (the policy has `capability.set_policy`). From JSON, an unknown field is refused, so a body
+/// naming the public fields never reaches the use case.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateCapability {
+    /// The new name, trimmed; 1 to 64 characters.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The new description, as given; at most 2000 characters (empty clears it).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The provider's id of another account, page or line, as given; not blank. An external id
+    /// is changed, never removed.
+    #[serde(default)]
+    pub external_id: Option<String>,
+}
+
+/// A capability after an edit: as [`CapabilityOut`] (`capability` and `effective_status`), and
+/// whether the edit bound a connector capability to another account and so reset its
+/// verification and dropped its sealed credentials.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UpdatedCapability {
+    #[serde(flatten)]
+    pub current: CapabilityOut,
+    pub verification_reset: bool,
 }
 
 /// Which capabilities [`list`] returns, as a caller names them: every field that is set must
@@ -210,9 +245,11 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<CapabilityO
 /// `VALIDATION`: an unknown kind (naming `kind_key`), a missing, malformed or unexpected
 /// `key_detail`, a bad `name`, an over-long `description`, a blank or over-long `external_id`
 /// (each naming its field); public connector fields that are not an object or hold a
-/// secret-looking key, and a policy with gaps (`details.gaps`). For a connector capability,
-/// `connector_public.hosts`, when present, must be an array of at most [`MAX_HOSTS`] non-blank
-/// strings (`details.gaps`), each of which the tenant host registry accepts (its own
+/// secret-looking key, a policy with gaps (`details.gaps`), and public connector fields naming a
+/// key only connectors write (message "reserved public key", `details.gaps` naming each
+/// `connector_public.<key>`; see [`jt_capability::RESERVED_PUBLIC_KEYS`]). For a connector
+/// capability, `connector_public.hosts`, when present, must be an array of at most [`MAX_HOSTS`]
+/// non-blank strings (`details.gaps`), each of which the tenant host registry accepts (its own
 /// `VALIDATION` "host is not public"). An external account another live capability of the kind
 /// holds is `CONFLICT`. Nothing is written on a refusal.
 ///
@@ -249,6 +286,7 @@ pub async fn declare(
         ctx.now,
     )
     .map_err(capability_error)?;
+    check_reserved_public_keys(&capability.connector_public).map_err(capability_error)?;
     let hosts = match capability.reach {
         Reach::Connector => hosts_strict(&capability.connector_public)?,
         Reach::Agent | Reach::Device => Vec::new(),
@@ -294,6 +332,127 @@ pub async fn declare(
         }
     }
     Ok(CapabilityOut::at(capability, ctx.now))
+}
+
+/// Edits capability `id`: each field `input` names replaces the capability's. Needs
+/// `capabilities.manage`.
+///
+/// Checked as at declaration, before anything is read: an edit naming no field is `VALIDATION`
+/// (`details.fields` lists the editable ones); a bad `name`, an over-long `description` and a
+/// blank or over-long `external_id` are `VALIDATION` naming the field. Then an id that is not
+/// this workspace's is `NOT_FOUND`, a retired capability `CONFLICT` "capability is retired", and
+/// an external account another live capability of the kind holds `CONFLICT` naming `kind_key`
+/// and `external_id`. A field given as it already is changes nothing; when nothing changes,
+/// nothing is written and the capability is answered as it stands.
+///
+/// A changed external account of a capability reached through a connector binds it to another
+/// account (`connector::rebind_account`): whatever verified the old binding proves nothing about
+/// this one, so it reads `declared` again with no verification time and no evidence, its sealed
+/// credentials are dropped (connect the account, or enter its credentials, again) and the answer
+/// says `verification_reset: true`. Any other capability just takes the new external id; its
+/// verification stands, being the agent's claim about its hands.
+///
+/// Writes `capability.update` (payload `fields`: the changed fields' names among `name`,
+/// `description` and `external_id`, in that order; `name` and `external_id` when they changed;
+/// `rebind: true` when the account change reset a connector capability; never the description's
+/// text).
+pub async fn update(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    input: UpdateCapability,
+) -> Result<UpdatedCapability, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    let UpdateCapability {
+        name,
+        description,
+        external_id,
+    } = input;
+    if name.is_none() && description.is_none() && external_id.is_none() {
+        return Err(nothing_to_change(&["name", "description", "external_id"]));
+    }
+    let name = match name {
+        Some(name) => {
+            validate_name(&name).map_err(capability_error)?;
+            Some(name.trim().to_owned())
+        }
+        None => None,
+    };
+    if let Some(description) = &description {
+        validate_description(description).map_err(capability_error)?;
+    }
+    if let Some(external_id) = &external_id {
+        validate_external_id(external_id).map_err(capability_error)?;
+    }
+
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut capability = locked(repos.as_mut(), id).await?;
+    not_retired(&capability)?;
+    let mut fields: Vec<&str> = Vec::new();
+    let mut payload = Map::new();
+    if let Some(name) = name.filter(|n| *n != capability.name) {
+        fields.push("name");
+        payload.insert("name".into(), json!(name));
+        capability.name = name;
+    }
+    if let Some(description) = description.filter(|d| *d != capability.description) {
+        fields.push("description");
+        capability.description = description;
+    }
+    let account = external_id.filter(|e| capability.external_id.as_deref() != Some(e.as_str()));
+    if let Some(account) = &account {
+        fields.push("external_id");
+        payload.insert("external_id".into(), json!(account));
+    }
+    if fields.is_empty() {
+        return Ok(UpdatedCapability {
+            current: CapabilityOut::at(capability, ctx.now),
+            verification_reset: false,
+        });
+    }
+
+    capability.updated_at = ctx.now;
+    let rebind = account.is_some() && capability.reach == Reach::Connector;
+    match account {
+        Some(account) if rebind => {
+            connector::rebind_account(
+                repos.as_mut(),
+                &mut capability,
+                Some(account),
+                None,
+                ctx.now,
+            )
+            .await?;
+        }
+        Some(account) => {
+            if connector::account_held_elsewhere(repos.as_mut(), &capability, &account).await? {
+                return Err(connector::account_taken(&capability.kind_key, &account));
+            }
+            capability.external_id = Some(account);
+            repos.capabilities().update(capability.clone()).await?;
+        }
+        None => repos.capabilities().update(capability.clone()).await?,
+    }
+    payload.insert("fields".into(), json!(fields));
+    if rebind {
+        payload.insert("rebind".into(), json!(true));
+    }
+    let in_force = version_in_force(repos.as_mut()).await?;
+    record(
+        repos.as_mut(),
+        ctx,
+        "capability.update",
+        id,
+        in_force,
+        Value::Object(payload),
+    )
+    .await?;
+    let current = reread(repos.as_mut(), id, ctx.now).await?;
+    repos.commit().await?;
+    Ok(UpdatedCapability {
+        current,
+        verification_reset: rebind,
+    })
 }
 
 /// Marks capability `id` verified on the strength of `evidence`, at `ctx.now`, and returns it.
@@ -485,8 +644,14 @@ pub async fn retire(
             })
             .await?;
     }
+    let mut budget_links = 0;
     for item in &capability.budget_item_ids {
-        repos.budget().unlink(id, *item).await?;
+        match repos.budget().unlink(id, *item).await {
+            Ok(()) => budget_links += 1,
+            // A budget item retired since the capability was read took the link with it.
+            Err(e) if e.code == ErrorCode::NotFound => {}
+            Err(e) => return Err(e),
+        }
     }
     let groups = repos.capability_groups().list().await?;
     let mut left = 0;
@@ -520,7 +685,7 @@ pub async fn retire(
         id,
         in_force,
         json!({
-            "budget_links": capability.budget_item_ids.len(),
+            "budget_links": budget_links,
             "groups": left,
             "hosts_revoked": revoked.len(),
         }),
@@ -547,9 +712,11 @@ pub async fn retire(
 /// again changes nothing. Needs `capabilities.manage`.
 ///
 /// A capability or an item that is not this workspace's is `NOT_FOUND`; a retired capability
-/// `CONFLICT`; a capability whose kind may not spend from the item's kind (`can_link_budget`)
-/// `VALIDATION` with `details.reason = "kind_mismatch"`. Writes `capability.link_budget`
-/// (payload `budget_item_id`).
+/// `CONFLICT` "capability is retired", a retired item `CONFLICT` "budget item is retired"; a
+/// capability whose kind may not spend from the item's kind (`can_link_budget`) `VALIDATION`
+/// with `details.reason = "kind_mismatch"`. The capability is locked, then the item, so a link
+/// never lands on an item retired meanwhile. Writes `capability.link_budget` (payload
+/// `budget_item_id`).
 pub async fn link_budget(
     deps: &Deps,
     ctx: &Ctx,
@@ -559,12 +726,9 @@ pub async fn link_budget(
     ctx.require(Permission::CapabilitiesManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let capability = locked(repos.as_mut(), id).await?;
-    let budget_item = repos
-        .budget()
-        .find_item(item)
-        .await?
-        .ok_or_else(|| AppError::not_found(NO_SUCH_BUDGET_ITEM))?;
+    let budget_item = locked_item(repos.as_mut(), item).await?;
     not_retired(&capability)?;
+    item_not_retired(&budget_item)?;
     let fits = capability
         .kind()
         .is_some_and(|kind| can_link_budget(kind, budget_item.kind));
@@ -741,7 +905,9 @@ fn strict_policy<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Policy>, D::E
 pub(crate) fn capability_error(e: CapabilityError) -> AppError {
     let message = e.to_string();
     let field = match e {
-        CapabilityError::InvalidConnectorPublic(gaps) | CapabilityError::InvalidPolicy(gaps) => {
+        CapabilityError::InvalidConnectorPublic(gaps)
+        | CapabilityError::ReservedPublicKey(gaps)
+        | CapabilityError::InvalidPolicy(gaps) => {
             return gaps_error(&message, gaps);
         }
         CapabilityError::UnknownKind(_) => "kind_key",

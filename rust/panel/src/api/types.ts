@@ -577,6 +577,24 @@ export interface DeclareInput {
   policy?: Policy;
 }
 
+/**
+ * `jt_app::usecases::capabilities::UpdateCapability`: each field given replaces the capability's
+ * (at least one); the kind, public settings and policy are not edited this way.
+ */
+export interface UpdateCapabilityInput {
+  name?: string;
+  description?: string;
+  external_id?: string;
+}
+
+/**
+ * `jt_app::usecases::capabilities::UpdatedCapability`: `verification_reset` when a connector's
+ * account changed, so its verification was reset and its stored credentials dropped.
+ */
+export interface UpdatedCapability extends CapabilityOut {
+  verification_reset: boolean;
+}
+
 /** `jt_capability::CapabilityGroup`. */
 export interface CapabilityGroup {
   id: Uuid;
@@ -640,6 +658,8 @@ export interface BudgetItem {
   period: BudgetPeriod;
   strategy_version_id: Uuid | null;
   created_at: Rfc3339;
+  /** When it was retired: it then takes no links and no spend. `null` while it is live. */
+  retired_at: Rfc3339 | null;
 }
 
 /** `jt_app::usecases::budget::BudgetItemInput`. */
@@ -649,6 +669,16 @@ export interface BudgetItemInput {
   unit: Unit;
   cap: number;
   period: BudgetPeriod;
+}
+
+/**
+ * `jt_app::usecases::budget::UpdateBudgetItem`: each field given replaces the item's (at least
+ * one); the kind and unit never change.
+ */
+export interface UpdateBudgetItemInput {
+  name?: string;
+  cap?: number;
+  period?: BudgetPeriod;
 }
 
 /** `jt_app::usecases::budget::BudgetItemOut`: `remaining` is negative when over the cap. */

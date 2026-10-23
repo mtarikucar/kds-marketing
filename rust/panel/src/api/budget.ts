@@ -1,5 +1,11 @@
 import { request, seg } from './client';
-import type { BudgetItemInput, BudgetItemOut, BudgetSpend, BudgetSpendOut } from './types';
+import type {
+  BudgetItemInput,
+  BudgetItemOut,
+  BudgetSpend,
+  BudgetSpendOut,
+  UpdateBudgetItemInput,
+} from './types';
 
 /** The server's default spend page, asked for explicitly so "is there more?" is decidable. */
 export const SPEND_PAGE_SIZE = 50;
@@ -14,6 +20,23 @@ export function createBudgetItem(input: BudgetItemInput): Promise<BudgetItemOut>
   return request('POST', '/api/budget/items', {
     body: { name: input.name, kind: input.kind, unit: input.unit, cap: input.cap, period: input.period },
   });
+}
+
+/**
+ * `PATCH /api/budget/items/{id}`: only the fields given are sent (the server refuses any other,
+ * the kind and unit among them, and an edit naming none).
+ */
+export function updateBudgetItem(id: string, input: UpdateBudgetItemInput): Promise<BudgetItemOut> {
+  const body: Record<string, unknown> = {};
+  if (input.name !== undefined) body.name = input.name;
+  if (input.cap !== undefined) body.cap = input.cap;
+  if (input.period !== undefined) body.period = input.period;
+  return request('PATCH', `/api/budget/items/${seg(id)}`, { body });
+}
+
+/** `POST /api/budget/items/{id}/retire`: final; its links go, its spend history stays. */
+export function retireBudgetItem(id: string): Promise<BudgetItemOut> {
+  return request('POST', `/api/budget/items/${seg(id)}/retire`, { body: { confirm: true } });
 }
 
 /** `POST /api/budget/items/{id}/spend` (`201`): `amount` in the item's unit, positive. */

@@ -1,14 +1,15 @@
 //! `/api/budget/items`: the budget items of the session's current workspace and their spend: the
 //! tenant's own money and caps (spec §6.2 "Bütçe kalemi").
 //!
-//! Creating an item and recording a spend answer `201`. A spend's `source` is the caller, never
-//! the body.
+//! Creating an item and recording a spend answer `201`; editing and retiring an item answer the
+//! item as it now stands (`200`), the same JSON their MCP tools answer. A spend's `source` is the
+//! caller, never the body.
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use jt_app::usecases::budget::{
-    self, BudgetItemInput, BudgetItemOut, BudgetSpendOut, DEFAULT_SPEND_PAGE,
+    self, BudgetItemInput, BudgetItemOut, BudgetSpendOut, DEFAULT_SPEND_PAGE, UpdateBudgetItem,
 };
 use jt_capability::{BudgetItemId, BudgetSpend, BudgetSpendId};
 use serde::Deserialize;
@@ -16,6 +17,15 @@ use serde::Deserialize;
 use crate::error::{ApiError, ApiJson, ApiPath, ApiQuery};
 use crate::session::WorkspaceCtx;
 use crate::state::AppState;
+
+/// `POST /api/budget/items/{budget_item_id}/retire`: the confirmation (missing reads as `false`,
+/// which is refused).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetireItemBody {
+    #[serde(default)]
+    pub confirm: bool,
+}
 
 /// `POST /api/budget/items/{budget_item_id}/spend`.
 #[derive(Deserialize)]
@@ -59,6 +69,31 @@ pub async fn create_item(
 ) -> Result<(StatusCode, Json<BudgetItemOut>), ApiError> {
     let item = budget::create_item(&state.deps, &ctx, body).await?;
     Ok((StatusCode::CREATED, Json(item)))
+}
+
+/// `200` with the item as edited. The body is the edit as [`UpdateBudgetItem`] reads it:
+/// `{name?, cap?, period?}`, at least one; the kind and the unit are refused.
+pub async fn update_item(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(item): ApiPath<BudgetItemId>,
+    ApiJson(body): ApiJson<UpdateBudgetItem>,
+) -> Result<Json<BudgetItemOut>, ApiError> {
+    Ok(Json(
+        budget::update_item(&state.deps, &ctx, item, body).await?,
+    ))
+}
+
+/// `200` with the retired item: unlinked from every capability, taking no more spend.
+pub async fn retire_item(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(item): ApiPath<BudgetItemId>,
+    ApiJson(body): ApiJson<RetireItemBody>,
+) -> Result<Json<BudgetItemOut>, ApiError> {
+    Ok(Json(
+        budget::retire_item(&state.deps, &ctx, item, body.confirm).await?,
+    ))
 }
 
 /// `201` with the recorded spend and what remains of the item's cap in its period.

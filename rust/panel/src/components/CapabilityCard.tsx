@@ -7,7 +7,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/compo
 import { kindLabel } from '@/lib/capabilities';
 import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/format';
 
-export type CapabilityAction = 'verify' | 'policy' | 'unreachable' | 'link' | 'retire';
+export type CapabilityAction = 'verify' | 'edit' | 'policy' | 'unreachable' | 'link' | 'retire';
 
 /** A policy in a few short lines: hours, caps, human approval, how long a verification lasts. */
 export function policySummary(t: TFunction, language: string, policy: Policy): string[] {
@@ -143,6 +143,9 @@ export function CapabilityCard({
                 {t('capabilities.actions.verify')}
               </Button>
             )}
+            <Button size="sm" variant="outline" onClick={() => onAction('edit', item)}>
+              {t('capabilities.actions.edit')}
+            </Button>
             <Button size="sm" variant="outline" onClick={() => onAction('policy', item)}>
               {t('capabilities.actions.policy')}
             </Button>

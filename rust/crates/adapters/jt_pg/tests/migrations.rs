@@ -46,6 +46,23 @@ const CONNECTOR_INDEXES: [&str; 2] = [
     "inbound_events_raw_received_idx",
 ];
 
+/// The column `0005_connectors` adds to a table of an earlier migration: a budget item's
+/// retirement time.
+const RETIRED_AT: (&str, &str) = ("budget_items", "retired_at");
+
+/// Whether `table` has a column named `column`.
+async fn column_exists(pool: &PgPool, (table, column): (&str, &str)) -> bool {
+    sqlx::query_scalar(
+        "select exists(select 1 from information_schema.columns \
+         where table_schema = 'public' and table_name = $1 and column_name = $2)",
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 /// Migrations recorded as applied.
 async fn applied_count(pool: &PgPool) -> i64 {
     sqlx::query_scalar("select count(*) from _sqlx_migrations")
@@ -76,6 +93,7 @@ async fn up_down_up_round_trip() {
     for index in CONNECTOR_INDEXES {
         assert!(index_exists(&db.pool, index).await, "{index}");
     }
+    assert!(column_exists(&db.pool, RETIRED_AT).await);
 
     jt_pg::migrate_down_all(&db.pool).await.unwrap();
     assert_eq!(table_count(&db.pool).await, 0);
@@ -91,6 +109,7 @@ async fn up_down_up_round_trip() {
     for index in CONNECTOR_INDEXES {
         assert!(index_exists(&db.pool, index).await, "{index}");
     }
+    assert!(column_exists(&db.pool, RETIRED_AT).await);
 }
 
 /// Whether a function named `name` exists.
@@ -144,24 +163,29 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     for index in CONNECTOR_INDEXES {
         assert!(index_exists(&db.pool, index).await, "{index}");
     }
+    assert!(column_exists(&db.pool, RETIRED_AT).await);
 
-    // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables and
-    // trigger functions; 0004 its index; 0003 its tables and trigger function.
+    // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
+    // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     run(connectors_down.clone()).await;
     run(connectors_down.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
     for function in CONNECTOR_FUNCTIONS {
         assert!(!function_exists(&db.pool, function).await, "{function}");
     }
-    // Including the index it put on `capabilities`, which stays.
+    // Including the index it put on `capabilities` and the column it put on `budget_items`,
+    // which stay.
     for index in CONNECTOR_INDEXES {
         assert!(!index_exists(&db.pool, index).await, "{index}");
     }
+    assert!(!column_exists(&db.pool, RETIRED_AT).await);
     // 0005 applies again on its own, and reverts again.
     run(connectors_up.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert!(column_exists(&db.pool, RETIRED_AT).await);
     run(connectors_down).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
+    assert!(!column_exists(&db.pool, RETIRED_AT).await);
 
     run(backfill_down.clone()).await;
     run(backfill_down.clone()).await;

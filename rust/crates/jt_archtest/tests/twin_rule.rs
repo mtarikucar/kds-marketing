@@ -112,11 +112,13 @@ fn mcp_registry_matches_catalog() {
     }
 }
 
-/// The MCP tools the registry defines after M1a, by domain: 15 from M0 (`agent`, `workspace`,
-/// `team`, `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and
-/// `budget`, and 3 `work`. Written out, so a tool added or dropped without updating the
-/// documentation (the README lists them) fails here. The six `connector` tools are in the catalog
-/// but not yet defined (`jt_mcp::NOT_YET_DEFINED`); M1b Task 8 defines them and adds the domain.
+/// The MCP tools the registry defines, by domain: 15 from M0 (`agent`, `workspace`, `team`,
+/// `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and `budget` from
+/// M1a and the three edits of M1b Task 4b (`jeeta.capability.update`,
+/// `jeeta.budget.items_update`, `jeeta.budget.items_retire`), and 3 `work`. Written out, so a
+/// tool added or dropped without updating the documentation (the README lists them) fails here.
+/// The six `connector` tools are in the catalog but not yet defined (`jt_mcp::NOT_YET_DEFINED`);
+/// M1b Task 8 defines them and adds the domain.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("agent", 1),
     ("workspace", 1),
@@ -126,17 +128,17 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("agents", 1),
     ("ledger", 1),
     ("strategy", 10),
-    ("capability", 15),
-    ("budget", 4),
+    ("capability", 16),
+    ("budget", 6),
     ("work", 3),
 ];
 
 #[test]
-fn the_registry_holds_47_tools() {
+fn the_registry_holds_50_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 47);
+    assert_eq!(specs.len(), 50);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 47);
+    assert_eq!(total, 50);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();

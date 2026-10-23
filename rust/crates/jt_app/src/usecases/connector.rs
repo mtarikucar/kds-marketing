@@ -1139,7 +1139,7 @@ async fn renew(
 }
 
 /// `CONFLICT`: a live capability of `kind_key` already holds the account `external_id`.
-fn account_taken(kind_key: &str, external_id: &str) -> AppError {
+pub(crate) fn account_taken(kind_key: &str, external_id: &str) -> AppError {
     AppError {
         code: ErrorCode::Conflict,
         message: "a capability of this kind already holds the account".into(),
@@ -1707,7 +1707,7 @@ async fn bound_to_account(
 }
 
 /// Whether a live capability of `capability`'s kind, other than it, holds `account`.
-async fn account_held_elsewhere(
+pub(crate) async fn account_held_elsewhere(
     repos: &mut dyn TenantRepos,
     capability: &Capability,
     account: &str,
