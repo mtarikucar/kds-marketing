@@ -151,6 +151,23 @@ pub trait ConversationRepo: Send + Sync {
 
 #[async_trait]
 pub trait MessageRepo: Send + Sync {
+    /// Indexed workspace/capability lookup; provider ids are scoped to the messaging account.
+    /// If historical duplicates exist across conversations, returns the earliest (at,id).
+    async fn find_by_external_id(
+        &mut self,
+        capability: CapabilityId,
+        external_id: &str,
+    ) -> Result<Option<Message>, AppError>;
+    /// At most two outbound messages with matching text, no external id and an outbox row
+    /// in sending, or sent no earlier than five minutes before receipt. Enqueued after receipt is excluded.
+    /// Callers must defer ambiguous matches, never guess authorship. Hold the workspace lock.
+    async fn echo_candidates(
+        &mut self,
+        conversation: ConversationId,
+        body: &str,
+        received_at: OffsetDateTime,
+    ) -> Result<Vec<Message>, AppError>;
+
     /// Latest messages in chronological order.
     async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError>;
     /// Consumer contract: after a NEW inbound insert, call in the SAME transaction with the

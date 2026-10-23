@@ -153,3 +153,12 @@ async fn claim_effect_completion_rollback_and_retry() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn message_lookup_and_echo_binding_contract() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::inbox_contract::message_receipt_lookup_and_echo_binding(Arc::new(
+        jt_pg::PgUnitOfWork::new(db.pool.clone()),
+    ))
+    .await;
+}

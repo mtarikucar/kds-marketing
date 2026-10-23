@@ -625,6 +625,61 @@ impl ConversationRepo for MemTenant {
 }
 #[async_trait]
 impl MessageRepo for MemTenant {
+    async fn find_by_external_id(
+        &mut self,
+        capability: CapabilityId,
+        external_id: &str,
+    ) -> Result<Option<Message>, AppError> {
+        let s = self.state();
+        Ok(s.inbox
+            .messages
+            .iter()
+            .filter(|m| {
+                m.workspace_id == self.ws
+                    && m.external_id.as_deref() == Some(external_id)
+                    && s.inbox.conversations.iter().any(|c| {
+                        c.workspace_id == self.ws
+                            && c.id == m.conversation_id
+                            && c.capability_id == capability
+                    })
+            })
+            .min_by_key(|m| (m.at, m.id))
+            .cloned())
+    }
+    async fn echo_candidates(
+        &mut self,
+        conversation: ConversationId,
+        body: &str,
+        received_at: OffsetDateTime,
+    ) -> Result<Vec<Message>, AppError> {
+        let s = self.state();
+        let mut rows: Vec<_> = s
+            .inbox
+            .messages
+            .iter()
+            .filter(|m| {
+                m.workspace_id == self.ws
+                    && m.conversation_id == conversation
+                    && m.direction == Direction::Outbound
+                    && m.external_id.is_none()
+                    && m.body == body
+                    && s.inbox.outbox.iter().any(|o| {
+                        o.workspace_id == self.ws
+                            && o.conversation_id == m.conversation_id
+                            && o.message_id == m.id
+                            && o.created_at <= received_at
+                            && (o.state == "sending"
+                                || (o.state == "sent"
+                                    && o.updated_at >= received_at - Duration::minutes(5)))
+                    })
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|m| (m.at, m.id));
+        rows.truncate(2);
+        Ok(rows)
+    }
+
     async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError> {
         let mut rows: Vec<_> = self
             .state()

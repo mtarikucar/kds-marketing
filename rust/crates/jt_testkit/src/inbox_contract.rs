@@ -895,3 +895,214 @@ pub async fn conversation_upsert_uses_the_natural_key(uow: Arc<dyn UnitOfWork>) 
     );
     t.commit().await.unwrap();
 }
+
+/// External-id lookup is tenant/account scoped; echo candidates preserve our outbound row.
+pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let p = f.insert_person("Receipt").await;
+    let cap = f.capability().await;
+    let other_cap = f.capability().await;
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    let c = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(p.id, cap))
+        .await
+        .unwrap();
+    let other = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(p.id, other_cap))
+        .await
+        .unwrap();
+    let mut m = f.message(c.id);
+    m.direction = Direction::Outbound;
+    m.author = Author::Human(f.user);
+    m.status = MsgStatus::Sent;
+    t.messages().insert_if_new(m.clone()).await.unwrap();
+    let mut different_account = m.clone();
+    different_account.id = MessageId::new_v7();
+    different_account.conversation_id = other.id;
+    t.messages()
+        .insert_if_new(different_account.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        t.messages()
+            .find_by_external_id(cap, "provider-1")
+            .await
+            .unwrap(),
+        Some(m.clone())
+    );
+    assert_eq!(
+        t.messages()
+            .find_by_external_id(other_cap, "provider-1")
+            .await
+            .unwrap(),
+        Some(different_account)
+    );
+    assert!(
+        t.messages()
+            .find_by_external_id(cap, "missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        t.messages()
+            .find_by_external_id(CapabilityId::new_v7(), "provider-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let mut pending = m.clone();
+    pending.id = MessageId::new_v7();
+    pending.external_id = None;
+    pending.status = MsgStatus::Queued;
+    t.messages().insert_if_new(pending.clone()).await.unwrap();
+    let mut row = OutboxRow {
+        id: Uuid::now_v7(),
+        workspace_id: f.ws,
+        conversation_id: c.id,
+        message_id: pending.id,
+        capability_id: cap,
+        intent: json!({}),
+        expected_generation: 0,
+        fence_snapshot: None,
+        state: "queued".into(),
+        attempts: 0,
+        last_error: None,
+        created_at: FIXED_NOW,
+        updated_at: FIXED_NOW,
+    };
+    t.outbox().insert(row.clone()).await.unwrap();
+    assert!(
+        t.messages()
+            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for state in ["sending", "sent"] {
+        row.state = state.into();
+        t.outbox().update(row.clone()).await.unwrap();
+        assert_eq!(
+            t.messages()
+                .echo_candidates(c.id, &m.body, FIXED_NOW)
+                .await
+                .unwrap(),
+            vec![pending.clone()]
+        );
+        assert!(
+            t.messages()
+                .echo_candidates(other.id, &m.body, FIXED_NOW)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            t.messages()
+                .echo_candidates(c.id, "different text", FIXED_NOW)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            t.messages()
+                .echo_candidates(c.id, &m.body, FIXED_NOW - Duration::seconds(1))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(
+        t.messages()
+            .echo_candidates(c.id, &m.body, FIXED_NOW + Duration::minutes(6))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for state in ["unknown", "failed", "refused"] {
+        row.state = state.into();
+        t.outbox().update(row.clone()).await.unwrap();
+        assert!(
+            t.messages()
+                .echo_candidates(c.id, &m.body, FIXED_NOW)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    row.state = "sending".into();
+    t.outbox().update(row.clone()).await.unwrap();
+    let mut second = pending.clone();
+    second.id = MessageId::new_v7();
+    t.messages().insert_if_new(second.clone()).await.unwrap();
+    let mut second_outbox = row.clone();
+    second_outbox.id = Uuid::now_v7();
+    second_outbox.message_id = second.id;
+    t.outbox().insert(second_outbox.clone()).await.unwrap();
+    assert_eq!(
+        t.messages()
+            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    second_outbox.state = "failed".into();
+    t.outbox().update(second_outbox).await.unwrap();
+    // Receipt may finalize after the echo arrived but before it is consumed.
+    row.state = "sent".into();
+    row.updated_at = FIXED_NOW + Duration::seconds(1);
+    t.outbox().update(row).await.unwrap();
+    assert_eq!(
+        t.messages()
+            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .await
+            .unwrap(),
+        vec![pending.clone()]
+    );
+    // Echo binds the id; the later receipt repeats the same id and adds status/cost.
+    t.messages()
+        .set_status(pending.id, MsgStatus::Queued, Some("echo-id".into()), None)
+        .await
+        .unwrap();
+    t.messages()
+        .set_status(pending.id, MsgStatus::Sent, Some("echo-id".into()), Some(4))
+        .await
+        .unwrap();
+    let sent = t
+        .messages()
+        .find_by_external_id(cap, "echo-id")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sent.id, pending.id);
+    assert_eq!(sent.author, pending.author);
+    assert_eq!(sent.cost_minor, Some(4));
+    assert!(
+        t.messages()
+            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    t.commit().await.unwrap();
+    let mut other = f.uow.tenant(f.other).await.unwrap();
+    assert!(
+        other
+            .messages()
+            .find_by_external_id(cap, "provider-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        other
+            .messages()
+            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

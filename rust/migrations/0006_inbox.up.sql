@@ -122,6 +122,10 @@ create table if not exists request_keys (
 create unique index if not exists identities_active_key on identities (workspace_id, channel, value_normalized) where active;
 create unique index if not exists journeys_one_open on journeys (workspace_id, person_id) where closed_at is null;
 create unique index if not exists messages_external_key on messages (workspace_id, conversation_id, external_id) where external_id is not null;
+-- External ids are account-scoped via conversations; this narrows receipts before the join.
+create index if not exists messages_external_lookup on messages (workspace_id, external_id, at, id) where external_id is not null;
+create index if not exists messages_echo_candidates on messages (workspace_id, conversation_id, at, id) where direction='outbound' and external_id is null;
+create index if not exists outbox_message_lookup on outbox (workspace_id, message_id);
 create index if not exists outbox_pending on outbox (workspace_id, state, updated_at);
 create index if not exists request_keys_expiry on request_keys (workspace_id, at);
 

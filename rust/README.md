@@ -1285,16 +1285,29 @@ harici hesap kimliğiyle kapsamlanır. Her yeni inbound mesajdan sonra aynı iş
 normalleştirilmiş/hesapla kapsamlanmış kimlik, mesajın gönderenini kaydeder ve en son
 gelen mesaja göre `last_inbound_identity_id` değerini günceller. Geç gelen eski mesaj
 ve tekrar teslim, daha yeni göndereni değiştirmez; ayrı bir gönderen kaydı tutulmaz.
+Etkinlik ve mesaj zamanı RFC3339 `payload.occurred_at` değerinden alınır; değer yoksa,
+geçersizse veya `received_at` değerinden beş dakikadan fazla ilerideyse `received_at`
+kullanılır. Gecikmiş eski mesaj, 24 saatlik yanıt penceresini yenilemez.
+Page/Instagram profil kabiliyetine yönlenen Meta mesaj/echo/raporları, aynı çalışma
+alanı ve harici hesaptaki emekliye ayrılmamış `messenger`/`instagram_dm` kardeşine
+çözülür; kardeşi bulunmayan olay ertelenir.
 Mesaj kimliği sağlayıcının mesaj kimliği,
 yolculuk anahtarı `inbound:<event_id>` olur. Lost mesajı aynı yolculuğu korur ve
 konuşmayı Ours/Human{None} yapıp executor neslini artırır; Won sonrası yeni Repeat
 yolculuğu açılır, kişinin ilk kaynağı değişmez. Echo, mevcut gönderiyi eşler veya
 bilinen konuşmaya System outbound yazar; teslim raporları eşleşen gönderiyi günceller.
+Echo makbuzdan önce gelirse, aynı metinli ve henüz harici kimliği olmayan `sending`
+gönderiye (veya son beş dakikada `sent` olmuş gönderiye) kimliği bağlar; yazarını korur.
+Birden fazla aday varsa tahmin etmek yerine erteler. Makbuz aynı kimliği tekrar
+kaydedebilir. `MessageRepo::find_by_external_id` çalışma alanı/kabiliyet kapsamında
+indeksli arar; rapor ve echo eşlemesi tüm konuşma/mesaj geçmişini taramaz.
 
 NetGSM PBX olayları `unique_id` ile ilişkilendirilir. `inbound_call`/`answer`
 konuşma etkinliğini günceller; Hangup, `call:<unique_id>` anahtarıyla tek `call_made`
 yazar. Kısmi etkinlik, sürümler arasında sabit `inbox.pbx_activity` talebiyle
-yalnız bir kez uygulanır. Bağlantı yalnız Hangup'a kadar saklanan Answer ile doğrulanır; Hangup'ın
+yalnız bir kez uygulanır. Aynı teslim zamanındaki kardeş olaylar, üretilen kimliklerin
+sırasından bağımsız olarak çalışma alanı/sağlayıcı/`unique_id` ile ilişkilendirilir.
+Bağlantı yalnız Hangup'a kadar saklanan Answer ile doğrulanır; Hangup'ın
 durum/metin/süre alanı bağlantı kanıtı değildir. Sonradan gelen olay sonucu değiştirmez.
 
 LeadGen, Consent, Unknown, yönlendirilmemiş/desteklenmeyen kabiliyet olayları,

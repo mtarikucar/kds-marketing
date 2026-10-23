@@ -416,6 +416,9 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
     assert_eq!(table_count(&db.pool).await, 36);
+    assert!(index_exists(&db.pool, "messages_external_lookup").await);
+    assert!(index_exists(&db.pool, "messages_echo_candidates").await);
+    assert!(index_exists(&db.pool, "outbox_message_lookup").await);
     assert!(column_exists(&db.pool, ("conversations", "created_at")).await);
     assert!(column_exists(&db.pool, ("conversations", "updated_at")).await);
     assert!(column_exists(&db.pool, ("conversations", "activity_revision")).await);
@@ -434,6 +437,9 @@ async fn migration_round_trip_23_36_23_36() {
     for _ in 0..2 {
         sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, 23);
+        assert!(!index_exists(&db.pool, "messages_external_lookup").await);
+        assert!(!index_exists(&db.pool, "messages_echo_candidates").await);
+        assert!(!index_exists(&db.pool, "outbox_message_lookup").await);
         assert!(!column_exists(&db.pool, ("conversations", "created_at")).await);
         assert!(!column_exists(&db.pool, ("conversations", "updated_at")).await);
         assert!(!column_exists(&db.pool, ("conversations", "activity_revision")).await);
@@ -455,6 +461,9 @@ async fn migration_round_trip_23_36_23_36() {
     for _ in 0..2 {
         sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, 36);
+        assert!(index_exists(&db.pool, "messages_external_lookup").await);
+        assert!(index_exists(&db.pool, "messages_echo_candidates").await);
+        assert!(index_exists(&db.pool, "outbox_message_lookup").await);
         assert!(column_exists(&db.pool, ("conversations", "created_at")).await);
         assert!(column_exists(&db.pool, ("conversations", "updated_at")).await);
         assert!(column_exists(&db.pool, ("conversations", "activity_revision")).await);

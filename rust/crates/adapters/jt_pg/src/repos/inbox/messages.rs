@@ -5,9 +5,28 @@ use jt_app::{
     error::AppError,
     ports::inbox::{MAX_INBOX_PAGE, MessageRepo},
 };
+use jt_capability::CapabilityId;
 use jt_inbox::{ConversationId, IdentityId, Message, MessageId, MsgStatus};
 #[async_trait]
 impl MessageRepo for PgTenantRepos {
+    async fn find_by_external_id(
+        &mut self,
+        capability: CapabilityId,
+        external_id: &str,
+    ) -> Result<Option<Message>, AppError> {
+        one!(sqlx::query_scalar("select to_jsonb(m) from messages m join conversations c on (c.workspace_id,c.id)=(m.workspace_id,m.conversation_id) where m.workspace_id=$1 and c.capability_id=$2 and m.external_id=$3 order by m.at,m.id limit 1")
+            .bind(self.workspace_id().as_uuid()).bind(capability.as_uuid()).bind(external_id),self,Message)
+    }
+    async fn echo_candidates(
+        &mut self,
+        conversation: ConversationId,
+        body: &str,
+        received_at: time::OffsetDateTime,
+    ) -> Result<Vec<Message>, AppError> {
+        many!(sqlx::query_scalar("select to_jsonb(m) from messages m where m.workspace_id=$1 and m.conversation_id=$2 and m.direction='outbound' and m.external_id is null and m.body=$3 and exists(select 1 from outbox o where o.workspace_id=m.workspace_id and o.conversation_id=m.conversation_id and o.message_id=m.id and o.created_at<=$4 and (o.state='sending' or (o.state='sent' and o.updated_at >= $4 - interval '5 minutes'))) order by m.at,m.id limit 2")
+            .bind(self.workspace_id().as_uuid()).bind(conversation.as_uuid()).bind(body).bind(received_at),self,Message)
+    }
+
     async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError> {
         many!(sqlx::query_scalar("select to_jsonb(m) from (select * from messages where workspace_id=$1 and conversation_id=$2 order by at desc,id desc limit $3) m order by at,id").bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(i64::from(limit.clamp(1,500))),self,Message)
     }

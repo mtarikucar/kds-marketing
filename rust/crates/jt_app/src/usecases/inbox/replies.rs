@@ -615,6 +615,24 @@ pub async fn record_result(
             }
         }
     };
+    // An early echo can bind the id while provider I/O is still in flight. A delivery
+    // report processed before acceptance bookkeeping is newer evidence than Sent.
+    let status = if status == MsgStatus::Sent {
+        let message = r
+            .messages()
+            .get(row.message_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("no such message"))?;
+        if message.external_id == external
+            && matches!(message.status, MsgStatus::Delivered | MsgStatus::Failed)
+        {
+            message.status
+        } else {
+            status
+        }
+    } else {
+        status
+    };
     row.updated_at = ctx.now;
     r.messages()
         .set_status(row.message_id, status, external, cost)

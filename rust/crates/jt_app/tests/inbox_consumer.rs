@@ -797,3 +797,322 @@ async fn orphan_echo_defers_without_inventing_an_inbound_reply_window() {
         "deferred"
     );
 }
+
+#[tokio::test]
+async fn newer_page_routes_messages_to_live_messaging_sibling() {
+    for (page_kind, messaging_kind, file) in [
+        ("facebook_page", "messenger", "messenger_messaging"),
+        ("instagram", "instagram_dm", "instagram_messaging"),
+    ] {
+        let w = world().await;
+        let messaging = cap(&w, messaging_kind).await;
+        let page = cap(&w, page_kind).await;
+        let mut r = w.uow.tenant(w.ws).await.unwrap();
+        for id in [messaging, page] {
+            let mut c = r.capabilities().lock(id).await.unwrap().unwrap();
+            c.external_id = Some("shared-account".into());
+            c.status = jt_capability::StoredStatus::Verified;
+            c.last_verified_at = Some(w.owner_ctx.now);
+            r.capabilities().update(c).await.unwrap();
+        }
+        r.commit().await.unwrap();
+        put(&w, Some(page), Provider::Meta, meta(file).remove(0), 0).await;
+        assert_eq!(run(&w).await.failed, 0);
+        let s = w.uow.snapshot().inbox;
+        assert_eq!(s.messages.len(), 1);
+        assert_eq!(s.conversations[0].capability_id, messaging);
+        assert!(
+            s.identities[0]
+                .value_normalized
+                .starts_with("shared-account:")
+        );
+    }
+}
+
+#[tokio::test]
+async fn batched_unanswered_call_correlates_siblings_after_hangup_id() {
+    let w = world().await;
+    let c = cap(&w, "netgsm_pbx").await;
+    let drafts = netgsm("events", NetgsmPurpose::Events);
+    // store_all sorts provider ids: hangup is allocated before inbound_call, at the same time.
+    for index in [2, 0] {
+        put(&w, Some(c), Provider::Netgsm, drafts[index].clone(), 0).await;
+    }
+    let report = run(&w).await;
+    assert_eq!(report.failed, 0);
+    let s = w.uow.snapshot().inbox;
+    assert_eq!(s.events.len(), 1);
+    assert_eq!(
+        s.events[0].kind,
+        JourneyEventKind::CallMade { connected: false }
+    );
+    assert_eq!(s.journeys[0].unreachable_attempts, 1);
+}
+
+#[tokio::test]
+async fn delayed_occurrence_preserves_reply_window_and_latest_sender() {
+    use jt_app::usecases::inbox::people;
+    let (w, c) = first().await;
+    let conv = w.uow.snapshot().inbox.conversations[0].clone();
+    people::add_identity(
+        &w.deps,
+        &w.owner_ctx,
+        conv.person_id,
+        people::IdentityInput {
+            channel: IdentityChannel::Phone,
+            value: "0555 222 22 22".into(),
+            capability_id: Some(c),
+        },
+    )
+    .await
+    .unwrap();
+    let before = w.uow.snapshot().inbox;
+    let old_at = w.owner_ctx.now - Duration::hours(48);
+    let mut old = meta("whatsapp_messages").remove(1);
+    old.payload["occurred_at"] = json!(
+        old_at
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    );
+    put(&w, Some(c), Provider::Meta, old, 30).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let after = w.uow.snapshot().inbox;
+    assert_eq!(after.conversations[0].last_inbound_at, conv.last_inbound_at);
+    assert_eq!(
+        after.conversation_send_states[&conv.id].last_inbound_identity_id,
+        before.conversation_send_states[&conv.id].last_inbound_identity_id
+    );
+    assert!(after.messages.iter().any(|m| m.at == old_at));
+
+    // A first contact delivered two days late must also retain its expired activity window.
+    let w = world().await;
+    let c = cap(&w, "whatsapp_cloud").await;
+    let mut old = meta("whatsapp_messages").remove(0);
+    old.payload["occurred_at"] = json!(
+        old_at
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    );
+    put(&w, Some(c), Provider::Meta, old, 0).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let conv = w.uow.snapshot().inbox.conversations[0].clone();
+    assert_eq!(conv.last_inbound_at, Some(old_at));
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    w.approve_strategy().await;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let mut capability = r.capabilities().lock(c).await.unwrap().unwrap();
+    capability.status = jt_capability::StoredStatus::Verified;
+    capability.last_verified_at = Some(w.owner_ctx.now);
+    r.capabilities().update(capability).await.unwrap();
+    r.capabilities()
+        .set_sealed(c, Some(vec![1]), w.owner_ctx.now)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let error = jt_app::usecases::inbox::replies::reply(
+        &w.deps,
+        &w.owner_ctx,
+        conv.id,
+        serde_json::from_value(json!({"text":"Late reply", "intent":"reply"})).unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.message, "reply_window_closed");
+    assert!(w.uow.snapshot().inbox.outbox.is_empty());
+}
+
+#[tokio::test]
+async fn future_or_invalid_occurrence_falls_back_to_receipt_time() {
+    for occurrence in [json!("invalid"), json!("2999-01-01T00:00:00Z")] {
+        let w = world().await;
+        let c = cap(&w, "whatsapp_cloud").await;
+        let mut draft = meta("whatsapp_messages").remove(0);
+        draft.payload["occurred_at"] = occurrence;
+        put(&w, Some(c), Provider::Meta, draft, 0).await;
+        assert_eq!(run(&w).await.failed, 0);
+        let s = w.uow.snapshot().inbox;
+        assert_eq!(s.messages[0].at, w.owner_ctx.now);
+        assert_eq!(s.conversations[0].last_inbound_at, Some(w.owner_ctx.now));
+    }
+}
+
+async fn echo_receipt_order(echo_first: bool, delivery_first: bool) {
+    use jt_app::{
+        ports::connectors::SendReceipt,
+        usecases::inbox::{consumer, replies},
+    };
+    use jt_testkit::fakes::{ScriptedConnector, ScriptedRegistry};
+    use std::sync::Arc;
+    let mut w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    w.approve_strategy().await;
+    let c = cap(&w, "messenger").await;
+    let cred = jt_connector::Credential::PageToken {
+        page_id: c.to_string(),
+        token: "test".into(),
+    };
+    let sealed = w
+        .deps
+        .seal
+        .seal(w.ws, &serde_json::to_vec(&cred).unwrap())
+        .unwrap();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let mut capability = r.capabilities().lock(c).await.unwrap().unwrap();
+    capability.status = jt_capability::StoredStatus::Verified;
+    capability.last_verified_at = Some(w.owner_ctx.now);
+    r.capabilities().update(capability).await.unwrap();
+    r.capabilities()
+        .set_sealed(c, Some(sealed), w.owner_ctx.now)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    put(
+        &w,
+        Some(c),
+        Provider::Meta,
+        meta("messenger_messaging").remove(0),
+        0,
+    )
+    .await;
+    assert_eq!(run(&w).await.failed, 0);
+    let conv = w.uow.snapshot().inbox.conversations[0].id;
+    let connector = Arc::new(ScriptedConnector::new(Provider::Meta));
+    connector.push_send_text(Ok(SendReceipt {
+        provider_id: "m_TEST-ECHO-1".into(),
+        cost_minor: Some(3),
+    }));
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(connector.clone()));
+    if echo_first {
+        put(
+            &w,
+            Some(c),
+            Provider::Meta,
+            meta("messenger_messaging").remove(1),
+            1,
+        )
+        .await;
+        if delivery_first {
+            let delivery = meta("messenger_messaging")
+                .into_iter()
+                .find(|d| d.kind == EventKind::Status && d.payload["mid"] == "m_TEST-ECHO-1")
+                .unwrap();
+            put(&w, Some(c), Provider::Meta, delivery, 2).await;
+        }
+        let deps = w.deps.clone();
+        let ws = w.ws;
+        let now = w.owner_ctx.now + Duration::minutes(1);
+        connector.push_send_hook(move || async move {
+            assert_eq!(consumer::consume_workspace(&deps, ws, now).await.failed, 0);
+        });
+    }
+    let result = replies::reply(
+        &w.deps,
+        &w.owner_ctx,
+        conv,
+        serde_json::from_value(json!({"text":"Hoş geldiniz","intent":"reply"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.state, "sent");
+    if !echo_first {
+        put(
+            &w,
+            Some(c),
+            Provider::Meta,
+            meta("messenger_messaging").remove(1),
+            1,
+        )
+        .await;
+        assert_eq!(run(&w).await.failed, 0);
+    }
+    let s = w.uow.snapshot().inbox;
+    assert_eq!(s.messages.len(), 2);
+    let sent = s
+        .messages
+        .iter()
+        .find(|m| m.id == result.message_id)
+        .unwrap();
+    assert_eq!(sent.author, Author::Human(w.owner));
+    assert_eq!(sent.external_id.as_deref(), Some("m_TEST-ECHO-1"));
+    assert_eq!(sent.cost_minor, Some(3));
+    assert_eq!(
+        sent.status,
+        if delivery_first {
+            MsgStatus::Delivered
+        } else {
+            MsgStatus::Sent
+        }
+    );
+    assert_eq!(s.outbox[0].state, "sent");
+}
+#[tokio::test]
+async fn echo_before_receipt_attaches_to_original_outbound() {
+    echo_receipt_order(true, false).await;
+}
+#[tokio::test]
+async fn receipt_before_echo_preserves_original_outbound() {
+    echo_receipt_order(false, false).await;
+}
+
+#[tokio::test]
+async fn message_lookup_and_echo_binding_contract() {
+    jt_testkit::inbox_contract::message_receipt_lookup_and_echo_binding(std::sync::Arc::new(
+        jt_testkit::fakes::InMemoryUow::default(),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn sibling_resolution_rejects_missing_retired_and_other_account() {
+    for variant in ["missing", "retired", "other_account"] {
+        let w = world().await;
+        let page = cap(&w, "facebook_page").await;
+        if variant != "missing" {
+            let messenger = cap(&w, "messenger").await;
+            let mut r = w.uow.tenant(w.ws).await.unwrap();
+            let mut c = r.capabilities().lock(messenger).await.unwrap().unwrap();
+            if variant == "retired" {
+                c.external_id = Some(page.to_string());
+                c.status = jt_capability::StoredStatus::Retired;
+            }
+            r.capabilities().update(c).await.unwrap();
+            r.commit().await.unwrap();
+        }
+        put(
+            &w,
+            Some(page),
+            Provider::Meta,
+            meta("messenger_messaging").remove(0),
+            0,
+        )
+        .await;
+        assert_eq!(run(&w).await.skipped, 1, "{variant}");
+        assert!(w.uow.snapshot().inbox.people.is_empty(), "{variant}");
+    }
+}
+
+#[tokio::test]
+async fn occurrence_future_skew_is_bounded_at_five_minutes() {
+    for (seconds, accepted) in [(300, true), (301, false)] {
+        let w = world().await;
+        let c = cap(&w, "whatsapp_cloud").await;
+        let mut draft = meta("whatsapp_messages").remove(0);
+        let occurred = w.owner_ctx.now + Duration::seconds(seconds);
+        draft.payload["occurred_at"] = json!(
+            occurred
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        );
+        put(&w, Some(c), Provider::Meta, draft, 0).await;
+        assert_eq!(run(&w).await.failed, 0);
+        let expected = if accepted { occurred } else { w.owner_ctx.now };
+        let s = w.uow.snapshot().inbox;
+        assert_eq!(s.messages[0].at, expected);
+        assert_eq!(s.conversations[0].last_inbound_at, Some(expected));
+    }
+}
+
+#[tokio::test]
+async fn echo_and_delivery_before_receipt_preserve_delivery_status() {
+    echo_receipt_order(true, true).await;
+}

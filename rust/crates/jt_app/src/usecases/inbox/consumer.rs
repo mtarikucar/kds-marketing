@@ -3,19 +3,16 @@ use super::{journeys, people, record};
 use crate::{
     ctx::Ctx,
     error::AppError,
-    ports::{
-        EventOrder, EventQuery, TenantRepos,
-        inbox::{ConsumptionOutcome, ConversationQueue},
-    },
+    ports::{CapabilityFilter, EventOrder, EventQuery, TenantRepos, inbox::ConsumptionOutcome},
     usecases::{Deps, jobs::JobReport},
 };
-use jt_capability::Capability;
+use jt_capability::{Capability, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, Provider};
 use jt_inbox::*;
 use jt_ledger::Actor;
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const CONSUMER: &str = "inbox@1";
 // Stable across inbox consumer versions: activity must not reopen a conversation twice.
@@ -119,9 +116,40 @@ async fn route(
     let Some(id) = event.capability_id else {
         return Ok("deferred");
     };
-    let Some(cap) = r.capabilities().find(id).await? else {
+    let Some(mut cap) = r.capabilities().find(id).await? else {
         return Ok("deferred");
     };
+    // Webhook routing may select the newer Page/profile capability for this same account.
+    if event.provider == Provider::Meta
+        && matches!(
+            event.kind,
+            EventKind::Message | EventKind::MessageEcho | EventKind::Status
+        )
+        && let Some(kind) = match cap.kind_key.as_str() {
+            "facebook_page" => Some("messenger"),
+            "instagram" => Some("instagram_dm"),
+            _ => None,
+        }
+    {
+        let Some(account) = cap.external_id.as_deref().filter(|id| !id.is_empty()) else {
+            return Ok("deferred");
+        };
+        let sibling = r
+            .capabilities()
+            .list(CapabilityFilter {
+                kind: Some(kind),
+                ..Default::default()
+            })
+            .await?
+            .into_iter()
+            .find(|c| {
+                c.status != StoredStatus::Retired && c.external_id.as_deref() == Some(account)
+            });
+        let Some(sibling) = sibling else {
+            return Ok("deferred");
+        };
+        cap = sibling;
+    }
     let Some(channel) = channel_for_kind(&cap.kind_key) else {
         return Ok("deferred");
     };
@@ -162,6 +190,13 @@ fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
+}
+// Validate against arrival, not processing time: retries must not make a future timestamp valid.
+fn activity_at(event: &InboundEvent) -> OffsetDateTime {
+    text(&event.payload, "occurred_at")
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .filter(|at| *at <= event.received_at + Duration::minutes(5))
+        .unwrap_or(event.received_at)
 }
 fn malformed() -> AppError {
     AppError::validation("invalid inbound payload", json!({}))
@@ -255,7 +290,7 @@ async fn conversation(
             state: ConvState::Ours,
             executor: Executor::Agent,
             executor_generation: 0,
-            last_inbound_at: Some(event.received_at),
+            last_inbound_at: Some(activity_at(event)),
             last_outbound_at: None,
             created_at: ctx.now,
             updated_at: ctx.now,
@@ -337,15 +372,15 @@ async fn message(
         return Ok("duplicate");
     }
     let content = decode(event, channel, false)?;
-    let person = contact(deps, ctx, r, cap, channel, &content).await?;
     // Check message identity before reopening or fencing: replay has no domain effects.
-    if let Some(conv) = r.conversations().find(person.id, cap.id).await?
-        && find_message(r, conv.id, &content.external_id)
-            .await?
-            .is_some()
+    if r.messages()
+        .find_by_external_id(cap.id, &content.external_id)
+        .await?
+        .is_some()
     {
         return Ok("duplicate");
     }
+    let person = contact(deps, ctx, r, cap, channel, &content).await?;
     let conv = conversation(deps, ctx, r, event, cap, person.id).await?;
     let inserted = r
         .messages()
@@ -359,7 +394,7 @@ async fn message(
             external_id: Some(content.external_id),
             status: MsgStatus::Received,
             cost_minor: None,
-            at: event.received_at,
+            at: activity_at(event),
         })
         .await?;
     let Some(message_id) = inserted else {
@@ -389,49 +424,15 @@ async fn message(
     apply(deps, ctx, r, j, key, JourneyEventKind::MessageReceived).await?;
     Ok("consumed")
 }
-async fn find_message(
-    r: &mut dyn TenantRepos,
-    conversation: ConversationId,
-    external: &str,
-) -> Result<Option<Message>, AppError> {
-    let mut cursor = None;
-    loop {
-        let page = r.messages().page(conversation, cursor, 100).await?;
-        if page.is_empty() {
-            return Ok(None);
-        }
-        for m in page {
-            cursor = Some((m.at, m.id));
-            if m.external_id.as_deref() == Some(external) {
-                return Ok(Some(m));
-            }
-        }
-    }
-}
 async fn outbound(
     r: &mut dyn TenantRepos,
     cap: &Capability,
     external: &str,
 ) -> Result<Option<Message>, AppError> {
-    let mut cursor = None;
-    loop {
-        let page = r
-            .conversations()
-            .page(ConversationQueue::All, cursor, 100)
-            .await?;
-        if page.is_empty() {
-            return Ok(None);
-        }
-        for c in page {
-            cursor = Some((c.created_at, c.id));
-            if c.capability_id == cap.id
-                && let Some(m) = find_message(r, c.id, external).await?
-                && m.direction == Direction::Outbound
-            {
-                return Ok(Some(m));
-            }
-        }
-    }
+    Ok(r.messages()
+        .find_by_external_id(cap.id, external)
+        .await?
+        .filter(|m| m.direction == Direction::Outbound))
 }
 fn sender_key(cap: &Capability, channel: Channel, sender: &str) -> Result<String, AppError> {
     let normalized = normalise(channel.identity_channel(), sender).map_err(|_| malformed())?;
@@ -470,6 +471,26 @@ async fn echo(
     let Some(conv) = r.conversations().find(person.id, cap.id).await? else {
         return Ok("deferred");
     };
+    let candidates = r
+        .messages()
+        .echo_candidates(conv.id, &content.body, event.received_at)
+        .await?;
+    match candidates.as_slice() {
+        [sent] => {
+            // Only bind the provider id. Receipt finalization owns status/cost/outbox transitions.
+            r.messages()
+                .set_status(
+                    sent.id,
+                    sent.status.clone(),
+                    Some(content.external_id),
+                    sent.cost_minor,
+                )
+                .await?;
+            return Ok("consumed");
+        }
+        [] => {}
+        _ => return Ok("deferred"),
+    }
     r.messages()
         .insert_if_new(Message {
             id: MessageId::from(deps.ids.uuid()),
@@ -481,7 +502,7 @@ async fn echo(
             external_id: Some(content.external_id),
             status: MsgStatus::Sent,
             cost_minor: None,
-            at: event.received_at,
+            at: activity_at(event),
         })
         .await?;
     Ok("consumed")
@@ -556,10 +577,10 @@ async fn call(
         for e in page {
             let position = (e.received_at, e.id);
             cursor = Some(position);
-            if position > (event.received_at, event.id) {
+            if e.received_at > event.received_at {
                 break 'history;
             }
-            if e.capability_id != Some(cap.id) || text(&e.payload, "unique_id") != Some(id) {
+            if text(&e.payload, "unique_id") != Some(id) {
                 continue;
             }
             answered |= text(&e.payload, "scenario") == Some("answer");

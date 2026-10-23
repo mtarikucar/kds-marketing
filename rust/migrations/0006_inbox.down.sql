@@ -5,6 +5,10 @@ where is_system and key in ('owner','manager','rep') and permissions @> array['i
 update roles set permissions = array_remove(permissions, 'inbox.manage')
 where is_system and key in ('owner','manager') and permissions @> array['inbox.manage'];
 drop table if exists request_keys;
+-- Receipt/echo lookup indexes are task-owned and are also removed by the table drops.
+drop index if exists messages_external_lookup;
+drop index if exists messages_echo_candidates;
+drop index if exists outbox_message_lookup;
 drop table if exists outbox;
 drop table if exists event_consumption;
 drop table if exists lost_reasons;
