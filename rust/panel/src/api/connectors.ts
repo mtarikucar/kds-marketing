@@ -1,0 +1,85 @@
+import { request, seg } from './client';
+import type {
+  CapabilityOut,
+  ConnectorHealth,
+  CredentialInput,
+  PendingAssetsOut,
+  ProbeOut,
+  SetCredentialsInput,
+  StartOut,
+} from './types';
+
+// Connecting accounts (`/api/connectors`). Credentials and the provider's one-time code only ever
+// travel in mutations: no query, so nothing secret sits in the query cache.
+
+/** `POST /api/connectors/oauth/start`: an OAuth flow for a Meta kind or `x`. */
+export function startOAuth(kindKey: string): Promise<StartOut> {
+  return request('POST', '/api/connectors/oauth/start', { body: { kind_key: kindKey } });
+}
+
+/**
+ * `GET /api/connectors/oauth/callback/{provider}?state=&code=`: completes the flow the provider
+ * called back for (the server refuses any other parameter) and answers the assets it found.
+ */
+export function completeOAuth(provider: string, state: string, code: string): Promise<PendingAssetsOut> {
+  return request('GET', `/api/connectors/oauth/callback/${seg(provider)}`, { query: { state, code } });
+}
+
+/** `POST /api/connectors/oauth/{pending_id}/confirm`: the chosen assets become capabilities. */
+export function confirmAssets(pendingId: string, selected: string[]): Promise<CapabilityOut[]> {
+  return request('POST', `/api/connectors/oauth/${seg(pendingId)}/confirm`, { body: { selected } });
+}
+
+/** The credential exactly as the server reads it: its kind and fields, an optional one only when set. */
+function credentialBody(credential: CredentialInput): Record<string, string> {
+  switch (credential.kind) {
+    case 'netgsm_sms':
+      return {
+        kind: credential.kind,
+        usercode: credential.usercode,
+        password: credential.password,
+        msgheader: credential.msgheader,
+      };
+    case 'netgsm_pbx': {
+      const body: Record<string, string> = {
+        kind: credential.kind,
+        username: credential.username,
+        password: credential.password,
+      };
+      if (credential.trunk) body.trunk = credential.trunk;
+      if (credential.pbxnum) body.pbxnum = credential.pbxnum;
+      return body;
+    }
+    case 'meta_token':
+      return { kind: credential.kind, access_token: credential.access_token };
+  }
+}
+
+/**
+ * `POST /api/connectors/credentials`: seals and probes the credentials; answers the capability.
+ * The server refuses unknown fields, so only known ones are sent.
+ */
+export function setCredentials(input: SetCredentialsInput): Promise<CapabilityOut> {
+  const body: Record<string, unknown> =
+    'capability_id' in input
+      ? { capability_id: input.capability_id }
+      : { kind_key: input.kind_key, name: input.name };
+  if (input.external_id) body.external_id = input.external_id;
+  body.credential = credentialBody(input.credential);
+  return request('POST', '/api/connectors/credentials', { body });
+}
+
+/** `POST /api/connectors/{id}/probe`: the probe's outcome and the status after it. */
+export function probeConnector(id: string): Promise<ProbeOut> {
+  return request('POST', `/api/connectors/${seg(id)}/probe`);
+}
+
+/** `GET /api/connectors/health`: every connector capability that is not retired. */
+export function connectorHealth(): Promise<ConnectorHealth[]> {
+  return request('GET', '/api/connectors/health');
+}
+
+/** `POST /api/connectors/{id}/reconnect`: a flow bound to the capability, as `startOAuth` answers. */
+export function reconnectConnector(id: string): Promise<StartOut> {
+  return request('POST', `/api/connectors/${seg(id)}/reconnect`);
+}

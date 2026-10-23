@@ -1,14 +1,33 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { Plug, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Link, useNavigate } from 'react-router-dom';
 import { listBudgetItems } from '@/api/budget';
 import { listCapabilities, listGroups, retireCapability, unlinkBudget } from '@/api/capabilities';
-import { KIND_GROUPS, type CapabilityOut, type KindGroup } from '@/api/types';
+import { connectorHealth, probeConnector, reconnectConnector } from '@/api/connectors';
+import { KIND_GROUPS, type CapabilityOut, type KindGroup, type ProbeOut } from '@/api/types';
 import { useSession } from '@/auth/useSession';
-import { CapabilityCard, type CapabilityAction } from '@/components/CapabilityCard';
+import { CapabilityCard, type CapabilityAction, type ConnectorAction } from '@/components/CapabilityCard';
 import { QueryState } from '@/components/QueryState';
-import { Button, ConfirmDialog, EmptyState, PageHeader, cn, toast } from '@/components/ui';
+import { CapabilityStatusBadge } from '@/components/StatusBadges';
+import {
+  Button,
+  Callout,
+  ConfirmDialog,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  EmptyState,
+  PageHeader,
+  cn,
+  toast,
+} from '@/components/ui';
+import { browser, providerUrl } from '@/lib/browser';
+import { connectsByOAuth, isErrorKind, providerOf } from '@/lib/connectors';
 import { errorMessage } from '@/lib/errors';
 import { can } from '@/lib/roles';
 import {
@@ -20,7 +39,13 @@ import {
   VerifyDialog,
 } from './capabilities/dialogs';
 import { GroupsPanel } from './capabilities/GroupsPanel';
-import { BUDGET_ITEMS_KEY, CAPABILITIES_KEY, GROUPS_KEY, invalidateCapabilities } from './capabilities/queries';
+import {
+  BUDGET_ITEMS_KEY,
+  CAPABILITIES_KEY,
+  CONNECTOR_HEALTH_KEY,
+  GROUPS_KEY,
+  invalidateCapabilities,
+} from './capabilities/queries';
 
 type Filter = KindGroup | 'all';
 
@@ -53,12 +78,63 @@ function FilterChips({ value, onChange }: { value: Filter; onChange: (next: Filt
   );
 }
 
+/** A probe's outcome: whether it succeeded (and why not), how long it took, the status after it. */
+function ProbeDialog({ probed, onClose }: { probed: { name: string; out: ProbeOut } | null; onClose: () => void }) {
+  const { t } = useTranslation();
+  const result = probed?.out.result;
+  const reason =
+    result && isErrorKind(result.error_kind)
+      ? t(`capabilities.connector.errorKinds.${result.error_kind}`)
+      : t('capabilities.connector.errorKinds.unknown');
+  return (
+    <Dialog open={probed !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('capabilities.connector.probeDialog.title', { name: probed?.name ?? '' })}</DialogTitle>
+          <DialogDescription>{t('capabilities.connector.probeDialog.description')}</DialogDescription>
+        </DialogHeader>
+        {probed && result && (
+          <div className="flex flex-col gap-3 text-sm">
+            {result.ok ? (
+              <Callout tone="success">{t('capabilities.connector.probeDialog.ok')}</Callout>
+            ) : (
+              <Callout tone="danger">{t('capabilities.connector.probeDialog.failed', { reason })}</Callout>
+            )}
+            <dl className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-caption text-muted-foreground">{t('capabilities.connector.probeDialog.latency')}</dt>
+                <dd className="text-foreground">
+                  {t('capabilities.connector.probeDialog.latencyValue', { ms: result.latency_ms })}
+                </dd>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-caption text-muted-foreground">{t('capabilities.connector.probeDialog.status')}</dt>
+                <dd>
+                  <CapabilityStatusBadge status={probed.out.status} />
+                </dd>
+              </div>
+            </dl>
+          </div>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t('common.close')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function CapabilitiesPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const session = useSession();
+  const navigate = useNavigate();
   const canManage = can(session.data, 'capabilities.manage');
+  const canProbe = can(session.data, 'workspace.read');
   const [filter, setFilter] = useState<Filter>('all');
+  const [probed, setProbed] = useState<{ name: string; out: ProbeOut } | null>(null);
   const [declaring, setDeclaring] = useState(false);
   const [action, setAction] = useState<{ kind: CapabilityAction; item: CapabilityOut } | null>(null);
 
@@ -70,6 +146,46 @@ export function CapabilitiesPage() {
   const all = useQuery({ queryKey: [...CAPABILITIES_KEY, 'all'], queryFn: () => listCapabilities() });
   const groups = useQuery({ queryKey: GROUPS_KEY, queryFn: listGroups });
   const budgetItems = useQuery({ queryKey: BUDGET_ITEMS_KEY, queryFn: listBudgetItems });
+  const health = useQuery({ queryKey: CONNECTOR_HEALTH_KEY, queryFn: connectorHealth });
+  const healthOf = (id: string) => health.data?.find((h) => h.capability_id === id);
+
+  // A probe asks the provider now; the list (and the health) refresh after it, whatever it found.
+  const probe = useMutation({
+    mutationFn: (item: CapabilityOut) => probeConnector(item.capability.id),
+    onSuccess: (out, item) => setProbed({ name: item.capability.name, out }),
+    onError: (err) => toast.error(errorMessage(t, err)),
+    onSettled: () => invalidateCapabilities(queryClient),
+  });
+  // A Meta or X capability is reconnected by signing in at the provider again.
+  const reconnect = useMutation({
+    mutationFn: async (id: string) => {
+      const url = providerUrl((await reconnectConnector(id)).authorize_url);
+      if (!url) throw new Error('the provider address is not an https address');
+      return url;
+    },
+    onSuccess: (url) => {
+      toast.info(t('capabilities.connector.redirecting'));
+      browser.assign(url);
+    },
+    onError: (err) => toast.error(errorMessage(t, err)),
+  });
+  const onConnector = (kind: ConnectorAction, item: CapabilityOut) => {
+    const c = item.capability;
+    const forCapability = `/connect?capability=${encodeURIComponent(c.id)}`;
+    if (kind === 'probe') {
+      probe.mutate(item);
+    } else if (kind === 'reconnect' && connectsByOAuth(c.kind_key)) {
+      // A Meta or X account signs in again at once.
+      reconnect.mutate(c.id);
+    } else if (providerOf(c.kind_key) === 'netgsm' || c.external_id !== null) {
+      // NetGSM takes its credentials (again), and an account that names its id signs in for it,
+      // on the connect page, for this capability.
+      navigate(forCapability);
+    } else {
+      // A declared account without its id: a new sign-in for its kind.
+      navigate(`/connect?kind=${encodeURIComponent(c.kind_key)}`);
+    }
+  };
 
   const retire = useMutation({
     mutationFn: (id: string) => retireCapability(id),
@@ -100,10 +216,18 @@ export function CapabilitiesPage() {
         description={t('capabilities.description')}
         actions={
           canManage ? (
-            <Button onClick={() => setDeclaring(true)}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              {t('capabilities.declare')}
-            </Button>
+            <>
+              <Button asChild variant="outline">
+                <Link to="/connect">
+                  <Plug className="h-4 w-4" aria-hidden="true" />
+                  {t('connect.open')}
+                </Link>
+              </Button>
+              <Button onClick={() => setDeclaring(true)}>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                {t('capabilities.declare')}
+              </Button>
+            </>
           ) : null
         }
       />
@@ -123,11 +247,16 @@ export function CapabilitiesPage() {
                 onAction={(kind, it) => setAction({ kind, item: it })}
                 onUnlink={(it, itemId) => unlink.mutate({ id: it.capability.id, itemId })}
                 unlinking={unlink.isPending}
+                health={healthOf(item.capability.id)}
+                canProbe={canProbe}
+                onConnector={onConnector}
+                connectorBusy={probe.isPending || reconnect.isPending}
               />
             ))}
           </div>
         )}
       </QueryState>
+      <ProbeDialog probed={probed} onClose={() => setProbed(null)} />
       <QueryState query={groups}>
         <GroupsPanel groups={groups.data ?? []} capabilities={all.data ?? []} canManage={canManage} />
       </QueryState>

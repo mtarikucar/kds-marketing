@@ -10,6 +10,7 @@ import {
   updateCapability,
   type CapabilityQuery,
 } from './capabilities';
+import { completeOAuth, confirmAssets, probeConnector, reconnectConnector, setCredentials } from './connectors';
 import { archiveVersion, listConsultation, recordEntry, writeSection } from './strategy';
 import { getPending, setCheckinInterval } from './work';
 
@@ -149,5 +150,54 @@ describe('api wrappers: bodies and answers', () => {
     await setCheckinInterval(60);
     expect(calls[0].headers.get('x-requested-with')).toBeNull();
     expect(calls[1].body).toEqual({ minutes: 60 });
+  });
+});
+
+describe('api wrappers: connectors', () => {
+  it('sends credentials with only the fields the server takes', async () => {
+    const calls = mockFetch({ 'POST /api/connectors/credentials': { capability: {}, effective_status: 'verified' } });
+    await setCredentials({
+      capability_id: CAP,
+      external_id: '',
+      credential: { kind: 'netgsm_pbx', username: 'u', password: 'p', trunk: '', pbxnum: '9' },
+    });
+    await setCredentials({
+      kind_key: 'sms_line',
+      name: 'Hat',
+      credential: {
+        kind: 'netgsm_sms',
+        usercode: 'u',
+        password: 'p',
+        msgheader: 'H',
+        stray: 'x',
+      } as unknown as Parameters<typeof setCredentials>[0]['credential'],
+    });
+    expect(calls.map((c) => c.body)).toEqual([
+      { capability_id: CAP, credential: { kind: 'netgsm_pbx', username: 'u', password: 'p', pbxnum: '9' } },
+      { kind_key: 'sms_line', name: 'Hat', credential: { kind: 'netgsm_sms', usercode: 'u', password: 'p', msgheader: 'H' } },
+    ]);
+    expect(calls[0].headers.get('x-requested-with')).toBe('jeeta-panel');
+  });
+
+  it('passes the callback state and code as the only query parameters', async () => {
+    const calls = mockFetch({ 'GET /api/connectors/oauth/callback/meta': { pending_id: 'p', assets: [] } });
+    await completeOAuth('meta', 's&t', 'c=1');
+    expect(Object.fromEntries(new URLSearchParams(calls[0].search))).toEqual({ state: 's&t', code: 'c=1' });
+  });
+
+  it('confirms, probes and reconnects at their routes', async () => {
+    const calls = mockFetch({
+      'POST /api/connectors/oauth/p1/confirm': [],
+      [`POST /api/connectors/${CAP}/probe`]: { result: {}, status: 'verified' },
+      [`POST /api/connectors/${CAP}/reconnect`]: { authorize_url: 'https://x', pending_id: 'p', expires_at: '' },
+    });
+    await confirmAssets('p1', ['a', 'b']);
+    await probeConnector(CAP);
+    await reconnectConnector(CAP);
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ['POST', '/api/connectors/oauth/p1/confirm', { selected: ['a', 'b'] }],
+      ['POST', `/api/connectors/${CAP}/probe`, undefined],
+      ['POST', `/api/connectors/${CAP}/reconnect`, undefined],
+    ]);
   });
 });

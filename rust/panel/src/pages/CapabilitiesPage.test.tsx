@@ -1,9 +1,23 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { EFFECTIVE_STATUSES } from '@/api/types';
-import { budgetItems, capabilities, groups, me } from '@/test/fixtures';
+import i18n from '@/i18n/config';
+import { browser } from '@/lib/browser';
+import {
+  PAGE_ID,
+  PENDING_ID,
+  SMS_LINE_ID,
+  budgetItems,
+  capabilities,
+  connectorHealth,
+  groups,
+  lostPage,
+  me,
+  repMe,
+  smsLine,
+} from '@/test/fixtures';
 import { mockFetch, renderAt } from '@/test/render';
 
 const routes = {
@@ -11,7 +25,24 @@ const routes = {
   'GET /api/capabilities': capabilities,
   'GET /api/capability-groups': groups,
   'GET /api/budget/items': budgetItems,
+  'GET /api/connectors/health': connectorHealth,
 };
+
+/** Every fixture capability plus a verified NetGSM line and a Facebook page to reconnect. */
+const withConnectors = {
+  ...routes,
+  'GET /api/capabilities': [...capabilities, smsLine, lostPage],
+};
+
+/** The card of the capability named `name`. */
+async function cardOf(name: string): Promise<HTMLElement> {
+  return (await screen.findByRole('heading', { name })).closest('[data-capability-id]') as HTMLElement;
+}
+
+/** The connection actions of a card, if it has any. */
+function connectionActions(card: HTMLElement): HTMLElement | null {
+  return within(card).queryByRole('group', { name: tr.capabilities.connector.actionsLabel });
+}
 
 describe('CapabilitiesPage', () => {
   it('shows each capability as a card with its effective status', async () => {
@@ -161,5 +192,96 @@ describe('CapabilitiesPage', () => {
     await waitFor(() =>
       expect(calls.some((c) => c.path === '/api/capabilities' && c.search === '?group=device')).toBe(true),
     );
+  });
+
+  it('shows each connector its health and the connection actions that fit it', async () => {
+    mockFetch(withConnectors);
+    renderAt('/capabilities');
+
+    // A declared Instagram account: never probed, waiting to be connected.
+    const instagram = await cardOf('Atölye Instagram');
+    expect(within(instagram).getByText(tr.capabilities.connector.health.never)).toBeInTheDocument();
+    const declared = connectionActions(instagram) as HTMLElement;
+    expect(within(declared).getByRole('button', { name: tr.capabilities.connector.connect })).toBeInTheDocument();
+    expect(within(declared).queryByRole('button', { name: tr.capabilities.connector.probe })).not.toBeInTheDocument();
+
+    // A verified line: its last probe succeeded; it can be probed, not reconnected by hand.
+    const line = await cardOf('Kampanya hattı');
+    expect(within(line).getByText(/Yoklama başarılı/)).toBeInTheDocument();
+    const lineActions = connectionActions(line) as HTMLElement;
+    expect(within(lineActions).getByRole('button', { name: tr.capabilities.connector.probe })).toBeInTheDocument();
+    expect(
+      within(lineActions).queryByRole('button', { name: tr.capabilities.connector.reconnect }),
+    ).not.toBeInTheDocument();
+
+    // A page whose login was refused: it must be reconnected.
+    const page = await cardOf('Atölye sayfası');
+    expect(within(page).getByText(tr.capabilities.connector.health.reconnect)).toBeInTheDocument();
+    const pageActions = connectionActions(page) as HTMLElement;
+    expect(within(pageActions).getByRole('button', { name: tr.capabilities.connector.reconnect })).toBeInTheDocument();
+
+    // No provider connects a mailbox yet, and a retired line takes no action.
+    expect(connectionActions(await cardOf('Destek kutusu'))).toBeNull();
+    expect(connectionActions(await cardOf('Eski hat'))).toBeNull();
+  });
+
+  it('probes a connector, shows the outcome and refreshes the list', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch({
+      ...withConnectors,
+      [`POST /api/connectors/${SMS_LINE_ID}/probe`]: {
+        result: { ok: true, latency_ms: 87, error_kind: null, error_reason: null, facts: { account_id: '8508001234' } },
+        status: 'verified',
+      },
+    });
+    renderAt('/capabilities');
+    const line = await cardOf('Kampanya hattı');
+    const listed = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/capabilities').length;
+    const before = listed();
+    await user.click(within(line).getByRole('button', { name: tr.capabilities.connector.probe }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(tr.capabilities.connector.probeDialog.ok)).toBeInTheDocument();
+    expect(within(dialog).getByText(i18n.t('capabilities.connector.probeDialog.latencyValue', { ms: 87 }))).toBeInTheDocument();
+    await waitFor(() => expect(listed()).toBeGreaterThan(before));
+    expect(calls.some((c) => c.method === 'GET' && c.path === '/api/connectors/health')).toBe(true);
+  });
+
+  it('reconnects a Meta page by sending the browser to the provider', async () => {
+    const user = userEvent.setup();
+    const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+    const calls = mockFetch({
+      ...withConnectors,
+      [`POST /api/connectors/${PAGE_ID}/reconnect`]: {
+        authorize_url: 'https://oauth.test/meta/authorize?state=again',
+        pending_id: PENDING_ID,
+        expires_at: '2026-10-22T09:10:00Z',
+      },
+    });
+    renderAt('/capabilities');
+    const page = await cardOf('Atölye sayfası');
+    await user.click(within(page).getByRole('button', { name: tr.capabilities.connector.reconnect }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://oauth.test/meta/authorize?state=again'));
+    expect(calls.some((c) => c.method === 'POST' && c.path === `/api/connectors/${PAGE_ID}/reconnect`)).toBe(true);
+  });
+
+  it('connects a declared account on the connect page, its kind chosen', async () => {
+    const user = userEvent.setup();
+    mockFetch(withConnectors);
+    const { router } = renderAt('/capabilities');
+    const instagram = await cardOf('Atölye Instagram');
+    await user.click(within(instagram).getByRole('button', { name: tr.capabilities.connector.connect }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/connect'));
+    expect(router.state.location.search).toBe('?kind=instagram');
+    expect(screen.getByRole('button', { name: 'Instagram', pressed: true })).toBeInTheDocument();
+  });
+
+  it('lets a rep probe but not connect', async () => {
+    mockFetch({ ...withConnectors, 'GET /api/auth/me': repMe });
+    renderAt('/capabilities');
+    const line = await cardOf('Kampanya hattı');
+    expect(within(line).getByRole('button', { name: tr.capabilities.connector.probe })).toBeInTheDocument();
+    const instagram = await cardOf('Atölye Instagram');
+    expect(within(instagram).queryByRole('button', { name: tr.capabilities.connector.connect })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: tr.connect.open })).not.toBeInTheDocument();
   });
 });

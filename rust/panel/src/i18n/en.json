@@ -159,7 +159,18 @@
     "before_id": "Page cursor",
     "group": "Kind group",
     "group_id": "Group",
-    "confirm": "Confirmation"
+    "confirm": "Confirmation",
+    "selected": "Selected accounts",
+    "credential": {
+      "kind": "Credential type",
+      "usercode": "User code",
+      "password": "Password",
+      "msgheader": "Message header",
+      "username": "Username",
+      "trunk": "Trunk",
+      "pbxnum": "PBX number",
+      "access_token": "Access token"
+    }
   },
   "errors": {
     "UNAUTHENTICATED": "You need to sign in.",
@@ -188,7 +199,12 @@
     "noDraft": "There is no open strategy draft.",
     "versionMoved": "The version changed meanwhile; reload the page.",
     "draftChanged": "The draft changed after it was shown to you. Go through it again before approving.",
-    "missingPermission": "This needs the permission: {{permission}}."
+    "missingPermission": "This needs the permission: {{permission}}.",
+    "providerAppMissing": "This provider's platform app is not configured yet, so this kind of account cannot be connected for now.",
+    "useSetCredentials": "This kind of account connects with credentials, not by signing in at the provider.",
+    "accountMismatch": "The account you signed in with does not reach this capability's account.",
+    "providerRefused": "The provider refused the request.",
+    "accountTaken": "Another capability of the same kind already holds this account."
   },
   "login": {
     "title": "Sign in",
@@ -273,8 +289,10 @@
       "verify_capability_stale": "The verification of {{name}} has lapsed; verify it again.",
       "declare_first_capability": "Declare the first capability the workspace can act through.",
       "connect_connector": "{{name}} awaits its connection.",
+      "reconnect_connector": "{{name}} must be reconnected: its provider no longer accepts its login.",
       "open": "Open",
-      "priority": "Priority {{priority}}"
+      "priority": "Priority {{priority}}",
+      "reconnect": "Reconnect"
     }
   },
   "team": {
@@ -773,7 +791,113 @@
       "deleted": "Group deleted.",
       "memberAdded": "Member added.",
       "memberRemoved": "Member removed."
+    },
+    "connector": {
+      "label": "Connection",
+      "actionsLabel": "Connection actions",
+      "connect": "Connect",
+      "reconnect": "Reconnect",
+      "probe": "Probe",
+      "health": {
+        "ok": "Probe succeeded · {{when}}",
+        "failed": "Probe failed ({{reason}}) · {{when}}",
+        "never": "Not probed yet",
+        "reconnect": "Must be reconnected",
+        "expiresSoon": "The access token expires {{when}}",
+        "expired": "The access token has expired"
+      },
+      "errorKinds": {
+        "auth": "login refused",
+        "permission": "no permission",
+        "throttle": "provider busy",
+        "transient": "a temporary problem",
+        "permanent": "a permanent problem",
+        "unknown": "an unknown problem"
+      },
+      "probeDialog": {
+        "title": "Probe: {{name}}",
+        "description": "The system made a small trial call to the provider with the credentials.",
+        "ok": "The probe succeeded; the connection works.",
+        "failed": "The probe failed: {{reason}}.",
+        "latency": "Duration",
+        "latencyValue": "{{ms}} ms",
+        "status": "Status"
+      },
+      "probing": "Probing…",
+      "redirecting": "Taking you to the provider…"
     }
+  },
+  "connect": {
+    "title": "Connect an account",
+    "description": "Connect your provider accounts to the workspace. For Meta and X you sign in at the provider; for NetGSM you enter your credentials.",
+    "open": "Connect an account",
+    "kindsLabel": "Kind of account to connect",
+    "chooseKind": "Choose the kind of account to connect first.",
+    "providers": {
+      "meta": "Meta",
+      "netgsm": "NetGSM",
+      "x": "X"
+    },
+    "forCapability": "For {{name}}",
+    "noPermission": "Connecting accounts needs the permission to manage capabilities.",
+    "unsupported": "No provider connects this kind of account yet.",
+    "oauth": {
+      "title": "Sign in at the provider",
+      "body": "You will be taken to the provider's sign-in page. Once you have signed in and granted access, you come back to the panel and choose the accounts to connect. Sign in within ten minutes.",
+      "submit": "Sign in with {{provider}}",
+      "reconnectBody": "This account's login will be renewed: sign in at the provider with the same account again.",
+      "reconnectSubmit": "Reconnect",
+      "newCapabilityNote": "This capability names no account id; the accounts you sign in with are added as new capabilities."
+    },
+    "credentials": {
+      "title": "Credentials",
+      "body": "They are stored sealed and never shown again; the connection is probed as soon as they are saved.",
+      "name": "Capability name",
+      "nameHint": "Shown under this name in the panel and in the list the agent reads.",
+      "usercode": "User code",
+      "password": "Password",
+      "msgheader": "Message header",
+      "msgheaderHint": "The approved sender name at NetGSM.",
+      "username": "Username",
+      "trunk": "Trunk (optional)",
+      "pbxnum": "PBX number (optional)",
+      "submit": "Save and probe"
+    },
+    "advanced": "Advanced",
+    "token": {
+      "body": "You can also connect by pasting an access token you got from the provider. The token is sealed and never shown again.",
+      "accessToken": "Access token",
+      "externalId": "Account id",
+      "externalIdHint": "The provider's id of the page or the WhatsApp phone number.",
+      "externalIdOptional": "Account id (optional)",
+      "submit": "Save the token and probe"
+    },
+    "result": {
+      "verified": "The connection was probed and verified.",
+      "failed": "The credentials were saved, but the probe failed: {{reason}}.",
+      "pending": "The credentials were saved; the connection is not verified yet.",
+      "toCapabilities": "Go to capabilities",
+      "another": "Connect another account"
+    }
+  },
+  "oauthCallback": {
+    "title": "Account connection",
+    "loading": "Processing the provider's answer…",
+    "chooseTitle": "Choose the accounts to connect",
+    "chooseBody": "Below are the assets the account you signed in with reaches. The ones you choose are added as capabilities and probed at once.",
+    "assetsLabel": "Assets found",
+    "externalId": "Id: {{id}}",
+    "scopes": "Permissions: {{scopes}}",
+    "expires": "Access ends: {{at}}",
+    "none": "This account reaches nothing that can be connected.",
+    "confirm": "Connect the selected",
+    "connected": "Accounts connected: {{count}}.",
+    "errorTitle": "The connection could not be completed",
+    "providerDenied": "Access was not granted at the provider; no account was connected.",
+    "providerError": "The provider did not complete the connection.",
+    "missingParams": "This page was opened without the provider's answer.",
+    "stateRefused": "This connection request does not belong to this workspace, has expired or was already used. Start connecting again.",
+    "restart": "Start again"
   },
   "budget": {
     "title": "Budget",

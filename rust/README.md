@@ -578,6 +578,14 @@ yolu yoktur. Bir OAuth akışı şöyle yürür:
    gövde `{"selected": [dış kimlikler]}`) her birini bir kabiliyete çevirir, kimlik bilgisini mühürler ve
    yoklar. Akış onaydan sonra silinir.
 
+Panelde hesaplar **Hesap bağla** sayfasından (`/connect`) bağlanır: Meta türleri "Meta", NetGSM türleri
+"NetGSM" başlığı altında, X ayrı; Meta ve X için sağlayıcıda oturum açılır, NetGSM için kimlik bilgisi formu
+doldurulur (parola alanları gizlidir, değerler hiçbir önbellekte tutulmaz ve kayıttan sonra formdan silinir),
+yapıştırılmış Meta jetonu ise "Gelişmiş" altındadır; X hiçbir kimlik bilgisi formu göstermez. Kabiliyetler
+sayfası her bağlayıcı kabiliyetinin sağlığını (`connector.health`: son yoklama ve yaşı, hata türü, yeniden
+bağlama gereği, yaklaşan jeton bitişi) gösterir ve duruma uyan işlemleri sunar: **Bağla** (`declared`),
+**Yeniden bağla** (Meta ve X sağlayıcıya yeniden gider, NetGSM yeni kimlik bilgisi alır) ve **Yokla**.
+Ana sayfadaki `reconnect_connector` işi doğrudan o kabiliyetin yeniden bağlanmasına götürür.
 Sağlayıcının hata dönüşü (`error`, `error_description`) panelde kendi metniyle gösterilir, ham hali asla.
 Platform uygulamaları yapılandırılmadıkça (M1b'nin son adımı) OAuth türleri `409 CONFLICT` ("provider
 app not configured") alır; NetGSM elle girişi bundan bağımsızdır.

@@ -5,6 +5,7 @@ import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
 import {
   DRAFT_ID,
+  PAGE_ID,
   approvedVersion,
   draftVersion,
   me,
@@ -96,8 +97,61 @@ describe('HomePage', () => {
     expect(approvals()).toHaveLength(0);
     await user.click(within(dialog).getByRole('button', { name: tr.strategy.approveConfirm }));
     await waitFor(() => expect(approvals()).toHaveLength(1));
-    // The shortcut names the draft as the pending work showed it.
-    expect(approvals()[0].body).toEqual(submitted.strategy.submitted);
+    // The shortcut names the draft as the dialog showed it.
+    expect(approvals()[0].body).toEqual({ version_id: DRAFT_ID, submitted_at: draftVersion.submitted_at });
+  });
+
+  it('home_approve_uses_the_displayed_drafts_stamp', async () => {
+    // The pending work was read before the agent submitted the draft again: its stamp is stale.
+    // The dialog fetches the draft when it opens and approves the one it shows.
+    const user = userEvent.setup();
+    const fresh = '2026-10-22T11:30:00Z';
+    const calls = mockFetch({
+      'GET /api/auth/me': me,
+      'GET /api/workspace': workspace,
+      'GET /api/work/pending': submitted,
+      'GET /api/strategy': {
+        ...strategyWithDraft,
+        draft: { ...draftVersion, submitted_at: fresh, gaps: [], hypotheses: approvedVersion.hypotheses },
+      },
+      'POST /api/strategy/draft/approve': { ...draftVersion, status: 'approved', assumptions: [] },
+    });
+    renderAt('/');
+    await user.click(await screen.findByRole('button', { name: tr.home.strategy.approve }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Öğrenciler akşamları sipariş verir');
+    await user.click(within(dialog).getByRole('button', { name: tr.strategy.approveConfirm }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'POST' && c.path === '/api/strategy/draft/approve')?.body).toEqual({
+        version_id: DRAFT_ID,
+        submitted_at: fresh,
+      }),
+    );
+    expect(submitted.strategy.submitted.submitted_at).not.toBe(fresh);
+  });
+
+  it('names the connector to reconnect and links to its reconnection', async () => {
+    const reconnect = {
+      ...pendingOverdue,
+      items: [
+        {
+          kind: 'reconnect_connector' as const,
+          capability_id: PAGE_ID,
+          name: 'Atölye sayfası',
+          priority: 1,
+          hint: 'reconnect it',
+        },
+      ],
+    };
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': reconnect });
+    renderAt('/');
+    const text = await screen.findByText(i18n.t('home.pending.reconnect_connector', { name: 'Atölye sayfası' }));
+    const row = text.closest('li') as HTMLElement;
+    expect(within(row).getByRole('link', { name: tr.home.pending.reconnect })).toHaveAttribute(
+      'href',
+      `/connect?capability=${PAGE_ID}`,
+    );
+    expect(screen.queryByText('reconnect it')).not.toBeInTheDocument();
   });
 
   it('shows the draft gaps and the version in force', async () => {

@@ -159,7 +159,18 @@
     "before_id": "Sayfa imleci",
     "group": "Tür grubu",
     "group_id": "Grup",
-    "confirm": "Onay"
+    "confirm": "Onay",
+    "selected": "Seçilen hesaplar",
+    "credential": {
+      "kind": "Kimlik bilgisi türü",
+      "usercode": "Kullanıcı kodu",
+      "password": "Parola",
+      "msgheader": "Mesaj başlığı",
+      "username": "Kullanıcı adı",
+      "trunk": "Hat",
+      "pbxnum": "Santral numarası",
+      "access_token": "Erişim jetonu"
+    }
   },
   "errors": {
     "UNAUTHENTICATED": "Oturum açmanız gerekiyor.",
@@ -188,7 +199,12 @@
     "noDraft": "Açık bir strateji taslağı yok.",
     "versionMoved": "Sürüm bu arada değişti; sayfayı yenileyin.",
     "draftChanged": "Taslak size gösterildikten sonra değişti. Onaylamadan önce yeniden gözden geçirin.",
-    "missingPermission": "Bu işlem için şu izin gerekiyor: {{permission}}."
+    "missingPermission": "Bu işlem için şu izin gerekiyor: {{permission}}.",
+    "providerAppMissing": "Bu sağlayıcının platform uygulaması henüz yapılandırılmadı; bu hesap türü şimdilik bağlanamaz.",
+    "useSetCredentials": "Bu hesap türü sağlayıcıda oturum açarak değil, kimlik bilgileriyle bağlanır.",
+    "accountMismatch": "Oturum açılan hesap bu kabiliyetin hesabına ulaşmıyor.",
+    "providerRefused": "Sağlayıcı isteği reddetti.",
+    "accountTaken": "Bu hesap zaten aynı türden başka bir kabiliyete bağlı."
   },
   "login": {
     "title": "Giriş yap",
@@ -273,8 +289,10 @@
       "verify_capability_stale": "{{name}} için doğrulama eskidi; yeniden doğrulanmalı.",
       "declare_first_capability": "Çalışma alanının kullanabileceği ilk kabiliyeti bildirin.",
       "connect_connector": "{{name}} bağlanmayı bekliyor.",
+      "reconnect_connector": "{{name}} yeniden bağlanmalı: sağlayıcı girişini artık kabul etmiyor.",
       "open": "Aç",
-      "priority": "Öncelik {{priority}}"
+      "priority": "Öncelik {{priority}}",
+      "reconnect": "Yeniden bağla"
     }
   },
   "team": {
@@ -773,7 +791,113 @@
       "deleted": "Grup silindi.",
       "memberAdded": "Üye eklendi.",
       "memberRemoved": "Üye çıkarıldı."
+    },
+    "connector": {
+      "label": "Bağlantı",
+      "actionsLabel": "Bağlantı işlemleri",
+      "connect": "Bağla",
+      "reconnect": "Yeniden bağla",
+      "probe": "Yokla",
+      "health": {
+        "ok": "Yoklama başarılı · {{when}}",
+        "failed": "Yoklama başarısız ({{reason}}) · {{when}}",
+        "never": "Henüz yoklanmadı",
+        "reconnect": "Yeniden bağlanmalı",
+        "expiresSoon": "Erişim jetonunun süresi {{when}} doluyor",
+        "expired": "Erişim jetonunun süresi doldu"
+      },
+      "errorKinds": {
+        "auth": "giriş reddedildi",
+        "permission": "izin yok",
+        "throttle": "sağlayıcı yoğun",
+        "transient": "geçici bir sorun",
+        "permanent": "kalıcı bir sorun",
+        "unknown": "bilinmeyen bir sorun"
+      },
+      "probeDialog": {
+        "title": "Yoklama: {{name}}",
+        "description": "Sistem sağlayıcıya kimlik bilgileriyle küçük bir deneme çağrısı yaptı.",
+        "ok": "Yoklama başarılı; bağlantı çalışıyor.",
+        "failed": "Yoklama başarısız: {{reason}}.",
+        "latency": "Süre",
+        "latencyValue": "{{ms}} ms",
+        "status": "Durum"
+      },
+      "probing": "Yoklanıyor…",
+      "redirecting": "Sağlayıcıya yönlendiriliyorsunuz…"
     }
+  },
+  "connect": {
+    "title": "Hesap bağla",
+    "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta ve X için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
+    "open": "Hesap bağla",
+    "kindsLabel": "Bağlanacak hesap türü",
+    "chooseKind": "Önce bağlanacak hesap türünü seçin.",
+    "providers": {
+      "meta": "Meta",
+      "netgsm": "NetGSM",
+      "x": "X"
+    },
+    "forCapability": "{{name}} için",
+    "noPermission": "Hesap bağlamak için kabiliyetleri yönetme izni gerekiyor.",
+    "unsupported": "Bu hesap türü henüz bir sağlayıcıyla bağlanamıyor.",
+    "oauth": {
+      "title": "Sağlayıcıda oturum açın",
+      "body": "Sağlayıcının giriş sayfasına yönlendirileceksiniz. Oturum açıp izin verdikten sonra panele dönersiniz ve bağlanacak hesapları seçersiniz. Giriş on dakika içinde tamamlanmalıdır.",
+      "submit": "{{provider}} ile oturum aç",
+      "reconnectBody": "Bu hesabın girişi yenilenecek: sağlayıcıda aynı hesapla yeniden oturum açın.",
+      "reconnectSubmit": "Yeniden bağla",
+      "newCapabilityNote": "Bu kabiliyet bir hesap kimliği taşımıyor; oturum açtığınız hesaplar yeni kabiliyetler olarak eklenir."
+    },
+    "credentials": {
+      "title": "Kimlik bilgileri",
+      "body": "Bilgiler mühürlenerek saklanır ve bir daha gösterilmez; kaydedilir kaydedilmez bağlantı yoklanır.",
+      "name": "Kabiliyetin adı",
+      "nameHint": "Panelde ve ajanın gördüğü listede bu adla görünür.",
+      "usercode": "Kullanıcı kodu",
+      "password": "Parola",
+      "msgheader": "Mesaj başlığı",
+      "msgheaderHint": "NetGSM'de onaylı gönderici adı.",
+      "username": "Kullanıcı adı",
+      "trunk": "Hat (isteğe bağlı)",
+      "pbxnum": "Santral numarası (isteğe bağlı)",
+      "submit": "Kaydet ve yokla"
+    },
+    "advanced": "Gelişmiş",
+    "token": {
+      "body": "Sağlayıcıdan aldığınız bir erişim jetonunu yapıştırarak da bağlayabilirsiniz. Jeton mühürlenir ve bir daha gösterilmez.",
+      "accessToken": "Erişim jetonu",
+      "externalId": "Hesap kimliği",
+      "externalIdHint": "Sayfanın ya da WhatsApp telefon numarasının sağlayıcıdaki kimliği.",
+      "externalIdOptional": "Hesap kimliği (isteğe bağlı)",
+      "submit": "Jetonu kaydet ve yokla"
+    },
+    "result": {
+      "verified": "Bağlantı yoklandı ve doğrulandı.",
+      "failed": "Kimlik bilgileri kaydedildi, ama yoklama başarısız oldu: {{reason}}.",
+      "pending": "Kimlik bilgileri kaydedildi; bağlantı henüz doğrulanmadı.",
+      "toCapabilities": "Kabiliyetlere git",
+      "another": "Başka bir hesap bağla"
+    }
+  },
+  "oauthCallback": {
+    "title": "Hesap bağlantısı",
+    "loading": "Sağlayıcının yanıtı işleniyor…",
+    "chooseTitle": "Bağlanacak hesapları seçin",
+    "chooseBody": "Oturum açtığınız hesabın ulaştığı varlıklar aşağıda. Seçtikleriniz kabiliyet olarak eklenir ve hemen yoklanır.",
+    "assetsLabel": "Bulunan varlıklar",
+    "externalId": "Kimlik: {{id}}",
+    "scopes": "İzinler: {{scopes}}",
+    "expires": "Erişimin bitişi: {{at}}",
+    "none": "Bu hesabın bağlanabilecek bir varlığı bulunamadı.",
+    "confirm": "Seçilenleri bağla",
+    "connected": "Bağlanan hesap sayısı: {{count}}.",
+    "errorTitle": "Bağlantı tamamlanamadı",
+    "providerDenied": "Sağlayıcıda izin verilmedi; hesap bağlanmadı.",
+    "providerError": "Sağlayıcı bağlantıyı tamamlamadı.",
+    "missingParams": "Bu sayfa sağlayıcının geri dönüşü olmadan açıldı.",
+    "stateRefused": "Bu bağlantı isteği bu çalışma alanına ait değil, süresi doldu ya da zaten kullanıldı. Bağlamayı yeniden başlatın.",
+    "restart": "Yeniden başlat"
   },
   "budget": {
     "title": "Bütçe",

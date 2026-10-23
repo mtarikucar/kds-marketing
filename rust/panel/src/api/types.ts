@@ -728,7 +728,8 @@ export type WorkKind =
   | { kind: 'approve_strategy' }
   | { kind: 'verify_capability'; capability_id: Uuid; name: string; stale: boolean }
   | { kind: 'declare_first_capability' }
-  | { kind: 'connect_connector'; capability_id: Uuid; name: string };
+  | { kind: 'connect_connector'; capability_id: Uuid; name: string }
+  | { kind: 'reconnect_connector'; capability_id: Uuid; name: string };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {
@@ -755,3 +756,81 @@ export interface PendingOut {
 /** `jt_app::ports::{MIN,MAX}_AGENT_CHECKIN_INTERVAL_MINUTES`. */
 export const MIN_CHECKIN_INTERVAL_MINUTES = 15;
 export const MAX_CHECKIN_INTERVAL_MINUTES = 10_080;
+
+// ---------------------------------------------------------------------------------------------
+// Connectors
+// ---------------------------------------------------------------------------------------------
+
+/** `jt_connector::Provider`. */
+export type Provider = 'meta' | 'netgsm' | 'x';
+export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x'];
+
+/** `jt_app::usecases::connector::StartOut`: where to send the browser, until when. */
+export interface StartOut {
+  authorize_url: string;
+  pending_id: Uuid;
+  expires_at: Rfc3339;
+}
+
+/** `jt_app::ports::connectors::AssetPublic`: what the owner chooses from; never a credential. */
+export interface AssetPublic {
+  kind_key: string;
+  external_id: string;
+  name: string;
+  /** The provider's public facts, e.g. a category, the granted scopes, an expiry. */
+  public: unknown;
+}
+
+/** `jt_app::usecases::connector::PendingAssetsOut`. */
+export interface PendingAssetsOut {
+  pending_id: Uuid;
+  assets: AssetPublic[];
+}
+
+/** `jt_app::usecases::connector::CredentialInput`, tagged by `kind`. */
+export type CredentialInput =
+  | { kind: 'netgsm_sms'; usercode: string; password: string; msgheader: string }
+  | { kind: 'netgsm_pbx'; username: string; password: string; trunk?: string; pbxnum?: string }
+  | { kind: 'meta_token'; access_token: string };
+export type CredentialKind = CredentialInput['kind'];
+
+/**
+ * `jt_app::usecases::connector::SetCredentials`: an existing capability (`capability_id`) or a new
+ * one (`kind_key` and `name`), the account it should reach when known, and the credentials.
+ */
+export type SetCredentialsInput = ({ capability_id: Uuid } | { kind_key: string; name: string }) & {
+  external_id?: string;
+  credential: CredentialInput;
+};
+
+/** `jt_app::usecases::connector::ProbeResultPublic`: never the credential. */
+export interface ProbeResultPublic {
+  ok: boolean;
+  latency_ms: number;
+  /** `jt_connector::ConnectorError` kind of a failure. */
+  error_kind: string | null;
+  /** Redacted by the server; for logs and agents, not shown. */
+  error_reason: string | null;
+  facts: unknown;
+}
+
+/** `jt_app::usecases::connector::ProbeOut`. */
+export interface ProbeOut {
+  result: ProbeResultPublic;
+  status: StoredStatus;
+}
+
+/** `jt_app::usecases::connector::ConnectorHealth`. */
+export interface ConnectorHealth {
+  capability_id: Uuid;
+  kind_key: string;
+  name: string;
+  /** `null` for a connector kind no provider serves yet. */
+  provider: Provider | null;
+  status: EffectiveStatus;
+  last_probe_at: Rfc3339 | null;
+  ok: boolean | null;
+  error_kind: string | null;
+  token_expires_at: Rfc3339 | null;
+  reconnect_required: boolean;
+}
