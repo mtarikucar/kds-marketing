@@ -1172,6 +1172,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "jt_app",
+ "jt_connector",
  "jt_mcp",
  "jt_panel_http",
  "jt_pg",
@@ -1232,6 +1233,7 @@ dependencies = [
  "http",
  "jt_app",
  "jt_capability",
+ "jt_connector",
  "jt_ledger",
  "jt_pg",
  "jt_strategy",
@@ -1315,6 +1317,7 @@ dependencies = [
  "http",
  "jt_app",
  "jt_capability",
+ "jt_connector",
  "jt_mcp",
  "jt_pg",
  "jt_strategy",

@@ -9,6 +9,7 @@ publish.workspace = true
 jt_tenancy.workspace = true
 jt_strategy.workspace = true
 jt_capability.workspace = true
+jt_connector.workspace = true
 jt_app.workspace = true
 axum.workspace = true
 tower = { workspace = true, features = ["util"] }

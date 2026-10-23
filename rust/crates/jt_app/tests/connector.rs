@@ -189,9 +189,17 @@ impl Rig {
         state: &str,
         code: &str,
     ) -> Result<PendingAssetsOut, AppError> {
+        // The provider's redirect names the provider the flow was started for (Meta for a state
+        // no flow holds).
+        let provider = self
+            .pending_rows()
+            .into_iter()
+            .find(|p| p.state_hash == hash_token(state))
+            .map_or(Provider::Meta, |p| p.provider);
         connector::complete_oauth(
             deps,
             CompleteOAuth {
+                provider,
                 state: state.into(),
                 code: code.into(),
                 principal,
@@ -331,7 +339,7 @@ async fn start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier() {
     assert_eq!(query(&out, "client_id").as_deref(), Some("meta-app-id"));
     assert_eq!(
         query(&out, "redirect_uri").as_deref(),
-        Some("https://panel.test/api/connectors/oauth/callback/meta")
+        Some("https://panel.test/oauth/callback/meta")
     );
     assert_eq!(query(&out, "code_challenge"), None);
     let state = state_of(&out);
@@ -371,7 +379,7 @@ async fn start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier() {
     assert_eq!(query(&x, "client_id").as_deref(), Some("x-client-id"));
     assert_eq!(
         query(&x, "redirect_uri").as_deref(),
-        Some("https://panel.test/api/connectors/oauth/callback/x")
+        Some("https://panel.test/oauth/callback/x")
     );
     assert_eq!(query(&x, "code_challenge_method").as_deref(), Some("S256"));
     let challenge = query(&x, "code_challenge").unwrap();
@@ -494,6 +502,19 @@ async fn state_cannot_be_reused_or_completed_by_another_workspace() {
         ),
         ErrorCode::Forbidden
     );
+    // Nor a callback addressed to another provider than the one the state was signed for.
+    let elsewhere = connector::complete_oauth(
+        &r.w.deps,
+        CompleteOAuth {
+            provider: Provider::X,
+            state: state.clone(),
+            code: "code-1".into(),
+            principal: &owner,
+        },
+    )
+    .await;
+    assert_eq!(code(elsewhere), ErrorCode::Forbidden);
+    assert!(r.x_oauth.calls().is_empty());
     // A member of Acme without capabilities.manage cannot either.
     r.w.member("rep").await;
     // The support world's members sign in with the password "pw".
@@ -526,7 +547,7 @@ async fn state_cannot_be_reused_or_completed_by_another_workspace() {
         r.meta_oauth.calls()[1],
         OAuthCall::Exchange {
             client_id: "meta-app-id".into(),
-            redirect: Url::parse("https://panel.test/api/connectors/oauth/callback/meta").unwrap(),
+            redirect: Url::parse("https://panel.test/oauth/callback/meta").unwrap(),
             code: "code-1".into(),
             pkce_verifier: None,
         }
@@ -2427,6 +2448,7 @@ impl OAuthProvider for RacingOAuth {
             let out = connector::complete_oauth(
                 &deps,
                 CompleteOAuth {
+                    provider: Provider::Meta,
                     state,
                     code: "code-2".into(),
                     principal: &principal,

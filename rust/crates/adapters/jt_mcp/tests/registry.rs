@@ -59,23 +59,19 @@ const TOOLS: &[&str] = &[
     "jeeta.work.pending",
     "jeeta.work.checkin",
     "jeeta.work.set_checkin_interval",
+    "jeeta.connector.start_oauth",
+    "jeeta.connector.confirm_assets",
+    "jeeta.connector.set_credentials",
+    "jeeta.connector.probe",
+    "jeeta.connector.health",
+    "jeeta.connector.reconnect",
 ];
 
 #[test]
 fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
-    // The connection tools are in the catalog ahead of their definitions (M1b Task 8).
-    assert_eq!(
-        NOT_YET_DEFINED,
-        [
-            "jeeta.connector.start_oauth",
-            "jeeta.connector.confirm_assets",
-            "jeeta.connector.set_credentials",
-            "jeeta.connector.probe",
-            "jeeta.connector.health",
-            "jeeta.connector.reconnect",
-        ]
-    );
-    assert_eq!(TOOLS.len(), 50);
+    // Every catalog tool is defined (M1b Task 8 defined the connection tools).
+    assert!(NOT_YET_DEFINED.is_empty());
+    assert_eq!(TOOLS.len(), 56);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -420,4 +416,102 @@ fn work_tools_read_and_check_in_with_workspace_read_and_set_the_interval_with_te
     assert_eq!(required(&interval), BTreeSet::from(["minutes"]));
     assert_eq!(interval["properties"]["minutes"]["minimum"], 15);
     assert_eq!(interval["properties"]["minutes"]["maximum"], 10_080);
+}
+
+#[test]
+fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_workspace_read() {
+    let specs: Vec<ToolSpec> = registry()
+        .into_iter()
+        .filter(|s| s.use_case.starts_with("connector."))
+        .collect();
+    let permissions: Vec<(&str, Permission, Risk)> = specs
+        .iter()
+        .map(|s| (s.name, s.permission, s.risk))
+        .collect();
+    assert_eq!(
+        permissions,
+        [
+            (
+                "jeeta.connector.start_oauth",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.confirm_assets",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.set_credentials",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.probe",
+                Permission::WorkspaceRead,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.health",
+                Permission::WorkspaceRead,
+                Risk::Read
+            ),
+            (
+                "jeeta.connector.reconnect",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+        ]
+    );
+    // No tool completes an OAuth flow: only the owner's browser, on the panel, does.
+    assert!(
+        registry()
+            .iter()
+            .all(|s| s.use_case != "connector.complete_oauth")
+    );
+    let find = |name: &str| specs.iter().find(|s| s.name == name).unwrap();
+    let start = find("jeeta.connector.start_oauth");
+    assert!(
+        start
+            .description
+            .contains("hand the authorize_url to the owner"),
+        "{}",
+        start.description
+    );
+    let schema = start.input_schema.clone().to_value();
+    assert_eq!(required(&schema), BTreeSet::from(["kind_key"]));
+    assert_eq!(schema["additionalProperties"], false);
+
+    let confirm = find("jeeta.connector.confirm_assets")
+        .input_schema
+        .clone()
+        .to_value();
+    assert_eq!(
+        required(&confirm),
+        BTreeSet::from(["pending_id", "selected"])
+    );
+
+    // The credentials' shapes are named in the schema; X takes none.
+    let set = find("jeeta.connector.set_credentials");
+    let schema = set.input_schema.clone().to_value();
+    assert_eq!(required(&schema), BTreeSet::from(["credential"]));
+    assert_eq!(schema["additionalProperties"], false);
+    let shapes: BTreeSet<&str> = schema["properties"]["credential"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["properties"]["kind"]["const"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        shapes,
+        BTreeSet::from(["netgsm_sms", "netgsm_pbx", "meta_token"])
+    );
+    for name in ["jeeta.connector.probe", "jeeta.connector.reconnect"] {
+        let schema = find(name).input_schema.clone().to_value();
+        assert_eq!(
+            required(&schema),
+            BTreeSet::from(["capability_id"]),
+            "{name}"
+        );
+    }
 }

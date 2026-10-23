@@ -12,8 +12,10 @@ pub mod api_keys;
 pub mod auth;
 pub mod budget;
 pub mod capabilities;
+pub mod connector;
 pub mod groups;
 pub mod ledger;
+pub mod oauth_callback;
 pub mod platform;
 pub mod roles;
 pub mod strategy;
@@ -93,6 +95,13 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/budget/items/{budget_item_id}/retire"),
     ("POST", "/api/budget/items/{budget_item_id}/spend"),
     ("GET", "/api/budget/items/{budget_item_id}/spend"),
+    ("POST", "/api/connectors/oauth/start"),
+    ("GET", "/api/connectors/oauth/callback/{provider}"),
+    ("POST", "/api/connectors/oauth/{pending_id}/confirm"),
+    ("POST", "/api/connectors/credentials"),
+    ("POST", "/api/connectors/{capability_id}/probe"),
+    ("GET", "/api/connectors/health"),
+    ("POST", "/api/connectors/{capability_id}/reconnect"),
     ("GET", "/api/work/pending"),
     ("PUT", "/api/work/checkin-interval"),
     ("POST", "/api/platform/login"),
@@ -396,6 +405,48 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/budget/items/{budget_item_id}/spend",
             "budget.spend.list",
             budget::spend,
+        ),
+        api_route(
+            "POST",
+            "/connectors/oauth/start",
+            "connector.start_oauth",
+            connector::start_oauth,
+        ),
+        api_route(
+            "GET",
+            "/connectors/oauth/callback/{provider}",
+            "connector.complete_oauth",
+            oauth_callback::callback,
+        ),
+        api_route(
+            "POST",
+            "/connectors/oauth/{pending_id}/confirm",
+            "connector.confirm_assets",
+            connector::confirm_assets,
+        ),
+        api_route(
+            "POST",
+            "/connectors/credentials",
+            "connector.set_credentials",
+            connector::set_credentials,
+        ),
+        api_route(
+            "POST",
+            "/connectors/{capability_id}/probe",
+            "connector.probe",
+            connector::probe,
+        ),
+        api_route(
+            "GET",
+            "/connectors/health",
+            "connector.health",
+            connector::health,
+        ),
+        api_route(
+            "POST",
+            "/connectors/{capability_id}/reconnect",
+            "connector.reconnect",
+            connector::reconnect,
         ),
         api_route("GET", "/work/pending", "work.pending", work::pending),
         api_route(

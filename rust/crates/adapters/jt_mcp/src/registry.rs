@@ -67,16 +67,9 @@ pub fn risk_tag(risk: Risk) -> &'static str {
 
 /// Catalog tools not defined here yet: a use case may enter the catalog before its tool, while a
 /// plan lands it in steps. [`registry`] leaves them out. Each entry must still be a catalog tool
-/// without a definition, so defining one stops the server until it is dropped from here. The
-/// connection tools (M1b Task 4) are defined by M1b Task 8, which empties this list.
-pub const NOT_YET_DEFINED: &[&str] = &[
-    "jeeta.connector.start_oauth",
-    "jeeta.connector.confirm_assets",
-    "jeeta.connector.set_credentials",
-    "jeeta.connector.probe",
-    "jeeta.connector.health",
-    "jeeta.connector.reconnect",
-];
+/// without a definition, so defining one stops the server until it is dropped from here. Empty:
+/// every catalog tool is defined (M1b Task 8 defined the connection tools).
+pub const NOT_YET_DEFINED: &[&str] = &[];
 
 /// One tool per `CATALOG` row with an MCP tool, in catalog order, but those in
 /// [`NOT_YET_DEFINED`].

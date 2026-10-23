@@ -12,17 +12,9 @@ const INFRASTRUCTURE_ROUTES: &[(&str, &str)] = &[("GET", "/healthz")];
 
 /// Catalog panel routes not served yet: a use case may enter the catalog before its route, while
 /// a plan lands it in steps. Each entry must still be unserved, so serving one fails this test
-/// until it is dropped from here. The connection use cases (M1b Task 4) are served by M1b Task 8,
-/// which empties this list.
-const NOT_YET_SERVED: &[(&str, &str)] = &[
-    ("POST", "/api/connectors/oauth/start"),
-    ("GET", "/api/connectors/oauth/callback/{provider}"),
-    ("POST", "/api/connectors/oauth/{pending_id}/confirm"),
-    ("POST", "/api/connectors/credentials"),
-    ("POST", "/api/connectors/{capability_id}/probe"),
-    ("GET", "/api/connectors/health"),
-    ("POST", "/api/connectors/{capability_id}/reconnect"),
-];
+/// until it is dropped from here. Empty: every catalog route is served (M1b Task 8 served the
+/// connection routes).
+const NOT_YET_SERVED: &[(&str, &str)] = &[];
 
 #[test]
 fn panel_routes_table_matches_catalog() {
@@ -115,10 +107,10 @@ fn mcp_registry_matches_catalog() {
 /// The MCP tools the registry defines, by domain: 15 from M0 (`agent`, `workspace`, `team`,
 /// `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and `budget` from
 /// M1a and the three edits of M1b Task 4b (`jeeta.capability.update`,
-/// `jeeta.budget.items_update`, `jeeta.budget.items_retire`), and 3 `work`. Written out, so a
-/// tool added or dropped without updating the documentation (the README lists them) fails here.
-/// The six `connector` tools are in the catalog but not yet defined (`jt_mcp::NOT_YET_DEFINED`);
-/// M1b Task 8 defines them and adds the domain.
+/// `jeeta.budget.items_update`, `jeeta.budget.items_retire`), 3 `work`, and the 6 `connector`
+/// tools of M1b Task 8 (the seventh connection use case, completing an OAuth flow, is the
+/// panel's callback only). Written out, so a tool added or dropped without updating the
+/// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("agent", 1),
     ("workspace", 1),
@@ -131,19 +123,24 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("capability", 16),
     ("budget", 6),
     ("work", 3),
+    ("connector", 6),
 ];
 
 #[test]
-fn the_registry_holds_50_tools() {
+fn the_registry_holds_56_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 50);
+    assert_eq!(specs.len(), 56);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 50);
+    assert_eq!(total, 56);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
         assert_eq!(found, *expected, "tools named {prefix}*");
     }
+    // Every catalog tool is defined.
+    assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
+    let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
+    assert_eq!(catalog, 56);
 }
 
 /// An MCP-only use case has no human caller: only an agent's check-in is one.

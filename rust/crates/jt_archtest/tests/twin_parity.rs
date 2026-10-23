@@ -22,6 +22,10 @@
 //!   connector's changed account resetting it on both), and both gates give the same refusals:
 //!   an edit naming nothing, a taken account, a retired item, a missing confirmation, and a body
 //!   naming a field an edit does not take.
+//! - `connector.health`, `connector.probe`: a NetGSM line connected on the panel (credentials
+//!   entered by hand, a scripted adapter answering the probes) reads the same health on both
+//!   gates, a probe answers the same outcome and status on both, failed or not, and both refuse
+//!   an unknown capability alike.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -30,16 +34,19 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
+use jt_app::ports::connectors::ConnectorRegistry;
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::Deps;
 use jt_app::usecases::capabilities::UowChannelCatalog;
 use jt_app::usecases::strategy::NoopArchivedHook;
+use jt_connector::{ConnectorError, ProbeResult, Provider};
 use jt_mcp::McpState;
 use jt_panel_http::AppState;
 use jt_pg::{PgStrategyGate, PgUnitOfWork};
 use jt_testkit::TestDb;
 use jt_testkit::fakes::{
-    FakeAppConfig, PlainHasher, PlainSecretBox, RecordingTenantHosts, ScriptedRegistry,
+    FakeAppConfig, PlainHasher, PlainSecretBox, RecordingTenantHosts, ScriptedConnector,
+    ScriptedRegistry,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -59,8 +66,13 @@ fn app(db: &TestDb, deps: &Deps) -> Router {
 }
 
 /// The ports over `db`'s pool, the channel catalog over the capability registry as the binary
-/// builds it, with a plain-text hasher and secret box.
+/// builds it, with a plain-text hasher and secret box, and no provider adapter.
 fn deps(db: &TestDb) -> Deps {
+    deps_with(db, Arc::new(ScriptedRegistry::new()))
+}
+
+/// [`deps`] with these provider adapters.
+fn deps_with(db: &TestDb, connectors: Arc<dyn ConnectorRegistry>) -> Deps {
     let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
     Deps {
         uow: uow.clone(),
@@ -73,7 +85,7 @@ fn deps(db: &TestDb) -> Deps {
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
-        connectors: Arc::new(ScriptedRegistry::new()),
+        connectors,
     }
 }
 
@@ -1001,4 +1013,120 @@ async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
     let untouched = entry(&listed, &third);
     assert_eq!(untouched["item"]["kind"], "cash");
     assert_eq!(untouched["item"]["retired_at"], Value::Null);
+}
+
+#[tokio::test]
+async fn connector_health_and_probe_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("alpha").await;
+    let netgsm =
+        Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(&["api.netgsm.com.tr"]));
+    let deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(netgsm.clone())),
+    );
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let ok = |account: &str| ProbeResult::success(42, json!({ "account_id": account }));
+
+    // The owner connects a NetGSM line on the panel; its first probe verifies it.
+    netgsm.push_probe(ok("8508001234"));
+    let body = json!({
+        "kind_key": "sms_line",
+        "name": "SMS hattı",
+        "credential": {
+            "kind": "netgsm_sms",
+            "usercode": "8508001234",
+            "password": "netgsm-pass-1",
+            "msgheader": "ALFA",
+        },
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/connectors/credentials",
+            Some(&cookie),
+            Some(body),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let id = json_body(resp).await["capability"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let health = |cookie: String| {
+        let app = app.clone();
+        async move {
+            let resp = send(
+                &app,
+                panel(Method::GET, "/api/connectors/health", Some(&cookie), None),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            json_body(resp).await
+        }
+    };
+    let human = health(cookie.clone()).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.connector.health", json!({})).await;
+    assert_eq!(human, agent["connectors"]);
+    assert_eq!(human.as_array().unwrap().len(), 1);
+    assert_eq!(human[0]["ok"], true);
+
+    // A probe that succeeds, then one that fails with Auth: each answers the same on both gates.
+    let probe_path = format!("/api/connectors/{id}/probe");
+    for result in [
+        ok("8508001234"),
+        ProbeResult::failure(30, ConnectorError::auth("bad credentials")),
+    ] {
+        netgsm.push_probe(result.clone());
+        netgsm.push_probe(result);
+        let resp = send(&app, panel(Method::POST, &probe_path, Some(&cookie), None)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let human = json_body(resp).await;
+        let agent = call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.connector.probe",
+            json!({ "capability_id": id }),
+        )
+        .await;
+        assert_eq!(human, agent);
+    }
+    let human = health(cookie.clone()).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.connector.health", json!({})).await;
+    assert_eq!(human, agent["connectors"]);
+    assert_eq!(human[0]["status"], "unreachable");
+    assert_eq!(human[0]["error_kind"], "auth");
+    assert_eq!(human[0]["reconnect_required"], true);
+
+    // An unknown capability: the same refusal on both gates.
+    let unknown = "0192f0c4-0000-7000-8000-000000000000";
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/connectors/{unknown}/probe"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.connector.probe",
+        json!({ "capability_id": unknown }),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
 }

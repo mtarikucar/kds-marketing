@@ -112,8 +112,11 @@ use crate::ports::{
 pub const OAUTH_STATE_PURPOSE: &str = "oauth-state";
 
 /// Where a provider sends the owner's browser back to, under the public base URL, followed by
-/// `/{provider}`: the redirect URI of every flow.
-pub const OAUTH_CALLBACK_PATH: &str = "/api/connectors/oauth/callback";
+/// `/{provider}`: the redirect URI of every flow. It is the panel's page, not the API: the page
+/// reads `state` and `code` from its address and calls the callback route
+/// (`GET /api/connectors/oauth/callback/{provider}`) itself, a same-site request that carries the
+/// session cookie (`SameSite=Strict`), which the provider's cross-site redirect would not.
+pub const OAUTH_CALLBACK_PATH: &str = "/oauth/callback";
 
 /// How long a started flow can be confirmed. Its state is accepted for [`STATE_TTL`] only (the
 /// time to sign in at the provider); the owner then has the rest of this time to choose assets.
@@ -172,9 +175,11 @@ pub struct StartOut {
     pub expires_at: OffsetDateTime,
 }
 
-/// The provider's callback: the `state` and `code` it sent back, and the signed-in user whose
-/// browser brought them. `Debug` masks the state and the code.
+/// The provider's callback: the provider it was addressed to (the redirect URI's last segment),
+/// the `state` and `code` it sent back, and the signed-in user whose browser brought them.
+/// `Debug` masks the state and the code.
 pub struct CompleteOAuth<'a> {
+    pub provider: Provider,
     pub state: String,
     pub code: String,
     pub principal: &'a Principal,
@@ -183,6 +188,7 @@ pub struct CompleteOAuth<'a> {
 impl fmt::Debug for CompleteOAuth<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompleteOAuth")
+            .field("provider", &self.provider)
             .field("state", &Masked)
             .field("code", &Masked)
             .field("user_id", &self.principal.user_id)
@@ -366,9 +372,9 @@ pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<St
 /// must be the one that started the flow, and they need `capabilities.manage` there.
 ///
 /// Refused with `FORBIDDEN` (Review Focus 4), and the provider is not asked: no current
-/// workspace; a state not signed for it, malformed, or issued more than [`STATE_TTL`] ago; a
-/// flow that is unknown, expired, or already completed (a state is used once); a reconnection
-/// whose capability was retired meanwhile. Then the code is exchanged for a credential and the
+/// workspace; a state not signed for it, signed for another provider than `input.provider`,
+/// malformed, or issued more than [`STATE_TTL`] ago; a flow that is unknown, expired, or already
+/// completed (a state is used once); a reconnection whose capability was retired meanwhile. Then the code is exchanged for a credential and the
 /// account's assets are listed; a provider refusal (`Auth`, `Permission`, `Permanent`) is
 /// `VALIDATION` with `details = {provider, provider_error, reason}`, and a busy or unreachable
 /// provider (`Throttle`, `Transient`) `UPSTREAM_UNAVAILABLE` with
@@ -387,6 +393,7 @@ pub async fn complete_oauth(
     input: CompleteOAuth<'_>,
 ) -> Result<PendingAssetsOut, AppError> {
     let CompleteOAuth {
+        provider,
         state,
         code,
         principal,
@@ -399,7 +406,7 @@ pub async fn complete_oauth(
     ctx.require(Permission::CapabilitiesManage)?;
     let key = deps.seal.hmac_key(ws, OAUTH_STATE_PURPOSE)?;
     let signed = OAuthState::verify(&state, &key, now).map_err(|_| refused_state())?;
-    if signed.workspace_id != ws {
+    if signed.workspace_id != ws || signed.provider != provider {
         return Err(refused_state());
     }
 
