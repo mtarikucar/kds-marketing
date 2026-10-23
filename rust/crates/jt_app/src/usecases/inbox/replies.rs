@@ -95,6 +95,62 @@ pub async fn enqueue(
     id: ConversationId,
     input: ReplyInput,
 ) -> Result<Enqueued, AppError> {
+    enqueue_target(deps, ctx, Target::Conversation(id), input).await
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SendInput {
+    pub channel: Channel,
+    pub text: String,
+    pub intent: SendIntent,
+    #[serde(default)]
+    pub request_key: Option<String>,
+}
+
+pub async fn send(
+    deps: &Deps,
+    ctx: &Ctx,
+    person: PersonId,
+    input: SendInput,
+) -> Result<ReplyOut, AppError> {
+    ctx.require(Permission::InboxWork)?;
+    if input.intent != SendIntent::Commercial {
+        return Err(AppError::validation(
+            "send requires commercial intent",
+            json!({"field":"intent"}),
+        ));
+    }
+    let input_reply = ReplyInput {
+        text: input.text,
+        intent: input.intent,
+        request_key: input.request_key,
+        subject: None,
+        in_reply_to: None,
+        references: vec![],
+    };
+    match enqueue_target(
+        deps,
+        ctx,
+        Target::Person(person, input.channel),
+        input_reply,
+    )
+    .await?
+    {
+        Enqueued::Existing(out) => Ok(out),
+        Enqueued::New(id) => send_step(deps, ctx, id).await,
+    }
+}
+enum Target {
+    Conversation(ConversationId),
+    Person(PersonId, Channel),
+}
+async fn enqueue_target(
+    deps: &Deps,
+    ctx: &Ctx,
+    target: Target,
+    input: ReplyInput,
+) -> Result<Enqueued, AppError> {
     ctx.require(Permission::InboxWork)?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
@@ -109,14 +165,64 @@ pub async fn enqueue(
     {
         return Ok(Enqueued::Existing(serde_json::from_value(out)?));
     }
-    if input.intent != SendIntent::Reply {
+    let text = required("text", &input.text)?;
+    if text.len() > 1_000_000 {
         return Err(AppError::validation(
-            "commercial sending is not available",
-            json!({"field":"intent"}),
+            "message too large",
+            json!({"field":"text"}),
         ));
     }
-    let text = required("text", &input.text)?;
-    let c = lock_conversation(r.as_mut(), id).await?;
+    let c = match target {
+        Target::Conversation(id) => lock_conversation(r.as_mut(), id).await?,
+        Target::Person(person, channel) => {
+            let kind = match channel {
+                Channel::Sms => "sms_line",
+                Channel::Email => "mailbox",
+                Channel::WhatsApp => "whatsapp_cloud",
+                Channel::Messenger => "messenger",
+                Channel::InstagramDm => "instagram_dm",
+                _ => {
+                    return Err(AppError::validation(
+                        "unsupported send channel",
+                        json!({"field":"channel"}),
+                    ));
+                }
+            };
+            let mut caps = r
+                .capabilities()
+                .list(crate::ports::CapabilityFilter {
+                    kind: Some(kind),
+                    ..Default::default()
+                })
+                .await?
+                .into_iter()
+                .filter(|c| {
+                    effective_status(c, ctx.now) == EffectiveStatus::Verified && c.has_sealed_config
+                });
+            let cap = caps.next().ok_or_else(|| refused("capability_down"))?;
+            if caps.next().is_some() {
+                return Err(AppError::conflict("ambiguous send capability"));
+            }
+            match r.conversations().find(person, cap.id).await? {
+                Some(c) => c,
+                None => Conversation {
+                    id: ConversationId::from(deps.ids.uuid()),
+                    workspace_id: ctx.workspace_id,
+                    person_id: person,
+                    capability_id: cap.id,
+                    kind_key: kind.into(),
+                    state: ConvState::Open,
+                    executor: Executor::Agent,
+                    executor_generation: 0,
+                    last_inbound_at: None,
+                    last_outbound_at: None,
+                    created_at: ctx.now,
+                    updated_at: ctx.now,
+                },
+            }
+        }
+    };
+    let id = c.id;
     let j = lock_current_journey(r.as_mut(), c.person_id).await?;
     let author = match ctx.actor {
         Actor::Human { user_id } => Author::Human(user_id),
@@ -124,16 +230,35 @@ pub async fn enqueue(
         Actor::System { .. } => Author::System,
     };
     let cap = capability(r.as_mut(), &c).await?;
-    fence(
+    if let Err(error) = fence(
         r.as_mut(),
         ctx,
         &c,
         j.as_ref(),
         &cap,
         c.executor_generation,
-        author,
+        (author, input.intent),
     )
-    .await?;
+    .await
+    {
+        if error.code == ErrorCode::Forbidden {
+            record(
+                r.as_mut(),
+                ctx,
+                "inbox.send.refused",
+                "person",
+                c.person_id,
+                json!({"person_id":c.person_id,"reason":error.message}),
+            )
+            .await?;
+            r.commit().await?;
+        }
+        return Err(error);
+    }
+    // Only an accepted send may create a conversation. No inbound time is manufactured.
+    if r.conversations().get(id).await?.is_none() {
+        r.conversations().insert_for_send(c.clone()).await?;
+    }
     // Validate recipient ambiguity before creating any durable outbound intent.
     let recipient = recipient(r.as_mut(), &c, &cap).await?;
     let message_id = MessageId::from(deps.ids.uuid());
@@ -287,19 +412,39 @@ async fn fence(
     j: Option<&Journey>,
     cap: &Capability,
     generation: u32,
-    author: Author,
+    purpose: (Author, SendIntent),
 ) -> Result<(), AppError> {
+    let (author, intent) = purpose;
     let person = r
         .people()
         .get(c.person_id)
         .await?
         .ok_or_else(|| AppError::not_found("no such person"))?;
+    let channel =
+        channel_for_kind(&c.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
+    let history = super::consent::history(r, c.person_id).await?;
+    let consents: Vec<_> = history
+        .consents
+        .into_iter()
+        .map(|mut row| {
+            row.person_id = c.person_id;
+            row
+        })
+        .collect();
+    let suppressions: Vec<_> = history
+        .suppressions
+        .into_iter()
+        .map(|mut row| {
+            row.person_id = c.person_id;
+            row
+        })
+        .collect();
     may_send(
         &FenceCtx {
             journey_status: j.map(|j| j.status),
-            suppressed: false,
-            consent_ok: true,
-            intent: SendIntent::Reply,
+            suppressed: suppressions.iter().any(|s| s.channel == channel),
+            consent_ok: commercial_allowed(&consents, &suppressions, channel).is_ok(),
+            intent,
             person_erased: person.erased_at.is_some(),
             person_merged: person.merged_into.is_some(),
             conversation_state: c.state.clone(),
@@ -312,9 +457,11 @@ async fn fence(
         matches!(author, Author::Agent),
     )
     .map_err(|e| refused(e.to_string()))?;
-    if !c.last_inbound_at.is_some_and(|at| {
-        at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
-    }) {
+    if intent == SendIntent::Reply
+        && !c.last_inbound_at.is_some_and(|at| {
+            at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
+        })
+    {
         return Err(refused("reply_window_closed"));
     }
     // Recovery must honor the same workspace gate as the public surfaces.
@@ -374,7 +521,10 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         j.as_ref(),
         &cap,
         row.expected_generation,
-        message.author,
+        (
+            message.author,
+            serde_json::from_value(row.intent["kind"].clone())?,
+        ),
     )
     .await
     {
@@ -576,7 +726,7 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
                 &p.recipient,
                 &p.message.body,
                 Some(&id.to_string()),
-                false,
+                p.row.intent["kind"] == "commercial",
             )
             .await
     } else {

@@ -253,7 +253,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (90 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (95 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -270,7 +270,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 90 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 95 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -905,6 +905,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `probe_all` | 15 dakika | Son yoklaması (`connector_public.health.at`) en az bir saatlik olan ya da hiç yoklanmamış her canlı bağlayıcı kabiliyetini (mühürlü kimlik bilgisi olan; kimlik bilgisi olmayan bir `declared` kabiliyet asla) `connector.probe`'un yaptığının aynısıyla yoklar; en çok dördü aynı anda (yoklama sağlayıcıyı beklerken kabiliyetin satır kilidini ve bir veritabanı bağlantısını tutar) | `jeeta.jobs.probe_all` |
 | `netgsm_dlr_poll` | 1 dakika | İletimi kesinleşmemiş gönderilerin iş kimliklerini (en çok 50) alanın doğrulanmış SMS hatlarının kimlik bilgisiyle NetGSM iletim raporuna sorar ve duyduğu durumları kaydeder. Gönderiler M2'nin tablosundadır; o gelene dek bekleyen iş yoktur ve sağlayıcıya hiç gidilmez | `jeeta.jobs.netgsm_dlr_poll` |
 | `netgsm_inbox_poll` | 1 saat | Her doğrulanmış SMS hattının NetGSM gelen kutusunu son iki saat için okur (başlangıç ve bitiş tarihi her zaman verilir) ve webhook'un kaçırdığı mesajları o hatta bağlı gelen olay olarak saklar. Kimlik webhook'unkiyle aynıdır (`netgsm-mo:<gorevid>`): webhook'un ya da önceki yoklamanın sakladığı mesaj ikinci kez yazılmaz. Yoklamanın ham gövdesi yoktur | `jeeta.jobs.netgsm_inbox_poll` |
+| `iys_sync` | 1 saat | İYS izin kararlarını eşitler; beş hatadan sonra insan takip görevi açar | `jeeta.jobs.iys_sync` |
 | `mail_inbox_poll` | 2 dakika | Doğrulanmış posta kutularında INBOX/Sent UID imleçlerini okur; olaylarla imleçleri aynı işlemde kaydeder ve gelen kutusu tüketicisini çalıştırır | `jeeta.jobs.mail_inbox_poll` |
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
@@ -1237,7 +1238,7 @@ birleştirme işlemleri `inbox.manage` gerektirir.
 | `close` | `POST /api/inbox/conversations/{conversation_id}/close` | `jeeta.inbox.close` | WRITE / `inbox.work` |
 | `reply` | `POST /api/inbox/conversations/{conversation_id}/reply` | `jeeta.inbox.reply` | WRITE / `inbox.work` |
 
-`reply`: `{text,intent:"reply",request_key?}`. M2a'da `commercial` doğrulama hatasıdır.
+`reply`: `{text,intent:"reply"|"commercial",request_key?}`. Ticari gönderim güncel izin ve bastırma kayıtlarını iki çitte denetler.
 Yanıt penceresi aynı konuşmadaki son gelen mesajdan itibaren 24 saattir. İki gönderim çiti
 kayıp yolculuk, silinmiş/birleştirilmiş kişi, canlı kabiliyet ve yürütücü neslini denetler.
 İnsan yanıtı yürütücüyü değiştirmez. Niyet, sağlayıcı çağrısından önce kalıcıdır; çağrı sırasında
@@ -1364,7 +1365,7 @@ its down migration removes only the added policy column.
 
 ### M2a inbox core: model, reducer and surfaces
 
-The catalog contains **90 MCP tools: the M1b 60 plus 30 inbox tools**. Every inbox tool
+The catalog contains **95 MCP tools: the M1b 60 plus 35 inbox tools**. Every inbox tool
 has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
 are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
 check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
@@ -1524,6 +1525,58 @@ Sent evidence is correlated by exact persisted Message-ID and capability, in the
 claim transaction. It resolves an unknown send once, reuses the request-key response, and
 records `inbox.sent_after_terminal` without reopening a terminal journey. DSNs record failure.
 Unknown SMS without a provider job ID stays unknown: no reference lookup or automatic resend.
-No new catalog rows or public tools are added: the existing 90-tool release counts stay exact.
+Mailbox flows add no catalog rows. Task 5 adds five compliance tools, bringing the release to 95.
 Commercial sending/consent ingestion remain Task 5; calendar integration, archive, HTML mail
 composition and webchat remain M2c.
+
+
+## M2b consent, suppression and commercial sending
+
+Five strategy-gated operations extend the inbox to 35 tools (95 total):
+
+| Row | Panel route | MCP tool | Permission |
+|---|---|---|---|
+| `inbox.consent.record` | POST `/api/inbox/people/{person_id}/consents` | `jeeta.inbox.consent_record` | InboxWork |
+| `inbox.consent.list` | GET `/api/inbox/people/{person_id}/consents` | `jeeta.inbox.consent_list` | InboxWork |
+| `inbox.suppressions.add` | POST `/api/inbox/people/{person_id}/suppressions` | `jeeta.inbox.suppressions_add` | InboxManage |
+| `inbox.suppressions.remove` | DELETE `/api/inbox/people/{person_id}/suppressions/{channel}/{reason}` | `jeeta.inbox.suppressions_remove` | InboxManage |
+| `inbox.send` | POST `/api/inbox/people/{person_id}/send` | `jeeta.inbox.send` | InboxWork |
+
+Consent input is `{channel,kind,source,at}`; `at` is RFC3339 and cannot be future dated.
+The latest effective decision wins, with withdrawal winning equal-time ties. SMS and call
+consent are separate. Lists include both consent history and active suppressions. Manual
+suppression insertion is idempotent; removal removes only the selected reason/channel.
+Applied merge aliases contribute their immutable consent/suppression history to the survivor.
+Undo excludes that alias again; compliance mutations advance the person edit guard.
+
+`send` takes `{channel,text,intent:"commercial",request_key?}` and selects the single verified,
+configured capability for that channel; ambiguous capability or recipient selection is refused.
+It creates an outbound conversation without manufacturing inbound activity. Both enqueue and
+provider fences read current consent and suppression; missing permission or suppression returns
+FORBIDDEN `IZIN_YOK`, ledgered without message/identity text. Reply intent keeps its same-conversation
+24-hour inbound window; commercial replies use consent instead. SMS commercial sends use
+`iysfilter=1`; Reply uses 0. Both send/reply share the 24-hour workspace request-key response cache
+and existing outbox recovery, including never automatically retrying unknown sends.
+
+The `inbox@2` consumer reclaims deferred consent callbacks. NetGSM adapter decisions use the
+provider's effective timestamp; undated, invalid or future grants are deferred instead of
+using arrival time. Incoming mail withdrawals suppress the matched person.
+Correlated mail bounces and ARF abuse/fraud/virus complaints add email suppression and refuse subsequent queued commercial
+mail at its provider fence. Unknown identities are deferred without creating a person.
+
+The hourly `iys_sync` job uses the existing advisory-lock scheduler. It submits pending/failed
+SMS (`MESAJ`), telephone (`ARAMA`) and email (`EPOSTA`) decisions. Withdrawals send `granted=false`.
+Submissions batch up to 500 rows; throttling does not spend the retry budget. Unsupported
+channels and erased people are excluded before pagination. Merged aliases synchronize through
+the survivor’s identities, retaining the original decision and effective time. Missing or ambiguous recipients
+consume bounded validation retries so they cannot permanently block later withdrawals.
+An acknowledgement marks sent; errors increment attempts, and attempt five marks failed_final
+and creates a human follow-up task. Sent/failed_final rows are not retried. Provider I/O holds
+no tenant transaction. Lost acknowledgements may repeat submissions: there is no exactly-once
+provider guarantee. As with other jobs, enable scheduling on one server instance.
+
+**Provisioning decision pending:** sync requires exactly one verified capability with a sealed
+`Credential::NetgsmIys`. The current public `connector.set_credentials` input does not provision
+this variant or bind a brand to a sending capability. The job and tests support the credential,
+but enabling production provisioning requires the coordinator's use-case contract decision;
+SMS credentials alone are never guessed to contain an İYS brand. No migration was changed.

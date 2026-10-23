@@ -30,6 +30,7 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 [dev-dependencies]
 jt_meta.workspace = true
 jt_netgsm.workspace = true
+jt_mail.workspace = true
 jt_testkit.workspace = true
 
 [lints]

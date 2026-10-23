@@ -142,6 +142,11 @@ fn catalog_is_the_release_table() {
         ("inbox.tasks.complete", Some("jeeta.inbox.tasks_complete"), Some(("POST", "/api/inbox/tasks/{task_id}/complete")), false, Risk::Write),
         ("inbox.tasks.list", Some("jeeta.inbox.tasks_list"), Some(("GET", "/api/inbox/tasks")), false, Risk::Read),
         ("inbox.notes.add", Some("jeeta.inbox.notes_add"), Some(("POST", "/api/inbox/journeys/{journey_id}/notes")), false, Risk::Write),
+        ("inbox.consent.record", Some("jeeta.inbox.consent_record"), Some(("POST", "/api/inbox/people/{person_id}/consents")), false, Risk::Write),
+        ("inbox.consent.list", Some("jeeta.inbox.consent_list"), Some(("GET", "/api/inbox/people/{person_id}/consents")), false, Risk::Read),
+        ("inbox.suppressions.add", Some("jeeta.inbox.suppressions_add"), Some(("POST", "/api/inbox/people/{person_id}/suppressions")), false, Risk::Write),
+        ("inbox.suppressions.remove", Some("jeeta.inbox.suppressions_remove"), Some(("DELETE", "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}")), false, Risk::Write),
+        ("inbox.send", Some("jeeta.inbox.send"), Some(("POST", "/api/inbox/people/{person_id}/send")), false, Risk::Write),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
@@ -214,7 +219,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 100);
+    assert_eq!(CATALOG.len(), 105);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

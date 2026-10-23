@@ -88,7 +88,8 @@ pub trait ConsentRepo: Send + Sync {
     async fn insert(&mut self, row: Consent) -> Result<(), AppError>;
     /// Ascending (effective time,id); effective_consent resolves withdrawal ties.
     async fn list(&mut self, person: PersonId) -> Result<Vec<Consent>, AppError>;
-    /// Pending/retryable records only, ascending (at,id), limit clamped to 1..=1000.
+    /// Pending/retryable IYS channels (SMS/phone/email) on nonerased people only (aliases retain pending decisions).
+    /// Filter before the ascending (at,id) page limit, clamped to 1..=1000.
     async fn pending_sync(&mut self, limit: u32) -> Result<Vec<Consent>, AppError>;
     /// Mutates sync metadata only; the underlying decision is immutable.
     async fn set_sync(

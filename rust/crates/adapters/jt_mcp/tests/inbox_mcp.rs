@@ -5,12 +5,14 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
         .into_iter()
         .filter(|s| s.name.starts_with("jeeta.inbox."))
         .collect();
-    assert_eq!(tools.len(), 30);
+    assert_eq!(tools.len(), 35);
     for tool in tools {
         assert_eq!(tool.input_schema.as_value()["additionalProperties"], false);
         let manage = matches!(
             tool.use_case,
-            "inbox.journeys.assign_owner"
+            "inbox.suppressions.add"
+                | "inbox.suppressions.remove"
+                | "inbox.journeys.assign_owner"
                 | "inbox.lost_reasons.set"
                 | "inbox.status_labels.set"
                 | "inbox.merges.list"
@@ -44,6 +46,11 @@ fn merge_task_and_note_schemas_share_panel_inputs_with_path_ids() {
         ("unsnooze", Some("conversation_id")),
         ("close", Some("conversation_id")),
         ("reply", Some("conversation_id")),
+        ("consent.record", Some("person_id")),
+        ("consent.list", Some("person_id")),
+        ("suppressions.add", Some("person_id")),
+        ("suppressions.remove", Some("person_id")),
+        ("send", Some("person_id")),
         ("merges.list", None),
         ("merges.apply", Some("merge_id")),
         ("merges.undo", Some("merge_id")),

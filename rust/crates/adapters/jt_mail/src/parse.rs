@@ -188,7 +188,8 @@ fn original_id(mail: &ParsedMail<'_>) -> Option<String> {
     }
     None
 }
-pub(crate) fn event(
+/// Decode one mailbox message into a provider event without performing network I/O.
+pub fn event(
     account: &str,
     mailbox: &str,
     validity: u32,
@@ -225,6 +226,28 @@ pub(crate) fn event(
     if is_sent {
         kind = EventKind::Status;
         payload["status"] = json!("sent");
+    } else if mail.ctype.mimetype == "multipart/report"
+        && mail
+            .ctype
+            .params
+            .get("report-type")
+            .is_some_and(|t| t.eq_ignore_ascii_case("feedback-report"))
+    {
+        let feedback = find_part(&mail, "message/feedback-report").ok_or_else(invalid)?;
+        let body = feedback.get_body_raw().map_err(|_| invalid())?;
+        let report = bounded_parse(&body)?;
+        let feedback_type = header(&report, "Feedback-Type").ok_or_else(invalid)?;
+        if ["abuse", "fraud", "virus"]
+            .iter()
+            .any(|kind| feedback_type.trim().eq_ignore_ascii_case(kind))
+        {
+            let original = original_id(&mail).ok_or_else(invalid)?;
+            kind = EventKind::Status;
+            payload = json!({"status":"complaint","message_id":original,"mailbox":mailbox,"account_id":account,"date":date});
+        } else {
+            kind = EventKind::Unknown("mail_feedback".into());
+            payload = json!({"mailbox":mailbox,"account_id":account});
+        }
     } else if let Some(dsn) = find_part(&mail, "message/delivery-status") {
         let status = dsn.get_body().map_err(|_| invalid())?;
         if status

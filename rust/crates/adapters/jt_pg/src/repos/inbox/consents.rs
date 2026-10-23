@@ -9,17 +9,18 @@ impl ConsentRepo for PgTenantRepos {
     async fn insert(&mut self, row: Consent) -> Result<(), AppError> {
         let ws = self.workspace_id();
         reference(self.tx.conn(), ws, "people", row.person_id.as_uuid()).await?;
-        let mut data = value!(row);
+        let mut data = value!(&row);
         data["workspace_id"] = value!(ws);
         inserted(sqlx::query("insert into consents select * from jsonb_populate_record(null::consents,$1) where workspace_id=$2 on conflict do nothing")
-            .bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert consent"))?)
+            .bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert consent"))?)?;
+        super::touch_person(self, row.person_id).await
     }
     async fn list(&mut self, person: PersonId) -> Result<Vec<Consent>, AppError> {
         many!(sqlx::query_scalar("select to_jsonb(c) from consents c where workspace_id=$1 and person_id=$2 order by at,id")
             .bind(self.workspace_id().as_uuid()).bind(person.as_uuid()),self,Consent)
     }
     async fn pending_sync(&mut self, limit: u32) -> Result<Vec<Consent>, AppError> {
-        many!(sqlx::query_scalar("select to_jsonb(c) from consents c where workspace_id=$1 and sync_state in ('pending','failed') order by at,id limit $2")
+        many!(sqlx::query_scalar("select to_jsonb(c) from consents c where workspace_id=$1 and sync_state in ('pending','failed') and channel in ('sms','phone','email') and exists(select 1 from people p where p.workspace_id=c.workspace_id and p.id=c.person_id and p.erased_at is null) order by at,id limit $2")
             .bind(self.workspace_id().as_uuid()).bind(i64::from(limit.clamp(1,1000))),self,Consent)
     }
     async fn set_sync(

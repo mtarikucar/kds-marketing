@@ -21,6 +21,25 @@ fn state_columns(state: &ConvState) -> (&'static str, Option<OffsetDateTime>) {
 }
 #[async_trait]
 impl ConversationRepo for PgTenantRepos {
+    async fn insert_for_send(&mut self, row: Conversation) -> Result<(), AppError> {
+        same_workspace(self.workspace_id(), row.workspace_id)?;
+        if row.last_inbound_at.is_some()
+            || row.executor != Executor::Agent
+            || row.state != ConvState::Open
+            || row.executor_generation != 0
+            || row.last_outbound_at.is_some()
+        {
+            return Err(AppError::validation(
+                "invalid outbound conversation",
+                serde_json::json!({}),
+            ));
+        }
+        sqlx::query("insert into conversations(id,workspace_id,person_id,capability_id,kind_key,state,executor_kind,executor_generation,created_at,updated_at) values($1,$2,$3,$4,$5,'open','agent',0,$6,$6)")
+            .bind(row.id.as_uuid()).bind(row.workspace_id.as_uuid()).bind(row.person_id.as_uuid()).bind(row.capability_id.as_uuid()).bind(row.kind_key).bind(row.created_at)
+            .execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert outbound conversation"))?;
+        Ok(())
+    }
+
     async fn send_state(&mut self, id: ConversationId) -> Result<ConversationSendState, AppError> {
         one!(sqlx::query_scalar("select jsonb_build_object('last_inbound_identity_id',last_inbound_identity_id,'activity_revision',activity_revision) from conversations where workspace_id=$1 and id=$2").bind(self.workspace_id().as_uuid()).bind(id.as_uuid()),self,ConversationSendState)?
             .ok_or_else(||AppError::not_found("no such conversation"))

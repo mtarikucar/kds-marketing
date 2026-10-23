@@ -8,7 +8,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::capability::ensure_capability;
-use super::inbox::{journey, person};
+use super::inbox::{journey, person, touch_person};
 use super::state::{MemBundle, exists, same_workspace, unique};
 use super::tenant::MemTenant;
 
@@ -22,7 +22,11 @@ impl ConsentRepo for MemTenant {
                 !t.state().inbox.consents.iter().any(|(_, r)| r.id == row.id),
                 "consent id is taken",
             )?;
-            t.tx.write(move |s| s.inbox.consents.push((ws, row.clone())));
+            let at = t.inbox_write_at();
+            t.tx.write(move |s| {
+                s.inbox.consents.push((ws, row.clone()));
+                touch_person(s, ws, row.person_id, at);
+            });
             Ok(())
         })
     }
@@ -45,7 +49,12 @@ impl ConsentRepo for MemTenant {
             .consents
             .iter()
             .filter(|(ws, r)| {
-                *ws == self.ws && matches!(r.sync_state, SyncState::Pending | SyncState::Failed)
+                *ws == self.ws
+                    && matches!(r.sync_state, SyncState::Pending | SyncState::Failed)
+                    && matches!(r.channel, Channel::Sms | Channel::Phone | Channel::Email)
+                    && self.state().inbox.people.iter().any(|p| {
+                        p.workspace_id == self.ws && p.id == r.person_id && p.erased_at.is_none()
+                    })
             })
             .map(|(_, r)| r.clone())
             .collect();
@@ -118,7 +127,11 @@ impl SuppressionRepo for MemTenant {
                 .iter()
                 .any(|(w, r)| *w == ws && *r == row)
             {
-                t.tx.write(move |s| s.inbox.suppressions.push((ws, row.clone())));
+                let at = t.inbox_write_at();
+                t.tx.write(move |s| {
+                    s.inbox.suppressions.push((ws, row.clone()));
+                    touch_person(s, ws, row.person_id, at);
+                });
             }
             Ok(())
         })
@@ -143,13 +156,31 @@ impl SuppressionRepo for MemTenant {
     ) -> Result<(), AppError> {
         self.call(|t| {
             let ws = t.ws;
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
+                let before = s.inbox.suppressions.len();
                 s.inbox.suppressions.retain(|(w, r)| {
                     !(*w == ws
                         && r.person_id == person
                         && r.channel == channel
                         && r.reason == reason)
-                })
+                });
+                if before != s.inbox.suppressions.len() {
+                    let mut next = Some(person);
+                    let mut seen = std::collections::BTreeSet::new();
+                    while let Some(id) = next {
+                        if !seen.insert(id) {
+                            break;
+                        }
+                        next = s
+                            .inbox
+                            .people
+                            .iter()
+                            .find(|p| p.workspace_id == ws && p.id == id)
+                            .and_then(|p| p.merged_into);
+                        touch_person(s, ws, id, at);
+                    }
+                }
             });
             Ok(())
         })

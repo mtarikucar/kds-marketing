@@ -1,0 +1,27 @@
+From: feedback@example.com
+To: sender@example.com
+Message-ID: <complaint@example.com>
+Content-Type: multipart/report; report-type=feedback-report; boundary=arf
+
+--arf
+Content-Type: text/plain
+
+Recipient reported abuse
+--arf
+Content-Type: message/feedback-report
+
+Feedback-Type: abuse
+User-Agent: Example-FBL/1.0
+Version: 1
+Original-Rcpt-To: rfc822; person@example.com
+
+--arf
+Content-Type: message/rfc822
+
+From: sender@example.com
+To: person@example.com
+Message-ID: <original@example.com>
+Subject: Offer
+
+Original message
+--arf--

@@ -3,6 +3,7 @@
 //! transport-only. No retries: the caller owns recovery and persists Message-ID before sending.
 mod imap;
 mod parse;
+pub use parse::event as parse_message;
 mod probe;
 mod smtp;
 mod socket;

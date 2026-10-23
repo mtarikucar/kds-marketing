@@ -99,6 +99,8 @@ pub struct ConversationSendState {
 
 #[async_trait]
 pub trait ConversationRepo: Send + Sync {
+    /// Create an outbound-only conversation without inbound activity. Existing pair is a conflict.
+    async fn insert_for_send(&mut self, conversation: Conversation) -> Result<(), AppError>;
     async fn send_state(&mut self, id: ConversationId) -> Result<ConversationSendState, AppError>;
     /// Set Theirs/clear snooze only when no newer inbound/operator activity occurred. Always
     /// record the greatest outbound time. Does not advance activity_revision.

@@ -10,6 +10,22 @@ pub fn input(action: &str) -> Value {
         &["channel", "value"],
     );
     match action {
+        "consent.record" => object(
+            json!({"channel":{"enum":["sms","email","phone","whats_app","messenger","instagram_dm","webchat"]},"kind":{"enum":["explicit","implied_by_contract","withdrawn"]},"source":{"enum":["form","agent","import","iys_sync","customer"]},"at":{"type":"string","format":"date-time"}}),
+            &["channel", "kind", "source", "at"],
+        ),
+        "suppressions.add" => object(
+            json!({"channel":{"enum":["sms","email","phone","whats_app","messenger","instagram_dm","webchat"]},"reason":{"enum":["manual"]}}),
+            &["channel", "reason"],
+        ),
+        "suppressions.remove" => object(
+            json!({"channel":{"enum":["sms","email","phone","whats_app","messenger","instagram_dm","webchat"]},"reason":{"enum":["manual","unsubscribe","bounce","complaint"]}}),
+            &["channel", "reason"],
+        ),
+        "send" => object(
+            json!({"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["commercial"]},"request_key":{"type":["string","null"]}}),
+            &["channel", "text", "intent"],
+        ),
         "conversations.list" => object(
             json!({"queue":{"type":"string","enum":["ours","unassigned","snoozed","all"],"default":"ours"},"cursor":{"type":["string","null"]},"limit":{"type":["integer","null"],"minimum":1,"maximum":499,"default":50}}),
             &[],
@@ -85,7 +101,14 @@ pub fn tool(action: &str) -> Value {
     let id = match action {
         "context" | "conversations.get" | "messages.list" | "take_over" | "hand_to_agent"
         | "snooze" | "unsnooze" | "close" | "reply" => Some("conversation_id"),
-        "people.get" | "identities.add" | "journeys.open" => Some("person_id"),
+        "people.get"
+        | "identities.add"
+        | "journeys.open"
+        | "consent.record"
+        | "consent.list"
+        | "suppressions.add"
+        | "suppressions.remove"
+        | "send" => Some("person_id"),
         "journeys.get"
         | "journeys.assign_owner"
         | "events.report"

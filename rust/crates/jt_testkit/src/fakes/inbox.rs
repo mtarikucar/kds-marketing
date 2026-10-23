@@ -376,6 +376,39 @@ impl IdentityRepo for MemTenant {
 }
 #[async_trait]
 impl ConversationRepo for MemTenant {
+    async fn insert_for_send(&mut self, row: Conversation) -> Result<(), AppError> {
+        self.call(|t| {
+            same_workspace(t.ws, row.workspace_id)?;
+            if row.last_inbound_at.is_some()
+                || row.executor != Executor::Agent
+                || row.state != ConvState::Open
+                || row.executor_generation != 0
+                || row.last_outbound_at.is_some()
+            {
+                return Err(AppError::validation(
+                    "invalid outbound conversation",
+                    serde_json::json!({}),
+                ));
+            }
+            person(t.state(), t.ws, row.person_id)?;
+            capability(t.state(), t.ws, row.capability_id)?;
+            unique(
+                !t.state().inbox.conversations.iter().any(|c| {
+                    c.id == row.id
+                        || (c.workspace_id == t.ws
+                            && c.person_id == row.person_id
+                            && c.capability_id == row.capability_id)
+                }),
+                "conversation already exists",
+            )?;
+            t.tx.write(move |s| {
+                s.inbox.conversation_send_states.entry(row.id).or_default();
+                s.inbox.conversations.push(row.clone());
+            });
+            Ok(())
+        })
+    }
+
     async fn send_state(&mut self, id: ConversationId) -> Result<ConversationSendState, AppError> {
         conversation(self.state(), self.ws, id)?;
         Ok(self

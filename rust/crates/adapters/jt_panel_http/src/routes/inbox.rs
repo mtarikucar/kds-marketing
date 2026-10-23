@@ -247,3 +247,55 @@ pub async fn context(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&jt_app::usecases::inbox::context::context(&state.deps, &ctx, id).await?)
 }
+
+use jt_app::usecases::inbox::consent;
+pub async fn consent_record(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<consent::RecordInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&consent::record_consent(&state.deps, &ctx, id, input).await?)
+}
+pub async fn consent_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&consent::list(&state.deps, &ctx, id).await?)
+}
+pub async fn suppressions_add(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<consent::SuppressionInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&consent::add_suppression(&state.deps, &ctx, id, input).await?)
+}
+pub async fn suppressions_remove(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath((id, channel, reason)): ApiPath<(
+        PersonId,
+        consent::Channel,
+        consent::SuppressionReason,
+    )>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(
+        &consent::remove_suppression(
+            &state.deps,
+            &ctx,
+            id,
+            consent::SuppressionInput { channel, reason },
+        )
+        .await?,
+    )
+}
+pub async fn send(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<jt_app::usecases::inbox::replies::SendInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&jt_app::usecases::inbox::replies::send(&state.deps, &ctx, id, input).await?)
+}

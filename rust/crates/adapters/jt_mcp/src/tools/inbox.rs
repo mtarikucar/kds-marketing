@@ -20,6 +20,41 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "inbox.consent.record",
+            description: "consent.record for a workspace person. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("consent.record")).expect("inbox schema"),
+            run: consent_record,
+        },
+        ToolDef {
+            use_case: "inbox.consent.list",
+            description: "consent.list for a workspace person. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("consent.list")).expect("inbox schema"),
+            run: consent_list,
+        },
+        ToolDef {
+            use_case: "inbox.suppressions.add",
+            description: "suppressions.add for a workspace person. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("suppressions.add")).expect("inbox schema"),
+            run: suppressions_add,
+        },
+        ToolDef {
+            use_case: "inbox.suppressions.remove",
+            description: "suppressions.remove for a workspace person. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("suppressions.remove")).expect("inbox schema"),
+            run: suppressions_remove,
+        },
+        ToolDef {
+            use_case: "inbox.send",
+            description: "send for a workspace person. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("send")).expect("inbox schema"),
+            run: send,
+        },
+        ToolDef {
             use_case: "inbox.pending",
             description: "Read the executor-visible inbox queues. [risk: READ]",
             permission: Permission::InboxWork,
@@ -423,5 +458,38 @@ fn context<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
         let id: ConversationId = take_id(&mut raw, "conversation_id")?;
         let _: NoArgs = args(raw)?;
         to_json(&jt_app::usecases::inbox::context::context(deps, ctx, id).await?)
+    })
+}
+
+use jt_app::usecases::inbox::consent;
+fn consent_record<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&consent::record_consent(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn consent_list<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&consent::list(deps, ctx, id).await?)
+    })
+}
+fn suppressions_add<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&consent::add_suppression(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn suppressions_remove<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&consent::remove_suppression(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn send<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&replies::send(deps, ctx, id, args(raw)?).await?)
     })
 }

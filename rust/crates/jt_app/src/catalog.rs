@@ -225,6 +225,11 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.tasks.complete", GateMode::Gated, "jeeta.inbox.tasks_complete", ("POST", "/api/inbox/tasks/{task_id}/complete"), Write),
     twin("inbox.tasks.list", GateMode::Gated, "jeeta.inbox.tasks_list", ("GET", "/api/inbox/tasks"), Read),
     twin("inbox.notes.add", GateMode::Gated, "jeeta.inbox.notes_add", ("POST", "/api/inbox/journeys/{journey_id}/notes"), Write),
+    twin("inbox.consent.record", GateMode::Gated, "jeeta.inbox.consent_record", ("POST", "/api/inbox/people/{person_id}/consents"), Write),
+    twin("inbox.consent.list", GateMode::Gated, "jeeta.inbox.consent_list", ("GET", "/api/inbox/people/{person_id}/consents"), Read),
+    twin("inbox.suppressions.add", GateMode::Gated, "jeeta.inbox.suppressions_add", ("POST", "/api/inbox/people/{person_id}/suppressions"), Write),
+    twin("inbox.suppressions.remove", GateMode::Gated, "jeeta.inbox.suppressions_remove", ("DELETE", "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}"), Write),
+    twin("inbox.send", GateMode::Gated, "jeeta.inbox.send", ("POST", "/api/inbox/people/{person_id}/send"), Write),
 
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),

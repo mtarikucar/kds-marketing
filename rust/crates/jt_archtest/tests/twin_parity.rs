@@ -2361,3 +2361,187 @@ async fn mailbox_hosts_probe_and_retire_surface_parity() {
         }
     }
 }
+
+#[tokio::test]
+async fn inbox_consent_suppressions_and_send_have_http_mcp_parity() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("consent-parity").await;
+    let sender =
+        Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(&["api.netgsm.com.tr"]));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(sender.clone())),
+    );
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    sender.push_probe(ProbeResult::success(42, json!({"account_id":"8508001234"})));
+    ok(send(&app,panel(Method::POST,"/api/connectors/credentials",Some(&cookie),Some(json!({"kind_key":"sms_line","name":"SMS","credential":{"kind":"netgsm_sms","usercode":"8508001234","password":"test-secret","msgheader":"ALFA"}})))).await).await;
+    let created=ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})))).await).await;
+    let person = created["person"]["id"].as_str().unwrap();
+    let base = format!("/api/inbox/people/{person}");
+    let input = json!({"channel":"sms","text":"Offer","intent":"commercial","request_key":"commercial-parity"});
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("{base}/send"),
+                Some(&cookie),
+                Some(input.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let mut args = input.clone();
+    args["person_id"] = json!(person);
+    let agent = tool_result(&app, &key, &session, "jeeta.inbox.send", args.clone()).await;
+    assert_eq!(human["code"], "FORBIDDEN");
+    assert_eq!(human["message"], "IZIN_YOK");
+    assert_eq!(agent["structuredContent"], human);
+    let consent =
+        json!({"channel":"sms","kind":"explicit","source":"agent","at":"2020-01-01T00:00:00Z"});
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/consents"),
+            Some(&cookie),
+            Some(consent.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let mut record_args = consent;
+    record_args["person_id"] = json!(person);
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.consent_record",
+        record_args,
+    )
+    .await;
+    assert_ne!(human["id"], agent["id"]);
+    for field in [
+        "person_id",
+        "channel",
+        "kind",
+        "source",
+        "at",
+        "sync_state",
+        "attempts",
+    ] {
+        assert_eq!(human[field], agent[field], "{field}");
+    }
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("{base}/consents"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.consent_list",
+            json!({"person_id":person})
+        )
+        .await
+    );
+    assert_eq!(human["consents"].as_array().unwrap().len(), 2);
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/suppressions"),
+            Some(&cookie),
+            Some(json!({"channel":"sms","reason":"manual"})),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.suppressions_add",
+            json!({"person_id":person,"channel":"sms","reason":"manual"})
+        )
+        .await
+    );
+    let human = ok(send(
+        &app,
+        panel(
+            Method::DELETE,
+            &format!("{base}/suppressions/sms/manual"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.suppressions_remove",
+            json!({"person_id":person,"channel":"sms","reason":"manual"})
+        )
+        .await
+    );
+    sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
+        provider_id: "commercial-1".into(),
+        cost_minor: None,
+    }));
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("{base}/send"),
+            Some(&cookie),
+            Some(input),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        human,
+        call_tool(&app, &key, &session, "jeeta.inbox.send", args).await
+    );
+    assert_eq!(human["state"], "sent");
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let person = serde_json::from_value(json!(person)).unwrap();
+    let conversations = r.conversations().list(Some(person), 10).await.unwrap();
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(conversations[0].last_inbound_at, None);
+    assert_eq!(
+        r.messages()
+            .list(conversations[0].id, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}

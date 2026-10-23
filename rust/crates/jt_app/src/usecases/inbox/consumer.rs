@@ -14,7 +14,7 @@ use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub const CONSUMER: &str = "inbox@1";
+pub const CONSUMER: &str = "inbox@2";
 // Stable across inbox consumer versions: activity must not reopen a conversation twice.
 const PBX_ACTIVITY: &str = "inbox.pbx_activity";
 
@@ -149,6 +149,9 @@ async fn route(
             return Ok("deferred");
         };
         cap = sibling;
+    }
+    if event.kind == EventKind::Consent {
+        return consent_event(deps, ctx, r, event, &cap).await;
     }
     let Some(channel) = channel_for_kind(&cap.kind_key) else {
         return Ok("deferred");
@@ -670,7 +673,7 @@ async fn mail_evidence(
             provider_id: mid.into(),
             cost_minor: None,
         }),
-        Some("failed") => Err(jt_connector::ConnectorError::permanent(
+        Some("failed" | "complaint") => Err(jt_connector::ConnectorError::permanent(
             "mail delivery failed",
         )),
         _ => return Ok("deferred"),
@@ -679,7 +682,33 @@ async fn mail_evidence(
         return Ok("deferred");
     }
     super::replies::record_result_in(deps, ctx, r, id, result, true).await?;
-    if text(&event.payload, "status") == Some("failed") {
+    if matches!(text(&event.payload, "status"), Some("failed" | "complaint")) {
+        let conversation = r
+            .conversations()
+            .get(row.conversation_id)
+            .await?
+            .ok_or_else(malformed)?;
+        let reason = if text(&event.payload, "status") == Some("complaint") {
+            SuppressionReason::Complaint
+        } else {
+            SuppressionReason::Bounce
+        };
+        r.suppressions()
+            .insert(Suppression {
+                person_id: conversation.person_id,
+                channel: Channel::Email,
+                reason,
+            })
+            .await?;
+        record(
+            r,
+            ctx,
+            "inbox.suppression.received",
+            "person",
+            conversation.person_id,
+            json!({"person_id":conversation.person_id,"channel":"email","reason":reason}),
+        )
+        .await?;
         let m = r
             .messages()
             .get(row.message_id)
@@ -689,5 +718,102 @@ async fn mail_evidence(
             .set_status(m.id, MsgStatus::Failed, m.external_id, m.cost_minor)
             .await?;
     }
+    Ok("consumed")
+}
+
+async fn consent_event(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    cap: &Capability,
+) -> Result<&'static str, AppError> {
+    let p = &event.payload;
+    let (channel, recipient, kind, source) = match event.provider {
+        Provider::Netgsm if matches!(cap.kind_key.as_str(), "sms_line" | "netgsm_pbx") => {
+            let channel = match text(p, "channel") {
+                Some("MESAJ") => Channel::Sms,
+                Some("ARAMA") => Channel::Phone,
+                Some("EPOSTA") => Channel::Email,
+                _ => return Ok("deferred"),
+            };
+            let kind = match (text(p, "status"), p["granted"].as_bool()) {
+                (Some("ONAY"), Some(true)) => ConsentKind::Explicit,
+                (Some("RET"), Some(false)) => ConsentKind::Withdrawn,
+                _ => return Err(malformed()),
+            };
+            (
+                channel,
+                text(p, "recipient").ok_or_else(malformed)?,
+                kind,
+                ConsentSource::IysSync,
+            )
+        }
+        Provider::Mail
+            if cap.kind_key == "mailbox" && p["withdrawn"] == true && p["channel"] == "email" =>
+        {
+            (
+                Channel::Email,
+                text(p, "from").ok_or_else(malformed)?,
+                ConsentKind::Withdrawn,
+                ConsentSource::Customer,
+            )
+        }
+        _ => return Ok("deferred"),
+    };
+    let at = if kind == ConsentKind::Explicit {
+        // Arrival time is not proof of a grant's effective time: delayed callbacks must
+        // never manufacture permission newer than a recorded withdrawal.
+        let Some(at) = text(p, "occurred_at")
+            .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+            .filter(|at| *at <= event.received_at && *at <= ctx.now)
+        else {
+            return Ok("deferred");
+        };
+        at
+    } else {
+        activity_at(event)
+    };
+    let normalized = normalise(channel.identity_channel(), recipient).map_err(|_| malformed())?;
+    let Some(person) = r
+        .people()
+        .find_by_identity(channel.identity_channel(), &normalized)
+        .await?
+    else {
+        return Ok("deferred");
+    };
+    let row = Consent {
+        id: ConsentId::from(deps.ids.uuid()),
+        person_id: person.id,
+        channel,
+        kind,
+        source,
+        at,
+        sync_state: if source == ConsentSource::IysSync {
+            SyncState::Sent
+        } else {
+            SyncState::Pending
+        },
+        attempts: 0,
+    };
+    r.consents().insert(row.clone()).await?;
+    if kind == ConsentKind::Withdrawn {
+        r.suppressions()
+            .insert(Suppression {
+                person_id: person.id,
+                channel,
+                reason: SuppressionReason::Unsubscribe,
+            })
+            .await?;
+    }
+    record(
+        r,
+        ctx,
+        "inbox.consent.received",
+        "person",
+        person.id,
+        json!({"person_id":person.id,"consent_id":row.id,"channel":channel,"kind":kind}),
+    )
+    .await?;
     Ok("consumed")
 }

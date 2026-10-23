@@ -39,6 +39,14 @@ use crate::state::AppState;
 /// `CATALOG.panel_route` writes it. The twin-rule test compares it with the catalog.
 pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/inbox/pending"),
+    ("POST", "/api/inbox/people/{person_id}/consents"),
+    ("GET", "/api/inbox/people/{person_id}/consents"),
+    ("POST", "/api/inbox/people/{person_id}/suppressions"),
+    (
+        "DELETE",
+        "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}",
+    ),
+    ("POST", "/api/inbox/people/{person_id}/send"),
     ("GET", "/api/inbox/conversations/{conversation_id}/context"),
     ("GET", "/api/inbox/conversations"),
     ("GET", "/api/inbox/conversations/{conversation_id}"),
@@ -219,6 +227,36 @@ where
 pub fn api_routes() -> Vec<ApiRoute> {
     vec![
         api_route("GET", "/inbox/pending", "inbox.pending", inbox::pending),
+        api_route(
+            "POST",
+            "/inbox/people/{person_id}/consents",
+            "inbox.consent.record",
+            inbox::consent_record,
+        ),
+        api_route(
+            "GET",
+            "/inbox/people/{person_id}/consents",
+            "inbox.consent.list",
+            inbox::consent_list,
+        ),
+        api_route(
+            "POST",
+            "/inbox/people/{person_id}/suppressions",
+            "inbox.suppressions.add",
+            inbox::suppressions_add,
+        ),
+        api_route(
+            "DELETE",
+            "/inbox/people/{person_id}/suppressions/{channel}/{reason}",
+            "inbox.suppressions.remove",
+            inbox::suppressions_remove,
+        ),
+        api_route(
+            "POST",
+            "/inbox/people/{person_id}/send",
+            "inbox.send",
+            inbox::send,
+        ),
         api_route(
             "GET",
             "/inbox/conversations/{conversation_id}/context",

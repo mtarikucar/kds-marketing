@@ -110,6 +110,7 @@ pub enum Job {
     NetgsmDlrPoll,
     NetgsmInboxPoll,
     MailInboxPoll,
+    IysSync,
     PurgeRawBodies,
     PurgeOAuthPending,
     PurgeProbeRuns,
@@ -121,12 +122,13 @@ pub enum Job {
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 12] = [
+    pub const ALL: [Job; 13] = [
         Job::RefreshTokens,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
         Job::NetgsmInboxPoll,
         Job::MailInboxPoll,
+        Job::IysSync,
         Job::PurgeRawBodies,
         Job::PurgeOAuthPending,
         Job::PurgeProbeRuns,
@@ -145,6 +147,7 @@ impl Job {
             Job::NetgsmDlrPoll => "netgsm_dlr_poll",
             Job::NetgsmInboxPoll => "netgsm_inbox_poll",
             Job::MailInboxPoll => "mail_inbox_poll",
+            Job::IysSync => "iys_sync",
             Job::PurgeRawBodies => "purge_raw_bodies",
             Job::PurgeOAuthPending => "purge_oauth_pending",
             Job::PurgeProbeRuns => "purge_probe_runs",
@@ -168,6 +171,7 @@ impl Job {
             Job::NetgsmDlrPoll => run_netgsm_dlr_poll(deps, now).await,
             Job::NetgsmInboxPoll => run_netgsm_inbox_poll(deps, now).await,
             Job::MailInboxPoll => run_mail_inbox_poll(deps, now).await,
+            Job::IysSync => run_iys_sync(deps, now).await,
             Job::PurgeRawBodies => run_purge_raw_bodies(deps, now).await,
             Job::PurgeOAuthPending => run_purge_oauth_pending(deps, now).await,
             Job::PurgeProbeRuns => run_purge_probe_runs(deps, now).await,
@@ -1295,4 +1299,202 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
         report.failed += consumed.failed;
     }
     finish(job, report)
+}
+
+/// Hourly retry, serialized by the scheduler's iys_sync advisory lock. A lost acknowledgement
+/// may repeat a submission. Sync metadata never changes the underlying local consent decision.
+pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use jt_inbox::{Channel, ConsentKind, SyncState, Task, TaskId, TaskStatus};
+    let job = Job::IysSync;
+    let mut report = JobReport::default();
+    let Some(sync) = deps.connectors.consent(Provider::Netgsm) else {
+        return finish(job, report);
+    };
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let result = async {
+            let (credential, rows) = {
+                let mut r = deps.uow.tenant(ws).await?;
+                let mut credentials = Vec::new();
+                for cap in r.capabilities().list(CapabilityFilter::default()).await? {
+                    if cap.status != StoredStatus::Verified
+                        || provider_for_kind(&cap.kind_key) != Some(Provider::Netgsm)
+                    {
+                        continue;
+                    }
+                    if let Some(sealed) = r.capabilities().read_sealed(cap.id).await? {
+                        let cred = open_credential(deps, ws, &sealed)?;
+                        if matches!(cred, Credential::NetgsmIys { .. }) {
+                            credentials.push(cred);
+                        }
+                    }
+                }
+                // A tenant with multiple brands needs an explicit binding; never guess a brand.
+                if credentials.len() != 1 {
+                    return Ok::<_, AppError>(());
+                }
+                (
+                    credentials.remove(0),
+                    r.consents().pending_sync(1000).await?,
+                )
+            };
+            for chunk in rows.chunks(500) {
+                let mut wire = Vec::new();
+                let mut valid = std::collections::BTreeSet::new();
+                {
+                    let mut r = deps.uow.tenant(ws).await?;
+                    for row in chunk {
+                        let channel = match row.channel {
+                            Channel::Sms => "MESAJ",
+                            Channel::Phone => "ARAMA",
+                            Channel::Email => "EPOSTA",
+                            _ => continue,
+                        };
+                        let Some(person) =
+                            consent_recipient_person(r.as_mut(), row.person_id).await?
+                        else {
+                            continue;
+                        };
+                        if person.erased_at.is_some() {
+                            continue;
+                        }
+                        let identities = r.identities().list(person.id).await?;
+                        let candidates: Vec<_> = identities
+                            .iter()
+                            .filter(|i| i.active && i.channel == row.channel.identity_channel())
+                            .collect();
+                        if candidates.len() != 1 {
+                            continue;
+                        }
+                        wire.push(crate::ports::connectors::ConsentRow {
+                            recipient: candidates[0].value_normalized.clone(),
+                            channel: channel.into(),
+                            granted: row.kind != ConsentKind::Withdrawn,
+                            source: "HS_WEB".into(),
+                            at: row.at,
+                        });
+                        valid.insert(row.id);
+                    }
+                }
+                // A full page uses at most two provider requests, not one request per decision.
+                // No tenant transaction or row lock crosses the provider call.
+                let result = if wire.is_empty() {
+                    Ok(crate::ports::connectors::SendReceipt {
+                        provider_id: String::new(),
+                        cost_minor: None,
+                    })
+                } else {
+                    sync.add(&credential, &wire).await
+                };
+                for row in chunk {
+                    report.touched += 1;
+                    if valid.contains(&row.id)
+                        && matches!(result, Err(ConnectorError::Throttle { .. }))
+                    {
+                        report.skipped += 1;
+                        continue;
+                    }
+                    // Unresolvable recipients also consume the bounded validation retry budget.
+                    let ok = valid.contains(&row.id) && result.is_ok();
+                    let mut r = deps.uow.tenant(ws).await?;
+                    r.people().lock_workspace().await?;
+                    let current = r
+                        .consents()
+                        .list(row.person_id)
+                        .await?
+                        .into_iter()
+                        .find(|c| c.id == row.id);
+                    if !current.is_some_and(|c| {
+                        c.sync_state == row.sync_state && c.attempts == row.attempts
+                    }) {
+                        report.skipped += 1;
+                        continue;
+                    }
+                    let attempts = row.attempts + 1;
+                    let state = if ok {
+                        SyncState::Sent
+                    } else if attempts >= 5 {
+                        SyncState::FailedFinal
+                    } else {
+                        SyncState::Failed
+                    };
+                    r.consents().set_sync(row.id, state, attempts).await?;
+                    if state == SyncState::FailedFinal {
+                        let person = consent_recipient_person(r.as_mut(), row.person_id)
+                            .await?
+                            .ok_or_else(|| AppError::not_found("consent person missing"))?;
+                        let journey =
+                            r.journeys().latest_for(person.id).await?.ok_or_else(|| {
+                                AppError::conflict("consent requires a human follow-up journey")
+                            })?;
+                        let assignee = r
+                            .memberships()
+                            .list()
+                            .await?
+                            .into_iter()
+                            .find(|m| {
+                                m.status == jt_tenancy::MembershipStatus::Active
+                                    && matches!(m.role_key.as_str(), "owner" | "manager")
+                            })
+                            .and_then(|m| m.user_id);
+                        r.tasks()
+                            .insert(Task {
+                                id: TaskId::from(deps.ids.uuid()),
+                                workspace_id: ws,
+                                journey_id: journey.id,
+                                title: format!(
+                                    "Review failed IYS consent synchronization {}",
+                                    row.id
+                                ),
+                                due_at: now,
+                                assignee,
+                                status: TaskStatus::Open,
+                            })
+                            .await?;
+                    }
+                    super::inbox::record(
+                        r.as_mut(),
+                        &system_ctx(job, ws, now),
+                        "inbox.consent.synced",
+                        "consent",
+                        row.id,
+                        json!({"person_id":row.person_id,"state":state,"attempts":attempts}),
+                    )
+                    .await?;
+                    r.commit().await?;
+                    if ok {
+                        report.changed += 1;
+                    } else {
+                        report.failed += 1;
+                    }
+                }
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = result {
+            report.failed += 1;
+            step_failed(job, ws, None, &Failure::App(e));
+        }
+    }
+    finish(job, report)
+}
+
+async fn consent_recipient_person(
+    r: &mut dyn TenantRepos,
+    mut id: jt_inbox::PersonId,
+) -> Result<Option<jt_inbox::Person>, AppError> {
+    let mut visited = BTreeSet::new();
+    loop {
+        if !visited.insert(id) {
+            return Err(AppError::conflict("cyclic person merge"));
+        }
+        let Some(person) = r.people().get(id).await? else {
+            return Ok(None);
+        };
+        if let Some(target) = person.merged_into {
+            id = target;
+        } else {
+            return Ok(Some(person));
+        }
+    }
 }
