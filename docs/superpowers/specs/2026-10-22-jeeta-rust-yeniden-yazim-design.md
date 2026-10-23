@@ -239,6 +239,22 @@ döner ve hiçbir şey değişmez. Bu eylemlerin yetkisi onaydan değil rolden g
 onaylamak ve arşivlemek gibi role bağlı eylemler, rol anahtarıyla birlikte `team.manage` iznini anahtarın
 kapsamı içinde ister ve ajan bu yetkiyi anahtarı çıkaran insandan devralır (§5).
 
+**(M1b uygulamasında kesinleşti) Bağlayıcı hataları ve onay listesi.** Bir kullanım durumu sağlayıcıya
+eşzamanlı çağrı yapar da sağlayıcı geçici olarak yanıt vermez ya da hız sınırı koyarsa (`Throttle`,
+`Transient`), yapısal hata kodu `UPSTREAM_UNAVAILABLE`'dır (panelde HTTP 503; MCP'de aynı gövde):
+`details = { provider, retryable: true, retry_after_s?, reason }` ve `reason` her zaman gizli-değer
+maskesinden geçer. Yoklama (`connector.probe`) başarısızlığı bir hata değil sonuçtur; o yüzden bu kodu
+döndürmez. `confirm: true` isteyen yıkıcı araç listesine `jeeta.budget.items_retire` eklendi: emekli
+bütçe kalemi bağ ve harcama almaz, bağları aynı işlemde silinir, harcama geçmişi kalır. Tek HTTP çıkış
+kapısı iki istisna ve iki ek denetim kazandı: (1) yalnız `netgsm` kapsamında, yalnız
+`crmsntrl.netgsm.com.tr:9111` için düz `http` (Netsantral'ın tıkla-ara ucu; sağlayıcı sınırı olarak
+belgelenir); (2) ad çözümleme anında özel adres aralığına çözünen her ad reddedilir (sabit sağlayıcı
+adları dahil; `resolve_public` M2'nin SMTP/IMAP soketleri için de tek paylaşılan süzgeçtir); (3)
+yalnız geliştirme testlerinin açtığı `test-loopback` özelliği derlemeye girmişse ikili
+`JEETA_ALLOW_TEST_LOOPBACK=1` olmadan açılmayı reddeder; (4) kiracı katmanı her açılışta canlı
+bağlayıcı kabiliyetlerinin `connector_public.hosts` listesinden yeniden kurulur, emekli kabiliyetin
+adresleri düşer.
+
 ### 4.5 Panel ve MCP ikizliği
 
 Panelde yapılabilen her iş bir MCP aracıyla da yapılabilir; tersi de geçerlidir. İkisi aynı uygulama
@@ -455,6 +471,26 @@ kutusu, hangi hattın hangi markaya ait olduğunu gruptan okur. İç içe grup i
   bekleyen işlere yeniden doğrulama olarak düşer. Bağlayıcıyla ulaşılan türler bir beyanla doğrulanamaz
   (`CONFLICT`); onları kendi yoklamaları doğrular (M1b). Bildirilmiş ama bağlanmamış her bağlayıcı
   kabiliyeti bekleyen işlerde adıyla "bağlan" işi olarak görünür.
+
+- **(M1b uygulamasında kesinleşti) Bağlayıcı doğrulaması ve yönlendirme.** Her başarılı yoklama
+  `facts.account_id` döndürmek zorundadır (sayfa, IG kullanıcı, WABA telefon kimliği, X kullanıcı
+  kimliği, NetGSM başlık ya da kullanıcı adı); bu değer kabiliyetin `external_id`'siyle harfi harfine
+  karşılaştırılır, uyuşmazsa ya da yoksa kabiliyet asla `doğrulandı` olmaz (hata `Permission` "account
+  mismatch"). Böylece başka bir kiracının hesap kimliğini bildirip rastgele bir jeton yapıştırmak işe
+  yaramaz. Gelen webhook olayları yalnız emekli olmayan, kimlik bilgisi mühürlü ve EN AZ BİR KEZ
+  doğrulanmış (`last_verified_at` dolu) kabiliyete yönlenir; durumu `ulaşılamıyor` olsa da (jeton
+  süresi dolmuş) olaylar düşmez, sahibi yeniden bağlayınca yerinde durur. Hesap kimliği değişirse
+  (`capability.update`) doğrulama sıfırlanır, mühürlü kimlik bilgisi ve eski hesabın herkese açık
+  bilgileri (`health`, `facts`, `asset`, `account`) silinir. Bağlayıcının yazdığı herkese açık
+  anahtarlar (`access`, `account`, `asset`, `facts`, `health`, `provider`, `reconnect_required`)
+  kullanıcıya kapalıdır; `hosts` kullanıcıya açıktır. Kimlik doğrulama hatasında
+  `reconnect_required = true` olur ve bekleyen işlerde 1. öncelikte "yeniden bağla" görünür; kabiliyet
+  anahtarı kurallarında "auth" ve "credential" sözcükleri gizli-değer sayıldığı için adlar
+  `reauth_required`/`credential.expires_at` yerine `reconnect_required`/`access.expires_at`'tir. OAuth
+  durumu çalışma alanına özel HMAC anahtarıyla imzalanır (`hmac_key(ws, "oauth-state")`); PKCE
+  doğrulayıcısı duruma değil sunucudaki bekleyen satıra mühürlenir; aynı durum ikinci kez tamamlanamaz
+  (`FORBIDDEN`). Meta ve X'te kimlik bilgisi yalnız OAuth ya da yapıştırılan Meta jetonuyla, NetGSM'de
+  elle girilir; `x` türünün elle yolu yoktur.
 
 ### 6.5 Araçlar (özet)
 
@@ -725,6 +761,7 @@ tamamlar. Bu kod başka hiçbir eylemde yoktur.
 | Adaptör testleri | her bağlayıcı için kayıtlı sağlayıcı yanıtlarıyla; gerçek sağlayıcıya yalnız elle smoke |
 | Uçtan uca | gerçek PostgreSQL ile: webhook → kişi → ajan yanıtı → yayın → ölçüm |
 | İkizlik | her kullanım durumu için MCP ve panel yolu aynı sonucu verir |
+| Çıkış adaptörü | sabit sağlayıcı adları birebir; özel adrese çözünen ad reddi (enjekte çözücü); Netsantral düz-http istisnası yalnız o kapsamda; `test-loopback` özelliği yalnız dev-bağımlılıkta (mimari test) ve üretim derlemesi ayrı test edilir (M1b uygulamasında kesinleşti) |
 | CI | v1'den ayrı iş akışı; etiketler v1 ile çakışmaz |
 
 ## 13. Yol haritası (K9 sırası)
