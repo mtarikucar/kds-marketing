@@ -86,14 +86,14 @@ döndürür. Beş göç vardır:
 | `0002_strategy` | strateji sürümleri, hipotezler, istişare kaydı |
 | `0003_capabilities` | kabiliyetler (bildiren ajan bağlantısı `declared_by_connection` dahil), gruplar (adı alan içinde büyük/küçük harf ayırmadan tek: `capability_groups_name_ci`, `lower(name)` üzerinde), bütçe kalemleri ve bağları, harcama kaydı, çalışma alanı politikaları |
 | `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan kısmi dizini (`ledger_entries_agent_connection_idx`, yalnız `action = 'work.checkin'` satırları) açar |
-| `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir; bir tetikleyici her değişikliği ve 30 günden genç bir kaydın silinmesini reddeder); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
+| `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez; geçmiş için en yenisi başta bir dizin), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; akışın oturum açtığı uygulama `app`; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir; bir tetikleyici her değişikliği ve 30 günden genç bir kaydın silinmesini reddeder); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
 
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
 değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
 harf ayırmayan benzersiz dizini eklendi, `0004`'ün yoklama dizini yalnız `work.checkin` satırlarını
-tutar oldu); `0005` de M1b sırasında yayımlanmadan önce yerinde değiştirildi (en son: `probe_runs`
-tetikleyicisi 30 günden eski kayıtların silinmesine izin verir oldu; ondan önce `budget_items.retired_at`
-sütunu eklendi). Bu göçlerin eski
+tutar oldu); `0005` de M1b sırasında yayımlanmadan önce yerinde değiştirildi (en son: `oauth_pending.app`
+sütunu ve `inbound_events_history_idx` dizini eklendi; ondan önce `probe_runs` tetikleyicisi 30 günden eski
+kayıtların silinmesine izin verir oldu ve `budget_items.retired_at` sütunu eklendi). Bu göçlerin eski
 bir hâlini uygulamış bir veritabanında `jeeta serve` sağlama toplamı (checksum) uyuşmazlığıyla durur
 (`migration 3 was previously applied but has been modified`). Bu yalnız yayından önceki yerel
 geliştirme veritabanları içindir: değişmiş bir göç, eski hâlini uygulamış dağıtılmış bir veritabanına asla
@@ -235,7 +235,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (47 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (60 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -699,6 +699,16 @@ genel bilgiler, 30 gün tutulur); günlüğe (`connector.probe`) yalnız durum d
 yeniden bağlama gereğini mühür açmadan okur. Yeniden bağlama (`connector.reconnect`) Meta ve X için
 kabiliyete bağlı yeni bir OAuth akışı başlatır; NetGSM kabiliyeti yeni kimlik bilgisi alır.
 
+**Hangi uygulamayla yeniden bağlanır.** Bir OAuth akışının verdiği kimlik bilgisi, akışın oturum açtığı
+uygulamayı kaydeder (`connector_public.access.app`: `meta`, `instagram` ya da `x`; jeton yenilemesi
+korur, elle girilen kimlik bilgisi adlamaz) ve yeniden bağlama o uygulamayla oturum açar; akış uygulamasını
+geri dönüşe kadar taşır, başka bir uygulamanın geri dönüş adresi `403`'tür. Facebook Login'le (sayfası
+üzerinden) bağlanmış bir `instagram` kabiliyeti Meta uygulamasıyla döner, Instagram uygulaması
+yapılandırılmamış olsa da; Instagram Login'le bağlanmış olan Instagram uygulamasıyla döner (o uygulama
+yoksa `409 provider_app_not_configured`). Uygulama adlamayan bir `instagram` kabiliyeti (bildirilmiş ya
+da elle bağlanmış) Meta uygulaması yapılandırılmışsa onunla, değilse Instagram uygulamasıyla bağlanır;
+öteki türler hep kendi uygulamalarıyla.
+
 ### Sabit çıkış adresleri
 
 Bağdaştırıcılar yalnız kendi sağlayıcılarının sabit adreslerine çıkar (`jt_outbound::FIXED_HOSTS`, testte
@@ -778,7 +788,13 @@ saklanır: yeniden gönderim ve aynı anda gelen kopyalar tek satır bırakır. 
 alanda sağlayıcı kimliklerinin sırasıyla yazılır (alanlar da kimlik sırasıyla), böylece aynı olayları
 farklı sırada taşıyan iki teslim kilitleri aynı sırada alır ve birbirini kilitlemez. Ham gövde teslim ve
 alan başına bir kez, oraya yeni yazılan ilk olayın yanında tutulur (bin olaylı bir gövde bin kez
-saklanmaz; kardeş olaylar aynı `received_at`'i taşır); 30 gün tutulur ve hiçbir yanıtta görünmez. Daha
+saklanmaz; kardeş olaylar aynı `received_at`'i taşır); 30 gün tutulur ve hiçbir yanıtta görünmez. Ham
+gövde **alanın kendisinindir**: Meta bir teslimde birkaç alanın sayfalarını, Instagram hesaplarını ya da
+WhatsApp numaralarını bir arada gönderebilir; her alan yalnız kendi olaylarının geldiği girdileri (bir
+WhatsApp girdisinde yalnız kendi numaralarının `changes` öğelerini) `{"object", "entry": […]}` olarak
+saklar (ayrıştırılmış gövdeden yeniden yazılır; imza özgün gövdeyi kapsar), gövdenin tamamı o alanınsa
+olduğu gibi saklar. Hiçbir alanın almadığı bir öğe (bağlı olmayan hesap, askıdaki alan, olay çıkmayan
+öğe) hiçbir yerde saklanmaz. NetGSM gövdesi adresin adladığı tek alanındır ve olduğu gibi saklanır. Daha
 eskilerini zamanlayıcının günlük `purge_raw_bodies` işi her alanda ayrı ayrı siler
 (`webhook::purge_raw_in`, bkz. [Zamanlanmış işler](#zamanlanmış-işler)); olaylar kalır. Olaylar günlüğe
 (ledger) yazılmaz: dış dünyanın kayıtlarıdır.
@@ -861,7 +877,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `probe_all` | 15 dakika | Son yoklaması (`connector_public.health.at`) en az bir saatlik olan ya da hiç yoklanmamış her canlı bağlayıcı kabiliyetini (mühürlü kimlik bilgisi olan; kimlik bilgisi olmayan bir `declared` kabiliyet asla) `connector.probe`'un yaptığının aynısıyla yoklar; en çok dördü aynı anda (yoklama sağlayıcıyı beklerken kabiliyetin satır kilidini ve bir veritabanı bağlantısını tutar) | `jeeta.jobs.probe_all` |
 | `netgsm_dlr_poll` | 1 dakika | İletimi kesinleşmemiş gönderilerin iş kimliklerini (en çok 50) alanın doğrulanmış SMS hatlarının kimlik bilgisiyle NetGSM iletim raporuna sorar ve duyduğu durumları kaydeder. Gönderiler M2'nin tablosundadır; o gelene dek bekleyen iş yoktur ve sağlayıcıya hiç gidilmez | `jeeta.jobs.netgsm_dlr_poll` |
 | `netgsm_inbox_poll` | 1 saat | Her doğrulanmış SMS hattının NetGSM gelen kutusunu son iki saat için okur (başlangıç ve bitiş tarihi her zaman verilir) ve webhook'un kaçırdığı mesajları o hatta bağlı gelen olay olarak saklar. Kimlik webhook'unkiyle aynıdır (`netgsm-mo:<gorevid>`): webhook'un ya da önceki yoklamanın sakladığı mesaj ikinci kez yazılmaz. Yoklamanın ham gövdesi yoktur | `jeeta.jobs.netgsm_inbox_poll` |
-| `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
+| `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
 
@@ -888,9 +904,11 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
   satırıyla biter (`job`, `touched`, `changed`, `skipped`, `failed`): bir şey yaptıysa `info`, yapacak
   bir şey bulmadıysa `debug` (her dakika çalışan yoklama günlüğü doldurmasın); hiçbir günlük satırı,
   günlük kaydı ya da rapor kimlik bilgisi taşımaz.
-- **Hangi alanlar.** `probe_all` ve iki NetGSM yoklaması yalnız etkin (`active`) alanlar için çalışır:
-  ödeme bekleyen ya da askıya alınmış bir alan adına bu işler sağlayıcıları yoklamaz. Webhook girişleri
-  ise etkin ve ödeme bekleyen alanların olaylarını saklar; askıdaki alanların olaylarını almaz.
+- **Hangi alanlar.** `probe_all` ve NetGSM teslim raporu yoklaması (`netgsm_dlr_poll`) yalnız etkin
+  (`active`) alanlar için çalışır: ödeme bekleyen ya da askıya alınmış bir alan adına bu işler
+  sağlayıcıları yoklamaz. Webhook girişleri etkin ve ödeme bekleyen alanların olaylarını saklar,
+  askıdaki alanların olaylarını almaz; NetGSM gelen kutusu yedeği (`netgsm_inbox_poll`) de aynı alanlar
+  için çalışır, böylece ödeme beklerken webhook'un kaçırdığı mesajlar da kaybolmaz.
   `refresh_tokens` etkin ve ödeme bekleyen (`pending_payment`) alanlar için çalışır: yenileme yalnız
   var olan bir izni canlı tutar, bir ödeme beklemesi bütün hesapların yeniden bağlanmasına dönüşmemeli; askıya alınmış alan dışarıda kalır. NetGSM yoklamaları
   yalnız doğrulanmış bir SMS hattı olan alanlara girer: bu alanlar platform genelinde tek bir okumayla
@@ -913,7 +931,11 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 Ajanın giriş noktası `jeeta.work.pending`'dir (panelde `GET /api/work/pending`, ana sayfanın verisi): stratejinin
 durumu, en acil olanı başta bekleyen işler ve ajanın son görülme uyarısı. Strateji kapısından muaftır, çalışma
 alanı durumu denetiminden ise alan ödeme beklerken muaftır: ajan, strateji yokken ve alan ödeme beklerken de
-neyin beklediğini sorabilir; askıya alınmış bir alanda `work.*` de `WORKSPACE_INACTIVE` alır.
+neyin beklediğini sorabilir; askıya alınmış bir alanda `work.*` de `WORKSPACE_INACTIVE` alır. Yalnız alanın
+durumunun yapılmasına izin verdiği işler listelenir: her iş onu bitiren kullanım durumunu bilir ve o
+kullanım durumu `WORKSPACE_INACTIVE` alacaksa iş gösterilmez. Ödeme bekleyen bir alanda bu yalnız
+stratejinin işleridir (`consult_strategy`, `approve_strategy`); kabiliyet, bağlantı ve gelen olay işleri
+ödeme sonrasına kalır (webhook'lar bu arada olayları saklamayı sürdürür, alan etkinleşince listelenir).
 
 - **`strategy`**: `"missing"` (ne onaylı sürüm ne taslak), `{"draft_open": {"gaps": […]}}` (taslak üzerinde
   çalışılıyor), `{"submitted": {"version_id": …, "submitted_at": …}}` (taslak onay bekliyor; onay bu iki

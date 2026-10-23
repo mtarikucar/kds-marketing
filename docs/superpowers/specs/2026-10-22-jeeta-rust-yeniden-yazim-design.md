@@ -278,7 +278,7 @@ başlıklarının ve rota şablonunu yazan erişim günlüğünün içindedir. Y
 |---|---|
 | `GET /hooks/meta` | `hub.mode=subscribe` ve platformun doğrulama anahtarı (sabit zamanda) için `hub.challenge` düz metin, `200`; aksi `403`; Meta uygulaması yapılandırılmamışsa `404` |
 | `POST /hooks/meta` | imza başlığı ya da Meta uygulaması yoksa gövde okunmadan `401`; 3 MB üstü `413`; `X-Hub-Signature-256` ham gövde üzerinde Meta uygulamasının sırrıyla, Instagram uygulaması varsa onunkiyle de sabit zamanda denetlenir, tutmazsa `401` ve hiçbir şey yazılmaz; ayrıştırılamayan imzalı gövde `200` (sayılır, yazılmaz); olaylar yazılınca ya da kurala göre atılınca `200 EVENT_RECEIVED`; veritabanı hatası `500` |
-| `POST /hooks/netgsm/{workspace_id}/{anahtar}/{amaç}` | çözülemeyen parça, bilinmeyen amaç, bozuk alan kimliği, alanın o amaç için olmayan anahtarı (sabit zamanda), var olmayan ya da etkin olmayan alan: hepsi gövde okunmadan çıplak `404`; 256 KB üstü `413`; okunamayan gövde `202` (sayılır, yazılmaz); olaylar yazılınca `202`; veritabanı hatası `503` |
+| `POST /hooks/netgsm/{workspace_id}/{anahtar}/{amaç}` | çözülemeyen parça, bilinmeyen amaç, bozuk alan kimliği, alanın o amaç için olmayan anahtarı (sabit zamanda), var olmayan ya da askıya alınmış (`suspended`) alan: hepsi gövde okunmadan çıplak `404`; 256 KB üstü `413`; okunamayan gövde `202` (sayılır, yazılmaz); olaylar yazılınca `202`; veritabanı hatası `503` |
 
 İki sağlayıcı farklı yönlendirilir. **Meta** bir imzayla bütün platforma gelir: her olay hesabıyla
 (sayfa, Instagram hesabı, WhatsApp numarası) bütün alanlarda aranır ve hesabı bağlı tutan (mühürlü,
@@ -290,11 +290,18 @@ yönlendirmesi hesaba değil alanın anahtarına dayanır; §6.4'teki "yalnız e
 kabiliyete yönlenir" kuralı Meta'nın hesap yönlendirmesi içindir. **Alanın durumu:** Meta olayları
 hesabı tutan alan etkin ya da ödeme bekliyor (`pending_payment`) iken yazılır, askıya alınmışsa
 (`suspended`) atılır (hiçbir yere satır yazılmaz, `unrouted_meta` sayacı artar, günlüğe yalnız
-sağlayıcı, `reason=inactive`, hesap türü ve sayı yazılır; Meta'ya yine `200`); NetGSM adresi yalnız
-etkin bir alan için açıktır. Hiçbir yanıt, günlük satırı ya da sayaç gövde, hesap kimliği ya da anahtar
+sağlayıcı, `reason=inactive`, hesap türü ve sayı yazılır; Meta'ya yine `200`); NetGSM adresi etkin ve
+ödeme bekleyen alanlar için açıktır, askıdaki alan için `404`'tür. **Ham gövde alanındır:** bir Meta
+teslimi birkaç alanın hesaplarını bir arada taşıyabilir; her alan yalnız kendi olaylarının geldiği
+parçayı saklar (`{"object", "entry": [yalnız kendi girdileri]}`, WhatsApp girdisinde yalnız kendi
+numaralarının `changes` öğeleri; ayrıştırılmış değerden yeniden yazılır, imza özgün gövdeyi kapsar, bunu
+değil); gövdenin tamamı o alanınsa olduğu gibi saklanır. Hiçbir alanın almadığı bir öğe (yönlenmeyen
+hesap, askıdaki alan, olay çıkmayan öğe) hiçbir yerde saklanmaz. NetGSM gövdesi tek alanı adlar ve
+olduğu gibi saklanır. Hiçbir yanıt, günlük satırı ya da sayaç gövde, hesap kimliği ya da anahtar
 taşımaz. Sağlayıcının serbest metninde yinelenen sırlar da maskelenir: bir çağrının bilinen sırları (o
-anki jeton, uygulama sırrı, yetki kodu, istemci sırrı; olduğu gibi ve URL/form kodlu biçimleriyle)
-sağlayıcının mesajından kısaltmadan önce çıkarılır, genel maske ardından uygulanır.
+anki jeton, uygulama sırrı, yetki kodu, istemci sırrı) sağlayıcının mesajından, kendisine çözülen her
+yazımıyla (olduğu gibi; herhangi baytları kaçışlı, her harf büyüklüğünde yüzde kodlu; boşluk yerine `+`;
+bunların üç tura kadar iç içe uygulanmışı) kısaltmadan önce çıkarılır, genel maske ardından uygulanır.
 
 ### 4.5 Panel ve MCP ikizliği
 
@@ -548,7 +555,16 @@ kutusu, hangi hattın hangi markaya ait olduğunu gruptan okur. İç içe grup i
   (`CONFLICT`, `public_base_url_not_configured`). OAuth geri dönüş adresi uygulama başınadır: panelin
   `{genel adres}/oauth/callback/meta` (Facebook Login), `/oauth/callback/instagram` (Instagram Login) ve
   `/oauth/callback/x` sayfası; kod değişimi aynı adresi gönderir, API geri dönüşü akışın uygulaması
-  adresle uyuşmazsa `FORBIDDEN` döner.
+  adresle uyuşmazsa `FORBIDDEN` döner. Akış uygulamasını başlangıçtan bitişe taşır (`oauth_pending.app`)
+  ve bir OAuth akışının verdiği kimlik bilgisi onu kaydeder (`connector_public.access.app`; jeton
+  yenilemesi korur, elle girilen kimlik bilgisi adlamaz); yeniden bağlama kimlik bilgisini veren
+  uygulamayla oturum açar: Facebook Login'le (sayfası üzerinden) bağlanmış bir `instagram` kabiliyeti
+  Meta uygulamasıyla, Instagram Login'le bağlanmış olan Instagram uygulamasıyla döner; uygulama
+  adlamayan bir `instagram` kabiliyeti Meta uygulaması yapılandırılmışsa onunla, değilse Instagram
+  uygulamasıyla. Zamanlayıcının NetGSM gelen kutusu yedeği, webhook gibi etkin ve ödeme bekleyen
+  alanlar için çalışır; yoklama ve teslim raporu yoklaması yalnız etkin alanlar için. Ödeme bekleyen bir
+  alanın bekleyen işleri (`work.pending`) yalnız o durumda yapılabilenleri listeler (stratejinin
+  işleri); kabiliyet, bağlantı ve gelen olay işleri ödeme sonrasına kalır.
 
 ### 6.5 Araçlar (özet)
 
@@ -811,8 +827,10 @@ tamamlar. Bu kod başka hiçbir eylemde yoktur.
   ancak yazma bitince döner, veritabanı hatasında sağlayıcı yeniden gönderir (Meta `500`, NetGSM `503`);
   kaybolan bir yanıt yeniden gönderimdir, kaybolan bir olay değil. "Kuyruk" olayların kendisidir:
   her olay alan, sağlayıcı ve sağlayıcı kimliği başına bir kez `inbound_events`'e yazılır ve işlenene
-  dek bekler. Ham gövde teslim ve alan başına bir kez saklanır, 30 gün tutulur ve sonra zamanlayıcının
-  günlük işiyle silinir (olay kalır); ham gövde hiçbir API ya da MCP yanıtında dönmez, yalnız adli
+  dek bekler. Ham gövde teslim ve alan başına bir kez, yalnız o alanın parçası olarak saklanır (§4.4:
+  birkaç alanın hesaplarını taşıyan bir Meta tesliminde her alan yalnız kendi girdilerini tutar,
+  hiçbir alanın almadığı öğe hiçbir yerde tutulmaz), 30 gün tutulur ve sonra zamanlayıcının
+  günlük işiyle silinir (bir alan silinemezse sayılır, diğerleri yine silinir; olay kalır); ham gövde hiçbir API ya da MCP yanıtında dönmez, yalnız adli
   kayıttır. `probe_runs` kayıtları da 30 gün tutulur; tetikleyici her değişikliği ve 30 günden genç bir
   kaydın silinmesini reddeder. Gelen olaylar günlüğe yazılmaz (dış dünyanın kayıtlarıdır), bağlantı
   değişiklikleri yazılır. Olaylar M2'ye (gelen kutusu) ve M3'e (ölçüm) devrin noktasıdır: o aşamaların
