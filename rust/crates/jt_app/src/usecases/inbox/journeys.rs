@@ -198,6 +198,7 @@ pub async fn report(
         .await?
         .ok_or_else(|| AppError::not_found("no such journey"))?
         .person_id;
+    super::erasure::check_person(r.as_mut(), person).await?;
     r.conversations().lock_for_person(person).await?;
     let mut journey = r
         .journeys()

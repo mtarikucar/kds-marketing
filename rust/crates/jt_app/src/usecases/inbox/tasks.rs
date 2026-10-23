@@ -49,10 +49,12 @@ pub async fn create(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
-    r.journeys()
+    let j = r
+        .journeys()
         .lock(journey)
         .await?
         .ok_or_else(|| AppError::not_found("no such journey"))?;
+    super::erasure::check_person(r.as_mut(), j.person_id).await?;
     if let Some(user) = input.assignee {
         let member = r
             .memberships()
@@ -141,10 +143,12 @@ pub async fn add_note(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
-    r.journeys()
+    let j = r
+        .journeys()
         .lock(journey)
         .await?
         .ok_or_else(|| AppError::not_found("no such journey"))?;
+    super::erasure::check_person(r.as_mut(), j.person_id).await?;
     let author = match ctx.actor {
         Actor::Human { user_id } => EventSource::Human(user_id),
         Actor::Agent { .. } => EventSource::Agent,

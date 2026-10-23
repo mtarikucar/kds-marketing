@@ -7,13 +7,14 @@ import { listTeam } from '@/api/team';
 import type { CommissionState } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { can, isOwnerOrManager } from '@/lib/roles';
+import { formatMoney } from '@/lib/format';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
 import { Badge, Button, Callout, Input, PageHeader } from '@/components/ui';
 import { columnClass, selectClass, useInboxKey, useInboxMutation } from './InboxShared';
 
 export function InboxCommissions() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const session = useSession();
   const key = useInboxKey();
   const allowed = can(session.data, 'inbox.work');
@@ -64,7 +65,7 @@ export function InboxCommissions() {
           {rows.data?.length === 0 && <p>{t('inbox.empty')}</p>}
           {rows.data?.map(row => <article key={row.id} data-testid={`commission-${row.id}`} className="flex min-w-0 flex-col gap-2 rounded-lg border p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <strong>{row.amount_minor / 100} {row.currency}</strong>
+              <strong>{formatMoney(row.amount_minor, row.currency, i18n.language)}</strong>
               <Badge>{t(`inbox.commissions.state.${row.state}`)}</Badge>
             </div>
             <p>{t('inbox.commissions.payee')}: {row.payee ? team.data?.find(m => m.user_id === row.payee)?.display_name || row.payee : t('inbox.commissions.unassigned')}</p>

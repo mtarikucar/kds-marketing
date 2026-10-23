@@ -1629,7 +1629,8 @@ response commit together. The response is `{quote,delivery:{message_id,state}}`;
 is authoritative for delivery, separately from the quote's business lifecycle. Reusing a key
 returns the stored quote and response without another send. Unknown delivery is never resent;
 provider acceptance or later evidence records `quote_sent` once. Late receipts after Won/Lost
-remain historical and never reopen or change the closed journey. Accept requires confirmed
+remain historical, including after a Lost journey is reopened: the persisted closure fence
+prevents old receipts from advancing its new lifecycle. Accept requires confirmed
 delivery, refuses an expired quote, and atomically records `quote_accepted` (Pending).
 `file_ref` is opaque and agent-owned: the platform does not fetch, host or delete its asset.
 
@@ -1637,7 +1638,8 @@ Book accepts `{starts_at,ends_at,location,intent}` with RFC3339 times and `ends_
 It atomically records `appointment_booked` and an automatic task due **one hour before** start,
 assigned to the journey owner (or unassigned). The reminder uses the appointment UUID in the
 separate task table. Held records `meeting_held` and completes the reminder; cancel cancels only
-that booking's reminder. Repeating the same final state is idempotent; a different final state
+that booking's reminder. Cancellation also works on Won/Lost journeys without a journey
+transition; it cancels the reminder even if closure already completed it. Repeating the same final state is idempotent; a different final state
 conflicts. The result contains `{appointment,reminder,notification:{state,message_id}}`.
 
 When a verified mailbox and active email identity are available, booking includes an
@@ -1695,23 +1697,32 @@ while retaining tenant-scoped hashes of their normalized, account-scoped values.
 
 Erasure clears personal message/note/event text, task titles, quote file references,
 appointment locations, merge restoration snapshots, queued mail bodies/recipients/attachments,
-matching request-key responses and person-linked probe facts. Queued sends are refused and
+matching request-key responses and person-linked probe facts. Provider delivery jobs enter terminal
+`erased` state; polling skips them and late delivery reports cannot restore recipient numbers.
+Queued sends are refused and
 conversation generations advance to invalidate outstanding send claims. The non-personal stable
 mail Message-ID remains available for late Sent-folder evidence to reconcile unknown sends. An already submitted
 provider request cannot be recalled. File references are forgotten; agent-owned assets are
 not fetched or deleted by the platform.
 
-Inbound events match by person reference or normalized adapter identity. Matching payloads are
+Inbound events match by person reference, normalized adapter identity, or the original outbound
+mail Message-ID within the same capability (including bounce and complaint reports). Matching payloads are
 scrubbed, and every copy of their raw delivery batch in that workspace is nulled; unrelated
 parsed payloads and other tenants remain unchanged. PostgreSQL's non-ledger history guards
 permit only person-scoped erasure using transaction-local settings, with ordinary append-only
 protection restored when the transaction ends. Migration 0008 remains an up/down pair.
 
 Ledger rows remain physically append-only. All ledger reads recursively mask personal keys
-when `payload.person_id` appears in that tenant's erasure log. Consumer identity checks run
-before person matching, including IMAP UIDVALIDITY replay; each dropped event is durably
+when `payload.person_id` appears in that tenant's erasure log. Webhook and IMAP intake check
+tombstones under the same workspace lock as erasure, before storing payloads or raw batches.
+A batch containing an erased identity retains no raw body, even on an unrelated sibling event.
+Consumer identity checks also run before person matching; each dropped event is durably
 counted by its `event_consumption.outcome = 'erased_identity_drop'`, without recreating a person.
-Manual creation and identity attachment reject these hashes as well.
+Manual creation and identity attachment reject these hashes as well. Erased journeys reject
+new tasks, notes and reports with `CONFLICT` / `person_erased`; repeat erasure scrubs any late
+legacy writes. Scrubbed mail status evidence still reconciles uncertain sends.
+
+The commissions panel formats amounts using the currency's minor units (including JPY and KWD).
 
 ## M2b lead-gen intake and attribution
 

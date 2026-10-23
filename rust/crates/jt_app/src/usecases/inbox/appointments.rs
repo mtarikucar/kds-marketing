@@ -236,7 +236,11 @@ async fn change(
     if row.appointment.state != AppointmentState::Booked {
         return Err(AppError::conflict("appointment is no longer booked"));
     }
-    let j = lock_live_journey(r.as_mut(), row.appointment.journey_id).await?;
+    let j = if state == AppointmentState::Cancelled {
+        super::quotes::lock_journey(r.as_mut(), row.appointment.journey_id).await?
+    } else {
+        lock_live_journey(r.as_mut(), row.appointment.journey_id).await?
+    };
     if state == AppointmentState::Held {
         event_in(
             deps,
@@ -252,7 +256,8 @@ async fn change(
     r.appointments().set_state(id, state).await?;
     let reminder_id = TaskId::from(id);
     if let Some(reminder) = r.tasks().get(reminder_id).await?
-        && reminder.status == TaskStatus::Open
+        && (reminder.status == TaskStatus::Open
+            || (state == AppointmentState::Cancelled && reminder.status != TaskStatus::Cancelled))
     {
         r.tasks()
             .set_status(

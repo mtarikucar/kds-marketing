@@ -132,13 +132,15 @@ async fn route(
     event: &InboundEvent,
     lead: Option<&super::leadgen::Fetched>,
 ) -> Result<&'static str, AppError> {
-    if let Some(person) = event
-        .payload
-        .get("person_id")
-        .and_then(Value::as_str)
+    let mut erased = event.payload["erased_identity"] == true;
+    if let Some(person) = event.payload["person_id"]
+        .as_str()
         .and_then(|s| s.parse::<PersonId>().ok())
-        && r.erasure().get(person).await?.is_some()
     {
+        erased |= r.erasure().get(person).await?.is_some();
+    }
+    // Scrubbed mail delivery facts remain useful; they must reconcile uncertain sends.
+    if erased && !(event.provider == Provider::Mail && event.kind == EventKind::Status) {
         return Ok("erased_identity_drop");
     }
     let Some(id) = event.capability_id else {

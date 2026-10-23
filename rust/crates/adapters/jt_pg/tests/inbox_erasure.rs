@@ -157,7 +157,7 @@ async fn erasure_nulls_matching_raw_preserves_unrelated_parsed_data() {
     assert!(raw.is_some());
 }
 #[tokio::test]
-async fn replay_and_imap_cannot_resurrect() {
+async fn erased_identity_replay_is_scrubbed_before_storage() {
     let w = setup().await;
     let ws = w.ctx.workspace_id;
     event(
@@ -185,6 +185,41 @@ async fn replay_and_imap_cannot_resurrect() {
         )
         .await;
     }
+    let mut r = w.deps.uow.tenant(ws).await.unwrap();
+    for rows in [
+        r.inbound_events().list_pending(100).await.unwrap(),
+        r.inbound_events()
+            .list(jt_app::ports::EventQuery {
+                pending_only: false,
+                provider: None,
+                kind: None,
+                order: jt_app::ports::EventOrder::NewestFirst { before: None },
+                limit: 100,
+            })
+            .await
+            .unwrap(),
+    ] {
+        for row in rows {
+            assert!(
+                !row.payload
+                    .to_string()
+                    .to_lowercase()
+                    .contains("private@example.com")
+            );
+            assert!(!row.payload.to_string().contains("Replay"));
+        }
+    }
+    drop(r);
+    let mut tx = TenantTx::begin(&w.db.pool, ws).await.unwrap();
+    let raws: i64 = sqlx::query_scalar(
+        "select count(*) from inbound_events where workspace_id=$1 and raw is not null",
+    )
+    .bind(ws.as_uuid())
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(raws, 0);
+    tx.commit().await.unwrap();
     let result = consumer::consume_workspace(&w.deps, ws, FIXED_NOW).await;
     assert_eq!(result.failed, 0);
     assert_eq!(result.changed, 0);
@@ -876,4 +911,226 @@ async fn erasure_matches_flattened_meta_delivery_receipts() {
     assert!(!p.to_string().contains("customer-id"));
     assert_eq!(p["mid"], "message-id");
     assert_eq!(p["watermark"], 1234);
+}
+
+#[tokio::test]
+async fn scrubbed_mail_evidence_still_reconciles_unknown_send() {
+    use jt_app::ports::inbox::OutboxRow;
+    let w = setup().await;
+    let ws = w.ctx.workspace_id;
+    event(
+        &w,
+        ws,
+        "mail-before-erasure",
+        json!({"from":"private@example.com","text":"Private","message_id":"inbound"}),
+        b"raw",
+    )
+    .await;
+    assert_eq!(
+        consumer::consume_workspace(&w.deps, ws, FIXED_NOW)
+            .await
+            .changed,
+        1
+    );
+    let mut r = w.deps.uow.tenant(ws).await.unwrap();
+    let c = r.conversations().list(Some(w.person), 100).await.unwrap()[0].id;
+    let message = MessageId::new_v7();
+    let id = uuid::Uuid::now_v7();
+    let mid = format!("<{id}@public.example>");
+    r.messages()
+        .insert_if_new(Message {
+            id: message,
+            workspace_id: ws,
+            conversation_id: c,
+            direction: Direction::Outbound,
+            author: Author::Agent,
+            body: "Private outgoing text".into(),
+            external_id: None,
+            status: MsgStatus::Unknown,
+            cost_minor: None,
+            at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    r.outbox().insert(OutboxRow{id,workspace_id:ws,conversation_id:c,message_id:message,capability_id:w.cap,intent:json!({"mail":{"to":"private@example.com","text":"Private outgoing text","message_id":mid}}),expected_generation:0,fence_snapshot:None,conversation_merged:false,state:"unknown".into(),attempts:1,last_error:None,created_at:FIXED_NOW,updated_at:FIXED_NOW}).await.unwrap();
+    r.commit().await.unwrap();
+    let mut r = w.deps.uow.tenant(ws).await.unwrap();
+    let intent = r.outbox().get(id).await.unwrap().unwrap().intent;
+    assert_eq!(intent["mail"]["message_id"], mid);
+    r.inbound_events()
+        .insert_if_new(
+            InboundEvent {
+                id: InboundEventId::new_v7(),
+                workspace_id: ws,
+                capability_id: Some(w.cap),
+                provider: Provider::Mail,
+                external_id: "imap:Sent:evidence".into(),
+                kind: EventKind::Status,
+                payload: json!({"message_id":mid,"status":"sent","to":"private@example.com","text":"Private sent text"}),
+                received_at: FIXED_NOW,
+                processed_at: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    erase(&w).await;
+    assert_eq!(
+        consumer::consume_workspace(&w.deps, ws, FIXED_NOW)
+            .await
+            .changed,
+        1
+    );
+    let mut r = w.deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(r.outbox().get(id).await.unwrap().unwrap().state, "sent");
+    assert!(
+        r.messages()
+            .get(message)
+            .await
+            .unwrap()
+            .unwrap()
+            .body
+            .is_empty()
+    );
+}
+
+async fn outbound_message(w: &World, external: &str) -> MessageId {
+    let mut r = w.deps.uow.tenant(w.ctx.workspace_id).await.unwrap();
+    let c = r
+        .conversations()
+        .upsert_on_inbound(Conversation {
+            id: ConversationId::new_v7(),
+            workspace_id: w.ctx.workspace_id,
+            person_id: w.person,
+            capability_id: w.cap,
+            kind_key: "mailbox".into(),
+            state: ConvState::Ours,
+            executor: Executor::Agent,
+            executor_generation: 0,
+            last_inbound_at: Some(FIXED_NOW),
+            last_outbound_at: None,
+            created_at: FIXED_NOW,
+            updated_at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    let id = MessageId::new_v7();
+    r.messages()
+        .insert_if_new(Message {
+            id,
+            workspace_id: w.ctx.workspace_id,
+            conversation_id: c.id,
+            direction: Direction::Outbound,
+            author: Author::Agent,
+            body: "Private outgoing".into(),
+            external_id: Some(external.into()),
+            status: MsgStatus::Sent,
+            cost_minor: None,
+            at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    id
+}
+
+#[tokio::test]
+async fn late_dlr_after_erasure_stores_no_recipient() {
+    use jt_app::ports::{
+        compliance::{OutboundJobRow, OutboundJobState},
+        connectors::{DeliveryState, DeliveryStatus},
+    };
+    let w = setup().await;
+    let ws = w.ctx.workspace_id;
+    let message = outbound_message(&w, "sms-job").await;
+    let id = uuid::Uuid::now_v7();
+    let mut r = w.deps.uow.tenant(ws).await.unwrap();
+    r.outbound_jobs()
+        .insert(OutboundJobRow {
+            id,
+            workspace_id: ws,
+            capability_id: w.cap,
+            provider_job_id: Some("sms-job".into()),
+            message_id: Some(message),
+            state: OutboundJobState::Sent,
+            last_status: None,
+            created_at: FIXED_NOW,
+            updated_at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    erase(&w).await;
+    let mut r = w.deps.uow.tenant(ws).await.unwrap();
+    r.people().set_write_time(FIXED_NOW).await.unwrap();
+    r.outbound_jobs()
+        .record_status(
+            ws,
+            w.cap,
+            vec![DeliveryStatus {
+                job_id: "sms-job".into(),
+                recipient: "+905321234567".into(),
+                status: DeliveryState::Delivered,
+                at: None,
+                raw_code: "1".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    let job = r.outbound_jobs().get(w.cap, id).await.unwrap().unwrap();
+    assert!(job.last_status.is_none());
+    assert_eq!(serde_json::to_value(job.state).unwrap(), "erased");
+    assert!(
+        r.outbound_jobs()
+            .pending_job_ids(ws, w.cap, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    r.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn mail_bounce_for_erased_person_is_scrubbed() {
+    let w = setup().await;
+    let ws = w.ctx.workspace_id;
+    outbound_message(&w, "<original@example.com>").await;
+    for status in ["failed", "complaint"] {
+        event(&w, ws, status, json!({"message_id":"<original@example.com>","status":status,"from":"mailer-daemon@example.com","to":"support@example.com","text":"Private bounce"}), b"private@example.com original body").await;
+    }
+    let other = event(
+        &w,
+        ws,
+        "unrelated-bounce",
+        json!({"message_id":"<unrelated@example.com>","status":"failed","text":"Unrelated bounce"}),
+        b"unrelated body",
+    )
+    .await;
+    erase(&w).await;
+    event(
+        &w,
+        ws,
+        "late-bounce",
+        json!({"message_id":"<original@example.com>","status":"failed","text":"Private bounce"}),
+        b"private@example.com original body",
+    )
+    .await;
+    let mut tx = TenantTx::begin(&w.db.pool, ws).await.unwrap();
+    let rows: Vec<(uuid::Uuid, Value, Option<Vec<u8>>)> =
+        sqlx::query_as("select id,payload,raw from inbound_events where workspace_id=$1")
+            .bind(ws.as_uuid())
+            .fetch_all(tx.conn())
+            .await
+            .unwrap();
+    for (id, payload, raw) in rows {
+        if id == other.as_uuid() {
+            assert_eq!(payload["text"], "Unrelated bounce");
+            assert!(raw.is_some());
+        } else {
+            assert_eq!(payload["text"], "");
+            assert!(raw.is_none());
+            assert_eq!(payload["message_id"], "<original@example.com>");
+        }
+    }
 }

@@ -55,6 +55,7 @@ drop function if exists journey_attribution_immutable();
 drop table if exists commission_user_rates;
 drop table if exists commission_default;
 drop table if exists mail_cursors;
+-- Includes terminal erased jobs introduced with the compliance inventory.
 drop table if exists outbound_jobs;
 drop table if exists erased_identities;
 drop table if exists erasure_log;

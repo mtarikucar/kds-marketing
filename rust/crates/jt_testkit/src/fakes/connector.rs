@@ -86,9 +86,20 @@ impl InboundEventRepo for MemTenant {
 
     async fn insert_if_new(
         &mut self,
-        event: InboundEvent,
-        raw: Option<Vec<u8>>,
+        mut event: InboundEvent,
+        mut raw: Option<Vec<u8>>,
     ) -> Result<Option<InboundEventId>, AppError> {
+        same_workspace(self.ws, event.workspace_id)?;
+        jt_app::ports::inbox::PersonRepo::lock_workspace(self).await?;
+        if jt_app::usecases::inbox::erasure::scrub_inbound(
+            self,
+            event.capability_id,
+            &mut event.payload,
+        )
+        .await?
+        {
+            raw = None;
+        }
         self.call(|this| {
             same_workspace(this.ws, event.workspace_id)?;
             let (ws, state) = (this.ws, this.state());
@@ -492,6 +503,7 @@ impl OutboundJobRepo for MemTenant {
                         j.workspace_id == ws
                             && j.capability_id == capability_id
                             && j.row.provider_job_id.as_deref() == Some(status.job_id.as_str())
+                            && j.row.state != OutboundJobState::Erased
                     }) {
                         job.status = Some(status.clone());
                         job.row.last_status = Some(status.clone());

@@ -242,6 +242,17 @@ pub(super) async fn lock_live_journey(
     r: &mut dyn TenantRepos,
     id: JourneyId,
 ) -> Result<Journey, AppError> {
+    let j = lock_journey(r, id).await?;
+    if j.closed_at.is_some() || matches!(j.status, JourneyStatus::Won | JourneyStatus::Lost) {
+        return Err(AppError::conflict("journey is terminal"));
+    }
+    Ok(j)
+}
+
+pub(super) async fn lock_journey(
+    r: &mut dyn TenantRepos,
+    id: JourneyId,
+) -> Result<Journey, AppError> {
     let j = r
         .journeys()
         .get(id)
@@ -261,9 +272,6 @@ pub(super) async fn lock_live_journey(
     if person.erased_at.is_some() || person.merged_into.is_some() {
         return Err(AppError::conflict("person unavailable"));
     }
-    if j.closed_at.is_some() || matches!(j.status, JourneyStatus::Won | JourneyStatus::Lost) {
-        return Err(AppError::conflict("journey is terminal"));
-    }
     Ok(j)
 }
 
@@ -273,20 +281,26 @@ pub(super) async fn sent_in(
     r: &mut dyn TenantRepos,
     id: Uuid,
     at: OffsetDateTime,
+    journey_closed: bool,
 ) -> Result<(), AppError> {
     let quote = r
         .quotes()
         .get(id)
         .await?
         .ok_or_else(|| AppError::internal("outbox quote missing"))?;
-    event_in(
-        deps,
-        ctx,
+    apply_event_in(
         r,
-        quote.quote.journey_id,
-        format!("quote:{id}:sent"),
-        JourneyEventKind::QuoteSent,
-        at,
+        JourneyEvent {
+            id: JourneyEventId::from(deps.ids.uuid()),
+            workspace_id: ctx.workspace_id,
+            journey_id: quote.quote.journey_id,
+            source: EventSource::System,
+            idempotency_key: format!("quote:{id}:sent"),
+            kind: JourneyEventKind::QuoteSent,
+            reason_label: None,
+            at,
+        },
+        journey_closed,
     )
     .await?;
     record(
@@ -309,10 +323,32 @@ pub(super) async fn event_in(
     kind: JourneyEventKind,
     at: OffsetDateTime,
 ) -> Result<(), AppError> {
-    if let Some(existing) = r.journeys().event_by_key(&key).await? {
+    apply_event_in(
+        r,
+        JourneyEvent {
+            id: JourneyEventId::from(deps.ids.uuid()),
+            workspace_id: ctx.workspace_id,
+            journey_id: journey,
+            source: EventSource::System,
+            idempotency_key: key,
+            kind,
+            reason_label: None,
+            at,
+        },
+        false,
+    )
+    .await
+}
+
+async fn apply_event_in(
+    r: &mut dyn TenantRepos,
+    event: JourneyEvent,
+    historical: bool,
+) -> Result<(), AppError> {
+    if let Some(existing) = r.journeys().event_by_key(&event.idempotency_key).await? {
         return if existing.source == EventSource::System
-            && existing.kind == kind
-            && existing.journey_id == journey
+            && existing.kind == event.kind
+            && existing.journey_id == event.journey_id
         {
             Ok(())
         } else {
@@ -321,27 +357,15 @@ pub(super) async fn event_in(
     }
     let j = r
         .journeys()
-        .lock(journey)
+        .lock(event.journey_id)
         .await?
         .ok_or_else(|| AppError::not_found("no such journey"))?;
-    let event = JourneyEvent {
-        id: JourneyEventId::from(deps.ids.uuid()),
-        workspace_id: ctx.workspace_id,
-        journey_id: journey,
-        source: EventSource::System,
-        idempotency_key: key,
-        kind,
-        reason_label: None,
-        at,
-    };
     if event.kind == JourneyEventKind::QuoteSent
-        && matches!(j.status, JourneyStatus::Won | JourneyStatus::Lost)
+        && (historical || matches!(j.status, JourneyStatus::Won | JourneyStatus::Lost))
     {
         return r.journeys().append_historical_reply(event).await;
     }
     let transition = reduce(&j, &event, &ReducePolicy::default())
         .map_err(|e| AppError::conflict(e.to_string()))?;
-    r.journeys()
-        .apply_transition(journey, transition, event)
-        .await
+    r.journeys().apply_transition(j.id, transition, event).await
 }

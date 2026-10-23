@@ -13,6 +13,17 @@ const rows = [
 ];
 const answers = { ...inboxAnswers, 'GET /api/inbox/commissions': rows };
 describe('Inbox commissions', () => {
+  it('commission_amounts_use_minor_units', async () => {
+    mockFetch({ ...answers, 'GET /api/inbox/commissions': [
+      { ...rows[0], id: 'jpy', amount_minor: 1000, currency: 'JPY' },
+      { ...rows[0], id: 'kwd', amount_minor: 1000, currency: 'KWD' },
+      { ...rows[0], id: 'try', amount_minor: 12345, currency: 'TRY' },
+    ] });
+    renderAt('/inbox/commissions');
+    expect((await screen.findByTestId('commission-jpy')).querySelector('strong')).toHaveTextContent('¥1.000');
+    expect(screen.getByTestId('commission-kwd').querySelector('strong')).toHaveTextContent('KWD 1,000');
+    expect(screen.getByTestId('commission-try').querySelector('strong')).toHaveTextContent('₺123,45');
+  });
   it('offers only the next valid payment action and sends shared rate inputs', async () => {
     const calls = mockFetch({ ...answers, 'POST /api/inbox/commissions/pending/approve': { ...rows[0], state: 'approved' }, 'POST /api/inbox/commissions/approved/pay': { ...rows[1], state: 'paid' }, 'PUT /api/inbox/commission-rates': { user_id: null, rate_bp: 250 } });
     renderAt('/inbox/commissions');

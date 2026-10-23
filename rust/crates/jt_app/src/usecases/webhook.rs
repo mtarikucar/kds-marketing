@@ -380,6 +380,14 @@ async fn store_all(
     raw: Option<&(dyn Fn() -> Option<Vec<u8>> + Sync)>,
     out: &mut [Delivery],
 ) -> Result<(), AppError> {
+    // Serialize with erasure before inspecting tombstones or retaining any raw batch.
+    repos.people().lock_workspace().await?;
+    let mut scrubbed = false;
+    for (_, capability, draft) in &mut items {
+        scrubbed |=
+            super::inbox::erasure::scrub_inbound(repos, *capability, &mut draft.payload).await?;
+    }
+    let raw = if scrubbed { None } else { raw };
     items.sort_by(|a, b| a.2.external_id.cmp(&b.2.external_id));
     let mut made: Option<Option<Vec<u8>>> = None;
     let mut raw_kept = false;

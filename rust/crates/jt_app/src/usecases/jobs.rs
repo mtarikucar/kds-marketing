@@ -1276,6 +1276,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                     .map_err(Failure::Provider)?;
                 drop(credential);
                 let mut r = deps.uow.tenant(ws).await?;
+                r.people().lock_workspace().await?;
                 let current = r.capabilities().lock(cap.id).await?;
                 if !RECEIVING.contains(&r.workspace().get().await?.status)
                     || !current.is_some_and(|c| {

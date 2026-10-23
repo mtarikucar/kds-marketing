@@ -79,7 +79,7 @@ impl OutboundJobRepo for PgTenantRepos {
             };
             let data = serde_json::to_value(&status)
                 .map_err(|_| AppError::internal("cannot encode delivery status"))?;
-            sqlx::query("update outbound_jobs set last_status=$4,state=coalesce($5,state),updated_at=$6 where workspace_id=$1 and capability_id=$2 and provider_job_id=$3")
+            sqlx::query("update outbound_jobs set last_status=$4,state=coalesce($5,state),updated_at=$6 where workspace_id=$1 and capability_id=$2 and provider_job_id=$3 and state <> 'erased'")
                 .bind(ws.as_uuid()).bind(capability_id.as_uuid()).bind(status.job_id).bind(data).bind(state).bind(now)
                 .execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"record delivery status"))?;
         }

@@ -52,57 +52,34 @@ pub(super) fn scrub(s: &mut MemState, ws: WorkspaceId, person: PersonId) {
                     c.capability.workspace_id == ws && Some(c.capability.id) == e.capability_id
                 })
                 .map(|c| &c.capability);
-            let namespace = cap.and_then(|c| match c.kind_key.as_str() {
-                "facebook_page" => Some(IdentityChannel::Messenger),
-                "instagram" => Some(IdentityChannel::InstagramDm),
-                kind => channel_for_kind(kind).map(Channel::identity_channel),
-            });
-            let recipient_namespace = match e.payload["channel"].as_str() {
-                Some("EPOSTA") => Some(IdentityChannel::Email),
-                Some("MESAJ" | "ARAMA") => Some(IdentityChannel::Phone),
-                _ => namespace,
-            };
-            let cdr = (e.payload["scenario"] == "cdr").then_some(IdentityChannel::Phone);
-            [
-                ("/from", namespace),
-                ("/to", namespace),
-                ("/recipient", recipient_namespace),
-                ("/source", cdr),
-                ("/destination", cdr),
-                ("/customer_num", Some(IdentityChannel::Phone)),
-                ("/email", Some(IdentityChannel::Email)),
-                ("/phone", Some(IdentityChannel::Phone)),
-                ("/message/from", Some(IdentityChannel::Phone)),
-                ("/messaging/sender/id", namespace),
-                ("/messaging/recipient/id", namespace),
-                ("/sender/id", namespace),
-                ("/recipient/id", namespace),
-                ("/status/recipient_id", Some(IdentityChannel::Phone)),
-            ]
-            .iter()
-            .filter_map(|(path, channel)| Some((e.payload.pointer(path)?.as_str()?, (*channel)?)))
-            .any(|(candidate, channel)| {
-                identities.iter().filter(|i| i.channel == channel).any(|i| {
-                    if channel == IdentityChannel::Email {
-                        return candidate
-                            .split(|c: char| c.is_whitespace() || "<>,;:\"".contains(c))
-                            .any(|v| {
-                                normalise(channel, v).ok().as_deref() == Some(&i.value_normalized)
-                            });
-                    }
-                    normalise(channel, candidate).ok().is_some_and(|v| {
-                        let v = if channel == IdentityChannel::Phone {
-                            v
-                        } else {
-                            scope_opaque(
-                                cap.and_then(|c| c.external_id.as_deref()).unwrap_or(""),
-                                &v,
-                            )
-                        };
-                        v == i.value_normalized
-                    })
+            if cap.is_some_and(|c| c.kind_key == "mailbox") {
+                let mid = e.payload["message_id"].as_str();
+                if mid.is_some()
+                    && (s.inbox.messages.iter().any(|m| {
+                        messages.contains(&m.id)
+                            && m.direction == Direction::Outbound
+                            && m.external_id.as_deref() == mid
+                            && s.inbox.conversations.iter().any(|c| {
+                                c.id == m.conversation_id
+                                    && Some(c.capability_id) == e.capability_id
+                            })
+                    }) || s.inbox.outbox.iter().any(|o| {
+                        o.workspace_id == ws
+                            && Some(o.capability_id) == e.capability_id
+                            && convs.contains(&o.conversation_id)
+                            && o.intent["mail"]["message_id"].as_str() == mid
+                    }))
+                {
+                    return true;
+                }
+            }
+            jt_app::usecases::inbox::erasure::event_identities(cap, &e.payload)
+                .iter()
+                .any(|(channel, value)| {
+                    identities
+                        .iter()
+                        .any(|i| i.channel == *channel && i.value_normalized == *value)
                 })
-            })
         })
         .map(|e| e.event.id)
         .collect();
@@ -183,9 +160,7 @@ pub(super) fn scrub(s: &mut MemState, ws: WorkspaceId, person: PersonId) {
         if j.workspace_id == ws && j.row.message_id.is_some_and(|m| messages.contains(&m)) {
             j.row.last_status = None;
             j.status = None;
-            if j.row.state == jt_app::ports::compliance::OutboundJobState::Queued {
-                j.row.state = jt_app::ports::compliance::OutboundJobState::Refused;
-            }
+            j.row.state = jt_app::ports::compliance::OutboundJobState::Erased;
         }
     }
     for m in &mut s.inbox.messages {

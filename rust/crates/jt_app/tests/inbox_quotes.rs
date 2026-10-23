@@ -248,3 +248,62 @@ async fn client_event_key_cannot_forge_quote_delivery() {
         JourneyStatus::Pending
     );
 }
+
+#[tokio::test]
+async fn quote_receipt_after_closure_is_historical() {
+    let (w, _, c) = setup_channel("whatsapp_cloud").await;
+    let j = w.uow.snapshot().inbox.journeys[0].id;
+    c.push_send_text(Err(ConnectorError::unknown("lost acknowledgement")));
+    quotes::send(&w.deps, &w.owner_ctx, j, input(&w, Some("terminal")))
+        .await
+        .unwrap();
+    jt_app::usecases::inbox::journeys::report(
+        &w.deps,
+        &w.owner_ctx,
+        j,
+        serde_json::from_value(
+            json!({"kind":"lost","idempotency_key":"lost","payload":{"reason_key":"fiyat"}}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    jt_app::usecases::inbox::journeys::report(
+        &w.deps,
+        &w.owner_ctx,
+        j,
+        serde_json::from_value(json!({"kind":"reopened","idempotency_key":"reopen","payload":{}}))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let before = w.uow.snapshot().inbox.journeys[0].clone();
+    let id = w.uow.snapshot().inbox.outbox[0].id;
+    replies::record_result(&w.deps, &w.owner_ctx, id, accepted())
+        .await
+        .unwrap();
+    replies::record_result(&w.deps, &w.owner_ctx, id, accepted())
+        .await
+        .unwrap();
+    let after = w.uow.snapshot();
+    assert_eq!(after.inbox.journeys[0], before);
+    assert_eq!(after.inbox.outbox[0].state, "sent");
+    assert_eq!(
+        after
+            .inbox
+            .events
+            .iter()
+            .filter(|e| e.kind == JourneyEventKind::QuoteSent)
+            .count(),
+        1
+    );
+    assert_eq!(
+        quotes::send(&w.deps, &w.owner_ctx, j, input(&w, Some("terminal")))
+            .await
+            .unwrap()
+            .delivery
+            .state,
+        "sent"
+    );
+    assert_eq!(c.calls().len(), 1);
+}

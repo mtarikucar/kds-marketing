@@ -73,7 +73,7 @@ create table if not exists erased_identities (
 create table if not exists outbound_jobs (
     workspace_id uuid not null references workspaces (id),
     id uuid primary key, capability_id uuid not null, provider_job_id text, message_id uuid,
-    state text not null check (state in ('queued','sent','delivered','failed','unknown','refused')),
+    state text not null check (state in ('queued','sent','delivered','failed','unknown','refused','erased')),
     last_status jsonb, created_at timestamptz not null, updated_at timestamptz not null,
     unique (workspace_id, capability_id, provider_job_id),
     foreign key (capability_id, workspace_id) references capabilities (id, workspace_id),
@@ -158,6 +158,18 @@ $$;
 create or replace function inbox_event_person(ws uuid, cap uuid, p jsonb, person uuid)
 returns boolean language sql stable as $$
     select p->>'person_id' = person::text or exists (
+        select 1 from messages m
+        join conversations c on c.workspace_id=m.workspace_id and c.id=m.conversation_id
+        join capabilities k on k.workspace_id=c.workspace_id and k.id=c.capability_id
+        where m.workspace_id=ws and c.person_id=person and c.capability_id=cap
+          and k.kind_key='mailbox' and m.direction='outbound' and m.external_id=p->>'message_id'
+    ) or exists (
+        select 1 from outbox o
+        join conversations c on c.workspace_id=o.workspace_id and c.id=o.conversation_id
+        join capabilities k on k.workspace_id=o.workspace_id and k.id=o.capability_id
+        where o.workspace_id=ws and c.person_id=person and o.capability_id=cap
+          and k.kind_key='mailbox' and o.intent#>>'{mail,message_id}'=p->>'message_id'
+    ) or exists (
         select 1 from identities i
         left join capabilities c on c.workspace_id = i.workspace_id and c.id = cap
         cross join lateral (select case c.kind_key

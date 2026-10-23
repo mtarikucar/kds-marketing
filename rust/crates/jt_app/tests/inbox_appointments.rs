@@ -198,3 +198,68 @@ async fn invalid_or_unauthorized_appointment_leaves_no_rows() {
     assert!(s.inbox.outbox.is_empty());
     assert!(s.inbox.events.is_empty());
 }
+
+#[tokio::test]
+async fn appointment_cancel_on_terminal_journey() {
+    for (kind, payload) in [
+        ("lost", json!({"reason_key":"fiyat"})),
+        (
+            "won",
+            json!({"product":"Plan","amount_minor":1000,"currency":"TRY"}),
+        ),
+    ] {
+        let (w, _, _) = setup_channel("mailbox").await;
+        let j = w.uow.snapshot().inbox.journeys[0].id;
+        let booked = appointments::enqueue(&w.deps, &w.owner_ctx, j, input(&w, "reply"))
+            .await
+            .unwrap();
+        jt_app::usecases::inbox::journeys::report(
+            &w.deps,
+            &w.owner_ctx,
+            j,
+            serde_json::from_value(
+                json!({"kind":kind,"idempotency_key":"close","payload":payload}),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let before = w.uow.snapshot();
+        let cancelled = appointments::cancel(&w.deps, &w.owner_ctx, booked.appointment.id)
+            .await
+            .unwrap();
+        assert_eq!(cancelled.appointment.state, AppointmentState::Cancelled);
+        assert_eq!(
+            appointments::cancel(&w.deps, &w.owner_ctx, booked.appointment.id)
+                .await
+                .unwrap(),
+            cancelled
+        );
+        let after = w.uow.snapshot();
+        // Cancelling a reminder touches the activity timestamp, but never the reducer.
+        assert_eq!(
+            after.inbox.journey_reducer_revisions,
+            before.inbox.journey_reducer_revisions
+        );
+        let mut expected = before.inbox.journeys;
+        assert!(after.inbox.journeys[0].updated_at >= expected[0].updated_at);
+        expected[0].updated_at = after.inbox.journeys[0].updated_at;
+        assert_eq!(after.inbox.journeys, expected);
+        assert_eq!(after.inbox.events, before.inbox.events);
+        assert_eq!(
+            after
+                .inbox
+                .tasks
+                .iter()
+                .find(|t| t.id == booked.reminder.id)
+                .unwrap()
+                .status,
+            TaskStatus::Cancelled
+        );
+        assert!(
+            appointments::held(&w.deps, &w.owner_ctx, booked.appointment.id)
+                .await
+                .is_err()
+        );
+    }
+}

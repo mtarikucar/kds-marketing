@@ -93,13 +93,23 @@ impl InboundEventRepo for PgTenantRepos {
     /// bundle's row and would answer `CONFLICT` for a replay.
     async fn insert_if_new(
         &mut self,
-        event: InboundEvent,
-        raw: Option<Vec<u8>>,
+        mut event: InboundEvent,
+        mut raw: Option<Vec<u8>>,
     ) -> Result<Option<InboundEventId>, AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, event.workspace_id)?;
         if let Some(capability) = event.capability_id {
             ensure_capability(self.tx.conn(), ws, capability).await?;
+        }
+        jt_app::ports::inbox::PersonRepo::lock_workspace(self).await?;
+        if jt_app::usecases::inbox::erasure::scrub_inbound(
+            self,
+            event.capability_id,
+            &mut event.payload,
+        )
+        .await?
+        {
+            raw = None;
         }
         let done = sqlx::query(
             "insert into inbound_events (id, workspace_id, provider, capability_id, external_id, \

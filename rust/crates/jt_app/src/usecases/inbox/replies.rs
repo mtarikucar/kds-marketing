@@ -995,6 +995,9 @@ pub(super) async fn record_result_in(
                     r,
                     serde_json::from_value(quote_id.clone())?,
                     sent_at,
+                    row.fence_snapshot
+                        .as_ref()
+                        .is_some_and(|s| s["journey_closed"] == true),
                 )
                 .await?;
             }
