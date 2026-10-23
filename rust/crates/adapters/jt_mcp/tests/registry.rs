@@ -65,13 +65,18 @@ const TOOLS: &[&str] = &[
     "jeeta.connector.probe",
     "jeeta.connector.health",
     "jeeta.connector.reconnect",
+    "jeeta.connector.hooks",
+    "jeeta.events.pending",
+    "jeeta.events.ack",
+    "jeeta.events.list",
 ];
 
 #[test]
 fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
-    // Every catalog tool is defined (M1b Task 8 defined the connection tools).
+    // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
+    // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 56);
+    assert_eq!(TOOLS.len(), 60);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -369,6 +374,13 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
     assert_eq!(required(&retire), BTreeSet::from(["budget_item_id"]));
 }
 
+/// Whether an object schema requires no property: no `required` list, or an empty one.
+fn requires_nothing(schema: &Value) -> bool {
+    schema
+        .get("required")
+        .is_none_or(|r| r.as_array().is_some_and(Vec::is_empty))
+}
+
 /// The `required` property names of an object schema.
 fn required(schema: &Value) -> BTreeSet<&str> {
     schema["required"]
@@ -461,6 +473,11 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
                 Permission::CapabilitiesManage,
                 Risk::Write
             ),
+            (
+                "jeeta.connector.hooks",
+                Permission::CapabilitiesManage,
+                Risk::Read
+            ),
         ]
     );
     // No tool completes an OAuth flow: only the owner's browser, on the panel, does.
@@ -514,4 +531,85 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
             "{name}"
         );
     }
+    // The hook addresses take no argument and say the tokens are the workspace's.
+    let hooks = find("jeeta.connector.hooks");
+    let schema = hooks.input_schema.clone().to_value();
+    assert!(requires_nothing(&schema), "{schema}");
+    assert!(
+        hooks.description.contains("NetGSM"),
+        "{}",
+        hooks.description
+    );
+}
+
+#[test]
+fn event_tools_read_with_workspace_read_and_acknowledge_with_capabilities_manage() {
+    let specs: Vec<ToolSpec> = registry()
+        .into_iter()
+        .filter(|s| s.use_case.starts_with("events."))
+        .collect();
+    let permissions: Vec<(&str, Permission, Risk)> = specs
+        .iter()
+        .map(|s| (s.name, s.permission, s.risk))
+        .collect();
+    assert_eq!(
+        permissions,
+        [
+            (
+                "jeeta.events.pending",
+                Permission::WorkspaceRead,
+                Risk::Read
+            ),
+            (
+                "jeeta.events.ack",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            ("jeeta.events.list", Permission::WorkspaceRead, Risk::Read),
+        ]
+    );
+    let find = |name: &str| {
+        specs
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap()
+            .input_schema
+            .clone()
+            .to_value()
+    };
+    let properties = |schema: &Value| -> BTreeSet<String> {
+        schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let pending = find("jeeta.events.pending");
+    assert!(requires_nothing(&pending), "{pending}");
+    assert_eq!(pending["additionalProperties"], false);
+    assert_eq!(
+        properties(&pending),
+        ["after_at", "after_id", "limit"].map(String::from).into()
+    );
+    assert_eq!(pending["properties"]["limit"]["maximum"], 200);
+    let list = find("jeeta.events.list");
+    assert!(requires_nothing(&list), "{list}");
+    assert_eq!(
+        properties(&list),
+        [
+            "before_at",
+            "before_id",
+            "include_processed",
+            "kind",
+            "limit",
+            "provider"
+        ]
+        .map(String::from)
+        .into()
+    );
+    let ack = find("jeeta.events.ack");
+    assert_eq!(required(&ack), BTreeSet::from(["ids"]));
+    assert_eq!(ack["properties"]["ids"]["minItems"], 1);
+    assert_eq!(ack["properties"]["ids"]["maxItems"], 200);
 }

@@ -13,6 +13,7 @@ pub mod auth;
 pub mod budget;
 pub mod capabilities;
 pub mod connector;
+pub mod events;
 pub mod groups;
 pub mod ledger;
 pub mod oauth_callback;
@@ -102,6 +103,10 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/connectors/{capability_id}/probe"),
     ("GET", "/api/connectors/health"),
     ("POST", "/api/connectors/{capability_id}/reconnect"),
+    ("GET", "/api/connectors/hooks"),
+    ("GET", "/api/events/pending"),
+    ("POST", "/api/events/ack"),
+    ("GET", "/api/events"),
     ("GET", "/api/work/pending"),
     ("PUT", "/api/work/checkin-interval"),
     ("POST", "/api/platform/login"),
@@ -448,6 +453,15 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "connector.reconnect",
             connector::reconnect,
         ),
+        api_route(
+            "GET",
+            "/connectors/hooks",
+            "connector.hooks",
+            connector::hooks,
+        ),
+        api_route("GET", "/events/pending", "events.pending", events::pending),
+        api_route("POST", "/events/ack", "events.ack", events::ack),
+        api_route("GET", "/events", "events.list", events::list),
         api_route("GET", "/work/pending", "work.pending", work::pending),
         api_route(
             "PUT",

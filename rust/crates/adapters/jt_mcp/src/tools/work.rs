@@ -24,9 +24,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           strategy is missing, submitted, {draft_open: {gaps}} or {approved: \
                           {number}}. Each item has a kind (consult_strategy, approve_strategy, \
                           verify_capability with capability_id, name and stale, \
-                          connect_connector with capability_id and name, \
-                          declare_first_capability), a priority (1 is the most urgent) and a \
-                          hint saying what to do. agent says when an agent was last seen, the \
+                          connect_connector and reconnect_connector with capability_id and name, \
+                          inbound_events with count (up to 1000: unacknowledged events to read \
+                          with jeeta.events.pending), declare_first_capability), a priority (1 \
+                          is the most urgent) and a hint saying what to do. agent says when an agent was last seen, the \
                           check-in interval in minutes and whether the agent is overdue. \
                           [risk: READ]",
             permission: Permission::WorkspaceRead,

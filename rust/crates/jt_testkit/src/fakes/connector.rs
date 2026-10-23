@@ -6,8 +6,8 @@
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
-    InboundEventRepo, MAX_EVENT_PAGE, MAX_PROBE_PAGE, OAuthPendingId, OAuthPendingRepo,
-    OAuthPendingRow, ProbeRun, ProbeRunId, ProbeRunRepo,
+    EventOrder, EventQuery, InboundEventRepo, MAX_EVENT_PAGE, MAX_PROBE_PAGE, OAuthPendingId,
+    OAuthPendingRepo, OAuthPendingRow, ProbeRun, ProbeRunId, ProbeRunRepo,
 };
 use jt_capability::CapabilityId;
 use jt_connector::{InboundEvent, InboundEventId};
@@ -116,6 +116,45 @@ impl InboundEventRepo for MemTenant {
             }
         });
         Ok(n as u64)
+    }
+
+    async fn list(&mut self, query: EventQuery) -> Result<Vec<InboundEvent>, AppError> {
+        let ws = self.ws;
+        let key = |e: &InboundEvent| (e.received_at, e.id);
+        let mut events: Vec<InboundEvent> = self
+            .state()
+            .inbound_events
+            .iter()
+            .map(|s| &s.event)
+            .filter(|e| {
+                e.workspace_id == ws
+                    && (!query.pending_only || e.processed_at.is_none())
+                    && query.provider.is_none_or(|p| e.provider == p)
+                    && query.kind.as_ref().is_none_or(|k| e.kind.key() == k.key())
+                    && match query.order {
+                        EventOrder::OldestFirst { after } => after.is_none_or(|c| key(e) > c),
+                        EventOrder::NewestFirst { before } => before.is_none_or(|c| key(e) < c),
+                    }
+            })
+            .cloned()
+            .collect();
+        events.sort_by_key(key);
+        if matches!(query.order, EventOrder::NewestFirst { .. }) {
+            events.reverse();
+        }
+        events.truncate(query.limit.clamp(1, MAX_EVENT_PAGE) as usize);
+        Ok(events)
+    }
+
+    async fn count_pending(&mut self, cap: u32) -> Result<u32, AppError> {
+        let ws = self.ws;
+        let n = self
+            .state()
+            .inbound_events
+            .iter()
+            .filter(|s| s.event.workspace_id == ws && s.event.processed_at.is_none())
+            .count();
+        Ok(u32::try_from(n).unwrap_or(u32::MAX).min(cap))
     }
 }
 

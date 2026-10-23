@@ -10,9 +10,11 @@ use jt_app::ports::{DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES, UnitOfWork, Workspac
 use jt_app::usecases::agents::{self, ClientInfo};
 use jt_app::usecases::api_keys::{self, CreateKey};
 use jt_app::usecases::capabilities::{self, CapabilityQuery};
+use jt_app::usecases::events;
 use jt_app::usecases::strategy;
 use jt_app::usecases::work::{self, AgentState, PendingOut, StrategyState, WorkItem, WorkKind};
 use jt_capability::{CapabilityId, EffectiveStatus, Evidence, StoredStatus};
+use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
 use jt_ledger::{Actor, Subject};
 use jt_strategy::{Sections, StrategyVersion, StrategyVersionId, VersionStatus};
 use jt_tenancy::AgentConnectionId;
@@ -407,6 +409,94 @@ async fn declare_first_capability_until_a_live_one_exists() {
         .await
         .unwrap();
     assert!(kinds(&pending(&w, &w.owner_ctx).await).contains(&WorkKind::DeclareFirstCapability));
+}
+
+/// Stores `n` pending inbound events in the world's workspace, a second apart.
+async fn inbound(w: &World, n: usize) -> Vec<InboundEventId> {
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    let mut ids = Vec::new();
+    for i in 0..n {
+        let id = InboundEventId::new_v7();
+        t.inbound_events()
+            .insert_if_new(
+                InboundEvent {
+                    id,
+                    workspace_id: w.ws,
+                    provider: Provider::Netgsm,
+                    capability_id: None,
+                    external_id: format!("netgsm-mo:{i}"),
+                    kind: EventKind::Message,
+                    payload: json!({ "text": "Merhaba" }),
+                    received_at: FIXED_NOW + Duration::seconds(i as i64),
+                    processed_at: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    t.commit().await.unwrap();
+    ids
+}
+
+#[tokio::test]
+async fn pending_lists_inbound_events_while_some_are_unprocessed() {
+    let w = world().await;
+    assert!(
+        !kinds(&pending(&w, &w.owner_ctx).await)
+            .iter()
+            .any(|k| matches!(k, WorkKind::InboundEvents { .. }))
+    );
+    let ids = inbound(&w, 3).await;
+    let out = pending(&w, &w.owner_ctx).await;
+    let item = item(&out, &WorkKind::InboundEvents { count: 3 });
+    assert_eq!(item.priority, 2);
+    assert!(item.hint.contains("jeeta.events.pending"), "{}", item.hint);
+    assert!(item.hint.contains("jeeta.events.ack"), "{}", item.hint);
+    let wire = serde_json::to_value(item).unwrap();
+    assert_eq!(wire["kind"], "inbound_events");
+    assert_eq!(wire["count"], 3);
+    // A rep sees it too: reading events needs workspace.read.
+    let rep = w.member("rep").await;
+    assert!(kinds(&pending(&w, &rep).await).contains(&WorkKind::InboundEvents { count: 3 }));
+
+    events::ack(
+        &w.deps,
+        &w.owner_ctx,
+        events::Ack {
+            ids: ids[..2].to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        kinds(&pending(&w, &w.owner_ctx).await).contains(&WorkKind::InboundEvents { count: 1 })
+    );
+    events::ack(
+        &w.deps,
+        &w.owner_ctx,
+        events::Ack {
+            ids: ids[2..].to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        !kinds(&pending(&w, &w.owner_ctx).await)
+            .iter()
+            .any(|k| matches!(k, WorkKind::InboundEvents { .. }))
+    );
+}
+
+/// The count stops at [`work::INBOUND_EVENTS_COUNT_CAP`]: past it the item says "at least".
+#[tokio::test]
+async fn the_inbound_events_count_stops_at_its_cap() {
+    let w = world().await;
+    assert_eq!(work::INBOUND_EVENTS_COUNT_CAP, 1_000);
+    inbound(&w, 1_001).await;
+    let out = pending(&w, &w.owner_ctx).await;
+    assert!(kinds(&out).contains(&WorkKind::InboundEvents { count: 1_000 }));
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 //! `/api/connectors`: connecting the accounts of the session's current workspace through their
 //! providers (spec §6.1, §6.4): starting an OAuth flow (or one that reconnects a capability),
 //! confirming the assets a completed flow found, entering credentials by hand, probing a
-//! connector capability and reading every connector's health. The flow's callback, which only
-//! the owner's browser brings back, is [`super::oauth_callback`].
+//! connector capability, reading every connector's health and the webhook addresses to register
+//! at the providers. The flow's callback, which only the owner's browser brings back, is
+//! [`super::oauth_callback`].
 //!
 //! Every route answers `200` with the JSON its MCP tool answers: a started flow
 //! (`{authorize_url, pending_id, expires_at}`; the tool adds a `handoff` sentence for the agent),
@@ -16,7 +17,7 @@ use axum::extract::State;
 use jt_app::ports::OAuthPendingId;
 use jt_app::usecases::capabilities::CapabilityOut;
 use jt_app::usecases::connector::{
-    self, ConfirmAssets, ConnectorHealth, ProbeOut, SetCredentials, StartOAuth, StartOut,
+    self, ConfirmAssets, ConnectorHealth, HooksOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
 };
 use jt_capability::CapabilityId;
 use serde::Deserialize;
@@ -88,6 +89,16 @@ pub async fn health(
     WorkspaceCtx(ctx): WorkspaceCtx,
 ) -> Result<Json<Vec<ConnectorHealth>>, ApiError> {
     Ok(Json(connector::health(&state.deps, &ctx).await?))
+}
+
+/// `200` with the webhook addresses to register at the providers: `{meta, netgsm}`, the Meta
+/// webhook (`null` without the platform's Meta app) and the workspace's NetGSM callback URL per
+/// purpose, each carrying the workspace's hook token (`capabilities.manage` only).
+pub async fn hooks(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+) -> Result<Json<HooksOut>, ApiError> {
+    Ok(Json(connector::hooks(&state.deps, &ctx).await?))
 }
 
 /// `200` with a flow bound to the capability, started as `start_oauth` starts one.

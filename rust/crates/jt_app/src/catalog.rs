@@ -265,6 +265,14 @@ pub static CATALOG: &[UseCase] = &[
     twin("connector.probe", Exempt, "jeeta.connector.probe", ("POST", "/api/connectors/{capability_id}/probe"), Write),
     twin("connector.health", Exempt, "jeeta.connector.health", ("GET", "/api/connectors/health"), Read),
     twin("connector.reconnect", Exempt, "jeeta.connector.reconnect", ("POST", "/api/connectors/{capability_id}/reconnect"), Write),
+    // The webhook addresses to register at the providers; the NetGSM ones carry the workspace's
+    // hook tokens, so `capabilities.manage` reads them.
+    twin("connector.hooks", Exempt, "jeeta.connector.hooks", ("GET", "/api/connectors/hooks"), Read),
+    // What the connections brought in: observation, not planned work, so exempt from the
+    // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
+    twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),
+    twin("events.ack", Exempt, "jeeta.events.ack", ("POST", "/api/events/ack"), Write),
+    twin("events.list", Exempt, "jeeta.events.list", ("GET", "/api/events"), Read),
     // What is pending (B11): exempt from the strategy gate, and from the status check while the
     // workspace awaits payment, since an agent asks it before any strategy exists. Checking in is
     // an agent's call only.

@@ -1,6 +1,7 @@
 //! `jeeta.connector.start_oauth`, `jeeta.connector.confirm_assets`,
-//! `jeeta.connector.set_credentials`, `jeeta.connector.probe`, `jeeta.connector.health` and
-//! `jeeta.connector.reconnect`: connecting the workspace's accounts through their providers.
+//! `jeeta.connector.set_credentials`, `jeeta.connector.probe`, `jeeta.connector.health`,
+//! `jeeta.connector.reconnect` and `jeeta.connector.hooks`: connecting the workspace's accounts
+//! through their providers, and the webhook addresses to register at them.
 //!
 //! **An agent cannot complete an OAuth flow.** It starts one (or a reconnection) and gets the
 //! provider's authorize URL, which it hands to the owner: the owner signs in at the provider in
@@ -125,6 +126,20 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             permission: Permission::CapabilitiesManage,
             schema: schema_for::<CapabilityArgs>,
             run: reconnect,
+        },
+        ToolDef {
+            use_case: "connector.hooks",
+            description: "Read the webhook addresses to register at the providers, to hand to \
+                          the owner: the workspace's NetGSM callback URL for each purpose (mo: \
+                          incoming SMS, events: Netsantral call events, iys: consent changes, \
+                          voice-report, autocall-report), each carrying the workspace's own \
+                          token, which lets NetGSM's calls in (keep it to the owner); and the \
+                          platform's Meta webhook URL (null until the platform's Meta app is \
+                          configured), whose verify token is set in the Meta app dashboard and \
+                          never shown. Returns {meta, netgsm: [{purpose, url}]}. [risk: READ]",
+            permission: Permission::CapabilitiesManage,
+            schema: schema_for::<NoArgs>,
+            run: hooks,
         },
     ]
 }
@@ -280,5 +295,12 @@ fn reconnect<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         let CapabilityArgs { capability_id } = args(raw)?;
         handoff(&connector::reconnect(deps, ctx, CapabilityId(capability_id)).await?)
+    })
+}
+
+fn hooks<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let NoArgs {} = args(raw)?;
+        to_json(&connector::hooks(deps, ctx).await?)
     })
 }

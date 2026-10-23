@@ -10,7 +10,10 @@ use jt_app::ports::connectors::{
     AdInsights, AdSet, Asset, ConsentRow, DeliveryState, DeliveryStatus, InboundEventDraft,
     OAuthApp, PostMetrics, PublishReceipt, PublishRequest, SendReceipt, Url, XApp,
 };
-use jt_app::ports::{OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, SecretBox, UserRow};
+use jt_app::ports::{
+    EventOrder, EventQuery, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, SecretBox,
+    UserRow,
+};
 use jt_app::usecases::Deps;
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{
@@ -354,6 +357,185 @@ async fn pending_events_order_processing_and_raw_purge() {
         ),
         ErrorCode::NotFound
     );
+}
+
+/// The ids of `events`, in order.
+fn ids(events: &[InboundEvent]) -> Vec<InboundEventId> {
+    events.iter().map(|e| e.id).collect()
+}
+
+/// An event query over every event in `order`, at most 50.
+fn query(order: EventOrder) -> EventQuery {
+    EventQuery {
+        pending_only: false,
+        provider: None,
+        kind: None,
+        order,
+        limit: 50,
+    }
+}
+
+const OLDEST: EventOrder = EventOrder::OldestFirst { after: None };
+const NEWEST: EventOrder = EventOrder::NewestFirst { before: None };
+
+/// As `jt_pg`'s `events_are_listed_by_query_in_either_order_and_counted`.
+#[tokio::test]
+async fn events_are_listed_by_query_in_either_order_and_counted() {
+    let (_, deps) = setup();
+    let (a, _) = workspace(&deps, "a").await;
+    let (b, _) = workspace(&deps, "b").await;
+    let e1 = event(a, Provider::Meta, "mid.1", FIXED_NOW);
+    let e2 = InboundEvent {
+        kind: EventKind::Consent,
+        ..event(
+            a,
+            Provider::Netgsm,
+            "netgsm-iys:1",
+            FIXED_NOW + Duration::minutes(1),
+        )
+    };
+    let e3 = InboundEvent {
+        kind: EventKind::Status,
+        ..event(
+            a,
+            Provider::Meta,
+            "mid.1:delivered",
+            FIXED_NOW + Duration::minutes(2),
+        )
+    };
+    let e4 = InboundEvent {
+        kind: EventKind::Unknown("reaction".into()),
+        ..event(
+            a,
+            Provider::Meta,
+            "reaction.1",
+            FIXED_NOW + Duration::minutes(3),
+        )
+    };
+    let mut twins = [
+        event(a, Provider::X, "x.1", FIXED_NOW + Duration::minutes(5)),
+        event(a, Provider::X, "x.2", FIXED_NOW + Duration::minutes(5)),
+    ];
+    twins.sort_by_key(|e| e.id);
+    let [t1, t2] = twins.clone();
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    for e in [&e4, &e1, &t2, &e3, &e2, &t1] {
+        t.inbound_events()
+            .insert_if_new(e.clone(), Some(b"raw".to_vec()))
+            .await
+            .unwrap();
+    }
+    t.inbound_events()
+        .mark_processed(e2.id, FIXED_NOW + Duration::hours(1))
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = deps.uow.tenant(b).await.unwrap();
+    t.inbound_events()
+        .insert_if_new(event(b, Provider::Meta, "mid.b", FIXED_NOW), None)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    let mut list = async |q: EventQuery| ids(&t.inbound_events().list(q).await.unwrap());
+    assert_eq!(
+        list(query(OLDEST)).await,
+        [e1.id, e2.id, e3.id, e4.id, t1.id, t2.id]
+    );
+    assert_eq!(
+        list(query(NEWEST)).await,
+        [t2.id, t1.id, e4.id, e3.id, e2.id, e1.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            pending_only: true,
+            ..query(OLDEST)
+        })
+        .await,
+        [e1.id, e3.id, e4.id, t1.id, t2.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            pending_only: true,
+            ..query(EventOrder::OldestFirst {
+                after: Some((e1.received_at, e1.id))
+            })
+        })
+        .await,
+        [e3.id, e4.id, t1.id, t2.id]
+    );
+    assert_eq!(
+        list(query(EventOrder::OldestFirst {
+            after: Some((t1.received_at, t1.id))
+        }))
+        .await,
+        [t2.id]
+    );
+    assert_eq!(
+        list(query(EventOrder::NewestFirst {
+            before: Some((t2.received_at, t2.id))
+        }))
+        .await,
+        [t1.id, e4.id, e3.id, e2.id, e1.id]
+    );
+    assert_eq!(
+        list(query(EventOrder::NewestFirst {
+            before: Some((e3.received_at, e3.id))
+        }))
+        .await,
+        [e2.id, e1.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            provider: Some(Provider::Netgsm),
+            ..query(NEWEST)
+        })
+        .await,
+        [e2.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            kind: Some(EventKind::Status),
+            ..query(NEWEST)
+        })
+        .await,
+        [e3.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            kind: Some(EventKind::Unknown("reaction".into())),
+            ..query(NEWEST)
+        })
+        .await,
+        [e4.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            limit: 2,
+            ..query(NEWEST)
+        })
+        .await,
+        [t2.id, t1.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            limit: 0,
+            ..query(OLDEST)
+        })
+        .await,
+        [e1.id]
+    );
+    let read = t.inbound_events().list(query(OLDEST)).await.unwrap();
+    assert_eq!(read[0], e1);
+    assert_eq!(read[1].processed_at, Some(FIXED_NOW + Duration::hours(1)));
+
+    assert_eq!(t.inbound_events().count_pending(1_000).await.unwrap(), 5);
+    assert_eq!(t.inbound_events().count_pending(3).await.unwrap(), 3);
+    assert_eq!(t.inbound_events().count_pending(0).await.unwrap(), 0);
+    drop(t);
+    let mut t = deps.uow.tenant(b).await.unwrap();
+    assert_eq!(t.inbound_events().count_pending(1_000).await.unwrap(), 1);
 }
 
 #[tokio::test]

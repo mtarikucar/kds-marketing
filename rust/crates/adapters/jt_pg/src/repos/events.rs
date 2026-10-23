@@ -4,11 +4,11 @@
 //! received. `(workspace_id, provider, external_id)` is unique, so a replayed delivery is skipped
 //! by `on conflict do nothing` without aborting the transaction (Review Focus 2). A trigger lets
 //! only `processed_at` change and `raw` be removed, and refuses every delete; no statement here
-//! reads `raw` back.
+//! reads `raw` back. Listings page by the key `(received_at, id)` in either direction.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
-use jt_app::ports::{InboundEventRepo, MAX_EVENT_PAGE};
+use jt_app::ports::{EventOrder, EventQuery, InboundEventRepo, MAX_EVENT_PAGE};
 use jt_capability::CapabilityId;
 use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
 use jt_tenancy::WorkspaceId;
@@ -167,5 +167,64 @@ impl InboundEventRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "purge inbound event bodies"))?;
         Ok(done.rows_affected())
+    }
+
+    /// One statement per order; every filter is a bind parameter that is `null` when unset, and
+    /// the cursor is a row comparison on `(received_at, id)`, which the order shares.
+    async fn list(&mut self, query: EventQuery) -> Result<Vec<InboundEvent>, AppError> {
+        let ws = self.workspace_id();
+        let (sql, cursor) = match query.order {
+            EventOrder::OldestFirst { after } => (
+                format!(
+                    "select {COLUMNS} from inbound_events \
+                     where workspace_id = $1 \
+                     and (not $2 or processed_at is null) \
+                     and ($3::text is null or provider = $3) \
+                     and ($4::text is null or kind = $4) \
+                     and ($5::timestamptz is null or (received_at, id) > ($5, $6)) \
+                     order by received_at, id limit $7"
+                ),
+                after,
+            ),
+            EventOrder::NewestFirst { before } => (
+                format!(
+                    "select {COLUMNS} from inbound_events \
+                     where workspace_id = $1 \
+                     and (not $2 or processed_at is null) \
+                     and ($3::text is null or provider = $3) \
+                     and ($4::text is null or kind = $4) \
+                     and ($5::timestamptz is null or (received_at, id) < ($5, $6)) \
+                     order by received_at desc, id desc limit $7"
+                ),
+                before,
+            ),
+        };
+        let records: Vec<EventRecord> = sqlx::query_as(&sql)
+            .bind(ws.as_uuid())
+            .bind(query.pending_only)
+            .bind(query.provider.map(|p| p.key()))
+            .bind(query.kind.as_ref().map(EventKind::key))
+            .bind(cursor.map(|(at, _)| at))
+            .bind(cursor.map(|(_, id)| id.as_uuid()))
+            .bind(i64::from(query.limit.clamp(1, MAX_EVENT_PAGE)))
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "list inbound events"))?;
+        records.into_iter().map(EventRecord::into_event).collect()
+    }
+
+    async fn count_pending(&mut self, cap: u32) -> Result<u32, AppError> {
+        let ws = self.workspace_id();
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from (select 1 from inbound_events \
+             where workspace_id = $1 and processed_at is null limit $2) pending",
+        )
+        .bind(ws.as_uuid())
+        .bind(i64::from(cap))
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count pending inbound events"))?;
+        // At most `cap`, which fits.
+        Ok(u32::try_from(n).unwrap_or(cap))
     }
 }

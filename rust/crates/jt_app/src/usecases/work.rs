@@ -16,6 +16,8 @@
 //!   `declared` or `stale` (a lapsed verification is asked for again);
 //! - `ConnectConnector` (2): each capability reached through a connector that reads `declared`
 //!   (M1b sets connectors up);
+//! - `InboundEvents` (2): inbound events (webhooks, polls) not yet acknowledged, with how many
+//!   (counted up to [`INBOUND_EVENTS_COUNT_CAP`]: a count of the cap means at least that many);
 //! - `DeclareFirstCapability` (3): no capability that is not retired.
 //!
 //! Each item carries a hint in English, for the agent; the panel shows its own copy.
@@ -50,6 +52,10 @@ use crate::ports::{
 /// How long after a connection's ledgered check-in the next one is answered without a ledger
 /// entry.
 pub const CHECKIN_LEDGER_RESOLUTION: Duration = Duration::hours(1);
+
+/// The most unprocessed inbound events `InboundEvents` counts; past it the count reads as the cap
+/// ("at least this many"), so asking what is pending never counts a whole backlog.
+pub const INBOUND_EVENTS_COUNT_CAP: u32 = 1_000;
 
 const CHECKIN: &str = CHECKIN_ACTION;
 
@@ -128,6 +134,9 @@ pub enum WorkKind {
         capability_id: CapabilityId,
         name: String,
     },
+    /// Read and acknowledge the inbound events not yet processed: `count` of them, counted up to
+    /// [`INBOUND_EVENTS_COUNT_CAP`].
+    InboundEvents { count: u32 },
 }
 
 /// The workspace's agent check-in.
@@ -171,11 +180,16 @@ async fn pending_as_seen(
         .map(|c| CapabilityOut::at(c, ctx.now))
         .collect();
     let agent = agent_state(repos.as_mut(), ctx.now, seen_now).await?;
+    let inbound = repos
+        .inbound_events()
+        .count_pending(INBOUND_EVENTS_COUNT_CAP)
+        .await?;
     drop(repos);
 
     let state = strategy_state(&strategy);
     let mut items = strategy_items(&state, may_approve(ctx));
     items.extend(capability_items(&capabilities));
+    items.extend(inbound_items(inbound));
     items.sort_by_key(|item| item.priority);
     Ok(PendingOut {
         strategy: state,
@@ -394,6 +408,18 @@ fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
         });
     }
     items
+}
+
+/// The inbound events' item, when `count` (capped) are unprocessed.
+fn inbound_items(count: u32) -> Option<WorkItem> {
+    (count > 0).then(|| WorkItem {
+        kind: WorkKind::InboundEvents { count },
+        priority: 2,
+        hint: "Inbound events (messages, delivery statuses, leads, calls, consent changes) await \
+               handling: read them with jeeta.events.pending, oldest first, and acknowledge each \
+               one you have handled with jeeta.events.ack."
+            .to_owned(),
+    })
 }
 
 /// The workspace's check-in state at `now`: the latest sight of any of its connections, and of

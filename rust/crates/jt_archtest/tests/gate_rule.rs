@@ -10,8 +10,9 @@ use jt_app::catalog::{CATALOG, GateMode, StatusExemption};
 /// Id prefixes whose use cases may be exempt: identity, workspace and team administration, keys
 /// and agents, the platform console, the strategy itself (it is what opens the gate), the
 /// capabilities and budget items (the consultation needs to know what the workspace has, spec
-/// §5), the pending work (an agent asks what is pending before any strategy exists), and
-/// connecting accounts (part of the consultation's prerequisites, M1b).
+/// §5), the pending work (an agent asks what is pending before any strategy exists), connecting
+/// accounts (part of the consultation's prerequisites, M1b) and the inbound events (observation,
+/// not planned work, M1b).
 const EXEMPT_PREFIXES: &[&str] = &[
     "auth.",
     "workspace.",
@@ -25,6 +26,7 @@ const EXEMPT_PREFIXES: &[&str] = &[
     "budget.",
     "work.",
     "connector.",
+    "events.",
 ];
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
@@ -100,7 +102,9 @@ fn the_exempt_list_rejects_other_use_cases() {
     assert!(may_be_exempt("budget.spend.record"));
     assert!(may_be_exempt("work.pending"));
     assert!(may_be_exempt("connector.probe"));
+    assert!(may_be_exempt("events.ack"));
     assert!(!may_be_exempt("connectors.list"));
+    assert!(!may_be_exempt("event.list"));
     assert!(!may_be_exempt("strategies.list"));
     assert!(!may_be_exempt("capabilities.list"));
     assert!(!may_be_exempt("budgets.list"));

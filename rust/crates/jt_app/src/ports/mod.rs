@@ -28,7 +28,7 @@ use jt_capability::{
     BudgetItem, BudgetItemId, BudgetSpend, BudgetSpendId, Capability, CapabilityGroup,
     CapabilityGroupId, CapabilityId, KindGroup, StoredStatus,
 };
-use jt_connector::{InboundEvent, InboundEventId, ProbeResult, Provider};
+use jt_connector::{EventKind, InboundEvent, InboundEventId, ProbeResult, Provider};
 use jt_ledger::LedgerEntry;
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
@@ -1011,8 +1011,38 @@ pub trait WorkspacePolicyRepo: Send + Sync {
 // OAuth flows and probe runs.
 // ---------------------------------------------------------------------------------------------
 
-/// The most events one [`InboundEventRepo::list_pending`] returns.
+/// The most events one [`InboundEventRepo::list_pending`] or [`InboundEventRepo::list`]
+/// returns.
 pub const MAX_EVENT_PAGE: u32 = 500;
+
+/// Which inbound events [`InboundEventRepo::list`] reads, and in which order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventQuery {
+    /// Only events not yet processed.
+    pub pending_only: bool,
+    /// Only events of this provider.
+    pub provider: Option<Provider>,
+    /// Only events of this kind (compared by key, so an `Unknown` kind matches its own key).
+    pub kind: Option<EventKind>,
+    /// The order, and where the page starts.
+    pub order: EventOrder,
+    /// At most this many events (clamped to `1..=MAX_EVENT_PAGE`).
+    pub limit: u32,
+}
+
+/// The order of an event listing and its key-set cursor: an event's `(received_at, id)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventOrder {
+    /// Oldest (`received_at`, then id) first; with a cursor, only events after it.
+    OldestFirst {
+        after: Option<(OffsetDateTime, InboundEventId)>,
+    },
+    /// Newest (`received_at`, then id, both descending) first; with a cursor, only events
+    /// before it.
+    NewestFirst {
+        before: Option<(OffsetDateTime, InboundEventId)>,
+    },
+}
 
 /// The workspace's inbound events: what webhooks and polls brought in, each stored once per
 /// provider id (`(provider, external_id)` is unique within a workspace), with its raw body for a
@@ -1049,6 +1079,12 @@ pub trait InboundEventRepo: Send + Sync {
     /// Removes the raw body of every event received before `cutoff` (the rest of each event
     /// stays) and returns how many bodies were removed.
     async fn purge_raw_before(&mut self, cutoff: OffsetDateTime) -> Result<u64, AppError>;
+    /// The events `query` selects, in its order, at most its `limit` (clamped to
+    /// `1..=MAX_EVENT_PAGE`). Never the raw bodies: no read gives them back.
+    async fn list(&mut self, query: EventQuery) -> Result<Vec<InboundEvent>, AppError>;
+    /// How many events are not yet processed, counting no further than `cap`: the answer is
+    /// `min(pending, cap)`.
+    async fn count_pending(&mut self, cap: u32) -> Result<u32, AppError>;
 }
 
 define_id!(

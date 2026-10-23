@@ -26,6 +26,11 @@
 //!   entered by hand, a scripted adapter answering the probes) reads the same health on both
 //!   gates, a probe answers the same outcome and status on both, failed or not, and both refuse
 //!   an unknown capability alike.
+//! - `events.pending`, `events.ack`, `events.list`: pages of inbound events (and the page after
+//!   a cursor) read the same on both gates, an acknowledgement on either answers alike and shows
+//!   on the other, and a half cursor is refused alike.
+//! - `connector.hooks`: the webhook addresses (the Meta webhook and the workspace's NetGSM
+//!   callback URLs with their tokens) read the same on both gates.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -1129,4 +1134,173 @@ async fn connector_health_and_probe_answer_the_same_over_the_panel_and_mcp() {
     .await;
     assert_eq!(agent["isError"], json!(true));
     assert_eq!(human, agent["structuredContent"]);
+}
+
+#[tokio::test]
+async fn events_pending_and_ack_answer_the_same_over_the_panel_and_mcp() {
+    use jt_connector::{EventKind, InboundEvent, InboundEventId};
+    use jt_testkit::fakes::FIXED_NOW;
+
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("alpha").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    // Four events came in, a minute apart.
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    let mut ids = Vec::new();
+    for i in 0..4 {
+        let id = InboundEventId::new_v7();
+        t.inbound_events()
+            .insert_if_new(
+                InboundEvent {
+                    id,
+                    workspace_id: ws,
+                    provider: Provider::Meta,
+                    capability_id: None,
+                    external_id: format!("wamid.{i}"),
+                    kind: EventKind::Message,
+                    payload: json!({ "message": { "n": i } }),
+                    received_at: FIXED_NOW + std::time::Duration::from_secs(60 * i),
+                    processed_at: None,
+                },
+                Some(b"raw".to_vec()),
+            )
+            .await
+            .unwrap();
+        ids.push(id.to_string());
+    }
+    t.commit().await.unwrap();
+
+    let get = |path: String| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let resp = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            json_body(resp).await
+        }
+    };
+    // One page, then the next from its cursor: the same JSON on both gates.
+    let human = get("/api/events/pending?limit=3".into()).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.events.pending",
+        json!({ "limit": 3 }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["events"].as_array().unwrap().len(), 3);
+    let next = &human["next"];
+    let human = get(format!(
+        "/api/events/pending?after_at={}&after_id={}",
+        next["after_at"].as_str().unwrap(),
+        next["after_id"].as_str().unwrap()
+    ))
+    .await;
+    let agent = call_tool(&app, &key, &session, "jeeta.events.pending", next.clone()).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["events"][0]["id"], json!(ids[3]));
+
+    // Acknowledging on either gate answers alike, and the other gate then reads the result.
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/events/ack",
+            Some(&cookie),
+            Some(json!({ "ids": [ids[0]] })),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.events.ack",
+        json!({ "ids": [ids[1]] }),
+    )
+    .await;
+    assert_eq!(human, json!({ "acked": 1 }));
+    assert_eq!(human, agent);
+    let human = get("/api/events/pending".into()).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.events.pending", json!({})).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["events"].as_array().unwrap().len(), 2);
+    let human = get("/api/events?include_processed=true".into()).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.events.list",
+        json!({ "include_processed": true }),
+    )
+    .await;
+    assert_eq!(human, agent);
+
+    // The same refusal for a half cursor.
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            "/api/events/pending?after_id=0192f0c4-0000-7000-8000-000000000000",
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.events.pending",
+        json!({ "after_id": "0192f0c4-0000-7000-8000-000000000000" }),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+}
+
+#[tokio::test]
+async fn connector_hooks_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("alpha").await;
+    let mut deps = deps(&db);
+    deps.apps = Arc::new(FakeAppConfig::with_all_apps());
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/connectors/hooks", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.connector.hooks", json!({})).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["meta"]["url"], "https://panel.test/hooks/meta");
+    assert_eq!(
+        human["meta"]["verify_token_hint"],
+        "set in the Meta app dashboard"
+    );
+    assert_eq!(human["netgsm"].as_array().unwrap().len(), 5);
+    assert!(
+        human["netgsm"][0]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("https://panel.test/hooks/netgsm/{ws}/"))
+    );
+    assert!(!human.to_string().contains("meta-verify-token"));
 }

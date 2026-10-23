@@ -1,6 +1,8 @@
 //! Connecting the workspace's accounts through their providers (spec §4.2 rule 1, §6.1, §6.4):
 //! `connector.start_oauth`, `connector.complete_oauth`, `connector.confirm_assets`,
-//! `connector.set_credentials`, `connector.probe`, `connector.health` and `connector.reconnect`.
+//! `connector.set_credentials`, `connector.probe`, `connector.health`, `connector.reconnect`,
+//! and `connector.hooks`, the webhook addresses the owner registers at the providers
+//! ([`hooks`]).
 //!
 //! **Two ways in.** Meta and X accounts connect through the platform's provider apps by OAuth: a
 //! flow starts ([`start_oauth`], or [`reconnect`] for a capability whose login expired), the
@@ -84,8 +86,8 @@ use jt_capability::{
     effective_status, is_secret_looking_key,
 };
 use jt_connector::{
-    ConnectorError, Credential, OAuthState, ProbeResult, Provider, STATE_TTL, pkce_challenge_s256,
-    provider_for_kind, redact_reason, status_after_probe,
+    ConnectorError, Credential, NetgsmPurpose, OAuthState, ProbeResult, Provider, STATE_TTL,
+    pkce_challenge_s256, provider_for_kind, redact_reason, status_after_probe,
 };
 use jt_tenancy::Permission;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -100,6 +102,7 @@ use super::capabilities::{
     CapabilityOut, append, capability_error, checked_external_id, checked_external_id_of, find,
     locked, not_retired, version_in_force,
 };
+use super::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH, netgsm_hook_token};
 use super::{Deps, acting_user, hash_token, invalid};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -344,6 +347,37 @@ pub struct ConnectorHealth {
     pub token_expires_at: Option<OffsetDateTime>,
     pub reconnect_required: bool,
 }
+
+/// Where the provider's webhooks for the workspace are to be delivered, to register at each
+/// provider ([`hooks`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HooksOut {
+    /// The platform's Meta webhook (one for every workspace: Meta signs each delivery and the
+    /// system routes it by account), when the platform's Meta app is configured.
+    pub meta: Option<MetaHook>,
+    /// The workspace's NetGSM callback URL for each purpose, in [`NetgsmPurpose::all`]'s order.
+    pub netgsm: Vec<NetgsmHook>,
+}
+
+/// The Meta webhook's address and where its verify token is set. The token itself is never
+/// shown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MetaHook {
+    pub url: String,
+    /// [`VERIFY_TOKEN_HINT`].
+    pub verify_token_hint: String,
+}
+
+/// One of the workspace's NetGSM callback URLs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NetgsmHook {
+    /// The purpose's key: `mo`, `events`, `iys`, `voice-report` or `autocall-report`.
+    pub purpose: String,
+    pub url: String,
+}
+
+/// Where the Meta webhook's verify token is set, shown instead of the token.
+pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 
 // ---------------------------------------------------------------------------------------------
 // Use cases
@@ -793,6 +827,36 @@ pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<Start
     begin_oauth(deps, ctx, &capability.kind_key, Some(id)).await
 }
 
+/// The webhook addresses to register at the providers, under the public base URL (its path kept,
+/// without a trailing slash): the platform's Meta webhook ([`META_HOOK_PATH`]) when the Meta app
+/// is configured, with [`VERIFY_TOKEN_HINT`] instead of its verify token; and the workspace's
+/// NetGSM callback URL for each purpose, `{NETGSM_HOOK_PATH}/{workspace_id}/{token}/{purpose}`,
+/// whose token ([`super::webhook::netgsm_hook_token`]) is what lets NetGSM's calls in. The token
+/// is a capability of the URL, not a sealed secret, but it lets anyone who holds it store events
+/// in the workspace: only who may manage capabilities sees it. Needs `capabilities.manage`.
+pub async fn hooks(deps: &Deps, ctx: &Ctx) -> Result<HooksOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    let apps = deps.apps.as_ref();
+    let meta = apps.meta_app().map(|_| MetaHook {
+        url: public_url(apps, META_HOOK_PATH).to_string(),
+        verify_token_hint: VERIFY_TOKEN_HINT.to_owned(),
+    });
+    let mut netgsm = Vec::new();
+    for &purpose in NetgsmPurpose::all() {
+        let token = netgsm_hook_token(deps, ctx.workspace_id, purpose)?;
+        let path = format!(
+            "{NETGSM_HOOK_PATH}/{}/{token}/{}",
+            ctx.workspace_id,
+            purpose.key()
+        );
+        netgsm.push(NetgsmHook {
+            purpose: purpose.key().to_owned(),
+            url: public_url(apps, &path).to_string(),
+        });
+    }
+    Ok(HooksOut { meta, netgsm })
+}
+
 /// Whether `capability` must be reconnected: `connector_public.reconnect_required` is `true`.
 pub(crate) fn reconnect_required(capability: &Capability) -> bool {
     capability.connector_public[RECONNECT_REQUIRED].as_bool() == Some(true)
@@ -942,9 +1006,15 @@ fn oauth_app(apps: &dyn PlatformAppConfig, provider: Provider, kind_key: &str) -
 /// The redirect URI of `provider`'s flows: the public base URL (its path kept, without a
 /// trailing slash), [`OAUTH_CALLBACK_PATH`] and the provider's key.
 fn callback_url(apps: &dyn PlatformAppConfig, provider: Provider) -> Url {
+    public_url(apps, &format!("{OAUTH_CALLBACK_PATH}/{}", provider.key()))
+}
+
+/// The public base URL (its path kept, without a trailing slash) followed by `path`, which
+/// starts with `/`; no query, no fragment.
+fn public_url(apps: &dyn PlatformAppConfig, path: &str) -> Url {
     let mut url = apps.public_base_url();
     let base = url.path().trim_end_matches('/').to_owned();
-    url.set_path(&format!("{base}{OAUTH_CALLBACK_PATH}/{}", provider.key()));
+    url.set_path(&format!("{base}{path}"));
     url.set_query(None);
     url.set_fragment(None);
     url

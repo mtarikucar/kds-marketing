@@ -4,7 +4,9 @@
 //! scoping, and the platform-wide lookup of a live capability by its external account.
 
 use jt_app::error::{AppError, ErrorCode};
-use jt_app::ports::{OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, UnitOfWork};
+use jt_app::ports::{
+    EventOrder, EventQuery, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, UnitOfWork,
+};
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
 use jt_pg::{PgUnitOfWork, PlatformTx, TenantTx};
@@ -359,6 +361,193 @@ async fn pending_events_are_listed_oldest_first_and_marked_processed_once() {
         ),
         ErrorCode::NotFound
     );
+}
+
+/// The ids of `events`, in order.
+fn ids(events: &[InboundEvent]) -> Vec<InboundEventId> {
+    events.iter().map(|e| e.id).collect()
+}
+
+/// An event query over every event, oldest first, at most 50.
+fn query(order: EventOrder) -> EventQuery {
+    EventQuery {
+        pending_only: false,
+        provider: None,
+        kind: None,
+        order,
+        limit: 50,
+    }
+}
+
+const OLDEST: EventOrder = EventOrder::OldestFirst { after: None };
+const NEWEST: EventOrder = EventOrder::NewestFirst { before: None };
+
+#[tokio::test]
+async fn events_are_listed_by_query_in_either_order_and_counted() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("a").await;
+    let (b, _) = db.seed_workspace("b").await;
+    let e1 = event(a, Provider::Meta, "mid.1", None, T0);
+    let e2 = InboundEvent {
+        kind: EventKind::Consent,
+        ..event(
+            a,
+            Provider::Netgsm,
+            "netgsm-iys:1",
+            None,
+            T0 + Duration::minutes(1),
+        )
+    };
+    let e3 = InboundEvent {
+        kind: EventKind::Status,
+        ..event(
+            a,
+            Provider::Meta,
+            "mid.1:delivered",
+            None,
+            T0 + Duration::minutes(2),
+        )
+    };
+    let e4 = InboundEvent {
+        kind: EventKind::Unknown("reaction".into()),
+        ..event(
+            a,
+            Provider::Meta,
+            "reaction.1",
+            None,
+            T0 + Duration::minutes(3),
+        )
+    };
+    // Two events at one instant: the id breaks the tie, in both orders and at a cursor.
+    let mut twins = [
+        event(a, Provider::X, "x.1", None, T0 + Duration::minutes(5)),
+        event(a, Provider::X, "x.2", None, T0 + Duration::minutes(5)),
+    ];
+    twins.sort_by_key(|e| e.id);
+    let [t1, t2] = twins.clone();
+    let mut t = uow.tenant(a).await.unwrap();
+    for e in [&e4, &e1, &t2, &e3, &e2, &t1] {
+        t.inbound_events()
+            .insert_if_new(e.clone(), Some(b"raw".to_vec()))
+            .await
+            .unwrap();
+    }
+    t.inbound_events()
+        .mark_processed(e2.id, T0 + Duration::hours(1))
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(b).await.unwrap();
+    t.inbound_events()
+        .insert_if_new(event(b, Provider::Meta, "mid.b", None, T0), None)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+
+    let mut t = uow.tenant(a).await.unwrap();
+    let mut list = async |q: EventQuery| ids(&t.inbound_events().list(q).await.unwrap());
+    assert_eq!(
+        list(query(OLDEST)).await,
+        [e1.id, e2.id, e3.id, e4.id, t1.id, t2.id]
+    );
+    assert_eq!(
+        list(query(NEWEST)).await,
+        [t2.id, t1.id, e4.id, e3.id, e2.id, e1.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            pending_only: true,
+            ..query(OLDEST)
+        })
+        .await,
+        [e1.id, e3.id, e4.id, t1.id, t2.id]
+    );
+    // Key-set cursors, ties included.
+    assert_eq!(
+        list(EventQuery {
+            pending_only: true,
+            ..query(EventOrder::OldestFirst {
+                after: Some((e1.received_at, e1.id))
+            })
+        })
+        .await,
+        [e3.id, e4.id, t1.id, t2.id]
+    );
+    assert_eq!(
+        list(query(EventOrder::OldestFirst {
+            after: Some((t1.received_at, t1.id))
+        }))
+        .await,
+        [t2.id]
+    );
+    assert_eq!(
+        list(query(EventOrder::NewestFirst {
+            before: Some((t2.received_at, t2.id))
+        }))
+        .await,
+        [t1.id, e4.id, e3.id, e2.id, e1.id]
+    );
+    assert_eq!(
+        list(query(EventOrder::NewestFirst {
+            before: Some((e3.received_at, e3.id))
+        }))
+        .await,
+        [e2.id, e1.id]
+    );
+    // Filters and limits.
+    assert_eq!(
+        list(EventQuery {
+            provider: Some(Provider::Netgsm),
+            ..query(NEWEST)
+        })
+        .await,
+        [e2.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            kind: Some(EventKind::Status),
+            ..query(NEWEST)
+        })
+        .await,
+        [e3.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            kind: Some(EventKind::Unknown("reaction".into())),
+            ..query(NEWEST)
+        })
+        .await,
+        [e4.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            limit: 2,
+            ..query(NEWEST)
+        })
+        .await,
+        [t2.id, t1.id]
+    );
+    assert_eq!(
+        list(EventQuery {
+            limit: 0,
+            ..query(OLDEST)
+        })
+        .await,
+        [e1.id]
+    );
+    // What a listing reads is the stored event, its processing time included.
+    let read = t.inbound_events().list(query(OLDEST)).await.unwrap();
+    assert_eq!(read[0], e1);
+    assert_eq!(read[1].processed_at, Some(T0 + Duration::hours(1)));
+
+    // Counting stops at its cap and sees only this workspace's pending events.
+    assert_eq!(t.inbound_events().count_pending(1_000).await.unwrap(), 5);
+    assert_eq!(t.inbound_events().count_pending(3).await.unwrap(), 3);
+    assert_eq!(t.inbound_events().count_pending(0).await.unwrap(), 0);
+    drop(t);
+    let mut t = uow.tenant(b).await.unwrap();
+    assert_eq!(t.inbound_events().count_pending(1_000).await.unwrap(), 1);
 }
 
 #[tokio::test]

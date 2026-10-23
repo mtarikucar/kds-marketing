@@ -11,12 +11,14 @@ pub mod auth;
 pub mod budget;
 pub mod capabilities;
 pub mod connector;
+pub mod events;
 pub mod groups;
 pub mod ledger;
 pub mod platform;
 pub mod roles;
 pub mod strategy;
 pub mod team;
+pub mod webhook;
 pub mod work;
 pub mod workspace;
 

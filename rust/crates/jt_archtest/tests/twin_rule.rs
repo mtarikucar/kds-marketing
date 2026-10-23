@@ -107,10 +107,11 @@ fn mcp_registry_matches_catalog() {
 /// The MCP tools the registry defines, by domain: 15 from M0 (`agent`, `workspace`, `team`,
 /// `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and `budget` from
 /// M1a and the three edits of M1b Task 4b (`jeeta.capability.update`,
-/// `jeeta.budget.items_update`, `jeeta.budget.items_retire`), 3 `work`, and the 6 `connector`
+/// `jeeta.budget.items_update`, `jeeta.budget.items_retire`), 3 `work`, the 6 `connector`
 /// tools of M1b Task 8 (the seventh connection use case, completing an OAuth flow, is the
-/// panel's callback only). Written out, so a tool added or dropped without updating the
-/// documentation (the README lists them) fails here.
+/// panel's callback only) and, from M1b Task 9, `jeeta.connector.hooks` and the 3 `events`
+/// tools: 60. Written out, so a tool added or dropped without updating the documentation (the
+/// README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("agent", 1),
     ("workspace", 1),
@@ -123,15 +124,16 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("capability", 16),
     ("budget", 6),
     ("work", 3),
-    ("connector", 6),
+    ("connector", 7),
+    ("events", 3),
 ];
 
 #[test]
-fn the_registry_holds_56_tools() {
+fn the_registry_holds_60_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 56);
+    assert_eq!(specs.len(), 60);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 56);
+    assert_eq!(total, 60);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -140,7 +142,7 @@ fn the_registry_holds_56_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 56);
+    assert_eq!(catalog, 60);
 }
 
 /// An MCP-only use case has no human caller: only an agent's check-in is one.

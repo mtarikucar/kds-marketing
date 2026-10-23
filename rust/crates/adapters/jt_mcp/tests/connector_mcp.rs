@@ -209,7 +209,7 @@ async fn agent_gets_an_authorize_url_but_cannot_complete() {
     let key = w.key(&[]).await;
     let session = w.session(&key).await;
 
-    // The agent sees six connection tools, none of which completes a flow.
+    // The agent sees seven connection tools, none of which completes a flow.
     let listed = w.rpc(&key, &session, "tools/list", json!({})).await;
     let names: Vec<&str> = listed["tools"]
         .as_array()
@@ -227,6 +227,7 @@ async fn agent_gets_an_authorize_url_but_cannot_complete() {
             "jeeta.connector.probe",
             "jeeta.connector.health",
             "jeeta.connector.reconnect",
+            "jeeta.connector.hooks",
         ]
     );
 
