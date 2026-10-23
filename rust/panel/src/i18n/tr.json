@@ -204,7 +204,8 @@
     "useSetCredentials": "Bu hesap türü sağlayıcıda oturum açarak değil, kimlik bilgileriyle bağlanır.",
     "accountMismatch": "Oturum açılan hesap bu kabiliyetin hesabına ulaşmıyor.",
     "providerRefused": "Sağlayıcı isteği reddetti.",
-    "accountTaken": "Bu hesap zaten aynı türden başka bir kabiliyete bağlı."
+    "accountTaken": "Bu hesap zaten aynı türden başka bir kabiliyete bağlı.",
+    "upstreamRetryAfter": "Sağlayıcı şu anda yanıt vermiyor. Yaklaşık {{seconds}} saniye sonra yeniden deneyin."
   },
   "login": {
     "title": "Giriş yap",
@@ -488,6 +489,8 @@
     "approveNoAssumptions": "Hiç varsayım kaydedilmedi: her nokta sizin cevaplarınıza dayanıyor.",
     "approveHypotheses": "Yürürlüğe koyduğu hipotezler: {{count}}.",
     "approveLoading": "Taslak yükleniyor…",
+    "approveNotSubmitted": "Taslak bu arada yeniden açıldı; onaya yeniden sunulmadan onaylanamaz.",
+    "approveNoDraft": "Onay bekleyen bir taslak kalmadı; bu arada onaylanmış ya da kapatılmış olabilir.",
     "approveConfirm": "Bu sürümü onayla",
     "archive": "Arşivle",
     "archiveTitle": "Onaylı stratejiyi arşivle",
@@ -847,7 +850,7 @@
       "submit": "{{provider}} ile oturum aç",
       "reconnectBody": "Bu hesabın girişi yenilenecek: sağlayıcıda aynı hesapla yeniden oturum açın.",
       "reconnectSubmit": "Yeniden bağla",
-      "newCapabilityNote": "Bu kabiliyet bir hesap kimliği taşımıyor; oturum açtığınız hesaplar yeni kabiliyetler olarak eklenir."
+      "firstBindsNote": "Bu kabiliyet henüz bir hesaba bağlı değil: sağlayıcıda ilk seçtiğiniz hesap bu kabiliyete bağlanır, diğer seçtikleriniz yeni kabiliyetler olarak eklenir."
     },
     "credentials": {
       "title": "Kimlik bilgileri",
@@ -885,6 +888,7 @@
     "loading": "Sağlayıcının yanıtı işleniyor…",
     "chooseTitle": "Bağlanacak hesapları seçin",
     "chooseBody": "Oturum açtığınız hesabın ulaştığı varlıklar aşağıda. Seçtikleriniz kabiliyet olarak eklenir ve hemen yoklanır.",
+    "firstBinds": "Bu bağlantı bir kabiliyet için başlatıldı: ilk seçtiğiniz hesap o kabiliyete bağlanır, diğerleri yeni kabiliyetler olarak eklenir.",
     "assetsLabel": "Bulunan varlıklar",
     "externalId": "Kimlik: {{id}}",
     "scopes": "İzinler: {{scopes}}",

@@ -295,7 +295,7 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | | `jeeta.connector.set_credentials` | Sahibin verdiği NetGSM kimlik bilgilerini (ya da yapıştırılmış Meta jetonunu) mühürler ve yoklar; günlük bunu ajanın girdiğini yazar (`by_agent: true`) | WRITE |
 | | `jeeta.connector.probe` | Bağlayıcı kabiliyeti sağlayıcısına karşı yoklar: sonuç ve sonraki durum | WRITE |
 | | `jeeta.connector.health` | Bütün bağlayıcıların sağlığı: durum, son yoklama, jetonun bitişi, yeniden bağlama gereği | READ |
-| | `jeeta.connector.reconnect` | Girişi düşen Meta ya da X kabiliyeti için ona bağlı yeni bir giriş başlatır (`handoff` ile) | WRITE |
+| | `jeeta.connector.reconnect` | Girişi düşen ya da hiç bağlanmamış (`declared`) Meta ya da X kabiliyeti için ona bağlı bir giriş başlatır (`handoff` ile); onayda ilk seçilen varlık o kabiliyet olur | WRITE |
 | iş | `jeeta.work.pending` | Bekleyen işler, stratejinin durumu, ajanın gecikmesi | READ |
 | | `jeeta.work.checkin` | Ajanın yoklaması: kaydedilir ve bekleyen işleri döndürür (yalnızca MCP) | WRITE |
 | | `jeeta.work.set_checkin_interval` | Beklenen yoklama aralığını değiştirir | WRITE |
@@ -578,6 +578,17 @@ yolu yoktur. Bir OAuth akışı şöyle yürür:
    gövde `{"selected": [dış kimlikler]}`) her birini bir kabiliyete çevirir, kimlik bilgisini mühürler ve
    yoklar. Akış onaydan sonra silinir.
 
+**Bir kabiliyete bağlı akış.** Yeniden bağlama (`reconnect`) akışı bir kabiliyete bağlıdır: hesabı belli
+bir kabiliyet için geri dönüş yalnızca o hesabı sunar ve onay kimlik bilgisini yeniler; hiç bağlanmamış
+(`declared`) ve hesap kimliği taşımayan bir kabiliyet için ise geri dönüş sağlayıcının bütün varlıklarını
+sunar. Onayda **ilk seçilen** (seçim sırasıyla) ve kabiliyetin türünden olan varlık o kabiliyet olur
+(hesabı ona bağlanır, kimlik bilgisi mühürlenir; adı sahibin verdiği ad kalır), kalan seçilenler yeni
+kabiliyetler olur; böylece önceden bildirilmiş bir kabiliyet yetim kalmaz. Türünden olmayan bir ilk seçim
+`422` (`selected`), başka bir canlı kabiliyetin tuttuğu hesap `409 CONFLICT`'tır ve hiçbir şey yazılmaz.
+Günlük kaydı `connector.connected` bağlanan kabiliyet için `bound: true`, yenilenen için
+`reconnected: true` taşır. Panelde `declared` bir Meta ya da X kabiliyetinin **Bağla** düğmesi bu yolu
+kullanır.
+
 Panelde hesaplar **Hesap bağla** sayfasından (`/connect`) bağlanır: Meta türleri "Meta", NetGSM türleri
 "NetGSM" başlığı altında, X ayrı; Meta ve X için sağlayıcıda oturum açılır, NetGSM için kimlik bilgisi formu
 doldurulur (parola alanları gizlidir, değerler hiçbir önbellekte tutulmaz ve kayıttan sonra formdan silinir),
@@ -598,7 +609,7 @@ app not configured") alır; NetGSM elle girişi bundan bağımsızdır.
 | Elle kimlik bilgisi (gövde `{capability_id}` ya da `{kind_key, name}`, isteğe bağlı `external_id`, `credential`) | `POST /api/connectors/credentials` | `jeeta.connector.set_credentials` | `capabilities.manage` |
 | Yoklama (gövdesiz; yanıt `{result, status}`) | `POST /api/connectors/{capability_id}/probe` | `jeeta.connector.probe` | `workspace.read` |
 | Sağlık (yanıt liste, araçta `{connectors}`) | `GET /api/connectors/health` | `jeeta.connector.health` | `workspace.read` |
-| Yeniden bağlama (gövdesiz; yanıt başlatma gibi) | `POST /api/connectors/{capability_id}/reconnect` | `jeeta.connector.reconnect` | `capabilities.manage` |
+| Kabiliyete bağlı giriş: yeniden bağlama ya da `declared` bir kabiliyetin ilk bağlanması (gövdesiz; yanıt başlatma gibi) | `POST /api/connectors/{capability_id}/reconnect` | `jeeta.connector.reconnect` | `capabilities.manage` |
 
 Kimlik bilgisi biçimleri (`credential.kind`): `netgsm_sms` (`usercode`, `password`, `msgheader`;
 `sms_line` için), `netgsm_pbx` (`username`, `password`, isteğe bağlı `trunk`, `pbxnum`; `netgsm_pbx` için)

@@ -22,6 +22,7 @@ import {
 import { kindLabel } from '@/lib/capabilities';
 import { callbackErrorMessage, oauthProviderErrorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
+import { forgetFlow, rememberedFlow, restartPath, type RememberedFlow } from '@/lib/oauthFlow';
 import { invalidateCapabilities } from './capabilities/queries';
 
 /** What the provider sent back in the address, read once when the page opens. */
@@ -97,8 +98,8 @@ function AssetRow({
   );
 }
 
-/** A refused callback: the panel's words and a way to start again. */
-function Failed({ message }: { message: string }) {
+/** A refused callback: the panel's words and a way to start again (for the same capability). */
+function Failed({ message, flow }: { message: string; flow: RememberedFlow | null }) {
   const { t } = useTranslation();
   return (
     <Card>
@@ -109,7 +110,7 @@ function Failed({ message }: { message: string }) {
         <Callout tone="danger">{message}</Callout>
         <div>
           <Button asChild variant="outline">
-            <Link to="/connect">{t('oauthCallback.restart')}</Link>
+            <Link to={restartPath(flow)}>{t('oauthCallback.restart')}</Link>
           </Button>
         </div>
       </CardContent>
@@ -134,6 +135,8 @@ export function OAuthCallbackPage() {
     code: params.get('code'),
     error: params.get('error'),
   }));
+  // The flow this tab started, if it is the one coming back: its capability, if bound to one.
+  const [flow] = useState(() => rememberedFlow());
   const [pending, setPending] = useState<PendingAssetsOut | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   // The code is good once: the flow completes once, whatever renders twice.
@@ -152,6 +155,7 @@ export function OAuthCallbackPage() {
   const confirm = useMutation({
     mutationFn: (ids: string[]) => confirmAssets(pending?.pending_id ?? '', ids),
     onSuccess: async (connected) => {
+      forgetFlow();
       toast.success(t('oauthCallback.connected', { count: connected.length }));
       await invalidateCapabilities(queryClient);
       navigate('/capabilities');
@@ -172,11 +176,11 @@ export function OAuthCallbackPage() {
 
   let body;
   if (answer.error !== null) {
-    body = <Failed message={oauthProviderErrorMessage(t, answer.error)} />;
+    body = <Failed message={oauthProviderErrorMessage(t, answer.error)} flow={flow} />;
   } else if (!answer.state || !answer.code) {
-    body = <Failed message={t('oauthCallback.missingParams')} />;
+    body = <Failed message={t('oauthCallback.missingParams')} flow={flow} />;
   } else if (complete.isError) {
-    body = <Failed message={callbackErrorMessage(t, complete.error)} />;
+    body = <Failed message={callbackErrorMessage(t, complete.error)} flow={flow} />;
   } else if (!pending) {
     body = (
       <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
@@ -186,6 +190,7 @@ export function OAuthCallbackPage() {
     );
   } else {
     const assets = pending.assets;
+    const bound = flow !== null && flow.pending_id === pending.pending_id && flow.capability_id !== null;
     const toggle = (id: string, on: boolean) =>
       setSelected((now) => (on ? [...now.filter((s) => s !== id), id] : now.filter((s) => s !== id)));
     const onSubmit = (e: FormEvent) => {
@@ -204,12 +209,13 @@ export function OAuthCallbackPage() {
               <Callout tone="warning">{t('oauthCallback.none')}</Callout>
               <div>
                 <Button asChild variant="outline">
-                  <Link to="/connect">{t('oauthCallback.restart')}</Link>
+                  <Link to={restartPath(flow)}>{t('oauthCallback.restart')}</Link>
                 </Button>
               </div>
             </div>
           ) : (
             <form className="flex flex-col gap-3" onSubmit={onSubmit} noValidate>
+              {bound && <Callout tone="info">{t('oauthCallback.firstBinds')}</Callout>}
               <ErrorCallout error={confirm.error} />
               <ul aria-label={t('oauthCallback.assetsLabel')} className="flex flex-col divide-y divide-border">
                 {assets.map((asset) => (

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
 import { browser } from '@/lib/browser';
-import { PAGE_ID, PENDING_ID, SMS_LINE_ID, lostPage, me, repMe, smsLine } from '@/test/fixtures';
+import { PAGE_ID, PENDING_ID, SMS_LINE_ID, capabilities, lostPage, me, repMe, smsLine } from '@/test/fixtures';
 import { mockFetch, renderAt } from '@/test/render';
 
 const started = {
@@ -150,6 +150,23 @@ describe('ConnectPage', () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith(started.authorize_url));
     // Bound to the capability, so confirming renews it rather than adding a second one.
     expect(calls.find((c) => c.method === 'POST')?.path).toBe(`/api/connectors/${PAGE_ID}/reconnect`);
+  });
+
+  it('binds a declared account without an id: the first account chosen becomes it', async () => {
+    const user = userEvent.setup();
+    const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+    const declared = capabilities[0];
+    const id = declared.capability.id;
+    const calls = mockFetch({
+      'GET /api/auth/me': me,
+      [`GET /api/capabilities/${id}`]: declared,
+      [`POST /api/connectors/${id}/reconnect`]: started,
+    });
+    renderAt(`/connect?capability=${id}`);
+    expect(await screen.findByText(tr.connect.oauth.firstBindsNote)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'Meta' }) }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith(started.authorize_url));
+    expect(calls.filter((c) => c.method === 'POST').map((c) => c.path)).toEqual([`/api/connectors/${id}/reconnect`]);
   });
 
   it('shows X no credential form, and keeps a pasted Meta token behind Advanced', async () => {

@@ -253,6 +253,17 @@ async fn agent_gets_an_authorize_url_but_cannot_complete() {
         handoff["tr"].as_str().unwrap().contains("sahib"),
         "{handoff}"
     );
+    // The link and the connection are named apart, in both languages.
+    let tr = handoff["tr"].as_str().unwrap();
+    assert!(
+        tr.contains("bağlantı adresini") && tr.contains("hesap bağlantısını"),
+        "{tr}"
+    );
+    let en = handoff["en"].as_str().unwrap();
+    assert!(
+        en.contains("sign-in link") && en.contains("account connection"),
+        "{en}"
+    );
     let state = jt_app::ports::connectors::Url::parse(url)
         .unwrap()
         .query_pairs()
@@ -409,4 +420,71 @@ async fn agent_enters_credentials_the_owner_gave_it_and_the_ledger_notes_it() {
         json!({}),
     )
     .await;
+}
+
+#[tokio::test]
+async fn set_credentials_arguments_are_strict_and_never_echoed() {
+    let w = World::new().await;
+    let key = w.key(&[]).await;
+    let session = w.session(&key).await;
+    let credential = |extra: Value| {
+        let mut c = json!({
+            "kind": "netgsm_sms",
+            "usercode": "8508001234",
+            "password": "netgsm-pass-1",
+            "msgheader": "ALFA",
+        });
+        for (k, v) in extra.as_object().unwrap() {
+            c[k] = v.clone();
+        }
+        c
+    };
+    // The panel's refused bodies, as tool arguments: an unknown field beside the credential or in
+    // it, a missing field, a field of the wrong type, a credential that is not an object, an
+    // unknown shape, no credential at all. Each is VALIDATION and repeats no value.
+    for arguments in [
+        json!({ "kind_key": "sms_line", "name": "H", "password": "netgsm-pass-1", "credential": credential(json!({})) }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": credential(json!({ "token": "netgsm-pass-1" })) }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "msgheader": "K" } }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": credential(json!({ "password": 98_765_432 })) }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": "netgsm-pass-1" }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm-pass-1", "password": "x" } }),
+        json!({ "kind_key": "sms_line", "name": "H" }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": credential(json!({ "usercode": "netgsm-pass-1\u{7}x" })) }),
+    ] {
+        let result = w
+            .tool(
+                &key,
+                &session,
+                "jeeta.connector.set_credentials",
+                arguments.clone(),
+            )
+            .await;
+        assert_eq!(result["isError"], json!(true), "{arguments}");
+        assert_eq!(
+            result["structuredContent"]["code"], "VALIDATION",
+            "{result}"
+        );
+        let text = result.to_string();
+        assert!(!text.contains("netgsm-pass-1"), "{text}");
+        assert!(!text.contains("98765432"), "{text}");
+    }
+    // Nothing was asked of the provider, nothing written.
+    assert!(w.netgsm.calls().is_empty());
+
+    // Well formed, the answer holds no secret either.
+    w.netgsm.push_probe(ProbeResult::success(
+        12,
+        json!({ "account_id": "8508001234" }),
+    ));
+    let result = w
+        .tool(
+            &key,
+            &session,
+            "jeeta.connector.set_credentials",
+            json!({ "kind_key": "sms_line", "name": "H", "credential": credential(json!({})) }),
+        )
+        .await;
+    assert_ne!(result["isError"], json!(true), "{result}");
+    assert!(!result.to_string().contains("netgsm-pass-1"), "{result}");
 }

@@ -36,7 +36,8 @@ function stampOf(draft: VersionOut | null | undefined): ApproveStamp | null {
  * "onayda açıkça listelenir"). Nothing is sent until the user confirms here; the request names the
  * draft exactly as the dialog shows it (its id and submission time), never a stamp read elsewhere,
  * so a draft that changed since it was shown is refused rather than approved unseen. `draft` is the
- * draft to list (undefined while it loads: confirming waits for it).
+ * draft to list: undefined while it loads (confirming waits for it), `null` when none is left; a
+ * draft no longer submitted, or none at all, says so instead of a silent disabled button.
  */
 export function ApproveDialog({
   open,
@@ -79,8 +80,12 @@ export function ApproveDialog({
           <DialogTitle>{t('strategy.approveTitle', { number: draft?.number ?? '' })}</DialogTitle>
           <DialogDescription>{t('strategy.approveBody')}</DialogDescription>
         </DialogHeader>
-        {draft ? (
+        {draft === null ? (
+          // Fetched, but no draft is left: approved or closed meanwhile.
+          <Callout tone="warning">{t('strategy.approveNoDraft')}</Callout>
+        ) : draft ? (
           <div className="flex flex-col gap-3 text-sm">
+            {!stamp && <Callout tone="warning">{t('strategy.approveNotSubmitted')}</Callout>}
             <section aria-labelledby="approve-assumptions" className="flex flex-col gap-2">
               <h3 id="approve-assumptions" className="font-medium text-foreground">
                 {t('strategy.approveAssumptions')}

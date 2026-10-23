@@ -6,7 +6,8 @@
 //! flow starts ([`start_oauth`], or [`reconnect`] for a capability whose login expired), the
 //! provider sends the owner's browser back with a code ([`complete_oauth`], the panel's callback
 //! route), and the owner chooses which of the assets the account reaches become capabilities
-//! ([`confirm_assets`]). NetGSM lines, and a pasted Meta token, are entered by hand
+//! ([`confirm_assets`]); a capability declared before it was connected is connected through a
+//! flow bound to it ([`reconnect`]), so the first chosen asset becomes it. NetGSM lines, and a pasted Meta token, are entered by hand
 //! ([`set_credentials`]); X has no manual way in.
 //!
 //! **The OAuth state** is signed with the workspace's MAC key for [`OAUTH_STATE_PURPOSE`] and
@@ -381,8 +382,10 @@ pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<St
 /// provider (`Throttle`, `Transient`) `UPSTREAM_UNAVAILABLE` with
 /// `details = {provider, retryable: true, retry_after_s?, reason}`, the reason redacted. Assets of
 /// kinds the provider does not serve are dropped, each account is kept once per kind, and keys
-/// that look like a secret's name are dropped from their public facts; a reconnection keeps only
-/// its capability's account, and an account that does not reach it is `VALIDATION` with
+/// that look like a secret's name are dropped from their public facts. A flow bound to a
+/// capability ([`reconnect`]) keeps only that capability's account when it names one; a declared
+/// capability that names none is offered every asset. Either way an account that reaches no
+/// asset of the capability's kind (or not its account) is `VALIDATION` with
 /// `details.reason = "account_mismatch"`. Of two completions racing on one state, the one that
 /// stores its assets second is `FORBIDDEN`, even after asking the provider (the flow is locked
 /// and checked again before anything is stored).
@@ -479,11 +482,13 @@ pub async fn complete_oauth(
         asset.public = screened(&asset.public);
     }
     if let Some(capability) = &bound {
-        assets.retain(|a| {
-            a.kind_key == capability.kind_key
-                && capability.external_id.as_deref() == Some(a.external_id.as_str())
-        });
-        if assets.is_empty() {
+        // A reconnection keeps its capability's account only; a declared capability's first
+        // connection is offered every asset (the first chosen of its kind becomes it), but needs
+        // one of its kind.
+        if let Some(held) = &capability.external_id {
+            assets.retain(|a| a.kind_key == capability.kind_key && a.external_id == *held);
+        }
+        if !assets.iter().any(|a| a.kind_key == capability.kind_key) {
             return Err(AppError::validation(
                 "the account signed in with does not reach this capability's account",
                 json!({ "reason": "account_mismatch" }),
@@ -538,13 +543,22 @@ pub async fn complete_oauth(
 /// connector, holding the asset's account (`external_id`), named after it (cut to the longest
 /// name allowed), its credential sealed and its public facts in `connector_public`, under the
 /// strategy version in force. An account another live capability of the kind holds is
-/// `CONFLICT` (`details` naming `kind_key` and `external_id`), and nothing is created. A
-/// reconnection ([`reconnect`]) instead seals the new credential into its capability, which must
-/// be the one chosen asset (else `VALIDATION` naming `selected`) and not retired (`CONFLICT`).
-/// The flow is deleted in the same transaction.
+/// `CONFLICT` (`details` naming `kind_key` and `external_id`), and nothing is created.
+///
+/// A flow bound to a capability ([`reconnect`]) gives that capability (not retired, else
+/// `CONFLICT`) the asset of its kind chosen first (`selected[0]`, in the order chosen; else
+/// `VALIDATION` naming `selected`): when the capability already holds that account, the new
+/// credential is sealed into it (a reconnection); when it holds none (a declared capability's
+/// first connection) or another one, it is bound to the asset's account the way every change of
+/// a connector's account is (back to `declared`, the old account's facts dropped; an account held
+/// elsewhere is `CONFLICT`), the credential sealed and the
+/// asset's facts written. Every other chosen asset becomes a new capability, as above (the bound
+/// capability's own account is no duplicate). Nothing is written when any of it is refused. The
+/// flow is deleted in the same transaction.
 ///
 /// Writes `connector.connected` per capability (payload `kind_key`, `external_id`, and
-/// `reconnected: true` for a reconnection). Once committed, the adapter's hosts are allowed for
+/// `reconnected: true` for a reconnection, `bound: true` for a bound capability given its account).
+/// Once committed, the adapter's hosts are allowed for
 /// the workspace (a host that cannot be is logged), and each capability runs the adapter's
 /// connection step (see the module docs) and is probed as [`probe`] does, under its lock; a probe
 /// that cannot run is logged and does not undo the connection.
@@ -597,8 +611,21 @@ pub async fn confirm_assets(
         .filter(|a| selected.contains(&a.external_id))
         .collect();
     let touched = if let Some(id) = flow.capability_id {
-        let renewed = renew(deps, repos.as_mut(), ctx, &flow, id, chosen, &hosts).await?;
-        vec![renewed]
+        let rest = renew(
+            deps,
+            repos.as_mut(),
+            ctx,
+            (&flow, id),
+            &selected[0],
+            chosen,
+            &hosts,
+        )
+        .await?;
+        let mut ids = vec![id];
+        if !rest.is_empty() {
+            ids.extend(create(deps, repos.as_mut(), ctx, &flow, rest, &hosts).await?);
+        }
+        ids
     } else {
         create(deps, repos.as_mut(), ctx, &flow, chosen, &hosts).await?
     };
@@ -746,15 +773,16 @@ pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppE
     Ok(out)
 }
 
-/// Starts an OAuth flow bound to capability `id`, so that confirming it renews the capability's
-/// sealed credentials instead of creating capabilities ([`confirm_assets`]), and returns it as
+/// Starts an OAuth flow bound to capability `id`, so that confirming it gives the capability the
+/// asset chosen first ([`confirm_assets`]: renewing its sealed credentials, or binding a declared
+/// capability to its first account) instead of only creating capabilities, and returns it as
 /// [`start_oauth`] does. Needs `capabilities.manage`.
 ///
 /// An unknown id is `NOT_FOUND`; a capability not reached through a connector, a retired one,
-/// one of a kind no provider serves, and one without an external account are `CONFLICT`; a
-/// NetGSM capability is `VALIDATION` with `details.reason = "use_set_credentials"` (it takes new
-/// credentials by hand). Otherwise as [`start_oauth`]; the ledger payload also names the
-/// `capability_id`.
+/// one of a kind no provider serves, and one that names no external account unless it is
+/// declared (never connected) are `CONFLICT`; a NetGSM capability is `VALIDATION` with
+/// `details.reason = "use_set_credentials"` (it takes new credentials by hand). Otherwise as
+/// [`start_oauth`]; the ledger payload also names the `capability_id`.
 pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<StartOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let capability = {
@@ -991,7 +1019,9 @@ fn reconnectable(capability: &Capability) -> Result<(), AppError> {
         None => return Err(AppError::conflict("no provider connects this kind yet")),
         Some(Provider::Meta | Provider::X) => {}
     }
-    if capability.external_id.is_none() {
+    // A declared capability is connected for the first time through a flow bound to it; any
+    // other must name the account it reconnects.
+    if capability.external_id.is_none() && capability.status != StoredStatus::Declared {
         return Err(AppError::conflict(
             "the capability names no external account to reconnect",
         ));
@@ -1135,29 +1165,43 @@ async fn create(
     Ok(ids)
 }
 
-/// Seals the chosen asset's credential into capability `id`, the one a reconnection renews, in
-/// `repos`, and returns its id.
+/// Gives capability `id`, the one the flow is bound to, the chosen asset of its kind whose id is
+/// `first` (the one chosen first), in `repos`: the new credential sealed into it, renewing its
+/// connection when it already holds that account, else binding it to the asset's account through
+/// [`rebind_account`]. Returns the other chosen assets.
 async fn renew(
     deps: &Deps,
     repos: &mut dyn TenantRepos,
     ctx: &Ctx,
-    flow: &OAuthPendingRow,
-    id: CapabilityId,
+    (flow, id): (&OAuthPendingRow, CapabilityId),
+    first: &str,
     mut chosen: Vec<Asset>,
     hosts: &[String],
-) -> Result<CapabilityId, AppError> {
+) -> Result<Vec<Asset>, AppError> {
     let mut capability = locked(repos, id).await?;
     not_retired(&capability)?;
-    let own = chosen.len() == 1
-        && chosen[0].kind_key == capability.kind_key
-        && capability.external_id.as_deref() == Some(chosen[0].external_id.as_str());
-    if !own {
+    let Some(at) = chosen
+        .iter()
+        .position(|a| a.external_id == first && a.kind_key == capability.kind_key)
+    else {
         return Err(invalid(
             "selected",
-            "a reconnection confirms the capability's own account, and only it",
+            "the asset chosen first becomes the capability, so it must be of the capability's kind",
         ));
+    };
+    let asset = chosen.remove(at);
+    let sealed = seal_credential(deps, ctx, &asset.credential)?;
+    let renewing = capability.external_id.as_deref() == Some(asset.external_id.as_str());
+    if !renewing {
+        rebind_account(
+            repos,
+            &mut capability,
+            Some(asset.external_id.clone()),
+            Some(sealed.clone()),
+            ctx.now,
+        )
+        .await?;
     }
-    let asset = chosen.remove(0);
     capability.connector_public = connected_public(
         &capability.connector_public,
         flow.provider,
@@ -1168,12 +1212,15 @@ async fn renew(
     );
     capability.updated_at = ctx.now;
     repos.capabilities().update(capability.clone()).await?;
-    let sealed = seal_credential(deps, ctx, &asset.credential)?;
-    repos
-        .capabilities()
-        .set_sealed(id, Some(sealed), ctx.now)
-        .await?;
+    if renewing {
+        repos
+            .capabilities()
+            .set_sealed(id, Some(sealed), ctx.now)
+            .await?;
+    }
     let in_force = version_in_force(repos).await?;
+    let mut payload = json!({ "kind_key": capability.kind_key, "external_id": asset.external_id });
+    payload[if renewing { "reconnected" } else { "bound" }] = json!(true);
     append(
         repos,
         ctx,
@@ -1181,14 +1228,10 @@ async fn renew(
         "capability",
         id,
         in_force,
-        json!({
-            "kind_key": capability.kind_key,
-            "external_id": asset.external_id,
-            "reconnected": true,
-        }),
+        payload,
     )
     .await?;
-    Ok(id)
+    Ok(chosen)
 }
 
 /// `CONFLICT`: a live capability of `kind_key` already holds the account `external_id`.

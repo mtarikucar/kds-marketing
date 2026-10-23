@@ -34,6 +34,7 @@ import {
   providerOf,
   tokenNeedsExternalId,
 } from '@/lib/connectors';
+import { rememberStart } from '@/lib/oauthFlow';
 import { can } from '@/lib/roles';
 import { CAPABILITIES_KEY, invalidateCapabilities } from './capabilities/queries';
 
@@ -116,9 +117,10 @@ function TextField({
 function OAuthPanel({ kind, capability }: { kind: string; capability: Capability | null }) {
   const { t } = useTranslation();
   const provider = providerOf(kind) as Provider;
-  // A capability that names its account signs in again for it (a flow bound to it); a first
-  // connection of a declared one reads as one, a renewal as a reconnection.
-  const bound = capability !== null && capability.external_id !== null;
+  // An existing capability signs in through a flow bound to it: a renewal reads as a
+  // reconnection; a declared one's first connection as a sign-in, whose first chosen account
+  // becomes it.
+  const bound = capability !== null;
   const reconnecting = bound && capability.status !== 'declared';
   const [redirecting, setRedirecting] = useState(false);
   const start = useMutation({
@@ -126,6 +128,7 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
       const out = bound ? await reconnectConnector(capability.id) : await startOAuth(kind);
       const url = providerUrl(out.authorize_url);
       if (!url) throw new Error('the provider address is not an https address');
+      rememberStart(out, bound ? capability.id : null);
       return url;
     },
     onSuccess: (url) => {
@@ -140,7 +143,9 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
         <CardDescription>{reconnecting ? t('connect.oauth.reconnectBody') : t('connect.oauth.body')}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        {capability !== null && !bound && <Callout tone="info">{t('connect.oauth.newCapabilityNote')}</Callout>}
+        {capability !== null && capability.external_id === null && (
+          <Callout tone="info">{t('connect.oauth.firstBindsNote')}</Callout>
+        )}
         <ErrorCallout error={start.error} />
         {redirecting ? (
           <p className="text-sm text-muted-foreground">{t('capabilities.connector.redirecting')}</p>

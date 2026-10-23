@@ -29,6 +29,7 @@ import {
 import { browser, providerUrl } from '@/lib/browser';
 import { connectsByOAuth, isErrorKind, providerOf } from '@/lib/connectors';
 import { errorMessage } from '@/lib/errors';
+import { rememberStart } from '@/lib/oauthFlow';
 import { can } from '@/lib/roles';
 import {
   DeclareDialog,
@@ -159,8 +160,10 @@ export function CapabilitiesPage() {
   // A Meta or X capability is reconnected by signing in at the provider again.
   const reconnect = useMutation({
     mutationFn: async (id: string) => {
-      const url = providerUrl((await reconnectConnector(id)).authorize_url);
+      const out = await reconnectConnector(id);
+      const url = providerUrl(out.authorize_url);
       if (!url) throw new Error('the provider address is not an https address');
+      rememberStart(out, id);
       return url;
     },
     onSuccess: (url) => {
@@ -171,19 +174,15 @@ export function CapabilitiesPage() {
   });
   const onConnector = (kind: ConnectorAction, item: CapabilityOut) => {
     const c = item.capability;
-    const forCapability = `/connect?capability=${encodeURIComponent(c.id)}`;
     if (kind === 'probe') {
       probe.mutate(item);
-    } else if (kind === 'reconnect' && connectsByOAuth(c.kind_key)) {
-      // A Meta or X account signs in again at once.
+    } else if (connectsByOAuth(c.kind_key)) {
+      // A Meta or X account signs in at once through a flow bound to this capability: a
+      // reconnection renews it; a declared one becomes the first account chosen (no orphan).
       reconnect.mutate(c.id);
-    } else if (providerOf(c.kind_key) === 'netgsm' || c.external_id !== null) {
-      // NetGSM takes its credentials (again), and an account that names its id signs in for it,
-      // on the connect page, for this capability.
-      navigate(forCapability);
-    } else {
-      // A declared account without its id: a new sign-in for its kind.
-      navigate(`/connect?kind=${encodeURIComponent(c.kind_key)}`);
+    } else if (providerOf(c.kind_key) === 'netgsm') {
+      // NetGSM takes its credentials (again) on the connect page, for this capability.
+      navigate(`/connect?capability=${encodeURIComponent(c.id)}`);
     }
   };
 

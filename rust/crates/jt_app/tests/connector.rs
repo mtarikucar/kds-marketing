@@ -1829,6 +1829,215 @@ fn page_asset_v2() -> Asset {
     page_asset("page-1", "Kahve", "EAAB-page-1-v2")
 }
 
+/// An Instagram account found by a Meta flow.
+fn instagram_asset(id: &str) -> Asset {
+    Asset {
+        kind_key: "instagram".into(),
+        external_id: id.into(),
+        name: "kahve".into(),
+        credential: user_token("IGQ-ig-token"),
+        public: json!({ "username": "kahve" }),
+    }
+}
+
+impl Rig {
+    /// A reconnection flow bound to capability `id`, completed by the owner with `assets`.
+    async fn bound_flow(&self, id: CapabilityId, assets: Vec<Asset>) -> PendingAssetsOut {
+        let out = connector::reconnect(&self.w.deps, &self.w.owner_ctx, id)
+            .await
+            .unwrap();
+        self.meta_oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+        self.meta_oauth.push_assets(Ok(assets));
+        let owner = self.owner().await;
+        self.complete_as(&self.w.deps, &owner, &state_of(&out), "code-1")
+            .await
+            .unwrap()
+    }
+
+    fn confirming(&self, pending: &PendingAssetsOut, selected: &[&str]) -> ConfirmAssets {
+        ConfirmAssets {
+            pending_id: pending.pending_id,
+            selected: selected.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+}
+
+#[tokio::test]
+async fn reconnect_accepts_a_declared_capability_without_account() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    // A page declared before any connection: no account yet.
+    let declared =
+        r.w.declare("facebook_page", "Kahve sayfası")
+            .await
+            .capability;
+    assert_eq!(declared.external_id, None);
+
+    // Connecting it is a flow bound to it.
+    let out = connector::reconnect(&r.w.deps, o, declared.id)
+        .await
+        .unwrap();
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.id == out.pending_id)
+        .unwrap();
+    assert_eq!(row.capability_id, Some(declared.id));
+    assert_eq!(row.kind_key, "facebook_page");
+
+    // The provider's assets are offered as they are: none is the capability's account yet.
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+    r.meta_oauth.push_assets(Ok(vec![
+        page_asset("page-1", "Kahve", "EAAB-page-1"),
+        page_asset("page-2", "Çay", "EAAB-page-2"),
+        instagram_asset("ig-1"),
+    ]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&out), "code-1")
+        .await
+        .unwrap();
+    let offered: Vec<&str> = pending
+        .assets
+        .iter()
+        .map(|a| a.external_id.as_str())
+        .collect();
+    assert_eq!(offered, ["page-1", "page-2", "ig-1"]);
+
+    // An account that reaches nothing of the capability's kind does not reach it.
+    let again = connector::reconnect(&r.w.deps, o, declared.id)
+        .await
+        .unwrap();
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth.push_assets(Ok(vec![instagram_asset("ig-1")]));
+    let e = err(r
+        .complete_as(&r.w.deps, &owner, &state_of(&again), "code-2")
+        .await);
+    assert_eq!(e.code, ErrorCode::Validation);
+    assert_eq!(e.details["reason"], "account_mismatch");
+
+    // Only a declared capability may lack its account: one that lost its connection without
+    // ever naming one cannot be reconnected (CONFLICT), nor can a retired one.
+    let lost = r.w.declare("instagram", "Kayıp hesap").await.capability;
+    capabilities::mark_unreachable(&r.w.deps, o, lost.id, "kapandı".into())
+        .await
+        .unwrap();
+    let e = err(connector::reconnect(&r.w.deps, o, lost.id).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    let retired = r.w.declare("instagram", "Eski hesap").await.capability;
+    capabilities::retire(&r.w.deps, o, retired.id, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        code(connector::reconnect(&r.w.deps, o, retired.id).await),
+        ErrorCode::Conflict
+    );
+}
+
+#[tokio::test]
+async fn bound_confirm_binds_first_asset_and_creates_the_rest() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let declared =
+        r.w.declare("facebook_page", "Kahve sayfası")
+            .await
+            .capability;
+    let pending = r
+        .bound_flow(
+            declared.id,
+            vec![
+                page_asset("page-1", "Kahve", "EAAB-page-1"),
+                page_asset("page-2", "Çay", "EAAB-page-2"),
+                page_asset("page-3", "Simit", "EAAB-page-1-v2"),
+            ],
+        )
+        .await;
+
+    // The first chosen asset (in the order chosen, not the flow's) becomes the declared
+    // capability; the other chosen ones become new capabilities; nothing is left over.
+    r.meta.push_probe(ok_probe("page-2"));
+    r.meta.push_probe(ok_probe("page-1"));
+    let out = r.confirm(&pending, &["page-2", "page-1"]).await;
+    assert_eq!(out.len(), 2);
+    let bound = &out[0].capability;
+    assert_eq!(bound.id, declared.id);
+    assert_eq!(bound.external_id.as_deref(), Some("page-2"));
+    assert_eq!(bound.name, "Kahve sayfası", "the owner's name stays");
+    assert_eq!(bound.status, StoredStatus::Verified);
+    assert_eq!(bound.connector_public["provider"], "meta");
+    assert_eq!(bound.connector_public["hosts"], json!(META_HOSTS));
+    assert_eq!(
+        bound.connector_public["asset"],
+        json!({ "category": "Cafe" })
+    );
+    assert_eq!(
+        r.sealed_credential(declared.id),
+        Credential::PageToken {
+            page_id: "page-2".into(),
+            token: "EAAB-page-2".into(),
+        }
+    );
+    let created = &out[1].capability;
+    assert_ne!(created.id, declared.id);
+    assert_eq!(created.external_id.as_deref(), Some("page-1"));
+    assert_eq!(created.name, "Kahve");
+    assert_eq!(r.w.uow.snapshot().capabilities.len(), 2);
+    assert!(r.pending_rows().iter().all(|p| p.id != pending.pending_id));
+    let connected: Vec<serde_json::Value> =
+        r.w.entries("connector.connected")
+            .into_iter()
+            .map(|e| e.payload)
+            .collect();
+    assert_eq!(
+        connected,
+        [
+            json!({ "kind_key": "facebook_page", "external_id": "page-2", "bound": true }),
+            json!({ "kind_key": "facebook_page", "external_id": "page-1" }),
+        ]
+    );
+    assert_no_secret("the answer", &serde_json::to_string(&out).unwrap());
+
+    // Another declared page: its first chosen asset must be of its kind ...
+    let spare = r.w.declare("facebook_page", "Yedek sayfa").await.capability;
+    let pending = r
+        .bound_flow(
+            spare.id,
+            vec![
+                page_asset("page-1", "Kahve", "EAAB-page-1"),
+                page_asset("page-4", "Börek", "EAAB-page-2"),
+                instagram_asset("ig-1"),
+            ],
+        )
+        .await;
+    let e =
+        err(
+            connector::confirm_assets(&r.w.deps, o, r.confirming(&pending, &["ig-1", "page-4"]))
+                .await,
+        );
+    assert_invalid(&e, "selected");
+    // ... and an account another live capability holds is CONFLICT, whether it is the one
+    // bound or one of the rest; nothing is written.
+    for selected in [&["page-1", "page-4"][..], &["page-4", "page-1"][..]] {
+        let e =
+            err(connector::confirm_assets(&r.w.deps, o, r.confirming(&pending, selected)).await);
+        assert_eq!(e.code, ErrorCode::Conflict, "{selected:?}");
+        assert_eq!(
+            e.details,
+            json!({ "kind_key": "facebook_page", "external_id": "page-1" }),
+            "{selected:?}"
+        );
+        assert_eq!(r.capability(spare.id).external_id, None, "{selected:?}");
+        assert_eq!(r.w.uow.snapshot().capabilities.len(), 3, "{selected:?}");
+    }
+    // The flow still stands: a valid choice binds the spare page alone.
+    r.meta.push_probe(ok_probe("page-4"));
+    let out = r.confirm(&pending, &["page-4"]).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].capability.id, spare.id);
+    assert_eq!(out[0].capability.external_id.as_deref(), Some("page-4"));
+    assert_eq!(r.w.uow.snapshot().capabilities.len(), 3);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Retiring, pending work
 // ---------------------------------------------------------------------------------------------

@@ -90,4 +90,30 @@ describe('errorMessage', () => {
       tr.errors.WORKSPACE_INACTIVE,
     );
   });
+
+  it("shows a busy provider in the panel's words, never reading its reason as ours", () => {
+    expect(
+      errorMessage(
+        t,
+        new ApiError('UPSTREAM_UNAVAILABLE', 'x', { provider: 'meta', retryable: true, reason: 'not_submitted' }, 503),
+      ),
+    ).toBe(tr.errors.UPSTREAM_UNAVAILABLE);
+    expect(
+      errorMessage(
+        t,
+        new ApiError(
+          'UPSTREAM_UNAVAILABLE',
+          'x',
+          { provider: 'x', retryable: true, retry_after_s: 45, reason: 'account_mismatch' },
+          503,
+        ),
+      ),
+    ).toBe(i18n.t('errors.upstreamRetryAfter', { seconds: 45 }));
+    expect(
+      callbackErrorMessage(
+        t,
+        new ApiError('UPSTREAM_UNAVAILABLE', 'x', { provider: 'meta', retryable: true, reason: 'use_set_credentials' }, 503),
+      ),
+    ).toBe(tr.errors.UPSTREAM_UNAVAILABLE);
+  });
 });

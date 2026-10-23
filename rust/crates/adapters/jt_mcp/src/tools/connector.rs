@@ -31,13 +31,15 @@ use super::{NoArgs, ToolDef, args, listed, to_json};
 use crate::registry::{ToolFuture, schema_for};
 
 /// What an agent is told to do with an authorize URL, in Turkish (`tr`) and English (`en`).
-pub(crate) const HANDOFF_TR: &str = "Bu bağlantıyı alanın sahibine iletin: sağlayıcıda kendi \
-                                     tarayıcısında oturum açıp panele dönen sahip bağlamayı \
-                                     tamamlar; ajan bağlantıyı tamamlayamaz.";
-pub(crate) const HANDOFF_EN: &str = "Hand this authorize_url to the workspace owner: the owner \
-                                     signs in at the provider in their own browser and comes back \
-                                     to the panel, which completes the connection; you cannot \
-                                     complete it yourself.";
+pub(crate) const HANDOFF_TR: &str = "Bu bağlantı adresini (authorize_url) alanın sahibine \
+                                     iletin: sahip sağlayıcıda kendi tarayıcısında oturum açıp \
+                                     panele döner ve hesap bağlantısını orada tamamlar; ajan hesap \
+                                     bağlantısını tamamlayamaz.";
+pub(crate) const HANDOFF_EN: &str = "Hand this sign-in link (authorize_url) to the workspace \
+                                     owner: the owner signs in at the provider in their own \
+                                     browser and comes back to the panel, which completes the \
+                                     account connection; you cannot complete the account \
+                                     connection yourself.";
 
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
@@ -61,11 +63,14 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "connector.confirm_assets",
             description: "Confirm which assets of a flow the owner completed become \
                           capabilities: selected lists their external ids, as the panel showed \
-                          them. Each becomes a connector capability (a reconnection renews its \
-                          own capability), is probed, and is returned as it stands after the \
-                          probe. Before the owner's browser came back the flow is CONFLICT; an \
-                          unknown flow is NOT_FOUND. Returns {capabilities: [...]}. \
-                          [risk: WRITE]",
+                          them. Each becomes a connector capability; in a flow bound to a \
+                          capability (jeeta.connector.reconnect) the first selected asset of its \
+                          kind becomes that capability (renewing it, or giving a declared one its \
+                          account) and the rest new capabilities. Each is probed and returned as \
+                          it stands after the probe. Before the owner's browser came back the \
+                          flow is CONFLICT; an unknown flow is NOT_FOUND; an account another \
+                          capability of the kind holds is CONFLICT. Returns {capabilities: \
+                          [...]}. [risk: WRITE]",
             permission: Permission::CapabilitiesManage,
             schema: schema_for::<ConfirmArgs>,
             run: confirm_assets,
@@ -109,13 +114,14 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "connector.reconnect",
-            description: "Start a new sign-in for a Meta or X capability whose login expired \
-                          or was refused, bound to it: returns {authorize_url, pending_id, \
-                          expires_at, handoff} as jeeta.connector.start_oauth does; hand the \
-                          authorize_url to the owner. Confirming the flow renews the \
-                          capability's credentials. A NetGSM capability takes new credentials \
-                          instead (VALIDATION, details.reason use_set_credentials). \
-                          [risk: WRITE]",
+            description: "Start a sign-in bound to a Meta or X capability: one whose login \
+                          expired or was refused, or a declared one never connected yet. Returns \
+                          {authorize_url, pending_id, expires_at, handoff} as \
+                          jeeta.connector.start_oauth does; hand the authorize_url to the owner. \
+                          Confirming the flow renews the capability's credentials, or gives the \
+                          declared capability the account chosen first. A NetGSM capability \
+                          takes new credentials instead (VALIDATION, details.reason \
+                          use_set_credentials). [risk: WRITE]",
             permission: Permission::CapabilitiesManage,
             schema: schema_for::<CapabilityArgs>,
             run: reconnect,

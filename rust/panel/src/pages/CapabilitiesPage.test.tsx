@@ -5,6 +5,7 @@ import tr from '@/i18n/tr.json';
 import { EFFECTIVE_STATUSES } from '@/api/types';
 import i18n from '@/i18n/config';
 import { browser } from '@/lib/browser';
+import { rememberedFlow } from '@/lib/oauthFlow';
 import {
   PAGE_ID,
   PENDING_ID,
@@ -264,15 +265,51 @@ describe('CapabilitiesPage', () => {
     expect(calls.some((c) => c.method === 'POST' && c.path === `/api/connectors/${PAGE_ID}/reconnect`)).toBe(true);
   });
 
-  it('connects a declared account on the connect page, its kind chosen', async () => {
+  it('connects a declared Meta account through a sign-in bound to it, leaving no orphan', async () => {
     const user = userEvent.setup();
-    mockFetch(withConnectors);
-    const { router } = renderAt('/capabilities');
+    const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+    const instagramId = capabilities[0].capability.id;
+    const calls = mockFetch({
+      ...withConnectors,
+      [`POST /api/connectors/${instagramId}/reconnect`]: {
+        authorize_url: 'https://oauth.test/meta/authorize?state=bound',
+        pending_id: PENDING_ID,
+        expires_at: '2099-10-22T09:10:00Z',
+      },
+    });
+    renderAt('/capabilities');
     const instagram = await cardOf('Atölye Instagram');
+    // Declared, never connected, no account id: "Connect" still binds the sign-in to it.
+    expect(capabilities[0].capability.external_id).toBeNull();
     await user.click(within(instagram).getByRole('button', { name: tr.capabilities.connector.connect }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://oauth.test/meta/authorize?state=bound'));
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/api/connectors/oauth/start')).toBe(false);
+    // The flow is remembered for the callback page (its capability, never a secret).
+    expect(rememberedFlow()).toEqual({
+      pending_id: PENDING_ID,
+      capability_id: instagramId,
+      expires_at: '2099-10-22T09:10:00Z',
+    });
+  });
+
+  it('connects a declared NetGSM line on the connect page, for that line', async () => {
+    const user = userEvent.setup();
+    const declaredLine = {
+      ...smsLine,
+      capability: { ...smsLine.capability, status: 'declared' as const, has_sealed_config: false },
+      effective_status: 'declared' as const,
+    };
+    mockFetch({
+      ...routes,
+      'GET /api/capabilities': [declaredLine],
+      [`GET /api/capabilities/${SMS_LINE_ID}`]: declaredLine,
+    });
+    const { router } = renderAt('/capabilities');
+    const line = await cardOf('Kampanya hattı');
+    await user.click(within(line).getByRole('button', { name: tr.capabilities.connector.connect }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/connect'));
-    expect(router.state.location.search).toBe('?kind=instagram');
-    expect(screen.getByRole('button', { name: 'Instagram', pressed: true })).toBeInTheDocument();
+    expect(router.state.location.search).toBe(`?capability=${SMS_LINE_ID}`);
+    expect(await screen.findByLabelText(tr.connect.credentials.password)).toBeInTheDocument();
   });
 
   it('lets a rep probe but not connect', async () => {

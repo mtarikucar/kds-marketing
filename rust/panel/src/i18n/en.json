@@ -204,7 +204,8 @@
     "useSetCredentials": "This kind of account connects with credentials, not by signing in at the provider.",
     "accountMismatch": "The account you signed in with does not reach this capability's account.",
     "providerRefused": "The provider refused the request.",
-    "accountTaken": "Another capability of the same kind already holds this account."
+    "accountTaken": "Another capability of the same kind already holds this account.",
+    "upstreamRetryAfter": "The provider is not answering right now. Try again in about {{seconds}} seconds."
   },
   "login": {
     "title": "Sign in",
@@ -488,6 +489,8 @@
     "approveNoAssumptions": "No assumption was recorded: every point rests on your answers.",
     "approveHypotheses": "Hypotheses it puts in force: {{count}}.",
     "approveLoading": "Loading the draft…",
+    "approveNotSubmitted": "The draft was reopened meanwhile; it cannot be approved until it is submitted again.",
+    "approveNoDraft": "No draft awaits approval any more; it may have been approved or closed meanwhile.",
     "approveConfirm": "Approve this version",
     "archive": "Archive",
     "archiveTitle": "Archive the approved strategy",
@@ -847,7 +850,7 @@
       "submit": "Sign in with {{provider}}",
       "reconnectBody": "This account's login will be renewed: sign in at the provider with the same account again.",
       "reconnectSubmit": "Reconnect",
-      "newCapabilityNote": "This capability names no account id; the accounts you sign in with are added as new capabilities."
+      "firstBindsNote": "This capability is not bound to an account yet: the first account you choose at the provider becomes this capability, and the others you choose are added as new capabilities."
     },
     "credentials": {
       "title": "Credentials",
@@ -885,6 +888,7 @@
     "loading": "Processing the provider's answer…",
     "chooseTitle": "Choose the accounts to connect",
     "chooseBody": "Below are the assets the account you signed in with reaches. The ones you choose are added as capabilities and probed at once.",
+    "firstBinds": "This connection was started for a capability: the first account you choose becomes that capability, and the others are added as new capabilities.",
     "assetsLabel": "Assets found",
     "externalId": "Id: {{id}}",
     "scopes": "Permissions: {{scopes}}",

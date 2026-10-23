@@ -687,3 +687,58 @@ async fn set_credentials_body_is_strict_and_never_echoed() {
     let body = body_json(p.get("/api/capabilities", &owner).await).await;
     assert_no_secret("the list", &body.to_string());
 }
+
+#[tokio::test]
+async fn a_declared_page_connects_through_a_flow_bound_to_it() {
+    let r = rig().await;
+    let p = &r.p;
+    let (owner, _) = p.register(OWNER, "Alpha").await;
+    // Declared before any connection: no account yet.
+    let declared = ok_json(
+        post(
+            p,
+            "/api/capabilities",
+            &owner,
+            json!({ "kind_key": "facebook_page", "name": "Kahve sayfası" }),
+        )
+        .await,
+    )
+    .await;
+    let id = declared["capability"]["id"].as_str().unwrap().to_owned();
+
+    // "Connect" on it is a flow bound to it; the callback offers every page the account reaches.
+    let started =
+        ok_json(post_empty(p, &format!("/api/connectors/{id}/reconnect"), &owner).await).await;
+    let state = query_param(started["authorize_url"].as_str().unwrap(), "state");
+    r.meta_oauth.push_exchange(Ok(user_token()));
+    r.meta_oauth.push_assets(Ok(vec![
+        page_asset("page-1", "Kahve", "EAAB-page-1"),
+        page_asset("page-2", "Çay", "EAAB-page-2"),
+    ]));
+    let pending = ok_json(p.get(&callback("meta", &state, "code-1"), &owner).await).await;
+    assert_eq!(pending["assets"].as_array().unwrap().len(), 2);
+
+    // The page chosen first becomes the declared capability, the other a new one: no orphan.
+    r.meta.push_probe(ok_probe("page-2"));
+    r.meta.push_probe(ok_probe("page-1"));
+    let pending_id = pending["pending_id"].as_str().unwrap();
+    let confirmed = ok_json(
+        post(
+            p,
+            &format!("/api/connectors/oauth/{pending_id}/confirm"),
+            &owner,
+            json!({ "selected": ["page-2", "page-1"] }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(confirmed[0]["capability"]["id"], json!(id));
+    assert_eq!(confirmed[0]["capability"]["external_id"], "page-2");
+    assert_eq!(confirmed[0]["capability"]["name"], "Kahve sayfası");
+    assert_eq!(confirmed[0]["capability"]["status"], "verified");
+    assert_eq!(confirmed[1]["capability"]["external_id"], "page-1");
+    let listed = ok_json(p.get("/api/capabilities", &owner).await).await;
+    assert_eq!(listed.as_array().unwrap().len(), 2);
+    let ledger = body_text(p.get("/api/ledger?action_prefix=connector.", &owner).await).await;
+    assert_no_secret("the ledger", &ledger);
+}

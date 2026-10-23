@@ -130,6 +130,31 @@ describe('HomePage', () => {
     expect(submitted.strategy.submitted.submitted_at).not.toBe(fresh);
   });
 
+  it('says why the draft it fetched can no longer be approved', async () => {
+    const user = userEvent.setup();
+    for (const [draft, reason] of [
+      // The agent reopened the draft meanwhile: not submitted any more.
+      [{ ...draftVersion, submitted_at: null, gaps: [], hypotheses: approvedVersion.hypotheses }, tr.strategy.approveNotSubmitted],
+      // It was approved or closed meanwhile: no draft left.
+      [null, tr.strategy.approveNoDraft],
+    ] as const) {
+      const calls = mockFetch({
+        'GET /api/auth/me': me,
+        'GET /api/workspace': workspace,
+        'GET /api/work/pending': submitted,
+        'GET /api/strategy': { ...strategyWithDraft, draft },
+      });
+      const { unmount } = renderAt('/');
+      await user.click(await screen.findByRole('button', { name: tr.home.strategy.approve }));
+      const dialog = await screen.findByRole('dialog');
+      expect(await within(dialog).findByText(reason)).toBeInTheDocument();
+      expect(within(dialog).queryByText(tr.strategy.approveLoading)).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: tr.strategy.approveConfirm })).toBeDisabled();
+      expect(calls.some((c) => c.method === 'POST')).toBe(false);
+      unmount();
+    }
+  });
+
   it('names the connector to reconnect and links to its reconnection', async () => {
     const reconnect = {
       ...pendingOverdue,

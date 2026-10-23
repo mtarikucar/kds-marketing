@@ -100,6 +100,14 @@ export function gapsOf(err: unknown): Gap[] {
 /** The panel's text for a failed request (or any other thrown value). */
 export function errorMessage(t: TFunction, err: unknown): string {
   if (!isApiError(err)) return t('errors.unknown');
+  // A busy or unreachable provider: the panel's own words, with the wait when the provider gave
+  // one. Its (redacted) reason is never shown nor read as one of ours.
+  if (err.code === 'UPSTREAM_UNAVAILABLE') {
+    const wait = err.details.retry_after_s;
+    return typeof wait === 'number' && Number.isFinite(wait) && wait > 0
+      ? t('errors.upstreamRetryAfter', { seconds: Math.ceil(wait) })
+      : t('errors.UPSTREAM_UNAVAILABLE');
+  }
   // A provider's refusal carries the provider's (redacted) reason, never shown nor read as ours.
   if (err.code === 'VALIDATION' && typeof err.details.provider_error === 'string') {
     return t('errors.providerRefused');

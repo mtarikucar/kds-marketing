@@ -3,7 +3,8 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
-import { PENDING_ID, budgetItems, capabilities, groups, me, pendingAssets, smsLine } from '@/test/fixtures';
+import { PAGE_ID, PENDING_ID, budgetItems, capabilities, groups, me, pendingAssets, smsLine } from '@/test/fixtures';
+import { rememberFlow } from '@/lib/oauthFlow';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 
 const CALLBACK = '/api/connectors/oauth/callback/meta';
@@ -89,5 +90,48 @@ describe('OAuthCallbackPage', () => {
     renderAt('/oauth/callback/meta');
     expect(await screen.findByText(tr.oauthCallback.missingParams)).toBeInTheDocument();
     expect(calls.some((c) => c.path === CALLBACK)).toBe(false);
+  });
+
+  it('shows a busy provider in the panel’s words, with the wait, and never asks twice', async () => {
+    const calls = mockFetch({
+      'GET /api/auth/me': me,
+      [`GET ${CALLBACK}`]: withStatus(503, {
+        code: 'UPSTREAM_UNAVAILABLE',
+        message: 'the provider is unavailable; try again later',
+        details: { provider: 'meta', retryable: true, retry_after_s: 30, reason: 'account_mismatch' },
+      }),
+    });
+    renderAt('/oauth/callback/meta?state=s&code=c');
+    expect(await screen.findByText(i18n.t('errors.upstreamRetryAfter', { seconds: 30 }))).toBeInTheDocument();
+    // The provider's reason is never read as one of the panel's own.
+    expect(screen.queryByText(tr.errors.accountMismatch)).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain('account_mismatch');
+    expect(screen.getByRole('link', { name: tr.oauthCallback.restart })).toHaveAttribute('href', '/connect');
+    expect(calls.filter((c) => c.path === CALLBACK)).toHaveLength(1);
+  });
+
+  it('starts a failed reconnection again for its capability', async () => {
+    rememberFlow({ pending_id: PENDING_ID, capability_id: PAGE_ID, expires_at: '2099-01-01T00:00:00Z' });
+    mockFetch({ 'GET /api/auth/me': me });
+    renderAt('/oauth/callback/meta?error=access_denied');
+    expect(await screen.findByText(tr.oauthCallback.providerDenied)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: tr.oauthCallback.restart })).toHaveAttribute(
+      'href',
+      `/connect?capability=${PAGE_ID}`,
+    );
+  });
+
+  it('says that the first account chosen becomes the capability the flow was started for', async () => {
+    rememberFlow({ pending_id: PENDING_ID, capability_id: PAGE_ID, expires_at: '2099-01-01T00:00:00Z' });
+    mockFetch({ 'GET /api/auth/me': me, [`GET ${CALLBACK}`]: pendingAssets });
+    renderAt('/oauth/callback/meta?state=s&code=c');
+    expect(await screen.findByText(tr.oauthCallback.firstBinds)).toBeInTheDocument();
+  });
+
+  it('forgets a remembered flow that has expired', async () => {
+    rememberFlow({ pending_id: PENDING_ID, capability_id: PAGE_ID, expires_at: '2000-01-01T00:00:00Z' });
+    mockFetch({ 'GET /api/auth/me': me });
+    renderAt('/oauth/callback/meta?error=access_denied');
+    expect(await screen.findByRole('link', { name: tr.oauthCallback.restart })).toHaveAttribute('href', '/connect');
   });
 });
