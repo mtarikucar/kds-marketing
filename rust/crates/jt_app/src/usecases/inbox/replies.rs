@@ -588,6 +588,33 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         .await?
         .ok_or_else(|| AppError::not_found("no such message"))?;
     let cap = capability(r.as_mut(), &c).await?;
+    if let Some(quote_id) = row.intent.get("quote_id") {
+        let quote_id = serde_json::from_value(quote_id.clone())?;
+        let quote = r
+            .quotes()
+            .get(quote_id)
+            .await?
+            .ok_or_else(|| AppError::internal("outbox quote missing"))?;
+        if quote.quote.valid_until <= ctx.now || quote.quote.state == QuoteState::Expired {
+            r.quotes().set_state(quote_id, QuoteState::Expired).await?;
+            row.state = "refused".into();
+            row.last_error = Some("quote_expired".into());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(
+                    row.message_id,
+                    MsgStatus::Refused {
+                        reason: "quote_expired".into(),
+                    },
+                    None,
+                    None,
+                )
+                .await?;
+            save_result(r.as_mut(), ctx, &row).await?;
+            r.commit().await?;
+            return Ok(Claim::Done(output(&row)));
+        }
+    }
     if let Some(appointment_id) = row.intent.get("appointment_id") {
         let appointment_id = serde_json::from_value(appointment_id.clone())?;
         let booked = r

@@ -307,3 +307,55 @@ async fn quote_receipt_after_closure_is_historical() {
     );
     assert_eq!(c.calls().len(), 1);
 }
+
+#[tokio::test]
+async fn expired_quote_is_not_dispatched() {
+    for elapsed in [time::Duration::minutes(1), time::Duration::minutes(2)] {
+        let (w, _, c) = setup_channel("whatsapp_cloud").await;
+        let j = w.uow.snapshot().inbox.journeys[0].id;
+        let mut request = input(&w, Some("expires-before-dispatch"));
+        request.valid_until = w.owner_ctx.now + time::Duration::minutes(1);
+        let (out, queued) = quotes::enqueue(&w.deps, &w.owner_ctx, j, request)
+            .await
+            .unwrap();
+        c.push_send_text(accepted());
+        let ctx = jt_app::ctx::Ctx {
+            now: w.owner_ctx.now + elapsed,
+            ..w.owner_ctx.clone()
+        };
+        let id = queued.unwrap();
+        let delivery = replies::send_step(&w.deps, &ctx, id).await.unwrap();
+        assert_eq!(delivery.state, "refused");
+        assert!(c.calls().is_empty());
+        let snapshot = w.uow.snapshot();
+        let row = &snapshot.inbox.outbox[0];
+        assert_eq!(row.last_error.as_deref(), Some("quote_expired"));
+        assert_eq!(row.attempts, 0);
+        assert_eq!(snapshot.inbox.quotes[0].quote.state, QuoteState::Expired);
+        assert_eq!(
+            snapshot
+                .inbox
+                .messages
+                .iter()
+                .find(|m| m.id == out.delivery.message_id)
+                .unwrap()
+                .status,
+            MsgStatus::Refused {
+                reason: "quote_expired".into()
+            }
+        );
+        assert!(snapshot.inbox.events.is_empty());
+        assert_eq!(
+            replies::send_step(&w.deps, &ctx, id).await.unwrap(),
+            delivery
+        );
+        assert_eq!(
+            quotes::send(&w.deps, &ctx, j, input(&w, Some("expires-before-dispatch")))
+                .await
+                .unwrap()
+                .delivery,
+            delivery
+        );
+        assert!(c.calls().is_empty());
+    }
+}

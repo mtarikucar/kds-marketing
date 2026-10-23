@@ -309,11 +309,44 @@ pub async fn imap_with_mode(
                     }
                     let next = messages.iter().map(|(uid, _, _)| *uid).max().unwrap_or(0) + 1;
                     reply(&mut stream, &format!("* 1 EXISTS\r\n* OK [UIDVALIDITY {validity}] validity\r\n* OK [UIDNEXT {next}] next\r\n{tag} OK [READ-ONLY] selected\r\n")).await;
+                } else if command.contains(" UID SEARCH ") {
+                    assert!(command.contains(" UID SEARCH UID "));
+                    let start: u32 = command
+                        .split_whitespace()
+                        .nth(4)
+                        .unwrap()
+                        .split(':')
+                        .next()
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    let highest = messages.iter().map(|(uid, _, _)| *uid).max().unwrap_or(0);
+                    // Match IMAP's reversed range semantics, including the old highest UID.
+                    let found = messages
+                        .iter()
+                        .rev()
+                        .filter(|(uid, _, _)| *uid >= start.min(highest))
+                        .map(|(uid, _, _)| uid.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    reply(
+                        &mut stream,
+                        &format!("* SEARCH {found}\r\n{tag} OK searched\r\n"),
+                    )
+                    .await;
                 } else if command.contains(" UID FETCH ") {
                     let range = command.split_whitespace().nth(3).unwrap();
                     let is_body = command.contains("BODY.PEEK");
                     for (uid, size, body) in &messages {
-                        if is_body && range != uid.to_string() && !range.contains(':') {
+                        let selected = range.split(',').any(|part| {
+                            if let Some((start, end)) = part.split_once(':') {
+                                (start.parse::<u32>().unwrap()..=end.parse::<u32>().unwrap())
+                                    .contains(uid)
+                            } else {
+                                part.parse::<u32>().unwrap() == *uid
+                            }
+                        });
+                        if !selected {
                             continue;
                         }
                         if is_body {
@@ -403,6 +436,8 @@ pub async fn malicious_imap() -> (u16, tokio::task::JoinHandle<()>) {
                 reply(&mut stream, &format!("{tag} OK listed\r\n")).await;
             } else if command.contains(" EXAMINE ") {
                 reply(&mut stream, &format!("* 1 EXISTS\r\n* OK [UIDVALIDITY 1] validity\r\n* OK [UIDNEXT 2] next\r\n{tag} OK selected\r\n")).await;
+            } else if command.contains(" UID SEARCH ") {
+                reply(&mut stream, &format!("* SEARCH 1\r\n{tag} OK searched\r\n")).await;
             } else if command.contains("BODY.PEEK") {
                 reply(&mut stream, "* OK ordinary status text {100}\r\n").await;
                 reply(&mut stream, "* 1 FETCH (UID 1 BODY[] {33554432").await;

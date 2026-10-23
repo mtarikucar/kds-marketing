@@ -6,6 +6,7 @@ use jt_connector::{ConnectorError, MailTls};
 use jt_outbound::TcpStream;
 use jt_tenancy::WorkspaceId;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio_rustls::client::TlsStream;
 
 const POLL_BYTES: usize = 20 * 1024 * 1024;
@@ -71,6 +72,14 @@ pub(crate) async fn poll(
         .as_str()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ConnectorError::permanent("mailbox external account id required"))?;
+    let binding: String = Sha256::digest(format!(
+        "{}:{}",
+        cred.imap_host.trim().to_ascii_lowercase(),
+        cred.imap_port
+    ))[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     let mut session = bounded(login(connector, ws, cred)).await?;
     let sent = sent_mailbox(&mut session).await?;
     // Finish the current command before returning a partial batch, so only fully consumed
@@ -79,10 +88,11 @@ pub(crate) async fn poll(
     let mut next = cursor.clone();
     let mut events = Vec::new();
     let mut budget = POLL_BYTES;
+    let mut remaining = 100;
     for (mailbox, is_sent) in
         std::iter::once(("INBOX", false)).chain(sent.as_deref().map(|name| (name, true)))
     {
-        if tokio::time::Instant::now() >= deadline {
+        if remaining == 0 || tokio::time::Instant::now() >= deadline {
             break;
         }
         let info = match bounded(async {
@@ -112,25 +122,45 @@ pub(crate) async fn poll(
             uidvalidity: validity,
             last_uid: last,
         };
-        // Bounded UID windows prevent an unbounded poll on a new/large mailbox. Progress over
-        // deleted UIDs is safe because UIDs are never reused within a UIDVALIDITY generation.
-        let end = info
-            .uid_next
-            .and_then(|n| n.checked_sub(1))
-            .ok_or_else(|| ConnectorError::transient("IMAP UIDNEXT missing"))?
-            .min(last.saturating_add(100));
-        if end > last {
+        // SEARCH finds existing UIDs immediately even when most numeric IDs were expunged.
+        // IMAP ranges may be reversed when '*' is below the lower bound; filter old UIDs.
+        let selected: std::collections::BTreeSet<_> = if let Some(start) = last.checked_add(1) {
+            let found = bounded(async {
+                session
+                    .uid_search(format!("UID {start}:*"))
+                    .await
+                    .map_err(error)
+            })
+            .await?;
+            let sorted: std::collections::BTreeSet<_> =
+                found.into_iter().filter(|uid| *uid > last).collect();
+            sorted.into_iter().take(remaining).collect()
+        } else {
+            std::collections::BTreeSet::new()
+        };
+        // The standalone MIME parser retains its legacy IDs. Every polled event, including
+        // rejected mail, receives the server binding before it reaches durable deduplication.
+        let bind = |mut draft: InboundEventDraft, uid| {
+            draft.external_id = format!("imap:{account}:{binding}:{mailbox}:{validity}:{uid}");
+            draft
+        };
+        if !selected.is_empty() {
+            let sequence = selected
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
             let mut sizes = std::collections::BTreeMap::new();
             bounded(async {
                 let mut stream = session
-                    .uid_fetch(format!("{}:{end}", last + 1), "(UID RFC822.SIZE)")
+                    .uid_fetch(sequence, "(UID RFC822.SIZE)")
                     .await
                     .map_err(error)?;
                 while let Some(fetch) = stream.try_next().await.map_err(error)? {
                     let uid = fetch
                         .uid
                         .ok_or_else(|| ConnectorError::transient("IMAP UID missing"))?;
-                    if uid <= last || uid > end {
+                    if !selected.contains(&uid) {
                         continue;
                     }
                     let size = fetch
@@ -141,25 +171,20 @@ pub(crate) async fn poll(
                 Ok(())
             })
             .await?;
-            let mut complete_window = true;
             for (uid, size) in sizes {
                 if tokio::time::Instant::now() >= deadline {
-                    complete_window = false;
                     break;
                 }
                 if size > MAX_MESSAGE_BYTES {
-                    events.push(parse::rejected(
-                        account,
-                        mailbox,
-                        validity,
+                    events.push(bind(
+                        parse::rejected(account, mailbox, validity, uid, "message_too_large"),
                         uid,
-                        "message_too_large",
                     ));
+                    remaining -= 1;
                     position.last_uid = uid;
                     continue;
                 }
                 if size > budget {
-                    complete_window = false;
                     break;
                 }
                 budget = budget.saturating_sub(size);
@@ -200,13 +225,11 @@ pub(crate) async fn poll(
                 })
                 .await?;
                 if let Some(draft) = draft {
-                    events.push(draft);
+                    events.push(bind(draft, uid));
                 }
+                remaining -= 1;
                 // A message expunged between metadata and body fetch has no content to ingest.
                 position.last_uid = uid;
-            }
-            if complete_window {
-                position.last_uid = end;
             }
         }
         next.mailboxes.insert(mailbox.to_owned(), position);

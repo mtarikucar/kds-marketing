@@ -26,14 +26,20 @@ never automatically retried. A conclusive SMTP refusal retains its permanent/tra
 
 Polling discovers the Sent folder through LIST special-use flags (with common-name fallbacks),
 and reads it and INBOX with BODY.PEEK. Missing Sent folders do not block INBOX. Each actual folder
-has an independent UIDVALIDITY/UID cursor, bounded 100-UID windows, size metadata preflight,
+has an independent UIDVALIDITY/UID cursor. `UID SEARCH UID <last+1>:*` selects existing UIDs,
+with at most 100 messages per poll across folders, size metadata preflight,
 partial body fetches, and a shared 20 MiB poll budget. Operations have ten-second deadlines;
 long batches return completed cursor progress after eight seconds between commands. Completed
 polls drop their session without waiting for LOGOUT.
 Mail over 10 MiB or malformed/excessively complex MIME produces a metadata-only `mail_rejected`
 event and advances that UID, so one poison message cannot block later mail. A byte ceiling below
 the protocol parser also limits dishonest server responses. Persist the returned cursor atomically with the event drafts. Changed
-UIDVALIDITY starts a new generation. Event IDs are `imap:<account>:<mailbox>:<uidvalidity>:<uid>`;
+UIDVALIDITY starts a new generation. The cursor advances to the highest processed UID, never
+by numeric distance. Event IDs are `imap:<account>:<binding>:<mailbox>:<uidvalidity>:<uid>`;
+`binding` is the first 12 lowercase hex characters of SHA-256 of `imap_host:imap_port`, with
+the host trimmed and ASCII-lowercased. Switching servers therefore cannot collide with stored
+events, including rejected mail. Old IDs remain readable as opaque legacy IDs without migration;
+the standalone `parse_message` helper retains the legacy format.
 `public.external_id` must be the capability's external account ID. Sent evidence emits a `sent`
 status with the stable Message-ID. Failed DSNs use the original message's ID. Explicit withdrawal
 requests emit consent events; a newsletter's List-Unsubscribe advertisement alone does not

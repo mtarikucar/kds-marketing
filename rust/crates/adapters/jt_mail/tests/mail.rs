@@ -189,6 +189,15 @@ async fn smtp_accepted_answer_lost_is_unknown() {
     assert!(!task.await.unwrap().is_empty());
 }
 
+fn bound_id(port: u16, account: &str, mailbox: &str, validity: u32, uid: u32) -> String {
+    use sha2::{Digest, Sha256};
+    let hash: String = Sha256::digest(format!("localhost:{port}"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("imap:{account}:{}:{mailbox}:{validity}:{uid}", &hash[..12])
+}
+
 #[tokio::test]
 async fn imap_account_mailbox_uid_dedupe() {
     let (port, task) = imap(false, 42, BODY.to_vec(), 3).await;
@@ -204,8 +213,14 @@ async fn imap_account_mailbox_uid_dedupe() {
         .await
         .unwrap();
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0].external_id, "imap:account-a:INBOX:42:7");
-    assert_eq!(events[1].external_id, "imap:account-a:Sent:42:7");
+    assert_eq!(
+        events[0].external_id,
+        bound_id(port, "account-a", "INBOX", 42, 7)
+    );
+    assert_eq!(
+        events[1].external_id,
+        bound_id(port, "account-a", "Sent", 42, 7)
+    );
     assert_eq!(events[0].payload["subject"], "Hello");
     assert_eq!(events[0].payload["text"], "hello\r\n");
     assert_eq!(events[0].payload["in_reply_to"], "<parent@example.com>");
@@ -230,7 +245,10 @@ async fn imap_account_mailbox_uid_dedupe() {
         )
         .await
         .unwrap();
-    assert_eq!(other[0].external_id, "imap:account-b:INBOX:42:7");
+    assert_eq!(
+        other[0].external_id,
+        bound_id(port, "account-b", "INBOX", 42, 7)
+    );
     task.await.unwrap();
 }
 
@@ -254,7 +272,10 @@ async fn uidvalidity_reset() {
         )
         .await
         .unwrap();
-    assert_eq!(events[0].external_id, "imap:account:INBOX:43:7");
+    assert_eq!(
+        events[0].external_id,
+        bound_id(port, "account", "INBOX", 43, 7)
+    );
     assert_eq!(
         next.mailboxes["INBOX"],
         MailboxPosition {
@@ -622,7 +643,10 @@ async fn discovers_sent_folders_and_keeps_inbox_when_sent_is_missing() {
             assert_eq!(events.len(), 2);
             assert_eq!(events[1].kind, EventKind::Status);
             assert_eq!(events[1].payload["status"], "sent");
-            assert_eq!(events[1].external_id, format!("imap:account:{sent}:42:7"));
+            assert_eq!(
+                events[1].external_id,
+                bound_id(port, "account", sent, 42, 7)
+            );
             assert_eq!(cursor.mailboxes[sent].last_uid, 7);
         } else {
             assert_eq!(events.len(), 1);
@@ -1040,4 +1064,115 @@ async fn smtp_starttls_setup_preserves_transient_failures() {
             task.await.unwrap();
         }
     }
+}
+
+#[tokio::test]
+async fn imap_server_change_does_not_collide_with_stored_events() {
+    let messages = vec![
+        (1, BODY.len() as u32, BODY.to_vec()),
+        (2, 11 * 1024 * 1024, vec![]),
+    ];
+    let (port_a, task_a) = imap_messages(false, 42, messages.clone(), 1).await;
+    let (port_b, task_b) = imap_messages(false, 42, messages, 1).await;
+    let conn = connector();
+    let public = json!({"external_id":"same-account"});
+    let (stored, _) = conn
+        .poll(
+            workspace(),
+            &credential(465, port_a, MailTls::Implicit),
+            &public,
+            &MailboxCursor::default(),
+        )
+        .await
+        .unwrap();
+    // Credential rebinding resets the cursor, but retains the external account and old events.
+    let (new, _) = conn
+        .poll(
+            workspace(),
+            &credential(465, port_b, MailTls::Implicit),
+            &public,
+            &MailboxCursor::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 4);
+    assert_eq!(new.len(), 4);
+    assert!(new.iter().all(|event| {
+        stored
+            .iter()
+            .all(|old| old.external_id != event.external_id)
+    }));
+    assert_eq!(new[1].kind, EventKind::Unknown("mail_rejected".into()));
+    task_a.await.unwrap();
+    task_b.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_poll_fetches_sparse_high_uids_immediately() {
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        vec![(1_000_000, BODY.len() as u32, BODY.to_vec())],
+        2,
+        ImapMode {
+            sent: None,
+            ..Default::default()
+        },
+    )
+    .await;
+    let conn = connector();
+    let cred = credential(465, port, MailTls::Implicit);
+    let public = json!({"external_id":"account"});
+    let (events, cursor) = conn
+        .poll(workspace(), &cred, &public, &MailboxCursor::default())
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].payload["text"], "hello\r\n");
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_000_000);
+    let (again, next) = conn
+        .poll(workspace(), &cred, &public, &cursor)
+        .await
+        .unwrap();
+    assert!(again.is_empty());
+    assert_eq!(next, cursor);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_poll_caps_total_messages_and_resumes_existing_uids() {
+    let messages = (1..=101)
+        .map(|n| (n * 10_000, BODY.len() as u32, BODY.to_vec()))
+        .collect();
+    let (port, task) = imap_messages(false, 42, messages, 3).await;
+    let conn = connector();
+    let cred = credential(465, port, MailTls::Implicit);
+    let public = json!({"external_id":"account"});
+    let (first, cursor) = conn
+        .poll(workspace(), &cred, &public, &MailboxCursor::default())
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 100);
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_000_000);
+    let (second, cursor) = conn
+        .poll(workspace(), &cred, &public, &cursor)
+        .await
+        .unwrap();
+    assert_eq!(second.len(), 100);
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_010_000);
+    assert_eq!(cursor.mailboxes["Sent"].last_uid, 990_000);
+    let (third, cursor) = conn
+        .poll(workspace(), &cred, &public, &cursor)
+        .await
+        .unwrap();
+    assert_eq!(third.len(), 2);
+    assert_eq!(cursor.mailboxes["Sent"].last_uid, 1_010_000);
+    let ids: std::collections::HashSet<_> = first
+        .iter()
+        .chain(&second)
+        .chain(&third)
+        .map(|e| &e.external_id)
+        .collect();
+    assert_eq!(ids.len(), 202);
+    task.await.unwrap();
 }
