@@ -279,31 +279,8 @@ pub struct PublishRequest {
     pub media: Vec<MediaUpload>,
 }
 
-/// One file to upload with a post: its bytes, its media type (e.g. `"image/png"`) and a file
-/// name for the upload. `Debug` shows the size, not the bytes.
-#[derive(Clone, PartialEq, Eq)]
-pub struct MediaUpload {
-    pub bytes: Vec<u8>,
-    pub mime: String,
-    pub filename: String,
-}
-
-impl fmt::Debug for MediaUpload {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MediaUpload")
-            .field("bytes", &format_args!("<{} bytes>", self.bytes.len()))
-            .field("mime", &self.mime)
-            .field("filename", &self.filename)
-            .finish()
-    }
-}
-
-/// A published post: the provider's id and, when it gives one, its public URL.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PublishReceipt {
-    pub external_id: String,
-    pub url: Option<Url>,
-}
+// Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
+pub use jt_studio::{MediaUpload, PublishReceipt};
 
 /// One post's counters, by the provider's metric name (e.g. `"impressions"`, `"likes"`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

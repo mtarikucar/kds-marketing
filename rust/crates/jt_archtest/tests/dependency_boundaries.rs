@@ -35,6 +35,7 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     ("jt_capability", &[]),
     ("jt_connector", CONNECTOR_EXTRA_ALLOW),
     ("jt_inbox", INBOX_EXTRA_ALLOW),
+    ("jt_studio", &["jt_strategy", "jt_capability", "url"]),
 ];
 
 #[test]
@@ -49,17 +50,19 @@ fn domain_crates_depend_only_on_pure_crates() {
     }
 }
 
-/// Read from each domain crate's manifest: the connector and inbox use capability types,
-/// both hash bytes, while the other crypto crates remain connector-only (non-vacuous).
+/// Exact dependency sets: connector, inbox and studio use capability types; only connector
+/// and inbox hash bytes, while the other crypto crates remain connector-only (non-vacuous).
 #[test]
-fn only_connector_and_inbox_use_capability_and_sha2_other_crypto_stays_connector_only() {
+fn domain_capability_and_crypto_dependencies_match_explicit_sets() {
     for krate in CONNECTOR_EXTRA_ALLOW {
         let users: BTreeSet<&str> = DOMAIN_CRATES
             .iter()
             .map(|(c, _)| *c)
             .filter(|c| direct_deps(c).contains(*krate))
             .collect();
-        let expected = if matches!(*krate, "jt_capability" | "sha2") {
+        let expected = if *krate == "jt_capability" {
+            BTreeSet::from(["jt_connector", "jt_inbox", "jt_studio"])
+        } else if *krate == "sha2" {
             BTreeSet::from(["jt_connector", "jt_inbox"])
         } else {
             BTreeSet::from(["jt_connector"])
@@ -81,6 +84,7 @@ const APP_ALLOW: &[&str] = &[
     "jt_capability",
     "jt_connector",
     "jt_inbox",
+    "jt_studio",
     "serde",
     "serde_json",
     "uuid",
@@ -116,6 +120,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_capability",
         "jt_connector",
         "jt_inbox",
+        "jt_studio",
         "jt_app",
         "jt_panel_http",
         "jt_mcp",

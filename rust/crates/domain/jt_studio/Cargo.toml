@@ -1,0 +1,23 @@
+[package]
+name = "jt_studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+jt_tenancy.workspace = true
+jt_ledger.workspace = true
+jt_strategy.workspace = true
+jt_capability.workspace = true
+serde.workspace = true
+uuid.workspace = true
+time.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

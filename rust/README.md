@@ -1858,8 +1858,8 @@ control locks follow the frame. Hook failure rolls back the transition and its w
 The existing post-commit archive hook is preserved. T3 supplies Studio cancellation;
 T0's default hook has no queue to cancel. Studio repository accessors and FileStore
 are wired everywhere and explicitly refuse while their T2/T5 adapters are absent.
-Contract rows currently live in `jt_app::ports::studio`; T1 owns their pure domain
-behavior and final domain placement. No new public Studio routes are exposed yet.
+Shared contract rows now live in `jt_studio` and are re-exported from
+`jt_app::ports::studio` (T1). No new public Studio routes are exposed yet.
 
 Meta adds pause/active status writes, verified account currency/timezone context,
 ad-set/day insights, and account-checked ad→ad-set resolution. Missing ad-set
@@ -1871,3 +1871,54 @@ There is no ad creation API and no zero-budget pause. `BUDGET_CAP` maps to HTTP 
 with the same MCP structured code and details. Atomic reservations and connector
 spend enforcement remain T8's implementation task; this baseline does not claim
 that enforcement has shipped.
+
+
+### M3 Task 1 — pure Studio domain
+
+`crates/domain/jt_studio` defines the typed chain, arms, slots, pieces, publication
+snapshots/outcomes, measurements, learning deltas, trends, external ad-set bindings,
+budget moves and controls. Its dependencies are pure domain types, serialization,
+UUID/time/error types and the URL parser; it performs no I/O. Existing application
+port paths re-export the shared records, including connector `MediaUpload` and
+`PublishReceipt`, without changing repository or provider method signatures.
+The T0 application `PublishOutcome` still transports `AppError`; persistence must
+map it to the domain's closed redacted outcome codes, never store diagnostic text.
+
+`validate_chain` checks nonnil tenant/birth/hypothesis/arm identities against loaded
+birth and current strategy versions, a live hypothesis, enabled lane cadence,
+selected content type, supported concrete capability kind and the target account's
+`ChannelChoice.group_id` memberships. Its context must come from tenant-scoped
+repositories and the operation's connector registry. Birth identity is retained
+when a newer approved strategy authorizes execution. Arms start at Beta(1,1),
+weight 0.5, independently of hypothesis prior confidence; kept arms retain learning.
+Nonfinite/invalid arm parameters refuse, including on deserialization. Learning
+updates validate finite deltas and confidence; there is no public confidence setter.
+
+The reducer follows Planned → Ready → Published → Measured → Retired. Editing
+Ready creates a new revision. Cancellation, hypothesis retirement and archive retire
+only unstarted work; week-end cleanup retires only Planned work. Consent is optional
+revision-bound metadata, with lane and capability requirements composed by OR.
+Budget moves carry their own revision so changing the amount invalidates consent.
+Human identity/permission checks and fresh brake/spend authorization remain T3/T8
+responsibilities; a domain transition is not an execution permit.
+
+Publication claims freeze the piece revision, actor, capability, strategy and control
+fences. Failed/refused attempts never return to the queue; unknown outcomes may be
+resolved by evidence without another publish. Retired slots remain retired when late
+in-flight outcomes or historical measurements arrive. Measurements require exactly
+one publication or ad-set/day target, preserve missing counters as `None`, and keep
+24h/72h/7d windows separate. An unknown pause is never evidence that an ad set stopped.
+Raw bytes cannot be serialized as persisted media; T5 must normalize them to File IDs.
+HostedUrl references remain direct. DNS/egress checks, file ownership, durable evidence
+immutability and transactional replay enforcement belong to the application/storage
+tasks. Stored records must be validated before writes. T4/T7 add planning/reward math;
+trends remain display context.
+
+| Release boundary after T1 | Current state |
+|---|---|
+| MCP tools / Studio public operations | **106 / 0** (T1 specifies no public rows) |
+| Tables / latest migration | **49 / 0009_studio**, unchanged by T1 |
+| Studio domain verification | `cargo test --locked --workspace --test studio_domain` |
+
+No migrations or new public surface schemas are introduced in T1. The later Studio
+rows require catalog, HTTP, MCP and parity coverage together when implemented.

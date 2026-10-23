@@ -1360,6 +1360,7 @@ dependencies = [
  "jt_netgsm",
  "jt_outbound",
  "jt_strategy",
+ "jt_studio",
  "jt_tenancy",
  "jt_testkit",
  "rand 0.10.3",
@@ -1637,6 +1638,22 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "time",
+ "uuid",
+]
+
+[[package]]
+name = "jt_studio"
+version = "0.1.0"
+dependencies = [
+ "jt_capability",
+ "jt_ledger",
+ "jt_strategy",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "url",
  "uuid",
 ]
 
