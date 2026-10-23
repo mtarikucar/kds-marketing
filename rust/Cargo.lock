@@ -1313,6 +1313,7 @@ dependencies = [
  "hex",
  "jt_app",
  "jt_connector",
+ "jt_mail",
  "jt_mcp",
  "jt_meta",
  "jt_netgsm",

@@ -96,11 +96,15 @@ use jt_mail::MailConnector;
 use serde_json::json;
 use support::*;
 
+fn workspace() -> WorkspaceId {
+    "11111111-1111-4111-8111-111111111111".parse().unwrap()
+}
+
 fn connector() -> MailConnector {
     let egress = Arc::new(Egress::new(&[]));
-    let ws = WorkspaceId::new_v7();
+    let ws = workspace();
     egress.allow_tenant_host(ws, "localhost");
-    MailConnector::new(egress, ws)
+    MailConnector::new(egress)
         .with_root_certificate(CA.to_vec())
         .unwrap()
 }
@@ -113,7 +117,11 @@ async fn smtp_starttls_stable_message_id() {
     })
     .await;
     let receipt = connector()
-        .send(&credential(port, 143, MailTls::StartTls), message())
+        .send(
+            workspace(),
+            &credential(port, 143, MailTls::StartTls),
+            message(),
+        )
         .await
         .unwrap();
     assert_eq!(receipt.provider_id, "<stable@example.com>");
@@ -138,7 +146,7 @@ async fn mail_sender_preserves_thread_headers_and_ics_attachment() {
     });
     assert!(!format!("{msg:?}").contains("PRIVATE-ATTACHMENT"));
     connector()
-        .send(&credential(port, 993, MailTls::Implicit), msg)
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
         .await
         .unwrap();
     let wire = task.await.unwrap();
@@ -169,7 +177,11 @@ async fn smtp_accepted_answer_lost_is_unknown() {
     })
     .await;
     let err = connector()
-        .send(&credential(port, 993, MailTls::Implicit), message())
+        .send(
+            workspace(),
+            &credential(port, 993, MailTls::Implicit),
+            message(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, ConnectorError::Unknown { .. }));
@@ -184,6 +196,7 @@ async fn imap_account_mailbox_uid_dedupe() {
     let cred = credential(465, port, MailTls::Implicit);
     let (events, cursor) = connector
         .poll(
+            workspace(),
             &cred,
             &json!({"external_id":"account-a"}),
             &MailboxCursor::default(),
@@ -198,13 +211,19 @@ async fn imap_account_mailbox_uid_dedupe() {
     assert_eq!(events[0].payload["in_reply_to"], "<parent@example.com>");
     assert!(events[0].occurred_at.is_some());
     let (again, next) = connector
-        .poll(&cred, &json!({"external_id":"account-a"}), &cursor)
+        .poll(
+            workspace(),
+            &cred,
+            &json!({"external_id":"account-a"}),
+            &cursor,
+        )
         .await
         .unwrap();
     assert!(again.is_empty());
     assert_eq!(next, cursor);
     let (other, _) = connector
         .poll(
+            workspace(),
             &cred,
             &json!({"external_id":"account-b"}),
             &MailboxCursor::default(),
@@ -228,6 +247,7 @@ async fn uidvalidity_reset() {
     );
     let (events, next) = connector()
         .poll(
+            workspace(),
             &credential(587, port, MailTls::StartTls),
             &json!({"external_id":"account"}),
             &cursor,
@@ -250,6 +270,7 @@ async fn sent_echo_reconciles_unknown() {
     let (port, task) = imap(false, 42, BODY.to_vec(), 1).await;
     let (events, _) = connector()
         .poll(
+            workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
             &MailboxCursor::default(),
@@ -274,7 +295,7 @@ async fn probe_authenticated_username_and_authorized_sender() {
         let result = connector()
             .probe(
                 &credential(smtp_port, imap_port, MailTls::Implicit),
-                &json!({"kind_key":"mailbox", "external_id":"untrusted-id"}),
+                &json!({"kind_key":"mailbox", "workspace_id":workspace(), "external_id":"untrusted-id"}),
             )
             .await;
         assert_eq!(result.ok, !rejected);
@@ -304,6 +325,7 @@ async fn bounce_and_consent_payload_fixtures() {
         let (port, task) = imap(false, 42, body.to_vec(), 1).await;
         let (events, _) = connector()
             .poll(
+                workspace(),
                 &credential(465, port, MailTls::Implicit),
                 &json!({"external_id":"account"}),
                 &MailboxCursor::default(),
@@ -332,7 +354,11 @@ async fn tls_required() {
     .await;
     assert!(
         connector()
-            .send(&credential(port, 143, MailTls::StartTls), message())
+            .send(
+                workspace(),
+                &credential(port, 143, MailTls::StartTls),
+                message()
+            )
             .await
             .is_err()
     );
@@ -343,8 +369,8 @@ async fn tls_required() {
     egress.allow_tenant_host(ws, "localhost");
     // Untrusted issuer: no permissive TLS verifier even in a loopback build.
     assert!(
-        MailConnector::new(egress, ws)
-            .send(&credential(port, 993, MailTls::Implicit), message())
+        MailConnector::new(egress)
+            .send(ws, &credential(port, 993, MailTls::Implicit), message())
             .await
             .is_err()
     );
@@ -359,7 +385,10 @@ async fn no_password_in_errors() {
     })
     .await;
     let cred = credential(port, 993, MailTls::Implicit);
-    let err = connector().send(&cred, message()).await.unwrap_err();
+    let err = connector()
+        .send(workspace(), &cred, message())
+        .await
+        .unwrap_err();
     assert!(matches!(err, ConnectorError::Auth { .. }));
     for secret in ["mail-password", "private-login"] {
         assert!(!format!("{err} {err:?} {cred:?}").contains(secret));
@@ -389,7 +418,7 @@ async fn tls_verifies_the_declared_hostname_in_both_modes() {
             MailTls::Implicit
         };
         let err = connector()
-            .send(&credential(port, 993, tls), message())
+            .send(workspace(), &credential(port, 993, tls), message())
             .await
             .unwrap_err();
         assert!(matches!(err, ConnectorError::Permanent { .. }));
@@ -402,7 +431,7 @@ async fn mail_rejects_header_injection_before_connect() {
     let mut msg = message();
     msg.message_id = "<id@example.com>\r\nBcc: other@example.com".into();
     let err = connector()
-        .send(&credential(465, 993, MailTls::Implicit), msg)
+        .send(workspace(), &credential(465, 993, MailTls::Implicit), msg)
         .await
         .unwrap_err();
     assert!(matches!(err, ConnectorError::Permanent { .. }));
@@ -431,6 +460,7 @@ async fn poison_mail_is_rejected_without_blocking_the_next_uid() {
     let cred = credential(465, port, MailTls::Implicit);
     let (events, cursor) = connector
         .poll(
+            workspace(),
             &cred,
             &json!({"external_id":"account"}),
             &MailboxCursor::default(),
@@ -446,7 +476,12 @@ async fn poison_mail_is_rejected_without_blocking_the_next_uid() {
     assert_eq!(events[3].kind, EventKind::Message);
     assert_eq!(events[7].kind, EventKind::Status);
     let (again, next) = connector
-        .poll(&cred, &json!({"external_id":"account"}), &cursor)
+        .poll(
+            workspace(),
+            &cred,
+            &json!({"external_id":"account"}),
+            &cursor,
+        )
         .await
         .unwrap();
     assert!(again.is_empty());
@@ -482,7 +517,11 @@ async fn smtp_invalid_final_answer_is_unknown() {
     })
     .await;
     let err = connector()
-        .send(&credential(port, 993, MailTls::Implicit), message())
+        .send(
+            workspace(),
+            &credential(port, 993, MailTls::Implicit),
+            message(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, ConnectorError::Unknown { .. }));
@@ -497,7 +536,7 @@ async fn imap_rejects_oversized_literal_before_waiting_for_body() {
     let public = json!({"external_id":"account"});
     let result = tokio::time::timeout(
         Duration::from_millis(300),
-        connector.poll(&cred, &public, &MailboxCursor::default()),
+        connector.poll(workspace(), &cred, &public, &MailboxCursor::default()),
     )
     .await;
     task.await.unwrap();
@@ -517,6 +556,7 @@ async fn list_unsubscribe_advertisement_is_not_withdrawal() {
     let (port, task) = imap(false, 42, body, 1).await;
     let (events, _) = connector()
         .poll(
+            workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
             &MailboxCursor::default(),
@@ -569,6 +609,7 @@ async fn discovers_sent_folders_and_keeps_inbox_when_sent_is_missing() {
         .await;
         let (events, cursor) = connector()
             .poll(
+                workspace(),
                 &credential(465, port, MailTls::Implicit),
                 &json!({"external_id":"account"}),
                 &MailboxCursor::default(),
@@ -613,6 +654,7 @@ async fn html_only_mail_has_readable_text_and_plain_alternative_wins() {
         let (port, task) = imap(false, 42, mime.as_bytes().to_vec(), 1).await;
         let (events, _) = connector()
             .poll(
+                workspace(),
                 &credential(465, port, MailTls::Implicit),
                 &json!({"external_id":"account"}),
                 &MailboxCursor::default(),
@@ -646,6 +688,7 @@ async fn slow_fetch_batch_returns_completed_cursor_progress() {
     let cred = credential(465, port, MailTls::Implicit);
     let (first, cursor) = conn
         .poll(
+            workspace(),
             &cred,
             &json!({"external_id":"account"}),
             &MailboxCursor::default(),
@@ -659,7 +702,12 @@ async fn slow_fetch_batch_returns_completed_cursor_progress() {
     );
     assert_eq!(cursor.mailboxes["INBOX"].last_uid as usize, first.len());
     let (second, cursor) = conn
-        .poll(&cred, &json!({"external_id":"account"}), &cursor)
+        .poll(
+            workspace(),
+            &cred,
+            &json!({"external_id":"account"}),
+            &cursor,
+        )
         .await
         .unwrap();
     assert_eq!(first.len() + second.len(), 100);
@@ -689,11 +737,13 @@ async fn completed_poll_does_not_wait_for_logout() {
     let cred = credential(465, port, MailTls::Implicit);
     let public = json!({"external_id":"account"});
     let cursor = MailboxCursor::default();
-    let (events, cursor) =
-        tokio::time::timeout(Duration::from_secs(1), conn.poll(&cred, &public, &cursor))
-            .await
-            .expect("cleanup must not delay completed polling")
-            .unwrap();
+    let (events, cursor) = tokio::time::timeout(
+        Duration::from_secs(1),
+        conn.poll(workspace(), &cred, &public, &cursor),
+    )
+    .await
+    .expect("cleanup must not delay completed polling")
+    .unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(cursor.mailboxes["Sent"].last_uid, 7);
     task.await.unwrap();
@@ -711,6 +761,7 @@ async fn smtp_rejects_encoded_oversize_before_opening_a_socket() {
     let result = tokio::time::timeout(
         Duration::from_secs(2),
         connector().send(
+            workspace(),
             &credential(
                 listener.local_addr().unwrap().port(),
                 993,
@@ -724,6 +775,90 @@ async fn smtp_rejects_encoded_oversize_before_opening_a_socket() {
     assert!(matches!(result, Err(ConnectorError::Permanent { .. })));
     assert!(
         tokio::time::timeout(Duration::from_millis(20), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn shared_mail_adapter_uses_each_calls_workspace_and_live_revocations() {
+    let egress = Arc::new(Egress::new(&[]));
+    let a = WorkspaceId::new_v7();
+    let b = WorkspaceId::new_v7();
+    egress.allow_tenant_host(a, "localhost");
+    let mail = MailConnector::new(egress.clone())
+        .with_root_certificate(CA.to_vec())
+        .unwrap();
+    let (smtp_port, smtp_task) = smtp(SmtpMode::default()).await;
+    let (imap_port, imap_task) = imap(false, 42, BODY.to_vec(), 1).await;
+    let cred = credential(smtp_port, imap_port, MailTls::Implicit);
+    let public = json!({"kind_key":"mailbox", "external_id":"account", "workspace_id":a});
+    assert!(matches!(
+        mail.send(b, &cred, message()).await,
+        Err(ConnectorError::Permission { .. })
+    ));
+    assert!(
+        matches!(
+            mail.poll(b, &cred, &public, &MailboxCursor::default())
+                .await,
+            Err(ConnectorError::Permission { .. })
+        ),
+        "public cannot override the explicit workspace"
+    );
+    let foreign = json!({"kind_key":"mailbox", "workspace_id":b});
+    assert!(matches!(
+        mail.probe(&cred, &foreign).await.error,
+        Some(ConnectorError::Permission { .. })
+    ));
+    assert!(mail.send(a, &cred, message()).await.is_ok());
+    assert!(
+        mail.poll(a, &cred, &public, &MailboxCursor::default())
+            .await
+            .is_ok()
+    );
+    smtp_task.await.unwrap();
+    imap_task.await.unwrap();
+    egress.revoke_tenant_host(a, "localhost");
+    assert!(matches!(
+        mail.send(a, &cred, message()).await,
+        Err(ConnectorError::Permission { .. })
+    ));
+    assert!(matches!(
+        mail.poll(a, &cred, &public, &MailboxCursor::default())
+            .await,
+        Err(ConnectorError::Permission { .. })
+    ));
+    egress.allow_tenant_host(b, "localhost");
+    let (port, task) = smtp(SmtpMode::default()).await;
+    assert!(
+        mail.send(
+            b,
+            &credential(port, imap_port, MailTls::Implicit),
+            message()
+        )
+        .await
+        .is_ok()
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn mail_probe_and_connection_step_require_a_valid_workspace() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cred = credential(
+        listener.local_addr().unwrap().port(),
+        listener.local_addr().unwrap().port(),
+        MailTls::Implicit,
+    );
+    for public in [
+        json!({"kind_key":"mailbox"}),
+        json!({"kind_key":"mailbox", "workspace_id":"invalid"}),
+    ] {
+        assert!(!connector().probe(&cred, &public).await.ok);
+        assert!(connector().on_connected(&cred, &public).await.is_err());
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), listener.accept())
             .await
             .is_err()
     );

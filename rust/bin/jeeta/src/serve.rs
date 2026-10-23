@@ -785,16 +785,16 @@ mod tests {
         // public address: an OAuth flow cannot start (the missing address is named first, before
         // any app, and nothing reaches a provider), and no webhook address is shown.
         for provider in jt_connector::Provider::all() {
-            if *provider == jt_connector::Provider::Mail {
-                // Mail cannot be served through the global registry until lookups carry the
-                // request's workspace. All three ports must remain absent together.
-                assert!(deps.connectors.connector(*provider).is_none());
-                assert!(deps.connectors.mail_sender(*provider).is_none());
-                assert!(deps.connectors.mailbox_poller(*provider).is_none());
-            } else {
-                let connector = deps.connectors.connector(*provider).expect("an adapter");
-                assert_eq!(connector.provider(), *provider);
-            }
+            let connector = deps.connectors.connector(*provider).expect("an adapter");
+            assert_eq!(connector.provider(), *provider);
+            assert_eq!(
+                deps.connectors.mail_sender(*provider).is_some(),
+                *provider == jt_connector::Provider::Mail
+            );
+            assert_eq!(
+                deps.connectors.mailbox_poller(*provider).is_some(),
+                *provider == jt_connector::Provider::Mail
+            );
         }
         assert!(
             deps.connectors

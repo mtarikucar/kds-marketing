@@ -1512,7 +1512,8 @@ fn attachment_debug_hides_bytes() {
 #[tokio::test]
 async fn mail_message_metadata_and_attachment_contract() {
     use jt_app::ports::connectors::MailSender;
-    let connector = ScriptedConnector::new(Provider::Netgsm);
+    let ws = jt_tenancy::WorkspaceId::new_v7();
+    let connector = ScriptedConnector::new(Provider::Mail);
     let cred = Credential::NetgsmSms {
         usercode: "test".into(),
         password: "private-token".into(),
@@ -1527,17 +1528,18 @@ async fn mail_message_metadata_and_attachment_contract() {
     let uncertain = ConnectorError::unknown("connection lost after DATA");
     connector.push_mail(Err(uncertain.clone()));
     assert_eq!(
-        MailSender::send(&connector, &cred, message.clone()).await,
+        MailSender::send(&connector, ws, &cred, message.clone()).await,
         Ok(receipt)
     );
     assert_eq!(
-        MailSender::send(&connector, &cred, message.clone()).await,
+        MailSender::send(&connector, ws, &cred, message.clone()).await,
         Err(uncertain)
     );
     assert_eq!(
         connector.calls(),
         vec![
             ConnectorCall::SendMail {
+                workspace_id: ws,
                 credential: cred.clone(),
                 message: message.clone()
             };
@@ -1590,7 +1592,8 @@ async fn mailbox_cursor_and_scripted_poller_contract() {
         payload: json!({"text":"hello"}),
         occurred_at: Some(FIXED_NOW),
     }];
-    let connector = ScriptedConnector::new(Provider::Netgsm);
+    let ws = jt_tenancy::WorkspaceId::new_v7();
+    let connector = ScriptedConnector::new(Provider::Mail);
     let cred = Credential::NetgsmSms {
         usercode: "test".into(),
         password: "secret".into(),
@@ -1601,19 +1604,21 @@ async fn mailbox_cursor_and_scripted_poller_contract() {
     let err = ConnectorError::transient("offline");
     connector.push_mailbox_poll(Err(err.clone()));
     assert_eq!(
-        connector.poll(&cred, &public, &cursor).await,
+        connector.poll(ws, &cred, &public, &cursor).await,
         Ok((drafts, next.clone()))
     );
-    assert_eq!(connector.poll(&cred, &public, &next).await, Err(err));
+    assert_eq!(connector.poll(ws, &cred, &public, &next).await, Err(err));
     assert_eq!(
         connector.calls(),
         vec![
             ConnectorCall::MailboxPoll {
+                workspace_id: ws,
                 credential: cred.clone(),
                 public: public.clone(),
                 cursor: cursor.clone()
             },
             ConnectorCall::MailboxPoll {
+                workspace_id: ws,
                 credential: cred,
                 public,
                 cursor: next
@@ -1624,13 +1629,19 @@ async fn mailbox_cursor_and_scripted_poller_contract() {
 }
 
 #[test]
-fn existing_providers_offer_no_mail_ports() {
+fn only_mail_provider_offers_mail_ports() {
     use jt_app::ports::connectors::ConnectorRegistry;
     for provider in Provider::all() {
         let registry =
             ScriptedRegistry::new().with_connector(Arc::new(ScriptedConnector::new(*provider)));
-        assert!(registry.mail_sender(*provider).is_none());
-        assert!(registry.mailbox_poller(*provider).is_none());
+        assert_eq!(
+            registry.mail_sender(*provider).is_some(),
+            *provider == Provider::Mail
+        );
+        assert_eq!(
+            registry.mailbox_poller(*provider).is_some(),
+            *provider == Provider::Mail
+        );
         let empty = jt_app::std_impls::EmptyConnectorRegistry;
         assert!(empty.mail_sender(*provider).is_none());
         assert!(empty.mailbox_poller(*provider).is_none());

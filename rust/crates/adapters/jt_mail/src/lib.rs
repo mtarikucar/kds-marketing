@@ -21,27 +21,22 @@ use std::{sync::Arc, time::Duration};
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
 
-/// One workspace's mail adapter. Construct with the same `Egress` used by the host registry;
-/// clones share its revocations. A registry that serves multiple workspaces must bind this
-/// adapter to the request's workspace, never reuse another tenant's instance.
+/// A shared mail adapter using the same `Egress` as the tenant host registry. Each call carries
+/// its workspace; clones share live host registrations and revocations.
 #[derive(Clone)]
 pub struct MailConnector {
     egress: Arc<Egress>,
-    workspace: WorkspaceId,
     roots: Vec<Vec<u8>>,
 }
 impl std::fmt::Debug for MailConnector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MailConnector")
-            .field("workspace", &self.workspace)
-            .finish_non_exhaustive()
+        f.debug_struct("MailConnector").finish_non_exhaustive()
     }
 }
 impl MailConnector {
-    pub fn new(egress: Arc<Egress>, workspace: WorkspaceId) -> Self {
+    pub fn new(egress: Arc<Egress>) -> Self {
         Self {
             egress,
-            workspace,
             roots: Vec::new(),
         }
     }
@@ -129,6 +124,14 @@ impl Connector for MailConnector {
     async fn probe(&self, cred: &Credential, public: &Value) -> ProbeResult {
         probe::probe(self, cred, public).await
     }
+    async fn on_connected(
+        &self,
+        _cred: &Credential,
+        public: &Value,
+    ) -> Result<Value, ConnectorError> {
+        workspace_from_public(public)?;
+        Ok(Value::Null)
+    }
     async fn refresh(&self, _cred: &Credential) -> Result<Option<Credential>, ConnectorError> {
         Ok(None)
     }
@@ -137,21 +140,28 @@ impl Connector for MailConnector {
 impl MailSender for MailConnector {
     async fn send(
         &self,
+        ws: WorkspaceId,
         cred: &Credential,
         message: MailMessage,
     ) -> Result<SendReceipt, ConnectorError> {
-        smtp::send(self, &MailCred::of(cred)?, message).await
+        smtp::send(self, ws, &MailCred::of(cred)?, message).await
     }
 }
 #[async_trait]
 impl MailboxPoller for MailConnector {
     async fn poll(
         &self,
+        ws: WorkspaceId,
         cred: &Credential,
         public: &Value,
         cursor: &MailboxCursor,
     ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError> {
         let cred = MailCred::of(cred)?;
-        imap::poll(self, &cred, public, cursor).await
+        imap::poll(self, ws, &cred, public, cursor).await
     }
+}
+
+fn workspace_from_public(public: &Value) -> Result<WorkspaceId, ConnectorError> {
+    serde_json::from_value(public["workspace_id"].clone())
+        .map_err(|_| ConnectorError::permanent("valid mailbox workspace_id required"))
 }

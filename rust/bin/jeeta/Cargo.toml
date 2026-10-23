@@ -17,6 +17,7 @@ jt_seal.workspace = true
 # The provider adapters the server runs (`src/connectors.rs`) and the provider keys they serve.
 jt_connector.workspace = true
 jt_meta.workspace = true
+jt_mail.workspace = true
 jt_netgsm.workspace = true
 jt_x.workspace = true
 sqlx.workspace = true

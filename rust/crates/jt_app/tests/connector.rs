@@ -3303,6 +3303,7 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
     // The adapter is handed the capability's kind and account, which are not stored.
     r.meta.push_on_connected(Ok(json!({
         "subscribed": true,
+        "workspace_id": jt_tenancy::WorkspaceId::new_v7(),
         "health": { "ok": false },
         "kind_key": "messenger",
         "hosts": ["evil.example"],
@@ -3338,6 +3339,7 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
         } => {
             assert_eq!(token, "EAAB-page-1");
             assert_eq!(public["kind_key"], "facebook_page");
+            assert_eq!(public["workspace_id"], json!(r.w.ws));
             assert_eq!(public["external_id"], "page-1");
         }
         other => panic!("expected the connection step first, got {other:?}"),
@@ -3345,6 +3347,7 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
     match &calls[1] {
         ConnectorCall::Probe { public, .. } => {
             assert_eq!(public["kind_key"], "facebook_page");
+            assert_eq!(public["workspace_id"], json!(r.w.ws));
             assert_eq!(public["external_id"], "page-1");
         }
         other => panic!("expected the probe second, got {other:?}"),
@@ -3358,6 +3361,14 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
         Some(ConnectorCall::Probe { .. })
     ));
     assert_eq!(r.meta.calls().len(), 3);
+    match r.meta.calls().last().unwrap() {
+        ConnectorCall::Probe { public, .. } => assert_eq!(
+            public["workspace_id"],
+            json!(r.w.ws),
+            "stored metadata cannot choose a foreign workspace"
+        ),
+        other => panic!("expected a probe, got {other:?}"),
+    }
 
     // By hand: the step fails. The line is still connected and probed; the failure is recorded
     // in its health, redacted, and outlives the probe that follows it.
@@ -3377,6 +3388,7 @@ async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
     match &r.netgsm.calls()[0] {
         ConnectorCall::OnConnected { public, .. } => {
             assert_eq!(public["kind_key"], "sms_line");
+            assert_eq!(public["workspace_id"], json!(r.w.ws));
             assert!(public.get("external_id").is_none(), "no account yet");
         }
         other => panic!("expected the connection step first, got {other:?}"),

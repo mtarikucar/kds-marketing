@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jt_connector::{ConnectorError, Credential, EventKind, ProbeResult, Provider};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{Date, OffsetDateTime};
@@ -480,9 +481,10 @@ pub struct AssetPublic {
 
 /// A provider adapter: what every provider supports, whatever it is used for. The credential is
 /// the opened sealed one of a capability; `public` is the capability's `connector_public` as the
-/// use cases hand it to adapters: with `kind_key` (the capability's kind) and, when the capability
+/// use cases hand it to adapters: with `workspace_id` (the capability's workspace),
+/// `kind_key` (the capability's kind) and, when the capability
 /// holds one, `external_id` (its account) set from the capability itself, whatever the stored
-/// fields say (neither is stored in `connector_public`). The kind tells an adapter serving
+/// fields say (these authoritative values are supplied at call time). The kind tells an adapter serving
 /// several kinds which call to make (a Meta Page token reaches a page, its Messenger inbox and its
 /// Instagram account).
 #[async_trait]
@@ -590,21 +592,24 @@ pub trait MessagingSender: Send + Sync {
     ) -> Result<SendReceipt, ConnectorError>;
 }
 
-/// Sends typed mail, preserving the caller's Message-ID, thread headers and attachments.
+/// Sends typed mail within `ws`, preserving the caller's Message-ID, thread headers and attachments.
 #[async_trait]
 pub trait MailSender: Send + Sync {
     async fn send(
         &self,
+        ws: WorkspaceId,
         cred: &Credential,
         message: MailMessage,
     ) -> Result<SendReceipt, ConnectorError>;
 }
 
-/// Polls mailboxes independently of SMS delivery reports. No cursor storage happens here.
+/// Polls mailboxes within `ws`, independently of SMS delivery reports. No cursor storage happens here.
+/// The explicit workspace controls authorization; `public` cannot override it.
 #[async_trait]
 pub trait MailboxPoller: Send + Sync {
     async fn poll(
         &self,
+        ws: WorkspaceId,
         cred: &Credential,
         public: &Value,
         cursor: &MailboxCursor,

@@ -13,10 +13,11 @@ pub(crate) async fn probe(
         if public["kind_key"] != "mailbox" {
             return Err(ConnectorError::permanent("mailbox kind_key required"));
         }
+        let ws = crate::workspace_from_public(public)?;
         let cred = MailCred::of(cred)?;
-        let mut session = imap::login(connector, &cred).await?;
+        let mut session = imap::login(connector, ws, &cred).await?;
         let _ = session.logout().await;
-        let mut smtp = smtp::authenticated(connector, &cred).await?;
+        let mut smtp = smtp::authenticated(connector, ws, &cred).await?;
         smtp::sender(&mut smtp, &cred).await?;
         let _ = smtp.quit().await;
         Ok(json!({"account_id":cred.username, "sender_authorized":true}))

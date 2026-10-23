@@ -2,6 +2,7 @@
 use crate::{IO_TIMEOUT, MailConnector};
 use jt_connector::ConnectorError;
 use jt_outbound::{EgressError, EgressScope, TcpStream};
+use jt_tenancy::WorkspaceId;
 use lettre::transport::smtp::client::{AsyncTokioStream, Certificate, TlsParameters};
 use std::{
     io,
@@ -21,17 +22,13 @@ use tokio_rustls::{
 
 pub(crate) async fn open(
     connector: &MailConnector,
+    ws: WorkspaceId,
     host: &str,
     port: u16,
 ) -> Result<TcpStream, ConnectorError> {
     connector
         .egress
-        .connect_public(
-            EgressScope::Tenant(connector.workspace),
-            host,
-            port,
-            IO_TIMEOUT,
-        )
+        .connect_public(EgressScope::Tenant(ws), host, port, IO_TIMEOUT)
         .await
         .map_err(|e| match e {
             EgressError::HostNotAllowed { .. } | EgressError::NotPublic { .. } => {

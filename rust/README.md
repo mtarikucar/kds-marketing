@@ -1472,9 +1472,11 @@ written to the ledger. The message and attachment types deliberately do not impl
 `MailboxPoller` returns inbound drafts and a `MailboxCursor` with a `MailboxPosition`
 (`uidvalidity`, `last_uid`) for each mailbox name (INBOX/Sent). The caller must persist the cursor
 atomically with drafts. The `mail_sender` and
-`mailbox_poller` registry getters default to `None`. The [mail adapter](crates/adapters/jt_mail/README.md)
-implements both ports over tenant-authorized SMTP/IMAP sockets with mandatory TLS. Scripted connectors
-implement both contracts directly and record arguments and queued outcomes for tests.
+`mailbox_poller` registry getters offer the [mail adapter](crates/adapters/jt_mail/README.md) for
+`Provider::Mail` in production and scripted registries. Both ports take a workspace per call and
+use tenant-authorized SMTP/IMAP sockets with mandatory TLS. Probe and connection hooks receive
+the capability's authoritative `workspace_id` through public metadata. Scripted connectors
+record workspaces, arguments and queued outcomes for tests.
 
 `OutboundJobRepo::pending_job_ids` and `record_status` both require a capability ID. The NetGSM
 DLR job reads pending jobs, polls and records statuses separately for each verified SMS capability;

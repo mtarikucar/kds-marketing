@@ -1,10 +1,11 @@
 # Mail adapter
 
-`MailConnector::new(Arc<Egress>, WorkspaceId)` implements `Connector`, `MailSender` and
-`MailboxPoller`. Bind an instance to the caller's workspace and share the `Egress` used by
-`EgressTenantHosts`. The production registry currently has no workspace argument, so production
-mail registration is deferred pending a workspace-aware registry port decision; do not infer
-the tenant from credentials. Register both credential hosts in the tenant registry and persist them in
+`MailConnector::new(Arc<Egress>)` implements `Connector`, `MailSender` and `MailboxPoller`
+and is registered in the production and scripted registries for `Provider::Mail`. Share the
+`Egress` used by `EgressTenantHosts`; send and poll receive the caller's `WorkspaceId` on every
+invocation. Probe and connection hooks require `public.workspace_id`, inserted authoritatively
+from the capability by `adapter_public`. Poll's explicit workspace takes precedence over any
+public metadata. Register both credential hosts in the tenant registry and persist them in
 `connector_public.hosts` during capability provisioning. `hosts()` is empty: mail has no fixed
 provider hosts. Revocation/rebuild of that registry affects subsequent socket opens immediately.
 

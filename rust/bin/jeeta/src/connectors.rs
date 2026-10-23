@@ -1,4 +1,4 @@
-//! The provider adapters the server runs: Meta (`jt_meta`), NetGSM (`jt_netgsm`) and X (`jt_x`),
+//! The provider adapters the server runs: Meta (`jt_meta`), NetGSM (`jt_netgsm`), X (`jt_x`) and mail (`jt_mail`),
 //! each sending to its production hosts through the one egress client the server builds, behind
 //! the use cases' [`ConnectorRegistry`] port.
 //!
@@ -9,6 +9,8 @@
 //! | Meta | ✓ | ✓ | — | ✓ | ✓ |
 //! | NetGSM | ✓ | — (credentials by hand) | ✓ | — | — |
 //! | X | ✓ | ✓ | — | ✓ | — |
+//!
+//! Mail additionally offers `MailSender` and `MailboxPoller`, each scoped by the call's workspace.
 //!
 //! (the same matrix `jt_testkit::fakes::ScriptedRegistry` offers, so the use cases' tests never
 //! count on more than production has). The OAuth flows need the platform's provider apps
@@ -23,12 +25,13 @@ use jt_app::ports::connectors::{
     Publisher, SmsSender, Telephony,
 };
 use jt_connector::Provider;
+use jt_mail::MailConnector;
 use jt_meta::{MetaBases, MetaConnector};
 use jt_netgsm::{NetgsmBases, NetgsmConnector};
 use jt_outbound::Egress;
 use jt_x::{XBases, XConnector};
 
-/// The registry of the three production adapters over `egress` (the client whose tenant tier
+/// The registry of the production adapters over `egress` (the client whose tenant tier
 /// the use cases' host registry fills), reading the platform's provider apps from `apps` at call
 /// time.
 pub fn registry(
@@ -45,13 +48,15 @@ pub fn registry(
             Arc::clone(&egress),
             NetgsmBases::production(),
         )),
+        mail: Arc::new(MailConnector::new(Arc::clone(&egress))),
         x: Arc::new(XConnector::new(egress, XBases::production(), apps)),
     })
 }
 
-/// The three adapters, each shared by every operation it offers.
+/// The adapters, each shared by every operation it offers.
 struct ProviderRegistry {
     meta: Arc<MetaConnector>,
+    mail: Arc<MailConnector>,
     netgsm: Arc<NetgsmConnector>,
     x: Arc<XConnector>,
 }
@@ -62,9 +67,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Meta => self.meta.clone(),
             Provider::Netgsm => self.netgsm.clone(),
             Provider::X => self.x.clone(),
-            // Mail needs a workspace-bound registry lookup. Do not guess the tenant from
-            // credentials or permit tenant hosts through a global provider instance.
-            Provider::Mail => return None,
+            Provider::Mail => self.mail.clone(),
         })
     }
 
@@ -76,12 +79,12 @@ impl ConnectorRegistry for ProviderRegistry {
         }
     }
 
-    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
-        None
+    fn mail_sender(&self, provider: Provider) -> Option<Arc<dyn MailSender>> {
+        (provider == Provider::Mail).then(|| self.mail.clone() as Arc<dyn MailSender>)
     }
 
-    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
-        None
+    fn mailbox_poller(&self, provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
+        (provider == Provider::Mail).then(|| self.mail.clone() as Arc<dyn MailboxPoller>)
     }
 
     fn sms(&self, provider: Provider) -> Option<Arc<dyn SmsSender>> {
@@ -202,7 +205,10 @@ mod tests {
                 Provider::X,
                 vec!["connector", "oauth", "publisher", "insights"],
             ),
-            (Provider::Mail, vec![]),
+            (
+                Provider::Mail,
+                vec!["connector", "mail_sender", "mailbox_poller"],
+            ),
         ];
         assert_eq!(expected.len(), Provider::all().len());
         assert_eq!(
@@ -225,12 +231,11 @@ mod tests {
 
     #[test]
     fn the_scripted_registry_offers_no_more_than_production() {
-        // Register exactly the adapters currently installed by the production factory; mail
-        // remains absent until the registry can bind an adapter to a request's workspace.
+        // Register every production adapter and compare the complete operation sets.
         let mut scripted = ScriptedRegistry::new();
-        for provider in [Provider::Meta, Provider::Netgsm, Provider::X] {
+        for provider in Provider::all().iter().copied() {
             scripted = scripted.with_connector(Arc::new(ScriptedConnector::new(provider)));
-            if provider != Provider::Netgsm {
+            if matches!(provider, Provider::Meta | Provider::X) {
                 scripted = scripted.with_oauth(Arc::new(ScriptedOAuth::new(provider)));
             }
         }
@@ -250,7 +255,12 @@ mod tests {
         let registry = production();
         for provider in Provider::all() {
             if *provider == Provider::Mail {
-                assert!(registry.connector(*provider).is_none());
+                let connector = registry.connector(*provider).expect("mail adapter");
+                assert_eq!(connector.provider(), Provider::Mail);
+                assert!(
+                    connector.hosts().is_empty(),
+                    "mail uses registered tenant hosts"
+                );
                 assert!(FIXED_HOSTS.iter().all(|h| h.connector != provider.key()));
                 continue;
             }

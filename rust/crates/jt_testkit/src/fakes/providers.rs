@@ -27,6 +27,7 @@ use jt_app::ports::connectors::{
     XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
+use jt_tenancy::WorkspaceId;
 use serde_json::Value;
 use time::{Date, OffsetDateTime};
 
@@ -171,10 +172,12 @@ pub enum ConnectorCall {
         commercial: bool,
     },
     SendMail {
+        workspace_id: WorkspaceId,
         credential: Credential,
         message: MailMessage,
     },
     MailboxPoll {
+        workspace_id: WorkspaceId,
         credential: Credential,
         public: Value,
         cursor: MailboxCursor,
@@ -510,10 +513,12 @@ impl SmsSender for ScriptedConnector {
 impl MailSender for ScriptedConnector {
     async fn send(
         &self,
+        ws: WorkspaceId,
         cred: &Credential,
         message: MailMessage,
     ) -> Result<SendReceipt, ConnectorError> {
         self.record(ConnectorCall::SendMail {
+            workspace_id: ws,
             credential: cred.clone(),
             message,
         });
@@ -526,11 +531,13 @@ impl MailSender for ScriptedConnector {
 impl MailboxPoller for ScriptedConnector {
     async fn poll(
         &self,
+        ws: WorkspaceId,
         cred: &Credential,
         public: &Value,
         cursor: &MailboxCursor,
     ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError> {
         self.record(ConnectorCall::MailboxPoll {
+            workspace_id: ws,
             credential: cred.clone(),
             public: public.clone(),
             cursor: cursor.clone(),
@@ -953,12 +960,14 @@ impl ConnectorRegistry for ScriptedRegistry {
             .map(|o| o as Arc<dyn OAuthProvider>)
     }
 
-    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
-        None
+    fn mail_sender(&self, provider: Provider) -> Option<Arc<dyn MailSender>> {
+        self.offered(provider, &[Provider::Mail])
+            .map(|c| c as Arc<dyn MailSender>)
     }
 
-    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
-        None
+    fn mailbox_poller(&self, provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
+        self.offered(provider, &[Provider::Mail])
+            .map(|c| c as Arc<dyn MailboxPoller>)
     }
 
     fn sms(&self, provider: Provider) -> Option<Arc<dyn SmsSender>> {

@@ -1,6 +1,7 @@
 use crate::{IO_TIMEOUT, MAX_MESSAGE_BYTES, MailConnector, MailCred, socket};
 use jt_app::ports::connectors::{MailMessage, SendReceipt};
 use jt_connector::{ConnectorError, MailTls};
+use jt_tenancy::WorkspaceId;
 use lettre::{
     Message,
     message::{Attachment, MultiPart, SinglePart, header::ContentType},
@@ -24,9 +25,10 @@ fn error(err: Error) -> ConnectorError {
 }
 pub(crate) async fn authenticated(
     connector: &MailConnector,
+    ws: WorkspaceId,
     cred: &MailCred<'_>,
 ) -> Result<AsyncSmtpConnection, ConnectorError> {
-    let socket = socket::open(connector, cred.smtp_host, cred.smtp_port).await?;
+    let socket = socket::open(connector, ws, cred.smtp_host, cred.smtp_port).await?;
     let transport: Box<dyn AsyncTokioStream> = match cred.tls {
         MailTls::Implicit => Box::new(socket::SmtpTls(
             socket::encrypt(connector, cred.smtp_host, socket).await?,
@@ -135,6 +137,7 @@ fn wire(cred: &MailCred<'_>, mail: &MailMessage) -> Result<Vec<u8>, ConnectorErr
 }
 pub(crate) async fn send(
     connector: &MailConnector,
+    ws: WorkspaceId,
     cred: &MailCred<'_>,
     message: MailMessage,
 ) -> Result<SendReceipt, ConnectorError> {
@@ -146,7 +149,7 @@ pub(crate) async fn send(
         .email;
     let mut post_data = false;
     let result = tokio::time::timeout(IO_TIMEOUT, async {
-        let mut smtp = authenticated(connector, cred).await?;
+        let mut smtp = authenticated(connector, ws, cred).await?;
         sender(&mut smtp, cred).await?;
         smtp.command(Rcpt::new(recipient, vec![]))
             .await

@@ -4,6 +4,7 @@ use futures_util::TryStreamExt;
 use jt_app::ports::connectors::{InboundEventDraft, MailboxCursor, MailboxPosition};
 use jt_connector::{ConnectorError, MailTls};
 use jt_outbound::TcpStream;
+use jt_tenancy::WorkspaceId;
 use serde_json::Value;
 use tokio_rustls::client::TlsStream;
 
@@ -15,9 +16,10 @@ fn error(_: async_imap::error::Error) -> ConnectorError {
 
 pub(crate) async fn login(
     connector: &MailConnector,
+    ws: WorkspaceId,
     cred: &MailCred<'_>,
 ) -> Result<MailSession, ConnectorError> {
-    let socket = socket::open(connector, cred.imap_host, cred.imap_port).await?;
+    let socket = socket::open(connector, ws, cred.imap_host, cred.imap_port).await?;
     let client = match cred.tls {
         MailTls::Implicit => {
             let stream = socket::encrypt(connector, cred.imap_host, socket).await?;
@@ -60,6 +62,7 @@ pub(crate) async fn login(
 
 pub(crate) async fn poll(
     connector: &MailConnector,
+    ws: WorkspaceId,
     cred: &MailCred<'_>,
     public: &Value,
     cursor: &MailboxCursor,
@@ -68,7 +71,7 @@ pub(crate) async fn poll(
         .as_str()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ConnectorError::permanent("mailbox external account id required"))?;
-    let mut session = bounded(login(connector, cred)).await?;
+    let mut session = bounded(login(connector, ws, cred)).await?;
     let sent = sent_mailbox(&mut session).await?;
     // Finish the current command before returning a partial batch, so only fully consumed
     // FETCH responses can advance the persisted cursor. Each command has its own hard limit.

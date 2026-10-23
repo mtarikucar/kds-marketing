@@ -2172,15 +2172,13 @@ pub(crate) fn object(value: &Value) -> Map<String, Value> {
     }
 }
 
-/// `capability`'s `connector_public` as adapters are handed it
-/// ([`crate::ports::connectors::Connector`]): the stored fields with `kind_key` set from the
-/// capability's kind and, when it holds one, `external_id` from its external account, so what an
-/// adapter acts on is the capability's own, whatever the stored fields say (a tenant may write
-/// keys the connector does not reserve). Never stored: `kind_key` could not be (the public fields
-/// refuse every key containing `key`), and both are the capability's own columns.
+/// The capability's public metadata with authoritative routing fields supplied at call time:
+/// `kind_key`, `workspace_id`, and its optional `external_id` come from capability columns.
+/// Stored tenant metadata cannot override the workspace or account an adapter acts on.
 pub(crate) fn adapter_public(capability: &Capability) -> Value {
     let mut public = object(&capability.connector_public);
     public.insert("kind_key".to_owned(), json!(capability.kind_key));
+    public.insert("workspace_id".to_owned(), json!(capability.workspace_id));
     match &capability.external_id {
         Some(account) => public.insert("external_id".to_owned(), json!(account)),
         None => public.remove("external_id"),
