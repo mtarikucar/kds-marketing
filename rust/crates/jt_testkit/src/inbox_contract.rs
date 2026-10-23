@@ -132,6 +132,33 @@ impl Fixture {
             reduce_input: ReduceInput::default(),
         }
     }
+    /// Seed a valid new journey through the domain proof, then explicitly assign its owner.
+    /// The complete initial-state assertion prevents fixtures from silently discarding a stage.
+    pub async fn insert_journey(
+        &self,
+        repos: &mut dyn jt_app::ports::TenantRepos,
+        row: &Journey,
+    ) -> Result<(), jt_app::error::AppError> {
+        let initial = begin_journey(
+            row.id,
+            row.workspace_id,
+            row.person_id,
+            row.source.clone(),
+            row.opened_at,
+        );
+        let mut expected = row.clone();
+        expected.owner = None;
+        assert_eq!(
+            initial.journey(),
+            &expected,
+            "fixture must be an initial journey"
+        );
+        repos.journeys().insert_initial(initial).await?;
+        if row.owner.is_some() {
+            repos.journeys().assign_owner(row.id, row.owner).await?;
+        }
+        Ok(())
+    }
     pub fn event(&self, j: JourneyId, key: &str, kind: JourneyEventKind) -> JourneyEvent {
         JourneyEvent {
             id: JourneyEventId::new_v7(),
@@ -563,16 +590,89 @@ pub async fn conversations_and_message_dedupe(uow: Arc<dyn UnitOfWork>) {
     );
 }
 
+/// Domain creation proofs preserve exact initial state, scope and uniqueness on both adapters.
+pub async fn initial_journey_is_scoped_and_immutable(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let person = f.insert_person("Initial journey").await;
+    let initial = begin_journey(
+        JourneyId::new_v7(),
+        f.ws,
+        person.id,
+        Source::Repeat,
+        FIXED_NOW,
+    );
+    let expected = initial.journey().clone();
+    let mut forged_copy = expected.clone();
+    forged_copy.status = JourneyStatus::Won;
+    forged_copy.closed_at = Some(FIXED_NOW);
+    forged_copy.unreachable_attempts = 7;
+    assert_ne!(&forged_copy, initial.journey());
+    let mut r = f.uow.tenant(f.ws).await.unwrap();
+    r.journeys().insert_initial(initial.clone()).await.unwrap();
+    assert_eq!(
+        r.journeys().get(expected.id).await.unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(r.journeys().reducer_revision(expected.id).await.unwrap(), 0);
+    assert!(
+        r.journeys()
+            .events(expected.id, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    r.commit().await.unwrap();
+    let mut r = f.uow.tenant(f.other).await.unwrap();
+    assert!(r.journeys().get(expected.id).await.unwrap().is_none());
+    assert_eq!(
+        r.journeys()
+            .insert_initial(initial.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Internal
+    );
+    drop(r);
+    let mut r = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        r.journeys().insert_initial(initial).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    drop(r);
+    let mut r = f.uow.tenant(f.other).await.unwrap();
+    let foreign_person = begin_journey(
+        JourneyId::new_v7(),
+        f.other,
+        person.id,
+        Source::Import,
+        FIXED_NOW,
+    );
+    assert_eq!(
+        r.journeys()
+            .insert_initial(foreign_person)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    drop(r);
+    let mut r = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(r.journeys().get(expected.id).await.unwrap(), Some(expected));
+}
+
 pub async fn reducer_patch_and_event_are_atomic(uow: Arc<dyn UnitOfWork>) {
     let f = Fixture::new(uow).await;
     let p = f.insert_person("Journey").await;
     let j = f.journey(p.id);
     let mut t = f.uow.tenant(f.ws).await.unwrap();
-    t.journeys().insert(j.clone()).await.unwrap();
+    f.insert_journey(t.as_mut(), &j).await.unwrap();
     t.commit().await.unwrap();
     let mut t = f.uow.tenant(f.ws).await.unwrap();
     assert_eq!(
-        t.journeys().insert(f.journey(p.id)).await.unwrap_err().code,
+        f.insert_journey(t.as_mut(), &f.journey(p.id))
+            .await
+            .unwrap_err()
+            .code,
         ErrorCode::Conflict
     );
     drop(t);
@@ -661,7 +761,7 @@ pub async fn tasks_notes_merges_and_outbox(uow: Arc<dyn UnitOfWork>) {
     let cap = f.capability().await;
     let j = f.journey(p.id);
     let mut t = f.uow.tenant(f.ws).await.unwrap();
-    t.journeys().insert(j.clone()).await.unwrap();
+    f.insert_journey(t.as_mut(), &j).await.unwrap();
     let c = t
         .conversations()
         .upsert_on_inbound(f.conversation(p.id, cap))
@@ -809,13 +909,13 @@ pub async fn missing_user_references_are_not_found(uow: Arc<dyn UnitOfWork>) {
     bad.owner = Some(UserId::new_v7());
     let mut t = f.uow.tenant(f.ws).await.unwrap();
     assert_eq!(
-        t.journeys().insert(bad).await.unwrap_err().code,
+        f.insert_journey(t.as_mut(), &bad).await.unwrap_err().code,
         ErrorCode::NotFound
     );
     drop(t);
     let j = f.journey(p.id);
     let mut t = f.uow.tenant(f.ws).await.unwrap();
-    t.journeys().insert(j.clone()).await.unwrap();
+    f.insert_journey(t.as_mut(), &j).await.unwrap();
     t.commit().await.unwrap();
     let mut t = f.uow.tenant(f.ws).await.unwrap();
     assert_eq!(

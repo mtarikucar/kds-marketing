@@ -1009,20 +1009,11 @@ impl JourneyRepo for MemTenant {
             .max_by_key(|r| (r.opened_at, r.id))
             .cloned())
     }
-    async fn insert(&mut self, mut row: Journey) -> Result<(), AppError> {
+    async fn insert_initial(&mut self, initial: InitialJourney) -> Result<(), AppError> {
+        let row = initial.journey().clone();
         self.call(|t| {
             let ws = t.ws;
             same_workspace(ws, row.workspace_id)?;
-            if row.status != JourneyStatus::New
-                || row.closed_at.is_some()
-                || row.lost_reason.is_some()
-                || row.unreachable_attempts != 0
-            {
-                return Err(AppError::validation(
-                    "journey must start in new state",
-                    serde_json::json!({}),
-                ));
-            }
             person(t.state(), ws, row.person_id)?;
             user(t.state(), row.owner)?;
             unique(
@@ -1034,7 +1025,6 @@ impl JourneyRepo for MemTenant {
                 }),
                 "open journey already exists",
             )?;
-            row.reduce_input = ReduceInput::default();
             let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 s.inbox.journeys.push(row.clone());

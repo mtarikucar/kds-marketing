@@ -42,7 +42,7 @@ impl MergeFixture {
         let cap = f.capability().await;
         let mut r = uow.tenant(f.ws).await.unwrap();
         r.people().set_write_time(FIXED_NOW).await.unwrap();
-        r.journeys().insert(journey.clone()).await.unwrap();
+        f.insert_journey(r.as_mut(), &journey).await.unwrap();
         let older = r
             .conversations()
             .upsert_on_inbound(f.conversation(source.id, cap))

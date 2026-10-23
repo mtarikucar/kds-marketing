@@ -2,7 +2,7 @@ use super::{inserted, map_sqlx, reference, same_workspace};
 use crate::uow::PgTenantRepos;
 use async_trait::async_trait;
 use jt_app::{error::AppError, ports::inbox::JourneyRepo};
-use jt_inbox::{Journey, JourneyEvent, JourneyId, JourneyStatus, PersonId, Transition};
+use jt_inbox::{InitialJourney, Journey, JourneyEvent, JourneyId, PersonId, Transition};
 const ROW: &str = "to_jsonb(j) || jsonb_build_object('owner',owner_id)";
 #[async_trait]
 impl JourneyRepo for PgTenantRepos {
@@ -91,21 +91,12 @@ impl JourneyRepo for PgTenantRepos {
     async fn latest_for(&mut self, person: PersonId) -> Result<Option<Journey>, AppError> {
         one!(sqlx::query_scalar(&format!("select {ROW} from journeys j where workspace_id=$1 and person_id=$2 order by opened_at desc,id desc limit 1")).bind(self.workspace_id().as_uuid()).bind(person.as_uuid()),self,Journey)
     }
-    async fn insert(&mut self, row: Journey) -> Result<(), AppError> {
+    async fn insert_initial(&mut self, initial: InitialJourney) -> Result<(), AppError> {
         let ws = self.workspace_id();
+        let row = initial.journey();
         same_workspace(ws, row.workspace_id)?;
-        if row.status != JourneyStatus::New
-            || row.closed_at.is_some()
-            || row.lost_reason.is_some()
-            || row.unreachable_attempts != 0
-        {
-            return Err(AppError::validation(
-                "journey must start in new state",
-                serde_json::json!({}),
-            ));
-        }
         reference(self.tx.conn(), ws, "people", row.person_id.as_uuid()).await?;
-        let mut data = value!(&row);
+        let mut data = value!(row);
         data["owner_id"] = value!(row.owner);
         data["reducer_revision"] = value!(0);
         inserted(sqlx::query("insert into journeys select * from jsonb_populate_record(null::journeys,$1) where workspace_id=$2 on conflict do nothing").bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert journey"))?)?;

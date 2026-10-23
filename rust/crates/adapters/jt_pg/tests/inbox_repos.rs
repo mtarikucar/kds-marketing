@@ -207,8 +207,12 @@ async fn concurrent_first_contacts_leave_one_person_and_journey() {
     let mut b = uow.tenant(f.ws).await.unwrap();
     a.people().insert(p.clone()).await.unwrap();
     b.people().insert(q.clone()).await.unwrap();
-    a.journeys().insert(f.journey(p.id)).await.unwrap();
-    b.journeys().insert(f.journey(q.id)).await.unwrap();
+    f.insert_journey(a.as_mut(), &f.journey(p.id))
+        .await
+        .unwrap();
+    f.insert_journey(b.as_mut(), &f.journey(q.id))
+        .await
+        .unwrap();
     let first = Identity {
         id: IdentityId::new_v7(),
         workspace_id: f.ws,
@@ -257,4 +261,11 @@ async fn conversation_upsert_uses_the_natural_key() {
     let db = jt_testkit::TestDb::new().await;
     let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
     jt_testkit::inbox_contract::conversation_upsert_uses_the_natural_key(uow).await;
+}
+
+#[tokio::test]
+async fn initial_journey_is_scoped_and_immutable() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::inbox_contract::initial_journey_is_scoped_and_immutable(uow).await;
 }

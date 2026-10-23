@@ -1,4 +1,4 @@
-//! Pure journey reduction. Only `reduce` produces a persistable transition.
+//! Pure journey creation and reduction. Only `begin_journey` and `reduce` produce persistable proofs.
 
 use std::collections::BTreeSet;
 
@@ -89,7 +89,8 @@ impl ReduceInput {
     }
 }
 
-/// A stored acquisition journey. Repositories persist changes only through [`Transition`].
+/// A stored acquisition journey. Repositories create through [`InitialJourney`] and change
+/// reducer-owned state only through [`Transition`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Journey {
     /// Journey identity.
@@ -124,6 +125,75 @@ pub struct Journey {
     /// Trusted application context, populated after loading and never deserialized.
     #[serde(skip)]
     pub reduce_input: ReduceInput,
+}
+
+/// An unforgeable initial journey, produced only by [`begin_journey`].
+///
+/// Application code cannot construct a literal or call the crate-private constructor:
+/// ```compile_fail
+/// use jt_inbox::{InitialJourney, Journey};
+/// fn forge(journey: Journey) -> InitialJourney { InitialJourney { journey } }
+/// ```
+/// ```compile_fail
+/// use jt_inbox::{InitialJourney, Journey};
+/// fn forge(journey: Journey) -> InitialJourney { InitialJourney::new(journey) }
+/// ```
+/// Neither deserialization nor Default can bypass domain initialization:
+/// ```compile_fail
+/// let _: jt_inbox::InitialJourney = serde_json::from_str("{}").unwrap();
+/// ```
+/// ```compile_fail
+/// let _: jt_inbox::InitialJourney = Default::default();
+/// ```
+/// Its accessor cannot mutate the proof's state:
+/// ```compile_fail
+/// use jt_inbox::{InitialJourney, JourneyStatus};
+/// fn overwrite(initial: &mut InitialJourney) {
+///     initial.journey().status = JourneyStatus::Won;
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct InitialJourney {
+    journey: Journey,
+}
+
+impl InitialJourney {
+    // Only begin_journey calls this constructor; a stored Journey is not a creation proof.
+    pub(crate) fn new(journey: Journey) -> Self {
+        Self { journey }
+    }
+
+    /// Read the complete domain-initialized row without exposing mutable state.
+    pub fn journey(&self) -> &Journey {
+        &self.journey
+    }
+}
+
+/// Initialize a new opportunity with no owner, failed attempts, closure or loss.
+///
+/// Identity, acquisition source and time are supplied by the application. Stage and reduction
+/// context are owned here; callers cannot import a stored or client-supplied stage as creation.
+pub fn begin_journey(
+    id: JourneyId,
+    workspace_id: WorkspaceId,
+    person_id: PersonId,
+    source: Source,
+    at: OffsetDateTime,
+) -> InitialJourney {
+    InitialJourney::new(Journey {
+        id,
+        workspace_id,
+        person_id,
+        status: JourneyStatus::New,
+        owner: None,
+        opened_at: at,
+        closed_at: None,
+        lost_reason: None,
+        unreachable_attempts: 0,
+        source,
+        updated_at: at,
+        reduce_input: ReduceInput::default(),
+    })
 }
 
 /// Typed event payload; the actor and historical loss label live on [`JourneyEvent`].

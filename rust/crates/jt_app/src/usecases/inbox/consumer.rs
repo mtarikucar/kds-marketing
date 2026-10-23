@@ -315,8 +315,9 @@ async fn journey(
     } else {
         person.first_touch.source.clone()
     };
-    let j = journeys::initial(deps, ctx, person.id, source);
-    r.journeys().insert(j.clone()).await?;
+    let initial = journeys::initial(deps, ctx, person.id, source);
+    let j = initial.journey().clone();
+    r.journeys().insert_initial(initial).await?;
     Ok(j)
 }
 async fn apply(

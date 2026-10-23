@@ -117,7 +117,7 @@ async fn ready(
         })
         .await
         .unwrap();
-    r.journeys().insert(j.clone()).await.unwrap();
+    f.insert_journey(r.as_mut(), &j).await.unwrap();
     r.conversations()
         .upsert_on_inbound(c.clone())
         .await

@@ -51,3 +51,9 @@ async fn conversation_upsert_uses_the_natural_key() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::conversation_upsert_uses_the_natural_key(uow).await;
 }
+
+#[tokio::test]
+async fn initial_journey_is_scoped_and_immutable() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::initial_journey_is_scoped_and_immutable(uow).await;
+}

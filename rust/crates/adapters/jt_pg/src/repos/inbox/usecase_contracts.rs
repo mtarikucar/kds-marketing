@@ -24,7 +24,7 @@ async fn repository_contract(uow: Arc<dyn UnitOfWork>) {
     let mut r = uow.tenant(f.ws).await.unwrap();
     r.people().lock_workspace().await.unwrap();
     r.people().set_write_time(FIXED_NOW).await.unwrap();
-    r.journeys().insert(j.clone()).await.unwrap();
+    f.insert_journey(r.as_mut(), &j).await.unwrap();
     r.conversations()
         .upsert_on_inbound(conv.clone())
         .await
@@ -94,7 +94,7 @@ async fn bounded_journey_events_fake_and_pg() {
         let mut journey = f.journey(p.id);
         let mut r = uow.tenant(f.ws).await.unwrap();
         r.people().set_write_time(FIXED_NOW).await.unwrap();
-        r.journeys().insert(journey.clone()).await.unwrap();
+        f.insert_journey(r.as_mut(), &journey).await.unwrap();
         let mut expected = Vec::new();
         // Equal timestamps and reversed IDs make insertion order an invalid tie-breaker.
         for index in 0..505_u128 {
@@ -342,7 +342,7 @@ async fn child_writes_advance_aggregate_timestamps() {
         let mut r = uow.tenant(f.ws).await.unwrap();
         // All mutations intentionally share the same clock, so each must still advance.
         r.people().set_write_time(FIXED_NOW).await.unwrap();
-        r.journeys().insert(journey.clone()).await.unwrap();
+        f.insert_journey(r.as_mut(), &journey).await.unwrap();
         assert!(r.people().get(p.id).await.unwrap().unwrap().updated_at > p.updated_at);
         let after_journey = r.people().get(p.id).await.unwrap().unwrap().updated_at;
         r.conversations()
@@ -511,7 +511,7 @@ async fn task_queries_boundaries_assignees_and_unbounded_all_fake_and_pg() {
         let journey = f.journey(p.id);
         let mut r = uow.tenant(f.ws).await.unwrap();
         r.people().set_write_time(FIXED_NOW).await.unwrap();
-        r.journeys().insert(journey.clone()).await.unwrap();
+        f.insert_journey(r.as_mut(), &journey).await.unwrap();
         let mut tasks = Vec::new();
         for index in 0..511_u128 {
             let task = Task {

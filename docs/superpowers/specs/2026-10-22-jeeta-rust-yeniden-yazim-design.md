@@ -664,9 +664,13 @@ kalıcı gönderim makbuzunu korur, aşama ve yan etki değiştirmez. Zorunlu is
 `inbox.event.duplicate` yazar. Farklı anahtarlı ikinci Won uç durum çatışmasıdır. Kayıp olayı
 nedenin o andaki etiketini saklar. Durumların dokuz anahtarı sabittir; politika yalnız etiketleri
 özelleştirir. `Transition` alanları özeldir ve Deserialize/Default yoktur; dışarıdan oluşturma
-derlenmez. İlk New eklemesi halen ayrı `insert(Journey)` doğrulamasındadır; INSERT'in de
-Transition alması kuralı için port kararı incelemededir, durum güncellemeleri `apply_transition`
-içinden geçer.
+derlenmez. İlk kayıt `begin_journey(id, workspace_id, person_id, source, at) -> InitialJourney`
+ile alan içinde üretilir: New, sıfır deneme, boş sahip/kapanış/neden ve `at` zamanları. Bu kanıtın
+da alanları özeldir, yalnız salt okunur erişim sunar; Deserialize/Default veya açık kurucusu
+yoktur. Port `insert_initial(InitialJourney)` kabul eder; sonraki durum güncellemeleri
+`apply_transition(Transition)` gerektirir. Yapısal test bütün PostgreSQL kaynaklarında INSERT
+ile UPDATE'i ayrı denetler. Birleştirmeyi geri almanın tek belgeli snapshot cümlesi mevcut
+yolculuğun kişi/zaman alanlarını geri yükler; yeni yolculuk oluşturmaz ve duruma dokunmaz.
 
 ### 7.4 Yürütücü ve devralma
 

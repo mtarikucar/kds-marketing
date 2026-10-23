@@ -151,7 +151,7 @@ pub(crate) async fn match_or_create(
         };
         r.people().insert(person.clone()).await?;
         let journey = super::journeys::initial(deps, ctx, person.id, input.source);
-        r.journeys().insert(journey).await?;
+        r.journeys().insert_initial(journey).await?;
         record(
             r,
             ctx,

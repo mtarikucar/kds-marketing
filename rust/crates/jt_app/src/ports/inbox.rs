@@ -224,8 +224,8 @@ pub trait JourneyRepo: Send + Sync {
     async fn open_for(&mut self, person: PersonId) -> Result<Option<Journey>, AppError>;
     async fn latest_for(&mut self, person: PersonId) -> Result<Option<Journey>, AppError>;
     async fn lock(&mut self, id: JourneyId) -> Result<Option<Journey>, AppError>;
-    /// Insert only initial New state (no closure, loss or attempts). Subsequent state is reducer-owned.
-    async fn insert(&mut self, journey: Journey) -> Result<(), AppError>;
+    /// Persist only a domain-created initial journey; arbitrary stored rows are not creation proofs.
+    async fn insert_initial(&mut self, initial: InitialJourney) -> Result<(), AppError>;
     /// Consume a reducer transition and persist its full patch and event atomically. A duplicate
     /// workspace event key is CONFLICT and changes nothing. Call reduce after locking the journey.
     /// Pass exactly the event and locked journey used for reduction; this is a trusted internal

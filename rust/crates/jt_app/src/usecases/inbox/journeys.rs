@@ -40,21 +40,19 @@ pub struct AssignOwnerInput {
     pub user_id: Option<UserId>,
 }
 
-pub(crate) fn initial(deps: &Deps, ctx: &Ctx, person_id: PersonId, source: Source) -> Journey {
-    Journey {
-        id: JourneyId::from(deps.ids.uuid()),
-        workspace_id: ctx.workspace_id,
+pub(crate) fn initial(
+    deps: &Deps,
+    ctx: &Ctx,
+    person_id: PersonId,
+    source: Source,
+) -> InitialJourney {
+    begin_journey(
+        JourneyId::from(deps.ids.uuid()),
+        ctx.workspace_id,
         person_id,
-        status: JourneyStatus::New,
-        owner: None,
-        opened_at: ctx.now,
-        closed_at: None,
-        lost_reason: None,
-        unreachable_attempts: 0,
         source,
-        updated_at: ctx.now,
-        reduce_input: ReduceInput::default(),
-    }
+        ctx.now,
+    )
 }
 pub async fn open(deps: &Deps, ctx: &Ctx, person: PersonId) -> Result<Journey, AppError> {
     ctx.require(Permission::InboxWork)?;
@@ -84,8 +82,9 @@ pub async fn open(deps: &Deps, ctx: &Ctx, person: PersonId) -> Result<Journey, A
     } else {
         person.first_touch.source
     };
-    let row = initial(deps, ctx, person.id, source);
-    r.journeys().insert(row.clone()).await?;
+    let initial = initial(deps, ctx, person.id, source);
+    let row = initial.journey().clone();
+    r.journeys().insert_initial(initial).await?;
     record(
         r.as_mut(),
         ctx,

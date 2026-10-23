@@ -1379,10 +1379,14 @@ journey. Lost inbound never creates another journey. System Replied after termin
 a no-op transition. Events use a required workspace-wide idempotency key; duplicates suppress
 effects and ledger `inbox.event.duplicate`. Different-key Won on Won conflicts.
 `Transition` has private fields, no public constructor, Deserialize or Default; compile-fail
-doctests protect those boundaries. PostgreSQL's initial `insert(Journey)` currently validates
-New/empty closure/zero attempts separately; the strict architecture check flags this as a
-remaining mismatch with the requested rule that INSERT also takes a Transition. Resolving it
-requires a journey-creation port decision; status UPDATE already uses `apply_transition`.
+doctests protect those boundaries. Creation uses `begin_journey(id, workspace_id, person_id,
+source, at) -> InitialJourney`, an equally unforgeable wrapper with an immutable journey accessor.
+It fixes New, zero attempts, no owner/closure/loss, and both timestamps to `at`. The port only
+accepts `insert_initial(InitialJourney)`; later status writes require `apply_transition(Transition)`.
+Structural tests parse every PostgreSQL source file and distinguish INSERT from UPDATE. Merge
+undo's single documented snapshot statement restores only an existing journey's person/time;
+it neither creates a journey nor changes its status. Fixtures use the same domain creation path
+and assign owners explicitly through the existing operation.
 
 A conversation's executor defaults to Agent and is separate from the journey owner. Every
 handover increments its generation; Human(None) is the unassigned queue. Human replies do not
