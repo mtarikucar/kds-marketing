@@ -65,6 +65,7 @@ impl World {
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::with_all_apps()),
             connectors: Arc::new(registry),
+            job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
         };
         let (ws, owner) = db.seed_workspace("alpha").await;
         let state = McpState::new(deps.clone(), Arc::new(PgStrategyGate::new(db.pool.clone())));

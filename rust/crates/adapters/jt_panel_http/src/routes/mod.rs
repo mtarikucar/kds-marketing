@@ -575,6 +575,7 @@ mod tests {
                 hosts: Arc::new(RecordingTenantHosts::new()),
                 apps: Arc::new(FakeAppConfig::default()),
                 connectors: Arc::new(ScriptedRegistry::new()),
+                job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
             },
             gate: Arc::new(NoStrategyYet),
             cookie_secure: false,

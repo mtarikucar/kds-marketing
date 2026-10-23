@@ -1,7 +1,7 @@
 //! Fakes for the application ports: a fixed clock, sequential ids, scripted tokens, a plain-text
 //! "hasher", a plain-text "secret box", a fixed channel catalog, a recording tenant host registry,
-//! a configurable platform app configuration, scripted provider adapters and an in-memory unit of
-//! work, plus [`deps`], which wires them all into a `Deps`.
+//! an in-memory job lock, a configurable platform app configuration, scripted provider adapters
+//! and an in-memory unit of work, plus [`deps`], which wires them all into a `Deps`.
 //!
 //! [`InMemoryUow`] keeps its tables behind one shared lock. Each bundle it opens works on a copy
 //! taken when it opens (reads see that copy plus the bundle's own writes) and records its writes;
@@ -60,11 +60,11 @@ pub use providers::{
     TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL,
 };
 pub use services::{
-    DEPS_TOKENS, FIXED_NOW, FixedChannelCatalog, FixedClock, FixedTokenGen, HostCall, PLAIN_PREFIX,
-    PlainHasher, PlainSecretBox, RecordingTenantHosts, SeqIdGen, deps,
+    DEPS_TOKENS, FIXED_NOW, FakeJobLock, FixedChannelCatalog, FixedClock, FixedTokenGen, HostCall,
+    PLAIN_PREFIX, PlainHasher, PlainSecretBox, RecordingTenantHosts, SeqIdGen, deps,
 };
 pub use state::{
     InMemoryUow, MemState, StoredBudgetLink, StoredCapability, StoredCapabilityGroup,
-    StoredConsultationEntry, StoredGroupMember, StoredHypothesis, StoredInboundEvent, StoredRole,
-    StoredWorkspacePolicy,
+    StoredConsultationEntry, StoredGroupMember, StoredHypothesis, StoredInboundEvent,
+    StoredOutboundJob, StoredRole, StoredWorkspacePolicy,
 };

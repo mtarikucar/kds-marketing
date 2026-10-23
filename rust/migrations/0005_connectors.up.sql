@@ -19,8 +19,9 @@
 -- (`capability_id`, null for a new connection). Rows are short-lived: confirmed or abandoned
 -- flows are deleted (`delete`, `purge_expired`).
 --
--- A probe run records one probe of a connector capability; the log is append-only (a trigger
--- refuses updates and deletes), read newest first per capability.
+-- A probe run records one probe of a connector capability; the log is append-only, read newest
+-- first per capability, and kept for 30 days: a trigger refuses every update, and every delete
+-- but that of a run older than 30 days by the database's clock (the scheduler's daily purge).
 --
 -- Events, probe runs and reconnections reference their capability together with the workspace
 -- (composite foreign keys on `capabilities (id, workspace_id)`), so a row can never tie in
@@ -131,7 +132,11 @@ create index if not exists probe_runs_capability_at_idx
 create or replace function probe_runs_immutable() returns trigger
 language plpgsql as $$
 begin
-    raise exception 'probe_runs is append-only';
+    -- Past its 30-day retention a run may be deleted (the daily purge); nothing else changes.
+    if tg_op = 'DELETE' and old.at < now() - interval '30 days' then
+        return old;
+    end if;
+    raise exception 'probe_runs is append-only: a run is never changed, and deleted only once older than 30 days';
 end;
 $$;
 

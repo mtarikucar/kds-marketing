@@ -17,8 +17,8 @@ use jt_app::error::AppError;
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, BudgetRepo, CapabilityFilter, CapabilityGroupRepo,
     CapabilityRepo, ConsultationRepo, HypothesisRepo, InboundEventRepo, LedgerRepo, MembershipRepo,
-    OAuthPendingRepo, PlatformRepos, ProbeRunRepo, RoleRepo, StrategyRepo, TenantRepos, UnitOfWork,
-    UserRepos, WorkspacePolicyRepo, WorkspaceRepo,
+    OAuthPendingRepo, OutboundJobRepo, PlatformRepos, ProbeRunRepo, RoleRepo, StrategyRepo,
+    TenantRepos, UnitOfWork, UserRepos, WorkspacePolicyRepo, WorkspaceRepo,
 };
 use jt_app::usecases::Deps;
 use jt_app::usecases::budget::{self, BudgetItemInput, UpdateBudgetItem};
@@ -158,6 +158,10 @@ impl TenantRepos for SpyTenant {
 
     fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo {
         self.inner.probe_runs()
+    }
+
+    fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo {
+        self.inner.outbound_jobs()
     }
 
     async fn commit(self: Box<Self>) -> Result<(), AppError> {

@@ -9,9 +9,9 @@ use jt_app::error::AppError;
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, ApiKeyRow, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
     ConsultationRepo, HypothesisRepo, InboundEventRepo, LedgerRepo, MembershipRepo, MembershipRow,
-    MembershipView, OAuthPendingRepo, OperatorRepo, PlatformRepos, PlatformSessionRepo,
-    ProbeRunRepo, RoleRepo, SessionRepo, StrategyRepo, TenantRepos, UnitOfWork, UserRepo,
-    UserRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
+    MembershipView, OAuthPendingRepo, OperatorRepo, OutboundJobRepo, PlatformRepos,
+    PlatformSessionRepo, ProbeRunRepo, RoleRepo, SessionRepo, StrategyRepo, TenantRepos,
+    UnitOfWork, UserRepo, UserRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
 };
 use jt_capability::Capability;
 use jt_ledger::LedgerEntry;
@@ -154,6 +154,11 @@ impl TenantRepos for PgTenantRepos {
     }
 
     fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo {
+        self
+    }
+
+    /// A stub until M2 adds the table of sent messages (see `repos::outbound_jobs`).
+    fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo {
         self
     }
 

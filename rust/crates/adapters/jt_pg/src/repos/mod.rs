@@ -31,6 +31,7 @@ pub(crate) mod ledger;
 pub(crate) mod memberships;
 mod oauth_pending;
 mod operators;
+mod outbound_jobs;
 mod policies;
 mod probe_runs;
 pub(crate) mod roles;

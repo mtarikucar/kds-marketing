@@ -7,8 +7,14 @@
 //! panics, naming the provider and the method: the test scripted too few answers. The one
 //! exception is [`Connector::on_connected`], which every connection runs: with nothing queued it
 //! answers `Ok(Value::Null)`, as the trait's default does. Nothing reaches a network.
+//!
+//! A [`ScriptedConnector`] also counts the probes it is answering at once
+//! ([`ScriptedConnector::max_probes_in_flight`]); [`ScriptedConnector::with_probe_yields`] makes
+//! each probe yield to the scheduler a few times before it answers, so that probes run
+//! concurrently overlap and a bound on their concurrency can be observed.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -231,6 +237,11 @@ pub struct ScriptedConnector {
     provider: Provider,
     hosts: &'static [&'static str],
     calls: Mutex<Vec<ConnectorCall>>,
+    /// How many times a probe yields to the scheduler before it answers.
+    probe_yields: usize,
+    /// The probes being answered now, and the most there ever were at once.
+    probes_in_flight: AtomicUsize,
+    max_probes_in_flight: AtomicUsize,
     probe: Script<ProbeResult>,
     refresh: Script<Result<Option<Credential>, ConnectorError>>,
     on_connected: Script<Result<Value, ConnectorError>>,
@@ -258,6 +269,9 @@ impl ScriptedConnector {
             provider,
             hosts: &[],
             calls: Mutex::new(Vec::new()),
+            probe_yields: 0,
+            probes_in_flight: AtomicUsize::new(0),
+            max_probes_in_flight: AtomicUsize::new(0),
             probe: Script::default(),
             refresh: Script::default(),
             on_connected: Script::default(),
@@ -284,9 +298,21 @@ impl ScriptedConnector {
         self
     }
 
+    /// The adapter yielding `yields` times to the scheduler inside every probe, before it
+    /// answers, so that concurrent probes overlap.
+    pub fn with_probe_yields(mut self, yields: usize) -> Self {
+        self.probe_yields = yields;
+        self
+    }
+
     /// Every call so far, in order.
     pub fn calls(&self) -> Vec<ConnectorCall> {
         lock(&self.calls).clone()
+    }
+
+    /// The most probes this adapter was answering at the same time.
+    pub fn max_probes_in_flight(&self) -> usize {
+        self.max_probes_in_flight.load(Ordering::SeqCst)
     }
 
     pub fn push_probe(&self, result: ProbeResult) {
@@ -383,6 +409,12 @@ impl Connector for ScriptedConnector {
             credential: cred.clone(),
             public: public.clone(),
         });
+        let now = self.probes_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_probes_in_flight.fetch_max(now, Ordering::SeqCst);
+        for _ in 0..self.probe_yields {
+            tokio::task::yield_now().await;
+        }
+        self.probes_in_flight.fetch_sub(1, Ordering::SeqCst);
         self.next(&self.probe, "probe result")
     }
 

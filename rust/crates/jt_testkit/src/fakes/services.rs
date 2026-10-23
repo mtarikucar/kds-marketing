@@ -1,6 +1,7 @@
 //! The service fakes: a fixed clock, sequential ids, scripted tokens, a plain-text "hasher", a
-//! plain-text "secret box", a fixed channel catalog, a recording tenant host registry, and
-//! [`deps`], which wires them all (and the connector fakes of `providers`) into a `Deps`.
+//! plain-text "secret box", a fixed channel catalog, a recording tenant host registry, an
+//! in-memory job lock, and [`deps`], which wires them all (and the connector fakes of
+//! `providers`) into a `Deps`.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
-    ChannelCatalog, Clock, IdGen, PasswordHasher, SecretBox, TenantHostRegistry, TokenGen,
-    UnitOfWork,
+    ChannelCatalog, Clock, IdGen, JobGuard, JobLock, PasswordHasher, SecretBox, TenantHostRegistry,
+    TokenGen, UnitOfWork,
 };
 use jt_app::usecases::Deps;
 use jt_app::usecases::strategy::NoopArchivedHook;
@@ -221,6 +222,100 @@ impl TenantHostRegistry for RecordingTenantHosts {
     }
 }
 
+/// A job lock kept in memory, as Postgres advisory locks behave between two sessions: a lock is
+/// granted when no live guard holds its name, else the answer is `None`. A guard gives its lock
+/// back when released or dropped. [`FakeJobLock::hold`] makes another runner hold a lock until
+/// [`FakeJobLock::free`]. Every grant and every give-back is recorded. Clones share the locks.
+#[derive(Clone, Debug, Default)]
+pub struct FakeJobLock {
+    inner: Arc<Mutex<JobLocks>>,
+}
+
+#[derive(Debug, Default)]
+struct JobLocks {
+    held: BTreeSet<String>,
+    granted: Vec<String>,
+    released: Vec<String>,
+}
+
+impl FakeJobLock {
+    /// A lock manager that grants every lock no one holds.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Another runner takes lock `name`: it is not granted until [`FakeJobLock::free`].
+    pub fn hold(&self, name: &str) {
+        lock(&self.inner).held.insert(name.to_owned());
+    }
+
+    /// The other runner gives lock `name` back.
+    pub fn free(&self, name: &str) {
+        lock(&self.inner).held.remove(name);
+    }
+
+    /// Whether lock `name` is held now.
+    pub fn is_held(&self, name: &str) -> bool {
+        lock(&self.inner).held.contains(name)
+    }
+
+    /// The locks granted so far, in order.
+    pub fn granted(&self) -> Vec<String> {
+        lock(&self.inner).granted.clone()
+    }
+
+    /// The locks given back so far (released or dropped guards), in order.
+    pub fn released(&self) -> Vec<String> {
+        lock(&self.inner).released.clone()
+    }
+}
+
+#[async_trait]
+impl JobLock for FakeJobLock {
+    async fn try_acquire(&self, name: &str) -> Result<Option<Box<dyn JobGuard>>, AppError> {
+        let mut locks = lock(&self.inner);
+        if !locks.held.insert(name.to_owned()) {
+            return Ok(None);
+        }
+        locks.granted.push(name.to_owned());
+        Ok(Some(Box::new(FakeJobGuard {
+            locks: Arc::clone(&self.inner),
+            name: Some(name.to_owned()),
+        })))
+    }
+}
+
+/// A lock [`FakeJobLock`] granted.
+struct FakeJobGuard {
+    locks: Arc<Mutex<JobLocks>>,
+    /// `None` once given back.
+    name: Option<String>,
+}
+
+impl FakeJobGuard {
+    fn give_back(&mut self) {
+        if let Some(name) = self.name.take() {
+            let mut locks = lock(&self.locks);
+            locks.held.remove(&name);
+            locks.released.push(name);
+        }
+    }
+}
+
+#[async_trait]
+impl JobGuard for FakeJobGuard {
+    async fn release(mut self: Box<Self>) -> Result<(), AppError> {
+        self.give_back();
+        Ok(())
+    }
+}
+
+impl Drop for FakeJobGuard {
+    fn drop(&mut self) {
+        self.give_back();
+    }
+}
+
 /// The instant the clock of [`deps`] reads.
 pub const FIXED_NOW: OffsetDateTime = time::macros::datetime!(2026-10-22 09:00 UTC);
 
@@ -232,7 +327,8 @@ pub const DEPS_TOKENS: usize = 256;
 /// tokens (`token-001`, `token-002`, …), [`PlainHasher`], [`PlainSecretBox`], a
 /// [`FixedChannelCatalog`] with no kinds, a [`NoopArchivedHook`], a [`RecordingTenantHosts`]
 /// that accepts every host, a default [`FakeAppConfig`] (no provider app, the public address
-/// `https://panel.test`) and an empty [`ScriptedRegistry`] (no provider adapter). A test that
+/// `https://panel.test`), an empty [`ScriptedRegistry`] (no provider adapter) and a
+/// [`FakeJobLock`] that grants every lock. A test that
 /// needs particular tokens, channels, hosts, apps, adapters or another time builds `Deps` itself
 /// or replaces the field.
 pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
@@ -250,6 +346,7 @@ pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
         connectors: Arc::new(ScriptedRegistry::new()),
+        job_lock: Arc::new(FakeJobLock::new()),
     }
 }
 

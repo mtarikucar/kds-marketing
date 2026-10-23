@@ -37,6 +37,7 @@ fn deps(db: &TestDb) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::with_all_apps()),
         connectors: Arc::new(ScriptedRegistry::new()),
+        job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
     }
 }
 

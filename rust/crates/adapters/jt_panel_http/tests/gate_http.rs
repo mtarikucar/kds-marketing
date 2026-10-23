@@ -96,6 +96,7 @@ impl World {
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),
             connectors: Arc::new(ScriptedRegistry::new()),
+            job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
         };
         let out = auth::register(
             &deps,

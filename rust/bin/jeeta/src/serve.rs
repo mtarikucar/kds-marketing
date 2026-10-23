@@ -30,7 +30,7 @@ use jt_app::usecases::{Deps, platform};
 use jt_mcp::{LOOPBACK_HOSTS, McpState};
 use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS};
 use jt_panel_http::AppState;
-use jt_pg::{PgStrategyGate, PgUnitOfWork};
+use jt_pg::{PgJobLock, PgStrategyGate, PgUnitOfWork};
 use jt_seal::AesSecretBox;
 use jt_webhook::WebhookState;
 use sqlx::PgPool;
@@ -44,6 +44,10 @@ use crate::connectors;
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The most job locks held at once (one per scheduled job), each on a connection of the job-lock
+/// pool, which is apart from the server's own (`PgJobLock::with_own_pool`).
+const JOB_LOCK_CONNECTIONS: u32 = 7;
 
 /// The operator console's login route, which the access log does not name.
 const PLATFORM_LOGIN: &str = "/api/platform/login";
@@ -198,6 +202,7 @@ pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
     let apps: Arc<dyn PlatformAppConfig> = Arc::new(NoPlatformApps::new(
         placeholder_public_base_url(config.bind),
     ));
+    let job_lock = Arc::new(PgJobLock::with_own_pool(&pool, JOB_LOCK_CONNECTIONS));
     let uow = Arc::new(PgUnitOfWork::new(pool));
     Deps {
         uow: uow.clone(),
@@ -211,6 +216,7 @@ pub(crate) fn deps(pool: PgPool, config: &Config) -> Deps {
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(EgressTenantHosts::new(Arc::clone(&egress))),
         connectors: connectors::registry(egress, Arc::clone(&apps)),
+        job_lock,
         apps,
     }
 }
@@ -429,7 +435,7 @@ mod tests {
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
     use jt_app::usecases::strategy::NoChannelsYet;
     use jt_testkit::fakes::{
-        FakeAppConfig, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+        FakeAppConfig, FakeJobLock, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
         ScriptedRegistry,
     };
     use serde_json::{Value, json};
@@ -451,6 +457,7 @@ mod tests {
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),
             connectors: Arc::new(ScriptedRegistry::new()),
+            job_lock: Arc::new(FakeJobLock::new()),
         }
     }
 

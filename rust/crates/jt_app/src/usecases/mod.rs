@@ -37,7 +37,7 @@ use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::connectors::{ConnectorRegistry, PlatformAppConfig};
 use crate::ports::{
-    ChannelCatalog, Clock, IdGen, PasswordHasher, SecretBox, StrategyArchivedHook,
+    ChannelCatalog, Clock, IdGen, JobLock, PasswordHasher, SecretBox, StrategyArchivedHook,
     TenantHostRegistry, TokenGen, UnitOfWork,
 };
 
@@ -62,6 +62,8 @@ pub struct Deps {
     pub apps: Arc<dyn PlatformAppConfig>,
     /// The provider adapters.
     pub connectors: Arc<dyn ConnectorRegistry>,
+    /// Keeps each scheduled job to one runner across the server's instances.
+    pub job_lock: Arc<dyn JobLock>,
 }
 
 /// The stored form of a secret token (a session, invite or API-key token): the lowercase hex

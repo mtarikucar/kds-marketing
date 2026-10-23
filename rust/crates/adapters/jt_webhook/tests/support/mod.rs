@@ -18,8 +18,8 @@ use jt_app::error::AppError;
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
     ConsultationRepo, EventQuery, HypothesisRepo, InboundEventRepo, LedgerRepo, MembershipRepo,
-    OAuthPendingRepo, PlatformRepos, ProbeRunRepo, RoleRepo, StrategyRepo, TenantRepos, UnitOfWork,
-    UserRepos, WorkspacePolicyRepo, WorkspaceRepo,
+    OAuthPendingRepo, OutboundJobRepo, PlatformRepos, ProbeRunRepo, RoleRepo, StrategyRepo,
+    TenantRepos, UnitOfWork, UserRepos, WorkspacePolicyRepo, WorkspaceRepo,
 };
 use jt_app::usecases::Deps;
 use jt_app::usecases::auth::{self, RegisterInput};
@@ -312,6 +312,10 @@ impl TenantRepos for FailingTenant {
     }
     fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo {
         self.0.probe_runs()
+    }
+
+    fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo {
+        self.0.outbound_jobs()
     }
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.0.commit().await

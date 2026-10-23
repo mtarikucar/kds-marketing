@@ -1,16 +1,22 @@
 //! The tenant bundle's connector repos: inbound events, pending OAuth flows and probe runs,
 //! answering as `jt_pg` does over migration 0005, with the checks in the order Postgres makes
 //! them: the repo's own pre-checks (workspace, capability), then check constraints, then the
-//! unique keys (`on conflict do nothing`), then the foreign keys.
+//! unique keys (`on conflict do nothing`), then the foreign keys. And the messages awaiting a
+//! delivery report, which `jt_pg` does not hold yet (M2's table): here a test can queue some
+//! ([`super::InMemoryUow::add_outbound_job`]); with none queued the repo answers nothing, as the
+//! Postgres stub does.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::connectors::{DeliveryState, DeliveryStatus};
 use jt_app::ports::{
-    EventOrder, EventQuery, InboundEventRepo, MAX_EVENT_PAGE, MAX_PROBE_PAGE, OAuthPendingId,
-    OAuthPendingRepo, OAuthPendingRow, ProbeRun, ProbeRunId, ProbeRunRepo,
+    EventOrder, EventQuery, InboundEventRepo, MAX_EVENT_PAGE, MAX_PENDING_JOBS, MAX_PROBE_PAGE,
+    OAuthPendingId, OAuthPendingRepo, OAuthPendingRow, OutboundJobRepo, ProbeRun, ProbeRunId,
+    ProbeRunRepo,
 };
 use jt_capability::CapabilityId;
 use jt_connector::{InboundEvent, InboundEventId};
+use jt_tenancy::WorkspaceId;
 use serde_json::Value;
 use time::OffsetDateTime;
 
@@ -323,5 +329,65 @@ impl ProbeRunRepo for MemTenant {
         runs.sort_by_key(|r| std::cmp::Reverse((r.at, r.id)));
         runs.truncate(limit.clamp(1, MAX_PROBE_PAGE) as usize);
         Ok(runs)
+    }
+
+    /// Without a database clock, only the cutoff applies (see the port).
+    async fn purge_before(&mut self, cutoff: OffsetDateTime) -> Result<u64, AppError> {
+        let ws = self.ws;
+        let old = move |r: &ProbeRun| r.workspace_id == ws && r.at < cutoff;
+        let n = self.state().probe_runs.iter().filter(|r| old(r)).count();
+        self.tx.write(move |s| s.probe_runs.retain(|r| !old(r)));
+        Ok(n as u64)
+    }
+}
+
+/// Whether a job whose last report is `status` still awaits a final one.
+fn awaiting(status: Option<&DeliveryStatus>) -> bool {
+    match status {
+        None => true,
+        Some(s) => matches!(s.status, DeliveryState::Pending | DeliveryState::Unknown(_)),
+    }
+}
+
+#[async_trait]
+impl OutboundJobRepo for MemTenant {
+    async fn pending_job_ids(
+        &mut self,
+        ws: WorkspaceId,
+        limit: u32,
+    ) -> Result<Vec<String>, AppError> {
+        self.call(|this| {
+            same_workspace(this.ws, ws)?;
+            Ok(this
+                .state()
+                .outbound_jobs
+                .iter()
+                .filter(|j| j.workspace_id == ws && awaiting(j.status.as_ref()))
+                .map(|j| j.job_id.clone())
+                .take(limit.clamp(1, MAX_PENDING_JOBS) as usize)
+                .collect())
+        })
+    }
+
+    async fn record_status(
+        &mut self,
+        ws: WorkspaceId,
+        statuses: Vec<DeliveryStatus>,
+    ) -> Result<(), AppError> {
+        self.call(|this| {
+            same_workspace(this.ws, ws)?;
+            this.tx.write(move |s| {
+                for status in &statuses {
+                    for job in s
+                        .outbound_jobs
+                        .iter_mut()
+                        .filter(|j| j.workspace_id == ws && j.job_id == status.job_id)
+                    {
+                        job.status = Some(status.clone());
+                    }
+                }
+            });
+            Ok(())
+        })
     }
 }

@@ -92,6 +92,16 @@ pub struct StoredInboundEvent {
     pub raw: Option<Vec<u8>>,
 }
 
+/// A message sent from a workspace, by the provider's job id, with the last delivery report
+/// recorded for it (`None` until one is). Only tests queue them
+/// ([`InMemoryUow::add_outbound_job`]): the messages are M2's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredOutboundJob {
+    pub workspace_id: WorkspaceId,
+    pub job_id: String,
+    pub status: Option<jt_app::ports::connectors::DeliveryStatus>,
+}
+
 /// A workspace's policies together with when they were last set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoredWorkspacePolicy {
@@ -126,6 +136,7 @@ pub struct MemState {
     pub inbound_events: Vec<StoredInboundEvent>,
     pub oauth_pending: Vec<OAuthPendingRow>,
     pub probe_runs: Vec<ProbeRun>,
+    pub outbound_jobs: Vec<StoredOutboundJob>,
 }
 
 impl MemState {
@@ -391,6 +402,16 @@ impl InMemoryUow {
     /// A copy of the committed tables, for assertions.
     pub fn snapshot(&self) -> MemState {
         lock(&self.state).clone()
+    }
+
+    /// Records a message of workspace `ws` sent as the provider's job `job_id`, awaiting its
+    /// delivery report (the messages are M2's; until then only tests add them).
+    pub fn add_outbound_job(&self, ws: WorkspaceId, job_id: &str) {
+        lock(&self.state).outbound_jobs.push(StoredOutboundJob {
+            workspace_id: ws,
+            job_id: job_id.to_owned(),
+            status: None,
+        });
     }
 }
 

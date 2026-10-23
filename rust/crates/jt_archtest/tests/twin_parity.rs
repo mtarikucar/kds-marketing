@@ -91,6 +91,7 @@ fn deps_with(db: &TestDb, connectors: Arc<dyn ConnectorRegistry>) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
         connectors,
+        job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
     }
 }
 

@@ -141,6 +141,32 @@ pub trait TenantHostRegistry: Send + Sync {
     fn rebuild_from(&self, ws: WorkspaceId, hosts: Vec<String>) -> Result<usize, AppError>;
 }
 
+/// Keeps each scheduled job to one runner at a time, across every instance of the server
+/// sharing the database: a run starts only once its runner holds the job's lock
+/// (`usecases::jobs::Job::lock_name`), and a runner that finds it held skips that run.
+///
+/// In Postgres the lock is a session-level advisory lock held on a connection of its own, which
+/// the guard keeps checked out until the lock is given back; when that connection's session
+/// ends (the process dies, the connection drops), Postgres gives the lock back by itself.
+#[async_trait]
+pub trait JobLock: Send + Sync {
+    /// The lock called `name` when no one holds it, else `Ok(None)` (another instance, or
+    /// another task of this one, holds it now). Never waits for it. Held until its guard is
+    /// released or dropped. `Err` only when the lock could not be asked for (the database is
+    /// unreachable): the run is skipped as when the lock is held.
+    async fn try_acquire(&self, name: &str) -> Result<Option<Box<dyn JobGuard>>, AppError>;
+}
+
+/// A held job lock ([`JobLock::try_acquire`]). [`JobGuard::release`] gives it back; a guard
+/// dropped without being released (a run that panicked) gives it back too, in the background,
+/// a moment later.
+#[async_trait]
+pub trait JobGuard: Send + Sync {
+    /// Gives the lock back. `Err` when it could not be given back cleanly; the lock is then
+    /// freed by ending the session that holds it.
+    async fn release(self: Box<Self>) -> Result<(), AppError>;
+}
+
 /// Told when a workspace's approved strategy version has been archived, after the archive is
 /// committed, so that work planned under it can be called off (spec §5: the gate closes again).
 ///
@@ -1242,8 +1268,12 @@ impl ProbeRun {
 /// The most runs one [`ProbeRunRepo::list`] returns.
 pub const MAX_PROBE_PAGE: u32 = 500;
 
-/// The workspace's probe log. Runs are never changed or deleted (Postgres refuses it with a
-/// trigger).
+/// How long a probe run is kept (spec §11): younger runs are never deleted, older ones are
+/// purged daily ([`ProbeRunRepo::purge_before`]).
+pub const PROBE_RUN_RETENTION: time::Duration = time::Duration::days(30);
+
+/// The workspace's probe log. Runs are never changed, and deleted only once older than
+/// [`PROBE_RUN_RETENTION`] (Postgres refuses anything else with a trigger).
 #[async_trait]
 pub trait ProbeRunRepo: Send + Sync {
     /// Appends the run and returns its id. A `run.workspace_id` other than the bundle's is
@@ -1260,6 +1290,42 @@ pub trait ProbeRunRepo: Send + Sync {
         capability_id: CapabilityId,
         limit: u32,
     ) -> Result<Vec<ProbeRun>, AppError>;
+    /// Deletes the workspace's runs made before `cutoff` and returns how many. A run younger than
+    /// [`PROBE_RUN_RETENTION`] by the database's clock is kept whatever the cutoff (Postgres
+    /// refuses to delete it, and the statement leaves it out rather than fail); the in-memory
+    /// fakes, which have no database clock, apply the cutoff alone. The daily purge passes
+    /// `now - PROBE_RUN_RETENTION`.
+    async fn purge_before(&mut self, cutoff: OffsetDateTime) -> Result<u64, AppError>;
+}
+
+/// The most job ids one [`OutboundJobRepo::pending_job_ids`] returns: as many as one NetGSM
+/// delivery-report request takes.
+pub const MAX_PENDING_JOBS: u32 = 50;
+
+/// The workspace's sent messages whose delivery is not final yet, by the provider's job id (the
+/// `provider_id` of a [`connectors::SendReceipt`]), and what the delivery reports said of them.
+///
+/// The messages themselves are the next milestone's (M2 stores them in its own table); until
+/// then the Postgres bundle holds none: `pending_job_ids` answers nothing and `record_status`
+/// writes nothing, so the delivery-report poll runs and never reaches a provider.
+#[async_trait]
+pub trait OutboundJobRepo: Send + Sync {
+    /// The job ids of workspace `ws`'s messages whose delivery is not final, oldest first, at
+    /// most `limit` (clamped to `1..=MAX_PENDING_JOBS`). `ws` must be the bundle's workspace,
+    /// else `INTERNAL`.
+    async fn pending_job_ids(
+        &mut self,
+        ws: WorkspaceId,
+        limit: u32,
+    ) -> Result<Vec<String>, AppError>;
+    /// Records each status against the job it names in workspace `ws`; a status naming a job
+    /// the workspace does not hold is ignored. `ws` must be the bundle's workspace, else
+    /// `INTERNAL`.
+    async fn record_status(
+        &mut self,
+        ws: WorkspaceId,
+        statuses: Vec<connectors::DeliveryStatus>,
+    ) -> Result<(), AppError>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1312,6 +1378,7 @@ pub trait TenantRepos: Send + Sync {
     fn inbound_events(&mut self) -> &mut dyn InboundEventRepo;
     fn oauth_pending(&mut self) -> &mut dyn OAuthPendingRepo;
     fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo;
+    fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 

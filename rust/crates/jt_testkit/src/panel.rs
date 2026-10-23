@@ -102,6 +102,7 @@ impl Panel {
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps,
             connectors,
+            job_lock: Arc::new(crate::fakes::FakeJobLock::new()),
         };
         let state = AppState {
             deps: deps.clone(),

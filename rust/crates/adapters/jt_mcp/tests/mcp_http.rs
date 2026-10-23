@@ -111,6 +111,7 @@ impl World {
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),
             connectors: Arc::new(ScriptedRegistry::new()),
+            job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
         };
         let (a, a_owner) = db.seed_workspace("alpha").await;
         let (b, b_owner) = db.seed_workspace("beta").await;

@@ -3,7 +3,8 @@
 //! Runs reference their capability together with the workspace (a composite foreign key), and
 //! `append` checks first that the capability is this workspace's, so another workspace's
 //! capability is `NOT_FOUND` before the key would refuse it. `latency_ms` is a 32-bit `integer`:
-//! a longer latency is stored as `i32::MAX`. A trigger refuses every update and delete.
+//! a longer latency is stored as `i32::MAX`. A trigger refuses every update, and every delete of
+//! a run younger than 30 days by the database's clock; `purge_before` deletes only older ones.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -96,5 +97,22 @@ impl ProbeRunRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "list probe runs"))?;
         records.into_iter().map(RunRecord::into_run).collect()
+    }
+
+    async fn purge_before(&mut self, cutoff: OffsetDateTime) -> Result<u64, AppError> {
+        let ws = self.workspace_id();
+        // The second bound is the trigger's own (migration 0005), so a cutoff ahead of the
+        // database's clock leaves the young runs out instead of making the trigger refuse the
+        // whole statement.
+        let done = sqlx::query(
+            "delete from probe_runs where workspace_id = $1 and at < $2 \
+             and at < now() - interval '30 days'",
+        )
+        .bind(ws.as_uuid())
+        .bind(cutoff)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "purge probe runs"))?;
+        Ok(done.rows_affected())
     }
 }
