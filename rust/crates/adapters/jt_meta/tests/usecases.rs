@@ -56,8 +56,8 @@ impl ConnectorRegistry for MetaRegistry {
     fn ads(&self, _: Provider) -> Option<Arc<dyn AdBudgetWriter>> {
         None
     }
-    fn leadgen(&self, _: Provider) -> Option<Arc<dyn LeadGenFetcher>> {
-        None
+    fn leadgen(&self, provider: Provider) -> Option<Arc<dyn LeadGenFetcher>> {
+        (provider == Provider::Meta).then(|| self.0.clone() as Arc<dyn LeadGenFetcher>)
     }
     fn telephony(&self, _: Provider) -> Option<Arc<dyn Telephony>> {
         None
@@ -228,4 +228,91 @@ async fn meta_error_text_echoing_the_token_never_reaches_use_case_outputs() {
         }
     }
     assert!(mock.violations().is_empty(), "invalid Graph authentication");
+}
+
+#[tokio::test]
+async fn leadgen_adapter_fields_create_meta_ads_person_and_task() {
+    use jt_app::ports::UnitOfWork;
+    use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
+    use jt_connector::{InboundEvent, InboundEventId};
+    let mock = Mock::start().await;
+    mock.on(
+        "GET",
+        "/fb/v19.0/6666666666",
+        ok(graph_fixture(&mock, "leadgen")),
+    );
+    let meta = Arc::new(MetaConnector::new(
+        egress(&mock),
+        bases(&mock),
+        Arc::new(TestApps::default()),
+    ));
+    let uow = Arc::new(InMemoryUow::new());
+    let mut deps = deps(uow.clone());
+    deps.connectors = Arc::new(MetaRegistry(meta));
+    let f = jt_testkit::inbox_contract::Fixture::new(uow.clone()).await;
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        f.ws,
+        NewCapability {
+            kind_key: "facebook_page".into(),
+            name: "Page".into(),
+            ..Default::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    cap.status = StoredStatus::Verified;
+    cap.external_id = Some("1234567890".into());
+    let credential = Credential::PageToken {
+        page_id: "1234567890".into(),
+        token: TOKEN.into(),
+    };
+    let sealed = deps
+        .seal
+        .seal(f.ws, &serde_json::to_vec(&credential).unwrap())
+        .unwrap();
+    let raw = include_bytes!("fixtures/meta/page_leadgen.json");
+    let draft = jt_meta::webhook::parse(raw).unwrap().remove(0).event;
+    let event = InboundEvent {
+        id: InboundEventId::new_v7(),
+        workspace_id: f.ws,
+        capability_id: Some(cap.id),
+        provider: Provider::Meta,
+        external_id: draft.external_id,
+        kind: draft.kind,
+        payload: draft.payload,
+        received_at: FIXED_NOW,
+        processed_at: None,
+    };
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+    r.inbound_events()
+        .insert_if_new(event, Some(raw.to_vec()))
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let report = jt_app::usecases::inbox::consumer::consume_workspace(&deps, f.ws, FIXED_NOW).await;
+    assert_eq!(report.changed, 1);
+    assert_eq!(report.failed, 0);
+    let s = uow.snapshot();
+    assert_eq!(s.inbox.people[0].display_name, "Test Kişi");
+    assert_eq!(
+        serde_json::to_value(&s.inbox.people[0].first_touch.source).unwrap(),
+        "meta_ads"
+    );
+    assert_eq!(s.inbox.identities[0].value_normalized, "test@example.com");
+    assert_eq!(
+        s.inbox.attribution[0].campaign_id.as_deref(),
+        Some("1212121212")
+    );
+    assert_eq!(
+        s.inbox.attribution[0].acquired_at,
+        time::macros::datetime!(2026-10-01 12:00:00 UTC)
+    );
+    assert_eq!(s.inbox.attribution[0].adset_id, None);
+    assert_eq!(
+        s.inbox.tasks[0].due_at,
+        FIXED_NOW + time::Duration::hours(1)
+    );
+    assert_graph_auth(&mock.request("GET", "/fb/v19.0/6666666666"), TOKEN);
 }

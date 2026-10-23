@@ -71,7 +71,10 @@ impl InboundEventRepo for MemTenant {
             })
             .filter(|e| {
                 !self.state().inbox.consumption.iter().any(|c| {
-                    c.workspace_id == self.ws && c.consumer == consumer && c.event_id == e.id
+                    c.workspace_id == self.ws
+                        && c.consumer == consumer
+                        && c.event_id == e.id
+                        && !super::inbox::deferred_leadgen(consumer, e, c.outcome.as_ref())
                 })
             })
             .cloned()

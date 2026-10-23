@@ -1381,6 +1381,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "jt_app",
+ "jt_capability",
  "jt_connector",
  "jt_inbox",
  "jt_ledger",
@@ -1392,6 +1393,7 @@ dependencies = [
  "proc-macro2",
  "serde_json",
  "syn 2.0.119",
+ "time",
  "tokio",
  "tower",
 ]
@@ -1509,6 +1511,7 @@ dependencies = [
  "axum",
  "hmac 0.13.0",
  "jt_app",
+ "jt_capability",
  "jt_connector",
  "jt_outbound",
  "jt_testkit",

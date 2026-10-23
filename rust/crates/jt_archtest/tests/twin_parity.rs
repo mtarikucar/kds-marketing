@@ -3177,3 +3177,111 @@ async fn inbox_erasure_has_http_mcp_parity() {
     .await;
     assert_eq!(human, agent);
 }
+
+#[tokio::test]
+async fn leadgen_people_and_journey_results_have_http_mcp_parity() {
+    use jt_app::ports::connectors::LeadGenRecord;
+    use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
+    use jt_connector::{Credential, EventKind, InboundEvent, InboundEventId};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("leadgen-parity").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let connector = Arc::new(ScriptedConnector::new(Provider::Meta));
+    deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(connector.clone()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let now = deps.clock.now();
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        ws,
+        NewCapability {
+            kind_key: "facebook_page".into(),
+            name: "Page".into(),
+            ..Default::default()
+        },
+        now,
+    )
+    .unwrap();
+    cap.status = StoredStatus::Verified;
+    cap.external_id = Some("page".into());
+    let credential = Credential::PageToken {
+        page_id: "page".into(),
+        token: "page-secret".into(),
+    };
+    let sealed = deps
+        .seal
+        .seal(ws, &serde_json::to_vec(&credential).unwrap())
+        .unwrap();
+    let event = InboundEvent {
+        id: InboundEventId::new_v7(),
+        workspace_id: ws,
+        capability_id: Some(cap.id),
+        provider: Provider::Meta,
+        external_id: "leadgen:lead".into(),
+        kind: EventKind::LeadGen,
+        payload: json!({"leadgen":{"page_id":"page","leadgen_id":"lead"}}),
+        received_at: now,
+        processed_at: None,
+    };
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+    r.inbound_events().insert_if_new(event, None).await.unwrap();
+    r.commit().await.unwrap();
+    connector.push_leadgen(Ok(LeadGenRecord {
+        leadgen_id: "lead".into(),
+        form_id: Some("form".into()),
+        ad_id: Some("ad".into()),
+        campaign_id: None,
+        campaign_name: None,
+        created_time: Some(now - time::Duration::days(1)),
+        fields: [("email".into(), vec!["lead@example.test".into()])].into(),
+    }));
+    assert_eq!(
+        jt_app::usecases::inbox::consumer::consume_workspace(&deps, ws, now)
+            .await
+            .changed,
+        1
+    );
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let p = r
+        .people()
+        .find_by_identity(jt_inbox::IdentityChannel::Email, "lead@example.test")
+        .await
+        .unwrap()
+        .unwrap();
+    let j = r.journeys().open_for(p.id).await.unwrap().unwrap();
+    drop(r);
+    for (path, tool, args) in [
+        (
+            format!("/api/inbox/people/{}", p.id),
+            "jeeta.inbox.people_get",
+            json!({"person_id":p.id}),
+        ),
+        (
+            format!("/api/inbox/journeys/{}", j.id),
+            "jeeta.inbox.journeys_get",
+            json!({"journey_id":j.id}),
+        ),
+    ] {
+        let response = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let human = json_body(response).await;
+        let agent = call_tool(&app, &key, &session, tool, args).await;
+        assert_eq!(human, agent);
+        if tool.ends_with("journeys_get") {
+            assert_eq!(human["attribution"]["leadgen_id"], "lead");
+            assert_eq!(human["attribution"]["adset_id"], Value::Null);
+            assert_eq!(human["tasks"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                human["events"][0]["kind"]["lead_received"]["leadgen_id"],
+                "lead"
+            );
+        } else {
+            assert_eq!(human["person"]["first_touch"]["source"], "meta_ads");
+        }
+    }
+}

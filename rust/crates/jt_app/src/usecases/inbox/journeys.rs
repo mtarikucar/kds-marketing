@@ -30,6 +30,7 @@ pub struct ReportOut {
 pub struct JourneyOut {
     pub status_labels: std::collections::BTreeMap<String, String>,
     pub journey: Journey,
+    pub attribution: Option<crate::ports::inbox::JourneyAttribution>,
     pub events: Vec<JourneyEvent>,
     pub tasks: Vec<Task>,
     pub notes: Vec<Note>,
@@ -108,6 +109,7 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: JourneyId) -> Result<JourneyOut, Ap
     let events = r.journeys().events(id, 50).await?;
     Ok(JourneyOut {
         status_labels: super::dictionaries::effective_status_labels(r.as_mut()).await?,
+        attribution: r.attribution().by_journey(id).await?,
         journey,
         events,
         tasks: r.tasks().list(id).await?,

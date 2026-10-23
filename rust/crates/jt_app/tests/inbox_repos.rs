@@ -35,3 +35,19 @@ async fn attribution_by_ad_half_open_window_and_tenant_isolation() {
     ))
     .await;
 }
+
+#[tokio::test]
+async fn journey_attribution_is_immutable() {
+    jt_testkit::compliance_contract::journey_attribution_is_immutable(std::sync::Arc::new(
+        jt_testkit::fakes::InMemoryUow::new(),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn attribution_by_journey_pg_fake_parity() {
+    jt_testkit::compliance_contract::attribution_by_journey_pg_fake_parity(std::sync::Arc::new(
+        jt_testkit::fakes::InMemoryUow::new(),
+    ))
+    .await;
+}

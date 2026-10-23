@@ -611,3 +611,183 @@ pub async fn iys_slot_is_separate_and_tenant_scoped(uow: Arc<dyn UnitOfWork>) {
         Some(b"sms-blob".to_vec())
     );
 }
+
+/// No replacement API exists: a second insert must preserve every original provenance field.
+pub async fn journey_attribution_is_immutable(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let person = f.insert_person("Lead").await;
+    let j = f.journey(person.id);
+    let original = JourneyAttribution {
+        workspace_id: f.ws,
+        journey_id: j.id,
+        provider: "meta".into(),
+        ad_id: Some("ad-original".into()),
+        adset_id: None,
+        campaign_id: Some("campaign-original".into()),
+        form_id: None,
+        leadgen_id: "lead-original".into(),
+        acquired_at: FIXED_NOW,
+    };
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    f.insert_journey(r.as_mut(), &j).await.unwrap();
+    assert!(r.attribution().insert_once(original.clone()).await.unwrap());
+    r.commit().await.unwrap();
+    let mut replacement = original.clone();
+    replacement.provider = "other".into();
+    replacement.ad_id = None;
+    replacement.adset_id = Some("set-later".into());
+    replacement.campaign_id = None;
+    replacement.form_id = Some("form-later".into());
+    replacement.leadgen_id = "lead-later".into();
+    replacement.acquired_at += Duration::days(1);
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(!r.attribution().insert_once(replacement).await.unwrap());
+    r.commit().await.unwrap();
+    let reader = crate::fakes::deps(uow.clone()).attribution();
+    assert_eq!(reader.by_journey(f.ws, j.id).await.unwrap(), Some(original));
+}
+
+/// The same committed read contract runs against PostgreSQL and the in-memory bundle.
+pub async fn attribution_by_journey_pg_fake_parity(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let person = f.insert_person("Lead").await;
+    let j = f.journey(person.id);
+    let row = JourneyAttribution {
+        workspace_id: f.ws,
+        journey_id: j.id,
+        provider: "meta".into(),
+        ad_id: None,
+        adset_id: None,
+        campaign_id: None,
+        form_id: None,
+        leadgen_id: "lead".into(),
+        acquired_at: FIXED_NOW,
+    };
+    let reader = crate::fakes::deps(uow.clone()).attribution();
+    assert!(reader.by_journey(f.ws, j.id).await.unwrap().is_none());
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    f.insert_journey(r.as_mut(), &j).await.unwrap();
+    r.attribution().insert_once(row.clone()).await.unwrap();
+    drop(r);
+    assert!(reader.by_journey(f.ws, j.id).await.unwrap().is_none());
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    f.insert_journey(r.as_mut(), &j).await.unwrap();
+    r.attribution().insert_once(row.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    assert_eq!(
+        reader.by_journey(f.ws, j.id).await.unwrap(),
+        Some(row.clone())
+    );
+    assert!(reader.by_journey(f.other, j.id).await.unwrap().is_none());
+    let mut r = uow.tenant(f.other).await.unwrap();
+    assert!(r.attribution().insert_once(row).await.is_err());
+}
+
+/// Only Meta forms deferred by inbox@2 can be reclaimed in that same generation.
+pub async fn deferred_leadgen_claim_is_narrow_and_transactional(uow: Arc<dyn UnitOfWork>) {
+    use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
+    let f = Fixture::new(uow.clone()).await;
+    let mut ids = Vec::new();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    for (provider, kind, outcome) in [
+        (Provider::Meta, EventKind::LeadGen, "deferred"),
+        (Provider::Meta, EventKind::Message, "deferred"),
+        (Provider::Netgsm, EventKind::LeadGen, "deferred"),
+        (Provider::Meta, EventKind::LeadGen, "consumed"),
+    ] {
+        let id = InboundEventId::new_v7();
+        r.inbound_events()
+            .insert_if_new(
+                InboundEvent {
+                    id,
+                    workspace_id: f.ws,
+                    capability_id: None,
+                    provider,
+                    kind,
+                    external_id: id.to_string(),
+                    payload: serde_json::json!({}),
+                    received_at: FIXED_NOW,
+                    processed_at: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(r.consumption().try_claim("inbox@2", id).await.unwrap());
+        r.consumption()
+            .record(
+                "inbox@2",
+                id,
+                ConsumptionOutcome {
+                    consumed_at: FIXED_NOW,
+                    outcome: outcome.into(),
+                },
+            )
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    r.commit().await.unwrap();
+    let mut other = uow.tenant(f.other).await.unwrap();
+    assert!(
+        other
+            .inbound_events()
+            .list_for_consumer("inbox@2", None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(other);
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let eligible = r
+        .inbound_events()
+        .list_for_consumer("inbox@2", None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        eligible.iter().map(|e| e.id).collect::<Vec<_>>(),
+        vec![ids[0]]
+    );
+    assert!(r.consumption().try_claim("inbox@2", ids[0]).await.unwrap());
+    drop(r); // an interrupted reclaim must retain the old deferral for another attempt
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(r.consumption().try_claim("inbox@2", ids[0]).await.unwrap());
+    assert!(!r.consumption().try_claim("inbox@2", ids[0]).await.unwrap());
+    for id in &ids[1..] {
+        assert!(!r.consumption().try_claim("inbox@2", *id).await.unwrap());
+    }
+    r.consumption()
+        .record(
+            "inbox@2",
+            ids[0],
+            ConsumptionOutcome {
+                consumed_at: FIXED_NOW,
+                outcome: "consumed".into(),
+            },
+        )
+        .await
+        .unwrap();
+    // The same exception must not silently apply to unrelated consumers.
+    assert!(r.consumption().try_claim("other", ids[0]).await.unwrap());
+    r.consumption()
+        .record(
+            "other",
+            ids[0],
+            ConsumptionOutcome {
+                consumed_at: FIXED_NOW,
+                outcome: "deferred".into(),
+            },
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(!r.consumption().try_claim("other", ids[0]).await.unwrap());
+    assert!(
+        r.inbound_events()
+            .list_for_consumer("inbox@2", None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

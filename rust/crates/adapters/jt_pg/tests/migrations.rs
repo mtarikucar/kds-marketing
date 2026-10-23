@@ -518,6 +518,16 @@ async fn inbox_policy_round_trip_preserves_existing_labels() {
 
 #[tokio::test]
 async fn migration_round_trip_36_48_36_48() {
+    compliance_round_trip_preserving_people().await;
+}
+
+// Historical plan name; the unreleased compliance migration is actually 0008.
+#[tokio::test]
+async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
+    compliance_round_trip_preserving_people().await;
+}
+
+async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
     let (ws, _) = db.seed_workspace("compliance-roundtrip").await;
     let person = Uuid::now_v7();

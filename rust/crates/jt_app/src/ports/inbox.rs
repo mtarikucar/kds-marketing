@@ -399,6 +399,8 @@ pub struct ConsumptionOutcome {
 pub trait ConsumptionRepo: Send + Sync {
     /// Claim within the same transaction as the effects. False on a duplicate. Rollback removes
     /// the claim, permitting retry. Always record before committing; never commit an empty claim.
+    /// Upgrade exception: inbox@2 may reclaim its deferred Meta LeadGen rows atomically.
+    /// Rollback restores the deferral; other kinds/providers/outcomes/consumers stay final.
     async fn try_claim(
         &mut self,
         consumer: &str,

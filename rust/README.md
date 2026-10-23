@@ -1334,9 +1334,10 @@ sırasından bağımsız olarak çalışma alanı/sağlayıcı/`unique_id` ile i
 Bağlantı yalnız Hangup'a kadar saklanan Answer ile doğrulanır; Hangup'ın
 durum/metin/süre alanı bağlantı kanıtı değildir. Sonradan gelen olay sonucu değiştirmez.
 
-LeadGen, Consent, Unknown, yönlendirilmemiş/desteklenmeyen kabiliyet olayları,
-eşleşmeyen raporlar ve henüz konuşması bulunmayan echo'lar `deferred` kaydedilir.
-Bu kayıtlar `inbox@2` tarafından tekrar talep edilebilir; mesaj ve yolculuk anahtarları
+M2a `inbox@1`, LeadGen ve Consent olaylarını ertelerdi; M2b `inbox@2` bu türleri işler.
+Unknown, yönlendirilmemiş/desteklenmeyen kabiliyet olayları, eşleşmeyen raporlar ve
+henüz konuşması bulunmayan echo'lar `deferred` kaydedilir.
+Önceki tüketicinin kayıtları `inbox@2` tarafından tekrar talep edilebilir; mesaj ve yolculuk anahtarları
 sürümler arasında sabit kalır. Konuşmasız echo için gelen temas zamanı uydurulmaz.
 
 T014 inceleme notu: Lost yolculuktaki PBX olayları şu anda yan etki olmadan ertelenir;
@@ -1711,3 +1712,42 @@ when `payload.person_id` appears in that tenant's erasure log. Consumer identity
 before person matching, including IMAP UIDVALIDITY replay; each dropped event is durably
 counted by its `event_consumption.outcome = 'erased_identity_drop'`, without recreating a person.
 Manual creation and identity attachment reject these hashes as well.
+
+## M2b lead-gen intake and attribution
+
+The `inbox@2` system consumer now processes Meta Page lead-form webhooks, including events
+previously deferred by `inbox@1` or earlier `inbox@2` builds. Only deferred Meta LeadGen
+claims are reclaimable within `inbox@2`; other kinds, providers, outcomes, and consumers stay
+final. Reclaiming a claim and applying effects share the same transaction. Page webhooks routed to either `facebook_page` or `messenger`
+fetch the submission with that capability's bound `PageToken` credential,
+then matches all `LeadGenRecord.fields` email/phone values in one identity operation. The
+provider read holds no transaction or domain locks; intake locks and rechecks the Page binding
+before applying the fetched data. Provider errors leave the event unclaimed for retry.
+
+New people have `first_touch.source = meta_ads`. Existing people retain their original first
+touch and gain a `lead_received` journey event. An open journey is reused; a Won journey leads
+to a new Repeat journey; a Lost journey stays Lost and receives a review follow-up. Each accepted
+submission creates one task due one hour after intake, assigned to the journey owner or the
+unassigned queue. Forms create no conversation, inbound message, consent, or reply window.
+
+Person/identity changes, the journey event, initial attribution, task, ledger, and consumer claim
+commit together. Replays cannot duplicate their effects. An email/phone split returns
+`CONFLICT` with `reason: identity_split`, both person IDs, and a durable merge suggestion. This conflict commits only its review
+suggestion and ledger entry, leaves the event unclaimed, and creates no intake effects. Repeated
+unresolved attempts reuse the suggestion; a caller can resolve the split and retry with one identity.
+
+`journey_attribution` records only the submission that opens a journey. Existing-journey later
+touches never fill or replace its original attribution. `acquired_at` is the provider's form
+acquisition time (fetched `created_time`, or the webhook's acquisition timestamp), never the
+processing time. Missing ad, campaign, and form IDs remain null; `adset_id` stays null rather
+than inferring it from `adgroup_id`. PostgreSQL and the fake preserve the first row; PostgreSQL
+also rejects direct updates/deletes. Anonymous provenance survives raw-event retention and
+person erasure. Erased email/phone hashes prevent later forms from recreating the person.
+
+The existing people-get and journeys-get panel/MCP operations expose the results; journeys-get
+includes `attribution` (or null), touch events, and follow-up tasks. This system consumer adds
+no public catalog row, route, permission, or tool, so release counts remain unchanged.
+`Deps::attribution()` provides tenant-scoped journey reads and half-open `[from,to)` ad reads,
+ordered by acquisition time and journey ID. The historical Task 9 migration-test name mentions
+0007; the compliance schema lives in unreleased **0008**, whose reversible round trip retains
+unrelated inbox rows.

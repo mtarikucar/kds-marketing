@@ -323,3 +323,21 @@ async fn attribution_by_ad_half_open_window_and_tenant_isolation() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn journey_attribution_is_immutable() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::compliance_contract::journey_attribution_is_immutable(std::sync::Arc::new(
+        jt_pg::PgUnitOfWork::new(db.pool.clone()),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn attribution_by_journey_pg_fake_parity() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::compliance_contract::attribution_by_journey_pg_fake_parity(std::sync::Arc::new(
+        jt_pg::PgUnitOfWork::new(db.pool.clone()),
+    ))
+    .await;
+}

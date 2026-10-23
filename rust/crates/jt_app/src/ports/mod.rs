@@ -1147,6 +1147,7 @@ pub trait InboundEventRepo: Send + Sync {
 
     /// Consumer-specific traversal, oldest (received_at,id) first; filters claims BEFORE limit,
     /// ignoring processed_at. Restart without a cursor each sweep so rolled-back events retry.
+    /// Includes inbox@2 Meta LeadGen rows previously marked deferred, matching try_claim.
     async fn list_for_consumer(
         &mut self,
         consumer: &str,

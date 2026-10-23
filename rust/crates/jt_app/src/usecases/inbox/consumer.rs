@@ -50,7 +50,7 @@ pub async fn consume_workspace(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime
         for event in events {
             cursor = Some((event.received_at, event.id));
             report.touched += 1;
-            match consume(deps, &event, now).await {
+            match consume_event(deps, &event, now).await {
                 Ok("consumed") => report.changed += 1,
                 Ok(_) => report.skipped += 1,
                 Err(e) => {
@@ -64,13 +64,15 @@ pub async fn consume_workspace(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime
 }
 fn warn(ws: WorkspaceId, e: &AppError) {
     // Adapter errors can contain SQL or personal data: only a structured code reaches logs.
-    tracing::warn!(job="inbox_consume",workspace_id=%ws,code=e.code.as_str(),"inbound consumption rolled back");
+    tracing::warn!(job="inbox_consume",workspace_id=%ws,code=e.code.as_str(),"inbound consumption failed");
 }
-async fn consume(
+/// Trusted system entry point; transport callers must use the authenticated event intake.
+pub async fn consume_event(
     deps: &Deps,
     event: &InboundEvent,
     now: OffsetDateTime,
 ) -> Result<&'static str, AppError> {
+    let lead = super::leadgen::fetch(deps, event).await?;
     let mut r = deps.uow.tenant(event.workspace_id).await?;
     r.people().lock_workspace().await?;
     if !matches!(
@@ -80,7 +82,11 @@ async fn consume(
         return Ok("deferred");
     }
     r.people().set_write_time(now).await?;
-    if !r.consumption().try_claim(CONSUMER, event.id).await? {
+    // Form splits must leave an actionable review suggestion but remain retryable. The
+    // workspace lock serializes matching; successful form effects and their claim still
+    // commit in this one transaction. Duplicate claims roll back all tentative effects.
+    let claim_after_intake = lead.is_some();
+    if !claim_after_intake && !r.consumption().try_claim(CONSUMER, event.id).await? {
         return Ok("duplicate");
     }
     let ctx = Ctx {
@@ -93,10 +99,19 @@ async fn consume(
         now,
         agent_connection_id: None,
     };
-    let outcome = match route(deps, &ctx, r.as_mut(), event).await {
+    let outcome = match route(deps, &ctx, r.as_mut(), event, lead.as_ref()).await {
+        Err(e) if claim_after_intake && e.details["reason"] == "identity_split" => {
+            // match_or_create detects a split before mutating any person or identity.
+            // Only its idempotent review suggestion and ledger entry have been written.
+            r.commit().await?;
+            return Err(e);
+        }
         Err(e) if e.details["reason"] == "erased_identity" => "erased_identity_drop",
         result => result?,
     };
+    if claim_after_intake && !r.consumption().try_claim(CONSUMER, event.id).await? {
+        return Ok("duplicate");
+    }
     r.consumption()
         .record(
             CONSUMER,
@@ -115,6 +130,7 @@ async fn route(
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
     event: &InboundEvent,
+    lead: Option<&super::leadgen::Fetched>,
 ) -> Result<&'static str, AppError> {
     if let Some(person) = event
         .payload
@@ -161,6 +177,12 @@ async fn route(
             return Ok("deferred");
         };
         cap = sibling;
+    }
+    if event.kind == EventKind::LeadGen {
+        return match lead {
+            Some(lead) => super::leadgen::intake(deps, ctx, r, &cap, lead).await,
+            None => Ok("deferred"),
+        };
     }
     if event.kind == EventKind::Consent {
         return consent_event(deps, ctx, r, event, &cap).await;
@@ -325,7 +347,7 @@ async fn conversation(
         })
         .await
 }
-async fn journey(
+pub(super) async fn journey(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,

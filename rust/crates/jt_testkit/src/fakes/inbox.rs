@@ -6,12 +6,24 @@ use async_trait::async_trait;
 use jt_app::ports::connectors::MailboxCursor;
 use jt_app::{error::AppError, ports::inbox::*};
 use jt_capability::CapabilityId;
-use jt_connector::InboundEventId;
+use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
 use jt_inbox::*;
 use jt_tenancy::{UserId, WorkspaceId};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
+
+/// Upgrade exception shared by claim and traversal; every other consumption remains final.
+pub(super) fn deferred_leadgen(
+    consumer: &str,
+    event: &InboundEvent,
+    outcome: Option<&ConsumptionOutcome>,
+) -> bool {
+    consumer == "inbox@2"
+        && event.provider == Provider::Meta
+        && event.kind == EventKind::LeadGen
+        && outcome.is_some_and(|o| o.outcome == "deferred")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredConsumption {
@@ -1367,13 +1379,36 @@ impl ConsumptionRepo for MemTenant {
                     .iter()
                     .any(|r| r.event.workspace_id == ws && r.event.id == id),
             )?;
-            if t.state()
+            if let Some(existing) = t
+                .state()
                 .inbox
                 .consumption
                 .iter()
-                .any(|r| r.workspace_id == ws && r.consumer == consumer && r.event_id == id)
+                .find(|r| r.workspace_id == ws && r.consumer == consumer && r.event_id == id)
             {
-                return Ok(false);
+                let event = &t
+                    .state()
+                    .inbound_events
+                    .iter()
+                    .find(|r| r.event.workspace_id == ws && r.event.id == id)
+                    .expect("checked event")
+                    .event;
+                if !deferred_leadgen(consumer, event, existing.outcome.as_ref()) {
+                    return Ok(false);
+                }
+                let consumer = consumer.to_owned();
+                t.tx.write(move |s| {
+                    let row = s
+                        .inbox
+                        .consumption
+                        .iter_mut()
+                        .find(|r| {
+                            r.workspace_id == ws && r.consumer == consumer && r.event_id == id
+                        })
+                        .expect("checked claim");
+                    row.outcome = None;
+                });
+                return Ok(true);
             }
             let row = StoredConsumption {
                 workspace_id: ws,

@@ -202,6 +202,14 @@ pub fn begin_journey(
 pub enum JourneyEventKind {
     /// Inbound contact; does not advance the journey.
     MessageReceived,
+    /// A Meta form touch; never establishes a conversation reply window.
+    LeadReceived {
+        /// Provider submission identifier, without form answers.
+        leadgen_id: String,
+        /// Original provider acquisition time.
+        #[serde(with = "time::serde::rfc3339")]
+        acquired_at: OffsetDateTime,
+    },
     /// An outbound reply was sent.
     Replied,
     /// A completed call attempt.
@@ -449,13 +457,16 @@ pub fn reduce(
             && !(j.status == JourneyStatus::Lost
                 && matches!(
                     e.kind,
-                    JourneyEventKind::MessageReceived | JourneyEventKind::Reopened
+                    JourneyEventKind::MessageReceived
+                        | JourneyEventKind::LeadReceived { .. }
+                        | JourneyEventKind::Reopened
                 ))
         {
             return Err(ReduceError::Terminal);
         }
         patch.updated_at = e.at;
         match &e.kind {
+            JourneyEventKind::LeadReceived { .. } => {}
             JourneyEventKind::MessageReceived => effects.push(JourneyEffect::ConversationOurs),
             JourneyEventKind::Replied | JourneyEventKind::CallMade { connected: true } => {
                 patch.unreachable_attempts = 0;
