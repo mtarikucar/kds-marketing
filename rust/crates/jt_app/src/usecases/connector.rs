@@ -444,12 +444,13 @@ pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 /// send the owner's browser. Needs `capabilities.manage`.
 ///
 /// The kind must be one OAuth connects (a Meta kind or `x`), else `VALIDATION` naming `kind_key`
-/// (a NetGSM kind with `details.reason = "use_set_credentials"`). The provider's app must be
-/// configured (`instagram` signs in with the Instagram app, the other Meta kinds with the Meta
-/// app, `x` with the X app), else `CONFLICT` "provider app not configured" (`details.reason =
-/// "provider_app_not_configured"`, `details.provider`); its adapter present, else `CONFLICT`; and
-/// the public base URL configured, else `CONFLICT` "public base url not configured"
-/// (`details.reason = "public_base_url_not_configured"`). The state is signed for the workspace
+/// (a NetGSM kind with `details.reason = "use_set_credentials"`). Then, in this order: the public
+/// base URL must be configured, else `CONFLICT` "public base url not configured"
+/// (`details.reason = "public_base_url_not_configured"`), whichever apps are configured; the
+/// provider's app must be configured (`instagram` signs in with the Instagram app, the other Meta
+/// kinds with the Meta app, `x` with the X app), else `CONFLICT` "provider app not configured"
+/// (`details.reason = "provider_app_not_configured"`, `details.provider`); and its adapter
+/// present, else `CONFLICT`. The state is signed for the workspace
 /// and holds the provider, the
 /// kind, the time and a nonce; for X a PKCE pair is made and its verifier sealed with the flow.
 /// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the key of the
@@ -472,8 +473,9 @@ pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<St
 /// malformed, or issued more than [`STATE_TTL`] ago; a flow that is unknown, expired, or already
 /// completed (a state is used once), or whose app is not the one `input.callback` names (an
 /// Instagram Login flow comes back to `instagram`, every other Meta flow to `meta`); a
-/// reconnection whose capability was retired meanwhile. Then the code is exchanged for a
-/// credential, with the flow's own redirect URI, and the
+/// reconnection whose capability was retired meanwhile. Then, as in [`start_oauth`], a missing
+/// public base URL is `CONFLICT` before a missing app or adapter. Then the code is exchanged for
+/// a credential, with the flow's own redirect URI, and the
 /// account's assets are listed; a provider refusal (`Auth`, `Permission`, `Permanent`) is
 /// `VALIDATION` with `details = {provider, provider_error, reason}`, and a busy or unreachable
 /// provider (`Throttle`, `Transient`) `UPSTREAM_UNAVAILABLE` with
@@ -549,13 +551,14 @@ pub async fn complete_oauth(
         (flow, verifier, bound)
     };
 
+    // The public base URL first, as when the flow started; then the app and its adapter.
+    let redirect = callback_url(deps.apps.as_ref(), callback)?;
     let app = oauth_app(deps.apps.as_ref(), flow.provider, &flow.kind_key)
         .ok_or_else(|| app_not_configured(flow.provider))?;
     let oauth = deps
         .connectors
         .oauth(flow.provider)
         .ok_or_else(|| AppError::conflict(NO_ADAPTER))?;
-    let redirect = callback_url(deps.apps.as_ref(), callback)?;
     let credential = oauth
         .exchange(
             &app,
@@ -900,10 +903,13 @@ pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<Start
 /// in the workspace: only who may manage capabilities sees it. Needs `capabilities.manage`.
 ///
 /// Without a configured public base URL there is no address to show: `CONFLICT` "public base url
-/// not configured" (`details.reason = "public_base_url_not_configured"`).
+/// not configured" (`details.reason = "public_base_url_not_configured"`), whichever apps are
+/// configured.
 pub async fn hooks(deps: &Deps, ctx: &Ctx) -> Result<HooksOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let apps = deps.apps.as_ref();
+    // The public base URL first: without it there is no address at all, whichever apps exist.
+    public_url(apps, "/")?;
     let meta = match apps.meta_app() {
         Some(_) => Some(MetaHook {
             url: public_url(apps, META_HOOK_PATH)?.to_string(),
@@ -953,15 +959,16 @@ async fn begin_oauth(
     bound: Option<CapabilityId>,
 ) -> Result<StartOut, AppError> {
     let provider = oauth_kind(kind_key)?;
+    let callback =
+        OAuthCallback::of_flow(provider, kind_key).ok_or_else(|| app_not_configured(provider))?;
+    // The public base URL first: without it no flow can start, whichever apps are configured.
+    let redirect = callback_url(deps.apps.as_ref(), callback)?;
     let app = oauth_app(deps.apps.as_ref(), provider, kind_key)
         .ok_or_else(|| app_not_configured(provider))?;
     let oauth = deps
         .connectors
         .oauth(provider)
         .ok_or_else(|| AppError::conflict(NO_ADAPTER))?;
-    let callback =
-        OAuthCallback::of_flow(provider, kind_key).ok_or_else(|| app_not_configured(provider))?;
-    let redirect = callback_url(deps.apps.as_ref(), callback)?;
     let started_by = acting_user(&ctx.actor)
         .ok_or_else(|| AppError::forbidden("only a person or an agent starts an OAuth flow"))?;
     let ws = ctx.workspace_id;

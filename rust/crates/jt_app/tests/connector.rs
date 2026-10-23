@@ -526,7 +526,8 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
 
 /// Without a configured public base URL there is no redirect URI and no webhook address: starting
 /// or reconnecting a flow, completing one, and listing the hook addresses are `CONFLICT` with the
-/// reason `public_base_url_not_configured`, and nothing is written nor asked of a provider.
+/// reason `public_base_url_not_configured`, before any app is looked at, and nothing is written
+/// nor asked of a provider.
 #[tokio::test]
 async fn hooks_and_start_oauth_conflict_without_public_base_url() {
     let r = rig().await;
@@ -580,12 +581,48 @@ async fn hooks_and_start_oauth_conflict_without_public_base_url() {
     assert_eq!(r.meta_oauth.calls().len(), meta_calls);
     assert_eq!(r.x_oauth.calls().len(), x_calls);
 
-    // A missing app is still named first: without an app, the address does not matter.
+    // The address is named first: without it every OAuth kind is blocked, whichever apps are
+    // configured (none here), and so are reconnecting, completing and the hook addresses.
     let mut bare = unset.clone();
     bare.apps = Arc::new(FakeAppConfig {
         public_base_url: None,
         ..FakeAppConfig::default()
     });
+    for kind in ["facebook_page", "instagram", "x"] {
+        assert_unset(
+            err(connector::start_oauth(&bare, o, start(kind)).await),
+            &format!("{kind} without apps"),
+        );
+    }
+    assert_unset(
+        err(connector::reconnect(&bare, o, page.id).await),
+        "reconnect without apps",
+    );
+    assert_unset(
+        err(r
+            .complete_as(&bare, &owner, &state_of(&started), "code-1")
+            .await),
+        "complete without apps",
+    );
+    assert_unset(err(connector::hooks(&bare, o).await), "hooks without apps");
+    // With only the X app, a Meta kind still reads the missing address, not the missing app.
+    bare.apps = Arc::new(FakeAppConfig {
+        public_base_url: None,
+        meta: None,
+        instagram: None,
+        ..FakeAppConfig::with_all_apps()
+    });
+    assert_unset(
+        err(connector::start_oauth(&bare, o, start("facebook_page")).await),
+        "facebook_page with only the X app",
+    );
+    assert_eq!(r.pending_rows().len(), rows);
+    assert_eq!(r.meta_oauth.calls().len(), meta_calls);
+    assert_eq!(r.x_oauth.calls().len(), x_calls);
+
+    // With the address, a missing app is named (see
+    // `start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier`).
+    bare.apps = Arc::new(FakeAppConfig::default());
     let e = err(connector::start_oauth(&bare, o, start("facebook_page")).await);
     assert_eq!(e.details["reason"], "provider_app_not_configured");
 }

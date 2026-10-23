@@ -8,9 +8,10 @@
 //! EAAB… is invalid"), possibly URL- or form-encoded. So every call knows its own secrets (the
 //! token in use, the app secret, and the secret fields of a token exchange's query or form: the
 //! code, the client secret, the token to exchange, the PKCE verifier) and takes each out of the
-//! provider's text, as is and in its encoded forms, **before** the reason is cut to its length
-//! (a secret straddling the cut would otherwise leave its first characters behind); the generic
-//! redaction then runs on what remains, when the error is built.
+//! provider's text, as every span that decodes to it ([`strip_secrets`]: as is, percent-encoded
+//! with any bytes escaped in any hex case, `+` for a space, a `%` escaped again), **before** the
+//! reason is cut to its length (a secret straddling the cut would otherwise leave its first
+//! characters behind); the generic redaction then runs on what remains, when the error is built.
 
 use std::fmt;
 
@@ -462,43 +463,109 @@ fn call_secrets(auth: Auth<'_>, url: &Url, body: &Body) -> Vec<String> {
     secrets
 }
 
-/// `text` with every secret of `secrets` replaced by [`SECRET_MASK`]: as is, form-encoded
-/// (`application/x-www-form-urlencoded`), and percent-encoded byte for byte with upper- and
-/// lowercase hex digits (every byte but ASCII letters and digits); the longest forms first, so a
-/// secret inside another goes with it.
+/// `text` with every spelling of a secret of `secrets` replaced by [`SECRET_MASK`], the text
+/// around it kept: every span that decodes to the secret byte for byte ([`spelled_at`]), so the
+/// secret as is, percent-encoded with any set of bytes escaped (RFC 3986 keeping `-._~`, every
+/// byte but letters and digits, or any mix), escapes in upper-, lower- or mixed-case hex, a
+/// space written `+` (form encoding), and a `%` itself escaped (`%25`, a URL quoted inside
+/// another). The longest secrets go first, so a secret inside another goes with it.
+///
+/// No other form is looked for because none is sent: the adapter puts a secret on the wire only
+/// as is (the `Authorization` header) or URL- or form-encoded (a query or a form); the
+/// `appsecret_proof` is an HMAC, not a form of the app secret.
 pub(crate) fn strip_secrets(text: &str, secrets: &[String]) -> String {
-    let mut forms: Vec<String> = Vec::new();
-    for secret in secrets.iter().filter(|s| !s.is_empty()) {
-        forms.push(secret.clone());
-        forms.push(url::form_urlencoded::byte_serialize(secret.as_bytes()).collect());
-        for upper in [true, false] {
-            forms.push(percent_encoded(secret, upper));
-        }
-    }
-    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
-    forms.dedup();
+    let mut secrets: Vec<&[u8]> = secrets
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.as_bytes())
+        .collect();
+    // Longest first; equal ones side by side, so each goes once.
+    secrets.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    secrets.dedup();
     let mut out = text.to_owned();
-    for form in &forms {
-        if out.contains(form.as_str()) {
-            out = out.replace(form.as_str(), SECRET_MASK);
-        }
+    for secret in secrets {
+        out = strip_secret(&out, secret);
     }
     out
 }
 
-/// `text` with every byte but ASCII letters and digits written `%XX`, in upper- or lowercase hex.
-fn percent_encoded(text: &str, upper: bool) -> String {
-    let mut out = String::with_capacity(text.len() * 3);
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() {
-            out.push(char::from(byte));
-        } else if upper {
-            out.push_str(&format!("%{byte:02X}"));
-        } else {
-            out.push_str(&format!("%{byte:02x}"));
+/// `text` with every span that spells `secret` ([`spelled_at`]) replaced by [`SECRET_MASK`],
+/// left to right, each span as long as it can be.
+fn strip_secret(text: &str, secret: &[u8]) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut kept = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        match spelled_at(bytes, at, secret) {
+            // Spans start and end next to ASCII or at a whole character; checked all the same.
+            Some(end) if text.is_char_boundary(at) && text.is_char_boundary(end) => {
+                out.push_str(&text[kept..at]);
+                out.push_str(SECRET_MASK);
+                kept = end;
+                at = end;
+            }
+            _ => at += 1,
         }
     }
+    out.push_str(&text[kept..]);
     out
+}
+
+/// The end of the longest span of `text` from `start` that decodes to `secret`, if one does.
+/// Each byte of the secret may be written as is, as a percent escape (`%XX`, hex digits in any
+/// case), as an escape whose `%` is itself escaped once or more (`%25XX`, `%2525XX`, …), and a
+/// space also as `+`. The spellings of every byte are followed side by side (a set of ends, not
+/// a backtracking search), so the time is bounded by the secret's length times the span's.
+fn spelled_at(text: &[u8], start: usize, secret: &[u8]) -> Option<usize> {
+    let first = *secret.first()?;
+    let lead = *text.get(start)?;
+    // Most positions start no spelling: skip them without allocating.
+    if lead != first && lead != b'%' && !(lead == b'+' && first == b' ') {
+        return None;
+    }
+    let mut ends = vec![start];
+    let mut next = Vec::new();
+    for &want in secret {
+        next.clear();
+        for &at in &ends {
+            let Some(&got) = text.get(at) else { continue };
+            if got == want || (got == b'+' && want == b' ') {
+                next.push(at + 1);
+            }
+            if got == b'%' {
+                // `%` then any number of `25`, then the escaped byte's two hex digits.
+                let mut digits = at + 1;
+                while let Some(byte) = hex_byte(text, digits) {
+                    if byte == want {
+                        next.push(digits + 2);
+                    }
+                    if byte != b'%' {
+                        break;
+                    }
+                    digits += 2;
+                }
+            }
+        }
+        if next.is_empty() {
+            return None;
+        }
+        next.sort_unstable();
+        next.dedup();
+        std::mem::swap(&mut ends, &mut next);
+    }
+    ends.last().copied()
+}
+
+/// The byte written by the two hex digits (any case) at `at` in `text`, if there are two.
+fn hex_byte(text: &[u8], at: usize) -> Option<u8> {
+    let digit = |i: usize| -> Option<u8> {
+        let c = *text.get(i)?;
+        char::from(c)
+            .to_digit(16)
+            .and_then(|d| u8::try_from(d).ok())
+    };
+    Some(digit(at)? * 16 + digit(at + 1)?)
 }
 
 /// An egress failure as a [`ConnectorError`] (no URL in it).
@@ -800,6 +867,184 @@ mod tests {
         let reason = e.reason().unwrap();
         assert!(!reason.contains("tok/"), "{reason}");
         assert!(reason.chars().count() <= MAX_REASON_CHARS);
+    }
+
+    /// The error a 400 Graph answer quoting `message` maps to, for a call with `secrets`.
+    fn quoting(message: &str, secrets: &[String]) -> ConnectorError {
+        let body = json!({ "error": {
+            "message": message, "type": "OAuthException", "code": 190,
+        }});
+        classify(StatusCode::BAD_REQUEST, &body, None, secrets)
+    }
+
+    /// Asserts that neither the `Display` nor the `Debug` of `e` holds any of `spellings`.
+    fn assert_hidden(e: &ConnectorError, spellings: &[&str]) {
+        let shown = format!("{e}");
+        let debug = format!("{e:?}");
+        for spelling in spellings {
+            assert!(
+                !shown.contains(spelling),
+                "Display leaks {spelling}: {shown}"
+            );
+            assert!(!debug.contains(spelling), "Debug leaks {spelling}: {debug}");
+        }
+    }
+
+    /// The synthetic secret of the encoding tests: every byte RFC 3986 keeps (`.`, `~`) or encodes
+    /// (`/`, `+`, `=`) beside letters.
+    const ECHOED: &str = "EAAB.echo~tok/en+key==";
+
+    #[test]
+    fn a_secret_quoted_as_is_is_masked_and_the_prose_kept() {
+        let e = quoting(
+            "The token EAAB.echo~tok/en+key== is invalid",
+            &[ECHOED.to_owned()],
+        );
+        assert_eq!(
+            e.reason(),
+            Some("HTTP 400 OAuthException (#190): The token *** is invalid")
+        );
+        assert_hidden(&e, &[ECHOED, "echo~tok"]);
+    }
+
+    #[test]
+    fn a_secret_quoted_rfc3986_encoded_is_masked() {
+        // RFC 3986 keeps `-._~` unreserved: `.` and `~` stay, the rest is escaped.
+        let quoted = "EAAB.echo~tok%2Fen%2Bkey%3D%3D";
+        let e = quoting(
+            &format!("The token {quoted} is invalid"),
+            &[ECHOED.to_owned()],
+        );
+        assert_eq!(
+            e.reason(),
+            Some("HTTP 400 OAuthException (#190): The token *** is invalid")
+        );
+        assert_hidden(&e, &[ECHOED, quoted, "echo~tok", "en%2Bkey"]);
+    }
+
+    #[test]
+    fn a_secret_quoted_with_lowercase_escapes_is_masked() {
+        for quoted in [
+            "EAAB.echo~tok%2fen%2bkey%3d%3d",
+            "EAAB%2eecho%7etok%2fen%2bkey%3d%3d",
+        ] {
+            let e = quoting(
+                &format!("The token {quoted} is invalid"),
+                &[ECHOED.to_owned()],
+            );
+            assert_eq!(
+                e.reason(),
+                Some("HTTP 400 OAuthException (#190): The token *** is invalid"),
+                "{quoted}"
+            );
+            assert_hidden(&e, &[ECHOED, quoted, "echo", "en%2bkey"]);
+        }
+    }
+
+    #[test]
+    fn a_secret_quoted_with_mixed_case_escapes_is_masked() {
+        // Mixed across escapes, and inside one escape (`ï` is `C3 AF`).
+        let secrets = [ECHOED.to_owned(), "na\u{ef}ve-s3cret".to_owned()];
+        for quoted in [
+            "EAAB%2Eecho%7etok%2Fen%2bkey%3D%3d",
+            "EAAB.echo~tok%2fen%2Bkey=%3D",
+            "na%c3%AFve-s3cret",
+            "na%C3%aFve%2Ds3cret",
+            "na%C3%Afve-s3cret",
+        ] {
+            let e = quoting(&format!("The token {quoted} is invalid"), &secrets);
+            assert_eq!(
+                e.reason(),
+                Some("HTTP 400 OAuthException (#190): The token *** is invalid"),
+                "{quoted}"
+            );
+            assert_hidden(&e, &[ECHOED, quoted, "echo", "s3cret"]);
+        }
+    }
+
+    #[test]
+    fn a_secret_quoted_form_encoded_with_plus_for_space_is_masked() {
+        // `application/x-www-form-urlencoded`: a space is `+`, a `+` is `%2B`.
+        let secret = "EAAB echo~tok/en+key==";
+        for quoted in [
+            "EAAB+echo%7Etok%2Fen%2Bkey%3D%3D",
+            "EAAB+echo~tok%2Fen%2Bkey%3D%3D",
+            "EAAB%20echo~tok%2fen%2bkey%3d%3d",
+            "EAAB echo~tok/en+key==",
+        ] {
+            let e = quoting(
+                &format!("The token {quoted} is invalid"),
+                &[secret.to_owned()],
+            );
+            assert_eq!(
+                e.reason(),
+                Some("HTTP 400 OAuthException (#190): The token *** is invalid"),
+                "{quoted}"
+            );
+            assert_hidden(&e, &[secret, quoted, "echo", "en%2"]);
+        }
+        // A `+` of the text may stand for a space of the secret, never the other way round: a
+        // space of the text is not the secret's `+`.
+        assert_eq!(strip_secrets("tok en", &["tok+en".to_owned()]), "tok en");
+    }
+
+    #[test]
+    fn a_secret_quoted_twice_encoded_is_masked() {
+        // A URL quoted inside another URL: `%` itself escaped as `%25`.
+        let quoted = "EAAB.echo~tok%252Fen%252Bkey%253D%253d";
+        let e = quoting(
+            &format!("The token {quoted} is invalid"),
+            &[ECHOED.to_owned()],
+        );
+        assert_eq!(
+            e.reason(),
+            Some("HTTP 400 OAuthException (#190): The token *** is invalid")
+        );
+        assert_hidden(&e, &[ECHOED, quoted, "echo"]);
+    }
+
+    #[test]
+    fn a_secret_across_the_cut_goes_whole_however_encoded() {
+        // "HTTP 400 OAuthException (#190): " is 32 characters: with 260 more, the secret starts at
+        // 292 and runs past the 300-character cut, so a cut before stripping would keep its head.
+        for quoted in [
+            ECHOED,
+            "EAAB.echo~tok%2Fen%2Bkey%3D%3D",
+            "EAAB.echo~tok%2fen%2bkey%3d%3d",
+            "EAAB%2Eecho%7etok%2Fen%2bkey%3D%3d",
+        ] {
+            let message = format!("{}{quoted} tail", "x".repeat(260));
+            let e = quoting(&message, &[ECHOED.to_owned()]);
+            let reason = e.reason().unwrap();
+            assert!(reason.chars().count() <= MAX_REASON_CHARS, "{reason}");
+            assert!(reason.ends_with("x*** tail"), "{quoted}: {reason}");
+            assert_hidden(&e, &[ECHOED, quoted, "EAAB", "echo"]);
+        }
+    }
+
+    #[test]
+    fn only_spans_decoding_to_the_whole_secret_are_masked() {
+        let secrets = [ECHOED.to_owned()];
+        for text in [
+            // A head of the secret, then something else.
+            "EAAB.echo~tok%2Fother",
+            // Escapes that do not decode to the secret's bytes.
+            "EAAB.echo~tok%2Een%2Bkey%3D%3D",
+            // A broken escape.
+            "EAAB.echo~tok%2Gen+key==",
+            // Unrelated escapes.
+            "see https://example.test/a%2Fb?c=d%3De",
+        ] {
+            assert_eq!(strip_secrets(text, &secrets), text);
+        }
+        // Several secrets and several spellings in one text, the rest left as it was.
+        assert_eq!(
+            strip_secrets(
+                "a EAAB.echo~tok/en+key== b EAAB.echo~tok%2Fen%2Bkey%3D%3D c s3c%2Fret d s3c/re",
+                &[ECHOED.to_owned(), "s3c/ret".to_owned()]
+            ),
+            "a *** b *** c *** d s3c/re"
+        );
     }
 
     #[test]
