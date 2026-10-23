@@ -708,8 +708,14 @@ async fn confirm_seals_credentials_and_outputs_never_contain_them() {
             }
         );
     }
-    // The probe reached each page with its own credential and public fields.
-    let calls = r.meta.calls();
+    // The probe reached each page with its own credential and public fields (each connection
+    // step first).
+    let calls: Vec<ConnectorCall> = r
+        .meta
+        .calls()
+        .into_iter()
+        .filter(|c| matches!(c, ConnectorCall::Probe { .. }))
+        .collect();
     assert_eq!(calls.len(), 2);
     assert!(matches!(
         &calls[0],
@@ -2480,5 +2486,140 @@ async fn a_second_completion_racing_the_first_is_forbidden() {
     assert_eq!(
         r.pending_rows()[0].assets_public,
         serde_json::to_value(&stored.assets).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn on_connected_facts_are_merged_and_failures_are_not_fatal() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+
+    // OAuth: the adapter's connection step reports facts. Its object is merged into the public
+    // fields, but never over a connector-owned or connection key, and never a secret-looking key.
+    // The adapter is handed the capability's kind and account, which are not stored.
+    r.meta.push_on_connected(Ok(json!({
+        "subscribed": true,
+        "health": { "ok": false },
+        "kind_key": "messenger",
+        "hosts": ["evil.example"],
+        "external_id": "page-9",
+        "name": "Başka",
+        "page_access_token": "EAAB-page-2",
+        "nested": { "api_key": "z", "fields": 5 },
+    })));
+    let page = r.connect_page().await;
+    assert_eq!(page.status, StoredStatus::Verified);
+    let public = &page.connector_public;
+    assert_eq!(public["subscribed"], true);
+    assert_eq!(public["nested"], json!({ "fields": 5 }));
+    assert!(
+        public.get("kind_key").is_none(),
+        "secret-looking: never stored"
+    );
+    assert!(public.get("external_id").is_none());
+    assert_eq!(public["name"], "Kahve");
+    assert_eq!(page.external_id.as_deref(), Some("page-1"));
+    assert_eq!(public["hosts"], json!(META_HOSTS));
+    assert_eq!(public["health"]["ok"], true, "the probe's health stands");
+    assert!(public["health"].get("on_connected_error").is_none());
+    assert!(public.get("page_access_token").is_none());
+    // The step ran with the sealed credential, before the probe, and saw the capability's kind
+    // and account; the probe saw them too.
+    let calls = r.meta.calls();
+    assert_eq!(calls.len(), 2);
+    match &calls[0] {
+        ConnectorCall::OnConnected {
+            credential: Credential::PageToken { token, .. },
+            public,
+        } => {
+            assert_eq!(token, "EAAB-page-1");
+            assert_eq!(public["kind_key"], "facebook_page");
+            assert_eq!(public["external_id"], "page-1");
+        }
+        other => panic!("expected the connection step first, got {other:?}"),
+    }
+    match &calls[1] {
+        ConnectorCall::Probe { public, .. } => {
+            assert_eq!(public["kind_key"], "facebook_page");
+            assert_eq!(public["external_id"], "page-1");
+        }
+        other => panic!("expected the probe second, got {other:?}"),
+    }
+
+    // A later probe does not run the connection step again.
+    r.meta.push_probe(ok_probe("page-1"));
+    r.probe(page.id).await;
+    assert!(matches!(
+        r.meta.calls().last(),
+        Some(ConnectorCall::Probe { .. })
+    ));
+    assert_eq!(r.meta.calls().len(), 3);
+
+    // By hand: the step fails. The line is still connected and probed; the failure is recorded
+    // in its health, redacted, and outlives the probe that follows it.
+    r.netgsm.push_on_connected(Err(ConnectorError::permission(
+        "subscription refused: token=netgsm-pass-1",
+    )));
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    let line = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating("sms_line", "Hat", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(line.status, StoredStatus::Verified);
+    match &r.netgsm.calls()[0] {
+        ConnectorCall::OnConnected { public, .. } => {
+            assert_eq!(public["kind_key"], "sms_line");
+            assert!(public.get("external_id").is_none(), "no account yet");
+        }
+        other => panic!("expected the connection step first, got {other:?}"),
+    }
+    let recorded = line.connector_public["health"]["on_connected_error"]
+        .as_str()
+        .expect("the failure is recorded")
+        .to_owned();
+    assert!(recorded.starts_with("permission denied"), "{recorded}");
+    assert_eq!(line.connector_public["health"]["ok"], true);
+    assert!(matches!(
+        r.netgsm.calls()[0],
+        ConnectorCall::OnConnected { .. }
+    ));
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    r.probe(line.id).await;
+    assert_eq!(
+        r.capability(line.id).connector_public["health"]["on_connected_error"],
+        json!(recorded)
+    );
+    assert_no_secret("the line", &wire(&r.capability(line.id)));
+
+    // Nothing scripted: the step merges nothing, and a success clears an earlier failure.
+    r.netgsm
+        .push_probe(ProbeResult::failure(3, ConnectorError::auth("expired")));
+    r.probe(line.id).await;
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    let again = connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            capability_id: Some(line.id),
+            kind_key: None,
+            name: None,
+            external_id: None,
+            credential: netgsm_sms("netgsm-pass-1"),
+        },
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(again.status, StoredStatus::Verified);
+    assert!(
+        again.connector_public["health"]
+            .get("on_connected_error")
+            .is_none(),
+        "{}",
+        again.connector_public
     );
 }

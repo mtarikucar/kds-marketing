@@ -291,7 +291,12 @@ pub struct AssetPublic {
 // ---------------------------------------------------------------------------------------------
 
 /// A provider adapter: what every provider supports, whatever it is used for. The credential is
-/// the opened sealed one of a capability; `public` is the capability's `connector_public`.
+/// the opened sealed one of a capability; `public` is the capability's `connector_public` as the
+/// use cases hand it to adapters: with `kind_key` (the capability's kind) and, when the capability
+/// holds one, `external_id` (its account) set from the capability itself, whatever the stored
+/// fields say (neither is stored in `connector_public`). The kind tells an adapter serving
+/// several kinds which call to make (a Meta Page token reaches a page, its Messenger inbox and its
+/// Instagram account).
 #[async_trait]
 pub trait Connector: Send + Sync {
     fn provider(&self) -> Provider;
@@ -309,13 +314,34 @@ pub trait Connector: Send + Sync {
     /// from the credential's own identity such as Graph `/me`; X: the user id; NetGSM: the SMS
     /// sender name (`msgheader`) or the PBX user name). Never an id taken from the request or from
     /// `public`: a provider that echoes the id it was asked about would let any credential pass
-    /// for any account. The use cases compare it verbatim with the capability's external id; a
+    /// for any account. (An account that is not the credential's own identity, such as a Meta ad
+    /// account or a WhatsApp number reached with a user or system token, is named as the provider
+    /// reports it for a node it serves only to a credential with access to it; the adapter says
+    /// which.) The use cases compare it verbatim with the capability's external id; a
     /// success that names no account, or names it otherwise than as a string, never verifies the
     /// capability. Other facts are optional, non-secret, and screened before they are shown.
     async fn probe(&self, cred: &Credential, public: &Value) -> ProbeResult;
     /// A fresh credential when this one can and should be renewed (an expiring or rotating
     /// token), `None` when it needs no renewal.
     async fn refresh(&self, cred: &Credential) -> Result<Option<Credential>, ConnectorError>;
+    /// The provider-side steps of a new connection, run once a credential has been sealed for a
+    /// capability (an OAuth asset confirmed, credentials entered by hand) and before it is
+    /// probed: subscribing a Facebook Page to the platform app's webhooks, registering a
+    /// WhatsApp number. `public` is as [`Connector::probe`] gets it.
+    ///
+    /// Returns non-secret facts to keep in the capability's `connector_public` (an object, whose
+    /// keys are merged in, but never over a connector-owned key such as `health` or `access`, nor
+    /// over `hosts`, `name` or `external_id`, and screened like a probe's facts), or `Value::Null`
+    /// for none. Best effort: a failure never undoes the connection, it is recorded in
+    /// `connector_public.health.on_connected_error`. The default does nothing.
+    async fn on_connected(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Value, ConnectorError> {
+        let _ = (cred, public);
+        Ok(Value::Null)
+    }
 }
 
 /// Sends SMS.

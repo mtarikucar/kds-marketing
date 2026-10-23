@@ -4,8 +4,9 @@
 //! A scripted adapter answers each method with the results a test queued for that method, in
 //! order, and records every call (with its arguments) for assertions; a [`ScriptedConnector`]
 //! names the hosts it was given ([`ScriptedConnector::with_hosts`], none by default). A call with nothing queued
-//! panics, naming the provider and the method: the test scripted too few answers. Nothing reaches
-//! a network.
+//! panics, naming the provider and the method: the test scripted too few answers. The one
+//! exception is [`Connector::on_connected`], which every connection runs: with nothing queued it
+//! answers `Ok(Value::Null)`, as the trait's default does. Nothing reaches a network.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -118,6 +119,11 @@ impl<T> Script<T> {
         lock(&self.queue).push_back(answer);
     }
 
+    /// The next answer, if one is queued.
+    fn try_next(&self) -> Option<T> {
+        lock(&self.queue).pop_front()
+    }
+
     /// The next answer; panics when none is queued.
     fn next(&self, adapter: &str, provider: Provider, what: &str) -> T {
         lock(&self.queue).pop_front().unwrap_or_else(|| {
@@ -143,6 +149,10 @@ pub enum ConnectorCall {
     },
     Refresh {
         credential: Credential,
+    },
+    OnConnected {
+        credential: Credential,
+        public: Value,
     },
     SendSms {
         credential: Credential,
@@ -212,6 +222,7 @@ pub struct ScriptedConnector {
     calls: Mutex<Vec<ConnectorCall>>,
     probe: Script<ProbeResult>,
     refresh: Script<Result<Option<Credential>, ConnectorError>>,
+    on_connected: Script<Result<Value, ConnectorError>>,
     sms: Script<Result<SendReceipt, ConnectorError>>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
@@ -236,6 +247,7 @@ impl ScriptedConnector {
             calls: Mutex::new(Vec::new()),
             probe: Script::default(),
             refresh: Script::default(),
+            on_connected: Script::default(),
             sms: Script::default(),
             publish: Script::default(),
             post_metrics: Script::default(),
@@ -268,6 +280,12 @@ impl ScriptedConnector {
 
     pub fn push_refresh(&self, result: Result<Option<Credential>, ConnectorError>) {
         self.refresh.push(result);
+    }
+
+    /// Queues an answer of [`Connector::on_connected`]; with none queued it answers
+    /// `Ok(Value::Null)`.
+    pub fn push_on_connected(&self, result: Result<Value, ConnectorError>) {
+        self.on_connected.push(result);
     }
 
     pub fn push_sms(&self, result: Result<SendReceipt, ConnectorError>) {
@@ -350,6 +368,18 @@ impl Connector for ScriptedConnector {
             credential: cred.clone(),
         });
         self.next(&self.refresh, "refresh result")
+    }
+
+    async fn on_connected(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Value, ConnectorError> {
+        self.record(ConnectorCall::OnConnected {
+            credential: cred.clone(),
+            public: public.clone(),
+        });
+        self.on_connected.try_next().unwrap_or(Ok(Value::Null))
     }
 }
 

@@ -21,7 +21,7 @@ use jt_testkit::fakes::{
     ConnectorCall, FIXED_NOW, FakeAppConfig, InMemoryUow, OAuthCall, PlainSecretBox,
     ScriptedConnector, ScriptedOAuth, ScriptedRegistry, deps,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use time::macros::date;
 use time::{Duration, OffsetDateTime};
 
@@ -857,6 +857,34 @@ async fn scripted_connector_answers_in_order_and_records_calls() {
                 reference: None,
             },
         ]
+    );
+
+    // The connection step answers what was queued, then `Null` once nothing is (as the trait's
+    // default does), recording each call.
+    netgsm.push_on_connected(Ok(json!({ "subscribed": true })));
+    netgsm.push_on_connected(Err(ConnectorError::permission("no")));
+    let public = json!({ "kind_key": "sms_line" });
+    assert_eq!(
+        connector.on_connected(&cred, &public).await,
+        Ok(json!({ "subscribed": true }))
+    );
+    assert_eq!(
+        connector.on_connected(&cred, &public).await,
+        Err(ConnectorError::permission("no"))
+    );
+    assert_eq!(
+        connector.on_connected(&cred, &public).await,
+        Ok(Value::Null)
+    );
+    assert_eq!(
+        netgsm.calls()[4..],
+        vec![
+            ConnectorCall::OnConnected {
+                credential: cred.clone(),
+                public: public.clone(),
+            };
+            3
+        ][..]
     );
 
     // The registry offers each operation where the real adapters do; nothing for a provider it

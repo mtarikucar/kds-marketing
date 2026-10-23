@@ -28,8 +28,9 @@
 //!   OAuth token its `expires_at` and `scopes`), written when it is sealed, so the token's expiry
 //!   is read without opening anything ([`health`]);
 //! - `asset`: the provider's public facts of an asset connected through OAuth;
-//! - `health`: the last probe, `{ok, at, latency_ms, error_kind}`; `facts`: what the last
-//!   successful probe reported;
+//! - `health`: the last probe, `{ok, at, latency_ms, error_kind}`, and `on_connected_error` while
+//!   the adapter's connection step last failed (see below); `facts`: what the last successful
+//!   probe reported;
 //! - `reconnect_required`: `true` once a probe found the login no longer accepted (`Auth`),
 //!   `false` again whenever a fresh credential is sealed, after a successful probe, and on
 //!   retirement.
@@ -38,6 +39,15 @@
 //! secret's name, any containing `auth` or `credential` among them.) What a provider reports (an
 //! asset's public facts, a probe's facts) is screened the same way before it is shown or stored:
 //! a key that looks like a secret's name is dropped, at any depth.
+//!
+//! **The connection step.** Once a credential is sealed for a capability (assets confirmed,
+//! credentials entered by hand), the adapter's [`Connector::on_connected`] runs with it, before
+//! the probe: the provider-side steps of a new connection, such as subscribing a Facebook Page to
+//! the platform app's webhooks. What it reports is merged into `connector_public` (screened, and
+//! never over a connector-owned key nor over `hosts`, `name` or `external_id`); a failure is never
+//! fatal: the connection stands, and the redacted failure is kept in
+//! `connector_public.health.on_connected_error` until the step next runs and succeeds. A plain
+//! probe never runs it.
 //!
 //! **Probes** are the system's own trial call, the only way a connector capability is verified
 //! (spec §6.4). A probe binds the account: a successful probe counts only when it names, as a
@@ -69,12 +79,12 @@ use std::sync::Arc;
 
 use jt_capability::{
     Capability, CapabilityId, CapabilityKind, EffectiveStatus, Evidence, MAX_EXTERNAL_ID_CHARS,
-    MAX_NAME_CHARS, NewCapability, Policy, Reach, StoredStatus, effective_status,
-    is_secret_looking_key,
+    MAX_NAME_CHARS, NewCapability, Policy, RESERVED_PUBLIC_KEYS, Reach, StoredStatus,
+    effective_status, is_secret_looking_key,
 };
 use jt_connector::{
     ConnectorError, Credential, OAuthState, ProbeResult, Provider, STATE_TTL, pkce_challenge_s256,
-    provider_for_kind, status_after_probe,
+    provider_for_kind, redact_reason, status_after_probe,
 };
 use jt_tenancy::Permission;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -123,6 +133,14 @@ const NONCE_BYTES: usize = 16;
 
 /// The `connector_public` key of the reconnection flag.
 const RECONNECT_REQUIRED: &str = "reconnect_required";
+
+/// The key, inside `connector_public.health`, of the connection step's last failure.
+const ON_CONNECTED_ERROR: &str = "on_connected_error";
+
+/// The `connector_public` keys of the connection itself, which the facts of the connection step
+/// never write (beside [`RESERVED_PUBLIC_KEYS`]; a key such as `kind_key` is screened out as
+/// secret-looking anyway).
+const CONNECTION_KEYS: &[&str] = &["hosts", "name", "external_id"];
 
 /// The `connector_public` keys that describe the account a capability is bound to, dropped when
 /// it is bound to another ([`rebind_account`]): the last probe, the probe's facts, the OAuth
@@ -519,8 +537,9 @@ pub async fn complete_oauth(
 ///
 /// Writes `connector.connected` per capability (payload `kind_key`, `external_id`, and
 /// `reconnected: true` for a reconnection). Once committed, the adapter's hosts are allowed for
-/// the workspace (a host that cannot be is logged), and each capability is probed as
-/// [`probe`] does; a probe that cannot run is logged and does not undo the connection.
+/// the workspace (a host that cannot be is logged), and each capability runs the adapter's
+/// connection step (see the module docs) and is probed as [`probe`] does, under its lock; a probe
+/// that cannot run is logged and does not undo the connection.
 pub async fn confirm_assets(
     deps: &Deps,
     ctx: &Ctx,
@@ -581,7 +600,7 @@ pub async fn confirm_assets(
     allow_hosts(deps, ctx, &hosts);
     let mut out = Vec::with_capacity(touched.len());
     for id in touched {
-        if let Err(e) = probe_locked(deps, ctx, id).await {
+        if let Err(e) = probe_locked(deps, ctx, id, true).await {
             tracing::warn!(
                 workspace_id = %ws,
                 capability_id = %id,
@@ -614,7 +633,8 @@ pub async fn confirm_assets(
 /// new binding is probed; an account another live capability of the kind holds is `CONFLICT`
 /// naming `kind_key` and `external_id`.
 ///
-/// The credential is probed with the adapter ([`probe`]'s rules, account binding included: the
+/// The adapter's connection step runs with the credential (see the module docs), then the
+/// credential is probed with the adapter ([`probe`]'s rules, account binding included: the
 /// probe must reach the given or held external id; without one, the probe's account becomes
 /// it), sealed (which clears `reconnect_required`), and written in one transaction with the
 /// capability and its probe. Writes
@@ -673,7 +693,7 @@ pub async fn set_credentials(
 /// `error_kind` for a failure) only when the status changed.
 pub async fn probe(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<ProbeOut, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
-    probe_locked(deps, ctx, id).await
+    probe_locked(deps, ctx, id, false).await
 }
 
 /// The health of every connector capability that is not retired, oldest first: its status at
@@ -1235,11 +1255,12 @@ async fn credentials_for_new(
     capability.declared_by_connection = ctx.agent_connection_id;
 
     // A new row has no one to wait for: the provider is asked before the transaction opens.
-    let result = connector
-        .probe(&credential, &capability.connector_public)
-        .await;
+    let public = adapter_public(&capability);
+    let step = connector.on_connected(&credential, &public).await;
+    let result = connector.probe(&credential, &public).await;
     let sealed = seal_credential(deps, ctx, &credential)?;
     drop(credential);
+    merge_connection_step(&mut capability, step);
 
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let in_force = version_in_force(repos.as_mut()).await?;
@@ -1324,9 +1345,9 @@ async fn credentials_for(
         external_id: bound.clone(),
         ..capability.clone()
     };
-    let result = connector
-        .probe(&credential, &probing.connector_public)
-        .await;
+    let public = adapter_public(&probing);
+    let step = connector.on_connected(&credential, &public).await;
+    let result = connector.probe(&credential, &public).await;
     let sealed = seal_credential(deps, ctx, &credential)?;
     drop(credential);
 
@@ -1346,6 +1367,8 @@ async fn credentials_for(
             .set_sealed(id, Some(sealed), ctx.now)
             .await?;
     }
+    // After a rebinding dropped the old account's facts, so the step's outcome is the new one's.
+    merge_connection_step(&mut capability, step);
     let in_force = version_in_force(repos.as_mut()).await?;
     record_credentials(repos.as_mut(), ctx, &capability, in_force).await?;
     apply_probe(deps, repos.as_mut(), ctx, capability, result).await?;
@@ -1536,11 +1559,17 @@ fn credential_strict<'de, D: Deserializer<'de>>(d: D) -> Result<CredentialInput,
 // Probing
 // ---------------------------------------------------------------------------------------------
 
-/// [`probe`] without its permission check: also run for capabilities just connected.
-async fn probe_locked(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<ProbeOut, AppError> {
+/// [`probe`] without its permission check: also run for capabilities just connected, which
+/// first run the adapter's connection step (`connected`; see the module docs).
+async fn probe_locked(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    connected: bool,
+) -> Result<ProbeOut, AppError> {
     let ws = ctx.workspace_id;
     let mut repos = deps.uow.tenant(ws).await?;
-    let capability = locked(repos.as_mut(), id).await?;
+    let mut capability = locked(repos.as_mut(), id).await?;
     if capability.reach != Reach::Connector {
         return Err(AppError::conflict(
             "only a capability reached through a connector is probed",
@@ -1556,10 +1585,17 @@ async fn probe_locked(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<ProbeO
         .await?
         .ok_or_else(|| AppError::conflict("no credentials"))?;
     let credential = open_credential(deps, ws, &sealed)?;
-    let result = connector
-        .probe(&credential, &capability.connector_public)
-        .await;
+    let public = adapter_public(&capability);
+    let step = if connected {
+        Some(connector.on_connected(&credential, &public).await)
+    } else {
+        None
+    };
+    let result = connector.probe(&credential, &public).await;
     drop(credential);
+    if let Some(step) = step {
+        merge_connection_step(&mut capability, step);
+    }
     let out = apply_probe(deps, repos.as_mut(), ctx, capability, result).await?;
     repos.commit().await?;
     Ok(out)
@@ -1600,15 +1636,17 @@ async fn apply_probe(
     let error_kind = error.map(|e| e.kind().to_owned());
 
     let mut public = object(&capability.connector_public);
-    public.insert(
-        "health".to_owned(),
-        json!({
-            "ok": result.ok,
-            "at": rfc3339(ctx.now)?,
-            "latency_ms": result.latency_ms,
-            "error_kind": error_kind,
-        }),
-    );
+    let mut health = json!({
+        "ok": result.ok,
+        "at": rfc3339(ctx.now)?,
+        "latency_ms": result.latency_ms,
+        "error_kind": error_kind,
+    });
+    // The connection step's failure outlives the probes until the step runs again.
+    if let Some(failure) = public.get("health").and_then(|h| h.get(ON_CONNECTED_ERROR)) {
+        health[ON_CONNECTED_ERROR] = failure.clone();
+    }
+    public.insert("health".to_owned(), health);
     if result.ok {
         public.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
         // The last success's facts replace the previous ones (screened above).
@@ -1873,6 +1911,57 @@ fn object(value: &Value) -> Map<String, Value> {
         Value::Object(map) => map.clone(),
         _ => Map::new(),
     }
+}
+
+/// `capability`'s `connector_public` as adapters are handed it
+/// ([`crate::ports::connectors::Connector`]): the stored fields with `kind_key` set from the
+/// capability's kind and, when it holds one, `external_id` from its external account, so what an
+/// adapter acts on is the capability's own, whatever the stored fields say (a tenant may write
+/// keys the connector does not reserve). Never stored: `kind_key` could not be (the public fields
+/// refuse every key containing `key`), and both are the capability's own columns.
+pub(crate) fn adapter_public(capability: &Capability) -> Value {
+    let mut public = object(&capability.connector_public);
+    public.insert("kind_key".to_owned(), json!(capability.kind_key));
+    match &capability.external_id {
+        Some(account) => public.insert("external_id".to_owned(), json!(account)),
+        None => public.remove("external_id"),
+    };
+    Value::Object(public)
+}
+
+/// The outcome `step` of the adapter's connection step, written into `capability`'s public
+/// fields (see the module docs): an object's keys merged in, screened and never over a
+/// connector-owned or connection key, and any earlier failure cleared; a failure kept, redacted,
+/// in `health.on_connected_error`.
+fn merge_connection_step(capability: &mut Capability, step: Result<Value, ConnectorError>) {
+    let mut public = object(&capability.connector_public);
+    let mut health = public.get("health").map(object).unwrap_or_default();
+    match step {
+        Ok(facts) => {
+            if let Value::Object(facts) = screened(&facts) {
+                for (key, value) in facts {
+                    let owned = RESERVED_PUBLIC_KEYS.contains(&key.as_str())
+                        || CONNECTION_KEYS.contains(&key.as_str());
+                    if !owned {
+                        public.insert(key, value);
+                    }
+                }
+            }
+            health.remove(ON_CONNECTED_ERROR);
+        }
+        Err(e) => {
+            health.insert(
+                ON_CONNECTED_ERROR.to_owned(),
+                json!(redact_reason(&e.to_string())),
+            );
+        }
+    }
+    if health.is_empty() {
+        public.remove("health");
+    } else {
+        public.insert("health".to_owned(), Value::Object(health));
+    }
+    capability.connector_public = Value::Object(public);
 }
 
 /// `credential` sealed for the context's workspace.
