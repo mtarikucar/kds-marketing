@@ -699,6 +699,7 @@
       "title": "{{name}}: düzenle",
       "description": "Adı, açıklamayı ya da hesabı değiştirin. Tür, ayarlar ve politika olduğu gibi kalır.",
       "externalIdHint": "Sağlayıcının hesap, sayfa ya da hat kimliği; boş bırakılamaz.",
+      "externalIdConnectorHint": "Sağlayıcının hesap, sayfa ya da hat kimliği; boş bırakılamaz. Değiştirirseniz hesabı yeniden bağlamanız gerekir.",
       "connectorWarning": "Hesabı değiştirmek doğrulamayı sıfırlar ve saklanan kimlik bilgilerini siler: ardından hesabı yeniden bağlayın.",
       "saved": "Kabiliyet güncellendi.",
       "savedReset": "Kabiliyet güncellendi; doğrulaması sıfırlandı ve kimlik bilgileri silindi. Hesabı yeniden bağlayın."

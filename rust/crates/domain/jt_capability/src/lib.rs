@@ -82,6 +82,10 @@ pub enum CapabilityError {
     /// An external id was given but is empty or only whitespace.
     #[error("an external id, when given, must not be blank")]
     BlankExternalId,
+    /// An external id contains a control character (a line break, a tab inside it, ...): no
+    /// provider names an account so.
+    #[error("an external id must not contain control characters")]
+    ExternalIdHasControlCharacter,
     /// The public connector fields are not an object or hold a secret-looking key.
     #[error("the public connector fields have {} problem(s)", .0.len())]
     InvalidConnectorPublic(Vec<Gap>),

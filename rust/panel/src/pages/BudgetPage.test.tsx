@@ -92,6 +92,24 @@ describe('BudgetPage', () => {
     expect(await screen.findByText(tr.budget.editDialog.saved)).toBeInTheDocument();
   });
 
+  it('renames an item sending only the name', async () => {
+    const user = userEvent.setup();
+    const cash = budgetItems[1];
+    const calls = mockFetch({
+      'GET /api/auth/me': me,
+      'GET /api/budget/items': budgetItems,
+      [`PATCH /api/budget/items/${CASH_ITEM_ID}`]: { ...cash, item: { ...cash.item, name: 'Saha' } },
+    });
+    renderAt('/budget');
+    await user.click(within(await rowOf('Saha giderleri')).getByRole('button', { name: tr.budget.actions.edit }));
+    const dialog = await screen.findByRole('dialog');
+    const name = within(dialog).getByLabelText(tr.fields.name, { exact: false });
+    await user.clear(name);
+    await user.type(name, ' Saha ');
+    await user.click(within(dialog).getByRole('button', { name: tr.common.save }));
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ name: 'Saha' }));
+  });
+
   it('retires an item once confirmed, and shows retired items greyed with their date', async () => {
     const user = userEvent.setup();
     const calls = mockFetch({

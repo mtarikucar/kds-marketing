@@ -92,17 +92,56 @@ describe('CapabilitiesPage', () => {
     ) as HTMLElement;
     await user.click(within(card).getByRole('button', { name: tr.capabilities.actions.edit }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(tr.capabilities.editDialog.connectorWarning)).toBeInTheDocument();
+    // The warning lands when the account is changed, not before.
+    expect(within(dialog).queryByText(tr.capabilities.editDialog.connectorWarning)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(tr.capabilities.editDialog.externalIdConnectorHint)).toBeInTheDocument();
     const account = within(dialog).getByLabelText(tr.fields.external_id, { exact: false });
     expect(account).toHaveValue('destek@acme.example');
     await user.clear(account);
     await user.type(account, 'yardim@acme.example');
+    expect(within(dialog).getByText(tr.capabilities.editDialog.connectorWarning)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: tr.common.save }));
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ external_id: 'yardim@acme.example' }),
     );
     // The answer says the verification was reset; the panel says so too.
     expect(await screen.findByText(tr.capabilities.editDialog.savedReset)).toBeInTheDocument();
+  });
+
+  it('renames a connector with padded stored text without touching its account', async () => {
+    const user = userEvent.setup();
+    // Declared over MCP before the server trimmed: whitespace around the stored values.
+    const inbox = {
+      ...capabilities[3],
+      capability: {
+        ...capabilities[3].capability,
+        description: 'Kampanya\n',
+        external_id: ' destek@acme.example ',
+      },
+    };
+    const id = inbox.capability.id;
+    const calls = mockFetch({
+      ...routes,
+      'GET /api/capabilities': capabilities.map((c) => (c.capability.id === id ? inbox : c)),
+      [`PATCH /api/capabilities/${id}`]: {
+        capability: { ...inbox.capability, name: 'Yardım kutusu' },
+        effective_status: inbox.effective_status,
+        verification_reset: false,
+      },
+    });
+    renderAt('/capabilities');
+    const card = (await screen.findByRole('heading', { name: 'Destek kutusu' })).closest(
+      '[data-capability-id]',
+    ) as HTMLElement;
+    await user.click(within(card).getByRole('button', { name: tr.capabilities.actions.edit }));
+    const dialog = await screen.findByRole('dialog');
+    const name = within(dialog).getByLabelText(tr.fields.name, { exact: false });
+    await user.clear(name);
+    await user.type(name, 'Yardım kutusu');
+    expect(within(dialog).queryByText(tr.capabilities.editDialog.connectorWarning)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: tr.common.save }));
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ name: 'Yardım kutusu' }));
+    expect(await screen.findByText(tr.capabilities.editDialog.saved)).toBeInTheDocument();
   });
 
   it('offers no edit on a retired capability', async () => {

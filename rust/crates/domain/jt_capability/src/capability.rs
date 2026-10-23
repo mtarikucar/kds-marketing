@@ -140,7 +140,8 @@ impl Capability {
     /// Refuses, in this order: a kind not on the list (`UnknownKind`); a missing, malformed or
     /// unexpected `key_detail` ([`validate_key_detail`]); a bad name (trimmed, then
     /// [`crate::validate_name`]); a description over [`MAX_DESCRIPTION_CHARS`] characters; a
-    /// blank or over-long external id; public connector fields that are not an object or hold a
+    /// blank, over-long or control-character external id ([`validate_external_id`]); public
+    /// connector fields that are not an object or hold a
     /// secret-looking key (`InvalidConnectorPublic`, with every gap); a policy with gaps
     /// (`InvalidPolicy`, with every gap).
     pub fn new(
@@ -241,12 +242,17 @@ pub fn validate_description(description: &str) -> Result<(), CapabilityError> {
     check_len("description", description, MAX_DESCRIPTION_CHARS)
 }
 
-/// `Ok` when `external_id` is not blank (`BlankExternalId`) and has at most
-/// [`MAX_EXTERNAL_ID_CHARS`] characters (`TextTooLong` naming `external_id`). It is stored as
-/// given, untrimmed. Declaring and editing a capability run it alike.
+/// `Ok` when `external_id` is not blank (`BlankExternalId`), holds no control character
+/// (`ExternalIdHasControlCharacter`) and has at most [`MAX_EXTERNAL_ID_CHARS`] characters
+/// (`TextTooLong` naming `external_id`). It is checked, and stored, as given: the use cases trim
+/// what a person or an agent types before (a provider's id is compared verbatim). Declaring,
+/// editing and connecting a capability run it alike.
 pub fn validate_external_id(external_id: &str) -> Result<(), CapabilityError> {
     if external_id.trim().is_empty() {
         return Err(CapabilityError::BlankExternalId);
+    }
+    if external_id.chars().any(char::is_control) {
+        return Err(CapabilityError::ExternalIdHasControlCharacter);
     }
     check_len("external_id", external_id, MAX_EXTERNAL_ID_CHARS)
 }

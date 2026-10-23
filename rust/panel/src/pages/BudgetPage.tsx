@@ -258,14 +258,17 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   );
 }
 
-/** What an edit of `item` sends: each field that differs from it, the name trimmed. */
+/**
+ * What an edit of `item` sends: each field that differs from the stored one, the name compared
+ * trimmed on both sides (the server trims it).
+ */
 function budgetItemEdit(
   item: BudgetItemOut['item'],
   form: { name: string; cap: number | null; period: BudgetPeriod },
 ): UpdateBudgetItemInput {
   const input: UpdateBudgetItemInput = {};
   const name = form.name.trim();
-  if (name !== item.name) input.name = name;
+  if (name !== item.name.trim()) input.name = name;
   if (form.cap !== null && form.cap !== item.cap) input.cap = form.cap;
   if (form.period !== item.period) input.period = form.period;
   return input;

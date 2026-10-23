@@ -269,8 +269,10 @@ export function DeclareDialog({ open, onOpenChange }: { open: boolean; onOpenCha
 // --- edit -------------------------------------------------------------------------------------
 
 /**
- * What an edit of `capability` sends: each field that differs from it, trimmed. `null` when the
- * account would be emptied (an external id is changed, never removed).
+ * What an edit of `capability` sends: each field whose trimmed value differs from the trimmed
+ * stored one (the server trims too), so whitespace around a stored value never turns a rename
+ * into an account change, which would reset a connector. `null` when the account would be
+ * emptied (an external id is changed, never removed).
  */
 function capabilityEdit(
   capability: CapabilityOut['capability'],
@@ -280,10 +282,11 @@ function capabilityEdit(
   const name = form.name.trim();
   const description = form.description.trim();
   const account = form.externalId.trim();
-  if (name !== capability.name) input.name = name;
-  if (description !== capability.description) input.description = description;
-  if (account === '' && capability.external_id !== null) return null;
-  if (account !== '' && account !== capability.external_id) input.external_id = account;
+  const storedAccount = (capability.external_id ?? '').trim();
+  if (name !== capability.name.trim()) input.name = name;
+  if (description !== capability.description.trim()) input.description = description;
+  if (account === '' && storedAccount !== '') return null;
+  if (account !== storedAccount) input.external_id = account;
   return input;
 }
 
@@ -313,6 +316,8 @@ export function EditDialog({ target, onClose }: { target: CapabilityOut | null; 
   const c = target.capability;
   const input = capabilityEdit(c, { name, description, externalId });
   const changed = input !== null && Object.keys(input).length > 0;
+  const connector = c.reach === 'connector';
+  const accountChanged = input !== null && input.external_id !== undefined;
   return (
     <FormDialog
       open
@@ -331,7 +336,10 @@ export function EditDialog({ target, onClose }: { target: CapabilityOut | null; 
       <Field label={t('fields.description')}>
         {(ids) => <Textarea id={ids.id} rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />}
       </Field>
-      <Field label={t('fields.external_id')} hint={t('capabilities.editDialog.externalIdHint')}>
+      <Field
+        label={t('fields.external_id')}
+        hint={t(connector ? 'capabilities.editDialog.externalIdConnectorHint' : 'capabilities.editDialog.externalIdHint')}
+      >
         {(ids) => (
           <Input
             id={ids.id}
@@ -342,7 +350,9 @@ export function EditDialog({ target, onClose }: { target: CapabilityOut | null; 
           />
         )}
       </Field>
-      {c.reach === 'connector' && <Callout tone="warning">{t('capabilities.editDialog.connectorWarning')}</Callout>}
+      {connector && accountChanged && (
+        <Callout tone="warning">{t('capabilities.editDialog.connectorWarning')}</Callout>
+      )}
     </FormDialog>
   );
 }

@@ -699,6 +699,7 @@
       "title": "Edit {{name}}",
       "description": "Change the name, the description or the account. The kind, the settings and the policy stay as they are.",
       "externalIdHint": "The provider's id of the account, page or line; it cannot be emptied.",
+      "externalIdConnectorHint": "The provider's id of the account, page or line; it cannot be emptied. Changing it means connecting the account again.",
       "connectorWarning": "Changing the account resets the verification and drops the stored credentials: connect the account again afterwards.",
       "saved": "Capability updated.",
       "savedReset": "Capability updated; its verification was reset and its credentials dropped. Connect the account again."

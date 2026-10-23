@@ -1382,6 +1382,20 @@ fn edits_run_the_rules_creation_runs() {
             "{blank:?}"
         );
     }
+    for control in ["page\u{7}1", "page\n1", "page-1\u{0}"] {
+        assert_eq!(
+            validate_external_id(control),
+            Err(CapabilityError::ExternalIdHasControlCharacter),
+            "{control:?}"
+        );
+    }
+    assert_eq!(
+        create(NewCapability {
+            external_id: Some("page\r1".into()),
+            ..input("instagram")
+        }),
+        Err(CapabilityError::ExternalIdHasControlCharacter)
+    );
     let external_error = CapabilityError::TextTooLong {
         field: "external_id",
         len: MAX_EXTERNAL_ID_CHARS + 1,

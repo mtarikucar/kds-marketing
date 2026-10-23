@@ -1183,6 +1183,90 @@ async fn update_refuses_a_retired_capability_and_a_taken_external_account() {
 }
 
 #[tokio::test]
+async fn declare_and_update_trim_text_and_refuse_control_characters_in_the_account() {
+    let w = world().await;
+    // Declaring trims the name, the description and the external id.
+    let declared = capabilities::declare(
+        &w.deps,
+        &w.owner_ctx,
+        DeclareInput {
+            description: "  Saha cihazı \n".into(),
+            external_id: Some("\tSN-1  ".into()),
+            ..declaring("phone", "  Telefon ")
+        },
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(
+        (
+            declared.name.as_str(),
+            declared.description.as_str(),
+            declared.external_id.as_deref()
+        ),
+        ("Telefon", "Saha cihazı", Some("SN-1"))
+    );
+    assert_eq!(
+        w.entries("capability.declare")[0].payload["external_id"],
+        "SN-1"
+    );
+    for bad in ["   ", "SN\u{7}1", "SN\n1"] {
+        let e = err(capabilities::declare(
+            &w.deps,
+            &w.owner_ctx,
+            DeclareInput {
+                external_id: Some(bad.into()),
+                ..declaring("phone", "Yedek")
+            },
+        )
+        .await);
+        assert_invalid(&e, "external_id");
+    }
+
+    // An edit trims alike; the trimmed values equal to the stored ones change nothing.
+    let same = capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        declared.id,
+        edit(Some(" Telefon"), Some("Saha cihazı  "), Some(" SN-1 ")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(same.current.capability, declared);
+    assert!(w.entries("capability.update").is_empty());
+    let out = capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        declared.id,
+        edit(None, Some("  Kampanya \n"), Some("  SN-2\t")),
+    )
+    .await
+    .unwrap()
+    .current
+    .capability;
+    assert_eq!(
+        (out.description.as_str(), out.external_id.as_deref()),
+        ("Kampanya", Some("SN-2"))
+    );
+    assert_eq!(
+        w.entries("capability.update")[0].payload,
+        json!({ "fields": ["description", "external_id"], "external_id": "SN-2" })
+    );
+    for bad in ["SN\u{0}3", "SN\r3"] {
+        assert_invalid(
+            &err(capabilities::update(
+                &w.deps,
+                &w.owner_ctx,
+                declared.id,
+                edit(None, None, Some(bad)),
+            )
+            .await),
+            "external_id",
+        );
+    }
+}
+
+#[tokio::test]
 async fn declare_and_update_refuse_reserved_public_keys() {
     let w = world().await;
     // Every key a connector writes is refused at declaration, for any kind, naming the key;

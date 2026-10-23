@@ -1996,6 +1996,22 @@ async fn binding_a_new_account_resets_the_verification() {
     assert_eq!(out.last_verified_at, None);
     assert_eq!(out.evidence, None);
     assert_eq!(out.connector_public["reconnect_required"], false);
+    // The fresh credential's public facts survive the rebinding; the health is this binding's
+    // first probe.
+    assert_eq!(
+        out.connector_public["access"],
+        Credential::NetgsmSms {
+            usercode: "8508850000".into(),
+            password: "netgsm-pass-1".into(),
+            msgheader: "KAHVE".into(),
+        }
+        .redact_for_public()
+    );
+    assert_eq!(out.connector_public["health"]["error_kind"], "throttle");
+    assert_eq!(
+        out.connector_public["health"]["at"],
+        (FIXED_NOW + Duration::minutes(1)).format(&Rfc3339).unwrap()
+    );
     assert_eq!(out.updated_at, FIXED_NOW + Duration::minutes(1));
     assert_eq!(
         r.sealed_credential(line.id),
@@ -2022,6 +2038,14 @@ async fn update_external_account_resets_verification_and_drops_credentials() {
     let page = r.connect_page().await;
     assert_eq!(page.status, StoredStatus::Verified);
     assert!(r.stored(page.id).sealed.is_some());
+    // The connection's public facts all describe page-1.
+    for key in ["provider", "hosts", "access", "asset", "health", "facts"] {
+        assert!(
+            page.connector_public.get(key).is_some(),
+            "{key}: {}",
+            page.connector_public
+        );
+    }
     let edit = |name: Option<&str>, external_id: Option<&str>| UpdateCapability {
         name: name.map(Into::into),
         description: None,
@@ -2037,15 +2061,23 @@ async fn update_external_account_resets_verification_and_drops_credentials() {
     assert!(out.current.capability.has_sealed_config);
     assert!(r.stored(page.id).sealed.is_some());
 
-    // Another account: whatever proved the old binding proves nothing about this one. The
-    // capability reads declared again, without verification or evidence, its credential is
-    // dropped, and the answer says so; the name changes in the same edit.
+    // Another account, given with the whitespace a paste brings (trimmed, as a declaration's
+    // is): whatever proved the old binding proves nothing about this one. The capability reads
+    // declared again, without verification or evidence, its credential is dropped, and the
+    // answer says so; the name changes in the same edit. An account with a control character in
+    // it is refused first.
     let later = at(o, FIXED_NOW + Duration::hours(1));
+    assert_invalid(
+        &err(
+            capabilities::update(&r.w.deps, &later, page.id, edit(None, Some("page-2\u{7}"))).await,
+        ),
+        "external_id",
+    );
     let out = capabilities::update(
         &r.w.deps,
         &later,
         page.id,
-        edit(Some("Çay"), Some("page-2")),
+        edit(Some("Çay"), Some("  page-2 \n")),
     )
     .await
     .unwrap();
@@ -2061,6 +2093,36 @@ async fn update_external_account_resets_verification_and_drops_credentials() {
     assert_eq!(c.connector_public["reconnect_required"], false);
     assert_eq!(c.updated_at, FIXED_NOW + Duration::hours(1));
     assert_eq!(r.stored(page.id).sealed, None);
+    // None of page-1's facts stay: not its last probe, its probe facts, its asset, nor the
+    // dropped credential's public facts. The provider and the hosts still hold.
+    for key in ["health", "facts", "asset", "account", "access"] {
+        assert!(
+            c.connector_public.get(key).is_none(),
+            "{key}: {}",
+            c.connector_public
+        );
+    }
+    assert_eq!(c.connector_public["provider"], "meta");
+    assert_eq!(c.connector_public["hosts"], json!(META_HOSTS));
+    assert!(
+        !serde_json::to_string(&c.connector_public)
+            .unwrap()
+            .contains("page-1")
+    );
+    // Health shows the new binding as never probed, with no token.
+    let health = connector::health(&r.w.deps, o).await.unwrap();
+    let row = health.iter().find(|h| h.capability_id == page.id).unwrap();
+    assert_eq!(
+        (
+            row.ok,
+            row.last_probe_at,
+            row.error_kind.clone(),
+            row.token_expires_at
+        ),
+        (None, None, None, None)
+    );
+    assert_eq!(row.status, EffectiveStatus::Declared);
+    assert!(!row.reconnect_required);
     let wire = serde_json::to_string(&out).unwrap();
     assert!(wire.contains("\"verification_reset\":true"), "{wire}");
     assert_no_secret("the edit's answer", &wire);
@@ -2088,6 +2150,40 @@ async fn update_external_account_resets_verification_and_drops_credentials() {
     assert_eq!(r.meta.calls().len(), asked);
     assert_eq!(r.capability(page.id).status, StoredStatus::Declared);
 
+    // Its token pasted, a probe that reaches page-2 (named verbatim by the provider) verifies
+    // the trimmed binding.
+    r.meta.push_probe(ok_probe("page-2"));
+    let pasted = connector::set_credentials(
+        &r.w.deps,
+        &later,
+        SetCredentials {
+            capability_id: Some(page.id),
+            kind_key: None,
+            name: None,
+            external_id: None,
+            credential: CredentialInput::MetaToken {
+                access_token: "EAAB-page-2".into(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(pasted.capability.status, StoredStatus::Verified);
+    assert_eq!(
+        pasted.capability.connector_public["facts"]["account_id"],
+        "page-2"
+    );
+    let row = connector::health(&r.w.deps, o)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|h| h.capability_id == page.id)
+        .unwrap();
+    assert_eq!(
+        (row.ok, row.last_probe_at),
+        (Some(true), Some(FIXED_NOW + Duration::hours(1)))
+    );
+
     // The page connected again holds page-1: binding the first one back to it is CONFLICT,
     // and nothing changes.
     let again = r.connect_page().await;
@@ -2103,6 +2199,7 @@ async fn update_external_account_resets_verification_and_drops_credentials() {
     assert_eq!(r.capability(again.id).status, StoredStatus::Verified);
     assert!(r.stored(again.id).sealed.is_some());
     assert_eq!(r.w.entries("capability.update").len(), 2);
+    assert_no_secret("the outputs", &serde_json::to_string(&pasted).unwrap());
 }
 
 #[tokio::test]

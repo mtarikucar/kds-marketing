@@ -86,7 +86,8 @@ use zeroize::Zeroizing;
 
 use super::auth::{self, Principal};
 use super::capabilities::{
-    CapabilityOut, append, capability_error, find, locked, not_retired, version_in_force,
+    CapabilityOut, append, capability_error, checked_external_id, find, locked, not_retired,
+    version_in_force,
 };
 use super::{Deps, acting_user, hash_token, invalid};
 use crate::ctx::Ctx;
@@ -122,6 +123,11 @@ const NONCE_BYTES: usize = 16;
 
 /// The `connector_public` key of the reconnection flag.
 const RECONNECT_REQUIRED: &str = "reconnect_required";
+
+/// The `connector_public` keys that describe the account a capability is bound to, dropped when
+/// it is bound to another ([`rebind_account`]): the last probe, the probe's facts, the OAuth
+/// asset's facts and the account.
+const OLD_ACCOUNT_FACTS: &[&str] = &["health", "facts", "asset", "account"];
 
 const NO_SUCH_FLOW: &str = "no such pending connection";
 const APP_NOT_CONFIGURED: &str = "provider app not configured";
@@ -671,9 +677,11 @@ pub async fn probe(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<ProbeOut,
 }
 
 /// The health of every connector capability that is not retired, oldest first: its status at
-/// `ctx.now`, its last probe (when, whether it succeeded, the error's kind) and when its token
-/// expires, read from `connector_public.access.expires_at` (no sealed credential is opened), and
-/// whether it must be reconnected. Needs `workspace.read`.
+/// `ctx.now`, its last probe (when, whether it succeeded, the error's kind), read from
+/// `connector_public.health` (each probe writes it with its run, and binding another account
+/// clears it, so it is always the current binding's), and when its token expires, read from
+/// `connector_public.access.expires_at` (no sealed credential is opened), and whether it must be
+/// reconnected. Needs `workspace.read`.
 pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
@@ -686,17 +694,20 @@ pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppE
         .into_iter()
         .filter(|c| c.reach == Reach::Connector && c.status != StoredStatus::Retired)
     {
-        let last = repos.probe_runs().latest(c.id).await?;
-        let token_expires_at = c.connector_public["access"]["expires_at"]
-            .as_str()
-            .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok());
+        let at = |value: &Value| {
+            value
+                .as_str()
+                .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok())
+        };
+        let last = &c.connector_public["health"];
+        let token_expires_at = at(&c.connector_public["access"]["expires_at"]);
         out.push(ConnectorHealth {
             capability_id: c.id,
             provider: provider_for_kind(&c.kind_key),
             status: effective_status(&c, ctx.now),
-            last_probe_at: last.as_ref().map(|r| r.at),
-            ok: last.as_ref().map(|r| r.ok),
-            error_kind: last.and_then(|r| r.error_kind),
+            last_probe_at: at(&last["at"]),
+            ok: last["ok"].as_bool(),
+            error_kind: last["error_kind"].as_str().map(str::to_owned),
             token_expires_at,
             reconnect_required: reconnect_required(&c),
             kind_key: c.kind_key,
@@ -1364,25 +1375,6 @@ async fn record_credentials(
     .await
 }
 
-/// `raw` trimmed, as an external id: not blank and at most [`MAX_EXTERNAL_ID_CHARS`] characters,
-/// else `VALIDATION` naming `external_id`.
-fn checked_external_id(raw: &str) -> Result<String, AppError> {
-    let id = raw.trim();
-    if id.is_empty()
-        || id.chars().count() > MAX_EXTERNAL_ID_CHARS
-        || id.chars().any(char::is_control)
-    {
-        return Err(invalid(
-            "external_id",
-            &format!(
-                "external_id must be 1 to {MAX_EXTERNAL_ID_CHARS} characters without control \
-                 characters"
-            ),
-        ));
-    }
-    Ok(id.to_owned())
-}
-
 /// `input` with every field checked: identifiers trimmed, secrets as given; each 1 to its limit
 /// in characters, without control characters, else `VALIDATION` naming `credential.<field>`.
 fn normalised(input: CredentialInput) -> Result<CredentialInput, AppError> {
@@ -1733,7 +1725,12 @@ pub(crate) async fn account_held_elsewhere(
 /// an unproven binding, and writes it: whatever verified the previous binding proved nothing about
 /// this one, so it reads `declared` again (a retired capability stays retired) with no
 /// verification time and no evidence, its sealed credentials become `sealed` (`None` removes
-/// them), and no reconnection is asked for. Every change of a connector capability's external
+/// them), and no reconnection is asked for (a declared capability reads as not connected on its
+/// own). The public facts of the old account go with it: its last probe (`health`, which
+/// [`health`] reads), the probe's facts, the OAuth asset's facts and the account (`facts`,
+/// `asset`, `account`), and, when no credential replaces the dropped one, its public facts
+/// (`access`, whose expiry would otherwise name a token that no longer exists). The provider and
+/// the hosts stay, being the kind's. Every change of a connector capability's external
 /// account goes through here (entering credentials for a new account here; editing a
 /// capability's external id in `capability.update`), before anything probes the new binding.
 /// An account another live capability of the kind holds is `CONFLICT` naming `kind_key` and
@@ -1757,6 +1754,12 @@ pub(crate) async fn rebind_account(
     capability.last_verified_at = None;
     capability.evidence = None;
     let mut public = object(&capability.connector_public);
+    for key in OLD_ACCOUNT_FACTS {
+        public.remove(*key);
+    }
+    if sealed.is_none() {
+        public.remove("access");
+    }
     public.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
     capability.connector_public = Value::Object(public);
     capability.updated_at = at;

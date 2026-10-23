@@ -130,11 +130,11 @@ pub struct UpdateCapability {
     /// The new name, trimmed; 1 to 64 characters.
     #[serde(default)]
     pub name: Option<String>,
-    /// The new description, as given; at most 2000 characters (empty clears it).
+    /// The new description, trimmed; at most 2000 characters (empty clears it).
     #[serde(default)]
     pub description: Option<String>,
-    /// The provider's id of another account, page or line, as given; not blank. An external id
-    /// is changed, never removed.
+    /// The provider's id of another account, page or line, trimmed; not blank, no control
+    /// character. An external id is changed, never removed.
     #[serde(default)]
     pub external_id: Option<String>,
 }
@@ -237,7 +237,8 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<CapabilityO
     Ok(CapabilityOut::at(capability, ctx.now))
 }
 
-/// Declares a capability and returns it. Needs `capabilities.manage`.
+/// Declares a capability and returns it. Needs `capabilities.manage`. The name, the description
+/// and the external id are trimmed.
 ///
 /// The capability is `declared`, reached as its kind is (`CapabilityKind::default_reach`), with
 /// the policy given (or the default), the strategy version in force, if any, and, when an agent
@@ -271,6 +272,8 @@ pub async fn declare(
         connector_public,
         policy,
     } = input;
+    // What a person or an agent types is trimmed here (the name by `Capability::new`); a
+    // provider's id is never trimmed, since its probe names it verbatim.
     let mut capability = Capability::new(
         CapabilityId(deps.ids.uuid()),
         ctx.workspace_id,
@@ -278,8 +281,8 @@ pub async fn declare(
             kind_key,
             key_detail,
             name,
-            description,
-            external_id,
+            description: description.trim().to_owned(),
+            external_id: external_id.map(|e| e.trim().to_owned()),
             connector_public,
             policy: policy.unwrap_or_default(),
         },
@@ -337,9 +340,10 @@ pub async fn declare(
 /// Edits capability `id`: each field `input` names replaces the capability's. Needs
 /// `capabilities.manage`.
 ///
-/// Checked as at declaration, before anything is read: an edit naming no field is `VALIDATION`
-/// (`details.fields` lists the editable ones); a bad `name`, an over-long `description` and a
-/// blank or over-long `external_id` are `VALIDATION` naming the field. Then an id that is not
+/// Checked as at declaration, before anything is read, each field trimmed: an edit naming no
+/// field is `VALIDATION` (`details.fields` lists the editable ones); a bad `name`, an over-long
+/// `description` and a blank, over-long or control-character `external_id` are `VALIDATION`
+/// naming the field. Then an id that is not
 /// this workspace's is `NOT_FOUND`, a retired capability `CONFLICT` "capability is retired", and
 /// an external account another live capability of the kind holds `CONFLICT` naming `kind_key`
 /// and `external_id`. A field given as it already is changes nothing; when nothing changes,
@@ -378,12 +382,17 @@ pub async fn update(
         }
         None => None,
     };
-    if let Some(description) = &description {
-        validate_description(description).map_err(capability_error)?;
-    }
-    if let Some(external_id) = &external_id {
-        validate_external_id(external_id).map_err(capability_error)?;
-    }
+    let description = match description {
+        Some(description) => {
+            let description = description.trim().to_owned();
+            validate_description(&description).map_err(capability_error)?;
+            Some(description)
+        }
+        None => None,
+    };
+    let external_id = external_id
+        .map(|raw| checked_external_id(&raw))
+        .transpose()?;
 
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let mut capability = locked(repos.as_mut(), id).await?;
@@ -918,12 +927,24 @@ pub(crate) fn capability_error(e: CapabilityError) -> AppError {
         | CapabilityError::NameTooLong { .. }
         | CapabilityError::NameHasControlCharacter => "name",
         CapabilityError::TextTooLong { field, .. } => field,
-        CapabilityError::BlankExternalId => "external_id",
+        CapabilityError::BlankExternalId | CapabilityError::ExternalIdHasControlCharacter => {
+            "external_id"
+        }
         CapabilityError::InvalidCurrency(_) | CapabilityError::InvalidUnitLabel(_) => "unit",
         CapabilityError::NegativeCap(_) => "cap",
         CapabilityError::NonPositiveAmount(_) => "amount",
     };
     invalid(field, &message)
+}
+
+/// `raw` trimmed, as an external id a person or an agent typed: [`validate_external_id`]'s rules
+/// (not blank, no control character, at most `MAX_EXTERNAL_ID_CHARS` characters), else
+/// `VALIDATION` naming `external_id`. Editing a capability and entering its credentials read it
+/// through here; declaring trims it the same way. A provider's id is never trimmed.
+pub(crate) fn checked_external_id(raw: &str) -> Result<String, AppError> {
+    let id = raw.trim();
+    validate_external_id(id).map_err(capability_error)?;
+    Ok(id.to_owned())
 }
 
 /// `VALIDATION` with `message`, listing `gaps` in `details.gaps`.

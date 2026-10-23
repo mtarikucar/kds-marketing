@@ -485,18 +485,24 @@ da çalışma saatine, yazıcılar sarf malzemeye ya da nakde, gerisi nakde). Ha
 ve `budget.over_cap` kaydıyla işaretlenir; bağlayıcıların harcamasında tavan M3'te sert sınır olur.
 
 **Düzenleme.** Bir kabiliyetin adı, açıklaması ve dış hesap kimliği (`external_id`) bildirimdeki
-kurallarla değiştirilir; verilmeyen alan olduğu gibi kalır, hiçbir alan vermeyen düzenleme `422 VALIDATION`
-(`details.fields`). Türü, ulaşılma yolu, bağlayıcı ayarları (`connector_public`) ve politikası bu yolla
-değişmez; gövdede başka bir alan `422`. Türünün başka bir canlı kabiliyetinin tuttuğu hesap `409 CONFLICT`
-(`details.kind_key`, `details.external_id`). Bağlayıcıyla ulaşılan bir kabiliyetin hesabı değişirse eski
-hesabı kanıtlayan hiçbir şey yenisini kanıtlamaz: kabiliyet yeniden `declared` okunur, doğrulama zamanı ve
-kanıtı silinir, mühürlü kimlik bilgileri düşer ve yanıt `verification_reset: true` taşır; hesap yeniden
-bağlanır, sonra yoklanır. Bir ajan ya da cihaz kabiliyetinin kimliği değişince doğrulaması kalır. Günlük
-kaydı `capability.update` değişen alanların adlarını (`fields`), değiştiyse yeni adı ve dış kimliği, hesap
-değişimi doğrulamayı sıfırladıysa `rebind: true` taşır; açıklamanın metnini asla. Bağlayıcıların yazdığı
-`connector_public` anahtarları (`access`, `account`, `asset`, `facts`, `health`, `provider`,
-`reconnect_required`) bildirimde reddedilir (`422 VALIDATION`, "reserved public key", `details.gaps`);
-`hosts` bildirilebilir, bağlayıcı kendi adreslerini ona ekler.
+kurallarla değiştirilir: bildirimde, düzenlemede ve kimlik bilgisi girişinde üçü de kırpılır, boş kalan
+ad ya da dış kimlik ve denetim karakteri (satır sonu …) taşıyan dış kimlik `422 VALIDATION`
+(sağlayıcının yoklamada bildirdiği hesap kimliği ise olduğu gibi karşılaştırılır); verilmeyen alan
+olduğu gibi kalır, hiçbir alan vermeyen düzenleme `422 VALIDATION` (`details.fields`). Türü, ulaşılma
+yolu, bağlayıcı ayarları (`connector_public`) ve politikası bu yolla değişmez; gövdede başka bir alan
+`422`. Türünün başka bir canlı kabiliyetinin tuttuğu hesap `409 CONFLICT` (`details.kind_key`,
+`details.external_id`). Bağlayıcıyla ulaşılan bir kabiliyetin hesabı değişirse eski hesabı kanıtlayan
+hiçbir şey yenisini kanıtlamaz: kabiliyet yeniden `declared` okunur, doğrulama zamanı ve kanıtı silinir,
+mühürlü kimlik bilgileri düşer ve yanıt `verification_reset: true` taşır; eski hesabı anlatan genel
+bilgiler de gider (son yoklama `health`, yoklama bilgileri `facts`, OAuth varlığı `asset`, `account`,
+düşen kimlik bilgisinin `access` bilgileri), `provider` ve `hosts` kalır. Bağlayıcı sağlığı
+(`connector.health`) son yoklamayı `connector_public.health` alanından okur, böylece yeni bağ hiç
+yoklanmamış görünür. Hesap yeniden bağlanır, sonra yoklanır. Bir ajan ya da cihaz kabiliyetinin kimliği
+değişince doğrulaması kalır. Günlük kaydı `capability.update` değişen alanların adlarını (`fields`),
+değiştiyse yeni adı ve dış kimliği, hesap değişimi doğrulamayı sıfırladıysa `rebind: true` taşır;
+açıklamanın metnini asla. Bağlayıcıların yazdığı `connector_public` anahtarları (`access`, `account`,
+`asset`, `facts`, `health`, `provider`, `reconnect_required`) bildirimde reddedilir (`422 VALIDATION`,
+"reserved public key", `details.gaps`); `hosts` bildirilebilir, bağlayıcı kendi adreslerini ona ekler.
 
 Bir bütçe kaleminin adı, tavanı ve dönemi değiştirilir; türü ve birimi değişmez (gövdede `kind` ya da `unit`
 `422`). Dönemde harcanandan düşük bir tavan kabul edilir: harcama kayıtlı kalır, kalem tavanı aşmış okunur.
