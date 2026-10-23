@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::credential::{MetaCred, account_of, kind_of};
-use crate::graph::{GraphApp, join, missing, node, text};
+use crate::graph::{GraphApp, join, missing, node, strip_secrets, text};
 use crate::{Masked, MetaConnector};
 
 /// The most media one post carries.
@@ -223,6 +223,14 @@ impl fmt::Debug for Ig<'_> {
 }
 
 impl Ig<'_> {
+    /// The secrets its calls carry: the token, and on the Graph API the app secret.
+    fn secrets(&self) -> Vec<String> {
+        match self {
+            Ig::Graph { app, token } => vec![(*token).to_owned(), app.secret.clone()],
+            Ig::Login { token } => vec![(*token).to_owned()],
+        }
+    }
+
     async fn get(
         &self,
         connector: &MetaConnector,
@@ -349,7 +357,9 @@ async fn wait_finished(
         match status["status_code"].as_str() {
             Some("FINISHED" | "PUBLISHED") => return Ok(()),
             Some(code @ ("ERROR" | "EXPIRED")) => {
-                let detail = status["status"].as_str().unwrap_or_default();
+                // The provider's words, without a secret of the call (see `graph`).
+                let detail =
+                    strip_secrets(status["status"].as_str().unwrap_or_default(), &ig.secrets());
                 return Err(ConnectorError::permanent(format!(
                     "the media container ended {code}: {detail}"
                 )));

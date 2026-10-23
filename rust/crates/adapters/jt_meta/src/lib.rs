@@ -24,7 +24,10 @@
 //!
 //! **Errors.** Nothing is thrown: every failure is a [`ConnectorError`], built through its
 //! redacting constructors, its reason naming the Graph error's type, code, subcode and message
-//! (never a body, a URL or a token). The mapping, first match wins:
+//! (never a body, a URL or a token). The provider's message has every secret of the call (the
+//! token in use, the app secret, a token exchange's code, client secret or token) taken out, as
+//! is and URL- or form-encoded, before the reason is cut to its length, whatever words carry it.
+//! The mapping, first match wins:
 //!
 //! | Answer | Error |
 //! |---|---|

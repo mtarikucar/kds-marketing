@@ -33,6 +33,24 @@ interface Answer {
   error: string | null;
 }
 
+/**
+ * The callback addresses a flow comes back to, one per provider app (`connector::OAuthCallback`):
+ * `meta` (Facebook Login), `instagram` (Instagram Login) and `x`.
+ */
+const CALLBACKS = ['meta', 'instagram', 'x'] as const;
+
+function isCallback(segment: string): boolean {
+  return (CALLBACKS as readonly string[]).includes(segment);
+}
+
+/**
+ * Where completing the flow stands. Kept in the page's own state, set by the mutation's own
+ * callbacks (which run whatever observes them): under StrictMode the effect that started the
+ * completion is cleaned up and run again, which detaches the mutation's observer, so its
+ * `isError` would never turn true; the code is good once, so the second run never asks again.
+ */
+type Completion = { kind: 'waiting' } | { kind: 'done'; out: PendingAssetsOut } | { kind: 'failed'; error: unknown };
+
 /** An asset's public facts worth showing: the granted scopes, the access's end, and plain values. */
 function facts(asset: AssetPublic): { scopes: string[]; expiresAt: string | null; plain: [string, string][] } {
   const scopes: string[] = [];
@@ -119,14 +137,16 @@ function Failed({ message, flow }: { message: string; flow: RememberedFlow | nul
 }
 
 /**
- * `/oauth/callback/:provider`: where a provider sends the owner's browser back. The page reads the
- * provider's answer once, drops it from the address, passes it to the API (a same-site request
- * carrying the session, which the provider's redirect did not), lists the assets the flow found
- * and connects the ones the owner chooses. A provider's error is shown in the panel's words only.
+ * `/oauth/callback/:provider` (`meta`, `instagram` or `x`, the app the flow signed in with): where
+ * a provider sends the owner's browser back. The page reads the provider's answer once, drops it
+ * from the address, passes it to the API at the same segment (a same-site request carrying the
+ * session, which the provider's redirect did not), lists the assets the flow found and connects
+ * the ones the owner chooses. A provider's error is shown in the panel's words only.
  */
 export function OAuthCallbackPage() {
   const { t } = useTranslation();
   const { provider = '' } = useParams();
+  const known = isCallback(provider);
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -137,18 +157,24 @@ export function OAuthCallbackPage() {
   }));
   // The flow this tab started, if it is the one coming back: its capability, if bound to one.
   const [flow] = useState(() => rememberedFlow());
-  const [pending, setPending] = useState<PendingAssetsOut | null>(null);
+  const [completion, setCompletion] = useState<Completion>({ kind: 'waiting' });
+  const pending = completion.kind === 'done' ? completion.out : null;
   const [selected, setSelected] = useState<string[]>([]);
-  // The code is good once: the flow completes once, whatever renders twice.
+  // The code is good once: the flow completes once, whatever renders (or runs effects) twice.
   const asked = useRef(false);
 
-  // The state and the code leave the mutation as soon as it answers: no cache keeps them.
+  // The state and the code leave the mutation as soon as it answers: no cache keeps them. Its
+  // outcome lives in `completion`, never in the mutation's observer (see `Completion`).
   const complete = useMutation({
     mutationFn: ({ state, code }: { state: string; code: string }) => completeOAuth(provider, state, code),
     gcTime: 0,
     onSuccess: (out) => {
-      setPending(out);
+      setCompletion({ kind: 'done', out });
       if (out.assets.length === 1) setSelected([out.assets[0].external_id]);
+      complete.reset();
+    },
+    onError: (error) => {
+      setCompletion({ kind: 'failed', error });
       complete.reset();
     },
   });
@@ -169,18 +195,20 @@ export function OAuthCallbackPage() {
     if (answer.state !== null || answer.code !== null || answer.error !== null) {
       navigate({ search: '' }, { replace: true });
     }
-    if (answer.error === null && answer.state && answer.code) {
+    if (known && answer.error === null && answer.state && answer.code) {
       complete.mutate({ state: answer.state, code: answer.code });
     }
-  }, [answer, complete, navigate]);
+  }, [answer, complete, known, navigate]);
 
   let body;
-  if (answer.error !== null) {
+  if (!known) {
+    body = <Failed message={t('oauthCallback.unknownCallback')} flow={flow} />;
+  } else if (answer.error !== null) {
     body = <Failed message={oauthProviderErrorMessage(t, answer.error)} flow={flow} />;
   } else if (!answer.state || !answer.code) {
     body = <Failed message={t('oauthCallback.missingParams')} flow={flow} />;
-  } else if (complete.isError) {
-    body = <Failed message={callbackErrorMessage(t, complete.error)} flow={flow} />;
+  } else if (completion.kind === 'failed') {
+    body = <Failed message={callbackErrorMessage(t, completion.error)} flow={flow} />;
   } else if (!pending) {
     body = (
       <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">

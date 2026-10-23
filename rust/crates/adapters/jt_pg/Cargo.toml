@@ -24,8 +24,9 @@ tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 jt_testkit.workspace = true
-# `time`: the job-lock test waits for a dropped guard's background unlock.
-tokio = { workspace = true, features = ["time"] }
+# `time`: the job-lock test waits for a dropped guard's background unlock; `net` and `io-util`:
+# the cancellation test runs a TCP proxy that holds back the database's answers.
+tokio = { workspace = true, features = ["time", "net", "io-util"] }
 
 [lints]
 workspace = true

@@ -11,6 +11,7 @@ use axum::http::{Request, StatusCode, header};
 use jt_app::usecases::Deps;
 use jt_capability::StoredStatus;
 use jt_connector::{EventKind, Provider};
+use jt_tenancy::WorkspaceStatus;
 use jt_testkit::fakes::FakeAppConfig;
 use jt_webhook::{META_BODY_LIMIT, counters};
 use serde_json::json;
@@ -222,6 +223,51 @@ async fn an_event_for_an_account_no_workspace_holds_connected_is_dropped_with_a_
         "905551111111",
     ] {
         assert!(!logs.contains(private), "the log names {private}: {logs}");
+    }
+}
+
+/// A delivery is stored while the workspace holding the account is active or awaits payment;
+/// while it is suspended the events are dropped (answered `200` all the same: Meta would only
+/// redeliver), counted as unrouted and logged with the reason `inactive`, nothing private.
+#[tokio::test]
+async fn meta_deliveries_follow_the_workspace_status() {
+    let body = fixture("meta/whatsapp_messages.json");
+    for (status, stored) in [
+        (WorkspaceStatus::PendingPayment, 4),
+        (WorkspaceStatus::Active, 4),
+        (WorkspaceStatus::Suspended, 0),
+    ] {
+        let w = World::new().await;
+        w.set_status(w.ws, status).await;
+        w.connected(w.ws, "whatsapp_cloud", WHATSAPP_NUMBER).await;
+        let before = counters().unrouted_meta;
+        let logs = Logs::capture();
+        let (answered, text) = answer(&w.app(), signed(&body)).await;
+        assert_eq!(
+            (answered, text.as_str()),
+            (StatusCode::OK, "EVENT_RECEIVED"),
+            "{status:?}"
+        );
+        assert_eq!(w.events_of(w.ws).len(), stored, "{status:?}");
+        assert_eq!(
+            w.stored().len(),
+            stored,
+            "{status:?}: nothing anywhere else"
+        );
+        let logs = logs.text();
+        if stored == 0 {
+            // The four messages of the suspended workspace's number (and the fixture's fifth,
+            // for a number no workspace holds).
+            assert!(counters().unrouted_meta >= before + 5, "{status:?}");
+            assert!(logs.contains("WARN"), "{logs}");
+            assert!(logs.contains("reason=\"inactive\""), "{logs}");
+            assert!(logs.contains("kind_hint=\"whatsapp_cloud\""), "{logs}");
+            for private in [WHATSAPP_NUMBER, "wamid", "Merhaba", "905551111111"] {
+                assert!(!logs.contains(private), "the log names {private}: {logs}");
+            }
+        } else {
+            assert!(!logs.contains("reason=\"inactive\""), "{status:?}: {logs}");
+        }
     }
 }
 

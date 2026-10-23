@@ -10,6 +10,15 @@
 //! The connections come from the pool [`PgJobLock`] is given. The server gives it a small pool
 //! of its own ([`PgJobLock::with_own_pool`]), so that a lock held while a job runs never takes a
 //! connection the panel and the jobs themselves need.
+//!
+//! **Cancellation.** A connection goes back to the pool only once its session is known to hold
+//! no lock taken here: the acquisition was refused, or the lock was given back. Between sending
+//! `pg_try_advisory_lock` and building the guard, and while a release (explicit or from `drop`)
+//! awaits `pg_advisory_unlock`, the connection is held by a [`Session`]: should that future be
+//! dropped there (its task aborted, a timeout, a panic), the connection is closed instead of
+//! returned, which ends the session, and Postgres frees whatever lock it held. Otherwise a pooled
+//! session could keep the lock with no guard to give it back, and every other instance would skip
+//! the job until that connection happened to close.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -55,31 +64,76 @@ impl PgJobLock {
 #[async_trait]
 impl JobLock for PgJobLock {
     async fn try_acquire(&self, name: &str) -> Result<Option<Box<dyn JobGuard>>, AppError> {
-        let mut conn = self
+        let conn = self
             .pool
             .acquire()
             .await
             .map_err(|e| map_sqlx(e, "open a job lock connection"))?;
+        // From here until the guard holds it, a dropped future closes the connection (its
+        // session may hold the lock already); so does a failed query (its state is unknown).
+        let mut session = Session::new(conn);
         let granted: bool = sqlx::query_scalar("select pg_try_advisory_lock(hashtext($1))")
             .bind(name)
-            .fetch_one(&mut *conn)
+            .fetch_one(session.conn())
             .await
             .map_err(|e| map_sqlx(e, "take a job lock"))?;
         if !granted {
             // Held by another session: the connection goes back to the pool, holding nothing.
+            drop(session.settle());
             return Ok(None);
         }
         Ok(Some(Box::new(PgJobGuard {
-            conn: Some(conn),
+            session: Some(session),
             name: name.to_owned(),
         })))
+    }
+}
+
+/// A pooled connection whose session may hold a job lock: dropped before [`Session::settle`], it
+/// is closed instead of going back to the pool, which ends the session and frees any advisory lock
+/// it holds (see the module docs).
+struct Session(Option<PoolConnection<Postgres>>);
+
+impl Session {
+    fn new(conn: PoolConnection<Postgres>) -> Session {
+        Session(Some(conn))
+    }
+
+    fn conn(&mut self) -> &mut PgConnection {
+        self.0
+            .as_mut()
+            .expect("a session holds its connection until it is settled or dropped")
+    }
+
+    /// The connection, to go back to the pool: its session is known to hold no job lock.
+    fn settle(mut self) -> PoolConnection<Postgres> {
+        self.0
+            .take()
+            .expect("a session holds its connection until it is settled or dropped")
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let Some(mut conn) = self.0.take() else {
+            return;
+        };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            // Closed on the runtime (a `Terminate`, then the socket), never back to the pool.
+            conn.close_on_drop();
+            drop(conn);
+        } else {
+            // No runtime left (the process is ending): the socket is dropped, which ends the
+            // session all the same.
+            drop(conn.detach());
+        }
     }
 }
 
 /// A granted job lock and the connection whose session holds it.
 struct PgJobGuard {
     /// `None` once the lock was given back.
-    conn: Option<PoolConnection<Postgres>>,
+    session: Option<Session>,
     name: String,
 }
 
@@ -94,20 +148,24 @@ async fn unlock(conn: &mut PgConnection, name: &str) -> Result<bool, sqlx::Error
 #[async_trait]
 impl JobGuard for PgJobGuard {
     async fn release(mut self: Box<Self>) -> Result<(), AppError> {
-        let Some(mut conn) = self.conn.take() else {
+        let Some(mut session) = self.session.take() else {
             return Ok(());
         };
-        match unlock(&mut conn, &self.name).await {
-            Ok(true) => Ok(()),
-            // The session did not hold it after all, or could not answer: close the connection
-            // instead of handing a session of unknown state back to the pool. Ending the session
-            // frees whatever advisory lock it still holds.
+        // Cancelled while it awaits the unlock, the session is dropped: closed, not pooled.
+        match unlock(session.conn(), &self.name).await {
+            Ok(true) => {
+                drop(session.settle());
+                Ok(())
+            }
+            // The session did not hold it after all, or could not answer: the connection is
+            // closed instead of handing a session of unknown state back to the pool. Ending the
+            // session frees whatever advisory lock it still holds.
             Ok(false) => {
-                conn.close_on_drop();
+                drop(session);
                 Err(AppError::internal("the job lock was not held"))
             }
             Err(e) => {
-                conn.close_on_drop();
+                drop(session);
                 Err(map_sqlx(e, "give back a job lock"))
             }
         }
@@ -116,24 +174,25 @@ impl JobGuard for PgJobGuard {
 
 /// A guard dropped without [`JobGuard::release`] (its run panicked, its task was aborted): the
 /// unlock cannot run inside `drop`, which is synchronous, so it is spawned onto the runtime and
-/// the connection returns to the pool once the lock is given back (or is closed if that fails).
-/// With no runtime left (the process is ending), the connection is detached from the pool and
-/// dropped, which ends its session, and Postgres frees the lock.
+/// the connection returns to the pool once the lock is given back; if that fails, or the spawned
+/// unlock is itself dropped (the runtime shutting down), the connection is closed. With no
+/// runtime left (the process is ending), the connection is closed at once, which ends its
+/// session, and Postgres frees the lock.
 impl Drop for PgJobGuard {
     fn drop(&mut self) {
-        let Some(mut conn) = self.conn.take() else {
+        let Some(mut session) = self.session.take() else {
             return;
         };
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
                 let name = std::mem::take(&mut self.name);
                 runtime.spawn(async move {
-                    if !matches!(unlock(&mut conn, &name).await, Ok(true)) {
-                        conn.close_on_drop();
+                    if matches!(unlock(session.conn(), &name).await, Ok(true)) {
+                        drop(session.settle());
                     }
                 });
             }
-            Err(_) => drop(conn.detach()),
+            Err(_) => drop(session),
         }
     }
 }

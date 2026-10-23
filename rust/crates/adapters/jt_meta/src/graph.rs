@@ -1,6 +1,16 @@
 //! The Graph client: URLs, `appsecret_proof`, sending through the egress client, reading answers,
 //! following paging links, and mapping Graph errors to [`ConnectorError`] (the crate docs hold the
 //! table).
+//!
+//! **Secrets in provider text.** A Graph error's reason quotes the provider's message, and a
+//! provider may repeat what it was sent in it, in any wording: not only as `key=value`, which the
+//! generic redaction ([`jt_connector::redact_reason`]) recognises, but in free text too ("the token
+//! EAAB… is invalid"), possibly URL- or form-encoded. So every call knows its own secrets (the
+//! token in use, the app secret, and the secret fields of a token exchange's query or form: the
+//! code, the client secret, the token to exchange, the PKCE verifier) and takes each out of the
+//! provider's text, as is and in its encoded forms, **before** the reason is cut to its length
+//! (a secret straddling the cut would otherwise leave its first characters behind); the generic
+//! redaction then runs on what remains, when the error is built.
 
 use std::fmt;
 
@@ -29,6 +39,14 @@ pub(crate) const MAX_PAGES: usize = 100;
 
 /// The longest error reason kept, in characters.
 const MAX_REASON_CHARS: usize = 300;
+
+/// The query and form fields of a call that are not secret; every other field of a call without
+/// a token ([`Auth::None`]: the token exchanges, whose credentials travel in the query or the
+/// form) is taken for a secret ([`call_secrets`]).
+const PUBLIC_PARAMS: &[&str] = &["client_id", "redirect_uri", "grant_type"];
+
+/// What a secret taken out of provider text is replaced with.
+const SECRET_MASK: &str = "***";
 
 /// The longest wait a throttle asks for: a provider's longer (or absurd) wait is cut to it, so
 /// a scheduler adding it to the clock can never overflow.
@@ -403,6 +421,7 @@ impl MetaConnector {
             }
             Auth::Bearer(token) => (without_params(&url, &["access_token"]), Some(token)),
         };
+        let secrets = call_secrets(auth, &url, &body);
         let mut request = self.egress.prepare(method, url);
         if let Some(token) = token {
             request = request.bearer(token);
@@ -413,8 +432,73 @@ impl MetaConnector {
             Body::Form(form) => request.form(&form),
         };
         let response = request.send(SCOPE).await.map_err(egress_error)?;
-        read(response).await
+        read(response, &secrets).await
     }
+}
+
+/// The secrets of one call, to be taken out of any provider text its error quotes: the token and
+/// the app secret of `auth`; for a call without a token, every query field of `url` but
+/// [`PUBLIC_PARAMS`] (the code, the client secret, the token to exchange); and every form field
+/// of `body` but those. Empty values are left out.
+fn call_secrets(auth: Auth<'_>, url: &Url, body: &Body) -> Vec<String> {
+    let mut secrets: Vec<String> = match auth {
+        Auth::None => url
+            .query_pairs()
+            .filter(|(name, _)| !PUBLIC_PARAMS.contains(&name.as_ref()))
+            .map(|(_, value)| value.into_owned())
+            .collect(),
+        Auth::Graph { token, secret } => vec![token.to_owned(), secret.to_owned()],
+        Auth::Bearer(token) => vec![token.to_owned()],
+    };
+    if let Body::Form(fields) = body {
+        secrets.extend(
+            fields
+                .iter()
+                .filter(|(name, _)| !PUBLIC_PARAMS.contains(&name.as_str()))
+                .map(|(_, value)| value.clone()),
+        );
+    }
+    secrets.retain(|s| !s.is_empty());
+    secrets
+}
+
+/// `text` with every secret of `secrets` replaced by [`SECRET_MASK`]: as is, form-encoded
+/// (`application/x-www-form-urlencoded`), and percent-encoded byte for byte with upper- and
+/// lowercase hex digits (every byte but ASCII letters and digits); the longest forms first, so a
+/// secret inside another goes with it.
+pub(crate) fn strip_secrets(text: &str, secrets: &[String]) -> String {
+    let mut forms: Vec<String> = Vec::new();
+    for secret in secrets.iter().filter(|s| !s.is_empty()) {
+        forms.push(secret.clone());
+        forms.push(url::form_urlencoded::byte_serialize(secret.as_bytes()).collect());
+        for upper in [true, false] {
+            forms.push(percent_encoded(secret, upper));
+        }
+    }
+    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    forms.dedup();
+    let mut out = text.to_owned();
+    for form in &forms {
+        if out.contains(form.as_str()) {
+            out = out.replace(form.as_str(), SECRET_MASK);
+        }
+    }
+    out
+}
+
+/// `text` with every byte but ASCII letters and digits written `%XX`, in upper- or lowercase hex.
+fn percent_encoded(text: &str, upper: bool) -> String {
+    let mut out = String::with_capacity(text.len() * 3);
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            out.push(char::from(byte));
+        } else if upper {
+            out.push_str(&format!("%{byte:02X}"));
+        } else {
+            out.push_str(&format!("%{byte:02x}"));
+        }
+    }
+    out
 }
 
 /// An egress failure as a [`ConnectorError`] (no URL in it).
@@ -436,9 +520,9 @@ fn egress_error(e: EgressError) -> ConnectorError {
     }
 }
 
-/// Reads `response`: its JSON on success, its mapped error otherwise. The body is read up to
-/// [`MAX_BODY_BYTES`] and never logged.
-async fn read(mut response: Response) -> Result<Value, ConnectorError> {
+/// Reads `response`: its JSON on success, its mapped error otherwise, without any of the call's
+/// `secrets` in its reason. The body is read up to [`MAX_BODY_BYTES`] and never logged.
+async fn read(mut response: Response, secrets: &[String]) -> Result<Value, ConnectorError> {
     let status = response.status();
     let wait = retry_after(response.headers());
     let mut body = Vec::new();
@@ -466,7 +550,7 @@ async fn read(mut response: Response) -> Result<Value, ConnectorError> {
     if status.is_success() && !has_error {
         Ok(json)
     } else {
-        Err(classify(status, &json, wait))
+        Err(classify(status, &json, wait, secrets))
     }
 }
 
@@ -517,8 +601,9 @@ impl<'a> GraphError<'a> {
         }
     }
 
-    /// `"<type> (#<code>/<subcode>): <message>"`, cut to [`MAX_REASON_CHARS`].
-    fn reason(&self, status: StatusCode) -> String {
+    /// `"HTTP <status> <type> (#<code>/<subcode>): <message>"`, every secret of `secrets` taken
+    /// out ([`strip_secrets`]), then cut to [`MAX_REASON_CHARS`].
+    fn reason(&self, status: StatusCode, secrets: &[String]) -> String {
         let mut out = format!("HTTP {}", status.as_u16());
         if let Some(kind) = self.kind {
             out.push_str(&format!(" {kind}"));
@@ -533,16 +618,25 @@ impl<'a> GraphError<'a> {
             out.push_str(": ");
             out.push_str(message);
         }
-        out.chars().take(MAX_REASON_CHARS).collect()
+        strip_secrets(&out, secrets)
+            .chars()
+            .take(MAX_REASON_CHARS)
+            .collect()
     }
 }
 
 /// The error a Graph answer with status `status` and body `json` maps to (the table in the crate
-/// docs; first match wins), with `wait` for a `Throttle`.
-pub(crate) fn classify(status: StatusCode, json: &Value, wait: Option<Duration>) -> ConnectorError {
+/// docs; first match wins), with `wait` for a `Throttle`; its reason holds none of the call's
+/// `secrets`.
+pub(crate) fn classify(
+    status: StatusCode,
+    json: &Value,
+    wait: Option<Duration>,
+    secrets: &[String],
+) -> ConnectorError {
     let e = GraphError::of(json);
     let code = e.code;
-    let reason = e.reason(status);
+    let reason = e.reason(status, secrets);
     let has = |codes: &[i64]| code.is_some_and(|c| codes.contains(&c));
     if status == StatusCode::TOO_MANY_REQUESTS
         || has(THROTTLE_CODES)
@@ -608,7 +702,7 @@ mod tests {
     use super::*;
 
     fn kind(status: u16, body: Value) -> &'static str {
-        classify(StatusCode::from_u16(status).unwrap(), &body, None).kind()
+        classify(StatusCode::from_u16(status).unwrap(), &body, None, &[]).kind()
     }
 
     fn graph(code: i64, subcode: Option<i64>, kind: &str) -> Value {
@@ -678,13 +772,72 @@ mod tests {
             "message": "Invalid OAuth access token: access_token=EAAB-secret",
             "type": "OAuthException", "code": 190, "error_subcode": 463,
         }});
-        let e = classify(StatusCode::BAD_REQUEST, &body, None);
+        let e = classify(StatusCode::BAD_REQUEST, &body, None, &[]);
         let reason = e.reason().unwrap();
         assert!(
             reason.starts_with("HTTP 400 OAuthException (#190/463): "),
             "{reason}"
         );
         assert!(!reason.contains("EAAB-secret"), "{reason}");
+    }
+
+    #[test]
+    fn secrets_go_as_is_and_encoded_before_the_cut() {
+        let secrets = vec!["tok/en+1".to_owned(), "s3cret".to_owned(), String::new()];
+        assert_eq!(
+            strip_secrets(
+                "a tok/en+1 b tok%2Fen%2B1 c tok%2fen%2b1 d s3cret e",
+                &secrets
+            ),
+            "a *** b *** c *** d *** e"
+        );
+        // An empty secret replaces nothing.
+        assert_eq!(strip_secrets("plain words", &secrets), "plain words");
+        // A secret where the reason is cut goes whole, before the cut.
+        let message = format!("{}tok/en+1 tail", "x".repeat(280));
+        let body = json!({ "error": { "message": message, "type": "T", "code": 1 } });
+        let e = classify(StatusCode::BAD_REQUEST, &body, None, &secrets);
+        let reason = e.reason().unwrap();
+        assert!(!reason.contains("tok/"), "{reason}");
+        assert!(reason.chars().count() <= MAX_REASON_CHARS);
+    }
+
+    #[test]
+    fn a_call_knows_its_secrets() {
+        let url = Url::parse(
+            "https://graph.test/oauth/access_token?client_id=app&redirect_uri=r&code=c0de\
+             &client_secret=s3c&fb_exchange_token=t0k&grant_type=g",
+        )
+        .unwrap();
+        let mut found = call_secrets(Auth::None, &url, &Body::Empty);
+        found.sort();
+        assert_eq!(found, ["c0de", "s3c", "t0k"]);
+        let form = Body::Form(vec![
+            ("client_id".into(), "app".into()),
+            ("client_secret".into(), "ig-s3c".into()),
+            ("code".into(), "ig-c0de".into()),
+        ]);
+        let token_endpoint = Url::parse("https://api.instagram.test/oauth/access_token").unwrap();
+        let mut found = call_secrets(Auth::None, &token_endpoint, &form);
+        found.sort();
+        assert_eq!(found, ["ig-c0de", "ig-s3c"]);
+        // With a token, the query holds no secret (the token goes in the header).
+        let plain = Url::parse("https://graph.test/me?fields=id").unwrap();
+        assert_eq!(
+            call_secrets(
+                Auth::Graph {
+                    token: "EAAB",
+                    secret: "app-s3c"
+                },
+                &plain,
+                &Body::Empty
+            ),
+            ["EAAB", "app-s3c"]
+        );
+        assert_eq!(
+            call_secrets(Auth::Bearer("IGAA"), &plain, &Body::Empty),
+            ["IGAA"]
+        );
     }
 
     #[test]

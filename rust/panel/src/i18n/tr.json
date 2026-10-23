@@ -919,6 +919,7 @@
     "providerDenied": "Sağlayıcıda izin verilmedi; hesap bağlanmadı.",
     "providerError": "Sağlayıcı bağlantıyı tamamlamadı.",
     "missingParams": "Bu sayfa sağlayıcının geri dönüşü olmadan açıldı.",
+    "unknownCallback": "Bu geri dönüş adresini panel tanımıyor; bağlamayı panelden yeniden başlatın.",
     "stateRefused": "Bu bağlantı isteği bu çalışma alanına ait değil, süresi doldu ya da zaten kullanıldı. Bağlamayı yeniden başlatın.",
     "restart": "Yeniden başlat"
   },

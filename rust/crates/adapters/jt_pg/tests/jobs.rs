@@ -2,6 +2,7 @@
 //! instances, a dropped guard gives its lock back) and the probe log's 30-day retention (the
 //! purge and the trigger that refuses everything else).
 
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use jt_app::ports::{JobLock, ProbeRun, ProbeRunId, UnitOfWork};
@@ -10,7 +11,11 @@ use jt_pg::{JOB_LOCK_APPLICATION_NAME, PgJobLock, PgUnitOfWork, TenantTx};
 use jt_tenancy::WorkspaceId;
 use jt_testkit::TestDb;
 use serde_json::json;
+use sqlx::postgres::{PgPoolOptions, PgSslMode};
 use time::{Duration, OffsetDateTime};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 
 const PROBE_ALL: &str = "jeeta.jobs.probe_all";
 
@@ -102,6 +107,133 @@ async fn second_runner_skips_while_first_holds() {
     .unwrap();
     assert_eq!(names, [JOB_LOCK_APPLICATION_NAME]);
     holder.release().await.unwrap();
+}
+
+/// A TCP proxy in front of the test database that can hold back what the database sends: while
+/// it holds, a query the client sent has run, but its answer has not arrived, which is where a
+/// call cancelled mid-await leaves a session lock behind. What the client sends always goes
+/// through, and when the client closes its end, the proxy closes the database's.
+struct Proxy {
+    port: u16,
+    hold: Arc<watch::Sender<bool>>,
+}
+
+impl Proxy {
+    async fn start(upstream: (String, u16)) -> Proxy {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hold = Arc::new(watch::channel(false).0);
+        let held = Arc::clone(&hold);
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let server = TcpStream::connect(upstream.clone()).await.unwrap();
+                let (mut from_client, mut to_client) = client.into_split();
+                let (mut from_server, mut to_server) = server.into_split();
+                tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut from_client, &mut to_server).await;
+                    let _ = to_server.shutdown().await;
+                });
+                let mut gate = held.subscribe();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 16 * 1024];
+                    loop {
+                        let n = match from_server.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => n,
+                        };
+                        loop {
+                            let holding = *gate.borrow_and_update();
+                            if !holding {
+                                break;
+                            }
+                            if gate.changed().await.is_err() {
+                                return;
+                            }
+                        }
+                        if to_client.write_all(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                    let _ = to_client.shutdown().await;
+                });
+            }
+        });
+        Proxy { port, hold }
+    }
+
+    /// Holds back (`true`) or passes on (`false`) what the database sends.
+    fn hold(&self, on: bool) {
+        self.hold.send_replace(on);
+    }
+}
+
+/// A lock acquisition cancelled after Postgres granted the lock but before its answer arrived
+/// (the task aborted mid-await, before any guard exists) must not leave the lock with a session
+/// that goes back to the pool: the connection is closed instead, its session ends, and another
+/// instance's fresh pool takes the lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_acquisition_cancelled_mid_answer_leaves_no_lock_behind() {
+    let db = TestDb::new().await;
+    let options = (*db.pool.connect_options()).clone();
+    let upstream = (options.get_host().to_owned(), options.get_port());
+    let proxy = Proxy::start(upstream).await;
+    // No ping when the connection is taken from the pool: the ping's answer would be held too.
+    let through_proxy = PgPoolOptions::new()
+        .max_connections(1)
+        .min_connections(0)
+        .test_before_acquire(false)
+        .connect_lazy_with(
+            options
+                .host("127.0.0.1")
+                .port(proxy.port)
+                .ssl_mode(PgSslMode::Disable),
+        );
+    // Before the answers are held: the connection is open, its statements prepared (sqlx waits
+    // for a statement's description before it runs it the first time) by a lock taken and given
+    // back once, and it is back idle in the pool (its release ping answered).
+    let lock = PgJobLock::new(through_proxy.clone());
+    let warm = lock
+        .try_acquire("jeeta.jobs.warm_up")
+        .await
+        .unwrap()
+        .expect("granted");
+    warm.release().await.unwrap();
+    for _ in 0..500 {
+        if through_proxy.num_idle() == 1 {
+            break;
+        }
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
+    assert_eq!(through_proxy.num_idle(), 1);
+    assert_eq!(advisory_locks(&db).await, 0);
+
+    proxy.hold(true);
+    let acquiring =
+        tokio::spawn(async move { lock.try_acquire(PROBE_ALL).await.map(|g| g.is_some()) });
+    // Postgres grants the lock; its answer is held back, so the acquisition is still awaiting.
+    let mut granted = false;
+    for _ in 0..500 {
+        if advisory_locks(&db).await == 1 {
+            granted = true;
+            break;
+        }
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
+    assert!(granted, "the lock was never granted");
+    acquiring.abort();
+    assert!(acquiring.await.unwrap_err().is_cancelled());
+    // The answers flow again: a connection that went back to the pool would now be idle there,
+    // its session still holding the lock.
+    proxy.hold(false);
+
+    // Another instance takes the lock: the cancelled session is gone.
+    let other = PgJobLock::with_own_pool(&db.pool, 1);
+    assert!(
+        eventually_granted(&other, PROBE_ALL).await,
+        "the cancelled acquisition left its lock behind"
+    );
+    assert_eq!(advisory_locks(&db).await, 0);
+    through_proxy.close().await;
 }
 
 /// A capability of `ws` to hang probe runs off.

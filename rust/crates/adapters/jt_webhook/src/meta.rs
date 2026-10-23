@@ -17,6 +17,11 @@ use crate::{META_BODY_LIMIT, UNPARSEABLE_META, UNROUTED_META, WebhookState, raw}
 /// What Meta is answered once a delivery is handled.
 const RECEIVED: &str = "EVENT_RECEIVED";
 
+/// The logged reason of an event dropped because no workspace holds its account connected.
+const UNROUTED: &str = "unrouted";
+/// The logged reason of an event dropped because the workspace holding its account is suspended.
+const INACTIVE: &str = "inactive";
+
 /// The longest `hub.challenge` echoed back.
 const MAX_CHALLENGE_CHARS: usize = 256;
 
@@ -110,20 +115,29 @@ pub(crate) async fn receive(
         .collect();
     match webhook::receive_for_accounts(deps, Provider::Meta, events, &raw).await {
         Ok(deliveries) => {
-            // One warning per kind of account, however many events a delivery drops.
-            let mut dropped: BTreeMap<&'static str, u64> = BTreeMap::new();
+            // One warning per reason and kind of account, however many events a delivery drops.
+            let mut dropped: BTreeMap<(&'static str, &'static str), u64> = BTreeMap::new();
             for (delivery, kind_hint) in deliveries.iter().zip(hints) {
-                if *delivery == Delivery::Unrouted {
-                    *dropped.entry(kind_hint).or_default() += 1;
-                }
+                let reason = match delivery {
+                    Delivery::Unrouted => UNROUTED,
+                    Delivery::Inactive => INACTIVE,
+                    Delivery::Stored(_) | Delivery::Duplicate => continue,
+                };
+                *dropped.entry((reason, kind_hint)).or_default() += 1;
             }
-            for (kind_hint, events) in dropped {
+            for ((reason, kind_hint), events) in dropped {
                 UNROUTED_META.fetch_add(events, Ordering::Relaxed);
                 tracing::warn!(
                     provider = "meta",
+                    reason,
                     kind_hint,
                     events,
-                    "webhook events for an account no workspace holds connected: dropped"
+                    "{}",
+                    match reason {
+                        INACTIVE =>
+                            "webhook events for an account of a suspended workspace: dropped",
+                        _ => "webhook events for an account no workspace holds connected: dropped",
+                    }
                 );
             }
             received()

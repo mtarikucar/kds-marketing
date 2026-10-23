@@ -919,6 +919,7 @@
     "providerDenied": "Access was not granted at the provider; no account was connected.",
     "providerError": "The provider did not complete the connection.",
     "missingParams": "This page was opened without the provider's answer.",
+    "unknownCallback": "The panel does not know this return address; start connecting again from the panel.",
     "stateRefused": "This connection request does not belong to this workspace, has expired or was already used. Start connecting again.",
     "restart": "Start again"
   },

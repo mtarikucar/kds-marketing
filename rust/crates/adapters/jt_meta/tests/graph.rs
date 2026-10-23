@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use jt_app::ports::connectors::{
-    AdBudgetWriter, Connector, InsightsReader, LeadGenFetcher, MessagingSender, OAuthApp,
-    OAuthProvider, PublishRequest, Publisher,
+    AdBudgetWriter, Connector, InsightsReader, InstagramApp, LeadGenFetcher, MessagingSender,
+    OAuthApp, OAuthProvider, PublishRequest, Publisher,
 };
 use jt_connector::{ConnectorError, Credential, Provider};
 use jt_meta::{
@@ -2182,4 +2182,257 @@ async fn a_refused_media_publish_surfaces_the_mapped_error() {
         .await
         .unwrap_err();
     assert_eq!(e.kind(), "auth");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Secrets echoed by the provider
+// ---------------------------------------------------------------------------------------------
+
+/// A Page token with characters that URL and form encoding change.
+const ECHO_TOKEN: &str = "EAAB.echo~tok/en+key==";
+/// An app secret with characters that URL and form encoding change (the mock checks Graph
+/// proofs under the test Meta app's own secret, so this one signs only the token exchanges).
+const ECHO_SECRET: &str = "app/secret+echo=value";
+/// An authorization code with characters that URL and form encoding change.
+const ECHO_CODE: &str = "AQD.code/echo+value==";
+
+/// `text` percent-encoded the way `application/x-www-form-urlencoded` encodes it.
+fn form_encoded(text: &str) -> String {
+    url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
+}
+
+/// `text` percent-encoded with lowercase hex digits, every byte but letters and digits.
+fn lower_encoded(text: &str) -> String {
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02x}")
+            }
+        })
+        .collect()
+}
+
+/// Asserts that `what` shows none of `secrets`, as is or encoded, nor their first eight
+/// characters (a secret cut where the reason is cut).
+fn assert_no_echo(what: &str, shown: &str, secrets: &[&str]) {
+    for secret in secrets {
+        for form in [
+            (*secret).to_owned(),
+            form_encoded(secret),
+            lower_encoded(secret),
+            secret[..8].to_owned(),
+        ] {
+            assert!(!shown.contains(&form), "{what} shows {form:?}: {shown}");
+        }
+    }
+}
+
+/// Graph's answer quoting `message`.
+fn quoting(message: String) -> Reply {
+    status(
+        400,
+        json!({ "error": {
+            "message": message, "type": "OAuthException", "code": 190, "error_subcode": 460,
+        }}),
+    )
+}
+
+/// Meta repeating a secret of the call in its free text (not as `key=value`), URL- or
+/// form-encoded, or where the reason is cut: the reason quotes the provider's words, but never a
+/// secret of the call (the token in use, the app secret, the code, the client secret), in the
+/// error's `Display` or `Debug`, a probe's result, or a log line.
+#[tokio::test]
+async fn provider_text_never_echoes_a_secret_of_the_call() {
+    let r = rig().await;
+    let m = &r.mock;
+    let cred = Credential::PageToken {
+        page_id: PAGE.into(),
+        token: ECHO_TOKEN.into(),
+    };
+    let path = "/fb/v19.0/6666666666";
+    let secrets = [ECHO_TOKEN, META_APP_SECRET];
+    // How much provider text precedes the token so that the reason's 300-character cut falls in
+    // its middle: the reason starts with "HTTP 400 OAuthException (#190/460): ".
+    let lead = 300 - "HTTP 400 OAuthException (#190/460): ".len() - 6;
+    for message in [
+        format!("The token {ECHO_TOKEN} is invalid for app secret {META_APP_SECRET}"),
+        format!(
+            "Bad request for {} signed with {}",
+            form_encoded(ECHO_TOKEN),
+            form_encoded(META_APP_SECRET)
+        ),
+        format!(
+            "Bad request for {} signed with {}",
+            lower_encoded(ECHO_TOKEN),
+            lower_encoded(META_APP_SECRET)
+        ),
+        format!("{}{ECHO_TOKEN} trailing words", "x".repeat(lead)),
+    ] {
+        m.set("GET", path, quoting(message.clone()));
+        let e = r.meta.fetch(&cred, "6666666666").await.unwrap_err();
+        assert_eq!(e.kind(), "auth", "{message}");
+        let reason = e.reason().unwrap().to_owned();
+        assert!(reason.contains("***"), "{reason}");
+        assert!(
+            reason.starts_with("HTTP 400 OAuthException (#190/460): "),
+            "{reason}"
+        );
+        assert_no_echo("the reason", &reason, &secrets);
+        assert_no_echo("Display", &e.to_string(), &secrets);
+        assert_no_echo("Debug", &format!("{e:?}"), &secrets);
+    }
+    // The words around the secret are kept: only the secret goes.
+    m.set(
+        "GET",
+        path,
+        quoting(format!("The token {ECHO_TOKEN} is invalid")),
+    );
+    let e = r.meta.fetch(&cred, "6666666666").await.unwrap_err();
+    assert_eq!(
+        e.reason(),
+        Some("HTTP 400 OAuthException (#190/460): The token *** is invalid")
+    );
+
+    // A probe's result holds the same redacted reason.
+    m.on(
+        "GET",
+        "/fb/v19.0/me",
+        quoting(format!(
+            "token {ECHO_TOKEN} expired, proof by {META_APP_SECRET}"
+        )),
+    );
+    let p = r
+        .meta
+        .probe(&cred, &public("facebook_page", Some(PAGE)))
+        .await;
+    assert!(!p.ok);
+    assert_no_echo("the probe", &format!("{p:?}"), &secrets);
+    assert_no_echo(
+        "the probe's reason",
+        p.error.as_ref().unwrap().reason().unwrap(),
+        &secrets,
+    );
+}
+
+/// The code exchanges carry the code and the client secret in their query or form: echoed back,
+/// neither reaches the reason.
+#[tokio::test]
+async fn a_refused_code_exchange_never_echoes_the_code_or_the_client_secret() {
+    // Facebook Login: the code and the Meta app's secret in the query.
+    let r = rig().await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/oauth/access_token",
+        quoting(format!(
+            "Code {ECHO_CODE} was refused for {} ({})",
+            form_encoded(ECHO_SECRET),
+            lower_encoded(ECHO_CODE)
+        )),
+    );
+    let mut app = meta_app();
+    app.app_secret = ECHO_SECRET.into();
+    let e = r
+        .meta
+        .exchange(&OAuthApp::Meta(app), &redirect(), ECHO_CODE, None)
+        .await
+        .unwrap_err();
+    let shown = format!("{e} {e:?}");
+    assert_no_echo("the Facebook exchange", &shown, &[ECHO_CODE, ECHO_SECRET]);
+    assert_eq!(
+        r.mock
+            .request("GET", "/fb/v19.0/oauth/access_token")
+            .param("code"),
+        Some(ECHO_CODE)
+    );
+
+    // Instagram Login: the code and the Instagram app's secret in the form.
+    let r = rig().await;
+    let instagram = InstagramApp {
+        app_secret: ECHO_SECRET.into(),
+        ..instagram_app()
+    };
+    r.mock.on(
+        "POST",
+        "/igapi/oauth/access_token",
+        status(
+            400,
+            json!({
+                "error_type": "OAuthException",
+                "code": 400,
+                "error_message": format!(
+                    "Invalid code {ECHO_CODE} for client {} {}",
+                    form_encoded(ECHO_SECRET),
+                    lower_encoded(ECHO_SECRET)
+                ),
+            }),
+        ),
+    );
+    let e = r
+        .meta
+        .exchange(
+            &OAuthApp::Instagram(instagram),
+            &redirect(),
+            ECHO_CODE,
+            None,
+        )
+        .await
+        .unwrap_err();
+    let shown = format!("{e} {e:?}");
+    assert_no_echo("the Instagram exchange", &shown, &[ECHO_CODE, ECHO_SECRET]);
+}
+
+/// A part of the asset listing left out is logged with its reason: never with a secret the
+/// provider echoed.
+#[tokio::test]
+async fn a_skipped_listing_part_logs_no_echoed_secret() {
+    use std::io::Write;
+    use std::sync::Mutex;
+
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+    impl Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let r = rig().await;
+    let m = &r.mock;
+    m.on("GET", "/fb/v19.0/me/accounts", ok(json!({ "data": [] })));
+    let refusal = |token: &str| {
+        status(
+            403,
+            json!({ "error": {
+                "message": format!("token {token} lacks ads_read; app {META_APP_SECRET}"),
+                "type": "OAuthException", "code": 200,
+            }}),
+        )
+    };
+    m.on("GET", "/fb/v19.0/me/adaccounts", refusal(USER_TOKEN));
+    m.on("GET", "/fb/v19.0/me/businesses", refusal(USER_TOKEN));
+
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let listed = {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        r.meta.list_assets(&user_cred()).await
+    };
+    assert!(listed.unwrap().is_empty());
+    let logged = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        logged.contains("a part of the Meta asset listing was left out"),
+        "{logged}"
+    );
+    assert_no_echo("the log", &logged, &[USER_TOKEN, META_APP_SECRET]);
 }

@@ -248,8 +248,13 @@ pub async fn list(
 /// event already processed keeps its time and does not count). Needs `capabilities.manage`.
 ///
 /// No id, or more than [`MAX_ACK_IDS`], is `VALIDATION` naming `ids`. All or nothing: an id
-/// that is not one of the workspace's events is `NOT_FOUND` naming it in `details.id`, and then
-/// nothing is marked.
+/// that is not one of the workspace's events is `NOT_FOUND` naming it in `details.id` (of several,
+/// the smallest), and then nothing is marked.
+///
+/// The ids are marked once each, in ascending order whatever order they were given in: each
+/// marking holds its row's lock until the end of the transaction, so two acknowledgements of the
+/// same events given in opposite orders take their locks in one order and never wait on each
+/// other in a circle (Postgres would abort one of them with a deadlock).
 ///
 /// Writes `events.acked` about the workspace's events (`subject.kind = "inbound_events"`, its id
 /// the workspace's; payload `n`, how many were newly marked) when it marked any; acknowledging
@@ -262,13 +267,8 @@ pub async fn ack(deps: &Deps, ctx: &Ctx, input: Ack) -> Result<AckOut, AppError>
             &format!("ids must hold 1 to {MAX_ACK_IDS} event ids"),
         ));
     }
-    // Each id once, in the order first given.
-    let mut seen = BTreeSet::new();
-    let ids: Vec<InboundEventId> = input
-        .ids
-        .into_iter()
-        .filter(|id| seen.insert(*id))
-        .collect();
+    // Each id once, in ascending order: one lock order for every acknowledgement.
+    let ids: BTreeSet<InboundEventId> = input.ids.into_iter().collect();
 
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let mut acked: u32 = 0;

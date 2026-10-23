@@ -397,6 +397,95 @@ async fn oauth_round_trip_creates_capabilities_from_selected_assets() {
     assert_no_secret("the ledger", &ledger);
 }
 
+/// Instagram Login runs under the platform's Instagram app, which registers its own redirect URI:
+/// the provider sends the browser back to the panel's `/oauth/callback/instagram`, the page calls
+/// `GET /api/connectors/oauth/callback/instagram`, and the code is exchanged with that same URI.
+/// The Meta app's callback does not complete it (nor does `instagram` complete a Facebook Login
+/// flow), and the provider is not asked then.
+#[tokio::test]
+async fn instagram_login_comes_back_to_its_own_callback() {
+    let r = rig().await;
+    let p = &r.p;
+    let (owner, _) = p.register(OWNER, "Alpha").await;
+
+    let started = ok_json(
+        post(
+            p,
+            "/api/connectors/oauth/start",
+            &owner,
+            json!({ "kind_key": "instagram" }),
+        )
+        .await,
+    )
+    .await;
+    let authorize_url = started["authorize_url"].as_str().unwrap();
+    assert_eq!(
+        query_param(authorize_url, "redirect_uri"),
+        "https://panel.test/oauth/callback/instagram"
+    );
+    assert_eq!(query_param(authorize_url, "client_id"), "instagram-app-id");
+    let state = query_param(authorize_url, "state");
+
+    // Brought back to the Meta app's callback (or X's), it is refused before the provider is
+    // asked.
+    for wrong in ["meta", "x"] {
+        expect_error(
+            p.get(&callback(wrong, &state, "code-1"), &owner).await,
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+        )
+        .await;
+    }
+    assert_eq!(r.meta_oauth.calls().len(), 1, "only the authorize URL");
+
+    // A Facebook Login flow is not completed at the Instagram app's callback either.
+    let (_, page_state) = start_page_flow(&r, &owner).await;
+    expect_error(
+        p.get(&callback("instagram", &page_state, "code-1"), &owner)
+            .await,
+        StatusCode::FORBIDDEN,
+        "FORBIDDEN",
+    )
+    .await;
+    assert_eq!(r.meta_oauth.calls().len(), 2, "only the two authorize URLs");
+
+    // At its own callback it completes, exchanging the code with its own redirect URI.
+    r.meta_oauth.push_exchange(Ok(Credential::OAuth {
+        access_token: "IGAA-ig-1".into(),
+        refresh_token: None,
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(60)),
+        scopes: vec!["instagram_business_basic".into()],
+    }));
+    r.meta_oauth.push_assets(Ok(vec![Asset {
+        kind_key: "instagram".into(),
+        external_id: "17841400000000001".into(),
+        name: "kahveevi".into(),
+        credential: Credential::OAuth {
+            access_token: "IGAA-ig-1".into(),
+            refresh_token: None,
+            expires_at: None,
+            scopes: vec![],
+        },
+        public: json!({ "username": "kahveevi" }),
+    }]));
+    let resp = p
+        .get(&callback("instagram", &state, "code-1"), &owner)
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = body_text(resp).await;
+    assert!(!text.contains("IGAA-ig-1"), "{text}");
+    let pending: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(pending["pending_id"], started["pending_id"]);
+    assert_eq!(pending["assets"][0]["kind_key"], "instagram");
+    assert!(matches!(
+        &r.meta_oauth.calls()[2],
+        OAuthCall::Exchange { client_id, code, redirect, .. }
+            if client_id == "instagram-app-id"
+                && code == "code-1"
+                && redirect.as_str() == "https://panel.test/oauth/callback/instagram"
+    ));
+}
+
 #[tokio::test]
 async fn callback_with_foreign_state_is_forbidden() {
     let r = rig().await;
@@ -468,14 +557,16 @@ async fn callback_without_session_is_unauthenticated() {
     expect_error(resp, StatusCode::UNAUTHORIZED, "UNAUTHENTICATED").await;
     assert_eq!(r.meta_oauth.calls().len(), 1, "only the authorize URL");
 
-    // A provider the system has no adapter for, and a query naming anything but the state and
-    // the code, are refused before the use case runs.
-    expect_error(
-        p.get(&callback("tiktok", &state, "code-1"), &owner).await,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "VALIDATION",
-    )
-    .await;
+    // A segment that names no OAuth app (a provider without OAuth among them), and a query
+    // naming anything but the state and the code, are refused before the use case runs.
+    for segment in ["tiktok", "netgsm", "Meta"] {
+        expect_error(
+            p.get(&callback(segment, &state, "code-1"), &owner).await,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VALIDATION",
+        )
+        .await;
+    }
     let extra = format!("{}&scope=x", callback("meta", &state, "code-1"));
     expect_error(
         p.get(&extra, &owner).await,

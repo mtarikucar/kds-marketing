@@ -18,10 +18,12 @@
 //! configured, with its secret too (Instagram Login webhooks are signed with it), each in
 //! constant time: either one signing it passes, neither is `401` with nothing stored. Each event is then
 //! routed by its account across workspaces and stored in the one workspace that holds the
-//! account connected (`jt_app::usecases::webhook::receive_for_accounts`); an event no workspace
-//! holds connected is dropped (Review Focus 1), with a warning naming only the provider, the
-//! kind of account and how many (one warning per kind and delivery), and counted
-//! ([`counters`]`().unrouted_meta`). A signed body that is not a webhook the parser knows is
+//! account connected (`jt_app::usecases::webhook::receive_for_accounts`), while that workspace is
+//! active or awaits payment; an event no workspace holds connected (Review Focus 1), or whose
+//! workspace is suspended, is dropped with nothing written, with a warning naming only the
+//! provider, the reason (`unrouted` or `inactive`), the kind of account and how many (one warning
+//! per reason, kind and delivery), and counted ([`counters`]`().unrouted_meta`, both reasons). A
+//! signed body that is not a webhook the parser knows is
 //! acknowledged, counted and stored as nothing (Meta would only redeliver it). A database
 //! failure is `500`: Meta redelivers.
 //!
@@ -56,7 +58,8 @@ pub const META_BODY_LIMIT: usize = 3 * 1024 * 1024;
 /// The largest NetGSM callback body read; a larger one is `413`.
 pub const NETGSM_BODY_LIMIT: usize = 256 * 1024;
 
-/// Meta events dropped because no workspace holds their account connected.
+/// Meta events dropped because no workspace holds their account connected, or because the one
+/// that does is suspended.
 static UNROUTED_META: AtomicU64 = AtomicU64::new(0);
 /// Signed Meta bodies the parser does not know.
 static UNPARSEABLE_META: AtomicU64 = AtomicU64::new(0);
@@ -67,7 +70,8 @@ static UNPARSEABLE_NETGSM: AtomicU64 = AtomicU64::new(0);
 /// start and are never stored).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
-    /// Meta events for an account no workspace holds connected.
+    /// Meta events dropped: for an account no workspace holds connected, or of a suspended
+    /// workspace.
     pub unrouted_meta: u64,
     /// Signed Meta bodies that are not a webhook the parser knows.
     pub unparseable_meta: u64,

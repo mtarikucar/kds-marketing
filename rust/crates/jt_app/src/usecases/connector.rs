@@ -116,10 +116,11 @@ use crate::ports::{
 pub const OAUTH_STATE_PURPOSE: &str = "oauth-state";
 
 /// Where a provider sends the owner's browser back to, under the public base URL, followed by
-/// `/{provider}`: the redirect URI of every flow. It is the panel's page, not the API: the page
-/// reads `state` and `code` from its address and calls the callback route
-/// (`GET /api/connectors/oauth/callback/{provider}`) itself, a same-site request that carries the
-/// session cookie (`SameSite=Strict`), which the provider's cross-site redirect would not.
+/// `/{callback}` ([`OAuthCallback::key`]: the app the flow signs in with): the redirect URI of
+/// every flow. It is the panel's page, not the API: the page reads `state` and `code` from its
+/// address and calls the callback route (`GET /api/connectors/oauth/callback/{callback}`) itself,
+/// a same-site request that carries the session cookie (`SameSite=Strict`), which the provider's
+/// cross-site redirect would not.
 pub const OAUTH_CALLBACK_PATH: &str = "/oauth/callback";
 
 /// How long a started flow can be confirmed. Its state is accepted for [`STATE_TTL`] only (the
@@ -179,11 +180,66 @@ pub struct StartOut {
     pub expires_at: OffsetDateTime,
 }
 
-/// The provider's callback: the provider it was addressed to (the redirect URI's last segment),
-/// the `state` and `code` it sent back, and the signed-in user whose browser brought them.
-/// `Debug` masks the state and the code.
+/// The app an OAuth flow signs in with, as the last segment of its redirect URI names it
+/// (`{public base URL}/oauth/callback/{key}`): each provider app registers its own redirect URI.
+///
+/// | callback | app | kinds |
+/// |---|---|---|
+/// | `meta` | the Meta app (Facebook Login) | every Meta kind but `instagram` |
+/// | `instagram` | the Instagram app (Instagram Login) | `instagram` |
+/// | `x` | the X app | `x` |
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthCallback {
+    Meta,
+    Instagram,
+    X,
+}
+
+impl OAuthCallback {
+    /// Every callback, in a fixed order.
+    pub fn all() -> &'static [OAuthCallback] {
+        &[
+            OAuthCallback::Meta,
+            OAuthCallback::Instagram,
+            OAuthCallback::X,
+        ]
+    }
+
+    /// The redirect URI's last segment: `meta`, `instagram` or `x`.
+    pub fn key(self) -> &'static str {
+        match self {
+            OAuthCallback::Meta => "meta",
+            OAuthCallback::Instagram => "instagram",
+            OAuthCallback::X => "x",
+        }
+    }
+
+    /// The provider whose flows come back here: Instagram Login is a Meta flow.
+    pub fn provider(self) -> Provider {
+        match self {
+            OAuthCallback::Meta | OAuthCallback::Instagram => Provider::Meta,
+            OAuthCallback::X => Provider::X,
+        }
+    }
+
+    /// The callback of a flow of `provider` for `kind_key` (see the table above); `None` for a
+    /// provider without OAuth (NetGSM).
+    pub fn of_flow(provider: Provider, kind_key: &str) -> Option<OAuthCallback> {
+        match provider {
+            Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
+            Provider::Meta => Some(OAuthCallback::Meta),
+            Provider::X => Some(OAuthCallback::X),
+            Provider::Netgsm => None,
+        }
+    }
+}
+
+/// The provider's callback: the callback it was addressed to (the redirect URI's last segment,
+/// [`OAuthCallback`]), the `state` and `code` it sent back, and the signed-in user whose browser
+/// brought them. `Debug` masks the state and the code.
 pub struct CompleteOAuth<'a> {
-    pub provider: Provider,
+    pub callback: OAuthCallback,
     pub state: String,
     pub code: String,
     pub principal: &'a Principal,
@@ -192,7 +248,7 @@ pub struct CompleteOAuth<'a> {
 impl fmt::Debug for CompleteOAuth<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompleteOAuth")
-            .field("provider", &self.provider)
+            .field("callback", &self.callback)
             .field("state", &Masked)
             .field("code", &Masked)
             .field("user_id", &self.principal.user_id)
@@ -393,8 +449,9 @@ pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 /// "provider_app_not_configured"`, `details.provider`); and its adapter
 /// present, else `CONFLICT`. The state is signed for the workspace and holds the provider, the
 /// kind, the time and a nonce; for X a PKCE pair is made and its verifier sealed with the flow.
-/// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the
-/// provider's key. `expires_at` is when the state stops being accepted ([`STATE_TTL`]).
+/// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the key of the
+/// flow's app ([`OAuthCallback`]: `meta`, `instagram` or `x`), and the code exchange sends the
+/// same one. `expires_at` is when the state stops being accepted ([`STATE_TTL`]).
 ///
 /// Writes `connector.oauth_started` about the flow (`subject.kind = "oauth_pending"`, payload
 /// `provider`, `kind_key`).
@@ -408,9 +465,12 @@ pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<St
 /// must be the one that started the flow, and they need `capabilities.manage` there.
 ///
 /// Refused with `FORBIDDEN` (Review Focus 4), and the provider is not asked: no current
-/// workspace; a state not signed for it, signed for another provider than `input.provider`,
+/// workspace; a state not signed for it, signed for another provider than `input.callback`'s,
 /// malformed, or issued more than [`STATE_TTL`] ago; a flow that is unknown, expired, or already
-/// completed (a state is used once); a reconnection whose capability was retired meanwhile. Then the code is exchanged for a credential and the
+/// completed (a state is used once), or whose app is not the one `input.callback` names (an
+/// Instagram Login flow comes back to `instagram`, every other Meta flow to `meta`); a
+/// reconnection whose capability was retired meanwhile. Then the code is exchanged for a
+/// credential, with the flow's own redirect URI, and the
 /// account's assets are listed; a provider refusal (`Auth`, `Permission`, `Permanent`) is
 /// `VALIDATION` with `details = {provider, provider_error, reason}`, and a busy or unreachable
 /// provider (`Throttle`, `Transient`) `UPSTREAM_UNAVAILABLE` with
@@ -431,7 +491,7 @@ pub async fn complete_oauth(
     input: CompleteOAuth<'_>,
 ) -> Result<PendingAssetsOut, AppError> {
     let CompleteOAuth {
-        provider,
+        callback,
         state,
         code,
         principal,
@@ -444,7 +504,7 @@ pub async fn complete_oauth(
     ctx.require(Permission::CapabilitiesManage)?;
     let key = deps.seal.hmac_key(ws, OAUTH_STATE_PURPOSE)?;
     let signed = OAuthState::verify(&state, &key, now).map_err(|_| refused_state())?;
-    if signed.workspace_id != ws || signed.provider != provider {
+    if signed.workspace_id != ws || signed.provider != callback.provider() {
         return Err(refused_state());
     }
 
@@ -459,7 +519,8 @@ pub async fn complete_oauth(
         let usable = flow.expires_at >= now
             && flow.assets_sealed.is_none()
             && flow.provider == signed.provider
-            && flow.kind_key == signed.kind_key;
+            && flow.kind_key == signed.kind_key
+            && OAuthCallback::of_flow(flow.provider, &flow.kind_key) == Some(callback);
         if !usable {
             return Err(refused_state());
         }
@@ -491,7 +552,7 @@ pub async fn complete_oauth(
         .connectors
         .oauth(flow.provider)
         .ok_or_else(|| AppError::conflict(NO_ADAPTER))?;
-    let redirect = callback_url(deps.apps.as_ref(), flow.provider);
+    let redirect = callback_url(deps.apps.as_ref(), callback);
     let credential = oauth
         .exchange(
             &app,
@@ -913,7 +974,9 @@ async fn begin_oauth(
     } else {
         (None, None)
     };
-    let redirect = callback_url(deps.apps.as_ref(), provider);
+    let callback =
+        OAuthCallback::of_flow(provider, kind_key).ok_or_else(|| app_not_configured(provider))?;
+    let redirect = callback_url(deps.apps.as_ref(), callback);
     // Before anything is written: a refused URL leaves no pending flow and no ledger entry.
     let authorize_url = oauth
         .authorize_url(&app, &redirect, &token, challenge.as_deref())
@@ -1003,10 +1066,10 @@ fn oauth_app(apps: &dyn PlatformAppConfig, provider: Provider, kind_key: &str) -
     }
 }
 
-/// The redirect URI of `provider`'s flows: the public base URL (its path kept, without a
-/// trailing slash), [`OAUTH_CALLBACK_PATH`] and the provider's key.
-fn callback_url(apps: &dyn PlatformAppConfig, provider: Provider) -> Url {
-    public_url(apps, &format!("{OAUTH_CALLBACK_PATH}/{}", provider.key()))
+/// The redirect URI of the flows that come back to `callback`: the public base URL (its path
+/// kept, without a trailing slash), [`OAUTH_CALLBACK_PATH`] and the callback's key.
+fn callback_url(apps: &dyn PlatformAppConfig, callback: OAuthCallback) -> Url {
+    public_url(apps, &format!("{OAUTH_CALLBACK_PATH}/{}", callback.key()))
 }
 
 /// The public base URL (its path kept, without a trailing slash) followed by `path`, which

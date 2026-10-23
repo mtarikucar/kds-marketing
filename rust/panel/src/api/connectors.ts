@@ -22,8 +22,9 @@ export function startOAuth(kindKey: string): Promise<StartOut> {
 }
 
 /**
- * `GET /api/connectors/oauth/callback/{provider}?state=&code=`: completes the flow the provider
- * called back for (the server refuses any other parameter) and answers the assets it found.
+ * `GET /api/connectors/oauth/callback/{meta|instagram|x}?state=&code=`: completes the flow the
+ * provider called back for, at the segment of the app it signed in with (the server refuses any
+ * other parameter, and a flow of another app) and answers the assets it found.
  */
 export function completeOAuth(provider: string, state: string, code: string): Promise<PendingAssetsOut> {
   return request('GET', `/api/connectors/oauth/callback/${seg(provider)}`, { query: { state, code } });

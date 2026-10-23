@@ -19,7 +19,7 @@ use jt_app::usecases::auth::{self, LoginInput, Principal};
 use jt_app::usecases::capabilities::{self, CapabilityOut, DeclareInput, UpdateCapability};
 use jt_app::usecases::connector::{
     self, CompleteOAuth, ConfirmAssets, ConnectorHealth, CredentialInput, OAUTH_STATE_PURPOSE,
-    PendingAssetsOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
+    OAuthCallback, PendingAssetsOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
 };
 use jt_app::usecases::hash_token;
 use jt_app::usecases::work::{self, WorkKind};
@@ -189,17 +189,18 @@ impl Rig {
         state: &str,
         code: &str,
     ) -> Result<PendingAssetsOut, AppError> {
-        // The provider's redirect names the provider the flow was started for (Meta for a state
-        // no flow holds).
-        let provider = self
+        // The provider's redirect names the app the flow was started with (Meta for a state no
+        // flow holds).
+        let callback = self
             .pending_rows()
             .into_iter()
             .find(|p| p.state_hash == hash_token(state))
-            .map_or(Provider::Meta, |p| p.provider);
+            .and_then(|p| OAuthCallback::of_flow(p.provider, &p.kind_key))
+            .unwrap_or(OAuthCallback::Meta);
         connector::complete_oauth(
             deps,
             CompleteOAuth {
-                provider,
+                callback,
                 state: state.into(),
                 code: code.into(),
                 principal,
@@ -423,6 +424,166 @@ async fn start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier() {
     );
 }
 
+/// The redirect URI of `out`'s authorize URL.
+fn redirect_of(out: &StartOut) -> String {
+    query(out, "redirect_uri").expect("a redirect URI")
+}
+
+/// The redirect URI the last code exchange of `calls` sent.
+fn exchanged_redirect(calls: &[OAuthCall]) -> String {
+    calls
+        .iter()
+        .rev()
+        .find_map(|c| match c {
+            OAuthCall::Exchange { redirect, .. } => Some(redirect.to_string()),
+            _ => None,
+        })
+        .expect("a code exchange")
+}
+
+/// Each provider app registers its own redirect URI: the Meta app (Facebook Login) comes back to
+/// `/oauth/callback/meta`, the Instagram app (Instagram Login) to `/oauth/callback/instagram`
+/// and the X app to `/oauth/callback/x`, and the code exchange sends exactly the URI the flow
+/// started with (a provider refuses any other).
+#[tokio::test]
+async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
+    let r = rig().await;
+    let owner = r.owner().await;
+    for (kind, callback, client_id, expected) in [
+        (
+            "facebook_page",
+            OAuthCallback::Meta,
+            "meta-app-id",
+            "https://panel.test/oauth/callback/meta",
+        ),
+        (
+            "instagram_dm",
+            OAuthCallback::Meta,
+            "meta-app-id",
+            "https://panel.test/oauth/callback/meta",
+        ),
+        (
+            "instagram",
+            OAuthCallback::Instagram,
+            "instagram-app-id",
+            "https://panel.test/oauth/callback/instagram",
+        ),
+        (
+            "x",
+            OAuthCallback::X,
+            "x-client-id",
+            "https://panel.test/oauth/callback/x",
+        ),
+    ] {
+        let out = r.start(kind).await;
+        assert_eq!(redirect_of(&out), expected, "{kind}: authorize");
+        assert_eq!(
+            query(&out, "client_id").as_deref(),
+            Some(client_id),
+            "{kind}"
+        );
+        let oauth = if kind == "x" {
+            &r.x_oauth
+        } else {
+            &r.meta_oauth
+        };
+        oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+        oauth.push_assets(Ok(Vec::new()));
+        let done = connector::complete_oauth(
+            &r.w.deps,
+            CompleteOAuth {
+                callback,
+                state: state_of(&out),
+                code: "code-1".into(),
+                principal: &owner,
+            },
+        )
+        .await;
+        assert!(done.is_ok(), "{kind}: {done:?}");
+        let calls = oauth.calls();
+        assert_eq!(exchanged_redirect(&calls), expected, "{kind}: exchange");
+        let exchanged_with = calls.iter().rev().find_map(|c| match c {
+            OAuthCall::Exchange { client_id, .. } => Some(client_id.clone()),
+            _ => None,
+        });
+        assert_eq!(exchanged_with.as_deref(), Some(client_id), "{kind}");
+    }
+    // The callbacks name their segment and their provider.
+    let keys: Vec<(&str, Provider)> = OAuthCallback::all()
+        .iter()
+        .map(|c| (c.key(), c.provider()))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            ("meta", Provider::Meta),
+            ("instagram", Provider::Meta),
+            ("x", Provider::X),
+        ]
+    );
+    assert_eq!(OAuthCallback::of_flow(Provider::Netgsm, "sms_line"), None);
+}
+
+/// A flow completes only at its own app's callback: an Instagram Login flow brought back to the
+/// Meta app's page, a Facebook Login flow to the Instagram app's, or an X flow to either, is
+/// `FORBIDDEN` and the provider is not asked; the flow stays usable at its own callback.
+#[tokio::test]
+async fn callback_path_must_match_the_flows_app() {
+    let r = rig().await;
+    let owner = r.owner().await;
+    let complete = |callback: OAuthCallback, state: String| {
+        let deps = r.w.deps.clone();
+        let owner = owner.clone();
+        async move {
+            connector::complete_oauth(
+                &deps,
+                CompleteOAuth {
+                    callback,
+                    state,
+                    code: "code-1".into(),
+                    principal: &owner,
+                },
+            )
+            .await
+        }
+    };
+
+    let ig = r.start("instagram").await;
+    let page = r.start("facebook_page").await;
+    let x = r.start("x").await;
+    let meta_calls = r.meta_oauth.calls().len();
+    let x_calls = r.x_oauth.calls().len();
+    for (callback, out) in [
+        (OAuthCallback::Meta, &ig),
+        (OAuthCallback::X, &ig),
+        (OAuthCallback::Instagram, &page),
+        (OAuthCallback::X, &page),
+        (OAuthCallback::Instagram, &x),
+        (OAuthCallback::Meta, &x),
+    ] {
+        let e = err(complete(callback, state_of(out)).await);
+        assert_eq!(e.code, ErrorCode::Forbidden, "{callback:?}");
+    }
+    assert_eq!(r.meta_oauth.calls().len(), meta_calls, "Meta was not asked");
+    assert_eq!(r.x_oauth.calls().len(), x_calls, "X was not asked");
+    assert!(r.w.entries("connector.oauth_completed").is_empty());
+
+    // At its own callback, the Instagram Login flow completes with its own redirect URI.
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+    r.meta_oauth
+        .push_assets(Ok(vec![instagram_asset("17841400000000001")]));
+    let done = complete(OAuthCallback::Instagram, state_of(&ig))
+        .await
+        .unwrap();
+    assert_eq!(done.pending_id, ig.pending_id);
+    assert_eq!(done.assets.len(), 1);
+    assert_eq!(done.assets[0].kind_key, "instagram");
+    assert_eq!(
+        exchanged_redirect(&r.meta_oauth.calls()),
+        "https://panel.test/oauth/callback/instagram"
+    );
+}
+
 #[tokio::test]
 async fn start_oauth_fails_cleanly_when_the_provider_refuses_the_authorize_url() {
     let r = rig().await;
@@ -513,7 +674,7 @@ async fn state_cannot_be_reused_or_completed_by_another_workspace() {
     let elsewhere = connector::complete_oauth(
         &r.w.deps,
         CompleteOAuth {
-            provider: Provider::X,
+            callback: OAuthCallback::X,
             state: state.clone(),
             code: "code-1".into(),
             principal: &owner,
@@ -2664,7 +2825,7 @@ impl OAuthProvider for RacingOAuth {
             let out = connector::complete_oauth(
                 &deps,
                 CompleteOAuth {
-                    provider: Provider::Meta,
+                    callback: OAuthCallback::Meta,
                     state,
                     code: "code-2".into(),
                     principal: &principal,

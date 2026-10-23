@@ -5,7 +5,7 @@ import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
 import { PAGE_ID, PENDING_ID, budgetItems, capabilities, groups, me, pendingAssets, smsLine } from '@/test/fixtures';
 import { rememberFlow } from '@/lib/oauthFlow';
-import { mockFetch, renderAt, withStatus } from '@/test/render';
+import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
 
 const CALLBACK = '/api/connectors/oauth/callback/meta';
 
@@ -126,6 +126,74 @@ describe('OAuthCallbackPage', () => {
     mockFetch({ 'GET /api/auth/me': me, [`GET ${CALLBACK}`]: pendingAssets });
     renderAt('/oauth/callback/meta?state=s&code=c');
     expect(await screen.findByText(tr.oauthCallback.firstBinds)).toBeInTheDocument();
+  });
+
+  // Development renders the panel under StrictMode, which runs the page's effect, cleans it up and
+  // runs it again: the code is still spent once, and the answer, arriving after that, is shown.
+  describe('under StrictMode, with the answer arriving late', () => {
+    it('shows a refused state', async () => {
+      const calls = mockFetch({
+        'GET /api/auth/me': me,
+        [`GET ${CALLBACK}`]: delayed(
+          30,
+          withStatus(403, {
+            code: 'FORBIDDEN',
+            message: 'the OAuth state is not valid for this workspace, or was already used',
+            details: {},
+          }),
+        ),
+      });
+      renderAt('/oauth/callback/meta?state=s&code=c', { strict: true });
+      expect(await screen.findByText(tr.oauthCallback.stateRefused)).toBeInTheDocument();
+      expect(screen.queryByText(tr.oauthCallback.loading)).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: tr.oauthCallback.restart })).toHaveAttribute('href', '/connect');
+      expect(calls.filter((c) => c.path === CALLBACK)).toHaveLength(1);
+    });
+
+    it('shows a busy provider', async () => {
+      const calls = mockFetch({
+        'GET /api/auth/me': me,
+        [`GET ${CALLBACK}`]: delayed(
+          30,
+          withStatus(503, {
+            code: 'UPSTREAM_UNAVAILABLE',
+            message: 'the provider is unavailable; try again later',
+            details: { provider: 'meta', retryable: true, retry_after_s: 30, reason: 'HTTP 503' },
+          }),
+        ),
+      });
+      renderAt('/oauth/callback/meta?state=s&code=c', { strict: true });
+      expect(await screen.findByText(i18n.t('errors.upstreamRetryAfter', { seconds: 30 }))).toBeInTheDocument();
+      expect(screen.queryByText(tr.oauthCallback.loading)).not.toBeInTheDocument();
+      expect(calls.filter((c) => c.path === CALLBACK)).toHaveLength(1);
+    });
+
+    it('lists the assets found', async () => {
+      const calls = mockFetch({
+        'GET /api/auth/me': me,
+        [`GET ${CALLBACK}`]: delayed(30, pendingAssets),
+      });
+      const { router } = renderAt('/oauth/callback/meta?state=s&code=c', { strict: true });
+      expect(await screen.findByRole('checkbox', { name: /Kahve Evi/ })).toBeInTheDocument();
+      expect(calls.filter((c) => c.path === CALLBACK)).toHaveLength(1);
+      await waitFor(() => expect(router.state.location.search).toBe(''));
+    });
+  });
+
+  it('completes an Instagram Login flow at its own callback', async () => {
+    const instagram = '/api/connectors/oauth/callback/instagram';
+    const calls = mockFetch({ 'GET /api/auth/me': me, [`GET ${instagram}`]: pendingAssets });
+    renderAt('/oauth/callback/instagram?state=s&code=c');
+    expect(await screen.findByRole('checkbox', { name: /Kahve Evi/ })).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === instagram)).toHaveLength(1);
+    expect(calls.some((c) => c.path === CALLBACK)).toBe(false);
+  });
+
+  it('refuses a callback address the panel does not know, without asking the API', async () => {
+    const calls = mockFetch({ 'GET /api/auth/me': me });
+    renderAt('/oauth/callback/netgsm?state=s&code=c');
+    expect(await screen.findByText(tr.oauthCallback.unknownCallback)).toBeInTheDocument();
+    expect(calls.some((c) => c.path.startsWith('/api/connectors/oauth/callback/'))).toBe(false);
   });
 
   it('forgets a remembered flow that has expired', async () => {

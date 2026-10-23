@@ -24,6 +24,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 jt_capability.workspace = true
+# The actor of the acknowledgements the Postgres tests make.
+jt_ledger.workspace = true
 jt_pg.workspace = true
 jt_testkit.workspace = true
 async-trait.workspace = true

@@ -1271,6 +1271,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
@@ -1435,6 +1436,7 @@ dependencies = [
  "jt_app",
  "jt_capability",
  "jt_connector",
+ "jt_ledger",
  "jt_meta",
  "jt_netgsm",
  "jt_pg",

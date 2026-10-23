@@ -13,9 +13,12 @@
 //! least once by a probe, not retired; a verified one before an unreachable one, then the newest)
 //! and stores the event in that capability's workspace. An event no workspace holds connected is
 //! **dropped**: no tenant row is written anywhere ([`Delivery::Unrouted`]; the gate logs and
-//! counts it). NetGSM signs nothing: each workspace's callback URL carries a token of its own
-//! (HMAC under the workspace's MAC key for [`NETGSM_HOOK_PURPOSE`]), so a NetGSM event is stored
-//! in the workspace its URL names, and only once the token matched.
+//! counts it). So is an event whose workspace is **suspended** ([`Delivery::Inactive`]): a
+//! workspace that is active or awaits payment keeps receiving (its accounts stay connected while
+//! the payment is settled), a suspended one receives nothing. NetGSM signs nothing: each
+//! workspace's callback URL carries a token of its own (HMAC under the workspace's MAC key for
+//! [`NETGSM_HOOK_PURPOSE`]), so a NetGSM event is stored in the workspace its URL names, and only
+//! once the token matched and while that workspace is active ([`netgsm_hook_open`]).
 //!
 //! **Deduplication (Review Focus 2).** An event is stored once per `(workspace, provider,
 //! external_id)`: a replayed delivery, or the same item twice in one body, is
@@ -68,6 +71,17 @@ pub enum Delivery {
     Duplicate,
     /// No workspace holds its account connected: dropped, nothing written.
     Unrouted,
+    /// The workspace that holds its account connected is suspended: dropped, nothing written.
+    Inactive,
+}
+
+/// Whether a workspace in `status` takes provider events routed to it by account: while it is
+/// active or awaits payment, not while it is suspended.
+pub fn takes_routed_events(status: WorkspaceStatus) -> bool {
+    match status {
+        WorkspaceStatus::Active | WorkspaceStatus::PendingPayment => true,
+        WorkspaceStatus::Suspended => false,
+    }
 }
 
 /// One event of a provider that names its account: which capability kinds may hold the account
@@ -80,9 +94,10 @@ pub struct AccountEvent {
 }
 
 /// Stores each of `events` of `provider` in the workspace that holds its account connected (see
-/// the module docs), with the raw body `raw`, and answers what became of each, in order. Each
-/// workspace's events are written in one transaction of their own, so a failure leaves the
-/// workspaces written before it stored: the provider's redelivery then finds those as duplicates.
+/// the module docs), with the raw body `raw`, and answers what became of each, in order: an event
+/// whose workspace is suspended is [`Delivery::Inactive`] and written nowhere. Each workspace's
+/// events are written in one transaction of their own, so a failure leaves the workspaces written
+/// before it stored: the provider's redelivery then finds those as duplicates.
 pub async fn receive_for_accounts(
     deps: &Deps,
     provider: Provider,
@@ -94,15 +109,34 @@ pub async fn receive_for_accounts(
         BTreeMap::new();
     {
         let mut platform = deps.uow.platform().await?;
+        // Each workspace's status, read once per delivery.
+        let mut open: BTreeMap<WorkspaceId, bool> = BTreeMap::new();
         for (i, event) in events.into_iter().enumerate() {
             let routed = platform
                 .capability_by_external(event.kind_keys, &event.external_account_id)
                 .await?;
-            if let Some(capability) = routed {
+            let Some(capability) = routed else {
+                continue;
+            };
+            let ws = capability.workspace_id;
+            let takes = match open.get(&ws) {
+                Some(takes) => *takes,
+                None => {
+                    let takes = platform
+                        .workspace_get(ws)
+                        .await?
+                        .is_some_and(|w| takes_routed_events(w.status));
+                    open.insert(ws, takes);
+                    takes
+                }
+            };
+            if takes {
                 by_workspace
-                    .entry(capability.workspace_id)
+                    .entry(ws)
                     .or_default()
                     .push((i, capability.id, event.draft));
+            } else {
+                out[i] = Delivery::Inactive;
             }
         }
     }

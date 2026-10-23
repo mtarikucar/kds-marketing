@@ -29,6 +29,8 @@ tokio = { workspace = true, features = ["time"] }
 jt_outbound = { workspace = true, features = ["test-loopback"] }
 axum.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
+# Captures the adapter's log lines in a test (no provider text may carry a secret into them).
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

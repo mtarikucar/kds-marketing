@@ -16,7 +16,7 @@ use jt_app::usecases::webhook::{
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, NetgsmPurpose, Provider, netgsm_hook_token};
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use jt_testkit::fakes::{FIXED_NOW, FakeAppConfig, StoredInboundEvent};
 use jt_testkit::flows::activate_workspace;
 use serde_json::json;
@@ -243,6 +243,67 @@ async fn an_event_for_an_account_no_workspace_holds_connected_writes_nothing() {
     .unwrap();
     assert_eq!(out, [Delivery::Unrouted; 5]);
     assert!(stored(&w).is_empty());
+}
+
+/// Sets workspace `ws`'s status, as the platform operator would.
+async fn set_status(w: &World, ws: WorkspaceId, status: WorkspaceStatus) {
+    let mut platform = w.uow.platform().await.unwrap();
+    platform.workspace_set_status(ws, status).await.unwrap();
+    platform.commit().await.unwrap();
+}
+
+/// A Meta event reaches the workspace that holds its account while that workspace is active or
+/// awaits payment; while it is suspended the event is dropped (`Delivery::Inactive`): nothing is
+/// stored there, and nothing anywhere else either. Another workspace's events in the same
+/// delivery are not held back.
+#[tokio::test]
+async fn meta_events_for_a_suspended_workspace_are_dropped() {
+    let w = world().await;
+    let number = connected(&w, w.ws, "whatsapp_cloud", "5555").await;
+    let event = |id: &str| vec![for_account(WHATSAPP, "5555", draft(id, EventKind::Message))];
+    let receive = |events| webhook::receive_for_accounts(&w.deps, Provider::Meta, events, b"{}");
+
+    // A new workspace awaits payment: its events are kept.
+    let out = receive(event("wamid.pending")).await.unwrap();
+    assert!(matches!(out[..], [Delivery::Stored(_)]), "{out:?}");
+    set_status(&w, w.ws, WorkspaceStatus::Active).await;
+    let out = receive(event("wamid.active")).await.unwrap();
+    assert!(matches!(out[..], [Delivery::Stored(_)]), "{out:?}");
+    assert_eq!(events_of(&w, w.ws).len(), 2);
+
+    // Suspended: dropped, nothing written.
+    set_status(&w, w.ws, WorkspaceStatus::Suspended).await;
+    let out = receive(event("wamid.suspended")).await.unwrap();
+    assert_eq!(out, [Delivery::Inactive]);
+    assert_eq!(stored(&w).len(), 2);
+
+    // In one delivery, a suspended workspace's event is dropped and an active one's stored.
+    let (beta, _) = w.other_workspace().await;
+    activate_workspace(&w.deps, beta).await;
+    let theirs = connected(&w, beta, "whatsapp_cloud", "6666").await;
+    let out = receive(vec![
+        for_account(WHATSAPP, "5555", draft("wamid.s2", EventKind::Message)),
+        for_account(WHATSAPP, "6666", draft("wamid.b1", EventKind::Message)),
+    ])
+    .await
+    .unwrap();
+    assert!(
+        matches!(out[..], [Delivery::Inactive, Delivery::Stored(_)]),
+        "{out:?}"
+    );
+    let beta_events = events_of(&w, beta);
+    assert_eq!(beta_events.len(), 1);
+    assert_eq!(beta_events[0].capability_id, Some(theirs));
+    assert!(
+        events_of(&w, w.ws)
+            .iter()
+            .all(|e| e.capability_id == Some(number) && e.external_id != "wamid.s2")
+    );
+
+    // Active again, its events come in again.
+    set_status(&w, w.ws, WorkspaceStatus::Active).await;
+    let out = receive(event("wamid.back")).await.unwrap();
+    assert!(matches!(out[..], [Delivery::Stored(_)]), "{out:?}");
 }
 
 /// A connection whose token expired (unreachable, verified once) keeps its events.
