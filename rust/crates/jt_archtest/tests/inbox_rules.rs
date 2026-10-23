@@ -404,7 +404,7 @@ fn inbox_catalog_schemas_match_both_surfaces() {
         .iter()
         .filter(|r| r.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 41);
+    assert_eq!(rows.len(), 45);
     for row in rows {
         let tool = tools.iter().find(|t| Some(t.name) == row.mcp_tool).unwrap();
         assert_eq!(

@@ -263,7 +263,7 @@ pub async fn report(
         duplicate: false,
     };
     r.journeys().apply_transition(id, transition, event).await?;
-    apply_effects(r.as_mut(), &journey, &out.effects).await?;
+    apply_effects(deps, ctx, r.as_mut(), &journey, &out.effects).await?;
     // Only status/effect metadata, never product, customer content or identity values.
     record(r.as_mut(), ctx, "inbox.event.reported", "journey", id, json!({"kind":input.kind,"from":journey.status,"to":out.transition.as_ref().map(Transition::to)})).await?;
     r.commit().await?;
@@ -271,10 +271,13 @@ pub async fn report(
 }
 
 pub(crate) async fn apply_effects(
+    deps: &Deps,
+    ctx: &Ctx,
     r: &mut dyn TenantRepos,
     journey: &Journey,
     effects: &[JourneyEffect],
 ) -> Result<(), AppError> {
+    let mut unassigned = None;
     for effect in effects {
         match effect {
             JourneyEffect::CloseTasks | JourneyEffect::CancelOpenTasks => {
@@ -289,7 +292,17 @@ pub(crate) async fn apply_effects(
                     }
                 }
             }
-            JourneyEffect::CommissionDue { .. } => { /* M2b consumes the stored Won event. */ }
+            JourneyEffect::CommissionDue {
+                amount_minor,
+                currency,
+            } => {
+                let row =
+                    super::commissions::snapshot(deps, ctx, r, journey, *amount_minor, currency)
+                        .await?;
+                if row.commission.state == CommissionState::NoPayee {
+                    unassigned = Some(row.id);
+                }
+            }
             other => {
                 let state = match other {
                     JourneyEffect::CloseConversations => ConvState::Closed,
@@ -307,6 +320,20 @@ pub(crate) async fn apply_effects(
                 }
             }
         }
+    }
+    // Won closes the old work first; this new human follow-up must remain open.
+    if let Some(id) = unassigned {
+        r.tasks()
+            .insert(Task {
+                id: TaskId::from(id),
+                workspace_id: ctx.workspace_id,
+                journey_id: journey.id,
+                title: "Commission has no payee".into(),
+                due_at: ctx.now,
+                assignee: None,
+                status: TaskStatus::Open,
+            })
+            .await?;
     }
     Ok(())
 }

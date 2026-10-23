@@ -6,7 +6,7 @@ use crate::{
 };
 use axum::{Json, extract::State};
 use jt_app::usecases::inbox::{
-    JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, tasks,
+    JourneyId, MergeId, PersonId, TaskId, commissions, dictionaries, journeys, merge, people, tasks,
 };
 use serde_json::Value;
 
@@ -344,4 +344,33 @@ pub async fn appointments_held(
     ApiPath(id): ApiPath<uuid::Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     to_json(&appointments::held(&state.deps, &ctx, id).await?)
+}
+
+pub async fn commissions_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(input): ApiQuery<commissions::ListInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&commissions::list(&state.deps, &ctx, input).await?)
+}
+pub async fn commission_rates_set(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(input): ApiJson<commissions::RateInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&commissions::set_rate(&state.deps, &ctx, input).await?)
+}
+pub async fn commissions_approve(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&commissions::approve(&state.deps, &ctx, id).await?)
+}
+pub async fn commissions_pay(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&commissions::pay(&state.deps, &ctx, id).await?)
 }

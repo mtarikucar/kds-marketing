@@ -236,6 +236,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.appointments.book", GateMode::Gated, "jeeta.inbox.appointments_book", ("POST", "/api/inbox/journeys/{journey_id}/appointments"), Write),
     twin("inbox.appointments.cancel", GateMode::Gated, "jeeta.inbox.appointments_cancel", ("POST", "/api/inbox/appointments/{id}/cancel"), Write),
     twin("inbox.appointments.held", GateMode::Gated, "jeeta.inbox.appointments_held", ("POST", "/api/inbox/appointments/{id}/held"), Write),
+    twin("inbox.commissions.list", GateMode::Gated, "jeeta.inbox.commissions_list", ("GET", "/api/inbox/commissions"), Read),
+    twin("inbox.commissions.approve", GateMode::Gated, "jeeta.inbox.commissions_approve", ("POST", "/api/inbox/commissions/{id}/approve"), Write),
+    twin("inbox.commissions.pay", GateMode::Gated, "jeeta.inbox.commissions_pay", ("POST", "/api/inbox/commissions/{id}/pay"), Write),
+    twin("inbox.commission_rates.set", GateMode::Gated, "jeeta.inbox.commission_rates_set", ("PUT", "/api/inbox/commission-rates"), Write),
 
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),

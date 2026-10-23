@@ -83,11 +83,12 @@ export function InboxPage() {
         title={t('inbox.title')}
         description={t('inbox.description')}
         actions={
-          manage ? (
-            <Button asChild variant="outline">
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline"><Link to="/inbox/commissions">{t('inbox.commissions.title')}</Link></Button>
+            {manage && <Button asChild variant="outline">
               <Link to="/inbox/merges">{t('inbox.merges.title')}</Link>
-            </Button>
-          ) : undefined
+            </Button>}
+          </div>
         }
       />
       <div

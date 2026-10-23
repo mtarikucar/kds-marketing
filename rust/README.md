@@ -1366,7 +1366,7 @@ its down migration removes only the added policy column.
 
 ### M2a inbox core: model, reducer and surfaces
 
-The catalog contains **101 MCP tools: the M1b 60 plus 41 inbox tools**. Every inbox tool
+The catalog contains **105 MCP tools: the M1b 60 plus 45 inbox tools**. Every inbox tool
 has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
 are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
 check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
@@ -1387,7 +1387,7 @@ when the keeper has changed since the merge.
 | `replied`, connected `call_made` | New/Unreachable → Contacted; reset failed attempts. Reply also makes conversation Theirs. |
 | Failed `call_made` | Count attempts; default third failure enters Unreachable only at rank ≤ 1. |
 | `appointment_booked`, `meeting_held`, `quote_sent`, `quote_accepted` | Advance to Appointment, Met, Quoted, Pending respectively without regressing a later stage. |
-| `won` | Close journey and open tasks; emit CommissionDue (commission accounting is M2b). |
+| `won` | Close journey and open tasks; consume CommissionDue and snapshot the human owner’s commission in the same transaction. |
 | `lost` | Snapshot active loss-reason label; close conversations and cancel open tasks. |
 | `snoozed` | Snooze conversation until the given instant. |
 | `reopened` | Human owner/manager with inbox.manage: Lost → Contacted; clear closure, loss and attempts. |
@@ -1607,8 +1607,7 @@ a line clears its İYS slot and brand metadata along with the old account creden
 
 ## M2b quotes and internal appointments
 
-Six additional strategy-gated `InboxWork` operations bring the release to **101 MCP tools**
-(**41 inbox tools**). Each operation uses the same input, output and permission on HTTP and MCP:
+Six strategy-gated `InboxWork` operations handle quotes and appointments. Each operation uses the same input, output and permission on HTTP and MCP:
 
 | Use case | MCP tool | HTTP route |
 |---|---|---|
@@ -1649,3 +1648,36 @@ Unknown mail is ledgered and reconciled through the same Message-ID recovery, wi
 Cancelling or holding a booking before its mail is claimed refuses the pending confirmation.
 Attachment bytes and personal location/text are excluded from ledger entries. These are internal
 appointments; external calendar availability, OAuth, events and public booking remain deferred.
+
+
+## M2b human commissions
+
+The release has **105 MCP tools**, including **45 inbox tools**. Commissions are part of the
+inbox (`/inbox/commissions` in the panel), with shared strict request schemas on both surfaces:
+
+| Use case | MCP tool | HTTP route | Permission |
+| --- | --- | --- | --- |
+| `inbox.commissions.list` | `jeeta.inbox.commissions_list` | GET `/api/inbox/commissions?state&payee` | `inbox.work` |
+| `inbox.commissions.approve` | `jeeta.inbox.commissions_approve` | POST `/api/inbox/commissions/{id}/approve` | `inbox.manage`, owner/manager authority |
+| `inbox.commissions.pay` | `jeeta.inbox.commissions_pay` | POST `/api/inbox/commissions/{id}/pay` | `inbox.manage`, owner/manager authority |
+| `inbox.commission_rates.set` | `jeeta.inbox.commission_rates_set` | PUT `/api/inbox/commission-rates` | `inbox.manage` |
+
+All four operations require an approved strategy and an active workspace. MCP approval/payment
+uses the issuer's owner/manager authority and effective `inbox.manage` scope. Payment records a
+human payment decision; it does not transfer funds. Only Pending → Approved → Paid is allowed;
+repeated or out-of-order decisions return CONFLICT and do not duplicate ledger entries.
+
+Won consumes CommissionDue inside the journey/event/effects/ledger transaction. Its payee is the
+active human journey owner at that instant, independent of the reporting actor or conversation
+executor. `commission_user_rates` overrides `commission_default`, including a zero override;
+a missing default means zero basis points. PUT accepts `{user_id?, rate_bp}`: omit/null user_id
+for the workspace default, or name an active member for an override. Rates are unsigned 16-bit
+basis points (100 = 1%). The amount uses integer round-half-even; unrepresentable amounts return
+VALIDATION and roll back Won. Amount, currency, rate and payee remain fixed after later rate or
+owner changes. Same-key Won repeats produce one commission; another key on Won returns terminal
+CONFLICT. Workspace locking serializes Won, rate changes and commission decisions.
+
+Without an active owner, the snapshot is NoPayee and can never be approved or paid. Existing open
+tasks close on Won; a new unassigned follow-up task remains open and due immediately. Assigning
+an owner later does not rewrite that financial snapshot. The panel lists state/payee filters,
+shows snapshot rates and amounts, and offers only permitted next actions and future-rate settings.

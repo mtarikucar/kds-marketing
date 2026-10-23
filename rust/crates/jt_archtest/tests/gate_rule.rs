@@ -189,7 +189,7 @@ fn inbox_core_keeps_exact_read_exemptions_and_status_gate() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 41);
+    assert_eq!(rows.len(), 45);
     for row in rows {
         assert_eq!(
             row.gate,

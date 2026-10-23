@@ -1046,6 +1046,31 @@
     }
   },
   "inbox": {
+    "commissions": {
+      "title": "Komisyonlar",
+      "description": "Kazanılan yolculukların insan temsilci komisyonları.",
+      "filterState": "Komisyon durumu",
+      "all": "Tümü",
+      "payee": "Hak sahibi",
+      "unassigned": "Atanmamış",
+      "snapshotRate": "Kazanıldığı andaki oran: %{{rate}}",
+      "noPayeeHelp": "Kazanıldığı anda hak sahibi yoktu. Bu kayıt ödenemez; atanmamış takip görevi oluşturuldu.",
+      "approve": "Onayla",
+      "pay": "Ödendi olarak işaretle",
+      "rates": "Komisyon oranı ayarla",
+      "rateHelp": "100 baz puan = %1. Temsilci oranı varsayılanın önüne geçer. Değişiklikler yalnız sonraki kazanımlara uygulanır.",
+      "rateTarget": "Oranın kapsamı",
+      "defaultRate": "Çalışma alanı varsayılanı",
+      "rate": "Oran (baz puan)",
+      "save": "Oranı kaydet",
+      "saved": "Oran kaydedildi.",
+      "state": {
+        "no_payee": "Hak sahibi yok",
+        "pending": "Onay bekliyor",
+        "approved": "Onaylandı",
+        "paid": "Ödendi"
+      }
+    },
     "emailSubject": "E-posta konusu",
     "title": "Gelen kutusu",
     "description": "Konuşmaları yanıtlayın, yolculukları ve takip işlerini yönetin.",

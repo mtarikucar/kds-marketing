@@ -7,8 +7,8 @@ use jt_app::{
     usecases::{
         Deps,
         inbox::{
-            JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, schema,
-            tasks,
+            JourneyId, MergeId, PersonId, TaskId, commissions, dictionaries, journeys, merge,
+            people, schema, tasks,
         },
     },
 };
@@ -19,6 +19,36 @@ use serde_json::Value;
 
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
+        ToolDef {
+            use_case: "inbox.commissions.list",
+            description: "commissions.list for workspace commissions. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("commissions.list")).expect("inbox schema"),
+            run: commissions_list,
+        },
+        ToolDef {
+            use_case: "inbox.commissions.approve",
+            description: "commissions.approve for workspace commissions. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("commissions.approve")).expect("inbox schema"),
+            run: commissions_approve,
+        },
+        ToolDef {
+            use_case: "inbox.commissions.pay",
+            description: "commissions.pay for workspace commissions. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("commissions.pay")).expect("inbox schema"),
+            run: commissions_pay,
+        },
+        ToolDef {
+            use_case: "inbox.commission_rates.set",
+            description: "commission_rates.set for workspace commissions. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || {
+                Schema::try_from(schema::tool("commission_rates.set")).expect("inbox schema")
+            },
+            run: commission_rates_set,
+        },
         ToolDef {
             use_case: "inbox.quotes.send",
             description: "quotes.send for an internal journey. [risk: WRITE]",
@@ -575,5 +605,26 @@ fn appointments_held<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFu
         let id: uuid::Uuid = take_id(&mut raw, "appointment_id")?;
         let _: NoArgs = args(raw)?;
         to_json(&appointments::held(deps, ctx, id).await?)
+    })
+}
+
+fn commissions_list<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&commissions::list(deps, ctx, args(raw)?).await?) })
+}
+fn commission_rates_set<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&commissions::set_rate(deps, ctx, args(raw)?).await?) })
+}
+fn commissions_approve<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "commission_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&commissions::approve(deps, ctx, id).await?)
+    })
+}
+fn commissions_pay<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "commission_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&commissions::pay(deps, ctx, id).await?)
     })
 }

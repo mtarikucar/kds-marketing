@@ -2072,6 +2072,7 @@ async fn panel_mcp_consumer_effect_parity() {
             "{}",
             json_body(response).await
         );
+        let original_task = json_body(response).await;
         let input = json!({"kind":"won", "idempotency_key":format!("won-{i}"), "payload":{"product":"Service","amount_minor":12500,"currency":"TRY"}});
         let output = match i {
             0 => {
@@ -2146,8 +2147,32 @@ async fn panel_mcp_consumer_effect_parity() {
         assert_eq!(human["status_labels"]["won"], "Satış tamamlandı");
         assert_eq!(human["status_labels"]["new"], "Yeni");
         assert_eq!(human["journey"]["status"], "won");
-        assert_eq!(human["tasks"].as_array().unwrap().len(), 1);
-        assert_eq!(human["tasks"][0]["status"], "done");
+        let tasks = human["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 2);
+        let closed = tasks
+            .iter()
+            .find(|t| t["id"] == original_task["id"])
+            .unwrap();
+        assert_eq!(closed["status"], "done");
+        let mut r = deps.uow.tenant(ws).await.unwrap();
+        let commission = r
+            .commissions()
+            .by_journey(journey.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            commission.commission.state,
+            jt_inbox::CommissionState::NoPayee
+        );
+        assert_eq!(commission.commission.payee, None);
+        let followup = tasks
+            .iter()
+            .find(|t| t["id"] == json!(commission.id))
+            .unwrap();
+        assert_eq!(followup["status"], "open");
+        assert_eq!(followup["assignee"], Value::Null);
+        drop(r);
         assert_eq!(human["events"].as_array().unwrap().len(), 1);
         let mut state = human["journey"].clone();
         for key in ["id", "person_id", "updated_at"] {
@@ -2826,4 +2851,272 @@ async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
     .await;
     assert_eq!(human["code"], "NOT_FOUND");
     assert_eq!(human, agent["structuredContent"]);
+}
+
+#[tokio::test]
+async fn inbox_commissions_have_http_mcp_parity_and_atomic_won() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("commission-parity").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    for input in [
+        json!({"rate_bp":1000}),
+        json!({"user_id":user,"rate_bp":100}),
+    ] {
+        let human = ok(send(
+            &app,
+            panel(
+                Method::PUT,
+                "/api/inbox/commission-rates",
+                Some(&cookie),
+                Some(input.clone()),
+            ),
+        )
+        .await)
+        .await;
+        assert_eq!(
+            human,
+            call_tool(
+                &app,
+                &key,
+                &session,
+                "jeeta.inbox.commission_rates_set",
+                input
+            )
+            .await
+        );
+    }
+    let mut commission_ids = vec![];
+    for n in 0..3 {
+        let person = ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Commission example","identities":[{"channel":"email","value":format!("commission-{n}@example.test")}],"source":"form"})))).await).await;
+        let mut r = deps.uow.tenant(ws).await.unwrap();
+        let j = r
+            .journeys()
+            .open_for(serde_json::from_value(person["person"]["id"].clone()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(r);
+        let base = format!("/api/inbox/journeys/{}", j.id);
+        if n != 2 {
+            ok(send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("{base}/owner"),
+                    Some(&cookie),
+                    Some(json!({"user_id":user})),
+                ),
+            )
+            .await)
+            .await;
+        }
+        let won = json!({"kind":"won","idempotency_key":format!("won-{n}"),"payload":{"product":"Private product","amount_minor":150,"currency":"TRY"}});
+        ok(send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("{base}/events"),
+                Some(&cookie),
+                Some(won.clone()),
+            ),
+        )
+        .await)
+        .await;
+        let mut args = won.clone();
+        args["journey_id"] = json!(j.id);
+        assert_eq!(
+            call_tool(&app, &key, &session, "jeeta.inbox.events_report", args).await["duplicate"],
+            true
+        );
+        let mut terminal = won;
+        terminal["idempotency_key"] = json!(format!("terminal-{n}"));
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("{base}/events"),
+                    Some(&cookie),
+                    Some(terminal.clone()),
+                ),
+            )
+            .await,
+        )
+        .await;
+        terminal["journey_id"] = json!(j.id);
+        let agent = tool_result(&app, &key, &session, "jeeta.inbox.events_report", terminal).await;
+        assert_eq!(human["code"], "CONFLICT");
+        assert_eq!(human["details"]["reason"], "terminal");
+        assert_eq!(human, agent["structuredContent"]);
+        let mut r = deps.uow.tenant(ws).await.unwrap();
+        let row = r.commissions().by_journey(j.id).await.unwrap().unwrap();
+        assert_eq!(row.commission.rate_bp, if n == 2 { 1000 } else { 100 });
+        assert_eq!(row.commission.amount_minor, if n == 2 { 15 } else { 2 });
+        if n == 2 {
+            assert_eq!(row.commission.state, jt_inbox::CommissionState::NoPayee);
+            let tasks = r.tasks().list(j.id).await.unwrap();
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].assignee, None);
+            assert_eq!(tasks[0].status, jt_inbox::TaskStatus::Open);
+        }
+        commission_ids.push(row.id);
+    }
+    for (query, args, count) in [
+        (String::new(), json!({}), 3),
+        (
+            format!("?state=pending&payee={user}"),
+            json!({"state":"pending","payee":user}),
+            2,
+        ),
+        ("?state=no_payee".into(), json!({"state":"no_payee"}), 1),
+    ] {
+        let human = ok(send(
+            &app,
+            panel(
+                Method::GET,
+                &format!("/api/inbox/commissions{query}"),
+                Some(&cookie),
+                None,
+            ),
+        )
+        .await)
+        .await;
+        assert_eq!(human.as_array().unwrap().len(), count);
+        assert_eq!(
+            human,
+            call_tool(&app, &key, &session, "jeeta.inbox.commissions_list", args).await
+        );
+    }
+    // NoPayee can never be approved or paid; Pending cannot be paid directly.
+    for (id, action) in [
+        (commission_ids[2], "approve"),
+        (commission_ids[2], "pay"),
+        (commission_ids[0], "pay"),
+    ] {
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("/api/inbox/commissions/{id}/{action}"),
+                    Some(&cookie),
+                    None,
+                ),
+            )
+            .await,
+        )
+        .await;
+        let agent = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.inbox.commissions_{action}"),
+            json!({"commission_id":id}),
+        )
+        .await;
+        assert_eq!(human["code"], "CONFLICT");
+        assert_eq!(human, agent["structuredContent"]);
+    }
+    // Separate commissions allow each surface to perform the same strict transition once.
+    for (action, state) in [("approve", "approved"), ("pay", "paid")] {
+        let human = ok(send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/commissions/{}/{action}", commission_ids[0]),
+                Some(&cookie),
+                None,
+            ),
+        )
+        .await)
+        .await;
+        let agent = call_tool(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.inbox.commissions_{action}"),
+            json!({"commission_id":commission_ids[1]}),
+        )
+        .await;
+        assert_eq!(human["state"], state);
+        for field in [
+            "workspace_id",
+            "payee",
+            "amount_minor",
+            "rate_bp",
+            "currency",
+            "state",
+            "created_at",
+        ] {
+            assert_eq!(human[field], agent[field], "{field}");
+        }
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("/api/inbox/commissions/{}/{action}", commission_ids[0]),
+                    Some(&cookie),
+                    None,
+                ),
+            )
+            .await,
+        )
+        .await;
+        let agent = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.inbox.commissions_{action}"),
+            json!({"commission_id":commission_ids[0]}),
+        )
+        .await;
+        assert_eq!(human["code"], "CONFLICT");
+        assert_eq!(human, agent["structuredContent"]);
+    }
+    // A snapshot failure after apply_transition rolls back the event, journey and commission.
+    let person = ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Overflow example","identities":[{"channel":"email","value":"overflow@example.test"}],"source":"form"})))).await).await;
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let j = r
+        .journeys()
+        .open_for(serde_json::from_value(person["person"]["id"].clone()).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(r);
+    call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.commission_rates_set",
+        json!({"rate_bp":65535}),
+    )
+    .await;
+    let error = tool_result(&app,&key,&session,"jeeta.inbox.events_report",json!({"journey_id":j.id,"kind":"won","idempotency_key":"overflow","payload":{"product":"Private product","amount_minor":i64::MAX,"currency":"TRY"}})).await;
+    assert_eq!(error["structuredContent"]["code"], "VALIDATION");
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        r.journeys().get(j.id).await.unwrap().unwrap().status,
+        jt_inbox::JourneyStatus::New
+    );
+    assert!(
+        r.journeys()
+            .event_by_key("overflow")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(r.commissions().by_journey(j.id).await.unwrap().is_none());
 }

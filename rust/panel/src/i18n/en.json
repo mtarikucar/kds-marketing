@@ -1046,6 +1046,31 @@
     }
   },
   "inbox": {
+    "commissions": {
+      "title": "Commissions",
+      "description": "Human representative commissions from won journeys.",
+      "filterState": "Commission state",
+      "all": "All",
+      "payee": "Payee",
+      "unassigned": "Unassigned",
+      "snapshotRate": "Rate at win: {{rate}}%",
+      "noPayeeHelp": "There was no payee at win. This record cannot be paid; an unassigned follow-up task was created.",
+      "approve": "Approve",
+      "pay": "Mark as paid",
+      "rates": "Set commission rate",
+      "rateHelp": "100 basis points = 1%. A representative rate overrides the default. Changes apply only to future wins.",
+      "rateTarget": "Rate applies to",
+      "defaultRate": "Workspace default",
+      "rate": "Rate (basis points)",
+      "save": "Save rate",
+      "saved": "Rate saved.",
+      "state": {
+        "no_payee": "No payee",
+        "pending": "Pending approval",
+        "approved": "Approved",
+        "paid": "Paid"
+      }
+    },
     "emailSubject": "Email subject",
     "title": "Inbox",
     "description": "Reply to conversations and manage journeys and follow-ups.",

@@ -373,7 +373,7 @@ async fn apply(
     r.journeys()
         .apply_transition(j.id, transition, event)
         .await?;
-    journeys::apply_effects(r, &j, &effects).await?;
+    journeys::apply_effects(deps, ctx, r, &j, &effects).await?;
     record(
         r,
         ctx,

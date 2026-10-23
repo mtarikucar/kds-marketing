@@ -153,6 +153,10 @@ fn catalog_is_the_release_table() {
         ("inbox.appointments.book", Some("jeeta.inbox.appointments_book"), Some(("POST", "/api/inbox/journeys/{journey_id}/appointments")), false, Risk::Write),
         ("inbox.appointments.cancel", Some("jeeta.inbox.appointments_cancel"), Some(("POST", "/api/inbox/appointments/{id}/cancel")), false, Risk::Write),
         ("inbox.appointments.held", Some("jeeta.inbox.appointments_held"), Some(("POST", "/api/inbox/appointments/{id}/held")), false, Risk::Write),
+        ("inbox.commissions.list", Some("jeeta.inbox.commissions_list"), Some(("GET", "/api/inbox/commissions")), false, Risk::Read),
+        ("inbox.commissions.approve", Some("jeeta.inbox.commissions_approve"), Some(("POST", "/api/inbox/commissions/{id}/approve")), false, Risk::Write),
+        ("inbox.commissions.pay", Some("jeeta.inbox.commissions_pay"), Some(("POST", "/api/inbox/commissions/{id}/pay")), false, Risk::Write),
+        ("inbox.commission_rates.set", Some("jeeta.inbox.commission_rates_set"), Some(("PUT", "/api/inbox/commission-rates")), false, Risk::Write),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
@@ -225,7 +229,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 111);
+    assert_eq!(CATALOG.len(), 115);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

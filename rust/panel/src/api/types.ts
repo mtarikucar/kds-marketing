@@ -1080,3 +1080,16 @@ export interface InboxReportOut {
   effects: InboxJourneyEffect[];
   duplicate: boolean;
 }
+
+export type CommissionState = 'no_payee' | 'pending' | 'approved' | 'paid';
+export interface InboxCommission {
+  id: string;
+  workspace_id: string;
+  journey_id: string;
+  payee: string | null;
+  amount_minor: number;
+  currency: string;
+  rate_bp: number;
+  state: CommissionState;
+  created_at: string;
+}

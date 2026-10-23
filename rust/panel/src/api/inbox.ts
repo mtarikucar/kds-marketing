@@ -58,3 +58,12 @@ export const completeTask = (id: string) => request<InboxTask>('POST', `${root}/
 export const addNote = (id: string, text: string) =>
   request<InboxNote>('POST', `${journey(id)}/notes`, { body: { text } });
 export const getInboxPending = () => request<InboxPendingOut>('GET', `${root}/pending`);
+
+export const listCommissions = (state?: import('./types').CommissionState, payee?: string) =>
+  request<import('./types').InboxCommission[]>('GET', `${root}/commissions`, { query: { state, payee } });
+export const approveCommission = (id: string) =>
+  request<import('./types').InboxCommission>('POST', `${root}/commissions/${seg(id)}/approve`);
+export const payCommission = (id: string) =>
+  request<import('./types').InboxCommission>('POST', `${root}/commissions/${seg(id)}/pay`);
+export const setCommissionRate = (input: { user_id: string | null; rate_bp: number }) =>
+  request<{ user_id: string | null; rate_bp: number }>('PUT', `${root}/commission-rates`, { body: input });
