@@ -185,11 +185,15 @@ impl Mock {
         Mock::start_on("127.0.0.1:0".parse().unwrap()).await
     }
 
-    /// The mock on `addr` (a port given back by a listener that was dropped).
+    /// The mock on `addr`.
     pub async fn start_on(addr: SocketAddr) -> Mock {
+        Self::from_listener(TcpListener::bind(addr).await.unwrap())
+    }
+
+    /// Starts serving an already-bound listener without releasing its port.
+    pub fn from_listener(listener: TcpListener) -> Mock {
         let script = Arc::new(Mutex::new(Script::default()));
         let app = Router::new().fallback(handle).with_state(script.clone());
-        let listener = TcpListener::bind(addr).await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Mock { addr, script }

@@ -2198,39 +2198,6 @@ const ECHO_SECRET: &str = "app/secret+echo=value";
 /// An authorization code with characters that URL and form encoding change.
 const ECHO_CODE: &str = "AQD.code/echo+value==";
 
-/// `text` percent-encoded the way `application/x-www-form-urlencoded` encodes it.
-fn form_encoded(text: &str) -> String {
-    url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
-}
-
-/// `text` percent-encoded with lowercase hex digits, every byte but letters and digits.
-fn lower_encoded(text: &str) -> String {
-    text.bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02x}")
-            }
-        })
-        .collect()
-}
-
-/// Asserts that `what` shows none of `secrets`, as is or encoded, nor their first eight
-/// characters (a secret cut where the reason is cut).
-fn assert_no_echo(what: &str, shown: &str, secrets: &[&str]) {
-    for secret in secrets {
-        for form in [
-            (*secret).to_owned(),
-            form_encoded(secret),
-            lower_encoded(secret),
-            secret[..8].to_owned(),
-        ] {
-            assert!(!shown.contains(&form), "{what} shows {form:?}: {shown}");
-        }
-    }
-}
-
 /// Graph's answer quoting `message`.
 fn quoting(message: String) -> Reply {
     status(
@@ -2383,60 +2350,6 @@ async fn a_refused_code_exchange_never_echoes_the_code_or_the_client_secret() {
         .unwrap_err();
     let shown = format!("{e} {e:?}");
     assert_no_echo("the Instagram exchange", &shown, &[ECHO_CODE, ECHO_SECRET]);
-}
-
-/// A part of the asset listing left out is logged with its reason: never with a secret the
-/// provider echoed.
-#[tokio::test]
-async fn a_skipped_listing_part_logs_no_echoed_secret() {
-    use std::io::Write;
-    use std::sync::Mutex;
-
-    #[derive(Clone, Default)]
-    struct Buffer(Arc<Mutex<Vec<u8>>>);
-    impl Write for Buffer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let r = rig().await;
-    let m = &r.mock;
-    m.on("GET", "/fb/v19.0/me/accounts", ok(json!({ "data": [] })));
-    let refusal = |token: &str| {
-        status(
-            403,
-            json!({ "error": {
-                "message": format!("token {token} lacks ads_read; app {META_APP_SECRET}"),
-                "type": "OAuthException", "code": 200,
-            }}),
-        )
-    };
-    m.on("GET", "/fb/v19.0/me/adaccounts", refusal(USER_TOKEN));
-    m.on("GET", "/fb/v19.0/me/businesses", refusal(USER_TOKEN));
-
-    let buffer = Buffer::default();
-    let writer = buffer.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
-    let listed = {
-        let _guard = tracing::subscriber::set_default(subscriber);
-        r.meta.list_assets(&user_cred()).await
-    };
-    assert!(listed.unwrap().is_empty());
-    let logged = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
-    assert!(
-        logged.contains("a part of the Meta asset listing was left out"),
-        "{logged}"
-    );
-    assert_no_echo("the log", &logged, &[USER_TOKEN, META_APP_SECRET]);
 }
 
 #[tokio::test]

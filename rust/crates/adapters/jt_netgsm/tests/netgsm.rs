@@ -296,50 +296,6 @@ const STALL: StdDuration = StdDuration::from_millis(1_500);
 const SHORT_TIMEOUT: StdDuration = StdDuration::from_millis(200);
 
 #[tokio::test]
-async fn a_read_retries_once_on_a_connect_failure() {
-    // A port that refuses connections until the mock comes up on it, after the first attempt.
-    let addr = {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        probe.local_addr().unwrap()
-    };
-    let netgsm = connector_at(
-        addr,
-        RetryPolicy {
-            attempts: 2,
-            base_delay: StdDuration::from_millis(400),
-        },
-        StdDuration::from_secs(5),
-    );
-    let up = tokio::spawn(async move {
-        tokio::time::sleep(StdDuration::from_millis(100)).await;
-        let mock = Mock::start_on(addr).await;
-        mock.on("GET", INBOX, rest("inbox"));
-        mock
-    });
-    let drafts = netgsm
-        .inbox(&sms_cred(), START - Duration::hours(2), START)
-        .await
-        .unwrap();
-    let mock = up.await.unwrap();
-    assert_eq!(drafts.len(), 2);
-    // The refused attempt never reached it; the retry did, once.
-    assert_eq!(mock.requests("GET", INBOX).len(), 1);
-
-    // An action that cannot connect is not retried, and says nothing was sent.
-    let closed = {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        probe.local_addr().unwrap()
-    };
-    let netgsm = connector_at(closed, no_pause(), StdDuration::from_secs(5));
-    let e = netgsm
-        .send(&sms_cred(), "905000000001", "Merhaba", None)
-        .await
-        .unwrap_err();
-    assert_eq!(e.kind(), "transient", "{e}");
-    assert!(e.reason().unwrap().contains("nothing was sent"), "{e}");
-}
-
-#[tokio::test]
 async fn reads_retry_when_no_answer_arrived() {
     // A socket that closes every connection: no answer ever arrives.
     let dropper = Dropper::start().await;

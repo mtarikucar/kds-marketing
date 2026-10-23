@@ -496,3 +496,36 @@ pub async fn broken_response(after_headers: bool) -> std::net::SocketAddr {
     });
     addr
 }
+
+/// `text` percent-encoded the way `application/x-www-form-urlencoded` encodes it.
+pub fn form_encoded(text: &str) -> String {
+    url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
+}
+
+/// `text` percent-encoded with lowercase hex digits, every byte but letters and digits.
+pub fn lower_encoded(text: &str) -> String {
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02x}")
+            }
+        })
+        .collect()
+}
+
+/// Asserts that `what` shows none of `secrets`, as is or encoded, nor their first eight
+/// characters (a secret cut where the reason is cut).
+pub fn assert_no_echo(what: &str, shown: &str, secrets: &[&str]) {
+    for secret in secrets {
+        for form in [
+            (*secret).to_owned(),
+            form_encoded(secret),
+            lower_encoded(secret),
+            secret[..8].to_owned(),
+        ] {
+            assert!(!shown.contains(&form), "{what} shows {form:?}: {shown}");
+        }
+    }
+}
