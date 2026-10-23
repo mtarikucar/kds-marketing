@@ -891,6 +891,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
+| `inbox_consume` | 10 saniye | Gelen olayları tek işlemde gelen kutusu kayıtlarına dönüştürür; active ve pending_payment alanlar | `jeeta.jobs.inbox_consume` |
 | `outbox_recover` | 1 dakika | 2 dakikadan eski `sending` → `unknown` (yeniden göndermez); 5 dakikadan eski `queued` kayıtlarını iki çitli gönderim adımına verir | `jeeta.jobs.outbox_recover` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
@@ -1264,3 +1265,41 @@ gösterir; `overdue` şu andan önceki görevleri, `all` zaman sınırı olmadan
 `assignee` isteğe bağlı kullanıcı filtresidir. Not metni işlem defterine yazılmaz.
 
 Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply",request_key?}`; commercial intent is reserved for M2b. Human replies preserve the executor.
+
+### Gelen olay tüketicisi (`inbox@1`)
+
+`inbox_consume`, 10 saniyede bir `jeeta.jobs.inbox_consume` kilidi altında
+`active` ve `pending_payment` alanlarda çalışır; strateji onayı gerektirmez.
+`list_for_consumer("inbox@1", cursor, 100)` üzerinden sayfalar. Her olayın talebi
+(`try_claim`), kişi/kimlik, konuşma, mesaj, yolculuk olayı ve tüketim sonucu tek
+alan işleminde yazılır. Hata hepsini geri alır; yalnız hata kodu günlüğe yazılır,
+sonraki olaylar devam eder, başarısız olay bir sonraki taramada yeniden denenir.
+`events.ack` yalnız görülme bilgisidir; alan tüketimini atlatmaz.
+
+WhatsApp, Messenger/Instagram ve NetGSM SMS mesajları gerçek adaptör payload'larından
+okunur. Telefon kimliği SMS/WhatsApp/aramada ortaktır; opak kimlikler kabiliyetin
+harici hesap kimliğiyle kapsamlanır. Her yeni inbound mesajdan sonra aynı işlemde
+`MessageRepo::record_inbound_sender(message_id, sender_identity_id)` çağrılır;
+normalleştirilmiş/hesapla kapsamlanmış kimlik, mesajın gönderenini kaydeder ve en son
+gelen mesaja göre `last_inbound_identity_id` değerini günceller. Geç gelen eski mesaj
+ve tekrar teslim, daha yeni göndereni değiştirmez; ayrı bir gönderen kaydı tutulmaz.
+Mesaj kimliği sağlayıcının mesaj kimliği,
+yolculuk anahtarı `inbound:<event_id>` olur. Lost mesajı aynı yolculuğu korur ve
+konuşmayı Ours/Human{None} yapıp executor neslini artırır; Won sonrası yeni Repeat
+yolculuğu açılır, kişinin ilk kaynağı değişmez. Echo, mevcut gönderiyi eşler veya
+bilinen konuşmaya System outbound yazar; teslim raporları eşleşen gönderiyi günceller.
+
+NetGSM PBX olayları `unique_id` ile ilişkilendirilir. `inbound_call`/`answer`
+konuşma etkinliğini günceller; Hangup, `call:<unique_id>` anahtarıyla tek `call_made`
+yazar. Kısmi etkinlik, sürümler arasında sabit `inbox.pbx_activity` talebiyle
+yalnız bir kez uygulanır. Bağlantı yalnız Hangup'a kadar saklanan Answer ile doğrulanır; Hangup'ın
+durum/metin/süre alanı bağlantı kanıtı değildir. Sonradan gelen olay sonucu değiştirmez.
+
+LeadGen, Consent, Unknown, yönlendirilmemiş/desteklenmeyen kabiliyet olayları,
+eşleşmeyen raporlar ve henüz konuşması bulunmayan echo'lar `deferred` kaydedilir.
+Bu kayıtlar `inbox@2` tarafından tekrar talep edilebilir; mesaj ve yolculuk anahtarları
+sürümler arasında sabit kalır. Konuşmasız echo için gelen temas zamanı uydurulmaz.
+
+T014 inceleme notu: Lost yolculuktaki PBX olayları şu anda yan etki olmadan ertelenir;
+reducer `CallMade` olayını Lost üzerinde reddeder. Lost Hangup kararının kalıcı kaydı ve
+konuşmasız echo için gelen temas oluşturmayan repository işlemi koordinatör kararı bekler.

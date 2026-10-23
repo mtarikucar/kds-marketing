@@ -55,6 +55,7 @@ pub struct Intervals {
     pub purge_oauth_pending: Duration,
     pub purge_probe_runs: Duration,
     pub outbox_recover: Duration,
+    pub inbox_consume: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -77,6 +78,7 @@ impl Default for Intervals {
             purge_oauth_pending: HOUR,
             purge_probe_runs: DAY,
             outbox_recover: MINUTE,
+            inbox_consume: Duration::from_secs(10),
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -94,6 +96,7 @@ impl Intervals {
             Job::PurgeOAuthPending => self.purge_oauth_pending,
             Job::PurgeProbeRuns => self.purge_probe_runs,
             Job::OutboxRecover => self.outbox_recover,
+            Job::InboxConsume => self.inbox_consume,
         }
     }
 }
@@ -373,6 +376,7 @@ mod tests {
             purge_oauth_pending: every,
             purge_probe_runs: every,
             outbox_recover: every,
+            inbox_consume: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -457,6 +461,8 @@ mod tests {
         assert_eq!(i.of(Job::PurgeOAuthPending), HOUR);
         assert_eq!(i.of(Job::PurgeProbeRuns), DAY);
         assert_eq!(i.of(Job::OutboxRecover), MINUTE);
+        assert_eq!(i.of(Job::InboxConsume), Duration::from_secs(10));
+        assert_eq!(Job::InboxConsume.lock_name(), "jeeta.jobs.inbox_consume");
         assert_eq!(i.first_run_jitter, Duration::from_secs(30));
         assert_eq!(SHUTDOWN_GRACE, Duration::from_secs(30));
         // The jitter stays within its bound, and none is none.

@@ -397,6 +397,7 @@ pub struct InMemoryUow {
     /// ([`InMemoryUow::fail_set_sealed`]).
     set_sealed_faults: Arc<AtomicUsize>,
     inbox_task_status_faults: Arc<AtomicUsize>,
+    inbox_consumption_faults: Arc<AtomicUsize>,
 }
 
 impl InMemoryUow {
@@ -407,6 +408,11 @@ impl InMemoryUow {
     /// A copy of the committed tables, for assertions.
     pub fn snapshot(&self) -> MemState {
         lock(&self.state).clone()
+    }
+
+    /// Fail completion after consumer effects to exercise atomic rollback.
+    pub fn fail_inbox_consumption(&self, times: usize) {
+        self.inbox_consumption_faults.store(times, Ordering::SeqCst);
     }
 
     /// Fail the next task-status effect calls to exercise transaction rollback.
@@ -439,6 +445,7 @@ pub(super) struct MemTx {
     ledger_seq: Arc<AtomicI64>,
     set_sealed_faults: Arc<AtomicUsize>,
     inbox_task_status_faults: Arc<AtomicUsize>,
+    inbox_consumption_faults: Arc<AtomicUsize>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
     ops: Vec<Op>,
@@ -453,6 +460,7 @@ impl MemTx {
             ledger_seq: Arc::clone(&uow.ledger_seq),
             set_sealed_faults: Arc::clone(&uow.set_sealed_faults),
             inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
+            inbox_consumption_faults: Arc::clone(&uow.inbox_consumption_faults),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
             ops: Vec::new(),
@@ -515,6 +523,12 @@ impl MemTx {
             }
         });
         Ok(())
+    }
+
+    pub(super) fn inbox_consumption_fails(&self) -> bool {
+        self.inbox_consumption_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 
     /// Whether this task-status effect is scheduled to fail.

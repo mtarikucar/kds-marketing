@@ -1253,6 +1253,9 @@ impl ConsumptionRepo for MemTenant {
         outcome: ConsumptionOutcome,
     ) -> Result<(), AppError> {
         self.call(|t| {
+            if t.tx.inbox_consumption_fails() {
+                return Err(AppError::internal("injected consumption failure"));
+            }
             let ws = t.ws;
             found(t.state().inbox.consumption.iter().any(|r| {
                 r.workspace_id == ws

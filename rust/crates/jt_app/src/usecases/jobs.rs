@@ -113,11 +113,12 @@ pub enum Job {
     PurgeOAuthPending,
     PurgeProbeRuns,
     OutboxRecover,
+    InboxConsume,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 8] = [
+    pub const ALL: [Job; 9] = [
         Job::RefreshTokens,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
@@ -126,6 +127,7 @@ impl Job {
         Job::PurgeOAuthPending,
         Job::PurgeProbeRuns,
         Job::OutboxRecover,
+        Job::InboxConsume,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -140,6 +142,7 @@ impl Job {
             Job::PurgeOAuthPending => "purge_oauth_pending",
             Job::PurgeProbeRuns => "purge_probe_runs",
             Job::OutboxRecover => "outbox_recover",
+            Job::InboxConsume => "inbox_consume",
         }
     }
 
@@ -159,6 +162,7 @@ impl Job {
             Job::PurgeOAuthPending => run_purge_oauth_pending(deps, now).await,
             Job::PurgeProbeRuns => run_purge_probe_runs(deps, now).await,
             Job::OutboxRecover => run_outbox_recover(deps, now).await,
+            Job::InboxConsume => run_inbox_consume(deps, now).await,
         }
     }
 }
@@ -1091,4 +1095,17 @@ pub async fn run_outbox_recover(deps: &Deps, now: OffsetDateTime) -> JobReport {
         }
     }
     finish(job, report)
+}
+
+/// Turn persisted inbound events into inbox facts for receiving workspaces, without a strategy gate.
+pub async fn run_inbox_consume(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, Job::InboxConsume, RECEIVING, &mut report).await {
+        let result = super::inbox::consumer::consume_workspace(deps, ws, now).await;
+        report.touched += result.touched;
+        report.changed += result.changed;
+        report.skipped += result.skipped;
+        report.failed += result.failed;
+    }
+    finish(Job::InboxConsume, report)
 }

@@ -1,4 +1,5 @@
 //! Inbox operations shared by the panel, MCP and trusted inbound consumers.
+pub mod consumer;
 pub mod conversations;
 pub mod dictionaries;
 pub mod journeys;

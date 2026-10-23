@@ -1156,6 +1156,8 @@ dependencies = [
  "jt_connector",
  "jt_inbox",
  "jt_ledger",
+ "jt_meta",
+ "jt_netgsm",
  "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
