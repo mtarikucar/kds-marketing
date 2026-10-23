@@ -84,7 +84,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           password, msgheader}), the NetGSM PBX (netgsm_pbx, {kind: netgsm_pbx, \
                           username, password, trunk?, pbxnum?}) or a pasted Meta token ({kind: \
                           meta_token, access_token}; a Page or WhatsApp token needs external_id). \
-                          X connects through OAuth only. The credentials are sealed and probed \
+                          A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). X connects through OAuth only. The credentials are sealed and probed \
                           at once; they are never shown again, and the ledger notes that you \
                           entered them. A verified capability keeps its credentials until a \
                           probe fails (CONFLICT). Returns the capability. [risk: WRITE]",
@@ -209,6 +209,22 @@ fn credential_schema(_: &mut SchemaGenerator) -> Schema {
     let field = |description: &str| json!({ "type": "string", "description": description });
     json_schema!({
         "oneOf": [
+            {
+                "type":"object",
+                "properties": {
+                    "kind":{"const":"mailbox"},
+                    "smtp_host":field("Public SMTP hostname."),
+                    "smtp_port":{"type":"integer","enum":[465,587]},
+                    "imap_host":field("Public IMAP hostname."),
+                    "imap_port":{"type":"integer","enum":[993,143]},
+                    "username":field("IMAP-authenticated account name."),
+                    "password":field("Mailbox password."),
+                    "from_address":field("SMTP-authorized sender address."),
+                    "tls":{"type":"string","enum":["implicit","start_tls"]}
+                },
+                "required":["kind","smtp_host","smtp_port","imap_host","imap_port","username","password","from_address","tls"],
+                "additionalProperties":false
+            },
             {
                 "type": "object",
                 "properties": {

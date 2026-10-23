@@ -860,12 +860,24 @@
     }
   },
   "connect": {
+    "mail": {
+      "title": "Connect an email mailbox",
+      "body": "Enter your SMTP and IMAP settings. The connection checks your account and sender address using TLS.",
+      "name": "Mailbox name",
+      "smtp_host": "SMTP hostname",
+      "imap_host": "IMAP hostname",
+      "username": "Mailbox username",
+      "password": "Mailbox password",
+      "from_address": "Sender email address",
+      "tls": "TLS mode"
+    },
     "title": "Connect an account",
     "description": "Connect your provider accounts to the workspace. For Meta and X you sign in at the provider; for NetGSM you enter your credentials.",
     "open": "Connect an account",
     "kindsLabel": "Kind of account to connect",
     "chooseKind": "Choose the kind of account to connect first.",
     "providers": {
+      "mail": "Email",
       "meta": "Meta",
       "netgsm": "NetGSM",
       "x": "X"
@@ -1023,6 +1035,7 @@
     }
   },
   "inbox": {
+    "emailSubject": "Email subject",
     "title": "Inbox",
     "description": "Reply to conversations and manage journeys and follow-ups.",
     "queues": "Queues",

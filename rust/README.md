@@ -905,6 +905,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `probe_all` | 15 dakika | Son yoklaması (`connector_public.health.at`) en az bir saatlik olan ya da hiç yoklanmamış her canlı bağlayıcı kabiliyetini (mühürlü kimlik bilgisi olan; kimlik bilgisi olmayan bir `declared` kabiliyet asla) `connector.probe`'un yaptığının aynısıyla yoklar; en çok dördü aynı anda (yoklama sağlayıcıyı beklerken kabiliyetin satır kilidini ve bir veritabanı bağlantısını tutar) | `jeeta.jobs.probe_all` |
 | `netgsm_dlr_poll` | 1 dakika | İletimi kesinleşmemiş gönderilerin iş kimliklerini (en çok 50) alanın doğrulanmış SMS hatlarının kimlik bilgisiyle NetGSM iletim raporuna sorar ve duyduğu durumları kaydeder. Gönderiler M2'nin tablosundadır; o gelene dek bekleyen iş yoktur ve sağlayıcıya hiç gidilmez | `jeeta.jobs.netgsm_dlr_poll` |
 | `netgsm_inbox_poll` | 1 saat | Her doğrulanmış SMS hattının NetGSM gelen kutusunu son iki saat için okur (başlangıç ve bitiş tarihi her zaman verilir) ve webhook'un kaçırdığı mesajları o hatta bağlı gelen olay olarak saklar. Kimlik webhook'unkiyle aynıdır (`netgsm-mo:<gorevid>`): webhook'un ya da önceki yoklamanın sakladığı mesaj ikinci kez yazılmaz. Yoklamanın ham gövdesi yoktur | `jeeta.jobs.netgsm_inbox_poll` |
+| `mail_inbox_poll` | 2 dakika | Doğrulanmış posta kutularında INBOX/Sent UID imleçlerini okur; olaylarla imleçleri aynı işlemde kaydeder ve gelen kutusu tüketicisini çalıştırır | `jeeta.jobs.mail_inbox_poll` |
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
@@ -1283,7 +1284,7 @@ Görevlerde varsayılan `queue=due_24h`, şu andan 24 saat sonrasına kadar olan
 gösterir; `overdue` şu andan önceki görevleri, `all` zaman sınırı olmadan görevleri getirir.
 `assignee` isteğe bağlı kullanıcı filtresidir. Not metni işlem defterine yazılmaz.
 
-Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply",request_key?}`; commercial intent is reserved for M2b. Human replies preserve the executor.
+Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply",request_key?,subject?,in_reply_to?,references?}`; commercial intent is reserved for M2b. Human replies preserve the executor.
 
 ### Gelen olay tüketicisi (`inbox@1`)
 
@@ -1494,3 +1495,35 @@ unique per journey. `commission_default` and `commission_user_rates` store indep
 `Deps::attribution()` supplies the application-owned `AttributionReader` over the configured Pg or
 in-memory unit of work. Reads establish the workspace context, use the half-open acquisition window
 `[from,to)` and order by `(acquired_at,journey_id)`. No update or delete API exists.
+
+### Mailbox connection and email replies (M2b Task 4)
+
+The existing `connector.set_credentials` operation accepts a `mailbox` credential on both
+`POST /api/connectors/credentials` and `jeeta.connector.set_credentials`:
+`smtp_host`, `smtp_port`, `imap_host`, `imap_port`, `username`, `password`, `from_address`,
+`tls` (`implicit`: 465/993; `start_tls`: 587/143). The panel Connect page offers the same form
+in Turkish and English. Credentials are sealed; committed public hosts authorize the initial
+probe, which verifies the IMAP account and SMTP sender. Connection, declaration, rebind and
+retirement serialize host changes per workspace, preserving shared live connector hosts and
+excluding agent/device metadata. Rebinding removes old hosts and resets mailbox cursors;
+credential replacement also resets cursors before polling the new server.
+
+Mail polling runs every two minutes for active/pending-payment workspaces. Network I/O runs
+outside the cursor transaction; the account, credential and previous cursor are rechecked
+before drafts and both mailbox positions commit atomically. The normal inbox consumer matches
+normalized email identities, including MIME senders with display names.
+
+`inbox.reply` / `POST /api/inbox/conversations/{id}/reply` / `jeeta.inbox.reply` accept optional
+`subject`, `in_reply_to`, `references` and `request_key`. Email replies persist the full typed
+mail and stable `<outbox-uuid@public-base-host>` Message-ID before sending through MailSender;
+they require the configured public base URL, the same 24-hour inbound window and both normal
+outbox fences. If omitted, threading uses the latest inbound Message-ID; the default subject is
+`Re:`. Account/host or recipient changes refuse a queued email instead of sending stale bindings.
+
+Sent evidence is correlated by exact persisted Message-ID and capability, in the consumer's
+claim transaction. It resolves an unknown send once, reuses the request-key response, and
+records `inbox.sent_after_terminal` without reopening a terminal journey. DSNs record failure.
+Unknown SMS without a provider job ID stays unknown: no reference lookup or automatic resend.
+No new catalog rows or public tools are added: the existing 90-tool release counts stay exact.
+Commercial sending/consent ingestion remain Task 5; calendar integration, archive, HTML mail
+composition and webchat remain M2c.

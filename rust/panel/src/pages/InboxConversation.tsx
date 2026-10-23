@@ -24,16 +24,19 @@ export function InboxConversation({ id }: { id: string }) {
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
   const [text, setText] = useState('');
+  const [subject, setSubject] = useState('');
   const [until, setUntil] = useState('');
-  const request = useRef<{ text: string; key: string }>();
+  const request = useRef<{ text: string; subject?: string; key: string }>();
   const send = useInboxMutation(
     async () => {
-      if (!request.current || request.current.text !== text.trim())
-        request.current = { text: text.trim(), key: crypto.randomUUID() };
-      return api.reply(id, request.current.text, request.current.key);
+      const emailSubject = conversation.data?.kind_key === 'mailbox' ? subject.trim() || 'Re:' : undefined;
+      if (!request.current || request.current.text !== text.trim() || request.current.subject !== emailSubject)
+        request.current = { text: text.trim(), subject: emailSubject, key: crypto.randomUUID() };
+      return api.reply(id, request.current.text, request.current.key, request.current.subject);
     },
     () => {
       setText('');
+      setSubject('');
       request.current = undefined;
     },
   );
@@ -171,6 +174,7 @@ export function InboxConversation({ id }: { id: string }) {
                   if (text.trim() && !disabled && ctx) send.mutate();
                 }}
               >
+                  {row.kind_key === 'mailbox' && <Input aria-label={t('inbox.emailSubject')} placeholder={t('inbox.emailSubject')} value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={998} />}
                 <label className="text-sm font-medium">
                   {t('inbox.reply')}
                   <Textarea

@@ -860,12 +860,24 @@
     }
   },
   "connect": {
+    "mail": {
+      "title": "E-posta kutusu bağla",
+      "body": "SMTP ve IMAP bilgilerinizi girin. Bağlantı, hesabınızı ve gönderici adresinizi TLS ile doğrular.",
+      "name": "Posta kutusu adı",
+      "smtp_host": "SMTP sunucusu",
+      "imap_host": "IMAP sunucusu",
+      "username": "Posta kutusu kullanıcı adı",
+      "password": "Posta kutusu parolası",
+      "from_address": "Gönderici e-posta adresi",
+      "tls": "TLS modu"
+    },
     "title": "Hesap bağla",
     "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta ve X için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
     "open": "Hesap bağla",
     "kindsLabel": "Bağlanacak hesap türü",
     "chooseKind": "Önce bağlanacak hesap türünü seçin.",
     "providers": {
+      "mail": "E-posta",
       "meta": "Meta",
       "netgsm": "NetGSM",
       "x": "X"
@@ -1023,6 +1035,7 @@
     }
   },
   "inbox": {
+    "emailSubject": "E-posta konusu",
     "title": "Gelen kutusu",
     "description": "Konuşmaları yanıtlayın, yolculukları ve takip işlerini yönetin.",
     "queues": "Kuyruklar",

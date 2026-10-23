@@ -4,7 +4,11 @@ use super::record;
 use crate::{
     ctx::Ctx,
     error::{AppError, ErrorCode},
-    ports::{TenantRepos, connectors::SendReceipt, inbox::OutboxRow},
+    ports::{
+        TenantRepos,
+        connectors::{MailMessage, SendReceipt},
+        inbox::OutboxRow,
+    },
     usecases::{
         Deps,
         connector::{adapter_public, open_credential},
@@ -29,6 +33,12 @@ pub struct ReplyInput {
     pub intent: SendIntent,
     #[serde(default)]
     pub request_key: Option<String>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    #[serde(default)]
+    pub references: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplyOut {
@@ -125,15 +135,82 @@ pub async fn enqueue(
     )
     .await?;
     // Validate recipient ambiguity before creating any durable outbound intent.
-    recipient(r.as_mut(), &c, &cap).await?;
+    let recipient = recipient(r.as_mut(), &c, &cap).await?;
     let message_id = MessageId::from(deps.ids.uuid());
+    let outbox_id = deps.ids.uuid();
+    let mut intent = json!({"kind":input.intent,"request_key":key});
+    if cap.kind_key == "mailbox" {
+        let base = deps
+            .apps
+            .public_base_url()
+            .ok_or_else(|| AppError::conflict("public base URL required for mail"))?;
+        let host = base
+            .host_str()
+            .ok_or_else(|| AppError::conflict("public base host required for mail"))?;
+        let header = |value: &str| -> Result<(), AppError> {
+            if value.len() > 998 || value.chars().any(char::is_control) {
+                return Err(AppError::validation(
+                    "invalid mail header",
+                    json!({"field":"mail"}),
+                ));
+            }
+            Ok(())
+        };
+        let subject = input.subject.unwrap_or_else(|| "Re:".into());
+        header(&subject)?;
+        let in_reply_to = match input.in_reply_to {
+            Some(id) => Some(id),
+            None => r
+                .messages()
+                .recent(c.id, 500)
+                .await?
+                .into_iter()
+                .rev()
+                .find(|m| m.direction == Direction::Inbound)
+                .and_then(|m| m.external_id)
+                .filter(|id| id.starts_with('<') && id.ends_with('>')),
+        };
+        let mut references = input.references;
+        if let Some(id) = &in_reply_to {
+            header(id)?;
+            if !references.contains(id) {
+                references.push(id.clone());
+            }
+        }
+        if references.len() > 50 {
+            return Err(AppError::validation(
+                "too many mail references",
+                json!({"field":"references"}),
+            ));
+        }
+        for reference in &references {
+            header(reference)?;
+        }
+        intent["mail_account"] = json!(cap.external_id);
+        intent["mail_hosts"] = cap.connector_public["hosts"].clone();
+        intent["mail"] = serde_json::to_value(MailMessage {
+            to: recipient,
+            subject,
+            text: text.clone(),
+            message_id: format!("<{outbox_id}@{host}>"),
+            in_reply_to,
+            references,
+            attachments: vec![],
+        })?;
+    } else if input.subject.is_some() || input.in_reply_to.is_some() || !input.references.is_empty()
+    {
+        return Err(AppError::validation(
+            "mail headers require an email conversation",
+            json!({"field":"subject"}),
+        ));
+    }
     let row = OutboxRow {
-        id: deps.ids.uuid(),
+        id: outbox_id,
         workspace_id: ctx.workspace_id,
         conversation_id: id,
         message_id,
         capability_id: c.capability_id,
-        intent: json!({"kind":input.intent,"request_key":key}),
+        intent,
         expected_generation: c.executor_generation,
         fence_snapshot: None,
         conversation_merged: false,
@@ -319,7 +396,28 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         r.commit().await?;
         return Ok(Claim::Done(output(&row)));
     }
-    let prepared = prepare(deps, r.as_mut(), &c, &cap).await;
+    let prepared = prepare(deps, r.as_mut(), &c, &cap)
+        .await
+        .and_then(|prepared| {
+            if cap.kind_key == "mailbox" {
+                let reason = if row.intent["mail_account"] != json!(cap.external_id)
+                    || row.intent["mail_hosts"] != cap.connector_public["hosts"]
+                {
+                    Some("mailbox_binding_changed")
+                } else if row.intent["mail"]["to"].as_str() != Some(prepared.1.as_str()) {
+                    Some("reply_recipient_changed")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    return Err(AppError::validation(
+                        "email binding changed after enqueue",
+                        json!({"reason":reason}),
+                    ));
+                }
+            }
+            Ok(prepared)
+        });
     let (credential, recipient, provider) = match prepared {
         Ok(p) => p,
         Err(e) if e.code == ErrorCode::Validation => {
@@ -384,7 +482,9 @@ async fn prepare(
     let provider =
         provider_for_kind(&cap.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
     if (cap.kind_key == "sms_line" && deps.connectors.sms(provider).is_none())
-        || (cap.kind_key != "sms_line" && deps.connectors.messaging(provider).is_none())
+        || (cap.kind_key == "mailbox" && deps.connectors.mail_sender(provider).is_none())
+        || (!matches!(cap.kind_key.as_str(), "sms_line" | "mailbox")
+            && deps.connectors.messaging(provider).is_none())
     {
         return Err(refused("connector_unavailable"));
     }
@@ -404,6 +504,7 @@ async fn recipient(
 ) -> Result<String, AppError> {
     let channel = match cap.kind_key.as_str() {
         "sms_line" | "whatsapp_cloud" => IdentityChannel::Phone,
+        "mailbox" => IdentityChannel::Email,
         "instagram_dm" => IdentityChannel::InstagramDm,
         "messenger" => IdentityChannel::Messenger,
         _ => return Err(refused("unsupported_reply_channel")),
@@ -421,7 +522,7 @@ async fn recipient(
         .into_iter()
         .filter(|i| i.active && i.channel == channel)
         .filter_map(|i| {
-            let value = if channel == IdentityChannel::Phone {
+            let value = if matches!(channel, IdentityChannel::Phone | IdentityChannel::Email) {
                 Some(i.value_normalized)
             } else {
                 prefix
@@ -459,7 +560,14 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
         Claim::Done(out) => return Ok(out),
         Claim::Ready(p) => p,
     };
-    let result = if p.capability.kind_key == "sms_line" {
+    let result = if p.capability.kind_key == "mailbox" {
+        let mail: MailMessage = serde_json::from_value(p.row.intent["mail"].clone())?;
+        deps.connectors
+            .mail_sender(p.provider)
+            .ok_or_else(|| AppError::internal("sender disappeared"))?
+            .send(ctx.workspace_id, &p.credential, mail)
+            .await
+    } else if p.capability.kind_key == "sms_line" {
         deps.connectors
             .sms(p.provider)
             .ok_or_else(|| AppError::internal("sender disappeared"))?
@@ -497,12 +605,26 @@ pub async fn record_result(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
+    let out = record_result_in(deps, ctx, r.as_mut(), id, result, false).await?;
+    r.commit().await?;
+    Ok(out)
+}
+
+/// Consumer reconciliation runs inside its event-claim transaction.
+pub(super) async fn record_result_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    id: Uuid,
+    result: Result<SendReceipt, ConnectorError>,
+    evidence: bool,
+) -> Result<ReplyOut, AppError> {
     let hint = r
         .outbox()
         .get(id)
         .await?
         .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
-    let c = lock_conversation(r.as_mut(), hint.conversation_id).await?;
+    let c = lock_conversation(r, hint.conversation_id).await?;
     let journey_id = hint
         .fence_snapshot
         .as_ref()
@@ -522,7 +644,9 @@ pub async fn record_result(
     // Recovery may time out a live provider future. Its eventual result still resolves that
     // interrupted claim, including a definite failure; completed failures are never replayed.
     let recovered = row.last_error.as_deref() == Some("send_interrupted");
-    if row.state != "sending" && !(row.state == "unknown" && (result.is_ok() || recovered)) {
+    if row.state != "sending"
+        && !(row.state == "unknown" && (result.is_ok() || recovered || evidence))
+    {
         return Ok(output(&row));
     }
     let (status, external, cost) = match result {
@@ -599,7 +723,7 @@ pub async fn record_result(
             }
             if terminal {
                 record(
-                    r.as_mut(),
+                    r,
                     ctx,
                     "inbox.sent_after_terminal",
                     "outbox",
@@ -663,8 +787,7 @@ pub async fn record_result(
     r.messages()
         .set_status(row.message_id, status, external, cost)
         .await?;
-    save_result(r.as_mut(), ctx, &row).await?;
-    r.commit().await?;
+    save_result(r, ctx, &row).await?;
     Ok(output(&row))
 }
 pub(super) async fn save_result(

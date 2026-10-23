@@ -215,7 +215,7 @@ pub struct SendReceipt {
 
 /// A mail attachment. Bytes are transport-only: never log or write them to the ledger.
 /// `Debug` exposes only the filename, MIME type and byte count.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attachment {
     pub filename: String,
     pub mime: String,
@@ -234,7 +234,7 @@ impl fmt::Debug for Attachment {
 
 /// A typed outgoing mail, with credentials supplied separately. The caller persists metadata
 /// and the stable Message-ID before sending; attachment bytes never enter logs or the ledger.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailMessage {
     pub to: String,
     pub subject: String,

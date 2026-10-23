@@ -34,8 +34,8 @@ export const conversationAction = (
 ) => request<InboxConversationRow>('POST', `${conv(id)}/${action}`);
 export const snooze = (id: string, until: string) =>
   request<InboxConversationRow>('POST', `${conv(id)}/snooze`, { body: { until } });
-export const reply = (id: string, text: string, request_key: string) =>
-  request<InboxReplyOut>('POST', `${conv(id)}/reply`, { body: { text, intent: 'reply', request_key } });
+export const reply = (id: string, text: string, request_key?: string, subject?: string) =>
+  request<InboxReplyOut>('POST', `${conv(id)}/reply`, { body: { text, intent: 'reply', request_key, ...(subject === undefined ? {} : { subject }) } });
 export const searchPeople = (q: string) => request<InboxPerson[]>('GET', `${root}/people`, { query: { q } });
 export const getPerson = (id: string) => request<InboxPersonOut>('GET', `${root}/people/${seg(id)}`);
 export const getJourney = (id: string) => request<InboxJourneyOut>('GET', journey(id));

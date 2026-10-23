@@ -207,3 +207,26 @@ describe('ConnectPage', () => {
     expect(screen.queryByRole('group', { name: tr.connect.providers.meta })).not.toBeInTheDocument();
   });
 });
+
+ it('connects a TLS mailbox and clears its password after probing', async () => {
+    const user = userEvent.setup();
+    const mailbox = { ...smsLine, capability: { ...smsLine.capability, kind_key: 'mailbox', name: 'Support' } };
+    const calls = mockFetch({ 'GET /api/auth/me': me, 'POST /api/connectors/credentials': mailbox });
+    const { client } = renderAt('/connect?kind=mailbox');
+    await screen.findByText(tr.connect.mail.title);
+    for (const [label, value] of [
+      [tr.connect.mail.name, 'Support'], [tr.connect.mail.smtp_host, 'smtp.example.com'],
+      [tr.connect.mail.imap_host, 'imap.example.com'], [tr.connect.mail.username, 'support@example.com'],
+      [tr.connect.mail.password, 'private-mail-password'], [tr.connect.mail.from_address, 'support@example.com'],
+    ]) await user.type(screen.getByLabelText(label), value);
+    expect(screen.getByLabelText(tr.connect.mail.password)).toHaveAttribute('type', 'password');
+    await user.selectOptions(screen.getByLabelText(tr.connect.mail.tls), 'start_tls');
+    await user.click(screen.getByRole('button', { name: tr.connect.credentials.submit }));
+    expect(await screen.findByText(tr.connect.result.verified)).toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ kind_key: 'mailbox', name: 'Support', credential: {
+      kind: 'mailbox', smtp_host: 'smtp.example.com', smtp_port: 587, imap_host: 'imap.example.com', imap_port: 143,
+      username: 'support@example.com', password: 'private-mail-password', from_address: 'support@example.com', tls: 'start_tls',
+    } });
+    expect(document.body.innerHTML).not.toContain('private-mail-password');
+    expect(JSON.stringify(client.getQueryCache().getAll().map((q) => q.state.data))).not.toContain('private-mail-password');
+  });

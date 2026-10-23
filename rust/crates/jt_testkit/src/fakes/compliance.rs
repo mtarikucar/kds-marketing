@@ -507,6 +507,9 @@ impl MailCursorRepo for MemTenant {
         cursor: MailboxCursor,
     ) -> Result<(), AppError> {
         self.call(|t| {
+            if t.tx.mail_cursor_fails() {
+                return Err(AppError::internal("injected cursor failure"));
+            }
             let ws = t.ws;
             ensure_capability(t.state(), ws, capability)?;
             t.tx.write(move |s| {

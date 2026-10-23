@@ -109,6 +109,7 @@ pub enum Job {
     ProbeAll,
     NetgsmDlrPoll,
     NetgsmInboxPoll,
+    MailInboxPoll,
     PurgeRawBodies,
     PurgeOAuthPending,
     PurgeProbeRuns,
@@ -120,11 +121,12 @@ pub enum Job {
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 11] = [
+    pub const ALL: [Job; 12] = [
         Job::RefreshTokens,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
         Job::NetgsmInboxPoll,
+        Job::MailInboxPoll,
         Job::PurgeRawBodies,
         Job::PurgeOAuthPending,
         Job::PurgeProbeRuns,
@@ -142,6 +144,7 @@ impl Job {
             Job::ProbeAll => "probe_all",
             Job::NetgsmDlrPoll => "netgsm_dlr_poll",
             Job::NetgsmInboxPoll => "netgsm_inbox_poll",
+            Job::MailInboxPoll => "mail_inbox_poll",
             Job::PurgeRawBodies => "purge_raw_bodies",
             Job::PurgeOAuthPending => "purge_oauth_pending",
             Job::PurgeProbeRuns => "purge_probe_runs",
@@ -164,6 +167,7 @@ impl Job {
             Job::ProbeAll => run_probe_all(deps, now).await,
             Job::NetgsmDlrPoll => run_netgsm_dlr_poll(deps, now).await,
             Job::NetgsmInboxPoll => run_netgsm_inbox_poll(deps, now).await,
+            Job::MailInboxPoll => run_mail_inbox_poll(deps, now).await,
             Job::PurgeRawBodies => run_purge_raw_bodies(deps, now).await,
             Job::PurgeOAuthPending => run_purge_oauth_pending(deps, now).await,
             Job::PurgeProbeRuns => run_purge_probe_runs(deps, now).await,
@@ -1195,6 +1199,100 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                 step_failed(job, ws, None, &Failure::App(e));
             }
         }
+    }
+    finish(job, report)
+}
+
+/// Poll each receiving workspace's verified mailboxes. Network I/O owns no transaction;
+/// cursor and drafts commit together only if the account, credential and cursor still match.
+pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::MailInboxPoll;
+    let mut report = JobReport::default();
+    let Some(poller) = deps.connectors.mailbox_poller(Provider::Mail) else {
+        return finish(job, report);
+    };
+    for ws in workspaces(deps, job, RECEIVING, &mut report).await {
+        let capabilities = match live_connector_capabilities(deps, ws).await {
+            Ok(caps) => caps,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for cap in capabilities
+            .into_iter()
+            .filter(|c| c.kind_key == "mailbox" && c.status == StoredStatus::Verified)
+        {
+            report.touched += 1;
+            let outcome = async {
+                let (sealed, cursor) = {
+                    let mut r = deps.uow.tenant(ws).await?;
+                    (
+                        r.capabilities().read_sealed(cap.id).await?,
+                        r.mail_cursors().get(cap.id).await?,
+                    )
+                };
+                let Some(sealed) = sealed else {
+                    return Ok::<_, Failure>(vec![]);
+                };
+                let credential = open_credential(deps, ws, &sealed)?;
+                let (drafts, next) = poller
+                    .poll(
+                        ws,
+                        &credential,
+                        &super::connector::adapter_public(&cap),
+                        &cursor,
+                    )
+                    .await
+                    .map_err(Failure::Provider)?;
+                drop(credential);
+                let mut r = deps.uow.tenant(ws).await?;
+                let current = r.capabilities().lock(cap.id).await?;
+                if !RECEIVING.contains(&r.workspace().get().await?.status)
+                    || !current.is_some_and(|c| {
+                        c.status == StoredStatus::Verified
+                            && c.external_id == cap.external_id
+                            && c.updated_at == cap.updated_at
+                    })
+                    || r.capabilities().read_sealed(cap.id).await?.as_ref() != Some(&sealed)
+                    || r.mail_cursors().get(cap.id).await? != cursor
+                {
+                    return Ok(vec![]);
+                }
+                let stored = webhook::store_polled(
+                    deps,
+                    r.as_mut(),
+                    ws,
+                    Provider::Mail,
+                    Some(cap.id),
+                    drafts,
+                    now,
+                )
+                .await?;
+                r.mail_cursors().store(cap.id, next).await?;
+                r.commit().await?;
+                Ok(stored)
+            }
+            .await;
+            match outcome {
+                Ok(stored) => {
+                    for delivery in stored {
+                        if matches!(delivery, Delivery::Stored(_)) {
+                            report.changed += 1;
+                        } else {
+                            report.skipped += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(cap.id), &e);
+                }
+            }
+        }
+        let consumed = super::inbox::consumer::consume_workspace(deps, ws, now).await;
+        report.failed += consumed.failed;
     }
     finish(job, report)
 }

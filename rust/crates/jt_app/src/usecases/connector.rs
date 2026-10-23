@@ -233,6 +233,16 @@ pub struct ConfirmAssets {
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CredentialInput {
+    Mailbox {
+        smtp_host: String,
+        smtp_port: u16,
+        imap_host: String,
+        imap_port: u16,
+        username: String,
+        password: String,
+        from_address: String,
+        tls: jt_connector::MailTls,
+    },
     NetgsmSms {
         usercode: String,
         password: String,
@@ -255,6 +265,7 @@ impl CredentialInput {
     /// The shape's key, e.g. `"netgsm_sms"`.
     pub fn kind(&self) -> &'static str {
         match self {
+            CredentialInput::Mailbox { .. } => "mailbox",
             CredentialInput::NetgsmSms { .. } => "netgsm_sms",
             CredentialInput::NetgsmPbx { .. } => "netgsm_pbx",
             CredentialInput::MetaToken { .. } => "meta_token",
@@ -265,6 +276,10 @@ impl CredentialInput {
 impl fmt::Debug for CredentialInput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            CredentialInput::Mailbox { .. } => f
+                .debug_struct("Mailbox")
+                .field("credential", &Masked)
+                .finish(),
             CredentialInput::NetgsmSms {
                 usercode,
                 msgheader,
@@ -619,6 +634,18 @@ pub async fn confirm_assets(
     input: ConfirmAssets,
 ) -> Result<Vec<CapabilityOut>, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
+    let guard = super::connector::host_mutation_lock(deps, ctx.workspace_id).await?;
+    let result = confirm_assets_with_hosts(deps, ctx, input).await;
+    guard.release().await?;
+    result
+}
+
+async fn confirm_assets_with_hosts(
+    deps: &Deps,
+    ctx: &Ctx,
+    input: ConfirmAssets,
+) -> Result<Vec<CapabilityOut>, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
     let mut selected: Vec<String> = Vec::new();
     for id in &input.selected {
         let id = id.trim();
@@ -729,6 +756,18 @@ pub async fn confirm_assets(
 /// `connector.probe` when the status changed. Once committed, the adapter's hosts are allowed for
 /// the workspace.
 pub async fn set_credentials(
+    deps: &Deps,
+    ctx: &Ctx,
+    input: SetCredentials,
+) -> Result<CapabilityOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    let guard = super::connector::host_mutation_lock(deps, ctx.workspace_id).await?;
+    let result = set_credentials_with_hosts(deps, ctx, input).await;
+    guard.release().await?;
+    result
+}
+
+async fn set_credentials_with_hosts(
     deps: &Deps,
     ctx: &Ctx,
     input: SetCredentials,
@@ -1467,7 +1506,7 @@ async fn credentials_for_new(
         .transpose()?;
     let credential = built_credential(kind.key, provider, input, external_id.as_deref())?;
     let connector = adapter(deps, provider)?;
-    let hosts = adapter_hosts(deps, connector.as_ref())?;
+    let hosts = credential_hosts(deps, connector.as_ref(), &credential)?;
     let public = connected_public(
         &Value::Object(Map::new()),
         provider,
@@ -1502,6 +1541,21 @@ async fn credentials_for_new(
         }
     }
     let sealed = seal_credential(deps, ctx, &credential)?;
+    if provider == Provider::Mail {
+        let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+        let in_force = version_in_force(repos.as_mut()).await?;
+        capability.strategy_version_id = in_force.map(|v| v.as_uuid());
+        let id = capability.id;
+        repos
+            .capabilities()
+            .insert(capability.clone(), Some(sealed))
+            .await?;
+        record_credentials(repos.as_mut(), ctx, &capability, in_force).await?;
+        repos.commit().await?;
+        sync_hosts(deps, ctx.workspace_id).await?;
+        probe_locked(deps, ctx, id, true).await?;
+        return current(deps, ctx, id).await;
+    }
     // A new row has no one to wait for: the provider is asked before the transaction opens.
     let public = adapter_public(&capability);
     let step = connector.on_connected(&credential, &public).await;
@@ -1578,7 +1632,7 @@ async fn credentials_for(
     }
     let credential = built_credential(kind.key, provider, input, bound.as_deref())?;
     let connector = adapter(deps, provider)?;
-    let hosts = adapter_hosts(deps, connector.as_ref())?;
+    let hosts = credential_hosts(deps, connector.as_ref(), &credential)?;
     let access = entered_access(
         &capability.connector_public["access"],
         provider,
@@ -1594,6 +1648,32 @@ async fn credentials_for(
     );
     capability.updated_at = ctx.now;
 
+    if provider == Provider::Mail {
+        reset_mail_cursor(repos.as_mut(), id).await?;
+        let sealed = seal_credential(deps, ctx, &credential)?;
+        if rebinding {
+            rebind_account(
+                repos.as_mut(),
+                &mut capability,
+                bound,
+                Some(sealed),
+                ctx.now,
+            )
+            .await?;
+        } else {
+            repos.capabilities().update(capability.clone()).await?;
+            repos
+                .capabilities()
+                .set_sealed(id, Some(sealed), ctx.now)
+                .await?;
+        }
+        let in_force = version_in_force(repos.as_mut()).await?;
+        record_credentials(repos.as_mut(), ctx, &capability, in_force).await?;
+        repos.commit().await?;
+        sync_hosts(deps, ctx.workspace_id).await?;
+        probe_locked(deps, ctx, id, true).await?;
+        return current(deps, ctx, id).await;
+    }
     // The provider is asked while the capability is locked (see the module docs), about the
     // binding being written.
     let probing = Capability {
@@ -1660,6 +1740,36 @@ fn normalised(input: CredentialInput) -> Result<CredentialInput, AppError> {
     let secret = |name: &str, raw: &str| checked_field(name, raw, MAX_SECRET_CHARS, false);
     let optional = |name: &str, raw: Option<String>| raw.map(|v| field(name, &v)).transpose();
     Ok(match input {
+        CredentialInput::Mailbox {
+            smtp_host,
+            smtp_port,
+            imap_host,
+            imap_port,
+            username,
+            password,
+            from_address,
+            tls,
+        } => {
+            let expected = match tls {
+                jt_connector::MailTls::Implicit => (465, 993),
+                jt_connector::MailTls::StartTls => (587, 143),
+            };
+            if (smtp_port, imap_port) != expected {
+                return Err(invalid("credential.tls", "mail ports must match TLS mode"));
+            }
+            let from_address = jt_inbox::normalise(jt_inbox::IdentityChannel::Email, &from_address)
+                .map_err(|_| invalid("credential.from_address", "invalid sender email"))?;
+            CredentialInput::Mailbox {
+                smtp_host: field("smtp_host", &smtp_host)?.to_ascii_lowercase(),
+                smtp_port,
+                imap_host: field("imap_host", &imap_host)?.to_ascii_lowercase(),
+                imap_port,
+                username: field("username", &username)?,
+                password: secret("password", &password)?,
+                from_address,
+                tls,
+            }
+        }
         CredentialInput::NetgsmSms {
             usercode,
             password,
@@ -1756,6 +1866,29 @@ fn built_credential(
             trunk,
             pbxnum,
         }),
+        (
+            Provider::Mail,
+            "mailbox",
+            CredentialInput::Mailbox {
+                smtp_host,
+                smtp_port,
+                imap_host,
+                imap_port,
+                username,
+                password,
+                from_address,
+                tls,
+            },
+        ) => Ok(Credential::Mailbox {
+            smtp_host,
+            smtp_port,
+            imap_host,
+            imap_port,
+            username,
+            password,
+            from_address,
+            tls,
+        }),
         (Provider::Meta, "facebook_page", CredentialInput::MetaToken { access_token }) => {
             Ok(Credential::PageToken {
                 page_id: account("page")?,
@@ -1805,7 +1938,8 @@ fn credential_strict<'de, D: Deserializer<'de>>(d: D) -> Result<CredentialInput,
         {
             format!("invalid credential: {message}")
         } else if message.starts_with("unknown variant") {
-            "invalid credential: `kind` must be netgsm_sms, netgsm_pbx or meta_token".to_owned()
+            "invalid credential: `kind` must be mailbox, netgsm_sms, netgsm_pbx or meta_token"
+                .to_owned()
         } else {
             "invalid credential: it must be an object with a `kind` and string fields".to_owned()
         };
@@ -2044,6 +2178,9 @@ pub(crate) async fn rebind_account(
     {
         return Err(account_taken(&capability.kind_key, account));
     }
+    if capability.kind_key == "mailbox" {
+        reset_mail_cursor(repos, capability.id).await?;
+    }
     capability.external_id = external_id;
     if capability.status != StoredStatus::Retired {
         capability.status = StoredStatus::Declared;
@@ -2055,6 +2192,9 @@ pub(crate) async fn rebind_account(
         public.remove(*key);
     }
     if sealed.is_none() {
+        if capability.kind_key == "mailbox" {
+            public.remove("hosts");
+        }
         public.remove("access");
     }
     public.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
@@ -2136,6 +2276,9 @@ fn connected_public(
     out.insert("provider".to_owned(), json!(provider.key()));
     if let Some(name) = name {
         out.insert("name".to_owned(), json!(name));
+    }
+    if provider == Provider::Mail {
+        out.remove("hosts");
     }
     let mut all: Vec<String> = out
         .get("hosts")
@@ -2264,4 +2407,82 @@ async fn current_in(
 fn rfc3339(at: OffsetDateTime) -> Result<String, AppError> {
     at.format(&Rfc3339)
         .map_err(|_| AppError::internal("a time cannot be written in RFC 3339"))
+}
+
+/// Mail hosts belong to the credential, not the provider's static endpoint list.
+fn credential_hosts(
+    deps: &Deps,
+    connector: &dyn Connector,
+    credential: &Credential,
+) -> Result<Vec<String>, AppError> {
+    let Credential::Mailbox {
+        smtp_host,
+        imap_host,
+        ..
+    } = credential
+    else {
+        return adapter_hosts(deps, connector);
+    };
+    let hosts: Vec<_> = [smtp_host.clone(), imap_host.clone()]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    for host in &hosts {
+        if host.is_empty()
+            || host.contains(['/', ':', '@', '*'])
+            || host.chars().any(char::is_whitespace)
+        {
+            return Err(invalid("credential.host", "invalid mail hostname"));
+        }
+        deps.hosts.check(host)?;
+    }
+    Ok(hosts)
+}
+/// Rebuild from committed live declarations, removing obsolete mailbox hosts while preserving
+/// hosts shared by another capability. Called before probing the newly committed credentials.
+pub(crate) async fn sync_hosts(deps: &Deps, ws: jt_tenancy::WorkspaceId) -> Result<(), AppError> {
+    let mut r = deps.uow.tenant(ws).await?;
+    let hosts = r
+        .capabilities()
+        .list(CapabilityFilter::default())
+        .await?
+        .into_iter()
+        .filter(|c| {
+            c.status != StoredStatus::Retired
+                && c.reach == Reach::Connector
+                && CapabilityKind::parse(&c.kind_key)
+                    .is_some_and(|k| k.default_reach() == Reach::Connector)
+        })
+        .flat_map(|c| super::capabilities::declared_hosts(&c))
+        .collect();
+    deps.hosts.rebuild_from(ws, hosts)?;
+    Ok(())
+}
+
+async fn reset_mail_cursor(r: &mut dyn TenantRepos, id: CapabilityId) -> Result<(), AppError> {
+    let mut cursor = r.mail_cursors().get(id).await?;
+    for position in cursor.mailboxes.values_mut() {
+        *position = Default::default();
+    }
+    r.mail_cursors().store(id, cursor).await
+}
+
+/// All live host mutations share this guard through commit and registry update. A startup-only
+/// snapshot replacement is unsafe while retirement, declaration or connection can interleave.
+pub(crate) async fn host_mutation_lock(
+    deps: &Deps,
+    ws: jt_tenancy::WorkspaceId,
+) -> Result<Box<dyn crate::ports::JobGuard>, AppError> {
+    let name = format!("jeeta.hosts.{ws}");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(guard) = deps.job_lock.try_acquire(&name).await? {
+                return Ok(guard);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| AppError::conflict("another connection is updating tenant hosts"))?
 }

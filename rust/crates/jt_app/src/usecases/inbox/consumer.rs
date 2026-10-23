@@ -153,6 +153,12 @@ async fn route(
     let Some(channel) = channel_for_kind(&cap.kind_key) else {
         return Ok("deferred");
     };
+    if event.provider == Provider::Mail
+        && channel == Channel::Email
+        && event.kind == EventKind::Status
+    {
+        return mail_evidence(deps, ctx, r, event, &cap).await;
+    }
     match event.kind {
         EventKind::Message
             if matches!(
@@ -161,6 +167,7 @@ async fn route(
                     Provider::Meta,
                     Channel::WhatsApp | Channel::Messenger | Channel::InstagramDm
                 ) | (Provider::Netgsm, Channel::Sms)
+                    | (Provider::Mail, Channel::Email)
             ) =>
         {
             message(deps, ctx, r, event, &cap, channel).await
@@ -231,6 +238,12 @@ fn decode(event: &InboundEvent, channel: Channel, echo: bool) -> Result<Content,
                 None,
             )
         }
+        (Provider::Mail, Channel::Email) => (
+            text(p, "from"),
+            text(p, "text"),
+            text(p, "message_id").or(Some(event.external_id.as_str())),
+            None,
+        ),
         (Provider::Netgsm, Channel::Sms) => (
             text(p, "from"),
             text(p, "text"),
@@ -622,6 +635,58 @@ async fn call(
                     outcome: "consumed".into(),
                 },
             )
+            .await?;
+    }
+    Ok("consumed")
+}
+
+/// Correlation requires the exact persisted Message-ID and capability. Never match text, an
+/// arbitrary UUID, or a different mailbox's evidence. Claim + result commit together.
+async fn mail_evidence(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    cap: &Capability,
+) -> Result<&'static str, AppError> {
+    let Some(mid) = text(&event.payload, "message_id") else {
+        return Ok("deferred");
+    };
+    let Some(id) = mid
+        .strip_prefix('<')
+        .and_then(|s| s.split_once('@'))
+        .and_then(|(id, _)| uuid::Uuid::parse_str(id).ok())
+    else {
+        return Ok("deferred");
+    };
+    let Some(row) = r.outbox().get(id).await? else {
+        return Ok("deferred");
+    };
+    if row.capability_id != cap.id || row.intent["mail"]["message_id"].as_str() != Some(mid) {
+        return Ok("deferred");
+    }
+    let result = match text(&event.payload, "status") {
+        Some("sent") => Ok(crate::ports::connectors::SendReceipt {
+            provider_id: mid.into(),
+            cost_minor: None,
+        }),
+        Some("failed") => Err(jt_connector::ConnectorError::permanent(
+            "mail delivery failed",
+        )),
+        _ => return Ok("deferred"),
+    };
+    if row.state == "queued" {
+        return Ok("deferred");
+    }
+    super::replies::record_result_in(deps, ctx, r, id, result, true).await?;
+    if text(&event.payload, "status") == Some("failed") {
+        let m = r
+            .messages()
+            .get(row.message_id)
+            .await?
+            .ok_or_else(malformed)?;
+        r.messages()
+            .set_status(m.id, MsgStatus::Failed, m.external_id, m.cost_minor)
             .await?;
     }
     Ok("consumed")

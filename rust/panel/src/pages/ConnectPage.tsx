@@ -309,6 +309,35 @@ function NetgsmForm({
   );
 }
 
+/** SMTP/IMAP credentials use the same mutation and secret-clearing lifecycle. */
+function MailboxForm({ capability, onDone }: { capability: Capability | null; onDone: (out: CapabilityOut) => void }) {
+  const { t } = useTranslation();
+  const empty = { name: '', smtp_host: '', imap_host: '', username: '', password: '', from_address: '' };
+  const [form, setForm] = useState(empty);
+  const [tls, setTls] = useState<'implicit' | 'start_tls'>('implicit');
+  const save = useCredentialsMutation((out) => { setForm(empty); onDone(out); });
+  const complete = Object.entries(form).every(([key, value]) => (key === 'name' && capability !== null) || value.trim() !== '');
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!complete) return;
+    save.mutate({ ...target('mailbox', capability, form.name), credential: {
+      kind: 'mailbox', smtp_host: form.smtp_host.trim(), smtp_port: tls === 'implicit' ? 465 : 587,
+      imap_host: form.imap_host.trim(), imap_port: tls === 'implicit' ? 993 : 143,
+      username: form.username.trim(), password: form.password, from_address: form.from_address.trim(), tls,
+    } });
+  };
+  return <Card><CardHeader><CardTitle>{t('connect.mail.title')}</CardTitle><CardDescription>{t('connect.mail.body')}</CardDescription></CardHeader>
+    <CardContent><form className="flex flex-col gap-4" onSubmit={submit} autoComplete="off">
+      <ErrorCallout error={save.error} />
+      {(Object.keys(empty) as (keyof typeof empty)[]).filter((key) => key !== 'name' || capability === null).map((key) =>
+        <TextField key={key} label={t(`connect.mail.${key}`)} value={form[key]} secret={key === 'password'} onChange={(value) => setForm((f) => ({ ...f, [key]: value }))} />)}
+      <Field label={t('connect.mail.tls')}>{(ids) => <select id={ids.id} className="rounded-md border border-border bg-surface p-2" value={tls} onChange={(e) => setTls(e.target.value as typeof tls)}>
+        <option value="implicit">TLS (SMTP 465 / IMAP 993)</option><option value="start_tls">STARTTLS (SMTP 587 / IMAP 143)</option>
+      </select>}</Field>
+      <Button type="submit" loading={save.isPending} disabled={!complete}>{t('connect.credentials.submit')}</Button>
+    </form></CardContent></Card>;
+}
+
 /** A Meta access token pasted by hand: an advanced way in, kept out of sight until asked for. */
 function TokenForm({
   kind,
@@ -383,6 +412,7 @@ function ConnectKind({
   onDone: (out: CapabilityOut) => void;
 }) {
   const { t } = useTranslation();
+  if (kind === 'mailbox') return <MailboxForm capability={capability} onDone={onDone} />;
   if (netgsmCredentialKind(kind)) return <NetgsmForm kind={kind} capability={capability} onDone={onDone} />;
   if (!connectsByOAuth(kind)) return <Callout tone="info">{t('connect.unsupported')}</Callout>;
   return (

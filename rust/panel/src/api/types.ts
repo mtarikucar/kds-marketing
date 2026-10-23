@@ -778,8 +778,8 @@ export const MAX_CHECKIN_INTERVAL_MINUTES = 10_080;
 // ---------------------------------------------------------------------------------------------
 
 /** `jt_connector::Provider`. */
-export type Provider = 'meta' | 'netgsm' | 'x';
-export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x'];
+export type Provider = 'meta' | 'netgsm' | 'x' | 'mail';
+export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail'];
 
 /** `jt_app::usecases::connector::StartOut`: where to send the browser, until when. */
 export interface StartOut {
@@ -805,6 +805,7 @@ export interface PendingAssetsOut {
 
 /** `jt_app::usecases::connector::CredentialInput`, tagged by `kind`. */
 export type CredentialInput =
+  | { kind: 'mailbox'; smtp_host: string; smtp_port: number; imap_host: string; imap_port: number; username: string; password: string; from_address: string; tls: 'implicit' | 'start_tls' }
   | { kind: 'netgsm_sms'; usercode: string; password: string; msgheader: string }
   | { kind: 'netgsm_pbx'; username: string; password: string; trunk?: string; pbxnum?: string }
   | { kind: 'meta_token'; access_token: string };

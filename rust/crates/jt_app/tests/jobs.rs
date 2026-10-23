@@ -273,6 +273,7 @@ fn every_job_has_a_lock_named_after_it() {
             "probe_all",
             "netgsm_dlr_poll",
             "netgsm_inbox_poll",
+            "mail_inbox_poll",
             "purge_raw_bodies",
             "purge_oauth_pending",
             "purge_probe_runs",
@@ -1693,5 +1694,96 @@ async fn dlr_failure_does_not_stop_other_capabilities() {
         } else {
             assert!(job.status.is_none());
         }
+    }
+}
+
+#[tokio::test]
+async fn poll_crash_keeps_cursor_and_events_consistent() {
+    use jt_app::ports::connectors::{MailboxCursor, MailboxPosition};
+    let mut rig = rig().await;
+    let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
+    rig.w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(mail.clone()));
+    let cred = Credential::Mailbox {
+        smtp_host: "smtp.example.com".into(),
+        smtp_port: 465,
+        imap_host: "imap.example.com".into(),
+        imap_port: 993,
+        username: "support@example.com".into(),
+        password: "secret".into(),
+        from_address: "support@example.com".into(),
+        tls: jt_connector::MailTls::Implicit,
+    };
+    let cap = rig
+        .store(
+            rig.w.ws,
+            "mailbox",
+            "support@example.com",
+            StoredStatus::Verified,
+            json!({}),
+            Some(sealed(rig.w.ws, &cred)),
+        )
+        .await;
+    let draft = InboundEventDraft {
+        external_id: "imap:support@example.com:INBOX:7:1".into(),
+        kind: EventKind::Message,
+        payload: json!({"from":"ada@example.com","text":"Hello","message_id":"<hello@example.com>"}),
+        occurred_at: None,
+    };
+    let cursor = MailboxCursor {
+        mailboxes: [(
+            "INBOX".into(),
+            MailboxPosition {
+                uidvalidity: 7,
+                last_uid: 1,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    };
+    let job = *Job::ALL
+        .iter()
+        .find(|j| j.name() == "mail_inbox_poll")
+        .expect("mail poll must be scheduled");
+    rig.w.uow.fail_mail_cursor(1);
+    mail.push_mailbox_poll(Ok((vec![draft.clone()], cursor.clone())));
+    assert_eq!(job.run(&rig.w.deps, NOW).await.failed, 1);
+    let mut r = rig.w.uow.tenant(rig.w.ws).await.unwrap();
+    assert_eq!(
+        r.mail_cursors().get(cap).await.unwrap(),
+        MailboxCursor::default()
+    );
+    drop(r);
+    assert!(rig.w.uow.snapshot().inbound_events.is_empty());
+    mail.push_mailbox_poll(Ok((vec![draft.clone()], cursor.clone())));
+    assert_eq!(job.run(&rig.w.deps, NOW).await.failed, 0);
+    let mut r = rig.w.uow.tenant(rig.w.ws).await.unwrap();
+    assert_eq!(r.mail_cursors().get(cap).await.unwrap(), cursor);
+    drop(r);
+    assert_eq!(rig.w.uow.snapshot().inbound_events.len(), 1);
+    assert_eq!(rig.w.uow.snapshot().inbox.messages.len(), 1);
+    mail.push_mailbox_poll(Ok((vec![draft], cursor.clone())));
+    assert_eq!(job.run(&rig.w.deps, NOW).await.failed, 0);
+    assert_eq!(rig.w.uow.snapshot().inbox.messages.len(), 1);
+    let calls = mail.calls();
+    for (n, call) in calls.iter().enumerate() {
+        let ConnectorCall::MailboxPoll {
+            workspace_id,
+            public,
+            cursor: seen,
+            ..
+        } = call
+        else {
+            panic!("poll expected");
+        };
+        assert_eq!(*workspace_id, rig.w.ws);
+        assert_eq!(public["external_id"], "support@example.com");
+        assert_eq!(
+            *seen,
+            if n < 2 {
+                MailboxCursor::default()
+            } else {
+                cursor.clone()
+            }
+        );
     }
 }

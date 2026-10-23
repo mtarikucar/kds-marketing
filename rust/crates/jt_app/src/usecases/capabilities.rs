@@ -266,6 +266,18 @@ pub async fn declare(
     input: DeclareInput,
 ) -> Result<CapabilityOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
+    let guard = super::connector::host_mutation_lock(deps, ctx.workspace_id).await?;
+    let result = declare_with_hosts(deps, ctx, input).await;
+    guard.release().await?;
+    result
+}
+
+async fn declare_with_hosts(
+    deps: &Deps,
+    ctx: &Ctx,
+    input: DeclareInput,
+) -> Result<CapabilityOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
     let DeclareInput {
         kind_key,
         key_detail,
@@ -371,6 +383,19 @@ pub async fn update(
     input: UpdateCapability,
 ) -> Result<UpdatedCapability, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
+    let guard = super::connector::host_mutation_lock(deps, ctx.workspace_id).await?;
+    let result = update_with_hosts(deps, ctx, id, input).await;
+    guard.release().await?;
+    result
+}
+
+async fn update_with_hosts(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    input: UpdateCapability,
+) -> Result<UpdatedCapability, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
     let UpdateCapability {
         name,
         description,
@@ -465,6 +490,9 @@ pub async fn update(
     .await?;
     let current = reread(repos.as_mut(), id, ctx.now).await?;
     repos.commit().await?;
+    if rebind && capability.kind_key == "mailbox" {
+        connector::sync_hosts(deps, ctx.workspace_id).await?;
+    }
     Ok(UpdatedCapability {
         current,
         verification_reset: rebind,
@@ -625,6 +653,19 @@ pub async fn set_policy(
 /// revoked then is logged as a warning and the retirement is answered all the same, since it
 /// holds.
 pub async fn retire(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    confirm: bool,
+) -> Result<CapabilityOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    let guard = super::connector::host_mutation_lock(deps, ctx.workspace_id).await?;
+    let result = retire_with_hosts(deps, ctx, id, confirm).await;
+    guard.release().await?;
+    result
+}
+
+async fn retire_with_hosts(
     deps: &Deps,
     ctx: &Ctx,
     id: CapabilityId,

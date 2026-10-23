@@ -399,6 +399,7 @@ pub struct InMemoryUow {
     set_sealed_faults: Arc<AtomicUsize>,
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
+    mail_cursor_faults: Arc<AtomicUsize>,
 }
 
 impl InMemoryUow {
@@ -409,6 +410,10 @@ impl InMemoryUow {
     /// A copy of the committed tables, for assertions.
     pub fn snapshot(&self) -> MemState {
         lock(&self.state).clone()
+    }
+
+    pub fn fail_mail_cursor(&self, times: usize) {
+        self.mail_cursor_faults.store(times, Ordering::SeqCst);
     }
 
     /// Fail completion after consumer effects to exercise atomic rollback.
@@ -459,6 +464,7 @@ pub(super) struct MemTx {
     set_sealed_faults: Arc<AtomicUsize>,
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
+    mail_cursor_faults: Arc<AtomicUsize>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
     ops: Vec<Op>,
@@ -474,6 +480,7 @@ impl MemTx {
             set_sealed_faults: Arc::clone(&uow.set_sealed_faults),
             inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
             inbox_consumption_faults: Arc::clone(&uow.inbox_consumption_faults),
+            mail_cursor_faults: Arc::clone(&uow.mail_cursor_faults),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
             ops: Vec::new(),
@@ -536,6 +543,12 @@ impl MemTx {
             }
         });
         Ok(())
+    }
+
+    pub(super) fn mail_cursor_fails(&self) -> bool {
+        self.mail_cursor_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 
     pub(super) fn inbox_consumption_fails(&self) -> bool {

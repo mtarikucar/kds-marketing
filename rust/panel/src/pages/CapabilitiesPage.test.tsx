@@ -224,8 +224,10 @@ describe('CapabilitiesPage', () => {
     const pageActions = connectionActions(page) as HTMLElement;
     expect(within(pageActions).getByRole('button', { name: tr.capabilities.connector.reconnect })).toBeInTheDocument();
 
-    // No provider connects a mailbox yet, and a retired line takes no action.
-    expect(connectionActions(await cardOf('Destek kutusu'))).toBeNull();
+    // A mailbox without sealed credentials offers reconnection; a retired line has no actions.
+    const mailboxActions = connectionActions(await cardOf('Destek kutusu')) as HTMLElement;
+    expect(within(mailboxActions).queryByRole('button', { name: tr.capabilities.connector.probe })).not.toBeInTheDocument();
+    expect(within(mailboxActions).getByRole('button', { name: tr.capabilities.connector.reconnect })).toBeInTheDocument();
     expect(connectionActions(await cardOf('Eski hat'))).toBeNull();
   });
 

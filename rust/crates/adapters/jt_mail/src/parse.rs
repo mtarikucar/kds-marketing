@@ -213,8 +213,12 @@ pub(crate) fn event(
         .as_deref()
         .and_then(|d| mailparse::dateparse(d).ok())
         .and_then(|d| OffsetDateTime::from_unix_timestamp(d).ok());
+    let from = header(&mail, "From")
+        .and_then(|raw| mailparse::addrparse(&raw).ok())
+        .and_then(|list| list.extract_single_info())
+        .map(|single| single.addr);
     let subject = header(&mail, "Subject").unwrap_or_default();
-    let mut payload = json!({"from":header(&mail,"From"), "to":header(&mail,"To"), "subject":subject,
+    let mut payload = json!({"from":from, "to":header(&mail,"To"), "subject":subject,
         "text":text, "message_id":header(&mail,"Message-ID"), "in_reply_to":header(&mail,"In-Reply-To"),
         "date":date, "attachments":attachments, "mailbox":mailbox, "account_id":account});
     let mut kind = EventKind::Message;
@@ -251,4 +255,14 @@ pub(crate) fn event(
         payload,
         occurred_at,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn display_name_from_yields_single_mailbox_identity() {
+        let draft = super::event("support@example.com", "INBOX", 7, 1,
+            b"From: Ada Lovelace <ADA@Example.com>\r\nTo: support@example.com\r\nMessage-ID: <a@example.com>\r\nSubject: Help\r\n\r\nHello", false).unwrap();
+        assert_eq!(draft.payload["from"], "ADA@Example.com");
+    }
 }

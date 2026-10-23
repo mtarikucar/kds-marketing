@@ -3617,3 +3617,111 @@ async fn meta_ads_external_ids_drop_the_act_prefix() {
     .capability;
     assert_eq!(page.external_id.as_deref(), Some("act_5"));
 }
+
+#[test]
+fn mailbox_credentials_are_typed_and_secret_free() {
+    let input: SetCredentials = serde_json::from_value(json!({
+        "kind_key":"mailbox", "name":"Support",
+        "credential":{"kind":"mailbox", "smtp_host":"smtp.example.com", "smtp_port":465,
+        "imap_host":"imap.example.com", "imap_port":993, "username":"support@example.com",
+        "password":"mail-private-password", "from_address":"support@example.com", "tls":"implicit"}
+    }))
+    .unwrap();
+    assert_eq!(input.credential.kind(), "mailbox");
+    assert!(!format!("{input:?}").contains("mail-private-password"));
+}
+
+#[tokio::test]
+async fn mailbox_rebind_revokes_hosts_and_resets_cursor() {
+    use jt_app::ports::connectors::{MailboxCursor, MailboxPosition};
+    let mut w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(mail.clone()));
+    capabilities::declare(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"kind_key":"notion","name":"Agent tool","connector_public":{"hosts":["agent-only.example.com"]}})).unwrap()).await.unwrap();
+    mail.push_probe(ok_probe("support@example.com"));
+    let out = connector::set_credentials(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"kind_key":"mailbox","name":"Mail","credential":{"kind":"mailbox","smtp_host":"smtp.example.com","smtp_port":465,"imap_host":"imap.example.com","imap_port":993,"username":"support@example.com","password":"secret","from_address":"support@example.com","tls":"implicit"}})).unwrap()).await.unwrap();
+    let id = out.capability.id;
+    assert!(w.hosts.calls().iter().all(|c| !matches!(c, HostCall::Rebuild(_, hosts) if hosts.iter().any(|h| h == "agent-only.example.com"))));
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.mail_cursors()
+        .store(
+            id,
+            MailboxCursor {
+                mailboxes: [
+                    (
+                        "INBOX".into(),
+                        MailboxPosition {
+                            uidvalidity: 7,
+                            last_uid: 100,
+                        },
+                    ),
+                    (
+                        "Sent".into(),
+                        MailboxPosition {
+                            uidvalidity: 7,
+                            last_uid: 50,
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    capabilities::update(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        UpdateCapability {
+            name: None,
+            description: None,
+            external_id: Some("other@example.com".into()),
+        },
+    )
+    .await
+    .unwrap();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let cursor = r.mail_cursors().get(id).await.unwrap();
+    assert!(
+        cursor
+            .mailboxes
+            .values()
+            .all(|p| p.uidvalidity == 0 && p.last_uid == 0)
+    );
+    assert_eq!(
+        w.hosts.calls().last(),
+        Some(&HostCall::Rebuild(w.ws, vec![]))
+    );
+    let c = r.capabilities().find(id).await.unwrap().unwrap();
+    assert!(c.connector_public.get("hosts").is_none());
+}
+
+#[tokio::test]
+async fn host_mutations_wait_for_workspace_guard() {
+    let w = world().await;
+    let guard = w
+        .deps
+        .job_lock
+        .try_acquire(&format!("jeeta.hosts.{}", w.ws))
+        .await
+        .unwrap()
+        .unwrap();
+    let pending = capabilities::declare(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"kind_key":"mailbox","name":"Mailbox","connector_public":{"hosts":["imap.example.com"]}})).unwrap());
+    tokio::pin!(pending);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(30), &mut pending)
+            .await
+            .is_err()
+    );
+    assert!(w.hosts.calls().is_empty());
+    guard.release().await.unwrap();
+    pending.await.unwrap();
+    assert!(
+        w.hosts
+            .calls()
+            .contains(&HostCall::Allow(w.ws, "imap.example.com".into()))
+    );
+}

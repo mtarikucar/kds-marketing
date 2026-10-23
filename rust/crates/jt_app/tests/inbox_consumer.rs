@@ -1161,3 +1161,26 @@ async fn call_events_are_scoped_bounded_ordered_and_uncapped() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn email_matches_normalized_identity() {
+    let w = world().await;
+    let c = cap(&w, "mailbox").await;
+    for (n, sender) in ["ADA@Example.com", "ada@example.com"].iter().enumerate() {
+        put(&w, Some(c), Provider::Mail, InboundEventDraft {
+            external_id: format!("imap:account:INBOX:1:{n}"),
+            kind: EventKind::Message,
+            payload: json!({"from":sender,"to":["support@example.com"],"subject":"Help","text":"Hello","message_id":format!("<in-{n}@example.com>")}),
+            occurred_at: None,
+        }, n as i64).await;
+    }
+    let report = run(&w).await;
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.changed, 2);
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.people.len(), 1);
+    assert_eq!(s.inbox.identities[0].value_normalized, "ada@example.com");
+    assert_eq!(s.inbox.messages.len(), 2);
+    assert_eq!(s.inbox.conversations.len(), 1);
+    assert_eq!(run(&w).await.changed, 0);
+}

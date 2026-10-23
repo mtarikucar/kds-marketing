@@ -8,10 +8,11 @@ export const PROVIDER_KINDS: Record<Provider, readonly KindKey[]> = {
   meta: ['facebook_page', 'instagram', 'instagram_dm', 'messenger', 'whatsapp_cloud', 'meta_ads', 'review_facebook'],
   netgsm: ['sms_line', 'netgsm_pbx'],
   x: ['x'],
+  mail: ['mailbox'],
 };
 
 /** A provider's name as shown (brand names, the same in every language). */
-export const PROVIDER_NAMES: Record<Provider, string> = { meta: 'Meta', netgsm: 'NetGSM', x: 'X' };
+export const PROVIDER_NAMES: Record<Provider, string> = { meta: 'Meta', netgsm: 'NetGSM', x: 'X', mail: 'Email' };
 
 /** The provider that serves `kind`, or `null` for a kind none serves yet. */
 export function providerOf(kind: string): Provider | null {

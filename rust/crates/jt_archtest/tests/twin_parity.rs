@@ -2158,3 +2158,206 @@ async fn panel_mcp_consumer_effect_parity() {
     assert_eq!(results[0], results[1]);
     assert_eq!(results[1], results[2]);
 }
+
+#[tokio::test]
+async fn email_reply_headers_and_request_key_have_http_mcp_parity() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    use jt_inbox::{ConvState, Conversation, ConversationId, Executor};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("conversation-parity").await;
+    let sender = Arc::new(ScriptedConnector::new(Provider::Mail));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(sender.clone())),
+    );
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    sender.push_probe(ProbeResult::success(
+        42,
+        json!({"account_id":"support@example.com"}),
+    ));
+    let cap=ok(send(&app,panel(Method::POST,"/api/connectors/credentials",Some(&cookie),Some(json!({"kind_key":"mailbox","name":"Mail","credential":{"kind":"mailbox","smtp_host":"smtp.example.com","smtp_port":465,"imap_host":"imap.example.com","imap_port":993,"username":"support@example.com","password":"test-secret","from_address":"support@example.com","tls":"implicit"}})))).await).await;
+    let person=ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"email","value":"ada@example.com"}],"source":"form"})))).await).await;
+    let id = ConversationId::new_v7();
+    let now = deps.clock.now();
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    r.people().set_write_time(now).await.unwrap();
+    r.conversations()
+        .upsert_on_inbound(Conversation {
+            id,
+            workspace_id: ws,
+            person_id: serde_json::from_value(person["person"]["id"].clone()).unwrap(),
+            capability_id: serde_json::from_value(cap["capability"]["id"].clone()).unwrap(),
+            kind_key: "mailbox".into(),
+            state: ConvState::Ours,
+            executor: Executor::Agent,
+            executor_generation: 0,
+            last_inbound_at: Some(now),
+            last_outbound_at: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/inbox/conversations/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.conversations_get",
+        json!({"conversation_id":id}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    sender.push_mail(Ok(jt_app::ports::connectors::SendReceipt {
+        provider_id: "receipt-1".into(),
+        cost_minor: None,
+    }));
+    let input = json!({"text":"Hello","intent":"reply","request_key":"parity-reply","subject":"Re: Question","in_reply_to":"<question@example.com>","references":["<question@example.com>"]});
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/conversations/{id}/reply"),
+            Some(&cookie),
+            Some(input.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let mut args = input;
+    args["conversation_id"] = json!(id);
+    let agent = call_tool(&app, &key, &session, "jeeta.inbox.reply", args).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["state"], "sent");
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(r.messages().list(id, 50).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn mailbox_hosts_probe_and_retire_surface_parity() {
+    use jt_testkit::fakes::HostCall;
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("mailbox-parity").await;
+    let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(mail.clone())),
+    );
+    let hosts = RecordingTenantHosts::new();
+    deps.hosts = Arc::new(hosts.clone());
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    for surface in ["panel", "mcp"] {
+        let account = format!("{surface}@example.com");
+        let smtp = format!("smtp.{surface}.example.com");
+        let imap = format!("imap.{surface}.example.com");
+        let body = json!({"kind_key":"mailbox","name":"Mail","credential":{"kind":"mailbox","smtp_host":smtp,"smtp_port":465,"imap_host":imap,"imap_port":993,"username":account,"password":"mail-private","from_address":account,"tls":"implicit"}});
+        mail.push_probe(ProbeResult::success(42, json!({"account_id":account})));
+        let created = if surface == "panel" {
+            let response = send(
+                &app,
+                panel(
+                    Method::POST,
+                    "/api/connectors/credentials",
+                    Some(&cookie),
+                    Some(body),
+                ),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await
+        } else {
+            call_tool(
+                &app,
+                &key,
+                &session,
+                "jeeta.connector.set_credentials",
+                body,
+            )
+            .await
+        };
+        assert_eq!(created["capability"]["status"], "verified", "{created}");
+        assert!(!created.to_string().contains("mail-private"));
+        assert_eq!(
+            created["capability"]["connector_public"]["hosts"],
+            json!([imap, smtp])
+        );
+        assert!(hosts.calls().iter().any(|c| matches!(c,HostCall::Rebuild(w,hs) if *w == ws && hs.contains(&smtp) && hs.contains(&imap))));
+        let id = created["capability"]["id"].as_str().unwrap();
+        mail.push_probe(ProbeResult::success(42, json!({"account_id":account})));
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("/api/connectors/{id}/probe"),
+                    Some(&cookie),
+                    None,
+                ),
+            )
+            .await,
+        )
+        .await;
+        mail.push_probe(ProbeResult::success(42, json!({"account_id":account})));
+        let agent = call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.connector.probe",
+            json!({"capability_id":id}),
+        )
+        .await;
+        assert_eq!(human, agent);
+        let retired = if surface == "panel" {
+            json_body(
+                send(
+                    &app,
+                    panel(
+                        Method::POST,
+                        &format!("/api/capabilities/{id}/retire"),
+                        Some(&cookie),
+                        Some(json!({"confirm":true})),
+                    ),
+                )
+                .await,
+            )
+            .await
+        } else {
+            call_tool(
+                &app,
+                &key,
+                &session,
+                "jeeta.capability.retire",
+                json!({"capability_id":id,"confirm":true}),
+            )
+            .await
+        };
+        assert_eq!(retired["capability"]["status"], "retired", "{retired}");
+        for host in [smtp, imap] {
+            assert!(hosts.calls().contains(&HostCall::Revoke(ws, host)));
+        }
+    }
+}
