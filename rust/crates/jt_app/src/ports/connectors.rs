@@ -15,7 +15,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
+use jt_connector::{ConnectorError, Credential, EventKind, ProbeResult, Provider};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{Date, OffsetDateTime};
@@ -218,6 +218,47 @@ pub struct ConsentRow {
     pub source: String,
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
+}
+
+/// Where a message sent earlier stands, as a provider's delivery report says.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryState {
+    /// It reached the recipient's handset (final).
+    Delivered,
+    /// It will not be delivered (final): refused, expired, a wrong number, no consent.
+    Failed,
+    /// Not final yet: ask again later.
+    Pending,
+    /// A status the adapter does not know, by the provider's code; not final.
+    Unknown(String),
+}
+
+/// One job's delivery report: the job (the provider id of a [`SendReceipt`]), its recipient,
+/// where it stands, when that happened when the provider says, and the provider's own status
+/// code (each adapter documents its form).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryStatus {
+    pub job_id: String,
+    pub recipient: String,
+    pub status: DeliveryState,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub at: Option<OffsetDateTime>,
+    pub raw_code: String,
+}
+
+/// An inbound event as a provider gives it (an item of a webhook body, a polled message), before
+/// it is routed to a workspace and stored as a [`jt_connector::InboundEvent`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct InboundEventDraft {
+    /// The provider's id of the event, unique per provider within a workspace: the dedupe key.
+    /// A webhook delivery and a poll that find the same event give it the same id.
+    pub external_id: String,
+    pub kind: EventKind,
+    /// The provider's item, under a key naming its family (each adapter documents its own).
+    pub payload: Value,
+    /// When it happened, by the provider's clock, when the item says.
+    pub occurred_at: Option<OffsetDateTime>,
 }
 
 /// Something an OAuth-connected account can reach and the owner may connect as a capability: a
@@ -437,14 +478,38 @@ pub trait LeadGenFetcher: Send + Sync {
     ) -> Result<LeadGenRecord, ConnectorError>;
 }
 
+/// Reads what a provider tells only when asked (polled, never pushed): the delivery reports of
+/// messages sent earlier, and the inbox backup that finds messages a webhook missed.
+#[async_trait]
+pub trait DeliveryReports: Send + Sync {
+    /// The delivery reports of the jobs `job_ids` (the provider ids of [`SmsSender::send`]
+    /// receipts). A job the provider does not report on is absent from the answer.
+    async fn report(
+        &self,
+        cred: &Credential,
+        job_ids: &[String],
+    ) -> Result<Vec<DeliveryStatus>, ConnectorError>;
+    /// The messages that arrived between `from` and `to`, as events whose `external_id` is the
+    /// one the provider's webhook gives the same message, so a poll never duplicates a push.
+    async fn inbox(
+        &self,
+        cred: &Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
+}
+
 /// Places and ends calls through a PBX.
 #[async_trait]
 pub trait Telephony: Send + Sync {
-    /// Rings extension `from_ext` and connects it to `to`; the receipt carries the call's
-    /// correlation id.
+    /// Rings `from_ext` and connects it to `to`; the receipt carries the call's correlation id.
+    /// `public` is as [`Connector::probe`] gets it, and carries the workspace's call policy
+    /// (whether calls may be recorded, which way the PBX places them; each adapter documents
+    /// its keys).
     async fn click_to_call(
         &self,
         cred: &Credential,
+        public: &Value,
         from_ext: &str,
         to: &str,
     ) -> Result<SendReceipt, ConnectorError>;
@@ -501,6 +566,7 @@ pub trait ConnectorRegistry: Send + Sync {
     fn leadgen(&self, provider: Provider) -> Option<Arc<dyn LeadGenFetcher>>;
     fn telephony(&self, provider: Provider) -> Option<Arc<dyn Telephony>>;
     fn consent(&self, provider: Provider) -> Option<Arc<dyn ConsentSync>>;
+    fn delivery_reports(&self, provider: Provider) -> Option<Arc<dyn DeliveryReports>>;
 }
 
 #[cfg(test)]
@@ -546,6 +612,32 @@ mod tests {
             "ig-secret-value"
         );
         assert_eq!(OAuthApp::Meta(meta).client_id(), "meta-id");
+    }
+
+    #[test]
+    fn delivery_statuses_read_back_from_json() {
+        let statuses = vec![
+            DeliveryStatus {
+                job_id: "17000000000000000000000001".into(),
+                recipient: "905000000001".into(),
+                status: DeliveryState::Delivered,
+                at: Some(time::macros::datetime!(2026-10-23 09:15 UTC)),
+                raw_code: "1".into(),
+            },
+            DeliveryStatus {
+                job_id: "17000000000000000000000002".into(),
+                recipient: "905000000002".into(),
+                status: DeliveryState::Unknown("99".into()),
+                at: None,
+                raw_code: "99".into(),
+            },
+        ];
+        let json = serde_json::to_value(&statuses).unwrap();
+        assert_eq!(json[0]["status"], "delivered");
+        assert_eq!(json[0]["at"], "2026-10-23T09:15:00Z");
+        assert_eq!(json[1]["status"], serde_json::json!({ "unknown": "99" }));
+        let back: Vec<DeliveryStatus> = serde_json::from_value(json).unwrap();
+        assert_eq!(back, statuses);
     }
 
     #[test]

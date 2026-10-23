@@ -9,8 +9,9 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::connectors::{
-    AdBudgetWriter, Asset, AssetPublic, Connector, ConnectorRegistry, ConsentSync, InsightsReader,
-    LeadGenFetcher, MessagingSender, OAuthApp, OAuthProvider, Publisher, SmsSender, Telephony, Url,
+    AdBudgetWriter, Asset, AssetPublic, Connector, ConnectorRegistry, ConsentSync, DeliveryReports,
+    InsightsReader, LeadGenFetcher, MessagingSender, OAuthApp, OAuthProvider, Publisher, SmsSender,
+    Telephony, Url,
 };
 use jt_app::ports::{OAuthPendingRow, SecretBox, UnitOfWork};
 use jt_app::usecases::Deps;
@@ -2440,6 +2441,10 @@ impl ConnectorRegistry for RacingRegistry {
 
     fn consent(&self, provider: Provider) -> Option<Arc<dyn ConsentSync>> {
         self.inner.consent(provider)
+    }
+
+    fn delivery_reports(&self, provider: Provider) -> Option<Arc<dyn DeliveryReports>> {
+        self.inner.delivery_reports(provider)
     }
 }
 

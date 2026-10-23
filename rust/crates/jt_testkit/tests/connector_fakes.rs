@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::connectors::{
-    AdInsights, AdSet, Asset, ConsentRow, OAuthApp, PostMetrics, PublishReceipt, PublishRequest,
-    SendReceipt, Url, XApp,
+    AdInsights, AdSet, Asset, ConsentRow, DeliveryState, DeliveryStatus, InboundEventDraft,
+    OAuthApp, PostMetrics, PublishReceipt, PublishRequest, SendReceipt, Url, XApp,
 };
 use jt_app::ports::{OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, SecretBox, UserRow};
 use jt_app::usecases::Deps;
@@ -894,6 +894,8 @@ async fn scripted_connector_answers_in_order_and_records_calls() {
     assert!(registry.oauth(Provider::Netgsm).is_none());
     assert!(registry.telephony(Provider::Netgsm).is_some());
     assert!(registry.consent(Provider::Netgsm).is_some());
+    assert!(registry.delivery_reports(Provider::Netgsm).is_some());
+    assert!(registry.delivery_reports(Provider::Meta).is_none());
     assert!(registry.publisher(Provider::Netgsm).is_none());
 }
 
@@ -986,6 +988,7 @@ async fn scripted_connector_covers_every_operation() {
     assert!(leadgen.fetch(&cred, "lead-1").await.is_err());
     assert!(registry.sms(Provider::Meta).is_none());
     assert!(registry.telephony(Provider::Meta).is_none());
+    assert!(registry.delivery_reports(Provider::Meta).is_none());
 
     let calls = meta.calls();
     assert_eq!(calls.len(), 9);
@@ -1015,6 +1018,22 @@ async fn scripted_connector_covers_every_operation() {
     netgsm.push_consent_add(Ok(SendReceipt {
         provider_id: "iys-1".into(),
     }));
+    let delivered = DeliveryStatus {
+        job_id: "job-1".into(),
+        recipient: "905000000001".into(),
+        status: DeliveryState::Delivered,
+        at: Some(FIXED_NOW),
+        raw_code: "1".into(),
+    };
+    netgsm.push_report(Ok(vec![delivered.clone()]));
+    netgsm.push_report(Err(ConnectorError::throttle(None)));
+    let mo = InboundEventDraft {
+        external_id: "netgsm-mo:1".into(),
+        kind: EventKind::Message,
+        payload: json!({ "text": "Merhaba" }),
+        occurred_at: None,
+    };
+    netgsm.push_inbox(Ok(vec![mo.clone()]));
     let registry = ScriptedRegistry::new().with_connector(netgsm.clone());
     let pbx = Credential::NetgsmPbx {
         username: "8501234567".into(),
@@ -1023,13 +1042,23 @@ async fn scripted_connector_covers_every_operation() {
         pbxnum: None,
     };
     let telephony = registry.telephony(Provider::Netgsm).unwrap();
+    let call_public = json!({ "kind_key": "netgsm_pbx", "recording_allowed": true });
     assert_eq!(
         telephony
-            .click_to_call(&pbx, "101", "905550000000")
+            .click_to_call(&pbx, &call_public, "101", "905550000000")
             .await
             .unwrap()
             .provider_id,
         "crm-1"
+    );
+    assert_eq!(
+        netgsm.calls()[0],
+        ConnectorCall::ClickToCall {
+            credential: pbx.clone(),
+            public: call_public.clone(),
+            from_ext: "101".into(),
+            to: "905550000000".into(),
+        }
     );
     assert_eq!(telephony.hangup(&pbx, "crm-1").await, Ok(()));
     let rows = vec![ConsentRow {
@@ -1054,6 +1083,49 @@ async fn scripted_connector_covers_every_operation() {
             rows,
         })
     );
+
+    // The polled reports and the inbox backup.
+    let sms = Credential::NetgsmSms {
+        usercode: "8500000000".into(),
+        password: "pw".into(),
+        msgheader: "TESTHDR".into(),
+    };
+    let reports = registry.delivery_reports(Provider::Netgsm).unwrap();
+    let jobs = vec!["job-1".to_owned(), "job-2".to_owned()];
+    assert_eq!(reports.report(&sms, &jobs).await, Ok(vec![delivered]));
+    assert_eq!(
+        reports.report(&sms, &jobs[..1]).await,
+        Err(ConnectorError::throttle(None))
+    );
+    let (from, to) = (FIXED_NOW - Duration::hours(2), FIXED_NOW);
+    assert_eq!(reports.inbox(&sms, from, to).await, Ok(vec![mo]));
+    let calls = netgsm.calls();
+    assert_eq!(
+        calls[calls.len() - 3..],
+        [
+            ConnectorCall::Report {
+                credential: sms.clone(),
+                job_ids: jobs.clone(),
+            },
+            ConnectorCall::Report {
+                credential: sms.clone(),
+                job_ids: jobs[..1].to_vec(),
+            },
+            ConnectorCall::Inbox {
+                credential: sms.clone(),
+                from,
+                to,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+#[should_panic(expected = "no inbox result scripted")]
+async fn an_unscripted_inbox_poll_panics() {
+    let connector = ScriptedConnector::new(Provider::Netgsm);
+    use jt_app::ports::connectors::DeliveryReports as _;
+    let _ = connector.inbox(&token(), FIXED_NOW, FIXED_NOW).await;
 }
 
 #[tokio::test]

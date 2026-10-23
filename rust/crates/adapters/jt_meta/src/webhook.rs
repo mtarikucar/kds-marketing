@@ -31,6 +31,7 @@
 //! comes from the item's own time (WhatsApp's seconds, Messenger's milliseconds, a lead's
 //! `created_time`), when it has one.
 
+pub use jt_app::ports::connectors::InboundEventDraft;
 use jt_connector::{EventKind, meta_signature_ok};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
@@ -45,18 +46,6 @@ pub const KIND_HINT_WHATSAPP: &str = "whatsapp_cloud";
 /// The longest unknown object name repeated in a [`ParseError`].
 const MAX_OBJECT_CHARS: usize = 64;
 
-/// An inbound event as a webhook body gives it, before it is routed to a workspace.
-#[derive(Clone, Debug, PartialEq)]
-pub struct InboundEventDraft {
-    /// The provider's id of the event (the dedupe key within a workspace).
-    pub external_id: String,
-    pub kind: EventKind,
-    /// The provider's item, under a key naming its family (see the module docs).
-    pub payload: Value,
-    /// When it happened, by the provider's clock, when the item says.
-    pub occurred_at: Option<OffsetDateTime>,
-}
-
 /// One event of a webhook body and the account it arrived for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParsedEvent {
@@ -65,6 +54,8 @@ pub struct ParsedEvent {
     /// Which kinds of capability may hold the account: [`KIND_HINT_PAGE`],
     /// [`KIND_HINT_INSTAGRAM`] or [`KIND_HINT_WHATSAPP`].
     pub kind_hint: &'static str,
+    /// The event; its `payload` is the provider's item under a key naming its family (see the
+    /// module docs).
     pub event: InboundEventDraft,
 }
 

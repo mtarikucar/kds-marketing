@@ -18,9 +18,9 @@ use jt_connector::Provider;
 
 use crate::error::AppError;
 use crate::ports::connectors::{
-    AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, InsightsReader, InstagramApp,
-    LeadGenFetcher, MessagingSender, MetaApp, OAuthProvider, PlatformAppConfig, Publisher,
-    SmsSender, Telephony, Url, XApp,
+    AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
+    InstagramApp, LeadGenFetcher, MessagingSender, MetaApp, OAuthProvider, PlatformAppConfig,
+    Publisher, SmsSender, Telephony, Url, XApp,
 };
 use crate::ports::{Clock, IdGen, PasswordHasher, TokenGen};
 
@@ -227,6 +227,10 @@ impl ConnectorRegistry for EmptyConnectorRegistry {
     fn consent(&self, _provider: Provider) -> Option<Arc<dyn ConsentSync>> {
         None
     }
+
+    fn delivery_reports(&self, _provider: Provider) -> Option<Arc<dyn DeliveryReports>> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -355,6 +359,7 @@ mod tests {
             assert!(registry.leadgen(provider).is_none());
             assert!(registry.telephony(provider).is_none());
             assert!(registry.consent(provider).is_none());
+            assert!(registry.delivery_reports(provider).is_none());
         }
     }
 

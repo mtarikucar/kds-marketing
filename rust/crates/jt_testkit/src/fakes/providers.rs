@@ -14,13 +14,14 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
     AccountMetrics, AdBudgetWriter, AdInsights, AdSet, Asset, Connector, ConnectorRegistry,
-    ConsentRow, ConsentSync, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord,
-    MessagingSender, MetaApp, OAuthApp, OAuthProvider, PlatformAppConfig, PostMetrics,
-    PublishReceipt, PublishRequest, Publisher, SendReceipt, SmsSender, Telephony, Url, XApp,
+    ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus, InboundEventDraft, InsightsReader,
+    InstagramApp, LeadGenFetcher, LeadGenRecord, MessagingSender, MetaApp, OAuthApp, OAuthProvider,
+    PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt,
+    SmsSender, Telephony, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use serde_json::Value;
-use time::Date;
+use time::{Date, OffsetDateTime};
 
 use super::state::lock;
 
@@ -201,6 +202,7 @@ pub enum ConnectorCall {
     },
     ClickToCall {
         credential: Credential,
+        public: Value,
         from_ext: String,
         to: String,
     },
@@ -211,6 +213,15 @@ pub enum ConnectorCall {
     ConsentAdd {
         credential: Credential,
         rows: Vec<ConsentRow>,
+    },
+    Report {
+        credential: Credential,
+        job_ids: Vec<String>,
+    },
+    Inbox {
+        credential: Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
     },
 }
 
@@ -235,6 +246,8 @@ pub struct ScriptedConnector {
     click_to_call: Script<Result<SendReceipt, ConnectorError>>,
     hangup: Script<Result<(), ConnectorError>>,
     consent_add: Script<Result<SendReceipt, ConnectorError>>,
+    report: Script<Result<Vec<DeliveryStatus>, ConnectorError>>,
+    inbox: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
 }
 
 impl ScriptedConnector {
@@ -260,6 +273,8 @@ impl ScriptedConnector {
             click_to_call: Script::default(),
             hangup: Script::default(),
             consent_add: Script::default(),
+            report: Script::default(),
+            inbox: Script::default(),
         }
     }
 
@@ -334,6 +349,14 @@ impl ScriptedConnector {
 
     pub fn push_consent_add(&self, result: Result<SendReceipt, ConnectorError>) {
         self.consent_add.push(result);
+    }
+
+    pub fn push_report(&self, result: Result<Vec<DeliveryStatus>, ConnectorError>) {
+        self.report.push(result);
+    }
+
+    pub fn push_inbox(&self, result: Result<Vec<InboundEventDraft>, ConnectorError>) {
+        self.inbox.push(result);
     }
 
     fn record(&self, call: ConnectorCall) {
@@ -532,11 +555,13 @@ impl Telephony for ScriptedConnector {
     async fn click_to_call(
         &self,
         cred: &Credential,
+        public: &Value,
         from_ext: &str,
         to: &str,
     ) -> Result<SendReceipt, ConnectorError> {
         self.record(ConnectorCall::ClickToCall {
             credential: cred.clone(),
+            public: public.clone(),
             from_ext: from_ext.to_owned(),
             to: to.to_owned(),
         });
@@ -564,6 +589,35 @@ impl ConsentSync for ScriptedConnector {
             rows: rows.to_vec(),
         });
         self.next(&self.consent_add, "consent result")
+    }
+}
+
+#[async_trait]
+impl DeliveryReports for ScriptedConnector {
+    async fn report(
+        &self,
+        cred: &Credential,
+        job_ids: &[String],
+    ) -> Result<Vec<DeliveryStatus>, ConnectorError> {
+        self.record(ConnectorCall::Report {
+            credential: cred.clone(),
+            job_ids: job_ids.to_vec(),
+        });
+        self.next(&self.report, "report result")
+    }
+
+    async fn inbox(
+        &self,
+        cred: &Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError> {
+        self.record(ConnectorCall::Inbox {
+            credential: cred.clone(),
+            from,
+            to,
+        });
+        self.next(&self.inbox, "inbox result")
     }
 }
 
@@ -714,15 +768,16 @@ const PUBLISHING: &[Provider] = &[Provider::Meta, Provider::X];
 /// The providers whose adapters send direct messages, write ad budgets and fetch lead-gen
 /// submissions (Meta).
 const META_ONLY: &[Provider] = &[Provider::Meta];
-/// The providers whose adapters send SMS, place calls and record consent (NetGSM).
+/// The providers whose adapters send SMS, place calls, record consent and answer delivery-report
+/// and inbox polls (NetGSM).
 const NETGSM_ONLY: &[Provider] = &[Provider::Netgsm];
 
 /// A registry over scripted adapters. It starts empty (every getter `None`, like
 /// `jt_app::std_impls::EmptyConnectorRegistry`); [`with_connector`](Self::with_connector) and
 /// [`with_oauth`](Self::with_oauth) register adapters by their provider. A registered
 /// [`ScriptedConnector`] is handed out for its provider's operations where the real adapter offers
-/// them: SMS, calls and consent for NetGSM; publishing and counters for Meta and X; messaging, ad
-/// budgets and lead-gen for Meta. Clones share the adapters.
+/// them: SMS, calls, consent and delivery reports for NetGSM; publishing and counters for Meta and
+/// X; messaging, ad budgets and lead-gen for Meta. Clones share the adapters.
 #[derive(Clone, Default)]
 pub struct ScriptedRegistry {
     connectors: BTreeMap<Provider, Arc<ScriptedConnector>>,
@@ -809,5 +864,10 @@ impl ConnectorRegistry for ScriptedRegistry {
     fn consent(&self, provider: Provider) -> Option<Arc<dyn ConsentSync>> {
         self.offered(provider, NETGSM_ONLY)
             .map(|c| c as Arc<dyn ConsentSync>)
+    }
+
+    fn delivery_reports(&self, provider: Provider) -> Option<Arc<dyn DeliveryReports>> {
+        self.offered(provider, NETGSM_ONLY)
+            .map(|c| c as Arc<dyn DeliveryReports>)
     }
 }
