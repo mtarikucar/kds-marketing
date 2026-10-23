@@ -14,6 +14,7 @@ members = [
     "crates/adapters/jt_seal",
     "crates/adapters/jt_meta",
     "crates/adapters/jt_netgsm",
+    "crates/adapters/jt_x",
     "crates/jt_testkit",
     "crates/jt_archtest",
     "bin/jeeta",
@@ -40,6 +41,7 @@ jt_outbound = { path = "crates/adapters/jt_outbound" }
 jt_seal = { path = "crates/adapters/jt_seal" }
 jt_meta = { path = "crates/adapters/jt_meta" }
 jt_netgsm = { path = "crates/adapters/jt_netgsm" }
+jt_x = { path = "crates/adapters/jt_x" }
 jt_testkit = { path = "crates/jt_testkit" }
 jt_archtest = { path = "crates/jt_archtest" }
 

@@ -1,0 +1,32 @@
+[package]
+name = "jt_x"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The X adapter: OAuth 2.0 with PKCE (a confidential client), the account, posts with image
+# uploads, public counters and the probe. It holds no HTTP client: every call goes through
+# `jt_outbound::Egress` under the `x` connector scope (`jt_archtest` asserts no HTTP client crate
+# is listed or named here).
+[dependencies]
+jt_app.workspace = true
+jt_connector.workspace = true
+jt_outbound.workspace = true
+serde_json.workspace = true
+time.workspace = true
+url.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+# `time`: the pause before a read that got no answer is tried again.
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+# Plain http to the in-process mock on 127.0.0.1, for the tests only (see jt_outbound's docs).
+jt_outbound = { workspace = true, features = ["test-loopback"] }
+axum.workspace = true
+base64.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
+
+[lints]
+workspace = true
