@@ -186,6 +186,33 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn netsantral_userinfo_trick_is_refused() {
+        // The text before `@` is userinfo: the host is `evil.example`, whatever the URL starts
+        // with, so neither the exception nor the fixed tier lets it through.
+        let egress = Egress::new(FIXED_HOSTS);
+        let netgsm = EgressScope::Connector("netgsm");
+        for trick in [
+            "http://crmsntrl.netgsm.com.tr:9111@evil.example/",
+            "http://crmsntrl.netgsm.com.tr:9111@evil.example:9111/",
+            "https://crmsntrl.netgsm.com.tr:9111@evil.example:9111/",
+            "http://user:pw@crmsntrl.netgsm.com.tr:9111@evil.example:9111/",
+        ] {
+            let target = url(trick);
+            assert_eq!(target.host_str(), Some("evil.example"), "{trick}");
+            assert!(!egress.permits(netgsm, &target), "{trick}");
+            match egress
+                .send(netgsm, crate::Request::new(crate::Method::GET, target))
+                .await
+            {
+                Err(crate::EgressError::HostNotAllowed { host }) => {
+                    assert_eq!(host, "evil.example", "{trick}")
+                }
+                other => panic!("{trick} must be refused, got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn plain_http_is_refused_for_netsantral_under_other_scopes() {
         let ws = WorkspaceId::new_v7();

@@ -1,8 +1,9 @@
 //! `jeeta serve`: the HTTP server. The panel's API and files, `/healthz` and the MCP endpoint
 //! at `/mcp`, on one listener.
 //!
-//! Start order: connect to the database, refuse a role that row-level security does not bind
-//! ([`check_database_role`]), apply pending migrations, create the first platform operator when
+//! Start order: refuse a binary built with `jt_outbound`'s test-only loopback paths
+//! ([`check_test_loopback`]), connect to the database, refuse a role that row-level security
+//! does not bind ([`check_database_role`]), apply pending migrations, create the first platform operator when
 //! configured, build the shared ports once, then serve until SIGINT or SIGTERM and drain open
 //! connections for at most [`DRAIN_TIMEOUT`].
 
@@ -48,6 +49,10 @@ const PLATFORM_LOGIN: &str = "/api/platform/login";
 
 /// Runs the server until a shutdown signal; any error before it listens stops the start.
 pub async fn run(config: Config) -> Result<()> {
+    check_test_loopback(
+        jt_outbound::TEST_LOOPBACK_ENABLED,
+        config.allow_test_loopback,
+    )?;
     let pool = connect(&config).await?;
     check_database_role(&pool, config.allow_superuser).await?;
     let (applied, total) = migrate(&pool).await?;
@@ -88,6 +93,33 @@ pub(crate) async fn connect(config: &Config) -> Result<PgPool> {
         .with_context(context)?
         .options([("client_min_messages", "warning")]);
     jt_pg::connect_with(options).await.with_context(context)
+}
+
+/// Refuses to start when `enabled` (`jt_outbound::TEST_LOOPBACK_ENABLED`): that build of the
+/// egress client lets requests reach this machine over plain http and resolves `localhost`,
+/// which only tests may do. A whole-workspace test or `--all-targets` build turns the feature on
+/// once a crate enables it in its `[dev-dependencies]`, so a binary must come from
+/// `cargo build --release -p jeeta`. With `allow` (the [`config::ALLOW_TEST_LOOPBACK`] override,
+/// for local testing only) it goes on and warns.
+pub(crate) fn check_test_loopback(enabled: bool, allow: bool) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    if allow {
+        tracing::warn!(
+            "{}=1: this binary was built with jt_outbound's `test-loopback` feature, so outbound \
+             requests may reach this machine over plain http; for local testing only",
+            config::ALLOW_TEST_LOOPBACK
+        );
+        return Ok(());
+    }
+    bail!(
+        "this binary was built with jt_outbound's `test-loopback` feature (a whole-workspace test \
+         or --all-targets build turns it on), which lets outbound requests reach this machine \
+         over plain http; build the binary with `cargo build --release -p jeeta`, or set {}=1 \
+         for local testing only",
+        config::ALLOW_TEST_LOOPBACK
+    )
 }
 
 /// Refuses to go on when the database role is a superuser or has `BYPASSRLS`: Postgres applies no
@@ -699,6 +731,24 @@ mod tests {
         // The development override lets it start.
         check_database_role(&admin, true).await.unwrap();
         admin.close().await;
+    }
+
+    #[test]
+    fn a_build_with_test_loopback_refuses_to_start_unless_allowed() {
+        // A production build: nothing to refuse, whatever the variable says.
+        check_test_loopback(false, false).unwrap();
+        check_test_loopback(false, true).unwrap();
+        // A build with jt_outbound's test-loopback paths compiled in.
+        let refused = format!("{:#}", check_test_loopback(true, false).unwrap_err());
+        for needle in [
+            "test-loopback",
+            "cargo build --release -p jeeta",
+            config::ALLOW_TEST_LOOPBACK,
+        ] {
+            assert!(refused.contains(needle), "{needle:?} in {refused}");
+        }
+        // The local-testing override lets it start.
+        check_test_loopback(true, true).unwrap();
     }
 
     #[test]

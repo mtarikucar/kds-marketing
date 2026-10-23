@@ -3,11 +3,10 @@
 //! The allowlist judges a URL's host by its text before anything is looked up; this guard judges
 //! the addresses the host's name resolves to, when the client connects. [`resolve_public`] looks
 //! the name up through the system resolver and keeps only the addresses
-//! [`validate_public_address`] accepts (the blocks [`crate::validate_public_host`] refuses:
-//! private, loopback, link-local, shared (CGNAT), unspecified, multicast, broadcast,
-//! documentation, IPv6 unique-local and link-local, and the IPv4-mapped and IPv4-compatible forms
-//! of those). When none is left, or the name does not resolve, resolution fails: the request
-//! fails before any socket is opened (fail closed).
+//! [`validate_public_address`] accepts: an address in none of the blocks
+//! [`crate::validate_public_host`] refuses. That function's documentation is the one list of
+//! those blocks (the same code judges both). When no address is left, or the name does not
+//! resolve, resolution fails: the request fails before any socket is opened (fail closed).
 //!
 //! The guard is installed as the egress client's resolver ([`PublicResolver`]), so it covers every
 //! name the client looks up, the fixed tier's provider hosts included: a provider host is trusted
@@ -59,6 +58,10 @@ fn system_lookup(name: String, port: u16) -> LookupFuture {
 ///
 /// In a test build (this crate's tests, or the `test-loopback` feature) the name `localhost` is
 /// let through to its loopback addresses, so a test server on this machine can be named.
+///
+/// **No timeout of its own.** The egress client bounds its own lookups with its connect and
+/// total timeouts; any other caller (M2's SMTP and IMAP sockets) wraps this call in
+/// `tokio::time::timeout`, or a slow resolver holds it indefinitely.
 pub async fn resolve_public(host: &str, port: u16) -> Result<Vec<SocketAddr>, HostError> {
     resolve_public_with(system_lookup, host, port).await
 }

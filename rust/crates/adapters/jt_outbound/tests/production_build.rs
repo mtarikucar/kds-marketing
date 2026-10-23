@@ -81,3 +81,35 @@ fn the_netsantral_exception_holds_in_a_production_build() {
         9111
     ));
 }
+
+#[tokio::test]
+async fn loopback_and_private_tenant_hosts_never_enter_outside_the_test_build() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    for host in ["127.0.0.1", "localhost", "[::1]", "10.0.0.1"] {
+        egress.allow_tenant_host(ws, host);
+        // Even over https, which the scheme check alone would let through.
+        let url = Url::parse(&format!("https://{host}:{port}/")).unwrap();
+        match egress
+            .send(EgressScope::Tenant(ws), Request::new(Method::GET, url))
+            .await
+        {
+            Err(EgressError::HostNotAllowed { host: refused }) => assert_eq!(refused, host),
+            other => panic!("{host} must not be in the tenant tier, got {other:?}"),
+        }
+    }
+    let accepted = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+    assert!(
+        accepted.is_err(),
+        "a refused request must not open a socket"
+    );
+}
+
+// A production build of the crate has none of the test-only loopback paths; checked when this
+// file compiles.
+const _: () = assert!(
+    !jt_outbound::TEST_LOOPBACK_ENABLED,
+    "a production build must not carry the test-loopback paths"
+);

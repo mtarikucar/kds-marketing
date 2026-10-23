@@ -103,18 +103,29 @@ mod tests {
         hosts: &[&str],
         status: StoredStatus,
     ) {
+        capability_with(uow, ws, kind_key, json!({ "hosts": hosts }), status).await;
+    }
+
+    /// A capability stored with `connector_public` as given, whatever its shape.
+    async fn capability_with(
+        uow: &InMemoryUow,
+        ws: WorkspaceId,
+        kind_key: &str,
+        connector_public: serde_json::Value,
+        status: StoredStatus,
+    ) {
         let mut capability = Capability::new(
             CapabilityId::new_v7(),
             ws,
             NewCapability {
                 kind_key: kind_key.into(),
                 name: format!("{kind_key} {status:?}"),
-                connector_public: json!({ "hosts": hosts }),
                 ..NewCapability::default()
             },
             FIXED_NOW,
         )
         .unwrap();
+        capability.connector_public = connector_public;
         capability.status = status;
         let mut repos = uow.tenant(ws).await.unwrap();
         repos.capabilities().insert(capability, None).await.unwrap();
@@ -197,6 +208,84 @@ mod tests {
         // Rebuilding again changes nothing.
         assert_eq!(rebuild_tenant_hosts(&egress, &uow).await.unwrap(), report);
         assert!(reaches(&egress, acme, "https://imap.live.example/"));
+    }
+
+    #[tokio::test]
+    async fn rebuild_skips_malformed_hosts() {
+        let uow = InMemoryUow::new();
+        let ws = workspace(&uow, "acme").await;
+        for connector_public in [
+            json!({}),
+            json!({ "hosts": null }),
+            json!({ "hosts": "imap.string.example" }),
+            json!({ "hosts": { "imap": "imap.object.example" } }),
+            json!({ "hosts": [1, null, true, "  ", ["nested.example"], { "h": "x.example" }, "ok.example"] }),
+        ] {
+            capability_with(
+                &uow,
+                ws,
+                "mailbox",
+                connector_public,
+                StoredStatus::Verified,
+            )
+            .await;
+        }
+
+        let egress = Egress::new(&[]);
+        let report = rebuild_tenant_hosts(&egress, &uow).await.unwrap();
+        assert_eq!(
+            report,
+            RebuildReport {
+                workspaces: 1,
+                hosts: 1
+            }
+        );
+        assert!(reaches(&egress, ws, "https://ok.example/"));
+        for refused in [
+            "https://imap.string.example/",
+            "https://imap.object.example/",
+            "https://nested.example/",
+            "https://x.example/",
+        ] {
+            assert!(!reaches(&egress, ws, refused), "{refused}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rebuild_empties_a_workspace_with_no_live_hosts() {
+        let uow = InMemoryUow::new();
+        // Every capability retired, or none at all.
+        let retired = workspace(&uow, "retired").await;
+        capability(
+            &uow,
+            retired,
+            "mailbox",
+            &["imap.gone.example"],
+            StoredStatus::Retired,
+        )
+        .await;
+        let bare = workspace(&uow, "bare").await;
+
+        let egress = Egress::new(&[]);
+        for (ws, host) in [
+            (retired, "imap.gone.example"),
+            (retired, "smtp.gone.example:465"),
+            (bare, "hooks.gone.example"),
+        ] {
+            egress.allow_tenant_host(ws, host);
+        }
+
+        let report = rebuild_tenant_hosts(&egress, &uow).await.unwrap();
+        assert_eq!(
+            report,
+            RebuildReport {
+                workspaces: 2,
+                hosts: 0
+            }
+        );
+        assert!(!reaches(&egress, retired, "https://imap.gone.example/"));
+        assert!(!reaches(&egress, retired, "https://smtp.gone.example:465/"));
+        assert!(!reaches(&egress, bare, "https://hooks.gone.example/"));
     }
 
     #[tokio::test]

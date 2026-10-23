@@ -77,6 +77,16 @@ fn plain_http_allowed(_host: &Host<&str>) -> bool {
     false
 }
 
+/// Whether `raw` is an entry for this machine: `localhost`, `127.0.0.1` or `[::1]`, with or
+/// without a port. Only a test build lets such an entry into a tier.
+#[cfg(any(test, feature = "test-loopback"))]
+pub(crate) fn is_loopback_entry(raw: &str) -> bool {
+    canonical_entry(raw).is_some_and(|entry| {
+        split_port(&entry)
+            .is_some_and(|(host, _)| matches!(host, "localhost" | "127.0.0.1" | "[::1]"))
+    })
+}
+
 /// Whether `host` names this machine: `localhost` or the loopback literals `127.0.0.1` and
 /// `[::1]`.
 #[cfg(any(test, feature = "test-loopback"))]
@@ -151,11 +161,7 @@ impl Allowlist {
         for (connector, raw) in extra {
             let raw = raw.as_ref();
             let entry = canonical_entry(raw)
-                .filter(|entry| {
-                    split_port(entry).is_some_and(|(host, _)| {
-                        matches!(host, "localhost" | "127.0.0.1" | "[::1]")
-                    })
-                })
+                .filter(|_| is_loopback_entry(raw))
                 .unwrap_or_else(|| {
                     panic!(
                         "test egress host {raw:?} of connector {connector:?} is not a loopback host"

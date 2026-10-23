@@ -16,7 +16,7 @@ use serde_json::json;
 
 use crate::allowlist::{AllowedHost, Allowlist};
 use crate::dns_guard::PublicResolver;
-use crate::public_host::HostError;
+use crate::public_host::{HostError, validate_public_host};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -90,6 +90,13 @@ impl From<EgressError> for AppError {
 /// there is deliberately no way to obtain the underlying `reqwest::Client` or a
 /// `RequestBuilder`, whose own `send` would skip the allowlist. Cheap to clone; clones share the
 /// tenant tier.
+///
+/// **A response carries the request's URL.** [`EgressError`] never does, but the `Response` a
+/// send returns does: `Response::url()`, and the error of `Response::error_for_status()`, hold
+/// the full URL, query string included, and a provider such as NetGSM takes its credentials in
+/// the query string. A connector maps the status itself and never logs, stores or returns
+/// either of them raw; text that may hold a URL goes through `jt_connector::redact_reason`
+/// first.
 #[derive(Clone, Debug)]
 pub struct Egress {
     client: reqwest::Client,
@@ -151,9 +158,24 @@ impl Egress {
         self
     }
 
-    /// Adds `host` (`host` or `host:port`, IPv6 in brackets) to the workspace's tenant tier. A
-    /// value that is not a valid host is ignored, so it can never allow anything.
+    /// Adds `host` (`host` or `host:port`, IPv6 in brackets) to the workspace's tenant tier when
+    /// it is on the public internet ([`validate_public_host`]). Anything else (a private,
+    /// loopback or other non-public IP literal, a name only a private network resolves, a value
+    /// that is not a host) is ignored with a warning, so it can never allow anything: an IP
+    /// literal never reaches the DNS guard, so this is the check that keeps it out. A test build
+    /// also lets in `localhost`, `127.0.0.1` and `[::1]`, for in-process test servers.
     pub fn allow_tenant_host(&self, ws: WorkspaceId, host: &str) {
+        if !loopback_tolerated(host)
+            && let Err(e) = validate_public_host(host)
+        {
+            tracing::warn!(
+                workspace_id = %ws,
+                host,
+                reason = e.key(),
+                "ignored a tenant egress host that is not public"
+            );
+            return;
+        }
         if !self.allowlist.allow_tenant(ws, host) {
             tracing::warn!(workspace_id = %ws, host, "ignored an invalid tenant egress host");
         }
@@ -188,6 +210,9 @@ impl Egress {
     /// Sends `req` if its URL is allowed for `scope`; otherwise returns `HostNotAllowed` without
     /// resolving or connecting anything. A name the DNS guard refuses is `NotPublic`, also
     /// without a socket.
+    ///
+    /// The `Response`'s `url()` and its `error_for_status()` error carry the request URL with its
+    /// query string: never log them raw (see [`Egress`]).
     pub async fn send(
         &self,
         scope: EgressScope,
@@ -206,6 +231,17 @@ impl Egress {
             }
         })
     }
+}
+
+/// Whether `host` is an entry for this machine that a test build lets into the tenant tier.
+#[cfg(any(test, feature = "test-loopback"))]
+fn loopback_tolerated(host: &str) -> bool {
+    crate::allowlist::is_loopback_entry(host)
+}
+
+#[cfg(not(any(test, feature = "test-loopback")))]
+fn loopback_tolerated(_host: &str) -> bool {
+    false
 }
 
 /// Whether `err` comes from a DNS guard refusal: a [`HostError`] other than `Unresolvable` (a
@@ -305,6 +341,10 @@ impl Prepared {
 
     /// Builds the request and sends it as [`Egress::send`] does: refused (`HostNotAllowed`)
     /// without resolving or connecting anything when the final URL is not allowed for `scope`.
+    ///
+    /// The `Response`'s `url()` and its `error_for_status()` error carry the request URL with its
+    /// query string, credentials included: map the status yourself and never log them raw (use
+    /// `jt_connector::redact_reason` on any text that may hold one; see [`Egress`]).
     pub async fn send(self, scope: EgressScope) -> Result<reqwest::Response, EgressError> {
         let req = self
             .builder
@@ -312,4 +352,61 @@ impl Prepared {
             .map_err(|err| EgressError::Build(err.without_url()))?;
         self.egress.send(scope, req).await
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reaches(egress: &Egress, ws: WorkspaceId, url: &str) -> bool {
+        egress.permits(EgressScope::Tenant(ws), &Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn allow_tenant_host_refuses_private_literals() {
+        let egress = Egress::new(&[]);
+        let ws = WorkspaceId::new_v7();
+        for host in [
+            "10.0.0.5",
+            "10.0.0.5:993",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "127.0.0.2",
+            "224.0.0.1",
+            "[fd00::1]",
+            "[fe80::1]",
+            "[::ffff:10.0.0.1]",
+            "[64:ff9b::10.0.0.1]",
+            "nas.lan",
+            "intranet",
+            "printer.local",
+        ] {
+            egress.allow_tenant_host(ws, host);
+            assert!(
+                !reaches(&egress, ws, &format!("https://{host}/")),
+                "{host} must not enter the tenant tier"
+            );
+        }
+        // A value that is not a host is ignored as before.
+        egress.allow_tenant_host(ws, "not a host");
+
+        // Public hosts still enter.
+        for host in [
+            "imap.example.com:993",
+            "93.184.216.34",
+            "[2606:4700:4700::1111]",
+        ] {
+            egress.allow_tenant_host(ws, host);
+            assert!(reaches(&egress, ws, &format!("https://{host}/")), "{host}");
+        }
+        // This test build lets this machine in, for the in-process test servers.
+        egress.allow_tenant_host(ws, "127.0.0.1");
+        assert!(reaches(&egress, ws, "http://127.0.0.1/"));
+    }
+
+    // This crate's own test build carries the test-only loopback paths.
+    const _: () = assert!(crate::TEST_LOOPBACK_ENABLED);
 }

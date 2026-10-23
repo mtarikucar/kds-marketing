@@ -39,6 +39,9 @@ pub const LOG_FORMAT: &str = "JEETA_LOG_FORMAT";
 /// Whether the database role may be a superuser or have `BYPASSRLS` (default `false`; local
 /// development only).
 pub const ALLOW_SUPERUSER: &str = "JEETA_ALLOW_SUPERUSER";
+/// Whether a binary built with `jt_outbound`'s `test-loopback` feature may start (`1` or `true`;
+/// default off; local testing only).
+pub const ALLOW_TEST_LOOPBACK: &str = "JEETA_ALLOW_TEST_LOOPBACK";
 
 /// Every variable the binary reads.
 const VARS: &[&str] = &[
@@ -54,6 +57,7 @@ const VARS: &[&str] = &[
     LOG,
     LOG_FORMAT,
     ALLOW_SUPERUSER,
+    ALLOW_TEST_LOOPBACK,
 ];
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -154,6 +158,9 @@ pub struct Config {
     /// Start even when the database role bypasses row-level security (a superuser or
     /// `BYPASSRLS`), with a warning; for local development only.
     pub allow_superuser: bool,
+    /// Start even when `jt_outbound` was built with its `test-loopback` feature, with a warning;
+    /// for local testing only.
+    pub allow_test_loopback: bool,
 }
 
 impl fmt::Debug for Config {
@@ -170,6 +177,7 @@ impl fmt::Debug for Config {
             .field("log_filter", &self.log_filter)
             .field("log_format", &self.log_format)
             .field("allow_superuser", &self.allow_superuser)
+            .field("allow_test_loopback", &self.allow_test_loopback)
             .finish()
     }
 }
@@ -232,6 +240,7 @@ impl Config {
 
         let cookie_secure = parse_bool(COOKIE_SECURE, get(COOKIE_SECURE), true)?;
         let allow_superuser = parse_bool(ALLOW_SUPERUSER, get(ALLOW_SUPERUSER), false)?;
+        let allow_test_loopback = parse_flag(ALLOW_TEST_LOOPBACK, get(ALLOW_TEST_LOOPBACK))?;
 
         let allowed_hosts = parse_allowed_hosts(get(ALLOWED_HOSTS))?;
         if !bind.ip().is_loopback() && allowed_hosts.is_empty() {
@@ -290,6 +299,7 @@ impl Config {
             log_filter,
             log_format,
             allow_superuser,
+            allow_test_loopback,
         })
     }
 }
@@ -301,6 +311,16 @@ fn parse_bool(var: &'static str, raw: Option<&str>, default: bool) -> Result<boo
         Some(v) if v.eq_ignore_ascii_case("true") => Ok(true),
         Some(v) if v.eq_ignore_ascii_case("false") => Ok(false),
         Some(_) => Err(ConfigError::new(var, "must be true or false")),
+    }
+}
+
+/// `1` or `true` (any case) is on, `0` or `false` off, unset off.
+fn parse_flag(var: &'static str, raw: Option<&str>) -> Result<bool, ConfigError> {
+    match raw.map(str::trim) {
+        None => Ok(false),
+        Some(v) if v == "1" || v.eq_ignore_ascii_case("true") => Ok(true),
+        Some(v) if v == "0" || v.eq_ignore_ascii_case("false") => Ok(false),
+        Some(_) => Err(ConfigError::new(var, "must be 1 (or true) or 0 (or false)")),
     }
 }
 
@@ -434,6 +454,26 @@ mod tests {
         assert_eq!(config.log_filter, "info,rmcp=warn");
         assert_eq!(config.log_format, LogFormat::Compact);
         assert!(!config.allow_superuser, "off unless asked for");
+        assert!(!config.allow_test_loopback, "off unless asked for");
+    }
+
+    #[test]
+    fn the_test_loopback_override_takes_one_or_true() {
+        for (raw, allowed) in [
+            ("1", true),
+            ("true", true),
+            (" TRUE ", true),
+            ("0", false),
+            ("false", false),
+            ("", false),
+        ] {
+            let config = Config::from_map(&with(&[(ALLOW_TEST_LOOPBACK, raw)])).unwrap();
+            assert_eq!(config.allow_test_loopback, allowed, "{raw:?}");
+        }
+        for bad in ["yes", "2", "on"] {
+            let err = error(&with(&[(ALLOW_TEST_LOOPBACK, bad)]));
+            assert_eq!(err.var, ALLOW_TEST_LOOPBACK, "{bad}");
+        }
     }
 
     #[test]
@@ -467,6 +507,7 @@ mod tests {
             (LOG, ""),
             (LOG_FORMAT, ""),
             (ALLOW_SUPERUSER, ""),
+            (ALLOW_TEST_LOOPBACK, ""),
         ]))
         .unwrap();
         assert_eq!(blank, Config::from_map(&with(&[])).unwrap());

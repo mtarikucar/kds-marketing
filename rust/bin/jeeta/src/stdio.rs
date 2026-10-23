@@ -5,8 +5,9 @@
 //! with the permissions the key had at that moment until it exits, so revoking the key or
 //! demoting its issuer takes effect at the next start. Stdout carries the MCP stream and logs go
 //! to stderr. This mode serves no HTTP and applies no migrations: the database must already have
-//! been migrated by `jeeta serve`. Like `serve`, it refuses a database role that row-level
-//! security does not bind (`serve::check_database_role`).
+//! been migrated by `jeeta serve`. Like `serve`, it refuses a binary built with
+//! `jt_outbound`'s test-only loopback paths (`serve::check_test_loopback`) and a database role
+//! that row-level security does not bind (`serve::check_database_role`).
 
 use anyhow::{Context, Result, bail};
 use jt_app::error::ErrorCode;
@@ -24,6 +25,10 @@ pub async fn run(config: Config) -> Result<()> {
             config::STDIO_API_KEY
         );
     };
+    serve::check_test_loopback(
+        jt_outbound::TEST_LOOPBACK_ENABLED,
+        config.allow_test_loopback,
+    )?;
     let pool = serve::connect(&config).await?;
     serve::check_database_role(&pool, config.allow_superuser).await?;
     let deps = serve::deps(pool.clone(), &config);

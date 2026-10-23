@@ -119,6 +119,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_LOG` | `info,rmcp=warn` | `tracing` süzgeci, ör. `info,rmcp=warn,jeeta=debug`. Kendi süzgecinizde `rmcp=warn`'u koruyun: rmcp her yeni MCP oturum kimliğini (`Mcp-Session-Id`) `info` düzeyinde yazar |
 | `JEETA_LOG_FORMAT` | `compact` | `compact` ya da `json`. Günlükler stderr'e yazılır |
 | `JEETA_ALLOW_SUPERUSER` | `false` | `true` ise veritabanı rolü süper kullanıcı ya da `BYPASSRLS` olsa da açılır ve bir `WARN` satırı yazar (çalışma alanı yalıtımı uygulanmaz). **Yalnızca yerel geliştirme için**; üretimde asla |
+| `JEETA_ALLOW_TEST_LOOPBACK` | kapalı | `1` (ya da `true`) ise `jt_outbound`'un `test-loopback` özelliğiyle derlenmiş bir ikili de açılır ve bir `WARN` satırı yazar; kapalıyken böyle bir ikili açılışı reddeder (bkz. [Üretim notları](#üretim-notları)). **Yalnızca yerel test için**; üretimde asla |
 
 Erişim günlüğü her istek için yalnızca yöntemi, rota şablonunu (`/api/team/{membership_id}`), durumu ve
 süreyi yazar; ham yol ve sorgu dizesi hiç yazılmaz. Rotası olmayan istekler (panel sayfaları ve dosyaları,
@@ -398,9 +399,9 @@ da `credential` geçen her addır (`token_count`, `author` da reddedilir).
 
 **Çıkış (egress) denetimi.** Bir adres iki anda denetlenir. Bildirildiği an yalnızca metniyle (IP adresi
 yazımları ve yalnız özel ağların çözdüğü ad kalıpları); bağlanırken de DNS koruması, adın çözüldüğü
-adresleri aynı bloklara göre süzer: genel olmayan her adres (özel, geri döngü, bağlantı-yerel, CGNAT,
-belirtilmemiş, çoklu yayın, yayın ve belgeleme blokları, IPv6 ULA ve bağlantı-yerel adresler, IPv4 eşlemeli
-ve uyumlu biçimler) atılır; geriye adres kalmazsa ya da ad çözülmezse istek hiçbir soket açılmadan düşer
+adresleri aynı bloklara göre süzer: genel olmayan her adres atılır (özel ağlar, geri döngü, bağlantı-yerel,
+CGNAT gibi blokların tek ve eksiksiz listesi `jt_outbound::validate_public_host` belgesindedir; iki denetim
+aynı kodu kullanır); geriye adres kalmazsa ya da ad çözülmezse istek hiçbir soket açılmadan düşer
 (DNS korumasının reddi `HOST_NOT_ALLOWED`, `details.reason = "no_public_address"`). Koruma sağlayıcıların sabit
 adreslerine de uygulanır; böylece genel görünen bir ad özel bir adrese çözülse (DNS yeniden bağlama) bile
 ona ulaşılmaz. HTTP dışındaki bağlantılar (M2'nin SMTP/IMAP soketleri) aynı denetimi
@@ -628,6 +629,12 @@ kapısından (port) ulaşır:
 
 ## Üretim notları
 
+- Yayın ikilisi yalnızca `cargo build --release --locked -p jeeta` ile derlenir. Bir crate
+  `jt_outbound`'un `test-loopback` özelliğini `[dev-dependencies]` içinde açtığında, tüm çalışma alanını
+  kapsayan bir test ya da `--all-targets` derlemesi özelliği `jt_outbound`'a da katar; o derlemenin ürettiği
+  `jeeta` ikilisi dış isteklerle bu makineye düz `http` ile ulaşabilir. Böyle bir ikili (`serve` de
+  `mcp-stdio` da) açılışta durur ve hatada özelliği ve bu derleme komutunu adıyla söyler;
+  `JEETA_ALLOW_TEST_LOOPBACK=1` bu denetimi yalnızca yerel test için geçer.
 - TLS'i bir ters vekil sonlandırır; `JEETA_COOKIE_SECURE=true` (varsayılan) kalır.
 - Her yanıt (panel, API, `/healthz`, MCP) `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`
   ve `Content-Security-Policy: frame-ancestors 'none'` taşır; ters vekil bunları silmemeli.

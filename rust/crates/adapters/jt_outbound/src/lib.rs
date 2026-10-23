@@ -6,9 +6,10 @@
 //! against one of two tiers, chosen by the request's [`EgressScope`]:
 //! - the fixed tier ([`FIXED_HOSTS`]): provider hosts per connector, part of the code;
 //! - the tenant tier: hosts a workspace declared in its capability records, managed at runtime
-//!   with [`Egress::allow_tenant_host`] and [`Egress::revoke_tenant_host`]. Use cases reach it
-//!   through [`EgressTenantHosts`], `jt_app`'s `TenantHostRegistry`, which lets in only hosts on
-//!   the public internet ([`validate_public_host`]). The tier lives in memory;
+//!   with [`Egress::allow_tenant_host`] and [`Egress::revoke_tenant_host`]. Only hosts on the
+//!   public internet ([`validate_public_host`]) ever enter it, by whichever path: use cases go
+//!   through [`EgressTenantHosts`], `jt_app`'s `TenantHostRegistry`, which refuses the others
+//!   with `VALIDATION`, and `allow_tenant_host` itself ignores them. The tier lives in memory;
 //!   [`rebuild_tenant_hosts`] fills it from the capability records at start-up.
 //!
 //! Then, when the client connects, the DNS guard ([`resolve_public`], the client's resolver)
@@ -24,6 +25,12 @@
 //! Callers build a request with [`Egress::prepare`] (or `Request::new(method, url)`) and the
 //! re-exported types below, so a connector crate never names `reqwest` itself;
 //! `reqwest::Client` and `reqwest::RequestBuilder` are deliberately not reachable.
+//!
+//! An [`EgressError`] never carries the request's URL, but a [`Response`] does:
+//! `Response::url()` and the error of `Response::error_for_status()` hold it with its query
+//! string, where a provider such as NetGSM takes credentials. Connector crates map the status
+//! themselves and never log either raw; any text that may hold a URL goes through
+//! `jt_connector::redact_reason` first.
 //!
 //! # The `test-loopback` feature
 //!
@@ -51,6 +58,13 @@ pub use public_host::{
 pub use tenant_rebuild::{RebuildReport, rebuild_tenant_hosts};
 
 pub use reqwest::{Body, Method, Request, Response, StatusCode, Url, header, multipart};
+
+/// Whether this build of the crate has the test-only loopback paths: `true` in its own tests and
+/// with the `test-loopback` feature, `false` in a production build. A whole-workspace test (or
+/// `--all-targets`) build can unify the feature in once a crate enables it in its
+/// `[dev-dependencies]`, so a binary built that way would carry the paths: `bin/jeeta` refuses to
+/// start when this is `true`.
+pub const TEST_LOOPBACK_ENABLED: bool = cfg!(any(test, feature = "test-loopback"));
 
 /// The egress tests run inside this crate's own test build, where `cfg(test)` tolerates plain
 /// http to loopback literals (see `tests/egress.rs`).
