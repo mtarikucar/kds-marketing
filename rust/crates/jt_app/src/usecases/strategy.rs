@@ -29,7 +29,9 @@
 //! listing every problem in `details.gaps` (`[{field, message}]`), and nothing is written. Gaps of
 //! completeness do not stop a write; they are answered in `VersionOut::gaps` and stop
 //! submission and approval (`VALIDATION`, `details.gaps`). Editing a submitted draft withdraws
-//! the submission: an owner approves what was last submitted, never a later edit.
+//! the submission: an owner approves what was last submitted, never a later edit. Recording an
+//! assumption is such an edit too (approval reads the assumptions to the owner), so it withdraws
+//! the submission as well.
 //!
 //! **Hypotheses** keep their identity across versions: a draft starts from the approved version
 //! with each hypothesis in force `kept`; a hypothesis written without an id is `added`; one of
@@ -327,6 +329,12 @@ pub async fn start_consultation(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, Ap
 /// section key one of [`Sections::KEYS`], else `VALIDATION` naming `text` or `section_key`.
 /// Without a draft, `CONFLICT` "no draft". Writes `strategy.record` (payload `kind`,
 /// `section_key`: never the text, which only the consultation log keeps).
+///
+/// An assumption recorded against a submitted draft withdraws the submission in the same
+/// transaction: approval lists the assumptions to the owner, so a submission stamp read before
+/// the assumption must not approve the draft that has it. Then `strategy.submission_withdrawn`
+/// is written too (payload `version_id`, `reason: "assumption_recorded"`). A question, an answer
+/// or a note leaves the submission standing.
 pub async fn record(
     deps: &Deps,
     ctx: &Ctx,
@@ -358,6 +366,18 @@ pub async fn record(
         json!({ "kind": kind.key(), "section_key": section_key }),
     )
     .await?;
+    if kind == ConsultationKind::Assumption && draft.submitted_at.is_some() {
+        withdraw_submission(repos.as_mut(), &draft).await?;
+        append_ledger(
+            repos.as_mut(),
+            ctx,
+            "strategy.submission_withdrawn",
+            draft.id,
+            in_force,
+            json!({ "version_id": draft.id, "reason": "assumption_recorded" }),
+        )
+        .await?;
+    }
     repos.commit().await?;
     Ok(id)
 }

@@ -341,7 +341,9 @@ ve kaydeder. Ajan şu sırayı izler:
    hipotezi korur. Açık bir taslak varsa onu döndürür, yeniden açmaz.
 4. Sahibe açık soruları sohbette sorar ve her soruyu, cevabı, cevapsız koyduğu varsayımı ve notu
    `jeeta.strategy.record` ile yazar (`kind`: `question`, `answer`, `assumption`, `note`; isteğe bağlı
-   `section_key`). Metin günlüğe değil istişare kaydına girer.
+   `section_key`). Metin günlüğe değil istişare kaydına girer. Onaya sunulmuş bir taslağa yazılan varsayım
+   sunumu geri çeker (onay varsayımları sahibe okur; günlükte `strategy.submission_withdrawn`); ajan
+   taslağı yeniden sunar.
 5. `jeeta.strategy.write_section` ile her bölümü bütünüyle yazar: `identity`, `audience`, `channels`,
    `goals`, `budget_frame`, `prohibitions`, `cadence`, `paid_enabled`. Yanıt kalan eksikleri gösterir;
    eksikler yazmayı engellemez.
