@@ -354,7 +354,8 @@ pub struct ConnectorHealth {
 /// The kind must be one OAuth connects (a Meta kind or `x`), else `VALIDATION` naming `kind_key`
 /// (a NetGSM kind with `details.reason = "use_set_credentials"`). The provider's app must be
 /// configured (`instagram` signs in with the Instagram app, the other Meta kinds with the Meta
-/// app, `x` with the X app), else `CONFLICT` "provider app not configured"; and its adapter
+/// app, `x` with the X app), else `CONFLICT` "provider app not configured" (`details.reason =
+/// "provider_app_not_configured"`, `details.provider`); and its adapter
 /// present, else `CONFLICT`. The state is signed for the workspace and holds the provider, the
 /// kind, the time and a nonce; for X a PKCE pair is made and its verifier sealed with the flow.
 /// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the
@@ -448,7 +449,7 @@ pub async fn complete_oauth(
     };
 
     let app = oauth_app(deps.apps.as_ref(), flow.provider, &flow.kind_key)
-        .ok_or_else(|| AppError::conflict(APP_NOT_CONFIGURED))?;
+        .ok_or_else(|| app_not_configured(flow.provider))?;
     let oauth = deps
         .connectors
         .oauth(flow.provider)
@@ -791,7 +792,7 @@ async fn begin_oauth(
 ) -> Result<StartOut, AppError> {
     let provider = oauth_kind(kind_key)?;
     let app = oauth_app(deps.apps.as_ref(), provider, kind_key)
-        .ok_or_else(|| AppError::conflict(APP_NOT_CONFIGURED))?;
+        .ok_or_else(|| app_not_configured(provider))?;
     let oauth = deps
         .connectors
         .oauth(provider)
@@ -929,6 +930,16 @@ fn nonce(deps: &Deps) -> [u8; NONCE_BYTES] {
     let mut nonce = [0u8; NONCE_BYTES];
     nonce.copy_from_slice(&digest[..NONCE_BYTES]);
     nonce
+}
+
+/// `CONFLICT` "provider app not configured" for a flow of `provider`, naming the reason
+/// (`provider_app_not_configured`) and the provider in `details`.
+fn app_not_configured(provider: Provider) -> AppError {
+    AppError {
+        code: ErrorCode::Conflict,
+        message: APP_NOT_CONFIGURED.into(),
+        details: json!({ "reason": "provider_app_not_configured", "provider": provider.key() }),
+    }
 }
 
 /// `FORBIDDEN` for every refused OAuth state, with the same message whatever the reason.

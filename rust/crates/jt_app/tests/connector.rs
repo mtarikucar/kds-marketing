@@ -302,6 +302,13 @@ async fn start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier() {
         let e = err(connector::start_oauth(&bare, o, start(kind)).await);
         assert_eq!(e.code, ErrorCode::Conflict, "{kind}");
         assert_eq!(e.message, "provider app not configured", "{kind}");
+        // The reason and the provider are named, so the panel shows its own copy.
+        let provider = if kind == "x" { "x" } else { "meta" };
+        assert_eq!(
+            e.details,
+            json!({ "reason": "provider_app_not_configured", "provider": provider }),
+            "{kind}"
+        );
     }
     // Instagram Login runs under the Instagram app; the other Meta kinds under the Meta app.
     let mut no_instagram = FakeAppConfig::with_all_apps();
