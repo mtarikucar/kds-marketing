@@ -984,6 +984,28 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
     );
     for state in ["sending", "sent"] {
         row.state = state.into();
+        row.fence_snapshot = None;
+        t.outbox().update(row.clone()).await.unwrap();
+        assert!(
+            t.messages()
+                .echo_candidates(c.id, &m.body, FIXED_NOW)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // A manual echo arrived while our reply was only queued; send started later.
+        row.fence_snapshot = Some(
+            json!({"send_at": (FIXED_NOW + Duration::seconds(1)).unix_timestamp_nanos().to_string()}),
+        );
+        t.outbox().update(row.clone()).await.unwrap();
+        assert!(
+            t.messages()
+                .echo_candidates(c.id, &m.body, FIXED_NOW)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        row.fence_snapshot = Some(json!({"send_at": FIXED_NOW.unix_timestamp_nanos().to_string()}));
         t.outbox().update(row.clone()).await.unwrap();
         assert_eq!(
             t.messages()

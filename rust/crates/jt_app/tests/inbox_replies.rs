@@ -735,3 +735,21 @@ async fn note_during_send_does_not_suppress_reply_transition() {
         JourneyStatus::Contacted
     );
 }
+
+#[tokio::test]
+async fn immediate_reply_tolerates_validated_provider_clock_skew() {
+    let (w, id, connector) = setup().await;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let mut conv = r.conversations().get(id).await.unwrap().unwrap();
+    conv.last_inbound_at = Some(w.owner_ctx.now + time::Duration::minutes(5));
+    r.conversations().upsert_on_inbound(conv).await.unwrap();
+    r.commit().await.unwrap();
+    connector.push_send_text(accepted());
+    assert_eq!(
+        replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+            .await
+            .unwrap()
+            .state,
+        "sent"
+    );
+}

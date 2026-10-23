@@ -1287,7 +1287,8 @@ gelen mesaja göre `last_inbound_identity_id` değerini günceller. Geç gelen e
 ve tekrar teslim, daha yeni göndereni değiştirmez; ayrı bir gönderen kaydı tutulmaz.
 Etkinlik ve mesaj zamanı RFC3339 `payload.occurred_at` değerinden alınır; değer yoksa,
 geçersizse veya `received_at` değerinden beş dakikadan fazla ilerideyse `received_at`
-kullanılır. Gecikmiş eski mesaj, 24 saatlik yanıt penceresini yenilemez.
+kullanılır. Yanıt kontrolü de kabul edilen beş dakikalık saat farkını tanır.
+Gecikmiş eski mesaj, 24 saatlik yanıt penceresini yenilemez.
 Page/Instagram profil kabiliyetine yönlenen Meta mesaj/echo/raporları, aynı çalışma
 alanı ve harici hesaptaki emekliye ayrılmamış `messenger`/`instagram_dm` kardeşine
 çözülür; kardeşi bulunmayan olay ertelenir.
@@ -1298,6 +1299,9 @@ yolculuğu açılır, kişinin ilk kaynağı değişmez. Echo, mevcut gönderiyi
 bilinen konuşmaya System outbound yazar; teslim raporları eşleşen gönderiyi günceller.
 Echo makbuzdan önce gelirse, aynı metinli ve henüz harici kimliği olmayan `sending`
 gönderiye (veya son beş dakikada `sent` olmuş gönderiye) kimliği bağlar; yazarını korur.
+Kaydedilmiş `fence_snapshot.send_at` echo'nun alınma zamanını geçemez; kuyruk zamanı
+tek başına eşleşme kanıtı değildir. Teslim sonucu, sonradan dönen kabul makbuzu veya
+belirsiz ağ hatası tarafından düşürülmez.
 Birden fazla aday varsa tahmin etmek yerine erteler. Makbuz aynı kimliği tekrar
 kaydedebilir. `MessageRepo::find_by_external_id` çalışma alanı/kabiliyet kapsamında
 indeksli arar; rapor ve echo eşlemesi tüm konuşma/mesaj geçmişini taramaz.

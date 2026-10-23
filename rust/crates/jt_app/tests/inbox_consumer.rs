@@ -936,7 +936,7 @@ async fn future_or_invalid_occurrence_falls_back_to_receipt_time() {
     }
 }
 
-async fn echo_receipt_order(echo_first: bool, delivery_first: bool) {
+async fn echo_receipt_order(echo_first: bool, delivery_first: bool, timeout: bool) {
     use jt_app::{
         ports::connectors::SendReceipt,
         usecases::inbox::{consumer, replies},
@@ -977,10 +977,14 @@ async fn echo_receipt_order(echo_first: bool, delivery_first: bool) {
     assert_eq!(run(&w).await.failed, 0);
     let conv = w.uow.snapshot().inbox.conversations[0].id;
     let connector = Arc::new(ScriptedConnector::new(Provider::Meta));
-    connector.push_send_text(Ok(SendReceipt {
-        provider_id: "m_TEST-ECHO-1".into(),
-        cost_minor: Some(3),
-    }));
+    connector.push_send_text(if timeout {
+        Err(jt_connector::ConnectorError::unknown("test timeout"))
+    } else {
+        Ok(SendReceipt {
+            provider_id: "m_TEST-ECHO-1".into(),
+            cost_minor: Some(3),
+        })
+    });
     w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(connector.clone()));
     if echo_first {
         put(
@@ -1013,7 +1017,8 @@ async fn echo_receipt_order(echo_first: bool, delivery_first: bool) {
     )
     .await
     .unwrap();
-    assert_eq!(result.state, "sent");
+    let expected_outbox = if timeout { "unknown" } else { "sent" };
+    assert_eq!(result.state, expected_outbox);
     if !echo_first {
         put(
             &w,
@@ -1034,7 +1039,7 @@ async fn echo_receipt_order(echo_first: bool, delivery_first: bool) {
         .unwrap();
     assert_eq!(sent.author, Author::Human(w.owner));
     assert_eq!(sent.external_id.as_deref(), Some("m_TEST-ECHO-1"));
-    assert_eq!(sent.cost_minor, Some(3));
+    assert_eq!(sent.cost_minor, if timeout { None } else { Some(3) });
     assert_eq!(
         sent.status,
         if delivery_first {
@@ -1043,15 +1048,15 @@ async fn echo_receipt_order(echo_first: bool, delivery_first: bool) {
             MsgStatus::Sent
         }
     );
-    assert_eq!(s.outbox[0].state, "sent");
+    assert_eq!(s.outbox[0].state, expected_outbox);
 }
 #[tokio::test]
 async fn echo_before_receipt_attaches_to_original_outbound() {
-    echo_receipt_order(true, false).await;
+    echo_receipt_order(true, false, false).await;
 }
 #[tokio::test]
 async fn receipt_before_echo_preserves_original_outbound() {
-    echo_receipt_order(false, false).await;
+    echo_receipt_order(false, false, false).await;
 }
 
 #[tokio::test]
@@ -1114,5 +1119,10 @@ async fn occurrence_future_skew_is_bounded_at_five_minutes() {
 
 #[tokio::test]
 async fn echo_and_delivery_before_receipt_preserve_delivery_status() {
-    echo_receipt_order(true, true).await;
+    echo_receipt_order(true, true, false).await;
+}
+
+#[tokio::test]
+async fn echo_and_delivery_before_timeout_preserve_delivery_status() {
+    echo_receipt_order(true, true, true).await;
 }

@@ -667,7 +667,13 @@ impl MessageRepo for MemTenant {
                         o.workspace_id == self.ws
                             && o.conversation_id == m.conversation_id
                             && o.message_id == m.id
-                            && o.created_at <= received_at
+                            && o.fence_snapshot
+                                .as_ref()
+                                .and_then(|f| f.get("send_at"))
+                                .and_then(Value::as_str)
+                                .filter(|s| s.strip_prefix('-').unwrap_or(s).len() <= 38)
+                                .and_then(|s| s.parse::<i128>().ok())
+                                .is_some_and(|at| at <= received_at.unix_timestamp_nanos())
                             && (o.state == "sending"
                                 || (o.state == "sent"
                                     && o.updated_at >= received_at - Duration::minutes(5)))

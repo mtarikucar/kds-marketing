@@ -159,7 +159,8 @@ pub trait MessageRepo: Send + Sync {
         external_id: &str,
     ) -> Result<Option<Message>, AppError>;
     /// At most two outbound messages with matching text, no external id and an outbox row
-    /// in sending, or sent no earlier than five minutes before receipt. Enqueued after receipt is excluded.
+    /// in sending, or sent no earlier than five minutes before receipt. The recorded send_at
+    /// must precede receipt; an earlier enqueue alone is not evidence that we sent the echo.
     /// Callers must defer ambiguous matches, never guess authorship. Hold the workspace lock.
     async fn echo_candidates(
         &mut self,

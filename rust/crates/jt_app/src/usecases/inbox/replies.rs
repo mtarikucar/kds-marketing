@@ -236,10 +236,9 @@ async fn fence(
         matches!(author, Author::Agent),
     )
     .map_err(|e| refused(e.to_string()))?;
-    if !c
-        .last_inbound_at
-        .is_some_and(|at| at <= ctx.now && ctx.now - at <= Duration::hours(24))
-    {
+    if !c.last_inbound_at.is_some_and(|at| {
+        at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
+    }) {
         return Err(refused("reply_window_closed"));
     }
     // Recovery must honor the same workspace gate as the public surfaces.
@@ -616,14 +615,15 @@ pub async fn record_result(
         }
     };
     // An early echo can bind the id while provider I/O is still in flight. A delivery
-    // report processed before acceptance bookkeeping is newer evidence than Sent.
-    let status = if status == MsgStatus::Sent {
+    // report processed before acceptance bookkeeping outranks acceptance or a transport timeout.
+    let status = if matches!(status, MsgStatus::Sent | MsgStatus::Unknown) {
         let message = r
             .messages()
             .get(row.message_id)
             .await?
             .ok_or_else(|| AppError::not_found("no such message"))?;
-        if message.external_id == external
+        if message.external_id.is_some()
+            && (external.is_none() || message.external_id == external)
             && matches!(message.status, MsgStatus::Delivered | MsgStatus::Failed)
         {
             message.status

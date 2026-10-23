@@ -23,7 +23,7 @@ impl MessageRepo for PgTenantRepos {
         body: &str,
         received_at: time::OffsetDateTime,
     ) -> Result<Vec<Message>, AppError> {
-        many!(sqlx::query_scalar("select to_jsonb(m) from messages m where m.workspace_id=$1 and m.conversation_id=$2 and m.direction='outbound' and m.external_id is null and m.body=$3 and exists(select 1 from outbox o where o.workspace_id=m.workspace_id and o.conversation_id=m.conversation_id and o.message_id=m.id and o.created_at<=$4 and (o.state='sending' or (o.state='sent' and o.updated_at >= $4 - interval '5 minutes'))) order by m.at,m.id limit 2")
+        many!(sqlx::query_scalar("select to_jsonb(m) from messages m where m.workspace_id=$1 and m.conversation_id=$2 and m.direction='outbound' and m.external_id is null and m.body=$3 and exists(select 1 from outbox o where o.workspace_id=m.workspace_id and o.conversation_id=m.conversation_id and o.message_id=m.id and case when o.fence_snapshot->>'send_at' ~ '^-?[0-9]{1,38}$' then (o.fence_snapshot->>'send_at')::numeric <= extract(epoch from $4::timestamptz)*1000000000 else false end and (o.state='sending' or (o.state='sent' and o.updated_at >= $4 - interval '5 minutes'))) order by m.at,m.id limit 2")
             .bind(self.workspace_id().as_uuid()).bind(conversation.as_uuid()).bind(body).bind(received_at),self,Message)
     }
 
