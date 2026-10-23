@@ -4,11 +4,15 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use jt_app::error::{AppError, ErrorCode};
-use jt_app::ports::connectors::{Asset, AssetPublic, Url};
-use jt_app::ports::{OAuthPendingRow, SecretBox};
+use jt_app::ports::connectors::{
+    AdBudgetWriter, Asset, AssetPublic, Connector, ConnectorRegistry, ConsentSync, InsightsReader,
+    LeadGenFetcher, MessagingSender, OAuthApp, OAuthProvider, Publisher, SmsSender, Telephony, Url,
+};
+use jt_app::ports::{OAuthPendingRow, SecretBox, UnitOfWork};
 use jt_app::usecases::Deps;
 use jt_app::usecases::auth::{self, LoginInput, Principal};
 use jt_app::usecases::capabilities::{self, CapabilityOut, DeclareInput};
@@ -18,7 +22,9 @@ use jt_app::usecases::connector::{
 };
 use jt_app::usecases::hash_token;
 use jt_app::usecases::work::{self, WorkKind};
-use jt_capability::{Capability, CapabilityId, EffectiveStatus, Reach, StoredStatus};
+use jt_capability::{
+    Capability, CapabilityId, EffectiveStatus, Evidence, NewCapability, Reach, StoredStatus,
+};
 use jt_connector::{
     ConnectorError, Credential, OAuthState, ProbeResult, Provider, pkce_challenge_s256,
 };
@@ -27,7 +33,7 @@ use jt_testkit::fakes::{
     ConnectorCall, FIXED_NOW, FakeAppConfig, FixedClock, HostCall, OAuthCall, PlainSecretBox,
     ScriptedConnector, ScriptedOAuth, ScriptedRegistry,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use support::*;
 use time::Duration;
 use time::format_description::well_known::Rfc3339;
@@ -515,54 +521,34 @@ async fn state_cannot_be_reused_or_completed_by_another_workspace() {
 async fn complete_oauth_maps_provider_errors() {
     let r = rig().await;
     let owner = r.owner().await;
-    let cases = [
+    // A refusal by the provider: VALIDATION naming the provider, the error's kind and its
+    // redacted reason.
+    let refusals = [
         (
             Err(ConnectorError::auth(
                 "the code access_token=EAAB-user-1 expired",
             )),
             None,
-            ErrorCode::Validation,
             "auth",
-            false,
         ),
         (
             Err(ConnectorError::permission("missing pages_show_list")),
             None,
-            ErrorCode::Validation,
             "permission",
-            false,
         ),
         (
             Err(ConnectorError::permanent("app is in development mode")),
             None,
-            ErrorCode::Validation,
             "permanent",
-            false,
-        ),
-        (
-            Err(ConnectorError::throttle(Some(Duration::seconds(30)))),
-            None,
-            ErrorCode::Internal,
-            "throttle",
-            true,
-        ),
-        (
-            Err(ConnectorError::transient("connection reset")),
-            None,
-            ErrorCode::Internal,
-            "transient",
-            true,
         ),
         // The exchange succeeds and listing the assets fails.
         (
             Ok(user_token("EAAB-user-1")),
             Some(ConnectorError::permission("missing business_management")),
-            ErrorCode::Validation,
             "permission",
-            false,
         ),
     ];
-    for (exchange, listing, expected, kind, retryable) in cases {
+    for (exchange, listing, kind) in refusals {
         let out = r.start("facebook_page").await;
         let failing = exchange
             .as_ref()
@@ -577,35 +563,77 @@ async fn complete_oauth_maps_provider_errors() {
         let e = err(r
             .complete_as(&r.w.deps, &owner, &state_of(&out), "code-1")
             .await);
-        assert_eq!(e.code, expected, "{kind}: {e:?}");
-        assert_eq!(e.details["provider_error"], kind, "{e:?}");
+        assert_eq!(e.code, ErrorCode::Validation, "{kind}: {e:?}");
         assert_eq!(
-            e.details["reason"],
-            json!(failing.reason()),
-            "the redacted reason: {e:?}"
-        );
-        assert_eq!(
-            e.details.get("retryable").and_then(Value::as_bool),
-            retryable.then_some(true),
-            "{e:?}"
+            e.details,
+            json!({
+                "provider": "meta",
+                "provider_error": kind,
+                "reason": failing.reason(),
+            })
         );
         assert_no_secret("the error", &serde_json::to_string(&e).unwrap());
-        // Nothing was stored with the flow.
-        let row = r
-            .pending_rows()
-            .into_iter()
-            .find(|p| p.id == out.pending_id)
-            .unwrap();
-        assert_eq!(row.assets_sealed, None);
+        assert_no_pending_assets(&r, out.pending_id);
     }
-    let throttled = r.start("facebook_page").await;
-    r.meta_oauth
-        .push_exchange(Err(ConnectorError::throttle(Some(Duration::seconds(30)))));
+
+    // A busy or unreachable provider: UPSTREAM_UNAVAILABLE, retryable, with how long to wait when
+    // the provider said.
+    let unavailable = [
+        (
+            ConnectorError::throttle(Some(Duration::seconds(30))),
+            json!({
+                "provider": "meta",
+                "retryable": true,
+                "retry_after_s": 30,
+                "reason": "rate limited",
+            }),
+        ),
+        (
+            ConnectorError::throttle(None),
+            json!({ "provider": "meta", "retryable": true, "reason": "rate limited" }),
+        ),
+        (
+            ConnectorError::transient("connection reset, token=EAAB-user-1"),
+            json!({
+                "provider": "meta",
+                "retryable": true,
+                "reason": ConnectorError::transient("connection reset, token=EAAB-user-1")
+                    .reason()
+                    .unwrap(),
+            }),
+        ),
+    ];
+    for (failure, details) in unavailable {
+        let out = r.start("facebook_page").await;
+        r.meta_oauth.push_exchange(Err(failure));
+        let e = err(r
+            .complete_as(&r.w.deps, &owner, &state_of(&out), "code-1")
+            .await);
+        assert_eq!(e.code, ErrorCode::UpstreamUnavailable, "{e:?}");
+        assert_eq!(e.code.as_str(), "UPSTREAM_UNAVAILABLE");
+        assert_eq!(e.details, details);
+        assert_no_secret("the error", &serde_json::to_string(&e).unwrap());
+        assert_no_pending_assets(&r, out.pending_id);
+    }
+    // X: the provider named is the flow's.
+    let x = r.start("x").await;
+    r.x_oauth
+        .push_exchange(Err(ConnectorError::transient("timeout")));
     let e = err(r
-        .complete_as(&r.w.deps, &owner, &state_of(&throttled), "code-1")
+        .complete_as(&r.w.deps, &owner, &state_of(&x), "code-1")
         .await);
-    assert_eq!(e.details["retry_after_s"], 30);
+    assert_eq!(e.details["provider"], "x");
     assert!(r.w.entries("connector.oauth_completed").is_empty());
+}
+
+/// Asserts that flow `pending_id` stored no assets.
+fn assert_no_pending_assets(r: &Rig, pending_id: jt_app::ports::OAuthPendingId) {
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.id == pending_id)
+        .unwrap();
+    assert_eq!(row.assets_sealed, None);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1379,13 +1407,16 @@ async fn probe_refuses_an_account_mismatch() {
     assert!(!run.ok);
     assert_eq!(run.error_kind.as_deref(), Some("permission"));
 
-    // A success that names no account cannot confirm the binding either.
-    r.meta
-        .push_probe(ProbeResult::success(10, json!({ "followers": 3 })));
-    let out = r.probe(page.id).await;
-    assert!(!out.result.ok);
-    assert_eq!(out.result.error_kind.as_deref(), Some("permission"));
-    assert_eq!(out.status, StoredStatus::Unreachable);
+    // A success that names no account, or names it otherwise than as a string, cannot confirm
+    // the binding either.
+    for facts in [json!({ "followers": 3 }), json!({ "account_id": 1 })] {
+        r.meta.push_probe(ProbeResult::success(10, facts));
+        let out = r.probe(page.id).await;
+        assert!(!out.result.ok);
+        assert_eq!(out.result.error_kind.as_deref(), Some("permission"));
+        assert_eq!(out.result.error_reason.as_deref(), Some("account mismatch"));
+        assert_eq!(out.status, StoredStatus::Unreachable);
+    }
 
     // The right account verifies it again.
     r.meta.push_probe(ok_probe("page-1"));
@@ -1689,9 +1720,21 @@ async fn reconnect_replaces_the_sealed_credential_on_confirm() {
         &err(connector::reconnect(&r.w.deps, &rep, page.id).await),
         "capabilities.manage",
     );
+    // A reconnection whose capability is retired before the provider calls back is refused
+    // without asking the provider.
+    let late = connector::reconnect(&r.w.deps, o, page.id).await.unwrap();
     capabilities::retire(&r.w.deps, o, page.id, true)
         .await
         .unwrap();
+    let asked = r.meta_oauth.calls().len();
+    assert_eq!(
+        code(
+            r.complete_as(&r.w.deps, &owner, &state_of(&late), "code-2")
+                .await
+        ),
+        ErrorCode::Forbidden
+    );
+    assert_eq!(r.meta_oauth.calls().len(), asked);
     assert_eq!(
         code(connector::reconnect(&r.w.deps, o, page.id).await),
         ErrorCode::Conflict
@@ -1812,5 +1855,443 @@ async fn pending_lists_reconnect_at_priority_one() {
     assert_eq!(
         item.as_object().unwrap().keys().collect::<Vec<_>>(),
         ["capability_id", "hint", "kind", "name", "priority"]
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fix round 1: binding, screening, fresh credentials, racing completions
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_probe_that_names_no_account_never_verifies() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    // A new line without an external id: a probe that names no account (or not as a string)
+    // verifies nothing and binds nothing, even with no account to compare against.
+    for facts in [
+        json!({}),
+        json!({ "balance": 10 }),
+        json!({ "account_id": 905_550_000 }),
+        json!({ "account_id": "" }),
+        json!({ "account_id": null }),
+    ] {
+        r.netgsm.push_probe(ProbeResult::success(7, facts.clone()));
+        let out = connector::set_credentials(
+            &r.w.deps,
+            o,
+            creating("sms_line", "Hat", netgsm_sms("netgsm-pass-1")),
+        )
+        .await
+        .unwrap();
+        let c = &out.capability;
+        assert_eq!(c.status, StoredStatus::Unreachable, "{facts}");
+        assert_eq!(c.external_id, None, "{facts}");
+        assert_eq!(c.last_verified_at, None, "{facts}");
+        assert_eq!(c.evidence, None, "{facts}");
+        assert_eq!(c.connector_public["health"]["error_kind"], "permission");
+        // And probing it again answers the same.
+        r.netgsm.push_probe(ProbeResult::success(3, facts.clone()));
+        let again = r.probe(c.id).await;
+        assert_eq!(
+            again.result.error_reason.as_deref(),
+            Some("account mismatch")
+        );
+        assert_eq!(again.status, StoredStatus::Unreachable);
+    }
+    // Named as a string, the account binds and verifies.
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    let bound = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating("sms_line", "Hat", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(bound.status, StoredStatus::Verified);
+    assert_eq!(bound.external_id.as_deref(), Some("KAHVE"));
+    assert_eq!(bound.last_verified_at, Some(FIXED_NOW));
+}
+
+#[tokio::test]
+async fn binding_a_new_account_resets_the_verification() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    // A line verified long ago without an account (as an earlier binary could leave it),
+    // unreachable since, holding an old credential, evidence and a reconnection request.
+    let verified_at = FIXED_NOW - Duration::days(10);
+    let mut line = Capability::new(
+        CapabilityId::new_v7(),
+        r.w.ws,
+        NewCapability {
+            kind_key: "sms_line".into(),
+            name: "Eski hat".into(),
+            connector_public: json!({ "reconnect_required": true }),
+            ..NewCapability::default()
+        },
+        verified_at,
+    )
+    .unwrap();
+    line.status = StoredStatus::Unreachable;
+    line.last_verified_at = Some(verified_at);
+    line.evidence = Some(Evidence {
+        text: "probe".into(),
+        refs: vec!["old-run".into()],
+    });
+    let old = Credential::NetgsmSms {
+        usercode: "old".into(),
+        password: "old-pass".into(),
+        msgheader: "ESKI".into(),
+    };
+    let sealed = PlainSecretBox
+        .seal(r.w.ws, &serde_json::to_vec(&old).unwrap())
+        .unwrap();
+    {
+        let mut t = r.w.uow.tenant(r.w.ws).await.unwrap();
+        t.capabilities()
+            .insert(line.clone(), Some(sealed))
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+    let given = |external_id: &str| SetCredentials {
+        capability_id: Some(line.id),
+        kind_key: None,
+        name: None,
+        external_id: Some(external_id.into()),
+        credential: netgsm_sms("netgsm-pass-1"),
+    };
+
+    // An account another live line holds: CONFLICT naming it, before the provider is asked.
+    r.netgsm.push_probe(ok_probe("TAKEN"));
+    connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating("sms_line", "Dolu hat", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap();
+    let asked = r.netgsm.calls().len();
+    let e = err(connector::set_credentials(&r.w.deps, o, given("TAKEN")).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(
+        e.details,
+        json!({ "kind_key": "sms_line", "external_id": "TAKEN" })
+    );
+    assert_eq!(r.netgsm.calls().len(), asked);
+    assert_eq!(r.capability(line.id), line);
+
+    // A new account: the old verification and evidence go, the line reads declared again, the
+    // new credential is sealed, no reconnection is asked for; then the new binding is probed (a
+    // busy provider leaves it declared).
+    let later = at(o, FIXED_NOW + Duration::minutes(1));
+    r.netgsm
+        .push_probe(ProbeResult::failure(4, ConnectorError::throttle(None)));
+    let out = connector::set_credentials(&r.w.deps, &later, given("NEW"))
+        .await
+        .unwrap()
+        .capability;
+    assert_eq!(out.external_id.as_deref(), Some("NEW"));
+    assert_eq!(out.status, StoredStatus::Declared);
+    assert_eq!(out.last_verified_at, None);
+    assert_eq!(out.evidence, None);
+    assert_eq!(out.connector_public["reconnect_required"], false);
+    assert_eq!(out.updated_at, FIXED_NOW + Duration::minutes(1));
+    assert_eq!(
+        r.sealed_credential(line.id),
+        Credential::NetgsmSms {
+            usercode: "8508850000".into(),
+            password: "netgsm-pass-1".into(),
+            msgheader: "KAHVE".into(),
+        }
+    );
+    // Only a probe that reaches the new account verifies it.
+    r.netgsm.push_probe(ok_probe("NEW"));
+    let probed = connector::probe(&r.w.deps, &later, line.id).await.unwrap();
+    assert_eq!(probed.status, StoredStatus::Verified);
+    assert_eq!(
+        r.capability(line.id).last_verified_at,
+        Some(FIXED_NOW + Duration::minutes(1))
+    );
+}
+
+#[tokio::test]
+async fn secret_looking_facts_are_dropped_from_every_output() {
+    let r = rig().await;
+    let started = r.start("facebook_page").await;
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+    let mut asset = page_asset("page-1", "Kahve", "EAAB-page-1");
+    asset.public = json!({
+        "category": "Cafe",
+        "page_access_token": "EAAB-page-2",
+        "nested": [{ "token": "x", "fans": 1 }],
+    });
+    r.meta_oauth.push_assets(Ok(vec![asset]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&started), "code-1")
+        .await
+        .unwrap();
+    let screened_asset = json!({ "category": "Cafe", "nested": [{ "fans": 1 }] });
+    assert_eq!(pending.assets[0].public, screened_asset);
+    assert_eq!(
+        r.pending_rows()[0].assets_public[0]["public"],
+        screened_asset
+    );
+
+    let reported = json!({
+        "account_id": "page-1",
+        "access_token": "x",
+        "nested": { "token": "y", "fans": 3, "Secret_Key": "z" },
+    });
+    let screened_facts = json!({ "account_id": "page-1", "nested": { "fans": 3 } });
+    r.meta.push_probe(ProbeResult::success(5, reported.clone()));
+    let page = r.confirm(&pending, &["page-1"]).await.remove(0).capability;
+    assert_eq!(page.status, StoredStatus::Verified);
+    assert_eq!(page.connector_public["asset"], screened_asset);
+    assert_eq!(page.connector_public["facts"], screened_facts);
+
+    r.meta.push_probe(ProbeResult::success(5, reported));
+    let out = r.probe(page.id).await;
+    assert_eq!(out.result.facts, screened_facts);
+    let runs = r.w.uow.snapshot().probe_runs;
+    assert!(
+        runs.iter()
+            .all(|run| run.facts.get("access_token").is_none())
+    );
+    assert_eq!(runs.last().unwrap().facts, screened_facts);
+    assert_no_secret("the pending assets", &wire(&pending));
+}
+
+/// Whether what is pending asks for a reconnection.
+async fn reconnecting(w: &World) -> bool {
+    work::pending(&w.deps, &w.owner_ctx)
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .any(|i| matches!(i.kind, WorkKind::ReconnectConnector { .. }))
+}
+
+#[tokio::test]
+async fn a_fresh_credential_clears_the_reconnection() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+
+    // OAuth: the owner reconnects, and the probe right after is throttled.
+    let page = r.connect_page().await;
+    r.meta
+        .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
+    r.probe(page.id).await;
+    assert!(reconnecting(&r.w).await);
+    let flow = connector::reconnect(&r.w.deps, o, page.id).await.unwrap();
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth.push_assets(Ok(vec![page_asset_v2()]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&flow), "code-2")
+        .await
+        .unwrap();
+    r.meta
+        .push_probe(ProbeResult::failure(4, ConnectorError::throttle(None)));
+    let renewed = r.confirm(&pending, &["page-1"]).await.remove(0).capability;
+    assert_eq!(renewed.status, StoredStatus::Unreachable);
+    assert_eq!(renewed.connector_public["reconnect_required"], false);
+    assert!(!reconnecting(&r.w).await);
+
+    // By hand: a line whose login failed takes new credentials while the provider is busy.
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    let line = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating("sms_line", "Hat", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap()
+    .capability
+    .id;
+    r.netgsm.push_probe(ProbeResult::failure(
+        9,
+        ConnectorError::auth("wrong password"),
+    ));
+    r.probe(line).await;
+    assert_eq!(
+        r.capability(line).connector_public["reconnect_required"],
+        true
+    );
+    r.netgsm
+        .push_probe(ProbeResult::failure(4, ConnectorError::transient("busy")));
+    let out = connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            capability_id: Some(line),
+            kind_key: None,
+            name: None,
+            external_id: None,
+            credential: netgsm_sms("netgsm-pass-2"),
+        },
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(out.status, StoredStatus::Unreachable);
+    assert_eq!(out.connector_public["reconnect_required"], false);
+    assert!(!reconnecting(&r.w).await);
+
+    // The next probe that finds the login refused asks again.
+    r.netgsm.push_probe(ProbeResult::failure(
+        9,
+        ConnectorError::auth("wrong password"),
+    ));
+    r.probe(line).await;
+    assert_eq!(
+        r.capability(line).connector_public["reconnect_required"],
+        true
+    );
+}
+
+/// An OAuth provider that, on its first exchange, lets a second completion of the same flow run
+/// to its end (as a second callback racing the first would), then answers as `inner` does.
+struct RacingOAuth {
+    inner: Arc<ScriptedOAuth>,
+    second: Mutex<Option<(Deps, Principal, String)>>,
+    second_result: Mutex<Option<Result<PendingAssetsOut, AppError>>>,
+}
+
+#[async_trait]
+impl OAuthProvider for RacingOAuth {
+    fn authorize_url(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        state: &str,
+        pkce_challenge: Option<&str>,
+    ) -> Url {
+        self.inner
+            .authorize_url(app, redirect, state, pkce_challenge)
+    }
+
+    async fn exchange(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        code: &str,
+        pkce_verifier: Option<&str>,
+    ) -> Result<Credential, ConnectorError> {
+        let second = self.second.lock().unwrap().take();
+        if let Some((deps, principal, state)) = second {
+            let out = connector::complete_oauth(
+                &deps,
+                CompleteOAuth {
+                    state,
+                    code: "code-2".into(),
+                    principal: &principal,
+                },
+            )
+            .await;
+            *self.second_result.lock().unwrap() = Some(out);
+        }
+        self.inner
+            .exchange(app, redirect, code, pkce_verifier)
+            .await
+    }
+
+    async fn list_assets(&self, cred: &Credential) -> Result<Vec<Asset>, ConnectorError> {
+        self.inner.list_assets(cred).await
+    }
+}
+
+/// `inner`, but Meta's OAuth flow is `oauth`.
+struct RacingRegistry {
+    inner: ScriptedRegistry,
+    oauth: Arc<RacingOAuth>,
+}
+
+impl ConnectorRegistry for RacingRegistry {
+    fn connector(&self, provider: Provider) -> Option<Arc<dyn Connector>> {
+        self.inner.connector(provider)
+    }
+
+    fn oauth(&self, provider: Provider) -> Option<Arc<dyn OAuthProvider>> {
+        (provider == Provider::Meta).then(|| self.oauth.clone() as Arc<dyn OAuthProvider>)
+    }
+
+    fn sms(&self, provider: Provider) -> Option<Arc<dyn SmsSender>> {
+        self.inner.sms(provider)
+    }
+
+    fn publisher(&self, provider: Provider) -> Option<Arc<dyn Publisher>> {
+        self.inner.publisher(provider)
+    }
+
+    fn insights(&self, provider: Provider) -> Option<Arc<dyn InsightsReader>> {
+        self.inner.insights(provider)
+    }
+
+    fn messaging(&self, provider: Provider) -> Option<Arc<dyn MessagingSender>> {
+        self.inner.messaging(provider)
+    }
+
+    fn ads(&self, provider: Provider) -> Option<Arc<dyn AdBudgetWriter>> {
+        self.inner.ads(provider)
+    }
+
+    fn leadgen(&self, provider: Provider) -> Option<Arc<dyn LeadGenFetcher>> {
+        self.inner.leadgen(provider)
+    }
+
+    fn telephony(&self, provider: Provider) -> Option<Arc<dyn Telephony>> {
+        self.inner.telephony(provider)
+    }
+
+    fn consent(&self, provider: Provider) -> Option<Arc<dyn ConsentSync>> {
+        self.inner.consent(provider)
+    }
+}
+
+#[tokio::test]
+async fn a_second_completion_racing_the_first_is_forbidden() {
+    let r = rig().await;
+    let racing = Arc::new(RacingOAuth {
+        inner: r.meta_oauth.clone(),
+        second: Mutex::new(None),
+        second_result: Mutex::new(None),
+    });
+    let mut deps = r.w.deps.clone();
+    deps.connectors = Arc::new(RacingRegistry {
+        inner: ScriptedRegistry::new().with_connector(r.meta.clone()),
+        oauth: racing.clone(),
+    });
+    let started = r.start("facebook_page").await;
+    let state = state_of(&started);
+    let owner = r.owner().await;
+    *racing.second.lock().unwrap() = Some((deps.clone(), owner.clone(), state.clone()));
+    // The second completion asks first (inside the first's exchange); both reach the provider.
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth
+        .push_assets(Ok(vec![page_asset("page-2", "Çay Evi", "EAAB-page-2")]));
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+    r.meta_oauth
+        .push_assets(Ok(vec![page_asset("page-1", "Kahve", "EAAB-page-1")]));
+
+    let first = r.complete_as(&deps, &owner, &state, "code-1").await;
+    let second = racing.second_result.lock().unwrap().take().unwrap();
+    // The one that stored its assets first wins; the other is refused although the provider
+    // answered it.
+    let stored = second.unwrap();
+    assert_eq!(stored.assets[0].external_id, "page-2");
+    assert_eq!(code(first), ErrorCode::Forbidden);
+    let exchanges = r
+        .meta_oauth
+        .calls()
+        .iter()
+        .filter(|c| matches!(c, OAuthCall::Exchange { .. }))
+        .count();
+    assert_eq!(exchanges, 2);
+    assert_eq!(r.w.entries("connector.oauth_completed").len(), 1);
+    assert_eq!(
+        r.pending_rows()[0].assets_public,
+        serde_json::to_value(&stored.assets).unwrap()
     );
 }

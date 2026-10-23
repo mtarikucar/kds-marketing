@@ -287,6 +287,30 @@ ajanın yoklaması (`jeeta.work.checkin`) hariç. Ajanın giriş noktası `jeeta
 | | `jeeta.work.checkin` | Ajanın yoklaması: kaydedilir ve bekleyen işleri döndürür (yalnızca MCP) | WRITE |
 | | `jeeta.work.set_checkin_interval` | Beklenen yoklama aralığını değiştirir | WRITE |
 
+## Hatalar
+
+Her başarısız çağrı, panelden de MCP'den de aynı yapıyı döndürür:
+`{"code": "<KOD>", "message": "<İngilizce açıklama>", "details": {…}}`. MCP'de başarısız bir araç çağrısı
+`is_error: true` taşır ve aynı gövdeyi hem yapılandırılmış hem metin içerik olarak verir.
+
+| Kod | Panel HTTP | Ne zaman |
+|---|---|---|
+| `UNAUTHENTICATED` | 401 | oturum ya da anahtar yok veya geçersiz |
+| `FORBIDDEN` | 403 | yetki yok (`details.permission` eksik izni adlar) |
+| `NOT_FOUND` | 404 | kayıt yok ya da bu alanın değil |
+| `CONFLICT` | 409 | mevcut durumla çelişki (ör. aynı hesap iki kez) |
+| `VALIDATION` | 422 | girdi kurala uymuyor (`details.field` ya da `details.gaps`) |
+| `STRATEGY_REQUIRED` | 409 | kapılı bir iş onaylı strateji ister |
+| `WORKSPACE_INACTIVE` | 423 | alan etkin değil (`details.status`) |
+| `HOST_NOT_ALLOWED` | 403 | dışarıya izinsiz bir adrese gidilmek istendi |
+| `UPSTREAM_UNAVAILABLE` | 503 | sağlayıcı meşgul ya da ulaşılamıyor; sonra yeniden denenebilir |
+| `INTERNAL` | 500 | beklenmeyen hata; ileti ve ayrıntılar yalnızca günlüğe yazılır, yanıt `"internal error"` ve boş `details` taşır |
+
+`UPSTREAM_UNAVAILABLE` ayrıntıları olduğu gibi iletilir:
+`{"code":"UPSTREAM_UNAVAILABLE","message":"the provider is unavailable; try again later","details":{"provider":"meta","retryable":true,"retry_after_s":30,"reason":"rate limited"}}`
+(`retry_after_s` yalnız sağlayıcı bekleme süresi söylediğinde vardır; `reason` maskelenmiştir). Bir yoklamanın
+(probe) başarısızlığı hata değildir, yoklamanın sonucudur.
+
 ## Strateji
 
 Stratejisi onaylanmamış bir alanda stratejiye bağlı (`Gated`) her araç ve rota (bu sürümde henüz yoktur)

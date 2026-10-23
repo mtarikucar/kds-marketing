@@ -170,6 +170,7 @@
     "STRATEGY_REQUIRED": "Bu işlem için önce onaylı bir strateji gerekiyor.",
     "WORKSPACE_INACTIVE": "Çalışma alanı etkin değil.",
     "HOST_NOT_ALLOWED": "Bu adrese erişime izin verilmiyor.",
+    "UPSTREAM_UNAVAILABLE": "Sağlayıcı şu anda yanıt vermiyor. Lütfen biraz sonra yeniden deneyin.",
     "INTERNAL": "Beklenmeyen bir hata oluştu. Lütfen biraz sonra yeniden deneyin.",
     "NETWORK": "Sunucuya ulaşılamadı. Bağlantınızı denetleyin.",
     "unknown": "Bir şeyler ters gitti.",

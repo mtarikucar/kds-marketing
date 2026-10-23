@@ -301,6 +301,17 @@ pub trait Connector: Send + Sync {
     fn hosts(&self) -> &'static [&'static str];
     /// A cheap authenticated call that says whether the capability can be reached. Never fails:
     /// a failure is a [`ProbeResult`] with `ok == false` and its error.
+    ///
+    /// **The account contract.** A success MUST name, as a string in `facts.account_id`, the
+    /// identity the credential itself authenticates as, as the provider reports it for the
+    /// credential (Meta: the page id of a Page token, the Instagram user id of an Instagram token,
+    /// the WhatsApp phone number id of a WhatsApp Cloud token, the user id of a user token, each
+    /// from the credential's own identity such as Graph `/me`; X: the user id; NetGSM: the SMS
+    /// sender name (`msgheader`) or the PBX user name). Never an id taken from the request or from
+    /// `public`: a provider that echoes the id it was asked about would let any credential pass
+    /// for any account. The use cases compare it verbatim with the capability's external id; a
+    /// success that names no account, or names it otherwise than as a string, never verifies the
+    /// capability. Other facts are optional, non-secret, and screened before they are shown.
     async fn probe(&self, cred: &Credential, public: &Value) -> ProbeResult;
     /// A fresh credential when this one can and should be renewed (an expiring or rotating
     /// token), `None` when it needs no renewal.

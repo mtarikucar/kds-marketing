@@ -1047,8 +1047,8 @@ async fn connector_tables_are_hidden_without_their_workspace_in_scope() {
 // Platform-wide lookup by external account
 // ---------------------------------------------------------------------------------------------
 
-/// Inserts `c` with sealed credentials and, when `verify`, sets its stored status to `Verified`:
-/// a capability connected through the provider (OAuth or a probe).
+/// Inserts `c` with sealed credentials and, when `verify`, marks it verified by a probe (status
+/// `Verified`, `last_verified_at` set): a capability connected through the provider.
 async fn connect(uow: &PgUnitOfWork, c: &Capability, verify: bool) {
     let mut t = uow.tenant(c.workspace_id).await.unwrap();
     t.capabilities()
@@ -1056,8 +1056,13 @@ async fn connect(uow: &PgUnitOfWork, c: &Capability, verify: bool) {
         .await
         .unwrap();
     if verify {
+        // As a probe that proved the account leaves it: verified, with a verification time.
         t.capabilities()
-            .set_status(c.id, StoredStatus::Verified, c.created_at)
+            .update(Capability {
+                status: StoredStatus::Verified,
+                last_verified_at: Some(c.created_at),
+                ..c.clone()
+            })
             .await
             .unwrap();
     }
@@ -1153,4 +1158,34 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
     connect(&uow, &second, true).await;
     connect(&uow, &first, true).await;
     assert_eq!(routed(&uow, meta, "page-3").await, Some(second.id));
+}
+
+/// Only a binding proven at least once routes events: a credential pasted for someone else's
+/// account (sealed, its probe failed or reached another account, so `unreachable` and never
+/// verified) takes nothing, while a connection verified once and unreachable since keeps its
+/// events.
+#[tokio::test]
+async fn capability_by_external_needs_an_account_proven_once() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("a").await;
+    let (b, _) = db.seed_workspace("b").await;
+    let meta: &[&str] = Provider::Meta.kinds();
+
+    let pasted = capability(b, "facebook_page", "page-5", T0 + Duration::days(1));
+    connect(&uow, &pasted, false).await;
+    set_status(&uow, &pasted, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&uow, meta, "page-5").await, None);
+    // Nor does a stored status of verified without a verification time.
+    let stamped = capability(b, "messenger", "page-5", T0 + Duration::days(2));
+    connect(&uow, &stamped, false).await;
+    set_status(&uow, &stamped, StoredStatus::Verified).await;
+    assert_eq!(routed(&uow, meta, "page-5").await, None);
+
+    // The owner's connection, verified once and unreachable since, is the one that answers,
+    // although the others are newer.
+    let owned = capability(a, "facebook_page", "page-5", T0);
+    connect(&uow, &owned, true).await;
+    set_status(&uow, &owned, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&uow, meta, "page-5").await, Some(owned.id));
 }

@@ -191,6 +191,7 @@ impl PlatformRepos for MemPlatform {
                 let c = &s.capability;
                 matches!(c.status, StoredStatus::Verified | StoredStatus::Unreachable)
                     && s.sealed.is_some()
+                    && c.last_verified_at.is_some()
                     && kind_keys.contains(&c.kind_key.as_str())
                     && c.external_id.as_deref() == Some(external_id)
             })

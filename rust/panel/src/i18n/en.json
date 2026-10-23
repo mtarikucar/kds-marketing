@@ -170,6 +170,7 @@
     "STRATEGY_REQUIRED": "This needs an approved strategy first.",
     "WORKSPACE_INACTIVE": "The workspace is not active.",
     "HOST_NOT_ALLOWED": "Access to this address is not allowed.",
+    "UPSTREAM_UNAVAILABLE": "The provider is not answering right now. Please try again shortly.",
     "INTERNAL": "Something unexpected went wrong. Please try again shortly.",
     "NETWORK": "Could not reach the server. Check your connection.",
     "unknown": "Something went wrong.",

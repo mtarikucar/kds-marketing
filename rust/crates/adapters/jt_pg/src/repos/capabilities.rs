@@ -9,7 +9,8 @@
 //! `capabilities_live_external_account` keeps one live capability per external account.
 //! `declared_by_connection` is written once, by `insert`: `update` leaves it as declared.
 //! [`by_external`] is the one platform-wide read: the connected capability (sealed credentials,
-//! verified or unreachable) of any workspace that holds an external account, where an inbound
+//! verified or unreachable, verified at least once) of any workspace that holds an external
+//! account, where an inbound
 //! event for that account is routed; the partial index `capabilities_connected_account_idx` of
 //! migration 0005 serves it.
 
@@ -124,8 +125,9 @@ fn map_write(err: sqlx::Error, what: &str) -> AppError {
 }
 
 /// The connected capability (sealed credentials present, stored status `verified` or
-/// `unreachable`) of any workspace whose kind is one of `kind_keys` and whose external account is
-/// `external_id`, verified ones first, then the most recently created; see
+/// `unreachable`, verified at least once) of any workspace whose kind is one of `kind_keys` and
+/// whose external account is `external_id`, verified ones first, then the most recently created;
+/// see
 /// `PlatformRepos::capability_by_external`. The predicate is the one of the partial index
 /// `capabilities_connected_account_idx`, so the index serves it.
 pub(crate) async fn by_external(
@@ -138,6 +140,7 @@ pub(crate) async fn by_external(
         "select {COLUMNS} from capabilities c \
          where c.kind_key = any($1) and c.external_id = $2 \
          and c.status in ('verified', 'unreachable') and c.connector_sealed is not null \
+         and c.last_verified_at is not null \
          order by (c.status = 'verified') desc, c.created_at desc, c.id desc limit 1"
     ))
     .bind(kind_keys.to_vec())

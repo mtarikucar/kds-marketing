@@ -7,7 +7,7 @@ use crate::redact::redact_reason;
 /// Why a call to a provider failed (spec §6.4). The only error shape adapters return:
 ///
 /// - `Auth`: the credential is no longer accepted (expired, revoked, wrong password); the
-///   capability turns unreachable and needs reconnecting (`reauth_required`);
+///   capability turns unreachable and needs reconnecting (`reconnect_required`);
 /// - `Permission`: the credential is valid but lacks a scope or a role for this call;
 /// - `Throttle`: the provider asks to slow down; back off, for `retry_after` when it says;
 /// - `Transient`: a network or provider-side failure worth a bounded retry;

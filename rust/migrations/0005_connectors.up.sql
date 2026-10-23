@@ -28,10 +28,12 @@
 -- is optional (null: not routed to one), and so is a pending flow's.
 --
 -- An inbound webhook is routed, across workspaces, to the capability that holds the provider's
--- account and was connected through the provider: sealed credentials, and stored status verified
--- or unreachable (an expired token keeps its events, so they are there when the owner
--- reconnects). A partial index on `capabilities` serves that lookup (a capability only declared,
--- or verified on an agent's word without credentials, is not in it and never receives events).
+-- account and was connected through the provider: sealed credentials, stored status verified or
+-- unreachable (an expired token keeps its events, so they are there when the owner reconnects),
+-- and verified at least once (`last_verified_at`, which only a probe proving the account sets).
+-- A partial index on `capabilities` serves that lookup (a capability only declared, sealed but
+-- never verified, or verified on an agent's word without credentials, is not in it and never
+-- receives events).
 --
 -- Every table is a tenant table with forced row-level security, like those of 0001 to 0003.
 -- Every statement is idempotent: running this file twice leaves the same schema.
@@ -83,7 +85,8 @@ create or replace trigger inbound_events_append_only
 
 create index if not exists capabilities_connected_account_idx
     on capabilities (kind_key, external_id)
-    where status in ('verified', 'unreachable') and connector_sealed is not null;
+    where status in ('verified', 'unreachable') and connector_sealed is not null
+      and last_verified_at is not null;
 
 create table if not exists oauth_pending (
     id uuid primary key,

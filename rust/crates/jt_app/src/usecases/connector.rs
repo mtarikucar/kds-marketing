@@ -31,19 +31,25 @@
 //! - `health`: the last probe, `{ok, at, latency_ms, error_kind}`; `facts`: what the last
 //!   successful probe reported;
 //! - `reconnect_required`: `true` once a probe found the login no longer accepted (`Auth`),
-//!   `false` again after a successful probe or a retirement.
+//!   `false` again whenever a fresh credential is sealed, after a successful probe, and on
+//!   retirement.
 //!
-//! (The flag is not called `reauth_required` and the facts not `credential`: `connector_public`
-//! refuses every key that looks like a secret's name, `auth` and `credential` among them.)
+//! (Every key is chosen so `connector_public` accepts it: it refuses every key that looks like a
+//! secret's name, any containing `auth` or `credential` among them.) What a provider reports (an
+//! asset's public facts, a probe's facts) is screened the same way before it is shown or stored:
+//! a key that looks like a secret's name is dropped, at any depth.
 //!
 //! **Probes** are the system's own trial call, the only way a connector capability is verified
-//! (spec §6.4). A probe binds the account: a successful probe must name the account it reached
-//! (`facts.account_id`), and an account other than the capability's external id (or none at all)
-//! counts as `Permission` "account mismatch", so a credential can never verify an account it does
-//! not reach. A capability without an external id takes the probe's account, unless another live
-//! capability of its kind holds it. The run is logged ([`crate::ports::ProbeRunRepo`]), the
-//! status follows [`jt_connector::status_after_probe`], and `connector.probe` is written only
-//! when the status changed.
+//! (spec §6.4). A probe binds the account: a successful probe counts only when it names, as a
+//! string in `facts.account_id`, the identity the credential itself authenticates as (see
+//! [`crate::ports::connectors::Connector::probe`]), and that is the capability's external id, or,
+//! for a capability without one, an account no other live capability of its kind holds (which the
+//! capability then takes). Anything else, no account named included, counts as `Permission`
+//! "account mismatch", so a credential can never verify an account it has not shown to be its
+//! own. Binding a capability to another account (`rebind_account`) first drops its
+//! verification. The run is logged ([`crate::ports::ProbeRunRepo`]), the status follows
+//! [`jt_connector::status_after_probe`], and `connector.probe` is written only when the status
+//! changed.
 //!
 //! **Gates.** Every use case here is exempt from the strategy gate (connecting accounts is part
 //! of the consultation's prerequisites) and subject to the workspace-status check. Changes need
@@ -64,7 +70,7 @@ use std::sync::Arc;
 use jt_capability::{
     Capability, CapabilityId, CapabilityKind, EffectiveStatus, Evidence, MAX_EXTERNAL_ID_CHARS,
     MAX_NAME_CHARS, NewCapability, Policy, Reach, StoredStatus, effective_status,
-    validate_connector_public,
+    is_secret_looking_key,
 };
 use jt_connector::{
     ConnectorError, Credential, OAuthState, ProbeResult, Provider, STATE_TTL, pkce_challenge_s256,
@@ -337,14 +343,18 @@ pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<St
 ///
 /// Refused with `FORBIDDEN` (Review Focus 4), and the provider is not asked: no current
 /// workspace; a state not signed for it, malformed, or issued more than [`STATE_TTL`] ago; a
-/// flow that is unknown, expired, or already completed (a state is used once). Then the code is
-/// exchanged for a credential and the account's assets are listed; a provider refusal (`Auth`,
-/// `Permission`, `Permanent`) is `VALIDATION` and a busy or unreachable provider (`Throttle`,
-/// `Transient`) `INTERNAL` with `details.retryable = true`, both with the error's kind and
-/// redacted reason in `details` (`provider_error`, `reason`, and `retry_after_s` when the
-/// provider said). Assets of kinds the provider does not serve are dropped; a reconnection keeps
-/// only its capability's account, and an account that does not reach it is `VALIDATION` with
-/// `details.reason = "account_mismatch"`.
+/// flow that is unknown, expired, or already completed (a state is used once); a reconnection
+/// whose capability was retired meanwhile. Then the code is exchanged for a credential and the
+/// account's assets are listed; a provider refusal (`Auth`, `Permission`, `Permanent`) is
+/// `VALIDATION` with `details = {provider, provider_error, reason}`, and a busy or unreachable
+/// provider (`Throttle`, `Transient`) `UPSTREAM_UNAVAILABLE` with
+/// `details = {provider, retryable: true, retry_after_s?, reason}`, the reason redacted. Assets of
+/// kinds the provider does not serve are dropped, each account is kept once per kind, and keys
+/// that look like a secret's name are dropped from their public facts; a reconnection keeps only
+/// its capability's account, and an account that does not reach it is `VALIDATION` with
+/// `details.reason = "account_mismatch"`. Of two completions racing on one state, the one that
+/// stores its assets second is `FORBIDDEN`, even after asking the provider (the flow is locked
+/// and checked again before anything is stored).
 ///
 /// The assets, credentials included, are sealed with the flow and their public facts stored
 /// beside them. Writes `connector.oauth_completed` (payload `provider`, `assets`: how many).
@@ -394,7 +404,13 @@ pub async fn complete_oauth(
             None => None,
         };
         let bound = match flow.capability_id {
-            Some(id) => Some(find(repos.as_mut(), id).await?),
+            Some(id) => {
+                let capability = find(repos.as_mut(), id).await?;
+                if capability.status == StoredStatus::Retired {
+                    return Err(refused_state());
+                }
+                Some(capability)
+            }
             None => None,
         };
         (flow, verifier, bound)
@@ -415,18 +431,21 @@ pub async fn complete_oauth(
             verifier.as_ref().map(|v| v.as_str()),
         )
         .await
-        .map_err(provider_error)?;
+        .map_err(|e| provider_error(flow.provider, e))?;
     let mut assets = oauth
         .list_assets(&credential)
         .await
-        .map_err(provider_error)?;
+        .map_err(|e| provider_error(flow.provider, e))?;
     drop(credential);
-    // Only kinds the provider serves, each account once per kind.
+    // Only kinds the provider serves, each account once per kind, no secret-looking facts.
     let mut seen = BTreeSet::new();
     assets.retain(|a| {
         provider_for_kind(&a.kind_key) == Some(flow.provider)
             && seen.insert((a.kind_key.clone(), a.external_id.clone()))
     });
+    for asset in &mut assets {
+        asset.public = screened(&asset.public);
+    }
     if let Some(capability) = &bound {
         assets.retain(|a| {
             a.kind_key == capability.kind_key
@@ -583,11 +602,16 @@ pub async fn confirm_assets(
 /// a pasted Page or WhatsApp token needs its account's id (`external_id`). A new capability is
 /// validated as a declaration is (its `name`); an existing one must be the workspace's
 /// (`NOT_FOUND`), not retired and not verified (`CONFLICT`: a verified capability keeps its
-/// credentials until a probe fails), and a given `external_id` must be the one it holds.
+/// credentials until a probe fails), and a given `external_id` must be the one it holds, if it
+/// holds one. An existing capability without an external id given one is rebound
+/// (`rebind_account`: back to `declared`, its verification and evidence dropped) before the
+/// new binding is probed; an account another live capability of the kind holds is `CONFLICT`
+/// naming `kind_key` and `external_id`.
 ///
 /// The credential is probed with the adapter ([`probe`]'s rules, account binding included: the
 /// probe must reach the given or held external id; without one, the probe's account becomes
-/// it), sealed, and written in one transaction with the capability and its probe. Writes
+/// it), sealed (which clears `reconnect_required`), and written in one transaction with the
+/// capability and its probe. Writes
 /// `connector.credentials_set` (payload `kind_key` and `by_agent`; never a value), and
 /// `connector.probe` when the status changed. Once committed, the adapter's hosts are allowed for
 /// the workspace.
@@ -870,37 +894,29 @@ fn refused_state() -> AppError {
     AppError::forbidden("the OAuth state is not valid for this workspace, or was already used")
 }
 
-/// A provider's refusal as the caller sees it: `VALIDATION` for `Auth`, `Permission` and
-/// `Permanent` (trying again will not help), `INTERNAL` with `details.retryable = true` for
-/// `Throttle` and `Transient`; `details` names the error's kind (`provider_error`) and its
-/// redacted reason (`reason`, `null` for `Throttle`), and `retry_after_s` when the provider said.
-fn provider_error(e: ConnectorError) -> AppError {
-    let mut details = json!({ "provider_error": e.kind(), "reason": e.reason() });
+/// A provider's refusal, from a call made on the caller's behalf, as the caller sees it:
+/// - `Auth`, `Permission`, `Permanent` (trying again will not help): `VALIDATION` with
+///   `details = {provider, provider_error, reason}` (the error's kind and its redacted reason);
+/// - `Throttle`, `Transient` (the provider is busy or unreachable): `UPSTREAM_UNAVAILABLE` with
+///   `details = {provider, retryable: true, retry_after_s?, reason}` ([`AppError::upstream_unavailable`]).
+///
+/// A probe's failure is never such an error: it is the probe's result.
+fn provider_error(provider: Provider, e: ConnectorError) -> AppError {
     match &e {
-        ConnectorError::Throttle { retry_after } => {
-            details["retryable"] = json!(true);
-            if let Some(wait) = retry_after {
-                details["retry_after_s"] = json!(wait.whole_seconds());
-            }
-            AppError {
-                code: ErrorCode::Internal,
-                message: "the provider asks to slow down; try again later".into(),
-                details,
-            }
-        }
-        ConnectorError::Transient { .. } => {
-            details["retryable"] = json!(true);
-            AppError {
-                code: ErrorCode::Internal,
-                message: "the provider could not be reached; try again".into(),
-                details,
-            }
+        ConnectorError::Throttle { retry_after } => AppError::upstream_unavailable(
+            provider.key(),
+            "rate limited",
+            retry_after.map(|wait| wait.whole_seconds()),
+        ),
+        ConnectorError::Transient { reason, .. } => {
+            AppError::upstream_unavailable(provider.key(), reason, None)
         }
         ConnectorError::Auth { .. }
         | ConnectorError::Permission { .. }
-        | ConnectorError::Permanent { .. } => {
-            AppError::validation(format!("the provider refused ({})", e.kind()), details)
-        }
+        | ConnectorError::Permanent { .. } => AppError::validation(
+            format!("the provider refused ({})", e.kind()),
+            json!({ "provider": provider.key(), "provider_error": e.kind(), "reason": e.reason() }),
+        ),
     }
 }
 
@@ -1270,6 +1286,14 @@ async fn credentials_for(
         (Some(held), _) => Some(held.clone()),
         (None, given) => given,
     };
+    // A new account for the capability: its earlier verification proved nothing about it.
+    let rebinding = bound != capability.external_id;
+    if rebinding
+        && let Some(account) = &bound
+        && account_held_elsewhere(repos.as_mut(), &capability, account).await?
+    {
+        return Err(account_taken(&capability.kind_key, account));
+    }
     let credential = built_credential(kind.key, provider, input, bound.as_deref())?;
     let connector = adapter(deps, provider)?;
     let hosts = adapter_hosts(deps, connector.as_ref())?;
@@ -1281,21 +1305,36 @@ async fn credentials_for(
         credential.redact_for_public(),
         None,
     );
-    capability.external_id = bound;
     capability.updated_at = ctx.now;
 
-    // The provider is asked while the capability is locked (see the module docs).
+    // The provider is asked while the capability is locked (see the module docs), about the
+    // binding being written.
+    let probing = Capability {
+        external_id: bound.clone(),
+        ..capability.clone()
+    };
     let result = connector
-        .probe(&credential, &capability.connector_public)
+        .probe(&credential, &probing.connector_public)
         .await;
     let sealed = seal_credential(deps, ctx, &credential)?;
     drop(credential);
 
-    repos.capabilities().update(capability.clone()).await?;
-    repos
-        .capabilities()
-        .set_sealed(id, Some(sealed), ctx.now)
+    if rebinding {
+        rebind_account(
+            repos.as_mut(),
+            &mut capability,
+            bound,
+            Some(sealed),
+            ctx.now,
+        )
         .await?;
+    } else {
+        repos.capabilities().update(capability.clone()).await?;
+        repos
+            .capabilities()
+            .set_sealed(id, Some(sealed), ctx.now)
+            .await?;
+    }
     let in_force = version_in_force(repos.as_mut()).await?;
     record_credentials(repos.as_mut(), ctx, &capability, in_force).await?;
     apply_probe(deps, repos.as_mut(), ctx, capability, result).await?;
@@ -1542,8 +1581,11 @@ async fn apply_probe(
     repos: &mut dyn TenantRepos,
     ctx: &Ctx,
     mut capability: Capability,
-    result: ProbeResult,
+    mut result: ProbeResult,
 ) -> Result<ProbeOut, AppError> {
+    // Whatever the adapter reported, no secret-looking key goes further: not into the probe log,
+    // the public fields or the answer.
+    result.facts = screened(&result.facts);
     let result = bound_to_account(repos, &mut capability, result).await?;
     let run_id = ProbeRunId(deps.ids.uuid());
     repos
@@ -1577,9 +1619,11 @@ async fn apply_probe(
     );
     if result.ok {
         public.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
-        let facts = json!({ "facts": result.facts });
-        if result.facts.is_object() && validate_connector_public(&facts).is_empty() {
+        // The last success's facts replace the previous ones (screened above).
+        if result.facts.is_object() {
             public.insert("facts".to_owned(), result.facts.clone());
+        } else {
+            public.remove("facts");
         }
         capability.last_verified_at = Some(ctx.now);
         capability.evidence = Some(Evidence {
@@ -1624,9 +1668,11 @@ async fn apply_probe(
 }
 
 /// `result` once the account it reached is checked against `capability`'s (see the module docs):
-/// a success naming another account, or none while the capability holds one, becomes
-/// `Permission`; a capability without an external id takes the account named, unless another
-/// live capability of its kind holds it (`Permission` too).
+/// a success counts only when it names, as a string in `facts.account_id`, the capability's
+/// external id, or, for a capability without one, an account no other live capability of its kind
+/// holds (which the capability then takes). Anything else (no account named, or not as a string,
+/// another account, an account held elsewhere) becomes `Permission` "account mismatch": a
+/// credential never verifies an account it has not shown to be its own.
 async fn bound_to_account(
     repos: &mut dyn TenantRepos,
     capability: &mut Capability,
@@ -1635,43 +1681,105 @@ async fn bound_to_account(
     if !result.ok {
         return Ok(result);
     }
-    let account = match &result.facts["account_id"] {
-        Value::String(id) => Some(id.trim().to_owned()).filter(|id| !id.is_empty()),
-        Value::Number(id) => Some(id.to_string()),
-        _ => None,
+    let mismatch = || {
+        ProbeResult::failure(
+            result.latency_ms,
+            ConnectorError::permission("account mismatch"),
+        )
     };
-    let refused =
-        |reason: &str| ProbeResult::failure(result.latency_ms, ConnectorError::permission(reason));
-    match (&capability.external_id, account) {
-        (Some(held), Some(account)) if *held == account => Ok(result),
-        (Some(_), Some(_)) => Ok(refused("account mismatch")),
-        (Some(_), None) => Ok(refused("account not confirmed: the probe named no account")),
-        (None, None) => Ok(result),
-        (None, Some(account)) => {
-            if account.chars().count() > MAX_EXTERNAL_ID_CHARS {
-                return Ok(refused("the probe named an account id that is too long"));
-            }
-            let kind = CapabilityKind::parse(&capability.kind_key).map(|k| k.key);
-            let taken = repos
-                .capabilities()
-                .list(CapabilityFilter {
-                    kind,
-                    ..CapabilityFilter::default()
-                })
-                .await?
-                .iter()
-                .any(|c| {
-                    c.id != capability.id
-                        && c.kind_key == capability.kind_key
-                        && c.status != StoredStatus::Retired
-                        && c.external_id.as_deref() == Some(account.as_str())
-                });
-            if taken {
-                return Ok(refused("the account is held by another capability"));
+    let Some(account) = result.facts["account_id"].as_str().map(str::to_owned) else {
+        return Ok(mismatch());
+    };
+    if account.trim().is_empty() || account.chars().count() > MAX_EXTERNAL_ID_CHARS {
+        return Ok(mismatch());
+    }
+    match &capability.external_id {
+        Some(held) if *held == account => Ok(result),
+        Some(_) => Ok(mismatch()),
+        None => {
+            if account_held_elsewhere(repos, capability, &account).await? {
+                return Ok(mismatch());
             }
             capability.external_id = Some(account);
             Ok(result)
         }
+    }
+}
+
+/// Whether a live capability of `capability`'s kind, other than it, holds `account`.
+async fn account_held_elsewhere(
+    repos: &mut dyn TenantRepos,
+    capability: &Capability,
+    account: &str,
+) -> Result<bool, AppError> {
+    let kind = CapabilityKind::parse(&capability.kind_key).map(|k| k.key);
+    Ok(repos
+        .capabilities()
+        .list(CapabilityFilter {
+            kind,
+            ..CapabilityFilter::default()
+        })
+        .await?
+        .iter()
+        .any(|c| {
+            c.id != capability.id
+                && c.kind_key == capability.kind_key
+                && c.status != StoredStatus::Retired
+                && c.external_id.as_deref() == Some(account)
+        }))
+}
+
+/// Binds `capability` (read through `lock` in `repos`) to the external account `external_id` as
+/// an unproven binding, and writes it: whatever verified the previous binding proved nothing about
+/// this one, so it reads `declared` again (a retired capability stays retired) with no
+/// verification time and no evidence, its sealed credentials become `sealed` (`None` removes
+/// them), and no reconnection is asked for. Every change of a connector capability's external
+/// account goes through here (entering credentials for a new account here; editing a
+/// capability's external id in `capability.update`), before anything probes the new binding.
+/// An account another live capability of the kind holds is `CONFLICT` naming `kind_key` and
+/// `external_id`, and nothing is written.
+pub(crate) async fn rebind_account(
+    repos: &mut dyn TenantRepos,
+    capability: &mut Capability,
+    external_id: Option<String>,
+    sealed: Option<Vec<u8>>,
+    at: OffsetDateTime,
+) -> Result<(), AppError> {
+    if let Some(account) = &external_id
+        && account_held_elsewhere(repos, capability, account).await?
+    {
+        return Err(account_taken(&capability.kind_key, account));
+    }
+    capability.external_id = external_id;
+    if capability.status != StoredStatus::Retired {
+        capability.status = StoredStatus::Declared;
+    }
+    capability.last_verified_at = None;
+    capability.evidence = None;
+    let mut public = object(&capability.connector_public);
+    public.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
+    capability.connector_public = Value::Object(public);
+    capability.updated_at = at;
+    repos.capabilities().update(capability.clone()).await?;
+    repos
+        .capabilities()
+        .set_sealed(capability.id, sealed, at)
+        .await
+}
+
+/// `value` without any object key, at any depth (inside arrays too), that looks like a secret's
+/// name ([`jt_capability::is_secret_looking_key`]): what a provider reports is shown and stored
+/// only so screened.
+fn screened(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(key, _)| !is_secret_looking_key(key))
+                .map(|(key, v)| (key.clone(), screened(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(screened).collect()),
+        other => other.clone(),
     }
 }
 
@@ -1712,10 +1820,10 @@ fn allow_hosts(deps: &Deps, ctx: &Ctx, hosts: &[String]) {
     }
 }
 
-/// `public` (an object, or none) with the facts of a connection: the provider, the account's
-/// name when given, the adapter's hosts added to those already named, the credential's public
-/// facts (`access`), the asset's when given, and `reconnect_required` as it was (`false` when
-/// it was not set).
+/// `public` (an object, or none) with the facts of a connection whose credential is being
+/// sealed: the provider, the account's name when given, the adapter's hosts added to those
+/// already named, the credential's public facts (`access`), the asset's when given, and
+/// `reconnect_required` cleared.
 fn connected_public(
     public: &Value,
     provider: Provider,
@@ -1750,8 +1858,9 @@ fn connected_public(
     if let Some(asset) = asset {
         out.insert("asset".to_owned(), asset.clone());
     }
-    out.entry(RECONNECT_REQUIRED.to_owned())
-        .or_insert(json!(false));
+    // A fresh credential is being sealed: nothing asks to be reconnected until a probe of it
+    // fails with `Auth`.
+    out.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
     Value::Object(out)
 }
 

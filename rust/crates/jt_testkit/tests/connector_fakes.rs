@@ -630,8 +630,13 @@ async fn connect(deps: &Deps, c: &Capability, verify: bool) {
         .await
         .unwrap();
     if verify {
+        // As a probe that proved the account leaves it: verified, with a verification time.
         t.capabilities()
-            .set_status(c.id, StoredStatus::Verified, c.created_at)
+            .update(Capability {
+                status: StoredStatus::Verified,
+                last_verified_at: Some(c.created_at),
+                ..c.clone()
+            })
             .await
             .unwrap();
     }
@@ -721,6 +726,35 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
     connect(&deps, &second, true).await;
     connect(&deps, &first, true).await;
     assert_eq!(routed(&deps, meta, "page-3").await, Some(second.id));
+}
+
+/// Only a binding proven at least once routes events: a credential pasted for someone else's
+/// account (sealed, its probe failed or reached another account, so `unreachable` and never
+/// verified) takes nothing, while a connection verified once and unreachable since keeps its
+/// events.
+#[tokio::test]
+async fn capability_by_external_needs_an_account_proven_once() {
+    let (_, deps) = setup();
+    let (a, _) = workspace(&deps, "a").await;
+    let (b, _) = workspace(&deps, "b").await;
+    let meta: &[&str] = Provider::Meta.kinds();
+
+    let pasted = capability(b, "facebook_page", "page-5", FIXED_NOW + Duration::days(1));
+    connect(&deps, &pasted, false).await;
+    set_status(&deps, &pasted, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&deps, meta, "page-5").await, None);
+    // Nor does a stored status of verified without a verification time.
+    let stamped = capability(b, "messenger", "page-5", FIXED_NOW + Duration::days(2));
+    connect(&deps, &stamped, false).await;
+    set_status(&deps, &stamped, StoredStatus::Verified).await;
+    assert_eq!(routed(&deps, meta, "page-5").await, None);
+
+    // The owner's connection, verified once and unreachable since, is the one that answers,
+    // although the others are newer.
+    let owned = capability(a, "facebook_page", "page-5", FIXED_NOW);
+    connect(&deps, &owned, true).await;
+    set_status(&deps, &owned, StoredStatus::Unreachable).await;
+    assert_eq!(routed(&deps, meta, "page-5").await, Some(owned.id));
 }
 
 // ---------------------------------------------------------------------------------------------

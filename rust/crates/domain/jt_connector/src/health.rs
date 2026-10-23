@@ -17,8 +17,10 @@ pub struct ProbeResult {
     pub latency_ms: u32,
     /// Why it failed; `None` when it succeeded.
     pub error: Option<ConnectorError>,
-    /// Non-secret facts the call returned (a page name, a balance, granted scopes), to be stored
-    /// in `connector_public` after [`jt_capability::validate_connector_public`]. `{}` when none.
+    /// Non-secret facts the call returned (a page name, a balance, granted scopes). A success
+    /// names, as a string in `account_id`, the identity the credential itself authenticates as;
+    /// without it the capability is never verified. Screened for secret-looking keys before they
+    /// are shown or stored. `{}` when none.
     pub facts: Value,
 }
 

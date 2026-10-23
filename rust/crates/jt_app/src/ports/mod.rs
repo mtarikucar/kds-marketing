@@ -1352,12 +1352,15 @@ pub trait PlatformRepos: Send + Sync {
     /// The connected capability, in whichever workspace it belongs to, whose kind is one of
     /// `kind_keys` and whose external account id is `external_id`: where an inbound event for
     /// that account is routed. Connected means proved through the provider: sealed credentials
-    /// present **and** stored status `Verified` or `Unreachable` (an expired token keeps its
-    /// events, so they are there when the owner reconnects; both statuses only ever follow a
-    /// sealed credential, which for Meta and X comes only through OAuth). A capability that is
-    /// only declared (anyone can type a public page id), sealed but never verified, verified on
-    /// an agent's word without credentials, or retired never receives events, whichever
-    /// workspace holds it.
+    /// present, stored status `Verified` or `Unreachable` (an expired token keeps its events, so
+    /// they are there when the owner reconnects), **and** verified at least once
+    /// (`last_verified_at` set). For a connector capability only a successful probe sets
+    /// `last_verified_at`, and only when the probe showed the credential to be the capability's
+    /// own account; binding the capability to another account clears it. So a capability that is
+    /// only declared (anyone can type a public page id), sealed but never verified (a pasted
+    /// token that failed its probe, or reached another account, ends `Unreachable` and sealed),
+    /// verified on an agent's word without credentials, or retired never receives events,
+    /// whichever workspace holds it.
     ///
     /// `None` when no workspace holds the account connected (the event is routed nowhere, Review
     /// Focus 1). When several do (the same account connected in two workspaces, or under two
