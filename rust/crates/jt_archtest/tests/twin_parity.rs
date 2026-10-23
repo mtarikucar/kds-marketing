@@ -273,7 +273,9 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
             "api_keys.manage",
             "ledger.read",
             "capabilities.manage",
-            "budget.manage"
+            "budget.manage",
+            "inbox.work",
+            "inbox.manage"
         ])
     );
 

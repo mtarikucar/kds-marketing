@@ -54,6 +54,19 @@ impl EventRecord {
 
 #[async_trait]
 impl InboundEventRepo for PgTenantRepos {
+    async fn list_for_consumer(
+        &mut self,
+        consumer: &str,
+        cursor: Option<(OffsetDateTime, InboundEventId)>,
+        limit: u32,
+    ) -> Result<Vec<InboundEvent>, AppError> {
+        let records: Vec<EventRecord> = sqlx::query_as(&format!(
+            "select {COLUMNS} from inbound_events e where workspace_id=$1 and ($3::timestamptz is null or (received_at,id)>($3,$4)) and not exists (select 1 from event_consumption c where c.workspace_id=e.workspace_id and c.event_id=e.id and c.consumer=$2) order by received_at,id limit $5"
+        )).bind(self.workspace_id().as_uuid()).bind(consumer).bind(cursor.map(|(at,_)|at)).bind(cursor.map(|(_,id)|id.as_uuid())).bind(i64::from(limit.clamp(1,MAX_EVENT_PAGE)))
+        .fetch_all(self.tx.conn()).await.map_err(|e| map_sqlx(e,"list events for consumer"))?;
+        records.into_iter().map(EventRecord::into_event).collect()
+    }
+
     /// `on conflict do nothing` covers both the id and the provider id. When it skipped the row,
     /// a second statement tells a replay (`None`) from a taken id (`CONFLICT`). That statement
     /// sees whatever committed meanwhile because tenant transactions run at READ COMMITTED (each

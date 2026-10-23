@@ -429,6 +429,7 @@ async fn register_once(deps: &Deps, account: &NewAccount) -> Result<SessionOut, 
             _ => Attempt::Failed(e),
         });
     }
+    super::workspace::initialize_lost_reasons(repos.as_mut(), ws).await?;
     let roles = system_roles(deps);
     // `system_roles` lists the owner first.
     let owner_role = roles[0].id;

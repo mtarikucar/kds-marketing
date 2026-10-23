@@ -210,7 +210,9 @@ async fn create_refuses_bad_input_with_structured_errors() {
             "api_keys.manage",
             "ledger.read",
             "capabilities.manage",
-            "budget.manage"
+            "budget.manage",
+            "inbox.work",
+            "inbox.manage"
         ])
     );
 }

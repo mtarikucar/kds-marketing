@@ -28,10 +28,12 @@ const TABLES_AFTER_STRATEGY: i64 = 13;
 const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
-const TABLES_AFTER_ALL: i64 = 23;
+const TABLES_AFTER_CONNECTORS: i64 = 23;
+/// Tables after `0006_inbox`, including outbox and request keys.
+const TABLES_AFTER_ALL: i64 = 36;
 
-/// The migrations there are: `0001_foundation` to `0005_connectors`.
-const MIGRATIONS: i64 = 5;
+/// The migrations there are: `0001_foundation` to `0006_inbox`.
+const MIGRATIONS: i64 = 6;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -169,6 +171,8 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
 
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
+    run(read("0006_inbox.down.sql")).await;
+    run(read("0006_inbox.down.sql")).await;
     run(connectors_down.clone()).await;
     run(connectors_down.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
@@ -183,7 +187,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     assert!(!column_exists(&db.pool, RETIRED_AT).await);
     // 0005 applies again on its own, and reverts again.
     run(connectors_up.clone()).await;
-    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CONNECTORS);
     assert!(column_exists(&db.pool, RETIRED_AT).await);
     run(connectors_down).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
@@ -404,5 +408,23 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
             role_permissions(&db.pool, custom_manager).await,
             ["workspace.read", "capabilities.manage"]
         );
+    }
+}
+
+#[tokio::test]
+async fn migration_round_trip_23_36_23_36() {
+    let db = TestDb::new().await;
+    assert_eq!(table_count(&db.pool).await, 36);
+    let dir = migrations_dir();
+    let down = std::fs::read_to_string(dir.join("0006_inbox.down.sql")).unwrap();
+    let up = std::fs::read_to_string(dir.join("0006_inbox.up.sql")).unwrap();
+    for _ in 0..2 {
+        sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, 23);
+        assert!(!column_exists(&db.pool, ("lost_reasons", "key")).await);
+    }
+    for _ in 0..2 {
+        sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, 36);
     }
 }

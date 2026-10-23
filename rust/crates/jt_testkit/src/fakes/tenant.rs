@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::inbox::*;
 use jt_app::ports::{
     AgentConnectionRepo, AgentConnectionRow, ApiKeyRepo, ApiKeyRow, ApiKeyStatus, BudgetRepo,
     CHECKIN_ACTION, CapabilityGroupRepo, CapabilityRepo, ConsultationRepo, HypothesisRepo,
@@ -44,6 +45,43 @@ impl MemBundle for MemTenant {
 
 #[async_trait]
 impl TenantRepos for MemTenant {
+    fn people(&mut self) -> &mut dyn PersonRepo {
+        self
+    }
+    fn identities(&mut self) -> &mut dyn IdentityRepo {
+        self
+    }
+    fn conversations(&mut self) -> &mut dyn ConversationRepo {
+        self
+    }
+    fn messages(&mut self) -> &mut dyn MessageRepo {
+        self
+    }
+    fn journeys(&mut self) -> &mut dyn JourneyRepo {
+        self
+    }
+    fn tasks(&mut self) -> &mut dyn TaskRepo {
+        self
+    }
+    fn notes(&mut self) -> &mut dyn NoteRepo {
+        self
+    }
+    fn merges(&mut self) -> &mut dyn MergeRepo {
+        self
+    }
+    fn lost_reasons(&mut self) -> &mut dyn LostReasonRepo {
+        self
+    }
+    fn consumption(&mut self) -> &mut dyn ConsumptionRepo {
+        self
+    }
+    fn request_keys(&mut self) -> &mut dyn RequestKeyRepo {
+        self
+    }
+    fn outbox(&mut self) -> &mut dyn OutboxRepo {
+        self
+    }
+
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self
     }

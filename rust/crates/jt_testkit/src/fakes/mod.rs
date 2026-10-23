@@ -47,6 +47,8 @@
 
 mod capability;
 mod connector;
+mod inbox;
+pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
 mod platform;
 mod providers;
 mod services;

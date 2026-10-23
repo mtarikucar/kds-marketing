@@ -27,6 +27,7 @@ mod consultation;
 mod events;
 mod groups;
 mod hypotheses;
+pub(crate) mod inbox;
 pub(crate) mod ledger;
 pub(crate) mod memberships;
 mod oauth_pending;
@@ -86,6 +87,9 @@ fn referenced_kind(constraint: Option<&str>) -> Option<&'static str> {
         || c.ends_with("_issued_by_fkey")
         || c.ends_with("_approved_by_fkey")
         || c.ends_with("_started_by_fkey")
+        || c.ends_with("_owner_id_fkey")
+        || c.ends_with("_assignee_fkey")
+        || c.ends_with("_applied_by_fkey")
     {
         Some("user")
     } else {

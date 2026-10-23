@@ -17,13 +17,15 @@ use jt_testkit::panel::{
 };
 use serde_json::{Value, json};
 
-const ALL_PERMISSIONS: [&str; 6] = [
+const ALL_PERMISSIONS: [&str; 8] = [
     "workspace.read",
     "team.manage",
     "api_keys.manage",
     "ledger.read",
     "capabilities.manage",
     "budget.manage",
+    "inbox.work",
+    "inbox.manage",
 ];
 
 fn register_body(email: &str, workspace_name: &str) -> Value {
@@ -462,7 +464,10 @@ async fn switch_workspace_moves_the_session_and_workspace_info_follows() {
     assert_eq!(info["id"], json!(ws_b));
     assert_eq!(info["status"], "active");
     assert_eq!(info["my_role"], "rep");
-    assert_eq!(info["my_permissions"], json!(["workspace.read"]));
+    assert_eq!(
+        info["my_permissions"],
+        json!(["workspace.read", "inbox.work"])
+    );
     let resp = p.call(get("/api/auth/me", Some(&cookie))).await;
     assert_eq!(body_json(resp).await["current_workspace"], json!(ws_b));
 

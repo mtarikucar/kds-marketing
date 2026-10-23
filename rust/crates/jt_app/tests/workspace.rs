@@ -80,7 +80,7 @@ async fn info_shows_the_workspace_with_the_callers_role_and_permissions() {
     assert_eq!(out.my_role, "rep");
     assert_eq!(
         out.my_permissions,
-        BTreeSet::from([Permission::WorkspaceRead])
+        BTreeSet::from([Permission::WorkspaceRead, Permission::InboxWork])
     );
 
     // Serialised as the panel and agents receive it.
@@ -90,7 +90,7 @@ async fn info_shows_the_workspace_with_the_callers_role_and_permissions() {
     assert_eq!(json["my_role"], "rep");
     assert_eq!(
         json["my_permissions"],
-        serde_json::json!(["workspace.read"])
+        serde_json::json!(["workspace.read", "inbox.work"])
     );
 }
 

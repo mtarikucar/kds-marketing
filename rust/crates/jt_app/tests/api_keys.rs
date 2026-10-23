@@ -278,7 +278,9 @@ async fn create_returns_plaintext_once_and_list_hides_it() {
             "api_keys.manage",
             "ledger.read",
             "capabilities.manage",
-            "budget.manage"
+            "budget.manage",
+            "inbox.work",
+            "inbox.manage"
         ])
     );
     assert!(created.get("key_hash").is_none());
@@ -513,7 +515,7 @@ async fn effective_scopes_shrink_when_issuer_is_demoted() {
         .unwrap();
     assert_eq!(
         principal.permissions,
-        BTreeSet::from([Permission::WorkspaceRead])
+        BTreeSet::from([Permission::WorkspaceRead, Permission::InboxWork])
     );
     assert_eq!(principal.issuer_role_key, "rep");
     assert_eq!(t.w.key_row(key.id).scopes, all_permissions());

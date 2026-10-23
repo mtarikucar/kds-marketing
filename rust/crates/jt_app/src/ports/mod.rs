@@ -20,6 +20,8 @@
 //! [`connectors`].
 
 pub mod connectors;
+pub mod inbox;
+use inbox::*;
 
 use std::collections::BTreeSet;
 
@@ -1079,6 +1081,15 @@ pub enum EventOrder {
 /// write.
 #[async_trait]
 pub trait InboundEventRepo: Send + Sync {
+    /// Consumer-specific traversal, oldest (received_at,id) first; filters claims BEFORE limit,
+    /// ignoring processed_at. Restart without a cursor each sweep so rolled-back events retry.
+    async fn list_for_consumer(
+        &mut self,
+        consumer: &str,
+        cursor: Option<(OffsetDateTime, InboundEventId)>,
+        limit: u32,
+    ) -> Result<Vec<InboundEvent>, AppError>;
+
     /// Stores `event` with its raw body and returns its id, unless the workspace already holds
     /// an event with the same provider and provider id: then nothing is written and the answer is
     /// `None` (a replayed delivery, Review Focus 2), and the bundle stays usable. Of two bundles
@@ -1367,6 +1378,19 @@ pub trait PlatformSessionRepo: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait TenantRepos: Send + Sync {
+    fn people(&mut self) -> &mut dyn PersonRepo;
+    fn identities(&mut self) -> &mut dyn IdentityRepo;
+    fn conversations(&mut self) -> &mut dyn ConversationRepo;
+    fn messages(&mut self) -> &mut dyn MessageRepo;
+    fn journeys(&mut self) -> &mut dyn JourneyRepo;
+    fn tasks(&mut self) -> &mut dyn TaskRepo;
+    fn notes(&mut self) -> &mut dyn NoteRepo;
+    fn merges(&mut self) -> &mut dyn MergeRepo;
+    fn lost_reasons(&mut self) -> &mut dyn LostReasonRepo;
+    fn consumption(&mut self) -> &mut dyn ConsumptionRepo;
+    fn request_keys(&mut self) -> &mut dyn RequestKeyRepo;
+    fn outbox(&mut self) -> &mut dyn OutboxRepo;
+
     fn roles(&mut self) -> &mut dyn RoleRepo;
     fn memberships(&mut self) -> &mut dyn MembershipRepo;
     fn api_keys(&mut self) -> &mut dyn ApiKeyRepo;
@@ -1393,6 +1417,8 @@ pub trait TenantRepos: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait UserRepos: Send + Sync {
+    /// Initialize defaults in the registration transaction, never on first use.
+    async fn lost_reasons_initialize(&mut self, ws: WorkspaceId) -> Result<(), AppError>;
     fn users(&mut self) -> &mut dyn UserRepo;
     fn sessions(&mut self) -> &mut dyn SessionRepo;
     /// The user's active memberships across workspaces, oldest first.

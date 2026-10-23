@@ -28,6 +28,12 @@ pub enum Permission {
     /// Create budget items.
     #[serde(rename = "budget.manage")]
     BudgetManage,
+    /// Work conversations, journeys, tasks and notes.
+    #[serde(rename = "inbox.work")]
+    InboxWork,
+    /// Manage the inbox dictionary and privileged journey changes.
+    #[serde(rename = "inbox.manage")]
+    InboxManage,
 }
 
 const ALL_PERMISSIONS: &[Permission] = &[
@@ -37,6 +43,8 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::LedgerRead,
     Permission::CapabilitiesManage,
     Permission::BudgetManage,
+    Permission::InboxWork,
+    Permission::InboxManage,
 ];
 
 impl Permission {
@@ -49,6 +57,8 @@ impl Permission {
             Permission::LedgerRead => "ledger.read",
             Permission::CapabilitiesManage => "capabilities.manage",
             Permission::BudgetManage => "budget.manage",
+            Permission::InboxWork => "inbox.work",
+            Permission::InboxManage => "inbox.manage",
         }
     }
 
@@ -71,7 +81,7 @@ pub enum SystemRole {
     Owner,
     /// Full control, but not counted as an owner.
     Manager,
-    /// Read-only member.
+    /// Workspace reader and inbox worker.
     Rep,
 }
 
@@ -89,7 +99,7 @@ impl SystemRole {
     pub fn permissions(&self) -> BTreeSet<Permission> {
         match self {
             SystemRole::Owner | SystemRole::Manager => Permission::all().iter().copied().collect(),
-            SystemRole::Rep => BTreeSet::from([Permission::WorkspaceRead]),
+            SystemRole::Rep => BTreeSet::from([Permission::WorkspaceRead, Permission::InboxWork]),
         }
     }
 }
@@ -262,4 +272,24 @@ pub fn can_change_role(
         return Err(TenancyError::LastOwner);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod inbox_tests {
+    use super::*;
+
+    #[test]
+    fn role_backfill_and_new_rep_defaults() {
+        for key in ["inbox.work", "inbox.manage"] {
+            let permission = Permission::parse(key).expect("inbox permission");
+            assert_eq!(permission.key(), key);
+            assert!(Permission::all().contains(&permission));
+            assert!(SystemRole::Owner.permissions().contains(&permission));
+            assert!(SystemRole::Manager.permissions().contains(&permission));
+            assert_eq!(
+                SystemRole::Rep.permissions().contains(&permission),
+                key == "inbox.work"
+            );
+        }
+    }
 }

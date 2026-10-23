@@ -1,0 +1,892 @@
+//! The same inbox contracts exercised by both adapters. Races are additionally tested on PostgreSQL.
+use crate::fakes::{FIXED_NOW, deps};
+use jt_app::usecases::auth::{self, RegisterInput};
+use jt_app::{
+    error::ErrorCode,
+    ports::inbox::*,
+    ports::{UnitOfWork, UserRow},
+};
+use jt_capability::{Capability, CapabilityId, NewCapability};
+use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
+use jt_inbox::*;
+use jt_tenancy::{Email, Permission, SystemRole, UserId, WorkspaceId, WorkspaceStatus};
+use serde_json::json;
+use std::sync::Arc;
+use time::Duration;
+use uuid::Uuid;
+
+pub struct Fixture {
+    pub uow: Arc<dyn UnitOfWork>,
+    pub ws: WorkspaceId,
+    pub other: WorkspaceId,
+    pub user: UserId,
+}
+impl Fixture {
+    pub async fn new(uow: Arc<dyn UnitOfWork>) -> Self {
+        let (ws, other, user) = (
+            WorkspaceId::new_v7(),
+            WorkspaceId::new_v7(),
+            UserId::new_v7(),
+        );
+        let mut t = uow.user().await.unwrap();
+        t.users()
+            .insert(UserRow {
+                id: user,
+                email: Email::parse(&format!("{}@example.test", user.as_uuid())).unwrap(),
+                password_hash: "plain:test".into(),
+                display_name: "Owner".into(),
+                created_at: FIXED_NOW,
+            })
+            .await
+            .unwrap();
+        for id in [ws, other] {
+            t.workspaces_create(
+                id,
+                "Contract",
+                &id.to_string(),
+                WorkspaceStatus::Active,
+                FIXED_NOW,
+            )
+            .await
+            .unwrap();
+            t.lost_reasons_initialize(id).await.unwrap();
+        }
+        t.commit().await.unwrap();
+        Self {
+            uow,
+            ws,
+            other,
+            user,
+        }
+    }
+    pub fn person(&self, name: &str) -> Person {
+        Person {
+            id: PersonId::new_v7(),
+            workspace_id: self.ws,
+            display_name: name.into(),
+            company: "Company".into(),
+            first_touch: FirstTouch {
+                source: Source::Import,
+                capability_id: None,
+                at: FIXED_NOW,
+            },
+            merged_into: None,
+            erased_at: None,
+            created_at: FIXED_NOW,
+            updated_at: FIXED_NOW,
+        }
+    }
+    pub async fn insert_person(&self, name: &str) -> Person {
+        let p = self.person(name);
+        let mut t = self.uow.tenant(self.ws).await.unwrap();
+        t.people().insert(p.clone()).await.unwrap();
+        t.commit().await.unwrap();
+        p
+    }
+    pub async fn capability(&self) -> CapabilityId {
+        let c = Capability::new(
+            CapabilityId::new_v7(),
+            self.ws,
+            NewCapability {
+                kind_key: "sms_line".into(),
+                name: "SMS".into(),
+                ..NewCapability::default()
+            },
+            FIXED_NOW,
+        )
+        .unwrap();
+        let mut t = self.uow.tenant(self.ws).await.unwrap();
+        t.capabilities().insert(c.clone(), None).await.unwrap();
+        t.commit().await.unwrap();
+        c.id
+    }
+    pub fn conversation(&self, p: PersonId, c: CapabilityId) -> Conversation {
+        Conversation {
+            id: ConversationId::new_v7(),
+            workspace_id: self.ws,
+            person_id: p,
+            capability_id: c,
+            kind_key: "sms_line".into(),
+            state: ConvState::Open,
+            executor: Executor::Agent,
+            executor_generation: 0,
+            last_inbound_at: Some(FIXED_NOW),
+            last_outbound_at: None,
+        }
+    }
+    pub fn journey(&self, p: PersonId) -> Journey {
+        Journey {
+            id: JourneyId::new_v7(),
+            workspace_id: self.ws,
+            person_id: p,
+            status: JourneyStatus::New,
+            owner: Some(self.user),
+            opened_at: FIXED_NOW,
+            closed_at: None,
+            lost_reason: None,
+            unreachable_attempts: 0,
+            source: Source::Import,
+            updated_at: FIXED_NOW,
+            reduce_input: ReduceInput::default(),
+        }
+    }
+    pub fn event(&self, j: JourneyId, key: &str, kind: JourneyEventKind) -> JourneyEvent {
+        JourneyEvent {
+            id: JourneyEventId::new_v7(),
+            workspace_id: self.ws,
+            journey_id: j,
+            source: EventSource::Human(self.user),
+            idempotency_key: key.into(),
+            kind,
+            reason_label: Some("Fiyat".into()),
+            at: FIXED_NOW + Duration::minutes(1),
+        }
+    }
+    pub fn message(&self, c: ConversationId) -> Message {
+        Message {
+            id: MessageId::new_v7(),
+            workspace_id: self.ws,
+            conversation_id: c,
+            direction: Direction::Inbound,
+            author: Author::Customer,
+            body: "Hello".into(),
+            external_id: Some("provider-1".into()),
+            status: MsgStatus::Received,
+            cost_minor: None,
+            at: FIXED_NOW,
+        }
+    }
+}
+
+pub async fn request_keys_workspace_scope_and_24h_expiry(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let now = FIXED_NOW;
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert!(
+        t.request_keys()
+            .store("key", json!({"id":1}), now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !t.request_keys()
+            .store(
+                "key",
+                json!({"id":2}),
+                now + Duration::hours(24) - Duration::nanoseconds(1)
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        t.request_keys()
+            .get("key", now + Duration::hours(24) - Duration::nanoseconds(1))
+            .await
+            .unwrap(),
+        Some(json!({"id":1}))
+    );
+    assert_eq!(
+        t.request_keys()
+            .get("key", now + Duration::hours(24))
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        t.request_keys()
+            .store("key", json!({"id":2}), now + Duration::hours(24))
+            .await
+            .unwrap()
+    );
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.other).await.unwrap();
+    assert_eq!(t.request_keys().get("key", now).await.unwrap(), None);
+    assert!(t.request_keys().store("key", json!(3), now).await.unwrap());
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.request_keys()
+            .get("key", now + Duration::hours(25))
+            .await
+            .unwrap(),
+        Some(json!({"id":2}))
+    );
+    assert!(
+        t.request_keys()
+            .store("rollback", json!(4), now)
+            .await
+            .unwrap()
+    );
+    drop(t);
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(t.request_keys().get("rollback", now).await.unwrap(), None);
+}
+
+pub async fn consumer_filters_before_limit_ignores_ack(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    let mut ids = vec![];
+    for i in 0..4 {
+        let e = InboundEvent {
+            id: InboundEventId::new_v7(),
+            workspace_id: f.ws,
+            provider: Provider::Meta,
+            capability_id: None,
+            external_id: format!("event-{i}"),
+            kind: EventKind::Message,
+            payload: json!({}),
+            received_at: FIXED_NOW + Duration::seconds(i),
+            processed_at: Some(FIXED_NOW),
+        };
+        ids.push(e.id);
+        t.inbound_events().insert_if_new(e, None).await.unwrap();
+    }
+    for id in &ids[..2] {
+        assert!(t.consumption().try_claim("inbox@1", *id).await.unwrap());
+        t.consumption()
+            .record(
+                "inbox@1",
+                *id,
+                ConsumptionOutcome {
+                    consumed_at: FIXED_NOW,
+                    outcome: "deferred".into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.inbound_events()
+            .list_for_consumer("inbox@1", None, 1)
+            .await
+            .unwrap()[0]
+            .id,
+        ids[2]
+    );
+    assert_eq!(
+        t.inbound_events()
+            .list_for_consumer(
+                "inbox@1",
+                Some((FIXED_NOW + Duration::seconds(2), ids[2])),
+                1
+            )
+            .await
+            .unwrap()[0]
+            .id,
+        ids[3]
+    );
+    assert_eq!(
+        t.inbound_events()
+            .list_for_consumer("inbox@2", None, 10)
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+    assert!(!t.consumption().try_claim("inbox@1", ids[0]).await.unwrap());
+    assert!(t.consumption().try_claim("inbox@1", ids[2]).await.unwrap());
+    let p = f.person("rolled back");
+    t.people().insert(p.clone()).await.unwrap();
+    t.consumption()
+        .record(
+            "inbox@1",
+            ids[2],
+            ConsumptionOutcome {
+                consumed_at: FIXED_NOW,
+                outcome: "completed".into(),
+            },
+        )
+        .await
+        .unwrap();
+    drop(t);
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert!(t.people().get(p.id).await.unwrap().is_none());
+    assert!(t.consumption().try_claim("inbox@1", ids[2]).await.unwrap());
+    t.people().insert(p.clone()).await.unwrap();
+    t.consumption()
+        .record(
+            "inbox@1",
+            ids[2],
+            ConsumptionOutcome {
+                consumed_at: FIXED_NOW,
+                outcome: "completed".into(),
+            },
+        )
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(t.people().get(p.id).await.unwrap(), Some(p));
+    assert_eq!(
+        t.inbound_events()
+            .list_for_consumer("inbox@1", None, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut t = f.uow.tenant(f.other).await.unwrap();
+    assert!(
+        t.inbound_events()
+            .list_for_consumer("inbox@1", None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        t.consumption()
+            .try_claim("inbox@1", ids[0])
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+}
+
+pub async fn people_identities_and_tombstones(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let a = f.insert_person("Ada %").await;
+    let b = f.insert_person("Bora").await;
+    let identity = Identity {
+        id: IdentityId::new_v7(),
+        workspace_id: f.ws,
+        person_id: a.id,
+        channel: IdentityChannel::Phone,
+        value_normalized: "+905550000000".into(),
+        value_display: "0555 000 00 00".into(),
+        active: true,
+        first_seen_at: FIXED_NOW,
+    };
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    t.identities().insert(identity.clone()).await.unwrap();
+    assert_eq!(t.people().lock(a.id).await.unwrap(), Some(a.clone()));
+    assert_eq!(
+        t.people()
+            .find_by_identity(IdentityChannel::Phone, &identity.value_normalized)
+            .await
+            .unwrap(),
+        Some(a.clone())
+    );
+    assert_eq!(t.people().search("%", 10).await.unwrap(), vec![a.clone()]);
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    let mut dup = identity.clone();
+    dup.id = IdentityId::new_v7();
+    dup.person_id = b.id;
+    assert_eq!(
+        t.identities().insert(dup.clone()).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    drop(t);
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    t.identities().deactivate_for(a.id).await.unwrap();
+    t.identities().insert(dup.clone()).await.unwrap();
+    t.identities().move_to(b.id, a.id).await.unwrap();
+    assert!(t.identities().list(b.id).await.unwrap().is_empty());
+    let live = t.identities().list(a.id).await.unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].id, dup.id);
+    t.people()
+        .mark_merged(a.id, Some(b.id), FIXED_NOW)
+        .await
+        .unwrap();
+    assert!(
+        t.people()
+            .find_by_identity(IdentityChannel::Phone, &identity.value_normalized)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        t.people().get(a.id).await.unwrap().unwrap().first_touch,
+        a.first_touch
+    );
+    t.people().mark_merged(a.id, None, FIXED_NOW).await.unwrap();
+    t.people().set_erased(a.id, FIXED_NOW).await.unwrap();
+    assert!(
+        t.people()
+            .find_by_identity(IdentityChannel::Phone, &identity.value_normalized)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.other).await.unwrap();
+    assert!(t.people().get(a.id).await.unwrap().is_none());
+    assert!(t.identities().list(a.id).await.unwrap().is_empty());
+    let mut wrong = dup;
+    wrong.id = IdentityId::new_v7();
+    wrong.workspace_id = f.other;
+    assert_eq!(
+        t.identities().insert(wrong).await.unwrap_err().code,
+        ErrorCode::NotFound
+    );
+}
+
+pub async fn conversations_and_message_dedupe(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let p = f.insert_person("Person").await;
+    let cap = f.capability().await;
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    let c = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(p.id, cap))
+        .await
+        .unwrap();
+    assert_eq!(c.state, ConvState::Ours);
+    assert_eq!(
+        t.conversations()
+            .update_executor(
+                c.id,
+                Executor::Human {
+                    user_id: Some(f.user)
+                }
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    t.conversations()
+        .update_state(
+            c.id,
+            ConvState::Snoozed {
+                until: FIXED_NOW + Duration::days(1),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        t.conversations().get(c.id).await.unwrap().unwrap().state,
+        ConvState::Snoozed { .. }
+    ));
+    let reopened = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(p.id, cap))
+        .await
+        .unwrap();
+    assert_eq!(reopened.id, c.id);
+    assert_eq!(reopened.executor_generation, 1);
+    assert_eq!(
+        reopened.executor,
+        Executor::Human {
+            user_id: Some(f.user)
+        }
+    );
+    assert_eq!(reopened.state, ConvState::Ours);
+    assert_eq!(
+        t.conversations()
+            .update_executor(c.id, Executor::Agent)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        t.conversations()
+            .update_executor(c.id, Executor::Agent)
+            .await
+            .unwrap(),
+        3
+    );
+    t.conversations()
+        .update_state(c.id, ConvState::Theirs, Some(FIXED_NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        t.conversations()
+            .lock(c.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_outbound_at,
+        Some(FIXED_NOW)
+    );
+    assert_eq!(
+        t.conversations().list(Some(p.id), 10).await.unwrap().len(),
+        1
+    );
+    let m = f.message(c.id);
+    assert_eq!(
+        t.messages().insert_if_new(m.clone()).await.unwrap(),
+        Some(m.id)
+    );
+    let mut replay = m.clone();
+    replay.id = MessageId::new_v7();
+    assert_eq!(t.messages().insert_if_new(replay).await.unwrap(), None);
+    for _ in 0..2 {
+        let mut local = m.clone();
+        local.id = MessageId::new_v7();
+        local.external_id = None;
+        assert!(t.messages().insert_if_new(local).await.unwrap().is_some());
+    }
+    t.messages()
+        .set_status(
+            m.id,
+            MsgStatus::Refused {
+                reason: "fence".into(),
+            },
+            None,
+            Some(12),
+        )
+        .await
+        .unwrap();
+    let rows = t.messages().list(c.id, 10).await.unwrap();
+    assert_eq!(rows.len(), 3);
+    let stored = rows.iter().find(|r| r.id == m.id).unwrap();
+    assert_eq!(stored.cost_minor, Some(12));
+    assert_eq!(
+        stored.status,
+        MsgStatus::Refused {
+            reason: "fence".into()
+        }
+    );
+    assert_eq!(stored.external_id, m.external_id);
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.other).await.unwrap();
+    assert!(t.conversations().get(c.id).await.unwrap().is_none());
+    assert!(t.messages().list(c.id, 10).await.unwrap().is_empty());
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    let mut collision = m;
+    collision.external_id = None;
+    assert_eq!(
+        t.messages()
+            .insert_if_new(collision)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+}
+
+pub async fn reducer_patch_and_event_are_atomic(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let p = f.insert_person("Journey").await;
+    let j = f.journey(p.id);
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    t.journeys().insert(j.clone()).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.journeys().insert(f.journey(p.id)).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    drop(t);
+    for i in 0..3 {
+        let mut t = f.uow.tenant(f.ws).await.unwrap();
+        let current = t.journeys().lock(j.id).await.unwrap().unwrap();
+        let e = f.event(
+            j.id,
+            &format!("call-{i}"),
+            JourneyEventKind::CallMade { connected: false },
+        );
+        let transition = reduce(&current, &e, &ReducePolicy::default()).unwrap();
+        t.journeys()
+            .apply_transition(j.id, transition, e)
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    let current = t.journeys().get(j.id).await.unwrap().unwrap();
+    assert_eq!(current.status, JourneyStatus::Unreachable);
+    assert_eq!(current.unreachable_attempts, 3);
+    let lost = f.event(
+        j.id,
+        "lost",
+        JourneyEventKind::Lost {
+            reason_key: "fiyat".into(),
+        },
+    );
+    let transition = reduce(&current, &lost, &ReducePolicy::default()).unwrap();
+    t.journeys()
+        .apply_transition(j.id, transition, lost.clone())
+        .await
+        .unwrap();
+    assert!(t.journeys().open_for(p.id).await.unwrap().is_none());
+    let mut current = t.journeys().latest_for(p.id).await.unwrap().unwrap();
+    assert_eq!(current.lost_reason.as_ref().unwrap().reason_label, "Fiyat");
+    assert!(current.closed_at.is_some());
+    current.reduce_input = ReduceInput::new([], true).unwrap();
+    let reopen = f.event(j.id, "reopen", JourneyEventKind::Reopened);
+    let transition = reduce(&current, &reopen, &ReducePolicy::default()).unwrap();
+    t.journeys()
+        .apply_transition(j.id, transition, reopen)
+        .await
+        .unwrap();
+    let reopened = t.journeys().get(j.id).await.unwrap().unwrap();
+    assert_eq!(reopened.status, JourneyStatus::Contacted);
+    assert_eq!(reopened.unreachable_attempts, 0);
+    assert!(reopened.closed_at.is_none() && reopened.lost_reason.is_none());
+    assert_eq!(t.journeys().events(j.id).await.unwrap().len(), 5);
+    t.commit().await.unwrap();
+    // Existing event key cannot produce another patch, even if the candidate event would win.
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    let current = t.journeys().lock(j.id).await.unwrap().unwrap();
+    let e = f.event(
+        j.id,
+        "reopen",
+        JourneyEventKind::Won {
+            product: "Product".into(),
+            amount_minor: 1,
+            currency: "TRY".into(),
+        },
+    );
+    let transition = reduce(&current, &e, &ReducePolicy::default()).unwrap();
+    assert_eq!(
+        t.journeys()
+            .apply_transition(j.id, transition, e)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    drop(t);
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(t.journeys().get(j.id).await.unwrap().unwrap(), reopened);
+    assert_eq!(t.journeys().events(j.id).await.unwrap().len(), 5);
+    let mut t = f.uow.tenant(f.other).await.unwrap();
+    assert!(t.journeys().get(j.id).await.unwrap().is_none());
+    assert!(t.journeys().events(j.id).await.unwrap().is_empty());
+}
+
+pub async fn tasks_notes_merges_and_outbox(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let p = f.insert_person("Keeper").await;
+    let q = f.insert_person("Merged").await;
+    let cap = f.capability().await;
+    let j = f.journey(p.id);
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    t.journeys().insert(j.clone()).await.unwrap();
+    let c = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(p.id, cap))
+        .await
+        .unwrap();
+    let m = f.message(c.id);
+    t.messages().insert_if_new(m.clone()).await.unwrap();
+    let mut task = Task {
+        id: TaskId::new_v7(),
+        workspace_id: f.ws,
+        journey_id: j.id,
+        title: "Call".into(),
+        due_at: FIXED_NOW,
+        assignee: Some(f.user),
+        status: TaskStatus::Open,
+    };
+    t.tasks().insert(task.clone()).await.unwrap();
+    assert_eq!(t.tasks().list(j.id).await.unwrap(), vec![task.clone()]);
+    t.tasks()
+        .set_status(task.id, TaskStatus::Done)
+        .await
+        .unwrap();
+    task.status = TaskStatus::Done;
+    assert_eq!(t.tasks().list(j.id).await.unwrap(), vec![task]);
+    let note = Note {
+        id: NoteId::new_v7(),
+        workspace_id: f.ws,
+        journey_id: j.id,
+        author: EventSource::Human(f.user),
+        text: "Note".into(),
+        at: FIXED_NOW,
+    };
+    t.notes().insert(note.clone()).await.unwrap();
+    assert_eq!(t.notes().list(j.id).await.unwrap(), vec![note]);
+    let mut merge = MergeRow {
+        id: MergeId::new_v7(),
+        workspace_id: f.ws,
+        source_id: q.id,
+        target_id: p.id,
+        decision: MergeDecision::Auto {
+            keep: p.id,
+            merge: q.id,
+        },
+        conflicts: vec![],
+        status: "applied".into(),
+        moved_snapshot: json!({"identity_ids":[]}),
+        at: FIXED_NOW,
+        applied_by: Some(f.user),
+        undone_at: None,
+    };
+    t.merges().insert(merge.clone()).await.unwrap();
+    assert_eq!(
+        t.merges().lock(merge.id).await.unwrap(),
+        Some(merge.clone())
+    );
+    assert_eq!(t.merges().list(p.id).await.unwrap(), vec![merge.clone()]);
+    t.merges().mark_undone(merge.id, FIXED_NOW).await.unwrap();
+    merge.status = "undone".into();
+    merge.undone_at = Some(FIXED_NOW);
+    assert_eq!(t.merges().get(merge.id).await.unwrap(), Some(merge.clone()));
+    let mut out = OutboxRow {
+        id: Uuid::now_v7(),
+        workspace_id: f.ws,
+        conversation_id: c.id,
+        message_id: m.id,
+        capability_id: cap,
+        intent: json!({"text":"hello"}),
+        expected_generation: 0,
+        fence_snapshot: None,
+        state: "queued".into(),
+        attempts: 0,
+        last_error: None,
+        created_at: FIXED_NOW,
+        updated_at: FIXED_NOW,
+    };
+    t.outbox().insert(out.clone()).await.unwrap();
+    assert_eq!(t.outbox().lock(out.id).await.unwrap(), Some(out.clone()));
+    assert_eq!(
+        t.outbox()
+            .list_pending("queued", FIXED_NOW + Duration::seconds(1), 10)
+            .await
+            .unwrap(),
+        vec![out.clone()]
+    );
+    out.state = "unknown".into();
+    out.attempts = 1;
+    out.last_error = Some("uncertain".into());
+    out.fence_snapshot = Some(json!({"generation":0}));
+    t.outbox().update(out.clone()).await.unwrap();
+    assert_eq!(t.outbox().get(out.id).await.unwrap(), Some(out.clone()));
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.other).await.unwrap();
+    assert!(t.tasks().list(j.id).await.unwrap().is_empty());
+    assert!(t.notes().list(j.id).await.unwrap().is_empty());
+    assert!(t.merges().get(merge.id).await.unwrap().is_none());
+    assert!(t.outbox().get(out.id).await.unwrap().is_none());
+}
+
+pub async fn lost_defaults_existing_and_new_workspaces(uow: Arc<dyn UnitOfWork>) {
+    // Use the actual registration use case: initialization must not depend on first inbox use.
+    let deps = deps(uow.clone());
+    let registered = auth::register(
+        &deps,
+        RegisterInput {
+            email: "register@example.test".into(),
+            password: "correct horse battery".into(),
+            display_name: "Owner".into(),
+            workspace_name: "New workspace".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let ws = registered.me.current_workspace.unwrap();
+    let mut t = uow.tenant(ws).await.unwrap();
+    let rows = t.lost_reasons().list().await.unwrap();
+    assert_eq!(rows.len(), 6);
+    assert!(rows.iter().all(|r| r.active && r.seeded));
+    for (key, label) in LOST_REASON_DEFAULTS {
+        assert!(rows.iter().any(|r| r.key == *key && r.label == *label));
+    }
+    for role in [SystemRole::Owner, SystemRole::Manager, SystemRole::Rep] {
+        let stored = t.roles().find_by_key(role.key()).await.unwrap().unwrap();
+        assert_eq!(stored.permissions, role.permissions());
+        assert!(stored.permissions.contains(&Permission::InboxWork));
+        assert_eq!(
+            stored.permissions.contains(&Permission::InboxManage),
+            role != SystemRole::Rep
+        );
+    }
+    let mut edited = rows[0].clone();
+    edited.label = "Edited".into();
+    edited.active = false;
+    t.lost_reasons().set(edited.clone()).await.unwrap();
+    t.lost_reasons().initialize().await.unwrap();
+    assert!(t.lost_reasons().list().await.unwrap().contains(&edited));
+    t.commit().await.unwrap();
+}
+
+/// User references have the same NOT_FOUND contract as tenancy repositories.
+pub async fn missing_user_references_are_not_found(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let p = f.insert_person("Person").await;
+    let q = f.insert_person("Other").await;
+    let mut bad = f.journey(p.id);
+    bad.owner = Some(UserId::new_v7());
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.journeys().insert(bad).await.unwrap_err().code,
+        ErrorCode::NotFound
+    );
+    drop(t);
+    let j = f.journey(p.id);
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    t.journeys().insert(j.clone()).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.tasks()
+            .insert(Task {
+                id: TaskId::new_v7(),
+                workspace_id: f.ws,
+                journey_id: j.id,
+                title: "Call".into(),
+                due_at: FIXED_NOW,
+                assignee: Some(UserId::new_v7()),
+                status: TaskStatus::Open
+            })
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    drop(t);
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.merges()
+            .insert(MergeRow {
+                id: MergeId::new_v7(),
+                workspace_id: f.ws,
+                source_id: q.id,
+                target_id: p.id,
+                decision: MergeDecision::Auto {
+                    keep: p.id,
+                    merge: q.id
+                },
+                conflicts: vec![],
+                status: "applied".into(),
+                moved_snapshot: json!({}),
+                at: FIXED_NOW,
+                applied_by: Some(UserId::new_v7()),
+                undone_at: None
+            })
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+}
+
+/// The inbound upsert's conflict target is the person/capability pair; a proposed id only
+/// identifies a newly inserted row, never replaces the id of an existing conversation.
+pub async fn conversation_upsert_uses_the_natural_key(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let p = f.insert_person("One").await;
+    let q = f.insert_person("Two").await;
+    let cap = f.capability().await;
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    let a = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(p.id, cap))
+        .await
+        .unwrap();
+    let b = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(q.id, cap))
+        .await
+        .unwrap();
+    let candidate = Conversation {
+        id: b.id,
+        ..f.conversation(p.id, cap)
+    };
+    assert_eq!(
+        t.conversations()
+            .upsert_on_inbound(candidate)
+            .await
+            .unwrap()
+            .id,
+        a.id
+    );
+    t.commit().await.unwrap();
+}

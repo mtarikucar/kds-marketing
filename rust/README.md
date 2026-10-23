@@ -87,6 +87,7 @@ döndürür. Beş göç vardır:
 | `0003_capabilities` | kabiliyetler (bildiren ajan bağlantısı `declared_by_connection` dahil), gruplar (adı alan içinde büyük/küçük harf ayırmadan tek: `capability_groups_name_ci`, `lower(name)` üzerinde), bütçe kalemleri ve bağları, harcama kaydı, çalışma alanı politikaları |
 | `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan kısmi dizini (`ledger_entries_agent_connection_idx`, yalnız `action = 'work.checkin'` satırları) açar |
 | `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez; geçmiş için en yenisi başta bir dizin), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; akışın oturum açtığı uygulama `app`; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir; bir tetikleyici her değişikliği ve 30 günden genç bir kaydın silinmesini reddeder); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
+| `0006_inbox` | Gelen kutusu için 13 alan tablosu (36 toplam): kişiler, kimlikler, konuşmalar, mesajlar, yolculuklar ve olayları, görevler, notlar, birleştirmeler, kayıp nedenleri, tüketici kayıtları, gönderim kuyruğu ve 24 saatlik istek anahtarları. FORCE RLS ve bileşik yabancı anahtarlar; varsayılan kayıp nedenleri ve sistem rollerinin gelen kutusu izinleri geriye dönük eklenir. |
 
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
 değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
@@ -571,6 +572,8 @@ Sistem rollerinin izinleri:
 | `ledger.read` | ✓ | ✓ | — |
 | `capabilities.manage` (kabiliyetleri ve grupları değiştirme) | ✓ | ✓ | — |
 | `budget.manage` (bütçe kalemi açma, düzenleme, emekliye ayırma) | ✓ | ✓ | — |
+| `inbox.work` (gelen kutusunda çalışma) | ✓ | ✓ | ✓ |
+| `inbox.manage` (kayıp nedenleri ve yetkili yolculuk işlemleri) | ✓ | ✓ | — |
 
 `capabilities.manage` ve `budget.manage` M1a ile geldi. Yeni bir alanın sahip ve yönetici rolleri onları
 açılışta alır; M1a'dan önce açılmış alanlarınkine `0004_role_permissions_backfill` göçü ekler (bkz.

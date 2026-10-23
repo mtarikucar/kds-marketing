@@ -155,6 +155,18 @@ impl SessionRepo for MemUser {
 
 #[async_trait]
 impl UserRepos for MemUser {
+    async fn lost_reasons_initialize(&mut self, ws: WorkspaceId) -> Result<(), AppError> {
+        self.call(|this| {
+            exists(
+                this.state().workspace(ws).is_some(),
+                "lost_reasons.workspace_id",
+            )?;
+            this.tx
+                .write(move |s| super::inbox::initialize_defaults(&mut s.inbox, ws));
+            Ok(())
+        })
+    }
+
     fn users(&mut self) -> &mut dyn UserRepo {
         self
     }

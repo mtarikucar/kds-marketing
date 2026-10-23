@@ -113,6 +113,7 @@ pub struct StoredWorkspacePolicy {
 /// Every table, in insertion order.
 #[derive(Clone, Debug, Default)]
 pub struct MemState {
+    pub inbox: super::inbox::MemInbox,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
     pub sessions: Vec<SessionRow>,

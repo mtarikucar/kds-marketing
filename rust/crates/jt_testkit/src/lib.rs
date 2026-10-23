@@ -8,3 +8,5 @@ pub mod flows;
 pub mod panel;
 
 pub use db::TestDb;
+
+pub mod inbox_contract;
