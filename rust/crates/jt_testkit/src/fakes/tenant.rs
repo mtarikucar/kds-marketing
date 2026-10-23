@@ -645,6 +645,14 @@ impl LedgerRepo for MemTenant {
             })
             .cloned()
             .collect();
+        for row in &mut rows {
+            if self.state().inbox.erasure_logs.iter().any(|e| {
+                e.workspace_id == self.ws
+                    && row.entry.payload["person_id"] == serde_json::json!(e.person_id)
+            }) {
+                jt_app::usecases::inbox::erasure::mask_personal(&mut row.entry.payload);
+            }
+        }
         rows.sort_by_key(|r| std::cmp::Reverse(r.id));
         rows.truncate(filter.limit as usize);
         Ok(rows)

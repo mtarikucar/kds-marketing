@@ -208,6 +208,7 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.reply", GateMode::Gated, "jeeta.inbox.reply", ("POST", "/api/inbox/conversations/{conversation_id}/reply"), Write),
     twin("inbox.people.search", GateMode::Gated, "jeeta.inbox.people_search", ("GET", "/api/inbox/people"), Read),
     twin("inbox.people.get", GateMode::Gated, "jeeta.inbox.people_get", ("GET", "/api/inbox/people/{person_id}"), Read),
+    twin("inbox.people.erase", GateMode::Gated, "jeeta.inbox.people_erase", ("POST", "/api/inbox/people/{person_id}/erase"), Destructive),
     twin("inbox.people.create", GateMode::Gated, "jeeta.inbox.people_create", ("POST", "/api/inbox/people"), Write),
     twin("inbox.identities.add", GateMode::Gated, "jeeta.inbox.identities_add", ("POST", "/api/inbox/people/{person_id}/identities"), Write),
     twin("inbox.journeys.open", GateMode::Gated, "jeeta.inbox.journeys_open", ("POST", "/api/inbox/people/{person_id}/journeys"), Write),

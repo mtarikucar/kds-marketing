@@ -66,7 +66,9 @@ pub fn input(action: &str) -> Value {
             &["text", "intent"],
         ),
         "merges.apply" => object(json!({"keep":{"type":"string","format":"uuid"}}), &["keep"]),
-        "merges.undo" => object(json!({"confirm":{"type":"boolean","default":false}}), &[]),
+        "people.erase" | "merges.undo" => {
+            object(json!({"confirm":{"type":"boolean","default":false}}), &[])
+        }
         "tasks.create" => object(
             json!({"title":{"type":"string","minLength":1},"due_at":{"type":"string","format":"date-time"},"assignee":{"type":["string","null"],"format":"uuid"}}),
             &["title", "due_at"],
@@ -127,6 +129,7 @@ pub fn tool(action: &str) -> Value {
         "people.get"
         | "identities.add"
         | "journeys.open"
+        | "people.erase"
         | "consent.record"
         | "consent.list"
         | "suppressions.add"

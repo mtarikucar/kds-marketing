@@ -125,6 +125,7 @@ fn catalog_is_the_release_table() {
         ("inbox.reply", Some("jeeta.inbox.reply"), Some(("POST", "/api/inbox/conversations/{conversation_id}/reply")), false, Risk::Write),
         ("inbox.people.search", Some("jeeta.inbox.people_search"), Some(("GET", "/api/inbox/people")), false, Risk::Read),
         ("inbox.people.get", Some("jeeta.inbox.people_get"), Some(("GET", "/api/inbox/people/{person_id}")), false, Risk::Read),
+        ("inbox.people.erase", Some("jeeta.inbox.people_erase"), Some(("POST", "/api/inbox/people/{person_id}/erase")), false, Risk::Destructive),
         ("inbox.people.create", Some("jeeta.inbox.people_create"), Some(("POST", "/api/inbox/people")), false, Risk::Write),
         ("inbox.identities.add", Some("jeeta.inbox.identities_add"), Some(("POST", "/api/inbox/people/{person_id}/identities")), false, Risk::Write),
         ("inbox.journeys.open", Some("jeeta.inbox.journeys_open"), Some(("POST", "/api/inbox/people/{person_id}/journeys")), false, Risk::Write),
@@ -229,7 +230,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 115);
+    assert_eq!(CATALOG.len(), 116);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

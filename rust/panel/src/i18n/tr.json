@@ -1046,6 +1046,7 @@
     }
   },
   "inbox": {
+    "erasure": {"open": "Kişisel verileri sil", "description": "İletişim kimlikleri, mesaj ve not metinleri, randevu bilgileri ve dosya referansları kalıcı olarak silinir. Anonim yolculuk, olay ve komisyon kayıtları ile tutarlar korunur. Ajanınızın sakladığı dosyalar silinmez.", "confirm": "Kişisel verilerin kalıcı olarak silineceğini anlıyorum.", "submit": "Kalıcı olarak sil"},
     "commissions": {
       "title": "Komisyonlar",
       "description": "Kazanılan yolculukların insan temsilci komisyonları.",

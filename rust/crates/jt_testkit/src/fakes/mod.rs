@@ -73,3 +73,5 @@ pub use state::{
 };
 
 mod inbox_merge;
+
+mod erasure;

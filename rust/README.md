@@ -1366,7 +1366,7 @@ its down migration removes only the added policy column.
 
 ### M2a inbox core: model, reducer and surfaces
 
-The catalog contains **105 MCP tools: the M1b 60 plus 45 inbox tools**. Every inbox tool
+The catalog contains **106 MCP tools: the M1b 60 plus 46 inbox tools**. Every inbox tool
 has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
 are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
 check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
@@ -1652,7 +1652,7 @@ appointments; external calendar availability, OAuth, events and public booking r
 
 ## M2b human commissions
 
-The release has **105 MCP tools**, including **45 inbox tools**. Commissions are part of the
+The release has **106 MCP tools**, including **46 inbox tools**. Commissions are part of the
 inbox (`/inbox/commissions` in the panel), with shared strict request schemas on both surfaces:
 
 | Use case | MCP tool | HTTP route | Permission |
@@ -1681,3 +1681,33 @@ Without an active owner, the snapshot is NoPayee and can never be approved or pa
 tasks close on Won; a new unassigned follow-up task remains open and due immediately. Assigning
 an owner later does not rewrite that financial snapshot. The panel lists state/payee filters,
 shows snapshot rates and amounts, and offers only permitted next actions and future-rate settings.
+
+
+### Person erasure and replay protection
+
+`POST /api/inbox/people/{person_id}/erase` and `jeeta.inbox.people_erase` require
+`inbox.manage`, the strategy gate and explicit `{ "confirm": true }`. The panel provides
+this action on the selected person's page, with a confirmation dialog in Turkish and English.
+The operation is atomic and repeatable: it keeps the person as `silinmiş kişi` with
+`erased_at`, keeps journey/event/commission IDs and financial amounts, and removes identities
+while retaining tenant-scoped hashes of their normalized, account-scoped values.
+
+Erasure clears personal message/note/event text, task titles, quote file references,
+appointment locations, merge restoration snapshots, queued mail bodies/recipients/attachments,
+matching request-key responses and person-linked probe facts. Queued sends are refused and
+conversation generations advance to invalidate outstanding send claims. The non-personal stable
+mail Message-ID remains available for late Sent-folder evidence to reconcile unknown sends. An already submitted
+provider request cannot be recalled. File references are forgotten; agent-owned assets are
+not fetched or deleted by the platform.
+
+Inbound events match by person reference or normalized adapter identity. Matching payloads are
+scrubbed, and every copy of their raw delivery batch in that workspace is nulled; unrelated
+parsed payloads and other tenants remain unchanged. PostgreSQL's non-ledger history guards
+permit only person-scoped erasure using transaction-local settings, with ordinary append-only
+protection restored when the transaction ends. Migration 0008 remains an up/down pair.
+
+Ledger rows remain physically append-only. All ledger reads recursively mask personal keys
+when `payload.person_id` appears in that tenant's erasure log. Consumer identity checks run
+before person matching, including IMAP UIDVALIDITY replay; each dropped event is durably
+counted by its `event_consumption.outcome = 'erased_identity_drop'`, without recreating a person.
+Manual creation and identity attachment reject these hashes as well.

@@ -453,6 +453,83 @@ impl CommissionRepo for MemTenant {
 
 #[async_trait]
 impl ErasureRepo for MemTenant {
+    async fn scrub(&mut self, person: PersonId) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            if !t
+                .state()
+                .inbox
+                .erasure_logs
+                .iter()
+                .any(|e| e.workspace_id == ws && e.person_id == person)
+            {
+                return Err(AppError::conflict(
+                    "erasure must be recorded before scrubbing",
+                ));
+            }
+            t.tx.write(move |s| {
+                let log = s
+                    .inbox
+                    .erasure_logs
+                    .iter()
+                    .find(|e| e.workspace_id == ws && e.person_id == person)
+                    .expect("recorded erasure")
+                    .clone();
+                let mut family = vec![person];
+                loop {
+                    let added: Vec<_> = s
+                        .inbox
+                        .people
+                        .iter()
+                        .filter(|p| {
+                            p.workspace_id == ws
+                                && !family.contains(&p.id)
+                                && p.merged_into.is_some_and(|id| family.contains(&id))
+                        })
+                        .map(|p| p.id)
+                        .collect();
+                    if added.is_empty() {
+                        break;
+                    }
+                    family.extend(added);
+                }
+                for person in family {
+                    if !s
+                        .inbox
+                        .erasure_logs
+                        .iter()
+                        .any(|e| e.workspace_id == ws && e.person_id == person)
+                    {
+                        s.inbox.erasure_logs.push(ErasureLog {
+                            person_id: person,
+                            ..log.clone()
+                        });
+                    }
+                    for i in &s.inbox.identities {
+                        if i.workspace_id == ws && i.person_id == person {
+                            let key =
+                                (ws, i.channel, identity_hash(i.channel, &i.value_normalized));
+                            if !s.inbox.erased_identities.contains(&key) {
+                                s.inbox.erased_identities.push(key);
+                            }
+                        }
+                    }
+                    super::erasure::scrub(s, ws, person);
+                    if let Some(p) = s
+                        .inbox
+                        .people
+                        .iter_mut()
+                        .find(|p| p.workspace_id == ws && p.id == person)
+                    {
+                        p.erased_at = Some(log.at);
+                        p.updated_at = log.at;
+                    }
+                }
+            });
+            Ok(())
+        })
+    }
+
     async fn record(&mut self, row: ErasureLog) -> Result<(), AppError> {
         self.call(|t| {
             same_workspace(t.ws, row.workspace_id)?;

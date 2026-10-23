@@ -48,6 +48,8 @@ begin
 end;
 $$;
 drop function if exists inbox_erasure_matches(uuid, text);
+drop function if exists inbox_event_person(uuid, uuid, jsonb, uuid);
+drop function if exists inbox_mask_personal(jsonb);
 drop table if exists journey_attribution;
 drop function if exists journey_attribution_immutable();
 drop table if exists commission_user_rates;

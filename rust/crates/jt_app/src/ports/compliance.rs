@@ -141,6 +141,10 @@ pub trait CommissionRepo: Send + Sync {
 }
 #[async_trait]
 pub trait ErasureRepo: Send + Sync {
+    /// Scrub the person and transitive merged aliases, recording alias erasures and hashing all
+    /// identities (including inactive keys) inside the caller transaction after recording erasure.
+    /// PostgreSQL uses transaction-local, person-scoped append-only exceptions.
+    async fn scrub(&mut self, person: PersonId) -> Result<(), AppError>;
     /// First request wins; replays preserve its timestamp and source.
     async fn record(&mut self, row: ErasureLog) -> Result<(), AppError>;
     async fn get(&mut self, person: PersonId) -> Result<Option<ErasureLog>, AppError>;

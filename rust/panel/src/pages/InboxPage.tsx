@@ -8,6 +8,7 @@ import { useSession } from '@/auth/useSession';
 import { can } from '@/lib/roles';
 import { QueryState } from '@/components/QueryState';
 import { Button, Callout, Input, PageHeader } from '@/components/ui';
+import { InboxErasure } from './InboxErasure';
 import { InboxConversation } from './InboxConversation';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
 import { columnClass, useInboxKey } from './InboxShared';
@@ -164,6 +165,7 @@ export function InboxPage() {
                 {selectedPerson.data?.person.display_name || t('inbox.thread')}
               </h2>
               <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>
+              {selectedPerson.data && <InboxErasure key={selectedPerson.data.person.id} personId={selectedPerson.data.person.id} />}
               {personId && (
                 <QueryState query={selectedPerson}>
                   {selectedPerson.data?.conversations.map((row) => (

@@ -374,3 +374,12 @@ pub async fn commissions_pay(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&commissions::pay(&state.deps, &ctx, id).await?)
 }
+
+pub async fn people_erase(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<jt_app::usecases::inbox::erasure::EraseInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&jt_app::usecases::inbox::erasure::erase(&state.deps, &ctx, id, input).await?)
+}

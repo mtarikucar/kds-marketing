@@ -67,3 +67,5 @@ export const payCommission = (id: string) =>
   request<import('./types').InboxCommission>('POST', `${root}/commissions/${seg(id)}/pay`);
 export const setCommissionRate = (input: { user_id: string | null; rate_bp: number }) =>
   request<{ user_id: string | null; rate_bp: number }>('PUT', `${root}/commission-rates`, { body: input });
+
+export const erasePerson = (id: string) => request<{ person_id: string; erased: boolean }>('POST', `${root}/people/${seg(id)}/erase`, { body: { confirm: true } });

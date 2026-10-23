@@ -93,7 +93,10 @@ async fn consume(
         now,
         agent_connection_id: None,
     };
-    let outcome = route(deps, &ctx, r.as_mut(), event).await?;
+    let outcome = match route(deps, &ctx, r.as_mut(), event).await {
+        Err(e) if e.details["reason"] == "erased_identity" => "erased_identity_drop",
+        result => result?,
+    };
     r.consumption()
         .record(
             CONSUMER,
@@ -113,6 +116,15 @@ async fn route(
     r: &mut dyn TenantRepos,
     event: &InboundEvent,
 ) -> Result<&'static str, AppError> {
+    if let Some(person) = event
+        .payload
+        .get("person_id")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<PersonId>().ok())
+        && r.erasure().get(person).await?.is_some()
+    {
+        return Ok("erased_identity_drop");
+    }
     let Some(id) = event.capability_id else {
         return Ok("deferred");
     };
@@ -397,6 +409,12 @@ async fn message(
         return Ok("duplicate");
     }
     let content = decode(event, channel, false)?;
+    super::erasure::check_identity(
+        r,
+        channel.identity_channel(),
+        &sender_key(cap, channel, &content.sender)?,
+    )
+    .await?;
     // Check message identity before reopening or fencing: replay has no domain effects.
     if r.messages()
         .find_by_external_id(cap.id, &content.external_id)

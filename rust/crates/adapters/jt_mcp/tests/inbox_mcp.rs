@@ -5,12 +5,13 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
         .into_iter()
         .filter(|s| s.name.starts_with("jeeta.inbox."))
         .collect();
-    assert_eq!(tools.len(), 45);
+    assert_eq!(tools.len(), 46);
     for tool in tools {
         assert_eq!(tool.input_schema.as_value()["additionalProperties"], false);
         let manage = matches!(
             tool.use_case,
-            "inbox.commissions.approve"
+            "inbox.people.erase"
+                | "inbox.commissions.approve"
                 | "inbox.commissions.pay"
                 | "inbox.commission_rates.set"
                 | "inbox.suppressions.add"

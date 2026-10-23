@@ -20,6 +20,13 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "inbox.people.erase",
+            description: "Permanently erase personal data, retain anonymous financial references. Requires confirm: true. [risk: DESTRUCTIVE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("people.erase")).expect("inbox schema"),
+            run: people_erase,
+        },
+        ToolDef {
             use_case: "inbox.commissions.list",
             description: "commissions.list for workspace commissions. [risk: READ]",
             permission: Permission::InboxWork,
@@ -626,5 +633,12 @@ fn commissions_pay<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFutu
         let id: uuid::Uuid = take_id(&mut raw, "commission_id")?;
         let _: NoArgs = args(raw)?;
         to_json(&commissions::pay(deps, ctx, id).await?)
+    })
+}
+
+fn people_erase<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&jt_app::usecases::inbox::erasure::erase(deps, ctx, id, args(raw)?).await?)
     })
 }

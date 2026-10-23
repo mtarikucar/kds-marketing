@@ -1046,6 +1046,7 @@
     }
   },
   "inbox": {
+    "erasure": {"open": "Erase personal data", "description": "Permanently removes contact identities, message and note text, appointment details and file references. Anonymous journey, event and commission records and amounts remain. Files held by your agent are not deleted.", "confirm": "I understand that personal data will be permanently erased.", "submit": "Erase permanently"},
     "commissions": {
       "title": "Commissions",
       "description": "Human representative commissions from won journeys.",

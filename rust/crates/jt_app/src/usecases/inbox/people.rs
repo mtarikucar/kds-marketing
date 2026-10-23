@@ -107,6 +107,7 @@ pub(crate) async fn match_or_create(
     let mut matches = Vec::new();
     for identity in &input.identities {
         let value = normalize(r, identity).await?;
+        super::erasure::check_identity(r, identity.channel, &value).await?;
         let found = r
             .people()
             .find_by_identity(identity.channel, &value)
@@ -326,6 +327,7 @@ pub async fn add_identity(
     r.people().lock_workspace().await?;
     let person = resolve(r.as_mut(), id).await?;
     let value = normalize(r.as_mut(), &input).await?;
+    super::erasure::check_identity(r.as_mut(), input.channel, &value).await?;
     let out = if let Some(other) = r.people().find_by_identity(input.channel, &value).await? {
         if other.id == person.id {
             json!({"status":"added","person_id":person.id})

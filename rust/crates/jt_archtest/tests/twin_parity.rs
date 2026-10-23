@@ -3120,3 +3120,60 @@ async fn inbox_commissions_have_http_mcp_parity_and_atomic_won() {
     );
     assert!(r.commissions().by_journey(j.id).await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn inbox_erasure_has_http_mcp_parity() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("erasure-parity").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let p = call_tool(&app,&key,&session,"jeeta.inbox.people_create",json!({"display_name":"Private Name","source":"form","identities":[{"channel":"email","value":"private@example.test"}]})).await;
+    let id = p["person"]["id"].as_str().unwrap();
+    for body in [json!({}), json!({"confirm":false})] {
+        let human = json_body(
+            send(
+                &app,
+                panel(
+                    Method::POST,
+                    &format!("/api/inbox/people/{id}/erase"),
+                    Some(&cookie),
+                    Some(body.clone()),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let mut args = body;
+        args["person_id"] = json!(id);
+        let agent = tool_result(&app, &key, &session, "jeeta.inbox.people_erase", args).await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(human, agent["structuredContent"]);
+    }
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/people/{id}/erase"),
+                Some(&cookie),
+                Some(json!({"confirm":true})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human, json!({"person_id":id,"erased":true}));
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.people_erase",
+        json!({"person_id":id,"confirm":true}),
+    )
+    .await;
+    assert_eq!(human, agent);
+}
