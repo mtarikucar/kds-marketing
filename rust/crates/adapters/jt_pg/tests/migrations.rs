@@ -415,6 +415,8 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
     assert_eq!(table_count(&db.pool).await, 36);
+    assert!(column_exists(&db.pool, ("conversations", "created_at")).await);
+    assert!(column_exists(&db.pool, ("conversations", "updated_at")).await);
     assert!(column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
     let (ws, _) = db.seed_workspace("inbox-policy-roundtrip").await;
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
@@ -427,6 +429,8 @@ async fn migration_round_trip_23_36_23_36() {
     for _ in 0..2 {
         sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, 23);
+        assert!(!column_exists(&db.pool, ("conversations", "created_at")).await);
+        assert!(!column_exists(&db.pool, ("conversations", "updated_at")).await);
         assert!(!column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
         assert!(!column_exists(&db.pool, ("lost_reasons", "key")).await);
         let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
@@ -442,6 +446,8 @@ async fn migration_round_trip_23_36_23_36() {
     for _ in 0..2 {
         sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, 36);
+        assert!(column_exists(&db.pool, ("conversations", "created_at")).await);
+        assert!(column_exists(&db.pool, ("conversations", "updated_at")).await);
         assert!(column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
         let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
         let labels: serde_json::Value = sqlx::query_scalar(

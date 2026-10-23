@@ -32,6 +32,12 @@ pub(super) struct MemTenant {
 }
 
 impl MemTenant {
+    pub(super) fn inbox_write_at(&self) -> OffsetDateTime {
+        self.tx
+            .inbox_write_at
+            .unwrap_or_else(OffsetDateTime::now_utc)
+    }
+
     pub(super) fn state(&self) -> &MemState {
         &self.tx.work
     }

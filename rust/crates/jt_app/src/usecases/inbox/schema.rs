@@ -10,6 +10,17 @@ pub fn input(action: &str) -> Value {
         &["channel", "value"],
     );
     match action {
+        "merges.apply" => object(json!({"keep":{"type":"string","format":"uuid"}}), &["keep"]),
+        "merges.undo" => object(json!({"confirm":{"type":"boolean","default":false}}), &[]),
+        "tasks.create" => object(
+            json!({"title":{"type":"string","minLength":1},"due_at":{"type":"string","format":"date-time"},"assignee":{"type":["string","null"],"format":"uuid"}}),
+            &["title", "due_at"],
+        ),
+        "tasks.list" => object(
+            json!({"queue":{"type":"string","enum":["due_24h","overdue","all"],"default":"due_24h"},"assignee":{"type":["string","null"],"format":"uuid"}}),
+            &[],
+        ),
+        "notes.add" => object(json!({"text":{"type":"string","minLength":1}}), &["text"]),
         "people.search" => object(
             json!({"q":{"type":"string","default":""},"limit":{"type":["integer","null"],"minimum":1,"maximum":500,"default":50}}),
             &[],
@@ -57,7 +68,13 @@ pub fn tool(action: &str) -> Value {
     let mut out = input(action);
     let id = match action {
         "people.get" | "identities.add" | "journeys.open" => Some("person_id"),
-        "journeys.get" | "journeys.assign_owner" | "events.report" => Some("journey_id"),
+        "journeys.get"
+        | "journeys.assign_owner"
+        | "events.report"
+        | "tasks.create"
+        | "notes.add" => Some("journey_id"),
+        "merges.apply" | "merges.undo" | "merges.refuse" => Some("merge_id"),
+        "tasks.complete" => Some("task_id"),
         _ => None,
     };
     if let Some(id) = id {

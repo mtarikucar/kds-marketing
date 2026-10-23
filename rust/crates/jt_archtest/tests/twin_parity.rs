@@ -1559,3 +1559,238 @@ async fn inbox_status_labels_have_http_mcp_parity_and_persist() {
     let after = serde_json::to_value(repos.workspace_policy().get().await.unwrap()).unwrap();
     assert_eq!(after, stored);
 }
+
+#[tokio::test]
+async fn inbox_merges_apply_and_tasks_list_have_http_mcp_parity() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("merge-task-parity").await;
+    let mut deps = deps(&db);
+    let now = jt_testkit::fakes::FIXED_NOW;
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(now));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    // Both surfaces enforce the strategy gate for the new operations.
+    let response = send(
+        &app,
+        panel(Method::GET, "/api/inbox/tasks", Some(&cookie), None),
+    )
+    .await;
+    let human = json_body(response).await;
+    let agent = tool_result(&app, &key, &session, "jeeta.inbox.tasks_list", json!({})).await;
+    assert_eq!(human["code"], "STRATEGY_REQUIRED");
+    assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    approve_inbox_strategy(&app, &cookie).await;
+    call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.lost_reasons_set",
+        json!({"key":"parity","label":"Parity","active":true}),
+    )
+    .await;
+
+    for (index, via_mcp) in [(0, false), (1, true)] {
+        let keeper = call_tool(&app, &key, &session, "jeeta.inbox.people_create", json!({
+            "display_name":"Keeper", "identities":[{"channel":"email","value":format!("keeper{index}@example.test")}], "source":"form"
+        })).await;
+        let donor_email = format!("donor{index}@example.test");
+        let donor = call_tool(&app, &key, &session, "jeeta.inbox.people_create", json!({
+            "display_name":"Donor", "identities":[{"channel":"email","value":donor_email}], "source":"form"
+        })).await;
+        let keep = &keeper["person"]["id"];
+        let suggestion = call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.identities_add",
+            json!({
+                "person_id":keep, "channel":"email", "value":donor_email
+            }),
+        )
+        .await;
+        let merge_id = &suggestion["merge_suggestion"]["id"];
+        let path = format!("/api/inbox/merges/{}/apply", merge_id.as_str().unwrap());
+        let response = send(
+            &app,
+            panel(
+                Method::POST,
+                &path,
+                Some(&cookie),
+                Some(json!({"keep":keep})),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let human = json_body(response).await;
+        let agent = tool_result(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.merges_apply",
+            json!({"merge_id":merge_id,"keep":keep}),
+        )
+        .await;
+        assert_eq!(human, agent["structuredContent"]);
+        assert_eq!(human["details"]["reason"], "two_open_journeys");
+
+        let donor = call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.people_get",
+            json!({"person_id":donor["person"]["id"]}),
+        )
+        .await;
+        call_tool(&app, &key, &session, "jeeta.inbox.events_report", json!({
+            "journey_id":donor["open_journey"]["id"],"kind":"lost", "idempotency_key":format!("close-donor-{index}"),"payload":{"reason_key":"parity"}
+        })).await;
+        let applied = if via_mcp {
+            call_tool(
+                &app,
+                &key,
+                &session,
+                "jeeta.inbox.merges_apply",
+                json!({"merge_id":merge_id,"keep":keep}),
+            )
+            .await
+        } else {
+            let response = send(
+                &app,
+                panel(
+                    Method::POST,
+                    &path,
+                    Some(&cookie),
+                    Some(json!({"keep":keep})),
+                ),
+            )
+            .await;
+            let status = response.status();
+            let body = json_body(response).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body
+        };
+        assert_eq!(applied["status"], "applied");
+        assert_eq!(applied["target_id"], *keep);
+        let observed = if via_mcp {
+            let response = send(
+                &app,
+                panel(Method::GET, "/api/inbox/merges", Some(&cookie), None),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await
+        } else {
+            call_tool(&app, &key, &session, "jeeta.inbox.merges_list", json!({})).await
+        };
+        assert_eq!(
+            observed
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == *merge_id),
+            Some(&applied)
+        );
+        // Undo's confirmation refusal is identical across the transports.
+        let undo_path = format!("/api/inbox/merges/{}/undo", merge_id.as_str().unwrap());
+        let response = send(
+            &app,
+            panel(Method::POST, &undo_path, Some(&cookie), Some(json!({}))),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let human = json_body(response).await;
+        let agent = tool_result(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.merges_undo",
+            json!({"merge_id":merge_id}),
+        )
+        .await;
+        assert_eq!(human, agent["structuredContent"]);
+
+        if index == 0 {
+            let keeper = call_tool(
+                &app,
+                &key,
+                &session,
+                "jeeta.inbox.people_get",
+                json!({"person_id":keep}),
+            )
+            .await;
+            let journey = &keeper["open_journey"]["id"];
+            for (title, due_at, assignee) in [
+                ("Overdue", "2026-10-22T08:59:59Z", Some(user)),
+                ("Due now", "2026-10-22T09:00:00Z", None),
+                ("Due tomorrow", "2026-10-23T09:00:00Z", Some(user)),
+                ("Later", "2026-10-23T09:00:01Z", None),
+            ] {
+                let input = json!({"title":title,"due_at":due_at,"assignee":assignee});
+                let response = send(
+                    &app,
+                    panel(
+                        Method::POST,
+                        &format!("/api/inbox/journeys/{}/tasks", journey.as_str().unwrap()),
+                        Some(&cookie),
+                        Some(input),
+                    ),
+                )
+                .await;
+                let status = response.status();
+                let body = json_body(response).await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+            }
+            for (query, args, count) in [
+                (String::new(), json!({}), 2),
+                ("?queue=due_24h".into(), json!({"queue":"due_24h"}), 2),
+                ("?queue=overdue".into(), json!({"queue":"overdue"}), 1),
+                ("?queue=all".into(), json!({"queue":"all"}), 4),
+                (
+                    format!("?queue=all&assignee={user}"),
+                    json!({"queue":"all","assignee":user}),
+                    2,
+                ),
+            ] {
+                let response = send(
+                    &app,
+                    panel(
+                        Method::GET,
+                        &format!("/api/inbox/tasks{query}"),
+                        Some(&cookie),
+                        None,
+                    ),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let human = json_body(response).await;
+                let agent = call_tool(&app, &key, &session, "jeeta.inbox.tasks_list", args).await;
+                assert_eq!(human, agent);
+                assert_eq!(human.as_array().unwrap().len(), count, "{query}");
+            }
+        }
+    }
+    let response = send(
+        &app,
+        panel(
+            Method::GET,
+            "/api/inbox/tasks?queue=invalid",
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let human = json_body(response).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.tasks_list",
+        json!({"queue":"invalid"}),
+    )
+    .await;
+    assert_eq!(human["code"], "VALIDATION");
+    assert_eq!(human["code"], agent["structuredContent"]["code"]);
+}

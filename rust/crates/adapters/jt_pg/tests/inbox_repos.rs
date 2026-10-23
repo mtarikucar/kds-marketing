@@ -237,7 +237,10 @@ async fn concurrent_first_contacts_leave_one_person_and_journey() {
     }
     drop(b);
     let mut t = uow.tenant(f.ws).await.unwrap();
-    assert_eq!(t.people().search("", 10).await.unwrap(), vec![p.clone()]);
+    let mut expected = p.clone();
+    expected.updated_at = t.people().get(p.id).await.unwrap().unwrap().updated_at;
+    assert!(expected.updated_at > p.updated_at);
+    assert_eq!(t.people().search("", 10).await.unwrap(), vec![expected]);
     assert!(t.journeys().open_for(p.id).await.unwrap().is_some());
     assert!(t.journeys().open_for(q.id).await.unwrap().is_none());
 }

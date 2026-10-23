@@ -10,6 +10,17 @@ use time::OffsetDateTime;
 
 #[async_trait]
 impl PersonRepo for PgTenantRepos {
+    async fn set_write_time(&mut self, at: OffsetDateTime) -> Result<(), AppError> {
+        let at = at
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| AppError::internal("invalid inbox write time"))?;
+        sqlx::query("select set_config('app.inbox_write_at',$1,true)")
+            .bind(at)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "set inbox write time"))?;
+        Ok(())
+    }
     async fn lock_workspace(&mut self) -> Result<(), AppError> {
         sqlx::query("select pg_advisory_xact_lock(hashtextextended('inbox:' || $1::text, 0))")
             .bind(self.workspace_id().as_uuid())
@@ -82,7 +93,7 @@ impl PersonRepo for PgTenantRepos {
         }
         changed(
             sqlx::query(
-                "update people set merged_into=$3,updated_at=$4 where workspace_id=$1 and id=$2",
+                "update people set merged_into=$3,updated_at=greatest(updated_at+interval '1 microsecond',$4) where workspace_id=$1 and id=$2",
             )
             .bind(ws.as_uuid())
             .bind(id.as_uuid())
@@ -96,7 +107,7 @@ impl PersonRepo for PgTenantRepos {
     async fn set_erased(&mut self, id: PersonId, at: OffsetDateTime) -> Result<(), AppError> {
         changed(
             sqlx::query(
-                "update people set erased_at=$3,updated_at=$3 where workspace_id=$1 and id=$2",
+                "update people set erased_at=$3,updated_at=greatest(updated_at+interval '1 microsecond',$3) where workspace_id=$1 and id=$2",
             )
             .bind(self.workspace_id().as_uuid())
             .bind(id.as_uuid())

@@ -22,6 +22,7 @@ create table if not exists identities (
 );
 
 create table if not exists conversations (
+    created_at timestamptz not null, updated_at timestamptz not null,
     workspace_id uuid not null references workspaces (id),
     id uuid primary key, person_id uuid not null, capability_id uuid not null,
     kind_key text not null, state text not null default 'open', snoozed_until timestamptz,

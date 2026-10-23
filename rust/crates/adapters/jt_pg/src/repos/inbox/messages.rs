@@ -20,6 +20,7 @@ impl MessageRepo for PgTenantRepos {
         .await?;
         let done=sqlx::query("insert into messages select * from jsonb_populate_record(null::messages,$1) where workspace_id=$2 on conflict do nothing").bind(value!(&row)).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert message"))?;
         if done.rows_affected() == 1 {
+            super::touch_conversation(self, row.conversation_id).await?;
             return Ok(Some(row.id));
         }
         let replay: bool=sqlx::query_scalar("select exists(select 1 from messages where workspace_id=$1 and conversation_id=$2 and external_id=$3)").bind(ws.as_uuid()).bind(row.conversation_id.as_uuid()).bind(row.external_id).fetch_one(self.tx.conn()).await.map_err(|e|map_sqlx(e,"find duplicate message"))?;
@@ -39,7 +40,19 @@ impl MessageRepo for PgTenantRepos {
         external_id: Option<String>,
         cost_minor: Option<i64>,
     ) -> Result<(), AppError> {
+        let parent: Option<uuid::Uuid> = sqlx::query_scalar(
+            "select conversation_id from messages where workspace_id=$1 and id=$2",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "message parent"))?;
         changed(sqlx::query("update messages set status=$3,external_id=coalesce($4,external_id),cost_minor=coalesce($5,cost_minor) where workspace_id=$1 and id=$2")
-            .bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(value!(status)).bind(external_id).bind(cost_minor).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"set message status"))?)
+            .bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(value!(status)).bind(external_id).bind(cost_minor).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"set message status"))?)?;
+        if let Some(parent) = parent {
+            super::touch_conversation(self, parent.into()).await?;
+        }
+        Ok(())
     }
 }

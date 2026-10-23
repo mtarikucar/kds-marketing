@@ -102,6 +102,8 @@ impl Fixture {
     }
     pub fn conversation(&self, p: PersonId, c: CapabilityId) -> Conversation {
         Conversation {
+            created_at: FIXED_NOW,
+            updated_at: FIXED_NOW,
             id: ConversationId::new_v7(),
             workspace_id: self.ws,
             person_id: p,
@@ -361,6 +363,7 @@ pub async fn people_identities_and_tombstones(uow: Arc<dyn UnitOfWork>) {
     };
     let mut t = f.uow.tenant(f.ws).await.unwrap();
     t.identities().insert(identity.clone()).await.unwrap();
+    let a = t.people().get(a.id).await.unwrap().unwrap();
     assert_eq!(t.people().lock(a.id).await.unwrap(), Some(a.clone()));
     assert_eq!(
         t.people()
@@ -619,7 +622,7 @@ pub async fn reducer_patch_and_event_are_atomic(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(reopened.status, JourneyStatus::Contacted);
     assert_eq!(reopened.unreachable_attempts, 0);
     assert!(reopened.closed_at.is_none() && reopened.lost_reason.is_none());
-    assert_eq!(t.journeys().events(j.id).await.unwrap().len(), 5);
+    assert_eq!(t.journeys().events(j.id, 500).await.unwrap().len(), 5);
     t.commit().await.unwrap();
     // Existing event key cannot produce another patch, even if the candidate event would win.
     let mut t = f.uow.tenant(f.ws).await.unwrap();
@@ -645,10 +648,10 @@ pub async fn reducer_patch_and_event_are_atomic(uow: Arc<dyn UnitOfWork>) {
     drop(t);
     let mut t = f.uow.tenant(f.ws).await.unwrap();
     assert_eq!(t.journeys().get(j.id).await.unwrap().unwrap(), reopened);
-    assert_eq!(t.journeys().events(j.id).await.unwrap().len(), 5);
+    assert_eq!(t.journeys().events(j.id, 500).await.unwrap().len(), 5);
     let mut t = f.uow.tenant(f.other).await.unwrap();
     assert!(t.journeys().get(j.id).await.unwrap().is_none());
-    assert!(t.journeys().events(j.id).await.unwrap().is_empty());
+    assert!(t.journeys().events(j.id, 500).await.unwrap().is_empty());
 }
 
 pub async fn tasks_notes_merges_and_outbox(uow: Arc<dyn UnitOfWork>) {
@@ -877,6 +880,8 @@ pub async fn conversation_upsert_uses_the_natural_key(uow: Arc<dyn UnitOfWork>) 
         .await
         .unwrap();
     let candidate = Conversation {
+        created_at: FIXED_NOW,
+        updated_at: FIXED_NOW,
         id: b.id,
         ..f.conversation(p.id, cap)
     };

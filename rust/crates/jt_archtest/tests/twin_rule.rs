@@ -110,7 +110,7 @@ fn mcp_registry_matches_catalog() {
 /// capability +1; `jeeta.budget.items_update` and `jeeta.budget.items_retire`, budget +2), the 7
 /// `connector` tools (six from Task 8 and `jeeta.connector.hooks` from Task 9; the eighth
 /// connection use case, completing an OAuth flow, is the panel's callback only) and the 3
-/// `events` tools: 60. Inbox adds 11, giving 71.
+/// `events` tools: 60. Inbox adds 19, giving 79.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -127,15 +127,15 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("work", 3),
     ("connector", 7),
     ("events", 3),
-    ("inbox", 11),
+    ("inbox", 19),
 ];
 
 #[test]
-fn the_registry_holds_71_tools() {
+fn the_registry_holds_79_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 71);
+    assert_eq!(specs.len(), 79);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 71);
+    assert_eq!(total, 79);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -144,7 +144,7 @@ fn the_registry_holds_71_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 71);
+    assert_eq!(catalog, 79);
 }
 
 /// An MCP-only use case has no human caller: only an agent's check-in is one.
@@ -156,4 +156,40 @@ fn only_the_agent_check_in_is_mcp_only() {
         .map(|uc| uc.id)
         .collect();
     assert_eq!(mcp_only, ["work.checkin"]);
+}
+
+/// These operations explicitly demand confirmation in addition to permission checks.
+#[test]
+fn destructive_confirmation_tools_are_explicitly_listed() {
+    let tools = jt_mcp::registry();
+    let confirmed: BTreeSet<_> = tools
+        .iter()
+        .filter(|tool| {
+            tool.input_schema.as_value()["properties"]
+                .get("confirm")
+                .is_some()
+        })
+        .map(|tool| {
+            assert_eq!(
+                tool.risk,
+                jt_app::catalog::Risk::Destructive,
+                "{}",
+                tool.name
+            );
+            assert_eq!(
+                tool.input_schema.as_value()["properties"]["confirm"]["type"],
+                "boolean"
+            );
+            tool.name
+        })
+        .collect();
+    assert_eq!(
+        confirmed,
+        BTreeSet::from([
+            "jeeta.strategy.archive",
+            "jeeta.capability.retire",
+            "jeeta.budget.items_retire",
+            "jeeta.inbox.merges_undo",
+        ])
+    );
 }

@@ -440,6 +440,7 @@ pub(super) struct MemTx {
     set_sealed_faults: Arc<AtomicUsize>,
     inbox_task_status_faults: Arc<AtomicUsize>,
     pub(super) work: MemState,
+    pub(super) inbox_write_at: Option<OffsetDateTime>,
     ops: Vec<Op>,
     /// Set once a call on the bundle has failed; `commit` then refuses.
     spoiled: bool,
@@ -453,6 +454,7 @@ impl MemTx {
             set_sealed_faults: Arc::clone(&uow.set_sealed_faults),
             inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
             work: lock(&uow.state).clone(),
+            inbox_write_at: None,
             ops: Vec::new(),
             spoiled: false,
         }

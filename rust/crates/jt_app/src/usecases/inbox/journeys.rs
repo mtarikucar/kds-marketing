@@ -59,6 +59,7 @@ pub async fn open(deps: &Deps, ctx: &Ctx, person: PersonId) -> Result<Journey, A
     ctx.require(Permission::InboxWork)?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
     let person = people::resolve(r.as_mut(), person).await?;
     if r.journeys().open_for(person.id).await?.is_some() {
         return Err(AppError::conflict("an open journey already exists"));
@@ -104,10 +105,7 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: JourneyId) -> Result<JourneyOut, Ap
         .get(id)
         .await?
         .ok_or_else(|| AppError::not_found("no such journey"))?;
-    let mut events = r.journeys().events(id).await?;
-    if events.len() > 50 {
-        events.drain(..events.len() - 50);
-    }
+    let events = r.journeys().events(id, 50).await?;
     Ok(JourneyOut {
         journey,
         events,
@@ -124,8 +122,8 @@ pub async fn assign_owner(
     ctx.require(Permission::InboxManage)?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
-    let mut row = r
-        .journeys()
+    r.people().set_write_time(ctx.now).await?;
+    r.journeys()
         .lock(id)
         .await?
         .ok_or_else(|| AppError::not_found("no such journey"))?;
@@ -142,7 +140,11 @@ pub async fn assign_owner(
         }
     }
     r.journeys().assign_owner(id, input.user_id).await?;
-    row.owner = input.user_id;
+    let row = r
+        .journeys()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such journey"))?;
     record(
         r.as_mut(),
         ctx,
@@ -182,6 +184,7 @@ pub async fn report(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     // Covers workspace-wide key races even when two requests name different journeys.
     r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
     let mut journey = r
         .journeys()
         .lock(id)

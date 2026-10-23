@@ -1,10 +1,12 @@
 //! Inbox operations shared by the panel, MCP and trusted inbound consumers.
 pub mod dictionaries;
 pub mod journeys;
+pub mod merge;
 pub mod people;
+pub mod tasks;
 
 use crate::{ctx::Ctx, error::AppError, ports::TenantRepos};
-pub use jt_inbox::{JourneyId, PersonId};
+pub use jt_inbox::{JourneyId, MergeId, PersonId, TaskId};
 use serde_json::Value;
 
 pub(crate) async fn record(

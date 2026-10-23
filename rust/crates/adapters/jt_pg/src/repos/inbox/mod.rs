@@ -30,7 +30,7 @@ macro_rules! many {
                 serde_json::from_value::<$ty>(v)
                     .map_err(|_| AppError::internal("invalid stored inbox row"))
             })
-            .collect()
+            .collect::<Result<Vec<$ty>, AppError>>()
     }};
 }
 macro_rules! value {
@@ -97,3 +97,47 @@ mod tasks_notes;
 
 #[cfg(test)]
 mod usecase_contracts;
+
+/// The caller can pin the transaction's logical clock; direct repository users use wall time.
+async fn write_time(
+    repos: &mut crate::uow::PgTenantRepos,
+) -> Result<time::OffsetDateTime, AppError> {
+    sqlx::query_scalar("select coalesce(nullif(current_setting('app.inbox_write_at',true), '')::timestamptz, clock_timestamp())")
+        .fetch_one(repos.tx.conn()).await.map_err(|e| map_sqlx(e,"inbox write time"))
+}
+async fn touch_person(
+    repos: &mut crate::uow::PgTenantRepos,
+    id: jt_inbox::PersonId,
+) -> Result<(), AppError> {
+    let at = write_time(repos).await?;
+    sqlx::query("update people set updated_at=greatest(updated_at+interval '1 microsecond',$3) where workspace_id=$1 and id=$2")
+        .bind(repos.workspace_id().as_uuid()).bind(id.as_uuid()).bind(at)
+        .execute(repos.tx.conn()).await.map_err(|e| map_sqlx(e,"touch person"))?;
+    Ok(())
+}
+async fn touch_journey(
+    repos: &mut crate::uow::PgTenantRepos,
+    id: jt_inbox::JourneyId,
+) -> Result<(), AppError> {
+    let at = write_time(repos).await?;
+    let parent: Option<Uuid> = sqlx::query_scalar("update journeys set updated_at=greatest(updated_at+interval '1 microsecond',$3) where workspace_id=$1 and id=$2 returning person_id")
+        .bind(repos.workspace_id().as_uuid()).bind(id.as_uuid()).bind(at)
+        .fetch_optional(repos.tx.conn()).await.map_err(|e| map_sqlx(e,"touch journey"))?;
+    if let Some(id) = parent {
+        touch_person(repos, id.into()).await?;
+    }
+    Ok(())
+}
+async fn touch_conversation(
+    repos: &mut crate::uow::PgTenantRepos,
+    id: jt_inbox::ConversationId,
+) -> Result<(), AppError> {
+    let at = write_time(repos).await?;
+    let parent: Option<Uuid> = sqlx::query_scalar("update conversations set updated_at=greatest(updated_at+interval '1 microsecond',$3) where workspace_id=$1 and id=$2 returning person_id")
+        .bind(repos.workspace_id().as_uuid()).bind(id.as_uuid()).bind(at)
+        .fetch_optional(repos.tx.conn()).await.map_err(|e| map_sqlx(e,"touch conversation"))?;
+    if let Some(id) = parent {
+        touch_person(repos, id.into()).await?;
+    }
+    Ok(())
+}

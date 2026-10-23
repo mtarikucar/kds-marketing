@@ -105,8 +105,52 @@ fn user(s: &MemState, id: Option<UserId>) -> Result<(), AppError> {
     Ok(())
 }
 
+pub(super) fn touch_person(s: &mut MemState, ws: WorkspaceId, id: PersonId, at: OffsetDateTime) {
+    if let Some(row) = s
+        .inbox
+        .people
+        .iter_mut()
+        .find(|r| r.workspace_id == ws && r.id == id)
+    {
+        row.updated_at = at.max(row.updated_at + Duration::microseconds(1));
+    }
+}
+pub(super) fn touch_journey(s: &mut MemState, ws: WorkspaceId, id: JourneyId, at: OffsetDateTime) {
+    if let Some(row) = s
+        .inbox
+        .journeys
+        .iter_mut()
+        .find(|r| r.workspace_id == ws && r.id == id)
+    {
+        row.updated_at = at.max(row.updated_at + Duration::microseconds(1));
+        let person_id = row.person_id;
+        touch_person(s, ws, person_id, at);
+    }
+}
+pub(super) fn touch_conversation(
+    s: &mut MemState,
+    ws: WorkspaceId,
+    id: ConversationId,
+    at: OffsetDateTime,
+) {
+    if let Some(row) = s
+        .inbox
+        .conversations
+        .iter_mut()
+        .find(|r| r.workspace_id == ws && r.id == id)
+    {
+        row.updated_at = at.max(row.updated_at + Duration::microseconds(1));
+        let person_id = row.person_id;
+        touch_person(s, ws, person_id, at);
+    }
+}
+
 #[async_trait]
 impl PersonRepo for MemTenant {
+    async fn set_write_time(&mut self, at: OffsetDateTime) -> Result<(), AppError> {
+        self.tx.inbox_write_at = Some(at);
+        Ok(())
+    }
     async fn lock_workspace(&mut self) -> Result<(), AppError> {
         Ok(())
     }
@@ -212,7 +256,7 @@ impl PersonRepo for MemTenant {
                     .find(|r| r.workspace_id == ws && r.id == id)
                 {
                     r.merged_into = target;
-                    r.updated_at = at;
+                    r.updated_at = at.max(r.updated_at + Duration::microseconds(1));
                 }
             });
             Ok(())
@@ -230,7 +274,7 @@ impl PersonRepo for MemTenant {
                     .find(|r| r.workspace_id == ws && r.id == id)
                 {
                     r.erased_at = Some(at);
-                    r.updated_at = at;
+                    r.updated_at = at.max(r.updated_at + Duration::microseconds(1));
                 }
             });
             Ok(())
@@ -254,7 +298,11 @@ impl IdentityRepo for MemTenant {
                 }),
                 "identity key is taken",
             )?;
-            t.tx.write(move |s| s.inbox.identities.push(row.clone()));
+            let at = t.inbox_write_at();
+            t.tx.write(move |s| {
+                s.inbox.identities.push(row.clone());
+                touch_person(s, row.workspace_id, row.person_id, at);
+            });
             Ok(())
         })
     }
@@ -274,6 +322,7 @@ impl IdentityRepo for MemTenant {
         self.call(|t| {
             let ws = t.ws;
             person(t.state(), ws, id)?;
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 for r in s
                     .inbox
@@ -283,6 +332,7 @@ impl IdentityRepo for MemTenant {
                 {
                     r.active = false;
                 }
+                touch_person(s, ws, id, at);
             });
             Ok(())
         })
@@ -292,6 +342,7 @@ impl IdentityRepo for MemTenant {
             let ws = t.ws;
             person(t.state(), ws, from)?;
             person(t.state(), ws, to)?;
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 for r in s
                     .inbox
@@ -301,6 +352,8 @@ impl IdentityRepo for MemTenant {
                 {
                     r.person_id = to;
                 }
+                touch_person(s, ws, from, at);
+                touch_person(s, ws, to, at);
             });
             Ok(())
         })
@@ -348,6 +401,7 @@ impl ConversationRepo for MemTenant {
     async fn upsert_on_inbound(&mut self, mut row: Conversation) -> Result<Conversation, AppError> {
         self.call(|t| {
             let ws = t.ws;
+            let write_at = t.inbox_write_at();
             same_workspace(ws, row.workspace_id)?;
             let at = row.last_inbound_at.ok_or_else(|| {
                 AppError::validation("inbound time is required", serde_json::json!({}))
@@ -371,7 +425,10 @@ impl ConversationRepo for MemTenant {
                     "conversation id is taken",
                 )?;
                 row.reopen_on_inbound(at);
+                row.created_at = write_at;
+                row.updated_at = write_at;
             }
+            row.updated_at = write_at.max(row.updated_at + Duration::microseconds(1));
             let out = row.clone();
             t.tx.write(move |s| {
                 if let Some(old) = s
@@ -384,6 +441,7 @@ impl ConversationRepo for MemTenant {
                 } else {
                     s.inbox.conversations.push(row.clone());
                 }
+                touch_person(s, ws, row.person_id, write_at);
             });
             Ok(out)
         })
@@ -397,6 +455,7 @@ impl ConversationRepo for MemTenant {
         self.call(|t| {
             let ws = t.ws;
             conversation(t.state(), ws, id)?;
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 if let Some(r) = s
                     .inbox
@@ -409,6 +468,7 @@ impl ConversationRepo for MemTenant {
                         r.last_outbound_at = outbound_at;
                     }
                 }
+                touch_conversation(s, ws, id, at);
             });
             Ok(())
         })
@@ -434,6 +494,7 @@ impl ConversationRepo for MemTenant {
             if let Executor::Human { user_id } = executor {
                 user(t.state(), user_id)?;
             }
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 if let Some(r) = s
                     .inbox
@@ -444,6 +505,7 @@ impl ConversationRepo for MemTenant {
                     r.executor = executor;
                     r.executor_generation = generation;
                 }
+                touch_conversation(s, ws, id, at);
             });
             Ok(generation)
         })
@@ -487,7 +549,11 @@ impl MessageRepo for MemTenant {
                 "message id is taken",
             )?;
             let id = row.id;
-            t.tx.write(move |s| s.inbox.messages.push(row.clone()));
+            let at = t.inbox_write_at();
+            t.tx.write(move |s| {
+                s.inbox.messages.push(row.clone());
+                touch_conversation(s, row.workspace_id, row.conversation_id, at);
+            });
             Ok(Some(id))
         })
     }
@@ -531,6 +597,8 @@ impl MessageRepo for MemTenant {
                     "message external id is taken",
                 )?;
             }
+            let conversation_id = old.conversation_id;
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 if let Some(r) = s
                     .inbox
@@ -546,6 +614,7 @@ impl MessageRepo for MemTenant {
                         r.cost_minor = cost_minor;
                     }
                 }
+                touch_conversation(s, ws, conversation_id, at);
             });
             Ok(())
         })
@@ -567,6 +636,7 @@ impl JourneyRepo for MemTenant {
             let ws = t.ws;
             journey(t.state(), ws, id)?;
             user(t.state(), owner)?;
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 if let Some(r) = s
                     .inbox
@@ -576,6 +646,7 @@ impl JourneyRepo for MemTenant {
                 {
                     r.owner = owner;
                 }
+                touch_journey(s, ws, id, at);
             });
             Ok(())
         })
@@ -637,7 +708,11 @@ impl JourneyRepo for MemTenant {
                 "open journey already exists",
             )?;
             row.reduce_input = ReduceInput::default();
-            t.tx.write(move |s| s.inbox.journeys.push(row.clone()));
+            let at = t.inbox_write_at();
+            t.tx.write(move |s| {
+                s.inbox.journeys.push(row.clone());
+                touch_person(s, row.workspace_id, row.person_id, at);
+            });
             Ok(())
         })
     }
@@ -685,6 +760,8 @@ impl JourneyRepo for MemTenant {
                     "open journey already exists",
                 )?;
             }
+            let person_id = row.person_id;
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 if let Some(r) = s
                     .inbox
@@ -696,14 +773,17 @@ impl JourneyRepo for MemTenant {
                     r.unreachable_attempts = patch.unreachable_attempts;
                     r.closed_at = patch.closed_at;
                     r.lost_reason = patch.lost_reason.clone();
-                    r.updated_at = patch.updated_at;
+                    r.updated_at = patch
+                        .updated_at
+                        .max(r.updated_at + Duration::microseconds(1));
                 }
                 s.inbox.events.push(event.clone());
+                touch_person(s, ws, person_id, at);
             });
             Ok(())
         })
     }
-    async fn events(&mut self, id: JourneyId) -> Result<Vec<JourneyEvent>, AppError> {
+    async fn events(&mut self, id: JourneyId, limit: u32) -> Result<Vec<JourneyEvent>, AppError> {
         let mut rows: Vec<_> = self
             .state()
             .inbox
@@ -713,11 +793,50 @@ impl JourneyRepo for MemTenant {
             .cloned()
             .collect();
         rows.sort_by_key(|r| (r.at, r.id));
-        Ok(rows)
+        let skip = rows.len().saturating_sub(limit.clamp(1, 500) as usize);
+        Ok(rows.into_iter().skip(skip).collect())
     }
 }
 #[async_trait]
 impl TaskRepo for MemTenant {
+    async fn get(&mut self, id: TaskId) -> Result<Option<Task>, AppError> {
+        Ok(self
+            .state()
+            .inbox
+            .tasks
+            .iter()
+            .find(|r| r.workspace_id == self.ws && r.id == id)
+            .cloned())
+    }
+    async fn query(
+        &mut self,
+        queue: TaskQueue,
+        assignee: Option<UserId>,
+        now: OffsetDateTime,
+    ) -> Result<Vec<Task>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbox
+            .tasks
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && r.status == TaskStatus::Open
+                    && assignee.is_none_or(|id| r.assignee == Some(id))
+                    && match queue {
+                        TaskQueue::Due24h => {
+                            r.due_at >= now && r.due_at <= now + Duration::hours(24)
+                        }
+                        TaskQueue::Overdue => r.due_at < now,
+                        TaskQueue::All => true,
+                    }
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|r| (r.due_at, r.id));
+        Ok(rows)
+    }
+
     async fn insert(&mut self, row: Task) -> Result<(), AppError> {
         self.call(|t| {
             same_workspace(t.ws, row.workspace_id)?;
@@ -727,7 +846,11 @@ impl TaskRepo for MemTenant {
                 !t.state().inbox.tasks.iter().any(|r| r.id == row.id),
                 "task id is taken",
             )?;
-            t.tx.write(move |s| s.inbox.tasks.push(row.clone()));
+            let at = t.inbox_write_at();
+            t.tx.write(move |s| {
+                s.inbox.tasks.push(row.clone());
+                touch_journey(s, row.workspace_id, row.journey_id, at);
+            });
             Ok(())
         })
     }
@@ -749,13 +872,15 @@ impl TaskRepo for MemTenant {
                 return Err(AppError::internal("injected task effect failure"));
             }
             let ws = t.ws;
-            found(
-                t.state()
-                    .inbox
-                    .tasks
-                    .iter()
-                    .any(|r| r.workspace_id == ws && r.id == id),
-            )?;
+            let journey_id = t
+                .state()
+                .inbox
+                .tasks
+                .iter()
+                .find(|r| r.workspace_id == ws && r.id == id)
+                .ok_or_else(|| AppError::not_found("no such task"))?
+                .journey_id;
+            let at = t.inbox_write_at();
             t.tx.write(move |s| {
                 if let Some(r) = s
                     .inbox
@@ -765,6 +890,7 @@ impl TaskRepo for MemTenant {
                 {
                     r.status = status;
                 }
+                touch_journey(s, ws, journey_id, at);
             });
             Ok(())
         })
@@ -780,7 +906,11 @@ impl NoteRepo for MemTenant {
                 !t.state().inbox.notes.iter().any(|r| r.id == row.id),
                 "note id is taken",
             )?;
-            t.tx.write(move |s| s.inbox.notes.push(row.clone()));
+            let at = t.inbox_write_at();
+            t.tx.write(move |s| {
+                s.inbox.notes.push(row.clone());
+                touch_journey(s, row.workspace_id, row.journey_id, at);
+            });
             Ok(())
         })
     }
@@ -795,74 +925,6 @@ impl NoteRepo for MemTenant {
             .collect();
         rows.sort_by_key(|r| (r.at, r.id));
         Ok(rows)
-    }
-}
-#[async_trait]
-impl MergeRepo for MemTenant {
-    async fn insert(&mut self, row: MergeRow) -> Result<(), AppError> {
-        self.call(|t| {
-            same_workspace(t.ws, row.workspace_id)?;
-            person(t.state(), t.ws, row.source_id)?;
-            person(t.state(), t.ws, row.target_id)?;
-            if row.source_id == row.target_id {
-                return Err(AppError::internal("merge source equals target"));
-            }
-            user(t.state(), row.applied_by)?;
-            unique(
-                !t.state().inbox.merges.iter().any(|r| r.id == row.id),
-                "merge id is taken",
-            )?;
-            t.tx.write(move |s| s.inbox.merges.push(row.clone()));
-            Ok(())
-        })
-    }
-    async fn get(&mut self, id: MergeId) -> Result<Option<MergeRow>, AppError> {
-        Ok(self
-            .state()
-            .inbox
-            .merges
-            .iter()
-            .find(|r| r.workspace_id == self.ws && r.id == id)
-            .cloned())
-    }
-    async fn lock(&mut self, id: MergeId) -> Result<Option<MergeRow>, AppError> {
-        MergeRepo::get(self, id).await
-    }
-    async fn list(&mut self, id: PersonId) -> Result<Vec<MergeRow>, AppError> {
-        let mut rows: Vec<_> = self
-            .state()
-            .inbox
-            .merges
-            .iter()
-            .filter(|r| r.workspace_id == self.ws && (r.source_id == id || r.target_id == id))
-            .cloned()
-            .collect();
-        rows.sort_by_key(|r| (r.at, r.id));
-        Ok(rows)
-    }
-    async fn mark_undone(&mut self, id: MergeId, at: OffsetDateTime) -> Result<(), AppError> {
-        self.call(|t| {
-            let ws = t.ws;
-            found(
-                t.state()
-                    .inbox
-                    .merges
-                    .iter()
-                    .any(|r| r.workspace_id == ws && r.id == id),
-            )?;
-            t.tx.write(move |s| {
-                if let Some(r) = s
-                    .inbox
-                    .merges
-                    .iter_mut()
-                    .find(|r| r.workspace_id == ws && r.id == id)
-                {
-                    r.status = "undone".into();
-                    r.undone_at = Some(at);
-                }
-            });
-            Ok(())
-        })
     }
 }
 #[async_trait]

@@ -40,6 +40,8 @@ pub const LOST_REASON_DEFAULTS: &[(&str, &str)] = &[
 
 #[async_trait]
 pub trait PersonRepo: Send + Sync {
+    /// Supply the application clock for aggregate writes in this transaction.
+    async fn set_write_time(&mut self, at: OffsetDateTime) -> Result<(), AppError>;
     /// Serialize inbox matching/dictionary/event writes in this workspace until commit.
     /// Acquire before any person/journey locks, including from the inbound consumer.
     async fn lock_workspace(&mut self) -> Result<(), AppError>;
@@ -151,11 +153,29 @@ pub trait JourneyRepo: Send + Sync {
         event: JourneyEvent,
     ) -> Result<(), AppError>;
     async fn get(&mut self, id: JourneyId) -> Result<Option<Journey>, AppError>;
-    async fn events(&mut self, id: JourneyId) -> Result<Vec<JourneyEvent>, AppError>;
+    async fn events(&mut self, id: JourneyId, limit: u32) -> Result<Vec<JourneyEvent>, AppError>;
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskQueue {
+    #[default]
+    #[serde(rename = "due_24h")]
+    Due24h,
+    Overdue,
+    All,
 }
 
 #[async_trait]
 pub trait TaskRepo: Send + Sync {
+    async fn get(&mut self, id: TaskId) -> Result<Option<Task>, AppError>;
+    /// Open tasks, ordered by (due_at,id), without a hidden page cap.
+    async fn query(
+        &mut self,
+        queue: TaskQueue,
+        assignee: Option<UserId>,
+        now: OffsetDateTime,
+    ) -> Result<Vec<Task>, AppError>;
     async fn insert(&mut self, task: Task) -> Result<(), AppError>;
     async fn list(&mut self, journey: JourneyId) -> Result<Vec<Task>, AppError>;
     async fn set_status(&mut self, id: TaskId, status: TaskStatus) -> Result<(), AppError>;
@@ -183,8 +203,79 @@ pub struct MergeRow {
     #[serde(with = "time::serde::rfc3339::option")]
     pub undone_at: Option<OffsetDateTime>,
 }
+/// Private restoration data: no message, note or identity text is copied into the ledger.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MergeSnapshot {
+    /// Maximum timestamp of the locked aggregates; merge checkpoints must advance it.
+    #[serde(with = "time::serde::rfc3339")]
+    pub latest_write_at: OffsetDateTime,
+    pub people: [PersonId; 2],
+    pub version: u32,
+    pub identities: Vec<IdentityParent>,
+    pub journeys: Vec<JourneyParent>,
+    pub conversations: Vec<Conversation>,
+    pub messages: Vec<MessageParent>,
+    pub tasks: Vec<TaskParent>,
+    pub notes: Vec<NoteParent>,
+    pub outbox: Vec<OutboxParent>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct IdentityParent {
+    pub id: IdentityId,
+    pub person_id: PersonId,
+    pub active: bool,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JourneyParent {
+    pub id: JourneyId,
+    pub person_id: PersonId,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MessageParent {
+    pub id: MessageId,
+    pub conversation_id: ConversationId,
+    pub external_id: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TaskParent {
+    pub id: TaskId,
+    pub journey_id: JourneyId,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NoteParent {
+    pub id: NoteId,
+    pub journey_id: JourneyId,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OutboxParent {
+    pub id: Uuid,
+    pub conversation_id: ConversationId,
+}
+
 #[async_trait]
 pub trait MergeRepo: Send + Sync {
+    async fn list_all(&mut self) -> Result<Vec<MergeRow>, AppError>;
+    /// Lock child aggregates in id order, after both people have been locked in id order.
+    async fn snapshot(&mut self, a: PersonId, b: PersonId) -> Result<MergeSnapshot, AppError>;
+    /// Move the snapshotted graph, preserving every message even when external IDs collide.
+    async fn apply_snapshot(
+        &mut self,
+        snapshot: &MergeSnapshot,
+        keep: PersonId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// Called only after the app has checked time, confirmation and aggregate edit guards.
+    async fn restore_snapshot(
+        &mut self,
+        snapshot: &MergeSnapshot,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    async fn edited_since(
+        &mut self,
+        person: PersonId,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError>;
+    async fn save(&mut self, row: MergeRow) -> Result<(), AppError>;
     async fn insert(&mut self, row: MergeRow) -> Result<(), AppError>;
     async fn get(&mut self, id: MergeId) -> Result<Option<MergeRow>, AppError>;
     async fn lock(&mut self, id: MergeId) -> Result<Option<MergeRow>, AppError>;
@@ -278,4 +369,24 @@ pub trait OutboxRepo: Send + Sync {
     ) -> Result<Vec<OutboxRow>, AppError>;
     /// Update only processing state; identity, intent and relationships stay immutable.
     async fn update(&mut self, row: OutboxRow) -> Result<(), AppError>;
+}
+
+impl MergeSnapshot {
+    /// Stable original-to-survivor mapping; the oldest conversation keeps its state/executor.
+    pub fn conversation_targets(
+        &self,
+    ) -> std::collections::BTreeMap<ConversationId, ConversationId> {
+        self.conversations
+            .iter()
+            .map(|c| {
+                let keep = self
+                    .conversations
+                    .iter()
+                    .filter(|other| other.capability_id == c.capability_id)
+                    .min_by_key(|other| (other.created_at, other.id))
+                    .expect("conversation itself");
+                (c.id, keep.id)
+            })
+            .collect()
+    }
 }

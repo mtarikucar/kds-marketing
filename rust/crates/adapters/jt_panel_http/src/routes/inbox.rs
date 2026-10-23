@@ -5,7 +5,9 @@ use crate::{
     state::AppState,
 };
 use axum::{Json, extract::State};
-use jt_app::usecases::inbox::{JourneyId, PersonId, dictionaries, journeys, people};
+use jt_app::usecases::inbox::{
+    JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, tasks,
+};
 use serde_json::Value;
 
 fn to_json(value: &impl serde::Serialize) -> Result<Json<Value>, ApiError> {
@@ -94,4 +96,71 @@ pub async fn status_labels_set(
     ApiJson(input): ApiJson<dictionaries::StatusLabelsInput>,
 ) -> Result<Json<Value>, ApiError> {
     to_json(&dictionaries::set_status_labels(&state.deps, &ctx, input).await?)
+}
+
+pub async fn merges_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&merge::list(&state.deps, &ctx).await?)
+}
+
+pub async fn merges_apply(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<MergeId>,
+    ApiJson(input): ApiJson<merge::ApplyInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&merge::apply(&state.deps, &ctx, id, input).await?)
+}
+
+pub async fn merges_undo(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<MergeId>,
+    ApiJson(input): ApiJson<merge::UndoInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&merge::undo(&state.deps, &ctx, id, input).await?)
+}
+
+pub async fn merges_refuse(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<MergeId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&merge::refuse(&state.deps, &ctx, id).await?)
+}
+
+pub async fn tasks_create(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<JourneyId>,
+    ApiJson(input): ApiJson<tasks::CreateInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&tasks::create(&state.deps, &ctx, id, input).await?)
+}
+
+pub async fn tasks_complete(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<TaskId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&tasks::complete(&state.deps, &ctx, id).await?)
+}
+
+pub async fn tasks_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(input): ApiQuery<tasks::ListInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&tasks::list(&state.deps, &ctx, input).await?)
+}
+
+pub async fn notes_add(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<JourneyId>,
+    ApiJson(input): ApiJson<tasks::NoteInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&tasks::add_note(&state.deps, &ctx, id, input).await?)
 }

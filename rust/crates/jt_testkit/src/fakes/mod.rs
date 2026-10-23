@@ -70,3 +70,5 @@ pub use state::{
     StoredConsultationEntry, StoredGroupMember, StoredHypothesis, StoredInboundEvent,
     StoredOutboundJob, StoredRole, StoredWorkspacePolicy,
 };
+
+mod inbox_merge;

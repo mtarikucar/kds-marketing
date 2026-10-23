@@ -46,6 +46,12 @@ pub enum Executor {
 /// One person's conversation through one capability, with a monotonically increasing fence.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conversation {
+    /// Original creation time, preserved during coalescing and undo.
+    #[serde(default = "epoch", with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    /// Last aggregate write, including message mutations.
+    #[serde(default = "epoch", with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
     /// The conversation's id.
     pub id: ConversationId,
     /// The tenant that owns the conversation.
@@ -122,4 +128,8 @@ impl Conversation {
         self.executor_generation = generation;
         generation
     }
+}
+
+fn epoch() -> OffsetDateTime {
+    OffsetDateTime::UNIX_EPOCH
 }

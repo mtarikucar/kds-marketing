@@ -189,7 +189,7 @@ fn inbox_core_is_strategy_and_status_gated() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert!(!rows.is_empty());
+    assert_eq!(rows.len(), 19);
     for row in rows {
         assert_eq!(row.gate, GateMode::Gated);
         assert_eq!(row.status_exemption, StatusExemption::Never);

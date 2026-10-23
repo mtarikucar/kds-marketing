@@ -123,6 +123,14 @@ fn catalog_is_the_release_table() {
         ("inbox.journeys.get", Some("jeeta.inbox.journeys_get"), Some(("GET", "/api/inbox/journeys/{journey_id}")), false, Risk::Read),
         ("inbox.journeys.assign_owner", Some("jeeta.inbox.journeys_assign_owner"), Some(("POST", "/api/inbox/journeys/{journey_id}/owner")), false, Risk::Write),
         ("inbox.status_labels.set", Some("jeeta.inbox.status_labels_set"), Some(("PUT", "/api/inbox/status-labels")), false, Risk::Write),
+        ("inbox.merges.list", Some("jeeta.inbox.merges_list"), Some(("GET", "/api/inbox/merges")), false, Risk::Read),
+        ("inbox.merges.apply", Some("jeeta.inbox.merges_apply"), Some(("POST", "/api/inbox/merges/{merge_id}/apply")), false, Risk::Write),
+        ("inbox.merges.undo", Some("jeeta.inbox.merges_undo"), Some(("POST", "/api/inbox/merges/{merge_id}/undo")), false, Risk::Destructive),
+        ("inbox.merges.refuse", Some("jeeta.inbox.merges_refuse"), Some(("POST", "/api/inbox/merges/{merge_id}/refuse")), false, Risk::Write),
+        ("inbox.tasks.create", Some("jeeta.inbox.tasks_create"), Some(("POST", "/api/inbox/journeys/{journey_id}/tasks")), false, Risk::Write),
+        ("inbox.tasks.complete", Some("jeeta.inbox.tasks_complete"), Some(("POST", "/api/inbox/tasks/{task_id}/complete")), false, Risk::Write),
+        ("inbox.tasks.list", Some("jeeta.inbox.tasks_list"), Some(("GET", "/api/inbox/tasks")), false, Risk::Read),
+        ("inbox.notes.add", Some("jeeta.inbox.notes_add"), Some(("POST", "/api/inbox/journeys/{journey_id}/notes")), false, Risk::Write),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
@@ -195,7 +203,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 81);
+    assert_eq!(CATALOG.len(), 89);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id.starts_with("inbox.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

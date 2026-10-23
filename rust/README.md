@@ -236,7 +236,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (71 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (79 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -253,12 +253,14 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 71 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 79 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
 emekliye ayırır) ve `jeeta.budget.items_retire` (bütçe kalemini kesin olarak emekliye ayırır), ayrıca
-`confirm: true` ister, yoksa `VALIDATION`. Öteki yıkıcı araçlar istemez, çünkü
+`confirm: true` ister, yoksa `VALIDATION`. Birleştirmeyi geri alan
+`jeeta.inbox.merges_undo` da `DESTRUCTIVE` olarak işaretlidir ve `confirm: true` ister.
+Öteki yıkıcı araçlar istemez, çünkü
 etkileri onarılabilir: çıkarılan üye yeniden davet edilir, silinen rol ya da grup yeniden açılır, iptal
 edilen anahtarın yerine yenisi çıkarılır; bir grup ancak strateji ona başvurmuyorsa silinir (başvuruyorsa
 `CONFLICT`), bu yüzden silinen grup yeniden kurulabilir. Yetki onaydan değil rolden gelir: anahtar, çıkaran insanın
@@ -1178,9 +1180,9 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
 
 ## Gelen kutusu çekirdeği (M2a)
 
-Aşağıdaki 11 işlem panel ve MCP üzerinde aynı JSON gövdesini döndürür. Hepsi etkin çalışma
-alanı ve onaylı strateji ister. Okuma ve günlük çalışma `inbox.work`, sözlük ve sahip atama
-`inbox.manage` gerektirir.
+Aşağıdaki 19 işlem panel ve MCP üzerinde aynı JSON gövdesini döndürür. Hepsi etkin çalışma
+alanı ve onaylı strateji ister. Günlük çalışma `inbox.work`; sözlük, sahip atama ve
+birleştirme işlemleri `inbox.manage` gerektirir.
 
 | İşlem | Panel | MCP | Risk / izin |
 |---|---|---|---|
@@ -1195,6 +1197,14 @@ alanı ve onaylı strateji ister. Okuma ve günlük çalışma `inbox.work`, sö
 | Kayıp nedenlerini oku | `GET /api/inbox/lost-reasons` | `jeeta.inbox.lost_reasons_list` | READ / `inbox.work` |
 | Kayıp nedeni düzenle | `PUT /api/inbox/lost-reasons` | `jeeta.inbox.lost_reasons_set` | WRITE / `inbox.manage` |
 | Durum etiketlerini düzenle | `PUT /api/inbox/status-labels` | `jeeta.inbox.status_labels_set` | WRITE / `inbox.manage` |
+| Birleştirme önerilerini listele | `GET /api/inbox/merges` | `jeeta.inbox.merges_list` | READ / `inbox.manage` |
+| Birleştir (`{keep}`) | `POST /api/inbox/merges/{merge_id}/apply` | `jeeta.inbox.merges_apply` | WRITE / `inbox.manage` |
+| Birleştirmeyi geri al (`{confirm:true}`) | `POST /api/inbox/merges/{merge_id}/undo` | `jeeta.inbox.merges_undo` | DESTRUCTIVE / `inbox.manage` |
+| Birleştirme önerisini reddet | `POST /api/inbox/merges/{merge_id}/refuse` | `jeeta.inbox.merges_refuse` | WRITE / `inbox.manage` |
+| Görev oluştur (`{title,due_at,assignee?}`) | `POST /api/inbox/journeys/{journey_id}/tasks` | `jeeta.inbox.tasks_create` | WRITE / `inbox.work` |
+| Görevi tamamla | `POST /api/inbox/tasks/{task_id}/complete` | `jeeta.inbox.tasks_complete` | WRITE / `inbox.work` |
+| Görev kuyruğunu oku (`queue`, `assignee`) | `GET /api/inbox/tasks` | `jeeta.inbox.tasks_list` | READ / `inbox.work` |
+| Not ekle (`{text}`) | `POST /api/inbox/journeys/{journey_id}/notes` | `jeeta.inbox.notes_add` | WRITE / `inbox.work` |
 
 `people.create`: `{display_name, identities:[{channel,value,capability_id?}], source}`.
 Telefonlar SMS/WhatsApp/arama arasında ortak, opak kimlikler kabiliyetin dış hesap kimliğiyle
@@ -1216,3 +1226,17 @@ Değişiklik, etkiler ve günlük aynı veritabanı işlemindedir. Yeniden açma
 anahtarı kabul edilir. Etiketler çalışma alanı politika satırında saklanır; diğer politika alanları
 korunur. Harita tamamen değiştirilir, boş harita varsayılan etiketlere döner. Bilinmeyen anahtarlar
 ve boş etiketler `VALIDATION` verir; günlük yalnızca değiştirilen durum anahtarlarını içerir.
+
+Birleştirmede `keep` kalan kişiyi seçer; iki kişinin de açık yolculuğu varsa işlem
+`CONFLICT` / `two_open_journeys` döner. Kimlikler, yolculuklar, görevler ve notlar taşınır;
+aynı kabiliyetteki konuşmaların eskisi kalır ve mesajlar korunur. Kalan kişinin ilk temas bilgisi
+korunur. Geri alma en fazla 30 gün içinde ve `confirm: true` ile yapılır; birleşmeden sonra
+kalan kişi, yolculuk veya konuşma değişmişse `CONFLICT` / `edited_after_merge` döner.
+Aynı sağlayıcı mesaj kimliği iki konuşmada bulunursa her iki mesaj saklanır; çakışan kimliklerden
+biri birleştirme süresince boş bırakılır, geri almada özgün kimliği yüklenir. Birleştirme zaman
+damgası kilitlenen kayıtların son değişiklik zamanından ileridir; aynı zamanla gelen ikinci
+bir birleştirme önceki geri alma korumasını silemez.
+
+Görevlerde varsayılan `queue=due_24h`, şu andan 24 saat sonrasına kadar olanları (iki sınır dahil)
+gösterir; `overdue` şu andan önceki görevleri, `all` zaman sınırı olmadan görevleri getirir.
+`assignee` isteğe bağlı kullanıcı filtresidir. Not metni işlem defterine yazılmaz.

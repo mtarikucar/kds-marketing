@@ -23,7 +23,8 @@ impl JourneyRepo for PgTenantRepos {
                 .execute(self.tx.conn())
                 .await
                 .map_err(|e| map_sqlx(e, "assign journey owner"))?,
-        )
+        )?;
+        super::touch_journey(self, id).await
     }
     async fn get(&mut self, id: JourneyId) -> Result<Option<Journey>, AppError> {
         one!(
@@ -69,7 +70,8 @@ impl JourneyRepo for PgTenantRepos {
         reference(self.tx.conn(), ws, "people", row.person_id.as_uuid()).await?;
         let mut data = value!(&row);
         data["owner_id"] = value!(row.owner);
-        inserted(sqlx::query("insert into journeys select * from jsonb_populate_record(null::journeys,$1) where workspace_id=$2 on conflict do nothing").bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert journey"))?)
+        inserted(sqlx::query("insert into journeys select * from jsonb_populate_record(null::journeys,$1) where workspace_id=$2 on conflict do nothing").bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert journey"))?)?;
+        super::touch_person(self, row.person_id).await
     }
     async fn apply_transition(
         &mut self,
@@ -98,12 +100,13 @@ impl JourneyRepo for PgTenantRepos {
         inserted(sqlx::query("insert into journey_events select * from jsonb_populate_record(null::journey_events,$1) where workspace_id=$2 on conflict do nothing")
             .bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"append journey event"))?)?;
         let p = transition.patch();
-        sqlx::query("update journeys set status=$3,unreachable_attempts=$4,closed_at=$5,lost_reason=$6,updated_at=$7 where workspace_id=$1 and id=$2")
+        sqlx::query("update journeys set status=$3,unreachable_attempts=$4,closed_at=$5,lost_reason=$6,updated_at=greatest(updated_at + interval '1 microsecond',$7) where workspace_id=$1 and id=$2")
             .bind(ws.as_uuid()).bind(id.as_uuid()).bind(value!(p.status).as_str()).bind(i16::from(p.unreachable_attempts)).bind(p.closed_at).bind(p.lost_reason.as_ref().map(serde_json::to_value).transpose().map_err(|_| AppError::internal("encode loss"))?).bind(p.updated_at)
             .execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"apply journey transition"))?;
-        Ok(())
+        super::touch_person(self, current.person_id).await
     }
-    async fn events(&mut self, id: JourneyId) -> Result<Vec<JourneyEvent>, AppError> {
-        many!(sqlx::query_scalar("select to_jsonb(e) || jsonb_build_object('kind',payload) from journey_events e where workspace_id=$1 and journey_id=$2 order by at,id").bind(self.workspace_id().as_uuid()).bind(id.as_uuid()),self,JourneyEvent)
+    async fn events(&mut self, id: JourneyId, limit: u32) -> Result<Vec<JourneyEvent>, AppError> {
+        many!(sqlx::query_scalar("select to_jsonb(e) || jsonb_build_object('kind',payload) from (select * from journey_events where workspace_id=$1 and journey_id=$2 order by at desc,id desc limit $3) e order by at,id")
+            .bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(i64::from(limit.clamp(1, 500))),self,JourneyEvent)
     }
 }

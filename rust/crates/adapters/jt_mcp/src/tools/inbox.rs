@@ -6,7 +6,10 @@ use jt_app::{
     error::AppError,
     usecases::{
         Deps,
-        inbox::{JourneyId, PersonId, dictionaries, journeys, people, schema},
+        inbox::{
+            JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, schema,
+            tasks,
+        },
     },
 };
 use jt_tenancy::Permission;
@@ -16,6 +19,62 @@ use serde_json::Value;
 
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
+        ToolDef {
+            use_case: "inbox.merges.list",
+            description: "List merge suggestions and their decisions. [risk: READ]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("merges.list")).expect("inbox schema"),
+            run: merges_list,
+        },
+        ToolDef {
+            use_case: "inbox.merges.apply",
+            description: "Apply a merge keeping the selected person; two open journeys conflict. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("merges.apply")).expect("inbox schema"),
+            run: merges_apply,
+        },
+        ToolDef {
+            use_case: "inbox.merges.undo",
+            description: "Undo a merge within 30 days, requiring confirm: true and unchanged aggregates. [risk: DESTRUCTIVE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("merges.undo")).expect("inbox schema"),
+            run: merges_undo,
+        },
+        ToolDef {
+            use_case: "inbox.merges.refuse",
+            description: "Refuse a pending merge suggestion. [risk: WRITE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("merges.refuse")).expect("inbox schema"),
+            run: merges_refuse,
+        },
+        ToolDef {
+            use_case: "inbox.tasks.create",
+            description: "Create a follow-up task with a due time and optional assignee. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("tasks.create")).expect("inbox schema"),
+            run: tasks_create,
+        },
+        ToolDef {
+            use_case: "inbox.tasks.complete",
+            description: "Complete a follow-up task. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("tasks.complete")).expect("inbox schema"),
+            run: tasks_complete,
+        },
+        ToolDef {
+            use_case: "inbox.tasks.list",
+            description: "List tasks in the due_24h, overdue or all queue, optionally filtered by assignee. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("tasks.list")).expect("inbox schema"),
+            run: tasks_list,
+        },
+        ToolDef {
+            use_case: "inbox.notes.add",
+            description: "Add a journey note; its text is excluded from the ledger. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("notes.add")).expect("inbox schema"),
+            run: notes_add,
+        },
         ToolDef {
             use_case: "inbox.status_labels.set",
             description: "Replace workspace display-label overrides for the nine fixed journey stages. Unknown keys or blank labels are VALIDATION. An empty map restores default labels. [risk: WRITE]",
@@ -161,4 +220,59 @@ fn journeys_assign_owner<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> To
 
 fn status_labels_set<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move { to_json(&dictionaries::set_status_labels(deps, ctx, args(raw)?).await?) })
+}
+
+fn merges_list<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let _: NoArgs = args(raw)?;
+        to_json(&merge::list(deps, ctx).await?)
+    })
+}
+
+fn merges_apply<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: MergeId = take_id(&mut raw, "merge_id")?;
+        to_json(&merge::apply(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+fn merges_undo<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: MergeId = take_id(&mut raw, "merge_id")?;
+        to_json(&merge::undo(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+fn merges_refuse<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: MergeId = take_id(&mut raw, "merge_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&merge::refuse(deps, ctx, id).await?)
+    })
+}
+
+fn tasks_create<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: JourneyId = take_id(&mut raw, "journey_id")?;
+        to_json(&tasks::create(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+fn tasks_complete<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: TaskId = take_id(&mut raw, "task_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&tasks::complete(deps, ctx, id).await?)
+    })
+}
+
+fn tasks_list<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&tasks::list(deps, ctx, args(raw)?).await?) })
+}
+
+fn notes_add<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: JourneyId = take_id(&mut raw, "journey_id")?;
+        to_json(&tasks::add_note(deps, ctx, id, args(raw)?).await?)
+    })
 }
