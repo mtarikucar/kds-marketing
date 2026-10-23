@@ -1218,6 +1218,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_inbox"
+version = "0.1.0"
+dependencies = [
+ "jt_capability",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "jt_ledger"
 version = "0.1.0"
 dependencies = [
