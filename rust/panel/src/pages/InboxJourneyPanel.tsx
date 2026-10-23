@@ -271,7 +271,7 @@ export function InboxJourneyPanel({
               <Badge
                 tone={journey.status === 'lost' ? 'danger' : journey.status === 'won' ? 'success' : 'primary'}
               >
-                {t(`inbox.status.${journey.status}`)}
+                {data.data?.status_labels?.[journey.status] ?? t(`inbox.status.${journey.status}`)}
               </Badge>
               {journey.lost_reason && <p className="mt-2 text-sm">{journey.lost_reason.reason_label}</p>}
             </div>

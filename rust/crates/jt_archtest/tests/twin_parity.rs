@@ -1938,6 +1938,14 @@ async fn inbox_pending_and_context_have_http_mcp_parity_without_strategy() {
     r.commit().await.unwrap();
 
     let mut r = deps.uow.tenant(ws).await.unwrap();
+    let mut policy = r.workspace_policy().get().await.unwrap();
+    policy
+        .inbox
+        .status_labels
+        .insert("new".into(), "Özel başlangıç".into());
+    r.workspace_policy().set(policy, now).await.unwrap();
+    r.commit().await.unwrap();
+    let mut r = deps.uow.tenant(ws).await.unwrap();
     let version = r.strategy().current_approved().await.unwrap().unwrap();
     r.strategy()
         .set_status(
@@ -1969,6 +1977,9 @@ async fn inbox_pending_and_context_have_http_mcp_parity_without_strategy() {
     )
     .await;
     assert_eq!(human, agent);
+    assert_eq!(human["status_labels"].as_object().unwrap().len(), 9);
+    assert_eq!(human["status_labels"]["new"], "Özel başlangıç");
+    assert_eq!(human["status_labels"]["won"], "Kazanıldı");
     assert!(human["strategy_guidance"].is_null());
     assert_eq!(human["person"]["id"], person["person"]["id"]);
     let mut r = deps.uow.tenant(ws).await.unwrap();
@@ -2011,4 +2022,139 @@ async fn inbox_pending_and_context_have_http_mcp_parity_without_strategy() {
             assert_eq!(human["code"], agent["structuredContent"]["code"]);
         }
     }
+}
+
+/// A consumer-equivalent System context uses the same transaction/reducer/effects path.
+/// The consumer itself cannot emit Won from an inbound message; that event is supplied here
+/// explicitly to compare identical domain input on all three entry paths.
+#[tokio::test]
+async fn panel_mcp_consumer_effect_parity() {
+    use jt_app::{ctx::Ctx, usecases::inbox::journeys};
+    use jt_ledger::Actor;
+    use jt_tenancy::Permission;
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("effect-parity").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let mut policy = r.workspace_policy().get().await.unwrap();
+    policy
+        .inbox
+        .status_labels
+        .insert("won".into(), "Satış tamamlandı".into());
+    r.workspace_policy()
+        .set(policy, deps.clock.now())
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut results = Vec::new();
+    for (i, phone) in ["05321234001", "05321234002", "05321234003"]
+        .iter()
+        .enumerate()
+    {
+        let response = send(&app, panel(Method::POST, "/api/inbox/people", Some(&cookie),
+            Some(json!({"display_name":"Parity", "source":"form", "identities":[{"channel":"phone","value":phone}]})))).await;
+        assert!(response.status().is_success());
+        let person = json_body(response).await;
+        let person_id = serde_json::from_value(person["person"]["id"].clone()).unwrap();
+        let mut r = deps.uow.tenant(ws).await.unwrap();
+        let journey = r.journeys().open_for(person_id).await.unwrap().unwrap();
+        drop(r);
+        let response = send(&app, panel(Method::POST, &format!("/api/inbox/journeys/{}/tasks", journey.id), Some(&cookie),
+            Some(json!({"title":"Follow up", "due_at":serde_json::to_value(&journey).unwrap()["opened_at"]})))).await;
+        assert!(
+            response.status().is_success(),
+            "{}",
+            json_body(response).await
+        );
+        let input = json!({"kind":"won", "idempotency_key":format!("won-{i}"), "payload":{"product":"Service","amount_minor":12500,"currency":"TRY"}});
+        let output = match i {
+            0 => {
+                let response = send(
+                    &app,
+                    panel(
+                        Method::POST,
+                        &format!("/api/inbox/journeys/{}/events", journey.id),
+                        Some(&cookie),
+                        Some(input),
+                    ),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+                json_body(response).await
+            }
+            1 => {
+                let mut input = input;
+                input["journey_id"] = json!(journey.id);
+                call_tool(&app, &key, &session, "jeeta.inbox.events_report", input).await
+            }
+            _ => {
+                let ctx = Ctx {
+                    workspace_id: ws,
+                    actor: Actor::System {
+                        component: "scheduler:inbox_consume".into(),
+                    },
+                    permissions: [Permission::InboxWork].into(),
+                    role_key: None,
+                    now: deps.clock.now(),
+                    agent_connection_id: None,
+                };
+                serde_json::to_value(
+                    journeys::report(
+                        &deps,
+                        &ctx,
+                        journey.id,
+                        serde_json::from_value(input).unwrap(),
+                    )
+                    .await
+                    .unwrap(),
+                )
+                .unwrap()
+            }
+        };
+        assert_eq!(
+            output["effects"],
+            json!([{"commission_due":{"amount_minor":12500,"currency":"TRY"}}, "close_tasks"])
+        );
+        let response = send(
+            &app,
+            panel(
+                Method::GET,
+                &format!("/api/inbox/journeys/{}", journey.id),
+                Some(&cookie),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let human = json_body(response).await;
+        let agent = call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.journeys_get",
+            json!({"journey_id":journey.id}),
+        )
+        .await;
+        assert_eq!(human, agent);
+        assert_eq!(human["status_labels"].as_object().unwrap().len(), 9);
+        assert_eq!(human["status_labels"]["won"], "Satış tamamlandı");
+        assert_eq!(human["status_labels"]["new"], "Yeni");
+        assert_eq!(human["journey"]["status"], "won");
+        assert_eq!(human["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(human["tasks"][0]["status"], "done");
+        assert_eq!(human["events"].as_array().unwrap().len(), 1);
+        let mut state = human["journey"].clone();
+        for key in ["id", "person_id", "updated_at"] {
+            state.as_object_mut().unwrap().remove(key);
+        }
+        results.push((state, output));
+    }
+    assert_eq!(results[0], results[1]);
+    assert_eq!(results[1], results[2]);
 }

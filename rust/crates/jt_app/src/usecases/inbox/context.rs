@@ -33,6 +33,7 @@ pub struct StrategyGuidance {
 }
 #[derive(Debug, Serialize)]
 pub struct ContextOut {
+    pub status_labels: std::collections::BTreeMap<String, String>,
     pub person: Person,
     pub journey: Option<Journey>,
     pub events: Vec<JourneyEvent>,
@@ -231,6 +232,7 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
         None
     };
     Ok(ContextOut {
+        status_labels: super::dictionaries::effective_status_labels(r.as_mut()).await?,
         person,
         journey,
         events,

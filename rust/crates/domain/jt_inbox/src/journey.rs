@@ -276,17 +276,17 @@ pub enum JourneyEffect {
 
 /// An unforgeable reducer result: read-only, serializable, never deserializable.
 ///
-/// Application code cannot call its constructor:
+/// `forged_transition_bypass_injection_rejected`: application code cannot call its constructor:
 /// ```compile_fail
 /// use jt_inbox::{JourneyPatch, JourneyStatus, Transition};
-/// fn forge(patch: JourneyPatch) -> Transition {
+/// fn forged_transition_bypass_injection_rejected(patch: JourneyPatch) -> Transition {
 ///     Transition::new(JourneyStatus::New, patch, vec![])
 /// }
 /// ```
 /// Nor can it construct a literal:
 /// ```compile_fail
 /// use jt_inbox::{JourneyPatch, JourneyStatus, Transition};
-/// fn forge(patch: JourneyPatch) -> Transition {
+/// fn forged_transition_bypass_injection_rejected(patch: JourneyPatch) -> Transition {
 ///     Transition { from: JourneyStatus::New, patch, effects: vec![] }
 /// }
 /// ```

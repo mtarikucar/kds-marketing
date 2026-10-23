@@ -1342,3 +1342,76 @@ removal transaction, recording each change. `WorkspacePolicy.inbox` holds `max_r
 (whatsapp/instagram_dm/messenger 900; sms 3600), `unreachable_threshold` (3) and fixed-key
 `status_labels`. Migration 0007 stores response settings and preserves existing label overrides;
 its down migration removes only the added policy column.
+
+
+### M2a inbox core: model, reducer and surfaces
+
+The catalog contains **90 MCP tools: the M1b 60 plus 30 inbox tools**. Every inbox tool
+has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
+are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
+check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
+and merges. Owner/manager have both, Rep has work; custom grants are preserved.
+`jeeta.inbox.merges_undo` requires explicit confirmation. Agents cannot take over as a person.
+
+A person owns active identities and conversations (one per capability), with at most one open
+journey. SMS, WhatsApp and calls share the normalized `phone` identity; email is trimmed and
+lowercased. Instagram DM, Messenger and webchat identifiers include the capability's external
+account id before matching. Acquisition source/first touch is separate and a merge preserves
+the keeper's first touch. Every person creation path shares `match_or_create`; conflicting
+email/phone identities produce a merge suggestion, not a silent reassignment. Undo refuses
+when the keeper has changed since the merge.
+
+| Event | Journey and effects |
+| --- | --- |
+| `message_received` | Keep stage, conversation Ours; Lost stays Lost and becomes unassigned human work. |
+| `replied`, connected `call_made` | New/Unreachable → Contacted; reset failed attempts. Reply also makes conversation Theirs. |
+| Failed `call_made` | Count attempts; default third failure enters Unreachable only at rank ≤ 1. |
+| `appointment_booked`, `meeting_held`, `quote_sent`, `quote_accepted` | Advance to Appointment, Met, Quoted, Pending respectively without regressing a later stage. |
+| `won` | Close journey and open tasks; emit CommissionDue (commission accounting is M2b). |
+| `lost` | Snapshot active loss-reason label; close conversations and cancel open tasks. |
+| `snoozed` | Snooze conversation until the given instant. |
+| `reopened` | Human owner/manager with inbox.manage: Lost → Contacted; clear closure, loss and attempts. |
+| `merged` | Preserve stage while moving ownership to the keeper person. |
+
+Rank is New=0, Contacted=Unreachable=1, Appointment=2, Met=3, Quoted=4, Pending=5.
+Won/Lost are terminal, outside this order. Won never reopens; later inbound opens a Repeat
+journey. Lost inbound never creates another journey. System Replied after terminal closure is
+a no-op transition. Events use a required workspace-wide idempotency key; duplicates suppress
+effects and ledger `inbox.event.duplicate`. Different-key Won on Won conflicts.
+`Transition` has private fields, no public constructor, Deserialize or Default; compile-fail
+doctests protect those boundaries. PostgreSQL's initial `insert(Journey)` currently validates
+New/empty closure/zero attempts separately; the strict architecture check flags this as a
+remaining mismatch with the requested rule that INSERT also takes a Transition. Resolving it
+requires a journey-creation port decision; status UPDATE already uses `apply_transition`.
+
+A conversation's executor defaults to Agent and is separate from the journey owner. Every
+handover increments its generation; Human(None) is the unassigned queue. Human replies do not
+change the executor and do not require holding it. Agent replies refuse human-held conversations.
+`context` and `journeys.get` return all nine effective `status_labels`: fixed Turkish defaults
+with workspace policy overrides. Keys remain fixed; the panel renders the returned label.
+
+Reply uses a durable outbox: commit queued intent after the first fence, recheck under locks
+immediately before sending and persist the fence snapshot, release all locks for provider I/O,
+then atomically persist the receipt/message/event/effects. Both fences check loss, erased or
+merged person, live capability, executor generation and agent ownership; reply intent also
+requires inbound in the same conversation within 24 hours. Lost/takeover before sending refuses.
+Uncertain provider acceptance stays Unknown and is never blindly retried. A successful send
+racing terminal closure remains Sent and records `inbox.sent_after_terminal`; it does not reopen
+the journey. Optional `request_key` reuses responses for 24 hours within a workspace.
+
+`inbox_consume` claims provider events separately from `events.ack`, with person/identity/message,
+reducer effects and consumption completion in one transaction. It does not need a principal or
+approved strategy; it consumes Active/PendingPayment workspaces and defers suspended ones.
+The consumer namespace is `inbox@1`; provider/message/event keys remain stable across versions.
+`response_sla` transfers overdue Ours/Agent conversations to the journey owner or Human(None),
+bumps the fence and ledgers once; `snooze_wake` wakes elapsed snoozes once. Both run every minute.
+Member departure unassigns human conversations and open journey ownership in the removal transaction.
+
+The panel exposes conversations, tasks and people with the three-column inbox: queue/person,
+conversation/reply, journey/events/tasks/notes. It shows actor and executor, supports takeover,
+hand-back, snooze, events, loss/reopen and merge/undo confirmation; customer text is rendered as text.
+
+Run `make smoke-inbox` from `rust/`: `cargo test --locked -p jt_app --test smoke_inbox`.
+It parses a scripted WhatsApp fixture, consumes it into person/journey/conversation, reads agent
+context, sends a scripted successful reply, checks the system Replied event and acknowledges
+inbound events. Everything runs in process without PostgreSQL, network access or provider secrets.

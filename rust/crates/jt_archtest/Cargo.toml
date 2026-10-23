@@ -11,6 +11,10 @@ serde_json.workspace = true
 # The twin-rule and gate-rule tests read the catalog, the panel route table and the MCP registry;
 # the twin-parity test drives both surfaces over one test database.
 [dev-dependencies]
+syn = { version = "=2.0.119", features = ["full", "visit"] }
+proc-macro2 = "1"
+jt_ledger.workspace = true
+jt_tenancy.workspace = true
 jt_inbox.workspace = true
 jt_connector.workspace = true
 jt_app.workspace = true

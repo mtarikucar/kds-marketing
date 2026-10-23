@@ -12,6 +12,21 @@ async function openConversation(answers = inboxAnswers) {
 }
 
 describe('Inbox', () => {
+  it('renders the workspace status label returned by journeys.get', async () => {
+    await openConversation({
+      ...inboxAnswers,
+      'GET /api/inbox/journeys/journey-1': {
+        journey,
+        events: [],
+        tasks: [],
+        notes: [],
+        status_labels: { contacted: 'İlk temas bekleniyor' },
+      },
+    });
+    const panel = await screen.findByRole('complementary', { name: 'Yolculuk' });
+    expect(within(panel).getByText('İlk temas bekleniyor')).toBeInTheDocument();
+  });
+
   it('human_holder_does_not_disable_panel_reply', async () => {
     const calls = await openConversation();
     const user = userEvent.setup();

@@ -995,12 +995,14 @@ export interface InboxNote {
   at: Rfc3339;
 }
 export interface InboxJourneyOut {
+  status_labels: Record<JourneyStatus, string>;
   journey: InboxJourney;
   events: InboxEvent[];
   tasks: InboxTask[];
   notes: InboxNote[];
 }
 export interface InboxContext {
+  status_labels: Record<JourneyStatus, string>;
   person: InboxPerson;
   journey: InboxJourney | null;
   events: InboxEvent[];

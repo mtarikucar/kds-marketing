@@ -606,6 +606,18 @@ için panelde açılacak bağlantıyı üretir), `dogrula`, `grup_olustur`, `gru
 6. Kişi oluşturmanın her yolu (panel, araç, form, reklam lead formu, içe aktarma) aynı eşleştirme
    fonksiyonundan geçer. Tek istisna yoktur.
 
+**(M2a uygulamasında kesinleşti) Kimlik kanalı ve hesap kapsamı.** SMS, WhatsApp ve santral
+aynı `phone` kimliğini kullanır; TR telefonları E.164 biçimine, e-posta kırpılıp küçük harfe
+normalleştirilir. `instagram_dm`, `messenger`, `webchat` opak değerleri eşleştirmeden önce
+`<kabiliyet external_id>:<opak değer>` ile hesap kapsamına alınır. Yalnız etkin kimlikler
+`(workspace_id, channel, value_normalized)` kapsamında eşleşir. İlk temasın kaynağı kimlik
+kanalından ayrıdır; birleştirme korunan kişinin ilk temasını değiştirmez. Tek `match_or_create`
+kişi oluşturma yollarını birleştirir. Mesajın kendi kanalındaki kimliği önceliklidir; telefon
+ve e-posta farklı kişilere işaret ederse öneri doğar, kimlik çalınmaz. Mesaj dışı oluşturma
+`identity_split` çatışmasıyla iki kişi kimliğini ve öneriyi döndürür; istemci tek kimlikle yeniden
+dener. İki açık yolculuk otomatik birleştirmeyi engeller; geri alma, korunan kişi sonradan
+düzenlendiyse reddedilir.
+
 ### 7.3 Yolculuk: olaylar ve türetilmiş durum
 
 Dışarıdan durum yazılmaz. Ajan ve insan **olay** bildirir; durum tek indirgeyiciden türer (B4).
@@ -638,6 +650,24 @@ düzenleyebildiği ama boş bırakamadığı bir sözlüktür.
 Durum adları sistemindir; kiracı etiketleri yeniden adlandırabilir, yeni durum ekleyemez. Bu benim
 kararım: v1'de ayarlanabilir aşama ile sabit huni iki ayrı doğru üretiyordu.
 
+**(M2a uygulamasında kesinleşti) Sıra, uçlar ve yinelenme.** Sabit sıra
+New=0, Contacted=Unreachable=1, Appointment=2, Met=3, Quoted=4, Pending=5'tir. Daha düşük
+sıralı olay aşamayı geriletmez; yan etkileri yine uygulanır. Başarısız arama sayacı artar ama
+Unreachable yalnız sıra ≤1 ve eşik (varsayılan 3) sağlanınca oluşur. Başarılı temas sayacı
+sıfırlar ve New/Unreachable durumunu Contacted yapar. Won/Lost sıralamanın dışındadır: Won
+hiçbir zaman yeniden açılmaz, sonraki gelen temas Repeat kaynaklı yeni yolculuk açar. Lost
+üzerine mesaj Lost'u korur, konuşmayı Ours/Human(None) yapar ve yeniden açma sorusu üretir;
+yeni yolculuk açmaz. Yalnız insan sahip/yönetici, `inbox.manage` ile Reopened bildirerek Lost'u
+Contacted'a taşır, kapanış/neden/sayaç temizlenir. Uç durumdan sonra sistem Replied kaydı
+kalıcı gönderim makbuzunu korur, aşama ve yan etki değiştirmez. Zorunlu istemci olay anahtarı
+çalışma alanında tektir; yinelenen anahtar indirgeme öncesinde etkileri bastırır ve
+`inbox.event.duplicate` yazar. Farklı anahtarlı ikinci Won uç durum çatışmasıdır. Kayıp olayı
+nedenin o andaki etiketini saklar. Durumların dokuz anahtarı sabittir; politika yalnız etiketleri
+özelleştirir. `Transition` alanları özeldir ve Deserialize/Default yoktur; dışarıdan oluşturma
+derlenmez. İlk New eklemesi halen ayrı `insert(Journey)` doğrulamasındadır; INSERT'in de
+Transition alması kuralı için port kararı incelemededir, durum güncellemeleri `apply_transition`
+içinden geçer.
+
 ### 7.4 Yürütücü ve devralma
 
 - Her konuşmanın bir yürütücüsü vardır; varsayılan ajandır. İnsan "devral" dediğinde yürütücü o olur;
@@ -649,6 +679,26 @@ kararım: v1'de ayarlanabilir aşama ile sabit huni iki ayrı doğru üretiyordu
   sistem bağlayıcıdan yollar ve `yanit_verildi` olayını kendi yazar.
 - Sistem "yanıt bekleyen" kuyruğunu kanalın en uzun yanıt gecikmesine göre tutar; süre dolunca
   konuşmayı insana devreder ve günlüğe nedenini yazar.
+
+**(M2a uygulamasında kesinleşti) Yürütücü, gönderim çiti ve kalıcı kuyruk.** Yürütücü
+Agent veya Human(user_id?) olur; boş insan kimliği atanmamış kuyruktur. Her değişim generation
+sayacını artırır. Üye ayrıldığında konuşmaları Human(None), açık yolculuk sahipliği boş olur;
+aynı işlem içinde günlük tutulur. İnsan yanıtı yürütücüyü değiştirmez ve sahipliği şart koşmaz.
+Ajanın `take_over` çağrısı “executor must be a person” doğrulama hatasıdır.
+
+Gönderim niyeti ilk çitten sonra outbox'a yazılıp kalıcılaştırılır; sağlayıcı öncesi ikinci
+kilitli çit Lost, silinmiş/birleşmiş kişi, canlı kabiliyet, generation ve ajan/insan sahipliğini
+yeniden denetler ve çit görüntüsünü saklar. Reply aynı konuşmada son 24 saatte gelen mesaj
+ister. Sağlayıcı I/O sırasında kilit tutulmaz. Makbuz, mesaj durumu, Replied ve etkiler son
+transaction'da birlikte yazılır. Kabul belirsizse Unknown olur, kör yeniden gönderim yoktur.
+Uç duruma geçişle yarışan başarılı gönderim Sent kalır, `inbox.sent_after_terminal` günlüğü
+yazılır; yolculuk yeniden açılmaz. İsteğe bağlı `request_key` çalışma alanında 24 saat yanıt
+tekrarı sağlar. `inbox_consume` sağlayıcı olayını `events.ack`'ten bağımsız `inbox@1` talebiyle
+kişiye/konuşmaya dönüştürür; claim ve etkiler aynı işlemde tamamlanır. Strateji/principal
+istemez, Active/PendingPayment işler; Suspended bekler. Dakikalık `response_sla`, Ours/Agent
+konuşması kanal süresini aşınca yolculuk sahibine veya Human(None)'a devreder; çit artar ve tek
+günlük yazılır. Varsayılan WhatsApp/Instagram/Messenger 900, SMS 3600 saniyedir. Dakikalık
+`snooze_wake` zamanı gelen ertelemeyi bir kez Ours yapar.
 
 ### 7.5 Komisyon
 
@@ -673,6 +723,19 @@ v1'in üç sütunlu tek ekranı korunur: solda kişiler ve kuyruklar (`bizde`, a
 hepsi), ortada konuşma ve yanıt, sağda yolculuk bağlamı. Eklenenler: yürütücü rozeti ve devral
 düğmesi; olay bildirme düğmeleri (görüşüldü, teklif kabul, kazanıldı, kaybedildi ve nedeni, ertele);
 birleştirme önerileri kuyruğu; yolculuk zaman çizgisinde olayların kaynağı (ajan, insan, sistem).
+
+**(M2a uygulamasında kesinleşti) Panelin çalışan yüzeyi.** Üç sütuna ek olarak görev ve kişi
+ekranları, yolculuk sahibi atama, görev tamamlama ve not ekleme vardır. Ajan/insan/sistem
+kaynakları zaman çizgisinde görünür; insan yanıtı başka yürütücü nedeniyle kilitlenmez. Lost
+gelen teması sahip/yöneticiye yeniden açma eylemi sunar. Birleştirmeyi geri alma açık onay
+ister. `journeys.get` ve `inbox.context`, dokuz varsayılan etiket üzerine çalışma alanı
+özelleştirmelerini uygular; panel yolculuk rozetinde dönen etiketi gösterir. `inbox.work`
+günlük işleri, `inbox.manage` sözlük/sahip/birleştirmeyi korur. Yalnız pending/context strateji
+kapısından muaftır; çalışma alanı durum kapısı hepsinde kalır. M1b'nin 60 aracına 30 gelen
+kutusu aracı eklenmiştir: toplam 90, yeni araçların hepsi HTTP ikizi ve ortak şemaya sahiptir.
+`make smoke-inbox`, gerçek sağlayıcı veya veritabanı olmadan WhatsApp → consumer → bağlam →
+yanıt → Replied → events ack akışını süreç içinde doğrular. Teklif/randevu/komisyon hesaplama
+ve uyum M2b; takvim sağlayıcıları, HTML posta, webchat ve arşiv M2c kapsamıdır.
 
 ### 7.8 Araçlar (özet)
 

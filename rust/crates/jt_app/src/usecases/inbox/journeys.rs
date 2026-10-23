@@ -28,6 +28,7 @@ pub struct ReportOut {
 }
 #[derive(Debug, Serialize)]
 pub struct JourneyOut {
+    pub status_labels: std::collections::BTreeMap<String, String>,
     pub journey: Journey,
     pub events: Vec<JourneyEvent>,
     pub tasks: Vec<Task>,
@@ -107,6 +108,7 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: JourneyId) -> Result<JourneyOut, Ap
         .ok_or_else(|| AppError::not_found("no such journey"))?;
     let events = r.journeys().events(id, 50).await?;
     Ok(JourneyOut {
+        status_labels: super::dictionaries::effective_status_labels(r.as_mut()).await?,
         journey,
         events,
         tasks: r.tasks().list(id).await?,

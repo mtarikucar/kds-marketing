@@ -105,3 +105,25 @@ pub async fn set_status_labels(
     repos.commit().await?;
     Ok(input)
 }
+
+/// Fixed Turkish defaults with workspace display-label overrides. Keys remain domain statuses.
+pub(crate) async fn effective_status_labels(
+    repos: &mut dyn crate::ports::TenantRepos,
+) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+    let mut labels: std::collections::BTreeMap<String, String> = [
+        ("new", "Yeni"),
+        ("contacted", "İletişim kuruldu"),
+        ("unreachable", "Ulaşılamadı"),
+        ("appointment", "Randevu"),
+        ("met", "Görüşüldü"),
+        ("quoted", "Teklif verildi"),
+        ("pending", "Beklemede"),
+        ("won", "Kazanıldı"),
+        ("lost", "Kaybedildi"),
+    ]
+    .into_iter()
+    .map(|(key, label)| (key.into(), label.into()))
+    .collect();
+    labels.extend(repos.workspace_policy().get().await?.inbox.status_labels);
+    Ok(labels)
+}
