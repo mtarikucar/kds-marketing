@@ -1445,8 +1445,9 @@ EXPLAIN regression verifies the indexed lookup and a schema test checks up → d
 
 ### M2b connector port prerequisites
 
-`SmsSender::send` takes `commercial: bool`: NetGSM sends `iysfilter="1"` for commercial SMS
-and `"0"` for informational messages. M2a reply callers explicitly pass `false`; commercial
+`SmsSender::send` takes `commercial: bool`: NetGSM sends `iysfilter="11"` for commercial SMS
+to individuals and `"0"` for informational messages; `"12"` for business recipients is not used yet.
+M2a reply callers explicitly pass `false`; commercial
 consent enforcement is supplied by the later M2b use cases.
 
 `MailSender` accepts a typed `MailMessage` with recipient, subject, text, stable Message-ID,

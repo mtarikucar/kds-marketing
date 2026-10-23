@@ -1393,7 +1393,7 @@ async fn send_receipt_carries_only_reported_minor_unit_cost() {
 
 #[tokio::test]
 async fn sms_commercial_iysfilter_mapping() {
-    for (commercial, expected) in [(true, "1"), (false, "0")] {
+    for (commercial, expected) in [(true, "11"), (false, "0")] {
         let r = rig().await;
         r.mock.on("POST", SEND, rest("send"));
         r.netgsm

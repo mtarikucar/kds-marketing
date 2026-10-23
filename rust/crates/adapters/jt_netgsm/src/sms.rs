@@ -241,9 +241,10 @@ pub(crate) async fn send(
     if text_body.contains(TURKISH_LETTERS) {
         body.insert("encoding".into(), json!("TR"));
     }
+    // Commercial SMS targets individuals ("11"); business recipients ("12") are not used yet.
     body.insert(
         "iysfilter".into(),
-        json!(if commercial { "1" } else { "0" }),
+        json!(if commercial { "11" } else { "0" }),
     );
     let answer = connector
         .call(
