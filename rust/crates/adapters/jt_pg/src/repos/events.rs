@@ -54,6 +54,25 @@ impl EventRecord {
 
 #[async_trait]
 impl InboundEventRepo for PgTenantRepos {
+    async fn call_events(
+        &mut self,
+        unique_id: &str,
+        until: OffsetDateTime,
+    ) -> Result<Vec<InboundEvent>, AppError> {
+        let records: Vec<EventRecord> = sqlx::query_as(&format!(
+            "select {COLUMNS} from inbound_events where workspace_id=$1 and provider='netgsm' \
+             and kind='call_event' and call_unique_id=$2 and received_at<=$3 \
+             order by received_at,id"
+        ))
+        .bind(self.workspace_id().as_uuid())
+        .bind(unique_id)
+        .bind(until)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list call events"))?;
+        records.into_iter().map(EventRecord::into_event).collect()
+    }
+
     async fn list_for_consumer(
         &mut self,
         consumer: &str,

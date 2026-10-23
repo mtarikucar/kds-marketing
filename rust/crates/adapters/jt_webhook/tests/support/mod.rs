@@ -360,6 +360,14 @@ impl TenantRepos for FailingTenant {
 
 #[async_trait]
 impl InboundEventRepo for FailingTenant {
+    async fn call_events(
+        &mut self,
+        unique_id: &str,
+        until: OffsetDateTime,
+    ) -> Result<Vec<InboundEvent>, AppError> {
+        self.0.inbound_events().call_events(unique_id, until).await
+    }
+
     async fn list_for_consumer(
         &mut self,
         consumer: &str,

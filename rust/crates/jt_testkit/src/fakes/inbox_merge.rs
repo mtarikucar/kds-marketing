@@ -436,7 +436,24 @@ impl MergeRepo for MemTenant {
                         .iter_mut()
                         .find(|r| r.workspace_id == ws && r.id == o.id)
                     {
-                        r.conversation_id = targets[&o.conversation_id];
+                        let target = targets[&o.conversation_id];
+                        if target != o.conversation_id
+                            && matches!(r.state.as_str(), "queued" | "sending")
+                        {
+                            r.state = "refused".into();
+                            r.last_error = Some("conversation_merged".into());
+                            r.updated_at = at;
+                            let message = s
+                                .inbox
+                                .messages
+                                .iter_mut()
+                                .find(|m| m.workspace_id == ws && m.id == r.message_id)
+                                .expect("validated outbox message");
+                            message.status = MsgStatus::Refused {
+                                reason: "conversation_merged".into(),
+                            };
+                        }
+                        r.conversation_id = target;
                     }
                 }
                 s.inbox.conversations.retain(|r| {

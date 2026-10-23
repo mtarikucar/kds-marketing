@@ -1419,3 +1419,20 @@ Run `make smoke-inbox` from `rust/`: `cargo test --locked -p jt_app --test smoke
 It parses a scripted WhatsApp fixture, consumes it into person/journey/conversation, reads agent
 context, sends a scripted successful reply, checks the system Replied event and acknowledges
 inbound events. Everything runs in process without PostgreSQL, network access or provider secrets.
+
+Merging conversations refuses every moved queued/sending outbox entry with
+`conversation_merged`, completes its request-key response and records the refusal in the ledger.
+Undo restores parent bindings but never revives those sends. Replies, context and pending queues
+prefer the open journey over newer closed history. A successful receipt still establishes contact
+when inbound or other events leave the journey rank unchanged; newer milestones or any intervening
+closure keep historical-only bookkeeping. Closure is retained in the outbox fence across reopening;
+the separate conversation activity revision preserves newer inbound/Ours activity.
+
+PBX calls use the workspace's `inbox.unreachable_threshold`. Correlation uses
+`InboundEventRepo::call_events(unique_id, until)`, including same-receipt-time siblings and processed
+rows, scoped to Netgsm call events in the tenant. Migration 0006 adds stored generated
+`inbound_events.call_unique_id` and the `inbound_events_call_lookup` composite index: PostgreSQL can
+use the call key as an index condition under forced RLS. The BEFORE append-only guard excludes only
+the database-generated key; rollback drops the key/index and restores the original guard. Shared
+fake/PostgreSQL contracts cover time/tenant/provider/kind boundaries and processing updates; a tenant
+EXPLAIN regression verifies the indexed lookup and a schema test checks up → down → up.

@@ -270,3 +270,33 @@ async fn role_backfill_is_idempotent_reversible_and_preserves_custom_grants() {
     }
     tx.commit().await.unwrap();
 }
+
+#[tokio::test]
+async fn call_lookup_index_round_trip_is_idempotent() {
+    let db = TestDb::new().await;
+    let exists = "select to_regclass('inbound_events_call_lookup') is not null";
+    assert!(
+        sqlx::query_scalar::<_, bool>(exists)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+    );
+    for _ in 0..2 {
+        sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
+        assert!(
+            !sqlx::query_scalar::<_, bool>(exists)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap()
+        );
+    }
+    for _ in 0..2 {
+        sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
+        assert!(
+            sqlx::query_scalar::<_, bool>(exists)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap()
+        );
+    }
+}

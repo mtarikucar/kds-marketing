@@ -635,3 +635,90 @@ pub async fn merge_and_undo_late_failures_roll_back(uow: Arc<dyn UnitOfWork>) {
         Some(w.keep.id)
     );
 }
+
+pub async fn coalescing_refuses_moved_live_outbox_without_undo_resurrection(
+    uow: Arc<dyn UnitOfWork>,
+) {
+    use jt_app::usecases::inbox::replies;
+    for state in ["queued", "sending"] {
+        let w = MergeFixture::new(uow.clone()).await;
+        let mut r = uow.tenant(w.f.ws).await.unwrap();
+        let snapshot = r.merges().snapshot(w.source.id, w.keep.id).await.unwrap();
+        let moved = snapshot
+            .outbox
+            .iter()
+            .find(|o| o.conversation_id == w.newer.id)
+            .unwrap();
+        let retained = snapshot
+            .outbox
+            .iter()
+            .find(|o| o.conversation_id == w.older.id)
+            .unwrap();
+        let mut row = r.outbox().get(moved.id).await.unwrap().unwrap();
+        row.state = state.into();
+        r.outbox().update(row).await.unwrap();
+        r.commit().await.unwrap();
+        w.apply().await;
+        let mut r = uow.tenant(w.f.ws).await.unwrap();
+        let refused = r.outbox().get(moved.id).await.unwrap().unwrap();
+        assert_eq!(refused.state, "refused", "{state}");
+        assert_eq!(refused.last_error.as_deref(), Some("conversation_merged"));
+        assert_eq!(
+            r.messages()
+                .get(refused.message_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            MsgStatus::Refused {
+                reason: "conversation_merged".into()
+            }
+        );
+        assert_eq!(
+            r.outbox().get(retained.id).await.unwrap().unwrap().state,
+            "queued"
+        );
+        let ledger = r
+            .ledger()
+            .list(jt_app::ports::LedgerFilter {
+                action_prefix: Some("inbox.reply.result".into()),
+                actor_kind: None,
+                agent_connection_id: None,
+                limit: 10,
+                before_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].entry.payload["reason"], "conversation_merged");
+        drop(r);
+        assert_eq!(
+            replies::send_step(&w.deps, &w.ctx, moved.id)
+                .await
+                .unwrap()
+                .state,
+            "refused"
+        );
+        assert!(
+            !replies::recover_sending(&w.deps, &w.ctx, moved.id)
+                .await
+                .unwrap()
+        );
+        w.undo().await;
+        let mut r = uow.tenant(w.f.ws).await.unwrap();
+        let restored = r.outbox().get(moved.id).await.unwrap().unwrap();
+        assert_eq!(restored.conversation_id, w.newer.id);
+        assert_eq!(restored.state, "refused");
+        assert_eq!(
+            r.messages()
+                .get(restored.message_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            MsgStatus::Refused {
+                reason: "conversation_merged".into()
+            }
+        );
+    }
+}

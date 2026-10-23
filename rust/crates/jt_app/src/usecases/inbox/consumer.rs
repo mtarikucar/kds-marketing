@@ -3,7 +3,7 @@ use super::{journeys, people, record};
 use crate::{
     ctx::Ctx,
     error::AppError,
-    ports::{CapabilityFilter, EventOrder, EventQuery, TenantRepos, inbox::ConsumptionOutcome},
+    ports::{CapabilityFilter, TenantRepos, inbox::ConsumptionOutcome},
     usecases::{Deps, jobs::JobReport},
 };
 use jt_capability::{Capability, StoredStatus};
@@ -343,7 +343,15 @@ async fn apply(
         reason_label: None,
         at: ctx.now,
     };
-    let transition = reduce(&j, &event, &ReducePolicy::default())
+    let policy = ReducePolicy {
+        unreachable_threshold: r
+            .workspace_policy()
+            .get()
+            .await?
+            .inbox
+            .unreachable_threshold,
+    };
+    let transition = reduce(&j, &event, &policy)
         .map_err(|_| AppError::conflict("inbound journey transition refused"))?;
     let effects = transition.effects().to_vec();
     r.journeys()
@@ -560,34 +568,14 @@ async fn call(
     }
     let mut sender = text(&event.payload, "customer_num").map(str::to_owned);
     let mut answered = false;
-    let mut cursor = None;
-    'history: loop {
-        let page = r
-            .inbound_events()
-            .list(EventQuery {
-                pending_only: false,
-                provider: Some(Provider::Netgsm),
-                kind: Some(EventKind::CallEvent),
-                order: EventOrder::OldestFirst { after: cursor },
-                limit: 100,
-            })
-            .await?;
-        if page.is_empty() {
-            break;
-        }
-        for e in page {
-            let position = (e.received_at, e.id);
-            cursor = Some(position);
-            if e.received_at > event.received_at {
-                break 'history;
-            }
-            if text(&e.payload, "unique_id") != Some(id) {
-                continue;
-            }
-            answered |= text(&e.payload, "scenario") == Some("answer");
-            if sender.is_none() {
-                sender = text(&e.payload, "customer_num").map(str::to_owned);
-            }
+    for sibling in r
+        .inbound_events()
+        .call_events(id, event.received_at)
+        .await?
+    {
+        answered |= text(&sibling.payload, "scenario") == Some("answer");
+        if sender.is_none() {
+            sender = text(&sibling.payload, "customer_num").map(str::to_owned);
         }
     }
     let content = Content {

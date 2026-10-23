@@ -1094,6 +1094,17 @@ impl JourneyRepo for MemTenant {
                         .updated_at
                         .max(r.updated_at + Duration::microseconds(1));
                 }
+                if patch.closed_at.is_some() {
+                    for row in s.inbox.outbox.iter_mut().filter(|o| {
+                        o.workspace_id == ws && matches!(o.state.as_str(), "sending" | "unknown")
+                    }) {
+                        if let Some(fence) = row.fence_snapshot.as_mut()
+                            && fence.get("journey_id") == Some(&serde_json::json!(id))
+                        {
+                            fence["journey_closed"] = serde_json::json!(true);
+                        }
+                    }
+                }
                 *s.inbox.journey_reducer_revisions.entry(id).or_default() += 1;
                 s.inbox.events.push(event.clone());
                 touch_person(s, ws, person_id, at);

@@ -3,6 +3,32 @@
 select set_config('app.platform', 'on', true);
 create unique index if not exists inbound_events_id_workspace_idx on inbound_events (id, workspace_id);
 
+-- A stored key permits an index condition under FORCE RLS; a JSON extraction expression
+-- is not leakproof and would be evaluated only after scanning the tenant's call history.
+alter table inbound_events add column if not exists call_unique_id text
+    generated always as (case when provider='netgsm' and kind='call_event'
+        and jsonb_typeof(payload->'unique_id')='string' then payload->>'unique_id' end) stored;
+create index if not exists inbound_events_call_lookup
+    on inbound_events (workspace_id, call_unique_id, received_at, id);
+create or replace function inbound_events_guard() returns trigger
+language plpgsql as $$
+begin
+    if tg_op = 'DELETE' then
+        raise exception 'inbound_events rows are never deleted';
+    end if;
+    -- call_unique_id is generated exclusively from frozen columns by PostgreSQL after
+    -- this BEFORE guard. Exclude only that derived value; all source columns stay frozen.
+    if (to_jsonb(new) - 'raw' - 'processed_at' - 'call_unique_id') is distinct from
+       (to_jsonb(old) - 'raw' - 'processed_at' - 'call_unique_id') then
+        raise exception 'inbound_events is append-only: only raw and processed_at may change';
+    end if;
+    if new.raw is not null and new.raw is distinct from old.raw then
+        raise exception 'inbound_events.raw may only be removed';
+    end if;
+    return new;
+end;
+$$;
+
 create table if not exists people (
     workspace_id uuid not null references workspaces (id),
     id uuid primary key, display_name text not null default '', company text not null default '',

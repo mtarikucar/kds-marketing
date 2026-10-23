@@ -548,3 +548,66 @@ async fn coalesced_late_reply_preserves_survivor_snooze_despite_equal_revisions(
         snoozed
     );
 }
+
+#[tokio::test]
+async fn postgres_late_receipt_after_closure_and_reopen_preserves_newer_attempts() {
+    use jt_app::usecases::inbox::journeys;
+    let db = jt_testkit::TestDb::new().await;
+    let uow = Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+    let (deps, mut ctx, cid, jid, connector) = ready(uow.clone()).await;
+    ctx.permissions.insert(Permission::InboxManage);
+    journeys::report(
+        &deps,
+        &ctx,
+        jid,
+        serde_json::from_value(json!({
+            "kind":"call_made", "idempotency_key":"contact", "payload":{"connected":true}
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    connector.push_sms(Err(jt_connector::ConnectorError::unknown("after write")));
+    let q = match replies::enqueue(&deps, &ctx, cid, reply_input())
+        .await
+        .unwrap()
+    {
+        replies::Enqueued::New(id) => id,
+        _ => panic!("new reply expected"),
+    };
+    replies::send_step(&deps, &ctx, q).await.unwrap();
+    ctx.now += time::Duration::minutes(1);
+    for (kind, key, payload) in [
+        ("lost", "close", json!({"reason_key":"fiyat"})),
+        ("reopened", "reopen", json!({})),
+        ("call_made", "failed-1", json!({"connected":false})),
+        ("call_made", "failed-2", json!({"connected":false})),
+        ("call_made", "failed-3", json!({"connected":false})),
+    ] {
+        journeys::report(
+            &deps,
+            &ctx,
+            jid,
+            serde_json::from_value(json!({
+                "kind":kind, "idempotency_key":key, "payload":payload
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    }
+    let mut r = uow.tenant(ctx.workspace_id).await.unwrap();
+    let before = r.journeys().get(jid).await.unwrap().unwrap();
+    drop(r);
+    assert_eq!(
+        replies::record_result(&deps, &ctx, q, receipt())
+            .await
+            .unwrap()
+            .state,
+        "sent"
+    );
+    let mut r = uow.tenant(ctx.workspace_id).await.unwrap();
+    assert_eq!(r.journeys().get(jid).await.unwrap().unwrap(), before);
+    assert_eq!(before.status, JourneyStatus::Unreachable);
+    assert_eq!(before.unreachable_attempts, 3);
+}

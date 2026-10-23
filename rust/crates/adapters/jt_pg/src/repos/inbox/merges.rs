@@ -68,6 +68,28 @@ impl MergeRepo for PgTenantRepos {
             sqlx::query("update messages set conversation_id=$3,external_id=$4 where workspace_id=$1 and id=$2").bind(ws).bind(m.id.as_uuid()).bind(target.as_uuid()).bind(if collision {None} else {m.external_id.clone()}).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"merge message"))?;
         }
         for o in &snapshot.outbox {
+            // Generations belong to the original conversation, never the survivor.
+            if targets[&o.conversation_id] != o.conversation_id {
+                let mut row = OutboxRepo::lock(self, o.id)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+                if matches!(row.state.as_str(), "queued" | "sending") {
+                    row.state = "refused".into();
+                    row.last_error = Some("conversation_merged".into());
+                    row.updated_at = at;
+                    MessageRepo::set_status(
+                        self,
+                        row.message_id,
+                        MsgStatus::Refused {
+                            reason: "conversation_merged".into(),
+                        },
+                        None,
+                        None,
+                    )
+                    .await?;
+                    OutboxRepo::update(self, row).await?;
+                }
+            }
             sqlx::query("update outbox set conversation_id=$3 where workspace_id=$1 and id=$2")
                 .bind(ws)
                 .bind(o.id)

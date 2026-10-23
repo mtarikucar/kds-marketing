@@ -162,3 +162,38 @@ async fn message_lookup_and_echo_binding_contract() {
     ))
     .await;
 }
+
+#[tokio::test]
+async fn call_events_are_scoped_bounded_ordered_and_uncapped() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::inbox_contract::call_events_are_scoped_bounded_ordered_and_uncapped(
+        std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone())),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn call_correlation_has_an_indexed_receipt_time_bound() {
+    let db = jt_testkit::TestDb::new().await;
+    let f = Fixture::new(Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()))).await;
+    let mut tx = jt_pg::TenantTx::begin(&db.pool, f.ws).await.unwrap();
+    sqlx::query("insert into inbound_events (id,workspace_id,provider,external_id,kind,payload,received_at) select md5(n::text)::uuid,$1,'netgsm',n::text,'call_event',jsonb_build_object('unique_id', case when n=1 then 'target' else n::text end),$2 from generate_series(1,2000) n")
+        .bind(f.ws.as_uuid()).bind(FIXED_NOW).execute(tx.conn()).await.unwrap();
+    sqlx::query("analyze inbound_events")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    sqlx::query("set local enable_seqscan=off")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let plan: serde_json::Value = sqlx::query_scalar(
+        "explain (format json) select id, payload from inbound_events where workspace_id=$1 and provider='netgsm' and kind='call_event' and call_unique_id=$2 and received_at<=$3 order by received_at,id"
+    ).bind(f.ws.as_uuid()).bind("target").bind(FIXED_NOW).fetch_one(tx.conn()).await.unwrap();
+    let plan = plan.to_string();
+    assert!(plan.contains("inbound_events_call_lookup"), "{plan}");
+    assert!(
+        plan.contains("Index Cond") && plan.contains("call_unique_id ="),
+        "{plan}"
+    );
+}

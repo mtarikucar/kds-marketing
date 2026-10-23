@@ -753,3 +753,318 @@ async fn immediate_reply_tolerates_validated_provider_clock_skew() {
         "sent"
     );
 }
+
+#[tokio::test]
+async fn merged_open_journey_wins_over_newer_lost_for_reply_context_and_pending() {
+    use jt_app::usecases::inbox::{context, journeys, merge};
+    let (w, id, connector) = setup().await;
+    let original = w.uow.snapshot().inbox.journeys[0].clone();
+    let later = at(&w.owner_ctx, w.owner_ctx.now + time::Duration::seconds(1));
+    let other = people::create(&w.deps, &later, serde_json::from_value(json!({
+        "display_name":"Other", "identities":[{"channel":"phone","value":"05321234568"}], "source":"form"
+    })).unwrap()).await.unwrap();
+    let lost = w
+        .uow
+        .snapshot()
+        .inbox
+        .journeys
+        .iter()
+        .find(|j| j.person_id == other.person.id)
+        .unwrap()
+        .id;
+    journeys::report(
+        &w.deps,
+        &later,
+        lost,
+        serde_json::from_value(json!({
+            "kind":"lost", "idempotency_key":"other-lost", "payload":{"reason_key":"fiyat"}
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    people::add_identity(
+        &w.deps,
+        &later,
+        original.person_id,
+        serde_json::from_value(json!({
+            "channel":"phone", "value":"05321234568"
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let row = merge::list(&w.deps, &later).await.unwrap().remove(0);
+    merge::apply(
+        &w.deps,
+        &later,
+        row.id,
+        merge::ApplyInput {
+            keep: original.person_id,
+        },
+    )
+    .await
+    .unwrap();
+    let ctx = context::context(&w.deps, &later, id).await.unwrap();
+    assert_eq!(ctx.journey.unwrap().id, original.id);
+    assert!(!ctx.prohibitions.iter().any(|p| p == "lost"));
+    let agent = w.agent(&["inbox.work"]).await;
+    let pending = context::pending(&w.deps, &agent).await.unwrap();
+    assert_eq!(
+        pending.ours.iter().map(|c| c.id).collect::<Vec<_>>(),
+        vec![id]
+    );
+    assert!(pending.reopen_questions.is_empty());
+    // Bind the original inbound sender now that the merged person has two numbers.
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let sender = r
+        .identities()
+        .list(original.person_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|i| i.value_normalized == "+905321234567")
+        .unwrap();
+    let message = Message {
+        id: MessageId::new_v7(),
+        workspace_id: w.ws,
+        conversation_id: id,
+        direction: Direction::Inbound,
+        author: Author::Customer,
+        body: "Hi".into(),
+        external_id: Some("before-merge".into()),
+        status: MsgStatus::Received,
+        cost_minor: None,
+        at: w.owner_ctx.now,
+    };
+    r.messages().insert_if_new(message.clone()).await.unwrap();
+    r.messages()
+        .record_inbound_sender(message.id, sender.id)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    connector.push_send_text(accepted());
+    assert_eq!(
+        replies::reply(&w.deps, &later, id, input(None))
+            .await
+            .unwrap()
+            .state,
+        "sent"
+    );
+    let s = w.uow.snapshot();
+    assert_eq!(
+        s.inbox
+            .journeys
+            .iter()
+            .find(|j| j.id == original.id)
+            .unwrap()
+            .status,
+        JourneyStatus::Contacted
+    );
+    assert_eq!(
+        s.inbox
+            .journeys
+            .iter()
+            .find(|j| j.id == lost)
+            .unwrap()
+            .status,
+        JourneyStatus::Lost
+    );
+}
+
+#[tokio::test]
+async fn inbound_during_provider_io_still_contacts_new_journey() {
+    let (w, id, connector) = setup().await;
+    let (deps, ctx) = (w.deps.clone(), w.owner_ctx.clone());
+    let cap = w.uow.snapshot().inbox.conversations[0].capability_id;
+    connector.push_send_text(accepted());
+    connector.push_send_hook(move || async move {
+        let received_at = ctx.now + time::Duration::seconds(1);
+        let mut r = deps.uow.tenant(ctx.workspace_id).await.unwrap();
+        r.inbound_events().insert_if_new(jt_connector::InboundEvent {
+            id: jt_connector::InboundEventId::new_v7(), workspace_id: ctx.workspace_id,
+            capability_id: Some(cap), provider: Provider::Meta, external_id: "during-send".into(),
+            kind: jt_connector::EventKind::Message,
+            payload: json!({"message":{"id":"during-send", "from":"905321234567", "type":"text", "text":{"body":"Another question"}}}),
+            received_at, processed_at: None,
+        }, None).await.unwrap();
+        r.commit().await.unwrap();
+        let report = jt_app::usecases::inbox::consumer::consume_workspace(&deps, ctx.workspace_id, received_at).await;
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.changed, 1);
+    });
+    assert_eq!(
+        replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+            .await
+            .unwrap()
+            .state,
+        "sent"
+    );
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.journeys[0].status, JourneyStatus::Contacted);
+    assert_eq!(s.inbox.conversations[0].state, ConvState::Ours);
+    assert_eq!(
+        s.inbox
+            .events
+            .iter()
+            .filter(|e| e.kind == JourneyEventKind::Replied)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn takeover_then_merge_into_older_agent_never_revives_queued_reply() {
+    use jt_app::usecases::inbox::merge;
+    let (w, source_id, connector) = setup().await;
+    let agent = w.agent(&["inbox.work"]).await;
+    let queued = match replies::enqueue(&w.deps, &agent, source_id, input(Some("merge-fence")))
+        .await
+        .unwrap()
+    {
+        replies::Enqueued::New(id) => id,
+        _ => panic!("new reply expected"),
+    };
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let source = r.conversations().get(source_id).await.unwrap().unwrap();
+    let mut keeper = r.people().get(source.person_id).await.unwrap().unwrap();
+    keeper.id = PersonId::new_v7();
+    r.people().insert(keeper.clone()).await.unwrap();
+    let mut older = source.clone();
+    older.id = ConversationId::new_v7();
+    older.person_id = keeper.id;
+    older.created_at -= time::Duration::minutes(1);
+    r.people().set_write_time(older.created_at).await.unwrap();
+    r.conversations()
+        .upsert_on_inbound(older.clone())
+        .await
+        .unwrap();
+    r.people().set_write_time(w.owner_ctx.now).await.unwrap();
+    r.conversations()
+        .update_executor(
+            source_id,
+            Executor::Human {
+                user_id: Some(w.owner),
+            },
+        )
+        .await
+        .unwrap();
+    let row = jt_app::ports::inbox::MergeRow {
+        id: MergeId::new_v7(),
+        workspace_id: w.ws,
+        source_id: source.person_id,
+        target_id: keeper.id,
+        decision: MergeDecision::Suggest(vec![MergeConflict::DisplayName]),
+        conflicts: vec![MergeConflict::DisplayName],
+        status: "suggested".into(),
+        moved_snapshot: json!({}),
+        at: w.owner_ctx.now,
+        applied_by: None,
+        undone_at: None,
+    };
+    r.merges().insert(row.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    merge::apply(
+        &w.deps,
+        &w.owner_ctx,
+        row.id,
+        merge::ApplyInput { keep: keeper.id },
+    )
+    .await
+    .unwrap();
+    connector.push_send_text(accepted());
+    assert_eq!(
+        replies::send_step(&w.deps, &agent, queued)
+            .await
+            .unwrap()
+            .state,
+        "refused"
+    );
+    let report = jt_app::usecases::jobs::run_outbox_recover(
+        &w.deps,
+        w.owner_ctx.now + time::Duration::minutes(6),
+    )
+    .await;
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.touched, 0);
+    assert!(connector.calls().is_empty());
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.conversations.len(), 1);
+    assert_eq!(s.inbox.conversations[0].id, older.id);
+    assert_eq!(s.inbox.conversations[0].executor, Executor::Agent);
+    assert_eq!(s.inbox.conversations[0].executor_generation, 0);
+    assert_eq!(s.inbox.outbox[0].expected_generation, 0);
+    assert_eq!(
+        s.inbox.outbox[0].last_error.as_deref(),
+        Some("conversation_merged")
+    );
+    assert_eq!(w.entries("inbox.reply.result").len(), 1);
+    merge::undo(
+        &w.deps,
+        &w.owner_ctx,
+        row.id,
+        merge::UndoInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    let replay = replies::reply(&w.deps, &agent, source_id, input(Some("merge-fence")))
+        .await
+        .unwrap();
+    assert_eq!(replay.state, "refused");
+    assert!(connector.calls().is_empty());
+}
+
+#[tokio::test]
+async fn late_receipt_after_closure_and_reopen_preserves_newer_attempts() {
+    use jt_app::usecases::inbox::journeys;
+    let (w, id, connector) = setup().await;
+    let jid = w.uow.snapshot().inbox.journeys[0].id;
+    journeys::report(
+        &w.deps,
+        &w.owner_ctx,
+        jid,
+        serde_json::from_value(json!({
+            "kind":"call_made", "idempotency_key":"contact", "payload":{"connected":true}
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    connector.push_send_text(Err(jt_connector::ConnectorError::unknown("after write")));
+    replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    let q = w.uow.snapshot().inbox.outbox[0].id;
+    let later = at(&w.owner_ctx, w.owner_ctx.now + time::Duration::minutes(1));
+    for (kind, key, payload) in [
+        ("lost", "close", json!({"reason_key":"fiyat"})),
+        ("reopened", "reopen", json!({})),
+        ("call_made", "failed-1", json!({"connected":false})),
+        ("call_made", "failed-2", json!({"connected":false})),
+        ("call_made", "failed-3", json!({"connected":false})),
+    ] {
+        journeys::report(
+            &w.deps,
+            &later,
+            jid,
+            serde_json::from_value(json!({
+                "kind":kind, "idempotency_key":key, "payload":payload
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    }
+    let before = w.uow.snapshot().inbox.journeys[0].clone();
+    assert_eq!(
+        replies::record_result(&w.deps, &later, q, accepted())
+            .await
+            .unwrap()
+            .state,
+        "sent"
+    );
+    let after = w.uow.snapshot().inbox.journeys[0].clone();
+    assert_eq!(after, before);
+    assert_eq!(after.status, JourneyStatus::Unreachable);
+    assert_eq!(after.unreachable_attempts, 3);
+}

@@ -1111,6 +1111,14 @@ pub enum EventOrder {
 /// write.
 #[async_trait]
 pub trait InboundEventRepo: Send + Sync {
+    /// Netgsm call events for exactly this unique_id, through the inclusive receipt time.
+    /// Includes processed rows and same-time siblings, ordered by (received_at, id), uncapped.
+    async fn call_events(
+        &mut self,
+        unique_id: &str,
+        until: OffsetDateTime,
+    ) -> Result<Vec<InboundEvent>, AppError>;
+
     /// Consumer-specific traversal, oldest (received_at,id) first; filters claims BEFORE limit,
     /// ignoring processed_at. Restart without a cursor each sweep so rolled-back events retry.
     async fn list_for_consumer(

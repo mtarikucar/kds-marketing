@@ -1228,3 +1228,129 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
             .is_empty()
     );
 }
+
+pub async fn call_events_are_scoped_bounded_ordered_and_uncapped(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let until = FIXED_NOW + Duration::seconds(1);
+    let mut expected = Vec::new();
+    for (ws, provider, kind, unique_id, at, count) in [
+        (
+            f.ws,
+            Provider::Netgsm,
+            EventKind::CallEvent,
+            "target",
+            FIXED_NOW,
+            105,
+        ),
+        (
+            f.ws,
+            Provider::Netgsm,
+            EventKind::CallEvent,
+            "target",
+            until,
+            2,
+        ),
+        (
+            f.ws,
+            Provider::Netgsm,
+            EventKind::CallEvent,
+            "target",
+            until + Duration::microseconds(1),
+            1,
+        ),
+        (
+            f.ws,
+            Provider::Netgsm,
+            EventKind::CallEvent,
+            "unrelated",
+            FIXED_NOW,
+            1,
+        ),
+        (
+            f.ws,
+            Provider::Meta,
+            EventKind::CallEvent,
+            "target",
+            FIXED_NOW,
+            1,
+        ),
+        (
+            f.ws,
+            Provider::Netgsm,
+            EventKind::Message,
+            "target",
+            FIXED_NOW,
+            1,
+        ),
+        (
+            f.other,
+            Provider::Netgsm,
+            EventKind::CallEvent,
+            "target",
+            FIXED_NOW,
+            1,
+        ),
+    ] {
+        let mut r = uow.tenant(ws).await.unwrap();
+        for n in 0..count {
+            let event = InboundEvent {
+                id: InboundEventId::new_v7(),
+                workspace_id: ws,
+                capability_id: None,
+                provider,
+                kind: kind.clone(),
+                external_id: Uuid::now_v7().to_string(),
+                payload: json!({"unique_id": unique_id, "scenario":"answer"}),
+                received_at: at,
+                processed_at: (n % 2 == 0).then_some(until),
+            };
+            if count > 1 {
+                expected.push(event.clone());
+            }
+            r.inbound_events().insert_if_new(event, None).await.unwrap();
+        }
+        r.commit().await.unwrap();
+    }
+    expected.sort_by_key(|e| (e.received_at, e.id));
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        r.inbound_events()
+            .call_events("target", until)
+            .await
+            .unwrap(),
+        expected
+    );
+    // The derived lookup key must not interfere with append-only processing metadata updates.
+    let pending = expected
+        .iter_mut()
+        .find(|e| e.processed_at.is_none())
+        .unwrap();
+    assert!(
+        r.inbound_events()
+            .mark_processed(pending.id, until)
+            .await
+            .unwrap()
+    );
+    pending.processed_at = Some(until);
+    assert_eq!(
+        r.inbound_events()
+            .call_events("target", until)
+            .await
+            .unwrap(),
+        expected
+    );
+    assert!(
+        r.inbound_events()
+            .call_events("missing", until)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        r.inbound_events()
+            .call_events("target", FIXED_NOW - Duration::microseconds(1))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

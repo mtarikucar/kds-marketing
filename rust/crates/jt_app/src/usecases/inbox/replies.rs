@@ -112,7 +112,7 @@ pub async fn enqueue(
     }
     let text = required("text", &input.text)?;
     let c = lock_conversation(r.as_mut(), id).await?;
-    let j = lock_latest(r.as_mut(), c.person_id).await?;
+    let j = lock_current_journey(r.as_mut(), c.person_id).await?;
     let author = match ctx.actor {
         Actor::Human { user_id } => Author::Human(user_id),
         Actor::Agent { .. } => Author::Agent,
@@ -192,11 +192,11 @@ async fn lock_conversation(
         .await?
         .ok_or_else(|| AppError::not_found("no such conversation"))
 }
-async fn lock_latest(
+async fn lock_current_journey(
     r: &mut dyn TenantRepos,
     person: PersonId,
 ) -> Result<Option<Journey>, AppError> {
-    match r.journeys().latest_for(person).await? {
+    match super::active_or_latest_journey(r, person).await? {
         Some(j) => r.journeys().lock(j.id).await,
         None => Ok(None),
     }
@@ -276,7 +276,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         .await?
         .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
     let c = lock_conversation(r.as_mut(), hint.conversation_id).await?;
-    let j = lock_latest(r.as_mut(), c.person_id).await?;
+    let j = lock_current_journey(r.as_mut(), c.person_id).await?;
     let mut row = r
         .outbox()
         .lock(id)
@@ -363,7 +363,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
     row.attempts += 1;
     row.updated_at = ctx.now;
     row.fence_snapshot = Some(
-        json!({"conversation_id":c.id,"journey_id":j.as_ref().map(|j|j.id),"journey_updated_at":j.as_ref().map(|j|j.updated_at.unix_timestamp_nanos().to_string()),"journey_reducer_revision":journey_reducer_revision,"executor_generation":c.executor_generation,"activity_revision":activity_revision,"send_at":ctx.now.unix_timestamp_nanos().to_string(),"person_erased":false,"person_merged":false}),
+        json!({"conversation_id":c.id,"journey_id":j.as_ref().map(|j|j.id),"journey_updated_at":j.as_ref().map(|j|j.updated_at.unix_timestamp_nanos().to_string()),"journey_reducer_revision":journey_reducer_revision,"journey_status":j.as_ref().map(|j|j.status),"executor_generation":c.executor_generation,"activity_revision":activity_revision,"send_at":ctx.now.unix_timestamp_nanos().to_string(),"person_erased":false,"person_merged":false}),
     );
     r.outbox().update(row.clone()).await?;
     r.commit().await?;
@@ -564,7 +564,28 @@ pub async fn record_result(
                         .and_then(|s| s.get("journey_reducer_revision"))
                         .and_then(Value::as_i64)
                         == Some(r.journeys().reducer_revision(j.id).await?);
-                    if unchanged || domain_unchanged {
+                    // Inbound messages and other same-stage events do not supersede contact.
+                    // A newer milestone or closure wins; old snapshots remain conservative.
+                    let non_superseding = row
+                        .fence_snapshot
+                        .as_ref()
+                        .filter(|s| s.get("journey_closed") != Some(&json!(true)))
+                        .and_then(|s| s.get("journey_status"))
+                        .and_then(|s| serde_json::from_value::<JourneyStatus>(s.clone()).ok())
+                        .is_some_and(|before| {
+                            j.closed_at.is_none()
+                                && !matches!(j.status, JourneyStatus::Won | JourneyStatus::Lost)
+                                && (before == j.status
+                                    || matches!(
+                                        (before, j.status),
+                                        (JourneyStatus::Contacted, JourneyStatus::Unreachable)
+                                            | (
+                                                JourneyStatus::Unreachable,
+                                                JourneyStatus::Contacted
+                                            )
+                                    ))
+                        });
+                    if unchanged || domain_unchanged || non_superseding {
                         let t = reduce(j, &event, &ReducePolicy::default())
                             .map_err(|_| AppError::internal("system reply reduction failed"))?;
                         r.journeys().apply_transition(j.id, t, event).await?;
@@ -641,7 +662,11 @@ pub async fn record_result(
     r.commit().await?;
     Ok(output(&row))
 }
-async fn save_result(r: &mut dyn TenantRepos, ctx: &Ctx, row: &OutboxRow) -> Result<(), AppError> {
+pub(super) async fn save_result(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    row: &OutboxRow,
+) -> Result<(), AppError> {
     r.outbox().update(row.clone()).await?;
     if let Some(key) = row.intent.get("request_key").and_then(Value::as_str) {
         let queued = ReplyOut {
@@ -669,7 +694,7 @@ async fn save_result(r: &mut dyn TenantRepos, ctx: &Ctx, row: &OutboxRow) -> Res
         "inbox.reply.result",
         "outbox",
         row.id,
-        json!({"message_id":row.message_id,"state":row.state}),
+        json!({"message_id":row.message_id,"state":row.state,"reason":row.last_error}),
     )
     .await
 }
@@ -686,7 +711,7 @@ pub async fn recover_sending(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<bool, A
         .await?
         .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
     let c = lock_conversation(r.as_mut(), hint.conversation_id).await?;
-    lock_latest(r.as_mut(), c.person_id).await?;
+    lock_current_journey(r.as_mut(), c.person_id).await?;
     let mut row = r
         .outbox()
         .lock(id)

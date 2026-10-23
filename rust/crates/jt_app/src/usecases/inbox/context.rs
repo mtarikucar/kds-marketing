@@ -107,8 +107,7 @@ pub(crate) async fn pending_in(r: &mut dyn TenantRepos, ctx: &Ctx) -> Result<Pen
         if c.state != ConvState::Ours {
             continue;
         }
-        if r.journeys()
-            .latest_for(c.person_id)
+        if super::active_or_latest_journey(r, c.person_id)
             .await?
             .is_some_and(|j| j.status == JourneyStatus::Lost)
         {
@@ -174,7 +173,7 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
         .get(conversation.person_id)
         .await?
         .ok_or_else(|| AppError::not_found("no such person"))?;
-    let journey = r.journeys().latest_for(person.id).await?;
+    let journey = super::active_or_latest_journey(r.as_mut(), person.id).await?;
     let (events, open_tasks) = if let Some(j) = &journey {
         (
             r.journeys().events(j.id, 10).await?,

@@ -106,3 +106,10 @@ async fn merge_and_undo_late_failures_roll_back() {
     ))
     .await;
 }
+
+#[tokio::test]
+async fn coalescing_refuses_moved_live_outbox_without_undo_resurrection() {
+    jt_testkit::inbox_merge_contract::coalescing_refuses_moved_live_outbox_without_undo_resurrection(
+        std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new()),
+    ).await;
+}

@@ -1126,3 +1126,38 @@ async fn echo_and_delivery_before_receipt_preserve_delivery_status() {
 async fn echo_and_delivery_before_timeout_preserve_delivery_status() {
     echo_receipt_order(true, true, true).await;
 }
+
+#[tokio::test]
+async fn unanswered_pbx_call_uses_workspace_threshold() {
+    let w = world().await;
+    let c = cap(&w, "netgsm_pbx").await;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let mut policy = r.workspace_policy().get().await.unwrap();
+    policy.inbox.unreachable_threshold = 1;
+    r.workspace_policy()
+        .set(policy, w.owner_ctx.now)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    for (i, d) in netgsm("events", NetgsmPurpose::Events)
+        .into_iter()
+        .take(3)
+        .enumerate()
+    {
+        if i != 1 {
+            put(&w, Some(c), Provider::Netgsm, d, i as i64).await;
+        }
+    }
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.journeys[0].status, JourneyStatus::Unreachable);
+    assert_eq!(s.inbox.journeys[0].unreachable_attempts, 1);
+}
+
+#[tokio::test]
+async fn call_events_are_scoped_bounded_ordered_and_uncapped() {
+    jt_testkit::inbox_contract::call_events_are_scoped_bounded_ordered_and_uncapped(
+        std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new()),
+    )
+    .await;
+}

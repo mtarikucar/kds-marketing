@@ -98,7 +98,30 @@ pub async fn apply(
     let at = ctx
         .now
         .max(snapshot.latest_write_at + Duration::microseconds(1));
+    let targets = snapshot.conversation_targets();
+    let mut invalidated = Vec::new();
+    for parent in &snapshot.outbox {
+        if targets[&parent.conversation_id] != parent.conversation_id {
+            let outbox = r
+                .outbox()
+                .lock(parent.id)
+                .await?
+                .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+            if matches!(outbox.state.as_str(), "queued" | "sending") {
+                invalidated.push(parent.id);
+            }
+        }
+    }
     r.merges().apply_snapshot(&snapshot, input.keep, at).await?;
+    for id in invalidated {
+        let refused = r
+            .outbox()
+            .get(id)
+            .await?
+            .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+        // Complete request-key responses and ledger the irreversible refusal in this transaction.
+        super::replies::save_result(r.as_mut(), ctx, &refused).await?;
+    }
     let source = if a.id == input.keep { b.id } else { a.id };
     r.people().mark_merged(source, Some(input.keep), at).await?;
     row.source_id = source;

@@ -23,6 +23,27 @@ drop table if exists conversations;
 drop table if exists identities;
 drop table if exists people;
 drop function if exists journey_events_immutable();
+drop index if exists inbound_events_call_lookup;
+alter table if exists inbound_events drop column if exists call_unique_id;
+create or replace function inbound_events_guard() returns trigger
+language plpgsql as $$
+begin
+    if tg_op = 'DELETE' then
+        raise exception 'inbound_events rows are never deleted';
+    end if;
+    -- Every column but `raw` and `processed_at` is frozen, `id` and `workspace_id` included, and
+    -- so is any column a later migration adds: the rows are compared whole, as JSON, without
+    -- those two.
+    if (to_jsonb(new) - 'raw' - 'processed_at') is distinct from
+       (to_jsonb(old) - 'raw' - 'processed_at') then
+        raise exception 'inbound_events is append-only: only raw and processed_at may change';
+    end if;
+    if new.raw is not null and new.raw is distinct from old.raw then
+        raise exception 'inbound_events.raw may only be removed';
+    end if;
+    return new;
+end;
+$$;
 drop index if exists inbound_events_id_workspace_idx;
 
 -- Keep the policy row and its pre-existing check-in interval.

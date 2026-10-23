@@ -129,6 +129,12 @@ impl JourneyRepo for PgTenantRepos {
         inserted(sqlx::query("insert into journey_events select * from jsonb_populate_record(null::journey_events,$1) where workspace_id=$2 on conflict do nothing")
             .bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"append journey event"))?)?;
         let p = transition.patch();
+        if p.closed_at.is_some() {
+            // A later reopen must not make a receipt from the previous lifecycle current again.
+            sqlx::query("update outbox set fence_snapshot=jsonb_set(fence_snapshot,'{journey_closed}','true'::jsonb) where workspace_id=$1 and state in ('sending','unknown') and fence_snapshot->>'journey_id'=$2")
+                .bind(ws.as_uuid()).bind(id.to_string()).execute(self.tx.conn()).await
+                .map_err(|e| map_sqlx(e, "fence receipts across journey closure"))?;
+        }
         sqlx::query("update journeys set reducer_revision=reducer_revision+1,status=$3,unreachable_attempts=$4,closed_at=$5,lost_reason=$6,updated_at=greatest(updated_at + interval '1 microsecond',$7) where workspace_id=$1 and id=$2")
             .bind(ws.as_uuid()).bind(id.as_uuid()).bind(value!(p.status).as_str()).bind(i16::from(p.unreachable_attempts)).bind(p.closed_at).bind(p.lost_reason.as_ref().map(serde_json::to_value).transpose().map_err(|_| AppError::internal("encode loss"))?).bind(p.updated_at)
             .execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"apply journey transition"))?;
