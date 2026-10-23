@@ -15,6 +15,7 @@ pub mod capabilities;
 pub mod connector;
 pub mod events;
 pub mod groups;
+pub mod inbox;
 pub mod ledger;
 pub mod oauth_callback;
 pub mod platform;
@@ -37,6 +38,17 @@ use crate::state::AppState;
 /// Every route the panel HTTP adapter serves, as (method, path), in axum's path syntax as
 /// `CATALOG.panel_route` writes it. The twin-rule test compares it with the catalog.
 pub const ROUTES: &[(&str, &str)] = &[
+    ("PUT", "/api/inbox/status-labels"),
+    ("GET", "/api/inbox/people"),
+    ("GET", "/api/inbox/people/{person_id}"),
+    ("POST", "/api/inbox/people"),
+    ("POST", "/api/inbox/people/{person_id}/identities"),
+    ("POST", "/api/inbox/people/{person_id}/journeys"),
+    ("POST", "/api/inbox/journeys/{journey_id}/events"),
+    ("GET", "/api/inbox/lost-reasons"),
+    ("PUT", "/api/inbox/lost-reasons"),
+    ("GET", "/api/inbox/journeys/{journey_id}"),
+    ("POST", "/api/inbox/journeys/{journey_id}/owner"),
     ("POST", "/api/auth/register"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),
@@ -178,6 +190,72 @@ where
 /// The JSON API's routes.
 pub fn api_routes() -> Vec<ApiRoute> {
     vec![
+        api_route(
+            "PUT",
+            "/inbox/status-labels",
+            "inbox.status_labels.set",
+            inbox::status_labels_set,
+        ),
+        api_route(
+            "GET",
+            "/inbox/people",
+            "inbox.people.search",
+            inbox::people_search,
+        ),
+        api_route(
+            "GET",
+            "/inbox/people/{person_id}",
+            "inbox.people.get",
+            inbox::people_get,
+        ),
+        api_route(
+            "POST",
+            "/inbox/people",
+            "inbox.people.create",
+            inbox::people_create,
+        ),
+        api_route(
+            "POST",
+            "/inbox/people/{person_id}/identities",
+            "inbox.identities.add",
+            inbox::identities_add,
+        ),
+        api_route(
+            "POST",
+            "/inbox/people/{person_id}/journeys",
+            "inbox.journeys.open",
+            inbox::journeys_open,
+        ),
+        api_route(
+            "POST",
+            "/inbox/journeys/{journey_id}/events",
+            "inbox.events.report",
+            inbox::events_report,
+        ),
+        api_route(
+            "GET",
+            "/inbox/lost-reasons",
+            "inbox.lost_reasons.list",
+            inbox::lost_reasons_list,
+        ),
+        api_route(
+            "PUT",
+            "/inbox/lost-reasons",
+            "inbox.lost_reasons.set",
+            inbox::lost_reasons_set,
+        ),
+        api_route(
+            "GET",
+            "/inbox/journeys/{journey_id}",
+            "inbox.journeys.get",
+            inbox::journeys_get,
+        ),
+        api_route(
+            "POST",
+            "/inbox/journeys/{journey_id}/owner",
+            "inbox.journeys.assign_owner",
+            inbox::journeys_assign_owner,
+        ),
         api_route("POST", "/auth/register", "auth.register", auth::register),
         api_route("POST", "/auth/login", "auth.login", auth::login),
         api_route("POST", "/auth/logout", "auth.logout", auth::logout),

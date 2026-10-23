@@ -693,6 +693,7 @@ async fn workspace_policy_defaults_and_bounds() {
         .set(
             WorkspacePolicy {
                 agent_checkin_interval_minutes: 30,
+                ..WorkspacePolicy::default()
             },
             FIXED_NOW,
         )
@@ -702,6 +703,7 @@ async fn workspace_policy_defaults_and_bounds() {
         .set(
             WorkspacePolicy {
                 agent_checkin_interval_minutes: 45,
+                ..WorkspacePolicy::default()
             },
             FIXED_NOW,
         )
@@ -734,6 +736,7 @@ async fn workspace_policy_defaults_and_bounds() {
             .set(
                 WorkspacePolicy {
                     agent_checkin_interval_minutes: minutes,
+                    ..WorkspacePolicy::default()
                 },
                 FIXED_NOW,
             )

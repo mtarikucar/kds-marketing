@@ -94,3 +94,6 @@ mod outbox;
 mod people;
 mod request_keys;
 mod tasks_notes;
+
+#[cfg(test)]
+mod usecase_contracts;

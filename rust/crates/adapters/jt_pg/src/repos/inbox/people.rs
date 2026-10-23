@@ -10,6 +10,14 @@ use time::OffsetDateTime;
 
 #[async_trait]
 impl PersonRepo for PgTenantRepos {
+    async fn lock_workspace(&mut self) -> Result<(), AppError> {
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended('inbox:' || $1::text, 0))")
+            .bind(self.workspace_id().as_uuid())
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "lock inbox workspace"))?;
+        Ok(())
+    }
     async fn insert(&mut self, person: Person) -> Result<(), AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, person.workspace_id)?;

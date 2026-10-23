@@ -19,3 +19,6 @@ drop table if exists identities;
 drop table if exists people;
 drop function if exists journey_events_immutable();
 drop index if exists inbound_events_id_workspace_idx;
+
+-- Keep the policy row and its pre-existing check-in interval.
+alter table if exists workspace_policies drop column if exists inbox_status_labels;

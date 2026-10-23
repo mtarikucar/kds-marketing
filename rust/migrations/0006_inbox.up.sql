@@ -318,3 +318,12 @@ update roles set permissions = array_append(permissions, 'inbox.work')
 where is_system and key in ('owner','manager','rep') and not (permissions @> array['inbox.work']);
 update roles set permissions = array_append(permissions, 'inbox.manage')
 where is_system and key in ('owner','manager') and not (permissions @> array['inbox.manage']);
+
+
+-- Display labels belong to the existing policy row; the funnel keys remain fixed.
+alter table workspace_policies add column if not exists inbox_status_labels jsonb not null default '{}'
+    constraint workspace_policies_inbox_status_labels_check check (
+        jsonb_typeof(inbox_status_labels) = 'object'
+        and inbox_status_labels - array['new','contacted','unreachable','appointment','met','quoted','pending','won','lost']::text[] = '{}'::jsonb
+        and not jsonb_path_exists(inbox_status_labels, '$.* ? (@.type() != "string")')
+    );

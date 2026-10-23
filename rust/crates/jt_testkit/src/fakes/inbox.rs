@@ -107,6 +107,9 @@ fn user(s: &MemState, id: Option<UserId>) -> Result<(), AppError> {
 
 #[async_trait]
 impl PersonRepo for MemTenant {
+    async fn lock_workspace(&mut self) -> Result<(), AppError> {
+        Ok(())
+    }
     async fn insert(&mut self, row: Person) -> Result<(), AppError> {
         self.call(|t| {
             same_workspace(t.ws, row.workspace_id)?;
@@ -305,6 +308,18 @@ impl IdentityRepo for MemTenant {
 }
 #[async_trait]
 impl ConversationRepo for MemTenant {
+    async fn lock_for_person(&mut self, person: PersonId) -> Result<Vec<Conversation>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbox
+            .conversations
+            .iter()
+            .filter(|r| r.workspace_id == self.ws && r.person_id == person)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|r| r.id);
+        Ok(rows)
+    }
     async fn get(&mut self, id: ConversationId) -> Result<Option<Conversation>, AppError> {
         Ok(self
             .state()
@@ -538,6 +553,33 @@ impl MessageRepo for MemTenant {
 }
 #[async_trait]
 impl JourneyRepo for MemTenant {
+    async fn event_by_key(&mut self, key: &str) -> Result<Option<JourneyEvent>, AppError> {
+        Ok(self
+            .state()
+            .inbox
+            .events
+            .iter()
+            .find(|r| r.workspace_id == self.ws && r.idempotency_key == key)
+            .cloned())
+    }
+    async fn assign_owner(&mut self, id: JourneyId, owner: Option<UserId>) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            journey(t.state(), ws, id)?;
+            user(t.state(), owner)?;
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .journeys
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.owner = owner;
+                }
+            });
+            Ok(())
+        })
+    }
     async fn get(&mut self, id: JourneyId) -> Result<Option<Journey>, AppError> {
         Ok(self
             .state()
@@ -703,6 +745,9 @@ impl TaskRepo for MemTenant {
     }
     async fn set_status(&mut self, id: TaskId, status: TaskStatus) -> Result<(), AppError> {
         self.call(|t| {
+            if t.tx.inbox_task_status_fails() {
+                return Err(AppError::internal("injected task effect failure"));
+            }
             let ws = t.ws;
             found(
                 t.state()

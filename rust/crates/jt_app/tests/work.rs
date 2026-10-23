@@ -800,7 +800,8 @@ async fn set_checkin_interval_takes_a_quarter_hour_to_a_week() {
     assert_eq!(
         stored,
         WorkspacePolicy {
-            agent_checkin_interval_minutes: 90
+            agent_checkin_interval_minutes: 90,
+            ..WorkspacePolicy::default()
         }
     );
 

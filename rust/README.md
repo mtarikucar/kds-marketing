@@ -236,7 +236,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (60 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (71 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -253,7 +253,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 60 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 71 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -1174,3 +1174,45 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
   güvenlik bildirimi ve kaynak denetimleri. Bir crate'in iki sürümü yalnızca `[bans] skip` listesinde
   nedeniyle yazılıysa kabul edilir (ör. `sqlx` 0.8'in kullandığı önceki RustCrypto kuşağı: `hkdf` 0.12,
   `hmac` 0.12, `sha2` 0.10, `digest` 0.10); `cargo deny check` uyarısız geçer.
+
+
+## Gelen kutusu çekirdeği (M2a)
+
+Aşağıdaki 11 işlem panel ve MCP üzerinde aynı JSON gövdesini döndürür. Hepsi etkin çalışma
+alanı ve onaylı strateji ister. Okuma ve günlük çalışma `inbox.work`, sözlük ve sahip atama
+`inbox.manage` gerektirir.
+
+| İşlem | Panel | MCP | Risk / izin |
+|---|---|---|---|
+| Kişi arama (`q`, `limit`) | `GET /api/inbox/people` | `jeeta.inbox.people_search` | READ / `inbox.work` |
+| Kişi, kimlikler, açık yolculuk, konuşmalar | `GET /api/inbox/people/{person_id}` | `jeeta.inbox.people_get` | READ / `inbox.work` |
+| Kişi eşleştir/oluştur | `POST /api/inbox/people` | `jeeta.inbox.people_create` | WRITE / `inbox.work` |
+| Kimlik ekle / birleştirme öner | `POST /api/inbox/people/{person_id}/identities` | `jeeta.inbox.identities_add` | WRITE / `inbox.work` |
+| Yolculuk aç | `POST /api/inbox/people/{person_id}/journeys` | `jeeta.inbox.journeys_open` | WRITE / `inbox.work` |
+| Yolculuk, son 50 olay, görevler, notlar | `GET /api/inbox/journeys/{journey_id}` | `jeeta.inbox.journeys_get` | READ / `inbox.work` |
+| Yolculuk olayı | `POST /api/inbox/journeys/{journey_id}/events` | `jeeta.inbox.events_report` | WRITE / `inbox.work` |
+| Komisyon sahibi ata/kaldır | `POST /api/inbox/journeys/{journey_id}/owner` | `jeeta.inbox.journeys_assign_owner` | WRITE / `inbox.manage` |
+| Kayıp nedenlerini oku | `GET /api/inbox/lost-reasons` | `jeeta.inbox.lost_reasons_list` | READ / `inbox.work` |
+| Kayıp nedeni düzenle | `PUT /api/inbox/lost-reasons` | `jeeta.inbox.lost_reasons_set` | WRITE / `inbox.manage` |
+| Durum etiketlerini düzenle | `PUT /api/inbox/status-labels` | `jeeta.inbox.status_labels_set` | WRITE / `inbox.manage` |
+
+`people.create`: `{display_name, identities:[{channel,value,capability_id?}], source}`.
+Telefonlar SMS/WhatsApp/arama arasında ortak, opak kimlikler kabiliyetin dış hesap kimliğiyle
+kapsamlıdır. Çakışan kimlikler kişi verisini taşımaz; `identity_split` hatası iki kişi kimliğini ve
+kalıcı birleştirme önerisini verir. İlk temas değişmez; kişi, ilk yolculuk ve kimlikleri tek işlemde
+oluşturulur. Gelen mesajda kendi kanalının eşleşmesi önceliklidir.
+
+`events.report`: `{kind,idempotency_key,payload}`. Dışarıdan yalnızca `call_made`,
+`appointment_booked`, `meeting_held`, `quote_accepted`, `won`, `lost`, `snoozed`, `reopened`
+raporlanır. `lost` yükü `{reason_key}`, `won` yükü `{product,amount_minor,currency}`,
+`call_made` yükü `{connected}`, `snoozed` yükü `{until}`; ötekiler `{}` alır.
+Kayıp nedeninin o andaki etiketi olayda korunur. Aynı çalışma alanında aynı anahtarın tekrarı
+etkileri çalıştırmaz ve `inbox.event.duplicate` yazar; yeni anahtarla ikinci Won terminal
+`CONFLICT` olur. Lost konuşmaları kapatır, açık görevleri iptal eder; Won açık görevleri tamamlar.
+Değişiklik, etkiler ve günlük aynı veritabanı işlemindedir. Yeniden açma, insan sahip/yönetici ve
+`inbox.manage` ister; Won yeniden açılmaz, yeni yolculuk `repeat` kaynağını alır.
+
+`status_labels.set`: `{labels:{new:"Yeni",won:"Kazanıldı"}}`; yalnızca dokuz sabit durum
+anahtarı kabul edilir. Etiketler çalışma alanı politika satırında saklanır; diğer politika alanları
+korunur. Harita tamamen değiştirilir, boş harita varsayılan etiketlere döner. Bilinmeyen anahtarlar
+ve boş etiketler `VALIDATION` verir; günlük yalnızca değiştirilen durum anahtarlarını içerir.

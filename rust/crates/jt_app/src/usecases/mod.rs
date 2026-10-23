@@ -13,6 +13,7 @@ pub mod capabilities;
 pub mod connector;
 pub mod events;
 pub mod groups;
+pub mod inbox;
 pub mod jobs;
 pub mod ledger;
 pub mod platform;

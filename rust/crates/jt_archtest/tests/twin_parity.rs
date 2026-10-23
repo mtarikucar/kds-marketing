@@ -1307,3 +1307,255 @@ async fn connector_hooks_answer_the_same_over_the_panel_and_mcp() {
     );
     assert!(!human.to_string().contains("meta-verify-token"));
 }
+
+async fn approve_inbox_strategy(app: &Router, cookie: &str) {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    }
+    ok(send(
+        app,
+        panel(
+            Method::POST,
+            "/api/strategy/consultation",
+            Some(cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    for (key, value) in [
+        ("identity", json!({"product":"Service"})),
+        (
+            "audience",
+            json!([{"key":"all","name":"Everyone","description":"Local"}]),
+        ),
+        (
+            "channels",
+            json!([{"channel":"any","rationale":"Available"}]),
+        ),
+        ("cadence", json!({"per_week":3})),
+    ] {
+        ok(send(
+            app,
+            panel(
+                Method::PUT,
+                &format!("/api/strategy/draft/sections/{key}"),
+                Some(cookie),
+                Some(value),
+            ),
+        )
+        .await)
+        .await;
+    }
+    ok(send(app,panel(Method::PUT,"/api/strategy/draft/hypotheses",Some(cookie),Some(json!([{"title":"Contact","segment_key":"all","angle":"Help","channel":"any","metric":"dm","confidence":0.6}])))).await).await;
+    let draft = ok(send(
+        app,
+        panel(
+            Method::POST,
+            "/api/strategy/draft/submit",
+            Some(cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    ok(send(
+        app,
+        panel(
+            Method::POST,
+            "/api/strategy/draft/approve",
+            Some(cookie),
+            Some(json!({"version_id":draft["id"],"submitted_at":draft["submitted_at"]})),
+        ),
+    )
+    .await)
+    .await;
+}
+
+#[tokio::test]
+async fn inbox_people_get_and_events_report_have_http_mcp_parity() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("inbox-parity").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/inbox/people", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(json_body(resp).await["code"], "STRATEGY_REQUIRED");
+    approve_inbox_strategy(&app, &cookie).await;
+    let resp=send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})))).await;
+    let status = resp.status();
+    let created = json_body(resp).await;
+    assert!(status.is_success(), "{status}: {created}");
+    let person = created["person"]["id"].as_str().unwrap();
+    let path = format!("/api/inbox/people/{person}");
+    let human = json_body(send(&app, panel(Method::GET, &path, Some(&cookie), None)).await).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.people_get",
+        json!({"person_id":person}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    let journey = human["open_journey"]["id"].as_str().unwrap();
+    let path = format!("/api/inbox/journeys/{journey}/events");
+    let reason = send(
+        &app,
+        panel(
+            Method::PUT,
+            "/api/inbox/lost-reasons",
+            Some(&cookie),
+            Some(json!({"key":"fiyat","label":"Fiyat","active":true})),
+        ),
+    )
+    .await;
+    assert_eq!(reason.status(), StatusCode::OK);
+    let input =
+        json!({"kind":"lost","idempotency_key":"parity-loss","payload":{"reason_key":"fiyat"}});
+    let first = json_body(
+        send(
+            &app,
+            panel(Method::POST, &path, Some(&cookie), Some(input.clone())),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(first["transition"]["patch"]["status"], "lost", "{first}");
+    assert_eq!(
+        first["effects"],
+        json!(["close_conversations", "cancel_open_tasks"])
+    );
+    let second = call_tool(&app, &key, &session, "jeeta.inbox.people_create", json!({"display_name":"Grace","identities":[{"channel":"phone","value":"05321234568"}],"source":"form"})).await;
+    let second = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.people_get",
+        json!({"person_id":second["person"]["id"]}),
+    )
+    .await;
+    let second = call_tool(&app, &key, &session, "jeeta.inbox.events_report", json!({"journey_id":second["open_journey"]["id"],"kind":"lost","idempotency_key":"parity-loss-second","payload":{"reason_key":"fiyat"}})).await;
+    assert_eq!(
+        first, second,
+        "successful transition and effects are identical across surfaces"
+    );
+    let repeat = json_body(
+        send(
+            &app,
+            panel(Method::POST, &path, Some(&cookie), Some(input.clone())),
+        )
+        .await,
+    )
+    .await;
+    let mut args = input;
+    args["journey_id"] = json!(journey);
+    let agent = call_tool(&app, &key, &session, "jeeta.inbox.events_report", args).await;
+    assert_eq!(repeat, agent);
+    assert_eq!(
+        agent,
+        json!({"transition":null,"effects":[],"duplicate":true})
+    );
+    for input in [
+        json!({"kind":"meeting_held","payload":{}}),
+        json!({"kind":"replied","idempotency_key":"system","payload":{}}),
+        json!({"kind":"lost","idempotency_key":"invalid","payload":{"reason_key":"fiyat","reason_label":"forged"}}),
+    ] {
+        let human = json_body(
+            send(
+                &app,
+                panel(Method::POST, &path, Some(&cookie), Some(input.clone())),
+            )
+            .await,
+        )
+        .await;
+        let mut args = input;
+        args["journey_id"] = json!(journey);
+        let agent = tool_result(&app, &key, &session, "jeeta.inbox.events_report", args).await;
+        assert_eq!(human["code"], "VALIDATION", "{human}");
+        assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    }
+}
+
+#[tokio::test]
+async fn inbox_status_labels_have_http_mcp_parity_and_persist() {
+    use jt_app::ports::UnitOfWork;
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("labels-parity").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let input = json!({"labels":{"new":"Yeni","won":"Kazanıldı"}});
+    let response = send(
+        &app,
+        panel(
+            Method::PUT,
+            "/api/inbox/status-labels",
+            Some(&cookie),
+            Some(input.clone()),
+        ),
+    )
+    .await;
+    let status = response.status();
+    let human = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{human}");
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.status_labels_set",
+        input.clone(),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human, input);
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let mut repos = uow.tenant(ws).await.unwrap();
+    let stored = serde_json::to_value(repos.workspace_policy().get().await.unwrap()).unwrap();
+    assert_eq!(stored["inbox_status_labels"], input["labels"]);
+    drop(repos);
+    for invalid in [
+        json!({"labels":{"custom_stage":"Custom"}}),
+        json!({"labels":{"new":" "}}),
+        json!({"labels":{"new":"New"},"status":"won"}),
+    ] {
+        let response = send(
+            &app,
+            panel(
+                Method::PUT,
+                "/api/inbox/status-labels",
+                Some(&cookie),
+                Some(invalid.clone()),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let human = json_body(response).await;
+        let agent = tool_result(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.status_labels_set",
+            invalid,
+        )
+        .await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(agent["structuredContent"]["code"], human["code"]);
+    }
+    let mut repos = uow.tenant(ws).await.unwrap();
+    let after = serde_json::to_value(repos.workspace_policy().get().await.unwrap()).unwrap();
+    assert_eq!(after, stored);
+}

@@ -9,6 +9,17 @@ use jt_tenancy::Permission;
 use serde_json::Value;
 
 const TOOLS: &[&str] = &[
+    "jeeta.inbox.people_search",
+    "jeeta.inbox.people_get",
+    "jeeta.inbox.people_create",
+    "jeeta.inbox.identities_add",
+    "jeeta.inbox.journeys_open",
+    "jeeta.inbox.events_report",
+    "jeeta.inbox.lost_reasons_list",
+    "jeeta.inbox.lost_reasons_set",
+    "jeeta.inbox.journeys_get",
+    "jeeta.inbox.journeys_assign_owner",
+    "jeeta.inbox.status_labels_set",
     "jeeta.agent.whoami",
     "jeeta.workspace.info",
     "jeeta.team.list",
@@ -76,7 +87,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 60);
+    assert_eq!(TOOLS.len(), 71);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)

@@ -16,6 +16,18 @@ use crate::error::AppError;
 
 /// Maximum page size for inbox reads; requested limits are clamped to 1..=500.
 pub const MAX_INBOX_PAGE: u32 = 500;
+/// Fixed reducer stage keys accepted by workspace display labels.
+pub const INBOX_STATUS_KEYS: &[&str] = &[
+    "new",
+    "contacted",
+    "unreachable",
+    "appointment",
+    "met",
+    "quoted",
+    "pending",
+    "won",
+    "lost",
+];
 /// Initial dictionary, shared by registration and the adapters. Migration 0006 backfills the same keys.
 pub const LOST_REASON_DEFAULTS: &[(&str, &str)] = &[
     ("fiyat", "Fiyat"),
@@ -28,6 +40,9 @@ pub const LOST_REASON_DEFAULTS: &[(&str, &str)] = &[
 
 #[async_trait]
 pub trait PersonRepo: Send + Sync {
+    /// Serialize inbox matching/dictionary/event writes in this workspace until commit.
+    /// Acquire before any person/journey locks, including from the inbound consumer.
+    async fn lock_workspace(&mut self) -> Result<(), AppError>;
     async fn insert(&mut self, person: Person) -> Result<(), AppError>;
     async fn get(&mut self, id: PersonId) -> Result<Option<Person>, AppError>;
     async fn lock(&mut self, id: PersonId) -> Result<Option<Person>, AppError>;
@@ -61,6 +76,8 @@ pub trait IdentityRepo: Send + Sync {
 
 #[async_trait]
 pub trait ConversationRepo: Send + Sync {
+    /// All conversations for terminal/snooze effects, locked in id order; never page effects.
+    async fn lock_for_person(&mut self, person: PersonId) -> Result<Vec<Conversation>, AppError>;
     async fn get(&mut self, id: ConversationId) -> Result<Option<Conversation>, AppError>;
     async fn lock(&mut self, id: ConversationId) -> Result<Option<Conversation>, AppError>;
     async fn find(
@@ -114,6 +131,10 @@ pub trait MessageRepo: Send + Sync {
 
 #[async_trait]
 pub trait JourneyRepo: Send + Sync {
+    /// Durable workspace-wide key lookup, including events on other journeys.
+    async fn event_by_key(&mut self, key: &str) -> Result<Option<JourneyEvent>, AppError>;
+    /// Change only the commission owner, never reducer-owned fields.
+    async fn assign_owner(&mut self, id: JourneyId, owner: Option<UserId>) -> Result<(), AppError>;
     async fn open_for(&mut self, person: PersonId) -> Result<Option<Journey>, AppError>;
     async fn latest_for(&mut self, person: PersonId) -> Result<Option<Journey>, AppError>;
     async fn lock(&mut self, id: JourneyId) -> Result<Option<Journey>, AppError>;

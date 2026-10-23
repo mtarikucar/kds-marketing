@@ -192,9 +192,21 @@ const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk
     }
 }
 
-/// Every use case of this release. None is `Gated` yet.
+/// Every use case of this release. Inbox operations require an approved strategy.
 #[rustfmt::skip]
 pub static CATALOG: &[UseCase] = &[
+    twin("inbox.people.search", GateMode::Gated, "jeeta.inbox.people_search", ("GET", "/api/inbox/people"), Read),
+    twin("inbox.people.get", GateMode::Gated, "jeeta.inbox.people_get", ("GET", "/api/inbox/people/{person_id}"), Read),
+    twin("inbox.people.create", GateMode::Gated, "jeeta.inbox.people_create", ("POST", "/api/inbox/people"), Write),
+    twin("inbox.identities.add", GateMode::Gated, "jeeta.inbox.identities_add", ("POST", "/api/inbox/people/{person_id}/identities"), Write),
+    twin("inbox.journeys.open", GateMode::Gated, "jeeta.inbox.journeys_open", ("POST", "/api/inbox/people/{person_id}/journeys"), Write),
+    twin("inbox.events.report", GateMode::Gated, "jeeta.inbox.events_report", ("POST", "/api/inbox/journeys/{journey_id}/events"), Write),
+    twin("inbox.lost_reasons.list", GateMode::Gated, "jeeta.inbox.lost_reasons_list", ("GET", "/api/inbox/lost-reasons"), Read),
+    twin("inbox.lost_reasons.set", GateMode::Gated, "jeeta.inbox.lost_reasons_set", ("PUT", "/api/inbox/lost-reasons"), Write),
+    twin("inbox.journeys.get", GateMode::Gated, "jeeta.inbox.journeys_get", ("GET", "/api/inbox/journeys/{journey_id}"), Read),
+    twin("inbox.journeys.assign_owner", GateMode::Gated, "jeeta.inbox.journeys_assign_owner", ("POST", "/api/inbox/journeys/{journey_id}/owner"), Write),
+    twin("inbox.status_labels.set", GateMode::Gated, "jeeta.inbox.status_labels_set", ("PUT", "/api/inbox/status-labels"), Write),
+
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),
     panel_only("auth.logout", Exempt, ("POST", "/api/auth/logout"), Write),

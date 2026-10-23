@@ -1277,6 +1277,7 @@ async fn workspace_policy_defaults() {
             .set(
                 WorkspacePolicy {
                     agent_checkin_interval_minutes: minutes,
+                    ..WorkspacePolicy::default()
                 },
                 T0,
             )
@@ -1310,6 +1311,7 @@ async fn workspace_policy_defaults() {
             .set(
                 WorkspacePolicy {
                     agent_checkin_interval_minutes: minutes,
+                    ..WorkspacePolicy::default()
                 },
                 T0,
             )
@@ -1460,6 +1462,7 @@ async fn capability_tables_are_hidden_without_their_workspace_in_scope() {
         .set(
             WorkspacePolicy {
                 agent_checkin_interval_minutes: 30,
+                ..WorkspacePolicy::default()
             },
             T0,
         )

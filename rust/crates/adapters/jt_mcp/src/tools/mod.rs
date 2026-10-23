@@ -11,6 +11,7 @@ mod budget;
 mod capabilities;
 mod connector;
 mod events;
+mod inbox;
 mod ledger;
 mod roles;
 mod strategy;
@@ -50,6 +51,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         budget::definitions(),
         connector::definitions(),
         events::definitions(),
+        inbox::definitions(),
         work::definitions(),
     ]
     .into_iter()

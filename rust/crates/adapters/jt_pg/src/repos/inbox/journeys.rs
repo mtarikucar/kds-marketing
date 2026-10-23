@@ -6,6 +6,25 @@ use jt_inbox::{Journey, JourneyEvent, JourneyId, JourneyStatus, PersonId, Transi
 const ROW: &str = "to_jsonb(j) || jsonb_build_object('owner',owner_id)";
 #[async_trait]
 impl JourneyRepo for PgTenantRepos {
+    async fn event_by_key(&mut self, key: &str) -> Result<Option<JourneyEvent>, AppError> {
+        one!(sqlx::query_scalar("select to_jsonb(e) || jsonb_build_object('kind',payload) from journey_events e where workspace_id=$1 and idempotency_key=$2")
+            .bind(self.workspace_id().as_uuid()).bind(key),self,JourneyEvent)
+    }
+    async fn assign_owner(
+        &mut self,
+        id: JourneyId,
+        owner: Option<jt_tenancy::UserId>,
+    ) -> Result<(), AppError> {
+        super::changed(
+            sqlx::query("update journeys set owner_id=$3 where workspace_id=$1 and id=$2")
+                .bind(self.workspace_id().as_uuid())
+                .bind(id.as_uuid())
+                .bind(owner.map(|id| id.as_uuid()))
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "assign journey owner"))?,
+        )
+    }
     async fn get(&mut self, id: JourneyId) -> Result<Option<Journey>, AppError> {
         one!(
             sqlx::query_scalar(&format!(

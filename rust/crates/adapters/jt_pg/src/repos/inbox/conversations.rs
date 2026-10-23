@@ -21,6 +21,10 @@ fn state_columns(state: &ConvState) -> (&'static str, Option<OffsetDateTime>) {
 }
 #[async_trait]
 impl ConversationRepo for PgTenantRepos {
+    async fn lock_for_person(&mut self, person: PersonId) -> Result<Vec<Conversation>, AppError> {
+        many!(sqlx::query_scalar(&format!("select {ROW} from conversations c where workspace_id=$1 and person_id=$2 order by id for update"))
+            .bind(self.workspace_id().as_uuid()).bind(person.as_uuid()),self,Conversation)
+    }
     async fn get(&mut self, id: ConversationId) -> Result<Option<Conversation>, AppError> {
         one!(
             sqlx::query_scalar(&format!(

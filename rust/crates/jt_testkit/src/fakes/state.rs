@@ -103,7 +103,7 @@ pub struct StoredOutboundJob {
 }
 
 /// A workspace's policies together with when they were last set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredWorkspacePolicy {
     pub workspace_id: WorkspaceId,
     pub policy: WorkspacePolicy,
@@ -396,6 +396,7 @@ pub struct InMemoryUow {
     /// How many of the next `CapabilityRepo::set_sealed` calls fail
     /// ([`InMemoryUow::fail_set_sealed`]).
     set_sealed_faults: Arc<AtomicUsize>,
+    inbox_task_status_faults: Arc<AtomicUsize>,
 }
 
 impl InMemoryUow {
@@ -408,6 +409,10 @@ impl InMemoryUow {
         lock(&self.state).clone()
     }
 
+    /// Fail the next task-status effect calls to exercise transaction rollback.
+    pub fn fail_inbox_task_status(&self, times: usize) {
+        self.inbox_task_status_faults.store(times, Ordering::SeqCst);
+    }
     /// Makes the next `times` calls of `CapabilityRepo::set_sealed`, in any bundle, fail with
     /// `INTERNAL` (spoiling their bundle, as a failed statement aborts a Postgres transaction):
     /// a database failing at the moment a credential is written.
@@ -433,6 +438,7 @@ pub(super) struct MemTx {
     shared: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
     set_sealed_faults: Arc<AtomicUsize>,
+    inbox_task_status_faults: Arc<AtomicUsize>,
     pub(super) work: MemState,
     ops: Vec<Op>,
     /// Set once a call on the bundle has failed; `commit` then refuses.
@@ -445,6 +451,7 @@ impl MemTx {
             shared: Arc::clone(&uow.state),
             ledger_seq: Arc::clone(&uow.ledger_seq),
             set_sealed_faults: Arc::clone(&uow.set_sealed_faults),
+            inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
             work: lock(&uow.state).clone(),
             ops: Vec::new(),
             spoiled: false,
@@ -508,6 +515,12 @@ impl MemTx {
         Ok(())
     }
 
+    /// Whether this task-status effect is scheduled to fail.
+    pub(super) fn inbox_task_status_fails(&self) -> bool {
+        self.inbox_task_status_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+    }
     /// Whether this `set_sealed` call is one [`InMemoryUow::fail_set_sealed`] asked to fail.
     pub(super) fn set_sealed_fails(&self) -> bool {
         self.set_sealed_faults

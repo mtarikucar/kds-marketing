@@ -112,6 +112,17 @@ fn catalog_is_the_release_table() {
         .map(|uc| (uc.id, uc.mcp_tool, uc.panel_route, uc.panel_only, uc.risk))
         .collect();
     let expected = [
+        ("inbox.people.search", Some("jeeta.inbox.people_search"), Some(("GET", "/api/inbox/people")), false, Risk::Read),
+        ("inbox.people.get", Some("jeeta.inbox.people_get"), Some(("GET", "/api/inbox/people/{person_id}")), false, Risk::Read),
+        ("inbox.people.create", Some("jeeta.inbox.people_create"), Some(("POST", "/api/inbox/people")), false, Risk::Write),
+        ("inbox.identities.add", Some("jeeta.inbox.identities_add"), Some(("POST", "/api/inbox/people/{person_id}/identities")), false, Risk::Write),
+        ("inbox.journeys.open", Some("jeeta.inbox.journeys_open"), Some(("POST", "/api/inbox/people/{person_id}/journeys")), false, Risk::Write),
+        ("inbox.events.report", Some("jeeta.inbox.events_report"), Some(("POST", "/api/inbox/journeys/{journey_id}/events")), false, Risk::Write),
+        ("inbox.lost_reasons.list", Some("jeeta.inbox.lost_reasons_list"), Some(("GET", "/api/inbox/lost-reasons")), false, Risk::Read),
+        ("inbox.lost_reasons.set", Some("jeeta.inbox.lost_reasons_set"), Some(("PUT", "/api/inbox/lost-reasons")), false, Risk::Write),
+        ("inbox.journeys.get", Some("jeeta.inbox.journeys_get"), Some(("GET", "/api/inbox/journeys/{journey_id}")), false, Risk::Read),
+        ("inbox.journeys.assign_owner", Some("jeeta.inbox.journeys_assign_owner"), Some(("POST", "/api/inbox/journeys/{journey_id}/owner")), false, Risk::Write),
+        ("inbox.status_labels.set", Some("jeeta.inbox.status_labels_set"), Some(("PUT", "/api/inbox/status-labels")), false, Risk::Write),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
@@ -184,8 +195,10 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 70);
-    assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "no use case is gated yet");
+    assert_eq!(CATALOG.len(), 81);
+    for uc in CATALOG {
+        assert_eq!(uc.gate, if uc.id.starts_with("inbox.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+    }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG
             .iter()

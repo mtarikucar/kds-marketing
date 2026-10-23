@@ -23,7 +23,7 @@ pub mod connectors;
 pub mod inbox;
 use inbox::*;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use jt_capability::{
@@ -1008,17 +1008,20 @@ pub const MIN_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 15;
 pub const MAX_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 10_080;
 
 /// The workspace-wide policies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkspacePolicy {
     /// How often an agent is expected to check in, in minutes:
     /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES`.
     pub agent_checkin_interval_minutes: u32,
+    /// Workspace display labels for the nine fixed inbox stages; absent overrides use defaults.
+    pub inbox_status_labels: BTreeMap<String, String>,
 }
 
 impl Default for WorkspacePolicy {
     fn default() -> Self {
         WorkspacePolicy {
             agent_checkin_interval_minutes: DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES,
+            inbox_status_labels: BTreeMap::new(),
         }
     }
 }
@@ -1027,6 +1030,7 @@ impl Default for WorkspacePolicy {
 #[async_trait]
 pub trait WorkspacePolicyRepo: Send + Sync {
     /// The stored policies, or [`WorkspacePolicy::default`] while none are stored.
+    /// Serialize policy read/modify/write transactions, including when the row is absent.
     async fn get(&mut self) -> Result<WorkspacePolicy, AppError>;
     /// Stores the policies, updated at `at`, replacing any stored before. An interval outside
     /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES` breaks a check

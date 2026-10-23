@@ -415,16 +415,42 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
     assert_eq!(table_count(&db.pool).await, 36);
+    assert!(column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
+    let (ws, _) = db.seed_workspace("inbox-policy-roundtrip").await;
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("insert into workspace_policies (workspace_id,agent_checkin_interval_minutes,updated_at,inbox_status_labels) values ($1,60,now(),$2)")
+        .bind(ws.as_uuid()).bind(serde_json::json!({"new":"Yeni"})).execute(tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
     let dir = migrations_dir();
     let down = std::fs::read_to_string(dir.join("0006_inbox.down.sql")).unwrap();
     let up = std::fs::read_to_string(dir.join("0006_inbox.up.sql")).unwrap();
     for _ in 0..2 {
         sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, 23);
+        assert!(!column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
         assert!(!column_exists(&db.pool, ("lost_reasons", "key")).await);
+        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+        let interval: i32 = sqlx::query_scalar(
+            "select agent_checkin_interval_minutes from workspace_policies where workspace_id=$1",
+        )
+        .bind(ws.as_uuid())
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+        assert_eq!(interval, 60);
     }
     for _ in 0..2 {
         sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, 36);
+        assert!(column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
+        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+        let labels: serde_json::Value = sqlx::query_scalar(
+            "select inbox_status_labels from workspace_policies where workspace_id=$1",
+        )
+        .bind(ws.as_uuid())
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+        assert_eq!(labels, serde_json::json!({}));
     }
 }
