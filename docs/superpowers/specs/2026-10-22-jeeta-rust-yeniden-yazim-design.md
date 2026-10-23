@@ -557,9 +557,10 @@ kutusu, hangi hattın hangi markaya ait olduğunu gruptan okur. İç içe grup i
   `/oauth/callback/x` sayfası; kod değişimi aynı adresi gönderir, API geri dönüşü akışın uygulaması
   adresle uyuşmazsa `FORBIDDEN` döner. Akış uygulamasını başlangıçtan bitişe taşır (`oauth_pending.app`)
   ve bir OAuth akışının verdiği kimlik bilgisi onu kaydeder (`connector_public.access.app`; jeton
-  yenilemesi korur, elle girilen kimlik bilgisi adlamaz); yeniden bağlama kimlik bilgisini veren
-  uygulamayla oturum açar: Facebook Login'le (sayfası üzerinden) bağlanmış bir `instagram` kabiliyeti
-  Meta uygulamasıyla, Instagram Login'le bağlanmış olan Instagram uygulamasıyla döner; uygulama
+  yenilemesi korur; yapıştırılan bir Meta jetonu `meta` adlar, elle girilen NetGSM kimlik bilgisi
+  uygulama adlamaz); yeniden bağlama kimlik bilgisini veren uygulamayla oturum açar: Facebook Login'le
+  (sayfası üzerinden) ya da yapıştırılan jetonla bağlanmış bir `instagram` kabiliyeti Meta
+  uygulamasıyla, Instagram Login'le bağlanmış olan Instagram uygulamasıyla döner; uygulama
   adlamayan bir `instagram` kabiliyeti Meta uygulaması yapılandırılmışsa onunla, değilse Instagram
   uygulamasıyla. Zamanlayıcının NetGSM gelen kutusu yedeği, webhook gibi etkin ve ödeme bekleyen
   alanlar için çalışır; yoklama ve teslim raporu yoklaması yalnız etkin alanlar için. Ödeme bekleyen bir

@@ -29,9 +29,10 @@
 //!   which the workspace's tenant tier is given once the change is committed;
 //! - `access`: `Credential::redact_for_public` of the sealed credential (its kind, and for an
 //!   OAuth token its `expires_at` and `scopes`), written when it is sealed, so the token's expiry
-//!   is read without opening anything ([`health`]); and, for a credential an OAuth flow issued,
-//!   `app`: the app that flow signed in with (`meta`, `instagram` or `x`), which a reconnection
-//!   signs in with again and a token renewal keeps (a credential entered by hand names none);
+//!   is read without opening anything ([`health`]); and `app`, the app that issued the
+//!   credential (`meta`, `instagram` or `x`), which a reconnection signs in with again and a
+//!   token renewal keeps: for an OAuth flow's, the app that flow signed in with; a pasted Meta
+//!   token names `meta`; hand-entered NetGSM credentials name no app;
 //! - `asset`: the provider's public facts of an asset connected through OAuth;
 //! - `health`: the last probe, `{ok, at, latency_ms, error_kind}`, and `on_connected_error` while
 //!   the adapter's connection step last failed (see below); `facts`: what the last successful
@@ -1037,11 +1038,11 @@ fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback) -> Option<OAuthAp
 }
 
 /// The app a reconnection of `capability`, of `provider`, signs in with: the one that issued its
-/// credential (`connector_public.access.app`, written when an OAuth flow's credential is sealed),
-/// so an `instagram` capability connected through Facebook Login (its Page) comes back through
-/// the Meta app and one connected through Instagram Login through the Instagram app. A
-/// capability that names none (declared and never connected, given credentials by hand, or
-/// sealed before the app was recorded) signs in, when it is `instagram`, with the Meta app when
+/// credential (`connector_public.access.app`, written when an OAuth flow's credential is sealed
+/// and when a Meta token is pasted), so an `instagram` capability connected through Facebook
+/// Login (its Page) or with a pasted Meta token comes back through the Meta app and one connected
+/// through Instagram Login through the Instagram app. A capability that names none (declared and
+/// never connected, or sealed before the app was recorded) signs in, when it is `instagram`, with the Meta app when
 /// that is configured and the Instagram app otherwise; with its kind's app for every other kind
 /// ([`OAuthCallback::of_flow`]). `None` for a provider without OAuth.
 fn reconnect_app(
@@ -1069,6 +1070,22 @@ fn issued_access(credential: &Credential, app: OAuthCallback) -> Value {
     let mut access = credential.redact_for_public();
     if let Value::Object(fields) = &mut access {
         fields.insert("app".to_owned(), json!(app.key()));
+    }
+    access
+}
+
+/// The public facts of `credential` of `provider`, entered by hand, in place of `previous` (the
+/// capability's earlier `connector_public.access`, or none): a pasted Meta token names the Meta
+/// app, as a Facebook Login token does (its calls go out under the Meta app), so a reconnection
+/// signs in with that app; a credential of any other shape (NetGSM's) names none of its own, and
+/// keeps an app the earlier facts named.
+fn entered_access(previous: &Value, provider: Provider, credential: &Credential) -> Value {
+    if provider == Provider::Meta {
+        return issued_access(credential, OAuthCallback::Meta);
+    }
+    let mut access = credential.redact_for_public();
+    if let (Some(app), Value::Object(fields)) = (previous.get("app"), &mut access) {
+        fields.insert("app".to_owned(), app.clone());
     }
     access
 }
@@ -1449,7 +1466,7 @@ async fn credentials_for_new(
         provider,
         None,
         &hosts,
-        credential.redact_for_public(),
+        entered_access(&Value::Null, provider, &credential),
         None,
     );
     let mut capability = Capability::new(
@@ -1555,12 +1572,17 @@ async fn credentials_for(
     let credential = built_credential(kind.key, provider, input, bound.as_deref())?;
     let connector = adapter(deps, provider)?;
     let hosts = adapter_hosts(deps, connector.as_ref())?;
+    let access = entered_access(
+        &capability.connector_public["access"],
+        provider,
+        &credential,
+    );
     capability.connector_public = connected_public(
         &capability.connector_public,
         provider,
         None,
         &hosts,
-        credential.redact_for_public(),
+        access,
         None,
     );
     capability.updated_at = ctx.now;

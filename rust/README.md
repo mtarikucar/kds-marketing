@@ -701,12 +701,14 @@ kabiliyete bağlı yeni bir OAuth akışı başlatır; NetGSM kabiliyeti yeni ki
 
 **Hangi uygulamayla yeniden bağlanır.** Bir OAuth akışının verdiği kimlik bilgisi, akışın oturum açtığı
 uygulamayı kaydeder (`connector_public.access.app`: `meta`, `instagram` ya da `x`; jeton yenilemesi
-korur, elle girilen kimlik bilgisi adlamaz) ve yeniden bağlama o uygulamayla oturum açar; akış uygulamasını
+korur; yapıştırılan bir Meta jetonu `meta` adlar, elle girilen NetGSM kimlik bilgisi uygulama adlamaz) ve
+yeniden bağlama o uygulamayla oturum açar; akış uygulamasını
 geri dönüşe kadar taşır, başka bir uygulamanın geri dönüş adresi `403`'tür. Facebook Login'le (sayfası
 üzerinden) bağlanmış bir `instagram` kabiliyeti Meta uygulamasıyla döner, Instagram uygulaması
 yapılandırılmamış olsa da; Instagram Login'le bağlanmış olan Instagram uygulamasıyla döner (o uygulama
-yoksa `409 provider_app_not_configured`). Uygulama adlamayan bir `instagram` kabiliyeti (bildirilmiş ya
-da elle bağlanmış) Meta uygulaması yapılandırılmışsa onunla, değilse Instagram uygulamasıyla bağlanır;
+yoksa `409 provider_app_not_configured`); jetonu yapıştırılarak bağlanmış olan Meta uygulamasıyla döner.
+Uygulama adlamayan bir `instagram` kabiliyeti (yalnız bildirilmiş) Meta uygulaması yapılandırılmışsa
+onunla, değilse Instagram uygulamasıyla bağlanır;
 öteki türler hep kendi uygulamalarıyla.
 
 ### Sabit çıkış adresleri
@@ -1116,6 +1118,7 @@ make check   # fmt + lint + doc + deny + test (JEETA_TEST_DATABASE_URL gerekli)
 | `make test` | `cargo test --locked --workspace` |
 | `make dev` | `cargo run --locked -p jeeta -- serve` |
 | `make panel-install` / `panel-test` / `panel-build` | `panel/` içinde pnpm |
+| `make sweep` | `cargo sweep --time 1` (bir günden eski `target/` çıktılarını siler) |
 
 CI (`.github/workflows/rust.yml`) `rust/**` ya da iş akışı dosyası değiştiğinde, `main` ve `feat/**`
 dallarına gönderimde ve her çekme isteğinde çalışır: `rust-checks` (fmt, clippy, doc, cargo-deny),
@@ -1123,6 +1126,14 @@ dallarına gönderimde ve her çekme isteğinde çalışır: `rust-checks` (fmt,
 `pnpm test`, `pnpm typecheck`, `pnpm build`). `fmt` dışındaki her `cargo` komutu, CI'da da `make` ile de
 (`make dev` dahil), `--locked` çalışır: `Cargo.lock` yeniden çözümlenmez, kilit dosyası güncel değilse iş
 durur (bir bağımlılık değiştiğinde kilit dosyasını bir kez düz `cargo build` ile güncelleyip işleyin).
+
+**Disk düzeni.** Her farklı `cargo` çağrı biçimi (paket kümesi, özellik kümesi, profil) bağımlılık
+ağacının ve test ikililerinin kendi kopyasını `target/` altına üretir: bir `-p` alt kümesi ya da başka bir
+özellik kümesi ağacı yeniden derler ve diskte ayrı yer tutar. Bu yüzden tam olarak Makefile'ın biçimlerini
+kullanın: `cargo test --locked --workspace`, `cargo clippy --locked --workspace --all-targets -- -D warnings`
+ve tek `cargo test --locked -p jt_outbound --test production_build` çalıştırması; `-p` alt kümeleri değil.
+Kök `Cargo.toml`'daki `[profile.dev] debug = "line-tables-only"` test ikililerini küçük tutar. İş gününün
+sonunda `make sweep` (bir kez `cargo install cargo-sweep` gerekir) ya da `cargo clean` çalıştırın.
 
 ## Sınırlar
 

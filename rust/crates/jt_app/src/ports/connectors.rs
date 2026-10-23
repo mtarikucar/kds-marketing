@@ -106,8 +106,8 @@ pub trait PlatformAppConfig: Send + Sync {
 /// The app an OAuth flow signs in with, as the last segment of its redirect URI names it
 /// (`{public base URL}/oauth/callback/{key}`): each provider app registers its own redirect URI.
 /// A flow keeps its app from start to completion (`OAuthPendingRow::app`), and a credential an
-/// OAuth flow issued records it (`connector_public.access.app`), so a reconnection signs in with
-/// the app that issued the credential.
+/// OAuth flow issued records it (`connector_public.access.app`; a pasted Meta token records
+/// `meta`), so a reconnection signs in with the app that issued the credential.
 ///
 /// | callback | app | a new connection of | a reconnection of |
 /// |---|---|---|---|

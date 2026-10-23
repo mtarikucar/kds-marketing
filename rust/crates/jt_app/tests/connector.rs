@@ -2283,6 +2283,81 @@ async fn reconnect_signs_in_with_the_app_that_issued_the_credential() {
     }
 }
 
+/// A pasted Meta token names the Meta app (`connector_public.access.app = "meta"`), as a
+/// Facebook Login token does, so a reconnection signs in with it, also for an `instagram`
+/// capability. Hand-entered NetGSM credentials name no app.
+#[tokio::test]
+async fn pasted_meta_token_records_access_app_meta() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let app_of = |id: CapabilityId| r.capability(id).connector_public["access"]["app"].clone();
+    let pasted = |kind: &str, account: &str, token: &str| SetCredentials {
+        external_id: Some(account.into()),
+        ..creating(
+            kind,
+            "Yapıştırılan",
+            CredentialInput::MetaToken {
+                access_token: token.into(),
+            },
+        )
+    };
+
+    // A new capability, and an existing one given a pasted token.
+    r.meta.push_probe(ok_probe("page-9"));
+    let page = connector::set_credentials(
+        &r.w.deps,
+        o,
+        pasted("facebook_page", "page-9", "EAAB-page-2"),
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(app_of(page.id), json!("meta"));
+    let ig = r.w.declare("instagram", "Instagram").await.capability.id;
+    r.meta.push_probe(ok_probe("ig-9"));
+    connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            capability_id: Some(ig),
+            kind_key: None,
+            name: None,
+            external_id: Some("ig-9".into()),
+            credential: CredentialInput::MetaToken {
+                access_token: "EAAB-user-2".into(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(app_of(ig), json!("meta"));
+    // It reconnects through the Meta app, even when the Instagram app is configured.
+    let out = connector::reconnect(&r.w.deps, o, ig).await.unwrap();
+    let flow = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.id == out.pending_id)
+        .unwrap();
+    assert_eq!(flow.app, OAuthCallback::Meta);
+
+    // NetGSM credentials name no app.
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    let line = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating("sms_line", "Hat", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap()
+    .capability
+    .id;
+    assert_eq!(app_of(line), serde_json::Value::Null);
+    assert_no_secret(
+        "the public facts",
+        &r.capability(page.id).connector_public.to_string(),
+    );
+}
+
 #[tokio::test]
 async fn reconnect_accepts_a_declared_capability_without_account() {
     let r = rig().await;
