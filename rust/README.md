@@ -7,7 +7,7 @@ Tasarım belgesi: `docs/superpowers/specs/2026-10-22-jeeta-rust-yeniden-yazim-de
 
 | Komut | Ne yapar |
 |---|---|
-| `jeeta serve` | HTTP sunucusu: panel (`/`), panelin JSON API'si (`/api/*`), `/healthz` ve MCP uç noktası (`/mcp`), tek dinleyicide |
+| `jeeta serve` | HTTP sunucusu: panel (`/`), panelin JSON API'si (`/api/*`), `/healthz`, MCP uç noktası (`/mcp`) ve sağlayıcıların webhook kapısı (`/hooks/*`), tek dinleyicide; ayrıca zamanlanmış işler |
 | `jeeta mcp-stdio` | MCP araçlarını stdin/stdout üzerinden, `JEETA_STDIO_API_KEY` anahtarı adına sunar; HTTP yoktur |
 | `jeeta --help` | Kullanımı yazdırır |
 
@@ -62,8 +62,12 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
    yapılandırılmışsa ilk platform operatörünü açar, sonra dinlemeye başlar:
 
    ```text
+   INFO jeeta::serve: provider apps: OAuth needs a configured app; webhook and redirect addresses need the public base URL providers="none" public_base_url="unset (JEETA_PUBLIC_BASE_URL)"
    INFO jeeta::serve: jeeta is listening bind=127.0.0.1:8080 panel=served from panel/dist allowed_hosts=0 migrations_applied=4
    ```
+
+   İlk satır hangi sağlayıcı uygulamalarının yapılandırıldığını (yalnız adları: `meta`, `instagram`,
+   `x`; kimlik ya da sır asla) ve genel adresi yazar (bkz. [Sağlayıcı uygulamaları](#sağlayıcı-uygulamaları)).
 
    `curl -s localhost:8080/healthz` → `{"ok":true}`; tarayıcıda `http://127.0.0.1:8080/` paneli açar.
 
@@ -87,19 +91,22 @@ döndürür. Beş göç vardır:
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
 değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
 harf ayırmayan benzersiz dizini eklendi, `0004`'ün yoklama dizini yalnız `work.checkin` satırlarını
-tutar oldu); `0005` de M1b sırasında yayımlanmadan önce değişiyor (en son: `probe_runs` tetikleyicisi
-30 günden eski kayıtların silinmesine izin verir oldu; ondan önce `budget_items.retired_at` sütunu
-eklendi). Bu göçlerin eski
+tutar oldu); `0005` de M1b sırasında yayımlanmadan önce yerinde değiştirildi (en son: `probe_runs`
+tetikleyicisi 30 günden eski kayıtların silinmesine izin verir oldu; ondan önce `budget_items.retired_at`
+sütunu eklendi). Bu göçlerin eski
 bir hâlini uygulamış bir veritabanında `jeeta serve` sağlama toplamı (checksum) uyuşmazlığıyla durur
-(`migration 3 was previously applied but has been modified`). Veritabanını yönetici olarak silip
-yeniden açın, `jeeta serve` göçleri baştan uygular:
+(`migration 3 was previously applied but has been modified`). Bu yalnız yayından önceki yerel
+geliştirme veritabanları içindir: değişmiş bir göç, eski hâlini uygulamış dağıtılmış bir veritabanına asla
+uygulanmaz. Yerel veritabanını yönetici olarak silip yeniden açın, `jeeta serve` göçleri baştan uygular:
 
 ```sh
 psql postgres://postgres@localhost:5432/postgres \
   -c 'drop database if exists jeeta with (force)' -c 'create database jeeta owner jeeta'
 ```
 
-Yayımlanmış bir göç bundan sonra değişmez; her değişiklik yeni bir göçtür.
+Yayımlanmış bir göç bundan sonra değişmez; her değişiklik yeni bir göçtür: geri alınabilir bir
+`NNNN_ad.up.sql` / `NNNN_ad.down.sql` çifti (`down` yalnız `up`'ın eklediğini kaldırır ve yeniden
+çalıştırılabilir).
 
 ## Yapılandırma
 
@@ -123,6 +130,25 @@ hiçbir günlük satırında görünmez.
 | `JEETA_ALLOW_SUPERUSER` | `false` | `true` ise veritabanı rolü süper kullanıcı ya da `BYPASSRLS` olsa da açılır ve bir `WARN` satırı yazar (çalışma alanı yalıtımı uygulanmaz). **Yalnızca yerel geliştirme için**; üretimde asla |
 | `JEETA_JOBS_ENABLED` | `true` | `false` ise `jeeta serve` zamanlanmış işleri (jeton yenileme, yoklamalar, NetGSM yoklamaları, temizlik) hiç başlatmaz ve açılışta bunu günlüğe yazar. Aynı veritabanında birden çok örnek varsa işleri yalnız birinde açık bırakın (bkz. [Zamanlanmış işler](#zamanlanmış-işler)) |
 | `JEETA_ALLOW_TEST_LOOPBACK` | kapalı | `1` (ya da `true`) ise `jt_outbound`'un `test-loopback` özelliğiyle derlenmiş bir ikili de açılır ve bir `WARN` satırı yazar; kapalıyken böyle bir ikili açılışı reddeder (bkz. [Üretim notları](#üretim-notları)). **Yalnızca yerel test için**; üretimde asla |
+| `JEETA_META_APP_ID` | — | Platformun Meta uygulamasının kimliği (Facebook Login, Graph API, Meta webhook'ları); sırla birlikte verilir |
+| `JEETA_META_APP_SECRET` | — | Meta uygulamasının sırrı; kimlikle birlikte verilir |
+| `JEETA_META_VERIFY_TOKEN` | — | Meta'nın webhook adresini doğrularken geri yolladığı anahtar; Meta uygulamasıyla **zorunlu**. Kendiniz üretin (`openssl rand -hex 32`) ve Meta panelinde de girin |
+| `JEETA_META_LOGIN_CONFIG_ID` | — | İsteğe bağlı: Facebook Login for Business yapılandırma kimliği (boşsa izinler tek tek istenir) |
+| `JEETA_META_WHATSAPP_CONFIG_ID` | — | İsteğe bağlı: WhatsApp gömülü kayıt yapılandırma kimliği |
+| `JEETA_META_GRAPH_VERSION` | `v19.0` | Graph API sürümü, `v` ve iki sayı (ör. `v21.0`); başka bir biçim açılışı durdurur |
+| `JEETA_INSTAGRAM_APP_ID` | — | Platformun Instagram uygulamasının kimliği (Instagram Login); sırla birlikte verilir |
+| `JEETA_INSTAGRAM_APP_SECRET` | — | Instagram uygulamasının sırrı; kimlikle birlikte verilir |
+| `JEETA_X_CLIENT_ID` | — | Platformun X uygulamasının (OAuth 2.0 gizli istemci) kimliği; sırla birlikte verilir |
+| `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
+| `JEETA_PUBLIC_BASE_URL` | — | Panelin dışarıdan ulaşılan genel adresi: `https://alan-adi` ya da `https://alan-adi:port`; yol, sorgu, parça ya da kullanıcı yok (yalnız yerel geliştirmede `http://localhost:port`). Herhangi bir sağlayıcı uygulaması yapılandırılmışsa **zorunlu**. OAuth yönlendirme adresleri ve webhook adresleri bundan kurulur; boşken akış başlamaz ve webhook adresi gösterilmez (`409`, `details.reason = "public_base_url_not_configured"`) |
+
+**Sağlayıcı değişkenleri.** Her uygulama isteğe bağlıdır ama ancak bütün olarak yapılandırılır:
+kimliği ve sırrı birlikte (Meta uygulaması ayrıca doğrulama anahtarıyla). Yarım bir uygulama (kimlik var,
+sır yok ya da tersi; Meta uygulaması olmadan bir Meta ayarı) açılışı durdurur ve eksik değişkeni adıyla
+söyler, hiçbir değeri yazmaz. `JEETA_PUBLIC_BASE_URL` ile `JEETA_ALLOWED_HOSTS` ayrı işlerdir: genel
+adres sağlayıcılara verilen adresin kendisidir (yönlendirme ve webhook adresleri), izinli adlar ise MCP uç
+noktasının kabul ettiği `Host` başlıklarıdır; aynı adı ikisine de yazmak gerekebilir. `jeeta serve` ve
+`jeeta mcp-stdio` aynı yapılandırmayı okur.
 
 Erişim günlüğü her istek için yalnızca yöntemi, rota şablonunu (`/api/team/{membership_id}`), durumu ve
 süreyi yazar; ham yol ve sorgu dizesi hiç yazılmaz. Rotası olmayan istekler (panel sayfaları ve dosyaları,
@@ -453,7 +479,8 @@ adreslerine de uygulanır; böylece genel görünen bir ad özel bir adrese çö
 ona ulaşılmaz. HTTP dışındaki bağlantılar (M2'nin SMTP/IMAP soketleri) aynı denetimi
 `jt_outbound::resolve_public` ile paylaşır. Kiracı adresleri bellekte tutulur;
 `jt_outbound::rebuild_tenant_hosts` onları kabiliyet kayıtlarından (emekliye ayrılmamış bağlayıcı
-kabiliyetlerinin `connector_public.hosts` alanı) yeniden kurar, açılışa bağlanması M1b'nin son adımıyla gelir.
+kabiliyetlerinin `connector_public.hosts` alanı) yeniden kurar; `jeeta serve` ve `jeeta mcp-stdio` bunu
+her açılışta, istek almadan önce yapar.
 Yalnızca `https` kabul edilir; tek istisna bir sağlayıcı kısıtıdır: NetGSM Netsantral'in tıkla-ara ucu
 yalnız düz `http` sunar, bu yüzden `crmsntrl.netgsm.com.tr:9111` yalnızca `netgsm` bağlayıcısının kapsamında
 düz `http` ile çağrılır. Testler için `jt_outbound`'un `test-loopback` özelliği (feature), bu makinedeki
@@ -571,15 +598,20 @@ yolu yoktur. Bir OAuth akışı şöyle yürür:
    `authorize_url`'idir. Ajan bu adresi sahibe iletir (yanıtın `handoff` cümlesi bunu söyler); akışı
    tamamlayamaz.
 2. Sahip kendi tarayıcısında sağlayıcıda oturum açar; sağlayıcı tarayıcıyı panelin sayfasına,
-   `{genel adres}/oauth/callback/{sağlayıcı}?state=…&code=…` adresine geri gönderir (yönlendirme adresi
-   API değil, paneldir).
-3. Sayfa `state` ve `code`'u okur ve geri dönüş rotasını (`GET /api/connectors/oauth/callback/{provider}`)
-   kendisi çağırır. Bu istek aynı sitedendir, bu yüzden `SameSite=Strict` oturum çerezini taşır (sağlayıcının
-   siteler arası yönlendirmesi taşımazdı). Rota oturum ister (`401`), alanın etkin olmasını ister (`423`);
-   durum (`state`) bu alan ve bu sağlayıcı için imzalanmış, on dakikadan eski olmayan ve kullanılmamış
-   olmalıdır, değilse nedeni ne olursa olsun `403 FORBIDDEN`. Sorgu yalnız `state` ve `code` alır. Yanıt,
-   hesabın ulaştığı varlıklardır (tür, ad, dış kimlik, genel bilgiler; hiçbir jeton), `Cache-Control:
-   no-store` ile.
+   `{genel adres}/oauth/callback/{uygulama}?state=…&code=…` adresine geri gönderir (yönlendirme adresi
+   API değil, paneldir). `{uygulama}` akışın oturum açtığı platform uygulamasıdır: `meta` (Facebook
+   Login: `instagram` dışındaki bütün Meta türleri), `instagram` (Instagram Login: `instagram` türü) ya da
+   `x`. Kod değişiminde de aynı adres gönderilir; her uygulama kendi adresini kaydeder (bkz.
+   [Sağlayıcı uygulamaları](#sağlayıcı-uygulamaları)).
+3. Sayfa `state` ve `code`'u okur ve geri dönüş rotasını aynı uygulama adıyla
+   (`GET /api/connectors/oauth/callback/{meta|instagram|x}`) kendisi çağırır. Bu istek aynı sitedendir, bu
+   yüzden `SameSite=Strict` oturum çerezini taşır (sağlayıcının siteler arası yönlendirmesi taşımazdı). Rota
+   oturum ister (`401`), alanın etkin olmasını ister (`423`); durum (`state`) bu alan ve bu adın sağlayıcısı
+   için imzalanmış, on dakikadan eski olmayan ve kullanılmamış olmalı, akış da bu adın uygulamasıyla
+   başlamış olmalıdır (Instagram Login akışı `meta`'ya, Facebook Login akışı `instagram`'a dönemez), değilse
+   nedeni ne olursa olsun `403 FORBIDDEN` ve sağlayıcıya hiç gidilmez. Başka bir ad `422`'dir. Sorgu yalnız
+   `state` ve `code` alır. Yanıt, hesabın ulaştığı varlıklardır (tür, ad, dış kimlik, genel bilgiler; hiçbir
+   jeton), `Cache-Control: no-store` ile.
 4. Sahip panelde bağlanacak varlıkları işaretler; onay (`POST /api/connectors/oauth/{pending_id}/confirm`,
    gövde `{"selected": [dış kimlikler]}`) her birini bir kabiliyete çevirir, kimlik bilgisini mühürler ve
    yoklar. Akış onaydan sonra silinir.
@@ -604,25 +636,119 @@ bağlama gereği, yaklaşan jeton bitişi) gösterir ve duruma uyan işlemleri s
 **Yeniden bağla** (Meta ve X sağlayıcıya yeniden gider, NetGSM yeni kimlik bilgisi alır) ve **Yokla**.
 Ana sayfadaki `reconnect_connector` işi doğrudan o kabiliyetin yeniden bağlanmasına götürür.
 Sağlayıcının hata dönüşü (`error`, `error_description`) panelde kendi metniyle gösterilir, ham hali asla.
-Platform uygulamaları yapılandırılmadıkça (M1b'nin son adımı) OAuth türleri `409 CONFLICT` ("provider
-app not configured") alır; NetGSM elle girişi bundan bağımsızdır.
+Bir türün platform uygulaması yapılandırılmamışsa o türün OAuth akışı `409 CONFLICT` ("provider app not
+configured", `details.reason = "provider_app_not_configured"`) alır; genel adres yapılandırılmamışsa her
+akış ve webhook adresleri `409 CONFLICT` ("public base url not configured", `details.reason =
+"public_base_url_not_configured"`) alır; panel ikisini de kendi cümlesiyle söyler. NetGSM elle girişi
+uygulama istemez.
+
+### Sağlayıcı uygulamaları
+
+Meta, Instagram ve X hesapları platformun kendi OAuth uygulamalarına bağlanır: uygulamalar kiracı başına
+değil platform başınadır, ortamdan okunur (bkz. [Yapılandırma](#yapılandırma)), kiracılar kendi
+hesaplarını bu uygulamalara bağlar. Uygulamaları açmak, ayarlamak ve onaylatmak **platform sahibinin
+işidir**; Jeeta yalnız aşağıdaki değerleri okur. Kayıtlı yönlendirme adresleri, her biri sağlayıcının
+panelinde birebir girilir (`{genel adres}` = `JEETA_PUBLIC_BASE_URL`):
+
+| Uygulama | Değişkenler | Sağlayıcı panelinde | Yönlendirme adresi |
+|---|---|---|---|
+| Meta (Facebook Login, Graph API) | `JEETA_META_APP_ID`, `JEETA_META_APP_SECRET`, `JEETA_META_VERIFY_TOKEN`; isteğe bağlı `JEETA_META_LOGIN_CONFIG_ID`, `JEETA_META_WHATSAPP_CONFIG_ID`, `JEETA_META_GRAPH_VERSION` | developers.facebook.com → uygulama → Ayarlar → Temel: Uygulama Kimliği ve Uygulama Sırrı; Facebook Login (for Business) → Ayarlar → Geçerli OAuth Yönlendirme URI'leri; Webhooks → Sayfa, Instagram ve WhatsApp Business Hesabı nesneleri için geri çağırma adresi `{genel adres}/hooks/meta` ve doğrulama anahtarı (`JEETA_META_VERIFY_TOKEN` ile aynı değer) | `{genel adres}/oauth/callback/meta` |
+| Instagram (Instagram Login) | `JEETA_INSTAGRAM_APP_ID`, `JEETA_INSTAGRAM_APP_SECRET` | Meta uygulamasının Instagram ürünü → API setup with Instagram login: Instagram uygulama kimliği ve sırrı; "Business login settings" → OAuth redirect URIs | `{genel adres}/oauth/callback/instagram` |
+| X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret | `{genel adres}/oauth/callback/x` |
+
+(Panel menülerinin adları sağlayıcıların arayüzüne göre değişebilir; aranan alanlar uygulama kimliği, sırrı,
+OAuth yönlendirme adresleri ve Meta için webhook geri çağırma adresi ile doğrulama anahtarıdır.)
+
+- **Meta uygulama incelemesi (App Review).** Facebook Login'in istediği izinler (`pages_show_list`,
+  `pages_manage_posts`, `pages_read_engagement`, `pages_messaging`, `pages_manage_metadata`,
+  `business_management`, `instagram_basic`, `instagram_manage_messages`, `instagram_content_publish`,
+  `instagram_manage_insights`, `whatsapp_business_management`, `whatsapp_business_messaging`, `ads_read`,
+  `ads_management`, `read_insights`, `leads_retrieval`) ve Instagram Login'in izinleri
+  (`instagram_business_basic`, `instagram_business_content_publish`) başka işletmelerin hesapları için
+  ancak Meta'nın incelemesinden (Advanced Access) ve iş doğrulamasından sonra çalışır; inceleme sürecinde
+  uygulama yalnız rolü olan hesaplarla (yönetici, geliştirici, test kullanıcısı) denenebilir. İnceleme ve
+  iş doğrulaması **sahibin işidir** (tasarım §14); Jeeta'nın kodu bunu beklemez, eksik bir izin yoklamada
+  `permission` olarak görünür.
+- **Webhook yalnız Meta uygulamasıyla açılır.** `/hooks/meta` Meta uygulaması (ve doğrulama anahtarı)
+  yapılandırılmadıkça kapalıdır; Instagram Login webhook'ları Instagram uygulamasının sırrıyla da
+  imzalanabildiği için kapı iki sırrı da dener, ama yalnız Instagram uygulaması yapılandırılmış bir
+  kurulumda webhook alınmaz (OAuth bağlantısı ve yoklama çalışır).
+- **Bir uygulama ya hep ya hiç.** Yarım yapılandırma açılışı durdurur; bir uygulama yokken onun türleri
+  bağlanamaz ama sunucu açılır. Genel adres, herhangi bir uygulama varken zorunludur; hiç uygulama yokken de
+  NetGSM webhook adreslerinin gösterilebilmesi için gerekir.
+
+### Yoklama, sağlık ve yeniden bağlama
+
+Bir bağlayıcı kabiliyetini yalnız sistemin kendi deneme çağrısı (yoklama, `connector.probe`) doğrular.
+Başarılı bir yoklama hesabın kimliğini (`facts.account_id`) söylemek zorundadır ve bu kabiliyetin hesabı
+olmalıdır; değilse `permission` ("account mismatch") sayılır. Yoklamanın sonucu durumu şöyle değiştirir:
+
+| Sonuç | Kayıtlı durum | Ayrıca |
+|---|---|---|
+| başarı | `verified` (`last_verified_at` şimdi) | `reconnect_required` temizlenir |
+| `auth` (giriş artık kabul edilmiyor) | `unreachable` | `reconnect_required = true`: bekleyen işlerde 1. öncelikte "yeniden bağla" |
+| `permission`, `permanent` (izin yok, hesap uyuşmuyor, kalıcı ret) | `unreachable` | — |
+| `throttle`, `transient` (sağlayıcı meşgul ya da ulaşılamıyor) | değişmez | bağlantı hakkında bir şey söylemez |
+
+Doğrulanmış bir kabiliyet, son başarılı yoklamasından politikanın `verify_max_age_days` süresi (varsayılan
+30 gün) geçince `stale` okunur; zamanlayıcının `probe_all` işi etkin alanlarda her canlı bağlayıcıyı
+saatte bir yokladığı için sağlıklı bir bağlantı tazeliğini korur (ödeme bekleyen bir alanın bağlantıları
+yoklanmaz, jetonları yine yenilenir). Her yoklama `probe_runs` kaydına yazılır (yalnız sonuç sınıfı ve
+genel bilgiler, 30 gün tutulur); günlüğe (`connector.probe`) yalnız durum değiştiğinde yazılır. Sağlık
+(`connector.health`) her bağlayıcı kabiliyetinin şimdiki durumunu, son yoklamasını, jetonun bitişini ve
+yeniden bağlama gereğini mühür açmadan okur. Yeniden bağlama (`connector.reconnect`) Meta ve X için
+kabiliyete bağlı yeni bir OAuth akışı başlatır; NetGSM kabiliyeti yeni kimlik bilgisi alır.
+
+### Sabit çıkış adresleri
+
+Bağdaştırıcılar yalnız kendi sağlayıcılarının sabit adreslerine çıkar (`jt_outbound::FIXED_HOSTS`, testte
+birebir sabitlenir; başka hiçbir crate `reqwest` adını anmaz):
+
+| Bağlayıcı | Adresler |
+|---|---|
+| `meta` | `graph.facebook.com`, `graph.instagram.com`, `api.instagram.com`, `rupload.facebook.com` |
+| `netgsm` | `api.netgsm.com.tr`, `whatsappapi.netgsm.com.tr`, `sesdosya.netgsm.com.tr`, `crmsntrl.netgsm.com.tr:9111` |
+| `x` | `api.twitter.com`, `api.x.com` |
+
+Hepsi yalnız `https`'tir; tek istisna Netsantral'in tıkla-ara ucudur: sağlayıcı onu yalnız düz `http` ile,
+`crmsntrl.netgsm.com.tr` adresinin 9111 portunda sunar, bu yüzden yalnız `netgsm` kapsamında, yalnız o
+adres ve port için düz `http` kullanılır (bir sağlayıcı kısıtı; DNS koruması yine uygulanır). Tarayıcının
+gittiği giriş sayfaları (`www.facebook.com`, `www.instagram.com`, `twitter.com`) çıkış değildir: sunucu
+onlara hiç istek atmaz, yalnız adreslerini kurar.
 
 ### Webhook'lar
 
 Sağlayıcılar olaylarını (gelen mesaj, iletim durumu, potansiyel müşteri formu, arama, İYS izni) sunucunun
 webhook kapısına (`jt_webhook`, `/hooks/*`) gönderir. Kapı panelin oturum ve istek başlığı denetimlerinin
 dışındadır (sağlayıcının oturumu yoktur), güvenlik başlıkları ve erişim günlüğü içindedir; günlük rotayı
-şablonuyla yazar, bu yüzden adresteki anahtar günlüğe hiç düşmez. Adresler genel adresin altındadır;
-panelde **Kabiliyetler** sayfasının "Webhook adresleri" bölümü (yalnız `capabilities.manage` taşıyana)
-her birini kopyalanacak biçimde gösterir, ajan aynı listeyi `jeeta.connector.hooks` ile okur
-(`GET /api/connectors/hooks`, yanıt `{meta, netgsm: [{purpose, url}]}`).
+şablonuyla yazar, bu yüzden adresteki anahtar günlüğe hiç düşmez. Adresler genel adresin
+(`JEETA_PUBLIC_BASE_URL`) altındadır; panelde **Kabiliyetler** sayfasının "Webhook adresleri" bölümü
+(yalnız `capabilities.manage` taşıyana) her birini kopyalanacak biçimde gösterir, ajan aynı listeyi
+`jeeta.connector.hooks` ile okur (`GET /api/connectors/hooks`, yanıt `{meta, netgsm: [{purpose, url}]}`).
+Genel adres yapılandırılmamışsa liste `409 CONFLICT`'tır (`details.reason =
+"public_base_url_not_configured"`).
+
+| İstek | Yanıt |
+|---|---|
+| `GET /hooks/meta` (doğrulama) | `hub.mode=subscribe` ve doğru `hub.verify_token` için `hub.challenge` düz metin olarak, `200`; başka her şey `403`; Meta uygulaması yapılandırılmamışsa `404` |
+| `POST /hooks/meta` | imza başlığı yoksa ya da Meta uygulaması yoksa gövde okunmadan `401`; 3 MB üstü `413`; imza tutmazsa `401`; olaylar yazılınca (ya da kurala göre atılınca) `200 EVENT_RECEIVED`; veritabanı hatası `500` (Meta yeniden gönderir) |
+| `POST /hooks/netgsm/{workspace_id}/{anahtar}/{amaç}` | bozuk ya da bilinmeyen parça, yanlış anahtar, var olmayan ya da etkin (`active`) olmayan alan: gövde okunmadan çıplak `404`; 256 KB üstü `413`; okunamayan gövde `202` (hiçbir şey yazılmaz); olaylar yazılınca `202`; veritabanı hatası `503` (NetGSM yeniden gönderir) |
+
+**Alanın durumu.** Meta olayları hesaba göre yönlendirilir ve hesabı tutan alan **etkin** ya da **ödeme
+bekliyor** (`pending_payment`) ise yazılır: ödeme beklerken bağlı hesapların olayları kaybolmaz. Alan
+**askıya alınmışsa** (`suspended`) olay atılır: hiçbir yere satır yazılmaz, `unrouted_meta` sayacı
+artar ve günlüğe yalnız sağlayıcı, neden (`reason="inactive"`), hesap türü ve sayı yazılır (gövde, hesap
+kimliği ya da mesaj asla); Meta'ya yine `200` döner (yeniden gönderim bir şey değiştirmezdi). NetGSM'in
+adresi alanı kendisi adlar ve yalnız etkin bir alan için açıktır (ödeme bekleyen ya da askıdaki alanın
+adresi `404`).
 
 - **NetGSM**: her amaç için ayrı bir adres, `{genel adres}/hooks/netgsm/{workspace_id}/{anahtar}/{amaç}`;
   amaç `mo` (gelen SMS), `events` (santral çağrı olayları), `iys` (İYS izin değişiklikleri), `voice-report`
   (sesli mesaj raporları) ya da `autocall-report` (otomatik arama raporları). Anahtar, alanın gizli
   anahtarından o amaç için türetilen HMAC'tir (saklanmaz, her istekte yeniden hesaplanır, sabit zamanda
-  karşılaştırılır); adresi NetGSM panelinde ilgili geri çağırma alanına yapıştırın ve başkasıyla
-  paylaşmayın. Çözülemeyen bir adres parçası (bozuk yüzde kodlaması), bilinmeyen amaç, bozuk alan
+  karşılaştırılır); adresi elle kurmayın, paneldeki "Webhook adresleri" bölümünden kopyalayıp NetGSM
+  panelinde ilgili geri çağırma alanına yapıştırın ve başkasıyla paylaşmayın (adres alanın anahtarını
+  taşır; şimdilik döndürülemez). Çözülemeyen bir adres parçası (bozuk yüzde kodlaması), bilinmeyen amaç, bozuk alan
   kimliği, yanlış anahtar, var olmayan ya da etkin olmayan alan: hepsi gövde okunmadan çıplak `404` alır
   ve hiçbir şey yazılmaz. Gövde en çok 256 KB'tır (`413`).
   Okunamayan bir gövde `202` alır, hiçbir şey yazılmaz, yalnız amaç günlüğe yazılır ve sayılır (NetGSM
@@ -631,8 +757,8 @@ her birini kopyalanacak biçimde gösterir, ajan aynı listeyi `jeeta.connector.
   yazma başarısız olursa `503` (NetGSM yeniden gönderir).
 - **Meta**: platformun tek adresi `{genel adres}/hooks/meta`; Meta uygulamasının panelinde (Webhooks)
   geri çağırma adresi olarak bu, doğrulama anahtarı olarak platformun doğrulama anahtarı girilir
-  (`JEETA_META_VERIFY_TOKEN`, sağlayıcı yapılandırmasıyla M1b'nin son adımında gelir; platform
-  operatörünün işidir ve anahtar hiçbir yanıtta görünmez). `GET` doğrulaması `hub.mode=subscribe` ve doğru
+  (`JEETA_META_VERIFY_TOKEN`; platform sahibinin işidir ve anahtar hiçbir yanıtta görünmez, panel yalnız
+  nereye girildiğini söyler). `GET` doğrulaması `hub.mode=subscribe` ve doğru
   `hub.verify_token` için `hub.challenge`'ı düz metin olarak döndürür, değilse `403`; Meta uygulaması
   yoksa `404`. `POST` teslimleri eşzamanlıdır: imza başlığı (`X-Hub-Signature-256`) yoksa ya da uygulama
   yoksa gövde okunmadan `401`; gövde en çok 3 MB'tır (WhatsApp Cloud API yükleri bu boyuta varır;
@@ -640,9 +766,12 @@ her birini kopyalanacak biçimde gösterir, ajan aynı listeyi `jeeta.connector.
   Instagram uygulaması yapılandırılmışsa onun sırrıyla da (Instagram Login webhook'ları onunla imzalanır)
   sabit zamanda doğrulanır; biri imzalıyorsa geçer, hiçbiri imzalamıyorsa `401` ve hiçbir şey yazılmaz. Her olay hesabıyla (sayfa, Instagram hesabı,
   WhatsApp numarası) bütün alanlarda aranır ve hesabı **bağlı** tutan tek alana yazılır (mühürlü kimlik
-  bilgisi, en az bir kez yoklamayla doğrulanmış, emekli değil). Hesabı bağlı tutan alan yoksa olay
-  **atılır**: hiçbir alana satır yazılmaz, günlüğe yalnız sağlayıcı ve hesap türü yazılır ve sayılır.
-  Her şey yazıldıktan sonra `200 EVENT_RECEIVED`; veritabanı hatası `500` (Meta yeniden gönderir).
+  bilgisi, en az bir kez yoklamayla doğrulanmış, emekli değil; jetonu sonradan düşse bile). Hesabı bağlı
+  tutan alan yoksa (`reason="unrouted"`) ya da o alan askıdaysa (`reason="inactive"`) olay **atılır**:
+  hiçbir alana satır yazılmaz, günlüğe yalnız sağlayıcı, neden ve hesap türü yazılır ve sayılır. Teslim
+  **eşzamanlıdır**: imza → ayrıştırma → yönlendirme → alanın işleminde yazma → `200 EVENT_RECEIVED`;
+  yanıt ancak her şey yazıldıktan sonra döner, bu yüzden kaybolan bir yanıt yeniden gönderimdir, kaybolan
+  bir olay değil. Veritabanı hatası `500` (Meta yeniden gönderir).
 
 Bir olay alan, sağlayıcı ve sağlayıcı kimliği (`wamid`, `mid`, `netgsm-mo:<gorevid>` …) başına bir kez
 saklanır: yeniden gönderim ve aynı anda gelen kopyalar tek satır bırakır. Bir teslimin olayları her
@@ -674,6 +803,19 @@ sayfanın imlecidir ve olduğu gibi geri gönderilir.
 İşaretleme `capabilities.manage` ister: olayların geldiği bağlantıları yöneten izindir ve daha hafif bir
 yazma izni yoktur; `workspace.read` olayları yalnız okur.
 
+- **Devir noktası.** Gelen olaylar M2'ye (gelen kutusu: konuşmalar, kişiler) ve M3'e (ölçüm) devrin
+  kendisidir: o aşamaların tüketicileri gelene dek ajan `jeeta.events.pending` ile okur, işlediğini
+  `jeeta.events.ack` ile işaretler, geçmişe `jeeta.events.list` ile bakar. Olay kaydı günlüğe yazılmaz;
+  yalnız işaretleme `events.acked` olarak yazılır.
+- **İmleç.** `events.pending` en eskiden ileri gider: yanıtın `next`'i (`after_at`, `after_id`) bir sonraki
+  sayfanın başıdır. Bir olay geç kaydedilip (işlemi geç biterse) imlecin gerisine düşebilir; o yüzden ajan
+  her turu imleçsiz başlatır (işlenmemişlerin başından), imleci yalnız aynı turun sayfaları arasında
+  kullanır: işaretlenmeyen hiçbir olay kaybolmaz. `events.list` en yeniden geriye gider (`before_at`,
+  `before_id`).
+- **İşaretleme sırası.** Kimlikler tekilleştirilir ve sıralanır, sonra her biri tek tek işaretlenir: aynı
+  olayları ters sırada işaretleyen iki istek satır kilitlerini aynı sırada alır ve birbirini kilitlemez;
+  ikisinin `acked` toplamı işaretlenen olay sayısına eşittir.
+
 | Adım | Panel | MCP aracı | İzin |
 |---|---|---|---|
 | OAuth başlatma (gövde `{"kind_key": …}`; yanıt `{authorize_url, pending_id, expires_at}`, araç ayrıca `handoff`) | `POST /api/connectors/oauth/start` | `jeeta.connector.start_oauth` | `capabilities.manage` |
@@ -692,6 +834,13 @@ tekrarlamaz. Mühürlenen kimlik bilgisi hiçbir yanıtta, günlük kaydında ya
 günlük kaydı `connector.credentials_set` yalnızca türü ve girenin ajan olup olmadığını (`by_agent`) yazar.
 Doğrulanmış bir kabiliyet kimlik bilgilerini bir yoklama düşene dek tutar (`409`). Bir NetGSM kabiliyeti
 yeniden bağlanmaz, yeni kimlik bilgisi alır (`422`, `details.reason = "use_set_credentials"`).
+
+**Deneme (smoke).** Sağlayıcılara karşı bütün otomatik testler süreç içinde, `127.0.0.1`'e bağlı sahte
+sunuculara karşı çalışır (kayıtlı sağlayıcı yanıtları `tests/fixtures/` altındadır); hiçbir test internete
+çıkmaz. "Testler geçti", gerçek bir hesabın bağlandığı anlamına gelmez: gerçek hesaplarla canlı deneme
+(uygulamalar ve genel adres yapılandırıldıktan sonra bir Meta sayfası, bir Instagram hesabı, bir X hesabı ve
+bir NetGSM hattı bağlamak, webhook'ları doğrulatmak) elle yapılır ve adımları sahibin canlı deneme
+listesindedir.
 
 Sunucu (`jeeta serve` ve `jeeta mcp-stdio`) üç sağlayıcının gerçek bağdaştırıcılarını (`jt_meta`,
 `jt_netgsm`, `jt_x`) üretim adresleriyle ve tek bir çıkış istemcisiyle (`jt_outbound::Egress`) kurar
@@ -726,6 +875,9 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
   (`application_name = jeeta-jobs`, en çok iş sayısı kadar bağlantı, ilk kilit istendiğinde açılır) bir
   bağlantının oturumuna aittir ve iş bitince bırakılır; süreç ölürse Postgres kilidi oturumla birlikte
   bırakır. Bu havuz sunucunun kendi havuzundan ayrıdır: kilit tutan bir iş panelin bağlantısını almaz.
+  Bağlantı havuza ancak oturumunun bu kilitlerden hiçbirini tutmadığı bilinince döner: kilit
+  alınırken ya da bırakılırken iş yarıda kesilirse (görev iptali, zaman aşımı, panik) bağlantı kapatılır,
+  oturum biter ve Postgres kilidi bırakır; böylece havuzda sahipsiz bir kilit kalmaz.
 - **İlk çalışma** açılıştan sonra 0–30 saniyelik rastgele bir gecikmeyle gelir (birlikte açılan örnekler
   kilidi aynı anda istemesin); sonraki tıklar aralığı izler, aralıktan uzun süren bir çalışma bir sonrakini
   erteler.
@@ -826,7 +978,9 @@ env = { JEETA_DATABASE_URL = "postgres://…", JEETA_SECRET_KEY = "…", JEETA_S
   sertleştirme: HTTP uç noktası ise anahtarı her istekte yeniden doğrular).
 - stdout MCP akışıdır; günlükler stderr'e gider.
 - Bu kip göç uygulamaz ve operatör açmaz: veritabanı önce `jeeta serve` ile hazırlanmış olmalıdır. Diğer
-  değişkenler (`JEETA_DATABASE_URL`, `JEETA_SECRET_KEY` …) `serve` ile aynı kurallarla doğrulanır.
+  değişkenler (`JEETA_DATABASE_URL`, `JEETA_SECRET_KEY` …) `serve` ile aynı kurallarla doğrulanır;
+  sağlayıcı uygulamaları ve genel adres de (yarım bir uygulama burada da açılışı durdurur), bu yüzden
+  burada başlatılan bir OAuth akışı sunucununkiyle aynı yönlendirme adresini kurar.
 
 ## Test veritabanı
 
@@ -954,7 +1108,12 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
 
 - `crates/jt_archtest`: alan (domain) crate'leri (`jt_tenancy`, `jt_ledger`, `jt_strategy`, `jt_capability`)
   yalnızca `serde`, `serde_json`, `uuid`, `time`, `thiserror` ve birbirlerini (`jt_tenancy`, `jt_ledger`)
-  kullanır; `jt_app` hiçbir adaptöre bağlı değildir; `reqwest` yalnızca `jt_outbound`'da, `sqlx` yalnızca
+  kullanır; `jt_app` hiçbir adaptöre bağlı değildir; `reqwest` yalnızca `jt_outbound`'da (başka hiçbir
+  paket, ikili dahil, ona bağlı değildir ve onu manifestinin bağımlılık bölümlerinde ya da herhangi bir Rust
+  kaynağında anmaz; tek istisna `jt_mcp`'nin `[dev-dependencies]` içindeki MCP test istemcisidir), sağlayıcı
+  bağdaştırıcıları (`jt_meta`, `jt_netgsm`, `jt_x`) yalnız `jt_outbound` üzerinden çıkar ve hiçbir HTTP
+  istemcisi ya da soket adlandırmaz, sabit çıkış adresleri (`FIXED_HOSTS`) belgelenen kümenin birebir
+  aynısıdır; `sqlx` yalnızca
   `jt_pg`'de (havuz kurmak için `jt_testkit` ve `jeeta`'da da), şifreleme ve anahtar türetme kütüphaneleri
   (`aes-gcm`, `hkdf`) yalnızca `jt_seal`'de bulunur; `jt_outbound`'un `test-loopback` özelliğini yalnız
   `[dev-dependencies]` bölümleri açar, `bin/jeeta` hiç açmaz. Aynı crate kapı kurallarını da sabitler: strateji
@@ -962,9 +1121,11 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
   `strategy.`, `capability.`, `budget.`, `work.`, `connector.`, `events.` önekli kullanım durumları ve
   `ledger.list` muaf olabilir;
   çalışma alanı durumu denetiminden her durumda tam olarak `auth.`, `workspace.`, `platform.` önekliler,
-  yalnız `pending_payment` iken de tam olarak `strategy.`, `work.` önekliler muaftır; panel rotaları ve
+  yalnız `pending_payment` iken de tam olarak `strategy.`, `work.` önekliler muaftır (her `connector.*` ve
+  `events.*` kullanım durumu strateji kapısından muaf, durum denetimine tabidir); panel rotaları ve
   MCP araçları kataloğun tam karşılığıdır, MCP'ye özgü tek kullanım durumu `work.checkin`'dir ve kayıt
-  60 araç tutar. Webhook kapısı (`jt_webhook`) panel gibi bir axum adaptörüdür: izin listesi `jt_app`,
+  60 araç tutar (M1a sonundaki 47'ye M1b'de `connector` 7, `events` 3, `capability` 1 ve `budget` 2
+  eklendi). Webhook kapısı (`jt_webhook`) panel gibi bir axum adaptörüdür: izin listesi `jt_app`,
   alan crate'leri, sağlayıcı bağdaştırıcılarının ayrıştırıcıları, `axum`, `http-body-util`, `url` ve
   `tracing`'dir; hiçbir HTTP istemcisi ya da veritabanı crate'i adlandırmaz.
 - `deny.toml`: aynı HTTP istemcisi ve `sqlx` kuralları (`reqwest` dışında hiçbir HTTP istemcisi, `ureq`,
