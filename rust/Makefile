@@ -49,3 +49,8 @@ panel-test:
 
 panel-build:
 	cd panel && pnpm build
+
+.PHONY: smoke-inbox
+# Entire connector/consumer/reply/ack flow in process; no database or provider required.
+smoke-inbox:
+	cargo test --locked -p jt_app --test smoke_inbox

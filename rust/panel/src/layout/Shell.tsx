@@ -4,6 +4,7 @@ import {
   Bot,
   Compass,
   Home,
+  Inbox,
   KeyRound,
   LogOut,
   Plug,
@@ -37,6 +38,7 @@ import { currentMembership } from '@/lib/roles';
 import { Brand } from './Brand';
 
 type NavKey =
+  | 'inbox'
   | 'home'
   | 'strategy'
   | 'capabilities'
@@ -49,6 +51,7 @@ type NavKey =
 
 const NAV: { to: string; key: NavKey; Icon: LucideIcon }[] = [
   { to: '/', key: 'home', Icon: Home },
+  { to: '/inbox', key: 'inbox', Icon: Inbox },
   { to: '/strategy', key: 'strategy', Icon: Compass },
   { to: '/capabilities', key: 'capabilities', Icon: Plug },
   { to: '/budget', key: 'budget', Icon: Wallet },

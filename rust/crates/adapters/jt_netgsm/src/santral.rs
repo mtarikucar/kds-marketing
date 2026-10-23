@@ -156,6 +156,7 @@ pub(crate) async fn click_to_call(
     pbx_call(connector, &pbx, verb, &query, Retry::Never).await?;
     Ok(SendReceipt {
         provider_id: crm_id,
+        cost_minor: None,
     })
 }
 

@@ -1,0 +1,738 @@
+//! Durable replies: commit the intent, claim under fresh fences, call without locks, then
+//! atomically record the result. An uncertain provider write is never retried.
+use super::record;
+use crate::{
+    ctx::Ctx,
+    error::{AppError, ErrorCode},
+    ports::{TenantRepos, connectors::SendReceipt, inbox::OutboxRow},
+    usecases::{
+        Deps,
+        connector::{adapter_public, open_credential},
+        required,
+    },
+};
+use jt_capability::{Capability, EffectiveStatus, effective_status};
+use jt_connector::{ConnectorError, Credential, Provider, provider_for_kind};
+use jt_inbox::*;
+use jt_ledger::Actor;
+use jt_tenancy::{Permission, WorkspaceStatus};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use time::Duration;
+use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendIntent {
+    Reply,
+    Commercial,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplyInput {
+    pub text: String,
+    pub intent: SendIntent,
+    #[serde(default)]
+    pub request_key: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplyOut {
+    pub message_id: MessageId,
+    pub state: String,
+}
+
+fn output(row: &OutboxRow) -> ReplyOut {
+    ReplyOut {
+        message_id: row.message_id,
+        state: row.state.clone(),
+    }
+}
+fn refused(reason: impl Into<String>) -> AppError {
+    let reason = reason.into();
+    AppError {
+        code: ErrorCode::Forbidden,
+        message: reason.clone(),
+        details: json!({"reason":reason}),
+    }
+}
+fn fresh(deps: &Deps, ctx: &Ctx) -> Ctx {
+    Ctx {
+        now: deps.clock.now().max(ctx.now),
+        ..ctx.clone()
+    }
+}
+
+/// Public boundary. A live request key wins even if the conversation has changed since the
+/// original response. In-flight repeats return its durable queued response without a new send.
+pub async fn reply(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: ConversationId,
+    input: ReplyInput,
+) -> Result<ReplyOut, AppError> {
+    let queued = enqueue(deps, ctx, id, input).await?;
+    match queued {
+        Enqueued::Existing(out) => Ok(out),
+        Enqueued::New(id) => send_step(deps, ctx, id).await,
+    }
+}
+
+#[derive(Debug)]
+pub enum Enqueued {
+    Existing(ReplyOut),
+    New(Uuid),
+}
+
+/// Phase A, also usable by trusted internal producers. Every user permission/fence applies.
+pub async fn enqueue(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: ConversationId,
+    input: ReplyInput,
+) -> Result<Enqueued, AppError> {
+    ctx.require(Permission::InboxWork)?;
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
+    let key = input
+        .request_key
+        .as_deref()
+        .map(|s| required("request_key", s))
+        .transpose()?;
+    if let Some(key) = &key
+        && let Some(out) = r.request_keys().get(key, ctx.now).await?
+    {
+        return Ok(Enqueued::Existing(serde_json::from_value(out)?));
+    }
+    if input.intent != SendIntent::Reply {
+        return Err(AppError::validation(
+            "commercial sending is not available",
+            json!({"field":"intent"}),
+        ));
+    }
+    let text = required("text", &input.text)?;
+    let c = lock_conversation(r.as_mut(), id).await?;
+    let j = lock_current_journey(r.as_mut(), c.person_id).await?;
+    let author = match ctx.actor {
+        Actor::Human { user_id } => Author::Human(user_id),
+        Actor::Agent { .. } => Author::Agent,
+        Actor::System { .. } => Author::System,
+    };
+    let cap = capability(r.as_mut(), &c).await?;
+    fence(
+        r.as_mut(),
+        ctx,
+        &c,
+        j.as_ref(),
+        &cap,
+        c.executor_generation,
+        author,
+    )
+    .await?;
+    // Validate recipient ambiguity before creating any durable outbound intent.
+    recipient(r.as_mut(), &c, &cap).await?;
+    let message_id = MessageId::from(deps.ids.uuid());
+    let row = OutboxRow {
+        id: deps.ids.uuid(),
+        workspace_id: ctx.workspace_id,
+        conversation_id: id,
+        message_id,
+        capability_id: c.capability_id,
+        intent: json!({"kind":input.intent,"request_key":key}),
+        expected_generation: c.executor_generation,
+        fence_snapshot: None,
+        conversation_merged: false,
+        state: "queued".into(),
+        attempts: 0,
+        last_error: None,
+        created_at: ctx.now,
+        updated_at: ctx.now,
+    };
+    let out = output(&row);
+    if let Some(key) = &key
+        && !r
+            .request_keys()
+            .store(key, serde_json::to_value(&out)?, ctx.now)
+            .await?
+    {
+        return Err(AppError::conflict("request key changed while enqueueing"));
+    }
+    r.messages()
+        .insert_if_new(Message {
+            id: message_id,
+            workspace_id: ctx.workspace_id,
+            conversation_id: id,
+            direction: Direction::Outbound,
+            author,
+            body: text,
+            external_id: None,
+            status: MsgStatus::Queued,
+            cost_minor: None,
+            at: ctx.now,
+        })
+        .await?;
+    r.outbox().insert(row.clone()).await?;
+    record(
+        r.as_mut(),
+        ctx,
+        "inbox.reply.queued",
+        "outbox",
+        row.id,
+        json!({"conversation_id":id,"message_id":message_id}),
+    )
+    .await?;
+    r.commit().await?;
+    Ok(Enqueued::New(row.id))
+}
+async fn lock_conversation(
+    r: &mut dyn TenantRepos,
+    id: ConversationId,
+) -> Result<Conversation, AppError> {
+    r.conversations()
+        .lock(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such conversation"))
+}
+async fn lock_current_journey(
+    r: &mut dyn TenantRepos,
+    person: PersonId,
+) -> Result<Option<Journey>, AppError> {
+    match super::active_or_latest_journey(r, person).await? {
+        Some(j) => r.journeys().lock(j.id).await,
+        None => Ok(None),
+    }
+}
+async fn capability(r: &mut dyn TenantRepos, c: &Conversation) -> Result<Capability, AppError> {
+    r.capabilities()
+        .find(c.capability_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such capability"))
+}
+async fn fence(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    c: &Conversation,
+    j: Option<&Journey>,
+    cap: &Capability,
+    generation: u32,
+    author: Author,
+) -> Result<(), AppError> {
+    let person = r
+        .people()
+        .get(c.person_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such person"))?;
+    may_send(
+        &FenceCtx {
+            journey_status: j.map(|j| j.status),
+            person_erased: person.erased_at.is_some(),
+            person_merged: person.merged_into.is_some(),
+            conversation_state: c.state.clone(),
+            expected_generation: generation,
+            current_generation: c.executor_generation,
+            executor_is_agent: c.executor == Executor::Agent,
+            capability_live: effective_status(cap, ctx.now) == EffectiveStatus::Verified
+                && cap.has_sealed_config,
+        },
+        matches!(author, Author::Agent),
+    )
+    .map_err(|e| refused(e.to_string()))?;
+    if !c.last_inbound_at.is_some_and(|at| {
+        at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
+    }) {
+        return Err(refused("reply_window_closed"));
+    }
+    // Recovery must honor the same workspace gate as the public surfaces.
+    if r.workspace().get().await?.status != WorkspaceStatus::Active {
+        return Err(refused("workspace_inactive"));
+    }
+    if r.strategy().current_approved().await?.is_none() {
+        return Err(refused("strategy_required"));
+    }
+    Ok(())
+}
+
+struct Prepared {
+    row: OutboxRow,
+    message: Message,
+    capability: Capability,
+    credential: Credential,
+    recipient: String,
+    provider: Provider,
+}
+enum Claim {
+    Ready(Box<Prepared>),
+    Done(ReplyOut),
+}
+
+/// Phase B. The workspace serialization lock is shared with merge/journey mutations; inside
+/// it, acquire conversation → journey → outbox. All are released before returning Ready.
+async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
+    let hint = r
+        .outbox()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    let c = lock_conversation(r.as_mut(), hint.conversation_id).await?;
+    let j = lock_current_journey(r.as_mut(), c.person_id).await?;
+    let mut row = r
+        .outbox()
+        .lock(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    if row.state != "queued" {
+        return Ok(Claim::Done(output(&row)));
+    }
+    let message = r
+        .messages()
+        .get(row.message_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such message"))?;
+    let cap = capability(r.as_mut(), &c).await?;
+    if let Err(e) = fence(
+        r.as_mut(),
+        ctx,
+        &c,
+        j.as_ref(),
+        &cap,
+        row.expected_generation,
+        message.author,
+    )
+    .await
+    {
+        if e.code != ErrorCode::Forbidden {
+            return Err(e);
+        }
+        row.state = "refused".into();
+        row.last_error = Some(e.message.clone());
+        row.updated_at = ctx.now;
+        r.messages()
+            .set_status(
+                row.message_id,
+                MsgStatus::Refused { reason: e.message },
+                None,
+                None,
+            )
+            .await?;
+        save_result(r.as_mut(), ctx, &row).await?;
+        r.commit().await?;
+        return Ok(Claim::Done(output(&row)));
+    }
+    let prepared = prepare(deps, r.as_mut(), &c, &cap).await;
+    let (credential, recipient, provider) = match prepared {
+        Ok(p) => p,
+        Err(e) if e.code == ErrorCode::Validation => {
+            let reason = e
+                .details
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("reply_recipient_unavailable")
+                .to_owned();
+            row.state = "refused".into();
+            row.last_error = Some(reason.clone());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(row.message_id, MsgStatus::Refused { reason }, None, None)
+                .await?;
+            save_result(r.as_mut(), ctx, &row).await?;
+            r.commit().await?;
+            return Err(e);
+        }
+        Err(e) => {
+            row.state = "failed".into();
+            row.last_error = Some("send_configuration_invalid".into());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(row.message_id, MsgStatus::Failed, None, None)
+                .await?;
+            save_result(r.as_mut(), ctx, &row).await?;
+            r.commit().await?;
+            // The durable result exposes only a stable state, never credential/identity data.
+            let _ = e;
+            return Ok(Claim::Done(output(&row)));
+        }
+    };
+    let activity_revision = r.conversations().send_state(c.id).await?.activity_revision;
+    let journey_reducer_revision = match &j {
+        Some(j) => Some(r.journeys().reducer_revision(j.id).await?),
+        None => None,
+    };
+    row.state = "sending".into();
+    row.attempts += 1;
+    row.updated_at = ctx.now;
+    row.fence_snapshot = Some(
+        json!({"conversation_id":c.id,"journey_id":j.as_ref().map(|j|j.id),"journey_updated_at":j.as_ref().map(|j|j.updated_at.unix_timestamp_nanos().to_string()),"journey_reducer_revision":journey_reducer_revision,"journey_status":j.as_ref().map(|j|j.status),"executor_generation":c.executor_generation,"activity_revision":activity_revision,"send_at":ctx.now.unix_timestamp_nanos().to_string(),"person_erased":false,"person_merged":false}),
+    );
+    r.outbox().update(row.clone()).await?;
+    r.commit().await?;
+    Ok(Claim::Ready(Box::new(Prepared {
+        row,
+        message,
+        capability: cap,
+        credential,
+        recipient,
+        provider,
+    })))
+}
+async fn prepare(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    cap: &Capability,
+) -> Result<(Credential, String, Provider), AppError> {
+    let provider =
+        provider_for_kind(&cap.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
+    if (cap.kind_key == "sms_line" && deps.connectors.sms(provider).is_none())
+        || (cap.kind_key != "sms_line" && deps.connectors.messaging(provider).is_none())
+    {
+        return Err(refused("connector_unavailable"));
+    }
+    let recipient = recipient(r, c, cap).await?;
+    let sealed = r
+        .capabilities()
+        .read_sealed(cap.id)
+        .await?
+        .ok_or_else(|| refused("capability_down"))?;
+    let credential = open_credential(deps, c.workspace_id, &sealed)?;
+    Ok((credential, recipient, provider))
+}
+async fn recipient(
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    cap: &Capability,
+) -> Result<String, AppError> {
+    let channel = match cap.kind_key.as_str() {
+        "sms_line" | "whatsapp_cloud" => IdentityChannel::Phone,
+        "instagram_dm" => IdentityChannel::InstagramDm,
+        "messenger" => IdentityChannel::Messenger,
+        _ => return Err(refused("unsupported_reply_channel")),
+    };
+    let binding = r
+        .conversations()
+        .send_state(c.id)
+        .await?
+        .last_inbound_identity_id;
+    let prefix = cap.external_id.as_ref().map(|id| format!("{id}:"));
+    let mut candidates = r
+        .identities()
+        .list(c.person_id)
+        .await?
+        .into_iter()
+        .filter(|i| i.active && i.channel == channel)
+        .filter_map(|i| {
+            let value = if channel == IdentityChannel::Phone {
+                Some(i.value_normalized)
+            } else {
+                prefix
+                    .as_ref()
+                    .and_then(|p| i.value_normalized.strip_prefix(p))
+                    .map(str::to_owned)
+            };
+            value.map(|value| (i.id, value))
+        });
+    let invalid = |reason: &str| {
+        AppError::validation(
+            "reply recipient cannot be determined",
+            json!({"reason":reason}),
+        )
+    };
+    if let Some(binding) = binding {
+        return candidates
+            .find(|(id, _)| *id == binding)
+            .map(|(_, value)| value)
+            .ok_or_else(|| invalid("reply_recipient_unavailable"));
+    }
+    let first = candidates
+        .next()
+        .ok_or_else(|| invalid("reply_recipient_unavailable"))?;
+    if candidates.next().is_some() {
+        return Err(invalid("ambiguous_reply_recipient"));
+    }
+    Ok(first.1)
+}
+
+/// Claim at most once. A sending or terminal entry is never put to the provider again.
+pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, AppError> {
+    let ctx = fresh(deps, ctx);
+    let p = match claim(deps, &ctx, id).await? {
+        Claim::Done(out) => return Ok(out),
+        Claim::Ready(p) => p,
+    };
+    let result = if p.capability.kind_key == "sms_line" {
+        deps.connectors
+            .sms(p.provider)
+            .ok_or_else(|| AppError::internal("sender disappeared"))?
+            .send(
+                &p.credential,
+                &p.recipient,
+                &p.message.body,
+                Some(&id.to_string()),
+            )
+            .await
+    } else {
+        deps.connectors
+            .messaging(p.provider)
+            .ok_or_else(|| AppError::internal("sender disappeared"))?
+            .send_text(
+                &p.credential,
+                &adapter_public(&p.capability),
+                &p.recipient,
+                &p.message.body,
+            )
+            .await
+    };
+    record_result(deps, &fresh(deps, &ctx), p.row.id, result).await
+}
+
+/// Phase C and acceptance reconciliation. The original journey is retained across a later
+/// inbound opening a new one. Replayed receipts use the same outbox event key.
+pub async fn record_result(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: Uuid,
+    result: Result<SendReceipt, ConnectorError>,
+) -> Result<ReplyOut, AppError> {
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
+    let hint = r
+        .outbox()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    let c = lock_conversation(r.as_mut(), hint.conversation_id).await?;
+    let journey_id = hint
+        .fence_snapshot
+        .as_ref()
+        .and_then(|s| s.get("journey_id"))
+        .filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value::<JourneyId>(v.clone()))
+        .transpose()?;
+    let j = match journey_id {
+        Some(id) => r.journeys().lock(id).await?,
+        None => None,
+    };
+    let mut row = r
+        .outbox()
+        .lock(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    // Recovery may time out a live provider future. Its eventual result still resolves that
+    // interrupted claim, including a definite failure; completed failures are never replayed.
+    let recovered = row.last_error.as_deref() == Some("send_interrupted");
+    if row.state != "sending" && !(row.state == "unknown" && (result.is_ok() || recovered)) {
+        return Ok(output(&row));
+    }
+    let (status, external, cost) = match result {
+        Ok(receipt) => {
+            let sent_at = row
+                .fence_snapshot
+                .as_ref()
+                .and_then(|s| s.get("send_at"))
+                .and_then(Value::as_str)
+                .and_then(|s| s.parse::<i128>().ok())
+                .and_then(|n| time::OffsetDateTime::from_unix_timestamp_nanos(n).ok())
+                .unwrap_or(row.created_at);
+            row.state = "sent".into();
+            row.last_error = None;
+            let terminal = j
+                .as_ref()
+                .is_some_and(|j| matches!(j.status, JourneyStatus::Won | JourneyStatus::Lost));
+            if let Some(j) = &j {
+                let key = format!("outbox:{id}");
+                if r.journeys().event_by_key(&key).await?.is_none() {
+                    let event = JourneyEvent {
+                        id: JourneyEventId::from(deps.ids.uuid()),
+                        workspace_id: ctx.workspace_id,
+                        journey_id: j.id,
+                        source: EventSource::System,
+                        idempotency_key: key,
+                        kind: JourneyEventKind::Replied,
+                        reason_label: None,
+                        at: sent_at,
+                    };
+                    let unchanged = row
+                        .fence_snapshot
+                        .as_ref()
+                        .and_then(|s| s.get("journey_updated_at"))
+                        .and_then(Value::as_str)
+                        == Some(j.updated_at.unix_timestamp_nanos().to_string().as_str());
+                    // Notes, task edits and owner assignment touch updated_at but do not
+                    // supersede a reply's domain transition. Legacy snapshots stay conservative.
+                    let domain_unchanged = row
+                        .fence_snapshot
+                        .as_ref()
+                        .and_then(|s| s.get("journey_reducer_revision"))
+                        .and_then(Value::as_i64)
+                        == Some(r.journeys().reducer_revision(j.id).await?);
+                    // Inbound messages and other same-stage events do not supersede contact.
+                    // A newer milestone or closure wins; old snapshots remain conservative.
+                    let non_superseding = row
+                        .fence_snapshot
+                        .as_ref()
+                        .filter(|s| s.get("journey_closed") != Some(&json!(true)))
+                        .and_then(|s| s.get("journey_status"))
+                        .and_then(|s| serde_json::from_value::<JourneyStatus>(s.clone()).ok())
+                        .is_some_and(|before| {
+                            j.closed_at.is_none()
+                                && !matches!(j.status, JourneyStatus::Won | JourneyStatus::Lost)
+                                && (before == j.status
+                                    || matches!(
+                                        (before, j.status),
+                                        (JourneyStatus::Contacted, JourneyStatus::Unreachable)
+                                            | (
+                                                JourneyStatus::Unreachable,
+                                                JourneyStatus::Contacted
+                                            )
+                                    ))
+                        });
+                    if unchanged || domain_unchanged || non_superseding {
+                        let t = reduce(j, &event, &ReducePolicy::default())
+                            .map_err(|_| AppError::internal("system reply reduction failed"))?;
+                        r.journeys().apply_transition(j.id, t, event).await?;
+                    } else {
+                        r.journeys().append_historical_reply(event).await?;
+                    }
+                }
+            }
+            if terminal {
+                record(
+                    r.as_mut(),
+                    ctx,
+                    "inbox.sent_after_terminal",
+                    "outbox",
+                    id,
+                    json!({"message_id":row.message_id,"journey_id":journey_id}),
+                )
+                .await?;
+            } else if !row.conversation_merged {
+                // Coalesced sends reconcile receipts and journeys but never conversation activity,
+                // even if undo has restored the original conversation before this receipt.
+                // A moved outbox must not compare revisions from different conversations.
+                // Send/message bookkeeping never invalidates this independent activity fence.
+                let revision = row
+                    .fence_snapshot
+                    .as_ref()
+                    .filter(|s| s.get("conversation_id") == Some(&json!(c.id)))
+                    .and_then(|s| s.get("activity_revision"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(-1);
+                r.conversations()
+                    .record_outbound(c.id, revision, sent_at)
+                    .await?;
+            }
+            (
+                MsgStatus::Sent,
+                Some(receipt.provider_id),
+                receipt.cost_minor,
+            )
+        }
+        Err(e) => {
+            row.last_error = Some(e.kind().into());
+            if matches!(e, ConnectorError::Unknown { .. }) {
+                row.state = "unknown".into();
+                (MsgStatus::Unknown, None, None)
+            } else {
+                row.state = "failed".into();
+                (MsgStatus::Failed, None, None)
+            }
+        }
+    };
+    // An early echo can bind the id while provider I/O is still in flight. A delivery
+    // report processed before acceptance bookkeeping outranks acceptance or a transport timeout.
+    let status = if matches!(status, MsgStatus::Sent | MsgStatus::Unknown) {
+        let message = r
+            .messages()
+            .get(row.message_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("no such message"))?;
+        if message.external_id.is_some()
+            && (external.is_none() || message.external_id == external)
+            && matches!(message.status, MsgStatus::Delivered | MsgStatus::Failed)
+        {
+            message.status
+        } else {
+            status
+        }
+    } else {
+        status
+    };
+    row.updated_at = ctx.now;
+    r.messages()
+        .set_status(row.message_id, status, external, cost)
+        .await?;
+    save_result(r.as_mut(), ctx, &row).await?;
+    r.commit().await?;
+    Ok(output(&row))
+}
+pub(super) async fn save_result(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    row: &OutboxRow,
+) -> Result<(), AppError> {
+    r.outbox().update(row.clone()).await?;
+    if let Some(key) = row.intent.get("request_key").and_then(Value::as_str) {
+        let queued = ReplyOut {
+            message_id: row.message_id,
+            state: "queued".into(),
+        };
+        let unknown = ReplyOut {
+            message_id: row.message_id,
+            state: "unknown".into(),
+        };
+        let response = serde_json::to_value(output(row))?;
+        if !r
+            .request_keys()
+            .complete(key, serde_json::to_value(queued)?, response.clone())
+            .await?
+        {
+            r.request_keys()
+                .complete(key, serde_json::to_value(unknown)?, response)
+                .await?;
+        }
+    }
+    record(
+        r,
+        ctx,
+        "inbox.reply.result",
+        "outbox",
+        row.id,
+        json!({"message_id":row.message_id,"state":row.state,"reason":row.last_error}),
+    )
+    .await
+}
+
+/// Recover an abandoned sending claim under the same lock order; never resend it. A late
+/// receipt may subsequently establish acceptance via record_result.
+pub async fn recover_sending(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<bool, AppError> {
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
+    let hint = r
+        .outbox()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    let c = lock_conversation(r.as_mut(), hint.conversation_id).await?;
+    lock_current_journey(r.as_mut(), c.person_id).await?;
+    let mut row = r
+        .outbox()
+        .lock(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    if row.state != "sending" || row.updated_at >= ctx.now - Duration::minutes(2) {
+        return Ok(false);
+    }
+    row.state = "unknown".into();
+    row.last_error = Some("send_interrupted".into());
+    row.updated_at = ctx.now;
+    r.messages()
+        .set_status(row.message_id, MsgStatus::Unknown, None, None)
+        .await?;
+    save_result(r.as_mut(), ctx, &row).await?;
+    r.commit().await?;
+    Ok(true)
+}

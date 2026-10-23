@@ -428,6 +428,7 @@ impl MetaConnector {
             Auth::Bearer(token) => (without_params(&url, &["access_token"]), Some(token)),
         };
         let secrets = call_secrets(auth, &url, &body);
+        let read_only = method == Method::GET;
         let mut request = self.egress.prepare(method, url);
         if let Some(token) = token {
             request = request.bearer(token);
@@ -437,8 +438,11 @@ impl MetaConnector {
             Body::Json(json) => request.json(&json),
             Body::Form(form) => request.form(&form),
         };
-        let response = request.send(SCOPE).await.map_err(egress_error)?;
-        read(response, &secrets).await
+        let response = request
+            .send(SCOPE)
+            .await
+            .map_err(|e| egress_error(e, read_only))?;
+        read(response, &secrets, read_only).await
     }
 }
 
@@ -604,8 +608,14 @@ fn hex_value(byte: u8) -> Option<u8> {
 }
 
 /// An egress failure as a [`ConnectorError`] (no URL in it).
-fn egress_error(e: EgressError) -> ConnectorError {
+fn egress_error(e: EgressError, read_only: bool) -> ConnectorError {
     match e {
+        EgressError::Transport(err) if err.is_connect() => {
+            ConnectorError::transient("the call to Meta could not connect; nothing was sent")
+        }
+        EgressError::Transport(_) if !read_only => {
+            ConnectorError::unknown("the request may have reached Meta: the outcome is unknown")
+        }
         EgressError::Transport(err) if err.is_timeout() => {
             ConnectorError::transient("the call to Meta timed out")
         }
@@ -624,7 +634,11 @@ fn egress_error(e: EgressError) -> ConnectorError {
 
 /// Reads `response`: its JSON on success, its mapped error otherwise, without any of the call's
 /// `secrets` in its reason. The body is read up to [`MAX_BODY_BYTES`] and never logged.
-async fn read(mut response: Response, secrets: &[String]) -> Result<Value, ConnectorError> {
+async fn read(
+    mut response: Response,
+    secrets: &[String],
+    read_only: bool,
+) -> Result<Value, ConnectorError> {
     let status = response.status();
     let wait = retry_after(response.headers());
     let mut body = Vec::new();
@@ -638,9 +652,12 @@ async fn read(mut response: Response, secrets: &[String]) -> Result<Value, Conne
             }
             Ok(None) => break,
             Err(_) => {
-                return Err(ConnectorError::transient(
-                    "the answer from Meta broke off in transit",
-                ));
+                let error = if read_only {
+                    ConnectorError::transient
+                } else {
+                    ConnectorError::unknown
+                };
+                return Err(error("the answer from Meta broke off in transit"));
             }
         }
     }

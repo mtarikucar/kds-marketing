@@ -924,6 +924,10 @@ async fn complete_oauth_maps_provider_errors() {
     // the provider said.
     let unavailable = [
         (
+            ConnectorError::unknown("access_token=EAAB-user-1"),
+            json!({ "provider": "meta", "retryable": false, "reason": "outcome unknown" }),
+        ),
+        (
             ConnectorError::throttle(Some(Duration::seconds(30))),
             json!({
                 "provider": "meta",

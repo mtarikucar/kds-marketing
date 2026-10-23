@@ -11,6 +11,7 @@ use crate::redact::redact_reason;
 /// - `Permission`: the credential is valid but lacks a scope or a role for this call;
 /// - `Throttle`: the provider asks to slow down; back off, for `retry_after` when it says;
 /// - `Transient`: a network or provider-side failure worth a bounded retry;
+/// - `Unknown`: the write may have reached the provider; never retry blindly;
 /// - `Permanent`: the request itself cannot succeed (a deleted page, a refused number); record it
 ///   and stop.
 ///
@@ -50,6 +51,10 @@ pub enum ConnectorError {
     #[error("temporary failure: {reason}")]
     #[non_exhaustive]
     Transient { reason: String },
+    /// The write may have reached the provider; never retry blindly.
+    #[error("outcome unknown: {reason}")]
+    #[non_exhaustive]
+    Unknown { reason: String },
     #[error("permanent failure: {reason}")]
     #[non_exhaustive]
     Permanent { reason: String },
@@ -91,6 +96,13 @@ impl ConnectorError {
         }
     }
 
+    /// The write may have reached the provider; never retry blindly. The reason is redacted.
+    pub fn unknown(reason: impl AsRef<str>) -> ConnectorError {
+        ConnectorError::Unknown {
+            reason: redact_reason(reason.as_ref()),
+        }
+    }
+
     /// `Permanent`, its reason redacted.
     pub fn permanent(reason: impl AsRef<str>) -> ConnectorError {
         ConnectorError::Permanent {
@@ -105,6 +117,7 @@ impl ConnectorError {
             ConnectorError::Permission { .. } => "permission",
             ConnectorError::Throttle { .. } => "throttle",
             ConnectorError::Transient { .. } => "transient",
+            ConnectorError::Unknown { .. } => "unknown",
             ConnectorError::Permanent { .. } => "permanent",
         }
     }
@@ -114,6 +127,7 @@ impl ConnectorError {
         match self {
             ConnectorError::Auth { reason }
             | ConnectorError::Permission { reason }
+            | ConnectorError::Unknown { reason }
             | ConnectorError::Transient { reason }
             | ConnectorError::Permanent { reason } => Some(reason),
             ConnectorError::Throttle { .. } => None,
@@ -126,5 +140,27 @@ impl ConnectorError {
             self,
             ConnectorError::Throttle { .. } | ConnectorError::Transient { .. }
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_is_redacted_and_never_retriable() {
+        let error = ConnectorError::unknown(r#"outcome unknown: {"access_token":"secret"}"#);
+        assert_eq!(error.kind(), "unknown");
+        assert!(!error.is_retriable());
+        assert_eq!(
+            error.reason(),
+            Some(r#"outcome unknown: {"access_token":"***"}"#)
+        );
+        assert!(!format!("{error} {error:?}").contains("secret"));
+        let probe = crate::ProbeResult::failure(1, error);
+        assert_eq!(
+            crate::status_after_probe(jt_capability::StoredStatus::Verified, &probe),
+            jt_capability::StoredStatus::Verified
+        );
     }
 }

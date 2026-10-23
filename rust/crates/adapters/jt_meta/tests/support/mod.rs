@@ -445,3 +445,87 @@ pub fn assert_graph_auth(r: &Recorded, token: &str) {
         r.line()
     );
 }
+
+/// Read the entire request, then close before or during the response.
+pub async fn broken_response(after_headers: bool) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                loop {
+                    socket.readable().await.unwrap();
+                    let mut buf = [0; 4096];
+                    match socket.try_read(&mut buf) {
+                        Ok(0) => return,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                        Err(e) => panic!("{e}"),
+                    }
+                    if let Some(end) = request.windows(4).position(|s| s == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]);
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                if after_headers {
+                    let mut response =
+                        &b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{"[..];
+                    while !response.is_empty() {
+                        socket.writable().await.unwrap();
+                        match socket.try_write(response) {
+                            Ok(n) => response = &response[n..],
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                            Err(e) => panic!("{e}"),
+                        }
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
+/// `text` percent-encoded the way `application/x-www-form-urlencoded` encodes it.
+pub fn form_encoded(text: &str) -> String {
+    url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
+}
+
+/// `text` percent-encoded with lowercase hex digits, every byte but letters and digits.
+pub fn lower_encoded(text: &str) -> String {
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02x}")
+            }
+        })
+        .collect()
+}
+
+/// Asserts that `what` shows none of `secrets`, as is or encoded, nor their first eight
+/// characters (a secret cut where the reason is cut).
+pub fn assert_no_echo(what: &str, shown: &str, secrets: &[&str]) {
+    for secret in secrets {
+        for form in [
+            (*secret).to_owned(),
+            form_encoded(secret),
+            lower_encoded(secret),
+            secret[..8].to_owned(),
+        ] {
+            assert!(!shown.contains(&form), "{what} shows {form:?}: {shown}");
+        }
+    }
+}

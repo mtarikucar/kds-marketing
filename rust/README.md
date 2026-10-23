@@ -76,6 +76,8 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 ### Göçler
 
+`0005`/`0006`, #360/#361 birleştirilene kadar yerinde değişebilir; yerel veritabanları yeniden oluşturulur.
+
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
 döndürür. Beş göç vardır:
@@ -87,6 +89,7 @@ döndürür. Beş göç vardır:
 | `0003_capabilities` | kabiliyetler (bildiren ajan bağlantısı `declared_by_connection` dahil), gruplar (adı alan içinde büyük/küçük harf ayırmadan tek: `capability_groups_name_ci`, `lower(name)` üzerinde), bütçe kalemleri ve bağları, harcama kaydı, çalışma alanı politikaları |
 | `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan kısmi dizini (`ledger_entries_agent_connection_idx`, yalnız `action = 'work.checkin'` satırları) açar |
 | `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez; geçmiş için en yenisi başta bir dizin), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; akışın oturum açtığı uygulama `app`; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir; bir tetikleyici her değişikliği ve 30 günden genç bir kaydın silinmesini reddeder); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
+| `0006_inbox` | Gelen kutusu için 13 alan tablosu (36 toplam): kişiler, kimlikler, konuşmalar, mesajlar, yolculuklar ve olayları, görevler, notlar, birleştirmeler, kayıp nedenleri, tüketici kayıtları, gönderim kuyruğu ve 24 saatlik istek anahtarları. FORCE RLS ve bileşik yabancı anahtarlar; varsayılan kayıp nedenleri ve sistem rollerinin gelen kutusu izinleri geriye dönük eklenir. |
 
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
 değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
@@ -235,7 +238,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (60 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (90 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -252,12 +255,14 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 60 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 90 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
 emekliye ayırır) ve `jeeta.budget.items_retire` (bütçe kalemini kesin olarak emekliye ayırır), ayrıca
-`confirm: true` ister, yoksa `VALIDATION`. Öteki yıkıcı araçlar istemez, çünkü
+`confirm: true` ister, yoksa `VALIDATION`. Birleştirmeyi geri alan
+`jeeta.inbox.merges_undo` da `DESTRUCTIVE` olarak işaretlidir ve `confirm: true` ister.
+Öteki yıkıcı araçlar istemez, çünkü
 etkileri onarılabilir: çıkarılan üye yeniden davet edilir, silinen rol ya da grup yeniden açılır, iptal
 edilen anahtarın yerine yenisi çıkarılır; bir grup ancak strateji ona başvurmuyorsa silinir (başvuruyorsa
 `CONFLICT`), bu yüzden silinen grup yeniden kurulabilir. Yetki onaydan değil rolden gelir: anahtar, çıkaran insanın
@@ -348,8 +353,10 @@ Her başarısız çağrı, panelden de MCP'den de aynı yapıyı döndürür:
 | `STRATEGY_REQUIRED` | 409 | kapılı bir iş onaylı strateji ister |
 | `WORKSPACE_INACTIVE` | 423 | alan etkin değil (`details.status`) |
 | `HOST_NOT_ALLOWED` | 403 | dışarıya izinsiz bir adrese gidilmek istendi |
-| `UPSTREAM_UNAVAILABLE` | 503 | sağlayıcı meşgul ya da ulaşılamıyor; sonra yeniden denenebilir |
+| `UPSTREAM_UNAVAILABLE` | 503 | sağlayıcı meşgul ya da ulaşılamıyor; yalnız `details.retryable: true` ise yeniden denenebilir |
 | `INTERNAL` | 500 | beklenmeyen hata; ileti ve ayrıntılar yalnızca günlüğe yazılır, yanıt `"internal error"` ve boş `details` taşır |
+
+`ConnectorError::Unknown`, yazmanın sağlayıcıya ulaşmış olabileceğini belirtir ve `UPSTREAM_UNAVAILABLE`, `retryable: false`, `reason: "outcome unknown"` olarak döner; körlemesine yeniden gönderilmez.
 
 `UPSTREAM_UNAVAILABLE` ayrıntıları olduğu gibi iletilir:
 `{"code":"UPSTREAM_UNAVAILABLE","message":"the provider is unavailable; try again later","details":{"provider":"meta","retryable":true,"retry_after_s":30,"reason":"rate limited"}}`
@@ -569,6 +576,8 @@ Sistem rollerinin izinleri:
 | `ledger.read` | ✓ | ✓ | — |
 | `capabilities.manage` (kabiliyetleri ve grupları değiştirme) | ✓ | ✓ | — |
 | `budget.manage` (bütçe kalemi açma, düzenleme, emekliye ayırma) | ✓ | ✓ | — |
+| `inbox.work` (gelen kutusunda çalışma) | ✓ | ✓ | ✓ |
+| `inbox.manage` (kayıp nedenleri ve yetkili yolculuk işlemleri) | ✓ | ✓ | — |
 
 `capabilities.manage` ve `budget.manage` M1a ile geldi. Yeni bir alanın sahip ve yönetici rolleri onları
 açılışta alır; M1a'dan önce açılmış alanlarınkine `0004_role_permissions_backfill` göçü ekler (bkz.
@@ -867,6 +876,8 @@ adreslerine ulaşır. Her biri yalnızca uyguladığı işlemler için sunulur: 
 mesajlaşma, reklam bütçesi ve potansiyel müşteri formları; NetGSM bağlantı, SMS, arama, İYS izni ve iletim
 raporları (OAuth yok); X bağlantı, OAuth, yayın ve sayaçlar.
 
+`SendReceipt`, `provider_id` yanında sağlayıcı bildirdiğinde en küçük para birimi cinsinden `cost_minor: Option<i64>` taşır; NetGSM gönderim yanıtındaki `cost_minor` okunur, bildirilmeyen tutar (Meta dahil) `None` kalır.
+
 ## Zamanlanmış işler
 
 `jeeta serve` bağlantıları canlı, kayıtları derli toplu tutan sabit aralıklı işler çalıştırır (yalnız
@@ -882,6 +893,8 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
+| `inbox_consume` | 10 saniye | Gelen olayları tek işlemde gelen kutusu kayıtlarına dönüştürür; active ve pending_payment alanlar | `jeeta.jobs.inbox_consume` |
+| `outbox_recover` | 1 dakika | 2 dakikadan eski `sending` → `unknown` (yeniden göndermez); 5 dakikadan eski `queued` kayıtlarını iki çitli gönderim adımına verir | `jeeta.jobs.outbox_recover` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -1167,3 +1180,264 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
   güvenlik bildirimi ve kaynak denetimleri. Bir crate'in iki sürümü yalnızca `[bans] skip` listesinde
   nedeniyle yazılıysa kabul edilir (ör. `sqlx` 0.8'in kullandığı önceki RustCrypto kuşağı: `hkdf` 0.12,
   `hmac` 0.12, `sha2` 0.10, `digest` 0.10); `cargo deny check` uyarısız geçer.
+
+
+## Gelen kutusu çekirdeği (M2a)
+
+Aşağıdaki 30 işlem panel ve MCP üzerinde aynı JSON gövdesini döndürür. Hepsi etkin çalışma
+alanı ister; `pending` ve `context` dışındakiler onaylı strateji de ister. Günlük çalışma `inbox.work`; sözlük, sahip atama ve
+birleştirme işlemleri `inbox.manage` gerektirir.
+
+| İşlem | Panel | MCP | Risk / izin |
+|---|---|---|---|
+| Kişi arama (`q`, `limit`) | `GET /api/inbox/people` | `jeeta.inbox.people_search` | READ / `inbox.work` |
+| Kişi, kimlikler, açık yolculuk, konuşmalar | `GET /api/inbox/people/{person_id}` | `jeeta.inbox.people_get` | READ / `inbox.work` |
+| Kişi eşleştir/oluştur | `POST /api/inbox/people` | `jeeta.inbox.people_create` | WRITE / `inbox.work` |
+| Kimlik ekle / birleştirme öner | `POST /api/inbox/people/{person_id}/identities` | `jeeta.inbox.identities_add` | WRITE / `inbox.work` |
+| Yolculuk aç | `POST /api/inbox/people/{person_id}/journeys` | `jeeta.inbox.journeys_open` | WRITE / `inbox.work` |
+| Yolculuk, son 50 olay, görevler, notlar | `GET /api/inbox/journeys/{journey_id}` | `jeeta.inbox.journeys_get` | READ / `inbox.work` |
+| Yolculuk olayı | `POST /api/inbox/journeys/{journey_id}/events` | `jeeta.inbox.events_report` | WRITE / `inbox.work` |
+| Komisyon sahibi ata/kaldır | `POST /api/inbox/journeys/{journey_id}/owner` | `jeeta.inbox.journeys_assign_owner` | WRITE / `inbox.manage` |
+| Kayıp nedenlerini oku | `GET /api/inbox/lost-reasons` | `jeeta.inbox.lost_reasons_list` | READ / `inbox.work` |
+| Kayıp nedeni düzenle | `PUT /api/inbox/lost-reasons` | `jeeta.inbox.lost_reasons_set` | WRITE / `inbox.manage` |
+| Durum etiketlerini düzenle | `PUT /api/inbox/status-labels` | `jeeta.inbox.status_labels_set` | WRITE / `inbox.manage` |
+| Birleştirme önerilerini listele | `GET /api/inbox/merges` | `jeeta.inbox.merges_list` | READ / `inbox.manage` |
+| Birleştir (`{keep}`) | `POST /api/inbox/merges/{merge_id}/apply` | `jeeta.inbox.merges_apply` | WRITE / `inbox.manage` |
+| Birleştirmeyi geri al (`{confirm:true}`) | `POST /api/inbox/merges/{merge_id}/undo` | `jeeta.inbox.merges_undo` | DESTRUCTIVE / `inbox.manage` |
+| Birleştirme önerisini reddet | `POST /api/inbox/merges/{merge_id}/refuse` | `jeeta.inbox.merges_refuse` | WRITE / `inbox.manage` |
+| Görev oluştur (`{title,due_at,assignee?}`) | `POST /api/inbox/journeys/{journey_id}/tasks` | `jeeta.inbox.tasks_create` | WRITE / `inbox.work` |
+| Görevi tamamla | `POST /api/inbox/tasks/{task_id}/complete` | `jeeta.inbox.tasks_complete` | WRITE / `inbox.work` |
+| Görev kuyruğunu oku (`queue`, `assignee`) | `GET /api/inbox/tasks` | `jeeta.inbox.tasks_list` | READ / `inbox.work` |
+| Not ekle (`{text}`) | `POST /api/inbox/journeys/{journey_id}/notes` | `jeeta.inbox.notes_add` | WRITE / `inbox.work` |
+| `pending` | `GET /api/inbox/pending` | `jeeta.inbox.pending` | READ / `inbox.work` |
+| `context` | `GET /api/inbox/conversations/{conversation_id}/context` | `jeeta.inbox.context` | READ / `inbox.work` |
+| `conversations.list` | `GET /api/inbox/conversations` | `jeeta.inbox.conversations_list` | READ / `inbox.work` |
+| `conversations.get` | `GET /api/inbox/conversations/{conversation_id}` | `jeeta.inbox.conversations_get` | READ / `inbox.work` |
+| `messages.list` | `GET /api/inbox/conversations/{conversation_id}/messages` | `jeeta.inbox.messages_list` | READ / `inbox.work` |
+| `take_over` | `POST /api/inbox/conversations/{conversation_id}/take-over` | `jeeta.inbox.take_over` | WRITE / `inbox.work` |
+| `hand_to_agent` | `POST /api/inbox/conversations/{conversation_id}/hand-to-agent` | `jeeta.inbox.hand_to_agent` | WRITE / `inbox.work` |
+| `snooze` | `POST /api/inbox/conversations/{conversation_id}/snooze` | `jeeta.inbox.snooze` | WRITE / `inbox.work` |
+| `unsnooze` | `POST /api/inbox/conversations/{conversation_id}/unsnooze` | `jeeta.inbox.unsnooze` | WRITE / `inbox.work` |
+| `close` | `POST /api/inbox/conversations/{conversation_id}/close` | `jeeta.inbox.close` | WRITE / `inbox.work` |
+| `reply` | `POST /api/inbox/conversations/{conversation_id}/reply` | `jeeta.inbox.reply` | WRITE / `inbox.work` |
+
+`reply`: `{text,intent:"reply",request_key?}`. M2a'da `commercial` doğrulama hatasıdır.
+Yanıt penceresi aynı konuşmadaki son gelen mesajdan itibaren 24 saattir. İki gönderim çiti
+kayıp yolculuk, silinmiş/birleştirilmiş kişi, canlı kabiliyet ve yürütücü neslini denetler.
+İnsan yanıtı yürütücüyü değiştirmez. Niyet, sağlayıcı çağrısından önce kalıcıdır; çağrı sırasında
+veritabanı kilidi tutulmaz. Sonuç ve sistem `replied` olayı birlikte kaydedilir. Çağrı sırasında
+terminal olan yolculuk değişmez; kabul edilmiş mesaj `sent` kalır ve `inbox.sent_after_terminal`
+yazılır. Geç kabul, daha yeni gelen mesajı veya operatörün konuşma durumunu değiştirmez; gönderim
+zamanı ilk denemenin zamanıdır. Kurtarma, göndermeden önce strateji onayını yeniden denetler.
+Belirsiz gönderim `unknown` olur ve otomatik yeniden gönderilmez. Aynı çalışma alanındaki
+`request_key` 24 saat boyunca kayıtlı yanıtı döndürür; sürmekte olan isteğin yanıtı `queued` olabilir.
+`SendIntent` şimdilik uygulamanın `usecases::inbox::replies` modülündedir.
+
+`people.create`: `{display_name, identities:[{channel,value,capability_id?}], source}`.
+Telefonlar SMS/WhatsApp/arama arasında ortak, opak kimlikler kabiliyetin dış hesap kimliğiyle
+kapsamlıdır. Çakışan kimlikler kişi verisini taşımaz; `identity_split` hatası iki kişi kimliğini ve
+kalıcı birleştirme önerisini verir. İlk temas değişmez; kişi, ilk yolculuk ve kimlikleri tek işlemde
+oluşturulur. Gelen mesajda kendi kanalının eşleşmesi önceliklidir.
+
+`events.report`: `{kind,idempotency_key,payload}`. Dışarıdan yalnızca `call_made`,
+`appointment_booked`, `meeting_held`, `quote_accepted`, `won`, `lost`, `snoozed`, `reopened`
+raporlanır. `lost` yükü `{reason_key}`, `won` yükü `{product,amount_minor,currency}`,
+`call_made` yükü `{connected}`, `snoozed` yükü `{until}`; ötekiler `{}` alır.
+Kayıp nedeninin o andaki etiketi olayda korunur. Aynı çalışma alanında aynı anahtarın tekrarı
+etkileri çalıştırmaz ve `inbox.event.duplicate` yazar; yeni anahtarla ikinci Won terminal
+`CONFLICT` olur. Lost konuşmaları kapatır, açık görevleri iptal eder; Won açık görevleri tamamlar.
+Değişiklik, etkiler ve günlük aynı veritabanı işlemindedir. Yeniden açma, insan sahip/yönetici ve
+`inbox.manage` ister; Won yeniden açılmaz, yeni yolculuk `repeat` kaynağını alır.
+
+`status_labels.set`: `{labels:{new:"Yeni",won:"Kazanıldı"}}`; yalnızca dokuz sabit durum
+anahtarı kabul edilir. Etiketler çalışma alanı politika satırında saklanır; diğer politika alanları
+korunur. Harita tamamen değiştirilir, boş harita varsayılan etiketlere döner. Bilinmeyen anahtarlar
+ve boş etiketler `VALIDATION` verir; günlük yalnızca değiştirilen durum anahtarlarını içerir.
+
+Birleştirmede `keep` kalan kişiyi seçer; iki kişinin de açık yolculuğu varsa işlem
+`CONFLICT` / `two_open_journeys` döner. Kimlikler, yolculuklar, görevler ve notlar taşınır;
+aynı kabiliyetteki konuşmaların eskisi kalır ve mesajlar korunur. Kalan kişinin ilk temas bilgisi
+korunur. Geri alma en fazla 30 gün içinde ve `confirm: true` ile yapılır; birleşmeden sonra
+kalan kişi, yolculuk veya konuşma değişmişse `CONFLICT` / `edited_after_merge` döner.
+Aynı sağlayıcı mesaj kimliği iki konuşmada bulunursa her iki mesaj saklanır; çakışan kimliklerden
+biri birleştirme süresince boş bırakılır, geri almada özgün kimliği yüklenir. Birleştirme zaman
+damgası kilitlenen kayıtların son değişiklik zamanından ileridir; aynı zamanla gelen ikinci
+bir birleştirme önceki geri alma korumasını silemez.
+
+Görevlerde varsayılan `queue=due_24h`, şu andan 24 saat sonrasına kadar olanları (iki sınır dahil)
+gösterir; `overdue` şu andan önceki görevleri, `all` zaman sınırı olmadan görevleri getirir.
+`assignee` isteğe bağlı kullanıcı filtresidir. Not metni işlem defterine yazılmaz.
+
+Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply",request_key?}`; commercial intent is reserved for M2b. Human replies preserve the executor.
+
+### Gelen olay tüketicisi (`inbox@1`)
+
+`inbox_consume`, 10 saniyede bir `jeeta.jobs.inbox_consume` kilidi altında
+`active` ve `pending_payment` alanlarda çalışır; strateji onayı gerektirmez.
+`list_for_consumer("inbox@1", cursor, 100)` üzerinden sayfalar. Her olayın talebi
+(`try_claim`), kişi/kimlik, konuşma, mesaj, yolculuk olayı ve tüketim sonucu tek
+alan işleminde yazılır. Hata hepsini geri alır; yalnız hata kodu günlüğe yazılır,
+sonraki olaylar devam eder, başarısız olay bir sonraki taramada yeniden denenir.
+`events.ack` yalnız görülme bilgisidir; alan tüketimini atlatmaz.
+
+WhatsApp, Messenger/Instagram ve NetGSM SMS mesajları gerçek adaptör payload'larından
+okunur. Telefon kimliği SMS/WhatsApp/aramada ortaktır; opak kimlikler kabiliyetin
+harici hesap kimliğiyle kapsamlanır. Her yeni inbound mesajdan sonra aynı işlemde
+`MessageRepo::record_inbound_sender(message_id, sender_identity_id)` çağrılır;
+normalleştirilmiş/hesapla kapsamlanmış kimlik, mesajın gönderenini kaydeder ve en son
+gelen mesaja göre `last_inbound_identity_id` değerini günceller. Geç gelen eski mesaj
+ve tekrar teslim, daha yeni göndereni değiştirmez; ayrı bir gönderen kaydı tutulmaz.
+Etkinlik ve mesaj zamanı RFC3339 `payload.occurred_at` değerinden alınır; değer yoksa,
+geçersizse veya `received_at` değerinden beş dakikadan fazla ilerideyse `received_at`
+kullanılır. Yanıt kontrolü de kabul edilen beş dakikalık saat farkını tanır.
+Gecikmiş eski mesaj, 24 saatlik yanıt penceresini yenilemez.
+Page/Instagram profil kabiliyetine yönlenen Meta mesaj/echo/raporları, aynı çalışma
+alanı ve harici hesaptaki emekliye ayrılmamış `messenger`/`instagram_dm` kardeşine
+çözülür; kardeşi bulunmayan olay ertelenir.
+Mesaj kimliği sağlayıcının mesaj kimliği,
+yolculuk anahtarı `inbound:<event_id>` olur. Lost mesajı aynı yolculuğu korur ve
+konuşmayı Ours/Human{None} yapıp executor neslini artırır; Won sonrası yeni Repeat
+yolculuğu açılır, kişinin ilk kaynağı değişmez. Echo, mevcut gönderiyi eşler veya
+bilinen konuşmaya System outbound yazar; teslim raporları eşleşen gönderiyi günceller.
+Echo makbuzdan önce gelirse, aynı metinli ve henüz harici kimliği olmayan `sending`
+gönderiye (veya son beş dakikada `sent` olmuş gönderiye) kimliği bağlar; yazarını korur.
+Kaydedilmiş `fence_snapshot.send_at` echo'nun alınma zamanını geçemez; kuyruk zamanı
+tek başına eşleşme kanıtı değildir. Teslim sonucu, sonradan dönen kabul makbuzu veya
+belirsiz ağ hatası tarafından düşürülmez.
+Birden fazla aday varsa tahmin etmek yerine erteler. Makbuz aynı kimliği tekrar
+kaydedebilir. `MessageRepo::find_by_external_id` çalışma alanı/kabiliyet kapsamında
+indeksli arar; rapor ve echo eşlemesi tüm konuşma/mesaj geçmişini taramaz.
+
+NetGSM PBX olayları `unique_id` ile ilişkilendirilir. `inbound_call`/`answer`
+konuşma etkinliğini günceller; Hangup, `call:<unique_id>` anahtarıyla tek `call_made`
+yazar. Kısmi etkinlik, sürümler arasında sabit `inbox.pbx_activity` talebiyle
+yalnız bir kez uygulanır. Aynı teslim zamanındaki kardeş olaylar, üretilen kimliklerin
+sırasından bağımsız olarak çalışma alanı/sağlayıcı/`unique_id` ile ilişkilendirilir.
+Bağlantı yalnız Hangup'a kadar saklanan Answer ile doğrulanır; Hangup'ın
+durum/metin/süre alanı bağlantı kanıtı değildir. Sonradan gelen olay sonucu değiştirmez.
+
+LeadGen, Consent, Unknown, yönlendirilmemiş/desteklenmeyen kabiliyet olayları,
+eşleşmeyen raporlar ve henüz konuşması bulunmayan echo'lar `deferred` kaydedilir.
+Bu kayıtlar `inbox@2` tarafından tekrar talep edilebilir; mesaj ve yolculuk anahtarları
+sürümler arasında sabit kalır. Konuşmasız echo için gelen temas zamanı uydurulmaz.
+
+T014 inceleme notu: Lost yolculuktaki PBX olayları şu anda yan etki olmadan ertelenir;
+reducer `CallMade` olayını Lost üzerinde reddeder. Lost Hangup kararının kalıcı kaydı ve
+konuşmasız echo için gelen temas oluşturmayan repository işlemi koordinatör kararı bekler.
+
+
+### Inbox pending/context and timers
+
+Only `inbox.pending` and `inbox.context` are exempt from the strategy gate; both still require
+an active workspace and `inbox.work`. Pending queues follow the executor (unassigned human
+queues are visible to all holders). Context includes at most ten recent conversations for the
+same person, the last three messages each, ten journey events, open tasks, and live strategy
+identity/segments/channel hypotheses plus prohibitions. No strategy produces null guidance.
+`work.pending` derives ReplyDue/ReopenQuestion (priority 2) and MergeSuggested/TaskDue (3), after
+strategy work, and preserves workspace status filtering.
+
+`response_sla` and `snooze_wake` run every minute under separate advisory locks. SLA hands stale
+Ours/Agent conversations to the journey owner or unassigned humans, increments the executor
+fence and records one ledger entry per handover. Snooze wake changes elapsed snoozes to Ours
+once. Member removal unassigns their executor conversations and all owned open journeys in the
+removal transaction, recording each change. `WorkspacePolicy.inbox` holds `max_response_s`
+(whatsapp/instagram_dm/messenger 900; sms 3600), `unreachable_threshold` (3) and fixed-key
+`status_labels`. Migration 0007 stores response settings and preserves existing label overrides;
+its down migration removes only the added policy column.
+
+
+### M2a inbox core: model, reducer and surfaces
+
+The catalog contains **90 MCP tools: the M1b 60 plus 30 inbox tools**. Every inbox tool
+has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
+are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
+check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
+and merges. Owner/manager have both, Rep has work; custom grants are preserved.
+`jeeta.inbox.merges_undo` requires explicit confirmation. Agents cannot take over as a person.
+
+A person owns active identities and conversations (one per capability), with at most one open
+journey. SMS, WhatsApp and calls share the normalized `phone` identity; email is trimmed and
+lowercased. Instagram DM, Messenger and webchat identifiers include the capability's external
+account id before matching. Acquisition source/first touch is separate and a merge preserves
+the keeper's first touch. Every person creation path shares `match_or_create`; conflicting
+email/phone identities produce a merge suggestion, not a silent reassignment. Undo refuses
+when the keeper has changed since the merge.
+
+| Event | Journey and effects |
+| --- | --- |
+| `message_received` | Keep stage, conversation Ours; Lost stays Lost and becomes unassigned human work. |
+| `replied`, connected `call_made` | New/Unreachable → Contacted; reset failed attempts. Reply also makes conversation Theirs. |
+| Failed `call_made` | Count attempts; default third failure enters Unreachable only at rank ≤ 1. |
+| `appointment_booked`, `meeting_held`, `quote_sent`, `quote_accepted` | Advance to Appointment, Met, Quoted, Pending respectively without regressing a later stage. |
+| `won` | Close journey and open tasks; emit CommissionDue (commission accounting is M2b). |
+| `lost` | Snapshot active loss-reason label; close conversations and cancel open tasks. |
+| `snoozed` | Snooze conversation until the given instant. |
+| `reopened` | Human owner/manager with inbox.manage: Lost → Contacted; clear closure, loss and attempts. |
+| `merged` | Preserve stage while moving ownership to the keeper person. |
+
+Rank is New=0, Contacted=Unreachable=1, Appointment=2, Met=3, Quoted=4, Pending=5.
+Won/Lost are terminal, outside this order. Won never reopens; later inbound opens a Repeat
+journey. Lost inbound never creates another journey. System Replied after terminal closure is
+a no-op transition. Events use a required workspace-wide idempotency key; duplicates suppress
+effects and ledger `inbox.event.duplicate`. Different-key Won on Won conflicts.
+`Transition` has private fields, no public constructor, Deserialize or Default; compile-fail
+doctests protect those boundaries. Creation uses `begin_journey(id, workspace_id, person_id,
+source, at) -> InitialJourney`, an equally unforgeable wrapper with an immutable journey accessor.
+It fixes New, zero attempts, no owner/closure/loss, and both timestamps to `at`. The port only
+accepts `insert_initial(InitialJourney)`; later status writes require `apply_transition(Transition)`.
+Structural tests parse every PostgreSQL source file and distinguish INSERT from UPDATE. Merge
+undo's single documented snapshot statement restores only an existing journey's person/time;
+it neither creates a journey nor changes its status. Fixtures use the same domain creation path
+and assign owners explicitly through the existing operation.
+
+A conversation's executor defaults to Agent and is separate from the journey owner. Every
+handover increments its generation; Human(None) is the unassigned queue. Human replies do not
+change the executor and do not require holding it. Agent replies refuse human-held conversations.
+`context` and `journeys.get` return all nine effective `status_labels`: fixed Turkish defaults
+with workspace policy overrides. Keys remain fixed; the panel renders the returned label.
+
+Reply uses a durable outbox: commit queued intent after the first fence, recheck under locks
+immediately before sending and persist the fence snapshot, release all locks for provider I/O,
+then atomically persist the receipt/message/event/effects. Both fences check loss, erased or
+merged person, live capability, executor generation and agent ownership; reply intent also
+requires inbound in the same conversation within 24 hours. Lost/takeover before sending refuses.
+Uncertain provider acceptance stays Unknown and is never blindly retried. A successful send
+racing terminal closure remains Sent and records `inbox.sent_after_terminal`; it does not reopen
+the journey. Optional `request_key` reuses responses for 24 hours within a workspace.
+
+`inbox_consume` claims provider events separately from `events.ack`, with person/identity/message,
+reducer effects and consumption completion in one transaction. It does not need a principal or
+approved strategy; it consumes Active/PendingPayment workspaces and defers suspended ones.
+The consumer namespace is `inbox@1`; provider/message/event keys remain stable across versions.
+`response_sla` transfers overdue Ours/Agent conversations to the journey owner or Human(None),
+bumps the fence and ledgers once; `snooze_wake` wakes elapsed snoozes once. Both run every minute.
+Member departure unassigns human conversations and open journey ownership in the removal transaction.
+
+The panel exposes conversations, tasks and people with the three-column inbox: queue/person,
+conversation/reply, journey/events/tasks/notes. It shows actor and executor, supports takeover,
+hand-back, snooze, events, loss/reopen and merge/undo confirmation; customer text is rendered as text.
+
+Run `make smoke-inbox` from `rust/`: `cargo test --locked -p jt_app --test smoke_inbox`.
+It parses a scripted WhatsApp fixture, consumes it into person/journey/conversation, reads agent
+context, sends a scripted successful reply, checks the system Replied event and acknowledges
+inbound events. Everything runs in process without PostgreSQL, network access or provider secrets.
+
+Merging conversations refuses moved queued outbox entries with `conversation_merged`, completes
+their request-key responses and records refusals in the ledger. Moved sending/unknown entries keep
+their state and gain a durable `conversation_merged` flag: provider outcomes, request-key responses
+and journey Replied events reconcile normally, but never change conversation state or activity.
+Undo preserves both refusals and the flag. Sending entries older than two minutes still recover to
+Unknown without resending. Replies, context and pending queues
+prefer the open journey over newer closed history. A successful receipt still establishes contact
+when inbound or other events leave the journey rank unchanged; newer milestones or any intervening
+closure keep historical-only bookkeeping. Closure is retained in the outbox fence across reopening;
+the separate conversation activity revision preserves newer inbound/Ours activity.
+
+PBX calls use the workspace's `inbox.unreachable_threshold`. Correlation uses
+`InboundEventRepo::call_events(unique_id, until)`, including same-receipt-time siblings and processed
+rows, scoped to Netgsm call events in the tenant. Migration 0006 adds stored generated
+`inbound_events.call_unique_id` and the `inbound_events_call_lookup` composite index: PostgreSQL can
+use the call key as an index condition under forced RLS. The BEFORE append-only guard excludes only
+the database-generated key; rollback drops the key/index and restores the original guard. Shared
+fake/PostgreSQL contracts cover time/tenant/provider/kind boundaries and processing updates; a tenant
+EXPLAIN regression verifies the indexed lookup and a schema test checks up → down → up.

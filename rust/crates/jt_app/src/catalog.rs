@@ -192,9 +192,40 @@ const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk
     }
 }
 
-/// Every use case of this release. None is `Gated` yet.
+/// Every use case of this release. Inbox operations require an approved strategy.
 #[rustfmt::skip]
 pub static CATALOG: &[UseCase] = &[
+    twin("inbox.pending", GateMode::Exempt, "jeeta.inbox.pending", ("GET", "/api/inbox/pending"), Read),
+    twin("inbox.context", GateMode::Exempt, "jeeta.inbox.context", ("GET", "/api/inbox/conversations/{conversation_id}/context"), Read),
+    twin("inbox.conversations.list", GateMode::Gated, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),
+    twin("inbox.conversations.get", GateMode::Gated, "jeeta.inbox.conversations_get", ("GET", "/api/inbox/conversations/{conversation_id}"), Read),
+    twin("inbox.messages.list", GateMode::Gated, "jeeta.inbox.messages_list", ("GET", "/api/inbox/conversations/{conversation_id}/messages"), Read),
+    twin("inbox.take_over", GateMode::Gated, "jeeta.inbox.take_over", ("POST", "/api/inbox/conversations/{conversation_id}/take-over"), Write),
+    twin("inbox.hand_to_agent", GateMode::Gated, "jeeta.inbox.hand_to_agent", ("POST", "/api/inbox/conversations/{conversation_id}/hand-to-agent"), Write),
+    twin("inbox.snooze", GateMode::Gated, "jeeta.inbox.snooze", ("POST", "/api/inbox/conversations/{conversation_id}/snooze"), Write),
+    twin("inbox.unsnooze", GateMode::Gated, "jeeta.inbox.unsnooze", ("POST", "/api/inbox/conversations/{conversation_id}/unsnooze"), Write),
+    twin("inbox.close", GateMode::Gated, "jeeta.inbox.close", ("POST", "/api/inbox/conversations/{conversation_id}/close"), Write),
+    twin("inbox.reply", GateMode::Gated, "jeeta.inbox.reply", ("POST", "/api/inbox/conversations/{conversation_id}/reply"), Write),
+    twin("inbox.people.search", GateMode::Gated, "jeeta.inbox.people_search", ("GET", "/api/inbox/people"), Read),
+    twin("inbox.people.get", GateMode::Gated, "jeeta.inbox.people_get", ("GET", "/api/inbox/people/{person_id}"), Read),
+    twin("inbox.people.create", GateMode::Gated, "jeeta.inbox.people_create", ("POST", "/api/inbox/people"), Write),
+    twin("inbox.identities.add", GateMode::Gated, "jeeta.inbox.identities_add", ("POST", "/api/inbox/people/{person_id}/identities"), Write),
+    twin("inbox.journeys.open", GateMode::Gated, "jeeta.inbox.journeys_open", ("POST", "/api/inbox/people/{person_id}/journeys"), Write),
+    twin("inbox.events.report", GateMode::Gated, "jeeta.inbox.events_report", ("POST", "/api/inbox/journeys/{journey_id}/events"), Write),
+    twin("inbox.lost_reasons.list", GateMode::Gated, "jeeta.inbox.lost_reasons_list", ("GET", "/api/inbox/lost-reasons"), Read),
+    twin("inbox.lost_reasons.set", GateMode::Gated, "jeeta.inbox.lost_reasons_set", ("PUT", "/api/inbox/lost-reasons"), Write),
+    twin("inbox.journeys.get", GateMode::Gated, "jeeta.inbox.journeys_get", ("GET", "/api/inbox/journeys/{journey_id}"), Read),
+    twin("inbox.journeys.assign_owner", GateMode::Gated, "jeeta.inbox.journeys_assign_owner", ("POST", "/api/inbox/journeys/{journey_id}/owner"), Write),
+    twin("inbox.status_labels.set", GateMode::Gated, "jeeta.inbox.status_labels_set", ("PUT", "/api/inbox/status-labels"), Write),
+    twin("inbox.merges.list", GateMode::Gated, "jeeta.inbox.merges_list", ("GET", "/api/inbox/merges"), Read),
+    twin("inbox.merges.apply", GateMode::Gated, "jeeta.inbox.merges_apply", ("POST", "/api/inbox/merges/{merge_id}/apply"), Write),
+    twin("inbox.merges.undo", GateMode::Gated, "jeeta.inbox.merges_undo", ("POST", "/api/inbox/merges/{merge_id}/undo"), Destructive),
+    twin("inbox.merges.refuse", GateMode::Gated, "jeeta.inbox.merges_refuse", ("POST", "/api/inbox/merges/{merge_id}/refuse"), Write),
+    twin("inbox.tasks.create", GateMode::Gated, "jeeta.inbox.tasks_create", ("POST", "/api/inbox/journeys/{journey_id}/tasks"), Write),
+    twin("inbox.tasks.complete", GateMode::Gated, "jeeta.inbox.tasks_complete", ("POST", "/api/inbox/tasks/{task_id}/complete"), Write),
+    twin("inbox.tasks.list", GateMode::Gated, "jeeta.inbox.tasks_list", ("GET", "/api/inbox/tasks"), Read),
+    twin("inbox.notes.add", GateMode::Gated, "jeeta.inbox.notes_add", ("POST", "/api/inbox/journeys/{journey_id}/notes"), Write),
+
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),
     panel_only("auth.logout", Exempt, ("POST", "/api/auth/logout"), Write),

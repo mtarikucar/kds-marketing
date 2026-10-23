@@ -387,6 +387,9 @@ pub async fn remove(deps: &Deps, ctx: &Ctx, membership_id: MembershipId) -> Resu
 
     let last_owner = target.status == MembershipStatus::Active && is_owner(&role) && owners <= 1;
     may_change(ctx, last_owner, "cannot remove the last owner")?;
+    if let Some(user) = target.user_id {
+        super::inbox::context::departure(repos.as_mut(), ctx, user).await?;
+    }
     repos.memberships().remove(membership_id).await?;
     let revoked_api_key_ids = match target.user_id {
         Some(user_id) => {

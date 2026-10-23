@@ -660,7 +660,7 @@ impl WorkspacePolicyRepo for MemTenant {
             .workspace_policies
             .iter()
             .find(|p| p.workspace_id == self.ws)
-            .map(|p| p.policy)
+            .map(|p| p.policy.clone())
             .unwrap_or_default())
     }
 
@@ -677,6 +677,14 @@ impl WorkspacePolicyRepo for MemTenant {
                 this.state().workspace(ws).is_some(),
                 "workspace_policies.workspace_id",
             )?;
+            if policy
+                .inbox
+                .status_labels
+                .keys()
+                .any(|key| !jt_app::ports::inbox::INBOX_STATUS_KEYS.contains(&key.as_str()))
+            {
+                return Err(AppError::internal("unknown inbox status label key"));
+            }
             let row = StoredWorkspacePolicy {
                 workspace_id: ws,
                 policy,
@@ -684,7 +692,7 @@ impl WorkspacePolicyRepo for MemTenant {
             };
             this.tx.write(move |s| {
                 s.workspace_policies.retain(|p| p.workspace_id != ws);
-                s.workspace_policies.push(row);
+                s.workspace_policies.push(row.clone());
             });
             Ok(())
         })

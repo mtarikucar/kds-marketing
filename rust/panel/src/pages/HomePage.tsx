@@ -305,6 +305,13 @@ function itemText(t: TFunction, item: WorkItem): string {
  */
 function itemLink(item: WorkItem): string | null {
   switch (item.kind) {
+    case 'reply_due':
+    case 'reopen_question':
+      return `/inbox/${encodeURIComponent(item.conversation_id)}`;
+    case 'merge_suggested':
+      return `/inbox/merges?merge=${encodeURIComponent(item.merge_id)}`;
+    case 'task_due':
+      return `/inbox?task=${encodeURIComponent(item.task_id)}`;
     case 'consult_strategy':
     case 'approve_strategy':
       return '/strategy';

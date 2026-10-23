@@ -15,7 +15,7 @@ use jt_app::ports::{
     ProbeRunRepo,
 };
 use jt_capability::CapabilityId;
-use jt_connector::{InboundEvent, InboundEventId};
+use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
 use jt_tenancy::WorkspaceId;
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -30,6 +30,55 @@ const ERROR_KINDS: [&str; 5] = ["auth", "permission", "throttle", "transient", "
 
 #[async_trait]
 impl InboundEventRepo for MemTenant {
+    async fn call_events(
+        &mut self,
+        unique_id: &str,
+        until: OffsetDateTime,
+    ) -> Result<Vec<InboundEvent>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbound_events
+            .iter()
+            .map(|s| &s.event)
+            .filter(|e| {
+                e.workspace_id == self.ws
+                    && e.provider == Provider::Netgsm
+                    && e.kind == EventKind::CallEvent
+                    && e.payload["unique_id"].as_str() == Some(unique_id)
+                    && e.received_at <= until
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|e| (e.received_at, e.id));
+        Ok(rows)
+    }
+
+    async fn list_for_consumer(
+        &mut self,
+        consumer: &str,
+        cursor: Option<(OffsetDateTime, InboundEventId)>,
+        limit: u32,
+    ) -> Result<Vec<InboundEvent>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbound_events
+            .iter()
+            .map(|s| &s.event)
+            .filter(|e| {
+                e.workspace_id == self.ws && cursor.is_none_or(|c| (e.received_at, e.id) > c)
+            })
+            .filter(|e| {
+                !self.state().inbox.consumption.iter().any(|c| {
+                    c.workspace_id == self.ws && c.consumer == consumer && c.event_id == e.id
+                })
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|e| (e.received_at, e.id));
+        rows.truncate(limit.clamp(1, MAX_EVENT_PAGE) as usize);
+        Ok(rows)
+    }
+
     async fn insert_if_new(
         &mut self,
         event: InboundEvent,

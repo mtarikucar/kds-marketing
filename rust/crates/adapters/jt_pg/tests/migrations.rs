@@ -28,10 +28,12 @@ const TABLES_AFTER_STRATEGY: i64 = 13;
 const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
-const TABLES_AFTER_ALL: i64 = 23;
+const TABLES_AFTER_CONNECTORS: i64 = 23;
+/// Tables after `0006_inbox`, including outbox and request keys.
+const TABLES_AFTER_ALL: i64 = 36;
 
-/// The migrations there are: `0001_foundation` to `0005_connectors`.
-const MIGRATIONS: i64 = 5;
+/// The migrations there are: `0001_foundation` to `0007_inbox_policy`.
+const MIGRATIONS: i64 = 7;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -169,6 +171,9 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
 
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
+    run(read("0007_inbox_policy.down.sql")).await;
+    run(read("0006_inbox.down.sql")).await;
+    run(read("0006_inbox.down.sql")).await;
     run(connectors_down.clone()).await;
     run(connectors_down.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
@@ -183,7 +188,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     assert!(!column_exists(&db.pool, RETIRED_AT).await);
     // 0005 applies again on its own, and reverts again.
     run(connectors_up.clone()).await;
-    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CONNECTORS);
     assert!(column_exists(&db.pool, RETIRED_AT).await);
     run(connectors_down).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
@@ -405,4 +410,100 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
             ["workspace.read", "capabilities.manage"]
         );
     }
+}
+
+#[tokio::test]
+async fn migration_round_trip_23_36_23_36() {
+    let db = TestDb::new().await;
+    assert_eq!(table_count(&db.pool).await, 36);
+    assert!(index_exists(&db.pool, "messages_external_lookup").await);
+    assert!(index_exists(&db.pool, "messages_echo_candidates").await);
+    assert!(index_exists(&db.pool, "outbox_message_lookup").await);
+    assert!(column_exists(&db.pool, ("conversations", "created_at")).await);
+    assert!(column_exists(&db.pool, ("conversations", "updated_at")).await);
+    assert!(column_exists(&db.pool, ("conversations", "activity_revision")).await);
+    assert!(column_exists(&db.pool, ("conversations", "last_inbound_identity_id")).await);
+    assert!(column_exists(&db.pool, ("messages", "sender_identity_id")).await);
+    assert!(column_exists(&db.pool, ("journeys", "reducer_revision")).await);
+    assert!(column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
+    let (ws, _) = db.seed_workspace("inbox-policy-roundtrip").await;
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("insert into workspace_policies (workspace_id,agent_checkin_interval_minutes,updated_at,inbox_status_labels) values ($1,60,now(),$2)")
+        .bind(ws.as_uuid()).bind(serde_json::json!({"new":"Yeni"})).execute(tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
+    let dir = migrations_dir();
+    let down = std::fs::read_to_string(dir.join("0006_inbox.down.sql")).unwrap();
+    let up = std::fs::read_to_string(dir.join("0006_inbox.up.sql")).unwrap();
+    for _ in 0..2 {
+        sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, 23);
+        assert!(!index_exists(&db.pool, "messages_external_lookup").await);
+        assert!(!index_exists(&db.pool, "messages_echo_candidates").await);
+        assert!(!index_exists(&db.pool, "outbox_message_lookup").await);
+        assert!(!column_exists(&db.pool, ("conversations", "created_at")).await);
+        assert!(!column_exists(&db.pool, ("conversations", "updated_at")).await);
+        assert!(!column_exists(&db.pool, ("conversations", "activity_revision")).await);
+        assert!(!column_exists(&db.pool, ("conversations", "last_inbound_identity_id")).await);
+        assert!(!column_exists(&db.pool, ("messages", "sender_identity_id")).await);
+        assert!(!column_exists(&db.pool, ("journeys", "reducer_revision")).await);
+        assert!(!column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
+        assert!(!column_exists(&db.pool, ("lost_reasons", "key")).await);
+        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+        let interval: i32 = sqlx::query_scalar(
+            "select agent_checkin_interval_minutes from workspace_policies where workspace_id=$1",
+        )
+        .bind(ws.as_uuid())
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+        assert_eq!(interval, 60);
+    }
+    for _ in 0..2 {
+        sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, 36);
+        assert!(index_exists(&db.pool, "messages_external_lookup").await);
+        assert!(index_exists(&db.pool, "messages_echo_candidates").await);
+        assert!(index_exists(&db.pool, "outbox_message_lookup").await);
+        assert!(column_exists(&db.pool, ("conversations", "created_at")).await);
+        assert!(column_exists(&db.pool, ("conversations", "updated_at")).await);
+        assert!(column_exists(&db.pool, ("conversations", "activity_revision")).await);
+        assert!(column_exists(&db.pool, ("conversations", "last_inbound_identity_id")).await);
+        assert!(column_exists(&db.pool, ("messages", "sender_identity_id")).await);
+        assert!(column_exists(&db.pool, ("journeys", "reducer_revision")).await);
+        assert!(column_exists(&db.pool, ("workspace_policies", "inbox_status_labels")).await);
+        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+        let labels: serde_json::Value = sqlx::query_scalar(
+            "select inbox_status_labels from workspace_policies where workspace_id=$1",
+        )
+        .bind(ws.as_uuid())
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+        assert_eq!(labels, serde_json::json!({}));
+    }
+}
+
+#[tokio::test]
+async fn inbox_policy_round_trip_preserves_existing_labels() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("policy-round-trip").await;
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("insert into workspace_policies(workspace_id,agent_checkin_interval_minutes,updated_at,inbox_status_labels,inbox_policy) values ($1,60,now(),$2,$3)")
+        .bind(ws.as_uuid()).bind(serde_json::json!({"new":"Yeni"})).bind(serde_json::json!({"unreachable_threshold":5})).execute(tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
+    let up = include_str!("../../../../migrations/0007_inbox_policy.up.sql");
+    let down = include_str!("../../../../migrations/0007_inbox_policy.down.sql");
+    for sql in [down, down, up, up] {
+        sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
+    }
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let labels: serde_json::Value = sqlx::query_scalar(
+        "select inbox_status_labels from workspace_policies where workspace_id=$1",
+    )
+    .bind(ws.as_uuid())
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(labels, serde_json::json!({"new":"Yeni"}));
+    assert!(column_exists(&db.pool, ("workspace_policies", "inbox_policy")).await);
 }

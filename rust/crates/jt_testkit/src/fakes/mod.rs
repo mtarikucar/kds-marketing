@@ -47,6 +47,8 @@
 
 mod capability;
 mod connector;
+mod inbox;
+pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
 mod platform;
 mod providers;
 mod services;
@@ -68,3 +70,5 @@ pub use state::{
     StoredConsultationEntry, StoredGroupMember, StoredHypothesis, StoredInboundEvent,
     StoredOutboundJob, StoredRole, StoredWorkspacePolicy,
 };
+
+mod inbox_merge;

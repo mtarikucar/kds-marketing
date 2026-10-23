@@ -1154,7 +1154,10 @@ dependencies = [
  "base64 0.23.1",
  "jt_capability",
  "jt_connector",
+ "jt_inbox",
  "jt_ledger",
+ "jt_meta",
+ "jt_netgsm",
  "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
@@ -1178,11 +1181,16 @@ dependencies = [
  "axum",
  "jt_app",
  "jt_connector",
+ "jt_inbox",
+ "jt_ledger",
  "jt_mcp",
  "jt_panel_http",
  "jt_pg",
+ "jt_tenancy",
  "jt_testkit",
+ "proc-macro2",
  "serde_json",
+ "syn 2.0.119",
  "tokio",
  "tower",
 ]
@@ -1212,6 +1220,19 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "subtle",
+ "thiserror",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "jt_inbox"
+version = "0.1.0"
+dependencies = [
+ "jt_capability",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
  "thiserror",
  "time",
  "uuid",
@@ -1347,6 +1368,7 @@ dependencies = [
  "jt_app",
  "jt_capability",
  "jt_connector",
+ "jt_inbox",
  "jt_ledger",
  "jt_strategy",
  "jt_tenancy",
@@ -1409,6 +1431,7 @@ dependencies = [
  "jt_app",
  "jt_capability",
  "jt_connector",
+ "jt_inbox",
  "jt_ledger",
  "jt_panel_http",
  "jt_pg",

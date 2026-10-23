@@ -112,11 +112,15 @@ pub enum Job {
     PurgeRawBodies,
     PurgeOAuthPending,
     PurgeProbeRuns,
+    OutboxRecover,
+    InboxConsume,
+    ResponseSla,
+    SnoozeWake,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 7] = [
+    pub const ALL: [Job; 11] = [
         Job::RefreshTokens,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
@@ -124,6 +128,10 @@ impl Job {
         Job::PurgeRawBodies,
         Job::PurgeOAuthPending,
         Job::PurgeProbeRuns,
+        Job::OutboxRecover,
+        Job::InboxConsume,
+        Job::ResponseSla,
+        Job::SnoozeWake,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -137,6 +145,10 @@ impl Job {
             Job::PurgeRawBodies => "purge_raw_bodies",
             Job::PurgeOAuthPending => "purge_oauth_pending",
             Job::PurgeProbeRuns => "purge_probe_runs",
+            Job::OutboxRecover => "outbox_recover",
+            Job::InboxConsume => "inbox_consume",
+            Job::ResponseSla => "response_sla",
+            Job::SnoozeWake => "snooze_wake",
         }
     }
 
@@ -155,6 +167,10 @@ impl Job {
             Job::PurgeRawBodies => run_purge_raw_bodies(deps, now).await,
             Job::PurgeOAuthPending => run_purge_oauth_pending(deps, now).await,
             Job::PurgeProbeRuns => run_purge_probe_runs(deps, now).await,
+            Job::OutboxRecover => run_outbox_recover(deps, now).await,
+            Job::InboxConsume => run_inbox_consume(deps, now).await,
+            Job::ResponseSla => run_response_sla(deps, now).await,
+            Job::SnoozeWake => run_snooze_wake(deps, now).await,
         }
     }
 }
@@ -1029,4 +1045,157 @@ fn public_time(value: &Value) -> Option<OffsetDateTime> {
     value
         .as_str()
         .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok())
+}
+
+/// Reconcile interrupted sends in every workspace; resume old queued intents only in active
+/// workspaces, with fresh fences in the shared send step. Each candidate is claimed under lock.
+pub async fn run_outbox_recover(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::inbox::replies;
+    let job = Job::OutboxRecover;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let candidates = async {
+            let mut r = deps.uow.tenant(ws).await?;
+            let sending = r
+                .outbox()
+                .list_pending("sending", now - Duration::minutes(2), 500)
+                .await?;
+            let queued = if r.workspace().get().await?.status == WorkspaceStatus::Active {
+                r.outbox()
+                    .list_pending("queued", now - Duration::minutes(5), 500)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            Ok::<_, AppError>((sending, queued))
+        }
+        .await;
+        let (sending, queued) = match candidates {
+            Ok(v) => v,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for row in sending {
+            report.touched += 1;
+            match replies::recover_sending(deps, &ctx, row.id).await {
+                Ok(true) => report.changed += 1,
+                Ok(false) => report.skipped += 1,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, None, &Failure::App(e));
+                }
+            }
+        }
+        for row in queued {
+            report.touched += 1;
+            match replies::send_step(deps, &ctx, row.id).await {
+                Ok(out) if out.state != "queued" => report.changed += 1,
+                Ok(_) => report.skipped += 1,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, None, &Failure::App(e));
+                }
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// Turn persisted inbound events into inbox facts for receiving workspaces, without a strategy gate.
+pub async fn run_inbox_consume(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, Job::InboxConsume, RECEIVING, &mut report).await {
+        let result = super::inbox::consumer::consume_workspace(deps, ws, now).await;
+        report.touched += result.touched;
+        report.changed += result.changed;
+        report.skipped += result.skipped;
+        report.failed += result.failed;
+    }
+    finish(Job::InboxConsume, report)
+}
+
+/// Hand overdue agent conversations to their journey owner or the unassigned queue.
+pub async fn run_response_sla(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    run_inbox_timer(deps, now, Job::ResponseSla).await
+}
+/// Wake elapsed snoozes; persisted state makes subsequent runs no-ops.
+pub async fn run_snooze_wake(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    run_inbox_timer(deps, now, Job::SnoozeWake).await
+}
+async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobReport {
+    use jt_inbox::{ConvState, Executor};
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let result = async {
+            let mut r = deps.uow.tenant(ws).await?;
+            r.people().lock_workspace().await?;
+            r.people().set_write_time(now).await?;
+            let policy = r.workspace_policy().get().await?.inbox;
+            let mut changed = 0;
+            for c in super::inbox::context::all_conversations(r.as_mut()).await? {
+                if job == Job::SnoozeWake {
+                    if !matches!(c.state,ConvState::Snoozed{until} if until<=now) {
+                        continue;
+                    }
+                    r.conversations()
+                        .update_state(c.id, ConvState::Ours, None)
+                        .await?;
+                } else {
+                    if c.state != ConvState::Ours || c.executor != Executor::Agent {
+                        continue;
+                    }
+                    let channel = match c.kind_key.as_str() {
+                        "sms_line" => "sms",
+                        "whatsapp_cloud" => "whatsapp",
+                        other => other,
+                    };
+                    let Some(seconds) = policy.max_response_s.get(channel) else {
+                        continue;
+                    };
+                    if now - c.last_inbound_at.unwrap_or(c.created_at)
+                        <= Duration::seconds(i64::from(*seconds))
+                    {
+                        continue;
+                    }
+                    let owner = r
+                        .journeys()
+                        .open_for(c.person_id)
+                        .await?
+                        .and_then(|j| j.owner);
+                    r.conversations()
+                        .update_executor(c.id, Executor::Human { user_id: owner })
+                        .await?;
+                }
+                super::inbox::record(
+                    r.as_mut(),
+                    &ctx,
+                    &format!("inbox.{}", job.name()),
+                    "conversation",
+                    c.id,
+                    json!({}),
+                )
+                .await?;
+                changed += 1;
+            }
+            r.commit().await?;
+            Ok::<_, AppError>(changed)
+        }
+        .await;
+        match result {
+            Ok(n) => {
+                report.changed += n;
+                report.touched += n;
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
 }

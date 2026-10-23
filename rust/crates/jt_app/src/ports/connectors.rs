@@ -207,6 +207,9 @@ impl OAuthApp {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SendReceipt {
     pub provider_id: String,
+    /// Cost in minor currency units when reported by the provider; unknown stays `None`.
+    #[serde(default)]
+    pub cost_minor: Option<i64>,
 }
 
 /// A post to publish: its text, the media to attach and an optional link.

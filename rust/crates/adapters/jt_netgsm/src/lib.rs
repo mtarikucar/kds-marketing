@@ -33,7 +33,8 @@
 //! | code `80` (rate limit); HTTP 429 without a code; a call over the [`RateBudgeter`]'s budget (refused before any call) | `Throttle`, `retry_after` from `Retry-After` or the budget |
 //! | code `30` (the credentials, or the server's IP address not on the account's allowlist); HTTP 401 without a code; Netsantral's "Kullanici dogrulanamadi" | `Auth`, its reason naming the credentials or IP allowlist |
 //! | code `40` (sender name not defined or not approved), `51` (brand not registered in İYS), `60` (no package or authority); HTTP 403 without a code | `Permission` |
-//! | code `100` (system error); HTTP 5xx without a code; no answer at all (connect failure, timeout), an answer broken off, a host resolving to no public address | `Transient` |
+//! | code `100` (system error); HTTP 5xx without a code; a read transport failure or broken response, a connect failure, a host resolving to no public address | `Transient` |
+//! | A non-idempotent write may have reached the provider, but its answer was lost or broke off | `Unknown` (never retry blindly) |
 //! | code `20` (message refused), `50` (İYS refused the recipient), `70` (bad parameters), `85` (duplicate limit), any other code; HTTP 200 with a body that cannot be read; any other HTTP status; an answer over 4 MiB; a host the `netgsm` tier does not hold | `Permanent` |
 //!
 //! **Retries.** Only idempotent reads are tried again (delivery reports, the inbox, the balance,
@@ -41,7 +42,7 @@
 //! [`RetryPolicy::attempts`] times in all, and only when no answer arrived (the connection
 //! failed, dropped or timed out). Actions are sent once, whatever happens: an SMS, a call
 //! (`originate`, `linkup`), a hangup, a consent record. An action that gets no answer after its
-//! request may have reached NetGSM fails `Transient` with a reason saying its outcome is unknown
+//! request may have reached NetGSM fails `Unknown` with a reason saying its outcome is unknown
 //! (a second send could bill a second SMS or ring a customer twice). Nothing is ever sent again
 //! once any answer arrived, readable or not.
 //!

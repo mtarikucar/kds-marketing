@@ -6,6 +6,7 @@ members = [
     "crates/domain/jt_strategy",
     "crates/domain/jt_capability",
     "crates/domain/jt_connector",
+    "crates/domain/jt_inbox",
     "crates/jt_app",
     "crates/adapters/jt_pg",
     "crates/adapters/jt_panel_http",
@@ -34,6 +35,7 @@ jt_ledger = { path = "crates/domain/jt_ledger" }
 jt_strategy = { path = "crates/domain/jt_strategy" }
 jt_capability = { path = "crates/domain/jt_capability" }
 jt_connector = { path = "crates/domain/jt_connector" }
+jt_inbox = { path = "crates/domain/jt_inbox" }
 jt_app = { path = "crates/jt_app" }
 jt_pg = { path = "crates/adapters/jt_pg" }
 jt_panel_http = { path = "crates/adapters/jt_panel_http" }

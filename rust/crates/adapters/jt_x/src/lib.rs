@@ -52,14 +52,15 @@
 //! | a token call's HTTP 401 `invalid_client` (the platform's X client id or secret refused: no reconnection can fix it) | `Permanent` ("platform client credentials rejected") |
 //! | HTTP 401; a token call's `invalid_grant` (a spent code, a verifier that does not match, a spent or revoked refresh token); a refresh's `invalid_request` (X's answer to a refresh token it no longer accepts) | `Auth`: the owner must reconnect |
 //! | HTTP 403 | `Permission` |
-//! | HTTP 5xx; no answer at all (connect failure, timeout), an answer broken off, a host resolving to no public address | `Transient` |
+//! | HTTP 5xx; a read transport failure or broken response, a connect failure, a host resolving to no public address | `Transient` |
+//! | A non-idempotent write may have reached the provider, but its answer was lost or broke off | `Unknown` (never retry blindly) |
 //! | any other status (another 4xx, a redirect, which is never followed); a 2xx answer that is not JSON, or that carries `errors` and no `data` (a deleted post); an answer lacking what the call needs; an answer over 4 MiB; a host the `x` tier does not hold | `Permanent` |
 //!
 //! **Retries.** Reads (`GET`) are tried once more ([`READ_ATTEMPTS`] in all) when no answer
 //! arrived (the connection failed, dropped or timed out), after [`DEFAULT_RETRY_DELAY`]. Posts,
 //! uploads and the token calls are sent once, whatever happens: a second post could publish
 //! twice, a second refresh would present a refresh token the first may have spent. One that gets
-//! no answer after its request may have reached X fails `Transient` with a reason saying its
+//! no answer after its request may have reached X fails `Unknown` with a reason saying its
 //! outcome is unknown. Nothing is ever sent again once any answer arrived.
 //!
 //! **Posts.** Checked before anything is sent, each failure `Permanent`: the kind

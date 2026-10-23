@@ -800,7 +800,8 @@ async fn set_checkin_interval_takes_a_quarter_hour_to_a_week() {
     assert_eq!(
         stored,
         WorkspacePolicy {
-            agent_checkin_interval_minutes: 90
+            agent_checkin_interval_minutes: 90,
+            ..WorkspacePolicy::default()
         }
     );
 
@@ -845,4 +846,142 @@ async fn capability_ids_in_items_are_the_capabilities() {
         })
         .collect();
     assert_eq!(ids, [phone]);
+}
+
+#[tokio::test]
+async fn work_pending_is_derived_and_preserves_status_gating() {
+    use jt_app::usecases::inbox::{conversations, people};
+    use jt_inbox::*;
+    use jt_tenancy::WorkspaceStatus;
+    let w = active_world().await;
+    let p=people::create(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})).unwrap()).await.unwrap();
+    let cap = w.declare("sms_line", "SMS").await;
+    let id = ConversationId::new_v7();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.conversations()
+        .upsert_on_inbound(Conversation {
+            id,
+            workspace_id: w.ws,
+            person_id: p.person.id,
+            capability_id: cap.capability.id,
+            kind_key: "sms_line".into(),
+            state: ConvState::Ours,
+            executor: Executor::Human { user_id: None },
+            executor_generation: 0,
+            last_inbound_at: Some(w.owner_ctx.now),
+            last_outbound_at: None,
+            created_at: w.owner_ctx.now,
+            updated_at: w.owner_ctx.now,
+        })
+        .await
+        .unwrap();
+    let j = r.journeys().open_for(p.person.id).await.unwrap().unwrap();
+    let task_id = TaskId::new_v7();
+    r.tasks()
+        .insert(Task {
+            id: task_id,
+            workspace_id: w.ws,
+            journey_id: j.id,
+            title: "Follow up".into(),
+            due_at: w.owner_ctx.now,
+            assignee: None,
+            status: TaskStatus::Open,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let before = w.uow.snapshot().ledger.len();
+    let first = work::pending(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(first, work::pending(&w.deps, &w.owner_ctx).await.unwrap());
+    assert_eq!(w.uow.snapshot().ledger.len(), before);
+    assert!(matches!(first.items[0].kind, WorkKind::ConsultStrategy));
+    assert!(first.items.iter().any(|i| i.kind
+        == WorkKind::ReplyDue {
+            conversation_id: id
+        }
+        && i.priority == 2));
+    assert!(
+        first
+            .items
+            .iter()
+            .any(|i| i.kind == WorkKind::TaskDue { task_id } && i.priority == 3)
+    );
+    let other=people::create(&w.deps,&w.owner_ctx,serde_json::from_value(json!({"display_name":"Other","identities":[{"channel":"email","value":"merge@example.test"}],"source":"form"})).unwrap()).await.unwrap();
+    let merge = people::add_identity(
+        &w.deps,
+        &w.owner_ctx,
+        p.person.id,
+        serde_json::from_value(json!({"channel":"email","value":"merge@example.test"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let merge_id: MergeId =
+        serde_json::from_value(merge["merge_suggestion"]["id"].clone()).unwrap();
+    assert_ne!(other.person.id, p.person.id);
+    assert!(
+        work::pending(&w.deps, &w.owner_ctx)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|i| i.kind == WorkKind::MergeSuggested { merge_id } && i.priority == 3)
+    );
+    jt_app::usecases::inbox::journeys::report(
+        &w.deps,
+        &w.owner_ctx,
+        j.id,
+        serde_json::from_value(
+            json!({"kind":"lost","idempotency_key":"lost-work","payload":{"reason_key":"fiyat"}}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.conversations()
+        .update_state(id, ConvState::Ours, None)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let lost = work::pending(&w.deps, &w.owner_ctx).await.unwrap();
+    assert!(lost.items.iter().any(|i| i.kind
+        == WorkKind::ReopenQuestion {
+            conversation_id: id
+        }
+        && i.priority == 2));
+    assert!(
+        !lost
+            .items
+            .iter()
+            .any(|i| matches!(i.kind, WorkKind::ReplyDue { .. }))
+    );
+    conversations::close(&w.deps, &w.owner_ctx, id)
+        .await
+        .unwrap();
+    assert!(
+        !work::pending(&w.deps, &w.owner_ctx)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|i| matches!(i.kind, WorkKind::ReplyDue { .. }))
+    );
+    let mut p = w.uow.platform().await.unwrap();
+    p.workspace_set_status(w.ws, WorkspaceStatus::PendingPayment)
+        .await
+        .unwrap();
+    p.commit().await.unwrap();
+    let held = work::pending(&w.deps, &w.owner_ctx).await.unwrap();
+    assert!(!held.items.iter().any(|i| matches!(
+        i.kind,
+        WorkKind::ReplyDue { .. }
+            | WorkKind::ReopenQuestion { .. }
+            | WorkKind::MergeSuggested { .. }
+            | WorkKind::TaskDue { .. }
+    )));
+    assert!(
+        held.items
+            .iter()
+            .any(|i| matches!(i.kind, WorkKind::ConsultStrategy))
+    );
 }

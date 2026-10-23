@@ -234,6 +234,9 @@ pub enum ConnectorCall {
 
 /// A provider adapter implementing [`Connector`] and every operation trait, answering from the
 /// queues its `push_*` methods fill (one queue per method) and recording every call.
+type SendHook =
+    Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
+
 pub struct ScriptedConnector {
     provider: Provider,
     hosts: &'static [&'static str],
@@ -247,6 +250,7 @@ pub struct ScriptedConnector {
     refresh: Script<Result<Option<Credential>, ConnectorError>>,
     on_connected: Script<Result<Value, ConnectorError>>,
     sms: Script<Result<SendReceipt, ConnectorError>>,
+    send_hooks: Script<SendHook>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
     account_metrics: Script<Result<AccountMetrics, ConnectorError>>,
@@ -277,6 +281,7 @@ impl ScriptedConnector {
             refresh: Script::default(),
             on_connected: Script::default(),
             sms: Script::default(),
+            send_hooks: Script::default(),
             publish: Script::default(),
             post_metrics: Script::default(),
             account_metrics: Script::default(),
@@ -330,6 +335,7 @@ impl ScriptedConnector {
         self.on_connected.push(result);
     }
 
+    /// Queue the exact outcome, including uncertain writes and an optional reported cost.
     pub fn push_sms(&self, result: Result<SendReceipt, ConnectorError>) {
         self.sms.push(result);
     }
@@ -346,6 +352,19 @@ impl ScriptedConnector {
         self.account_metrics.push(result);
     }
 
+    /// Run after recording a provider write, before its result. Supports races and crashes.
+    pub fn push_send_hook<F, Fut>(&self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.send_hooks.push(Box::new(move || Box::pin(hook())));
+    }
+    async fn after_send(&self) {
+        if let Some(hook) = self.send_hooks.try_next() {
+            hook().await;
+        }
+    }
     pub fn push_send_text(&self, result: Result<SendReceipt, ConnectorError>) {
         self.send_text.push(result);
     }
@@ -454,6 +473,7 @@ impl SmsSender for ScriptedConnector {
             text: text.to_owned(),
             reference: reference.map(str::to_owned),
         });
+        self.after_send().await;
         self.next(&self.sms, "sms result")
     }
 }
@@ -519,6 +539,7 @@ impl MessagingSender for ScriptedConnector {
             recipient_id: recipient_id.to_owned(),
             text: text.to_owned(),
         });
+        self.after_send().await;
         self.next(&self.send_text, "send_text result")
     }
 }

@@ -265,6 +265,42 @@ impl UnitOfWork for FailingInserts {
 
 #[async_trait]
 impl TenantRepos for FailingTenant {
+    fn people(&mut self) -> &mut dyn jt_app::ports::inbox::PersonRepo {
+        self.0.people()
+    }
+    fn identities(&mut self) -> &mut dyn jt_app::ports::inbox::IdentityRepo {
+        self.0.identities()
+    }
+    fn conversations(&mut self) -> &mut dyn jt_app::ports::inbox::ConversationRepo {
+        self.0.conversations()
+    }
+    fn messages(&mut self) -> &mut dyn jt_app::ports::inbox::MessageRepo {
+        self.0.messages()
+    }
+    fn journeys(&mut self) -> &mut dyn jt_app::ports::inbox::JourneyRepo {
+        self.0.journeys()
+    }
+    fn tasks(&mut self) -> &mut dyn jt_app::ports::inbox::TaskRepo {
+        self.0.tasks()
+    }
+    fn notes(&mut self) -> &mut dyn jt_app::ports::inbox::NoteRepo {
+        self.0.notes()
+    }
+    fn merges(&mut self) -> &mut dyn jt_app::ports::inbox::MergeRepo {
+        self.0.merges()
+    }
+    fn lost_reasons(&mut self) -> &mut dyn jt_app::ports::inbox::LostReasonRepo {
+        self.0.lost_reasons()
+    }
+    fn consumption(&mut self) -> &mut dyn jt_app::ports::inbox::ConsumptionRepo {
+        self.0.consumption()
+    }
+    fn request_keys(&mut self) -> &mut dyn jt_app::ports::inbox::RequestKeyRepo {
+        self.0.request_keys()
+    }
+    fn outbox(&mut self) -> &mut dyn jt_app::ports::inbox::OutboxRepo {
+        self.0.outbox()
+    }
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self.0.roles()
     }
@@ -324,6 +360,25 @@ impl TenantRepos for FailingTenant {
 
 #[async_trait]
 impl InboundEventRepo for FailingTenant {
+    async fn call_events(
+        &mut self,
+        unique_id: &str,
+        until: OffsetDateTime,
+    ) -> Result<Vec<InboundEvent>, AppError> {
+        self.0.inbound_events().call_events(unique_id, until).await
+    }
+
+    async fn list_for_consumer(
+        &mut self,
+        consumer: &str,
+        cursor: Option<(OffsetDateTime, InboundEventId)>,
+        limit: u32,
+    ) -> Result<Vec<InboundEvent>, AppError> {
+        self.0
+            .inbound_events()
+            .list_for_consumer(consumer, cursor, limit)
+            .await
+    }
     async fn insert_if_new(
         &mut self,
         _event: InboundEvent,

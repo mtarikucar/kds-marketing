@@ -112,6 +112,36 @@ fn catalog_is_the_release_table() {
         .map(|uc| (uc.id, uc.mcp_tool, uc.panel_route, uc.panel_only, uc.risk))
         .collect();
     let expected = [
+        ("inbox.pending", Some("jeeta.inbox.pending"), Some(("GET", "/api/inbox/pending")), false, Risk::Read),
+        ("inbox.context", Some("jeeta.inbox.context"), Some(("GET", "/api/inbox/conversations/{conversation_id}/context")), false, Risk::Read),
+        ("inbox.conversations.list", Some("jeeta.inbox.conversations_list"), Some(("GET", "/api/inbox/conversations")), false, Risk::Read),
+        ("inbox.conversations.get", Some("jeeta.inbox.conversations_get"), Some(("GET", "/api/inbox/conversations/{conversation_id}")), false, Risk::Read),
+        ("inbox.messages.list", Some("jeeta.inbox.messages_list"), Some(("GET", "/api/inbox/conversations/{conversation_id}/messages")), false, Risk::Read),
+        ("inbox.take_over", Some("jeeta.inbox.take_over"), Some(("POST", "/api/inbox/conversations/{conversation_id}/take-over")), false, Risk::Write),
+        ("inbox.hand_to_agent", Some("jeeta.inbox.hand_to_agent"), Some(("POST", "/api/inbox/conversations/{conversation_id}/hand-to-agent")), false, Risk::Write),
+        ("inbox.snooze", Some("jeeta.inbox.snooze"), Some(("POST", "/api/inbox/conversations/{conversation_id}/snooze")), false, Risk::Write),
+        ("inbox.unsnooze", Some("jeeta.inbox.unsnooze"), Some(("POST", "/api/inbox/conversations/{conversation_id}/unsnooze")), false, Risk::Write),
+        ("inbox.close", Some("jeeta.inbox.close"), Some(("POST", "/api/inbox/conversations/{conversation_id}/close")), false, Risk::Write),
+        ("inbox.reply", Some("jeeta.inbox.reply"), Some(("POST", "/api/inbox/conversations/{conversation_id}/reply")), false, Risk::Write),
+        ("inbox.people.search", Some("jeeta.inbox.people_search"), Some(("GET", "/api/inbox/people")), false, Risk::Read),
+        ("inbox.people.get", Some("jeeta.inbox.people_get"), Some(("GET", "/api/inbox/people/{person_id}")), false, Risk::Read),
+        ("inbox.people.create", Some("jeeta.inbox.people_create"), Some(("POST", "/api/inbox/people")), false, Risk::Write),
+        ("inbox.identities.add", Some("jeeta.inbox.identities_add"), Some(("POST", "/api/inbox/people/{person_id}/identities")), false, Risk::Write),
+        ("inbox.journeys.open", Some("jeeta.inbox.journeys_open"), Some(("POST", "/api/inbox/people/{person_id}/journeys")), false, Risk::Write),
+        ("inbox.events.report", Some("jeeta.inbox.events_report"), Some(("POST", "/api/inbox/journeys/{journey_id}/events")), false, Risk::Write),
+        ("inbox.lost_reasons.list", Some("jeeta.inbox.lost_reasons_list"), Some(("GET", "/api/inbox/lost-reasons")), false, Risk::Read),
+        ("inbox.lost_reasons.set", Some("jeeta.inbox.lost_reasons_set"), Some(("PUT", "/api/inbox/lost-reasons")), false, Risk::Write),
+        ("inbox.journeys.get", Some("jeeta.inbox.journeys_get"), Some(("GET", "/api/inbox/journeys/{journey_id}")), false, Risk::Read),
+        ("inbox.journeys.assign_owner", Some("jeeta.inbox.journeys_assign_owner"), Some(("POST", "/api/inbox/journeys/{journey_id}/owner")), false, Risk::Write),
+        ("inbox.status_labels.set", Some("jeeta.inbox.status_labels_set"), Some(("PUT", "/api/inbox/status-labels")), false, Risk::Write),
+        ("inbox.merges.list", Some("jeeta.inbox.merges_list"), Some(("GET", "/api/inbox/merges")), false, Risk::Read),
+        ("inbox.merges.apply", Some("jeeta.inbox.merges_apply"), Some(("POST", "/api/inbox/merges/{merge_id}/apply")), false, Risk::Write),
+        ("inbox.merges.undo", Some("jeeta.inbox.merges_undo"), Some(("POST", "/api/inbox/merges/{merge_id}/undo")), false, Risk::Destructive),
+        ("inbox.merges.refuse", Some("jeeta.inbox.merges_refuse"), Some(("POST", "/api/inbox/merges/{merge_id}/refuse")), false, Risk::Write),
+        ("inbox.tasks.create", Some("jeeta.inbox.tasks_create"), Some(("POST", "/api/inbox/journeys/{journey_id}/tasks")), false, Risk::Write),
+        ("inbox.tasks.complete", Some("jeeta.inbox.tasks_complete"), Some(("POST", "/api/inbox/tasks/{task_id}/complete")), false, Risk::Write),
+        ("inbox.tasks.list", Some("jeeta.inbox.tasks_list"), Some(("GET", "/api/inbox/tasks")), false, Risk::Read),
+        ("inbox.notes.add", Some("jeeta.inbox.notes_add"), Some(("POST", "/api/inbox/journeys/{journey_id}/notes")), false, Risk::Write),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
@@ -184,8 +214,10 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 70);
-    assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "no use case is gated yet");
+    assert_eq!(CATALOG.len(), 100);
+    for uc in CATALOG {
+        assert_eq!(uc.gate, if uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+    }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG
             .iter()

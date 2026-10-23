@@ -122,6 +122,18 @@ pub struct WorkItem {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkKind {
+    /// A visible conversation needs a reply.
+    ReplyDue {
+        conversation_id: jt_inbox::ConversationId,
+    },
+    /// A lost journey needs a human reopening decision.
+    ReopenQuestion {
+        conversation_id: jt_inbox::ConversationId,
+    },
+    /// A visible contact has a merge suggestion.
+    MergeSuggested { merge_id: jt_inbox::MergeId },
+    /// An open task has reached its due time.
+    TaskDue { task_id: jt_inbox::TaskId },
     /// Start the consultation, or continue the open draft's.
     ConsultStrategy,
     /// Approve the submitted draft.
@@ -154,6 +166,10 @@ impl WorkKind {
     /// connection): an item is listed only while the workspace's status lets it run.
     pub fn cleared_by(&self) -> &'static str {
         match self {
+            WorkKind::ReplyDue { .. } => "inbox.reply",
+            WorkKind::ReopenQuestion { .. } => "inbox.events.report",
+            WorkKind::MergeSuggested { .. } => "inbox.merges.apply",
+            WorkKind::TaskDue { .. } => "inbox.tasks.complete",
             WorkKind::ConsultStrategy => "strategy.start_consultation",
             WorkKind::ApproveStrategy => "strategy.approve",
             WorkKind::VerifyCapability { .. } => "capability.verify",
@@ -219,10 +235,43 @@ async fn pending_as_seen(
     } else {
         0
     };
+    let inbox = if ctx.permissions.contains(&Permission::InboxWork)
+        && status_exemption("inbox.pending").allows(status)
+    {
+        Some(super::inbox::context::pending_in(repos.as_mut(), ctx).await?)
+    } else {
+        None
+    };
     drop(repos);
 
     let state = strategy_state(&strategy);
     let mut items = strategy_items(&state, may_approve(ctx));
+    if let Some(p) = inbox {
+        items.extend(p.ours.into_iter().map(|c| WorkItem {
+            kind: WorkKind::ReplyDue {
+                conversation_id: c.id,
+            },
+            priority: 2,
+            hint: "Read jeeta.inbox.context and respond to the conversation.".into(),
+        }));
+        items.extend(p.reopen_questions.into_iter().map(|c| WorkItem {
+            kind: WorkKind::ReopenQuestion {
+                conversation_id: c.id,
+            },
+            priority: 2,
+            hint: "Ask an owner or manager whether to reopen the lost journey.".into(),
+        }));
+        items.extend(p.merges.into_iter().map(|m| WorkItem {
+            kind: WorkKind::MergeSuggested { merge_id: m.id },
+            priority: 3,
+            hint: "Ask an inbox manager to review the suggested merge.".into(),
+        }));
+        items.extend(p.tasks_due.into_iter().map(|t| WorkItem {
+            kind: WorkKind::TaskDue { task_id: t.id },
+            priority: 3,
+            hint: "Complete the due journey task.".into(),
+        }));
+    }
     items.extend(capability_items(&capabilities));
     items.extend(inbound_items(inbound));
     items.retain(|item| actionable(&item.kind));

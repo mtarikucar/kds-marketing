@@ -116,6 +116,42 @@ struct SpyTenant {
 
 #[async_trait]
 impl TenantRepos for SpyTenant {
+    fn people(&mut self) -> &mut dyn jt_app::ports::inbox::PersonRepo {
+        self.inner.people()
+    }
+    fn identities(&mut self) -> &mut dyn jt_app::ports::inbox::IdentityRepo {
+        self.inner.identities()
+    }
+    fn conversations(&mut self) -> &mut dyn jt_app::ports::inbox::ConversationRepo {
+        self.inner.conversations()
+    }
+    fn messages(&mut self) -> &mut dyn jt_app::ports::inbox::MessageRepo {
+        self.inner.messages()
+    }
+    fn journeys(&mut self) -> &mut dyn jt_app::ports::inbox::JourneyRepo {
+        self.inner.journeys()
+    }
+    fn tasks(&mut self) -> &mut dyn jt_app::ports::inbox::TaskRepo {
+        self.inner.tasks()
+    }
+    fn notes(&mut self) -> &mut dyn jt_app::ports::inbox::NoteRepo {
+        self.inner.notes()
+    }
+    fn merges(&mut self) -> &mut dyn jt_app::ports::inbox::MergeRepo {
+        self.inner.merges()
+    }
+    fn lost_reasons(&mut self) -> &mut dyn jt_app::ports::inbox::LostReasonRepo {
+        self.inner.lost_reasons()
+    }
+    fn consumption(&mut self) -> &mut dyn jt_app::ports::inbox::ConsumptionRepo {
+        self.inner.consumption()
+    }
+    fn request_keys(&mut self) -> &mut dyn jt_app::ports::inbox::RequestKeyRepo {
+        self.inner.request_keys()
+    }
+    fn outbox(&mut self) -> &mut dyn jt_app::ports::inbox::OutboxRepo {
+        self.inner.outbox()
+    }
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self.inner.roles()
     }

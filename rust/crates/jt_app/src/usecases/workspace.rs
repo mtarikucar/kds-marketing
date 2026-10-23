@@ -58,3 +58,11 @@ pub async fn info(deps: &Deps, ctx: &Ctx) -> Result<WorkspaceOut, AppError> {
 fn not_a_member() -> AppError {
     AppError::forbidden("not an active member of this workspace")
 }
+
+/// Registration defaults are written in the same transaction as the workspace and owner.
+pub(crate) async fn initialize_lost_reasons(
+    repos: &mut dyn crate::ports::UserRepos,
+    ws: WorkspaceId,
+) -> Result<(), AppError> {
+    repos.lost_reasons_initialize(ws).await
+}

@@ -20,8 +20,10 @@
 //! [`connectors`].
 
 pub mod connectors;
+pub mod inbox;
+use inbox::*;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use jt_capability::{
@@ -1005,18 +1007,47 @@ pub const MIN_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 15;
 /// The longest check-in interval a workspace may set, in minutes: a week.
 pub const MAX_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 10_080;
 
+/// Inbox response deadlines, reachability and fixed-stage display labels.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct InboxPolicy {
+    pub max_response_s: BTreeMap<String, u32>,
+    pub unreachable_threshold: u8,
+    pub status_labels: BTreeMap<String, String>,
+}
+impl Default for InboxPolicy {
+    fn default() -> Self {
+        Self {
+            max_response_s: [
+                ("whatsapp", 900),
+                ("instagram_dm", 900),
+                ("messenger", 900),
+                ("sms", 3600),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.into(), v))
+            .collect(),
+            unreachable_threshold: 3,
+            status_labels: BTreeMap::new(),
+        }
+    }
+}
+
 /// The workspace-wide policies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkspacePolicy {
     /// How often an agent is expected to check in, in minutes:
     /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES`.
     pub agent_checkin_interval_minutes: u32,
+    /// Workspace display labels for the nine fixed inbox stages; absent overrides use defaults.
+    pub inbox: InboxPolicy,
 }
 
 impl Default for WorkspacePolicy {
     fn default() -> Self {
         WorkspacePolicy {
             agent_checkin_interval_minutes: DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES,
+            inbox: InboxPolicy::default(),
         }
     }
 }
@@ -1025,6 +1056,7 @@ impl Default for WorkspacePolicy {
 #[async_trait]
 pub trait WorkspacePolicyRepo: Send + Sync {
     /// The stored policies, or [`WorkspacePolicy::default`] while none are stored.
+    /// Serialize policy read/modify/write transactions, including when the row is absent.
     async fn get(&mut self) -> Result<WorkspacePolicy, AppError>;
     /// Stores the policies, updated at `at`, replacing any stored before. An interval outside
     /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES` breaks a check
@@ -1079,6 +1111,23 @@ pub enum EventOrder {
 /// write.
 #[async_trait]
 pub trait InboundEventRepo: Send + Sync {
+    /// Netgsm call events for exactly this unique_id, through the inclusive receipt time.
+    /// Includes processed rows and same-time siblings, ordered by (received_at, id), uncapped.
+    async fn call_events(
+        &mut self,
+        unique_id: &str,
+        until: OffsetDateTime,
+    ) -> Result<Vec<InboundEvent>, AppError>;
+
+    /// Consumer-specific traversal, oldest (received_at,id) first; filters claims BEFORE limit,
+    /// ignoring processed_at. Restart without a cursor each sweep so rolled-back events retry.
+    async fn list_for_consumer(
+        &mut self,
+        consumer: &str,
+        cursor: Option<(OffsetDateTime, InboundEventId)>,
+        limit: u32,
+    ) -> Result<Vec<InboundEvent>, AppError>;
+
     /// Stores `event` with its raw body and returns its id, unless the workspace already holds
     /// an event with the same provider and provider id: then nothing is written and the answer is
     /// `None` (a replayed delivery, Review Focus 2), and the bundle stays usable. Of two bundles
@@ -1367,6 +1416,19 @@ pub trait PlatformSessionRepo: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait TenantRepos: Send + Sync {
+    fn people(&mut self) -> &mut dyn PersonRepo;
+    fn identities(&mut self) -> &mut dyn IdentityRepo;
+    fn conversations(&mut self) -> &mut dyn ConversationRepo;
+    fn messages(&mut self) -> &mut dyn MessageRepo;
+    fn journeys(&mut self) -> &mut dyn JourneyRepo;
+    fn tasks(&mut self) -> &mut dyn TaskRepo;
+    fn notes(&mut self) -> &mut dyn NoteRepo;
+    fn merges(&mut self) -> &mut dyn MergeRepo;
+    fn lost_reasons(&mut self) -> &mut dyn LostReasonRepo;
+    fn consumption(&mut self) -> &mut dyn ConsumptionRepo;
+    fn request_keys(&mut self) -> &mut dyn RequestKeyRepo;
+    fn outbox(&mut self) -> &mut dyn OutboxRepo;
+
     fn roles(&mut self) -> &mut dyn RoleRepo;
     fn memberships(&mut self) -> &mut dyn MembershipRepo;
     fn api_keys(&mut self) -> &mut dyn ApiKeyRepo;
@@ -1393,6 +1455,8 @@ pub trait TenantRepos: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait UserRepos: Send + Sync {
+    /// Initialize defaults in the registration transaction, never on first use.
+    async fn lost_reasons_initialize(&mut self, ws: WorkspaceId) -> Result<(), AppError>;
     fn users(&mut self) -> &mut dyn UserRepo;
     fn sessions(&mut self) -> &mut dyn SessionRepo;
     /// The user's active memberships across workspaces, oldest first.

@@ -23,6 +23,10 @@ const DOMAIN_ALLOW: &[&str] = &[
 // port.
 const CONNECTOR_EXTRA_ALLOW: &[&str] = &["jt_capability", "hmac", "sha2", "base64", "subtle"];
 
+// Inbox records refer to capabilities and may speak connector domain types. Only this crate
+// gets these additions; the shared domain and application allowlists remain unchanged.
+const INBOX_EXTRA_ALLOW: &[&str] = &["jt_capability", "jt_connector"];
+
 /// Every domain crate, with what it may depend on beyond [`DOMAIN_ALLOW`].
 const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     ("jt_tenancy", &[]),
@@ -30,6 +34,7 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     ("jt_strategy", &[]),
     ("jt_capability", &[]),
     ("jt_connector", CONNECTOR_EXTRA_ALLOW),
+    ("jt_inbox", INBOX_EXTRA_ALLOW),
 ];
 
 #[test]
@@ -44,21 +49,22 @@ fn domain_crates_depend_only_on_pure_crates() {
     }
 }
 
-/// Read from each domain crate's manifest: among the domain crates, exactly `jt_connector` lists
-/// `jt_capability` and each of the crypto crates (so the rule is not vacuous either).
+/// Read from each domain crate's manifest: the connector and inbox use capability types,
+/// while only the connector uses its crypto crates (so the rule is not vacuous either).
 #[test]
-fn only_the_connector_domain_uses_its_extra_crates() {
+fn only_connector_and_inbox_use_capability_and_only_connector_uses_crypto() {
     for krate in CONNECTOR_EXTRA_ALLOW {
         let users: BTreeSet<&str> = DOMAIN_CRATES
             .iter()
             .map(|(c, _)| *c)
             .filter(|c| direct_deps(c).contains(*krate))
             .collect();
-        assert_eq!(
-            users,
-            BTreeSet::from(["jt_connector"]),
-            "the domain crates depending on {krate}"
-        );
+        let expected = if *krate == "jt_capability" {
+            BTreeSet::from(["jt_connector", "jt_inbox"])
+        } else {
+            BTreeSet::from(["jt_connector"])
+        };
+        assert_eq!(users, expected, "the domain crates depending on {krate}");
     }
 }
 
@@ -74,6 +80,7 @@ const APP_ALLOW: &[&str] = &[
     "jt_strategy",
     "jt_capability",
     "jt_connector",
+    "jt_inbox",
     "serde",
     "serde_json",
     "uuid",
@@ -108,6 +115,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_strategy",
         "jt_capability",
         "jt_connector",
+        "jt_inbox",
         "jt_app",
         "jt_panel_http",
         "jt_mcp",

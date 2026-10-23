@@ -1733,6 +1733,7 @@ async fn messenger_send_body() {
             .await
             .unwrap();
         assert_eq!(receipt.provider_id, "m_TEST-SENT-1");
+        assert_eq!(receipt.cost_minor, None);
     }
     let sent = m.requests("POST", "/fb/v19.0/me/messages");
     assert_eq!(sent.len(), 2);
@@ -1790,6 +1791,7 @@ async fn whatsapp_send_body() {
         .await
         .unwrap();
     assert_eq!(receipt.provider_id, "wamid.TEST-SENT-9");
+    assert_eq!(receipt.cost_minor, None);
     let sent = m.request("POST", "/fb/v19.0/5555555555/messages");
     assert_eq!(
         sent.json(),
@@ -2196,39 +2198,6 @@ const ECHO_SECRET: &str = "app/secret+echo=value";
 /// An authorization code with characters that URL and form encoding change.
 const ECHO_CODE: &str = "AQD.code/echo+value==";
 
-/// `text` percent-encoded the way `application/x-www-form-urlencoded` encodes it.
-fn form_encoded(text: &str) -> String {
-    url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
-}
-
-/// `text` percent-encoded with lowercase hex digits, every byte but letters and digits.
-fn lower_encoded(text: &str) -> String {
-    text.bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02x}")
-            }
-        })
-        .collect()
-}
-
-/// Asserts that `what` shows none of `secrets`, as is or encoded, nor their first eight
-/// characters (a secret cut where the reason is cut).
-fn assert_no_echo(what: &str, shown: &str, secrets: &[&str]) {
-    for secret in secrets {
-        for form in [
-            (*secret).to_owned(),
-            form_encoded(secret),
-            lower_encoded(secret),
-            secret[..8].to_owned(),
-        ] {
-            assert!(!shown.contains(&form), "{what} shows {form:?}: {shown}");
-        }
-    }
-}
-
 /// Graph's answer quoting `message`.
 fn quoting(message: String) -> Reply {
     status(
@@ -2383,56 +2352,63 @@ async fn a_refused_code_exchange_never_echoes_the_code_or_the_client_secret() {
     assert_no_echo("the Instagram exchange", &shown, &[ECHO_CODE, ECHO_SECRET]);
 }
 
-/// A part of the asset listing left out is logged with its reason: never with a secret the
-/// provider echoed.
 #[tokio::test]
-async fn a_skipped_listing_part_logs_no_echoed_secret() {
-    use std::io::Write;
-    use std::sync::Mutex;
-
-    #[derive(Clone, Default)]
-    struct Buffer(Arc<Mutex<Vec<u8>>>);
-    impl Write for Buffer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
+async fn post_write_transport_failure_is_unknown() {
+    for after_headers in [false, true] {
+        let addr = broken_response(after_headers).await;
+        let base = Url::parse(&format!("http://{addr}/")).unwrap();
+        let meta = MetaConnector::new(
+            Arc::new(
+                jt_outbound::Egress::new(FIXED_HOSTS).with_test_hosts([("meta", addr.to_string())]),
+            ),
+            MetaBases {
+                graph: base.clone(),
+                instagram_graph: base.clone(),
+                instagram_api: base,
+                ..MetaBases::production()
+            },
+            Arc::new(TestApps::default()),
+        );
+        for media in [vec![], vec!["https://images.test/photo.jpg"]] {
+            let e = meta
+                .publish(
+                    &page_cred(),
+                    &public("facebook_page", Some(PAGE)),
+                    &post("hello", &media, None),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind(), "unknown", "{e}");
+            assert!(!e.is_retriable());
         }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+        for kind in ["messenger", "instagram_dm"] {
+            let e = meta
+                .send_text(
+                    &page_cred(),
+                    &public(kind, Some(PAGE)),
+                    "2000000000000001",
+                    "hello",
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind(), "unknown", "{e}");
+            assert!(!e.is_retriable());
         }
+        let e = meta
+            .send_text(
+                &wa_cred(None),
+                &public("whatsapp_cloud", Some(PHONE)),
+                "905000000001",
+                "hello",
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind(), "unknown", "{e}");
+        let e = meta
+            .probe(&page_cred(), &public("facebook_page", Some(PAGE)))
+            .await
+            .error
+            .unwrap();
+        assert_eq!(e.kind(), "transient", "{e}");
     }
-
-    let r = rig().await;
-    let m = &r.mock;
-    m.on("GET", "/fb/v19.0/me/accounts", ok(json!({ "data": [] })));
-    let refusal = |token: &str| {
-        status(
-            403,
-            json!({ "error": {
-                "message": format!("token {token} lacks ads_read; app {META_APP_SECRET}"),
-                "type": "OAuthException", "code": 200,
-            }}),
-        )
-    };
-    m.on("GET", "/fb/v19.0/me/adaccounts", refusal(USER_TOKEN));
-    m.on("GET", "/fb/v19.0/me/businesses", refusal(USER_TOKEN));
-
-    let buffer = Buffer::default();
-    let writer = buffer.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
-    let listed = {
-        let _guard = tracing::subscriber::set_default(subscriber);
-        r.meta.list_assets(&user_cred()).await
-    };
-    assert!(listed.unwrap().is_empty());
-    let logged = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
-    assert!(
-        logged.contains("a part of the Meta asset listing was left out"),
-        "{logged}"
-    );
-    assert_no_echo("the log", &logged, &[USER_TOKEN, META_APP_SECRET]);
 }

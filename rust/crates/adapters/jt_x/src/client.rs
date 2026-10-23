@@ -247,7 +247,7 @@ impl XConnector {
             };
             request = body.apply(request)?;
             match request.send(SCOPE).await {
-                Ok(response) => return read(response, endpoint, &secrets).await,
+                Ok(response) => return read(response, endpoint, &secrets, read_only).await,
                 Err(EgressError::Transport(err)) if attempt < attempts => {
                     tracing::warn!(
                         attempt,
@@ -278,7 +278,7 @@ fn egress_error(e: EgressError, read_only: bool) -> ConnectorError {
             } else {
                 "got no answer"
             };
-            ConnectorError::transient(format!(
+            ConnectorError::unknown(format!(
                 "the call to X {what} after the request may have reached it: the outcome is \
                  unknown, so it was not sent again"
             ))
@@ -303,6 +303,7 @@ async fn read(
     mut response: Response,
     endpoint: Endpoint,
     secrets: &[&str],
+    read_only: bool,
 ) -> Result<Value, ConnectorError> {
     let status = response.status();
     let wait = retry_after(response.headers(), OffsetDateTime::now_utc());
@@ -318,7 +319,12 @@ async fn read(
             Ok(None) => break,
             // An answer arrived (it may have been acted on): never sent again.
             Err(_) => {
-                return Err(ConnectorError::transient(
+                let error = if !read_only {
+                    ConnectorError::unknown
+                } else {
+                    ConnectorError::transient
+                };
+                return Err(error(
                     "X's answer broke off in transit: whether the request took effect is unknown",
                 ));
             }

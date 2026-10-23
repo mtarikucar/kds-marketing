@@ -1502,7 +1502,7 @@ const STALL: StdDuration = StdDuration::from_millis(3_000);
 const SHORT_TIMEOUT: StdDuration = StdDuration::from_millis(1_000);
 
 #[tokio::test]
-async fn posts_never_retry() {
+async fn post_write_transport_failure_is_unknown() {
     // A socket that closes every connection: no answer ever arrives.
     let dropper = Dropper::start().await;
     let x = connector_at(dropper.addr, TestApps::default(), StdDuration::from_secs(5));
@@ -1514,7 +1514,8 @@ async fn posts_never_retry() {
         .await
         .unwrap_err();
     assert_eq!(count(before), 1, "a post is sent once");
-    assert_eq!(e.kind(), "transient", "{e}");
+    assert_eq!(e.kind(), "unknown", "{e}");
+    assert!(!e.is_retriable());
     assert!(e.reason().unwrap().contains("outcome is unknown"), "{e}");
 
     let before = dropper.accepted();
@@ -1581,7 +1582,8 @@ async fn posts_never_retry() {
         r.x.publish(&cred(), &public(), &post("Merhaba", vec![]))
             .await
             .unwrap_err();
-    assert_eq!(e.kind(), "transient", "{e}");
+    assert_eq!(e.kind(), "unknown", "{e}");
+    assert!(!e.is_retriable());
     assert!(e.reason().unwrap().contains("outcome is unknown"), "{e}");
     assert_eq!(r.mock.requests("POST", TWEETS).len(), 1);
     r.mock.clear();
@@ -1621,4 +1623,22 @@ async fn adapter_values_print_no_secret() {
     let printed = format!("{:?} {:?} {request:?}", r.x, r.x.bases());
     assert_no_secret(&printed);
     assert!(printed.contains("<64 bytes>"), "{printed}");
+}
+
+#[tokio::test]
+async fn broken_response_body_preserves_write_uncertainty() {
+    let addr = broken_response(true).await;
+    let x = connector_at(addr, TestApps::default(), StdDuration::from_secs(5));
+    for media in [vec![], vec![png(8)]] {
+        let e = x
+            .publish(&cred(), &public(), &post("hello", media))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind(), "unknown", "{e}");
+        assert!(!e.is_retriable());
+    }
+    assert_eq!(
+        x.probe(&cred(), &public()).await.error.unwrap().kind(),
+        "transient"
+    );
 }

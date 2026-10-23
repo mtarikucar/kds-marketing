@@ -69,7 +69,10 @@ pub(crate) async fn send_text(
                 .and_then(|m| m.first())
                 .and_then(|m| text(&m["id"]))
                 .ok_or_else(|| missing("message id"))?;
-            Ok(SendReceipt { provider_id: id })
+            Ok(SendReceipt {
+                provider_id: id,
+                cost_minor: None,
+            })
         }
         (
             "messenger" | "instagram_dm" | "facebook_page",
@@ -94,7 +97,10 @@ pub(crate) async fn send_text(
                 )
                 .await?;
             let id = text(&answer["message_id"]).ok_or_else(|| missing("message id"))?;
-            Ok(SendReceipt { provider_id: id })
+            Ok(SendReceipt {
+                provider_id: id,
+                cost_minor: None,
+            })
         }
         _ => Err(ConnectorError::permanent(
             "this capability does not send direct messages",

@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::inbox::*;
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, ApiKeyRow, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
     ConsultationRepo, HypothesisRepo, InboundEventRepo, LedgerRepo, MembershipRepo, MembershipRow,
@@ -93,6 +94,43 @@ impl PgTenantRepos {
 
 #[async_trait]
 impl TenantRepos for PgTenantRepos {
+    fn people(&mut self) -> &mut dyn PersonRepo {
+        self
+    }
+    fn identities(&mut self) -> &mut dyn IdentityRepo {
+        self
+    }
+    fn conversations(&mut self) -> &mut dyn ConversationRepo {
+        self
+    }
+    fn messages(&mut self) -> &mut dyn MessageRepo {
+        self
+    }
+    fn journeys(&mut self) -> &mut dyn JourneyRepo {
+        self
+    }
+    fn tasks(&mut self) -> &mut dyn TaskRepo {
+        self
+    }
+    fn notes(&mut self) -> &mut dyn NoteRepo {
+        self
+    }
+    fn merges(&mut self) -> &mut dyn MergeRepo {
+        self
+    }
+    fn lost_reasons(&mut self) -> &mut dyn LostReasonRepo {
+        self
+    }
+    fn consumption(&mut self) -> &mut dyn ConsumptionRepo {
+        self
+    }
+    fn request_keys(&mut self) -> &mut dyn RequestKeyRepo {
+        self
+    }
+    fn outbox(&mut self) -> &mut dyn OutboxRepo {
+        self
+    }
+
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self
     }
@@ -180,6 +218,9 @@ pub struct PgUserRepos {
 
 #[async_trait]
 impl UserRepos for PgUserRepos {
+    async fn lost_reasons_initialize(&mut self, ws: WorkspaceId) -> Result<(), AppError> {
+        crate::repos::inbox::lost_reasons::initialize(self.tx.conn(), ws).await
+    }
     fn users(&mut self) -> &mut dyn UserRepo {
         self
     }
