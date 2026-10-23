@@ -1160,7 +1160,9 @@ async fn scripted_oauth_builds_urls_and_answers_exchanges_in_order() {
         client_secret: "secret".into(),
     });
     let redirect = Url::parse("https://panel.test/api/connectors/oauth/callback/x").unwrap();
-    let url = provider.authorize_url(&app, &redirect, "state-1", Some("challenge-1"));
+    let url = provider
+        .authorize_url(&app, &redirect, "state-1", Some("challenge-1"))
+        .unwrap();
     assert_eq!(url.host_str(), Some("oauth.test"));
     let query: Vec<(String, String)> = url.query_pairs().into_owned().collect();
     assert!(query.contains(&("client_id".into(), "cid".into())));
@@ -1199,7 +1201,7 @@ async fn scripted_oauth_builds_urls_and_answers_exchanges_in_order() {
             },
             OAuthCall::Exchange {
                 client_id: "cid".into(),
-                redirect,
+                redirect: redirect.clone(),
                 code: "code-2".into(),
                 pkce_verifier: None,
             },
@@ -1208,6 +1210,18 @@ async fn scripted_oauth_builds_urls_and_answers_exchanges_in_order() {
             },
         ]
     );
+    // A queued refusal answers the next authorize URL, once (the call is still recorded).
+    oauth.refuse_authorize(ConnectorError::permanent("pkce required"));
+    assert_eq!(
+        provider.authorize_url(&app, &redirect, "state-2", None),
+        Err(ConnectorError::permanent("pkce required"))
+    );
+    assert!(
+        provider
+            .authorize_url(&app, &redirect, "state-3", Some("challenge-3"))
+            .is_ok()
+    );
+    assert_eq!(oauth.calls().len(), 6);
 }
 
 #[test]

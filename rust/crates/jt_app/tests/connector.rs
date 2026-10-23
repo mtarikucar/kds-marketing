@@ -408,6 +408,55 @@ async fn start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier() {
     );
 }
 
+#[tokio::test]
+async fn start_oauth_fails_cleanly_when_the_provider_refuses_the_authorize_url() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+
+    // The provider refuses to build the URL (X without a PKCE challenge): VALIDATION with the
+    // provider's reason, and nothing written: no pending flow, no ledger entry.
+    r.x_oauth
+        .refuse_authorize(ConnectorError::permanent("pkce required"));
+    let e = err(connector::start_oauth(&r.w.deps, o, start("x")).await);
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(
+        e.details,
+        json!({ "provider": "x", "provider_error": "permanent", "reason": "pkce required" })
+    );
+    assert_eq!(r.x_oauth.calls().len(), 1);
+    assert!(r.pending_rows().is_empty());
+    assert!(r.w.entries("connector.oauth_started").is_empty());
+
+    // The reason reaches the caller redacted.
+    r.meta_oauth.refuse_authorize(ConnectorError::permanent(
+        "refused: client_secret=meta-app-secret",
+    ));
+    let e = err(connector::start_oauth(&r.w.deps, o, start("facebook_page")).await);
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_no_secret("the refusal", &format!("{e:?} {}", wire(&e.details)));
+    assert_eq!(e.details["reason"], "refused: client_secret=***");
+    assert!(r.pending_rows().is_empty());
+    assert!(r.w.entries("connector.oauth_started").is_empty());
+
+    // A reconnection refused the same way writes nothing either.
+    let page = r.connect_page().await;
+    let rows = r.pending_rows().len();
+    let started = r.w.entries("connector.oauth_started").len();
+    r.meta_oauth
+        .refuse_authorize(ConnectorError::permanent("not this app"));
+    let e = err(connector::reconnect(&r.w.deps, o, page.id).await);
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(e.details["provider_error"], "permanent", "{e:?}");
+    assert_eq!(e.details["reason"], "not this app", "{e:?}");
+    assert_eq!(r.pending_rows().len(), rows);
+    assert_eq!(r.w.entries("connector.oauth_started").len(), started);
+
+    // With no refusal queued, the next start goes through.
+    r.start("x").await;
+    assert_eq!(r.pending_rows().len(), rows + 1);
+    assert_eq!(r.w.entries("connector.oauth_started").len(), started + 1);
+}
+
 // ---------------------------------------------------------------------------------------------
 // complete_oauth
 // ---------------------------------------------------------------------------------------------
@@ -2361,7 +2410,7 @@ impl OAuthProvider for RacingOAuth {
         redirect: &Url,
         state: &str,
         pkce_challenge: Option<&str>,
-    ) -> Url {
+    ) -> Result<Url, ConnectorError> {
         self.inner
             .authorize_url(app, redirect, state, pkce_challenge)
     }

@@ -53,15 +53,15 @@ pub(crate) fn is_instagram_login(access_token: &str, scopes: &[String]) -> bool 
 }
 
 /// Where to send the owner's browser for `app`: Facebook Login's dialog (with the scopes, or the
-/// app's login configuration) or Instagram Login's. Holds no secret. Another provider's app gets
-/// `about:blank`: the use cases never hand one to this adapter.
+/// app's login configuration) or Instagram Login's. Holds no secret. Another provider's app is
+/// refused (`Permanent`): the use cases never hand one to this adapter.
 pub(crate) fn authorize_url(
     connector: &MetaConnector,
     app: &OAuthApp,
     redirect: &Url,
     state: &str,
     pkce_challenge: Option<&str>,
-) -> Url {
+) -> Result<Url, ConnectorError> {
     match app {
         OAuthApp::Meta(meta) => {
             // An invalid configured version falls back to the default here; every Graph call
@@ -92,7 +92,7 @@ pub(crate) fn authorize_url(
                         .append_pair("code_challenge_method", "S256");
                 }
             }
-            url
+            Ok(url)
         }
         OAuthApp::Instagram(instagram) => {
             let mut url = join(
@@ -106,9 +106,9 @@ pub(crate) fn authorize_url(
                 .append_pair("response_type", "code")
                 .append_pair("scope", &INSTAGRAM_SCOPES.join(","))
                 .append_pair("state", state);
-            url
+            Ok(url)
         }
-        OAuthApp::X(_) => Url::parse("about:blank").expect("a valid URL"),
+        OAuthApp::X(_) => Err(ConnectorError::permanent("an X app cannot sign in to Meta")),
     }
 }
 

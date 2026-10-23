@@ -132,7 +132,8 @@ async fn authorize_url_requires_pkce_and_carries_s256() {
     let (verifier, challenge) = pkce_pair([7u8; 48]);
     assert_eq!(challenge, pkce_challenge_s256(&verifier));
     let url =
-        r.x.authorize_url(&app, &redirect(), "state-1", Some(&challenge));
+        r.x.authorize_url(&app, &redirect(), "state-1", Some(&challenge))
+            .unwrap();
     assert_eq!(url.scheme(), "https");
     assert_eq!(url.host_str(), Some("twitter.com"));
     assert_eq!(url.path(), "/i/oauth2/authorize");
@@ -166,21 +167,13 @@ async fn authorize_url_requires_pkce_and_carries_s256() {
         "{query}"
     );
     assert!(!url.as_str().contains(CLIENT_SECRET), "{url}");
-    // The checked form says the same.
-    assert_eq!(
-        r.x.try_authorize_url(&app, &redirect(), "state-1", Some(&challenge))
-            .unwrap(),
-        url
-    );
 
-    // Without a challenge, or with an empty one: refused; the trait form gives an inert URL.
+    // Without a challenge, or with an empty one: refused.
     for missing in [None, Some(""), Some("  ")] {
         let e =
-            r.x.try_authorize_url(&app, &redirect(), "state-1", missing)
+            r.x.authorize_url(&app, &redirect(), "state-1", missing)
                 .unwrap_err();
         assert_eq!((e.kind(), e.reason()), ("permanent", Some("pkce required")));
-        let blank = r.x.authorize_url(&app, &redirect(), "state-1", missing);
-        assert_eq!(blank.as_str(), "about:blank");
     }
     // Another provider's app is not X's.
     let meta = OAuthApp::Meta(MetaApp {
@@ -192,13 +185,8 @@ async fn authorize_url_requires_pkce_and_carries_s256() {
         graph_version: None,
     });
     assert_eq!(
-        kind_of(r.x.try_authorize_url(&meta, &redirect(), "s", Some(&challenge))),
+        kind_of(r.x.authorize_url(&meta, &redirect(), "s", Some(&challenge))),
         "permanent"
-    );
-    assert_eq!(
-        r.x.authorize_url(&meta, &redirect(), "s", Some(&challenge))
-            .as_str(),
-        "about:blank"
     );
 
     // An exchange without the verifier is refused before any call.
@@ -293,7 +281,8 @@ async fn pkce_flow_bodies() {
     let app = OAuthApp::X(x_app());
     let (verifier, challenge) = pkce_pair([42u8; 48]);
     let url =
-        r.x.authorize_url(&app, &redirect(), "state-2", Some(&challenge));
+        r.x.authorize_url(&app, &redirect(), "state-2", Some(&challenge))
+            .unwrap();
     let sent_challenge = url
         .query_pairs()
         .find(|(k, _)| k == "code_challenge")
@@ -416,12 +405,13 @@ async fn refresh_rotates_and_maps_invalid_grant_to_auth() {
         // X answers a spent refresh token with `invalid_request` ("the token was invalid").
         (answer_with(400, "token_invalid_request"), "auth"),
         (answer_with(401, "error_unauthorized"), "auth"),
+        // The platform's client refused is the platform's problem, not the tenant's.
         (
             status(
                 401,
                 json!({ "error": "invalid_client", "error_description": "bad client" }),
             ),
-            "auth",
+            "permanent",
         ),
         (answer_with(429, "error_rate_limit"), "throttle"),
         (raw(503, "<html>unavailable</html>"), "transient"),
@@ -454,6 +444,52 @@ async fn refresh_rotates_and_maps_invalid_grant_to_auth() {
     assert_eq!(kind_of(unconfigured.x.refresh(&cred()).await), "permanent");
     assert!(r.mock.recorded().is_empty());
     assert!(unconfigured.mock.recorded().is_empty());
+}
+
+#[tokio::test]
+async fn token_endpoint_client_rejection_is_the_platforms_not_the_tenants() {
+    let r = rig().await;
+    let app = OAuthApp::X(x_app());
+    // The platform's client id or secret refused: no reconnection can help, so never `Auth`.
+    r.mock.set(
+        "POST",
+        TOKEN,
+        status(
+            401,
+            json!({ "error": "invalid_client", "error_description": "Missing valid authorization header" }),
+        ),
+    );
+    for e in [
+        r.x.exchange(&app, &redirect(), CODE, Some(VERIFIER))
+            .await
+            .unwrap_err(),
+        r.x.refresh(&cred()).await.unwrap_err(),
+    ] {
+        assert_eq!(
+            (e.kind(), e.reason()),
+            ("permanent", Some("platform client credentials rejected")),
+            "{e}"
+        );
+    }
+    // Every other refusal of the token endpoint is the tenant's grant: `Auth`.
+    for reply in [
+        status(401, json!({ "error": "unauthorized_client" })),
+        status(401, json!({ "title": "Unauthorized" })),
+        raw(401, "<html>no</html>"),
+        answer_with(400, "token_invalid_grant"),
+        answer_with(400, "token_invalid_request"),
+    ] {
+        r.mock.set("POST", TOKEN, reply.clone());
+        let e = r.x.refresh(&cred()).await.unwrap_err();
+        assert_eq!(e.kind(), "auth", "{reply:?}: {e}");
+    }
+    // On the API, `invalid_client` in a 401 body is still the token's refusal.
+    r.mock
+        .set("GET", ME, status(401, json!({ "error": "invalid_client" })));
+    assert_eq!(
+        kind_of(r.x.account_metrics(&cred(), &public()).await),
+        "auth"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -700,6 +736,27 @@ async fn publish_refuses_more_than_four_images_or_oversize_or_long_text_before_c
         ("281 characters", post(&"a".repeat(281), vec![])),
         ("281 wide characters", post(&"ğ".repeat(281), vec![])),
         ("nothing to post", post("  ", vec![])),
+        (
+            "a GIF with an image",
+            post("Merhaba", vec![image(8, "image/gif", "a.gif"), png(8)]),
+        ),
+        (
+            "two GIFs",
+            post(
+                "Merhaba",
+                vec![
+                    image(8, "image/gif", "a.gif"),
+                    image(8, "image/gif", "b.gif"),
+                ],
+            ),
+        ),
+        (
+            "more bytes than URLs",
+            PublishRequest {
+                media: vec![png(8), png(8)],
+                ..with_urls.clone()
+            },
+        ),
         ("media URLs without bytes", with_urls),
     ];
     for (what, request) in &refused {
@@ -714,6 +771,11 @@ async fn publish_refuses_more_than_four_images_or_oversize_or_long_text_before_c
             .await
             .unwrap_err();
     assert_eq!(e.reason(), Some("x needs media bytes"));
+    let e =
+        r.x.publish(&cred(), &public(), &refused[refused.len() - 2].1)
+            .await
+            .unwrap_err();
+    assert_eq!(e.reason(), Some("media bytes and urls disagree"));
     // A link counts as X counts it, 23 characters, after a blank line.
     let mut long_with_link = post(&"a".repeat(MAX_TEXT_CHARS - 24), vec![]);
     long_with_link.link = Some(Url::parse("https://jeeta.test/a").unwrap());
@@ -769,6 +831,120 @@ async fn publish_refuses_more_than_four_images_or_oversize_or_long_text_before_c
     .await
     .unwrap();
     assert_eq!(r.mock.requests("POST", TWEETS).len(), 4);
+
+    // As many bytes as URLs: the bytes are what is uploaded (the URLs are where they came from).
+    r.mock.clear();
+    let both = PublishRequest {
+        text: "Merhaba".into(),
+        media_urls: vec![Url::parse("https://cdn.test/a.png").unwrap()],
+        media: vec![png(32)],
+        ..PublishRequest::default()
+    };
+    r.x.publish(&cred(), &public(), &both).await.unwrap();
+    let parts = r.mock.request("POST", UPLOAD).parts();
+    assert_eq!(parts[0].data, png(32).bytes);
+    assert!(
+        r.mock
+            .recorded()
+            .iter()
+            .all(|c| !c.body().contains("cdn.test")),
+        "no URL is handed to X"
+    );
+}
+
+#[tokio::test]
+async fn gifs_upload_as_tweet_gif_and_go_alone() {
+    let r = rig().await;
+    r.mock.on("POST", UPLOAD, answer("media_upload"));
+    r.mock.on("POST", TWEETS, answer("tweet_created"));
+    let gif = image(64, " IMAGE/GIF", "loop.gif");
+    r.x.publish(&cred(), &public(), &post("Merhaba", vec![gif.clone()]))
+        .await
+        .unwrap();
+    let parts = r.mock.request("POST", UPLOAD).parts();
+    assert_eq!(parts[0].content_type.as_deref(), Some("image/gif"));
+    assert_eq!(parts[0].data, gif.bytes);
+    assert_eq!(parts[1].name, "media_category");
+    assert_eq!(parts[1].data, b"tweet_gif");
+    // Every other image type stays `tweet_image`.
+    for (mime, name) in [
+        ("image/png", "a.png"),
+        ("image/jpeg", "a.jpg"),
+        ("image/webp", "a.webp"),
+    ] {
+        r.mock.clear();
+        r.x.publish(
+            &cred(),
+            &public(),
+            &post("Merhaba", vec![image(8, mime, name)]),
+        )
+        .await
+        .unwrap();
+        let parts = r.mock.request("POST", UPLOAD).parts();
+        assert_eq!(parts[1].data, b"tweet_image", "{mime}");
+    }
+    // A GIF goes alone: with another image it is refused before anything is sent.
+    r.mock.clear();
+    let e =
+        r.x.publish(&cred(), &public(), &post("Merhaba", vec![png(8), gif]))
+            .await
+            .unwrap_err();
+    assert_eq!(e.kind(), "permanent");
+    assert!(r.mock.recorded().is_empty());
+}
+
+#[tokio::test]
+async fn urls_in_the_text_count_as_23() {
+    let r = rig().await;
+    r.mock.on("POST", TWEETS, answer("tweet_created"));
+    // 300 characters, 59 of them a URL: X counts 240 + 1 + 23 = 264.
+    let url = format!("https://jeeta.test/{}", "m".repeat(40));
+    assert_eq!(url.chars().count(), 59);
+    let text = format!("{} {url}", "a".repeat(240));
+    assert_eq!(text.chars().count(), 300);
+    r.x.publish(&cred(), &public(), &post(&text, vec![]))
+        .await
+        .unwrap();
+    // Sent as written: X shortens it itself.
+    assert_eq!(
+        r.mock.request("POST", TWEETS).json(),
+        json!({ "text": text })
+    );
+
+    // Every URL counts, `http` too, wherever it stands; what is left over still counts in full.
+    r.mock.clear();
+    let two = format!(
+        "{}\nhttp://a.test/{} (https://b.test/{})",
+        "a".repeat(230),
+        "x".repeat(60),
+        "y".repeat(60)
+    );
+    // 230 + 1 + 23 + 2 + 23 = 279 by X's count (the `)` goes with its URL); `over` is two more
+    // characters of text.
+    r.x.publish(&cred(), &public(), &post(&two, vec![]))
+        .await
+        .unwrap();
+    let over = format!("bb{two}");
+    assert_eq!(
+        kind_of(r.x.publish(&cred(), &public(), &post(&over, vec![])).await),
+        "permanent"
+    );
+    // A short URL still counts 23, as X counts it.
+    let short = format!("{} https://a.b", "a".repeat(257));
+    assert_eq!(short.chars().count(), 269);
+    assert_eq!(
+        kind_of(r.x.publish(&cred(), &public(), &post(&short, vec![])).await),
+        "permanent"
+    );
+    // Text without a URL is counted character by character, as before.
+    assert_eq!(
+        kind_of(
+            r.x.publish(&cred(), &public(), &post(&"a".repeat(281), vec![]))
+                .await
+        ),
+        "permanent"
+    );
+    assert_eq!(r.mock.requests("POST", TWEETS).len(), 1);
 }
 
 #[tokio::test]
@@ -1116,8 +1292,53 @@ async fn throttle_wait_from_rate_limit_reset_capped() {
     let got = wait(limited().with_header("x-rate-limit-reset", &(now - 60).to_string())).await;
     assert_eq!(got, None);
     assert_eq!(wait(limited()).await, None);
+
+    // The 24-hour caps (posts) reset the same way; the largest wait ahead wins, capped.
+    let at = |offset: i64| (now + offset).to_string();
+    let got = wait(
+        limited()
+            .with_header("x-rate-limit-reset", &at(60))
+            .with_header("x-app-limit-24hour-reset", &at(300)),
+    )
+    .await
+    .unwrap();
+    assert!(
+        got <= Duration::seconds(300) && got >= Duration::seconds(295),
+        "{got}"
+    );
+    let got = wait(
+        limited()
+            .with_header("x-rate-limit-reset", &at(60))
+            .with_header("x-app-limit-24hour-reset", &at(120))
+            .with_header("x-user-limit-24hour-reset", &at(900)),
+    )
+    .await
+    .unwrap();
+    assert!(
+        got <= Duration::seconds(900) && got >= Duration::seconds(895),
+        "{got}"
+    );
+    let got = wait(limited().with_header("x-user-limit-24hour-reset", &at(20 * 3600))).await;
+    assert_eq!(got, Some(MAX_RETRY_AFTER));
+    // A 24-hour reset already past does not shorten a window's wait.
+    let got = wait(
+        limited()
+            .with_header("x-rate-limit-reset", &at(200))
+            .with_header("x-user-limit-24hour-reset", &at(-5)),
+    )
+    .await
+    .unwrap();
+    assert!(got >= Duration::seconds(195), "{got}");
+    // ... nor does it beat Retry-After when it is the only reset given.
+    let got = wait(
+        limited()
+            .with_header("x-app-limit-24hour-reset", &at(-5))
+            .with_header("retry-after", "7"),
+    )
+    .await;
+    assert_eq!(got, Some(Duration::seconds(7)));
     // A throttled read is not tried again: an answer arrived.
-    assert_eq!(r.mock.requests("GET", ME).len(), 8);
+    assert_eq!(r.mock.requests("GET", ME).len(), 13);
 }
 
 #[tokio::test]
@@ -1149,6 +1370,32 @@ async fn no_secret_in_any_error_text() {
         r.mock.set("POST", TOKEN, token_error(description));
         errors.push(r.x.refresh(&cred()).await.unwrap_err());
     }
+    // A server error at the token endpoint that echoes everything it was sent.
+    let unavailable = |echo: String| {
+        status(
+            503,
+            json!({
+                "error": "temporarily_unavailable",
+                "error_description": format!("{echo} could not be checked"),
+            }),
+        )
+    };
+    r.mock.set(
+        "POST",
+        TOKEN,
+        unavailable(format!("{CODE} {VERIFIER} {CLIENT_SECRET}")),
+    );
+    errors.push(
+        r.x.exchange(&OAuthApp::X(x_app()), &redirect(), CODE, Some(VERIFIER))
+            .await
+            .unwrap_err(),
+    );
+    r.mock.set(
+        "POST",
+        TOKEN,
+        unavailable(format!("{REFRESH_TOKEN} {CLIENT_SECRET}")),
+    );
+    errors.push(r.x.refresh(&cred()).await.unwrap_err());
     // The API echoes the access token.
     for (code, body) in [
         (
@@ -1171,9 +1418,15 @@ async fn no_secret_in_any_error_text() {
             404,
             json!({ "title": "Not Found Error", "detail": format!("{{\"access_token\":\"{ACCESS_TOKEN}\"}}") }),
         ),
+        (
+            503,
+            json!({ "title": "Service Unavailable", "detail": format!("upstream saw {ACCESS_TOKEN}") }),
+        ),
     ] {
         r.mock.set("POST", TWEETS, status(code, body.clone()));
         r.mock.set("POST", UPLOAD, status(code, body.clone()));
+        r.mock
+            .set("GET", &tweet(TWEET_ID), status(code, body.clone()));
         r.mock.set("GET", ME, status(code, body));
         errors.push(
             r.x.publish(&cred(), &public(), &post("Merhaba", vec![]))
@@ -1186,10 +1439,44 @@ async fn no_secret_in_any_error_text() {
                 .unwrap_err(),
         );
         errors.push(r.x.account_metrics(&cred(), &public()).await.unwrap_err());
+        errors.push(
+            r.x.post_metrics(&cred(), &public(), TWEET_ID)
+                .await
+                .unwrap_err(),
+        );
         errors.push(r.x.probe(&cred(), &public()).await.error.unwrap());
         errors.push(r.x.list_assets(&cred()).await.unwrap_err());
     }
-    assert_eq!(errors.len(), 24);
+    // A 200 that carries only `errors`, quoting the token in every field it has.
+    let only_errors = ok(json!({ "errors": [ {
+        "title": format!("Not Found Error {ACCESS_TOKEN}"),
+        "detail": format!("token {ACCESS_TOKEN}"),
+        "message": format!("Bearer {ACCESS_TOKEN}"),
+        "value": ACCESS_TOKEN,
+    } ] }));
+    r.mock.set("GET", &tweet(TWEET_ID), only_errors.clone());
+    r.mock.set("GET", ME, only_errors.clone());
+    r.mock.set("POST", TWEETS, only_errors);
+    errors.push(
+        r.x.post_metrics(&cred(), &public(), TWEET_ID)
+            .await
+            .unwrap_err(),
+    );
+    errors.push(r.x.account_metrics(&cred(), &public()).await.unwrap_err());
+    errors.push(
+        r.x.publish(&cred(), &public(), &post("Merhaba", vec![]))
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(errors.len(), 4 + 2 + 5 * 6 + 3);
+    // Every path was taken: token refusals, server errors, client errors, the 200-with-errors.
+    let kinds: std::collections::BTreeSet<&str> = errors.iter().map(|e| e.kind()).collect();
+    assert_eq!(
+        kinds,
+        ["auth", "permanent", "permission", "transient"]
+            .into_iter()
+            .collect()
+    );
     for e in &errors {
         let text = format!("{e} {e:?}");
         assert_no_secret(&text);
@@ -1211,8 +1498,8 @@ async fn no_secret_in_any_error_text() {
 // ---------------------------------------------------------------------------------------------
 
 /// A pause long enough for an attempt to time out, and the attempt timeout that makes it so.
-const STALL: StdDuration = StdDuration::from_millis(1_500);
-const SHORT_TIMEOUT: StdDuration = StdDuration::from_millis(200);
+const STALL: StdDuration = StdDuration::from_millis(3_000);
+const SHORT_TIMEOUT: StdDuration = StdDuration::from_millis(1_000);
 
 #[tokio::test]
 async fn posts_never_retry() {

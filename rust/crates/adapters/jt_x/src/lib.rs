@@ -15,7 +15,7 @@
 //!
 //! | Step | Call |
 //! |---|---|
-//! | authorize | `https://twitter.com/i/oauth2/authorize?response_type=code&client_id&redirect_uri&scope&state&code_challenge&code_challenge_method=S256`, the scopes [`X_SCOPES`] joined by spaces (`%20`); without a challenge, refused ([`XConnector::try_authorize_url`]: `Permanent` "pkce required") |
+//! | authorize | `https://twitter.com/i/oauth2/authorize?response_type=code&client_id&redirect_uri&scope&state&code_challenge&code_challenge_method=S256`, the scopes [`X_SCOPES`] joined by spaces (`%20`); without a challenge (or for an app that is not X's), refused: `Permanent` "pkce required", and the use case starts no flow |
 //! | exchange | `POST {api}/2/oauth2/token`, form `grant_type=authorization_code, code, redirect_uri, client_id, code_verifier`, `Authorization: Basic base64(client_id:client_secret)`; without a verifier, refused ("pkce required") |
 //! | refresh | `POST {api}/2/oauth2/token`, form `grant_type=refresh_token, refresh_token, client_id`, the same `Basic` |
 //!
@@ -31,7 +31,7 @@
 //! | Operation | Call |
 //! |---|---|
 //! | the account ([`OAuthProvider::list_assets`]), the probe | `GET {api}/2/users/me` |
-//! | an image | `POST {upload}/2/media/upload`, multipart `media` (the file) and `media_category=tweet_image` → `data.id` (or `media_id_string`) |
+//! | an image | `POST {upload}/2/media/upload`, multipart `media` (the file) and `media_category=tweet_image` (a GIF: `tweet_gif`) → `data.id` (or `media_id_string`) |
 //! | a post | `POST {api}/2/tweets {text, media: {media_ids}}` |
 //! | a post's counters | `GET {api}/2/tweets/{id}?tweet.fields=public_metrics` |
 //! | the account's counters | `GET {api}/2/users/me?user.fields=public_metrics` |
@@ -48,7 +48,8 @@
 //!
 //! | Answer | Error |
 //! |---|---|
-//! | HTTP 429 | `Throttle`, the wait from `x-rate-limit-reset` (epoch seconds) minus now, else `Retry-After` (seconds), at most [`MAX_RETRY_AFTER`] |
+//! | HTTP 429 | `Throttle`, the largest wait ahead among `x-rate-limit-reset` (the endpoint's 15-minute window), `x-app-limit-24hour-reset` and `x-user-limit-24hour-reset` (the 24-hour post caps), each epoch seconds minus now; else `Retry-After` (seconds); at most [`MAX_RETRY_AFTER`] |
+//! | a token call's HTTP 401 `invalid_client` (the platform's X client id or secret refused: no reconnection can fix it) | `Permanent` ("platform client credentials rejected") |
 //! | HTTP 401; a token call's `invalid_grant` (a spent code, a verifier that does not match, a spent or revoked refresh token); a refresh's `invalid_request` (X's answer to a refresh token it no longer accepts) | `Auth`: the owner must reconnect |
 //! | HTTP 403 | `Permission` |
 //! | HTTP 5xx; no answer at all (connect failure, timeout), an answer broken off, a host resolving to no public address | `Transient` |
@@ -64,15 +65,19 @@
 //! **Posts.** Checked before anything is sent, each failure `Permanent`: the kind
 //! (`public["kind_key"]` must be `x`, else "kind_key missing"), an [`Credential::OAuth`]
 //! credential, at most [`MAX_IMAGES`] images, each 1 byte to [`MAX_IMAGE_BYTES`] of a type in
-//! [`IMAGE_MIMES`] (compared ignoring case and surrounding space), media URLs only with their
-//! bytes ("x needs media bytes": X takes uploads only, and M3 supplies the bytes from the asset
-//! store), something to post (text, a link or an image), and the length. A link is put after the
-//! text, on a line of its own. The length is counted in characters, not bytes, at most
-//! [`MAX_TEXT_CHARS`], the link counting [`LINK_CHARS`] as X counts every link; X weighs some
-//! characters (most CJK characters, emoji) as two, which this count does not, so M3 checks the
-//! weighted length before it posts and X refuses what slips through (`Permanent`). Images are
-//! uploaded one after the other, then the post is made with their ids; a failed upload stops the
-//! post (the images uploaded before it expire unused at X). The receipt's URL is
+//! [`IMAGE_MIMES`] (compared ignoring case and surrounding space), a GIF only alone (X takes up
+//! to four still images or one GIF), media URLs only with their bytes ("x needs media bytes": X
+//! takes uploads only, and M3 supplies the bytes from the asset store), as many bytes as URLs
+//! when both are given ("media bytes and urls disagree"; with equal counts the bytes are
+//! uploaded, the URLs being where they were read from), something to post (text, a link or an
+//! image), and the length. A link is put after the text, on a line of its own. The length is
+//! counted in characters, not bytes, at most [`MAX_TEXT_CHARS`], every URL counting
+//! [`LINK_CHARS`] as X counts it (the link, and each `http://` or `https://` in the text up to
+//! the next whitespace: X wraps them in `t.co` links); X also weighs some characters (most CJK
+//! characters, emoji) as two, which this count does not: that weighted length is M3's pre-check
+//! before it posts, and X refuses what slips through (`Permanent`). Images are uploaded one after
+//! the other (`media_category=tweet_image`, a GIF `tweet_gif`), then the post is made with their
+//! ids; a failed upload stops the post (the images uploaded before it expire unused at X). The receipt's URL is
 //! `https://x.com/<username>/status/<id>`, the username being the first X handle among
 //! `public["username"]`, the last probe's `public["facts"]["username"]` and the OAuth asset's
 //! `public["asset"]["username"]` (where the connection use cases keep them), else
@@ -111,8 +116,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use jt_app::ports::connectors::{OAuthApp, PlatformAppConfig};
-use jt_connector::ConnectorError;
+use jt_app::ports::connectors::PlatformAppConfig;
 use jt_outbound::Egress;
 use url::Url;
 
@@ -138,14 +142,15 @@ pub const MAX_IMAGES: usize = 4;
 /// The largest image uploaded, in bytes (5 MB).
 pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
-/// The media types of the images uploaded.
+/// The media types of the images uploaded. A GIF goes alone in a post and is uploaded as
+/// `tweet_gif`.
 pub const IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 /// The longest post, in characters.
 pub const MAX_TEXT_CHARS: usize = 280;
 
-/// What a link counts for in a post's length: X shortens every link to a 23-character `t.co`
-/// link.
+/// What a link (the request's, or a URL in the text) counts for in a post's length: X wraps every
+/// link in a 23-character `t.co` link.
 pub const LINK_CHARS: usize = 23;
 
 /// How many times a read is tried in all when no answer arrives (posts, uploads and token calls:
@@ -247,22 +252,6 @@ impl XConnector {
     /// Where the adapter sends its calls.
     pub fn bases(&self) -> &XBases {
         &self.bases
-    }
-
-    /// The authorize URL for `app`, returning to `redirect` with `state` and the S256
-    /// `pkce_challenge`; `Permanent` ("pkce required") without a challenge, and for an app that
-    /// is not X's. [`OAuthProvider::authorize_url`], whose port gives no room for an error, sends
-    /// the browser to `about:blank` instead.
-    ///
-    /// [`OAuthProvider::authorize_url`]: jt_app::ports::connectors::OAuthProvider::authorize_url
-    pub fn try_authorize_url(
-        &self,
-        app: &OAuthApp,
-        redirect: &Url,
-        state: &str,
-        pkce_challenge: Option<&str>,
-    ) -> Result<Url, ConnectorError> {
-        oauth::authorize_url(self, app, redirect, state, pkce_challenge)
     }
 }
 

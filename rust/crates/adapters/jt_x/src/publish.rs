@@ -14,8 +14,18 @@ use crate::{IMAGE_MIMES, LINK_CHARS, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TEXT_CHARS
 /// Why media URLs without their bytes are refused: X takes uploads only.
 pub(crate) const MEDIA_BYTES_REQUIRED: &str = "x needs media bytes";
 
-/// The upload category of a post's image.
-const MEDIA_CATEGORY: &str = "tweet_image";
+/// Why media bytes and media URLs of different counts are refused: an image would be lost or
+/// invented.
+pub(crate) const MEDIA_COUNT_MISMATCH: &str = "media bytes and urls disagree";
+
+/// The upload category of a post's still image.
+const IMAGE_CATEGORY: &str = "tweet_image";
+
+/// The upload category of a post's (animated) GIF.
+const GIF_CATEGORY: &str = "tweet_gif";
+
+/// The media type of a GIF.
+const GIF_MIME: &str = "image/gif";
 
 /// Where a post's public page is (a browser URL, never fetched).
 const PERMALINK_BASE: &str = "https://x.com";
@@ -67,13 +77,36 @@ fn safe_filename(name: &str) -> String {
     }
 }
 
+/// The length of `text` as X counts URLs: every `http://` or `https://` (any case, wherever it
+/// starts) up to the next whitespace counts [`LINK_CHARS`] (X wraps it in a `t.co` link),
+/// every other character one. X also weighs some characters as two (most CJK characters,
+/// emoji); this count does not, and M3 checks that weighted length before it posts.
+fn weighted_length(text: &str) -> usize {
+    let lower = text.to_ascii_lowercase();
+    let mut length = 0;
+    let mut rest = lower.as_str();
+    loop {
+        let next = ["http://", "https://"]
+            .iter()
+            .filter_map(|scheme| rest.find(scheme))
+            .min();
+        let Some(at) = next else {
+            return length + rest.chars().count();
+        };
+        length += rest[..at].chars().count() + LINK_CHARS;
+        let url = &rest[at..];
+        let end = url.find(char::is_whitespace).unwrap_or(url.len());
+        rest = &url[end..];
+    }
+}
+
 /// The text to post: the request's text (none when blank) and its link on a line of its own after
-/// it. `Permanent` when longer than [`MAX_TEXT_CHARS`] characters, the link counting
-/// [`LINK_CHARS`].
+/// it. `Permanent` when longer than [`MAX_TEXT_CHARS`] as X counts it ([`weighted_length`]; the
+/// link counts [`LINK_CHARS`] too).
 fn compose(request: &PublishRequest) -> Result<Option<String>, ConnectorError> {
     let text = Some(request.text.as_str()).filter(|t| !t.trim().is_empty());
     let link = request.link.as_ref();
-    let length = text.map_or(0, |t| t.chars().count())
+    let length = text.map_or(0, weighted_length)
         + link.map_or(0, |_| LINK_CHARS)
         + if text.is_some() && link.is_some() {
             2
@@ -82,8 +115,8 @@ fn compose(request: &PublishRequest) -> Result<Option<String>, ConnectorError> {
         };
     if length > MAX_TEXT_CHARS {
         return Err(ConnectorError::permanent(format!(
-            "a post is at most {MAX_TEXT_CHARS} characters, a link counting {LINK_CHARS}; this \
-             one is {length}"
+            "a post is at most {MAX_TEXT_CHARS} characters, each link counting {LINK_CHARS}; \
+             this one is {length}"
         )));
     }
     Ok(match (text, link) {
@@ -100,12 +133,17 @@ fn check_media(request: &PublishRequest) -> Result<Vec<String>, ConnectorError> 
     if request.media.is_empty() && !request.media_urls.is_empty() {
         return Err(ConnectorError::permanent(MEDIA_BYTES_REQUIRED));
     }
+    // Bytes and URLs together describe the same images (the bytes read from the URLs): as many
+    // of each, or an image would be lost or invented. The bytes are what is uploaded.
+    if !request.media_urls.is_empty() && request.media.len() != request.media_urls.len() {
+        return Err(ConnectorError::permanent(MEDIA_COUNT_MISMATCH));
+    }
     if request.media.len() > MAX_IMAGES {
         return Err(ConnectorError::permanent(format!(
             "an X post carries at most {MAX_IMAGES} images"
         )));
     }
-    request
+    let mimes = request
         .media
         .iter()
         .map(|media| {
@@ -126,7 +164,13 @@ fn check_media(request: &PublishRequest) -> Result<Vec<String>, ConnectorError> 
             }
             Ok(mime)
         })
-        .collect()
+        .collect::<Result<Vec<String>, ConnectorError>>()?;
+    if mimes.len() > 1 && mimes.iter().any(|m| m == GIF_MIME) {
+        return Err(ConnectorError::permanent(
+            "an X post carries one GIF, alone",
+        ));
+    }
+    Ok(mimes)
 }
 
 /// Where post `id` is seen: under the account's handle, the first of `public["username"]`, the
@@ -204,7 +248,11 @@ async fn upload(
         bytes: &media.bytes,
         mime,
         filename: safe_filename(&media.filename),
-        category: MEDIA_CATEGORY,
+        category: if mime == GIF_MIME {
+            GIF_CATEGORY
+        } else {
+            IMAGE_CATEGORY
+        },
     });
     let url = connector.upload_url(&["2", "media", "upload"]);
     let answer = connector
@@ -251,6 +299,24 @@ mod tests {
             Some("https://jeeta.test/".to_owned())
         );
         assert_eq!(compose(&request("\n ", None)).unwrap(), None);
+    }
+
+    #[test]
+    fn urls_in_the_text_weigh_23() {
+        assert_eq!(weighted_length("abc"), 3);
+        assert_eq!(weighted_length("ş ğ"), 3);
+        assert_eq!(
+            weighted_length("see https://jeeta.test/a-long-path-here ok"),
+            4 + 23 + 3
+        );
+        assert_eq!(weighted_length("http://a.b"), 23);
+        assert_eq!(weighted_length("(HTTPS://A.B/x)\tend"), 1 + 23 + 1 + 3);
+        assert_eq!(
+            weighted_length("x https://a.b\nhttp://c.d"),
+            2 + 23 + 1 + 23
+        );
+        // `https:` without `//` is no URL; nor is `ftp://`.
+        assert_eq!(weighted_length("https:a ftp://b"), 15);
     }
 
     #[test]

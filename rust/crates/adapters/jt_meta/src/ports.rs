@@ -51,7 +51,7 @@ impl OAuthProvider for MetaConnector {
         redirect: &Url,
         state: &str,
         pkce_challenge: Option<&str>,
-    ) -> Url {
+    ) -> Result<Url, ConnectorError> {
         oauth::authorize_url(self, app, redirect, state, pkce_challenge)
     }
 

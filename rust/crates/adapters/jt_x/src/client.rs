@@ -26,6 +26,18 @@ const MAX_REASON_CHARS: usize = 300;
 /// scheduler adding it to the clock can never overflow.
 pub const MAX_RETRY_AFTER: Duration = Duration::hours(1);
 
+/// Why the token endpoint's `401 invalid_client` is refused: the platform's X client (its id or
+/// secret) was not accepted, which only the platform's configuration can fix.
+pub(crate) const CLIENT_REJECTED: &str = "platform client credentials rejected";
+
+/// The headers naming when a limit resets (epoch seconds): the 15-minute window of an endpoint,
+/// and the 24-hour caps of the app and of the user (posts).
+const RESET_HEADERS: &[&str] = &[
+    "x-rate-limit-reset",
+    "x-app-limit-24hour-reset",
+    "x-user-limit-24hour-reset",
+];
+
 /// The form fields of a token call that are not secret (every other one is: the code, the
 /// verifier, the refresh token).
 const PUBLIC_FORM_FIELDS: &[&str] = &["grant_type", "client_id", "redirect_uri"];
@@ -345,8 +357,16 @@ pub(crate) fn classify(
     if status == StatusCode::TOO_MANY_REQUESTS {
         return ConnectorError::throttle(wait);
     }
-    let reason = reason(status, json, secrets);
     let oauth_error = json.and_then(|j| j["error"].as_str());
+    // The token endpoint refusing the platform's own client (its id or secret): no tenant can
+    // fix that by reconnecting, so it is never the tenant's `Auth`.
+    if matches!(endpoint, Endpoint::Token(_))
+        && status == StatusCode::UNAUTHORIZED
+        && oauth_error == Some("invalid_client")
+    {
+        return ConnectorError::permanent(CLIENT_REJECTED);
+    }
+    let reason = reason(status, json, secrets);
     let spent = match endpoint {
         Endpoint::Token(Grant::Code) => oauth_error == Some("invalid_grant"),
         Endpoint::Token(Grant::Refresh) => {
@@ -421,9 +441,9 @@ fn scrub(text: &str, secrets: &[&str]) -> String {
     out
 }
 
-/// How long X asks to wait, as of `now`: `x-rate-limit-reset` (the epoch second the window
-/// resets) minus now, when that is ahead; else `Retry-After` in seconds, when positive; at most
-/// [`MAX_RETRY_AFTER`]. `None` when neither names a wait.
+/// How long X asks to wait, as of `now`: the largest wait ahead among the resets of
+/// [`RESET_HEADERS`] (each the epoch second its limit resets, minus now); else `Retry-After` in
+/// seconds, when positive; at most [`MAX_RETRY_AFTER`]. `None` when none names a wait.
 pub(crate) fn retry_after(headers: &header::HeaderMap, now: OffsetDateTime) -> Option<Duration> {
     let cap = MAX_RETRY_AFTER.whole_seconds();
     let number = |name: &str| {
@@ -432,14 +452,14 @@ pub(crate) fn retry_after(headers: &header::HeaderMap, now: OffsetDateTime) -> O
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.trim().parse::<i64>().ok())
     };
-    if let Some(reset) = number("x-rate-limit-reset") {
-        let wait = reset.saturating_sub(now.unix_timestamp());
-        if wait > 0 {
-            return Some(Duration::seconds(wait.min(cap)));
-        }
-    }
-    number("retry-after")
-        .filter(|s| *s > 0)
+    let reset = RESET_HEADERS
+        .iter()
+        .filter_map(|name| number(name))
+        .map(|reset| reset.saturating_sub(now.unix_timestamp()))
+        .filter(|wait| *wait > 0)
+        .max();
+    reset
+        .or_else(|| number("retry-after").filter(|s| *s > 0))
         .map(|s| Duration::seconds(s.min(cap)))
 }
 
@@ -473,7 +493,13 @@ mod tests {
             (429, None, api, "throttle"),
             (429, token_error("invalid_grant"), refresh, "throttle"),
             (401, None, api, "auth"),
-            (401, token_error("invalid_client"), code, "auth"),
+            // The platform's client refused: never the tenant's `Auth`.
+            (401, token_error("invalid_client"), code, "permanent"),
+            (401, token_error("invalid_client"), refresh, "permanent"),
+            (401, token_error("invalid_client"), api, "auth"),
+            (401, token_error("unauthorized_client"), refresh, "auth"),
+            (401, None, refresh, "auth"),
+            (400, token_error("invalid_client"), code, "permanent"),
             (400, token_error("invalid_grant"), code, "auth"),
             (400, token_error("invalid_grant"), refresh, "auth"),
             (400, token_error("invalid_request"), refresh, "auth"),
@@ -604,6 +630,52 @@ mod tests {
         assert_eq!(
             retry_after(&headers(&[("retry-after", "0".into())]), NOW),
             None
+        );
+        // The 24-hour caps' resets count the same way: the largest wait ahead, capped.
+        assert_eq!(
+            retry_after(
+                &headers(&[
+                    ("x-rate-limit-reset", (now + 60).to_string()),
+                    ("x-app-limit-24hour-reset", (now + 300).to_string()),
+                    ("x-user-limit-24hour-reset", (now + 120).to_string()),
+                    ("retry-after", "5".into()),
+                ]),
+                NOW
+            ),
+            Some(Duration::seconds(300))
+        );
+        assert_eq!(
+            retry_after(
+                &headers(&[("x-user-limit-24hour-reset", (now + 86_000).to_string())]),
+                NOW
+            ),
+            Some(MAX_RETRY_AFTER)
+        );
+        assert_eq!(
+            retry_after(
+                &headers(&[
+                    ("x-user-limit-24hour-reset", (now - 10).to_string()),
+                    ("x-app-limit-24hour-reset", "later".into()),
+                    ("retry-after", "9".into()),
+                ]),
+                NOW
+            ),
+            Some(Duration::seconds(9))
+        );
+    }
+
+    #[test]
+    fn a_refused_platform_client_names_the_platform() {
+        let e = classify(
+            StatusCode::UNAUTHORIZED,
+            Some(&json!({ "error": "invalid_client", "error_description": "bad s-SECRET" })),
+            None,
+            Endpoint::Token(Grant::Refresh),
+            &["s-SECRET"],
+        );
+        assert_eq!(
+            (e.kind(), e.reason()),
+            ("permanent", Some("platform client credentials rejected"))
         );
     }
 

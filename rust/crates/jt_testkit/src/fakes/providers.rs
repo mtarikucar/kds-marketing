@@ -650,11 +650,14 @@ pub enum OAuthCall {
 
 /// An OAuth provider whose authorize URL is built deterministically
 /// (`https://oauth.test/<provider>/authorize?response_type=code&client_id=..&redirect_uri=..&state=..`,
-/// plus `code_challenge` and `code_challenge_method=S256` when a challenge is given) and whose
-/// exchanges and asset lists answer from the queues `push_exchange` and `push_assets` fill.
+/// plus `code_challenge` and `code_challenge_method=S256` when a challenge is given, unless
+/// `refuse_authorize` queued a refusal) and whose exchanges and asset lists answer from the
+/// queues `push_exchange` and `push_assets` fill.
 pub struct ScriptedOAuth {
     provider: Provider,
     calls: Mutex<Vec<OAuthCall>>,
+    /// Refusals of the next authorize URLs, in order; none queued builds the URL.
+    authorize: Script<ConnectorError>,
     exchange: Script<Result<Credential, ConnectorError>>,
     assets: Script<Result<Vec<Asset>, ConnectorError>>,
 }
@@ -665,6 +668,7 @@ impl ScriptedOAuth {
         ScriptedOAuth {
             provider,
             calls: Mutex::new(Vec::new()),
+            authorize: Script::default(),
             exchange: Script::default(),
             assets: Script::default(),
         }
@@ -678,6 +682,11 @@ impl ScriptedOAuth {
     /// Every call so far, in order.
     pub fn calls(&self) -> Vec<OAuthCall> {
         lock(&self.calls).clone()
+    }
+
+    /// Makes the next authorize URL a refusal with `error` (each queued refusal answers once).
+    pub fn refuse_authorize(&self, error: ConnectorError) {
+        self.authorize.push(error);
     }
 
     pub fn push_exchange(&self, result: Result<Credential, ConnectorError>) {
@@ -701,13 +710,16 @@ impl OAuthProvider for ScriptedOAuth {
         redirect: &Url,
         state: &str,
         pkce_challenge: Option<&str>,
-    ) -> Url {
+    ) -> Result<Url, ConnectorError> {
         self.record(OAuthCall::AuthorizeUrl {
             client_id: app.client_id().to_owned(),
             redirect: redirect.clone(),
             state: state.to_owned(),
             pkce_challenge: pkce_challenge.map(str::to_owned),
         });
+        if let Some(refusal) = self.authorize.try_next() {
+            return Err(refusal);
+        }
         let mut url = Url::parse(&format!(
             "https://{TEST_OAUTH_HOST}/{}/authorize",
             self.provider.key()
@@ -726,7 +738,7 @@ impl OAuthProvider for ScriptedOAuth {
                     .append_pair("code_challenge_method", "S256");
             }
         }
-        url
+        Ok(url)
     }
 
     async fn exchange(

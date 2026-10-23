@@ -814,7 +814,10 @@ async fn begin_oauth(
         (None, None)
     };
     let redirect = callback_url(deps.apps.as_ref(), provider);
-    let authorize_url = oauth.authorize_url(&app, &redirect, &token, challenge.as_deref());
+    // Before anything is written: a refused URL leaves no pending flow and no ledger entry.
+    let authorize_url = oauth
+        .authorize_url(&app, &redirect, &token, challenge.as_deref())
+        .map_err(|e| provider_error(provider, e))?;
 
     let id = OAuthPendingId(deps.ids.uuid());
     let mut repos = deps.uow.tenant(ws).await?;

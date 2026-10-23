@@ -124,7 +124,8 @@ async fn authorize_urls_carry_scopes_or_config_id() {
     };
     let fb = r
         .meta
-        .authorize_url(&OAuthApp::Meta(meta_app()), &redirect(), "state-1", None);
+        .authorize_url(&OAuthApp::Meta(meta_app()), &redirect(), "state-1", None)
+        .unwrap();
     assert_eq!(fb.host_str(), Some("www.facebook.com"));
     assert_eq!(fb.path(), "/v19.0/dialog/oauth");
     assert_eq!(get(&fb, "client_id").as_deref(), Some(META_APP_ID));
@@ -165,19 +166,23 @@ async fn authorize_urls_carry_scopes_or_config_id() {
     configured.graph_version = Some("v21.0".into());
     let fb = r
         .meta
-        .authorize_url(&OAuthApp::Meta(configured), &redirect(), "s", Some("chal"));
+        .authorize_url(&OAuthApp::Meta(configured), &redirect(), "s", Some("chal"))
+        .unwrap();
     assert_eq!(fb.path(), "/v21.0/dialog/oauth");
     assert_eq!(get(&fb, "config_id").as_deref(), Some("cfg-test"));
     assert_eq!(get(&fb, "scope"), None);
     assert_eq!(get(&fb, "code_challenge").as_deref(), Some("chal"));
     assert_eq!(get(&fb, "code_challenge_method").as_deref(), Some("S256"));
 
-    let ig = r.meta.authorize_url(
-        &OAuthApp::Instagram(instagram_app()),
-        &redirect(),
-        "state-2",
-        None,
-    );
+    let ig = r
+        .meta
+        .authorize_url(
+            &OAuthApp::Instagram(instagram_app()),
+            &redirect(),
+            "state-2",
+            None,
+        )
+        .unwrap();
     assert_eq!(ig.host_str(), Some("www.instagram.com"));
     assert_eq!(ig.path(), "/oauth/authorize");
     assert_eq!(
@@ -193,6 +198,17 @@ async fn authorize_urls_carry_scopes_or_config_id() {
             ("state".into(), "state-2".into()),
         ]
     );
+    // The X app is not Meta's: refused, no URL.
+    let x = OAuthApp::X(jt_app::ports::connectors::XApp {
+        client_id: "x-client".into(),
+        client_secret: "x-SECRET".into(),
+    });
+    let e = r
+        .meta
+        .authorize_url(&x, &redirect(), "state-3", None)
+        .unwrap_err();
+    assert_eq!(e.kind(), "permanent");
+    assert!(!e.to_string().contains("x-SECRET"), "{e}");
     assert!(r.mock.recorded().is_empty(), "authorize URLs fetch nothing");
 }
 

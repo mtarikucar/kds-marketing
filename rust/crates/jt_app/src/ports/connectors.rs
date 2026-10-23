@@ -565,13 +565,15 @@ pub trait ConsentSync: Send + Sync {
 pub trait OAuthProvider: Send + Sync {
     /// Where to send the owner's browser: the provider's authorize URL for `app`, returning to
     /// `redirect` with `state`, and with the S256 `pkce_challenge` when given. Holds no secret.
+    /// Refused (no URL) when the flow cannot start: an app that is not this provider's, or no
+    /// challenge for a provider that requires PKCE (X). Nothing is called: it only builds a URL.
     fn authorize_url(
         &self,
         app: &OAuthApp,
         redirect: &Url,
         state: &str,
         pkce_challenge: Option<&str>,
-    ) -> Url;
+    ) -> Result<Url, ConnectorError>;
     /// The credential the authorization `code` is exchanged for (long-lived where the provider
     /// offers one), sending the PKCE `pkce_verifier` when the flow used one.
     async fn exchange(

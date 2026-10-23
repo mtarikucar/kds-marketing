@@ -33,20 +33,16 @@ impl Connector for XConnector {
 
 #[async_trait]
 impl OAuthProvider for XConnector {
-    /// [`XConnector::try_authorize_url`], or `about:blank` (a page that starts no flow) when it
-    /// refuses: without a PKCE challenge, or for an app that is not X's.
+    /// The authorize URL (see the crate docs); `Permanent` ("pkce required") without a PKCE
+    /// challenge, and for an app that is not X's.
     fn authorize_url(
         &self,
         app: &OAuthApp,
         redirect: &Url,
         state: &str,
         pkce_challenge: Option<&str>,
-    ) -> Url {
-        self.try_authorize_url(app, redirect, state, pkce_challenge)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error_kind = e.kind(), "refused to build an X authorize URL");
-                Url::parse("about:blank").expect("a valid URL")
-            })
+    ) -> Result<Url, ConnectorError> {
+        oauth::authorize_url(self, app, redirect, state, pkce_challenge)
     }
 
     async fn exchange(
