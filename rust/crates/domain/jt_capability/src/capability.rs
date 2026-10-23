@@ -140,7 +140,8 @@ impl Capability {
     /// Refuses, in this order: a kind not on the list (`UnknownKind`); a missing, malformed or
     /// unexpected `key_detail` ([`validate_key_detail`]); a bad name (trimmed, then
     /// [`crate::validate_name`]); a description over [`MAX_DESCRIPTION_CHARS`] characters; a
-    /// blank or over-long external id; public connector fields that are not an object or hold a
+    /// blank, over-long or control-character external id ([`validate_external_id`]); public
+    /// connector fields that are not an object or hold a
     /// secret-looking key (`InvalidConnectorPublic`, with every gap); a policy with gaps
     /// (`InvalidPolicy`, with every gap).
     pub fn new(
@@ -164,12 +165,9 @@ impl Capability {
         };
         validate_key_detail(kind, key_detail.as_deref())?;
         let name = checked_name(name)?;
-        check_len("description", &description, MAX_DESCRIPTION_CHARS)?;
+        validate_description(&description)?;
         if let Some(external_id) = &external_id {
-            if external_id.trim().is_empty() {
-                return Err(CapabilityError::BlankExternalId);
-            }
-            check_len("external_id", external_id, MAX_EXTERNAL_ID_CHARS)?;
+            validate_external_id(external_id)?;
         }
         let connector_public = match connector_public {
             Value::Null => empty_object(),
@@ -236,6 +234,73 @@ pub fn validate_key_detail(
         (false, None) => Ok(()),
         (false, Some(_)) => Err(CapabilityError::KeyDetailNotAllowed(kind.key.to_owned())),
     }
+}
+
+/// `Ok` when `description` has at most [`MAX_DESCRIPTION_CHARS`] characters; else `TextTooLong`
+/// naming `description`. Declaring and editing a capability run it alike.
+pub fn validate_description(description: &str) -> Result<(), CapabilityError> {
+    check_len("description", description, MAX_DESCRIPTION_CHARS)
+}
+
+/// `Ok` when `external_id` is not blank (`BlankExternalId`), holds no control character
+/// (`ExternalIdHasControlCharacter`) and has at most [`MAX_EXTERNAL_ID_CHARS`] characters
+/// (`TextTooLong` naming `external_id`). It is checked, and stored, as given: the use cases trim
+/// what a person or an agent types before (a provider's id is compared verbatim). Declaring,
+/// editing and connecting a capability run it alike.
+pub fn validate_external_id(external_id: &str) -> Result<(), CapabilityError> {
+    if external_id.trim().is_empty() {
+        return Err(CapabilityError::BlankExternalId);
+    }
+    if external_id.chars().any(char::is_control) {
+        return Err(CapabilityError::ExternalIdHasControlCharacter);
+    }
+    check_len("external_id", external_id, MAX_EXTERNAL_ID_CHARS)
+}
+
+/// The top-level keys of `connector_public` that the system's connectors write: the provider
+/// (`provider`), the sealed credential's public facts (`access`), an OAuth asset's facts
+/// (`asset`), the account a probe proved (`account`), the last probe (`health`, `facts`) and the
+/// reconnection flag (`reconnect_required`). Nobody declares or edits them
+/// ([`check_reserved_public_keys`]): public fields claiming a health, an expiry or a reconnection
+/// would read as what no probe found.
+///
+/// `hosts` is not among them: a connector capability names the hosts it reaches when it is
+/// declared, and its connector adds its own to them.
+pub const RESERVED_PUBLIC_KEYS: &[&str] = &[
+    "access",
+    "account",
+    "asset",
+    "facts",
+    "health",
+    "provider",
+    "reconnect_required",
+];
+
+/// `Ok` unless a top-level key of `connector_public` is one of [`RESERVED_PUBLIC_KEYS`] (by its
+/// exact name); else `ReservedPublicKey` with a gap per such key, in sorted order. A value that
+/// is not an object has no keys. Declaring a capability runs it on top of
+/// [`validate_connector_public`]; [`Capability::new`] does not, since the connectors write those
+/// keys through it.
+pub fn check_reserved_public_keys(connector_public: &Value) -> Result<(), CapabilityError> {
+    let Some(map) = connector_public.as_object() else {
+        return Ok(());
+    };
+    let mut keys: Vec<&String> = map
+        .keys()
+        .filter(|k| RESERVED_PUBLIC_KEYS.contains(&k.as_str()))
+        .collect();
+    if keys.is_empty() {
+        return Ok(());
+    }
+    keys.sort();
+    let mut gaps = Gaps::default();
+    for key in keys {
+        gaps.add(
+            format!("connector_public.{key}"),
+            "a key the connector writes: it cannot be declared or edited",
+        );
+    }
+    Err(CapabilityError::ReservedPublicKey(gaps.0))
 }
 
 /// Parts of a key name that make it secret-looking wherever they appear in it, in any case: a

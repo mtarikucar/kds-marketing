@@ -668,5 +668,5 @@ async fn pending_payment_workspace_gets_workspace_inactive_on_capabilities() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 19);
+    assert_eq!(checked, 22);
 }

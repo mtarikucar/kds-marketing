@@ -23,7 +23,8 @@ use jt_panel_http::routes::api_route;
 use jt_panel_http::{AppState, Authed, WorkspaceCtx, router, router_with_test_route};
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use jt_testkit::fakes::{
-    FixedClock, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts, SeqIdGen,
+    FakeAppConfig, FixedClock, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+    ScriptedRegistry, SeqIdGen,
 };
 use serde_json::{Value, json};
 use time::macros::datetime;
@@ -93,6 +94,9 @@ impl World {
             channels: Arc::new(NoChannelsYet),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
+            apps: Arc::new(FakeAppConfig::default()),
+            connectors: Arc::new(ScriptedRegistry::new()),
+            job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
         };
         let out = auth::register(
             &deps,

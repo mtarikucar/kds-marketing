@@ -36,6 +36,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::StrategyRequired => StatusCode::CONFLICT,
         ErrorCode::WorkspaceInactive => StatusCode::LOCKED,
         ErrorCode::HostNotAllowed => StatusCode::FORBIDDEN,
+        ErrorCode::UpstreamUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -165,6 +166,10 @@ mod tests {
                 423,
             ),
             (AppError::host_not_allowed("evil.test"), 403),
+            (
+                AppError::upstream_unavailable("meta", "rate limited", Some(30)),
+                503,
+            ),
             (AppError::internal("m"), 500),
         ];
         for (err, status) in table {
@@ -176,6 +181,26 @@ mod tests {
                 assert_eq!(body, serde_json::to_value(&err).unwrap());
             }
         }
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_provider_passes_its_details_through() {
+        let err = AppError::upstream_unavailable("meta", "rate limited", Some(30));
+        let (status, body) = render(err).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            body,
+            json!({
+                "code": "UPSTREAM_UNAVAILABLE",
+                "message": "the provider is unavailable; try again later",
+                "details": {
+                    "provider": "meta",
+                    "retryable": true,
+                    "retry_after_s": 30,
+                    "reason": "rate limited",
+                },
+            })
+        );
     }
 
     #[tokio::test]

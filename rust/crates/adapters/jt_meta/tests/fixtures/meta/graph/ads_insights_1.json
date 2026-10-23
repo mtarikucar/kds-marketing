@@ -1,0 +1,9 @@
+{
+  "data": [
+    { "campaign_id": "1212121212", "campaign_name": "Test Kampanya", "spend": "123.45", "impressions": "10000", "clicks": "250", "date_start": "2026-10-01", "date_stop": "2026-10-01" }
+  ],
+  "paging": {
+    "cursors": { "before": "MAZDZD", "after": "MQZDZD" },
+    "next": "{{GRAPH}}/v19.0/act_1111111111/insights?access_token=EAAB-long-test&level=campaign&time_increment=1&limit=500&after=MQZDZD"
+  }
+}

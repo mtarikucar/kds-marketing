@@ -13,6 +13,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
 use jt_app::ports::PasswordHasher;
+use jt_app::ports::connectors::{ConnectorRegistry, PlatformAppConfig};
 use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::Deps;
 use jt_app::usecases::capabilities::UowChannelCatalog;
@@ -24,7 +25,9 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::db::TestDb;
-use crate::fakes::{PlainHasher, PlainSecretBox, RecordingTenantHosts};
+use crate::fakes::{
+    FakeAppConfig, PlainHasher, PlainSecretBox, RecordingTenantHosts, ScriptedRegistry,
+};
 use crate::flows::activate_workspace;
 
 /// The password every account the harness opens uses.
@@ -35,7 +38,8 @@ pub const REQUESTED_WITH: (&str, &str) = ("x-requested-with", "jeeta-panel");
 /// The panel router over a fresh test database, and the ports behind it: the real Postgres unit
 /// of work, clock, ids, tokens, channel catalog and strategy gate (as the binary serves them),
 /// with a plain-text hasher (unless asked otherwise), a plain-text secret box and a tenant host
-/// registry that records. No strategy is approved anywhere until a test approves one.
+/// registry that records; no provider app and no provider adapter unless asked
+/// ([`Panel::with_providers`]). No strategy is approved anywhere until a test approves one.
 pub struct Panel {
     pub app: Router,
     pub deps: Deps,
@@ -50,12 +54,38 @@ impl Panel {
         Panel::with(Arc::new(PlainHasher), false, None).await
     }
 
+    /// Plain hashing, with these platform apps and provider adapters (e.g.
+    /// `FakeAppConfig::with_all_apps()` and a `ScriptedRegistry` of scripted adapters).
+    pub async fn with_providers(
+        apps: Arc<dyn PlatformAppConfig>,
+        connectors: Arc<dyn ConnectorRegistry>,
+    ) -> Panel {
+        Panel::build(Arc::new(PlainHasher), false, None, apps, connectors).await
+    }
+
     /// The router with this password hasher, `Secure` cookies when `cookie_secure`, and the
     /// static panel from `panel_dir`.
     pub async fn with(
         hasher: Arc<dyn PasswordHasher>,
         cookie_secure: bool,
         panel_dir: Option<PathBuf>,
+    ) -> Panel {
+        Panel::build(
+            hasher,
+            cookie_secure,
+            panel_dir,
+            Arc::new(FakeAppConfig::default()),
+            Arc::new(ScriptedRegistry::new()),
+        )
+        .await
+    }
+
+    async fn build(
+        hasher: Arc<dyn PasswordHasher>,
+        cookie_secure: bool,
+        panel_dir: Option<PathBuf>,
+        apps: Arc<dyn PlatformAppConfig>,
+        connectors: Arc<dyn ConnectorRegistry>,
     ) -> Panel {
         let db = TestDb::new().await;
         let uow = PgUnitOfWork::new(db.pool.clone());
@@ -70,6 +100,9 @@ impl Panel {
             channels: Arc::new(UowChannelCatalog::new(shared)),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
+            apps,
+            connectors,
+            job_lock: Arc::new(crate::fakes::FakeJobLock::new()),
         };
         let state = AppState {
             deps: deps.clone(),

@@ -232,6 +232,8 @@ pub static CATALOG: &[UseCase] = &[
     twin("capability.list", Exempt, "jeeta.capability.list", ("GET", "/api/capabilities"), Read),
     twin("capability.get", Exempt, "jeeta.capability.get", ("GET", "/api/capabilities/{capability_id}"), Read),
     twin("capability.declare", Exempt, "jeeta.capability.declare", ("POST", "/api/capabilities"), Write),
+    // Body and arguments `{ name?, description?, external_id? }`: at least one.
+    twin("capability.update", Exempt, "jeeta.capability.update", ("PATCH", "/api/capabilities/{capability_id}"), Write),
     twin("capability.verify", Exempt, "jeeta.capability.verify", ("POST", "/api/capabilities/{capability_id}/verify"), Write),
     twin("capability.mark_unreachable", Exempt, "jeeta.capability.mark_unreachable", ("POST", "/api/capabilities/{capability_id}/unreachable"), Write),
     twin("capability.set_policy", Exempt, "jeeta.capability.set_policy", ("PUT", "/api/capabilities/{capability_id}/policy"), Write),
@@ -247,8 +249,30 @@ pub static CATALOG: &[UseCase] = &[
     twin("capability.groups.remove_member", Exempt, "jeeta.capability.groups_remove_member", ("DELETE", "/api/capability-groups/{group_id}/members/{capability_id}"), Write),
     twin("budget.items.list", Exempt, "jeeta.budget.items_list", ("GET", "/api/budget/items"), Read),
     twin("budget.items.create", Exempt, "jeeta.budget.items_create", ("POST", "/api/budget/items"), Write),
+    // Body and arguments `{ name?, cap?, period? }`: at least one; the kind and unit never change.
+    twin("budget.items.update", Exempt, "jeeta.budget.items_update", ("PATCH", "/api/budget/items/{budget_item_id}"), Write),
+    // Body and arguments `{ confirm }`.
+    twin("budget.items.retire", Exempt, "jeeta.budget.items_retire", ("POST", "/api/budget/items/{budget_item_id}/retire"), Destructive),
     twin("budget.spend.record", Exempt, "jeeta.budget.spend_record", ("POST", "/api/budget/items/{budget_item_id}/spend"), Spend),
     twin("budget.spend.list", Exempt, "jeeta.budget.spend_list", ("GET", "/api/budget/items/{budget_item_id}/spend"), Read),
+    // Connecting accounts: exempt from the strategy gate (the consultation needs the accounts),
+    // not from the status check (a workspace awaiting payment connects nothing). The provider's
+    // OAuth callback is the signed-in owner's browser coming back: panel only.
+    twin("connector.start_oauth", Exempt, "jeeta.connector.start_oauth", ("POST", "/api/connectors/oauth/start"), Write),
+    panel_only("connector.complete_oauth", Exempt, ("GET", "/api/connectors/oauth/callback/{provider}"), Write),
+    twin("connector.confirm_assets", Exempt, "jeeta.connector.confirm_assets", ("POST", "/api/connectors/oauth/{pending_id}/confirm"), Write),
+    twin("connector.set_credentials", Exempt, "jeeta.connector.set_credentials", ("POST", "/api/connectors/credentials"), Write),
+    twin("connector.probe", Exempt, "jeeta.connector.probe", ("POST", "/api/connectors/{capability_id}/probe"), Write),
+    twin("connector.health", Exempt, "jeeta.connector.health", ("GET", "/api/connectors/health"), Read),
+    twin("connector.reconnect", Exempt, "jeeta.connector.reconnect", ("POST", "/api/connectors/{capability_id}/reconnect"), Write),
+    // The webhook addresses to register at the providers; the NetGSM ones carry the workspace's
+    // hook tokens, so `capabilities.manage` reads them.
+    twin("connector.hooks", Exempt, "jeeta.connector.hooks", ("GET", "/api/connectors/hooks"), Read),
+    // What the connections brought in: observation, not planned work, so exempt from the
+    // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
+    twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),
+    twin("events.ack", Exempt, "jeeta.events.ack", ("POST", "/api/events/ack"), Write),
+    twin("events.list", Exempt, "jeeta.events.list", ("GET", "/api/events"), Read),
     // What is pending (B11): exempt from the strategy gate, and from the status check while the
     // workspace awaits payment, since an agent asks it before any strategy exists. Checking in is
     // an agent's call only.

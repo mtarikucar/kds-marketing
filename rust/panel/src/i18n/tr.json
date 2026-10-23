@@ -159,7 +159,18 @@
     "before_id": "Sayfa imleci",
     "group": "Tür grubu",
     "group_id": "Grup",
-    "confirm": "Onay"
+    "confirm": "Onay",
+    "selected": "Seçilen hesaplar",
+    "credential": {
+      "kind": "Kimlik bilgisi türü",
+      "usercode": "Kullanıcı kodu",
+      "password": "Parola",
+      "msgheader": "Mesaj başlığı",
+      "username": "Kullanıcı adı",
+      "trunk": "Hat",
+      "pbxnum": "Santral numarası",
+      "access_token": "Erişim jetonu"
+    }
   },
   "errors": {
     "UNAUTHENTICATED": "Oturum açmanız gerekiyor.",
@@ -170,6 +181,7 @@
     "STRATEGY_REQUIRED": "Bu işlem için önce onaylı bir strateji gerekiyor.",
     "WORKSPACE_INACTIVE": "Çalışma alanı etkin değil.",
     "HOST_NOT_ALLOWED": "Bu adrese erişime izin verilmiyor.",
+    "UPSTREAM_UNAVAILABLE": "Sağlayıcı şu anda yanıt vermiyor. Lütfen biraz sonra yeniden deneyin.",
     "INTERNAL": "Beklenmeyen bir hata oluştu. Lütfen biraz sonra yeniden deneyin.",
     "NETWORK": "Sunucuya ulaşılamadı. Bağlantınızı denetleyin.",
     "unknown": "Bir şeyler ters gitti.",
@@ -187,7 +199,14 @@
     "noDraft": "Açık bir strateji taslağı yok.",
     "versionMoved": "Sürüm bu arada değişti; sayfayı yenileyin.",
     "draftChanged": "Taslak size gösterildikten sonra değişti. Onaylamadan önce yeniden gözden geçirin.",
-    "missingPermission": "Bu işlem için şu izin gerekiyor: {{permission}}."
+    "missingPermission": "Bu işlem için şu izin gerekiyor: {{permission}}.",
+    "providerAppMissing": "Bu sağlayıcının platform uygulaması henüz yapılandırılmadı; bu hesap türü şimdilik bağlanamaz.",
+    "publicUrlMissing": "Platformun genel adresi henüz yapılandırılmadı; hesap bağlama ve webhook adresleri şimdilik kullanılamıyor.",
+    "useSetCredentials": "Bu hesap türü sağlayıcıda oturum açarak değil, kimlik bilgileriyle bağlanır.",
+    "accountMismatch": "Oturum açılan hesap bu kabiliyetin hesabına ulaşmıyor.",
+    "providerRefused": "Sağlayıcı isteği reddetti.",
+    "accountTaken": "Bu hesap zaten aynı türden başka bir kabiliyete bağlı.",
+    "upstreamRetryAfter": "Sağlayıcı şu anda yanıt vermiyor. Yaklaşık {{seconds}} saniye sonra yeniden deneyin."
   },
   "login": {
     "title": "Giriş yap",
@@ -272,8 +291,12 @@
       "verify_capability_stale": "{{name}} için doğrulama eskidi; yeniden doğrulanmalı.",
       "declare_first_capability": "Çalışma alanının kullanabileceği ilk kabiliyeti bildirin.",
       "connect_connector": "{{name}} bağlanmayı bekliyor.",
+      "reconnect_connector": "{{name}} yeniden bağlanmalı: sağlayıcı girişini artık kabul etmiyor.",
+      "inbound_events_one": "{{n}} gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.",
+      "inbound_events_other": "{{n}} gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.",
       "open": "Aç",
-      "priority": "Öncelik {{priority}}"
+      "priority": "Öncelik {{priority}}",
+      "reconnect": "Yeniden bağla"
     }
   },
   "team": {
@@ -469,6 +492,8 @@
     "approveNoAssumptions": "Hiç varsayım kaydedilmedi: her nokta sizin cevaplarınıza dayanıyor.",
     "approveHypotheses": "Yürürlüğe koyduğu hipotezler: {{count}}.",
     "approveLoading": "Taslak yükleniyor…",
+    "approveNotSubmitted": "Taslak bu arada yeniden açıldı; onaya yeniden sunulmadan onaylanamaz.",
+    "approveNoDraft": "Onay bekleyen bir taslak kalmadı; bu arada onaylanmış ya da kapatılmış olabilir.",
     "approveConfirm": "Bu sürümü onayla",
     "archive": "Arşivle",
     "archiveTitle": "Onaylı stratejiyi arşivle",
@@ -672,6 +697,7 @@
     "noGroups": "Grupta değil",
     "keyDetail": "Araç: {{detail}}",
     "actions": {
+      "edit": "Düzenle",
       "verify": "Doğrula",
       "policy": "Politika",
       "unreachable": "Ulaşılamıyor işaretle",
@@ -692,6 +718,15 @@
       "settingValue": "Değer",
       "submit": "Bildir",
       "declared": "Kabiliyet bildirildi."
+    },
+    "editDialog": {
+      "title": "{{name}}: düzenle",
+      "description": "Adı, açıklamayı ya da hesabı değiştirin. Tür, ayarlar ve politika olduğu gibi kalır.",
+      "externalIdHint": "Sağlayıcının hesap, sayfa ya da hat kimliği; boş bırakılamaz.",
+      "externalIdConnectorHint": "Sağlayıcının hesap, sayfa ya da hat kimliği; boş bırakılamaz. Değiştirirseniz hesabı yeniden bağlamanız gerekir.",
+      "connectorWarning": "Hesabı değiştirmek doğrulamayı sıfırlar ve saklanan kimlik bilgilerini siler: ardından hesabı yeniden bağlayın.",
+      "saved": "Kabiliyet güncellendi.",
+      "savedReset": "Kabiliyet güncellendi; doğrulaması sıfırlandı ve kimlik bilgileri silindi. Hesabı yeniden bağlayın."
     },
     "verifyDialog": {
       "title": "{{name}} doğrula",
@@ -762,7 +797,132 @@
       "deleted": "Grup silindi.",
       "memberAdded": "Üye eklendi.",
       "memberRemoved": "Üye çıkarıldı."
+    },
+    "connector": {
+      "label": "Bağlantı",
+      "actionsLabel": "Bağlantı işlemleri",
+      "connect": "Bağla",
+      "reconnect": "Yeniden bağla",
+      "probe": "Yokla",
+      "health": {
+        "ok": "Yoklama başarılı · {{when}}",
+        "failed": "Yoklama başarısız ({{reason}}) · {{when}}",
+        "never": "Henüz yoklanmadı",
+        "reconnect": "Yeniden bağlanmalı",
+        "expiresSoon": "Erişim jetonunun süresi {{when}} doluyor",
+        "expired": "Erişim jetonunun süresi doldu"
+      },
+      "errorKinds": {
+        "auth": "giriş reddedildi",
+        "permission": "izin yok",
+        "throttle": "sağlayıcı yoğun",
+        "transient": "geçici bir sorun",
+        "permanent": "kalıcı bir sorun",
+        "unknown": "bilinmeyen bir sorun"
+      },
+      "probeDialog": {
+        "title": "Yoklama: {{name}}",
+        "description": "Sistem sağlayıcıya kimlik bilgileriyle küçük bir deneme çağrısı yaptı.",
+        "ok": "Yoklama başarılı; bağlantı çalışıyor.",
+        "failed": "Yoklama başarısız: {{reason}}.",
+        "latency": "Süre",
+        "latencyValue": "{{ms}} ms",
+        "status": "Durum"
+      },
+      "probing": "Yoklanıyor…",
+      "redirecting": "Sağlayıcıya yönlendiriliyorsunuz…"
+    },
+    "hooks": {
+      "title": "Webhook adresleri",
+      "description": "Sağlayıcıların bu çalışma alanına olay (gelen mesaj, durum, arama, izin) göndereceği adresler. Her birini sağlayıcının paneline yapıştırın.",
+      "netgsmTitle": "NetGSM",
+      "netgsmHelp": "Her adres bu çalışma alanına özel bir anahtar taşır: yalnızca NetGSM paneline yapıştırın, başkasıyla paylaşmayın.",
+      "purposes": {
+        "mo": "Gelen SMS",
+        "events": "Santral çağrı olayları",
+        "iys": "İYS izin değişiklikleri",
+        "voice-report": "Sesli mesaj raporları",
+        "autocall-report": "Otomatik arama raporları"
+      },
+      "metaTitle": "Meta",
+      "metaUrl": "Meta webhook adresi",
+      "verifyTokenHint": "Doğrulama anahtarı platformun Meta uygulamasının panelinde ayarlıdır; burada gösterilmez.",
+      "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür."
     }
+  },
+  "connect": {
+    "title": "Hesap bağla",
+    "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta ve X için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
+    "open": "Hesap bağla",
+    "kindsLabel": "Bağlanacak hesap türü",
+    "chooseKind": "Önce bağlanacak hesap türünü seçin.",
+    "providers": {
+      "meta": "Meta",
+      "netgsm": "NetGSM",
+      "x": "X"
+    },
+    "forCapability": "{{name}} için",
+    "noPermission": "Hesap bağlamak için kabiliyetleri yönetme izni gerekiyor.",
+    "unsupported": "Bu hesap türü henüz bir sağlayıcıyla bağlanamıyor.",
+    "oauth": {
+      "title": "Sağlayıcıda oturum açın",
+      "body": "Sağlayıcının giriş sayfasına yönlendirileceksiniz. Oturum açıp izin verdikten sonra panele dönersiniz ve bağlanacak hesapları seçersiniz. Giriş on dakika içinde tamamlanmalıdır.",
+      "submit": "{{provider}} ile oturum aç",
+      "reconnectBody": "Bu hesabın girişi yenilenecek: sağlayıcıda aynı hesapla yeniden oturum açın.",
+      "reconnectSubmit": "Yeniden bağla",
+      "firstBindsNote": "Bu kabiliyet henüz bir hesaba bağlı değil: sağlayıcıda ilk seçtiğiniz hesap bu kabiliyete bağlanır, diğer seçtikleriniz yeni kabiliyetler olarak eklenir."
+    },
+    "credentials": {
+      "title": "Kimlik bilgileri",
+      "body": "Bilgiler mühürlenerek saklanır ve bir daha gösterilmez; kaydedilir kaydedilmez bağlantı yoklanır.",
+      "name": "Kabiliyetin adı",
+      "nameHint": "Panelde ve ajanın gördüğü listede bu adla görünür.",
+      "usercode": "Kullanıcı kodu",
+      "password": "Parola",
+      "msgheader": "Mesaj başlığı",
+      "msgheaderHint": "NetGSM'de onaylı gönderici adı.",
+      "username": "Kullanıcı adı",
+      "trunk": "Hat (isteğe bağlı)",
+      "pbxnum": "Santral numarası (isteğe bağlı)",
+      "submit": "Kaydet ve yokla"
+    },
+    "advanced": "Gelişmiş",
+    "token": {
+      "body": "Sağlayıcıdan aldığınız bir erişim jetonunu yapıştırarak da bağlayabilirsiniz. Jeton mühürlenir ve bir daha gösterilmez.",
+      "accessToken": "Erişim jetonu",
+      "externalId": "Hesap kimliği",
+      "externalIdHint": "Sayfanın ya da WhatsApp telefon numarasının sağlayıcıdaki kimliği.",
+      "externalIdOptional": "Hesap kimliği (isteğe bağlı)",
+      "submit": "Jetonu kaydet ve yokla"
+    },
+    "result": {
+      "verified": "Bağlantı yoklandı ve doğrulandı.",
+      "failed": "Kimlik bilgileri kaydedildi, ama yoklama başarısız oldu: {{reason}}.",
+      "pending": "Kimlik bilgileri kaydedildi; bağlantı henüz doğrulanmadı.",
+      "toCapabilities": "Kabiliyetlere git",
+      "another": "Başka bir hesap bağla"
+    }
+  },
+  "oauthCallback": {
+    "title": "Hesap bağlantısı",
+    "loading": "Sağlayıcının yanıtı işleniyor…",
+    "chooseTitle": "Bağlanacak hesapları seçin",
+    "chooseBody": "Oturum açtığınız hesabın ulaştığı varlıklar aşağıda. Seçtikleriniz kabiliyet olarak eklenir ve hemen yoklanır.",
+    "firstBinds": "Bu bağlantı bir kabiliyet için başlatıldı: ilk seçtiğiniz hesap o kabiliyete bağlanır, diğerleri yeni kabiliyetler olarak eklenir.",
+    "assetsLabel": "Bulunan varlıklar",
+    "externalId": "Kimlik: {{id}}",
+    "scopes": "İzinler: {{scopes}}",
+    "expires": "Erişimin bitişi: {{at}}",
+    "none": "Bu hesabın bağlanabilecek bir varlığı bulunamadı.",
+    "confirm": "Seçilenleri bağla",
+    "connected": "Bağlanan hesap sayısı: {{count}}.",
+    "errorTitle": "Bağlantı tamamlanamadı",
+    "providerDenied": "Sağlayıcıda izin verilmedi; hesap bağlanmadı.",
+    "providerError": "Sağlayıcı bağlantıyı tamamlamadı.",
+    "missingParams": "Bu sayfa sağlayıcının geri dönüşü olmadan açıldı.",
+    "unknownCallback": "Bu geri dönüş adresini panel tanımıyor; bağlamayı panelden yeniden başlatın.",
+    "stateRefused": "Bu bağlantı isteği bu çalışma alanına ait değil, süresi doldu ya da zaten kullanıldı. Bağlamayı yeniden başlatın.",
+    "restart": "Yeniden başlat"
   },
   "budget": {
     "title": "Bütçe",
@@ -798,7 +958,12 @@
     },
     "minutesValue": "{{value}} dk",
     "overCap": "Sınır aşıldı",
+    "retiredOn": "Emekliye ayrıldı: {{date}}",
     "spend": "Harcamalar",
+    "actions": {
+      "edit": "Düzenle",
+      "retire": "Emekliye ayır"
+    },
     "empty": "Henüz bütçe kalemi yok.",
     "emptyBody": "Reklam bütçesi, SMS ya da ajan kotası gibi bir kalem oluşturun; ajan harcadıkça buraya yazar.",
     "dialog": {
@@ -814,10 +979,21 @@
       "submit": "Oluştur",
       "created": "Bütçe kalemi oluşturuldu."
     },
+    "editDialog": {
+      "title": "{{name}}: düzenle",
+      "description": "Adı, üst sınırı ya da dönemi değiştirin; tür ve birim değişmez. Harcanmış tutarın altında bir sınır da verilebilir: kalem o zaman sınırı aşmış görünür.",
+      "saved": "Bütçe kalemi güncellendi."
+    },
+    "retireDialog": {
+      "title": "Bütçe kalemini emekliye ayır",
+      "body": "{{name}} artık bağ ve harcama kabul etmeyecek: ona bağlı her kabiliyetin bağı kaldırılır. Harcama geçmişi kalır.",
+      "retired": "Bütçe kalemi emekliye ayrıldı."
+    },
     "spendSheet": {
       "title": "{{name}}: harcamalar",
       "description": "En yenisi önce; bir harcama kaydı silinmez.",
       "summary": "Bu dönem {{spent}} harcandı, kalan {{remaining}}.",
+      "retired": "Bu kalem emekliye ayrıldı: artık harcama kabul etmez.",
       "record": "Harcama kaydet",
       "amountHint": "{{unit}} cinsinden, sıfırdan büyük.",
       "referenceHint": "Fatura numarası, kampanya kimliği…",

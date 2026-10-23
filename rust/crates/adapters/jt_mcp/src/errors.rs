@@ -40,8 +40,8 @@ pub fn tool_error(err: AppError) -> CallToolResult {
 }
 
 /// An HTTP answer for an error met before the MCP layer: `401` with `WWW-Authenticate: Bearer`
-/// for `UNAUTHENTICATED`, `404` for `NOT_FOUND`, `500` otherwise; the body is the structured
-/// error.
+/// for `UNAUTHENTICATED`, `404` for `NOT_FOUND`, `503` for `UPSTREAM_UNAVAILABLE`, `500`
+/// otherwise; the body is the structured error.
 pub fn http_error(err: AppError) -> Response {
     let code = err.code;
     let body = Json(error_json(err));
@@ -53,6 +53,7 @@ pub fn http_error(err: AppError) -> Response {
         )
             .into_response(),
         ErrorCode::NotFound => (StatusCode::NOT_FOUND, body).into_response(),
+        ErrorCode::UpstreamUnavailable => (StatusCode::SERVICE_UNAVAILABLE, body).into_response(),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, body).into_response(),
     }
 }
@@ -83,6 +84,10 @@ mod tests {
         let table = [
             (AppError::unauthenticated("invalid api key"), 401),
             (AppError::not_found("unknown session"), 404),
+            (
+                AppError::upstream_unavailable("meta", "rate limited", None),
+                503,
+            ),
             (AppError::internal("db down"), 500),
         ];
         for (err, status) in table {
@@ -93,6 +98,27 @@ mod tests {
                 status == 401
             );
         }
+    }
+
+    #[test]
+    fn an_unavailable_provider_keeps_its_details_in_a_tool_error() {
+        let err = AppError::upstream_unavailable("x", "temporary failure: reset", Some(5));
+        let expected = json!({
+            "code": "UPSTREAM_UNAVAILABLE",
+            "message": "the provider is unavailable; try again later",
+            "details": {
+                "provider": "x",
+                "retryable": true,
+                "retry_after_s": 5,
+                "reason": "temporary failure: reset",
+            },
+        });
+        assert_eq!(error_json(err.clone()), expected);
+        let result = tool_error(err);
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(result.structured_content, Some(expected.clone()));
+        let text = &result.content[0].as_text().unwrap().text;
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), expected);
     }
 
     #[test]

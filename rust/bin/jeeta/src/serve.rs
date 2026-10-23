@@ -1,10 +1,17 @@
-//! `jeeta serve`: the HTTP server. The panel's API and files, `/healthz` and the MCP endpoint
-//! at `/mcp`, on one listener.
+//! `jeeta serve`: the HTTP server. The panel's API and files, `/healthz`, the MCP endpoint at
+//! `/mcp` and the providers' webhooks at `/hooks/*`, on one listener.
 //!
-//! Start order: connect to the database, refuse a role that row-level security does not bind
-//! ([`check_database_role`]), apply pending migrations, create the first platform operator when
-//! configured, build the shared ports once, then serve until SIGINT or SIGTERM and drain open
-//! connections for at most [`DRAIN_TIMEOUT`].
+//! Start order: the configuration (provider apps included) was read and checked before this runs
+//! (a half-configured provider app never starts); refuse a binary built with `jt_outbound`'s
+//! test-only loopback paths ([`check_test_loopback`]), connect to the database, refuse a role that
+//! row-level security does not bind ([`check_database_role`]), apply pending migrations, build the
+//! shared ports once and refill the egress tenant tier from the capability records ([`boot`]),
+//! log which provider apps are configured and the public address ([`log_providers`]), create the
+//! first platform operator when configured, bind the listener, start the scheduled jobs
+//! ([`crate::scheduler`], unless `JEETA_JOBS_ENABLED=false`), then serve until SIGINT or SIGTERM.
+//! On the signal no new job run starts; open connections drain for at most [`DRAIN_TIMEOUT`], then
+//! the job runs still going get up to [`scheduler::SHUTDOWN_GRACE`] to finish before they are
+//! aborted.
 
 use std::future::IntoFuture;
 use std::path::Path;
@@ -19,43 +26,56 @@ use axum::middleware::{self, Next};
 use axum::response::Response;
 use jt_app::error::ErrorCode;
 use jt_app::gate::StrategyGate;
+use jt_app::ports::connectors::PlatformAppConfig;
 use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::capabilities::UowChannelCatalog;
+use jt_app::usecases::jobs::Job;
 use jt_app::usecases::strategy::NoopArchivedHook;
 use jt_app::usecases::{Deps, platform};
 use jt_mcp::{LOOPBACK_HOSTS, McpState};
-use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS};
+use jt_outbound::{Egress, EgressTenantHosts, FIXED_HOSTS, rebuild_tenant_hosts};
 use jt_panel_http::AppState;
-use jt_pg::{PgStrategyGate, PgUnitOfWork};
+use jt_pg::{PgJobLock, PgStrategyGate, PgUnitOfWork};
 use jt_seal::AesSecretBox;
+use jt_webhook::WebhookState;
 use sqlx::PgPool;
 use sqlx::migrate::Migrate;
 use sqlx::postgres::PgConnectOptions;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::config::{self, Bootstrap, Config, SecretKey};
+use crate::config::{self, Bootstrap, Config};
+use crate::{connectors, scheduler};
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The most job locks held at once (one per scheduled job), each on a connection of the job-lock
+/// pool, which is apart from the server's own (`PgJobLock::with_own_pool`).
+const JOB_LOCK_CONNECTIONS: u32 = Job::ALL.len() as u32;
 
 /// The operator console's login route, which the access log does not name.
 const PLATFORM_LOGIN: &str = "/api/platform/login";
 
 /// Runs the server until a shutdown signal; any error before it listens stops the start.
 pub async fn run(config: Config) -> Result<()> {
+    check_test_loopback(
+        jt_outbound::TEST_LOOPBACK_ENABLED,
+        config.allow_test_loopback,
+    )?;
     let pool = connect(&config).await?;
     check_database_role(&pool, config.allow_superuser).await?;
     let (applied, total) = migrate(&pool).await?;
     tracing::info!(applied, total, "migrations are up to date");
 
-    let deps = deps(pool.clone(), &config.secret_key);
+    let (deps, _egress) = boot(pool.clone(), &config).await?;
+    log_providers(&config);
     if let Some(bootstrap) = &config.bootstrap {
         bootstrap_operator(&deps, bootstrap).await?;
     }
     let gate = strategy_gate(pool.clone());
 
-    let app = app(deps, gate, &config);
+    let app = app(deps.clone(), gate, &config);
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("cannot listen on {} ({})", config.bind, config::BIND))?;
@@ -67,7 +87,10 @@ pub async fn run(config: Config) -> Result<()> {
         "jeeta is listening"
     );
 
-    serve(listener, app).await?;
+    let jobs = scheduler::start(&config, Arc::new(deps));
+    let served = serve(listener, app, jobs.stopper()).await;
+    jobs.shutdown(scheduler::SHUTDOWN_GRACE).await;
+    served?;
     pool.close().await;
     tracing::info!("stopped");
     Ok(())
@@ -84,6 +107,33 @@ pub(crate) async fn connect(config: &Config) -> Result<PgPool> {
         .with_context(context)?
         .options([("client_min_messages", "warning")]);
     jt_pg::connect_with(options).await.with_context(context)
+}
+
+/// Refuses to start when `enabled` (`jt_outbound::TEST_LOOPBACK_ENABLED`): that build of the
+/// egress client lets requests reach this machine over plain http and resolves `localhost`,
+/// which only tests may do. A whole-workspace test or `--all-targets` build turns the feature on
+/// once a crate enables it in its `[dev-dependencies]`, so a binary must come from
+/// `cargo build --release -p jeeta`. With `allow` (the [`config::ALLOW_TEST_LOOPBACK`] override,
+/// for local testing only) it goes on and warns.
+pub(crate) fn check_test_loopback(enabled: bool, allow: bool) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    if allow {
+        tracing::warn!(
+            "{}=1: this binary was built with jt_outbound's `test-loopback` feature, so outbound \
+             requests may reach this machine over plain http; for local testing only",
+            config::ALLOW_TEST_LOOPBACK
+        );
+        return Ok(());
+    }
+    bail!(
+        "this binary was built with jt_outbound's `test-loopback` feature (a whole-workspace test \
+         or --all-targets build turns it on), which lets outbound requests reach this machine \
+         over plain http; build the binary with `cargo build --release -p jeeta`, or set {}=1 \
+         for local testing only",
+        config::ALLOW_TEST_LOOPBACK
+    )
 }
 
 /// Refuses to go on when the database role is a superuser or has `BYPASSRLS`: Postgres applies no
@@ -138,31 +188,86 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
     Ok(applied.len())
 }
 
-/// The production ports over `pool`, sealing secrets under `secret_key`. One [`Argon2Hasher`]
-/// for the whole process: its concurrency permits are per instance, and every clone of the
-/// returned `Deps` shares it. Likewise one egress client, built here so that a bad fixed-tier
-/// entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`. The connectors
-/// M1b adds must share this same client, so that what the registry allows is what they reach;
-/// the tier lives in memory, so it starts empty at every start.
+/// The production ports over `pool` ([`ports`]), ready to serve: the egress client's tenant
+/// tier, which lives in memory and so starts empty, refilled from the capability records
+/// (`jt_outbound::rebuild_tenant_hosts`: the hosts of live connector capabilities only, so a
+/// retired capability's hosts stay out; it logs what it rebuilt). Every command runs it before it
+/// serves anything, so no request or job reaches out before the tier is whole. Returns the ports
+/// and the egress client they share.
+pub(crate) async fn boot(pool: PgPool, config: &Config) -> Result<(Deps, Arc<Egress>)> {
+    let (deps, egress) = ports(pool, config);
+    rebuild_tenant_hosts(&egress, deps.uow.as_ref())
+        .await
+        .context("cannot rebuild the egress tenant tier from the capability records")?;
+    Ok((deps, egress))
+}
+
+/// The production ports over `pool`, sealing secrets under the configured secret key. One
+/// [`Argon2Hasher`] for the whole process: its concurrency permits are per instance, and every
+/// clone of the returned `Deps` shares it. Likewise one egress client, built here so that a bad
+/// fixed-tier entry stops the start: its tenant tier is the use cases' `TenantHostRegistry`, and
+/// the provider adapters ([`connectors::registry`]: Meta, NetGSM and X) send through this same
+/// client, so that what the registry allows is what they reach; the tier lives in memory, so it
+/// starts empty at every start.
 ///
 /// The channel kinds a strategy may name are read from the capability registry, through the same
 /// unit of work: a workspace has a channel kind while it has a capability of that kind that is
 /// not retired.
-pub(crate) fn deps(pool: PgPool, secret_key: &SecretKey) -> Deps {
+///
+/// The scheduled jobs' locks are Postgres advisory locks on a small pool of their own
+/// ([`PgJobLock::with_own_pool`], [`JOB_LOCK_CONNECTIONS`] connections opened only when a lock is
+/// asked for), so a job holding its lock never takes a connection the server needs.
+///
+/// The platform's provider apps and public address are the configuration's
+/// ([`config::EnvPlatformApps`], read from the environment): the use cases and the three
+/// adapters read the same apps. A kind whose app is not configured answers `CONFLICT` "provider
+/// app not configured" to an OAuth flow, and without a public address no flow starts and no
+/// webhook URL is shown (`CONFLICT` "public base url not configured"); NetGSM credentials entered
+/// by hand need no app.
+///
+/// The tenant tier starts empty: [`boot`] refills it.
+pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
     let egress = Arc::new(Egress::new(FIXED_HOSTS));
+    let apps: Arc<dyn PlatformAppConfig> = Arc::new(config.apps.clone());
+    let job_lock = Arc::new(PgJobLock::with_own_pool(&pool, JOB_LOCK_CONNECTIONS));
     let uow = Arc::new(PgUnitOfWork::new(pool));
-    Deps {
+    let deps = Deps {
         uow: uow.clone(),
         clock: Arc::new(SystemClock),
         ids: Arc::new(UuidV7Gen),
         tokens: Arc::new(RandTokenGen),
         hasher: Arc::new(Argon2Hasher::default()),
-        seal: Arc::new(AesSecretBox::new(*secret_key.bytes())),
+        seal: Arc::new(AesSecretBox::new(*config.secret_key.bytes())),
         channels: Arc::new(UowChannelCatalog::new(uow)),
         // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
         archived_hook: Arc::new(NoopArchivedHook),
-        hosts: Arc::new(EgressTenantHosts::new(egress)),
-    }
+        hosts: Arc::new(EgressTenantHosts::new(Arc::clone(&egress))),
+        connectors: connectors::registry(Arc::clone(&egress), Arc::clone(&apps)),
+        job_lock,
+        apps,
+    };
+    (deps, egress)
+}
+
+/// One start-log line: which provider apps are configured (their names only, never an id or a
+/// secret) and the public address, or that none is.
+pub(crate) fn log_providers(config: &Config) {
+    let configured = config.apps.configured();
+    let providers = if configured.is_empty() {
+        "none".to_owned()
+    } else {
+        configured.join(",")
+    };
+    let public_base_url = config.apps.public_base_url().map_or_else(
+        || format!("unset ({})", config::PUBLIC_BASE_URL),
+        |url| url.to_string(),
+    );
+    tracing::info!(
+        providers,
+        public_base_url,
+        "provider apps: OAuth needs a configured app; webhook and redirect addresses need the \
+         public base URL"
+    );
 }
 
 /// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy
@@ -190,8 +295,9 @@ async fn bootstrap_operator(deps: &Deps, bootstrap: &Bootstrap) -> Result<()> {
 }
 
 /// The server's single router: the panel's (API, `/healthz`, files) merged with the MCP
-/// endpoint's, both behind the one strategy `gate`, with the security headers on every response
-/// and a one-line access log.
+/// endpoint's, both behind the one strategy `gate`, and the webhook gate's (`/hooks/*`, which
+/// providers call: outside the panel's session and request-header checks, which live inside the
+/// panel's own router), with the security headers on every response and a one-line access log.
 pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> Router {
     let panel = AppState {
         deps: deps.clone(),
@@ -199,11 +305,15 @@ pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> R
         cookie_secure: config.cookie_secure,
         panel_dir: config.panel_dir.clone(),
     };
+    let hooks = WebhookState {
+        deps: Arc::new(deps.clone()),
+    };
     let mcp = McpState::new(deps, gate).with_allowed_hosts(mcp_hosts(&config.allowed_hosts));
     jt_panel_http::router(panel)
         .merge(jt_mcp::http_service(mcp))
+        .merge(jt_webhook::router(hooks))
         // The panel's router sets them on its own responses already (idempotently); this
-        // covers the MCP endpoint too.
+        // covers the MCP endpoint and the webhook gate too.
         .layer(middleware::from_fn(jt_panel_http::security_headers))
         .layer(middleware::from_fn(access_log))
 }
@@ -264,9 +374,14 @@ fn panel_status(dir: Option<&Path>) -> String {
     }
 }
 
-/// Serves until SIGINT or SIGTERM, then stops accepting and lets open connections finish for
-/// at most [`DRAIN_TIMEOUT`].
-async fn serve(listener: TcpListener, app: Router) -> Result<()> {
+/// Serves until SIGINT or SIGTERM, then calls `on_signal` (which stops the scheduled jobs from
+/// starting new runs), stops accepting and lets open connections finish for at most
+/// [`DRAIN_TIMEOUT`].
+async fn serve(
+    listener: TcpListener,
+    app: Router,
+    on_signal: impl FnOnce() + Send + 'static,
+) -> Result<()> {
     let mut signals = Signals::install()?;
     let (stop, stopped) = oneshot::channel::<()>();
     let server = axum::serve(listener, app)
@@ -290,6 +405,7 @@ async fn serve(listener: TcpListener, app: Router) -> Result<()> {
             );
         }
     }
+    on_signal();
     let _ = stop.send(());
     match tokio::time::timeout(DRAIN_TIMEOUT, &mut server).await {
         Ok(ended) => ended
@@ -355,9 +471,13 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use jt_app::gate::NoStrategyYet;
+    use jt_app::ports::connectors::Url;
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
     use jt_app::usecases::strategy::NoChannelsYet;
-    use jt_testkit::fakes::{InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts};
+    use jt_testkit::fakes::{
+        FakeAppConfig, FakeJobLock, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+        ScriptedRegistry,
+    };
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -375,6 +495,9 @@ mod tests {
             channels: Arc::new(NoChannelsYet),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
+            apps: Arc::new(FakeAppConfig::default()),
+            connectors: Arc::new(ScriptedRegistry::new()),
+            job_lock: Arc::new(FakeJobLock::new()),
         }
     }
 
@@ -404,6 +527,14 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         (status, cookie, body)
+    }
+
+    fn panel_get(uri: &str, cookie: &str) -> Request<Body> {
+        Request::get(uri)
+            .header(header::COOKIE, cookie)
+            .header("x-requested-with", "jeeta-panel")
+            .body(Body::empty())
+            .unwrap()
     }
 
     fn panel_post(uri: &str, cookie: Option<&str>, body: Value) -> Request<Body> {
@@ -504,6 +635,43 @@ mod tests {
         }
     }
 
+    /// The webhook gate is merged into the one router outside the panel's checks (a provider
+    /// carries no session and no panel request header), with the security headers on its
+    /// answers too.
+    #[tokio::test]
+    async fn the_webhook_gate_is_served_outside_the_panel_checks() {
+        let mut deps = test_deps();
+        deps.apps = Arc::new(FakeAppConfig::with_all_apps());
+        let app = app(deps, Arc::new(NoStrategyYet), &test_config(&[]));
+
+        let verify = Request::get(
+            "/hooks/meta?hub.mode=subscribe&hub.verify_token=meta-verify-token&hub.challenge=42",
+        )
+        .body(Body::empty())
+        .unwrap();
+        let resp = app.clone().oneshot(verify).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        for (name, value) in jt_panel_http::headers::SECURITY_HEADERS {
+            let all: Vec<_> = resp.headers().get_all(*name).iter().collect();
+            assert_eq!(all, [*value], "{name}");
+        }
+        let text = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&text[..], b"42");
+
+        // No panel request header, no session: the gate's own answers, not the panel's 403/401.
+        let unsigned = Request::post("/hooks/meta").body(Body::from("{}")).unwrap();
+        let resp = app.clone().oneshot(unsigned).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let netgsm = Request::post(format!(
+            "/hooks/netgsm/0192f0c4-0000-7000-8000-000000000000/{}/mo",
+            "0".repeat(64)
+        ))
+        .body(Body::from("mesaj=x"))
+        .unwrap();
+        let resp = app.clone().oneshot(netgsm).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
     #[tokio::test]
     async fn mcp_accepts_loopback_hosts_and_the_configured_public_ones() {
         let deps = test_deps();
@@ -541,7 +709,7 @@ mod tests {
         // The production ports over a test database; only the hasher is swapped for speed.
         let db = jt_testkit::TestDb::new().await;
         let config = test_config(&[]);
-        let mut deps = deps(db.pool.clone(), &config.secret_key);
+        let (mut deps, _) = ports(db.pool.clone(), &config);
         deps.hasher = Arc::new(PlainHasher);
         let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
 
@@ -612,6 +780,220 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
+
+        // The three provider adapters are served; no provider app is configured here, nor a
+        // public address: an OAuth flow cannot start (the missing address is named first, before
+        // any app, and nothing reaches a provider), and no webhook address is shown.
+        for provider in jt_connector::Provider::all() {
+            let connector = deps.connectors.connector(*provider).expect("an adapter");
+            assert_eq!(connector.provider(), *provider);
+        }
+        assert!(
+            deps.connectors
+                .oauth(jt_connector::Provider::Meta)
+                .is_some()
+        );
+        assert!(deps.connectors.oauth(jt_connector::Provider::X).is_some());
+        assert!(
+            deps.connectors
+                .sms(jt_connector::Provider::Netgsm)
+                .is_some()
+        );
+        assert_eq!(deps.apps.meta_app(), None);
+        assert_eq!(deps.apps.x_app(), None);
+        assert_eq!(deps.apps.public_base_url(), None);
+        let (status, _, body) = call(
+            &app,
+            panel_post(
+                "/api/connectors/oauth/start",
+                Some(session),
+                json!({ "kind_key": "facebook_page" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["message"], "public base url not configured");
+        assert_eq!(body["details"]["reason"], "public_base_url_not_configured");
+        let (status, _, body) = call(&app, panel_get("/api/connectors/hooks", session)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["details"]["reason"], "public_base_url_not_configured");
+    }
+
+    /// The provider apps of the configuration reach every part that reads them: the OAuth flows
+    /// (each app's client id, and its own redirect URI under the public address), the hook
+    /// addresses, and the webhook gate's verification (the configured verify token).
+    #[tokio::test]
+    async fn the_configured_apps_reach_oauth_hooks_and_the_webhook_gate() {
+        let db = jt_testkit::TestDb::new().await;
+        let config = test_config(&[
+            (config::META_APP_ID, "meta-id-1"),
+            (config::META_APP_SECRET, "meta-secret-1"),
+            (config::META_VERIFY_TOKEN, "verify-1"),
+            (config::INSTAGRAM_APP_ID, "ig-id-1"),
+            (config::INSTAGRAM_APP_SECRET, "ig-secret-1"),
+            (config::X_CLIENT_ID, "x-id-1"),
+            (config::X_CLIENT_SECRET, "x-secret-1"),
+            (config::PUBLIC_BASE_URL, "https://jeeta.example"),
+        ]);
+        let (mut deps, _) = ports(db.pool.clone(), &config);
+        deps.hasher = Arc::new(PlainHasher);
+        let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
+        let (status, cookie, me) = call(
+            &app,
+            panel_post(
+                "/api/auth/register",
+                None,
+                json!({
+                    "email": "owner@example.test",
+                    "password": "correct horse battery",
+                    "display_name": "Owner",
+                    "workspace_name": "Acme"
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        jt_testkit::flows::activate_workspace(&deps, jt_testkit::panel::workspace_of(&me)).await;
+        let cookie = cookie.unwrap();
+        let session = cookie.split(';').next().unwrap();
+
+        for (kind, client_id, callback) in [
+            ("facebook_page", "meta-id-1", "meta"),
+            ("instagram", "ig-id-1", "instagram"),
+            ("x", "x-id-1", "x"),
+        ] {
+            let (status, _, body) = call(
+                &app,
+                panel_post(
+                    "/api/connectors/oauth/start",
+                    Some(session),
+                    json!({ "kind_key": kind }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{kind}: {body}");
+            let url = Url::parse(body["authorize_url"].as_str().unwrap()).unwrap();
+            let param = |name: &str| {
+                url.query_pairs()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| v.into_owned())
+            };
+            assert_eq!(param("client_id").as_deref(), Some(client_id), "{kind}");
+            assert_eq!(
+                param("redirect_uri"),
+                Some(format!("https://jeeta.example/oauth/callback/{callback}")),
+                "{kind}"
+            );
+            for secret in ["meta-secret-1", "ig-secret-1", "x-secret-1", "verify-1"] {
+                assert!(!body.to_string().contains(secret), "{kind}: {body}");
+            }
+        }
+
+        let (status, _, hooks) = call(&app, panel_get("/api/connectors/hooks", session)).await;
+        assert_eq!(status, StatusCode::OK, "{hooks}");
+        assert_eq!(hooks["meta"]["url"], "https://jeeta.example/hooks/meta");
+        assert!(
+            hooks["netgsm"][0]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://jeeta.example/hooks/netgsm/")
+        );
+        assert!(!hooks.to_string().contains("verify-1"));
+
+        let verify = Request::get(
+            "/hooks/meta?hub.mode=subscribe&hub.verify_token=verify-1&hub.challenge=7",
+        )
+        .body(Body::empty())
+        .unwrap();
+        let resp = app.clone().oneshot(verify).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            &to_bytes(resp.into_body(), usize::MAX).await.unwrap()[..],
+            b"7"
+        );
+    }
+
+    /// Review Focus 5 end to end: after a restart the egress tenant tier holds the hosts of live
+    /// connector capabilities only, a retired capability's hosts staying out although its record
+    /// still names them.
+    #[tokio::test]
+    async fn boot_rebuilds_the_tenant_tier_with_live_connector_hosts_only() {
+        let db = jt_testkit::TestDb::new().await;
+        let config = test_config(&[]);
+        let (mut deps, _) = boot(db.pool.clone(), &config).await.unwrap();
+        deps.hasher = Arc::new(PlainHasher);
+        let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
+
+        // Before the restart: the owner declares two mailboxes naming their hosts, and retires
+        // one.
+        let (status, cookie, me) = call(
+            &app,
+            panel_post(
+                "/api/auth/register",
+                None,
+                json!({
+                    "email": "owner@example.test",
+                    "password": "correct horse battery",
+                    "display_name": "Owner",
+                    "workspace_name": "Acme"
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let ws = jt_testkit::panel::workspace_of(&me);
+        jt_testkit::flows::activate_workspace(&deps, ws).await;
+        let cookie = cookie.unwrap();
+        let session = cookie.split(';').next().unwrap();
+        let mut ids = Vec::new();
+        for (name, host) in [
+            ("Destek", "imap.live.example"),
+            ("Eski", "imap.retired.example"),
+        ] {
+            let (status, _, body) = call(
+                &app,
+                panel_post(
+                    "/api/capabilities",
+                    Some(session),
+                    json!({
+                        "kind_key": "mailbox",
+                        "name": name,
+                        "connector_public": { "hosts": [host] },
+                    }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "{body}");
+            ids.push(body["capability"]["id"].as_str().unwrap().to_owned());
+        }
+        let (status, _, body) = call(
+            &app,
+            panel_post(
+                &format!("/api/capabilities/{}/retire", ids[1]),
+                Some(session),
+                json!({ "confirm": true }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["capability"]["status"], "retired");
+
+        // The restart: a new process, whose tier starts empty, boots on the same database.
+        let (_, egress) = boot(db.pool.clone(), &config).await.unwrap();
+        let reaches = |url: &str| {
+            egress.permits(
+                jt_outbound::EgressScope::Tenant(ws),
+                &Url::parse(url).unwrap(),
+            )
+        };
+        assert!(reaches("https://imap.live.example/"));
+        assert!(!reaches("https://imap.retired.example/"));
+        // Without the boot step, the tier would be empty.
+        let (_, cold) = ports(db.pool.clone(), &config);
+        assert!(!cold.permits(
+            jt_outbound::EgressScope::Tenant(ws),
+            &Url::parse("https://imap.live.example/").unwrap(),
+        ));
     }
 
     #[tokio::test]
@@ -635,12 +1017,35 @@ mod tests {
     }
 
     #[test]
+    fn a_build_with_test_loopback_refuses_to_start_unless_allowed() {
+        // A production build: nothing to refuse, whatever the variable says.
+        check_test_loopback(false, false).unwrap();
+        check_test_loopback(false, true).unwrap();
+        // A build with jt_outbound's test-loopback paths compiled in.
+        let refused = format!("{:#}", check_test_loopback(true, false).unwrap_err());
+        for needle in [
+            "test-loopback",
+            "cargo build --release -p jeeta",
+            config::ALLOW_TEST_LOOPBACK,
+        ] {
+            assert!(refused.contains(needle), "{needle:?} in {refused}");
+        }
+        // The local-testing override lets it start.
+        check_test_loopback(true, true).unwrap();
+    }
+
+    #[test]
     fn the_access_log_shows_route_templates_only() {
         assert_eq!(
             loggable_route(Some("/api/team/{membership_id}")),
             "/api/team/{membership_id}"
         );
         assert_eq!(loggable_route(Some("/mcp")), "/mcp");
+        // A NetGSM callback is logged by its template: never the workspace's hook token.
+        assert_eq!(
+            loggable_route(Some("/hooks/netgsm/{workspace_id}/{token}/{purpose}")),
+            "/hooks/netgsm/{workspace_id}/{token}/{purpose}"
+        );
         // Pages and files (including `/invite/<token>`) match no route: no path at all.
         assert_eq!(loggable_route(None), "-");
         assert_eq!(loggable_route(Some("/api/platform/login")), "<redacted>");

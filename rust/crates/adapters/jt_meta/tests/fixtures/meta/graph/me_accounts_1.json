@@ -1,0 +1,9 @@
+{
+  "data": [
+    { "id": "1234567890", "name": "Test Kahve", "access_token": "EAAB-page-1234567890", "category": "Cafe" }
+  ],
+  "paging": {
+    "cursors": { "before": "QVFTEST1", "after": "QVFTEST2" },
+    "next": "{{GRAPH}}/v19.0/me/accounts?access_token=EAAB-long-test&fields=id%2Cname%2Caccess_token&limit=100&appsecret_proof=stale&after=QVFTEST2"
+  }
+}

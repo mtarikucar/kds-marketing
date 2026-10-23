@@ -5,14 +5,16 @@
 //! Reading answers the capability with its status at the time of the call
 //! (`{capability, effective_status}`). Declaring answers `201`; every other write, unlinking a
 //! budget item included, answers the capability as it now stands (`200`), the same JSON its MCP
-//! tool answers. A policy, in a declaration or on its own, is read strictly: an unknown field is
-//! `422 VALIDATION` naming `policy`.
+//! tool answers; an edit adds `verification_reset`. A policy, in a declaration or on its own, is
+//! read strictly: an unknown field is `422 VALIDATION` naming `policy`; so is an edit's body,
+//! which takes only `name`, `description` and `external_id`.
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use jt_app::usecases::capabilities::{
-    self, CapabilityOut, CapabilityQuery, DeclareInput, parse_policy_strict,
+    self, CapabilityOut, CapabilityQuery, DeclareInput, UpdateCapability, UpdatedCapability,
+    parse_policy_strict,
 };
 use jt_capability::{BudgetItemId, CapabilityId, Evidence};
 use serde::Deserialize;
@@ -138,6 +140,19 @@ pub async fn declare(
 ) -> Result<(StatusCode, Json<CapabilityOut>), ApiError> {
     let out = capabilities::declare(&state.deps, &ctx, body.into_input()?).await?;
     Ok((StatusCode::CREATED, Json(out)))
+}
+
+/// `200` with the capability as edited and whether its verification was reset. The body is the
+/// edit as [`UpdateCapability`] reads it: `{name?, description?, external_id?}`, at least one.
+pub async fn update(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<CapabilityId>,
+    ApiJson(body): ApiJson<UpdateCapability>,
+) -> Result<Json<UpdatedCapability>, ApiError> {
+    Ok(Json(
+        capabilities::update(&state.deps, &ctx, id, body).await?,
+    ))
 }
 
 /// `200` with the capability, verified on the strength of the evidence.

@@ -9,11 +9,25 @@
 //! - `ConsultStrategy` (priority 1): no strategy at all, or a draft open (not submitted);
 //! - `ApproveStrategy` (1): a submitted draft, for a caller who may approve it (the role owner or
 //!   manager, and `team.manage`, as `strategy.approve` asks);
+//! - `ReconnectConnector` (1): each capability reached through a connector that reads
+//!   `unreachable` because its provider no longer accepts its login (a probe failed with `Auth`:
+//!   `connector_public.reconnect_required`);
 //! - `VerifyCapability` (2): each capability reached through an agent or a device that reads
 //!   `declared` or `stale` (a lapsed verification is asked for again);
 //! - `ConnectConnector` (2): each capability reached through a connector that reads `declared`
 //!   (M1b sets connectors up);
+//! - `InboundEvents` (2): inbound events (webhooks, polls) not yet acknowledged, with how many
+//!   (counted up to [`INBOUND_EVENTS_COUNT_CAP`]: a count of the cap means at least that many),
+//!   only for a caller who may acknowledge them ([`events::ACK_PERMISSION`]): anyone else would
+//!   see an item they could never clear;
 //! - `DeclareFirstCapability` (3): no capability that is not retired.
+//!
+//! Only the items the workspace's status lets be acted on are listed: each item is cleared by a
+//! use case ([`WorkKind::cleared_by`]), and an item whose use case the workspace-status check
+//! would refuse (`WORKSPACE_INACTIVE`) is left out. So while the workspace awaits payment only
+//! the strategy's items are listed (`strategy.*` runs then; capabilities, connections and events
+//! wait for the payment, though webhooks keep storing events meanwhile, which are listed once it
+//! is active).
 //!
 //! Each item carries a hint in English, for the agent; the panel shows its own copy.
 //!
@@ -36,7 +50,8 @@ use time::{Duration, OffsetDateTime};
 
 use super::capabilities::CapabilityOut;
 use super::strategy::{self, StrategyOut};
-use super::{Deps, agents, invalid, ledger_entry};
+use super::{Deps, agents, connector, events, invalid, ledger_entry};
+use crate::catalog::status_exemption;
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{
@@ -47,6 +62,10 @@ use crate::ports::{
 /// How long after a connection's ledgered check-in the next one is answered without a ledger
 /// entry.
 pub const CHECKIN_LEDGER_RESOLUTION: Duration = Duration::hours(1);
+
+/// The most unprocessed inbound events `InboundEvents` counts; past it the count reads as the cap
+/// ("at least this many"), so asking what is pending never counts a whole backlog.
+pub const INBOUND_EVENTS_COUNT_CAP: u32 = 1_000;
 
 const CHECKIN: &str = CHECKIN_ACTION;
 
@@ -120,6 +139,30 @@ pub enum WorkKind {
         capability_id: CapabilityId,
         name: String,
     },
+    /// Reconnect a connector capability whose credentials its provider no longer accepts.
+    ReconnectConnector {
+        capability_id: CapabilityId,
+        name: String,
+    },
+    /// Read and acknowledge the inbound events not yet processed: `count` of them, counted up to
+    /// [`INBOUND_EVENTS_COUNT_CAP`].
+    InboundEvents { count: u32 },
+}
+
+impl WorkKind {
+    /// The use case that clears the item (the first step of it, for a consultation or a
+    /// connection): an item is listed only while the workspace's status lets it run.
+    pub fn cleared_by(&self) -> &'static str {
+        match self {
+            WorkKind::ConsultStrategy => "strategy.start_consultation",
+            WorkKind::ApproveStrategy => "strategy.approve",
+            WorkKind::VerifyCapability { .. } => "capability.verify",
+            WorkKind::DeclareFirstCapability => "capability.declare",
+            WorkKind::ConnectConnector { .. } => "connector.start_oauth",
+            WorkKind::ReconnectConnector { .. } => "connector.reconnect",
+            WorkKind::InboundEvents { .. } => "events.ack",
+        }
+    }
 }
 
 /// The workspace's agent check-in.
@@ -163,11 +206,26 @@ async fn pending_as_seen(
         .map(|c| CapabilityOut::at(c, ctx.now))
         .collect();
     let agent = agent_state(repos.as_mut(), ctx.now, seen_now).await?;
+    let status = repos.workspace().get().await?.status;
+    let actionable = |kind: &WorkKind| status_exemption(kind.cleared_by()).allows(status);
+    // Only who may acknowledge the events is asked to handle them, and only while they can be.
+    let inbound = if ctx.permissions.contains(&events::ACK_PERMISSION)
+        && actionable(&WorkKind::InboundEvents { count: 0 })
+    {
+        repos
+            .inbound_events()
+            .count_pending(INBOUND_EVENTS_COUNT_CAP)
+            .await?
+    } else {
+        0
+    };
     drop(repos);
 
     let state = strategy_state(&strategy);
     let mut items = strategy_items(&state, may_approve(ctx));
     items.extend(capability_items(&capabilities));
+    items.extend(inbound_items(inbound));
+    items.retain(|item| actionable(&item.kind));
     items.sort_by_key(|item| item.priority);
     Ok(PendingOut {
         strategy: state,
@@ -344,6 +402,22 @@ fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
                     hint: hint.to_owned(),
                 });
             }
+            Reach::Connector
+                if status == EffectiveStatus::Unreachable && connector::reconnect_required(c) =>
+            {
+                items.push(WorkItem {
+                    kind: WorkKind::ReconnectConnector {
+                        capability_id: c.id,
+                        name: c.name.clone(),
+                    },
+                    priority: 1,
+                    hint: "Its provider no longer accepts its login: ask the owner to reconnect \
+                           it (jeeta.connector.reconnect gives the sign-in link to hand them; a \
+                           NetGSM line takes new credentials with \
+                           jeeta.connector.set_credentials)."
+                        .to_owned(),
+                });
+            }
             Reach::Connector if status == EffectiveStatus::Declared => items.push(WorkItem {
                 kind: WorkKind::ConnectConnector {
                     capability_id: c.id,
@@ -370,6 +444,18 @@ fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
         });
     }
     items
+}
+
+/// The inbound events' item, when `count` (capped) are unprocessed.
+fn inbound_items(count: u32) -> Option<WorkItem> {
+    (count > 0).then(|| WorkItem {
+        kind: WorkKind::InboundEvents { count },
+        priority: 2,
+        hint: "Inbound events (messages, delivery statuses, leads, calls, consent changes) await \
+               handling: read them with jeeta.events.pending, oldest first, and acknowledge each \
+               one you have handled with jeeta.events.ack."
+            .to_owned(),
+    })
 }
 
 /// The workspace's check-in state at `now`: the latest sight of any of its connections, and of

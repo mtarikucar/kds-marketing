@@ -5,8 +5,13 @@
 //! with the permissions the key had at that moment until it exits, so revoking the key or
 //! demoting its issuer takes effect at the next start. Stdout carries the MCP stream and logs go
 //! to stderr. This mode serves no HTTP and applies no migrations: the database must already have
-//! been migrated by `jeeta serve`. Like `serve`, it refuses a database role that row-level
-//! security does not bind (`serve::check_database_role`).
+//! been migrated by `jeeta serve`, and runs no scheduled jobs (the server does). Like `serve`, it
+//! refuses a binary built with `jt_outbound`'s test-only loopback paths
+//! (`serve::check_test_loopback`) and a database role that row-level security does not bind
+//! (`serve::check_database_role`), and refills the egress tenant tier from the capability records
+//! before it serves (`serve::boot`). It reads the same configuration, provider apps and public
+//! address included (`crate::config::EnvPlatformApps`), so a tool starting an OAuth flow here
+//! builds the same redirect URIs as the server, and logs them the same way.
 
 use anyhow::{Context, Result, bail};
 use jt_app::error::ErrorCode;
@@ -24,9 +29,14 @@ pub async fn run(config: Config) -> Result<()> {
             config::STDIO_API_KEY
         );
     };
+    serve::check_test_loopback(
+        jt_outbound::TEST_LOOPBACK_ENABLED,
+        config.allow_test_loopback,
+    )?;
     let pool = serve::connect(&config).await?;
     serve::check_database_role(&pool, config.allow_superuser).await?;
-    let deps = serve::deps(pool.clone(), &config.secret_key);
+    let (deps, _egress) = serve::boot(pool.clone(), &config).await?;
+    serve::log_providers(&config);
     let principal = match api_keys::authenticate(&deps, key).await {
         Ok(principal) => principal,
         Err(e) if e.code == ErrorCode::Unauthenticated => bail!(

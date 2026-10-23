@@ -4,14 +4,18 @@ import type { QueryClient } from '@tanstack/react-query';
 export const CAPABILITIES_KEY = ['capabilities'] as const;
 export const GROUPS_KEY = ['capability-groups'] as const;
 export const BUDGET_ITEMS_KEY = ['budget', 'items'] as const;
+export const CONNECTOR_HEALTH_KEY = ['connectors', 'health'] as const;
+export const HOOKS_KEY = ['connectors', 'hooks'] as const;
 
 /**
- * After a capability or group change: the lists, the pending work (verify / connect items) and
- * the strategy (its channel and group gaps read the capabilities).
+ * After a capability, group or connection change: the lists, the connectors' health, the pending
+ * work (verify / connect / reconnect items) and the strategy (its channel and group gaps read the
+ * capabilities).
  */
 export async function invalidateCapabilities(queryClient: QueryClient): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: CAPABILITIES_KEY }),
+    queryClient.invalidateQueries({ queryKey: CONNECTOR_HEALTH_KEY }),
     queryClient.invalidateQueries({ queryKey: GROUPS_KEY }),
     queryClient.invalidateQueries({ queryKey: ['work', 'pending'] }),
     queryClient.invalidateQueries({ queryKey: ['strategy'] }),

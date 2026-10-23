@@ -10,8 +10,15 @@ jt_app.workspace = true
 jt_pg.workspace = true
 jt_panel_http.workspace = true
 jt_mcp.workspace = true
+# The webhook gate (`/hooks/*`), merged into the server's router.
+jt_webhook.workspace = true
 jt_outbound.workspace = true
 jt_seal.workspace = true
+# The provider adapters the server runs (`src/connectors.rs`) and the provider keys they serve.
+jt_connector.workspace = true
+jt_meta.workspace = true
+jt_netgsm.workspace = true
+jt_x.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 axum.workspace = true
@@ -20,6 +27,8 @@ tracing-subscriber.workspace = true
 dotenvy.workspace = true
 anyhow.workspace = true
 hex.workspace = true
+# The scheduler hands each job the clock's time (`src/scheduler.rs`).
+time.workspace = true
 
 [dev-dependencies]
 jt_testkit = { workspace = true, features = ["panel"] }

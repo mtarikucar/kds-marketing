@@ -1,0 +1,37 @@
+[package]
+name = "jt_netgsm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The NetGSM adapter: SMS (REST v2), delivery reports and the inbox backup, the balance and sender
+# name probes, Netsantral (the cloud PBX), İYS consent records, a per-account rate budgeter and
+# NetGSM's callback bodies. It holds no HTTP client: every call goes through `jt_outbound::Egress`
+# under the `netgsm` connector scope (`jt_archtest` asserts no HTTP client crate is listed or
+# named here).
+[dependencies]
+jt_app.workspace = true
+jt_connector.workspace = true
+jt_outbound.workspace = true
+serde_json.workspace = true
+time.workspace = true
+url.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+# The fallback ids of callback items without one (SHA-256 of the item).
+sha2.workspace = true
+# `time`: the pause between attempts of a call that got no answer.
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+# Plain http to the in-process mock on 127.0.0.1, for the tests only (see jt_outbound's docs).
+jt_outbound = { workspace = true, features = ["test-loopback"] }
+axum.workspace = true
+base64.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
+
+[lints]
+workspace = true

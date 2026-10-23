@@ -8,6 +8,11 @@
 //! come from `capability_budget_links`, in the same statement. The partial unique index
 //! `capabilities_live_external_account` keeps one live capability per external account.
 //! `declared_by_connection` is written once, by `insert`: `update` leaves it as declared.
+//! [`by_external`] is the one platform-wide read: the connected capability (sealed credentials,
+//! verified or unreachable, verified at least once) of any workspace that holds an external
+//! account, where an inbound
+//! event for that account is routed; the partial index `capabilities_connected_account_idx` of
+//! migration 0005 serves it.
 
 use std::collections::BTreeSet;
 
@@ -23,6 +28,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::{map_sqlx, same_workspace, stored};
+use crate::tx::PlatformTx;
 use crate::uow::PgTenantRepos;
 
 /// The partial unique index that keeps one live capability per external account.
@@ -116,6 +122,52 @@ fn map_write(err: sqlx::Error, what: &str) -> AppError {
     } else {
         map_sqlx(err, what)
     }
+}
+
+/// The connected capability (sealed credentials present, stored status `verified` or
+/// `unreachable`, verified at least once) of any workspace whose kind is one of `kind_keys` and
+/// whose external account is `external_id`, verified ones first, then the most recently created;
+/// see
+/// `PlatformRepos::capability_by_external`. The predicate is the one of the partial index
+/// `capabilities_connected_account_idx`, so the index serves it.
+pub(crate) async fn by_external(
+    tx: &mut PlatformTx<'_>,
+    kind_keys: &[&str],
+    external_id: &str,
+) -> Result<Option<Capability>, AppError> {
+    let record: Option<CapabilityRecord> = sqlx::query_as(&format!(
+        // archtest: platform-wide
+        "select {COLUMNS} from capabilities c \
+         where c.kind_key = any($1) and c.external_id = $2 \
+         and c.status in ('verified', 'unreachable') and c.connector_sealed is not null \
+         and c.last_verified_at is not null \
+         order by (c.status = 'verified') desc, c.created_at desc, c.id desc limit 1"
+    ))
+    .bind(kind_keys.to_vec())
+    .bind(external_id)
+    .fetch_optional(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "find capability by external account"))?;
+    record.map(CapabilityRecord::into_capability).transpose()
+}
+
+/// The workspaces holding a verified capability with sealed credentials of one of `kind_keys`,
+/// in id order (see `PlatformRepos::workspaces_with_verified`).
+pub(crate) async fn workspaces_with_verified(
+    tx: &mut PlatformTx<'_>,
+    kind_keys: &[&str],
+) -> Result<Vec<WorkspaceId>, AppError> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        // archtest: platform-wide
+        "select distinct c.workspace_id from capabilities c \
+         where c.kind_key = any($1) and c.status = 'verified' \
+         and c.connector_sealed is not null order by c.workspace_id",
+    )
+    .bind(kind_keys.to_vec())
+    .fetch_all(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "list workspaces with a verified capability"))?;
+    Ok(ids.into_iter().map(WorkspaceId).collect())
 }
 
 /// `NOT_FOUND` unless capability `id` belongs to workspace `ws`. Writes that hang a row off a
@@ -289,14 +341,17 @@ impl CapabilityRepo for PgTenantRepos {
         &mut self,
         id: CapabilityId,
         sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
     ) -> Result<(), AppError> {
         let ws = self.workspace_id();
         let done = sqlx::query(
-            "update capabilities set connector_sealed = $3 where workspace_id = $1 and id = $2",
+            "update capabilities set connector_sealed = $3, updated_at = $4 \
+             where workspace_id = $1 and id = $2",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
         .bind(sealed)
+        .bind(at)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "set sealed connector config"))?;

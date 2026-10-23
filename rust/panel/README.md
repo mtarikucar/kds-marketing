@@ -102,8 +102,8 @@ bileşenlerde sabit metin yoktur.
 | `/invite/:token` | daveti kabul: oturum varsa tek tık, ardından oturum katılınan çalışma alanına geçer; yoksa ad + parola ile hesap; e-posta zaten kayıtlıysa giriş bağlantısı |
 | `/` | çalışma alanı kartı; `GET /api/work/pending`'den strateji kartı (yok → istişareyi başlat, taslak → eksikler, onayda → yetkiliye onay kısayolu, onaylı → sürüm), ajan kartı (son görülme, yoklama aralığı ve düzenleyici, gecikince kırmızı uyarı ve zamanlayıcının kiracıda olduğu notu), bekleyen işler listesi |
 | `/strategy` | Onaylı / Taslak sekmeleri: bölümler (taslakta `team.manage` ile yerinde düzenleme), hipotez tablosu ve düzenleyicisi, istişare kaydı ("daha fazla", not ekleme), eksikler, onaya sun (reddin eksikleri), onayla (sahip/yönetici), sürüm numarası yazılarak arşivleme, sürümler çekmecesi |
-| `/capabilities` | tür grubu süzgeci, kartlar (tür, ulaşım, beş durumlu rozet, son doğrulama, politika özeti, bütçe bağları, gruplar); bildir, doğrula, politika, ulaşılamıyor, bütçe bağla/çöz, emekliye ayır; gruplar paneli |
-| `/budget` | kalemler (kalan sınırı aşınca kırmızı), oluşturma diyaloğu (birim türe göre), harcama çekmecesi ve harcama kaydı |
+| `/capabilities` | tür grubu süzgeci, kartlar (tür, ulaşım, beş durumlu rozet, son doğrulama, politika özeti, bütçe bağları, gruplar); bildir, düzenle (ad, açıklama, dış hesap kimliği; bağlayıcıda hesap değişince doğrulamanın sıfırlanacağı ve kimlik bilgilerinin silineceği uyarısı), doğrula, politika, ulaşılamıyor, bütçe bağla/çöz, emekliye ayır; gruplar paneli |
+| `/budget` | kalemler (kalan sınırı aşınca kırmızı; emekliye ayrılan kalem soluk ve tarihiyle), oluşturma ve düzenleme (ad, sınır, dönem) diyalogları, onaylı emekliye ayırma, harcama çekmecesi ve harcama kaydı (emekliye ayrılan kalemde kayıt yok) |
 | `/team` | üyeler, rol seçimi, çıkarma (onaylı), davet diyaloğu: tek seferlik `/invite/<token>` bağlantısı + kopyala |
 | `/roles` | sistem ve özel roller; özel rol oluşturma/düzenleme (sabit izin listesi), silme |
 | `/api-keys` | anahtarlar; oluşturma diyaloğu düz metni bir kez gösterir (uyarı + kopyala); iptal |
@@ -152,11 +152,13 @@ kullanılmayan kit bileşenleri pakete girmez.
 - `src/api/client.test.ts`: başlık yalnızca değiştiren isteklerde, yapısal hata gövdesi, 401 yönlendirmesi,
   `whoami()`.
 - `src/api/wrappers.test.ts`: liste sarmalayıcıları yalnızca bilinen sorgu parametrelerini gönderir; arşiv,
-  emekliye ayırma ve kabiliyet silme rotalarının gövdeleri ve yanıtları.
+  emekliye ayırma ve kabiliyet silme rotalarının gövdeleri ve yanıtları; düzenlemeler yalnız verilen alanları
+  gönderir.
 - `src/pages/**/*.test.tsx`: her sayfa için sahte `fetch` ile çizim (başlık + listelerde bir satır); ana sayfada
   gecikme uyarısı ve her bekleyen işin kendi metni; strateji sayfasında eksikler, temsilci için kapalı onay,
-  reddedilen gönderimin eksikleri, yazılı onaylı arşiv; kabiliyetlerde beş durum rozeti ve `group` süzgeci;
-  bütçede sınır aşımı ve küçük birimle harcama kaydı;
+  reddedilen gönderimin eksikleri, yazılı onaylı arşiv; kabiliyetlerde beş durum rozeti, `group` süzgeci,
+  yalnız değişeni gönderen düzenleme ve bağlayıcı hesabı uyarısı; bütçede sınır aşımı, küçük birimle harcama
+  kaydı, düzenleme, onaylı emekliye ayırma ve soluk gösterilen emekliye ayrılmış kalem;
   API anahtarı düz metninin bir kez gösterilmesi, davet bağlantısı, ikisinin yalnız "Kapat" ile kapanması;
   oturum açıkken kabul edilen davetin ardından çalışma alanı geçişi.
 - `src/layout/Shell.test.tsx`: menü, varsayılan dil, oturumsuz ziyaretçinin giriş sayfasına gönderilmesi,

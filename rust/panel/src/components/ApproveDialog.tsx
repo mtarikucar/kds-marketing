@@ -25,24 +25,29 @@ function isSectionKey(key: string | null): key is SectionKey {
   return key !== null && (SECTION_KEYS as readonly string[]).includes(key);
 }
 
+/** The stamp that names `draft` as shown: its id and its submission time; none until submitted. */
+function stampOf(draft: VersionOut | null | undefined): ApproveStamp | null {
+  return draft && draft.submitted_at !== null ? { version_id: draft.id, submitted_at: draft.submitted_at } : null;
+}
+
 /**
  * Approves the submitted draft once the user has gone through what it rests on: the assumptions
  * its consultation recorded without an answer, and how many hypotheses it puts in force (spec §5,
  * "onayda açıkça listelenir"). Nothing is sent until the user confirms here; the request names the
- * draft as it was shown (`stamp`), so a draft that changed since is refused rather than approved
- * unseen. `draft` is the draft to list (undefined while it loads: confirming waits for it).
+ * draft exactly as the dialog shows it (its id and submission time), never a stamp read elsewhere,
+ * so a draft that changed since it was shown is refused rather than approved unseen. `draft` is the
+ * draft to list: undefined while it loads (confirming waits for it), `null` when none is left; a
+ * draft no longer submitted, or none at all, says so instead of a silent disabled button.
  */
 export function ApproveDialog({
   open,
   onOpenChange,
   draft,
-  stamp,
   onApproved,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   draft: VersionOut | null | undefined;
-  stamp: ApproveStamp;
   onApproved?: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -66,6 +71,7 @@ export function ApproveDialog({
   };
   const gaps = gapsOf(approve.error);
   const live = draft?.hypotheses.filter((h) => h.state !== 'retired').length;
+  const stamp = stampOf(draft);
 
   return (
     <Dialog open={open} onOpenChange={close}>
@@ -74,8 +80,12 @@ export function ApproveDialog({
           <DialogTitle>{t('strategy.approveTitle', { number: draft?.number ?? '' })}</DialogTitle>
           <DialogDescription>{t('strategy.approveBody')}</DialogDescription>
         </DialogHeader>
-        {draft ? (
+        {draft === null ? (
+          // Fetched, but no draft is left: approved or closed meanwhile.
+          <Callout tone="warning">{t('strategy.approveNoDraft')}</Callout>
+        ) : draft ? (
           <div className="flex flex-col gap-3 text-sm">
+            {!stamp && <Callout tone="warning">{t('strategy.approveNotSubmitted')}</Callout>}
             <section aria-labelledby="approve-assumptions" className="flex flex-col gap-2">
               <h3 id="approve-assumptions" className="font-medium text-foreground">
                 {t('strategy.approveAssumptions')}
@@ -112,7 +122,7 @@ export function ApproveDialog({
           <Button type="button" variant="outline" onClick={() => close(false)}>
             {t('common.cancel')}
           </Button>
-          <Button onClick={() => approve.mutate(stamp)} loading={approve.isPending} disabled={!draft}>
+          <Button onClick={() => stamp && approve.mutate(stamp)} loading={approve.isPending} disabled={!stamp}>
             <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
             {t('strategy.approveConfirm')}
           </Button>

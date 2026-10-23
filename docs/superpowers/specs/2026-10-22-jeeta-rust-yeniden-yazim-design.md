@@ -193,6 +193,21 @@ Zorlanan sınırlar (hepsi otomatik test):
 - Yolculuk durumuna yazan tek kod indirgeyicidir (B4).
 - Her kullanım durumunun bir MCP aracı ve bir panel ucu vardır (B8).
 
+**(M1b uygulamasında kesinleşti) Sabit katmanın listesi ve çıkış istisnaları.** Sabit katman
+bağlayıcı başına şu adlardır, başka hiçbiri değil (`jt_outbound::FIXED_HOSTS`, testte birebir):
+`meta` → `graph.facebook.com`, `graph.instagram.com`, `api.instagram.com`, `rupload.facebook.com`;
+`netgsm` → `api.netgsm.com.tr`, `whatsappapi.netgsm.com.tr`, `sesdosya.netgsm.com.tr`,
+`crmsntrl.netgsm.com.tr:9111`; `x` → `api.twitter.com`, `api.x.com`. Sağlayıcı bağdaştırıcıları
+(`jt_meta`, `jt_netgsm`, `jt_x`) HTTP istemcisi tutmaz, yalnız `Egress::send(EgressScope::Connector(..))`
+ile çıkar; `reqwest` yalnız `adapters/outbound`'dadır ve başka hiçbir paket onu bağımlılığında ya da
+kaynağında anmaz (mimari test; tek istisna MCP testlerinin dev-bağımlılığındaki istemcidir, ikiliye
+girmez). Tarayıcının gittiği giriş sayfaları (`www.facebook.com`, `www.instagram.com`, `twitter.com`)
+çıkış değildir, sunucu yalnız adreslerini kurar. Çıkışın istisnaları ve ek denetimleri §4.4'teki M1b
+bloğundadır: yalnız `netgsm` kapsamında `crmsntrl.netgsm.com.tr:9111` için düz `http` (Netsantral'ın
+tıkla-ara ucu, sağlayıcı sınırı), her adın çözüldüğü adresin genel olması (sabit adlar dahil), testlere
+özgü `test-loopback` derlemesinin üretimde açılmaması ve kiracı katmanının her açılışta canlı bağlayıcı
+kabiliyetlerinden yeniden kurulması.
+
 ### 4.4 Kapılar
 
 | Kapı | Kim | Kimlik |
@@ -238,6 +253,55 @@ başvurmamasına bağlıdır: onaylı sürüm ya da açık taslak bir kanalı o 
 döner ve hiçbir şey değişmez. Bu eylemlerin yetkisi onaydan değil rolden gelir:
 onaylamak ve arşivlemek gibi role bağlı eylemler, rol anahtarıyla birlikte `team.manage` iznini anahtarın
 kapsamı içinde ister ve ajan bu yetkiyi anahtarı çıkaran insandan devralır (§5).
+
+**(M1b uygulamasında kesinleşti) Bağlayıcı hataları ve onay listesi.** Bir kullanım durumu sağlayıcıya
+eşzamanlı çağrı yapar da sağlayıcı geçici olarak yanıt vermez ya da hız sınırı koyarsa (`Throttle`,
+`Transient`), yapısal hata kodu `UPSTREAM_UNAVAILABLE`'dır (panelde HTTP 503; MCP'de aynı gövde):
+`details = { provider, retryable: true, retry_after_s?, reason }` ve `reason` her zaman gizli-değer
+maskesinden geçer. Yoklama (`connector.probe`) başarısızlığı bir hata değil sonuçtur; o yüzden bu kodu
+döndürmez. `confirm: true` isteyen yıkıcı araç listesine `jeeta.budget.items_retire` eklendi: emekli
+bütçe kalemi bağ ve harcama almaz, bağları aynı işlemde silinir, harcama geçmişi kalır. Tek HTTP çıkış
+kapısı iki istisna ve iki ek denetim kazandı: (1) yalnız `netgsm` kapsamında, yalnız
+`crmsntrl.netgsm.com.tr:9111` için düz `http` (Netsantral'ın tıkla-ara ucu; sağlayıcı sınırı olarak
+belgelenir); (2) ad çözümleme anında özel adres aralığına çözünen her ad reddedilir (sabit sağlayıcı
+adları dahil; `resolve_public` M2'nin SMTP/IMAP soketleri için de tek paylaşılan süzgeçtir); (3)
+yalnız geliştirme testlerinin açtığı `test-loopback` özelliği derlemeye girmişse ikili
+`JEETA_ALLOW_TEST_LOOPBACK=1` olmadan açılmayı reddeder; (4) kiracı katmanı her açılışta canlı
+bağlayıcı kabiliyetlerinin `connector_public.hosts` listesinden yeniden kurulur, emekli kabiliyetin
+adresleri düşer.
+
+**(M1b uygulamasında kesinleşti) Webhook kapısı.** Sağlayıcılar sunucunun `/hooks/*` kapısını
+(`adapters/webhook`) çağırır; kapı panelin oturum ve istek başlığı denetimlerinin dışındadır, güvenlik
+başlıklarının ve rota şablonunu yazan erişim günlüğünün içindedir. Yanıtlar:
+
+| İstek | Yanıt |
+|---|---|
+| `GET /hooks/meta` | `hub.mode=subscribe` ve platformun doğrulama anahtarı (sabit zamanda) için `hub.challenge` düz metin, `200`; aksi `403`; Meta uygulaması yapılandırılmamışsa `404` |
+| `POST /hooks/meta` | imza başlığı ya da Meta uygulaması yoksa gövde okunmadan `401`; 3 MB üstü `413`; `X-Hub-Signature-256` ham gövde üzerinde Meta uygulamasının sırrıyla, Instagram uygulaması varsa onunkiyle de sabit zamanda denetlenir, tutmazsa `401` ve hiçbir şey yazılmaz; ayrıştırılamayan imzalı gövde `200` (sayılır, yazılmaz); olaylar yazılınca ya da kurala göre atılınca `200 EVENT_RECEIVED`; veritabanı hatası `500` |
+| `POST /hooks/netgsm/{workspace_id}/{anahtar}/{amaç}` | çözülemeyen parça, bilinmeyen amaç, bozuk alan kimliği, alanın o amaç için olmayan anahtarı (sabit zamanda), var olmayan ya da askıya alınmış (`suspended`) alan: hepsi gövde okunmadan çıplak `404`; 256 KB üstü `413`; okunamayan gövde `202` (sayılır, yazılmaz); olaylar yazılınca `202`; veritabanı hatası `503` |
+
+İki sağlayıcı farklı yönlendirilir. **Meta** bir imzayla bütün platforma gelir: her olay hesabıyla
+(sayfa, Instagram hesabı, WhatsApp numarası) bütün alanlarda aranır ve hesabı bağlı tutan (mühürlü,
+en az bir kez doğrulanmış, emekli değil) tek kabiliyetin alanına yazılır; böyle bir alan yoksa olay
+atılır. **NetGSM** imzalamaz: her alanın her amaç için kendi adresi vardır, adresteki anahtar alanın
+gizli anahtarından o amaç için türetilen HMAC'tir; olay adresin adladığı alana yazılır ve o amacın
+türündeki tek canlı kabiliyete bağlanır (hiç ya da birden çok varsa hiçbirine). Böylece NetGSM'in
+yönlendirmesi hesaba değil alanın anahtarına dayanır; §6.4'teki "yalnız en az bir kez doğrulanmış
+kabiliyete yönlenir" kuralı Meta'nın hesap yönlendirmesi içindir. **Alanın durumu:** Meta olayları
+hesabı tutan alan etkin ya da ödeme bekliyor (`pending_payment`) iken yazılır, askıya alınmışsa
+(`suspended`) atılır (hiçbir yere satır yazılmaz, `unrouted_meta` sayacı artar, günlüğe yalnız
+sağlayıcı, `reason=inactive`, hesap türü ve sayı yazılır; Meta'ya yine `200`); NetGSM adresi etkin ve
+ödeme bekleyen alanlar için açıktır, askıdaki alan için `404`'tür. **Ham gövde alanındır:** bir Meta
+teslimi birkaç alanın hesaplarını bir arada taşıyabilir; her alan yalnız kendi olaylarının geldiği
+parçayı saklar (`{"object", "entry": [yalnız kendi girdileri]}`, WhatsApp girdisinde yalnız kendi
+numaralarının `changes` öğeleri; ayrıştırılmış değerden yeniden yazılır, imza özgün gövdeyi kapsar, bunu
+değil); gövdenin tamamı o alanınsa olduğu gibi saklanır. Hiçbir alanın almadığı bir öğe (yönlenmeyen
+hesap, askıdaki alan, olay çıkmayan öğe) hiçbir yerde saklanmaz. NetGSM gövdesi tek alanı adlar ve
+olduğu gibi saklanır. Hiçbir yanıt, günlük satırı ya da sayaç gövde, hesap kimliği ya da anahtar
+taşımaz. Sağlayıcının serbest metninde yinelenen sırlar da maskelenir: bir çağrının bilinen sırları (o
+anki jeton, uygulama sırrı, yetki kodu, istemci sırrı) sağlayıcının mesajından, kendisine çözülen her
+yazımıyla (olduğu gibi; herhangi baytları kaçışlı, her harf büyüklüğünde yüzde kodlu; boşluk yerine `+`;
+bunların üç tura kadar iç içe uygulanmışı) kısaltmadan önce çıkarılır, genel maske ardından uygulanır.
 
 ### 4.5 Panel ve MCP ikizliği
 
@@ -455,6 +519,53 @@ kutusu, hangi hattın hangi markaya ait olduğunu gruptan okur. İç içe grup i
   bekleyen işlere yeniden doğrulama olarak düşer. Bağlayıcıyla ulaşılan türler bir beyanla doğrulanamaz
   (`CONFLICT`); onları kendi yoklamaları doğrular (M1b). Bildirilmiş ama bağlanmamış her bağlayıcı
   kabiliyeti bekleyen işlerde adıyla "bağlan" işi olarak görünür.
+
+- **(M1b uygulamasında kesinleşti) Bağlayıcı doğrulaması ve yönlendirme.** Her başarılı yoklama
+  `facts.account_id` döndürmek zorundadır (sayfa, IG kullanıcı, WABA telefon kimliği, X kullanıcı
+  kimliği, NetGSM başlık ya da kullanıcı adı); bu değer kabiliyetin `external_id`'siyle harfi harfine
+  karşılaştırılır, uyuşmazsa ya da yoksa kabiliyet asla `doğrulandı` olmaz (hata `Permission` "account
+  mismatch"). Böylece başka bir kiracının hesap kimliğini bildirip rastgele bir jeton yapıştırmak işe
+  yaramaz. Gelen webhook olayları yalnız emekli olmayan, kimlik bilgisi mühürlü ve EN AZ BİR KEZ
+  doğrulanmış (`last_verified_at` dolu) kabiliyete yönlenir; durumu `ulaşılamıyor` olsa da (jeton
+  süresi dolmuş) olaylar düşmez, sahibi yeniden bağlayınca yerinde durur. Hesap kimliği değişirse
+  (`capability.update`) doğrulama sıfırlanır, mühürlü kimlik bilgisi ve eski hesabın herkese açık
+  bilgileri (`health`, `facts`, `asset`, `account`) silinir. Bağlayıcının yazdığı herkese açık
+  anahtarlar (`access`, `account`, `asset`, `facts`, `health`, `provider`, `reconnect_required`)
+  kullanıcıya kapalıdır; `hosts` kullanıcıya açıktır. Kimlik doğrulama hatasında
+  `reconnect_required = true` olur ve bekleyen işlerde 1. öncelikte "yeniden bağla" görünür; kabiliyet
+  anahtarı kurallarında "auth" ve "credential" sözcükleri gizli-değer sayıldığı için adlar
+  `reauth_required`/`credential.expires_at` yerine `reconnect_required`/`access.expires_at`'tir. OAuth
+  durumu çalışma alanına özel HMAC anahtarıyla imzalanır (`hmac_key(ws, "oauth-state")`); PKCE
+  doğrulayıcısı duruma değil sunucudaki bekleyen satıra mühürlenir; aynı durum ikinci kez tamamlanamaz
+  (`FORBIDDEN`). Meta ve X'te kimlik bilgisi yalnız OAuth ya da yapıştırılan Meta jetonuyla, NetGSM'de
+  elle girilir; `x` türünün elle yolu yoktur.
+- **(M1b uygulamasında kesinleşti) Yoklama sonuçları ve tazelik.** Yukarıdaki "başarısızlık
+  `ulaşılamıyor` yapar" özeti hata sınıfına göre ayrıntılanır: başarı `doğrulandı` yapar
+  (`last_verified_at` yazılır, `reconnect_required` silinir); `Auth` `ulaşılamıyor` yapar ve
+  `reconnect_required = true` koyar ("yeniden bağla"); `Permission` (hesap uyuşmazlığı dahil) ve
+  `Permanent` `ulaşılamıyor` yapar; `Throttle` ve `Transient` durumu değiştirmez (sağlayıcının meşgul
+  olması bağlantı hakkında bir şey söylemez); emekli kabiliyet emekli kalır. Doğrulanmış bir bağlayıcı
+  kabiliyeti de, ajan ve cihazınki gibi, son başarılı yoklamasından `verify_max_age_days` (varsayılan 30
+  gün) geçince `eskidi` (`stale`) okunur; zamanlayıcı etkin alanlarda canlı her bağlayıcıyı saatte bir
+  yokladığı için sağlıklı bir bağlantı taze kalır. Her yoklama `probe_runs`'a (sonuç sınıfı, gecikme, olgular) yazılır,
+  günlüğe yalnız durum değişince. Platform uygulamaları (Meta, Instagram, X) ortamdan okunan platform
+  yapılandırmasıdır; bir uygulama ya bütün olarak (kimlik ve sır, Meta için doğrulama anahtarı da)
+  yapılandırılır ya hiç, yarım yapılandırma açılışı durdurur; herhangi bir uygulama varken genel adres
+  (`JEETA_PUBLIC_BASE_URL`) zorunludur, yokken bağlantı başlatılamaz ve webhook adresi gösterilmez
+  (`CONFLICT`, `public_base_url_not_configured`). OAuth geri dönüş adresi uygulama başınadır: panelin
+  `{genel adres}/oauth/callback/meta` (Facebook Login), `/oauth/callback/instagram` (Instagram Login) ve
+  `/oauth/callback/x` sayfası; kod değişimi aynı adresi gönderir, API geri dönüşü akışın uygulaması
+  adresle uyuşmazsa `FORBIDDEN` döner. Akış uygulamasını başlangıçtan bitişe taşır (`oauth_pending.app`)
+  ve bir OAuth akışının verdiği kimlik bilgisi onu kaydeder (`connector_public.access.app`; jeton
+  yenilemesi korur; yapıştırılan bir Meta jetonu `meta` adlar, elle girilen NetGSM kimlik bilgisi
+  uygulama adlamaz); yeniden bağlama kimlik bilgisini veren uygulamayla oturum açar: Facebook Login'le
+  (sayfası üzerinden) ya da yapıştırılan jetonla bağlanmış bir `instagram` kabiliyeti Meta
+  uygulamasıyla, Instagram Login'le bağlanmış olan Instagram uygulamasıyla döner; uygulama
+  adlamayan bir `instagram` kabiliyeti Meta uygulaması yapılandırılmışsa onunla, değilse Instagram
+  uygulamasıyla. Zamanlayıcının NetGSM gelen kutusu yedeği, webhook gibi etkin ve ödeme bekleyen
+  alanlar için çalışır; yoklama ve teslim raporu yoklaması yalnız etkin alanlar için. Ödeme bekleyen bir
+  alanın bekleyen işleri (`work.pending`) yalnız o durumda yapılabilenleri listeler (stratejinin
+  işleri); kabiliyet, bağlantı ve gelen olay işleri ödeme sonrasına kalır.
 
 ### 6.5 Araçlar (özet)
 
@@ -712,6 +823,21 @@ tamamlar. Bu kod başka hiçbir eylemde yoktur.
   denetlenmez.
 - Panel kimliği: e-posta ve parola, isteğe bağlı OIDC. MCP kimliği §4.4.
 - Webhook'lar imza doğrular, tekilleştirir, ham gövdeyi saklar, işlemi kuyruğa atar.
+- **(M1b uygulamasında kesinleşti) Webhook alımı, saklama ve devir.** Kapıda iş kuyruğu yoktur:
+  alım eşzamanlıdır (imza → ayrıştırma → yönlendirme → alanın işleminde yazma → `200`/`202`), yanıt
+  ancak yazma bitince döner, veritabanı hatasında sağlayıcı yeniden gönderir (Meta `500`, NetGSM `503`);
+  kaybolan bir yanıt yeniden gönderimdir, kaybolan bir olay değil. "Kuyruk" olayların kendisidir:
+  her olay alan, sağlayıcı ve sağlayıcı kimliği başına bir kez `inbound_events`'e yazılır ve işlenene
+  dek bekler. Ham gövde teslim ve alan başına bir kez, yalnız o alanın parçası olarak saklanır (§4.4:
+  birkaç alanın hesaplarını taşıyan bir Meta tesliminde her alan yalnız kendi girdilerini tutar,
+  hiçbir alanın almadığı öğe hiçbir yerde tutulmaz), 30 gün tutulur ve sonra zamanlayıcının
+  günlük işiyle silinir (bir alan silinemezse sayılır, diğerleri yine silinir; olay kalır); ham gövde hiçbir API ya da MCP yanıtında dönmez, yalnız adli
+  kayıttır. `probe_runs` kayıtları da 30 gün tutulur; tetikleyici her değişikliği ve 30 günden genç bir
+  kaydın silinmesini reddeder. Gelen olaylar günlüğe yazılmaz (dış dünyanın kayıtlarıdır), bağlantı
+  değişiklikleri yazılır. Olaylar M2'ye (gelen kutusu) ve M3'e (ölçüm) devrin noktasıdır: o aşamaların
+  tüketicileri gelene dek ajan `jeeta.events.pending` ile okur (en eskisi başta, ileri imleçle),
+  işlediğini `jeeta.events.ack` ile işaretler (kimlikler sıralanıp tekilleştirilir, hepsi ya da hiçbiri;
+  günlüğe `events.acked`), geçmişe `jeeta.events.list` ile bakar; ham gövde bu araçlardan da dönmez.
 - Dış çıkış yalnız izin listesindeki alan adlarına (B2). İzin listesi bağlayıcı başına belgelenir.
 - Açık depo kuralı: kimlik bilgisi, kiracı verisi ve gerçek ekran görüntüsü depoya girmez.
 
@@ -725,6 +851,7 @@ tamamlar. Bu kod başka hiçbir eylemde yoktur.
 | Adaptör testleri | her bağlayıcı için kayıtlı sağlayıcı yanıtlarıyla; gerçek sağlayıcıya yalnız elle smoke |
 | Uçtan uca | gerçek PostgreSQL ile: webhook → kişi → ajan yanıtı → yayın → ölçüm |
 | İkizlik | her kullanım durumu için MCP ve panel yolu aynı sonucu verir |
+| Çıkış adaptörü | sabit sağlayıcı adları birebir; özel adrese çözünen ad reddi (enjekte çözücü); Netsantral düz-http istisnası yalnız o kapsamda; `test-loopback` özelliği yalnız dev-bağımlılıkta (mimari test) ve üretim derlemesi ayrı test edilir (M1b uygulamasında kesinleşti) |
 | CI | v1'den ayrı iş akışı; etiketler v1 ile çakışmaz |
 
 ## 13. Yol haritası (K9 sırası)

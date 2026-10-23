@@ -5,6 +5,7 @@ import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
 import {
   DRAFT_ID,
+  PAGE_ID,
   approvedVersion,
   draftVersion,
   me,
@@ -96,8 +97,86 @@ describe('HomePage', () => {
     expect(approvals()).toHaveLength(0);
     await user.click(within(dialog).getByRole('button', { name: tr.strategy.approveConfirm }));
     await waitFor(() => expect(approvals()).toHaveLength(1));
-    // The shortcut names the draft as the pending work showed it.
-    expect(approvals()[0].body).toEqual(submitted.strategy.submitted);
+    // The shortcut names the draft as the dialog showed it.
+    expect(approvals()[0].body).toEqual({ version_id: DRAFT_ID, submitted_at: draftVersion.submitted_at });
+  });
+
+  it('home_approve_uses_the_displayed_drafts_stamp', async () => {
+    // The pending work was read before the agent submitted the draft again: its stamp is stale.
+    // The dialog fetches the draft when it opens and approves the one it shows.
+    const user = userEvent.setup();
+    const fresh = '2026-10-22T11:30:00Z';
+    const calls = mockFetch({
+      'GET /api/auth/me': me,
+      'GET /api/workspace': workspace,
+      'GET /api/work/pending': submitted,
+      'GET /api/strategy': {
+        ...strategyWithDraft,
+        draft: { ...draftVersion, submitted_at: fresh, gaps: [], hypotheses: approvedVersion.hypotheses },
+      },
+      'POST /api/strategy/draft/approve': { ...draftVersion, status: 'approved', assumptions: [] },
+    });
+    renderAt('/');
+    await user.click(await screen.findByRole('button', { name: tr.home.strategy.approve }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Öğrenciler akşamları sipariş verir');
+    await user.click(within(dialog).getByRole('button', { name: tr.strategy.approveConfirm }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'POST' && c.path === '/api/strategy/draft/approve')?.body).toEqual({
+        version_id: DRAFT_ID,
+        submitted_at: fresh,
+      }),
+    );
+    expect(submitted.strategy.submitted.submitted_at).not.toBe(fresh);
+  });
+
+  it('says why the draft it fetched can no longer be approved', async () => {
+    const user = userEvent.setup();
+    for (const [draft, reason] of [
+      // The agent reopened the draft meanwhile: not submitted any more.
+      [{ ...draftVersion, submitted_at: null, gaps: [], hypotheses: approvedVersion.hypotheses }, tr.strategy.approveNotSubmitted],
+      // It was approved or closed meanwhile: no draft left.
+      [null, tr.strategy.approveNoDraft],
+    ] as const) {
+      const calls = mockFetch({
+        'GET /api/auth/me': me,
+        'GET /api/workspace': workspace,
+        'GET /api/work/pending': submitted,
+        'GET /api/strategy': { ...strategyWithDraft, draft },
+      });
+      const { unmount } = renderAt('/');
+      await user.click(await screen.findByRole('button', { name: tr.home.strategy.approve }));
+      const dialog = await screen.findByRole('dialog');
+      expect(await within(dialog).findByText(reason)).toBeInTheDocument();
+      expect(within(dialog).queryByText(tr.strategy.approveLoading)).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: tr.strategy.approveConfirm })).toBeDisabled();
+      expect(calls.some((c) => c.method === 'POST')).toBe(false);
+      unmount();
+    }
+  });
+
+  it('names the connector to reconnect and links to its reconnection', async () => {
+    const reconnect = {
+      ...pendingOverdue,
+      items: [
+        {
+          kind: 'reconnect_connector' as const,
+          capability_id: PAGE_ID,
+          name: 'Atölye sayfası',
+          priority: 1,
+          hint: 'reconnect it',
+        },
+      ],
+    };
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': reconnect });
+    renderAt('/');
+    const text = await screen.findByText(i18n.t('home.pending.reconnect_connector', { name: 'Atölye sayfası' }));
+    const row = text.closest('li') as HTMLElement;
+    expect(within(row).getByRole('link', { name: tr.home.pending.reconnect })).toHaveAttribute(
+      'href',
+      `/connect?capability=${PAGE_ID}`,
+    );
+    expect(screen.queryByText('reconnect it')).not.toBeInTheDocument();
   });
 
   it('shows the draft gaps and the version in force', async () => {
@@ -113,5 +192,43 @@ describe('HomePage', () => {
     expect(screen.getByText('the product is required')).toBeInTheDocument();
     expect(screen.queryByText(tr.home.agent.overdueTitle)).not.toBeInTheDocument();
     expect(screen.getByText(tr.home.agent.onTime)).toBeInTheDocument();
+  });
+
+  it('counts the inbound events awaiting the agent, a full count as at least that many', async () => {
+    const withEvents = (count: number) => ({
+      ...pendingOverdue,
+      items: [{ kind: 'inbound_events' as const, count, priority: 2, hint: 'read them' }],
+    });
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': withEvents(3) });
+    const { unmount } = renderAt('/');
+    const item = await screen.findByText(i18n.t('home.pending.inbound_events', { count: 3, n: '3' }));
+    // The agent handles them: nothing for the person to open.
+    expect(within(item.closest('li') as HTMLElement).queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.queryByText('read them')).not.toBeInTheDocument();
+    unmount();
+
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': withEvents(1000) });
+    renderAt('/');
+    expect(
+      await screen.findByText(i18n.t('home.pending.inbound_events', { count: 1000, n: '1000+' })),
+    ).toBeInTheDocument();
+  });
+
+  it('says one inbound event in the singular in English, and keeps one Turkish sentence', () => {
+    const en = i18n.getFixedT('en');
+    expect(en('home.pending.inbound_events', { count: 1, n: '1' })).toBe(
+      '1 inbound event (a message, status, lead, call or consent change) awaits your agent.',
+    );
+    expect(en('home.pending.inbound_events', { count: 3, n: '3' })).toBe(
+      '3 inbound events (messages, statuses, leads, calls, consent changes) await your agent.',
+    );
+    expect(en('home.pending.inbound_events', { count: 1000, n: '1000+' })).toMatch(/^1000\+ inbound events /);
+    const tr = i18n.getFixedT('tr');
+    expect(tr('home.pending.inbound_events', { count: 1, n: '1' })).toBe(
+      '1 gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.',
+    );
+    expect(tr('home.pending.inbound_events', { count: 3, n: '3' })).toBe(
+      '3 gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.',
+    );
   });
 });

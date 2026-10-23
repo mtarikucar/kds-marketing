@@ -25,13 +25,45 @@ const TABLES_AFTER_STRATEGY: i64 = 13;
 /// Tables after `0003_capabilities`, which adds `capabilities`, `capability_groups`,
 /// `capability_group_members`, `budget_items`, `capability_budget_links`,
 /// `budget_spend_entries` and `workspace_policies`; `0004_role_permissions_backfill` adds none.
-const TABLES_AFTER_ALL: i64 = 20;
+const TABLES_AFTER_CAPABILITIES: i64 = 20;
+/// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
+/// `probe_runs`.
+const TABLES_AFTER_ALL: i64 = 23;
 
-/// The migrations there are: `0001_foundation` to `0004_role_permissions_backfill`.
-const MIGRATIONS: i64 = 4;
+/// The migrations there are: `0001_foundation` to `0005_connectors`.
+const MIGRATIONS: i64 = 5;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
+
+/// The trigger functions `0005_connectors` adds.
+const CONNECTOR_FUNCTIONS: [&str; 2] = ["inbound_events_guard", "probe_runs_immutable"];
+
+/// The indexes `0005_connectors` adds on tables of earlier migrations or beside its tables' own:
+/// the connected-account lookup on `capabilities`, and the raw-body purge and the newest-first
+/// history on `inbound_events`.
+const CONNECTOR_INDEXES: [&str; 3] = [
+    "capabilities_connected_account_idx",
+    "inbound_events_raw_received_idx",
+    "inbound_events_history_idx",
+];
+
+/// The column `0005_connectors` adds to a table of an earlier migration: a budget item's
+/// retirement time.
+const RETIRED_AT: (&str, &str) = ("budget_items", "retired_at");
+
+/// Whether `table` has a column named `column`.
+async fn column_exists(pool: &PgPool, (table, column): (&str, &str)) -> bool {
+    sqlx::query_scalar(
+        "select exists(select 1 from information_schema.columns \
+         where table_schema = 'public' and table_name = $1 and column_name = $2)",
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
 
 /// Migrations recorded as applied.
 async fn applied_count(pool: &PgPool) -> i64 {
@@ -60,6 +92,10 @@ async fn up_down_up_round_trip() {
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     assert_eq!(applied_count(&db.pool).await, MIGRATIONS);
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
+    for index in CONNECTOR_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    assert!(column_exists(&db.pool, RETIRED_AT).await);
 
     jt_pg::migrate_down_all(&db.pool).await.unwrap();
     assert_eq!(table_count(&db.pool).await, 0);
@@ -72,6 +108,10 @@ async fn up_down_up_round_trip() {
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     assert_eq!(applied_count(&db.pool).await, MIGRATIONS);
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
+    for index in CONNECTOR_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    assert!(column_exists(&db.pool, RETIRED_AT).await);
 }
 
 /// Whether a function named `name` exists.
@@ -106,20 +146,52 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
         read("0004_role_permissions_backfill.up.sql"),
         read("0004_role_permissions_backfill.down.sql"),
     );
+    let (connectors_up, connectors_down) = (
+        read("0005_connectors.up.sql"),
+        read("0005_connectors.down.sql"),
+    );
 
     // Re-running each `up` over an applied schema changes nothing.
     run(foundation_up.clone()).await;
     run(strategy_up.clone()).await;
     run(capabilities_up.clone()).await;
     run(backfill_up.clone()).await;
+    run(connectors_up.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
+    for function in CONNECTOR_FUNCTIONS {
+        assert!(function_exists(&db.pool, function).await, "{function}");
+    }
+    for index in CONNECTOR_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    assert!(column_exists(&db.pool, RETIRED_AT).await);
 
-    // Newest first, each `down` twice: the second run is a no-op. 0004 drops its index; 0003 its
-    // tables and trigger function.
-    run(backfill_down.clone()).await;
-    run(backfill_down.clone()).await;
+    // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
+    // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
+    run(connectors_down.clone()).await;
+    run(connectors_down.clone()).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
+    for function in CONNECTOR_FUNCTIONS {
+        assert!(!function_exists(&db.pool, function).await, "{function}");
+    }
+    // Including the index it put on `capabilities` and the column it put on `budget_items`,
+    // which stay.
+    for index in CONNECTOR_INDEXES {
+        assert!(!index_exists(&db.pool, index).await, "{index}");
+    }
+    assert!(!column_exists(&db.pool, RETIRED_AT).await);
+    // 0005 applies again on its own, and reverts again.
+    run(connectors_up.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert!(column_exists(&db.pool, RETIRED_AT).await);
+    run(connectors_down).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
+    assert!(!column_exists(&db.pool, RETIRED_AT).await);
+
+    run(backfill_down.clone()).await;
+    run(backfill_down.clone()).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
     assert!(!index_exists(&db.pool, CHECKIN_INDEX).await);
     run(backfill_up).await;
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
@@ -133,7 +205,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
 
     // 0003 applies again on its own, and reverts again.
     run(capabilities_up).await;
-    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_CAPABILITIES);
     assert!(function_exists(&db.pool, "budget_spend_entries_immutable").await);
     run(capabilities_down).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_STRATEGY);

@@ -15,6 +15,11 @@
 //! - A row or entry whose `workspace_id` differs from the tenant bundle's workspace is refused
 //!   with `INTERNAL` (it is a programming error) and nothing is written.
 //! - Mutations documented as such return `NOT_FOUND` when the id does not exist in scope.
+//!
+//! The provider adapters and the platform's provider apps have their own module,
+//! [`connectors`].
+
+pub mod connectors;
 
 use std::collections::BTreeSet;
 
@@ -23,6 +28,7 @@ use jt_capability::{
     BudgetItem, BudgetItemId, BudgetSpend, BudgetSpendId, Capability, CapabilityGroup,
     CapabilityGroupId, CapabilityId, KindGroup, StoredStatus,
 };
+use jt_connector::{EventKind, InboundEvent, InboundEventId, ProbeResult, Provider};
 use jt_ledger::LedgerEntry;
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
@@ -30,9 +36,10 @@ use jt_strategy::{
 };
 use jt_tenancy::{
     AgentConnectionId, ApiKeyId, Email, MembershipId, MembershipStatus, OperatorId, Permission,
-    RoleDef, RoleId, SessionId, UserId, WorkspaceId, WorkspaceStatus,
+    RoleDef, RoleId, SessionId, UserId, WorkspaceId, WorkspaceStatus, define_id,
 };
 use serde::Serialize;
+use serde_json::Value;
 use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -85,6 +92,13 @@ pub trait SecretBox: Send + Sync {
     /// are refused with `INTERNAL` and the message `"sealed data cannot be opened"`, whatever the
     /// reason, so a refusal tells a caller nothing about the bytes.
     fn open(&self, ws: WorkspaceId, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, AppError>;
+    /// A 32-byte key for computing MACs on behalf of workspace `ws` for one `purpose` (e.g.
+    /// `"oauth-state"`, `"netgsm-hook"`): the same for the same workspace and purpose (also after
+    /// a restart), different for another workspace or another purpose, and independent of the
+    /// sealing key. Like what `open` gives back, it is never returned, logged or stored, and it
+    /// is wiped from memory when dropped (functions taking `&[u8; 32]` get `&key`, which
+    /// dereferences).
+    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<Zeroizing<[u8; 32]>, AppError>;
 }
 
 /// The kinds of channel a workspace can use: the kind keys (e.g. `instagram`, `mailbox`) of its
@@ -102,11 +116,12 @@ pub trait ChannelCatalog: Send + Sync {
 /// a single-label name, a private suffix such as `.local` or `.internal`, an IP literal in a
 /// loopback, private, link-local, shared or other special-purpose range) is refused, so a tenant
 /// cannot point the system at its own network. The check is on the text of the host; what a
-/// public name resolves to is the egress client's concern when it connects.
+/// public name resolves to is checked by the egress client's DNS guard when it connects.
 ///
 /// The tier is one set of hosts per workspace, not counted per capability: a caller revoking a
 /// host first makes sure no other capability of the workspace still needs it. It lives in memory,
-/// so every method is synchronous.
+/// so every method is synchronous, and it starts empty: it is rebuilt from the capability records
+/// at start-up (`rebuild_from`).
 pub trait TenantHostRegistry: Send + Sync {
     /// `Ok` when `host` (`host` or `host:port`, an IPv6 literal in brackets) may enter a tenant
     /// tier, else `VALIDATION` "host is not public" naming it in `details.host`. Changes nothing:
@@ -118,6 +133,38 @@ pub trait TenantHostRegistry: Send + Sync {
     /// Workspace `ws` may no longer reach `host`. A host it could not reach is a no-op: revoking
     /// only takes away, so it refuses nothing.
     fn revoke(&self, ws: WorkspaceId, host: &str) -> Result<(), AppError>;
+    /// Replaces workspace `ws`'s whole tier with `hosts`: afterwards it reaches exactly those of
+    /// them `check` accepts, and nothing it reached before. A host `check` refuses is skipped
+    /// with a warning, not an error, so one bad stored host cannot keep the others out; an empty
+    /// list empties the tier. Returns how many distinct hosts the tier now holds. Used to rebuild
+    /// the tier from the capability records, which outlive it.
+    fn rebuild_from(&self, ws: WorkspaceId, hosts: Vec<String>) -> Result<usize, AppError>;
+}
+
+/// Keeps each scheduled job to one runner at a time, across every instance of the server
+/// sharing the database: a run starts only once its runner holds the job's lock
+/// (`usecases::jobs::Job::lock_name`), and a runner that finds it held skips that run.
+///
+/// In Postgres the lock is a session-level advisory lock held on a connection of its own, which
+/// the guard keeps checked out until the lock is given back; when that connection's session
+/// ends (the process dies, the connection drops), Postgres gives the lock back by itself.
+#[async_trait]
+pub trait JobLock: Send + Sync {
+    /// The lock called `name` when no one holds it, else `Ok(None)` (another instance, or
+    /// another task of this one, holds it now). Never waits for it. Held until its guard is
+    /// released or dropped. `Err` only when the lock could not be asked for (the database is
+    /// unreachable): the run is skipped as when the lock is held.
+    async fn try_acquire(&self, name: &str) -> Result<Option<Box<dyn JobGuard>>, AppError>;
+}
+
+/// A held job lock ([`JobLock::try_acquire`]). [`JobGuard::release`] gives it back; a guard
+/// dropped without being released (a run that panicked) gives it back too, in the background,
+/// a moment later.
+#[async_trait]
+pub trait JobGuard: Send + Sync {
+    /// Gives the lock back. `Err` when it could not be given back cleanly; the lock is then
+    /// freed by ending the session that holds it.
+    async fn release(self: Box<Self>) -> Result<(), AppError>;
 }
 
 /// Told when a workspace's approved strategy version has been archived, after the archive is
@@ -144,8 +191,8 @@ pub trait StrategyArchivedHook: Send + Sync {
 // `***`, so a log line or a failed assertion does not show it either.
 // ---------------------------------------------------------------------------------------------
 
-/// Prints `***` in place of a secret's hash in a row's `Debug` output.
-struct Masked;
+/// Prints `***` in place of a secret (a hash, a sealed blob, a credential) in a `Debug` output.
+pub(crate) struct Masked;
 
 impl std::fmt::Debug for Masked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -823,11 +870,13 @@ pub trait CapabilityRepo: Send + Sync {
     /// `NOT_FOUND`; moving it onto an external account another live capability of its kind
     /// holds is `CONFLICT` (in Postgres the transaction is then aborted).
     async fn update(&mut self, capability: Capability) -> Result<(), AppError>;
-    /// Replaces the sealed credentials (`None` removes them). An unknown id is `NOT_FOUND`.
+    /// Replaces the sealed credentials (`None` removes them) and sets `updated_at = at`, so a
+    /// credential change shows in the capability's update time. An unknown id is `NOT_FOUND`.
     async fn set_sealed(
         &mut self,
         id: CapabilityId,
         sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
     ) -> Result<(), AppError>;
     /// The sealed credentials, `None` when there are none. An unknown id is `NOT_FOUND`.
     ///
@@ -899,9 +948,22 @@ pub trait BudgetRepo: Send + Sync {
     /// Stores a budget item. An `item.workspace_id` other than the bundle's is `INTERNAL`; a
     /// taken id is `CONFLICT`.
     async fn insert_item(&mut self, item: BudgetItem) -> Result<(), AppError>;
-    /// Every budget item, oldest (`created_at`, then id) first.
+    /// Every budget item, retired ones included, oldest (`created_at`, then id) first.
     async fn list_items(&mut self) -> Result<Vec<BudgetItem>, AppError>;
     async fn find_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError>;
+    /// Budget item `id`, locked until the bundle ends (`select … for update` in `jt_pg`), or
+    /// `None` when it is not the workspace's. Editing or retiring an item, linking a capability
+    /// to it and recording a spend from it read it through here first, so a retirement and a
+    /// link or a spend take turns: neither lands on an item retired meanwhile. Whoever also locks
+    /// a capability locks it first (`CapabilityRepo::lock`), then the item.
+    async fn lock_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError>;
+    /// Writes the item's name, cap, period and retirement time (`retired_at`); its kind, unit,
+    /// strategy version and creation time never change. An item that is not the workspace's is
+    /// `NOT_FOUND`; an `item.workspace_id` other than the bundle's is `INTERNAL`.
+    async fn update_item(&mut self, item: BudgetItem) -> Result<(), AppError>;
+    /// Removes every capability's link to the item and answers how many there were (none for an
+    /// item that is not the workspace's).
+    async fn unlink_item(&mut self, item: BudgetItemId) -> Result<u64, AppError>;
     /// Links the capability to the budget item it spends from; linking again changes nothing. A
     /// capability or an item that is not the bundle's workspace's is `NOT_FOUND` (Review Focus
     /// 3). Whether the kinds fit (`can_link_budget`) is the caller's rule.
@@ -971,6 +1033,307 @@ pub trait WorkspacePolicyRepo: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Connector repositories: tenant repositories too, over one workspace's inbound events, pending
+// OAuth flows and probe runs.
+// ---------------------------------------------------------------------------------------------
+
+/// The most events one [`InboundEventRepo::list_pending`] or [`InboundEventRepo::list`]
+/// returns.
+pub const MAX_EVENT_PAGE: u32 = 500;
+
+/// Which inbound events [`InboundEventRepo::list`] reads, and in which order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventQuery {
+    /// Only events not yet processed.
+    pub pending_only: bool,
+    /// Only events of this provider.
+    pub provider: Option<Provider>,
+    /// Only events of this kind (compared by key, so an `Unknown` kind matches its own key).
+    pub kind: Option<EventKind>,
+    /// The order, and where the page starts.
+    pub order: EventOrder,
+    /// At most this many events (clamped to `1..=MAX_EVENT_PAGE`).
+    pub limit: u32,
+}
+
+/// The order of an event listing and its key-set cursor: an event's `(received_at, id)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventOrder {
+    /// Oldest (`received_at`, then id) first; with a cursor, only events after it.
+    OldestFirst {
+        after: Option<(OffsetDateTime, InboundEventId)>,
+    },
+    /// Newest (`received_at`, then id, both descending) first; with a cursor, only events
+    /// before it.
+    NewestFirst {
+        before: Option<(OffsetDateTime, InboundEventId)>,
+    },
+}
+
+/// The workspace's inbound events: what webhooks and polls brought in, each stored once per
+/// provider id (`(provider, external_id)` is unique within a workspace), with its raw body for a
+/// while.
+///
+/// An event never changes but for its processing time and the removal of its raw body, and is
+/// never deleted: Postgres refuses anything else with a trigger, and the fakes offer no other
+/// write.
+#[async_trait]
+pub trait InboundEventRepo: Send + Sync {
+    /// Stores `event` with its raw body and returns its id, unless the workspace already holds
+    /// an event with the same provider and provider id: then nothing is written and the answer is
+    /// `None` (a replayed delivery, Review Focus 2), and the bundle stays usable. Of two bundles
+    /// racing to store the same event, the second waits for the first and then gets `None` (or
+    /// stores it, if the first rolled back).
+    ///
+    /// An `event.workspace_id` other than the bundle's is `INTERNAL`; a `capability_id` that is
+    /// not the workspace's is `NOT_FOUND`; a taken id (for another event) is `CONFLICT`.
+    async fn insert_if_new(
+        &mut self,
+        event: InboundEvent,
+        raw: Option<Vec<u8>>,
+    ) -> Result<Option<InboundEventId>, AppError>;
+    /// The events not yet processed, oldest (`received_at`, then id) first, at most `limit`
+    /// (clamped to `1..=MAX_EVENT_PAGE`).
+    async fn list_pending(&mut self, limit: u32) -> Result<Vec<InboundEvent>, AppError>;
+    /// Marks the event processed at `at` and answers `true`; an event already processed keeps
+    /// its time and answers `false`. An unknown id is `NOT_FOUND`.
+    async fn mark_processed(
+        &mut self,
+        id: InboundEventId,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError>;
+    /// Removes the raw body of every event received before `cutoff` (the rest of each event
+    /// stays) and returns how many bodies were removed.
+    async fn purge_raw_before(&mut self, cutoff: OffsetDateTime) -> Result<u64, AppError>;
+    /// The events `query` selects, in its order, at most its `limit` (clamped to
+    /// `1..=MAX_EVENT_PAGE`). Never the raw bodies: no read gives them back.
+    async fn list(&mut self, query: EventQuery) -> Result<Vec<InboundEvent>, AppError>;
+    /// How many events are not yet processed, counting no further than `cap`: the answer is
+    /// `min(pending, cap)`.
+    async fn count_pending(&mut self, cap: u32) -> Result<u32, AppError>;
+}
+
+define_id!(
+    /// A pending OAuth flow.
+    OAuthPendingId
+);
+
+/// An OAuth flow between its start and the owner's choice of assets. Found by the hash of its
+/// signed state ([`jt_connector::OAuthState`]); the PKCE code verifier, when the flow uses one, is
+/// sealed here and never travels in the state.
+///
+/// Not `Serialize`, and `Debug` masks it: it carries sealed blobs and the state's hash.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OAuthPendingRow {
+    pub id: OAuthPendingId,
+    pub workspace_id: WorkspaceId,
+    pub provider: Provider,
+    /// The capability kind being connected, e.g. `"facebook_page"`.
+    pub kind_key: String,
+    /// The app the flow signs in with, start to completion: for a new connection the kind's
+    /// ([`connectors::OAuthCallback::of_flow`]); for a reconnection the one that issued the
+    /// capability's credential.
+    pub app: connectors::OAuthCallback,
+    /// The hash of the signed state, unique across every workspace.
+    pub state_hash: String,
+    /// The user who started it (for an agent, the user who issued its key).
+    pub started_by: UserId,
+    /// The capability a reconnection renews: confirming the flow replaces this capability's
+    /// sealed credentials instead of creating capabilities. `None` for a new connection.
+    pub capability_id: Option<CapabilityId>,
+    /// The PKCE code verifier, sealed for the workspace.
+    pub pkce_verifier_sealed: Option<Vec<u8>>,
+    /// The assets the account can reach, credentials included, sealed for the workspace; set
+    /// once the provider has called back.
+    pub assets_sealed: Option<Vec<u8>>,
+    /// The non-secret facts of those assets, a JSON array (`[]` until then).
+    pub assets_public: Value,
+    /// When the flow stops being accepted.
+    pub expires_at: OffsetDateTime,
+    pub created_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for OAuthPendingRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthPendingRow")
+            .field("id", &self.id)
+            .field("workspace_id", &self.workspace_id)
+            .field("provider", &self.provider)
+            .field("app", &self.app)
+            .field("kind_key", &self.kind_key)
+            .field("state_hash", &Masked)
+            .field("started_by", &self.started_by)
+            .field("capability_id", &self.capability_id)
+            .field(
+                "pkce_verifier_sealed",
+                &self.pkce_verifier_sealed.as_ref().map(|_| Masked),
+            )
+            .field(
+                "assets_sealed",
+                &self.assets_sealed.as_ref().map(|_| Masked),
+            )
+            .field("assets_public", &self.assets_public)
+            .field("expires_at", &self.expires_at)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
+}
+
+/// The workspace's pending OAuth flows. Short-lived rows: a flow is deleted once confirmed, and
+/// expired flows are purged.
+#[async_trait]
+pub trait OAuthPendingRepo: Send + Sync {
+    /// Stores the flow. A `row.workspace_id` other than the bundle's is `INTERNAL`; a
+    /// `started_by` that names no user, or a `capability_id` that is not the workspace's, is
+    /// `NOT_FOUND`; a taken id, or a state hash any workspace already holds, is `CONFLICT`.
+    async fn insert(&mut self, row: OAuthPendingRow) -> Result<(), AppError>;
+    /// The workspace's flow with this state hash, expired ones included, read without a lock;
+    /// the caller checks.
+    async fn find_by_state_hash(
+        &mut self,
+        state_hash: &str,
+    ) -> Result<Option<OAuthPendingRow>, AppError>;
+    /// The workspace's flow `id`, expired ones included, its row locked against every other
+    /// `lock` (and every write to it) until this bundle commits or is dropped; `None` when the id
+    /// is not the workspace's. A call that has to wait for another bundle holding the lock
+    /// returns what that bundle committed (`None` once it deleted the flow). Every write that
+    /// decides on a flow's state (storing its assets, confirming it) reads it through here first.
+    /// In Postgres it is `select .. for update`; the in-memory fakes run one bundle at a time in
+    /// tests, so there it is a plain read.
+    async fn lock(&mut self, id: OAuthPendingId) -> Result<Option<OAuthPendingRow>, AppError>;
+    /// Stores the assets the provider's callback found: `sealed` (credentials included, sealed
+    /// for the workspace) and their public facts. An unknown id is `NOT_FOUND`.
+    async fn set_assets(
+        &mut self,
+        id: OAuthPendingId,
+        sealed: Vec<u8>,
+        public: Value,
+    ) -> Result<(), AppError>;
+    /// Deletes the flow. An unknown id is `NOT_FOUND`.
+    async fn delete(&mut self, id: OAuthPendingId) -> Result<(), AppError>;
+    /// Deletes every flow that expired before `now` (`expires_at < now`: a flow is still
+    /// accepted at its expiry instant) and returns how many.
+    async fn purge_expired(&mut self, now: OffsetDateTime) -> Result<u64, AppError>;
+}
+
+define_id!(
+    /// A probe run.
+    ProbeRunId
+);
+
+/// One probe of a connector capability: when, whether it succeeded, why not (the
+/// [`jt_connector::ConnectorError::kind`] key, `None` when it succeeded or the adapter did not
+/// say), how long it took, and the non-secret facts it returned. Build it from the probe's result
+/// with [`ProbeRun::from_result`], so the error kind is always one the schema accepts.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProbeRun {
+    pub id: ProbeRunId,
+    pub workspace_id: WorkspaceId,
+    pub capability_id: CapabilityId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    pub ok: bool,
+    pub error_kind: Option<String>,
+    /// Stored as a 32-bit signed integer: a latency beyond `i32::MAX` milliseconds (24 days) is
+    /// stored, and read back, as `i32::MAX`.
+    pub latency_ms: u32,
+    pub facts: Value,
+}
+
+impl ProbeRun {
+    /// The run that records `result`: `ok` decides (as in [`jt_connector::status_after_probe`]),
+    /// the error kind is the [`jt_connector::ConnectorError::kind`] of a failure's error (`None`
+    /// for a success, and for a failure the adapter did not explain), and the facts are the
+    /// result's.
+    pub fn from_result(
+        id: ProbeRunId,
+        workspace_id: WorkspaceId,
+        capability_id: CapabilityId,
+        at: OffsetDateTime,
+        result: &ProbeResult,
+    ) -> ProbeRun {
+        let error_kind = if result.ok {
+            None
+        } else {
+            result.error.as_ref().map(|e| e.kind().to_owned())
+        };
+        ProbeRun {
+            id,
+            workspace_id,
+            capability_id,
+            at,
+            ok: result.ok,
+            error_kind,
+            latency_ms: result.latency_ms,
+            facts: result.facts.clone(),
+        }
+    }
+}
+
+/// The most runs one [`ProbeRunRepo::list`] returns.
+pub const MAX_PROBE_PAGE: u32 = 500;
+
+/// How long a probe run is kept (spec §11): younger runs are never deleted, older ones are
+/// purged daily ([`ProbeRunRepo::purge_before`]).
+pub const PROBE_RUN_RETENTION: time::Duration = time::Duration::days(30);
+
+/// The workspace's probe log. Runs are never changed, and deleted only once older than
+/// [`PROBE_RUN_RETENTION`] (Postgres refuses anything else with a trigger).
+#[async_trait]
+pub trait ProbeRunRepo: Send + Sync {
+    /// Appends the run and returns its id. A `run.workspace_id` other than the bundle's is
+    /// `INTERNAL`; a capability that is not the workspace's is `NOT_FOUND`; a taken id is
+    /// `CONFLICT`; an `error_kind` that is not a `ConnectorError` kind key breaks a check
+    /// constraint and is `INTERNAL`.
+    async fn append(&mut self, run: ProbeRun) -> Result<ProbeRunId, AppError>;
+    /// The capability's newest run (`at`, then id), if any.
+    async fn latest(&mut self, capability_id: CapabilityId) -> Result<Option<ProbeRun>, AppError>;
+    /// The capability's runs newest first, ordered by `(at, id)` descending, at most `limit`
+    /// (clamped to `1..=MAX_PROBE_PAGE`); a capability that is not the workspace's has none.
+    async fn list(
+        &mut self,
+        capability_id: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<ProbeRun>, AppError>;
+    /// Deletes the workspace's runs made before `cutoff` and returns how many. A run younger than
+    /// [`PROBE_RUN_RETENTION`] by the database's clock is kept whatever the cutoff (Postgres
+    /// refuses to delete it, and the statement leaves it out rather than fail); the in-memory
+    /// fakes, which have no database clock, apply the cutoff alone. The daily purge passes
+    /// `now - PROBE_RUN_RETENTION`.
+    async fn purge_before(&mut self, cutoff: OffsetDateTime) -> Result<u64, AppError>;
+}
+
+/// The most job ids one [`OutboundJobRepo::pending_job_ids`] returns: as many as one NetGSM
+/// delivery-report request takes.
+pub const MAX_PENDING_JOBS: u32 = 50;
+
+/// The workspace's sent messages whose delivery is not final yet, by the provider's job id (the
+/// `provider_id` of a [`connectors::SendReceipt`]), and what the delivery reports said of them.
+///
+/// The messages themselves are the next milestone's (M2 stores them in its own table); until
+/// then the Postgres bundle holds none: `pending_job_ids` answers nothing and `record_status`
+/// writes nothing, so the delivery-report poll runs and never reaches a provider.
+#[async_trait]
+pub trait OutboundJobRepo: Send + Sync {
+    /// The job ids of workspace `ws`'s messages whose delivery is not final, oldest first, at
+    /// most `limit` (clamped to `1..=MAX_PENDING_JOBS`). `ws` must be the bundle's workspace,
+    /// else `INTERNAL`.
+    async fn pending_job_ids(
+        &mut self,
+        ws: WorkspaceId,
+        limit: u32,
+    ) -> Result<Vec<String>, AppError>;
+    /// Records each status against the job it names in workspace `ws`; a status naming a job
+    /// the workspace does not hold is ignored. `ws` must be the bundle's workspace, else
+    /// `INTERNAL`.
+    async fn record_status(
+        &mut self,
+        ws: WorkspaceId,
+        statuses: Vec<connectors::DeliveryStatus>,
+    ) -> Result<(), AppError>;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Platform repositories
 // ---------------------------------------------------------------------------------------------
 
@@ -1017,6 +1380,10 @@ pub trait TenantRepos: Send + Sync {
     fn capability_groups(&mut self) -> &mut dyn CapabilityGroupRepo;
     fn budget(&mut self) -> &mut dyn BudgetRepo;
     fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo;
+    fn inbound_events(&mut self) -> &mut dyn InboundEventRepo;
+    fn oauth_pending(&mut self) -> &mut dyn OAuthPendingRepo;
+    fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo;
+    fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 
@@ -1103,6 +1470,36 @@ pub trait PlatformRepos: Send + Sync {
         &mut self,
         token_hash: &str,
     ) -> Result<Option<MembershipRow>, AppError>;
+    /// The connected capability, in whichever workspace it belongs to, whose kind is one of
+    /// `kind_keys` and whose external account id is `external_id`: where an inbound event for
+    /// that account is routed. Connected means proved through the provider: sealed credentials
+    /// present, stored status `Verified` or `Unreachable` (an expired token keeps its events, so
+    /// they are there when the owner reconnects), **and** verified at least once
+    /// (`last_verified_at` set). For a connector capability only a successful probe sets
+    /// `last_verified_at`, and only when the probe showed the credential to be the capability's
+    /// own account; binding the capability to another account clears it. So a capability that is
+    /// only declared (anyone can type a public page id), sealed but never verified (a pasted
+    /// token that failed its probe, or reached another account, ends `Unreachable` and sealed),
+    /// verified on an agent's word without credentials, or retired never receives events,
+    /// whichever workspace holds it.
+    ///
+    /// `None` when no workspace holds the account connected (the event is routed nowhere, Review
+    /// Focus 1). When several do (the same account connected in two workspaces, or under two
+    /// kinds), a `Verified` one wins over an `Unreachable` one, then the most recently created
+    /// (`created_at`, then id, both descending). Read as [`CapabilityRepo::find`] reads it.
+    async fn capability_by_external(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Option<Capability>, AppError>;
+    /// The workspaces, in id order, holding at least one capability of one of `kind_keys` that
+    /// is `Verified` and has sealed credentials: those a poll of the kinds' provider has a
+    /// connected account to ask with (the NetGSM polls ask with a verified `sms_line`). Lets a
+    /// job skip every other workspace without opening a transaction in it.
+    async fn workspaces_with_verified(
+        &mut self,
+        kind_keys: &[&str],
+    ) -> Result<Vec<WorkspaceId>, AppError>;
     /// Appends a ledger entry to `entry.workspace_id` on behalf of the platform.
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
@@ -1114,4 +1511,82 @@ pub trait UnitOfWork: Send + Sync {
     async fn tenant(&self, ws: WorkspaceId) -> Result<Box<dyn TenantRepos>, AppError>;
     async fn platform(&self) -> Result<Box<dyn PlatformRepos>, AppError>;
     async fn user(&self) -> Result<Box<dyn UserRepos>, AppError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use jt_connector::{ConnectorError, ProbeResult};
+    use serde_json::json;
+    use time::macros::datetime;
+
+    use super::*;
+
+    #[test]
+    fn a_probe_run_records_the_kind_of_its_error_and_only_when_it_failed() {
+        let (id, ws, cap) = (
+            ProbeRunId::new_v7(),
+            WorkspaceId::new_v7(),
+            CapabilityId::new_v7(),
+        );
+        let at = datetime!(2026-10-22 09:00 UTC);
+        let ok = ProbeRun::from_result(
+            id,
+            ws,
+            cap,
+            at,
+            &ProbeResult::success(12, json!({ "n": 1 })),
+        );
+        assert_eq!(
+            ok,
+            ProbeRun {
+                id,
+                workspace_id: ws,
+                capability_id: cap,
+                at,
+                ok: true,
+                error_kind: None,
+                latency_ms: 12,
+                facts: json!({ "n": 1 }),
+            }
+        );
+        let failed = ProbeRun::from_result(
+            id,
+            ws,
+            cap,
+            at,
+            &ProbeResult::failure(30, ConnectorError::auth("expired")),
+        );
+        assert!(!failed.ok);
+        assert_eq!(failed.error_kind.as_deref(), Some("auth"));
+        assert_eq!(failed.latency_ms, 30);
+        assert_eq!(failed.facts, json!({}));
+        let throttled = ProbeRun::from_result(
+            id,
+            ws,
+            cap,
+            at,
+            &ProbeResult::failure(5, ConnectorError::throttle(None)),
+        );
+        assert_eq!(throttled.error_kind.as_deref(), Some("throttle"));
+        // A failure the adapter did not explain has no kind; `ok` decides when the two disagree.
+        let unexplained = ProbeResult {
+            ok: false,
+            latency_ms: 1,
+            error: None,
+            facts: json!({}),
+        };
+        assert_eq!(
+            ProbeRun::from_result(id, ws, cap, at, &unexplained).error_kind,
+            None
+        );
+        let contradictory = ProbeResult {
+            ok: true,
+            latency_ms: 1,
+            error: Some(ConnectorError::transient("late")),
+            facts: json!({}),
+        };
+        let run = ProbeRun::from_result(id, ws, cap, at, &contradictory);
+        assert!(run.ok);
+        assert_eq!(run.error_kind, None);
+    }
 }

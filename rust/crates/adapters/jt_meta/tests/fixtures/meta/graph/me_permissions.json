@@ -1,0 +1,7 @@
+{
+  "data": [
+    { "permission": "pages_show_list", "status": "granted" },
+    { "permission": "pages_messaging", "status": "granted" },
+    { "permission": "ads_read", "status": "declined" }
+  ]
+}

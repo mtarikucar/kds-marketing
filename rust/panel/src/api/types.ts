@@ -577,6 +577,24 @@ export interface DeclareInput {
   policy?: Policy;
 }
 
+/**
+ * `jt_app::usecases::capabilities::UpdateCapability`: each field given replaces the capability's
+ * (at least one); the kind, public settings and policy are not edited this way.
+ */
+export interface UpdateCapabilityInput {
+  name?: string;
+  description?: string;
+  external_id?: string;
+}
+
+/**
+ * `jt_app::usecases::capabilities::UpdatedCapability`: `verification_reset` when a connector's
+ * account changed, so its verification was reset and its stored credentials dropped.
+ */
+export interface UpdatedCapability extends CapabilityOut {
+  verification_reset: boolean;
+}
+
 /** `jt_capability::CapabilityGroup`. */
 export interface CapabilityGroup {
   id: Uuid;
@@ -640,6 +658,8 @@ export interface BudgetItem {
   period: BudgetPeriod;
   strategy_version_id: Uuid | null;
   created_at: Rfc3339;
+  /** When it was retired: it then takes no links and no spend. `null` while it is live. */
+  retired_at: Rfc3339 | null;
 }
 
 /** `jt_app::usecases::budget::BudgetItemInput`. */
@@ -649,6 +669,16 @@ export interface BudgetItemInput {
   unit: Unit;
   cap: number;
   period: BudgetPeriod;
+}
+
+/**
+ * `jt_app::usecases::budget::UpdateBudgetItem`: each field given replaces the item's (at least
+ * one); the kind and unit never change.
+ */
+export interface UpdateBudgetItemInput {
+  name?: string;
+  cap?: number;
+  period?: BudgetPeriod;
 }
 
 /** `jt_app::usecases::budget::BudgetItemOut`: `remaining` is negative when over the cap. */
@@ -698,7 +728,10 @@ export type WorkKind =
   | { kind: 'approve_strategy' }
   | { kind: 'verify_capability'; capability_id: Uuid; name: string; stale: boolean }
   | { kind: 'declare_first_capability' }
-  | { kind: 'connect_connector'; capability_id: Uuid; name: string };
+  | { kind: 'connect_connector'; capability_id: Uuid; name: string }
+  | { kind: 'reconnect_connector'; capability_id: Uuid; name: string }
+  /** Unprocessed inbound events, counted up to `INBOUND_EVENTS_COUNT_CAP`. */
+  | { kind: 'inbound_events'; count: number };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {
@@ -722,6 +755,112 @@ export interface PendingOut {
   agent: AgentState;
 }
 
+/**
+ * `jt_app::usecases::work::INBOUND_EVENTS_COUNT_CAP`: an `inbound_events` count of the cap means at
+ * least that many.
+ */
+export const INBOUND_EVENTS_COUNT_CAP = 1000;
+
 /** `jt_app::ports::{MIN,MAX}_AGENT_CHECKIN_INTERVAL_MINUTES`. */
 export const MIN_CHECKIN_INTERVAL_MINUTES = 15;
 export const MAX_CHECKIN_INTERVAL_MINUTES = 10_080;
+
+// ---------------------------------------------------------------------------------------------
+// Connectors
+// ---------------------------------------------------------------------------------------------
+
+/** `jt_connector::Provider`. */
+export type Provider = 'meta' | 'netgsm' | 'x';
+export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x'];
+
+/** `jt_app::usecases::connector::StartOut`: where to send the browser, until when. */
+export interface StartOut {
+  authorize_url: string;
+  pending_id: Uuid;
+  expires_at: Rfc3339;
+}
+
+/** `jt_app::ports::connectors::AssetPublic`: what the owner chooses from; never a credential. */
+export interface AssetPublic {
+  kind_key: string;
+  external_id: string;
+  name: string;
+  /** The provider's public facts, e.g. a category, the granted scopes, an expiry. */
+  public: unknown;
+}
+
+/** `jt_app::usecases::connector::PendingAssetsOut`. */
+export interface PendingAssetsOut {
+  pending_id: Uuid;
+  assets: AssetPublic[];
+}
+
+/** `jt_app::usecases::connector::CredentialInput`, tagged by `kind`. */
+export type CredentialInput =
+  | { kind: 'netgsm_sms'; usercode: string; password: string; msgheader: string }
+  | { kind: 'netgsm_pbx'; username: string; password: string; trunk?: string; pbxnum?: string }
+  | { kind: 'meta_token'; access_token: string };
+export type CredentialKind = CredentialInput['kind'];
+
+/**
+ * `jt_app::usecases::connector::SetCredentials`: an existing capability (`capability_id`) or a new
+ * one (`kind_key` and `name`), the account it should reach when known, and the credentials.
+ */
+export type SetCredentialsInput = ({ capability_id: Uuid } | { kind_key: string; name: string }) & {
+  external_id?: string;
+  credential: CredentialInput;
+};
+
+/** `jt_app::usecases::connector::ProbeResultPublic`: never the credential. */
+export interface ProbeResultPublic {
+  ok: boolean;
+  latency_ms: number;
+  /** `jt_connector::ConnectorError` kind of a failure. */
+  error_kind: string | null;
+  /** Redacted by the server; for logs and agents, not shown. */
+  error_reason: string | null;
+  facts: unknown;
+}
+
+/** `jt_app::usecases::connector::ProbeOut`. */
+export interface ProbeOut {
+  result: ProbeResultPublic;
+  status: StoredStatus;
+}
+
+/** The purposes of NetGSM's callback URLs (`jt_connector::NetgsmPurpose`), in the server's order. */
+export const NETGSM_PURPOSES = ['mo', 'events', 'iys', 'voice-report', 'autocall-report'] as const;
+export type NetgsmPurpose = (typeof NETGSM_PURPOSES)[number];
+
+/** `jt_app::usecases::connector::MetaHook`: the verify token itself is never sent. */
+export interface MetaHook {
+  url: string;
+  verify_token_hint: string;
+}
+
+/** `jt_app::usecases::connector::NetgsmHook`: the URL carries the workspace's hook token. */
+export interface NetgsmHook {
+  purpose: NetgsmPurpose;
+  url: string;
+}
+
+/** `jt_app::usecases::connector::HooksOut`; `meta` is `null` while the platform has no Meta app. */
+export interface HooksOut {
+  meta: MetaHook | null;
+  netgsm: NetgsmHook[];
+}
+
+/** `jt_app::usecases::connector::ConnectorHealth`. */
+export interface ConnectorHealth {
+  capability_id: Uuid;
+  kind_key: string;
+  name: string;
+  /** `null` for a connector kind no provider serves yet. */
+  provider: Provider | null;
+  status: EffectiveStatus;
+  last_probe_at: Rfc3339 | null;
+  ok: boolean | null;
+  error_kind: string | null;
+  token_expires_at: Rfc3339 | null;
+  reconnect_required: boolean;
+}

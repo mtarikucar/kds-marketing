@@ -159,7 +159,18 @@
     "before_id": "Page cursor",
     "group": "Kind group",
     "group_id": "Group",
-    "confirm": "Confirmation"
+    "confirm": "Confirmation",
+    "selected": "Selected accounts",
+    "credential": {
+      "kind": "Credential type",
+      "usercode": "User code",
+      "password": "Password",
+      "msgheader": "Message header",
+      "username": "Username",
+      "trunk": "Trunk",
+      "pbxnum": "PBX number",
+      "access_token": "Access token"
+    }
   },
   "errors": {
     "UNAUTHENTICATED": "You need to sign in.",
@@ -170,6 +181,7 @@
     "STRATEGY_REQUIRED": "This needs an approved strategy first.",
     "WORKSPACE_INACTIVE": "The workspace is not active.",
     "HOST_NOT_ALLOWED": "Access to this address is not allowed.",
+    "UPSTREAM_UNAVAILABLE": "The provider is not answering right now. Please try again shortly.",
     "INTERNAL": "Something unexpected went wrong. Please try again shortly.",
     "NETWORK": "Could not reach the server. Check your connection.",
     "unknown": "Something went wrong.",
@@ -187,7 +199,14 @@
     "noDraft": "There is no open strategy draft.",
     "versionMoved": "The version changed meanwhile; reload the page.",
     "draftChanged": "The draft changed after it was shown to you. Go through it again before approving.",
-    "missingPermission": "This needs the permission: {{permission}}."
+    "missingPermission": "This needs the permission: {{permission}}.",
+    "providerAppMissing": "This provider's platform app is not configured yet, so this kind of account cannot be connected for now.",
+    "publicUrlMissing": "The platform's public address is not configured yet; connecting accounts and webhook addresses are unavailable for now.",
+    "useSetCredentials": "This kind of account connects with credentials, not by signing in at the provider.",
+    "accountMismatch": "The account you signed in with does not reach this capability's account.",
+    "providerRefused": "The provider refused the request.",
+    "accountTaken": "Another capability of the same kind already holds this account.",
+    "upstreamRetryAfter": "The provider is not answering right now. Try again in about {{seconds}} seconds."
   },
   "login": {
     "title": "Sign in",
@@ -272,8 +291,12 @@
       "verify_capability_stale": "The verification of {{name}} has lapsed; verify it again.",
       "declare_first_capability": "Declare the first capability the workspace can act through.",
       "connect_connector": "{{name}} awaits its connection.",
+      "reconnect_connector": "{{name}} must be reconnected: its provider no longer accepts its login.",
+      "inbound_events_one": "{{n}} inbound event (a message, status, lead, call or consent change) awaits your agent.",
+      "inbound_events_other": "{{n}} inbound events (messages, statuses, leads, calls, consent changes) await your agent.",
       "open": "Open",
-      "priority": "Priority {{priority}}"
+      "priority": "Priority {{priority}}",
+      "reconnect": "Reconnect"
     }
   },
   "team": {
@@ -469,6 +492,8 @@
     "approveNoAssumptions": "No assumption was recorded: every point rests on your answers.",
     "approveHypotheses": "Hypotheses it puts in force: {{count}}.",
     "approveLoading": "Loading the draft…",
+    "approveNotSubmitted": "The draft was reopened meanwhile; it cannot be approved until it is submitted again.",
+    "approveNoDraft": "No draft awaits approval any more; it may have been approved or closed meanwhile.",
     "approveConfirm": "Approve this version",
     "archive": "Archive",
     "archiveTitle": "Archive the approved strategy",
@@ -672,6 +697,7 @@
     "noGroups": "In no group",
     "keyDetail": "Tool: {{detail}}",
     "actions": {
+      "edit": "Edit",
       "verify": "Verify",
       "policy": "Policy",
       "unreachable": "Mark unreachable",
@@ -692,6 +718,15 @@
       "settingValue": "Value",
       "submit": "Declare",
       "declared": "Capability declared."
+    },
+    "editDialog": {
+      "title": "Edit {{name}}",
+      "description": "Change the name, the description or the account. The kind, the settings and the policy stay as they are.",
+      "externalIdHint": "The provider's id of the account, page or line; it cannot be emptied.",
+      "externalIdConnectorHint": "The provider's id of the account, page or line; it cannot be emptied. Changing it means connecting the account again.",
+      "connectorWarning": "Changing the account resets the verification and drops the stored credentials: connect the account again afterwards.",
+      "saved": "Capability updated.",
+      "savedReset": "Capability updated; its verification was reset and its credentials dropped. Connect the account again."
     },
     "verifyDialog": {
       "title": "Verify {{name}}",
@@ -762,7 +797,132 @@
       "deleted": "Group deleted.",
       "memberAdded": "Member added.",
       "memberRemoved": "Member removed."
+    },
+    "connector": {
+      "label": "Connection",
+      "actionsLabel": "Connection actions",
+      "connect": "Connect",
+      "reconnect": "Reconnect",
+      "probe": "Probe",
+      "health": {
+        "ok": "Probe succeeded · {{when}}",
+        "failed": "Probe failed ({{reason}}) · {{when}}",
+        "never": "Not probed yet",
+        "reconnect": "Must be reconnected",
+        "expiresSoon": "The access token expires {{when}}",
+        "expired": "The access token has expired"
+      },
+      "errorKinds": {
+        "auth": "login refused",
+        "permission": "no permission",
+        "throttle": "provider busy",
+        "transient": "a temporary problem",
+        "permanent": "a permanent problem",
+        "unknown": "an unknown problem"
+      },
+      "probeDialog": {
+        "title": "Probe: {{name}}",
+        "description": "The system made a small trial call to the provider with the credentials.",
+        "ok": "The probe succeeded; the connection works.",
+        "failed": "The probe failed: {{reason}}.",
+        "latency": "Duration",
+        "latencyValue": "{{ms}} ms",
+        "status": "Status"
+      },
+      "probing": "Probing…",
+      "redirecting": "Taking you to the provider…"
+    },
+    "hooks": {
+      "title": "Webhook addresses",
+      "description": "Where the providers send this workspace's events (incoming messages, statuses, calls, consent changes). Paste each one into the provider's dashboard.",
+      "netgsmTitle": "NetGSM",
+      "netgsmHelp": "Each address carries a key of this workspace's own: paste it into the NetGSM dashboard only, and do not share it.",
+      "purposes": {
+        "mo": "Incoming SMS",
+        "events": "PBX call events",
+        "iys": "İYS consent changes",
+        "voice-report": "Voice message reports",
+        "autocall-report": "Auto-call reports"
+      },
+      "metaTitle": "Meta",
+      "metaUrl": "Meta webhook address",
+      "verifyTokenHint": "The verify token is set in the dashboard of the platform's Meta app; it is not shown here.",
+      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is."
     }
+  },
+  "connect": {
+    "title": "Connect an account",
+    "description": "Connect your provider accounts to the workspace. For Meta and X you sign in at the provider; for NetGSM you enter your credentials.",
+    "open": "Connect an account",
+    "kindsLabel": "Kind of account to connect",
+    "chooseKind": "Choose the kind of account to connect first.",
+    "providers": {
+      "meta": "Meta",
+      "netgsm": "NetGSM",
+      "x": "X"
+    },
+    "forCapability": "For {{name}}",
+    "noPermission": "Connecting accounts needs the permission to manage capabilities.",
+    "unsupported": "No provider connects this kind of account yet.",
+    "oauth": {
+      "title": "Sign in at the provider",
+      "body": "You will be taken to the provider's sign-in page. Once you have signed in and granted access, you come back to the panel and choose the accounts to connect. Sign in within ten minutes.",
+      "submit": "Sign in with {{provider}}",
+      "reconnectBody": "This account's login will be renewed: sign in at the provider with the same account again.",
+      "reconnectSubmit": "Reconnect",
+      "firstBindsNote": "This capability is not bound to an account yet: the first account you choose at the provider becomes this capability, and the others you choose are added as new capabilities."
+    },
+    "credentials": {
+      "title": "Credentials",
+      "body": "They are stored sealed and never shown again; the connection is probed as soon as they are saved.",
+      "name": "Capability name",
+      "nameHint": "Shown under this name in the panel and in the list the agent reads.",
+      "usercode": "User code",
+      "password": "Password",
+      "msgheader": "Message header",
+      "msgheaderHint": "The approved sender name at NetGSM.",
+      "username": "Username",
+      "trunk": "Trunk (optional)",
+      "pbxnum": "PBX number (optional)",
+      "submit": "Save and probe"
+    },
+    "advanced": "Advanced",
+    "token": {
+      "body": "You can also connect by pasting an access token you got from the provider. The token is sealed and never shown again.",
+      "accessToken": "Access token",
+      "externalId": "Account id",
+      "externalIdHint": "The provider's id of the page or the WhatsApp phone number.",
+      "externalIdOptional": "Account id (optional)",
+      "submit": "Save the token and probe"
+    },
+    "result": {
+      "verified": "The connection was probed and verified.",
+      "failed": "The credentials were saved, but the probe failed: {{reason}}.",
+      "pending": "The credentials were saved; the connection is not verified yet.",
+      "toCapabilities": "Go to capabilities",
+      "another": "Connect another account"
+    }
+  },
+  "oauthCallback": {
+    "title": "Account connection",
+    "loading": "Processing the provider's answer…",
+    "chooseTitle": "Choose the accounts to connect",
+    "chooseBody": "Below are the assets the account you signed in with reaches. The ones you choose are added as capabilities and probed at once.",
+    "firstBinds": "This connection was started for a capability: the first account you choose becomes that capability, and the others are added as new capabilities.",
+    "assetsLabel": "Assets found",
+    "externalId": "Id: {{id}}",
+    "scopes": "Permissions: {{scopes}}",
+    "expires": "Access ends: {{at}}",
+    "none": "This account reaches nothing that can be connected.",
+    "confirm": "Connect the selected",
+    "connected": "Accounts connected: {{count}}.",
+    "errorTitle": "The connection could not be completed",
+    "providerDenied": "Access was not granted at the provider; no account was connected.",
+    "providerError": "The provider did not complete the connection.",
+    "missingParams": "This page was opened without the provider's answer.",
+    "unknownCallback": "The panel does not know this return address; start connecting again from the panel.",
+    "stateRefused": "This connection request does not belong to this workspace, has expired or was already used. Start connecting again.",
+    "restart": "Start again"
   },
   "budget": {
     "title": "Budget",
@@ -798,7 +958,12 @@
     },
     "minutesValue": "{{value}} min",
     "overCap": "Over the cap",
+    "retiredOn": "Retired {{date}}",
     "spend": "Spend",
+    "actions": {
+      "edit": "Edit",
+      "retire": "Retire"
+    },
     "empty": "No budget items yet.",
     "emptyBody": "Create an item such as an ad budget, SMS or an agent quota; the agent records what it spends here.",
     "dialog": {
@@ -814,10 +979,21 @@
       "submit": "Create",
       "created": "Budget item created."
     },
+    "editDialog": {
+      "title": "Edit {{name}}",
+      "description": "Change the name, the cap or the period; the kind and the unit stay. A cap below what was already spent is allowed: the item then reads over its cap.",
+      "saved": "Budget item updated."
+    },
+    "retireDialog": {
+      "title": "Retire the budget item",
+      "body": "{{name}} will stop taking links and spend: every capability linked to it is unlinked. Its spend history stays.",
+      "retired": "Budget item retired."
+    },
     "spendSheet": {
       "title": "{{name}}: spend",
       "description": "Newest first; a spend record is never deleted.",
       "summary": "{{spent}} spent this period, {{remaining}} remaining.",
+      "retired": "This item is retired: it takes no more spend.",
       "record": "Record spend",
       "amountHint": "In {{unit}}, greater than zero.",
       "referenceHint": "An invoice number, a campaign id…",

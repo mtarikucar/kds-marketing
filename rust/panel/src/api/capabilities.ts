@@ -8,6 +8,8 @@ import type {
   KindGroup,
   Policy,
   StoredStatus,
+  UpdateCapabilityInput,
+  UpdatedCapability,
 } from './types';
 
 /** Which capabilities to list; every field that is set must match. */
@@ -47,6 +49,19 @@ export function declareCapability(input: DeclareInput): Promise<CapabilityOut> {
   if (input.connector_public !== undefined) body.connector_public = input.connector_public;
   if (input.policy !== undefined) body.policy = input.policy;
   return request('POST', '/api/capabilities', { body });
+}
+
+/**
+ * `PATCH /api/capabilities/{id}`: only the fields given are sent (the server refuses any other,
+ * and an edit naming none). A connector's new account resets its verification
+ * (`verification_reset`).
+ */
+export function updateCapability(id: string, input: UpdateCapabilityInput): Promise<UpdatedCapability> {
+  const body: Record<string, unknown> = {};
+  if (input.name !== undefined) body.name = input.name;
+  if (input.description !== undefined) body.description = input.description;
+  if (input.external_id !== undefined) body.external_id = input.external_id;
+  return request('PATCH', `/api/capabilities/${seg(id)}`, { body });
 }
 
 /** `POST /api/capabilities/{id}/verify`: the agent's (or a person's) evidence, recorded as given. */

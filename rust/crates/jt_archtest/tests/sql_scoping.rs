@@ -125,6 +125,9 @@ fn tenant_tables_are_read_from_the_migrations() {
         "capability_budget_links",
         "budget_spend_entries",
         "workspace_policies",
+        "inbound_events",
+        "oauth_pending",
+        "probe_runs",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

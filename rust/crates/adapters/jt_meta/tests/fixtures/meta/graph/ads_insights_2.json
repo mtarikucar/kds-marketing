@@ -1,0 +1,6 @@
+{
+  "data": [
+    { "campaign_id": "1212121212", "campaign_name": "Test Kampanya", "spend": "7", "impressions": "900", "clicks": "12", "date_start": "2026-10-02", "date_stop": "2026-10-02" }
+  ],
+  "paging": { "cursors": { "before": "MQZDZD", "after": "MgZDZD" } }
+}

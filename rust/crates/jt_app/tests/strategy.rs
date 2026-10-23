@@ -15,9 +15,9 @@ use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
-    ConsultationRepo, HypothesisRepo, LedgerRepo, MembershipRepo, PlatformRepos, RoleRepo,
-    StrategyArchivedHook, StrategyRepo, TenantRepos, UnitOfWork, UserRepos, UserRow,
-    WorkspacePolicyRepo, WorkspaceRepo,
+    ConsultationRepo, HypothesisRepo, InboundEventRepo, LedgerRepo, MembershipRepo,
+    OAuthPendingRepo, OutboundJobRepo, PlatformRepos, ProbeRunRepo, RoleRepo, StrategyArchivedHook,
+    StrategyRepo, TenantRepos, UnitOfWork, UserRepos, UserRow, WorkspacePolicyRepo, WorkspaceRepo,
 };
 use jt_app::usecases::Deps;
 use jt_app::usecases::api_keys::{self, CreateKey};
@@ -166,6 +166,22 @@ impl TenantRepos for SpyTenant {
 
     fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo {
         self.inner.workspace_policy()
+    }
+
+    fn inbound_events(&mut self) -> &mut dyn InboundEventRepo {
+        self.inner.inbound_events()
+    }
+
+    fn oauth_pending(&mut self) -> &mut dyn OAuthPendingRepo {
+        self.inner.oauth_pending()
+    }
+
+    fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo {
+        self.inner.probe_runs()
+    }
+
+    fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo {
+        self.inner.outbound_jobs()
     }
 
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
@@ -1112,6 +1128,78 @@ async fn editing_a_submitted_draft_withdraws_the_submission() {
         .await
         .unwrap();
     assert_eq!(out.submitted_at, None);
+}
+
+#[tokio::test]
+async fn recording_an_assumption_withdraws_a_pending_submission() {
+    let w = world().await;
+    complete_draft(&w, &w.owner_ctx).await;
+    let submitted = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let stamp = as_read(&w);
+    assert_eq!(stamp.submitted_at, FIXED_NOW);
+
+    // A question, an answer or a note leaves the submission standing.
+    for kind in [RecordKind::Question, RecordKind::Answer, RecordKind::Note] {
+        strategy::record(
+            &w.deps,
+            &w.owner_ctx,
+            RecordInput {
+                kind,
+                section_key: None,
+                text: "Teslimat süresi?".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(w.version(submitted.id).submitted_at, Some(FIXED_NOW));
+    }
+    assert!(w.entries("strategy.submission_withdrawn").is_empty());
+
+    // An assumption changes what approval would accept: the submission is withdrawn with it.
+    strategy::record(
+        &w.deps,
+        &w.owner_ctx,
+        RecordInput {
+            kind: RecordKind::Assumption,
+            section_key: Some("audience".into()),
+            text: "Müşteriler İstanbul'da".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(w.version(submitted.id).submitted_at, None);
+    let withdrawn = w.entries("strategy.submission_withdrawn");
+    assert_eq!(withdrawn.len(), 1);
+    assert_eq!(
+        withdrawn[0].payload,
+        json!({ "version_id": submitted.id, "reason": "assumption_recorded" })
+    );
+    assert_eq!(
+        withdrawn[0].subject,
+        Some(Subject {
+            kind: "strategy_version".into(),
+            id: submitted.id.to_string(),
+        })
+    );
+
+    // Approving with the stamp read before the assumption is refused.
+    let r = strategy::approve(&w.deps, &w.owner_ctx, stamp).await;
+    assert_eq!(code(r), ErrorCode::Conflict);
+    assert_eq!(w.version(submitted.id).status, VersionStatus::Draft);
+
+    // An assumption on a draft that is not submitted withdraws nothing.
+    strategy::record(
+        &w.deps,
+        &w.owner_ctx,
+        RecordInput {
+            kind: RecordKind::Assumption,
+            section_key: None,
+            text: "Kargo ücretsiz".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(w.entries("strategy.submission_withdrawn").len(), 1);
 }
 
 // ---------------------------------------------------------------------------------------------

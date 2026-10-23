@@ -1,12 +1,14 @@
-//! `jeeta.budget.items_list`, `jeeta.budget.items_create`, `jeeta.budget.spend_record` and
-//! `jeeta.budget.spend_list`: the workspace's own money and caps, never the system's credit.
+//! `jeeta.budget.items_list`, `jeeta.budget.items_create`, `jeeta.budget.items_update`,
+//! `jeeta.budget.items_retire`, `jeeta.budget.spend_record` and `jeeta.budget.spend_list`: the
+//! workspace's own money and caps, never the system's credit.
 //!
-//! Creating an item needs `budget.manage`; reading and recording spend need `workspace.read`, so
-//! an agent can report what it spent. A spend's source is the caller, never an argument.
+//! Creating, editing and retiring an item need `budget.manage`; reading and recording spend need
+//! `workspace.read`, so an agent can report what it spent. A spend's source is the caller, never
+//! an argument.
 
 use jt_app::ctx::Ctx;
 use jt_app::usecases::Deps;
-use jt_app::usecases::budget::{self, BudgetItemInput, DEFAULT_SPEND_PAGE};
+use jt_app::usecases::budget::{self, BudgetItemInput, DEFAULT_SPEND_PAGE, UpdateBudgetItem};
 use jt_capability::{BudgetItemId, BudgetKind, BudgetSpendId, Period, Unit};
 use jt_tenancy::Permission;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -42,6 +44,28 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             permission: Permission::BudgetManage,
             schema: schema_for::<ItemCreateArgs>,
             run: items_create,
+        },
+        ToolDef {
+            use_case: "budget.items.update",
+            description: "Edit a budget item's name, cap (in its unit, minor units of a \
+                          currency) or period; a field left out stays, and at least one must be \
+                          given. Its kind and unit never change. A cap below what was already \
+                          spent in the period is allowed: the spend stays recorded and the item \
+                          reads over its cap. A retired item is not edited. Returns the item \
+                          with what was spent and what remains in its period. [risk: WRITE]",
+            permission: Permission::BudgetManage,
+            schema: schema_for::<ItemUpdateArgs>,
+            run: items_update,
+        },
+        ToolDef {
+            use_case: "budget.items.retire",
+            description: "Retire a budget item for good, only with confirm: true: every \
+                          capability is unlinked from it and it takes no more links or spend; \
+                          its spend history stays, and it is still listed with its retired_at. \
+                          Returns the item. [risk: DESTRUCTIVE]",
+            permission: Permission::BudgetManage,
+            schema: schema_for::<ItemRetireArgs>,
+            run: items_retire,
         },
         ToolDef {
             use_case: "budget.spend.record",
@@ -87,6 +111,36 @@ struct ItemCreateArgs {
     period: Period,
 }
 
+/// A budget item and what to change of it.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ItemUpdateArgs {
+    /// The budget item id, from jeeta.budget.items_list.
+    budget_item_id: Uuid,
+    /// The new name, 1 to 64 characters.
+    #[serde(default)]
+    name: Option<String>,
+    /// The new cap per period, in the item's unit; not negative.
+    #[serde(default)]
+    #[schemars(range(min = 0))]
+    cap: Option<i64>,
+    /// The new period.
+    #[serde(default)]
+    #[schemars(schema_with = "optional_period_schema")]
+    period: Option<Period>,
+}
+
+/// The budget item to retire.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ItemRetireArgs {
+    /// The budget item id, from jeeta.budget.items_list.
+    budget_item_id: Uuid,
+    /// Must be true: retiring is final.
+    #[serde(default)]
+    confirm: bool,
+}
+
 /// A spend from an item.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +182,13 @@ fn budget_kind_schema(_: &mut SchemaGenerator) -> Schema {
 fn period_schema(_: &mut SchemaGenerator) -> Schema {
     let keys: Vec<&str> = Period::all().iter().map(Period::key).collect();
     json_schema!({ "type": "string", "enum": keys })
+}
+
+/// [`period_schema`], or null.
+fn optional_period_schema(_: &mut SchemaGenerator) -> Schema {
+    let mut keys: Vec<Value> = Period::all().iter().map(|p| Value::from(p.key())).collect();
+    keys.push(Value::Null);
+    json_schema!({ "type": ["string", "null"], "enum": keys })
 }
 
 /// The JSON Schema of a unit: a currency, a count with its label, or minutes.
@@ -190,6 +251,29 @@ fn items_create<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
             period,
         };
         to_json(&budget::create_item(deps, ctx, input).await?)
+    })
+}
+
+fn items_update<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let ItemUpdateArgs {
+            budget_item_id,
+            name,
+            cap,
+            period,
+        } = args(raw)?;
+        let input = UpdateBudgetItem { name, cap, period };
+        to_json(&budget::update_item(deps, ctx, BudgetItemId(budget_item_id), input).await?)
+    })
+}
+
+fn items_retire<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let ItemRetireArgs {
+            budget_item_id,
+            confirm,
+        } = args(raw)?;
+        to_json(&budget::retire_item(deps, ctx, BudgetItemId(budget_item_id), confirm).await?)
     })
 }
 

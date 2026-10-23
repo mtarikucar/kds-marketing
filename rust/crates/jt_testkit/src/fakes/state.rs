@@ -1,20 +1,21 @@
 //! The in-memory tables, the checks shared by the bundles, and the unit of work with its
 //! transactions.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
-    AgentConnectionRow, ApiKeyRow, LedgerRow, MembershipRow, MembershipView, OperatorRow,
-    PlatformRepos, PlatformSessionRow, SessionRow, TenantRepos, UnitOfWork, UserRepos, UserRow,
-    WorkspacePolicy, WorkspaceRow,
+    AgentConnectionRow, ApiKeyRow, LedgerRow, MembershipRow, MembershipView, OAuthPendingRow,
+    OperatorRow, PlatformRepos, PlatformSessionRow, ProbeRun, SessionRow, TenantRepos, UnitOfWork,
+    UserRepos, UserRow, WorkspacePolicy, WorkspaceRow,
 };
 use jt_capability::{
     BudgetItem, BudgetItemId, BudgetSpend, Capability, CapabilityGroup, CapabilityGroupId,
     CapabilityId,
 };
+use jt_connector::InboundEvent;
 use jt_ledger::{Actor, LedgerEntry};
 use jt_strategy::{
     ConsultationEntry, Hypothesis, StrategyVersion, StrategyVersionId, VersionStatus,
@@ -84,6 +85,23 @@ pub struct StoredBudgetLink {
     pub budget_item_id: BudgetItemId,
 }
 
+/// An inbound event together with its raw body, as received (`None` once purged).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredInboundEvent {
+    pub event: InboundEvent,
+    pub raw: Option<Vec<u8>>,
+}
+
+/// A message sent from a workspace, by the provider's job id, with the last delivery report
+/// recorded for it (`None` until one is). Only tests queue them
+/// ([`InMemoryUow::add_outbound_job`]): the messages are M2's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredOutboundJob {
+    pub workspace_id: WorkspaceId,
+    pub job_id: String,
+    pub status: Option<jt_app::ports::connectors::DeliveryStatus>,
+}
+
 /// A workspace's policies together with when they were last set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoredWorkspacePolicy {
@@ -115,6 +133,10 @@ pub struct MemState {
     pub capability_budget_links: Vec<StoredBudgetLink>,
     pub budget_spend: Vec<BudgetSpend>,
     pub workspace_policies: Vec<StoredWorkspacePolicy>,
+    pub inbound_events: Vec<StoredInboundEvent>,
+    pub oauth_pending: Vec<OAuthPendingRow>,
+    pub probe_runs: Vec<ProbeRun>,
+    pub outbound_jobs: Vec<StoredOutboundJob>,
 }
 
 impl MemState {
@@ -307,7 +329,7 @@ pub(super) fn exists(found: bool, reference: &str) -> Result<(), AppError> {
         Some("workspace")
     } else if matches!(
         column,
-        "user_id" | "invited_by" | "issued_by" | "approved_by"
+        "user_id" | "invited_by" | "issued_by" | "approved_by" | "started_by"
     ) {
         Some("user")
     } else {
@@ -370,6 +392,9 @@ pub(super) fn actor_kind(actor: &Actor) -> &'static str {
 pub struct InMemoryUow {
     state: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
+    /// How many of the next `CapabilityRepo::set_sealed` calls fail
+    /// ([`InMemoryUow::fail_set_sealed`]).
+    set_sealed_faults: Arc<AtomicUsize>,
 }
 
 impl InMemoryUow {
@@ -381,6 +406,23 @@ impl InMemoryUow {
     pub fn snapshot(&self) -> MemState {
         lock(&self.state).clone()
     }
+
+    /// Makes the next `times` calls of `CapabilityRepo::set_sealed`, in any bundle, fail with
+    /// `INTERNAL` (spoiling their bundle, as a failed statement aborts a Postgres transaction):
+    /// a database failing at the moment a credential is written.
+    pub fn fail_set_sealed(&self, times: usize) {
+        self.set_sealed_faults.store(times, Ordering::SeqCst);
+    }
+
+    /// Records a message of workspace `ws` sent as the provider's job `job_id`, awaiting its
+    /// delivery report (the messages are M2's; until then only tests add them).
+    pub fn add_outbound_job(&self, ws: WorkspaceId, job_id: &str) {
+        lock(&self.state).outbound_jobs.push(StoredOutboundJob {
+            workspace_id: ws,
+            job_id: job_id.to_owned(),
+            status: None,
+        });
+    }
 }
 
 type Op = Box<dyn Fn(&mut MemState) + Send + Sync>;
@@ -389,6 +431,7 @@ type Op = Box<dyn Fn(&mut MemState) + Send + Sync>;
 pub(super) struct MemTx {
     shared: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
+    set_sealed_faults: Arc<AtomicUsize>,
     pub(super) work: MemState,
     ops: Vec<Op>,
     /// Set once a call on the bundle has failed; `commit` then refuses.
@@ -400,6 +443,7 @@ impl MemTx {
         MemTx {
             shared: Arc::clone(&uow.state),
             ledger_seq: Arc::clone(&uow.ledger_seq),
+            set_sealed_faults: Arc::clone(&uow.set_sealed_faults),
             work: lock(&uow.state).clone(),
             ops: Vec::new(),
             spoiled: false,
@@ -461,6 +505,13 @@ impl MemTx {
             }
         });
         Ok(())
+    }
+
+    /// Whether this `set_sealed` call is one [`InMemoryUow::fail_set_sealed`] asked to fail.
+    pub(super) fn set_sealed_fails(&self) -> bool {
+        self.set_sealed_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 
     pub(super) fn append_ledger(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

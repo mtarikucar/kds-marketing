@@ -1,0 +1,6 @@
+{
+  "data": [
+    { "id": "act_1111111111", "account_id": "1111111111", "name": "Test Reklam", "account_status": 1, "currency": "TRY" },
+    { "id": "act_2222222222", "account_id": "2222222222", "name": "Test Kapalı", "account_status": 2, "currency": "TRY" }
+  ]
+}

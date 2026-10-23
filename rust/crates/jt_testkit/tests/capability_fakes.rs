@@ -1,7 +1,8 @@
 //! The in-memory capability, group, budget and workspace-policy repos keep the contracts `jt_pg`
 //! keeps: the sealed blob only through `read_sealed`, one live capability per external account
 //! (`CONFLICT`), members and links only within the bundle's workspace (`NOT_FOUND`, Review Focus
-//! 3), half-open spend windows, newest-first spend pages, and policy defaults.
+//! 3), half-open spend windows, newest-first spend pages, budget item edits and retirement, and
+//! policy defaults.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -194,7 +195,7 @@ async fn capability_round_trip_keeps_the_sealed_blob_behind_read_sealed() {
         c.read_sealed(ig.id).await.unwrap(),
         Some(b"sealed".to_vec())
     );
-    c.set_sealed(ig.id, None).await.unwrap();
+    c.set_sealed(ig.id, None, at).await.unwrap();
     c.set_status(phone.id, StoredStatus::Retired, at)
         .await
         .unwrap();
@@ -225,6 +226,12 @@ async fn capability_round_trip_keeps_the_sealed_blob_behind_read_sealed() {
 
     // Another workspace sees none of it, and a row for another workspace is INTERNAL.
     let mut t = deps.uow.tenant(other).await.unwrap();
+    assert_eq!(
+        code(t.capabilities().set_sealed(ig.id, None, at).await),
+        ErrorCode::NotFound
+    );
+    drop(t);
+    let mut t = deps.uow.tenant(other).await.unwrap();
     assert_eq!(t.capabilities().find(ig.id).await.unwrap(), None);
     assert_eq!(
         code(t.capabilities().read_sealed(ig.id).await),
@@ -238,6 +245,50 @@ async fn capability_round_trip_keeps_the_sealed_blob_behind_read_sealed() {
     );
 }
 
+/// The repo contract `jt_pg` keeps too: a credential change shows in the capability's update
+/// time, and nothing else about the capability moves.
+#[tokio::test]
+async fn set_sealed_stamps_updated_at() {
+    let (_, deps) = setup();
+    let ws = workspace(&deps, "a").await;
+    let ig = capability(ws, "instagram", Some("ig-1"), FIXED_NOW);
+    insert(&deps, &ig, None).await;
+
+    let sealed_at = FIXED_NOW + Duration::hours(1);
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    t.capabilities()
+        .set_sealed(ig.id, Some(b"v1-sealed".to_vec()), sealed_at)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.capabilities().find(ig.id).await.unwrap(),
+        Some(Capability {
+            has_sealed_config: true,
+            updated_at: sealed_at,
+            ..ig.clone()
+        })
+    );
+    drop(t);
+
+    let cleared_at = sealed_at + Duration::hours(1);
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    t.capabilities()
+        .set_sealed(ig.id, None, cleared_at)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.capabilities().find(ig.id).await.unwrap(),
+        Some(Capability {
+            updated_at: cleared_at,
+            ..ig.clone()
+        })
+    );
+    assert_eq!(t.capabilities().read_sealed(ig.id).await.unwrap(), None);
+}
 #[tokio::test]
 async fn same_external_account_twice_is_conflict_until_retired() {
     let (_, deps) = setup();
@@ -444,6 +495,108 @@ async fn cross_workspace_group_member_and_budget_link_are_not_found() {
         code(t.capability_groups().rename(ours.id, "x").await),
         ErrorCode::NotFound
     );
+}
+
+#[tokio::test]
+async fn budget_items_are_edited_retired_and_unlinked_within_the_workspace() {
+    let (uow, deps) = setup();
+    let a = workspace(&deps, "a").await;
+    let b = workspace(&deps, "b").await;
+    let ours = item(a, FIXED_NOW);
+    let theirs = item(b, FIXED_NOW);
+    let (phone, printer) = (
+        capability(a, "phone", None, FIXED_NOW),
+        capability(a, "printer", None, FIXED_NOW),
+    );
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    t.budget().insert_item(ours.clone()).await.unwrap();
+    for c in [&phone, &printer] {
+        t.capabilities().insert(c.clone(), None).await.unwrap();
+        t.budget().link(c.id, ours.id).await.unwrap();
+    }
+    t.commit().await.unwrap();
+    let mut t = deps.uow.tenant(b).await.unwrap();
+    t.budget().insert_item(theirs.clone()).await.unwrap();
+    t.commit().await.unwrap();
+
+    // A lock reads as `find_item` does.
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    assert_eq!(
+        t.budget().lock_item(ours.id).await.unwrap(),
+        Some(ours.clone())
+    );
+    assert_eq!(t.budget().lock_item(theirs.id).await.unwrap(), None);
+    drop(t);
+
+    // Only the name, cap, period and retirement time are written; the rest stays.
+    let edited = BudgetItem {
+        name: "Reklam 2".into(),
+        cap: 5,
+        period: Period::Weekly,
+        retired_at: Some(FIXED_NOW + Duration::days(1)),
+        kind: BudgetKind::Cash,
+        unit: Unit::Minutes,
+        created_at: FIXED_NOW + Duration::days(9),
+        ..ours.clone()
+    };
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    t.budget().update_item(edited).await.unwrap();
+    assert_eq!(t.budget().unlink_item(ours.id).await.unwrap(), 2);
+    assert_eq!(t.budget().unlink_item(ours.id).await.unwrap(), 0);
+    assert_eq!(t.budget().unlink_item(theirs.id).await.unwrap(), 0);
+    t.commit().await.unwrap();
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    let stored = t.budget().find_item(ours.id).await.unwrap().unwrap();
+    assert_eq!(
+        stored,
+        BudgetItem {
+            name: "Reklam 2".into(),
+            cap: 5,
+            period: Period::Weekly,
+            retired_at: Some(FIXED_NOW + Duration::days(1)),
+            ..ours.clone()
+        }
+    );
+    assert_eq!(t.budget().list_items().await.unwrap(), vec![stored.clone()]);
+    for c in [&phone, &printer] {
+        let read = t.capabilities().find(c.id).await.unwrap().unwrap();
+        assert!(read.budget_item_ids.is_empty(), "{}", c.kind_key);
+    }
+    drop(t);
+    let other = uow.snapshot();
+    assert_eq!(
+        other.budget_items.iter().find(|i| i.id == theirs.id),
+        Some(&theirs)
+    );
+
+    // Another workspace's item, an unknown one: NOT_FOUND; a row for another workspace and a
+    // negative cap: INTERNAL.
+    for id in [theirs.id, BudgetItemId::new_v7()] {
+        let mut t = deps.uow.tenant(a).await.unwrap();
+        let r = t
+            .budget()
+            .update_item(BudgetItem {
+                id,
+                ..stored.clone()
+            })
+            .await;
+        assert_eq!(code(r), ErrorCode::NotFound);
+    }
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    assert_eq!(
+        code(t.budget().update_item(theirs.clone()).await),
+        ErrorCode::Internal
+    );
+    drop(t);
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    let r = t
+        .budget()
+        .update_item(BudgetItem {
+            cap: -1,
+            ..stored.clone()
+        })
+        .await;
+    assert_eq!(code(r), ErrorCode::Internal);
 }
 
 #[tokio::test]

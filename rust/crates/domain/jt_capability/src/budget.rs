@@ -174,6 +174,10 @@ pub struct BudgetItem {
     /// Missing reads as the Unix epoch.
     #[serde(default = "epoch", with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// When it was retired: from then on it takes no links and no spend, and its spend history
+    /// stays. Missing reads as `None` (live).
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub retired_at: Option<OffsetDateTime>,
 }
 
 /// What a new budget item is created with; [`BudgetItem::new`] checks it.
@@ -187,9 +191,9 @@ pub struct NewBudgetItem {
 }
 
 impl BudgetItem {
-    /// A new budget item created at `now`, with no strategy version. Refuses a bad name (trimmed,
-    /// then [`crate::validate_name`]), a bad unit ([`validate_unit`]) and a negative cap
-    /// (`NegativeCap`).
+    /// A new, live budget item created at `now`, with no strategy version. Refuses a bad name
+    /// (trimmed, then [`crate::validate_name`]), a bad unit ([`validate_unit`]) and a negative cap
+    /// ([`validate_cap`]).
     pub fn new(
         id: BudgetItemId,
         workspace_id: WorkspaceId,
@@ -205,9 +209,7 @@ impl BudgetItem {
         } = input;
         let name = checked_name(name)?;
         validate_unit(&unit)?;
-        if cap < 0 {
-            return Err(CapabilityError::NegativeCap(cap));
-        }
+        validate_cap(cap)?;
         Ok(BudgetItem {
             id,
             workspace_id,
@@ -218,6 +220,7 @@ impl BudgetItem {
             period,
             strategy_version_id: None,
             created_at: now,
+            retired_at: None,
         })
     }
 }
@@ -302,6 +305,15 @@ impl BudgetSpend {
             reference,
         })
     }
+}
+
+/// `Ok` when `cap` is not negative; else `NegativeCap`. Creating and editing a budget item run it
+/// alike.
+pub fn validate_cap(cap: i64) -> Result<(), CapabilityError> {
+    if cap < 0 {
+        return Err(CapabilityError::NegativeCap(cap));
+    }
+    Ok(())
 }
 
 /// `Ok` when `code` looks like an ISO 4217 code (three uppercase ASCII letters, e.g. `TRY`);

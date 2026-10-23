@@ -6,6 +6,7 @@ import i18n from '@/i18n/config';
 beforeEach(async () => {
   try {
     window.localStorage.clear();
+    window.sessionStorage.clear();
   } catch {
     // Storage may be unavailable; the panel works without it.
   }

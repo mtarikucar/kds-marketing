@@ -25,6 +25,9 @@ pub enum ErrorCode {
     WorkspaceInactive,
     /// An outbound request targeted a host outside the allowlist.
     HostNotAllowed,
+    /// A provider was busy (rate limited) or could not be reached; trying again later may
+    /// succeed.
+    UpstreamUnavailable,
     /// Something failed on our side.
     Internal,
 }
@@ -41,6 +44,7 @@ impl ErrorCode {
             ErrorCode::StrategyRequired => "STRATEGY_REQUIRED",
             ErrorCode::WorkspaceInactive => "WORKSPACE_INACTIVE",
             ErrorCode::HostNotAllowed => "HOST_NOT_ALLOWED",
+            ErrorCode::UpstreamUnavailable => "UPSTREAM_UNAVAILABLE",
             ErrorCode::Internal => "INTERNAL",
         }
     }
@@ -131,6 +135,22 @@ impl AppError {
         )
     }
 
+    /// `UPSTREAM_UNAVAILABLE`: `provider` (its key, e.g. `"meta"`) was busy or could not be
+    /// reached, so the same call may succeed later. `details`: `provider`, `retryable: true`,
+    /// `retry_after_s` (whole seconds) when the provider said how long to wait, and `reason`,
+    /// which the caller has already redacted (a `ConnectorError`'s reason always is).
+    pub fn upstream_unavailable(provider: &str, reason: &str, retry_after_s: Option<i64>) -> Self {
+        let mut details = json!({ "provider": provider, "retryable": true, "reason": reason });
+        if let Some(wait) = retry_after_s {
+            details["retry_after_s"] = json!(wait);
+        }
+        Self::new(
+            ErrorCode::UpstreamUnavailable,
+            "the provider is unavailable; try again later",
+            details,
+        )
+    }
+
     /// `INTERNAL`.
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, message, json!({}))
@@ -165,6 +185,10 @@ mod tests {
                 "WORKSPACE_INACTIVE",
             ),
             (AppError::host_not_allowed("evil.test"), "HOST_NOT_ALLOWED"),
+            (
+                AppError::upstream_unavailable("meta", "rate limited", None),
+                "UPSTREAM_UNAVAILABLE",
+            ),
             (AppError::internal("m"), "INTERNAL"),
         ];
         for (err, name) in all {
@@ -192,6 +216,14 @@ mod tests {
             json!({"host": "evil.test"})
         );
         assert_eq!(AppError::not_found("x").details, json!({}));
+        assert_eq!(
+            AppError::upstream_unavailable("meta", "rate limited", Some(30)).details,
+            json!({ "provider": "meta", "retryable": true, "retry_after_s": 30, "reason": "rate limited" })
+        );
+        assert_eq!(
+            AppError::upstream_unavailable("x", "temporary failure: reset", None).details,
+            json!({ "provider": "x", "retryable": true, "reason": "temporary failure: reset" })
+        );
     }
 
     #[test]

@@ -8,16 +8,18 @@ use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, ApiKeyRow, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
-    ConsultationRepo, HypothesisRepo, LedgerRepo, MembershipRepo, MembershipRow, MembershipView,
-    OperatorRepo, PlatformRepos, PlatformSessionRepo, RoleRepo, SessionRepo, StrategyRepo,
-    TenantRepos, UnitOfWork, UserRepo, UserRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
+    ConsultationRepo, HypothesisRepo, InboundEventRepo, LedgerRepo, MembershipRepo, MembershipRow,
+    MembershipView, OAuthPendingRepo, OperatorRepo, OutboundJobRepo, PlatformRepos,
+    PlatformSessionRepo, ProbeRunRepo, RoleRepo, SessionRepo, StrategyRepo, TenantRepos,
+    UnitOfWork, UserRepo, UserRepos, WorkspacePolicyRepo, WorkspaceRepo, WorkspaceRow,
 };
+use jt_capability::Capability;
 use jt_ledger::LedgerEntry;
 use jt_tenancy::{Email, MembershipId, RoleDef, RoleId, UserId, WorkspaceId, WorkspaceStatus};
 use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 
-use crate::repos::{api_keys, ledger, map_sqlx, memberships, roles, workspaces};
+use crate::repos::{api_keys, capabilities, ledger, map_sqlx, memberships, roles, workspaces};
 use crate::tx::{PlatformTx, TenantTx, UserTx};
 
 /// Opens repo bundles on a pool. Clones share the pool.
@@ -140,6 +142,23 @@ impl TenantRepos for PgTenantRepos {
     }
 
     fn workspace_policy(&mut self) -> &mut dyn WorkspacePolicyRepo {
+        self
+    }
+
+    fn inbound_events(&mut self) -> &mut dyn InboundEventRepo {
+        self
+    }
+
+    fn oauth_pending(&mut self) -> &mut dyn OAuthPendingRepo {
+        self
+    }
+
+    fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo {
+        self
+    }
+
+    /// A stub until M2 adds the table of sent messages (see `repos::outbound_jobs`).
+    fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo {
         self
     }
 
@@ -283,6 +302,21 @@ impl PlatformRepos for PgPlatformRepos {
         token_hash: &str,
     ) -> Result<Option<MembershipRow>, AppError> {
         memberships::find_by_invite_hash(&mut self.tx, token_hash).await
+    }
+
+    async fn capability_by_external(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Option<Capability>, AppError> {
+        capabilities::by_external(&mut self.tx, kind_keys, external_id).await
+    }
+
+    async fn workspaces_with_verified(
+        &mut self,
+        kind_keys: &[&str],
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        capabilities::workspaces_with_verified(&mut self.tx, kind_keys).await
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

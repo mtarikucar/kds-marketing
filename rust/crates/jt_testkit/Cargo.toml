@@ -10,6 +10,7 @@ jt_tenancy.workspace = true
 jt_ledger.workspace = true
 jt_strategy.workspace = true
 jt_capability.workspace = true
+jt_connector.workspace = true
 jt_app.workspace = true
 jt_pg.workspace = true
 # For `panel` (the `panel` feature), the panel router in process. `jt_panel_http` lists this
@@ -26,6 +27,7 @@ async-trait.workspace = true
 serde_json.workspace = true
 rand.workspace = true
 hex.workspace = true
+sha2.workspace = true
 zeroize.workspace = true
 
 [features]

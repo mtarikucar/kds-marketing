@@ -25,17 +25,23 @@ use serde::{Deserialize, Serialize};
 pub use budget::{
     BudgetItem, BudgetItemId, BudgetKind, BudgetSpend, BudgetSpendId, END_OF_TIME,
     MAX_REFERENCE_CHARS, MAX_UNIT_LABEL_CHARS, NewBudgetItem, NewBudgetSpend, Period, SpendSource,
-    Unit, can_link_budget, period_window, remaining, unit_fits, validate_currency, validate_unit,
+    Unit, can_link_budget, period_window, remaining, unit_fits, validate_cap, validate_currency,
+    validate_unit,
 };
 pub use capability::{
     Capability, CapabilityId, Evidence, MAX_EVIDENCE_REF_CHARS, MAX_EVIDENCE_REFS,
-    MAX_EVIDENCE_TEXT_CHARS, MAX_EXTERNAL_ID_CHARS, NewCapability, SECRET_KEY_FRAGMENTS,
-    is_secret_looking_key, validate_connector_public, validate_evidence, validate_key_detail,
+    MAX_EVIDENCE_TEXT_CHARS, MAX_EXTERNAL_ID_CHARS, NewCapability, RESERVED_PUBLIC_KEYS,
+    SECRET_KEY_FRAGMENTS, check_reserved_public_keys, is_secret_looking_key,
+    validate_connector_public, validate_description, validate_evidence, validate_external_id,
+    validate_key_detail,
 };
 pub use group::{CapabilityGroup, CapabilityGroupId};
 /// The key names that must never appear in public fields: the ledger's redaction list.
 pub use jt_ledger::REDACTED_KEYS;
-pub use kind::{CapabilityKind, KINDS, KindGroup, Reach, kinds_in_group};
+pub use kind::{
+    CapabilityKind, KINDS, KindGroup, META_AD_ACCOUNT_PREFIX, Reach, canonical_external_id,
+    kinds_in_group,
+};
 pub use policy::{DEFAULT_VERIFY_MAX_AGE_DAYS, Hours, MAX_TZ_CHARS, Policy, validate_policy};
 pub use status::{EffectiveStatus, StoredStatus, effective_status};
 
@@ -79,9 +85,17 @@ pub enum CapabilityError {
     /// An external id was given but is empty or only whitespace.
     #[error("an external id, when given, must not be blank")]
     BlankExternalId,
+    /// An external id contains a control character (a line break, a tab inside it, ...): no
+    /// provider names an account so.
+    #[error("an external id must not contain control characters")]
+    ExternalIdHasControlCharacter,
     /// The public connector fields are not an object or hold a secret-looking key.
     #[error("the public connector fields have {} problem(s)", .0.len())]
     InvalidConnectorPublic(Vec<Gap>),
+    /// Declared public connector fields name a key only the connectors write
+    /// ([`RESERVED_PUBLIC_KEYS`]).
+    #[error("reserved public key")]
+    ReservedPublicKey(Vec<Gap>),
     /// The policy breaks a rule of [`validate_policy`].
     #[error("the policy has {} problem(s)", .0.len())]
     InvalidPolicy(Vec<Gap>),

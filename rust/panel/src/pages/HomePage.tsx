@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
 import { getStrategy, startConsultation } from '@/api/strategy';
 import {
+  INBOUND_EVENTS_COUNT_CAP,
   MAX_CHECKIN_INTERVAL_MINUTES,
   MIN_CHECKIN_INTERVAL_MINUTES,
   type AgentState,
@@ -71,15 +72,19 @@ function StrategyCard({ state }: { state: StrategyState }) {
   const canConsult = can(session.data, 'team.manage');
   const canApprove = canApproveStrategy(session.data);
   const approvedNumber = typeof state === 'object' && 'approved' in state ? state.approved.number : null;
-  const submitted = typeof state === 'object' && 'submitted' in state ? state.submitted : null;
+  const submitted = typeof state === 'object' && 'submitted' in state;
   const [approving, setApproving] = useState(false);
   // To count the hypotheses in force, and to list what a submitted draft rests on before it is
-  // approved.
+  // approved: fetched again when the approval opens, and shown only once fetched.
   const strategy = useQuery({
     queryKey: STRATEGY_KEY,
     queryFn: getStrategy,
     enabled: approvedNumber !== null || approving,
   });
+  const openApproval = () => {
+    setApproving(true);
+    void strategy.refetch();
+  };
 
   const start = useMutation({
     mutationFn: startConsultation,
@@ -110,7 +115,7 @@ function StrategyCard({ state }: { state: StrategyState }) {
     actions = (
       <>
         {canApprove && (
-          <Button size="sm" onClick={() => setApproving(true)}>
+          <Button size="sm" onClick={openApproval}>
             <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
             {t('home.strategy.approve')}
           </Button>
@@ -160,12 +165,12 @@ function StrategyCard({ state }: { state: StrategyState }) {
         <div className="mt-auto flex flex-wrap gap-2">{actions}</div>
       </CardContent>
       {submitted && canApprove && (
-        // The shortcut approves the draft the pending work names; the dialog lists what it rests on.
+        // The shortcut approves the draft the dialog shows, fetched when it opens (never the
+        // pending work's stamp, which may be older), and lists what it rests on.
         <ApproveDialog
           open={approving}
           onOpenChange={setApproving}
-          draft={strategy.data ? strategy.data.draft : undefined}
-          stamp={submitted}
+          draft={strategy.data && !strategy.isFetching ? strategy.data.draft : undefined}
         />
       )}
     </Card>
@@ -281,13 +286,35 @@ function itemText(t: TFunction, item: WorkItem): string {
         : t('home.pending.verify_capability', { name: item.name });
     case 'connect_connector':
       return t('home.pending.connect_connector', { name: item.name });
+    case 'reconnect_connector':
+      return t('home.pending.reconnect_connector', { name: item.name });
+    case 'inbound_events':
+      // `count` picks the plural form; `n` is what is shown, a count of the cap as at least that many.
+      return t('home.pending.inbound_events', {
+        count: item.count,
+        n: item.count >= INBOUND_EVENTS_COUNT_CAP ? `${INBOUND_EVENTS_COUNT_CAP}+` : String(item.count),
+      });
     default:
       return t(`home.pending.${item.kind}`);
   }
 }
 
-function itemLink(item: WorkItem): string {
-  return item.kind === 'consult_strategy' || item.kind === 'approve_strategy' ? '/strategy' : '/capabilities';
+/**
+ * Where an item is acted on: a capability to reconnect goes straight to its reconnection; the
+ * inbound events are the agent's to read and acknowledge, so nothing opens for them.
+ */
+function itemLink(item: WorkItem): string | null {
+  switch (item.kind) {
+    case 'consult_strategy':
+    case 'approve_strategy':
+      return '/strategy';
+    case 'reconnect_connector':
+      return `/connect?capability=${encodeURIComponent(item.capability_id)}`;
+    case 'inbound_events':
+      return null;
+    default:
+      return '/capabilities';
+  }
 }
 
 /** The pending items, most urgent first, each in the panel's own words (the hints are for the agent). */
@@ -304,17 +331,27 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
           <p className="text-sm text-muted-foreground">{t('home.pending.empty')}</p>
         ) : (
           <ul className="flex flex-col divide-y divide-border">
-            {items.map((item, i) => (
-              <li key={`${item.kind}-${'capability_id' in item ? item.capability_id : i}`} className="flex items-center gap-3 py-2.5">
-                <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm">
-                  {t('home.pending.priority', { priority: item.priority })}
-                </Badge>
-                <span className="min-w-0 flex-1 text-sm text-foreground">{itemText(t, item)}</span>
-                <Button asChild variant="ghost" size="sm">
-                  <Link to={itemLink(item)}>{t('home.pending.open')}</Link>
-                </Button>
-              </li>
-            ))}
+            {items.map((item, i) => {
+              const link = itemLink(item);
+              return (
+                <li
+                  key={`${item.kind}-${'capability_id' in item ? item.capability_id : i}`}
+                  className="flex items-center gap-3 py-2.5"
+                >
+                  <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm">
+                    {t('home.pending.priority', { priority: item.priority })}
+                  </Badge>
+                  <span className="min-w-0 flex-1 text-sm text-foreground">{itemText(t, item)}</span>
+                  {link && (
+                    <Button asChild variant="ghost" size="sm">
+                      <Link to={link}>
+                        {item.kind === 'reconnect_connector' ? t('home.pending.reconnect') : t('home.pending.open')}
+                      </Link>
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </CardContent>

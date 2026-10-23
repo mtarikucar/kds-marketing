@@ -1,7 +1,7 @@
 //! `jeeta.capability.list`, `jeeta.capability.get`, `jeeta.capability.declare`,
-//! `jeeta.capability.verify`, `jeeta.capability.mark_unreachable`, `jeeta.capability.set_policy`,
-//! `jeeta.capability.retire`, `jeeta.capability.link_budget`, `jeeta.capability.unlink_budget`
-//! and the group tools `jeeta.capability.groups_*`.
+//! `jeeta.capability.update`, `jeeta.capability.verify`, `jeeta.capability.mark_unreachable`,
+//! `jeeta.capability.set_policy`, `jeeta.capability.retire`, `jeeta.capability.link_budget`,
+//! `jeeta.capability.unlink_budget` and the group tools `jeeta.capability.groups_*`.
 //!
 //! Reading needs `workspace.read`, and so does verifying: the use case lets an agent verify its
 //! own agent or device capability on its evidence alone. Every other change needs
@@ -10,7 +10,9 @@
 
 use jt_app::ctx::Ctx;
 use jt_app::usecases::Deps;
-use jt_app::usecases::capabilities::{self, CapabilityQuery, DeclareInput, parse_policy_strict};
+use jt_app::usecases::capabilities::{
+    self, CapabilityQuery, DeclareInput, UpdateCapability, parse_policy_strict,
+};
 use jt_app::usecases::groups;
 use jt_capability::{
     BudgetItemId, CapabilityGroupId, CapabilityId, Evidence, KINDS, KindGroup, MAX_EVIDENCE_REFS,
@@ -68,6 +70,20 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             permission: Permission::CapabilitiesManage,
             schema: schema_for::<DeclareArgs>,
             run: declare,
+        },
+        ToolDef {
+            use_case: "capability.update",
+            description: "Edit a capability's name, description or external_id (the \
+                          provider's id of its account, page or line); a field left out stays, \
+                          and at least one must be given. Its kind, public settings and policy \
+                          are not edited here (jeeta.capability.set_policy sets the policy); a \
+                          retired capability is not edited. Changing the account of a connector \
+                          capability resets its verification and drops its stored credentials: \
+                          connect the account again, then it is probed. Returns the capability \
+                          with verification_reset (true when that happened). [risk: WRITE]",
+            permission: Permission::CapabilitiesManage,
+            schema: schema_for::<UpdateArgs>,
+            run: update,
         },
         ToolDef {
             use_case: "capability.verify",
@@ -243,6 +259,23 @@ struct DeclareArgs {
     #[serde(default)]
     #[schemars(schema_with = "optional_policy_schema")]
     policy: Option<Value>,
+}
+
+/// A capability and what to change of it.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct UpdateArgs {
+    /// The capability id, from jeeta.capability.list.
+    capability_id: Uuid,
+    /// The new name, 1 to 64 characters.
+    #[serde(default)]
+    name: Option<String>,
+    /// The new description, at most 2000 characters; empty clears it.
+    #[serde(default)]
+    description: Option<String>,
+    /// The provider's id of another account, page or line; not blank.
+    #[serde(default)]
+    external_id: Option<String>,
 }
 
 /// The agent's proof.
@@ -481,6 +514,23 @@ fn declare<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
             policy,
         };
         to_json(&capabilities::declare(deps, ctx, input).await?)
+    })
+}
+
+fn update<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let UpdateArgs {
+            capability_id,
+            name,
+            description,
+            external_id,
+        } = args(raw)?;
+        let input = UpdateCapability {
+            name,
+            description,
+            external_id,
+        };
+        to_json(&capabilities::update(deps, ctx, CapabilityId(capability_id), input).await?)
     })
 }
 

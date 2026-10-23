@@ -333,13 +333,7 @@ function DraftTab({
       </Card>
       {canApprove && draft.submitted_at !== null && (
         // The page approves what it shows: the draft's id and its submission time as displayed.
-        <ApproveDialog
-          open={approving}
-          onOpenChange={setApproving}
-          draft={draft}
-          stamp={{ version_id: draft.id, submitted_at: draft.submitted_at }}
-          onApproved={onApproved}
-        />
+        <ApproveDialog open={approving} onOpenChange={setApproving} draft={draft} onApproved={onApproved} />
       )}
 
       {gaps.length > 0 ? (

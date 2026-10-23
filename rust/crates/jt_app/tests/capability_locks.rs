@@ -1,6 +1,8 @@
 //! Every capability mutation reads the capability through `CapabilityRepo::lock` before it reads
 //! it any other way and before any write, in the bundle that writes, so concurrent mutations of
-//! one capability take turns instead of writing back what the other changed.
+//! one capability take turns instead of writing back what the other changed. Likewise every
+//! change of a budget item, and every link to it or spend from it, reads the item through
+//! `BudgetRepo::lock_item` first (after the capability, when it locks one too).
 //!
 //! The fakes sit behind a [`Spy`] that records, in order, every capability, group and budget repo
 //! call each tenant bundle makes.
@@ -14,19 +16,23 @@ use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, BudgetRepo, CapabilityFilter, CapabilityGroupRepo,
-    CapabilityRepo, ConsultationRepo, HypothesisRepo, LedgerRepo, MembershipRepo, PlatformRepos,
-    RoleRepo, StrategyRepo, TenantRepos, UnitOfWork, UserRepos, WorkspacePolicyRepo, WorkspaceRepo,
+    CapabilityRepo, ConsultationRepo, HypothesisRepo, InboundEventRepo, LedgerRepo, MembershipRepo,
+    OAuthPendingRepo, OutboundJobRepo, PlatformRepos, ProbeRunRepo, RoleRepo, StrategyRepo,
+    TenantRepos, UnitOfWork, UserRepos, WorkspacePolicyRepo, WorkspaceRepo,
 };
 use jt_app::usecases::Deps;
-use jt_app::usecases::budget::{self, BudgetItemInput};
-use jt_app::usecases::capabilities;
+use jt_app::usecases::budget::{self, BudgetItemInput, UpdateBudgetItem};
+use jt_app::usecases::capabilities::{self, UpdateCapability};
+use jt_app::usecases::connector::{self, CredentialInput, SetCredentials};
 use jt_app::usecases::groups;
 use jt_capability::{
     BudgetItem, BudgetItemId, BudgetKind, BudgetSpend, BudgetSpendId, Capability, CapabilityGroup,
     CapabilityGroupId, CapabilityId, Evidence, Period, Policy, StoredStatus, Unit,
 };
+use jt_connector::{ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
-use jt_testkit::fakes::InMemoryUow;
+use jt_testkit::fakes::{InMemoryUow, ScriptedConnector, ScriptedRegistry};
+use serde_json::json;
 use support::*;
 use time::OffsetDateTime;
 
@@ -42,8 +48,10 @@ const WRITES: &[&str] = &[
     "groups.add_member",
     "groups.remove_member",
     "budget.insert_item",
+    "budget.update_item",
     "budget.link",
     "budget.unlink",
+    "budget.unlink_item",
     "budget.append_spend",
 ];
 
@@ -140,6 +148,22 @@ impl TenantRepos for SpyTenant {
         self.inner.workspace_policy()
     }
 
+    fn inbound_events(&mut self) -> &mut dyn InboundEventRepo {
+        self.inner.inbound_events()
+    }
+
+    fn oauth_pending(&mut self) -> &mut dyn OAuthPendingRepo {
+        self.inner.oauth_pending()
+    }
+
+    fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo {
+        self.inner.probe_runs()
+    }
+
+    fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo {
+        self.inner.outbound_jobs()
+    }
+
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.inner.commit().await
     }
@@ -176,9 +200,10 @@ impl CapabilityRepo for SpyTenant {
         &mut self,
         id: CapabilityId,
         sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
     ) -> Result<(), AppError> {
         self.spy.push("capabilities.set_sealed");
-        self.inner.capabilities().set_sealed(id, sealed).await
+        self.inner.capabilities().set_sealed(id, sealed, at).await
     }
 
     async fn read_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {
@@ -274,6 +299,21 @@ impl BudgetRepo for SpyTenant {
         self.inner.budget().find_item(id).await
     }
 
+    async fn lock_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError> {
+        self.spy.push("budget.lock_item");
+        self.inner.budget().lock_item(id).await
+    }
+
+    async fn update_item(&mut self, item: BudgetItem) -> Result<(), AppError> {
+        self.spy.push("budget.update_item");
+        self.inner.budget().update_item(item).await
+    }
+
+    async fn unlink_item(&mut self, item: BudgetItemId) -> Result<u64, AppError> {
+        self.spy.push("budget.unlink_item");
+        self.inner.budget().unlink_item(item).await
+    }
+
     async fn link(&mut self, capability: CapabilityId, item: BudgetItemId) -> Result<(), AppError> {
         self.spy.push("budget.link");
         self.inner.budget().link(capability, item).await
@@ -334,6 +374,28 @@ fn locked_first(what: &str, calls: &[&str]) {
     assert!(lock < first_write, "{what}: {calls:?}");
 }
 
+/// Asserts that `calls`, one mutation's repo calls, read the budget item through `lock_item`
+/// before reading it any other way and before every write, and after locking the capability when
+/// it locks one too.
+fn item_locked_first(what: &str, calls: &[&str]) {
+    let item_reads = ["budget.find_item", "budget.lock_item"];
+    let first_item_read = calls.iter().find(|c| item_reads.contains(c));
+    assert_eq!(
+        first_item_read,
+        Some(&"budget.lock_item"),
+        "{what}: {calls:?}"
+    );
+    let lock = calls.iter().position(|c| *c == "budget.lock_item").unwrap();
+    let first_write = calls
+        .iter()
+        .position(|c| WRITES.contains(c))
+        .unwrap_or_else(|| panic!("{what} wrote nothing: {calls:?}"));
+    assert!(lock < first_write, "{what}: {calls:?}");
+    if let Some(capability_lock) = calls.iter().position(|c| *c == "capabilities.lock") {
+        assert!(capability_lock < lock, "{what}: {calls:?}");
+    }
+}
+
 #[tokio::test]
 async fn every_capability_mutation_locks_the_capability_before_writing() {
     let w = world().await;
@@ -386,6 +448,18 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
         .await
         .unwrap();
     locked_first("mark_unreachable", &spy.take());
+    capabilities::update(
+        &deps,
+        o,
+        phone,
+        UpdateCapability {
+            name: Some("Saha telefonu".into()),
+            ..UpdateCapability::default()
+        },
+    )
+    .await
+    .unwrap();
+    locked_first("update", &spy.take());
     capabilities::link_budget(&deps, o, ads, cash)
         .await
         .unwrap();
@@ -398,4 +472,97 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
     locked_first("groups::add_member", &spy.take());
     capabilities::retire(&deps, o, ads, true).await.unwrap();
     locked_first("retire", &spy.take());
+}
+
+#[tokio::test]
+async fn budget_item_mutations_lock_the_item_before_writing() {
+    let w = world().await;
+    let spy = Spy {
+        inner: w.uow.clone(),
+        log: Arc::default(),
+    };
+    let deps = Deps {
+        uow: Arc::new(spy.clone()),
+        ..w.deps.clone()
+    };
+    let o = &w.owner_ctx;
+    let ads = w.declare("meta_ads", "Meta reklam").await.capability.id;
+    let cash = budget::create_item(
+        &w.deps,
+        o,
+        BudgetItemInput {
+            name: "Kasa".into(),
+            kind: BudgetKind::Cash,
+            unit: Unit::Currency("TRY".into()),
+            cap: 1_000,
+            period: Period::Monthly,
+        },
+    )
+    .await
+    .unwrap()
+    .item
+    .id;
+    spy.take();
+
+    capabilities::link_budget(&deps, o, ads, cash)
+        .await
+        .unwrap();
+    item_locked_first("link_budget", &spy.take());
+    budget::record_spend(&deps, o, cash, 10, None)
+        .await
+        .unwrap();
+    item_locked_first("record_spend", &spy.take());
+    let edit = UpdateBudgetItem {
+        cap: Some(2_000),
+        ..UpdateBudgetItem::default()
+    };
+    budget::update_item(&deps, o, cash, edit).await.unwrap();
+    item_locked_first("update_item", &spy.take());
+    budget::retire_item(&deps, o, cash, true).await.unwrap();
+    let calls = spy.take();
+    item_locked_first("retire_item", &calls);
+    // The links go in the retiring bundle.
+    assert!(calls.contains(&"budget.unlink_item"), "{calls:?}");
+}
+
+#[tokio::test]
+async fn connector_mutations_lock_the_capability_before_writing() {
+    let mut w = world().await;
+    let netgsm = Arc::new(ScriptedConnector::new(Provider::Netgsm));
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(netgsm.clone()));
+    let spy = Spy {
+        inner: w.uow.clone(),
+        log: Arc::default(),
+    };
+    let deps = Deps {
+        uow: Arc::new(spy.clone()),
+        ..w.deps.clone()
+    };
+    let o = &w.owner_ctx;
+    let line = w.declare("sms_line", "Hat").await.capability.id;
+    spy.take();
+
+    let reached = || ProbeResult::success(5, json!({ "account_id": "KAHVE" }));
+    netgsm.push_probe(reached());
+    connector::set_credentials(
+        &deps,
+        o,
+        SetCredentials {
+            capability_id: Some(line),
+            kind_key: None,
+            name: None,
+            external_id: None,
+            credential: CredentialInput::NetgsmSms {
+                usercode: "8508850000".into(),
+                password: "pw".into(),
+                msgheader: "KAHVE".into(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    locked_first("connector::set_credentials", &spy.take());
+    netgsm.push_probe(reached());
+    connector::probe(&deps, o, line).await.unwrap();
+    locked_first("connector::probe", &spy.take());
 }

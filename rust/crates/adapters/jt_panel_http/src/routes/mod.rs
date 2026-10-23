@@ -12,8 +12,11 @@ pub mod api_keys;
 pub mod auth;
 pub mod budget;
 pub mod capabilities;
+pub mod connector;
+pub mod events;
 pub mod groups;
 pub mod ledger;
+pub mod oauth_callback;
 pub mod platform;
 pub mod roles;
 pub mod strategy;
@@ -68,6 +71,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/capabilities"),
     ("GET", "/api/capabilities/{capability_id}"),
     ("POST", "/api/capabilities"),
+    ("PATCH", "/api/capabilities/{capability_id}"),
     ("POST", "/api/capabilities/{capability_id}/verify"),
     ("POST", "/api/capabilities/{capability_id}/unreachable"),
     ("PUT", "/api/capabilities/{capability_id}/policy"),
@@ -88,8 +92,21 @@ pub const ROUTES: &[(&str, &str)] = &[
     ),
     ("GET", "/api/budget/items"),
     ("POST", "/api/budget/items"),
+    ("PATCH", "/api/budget/items/{budget_item_id}"),
+    ("POST", "/api/budget/items/{budget_item_id}/retire"),
     ("POST", "/api/budget/items/{budget_item_id}/spend"),
     ("GET", "/api/budget/items/{budget_item_id}/spend"),
+    ("POST", "/api/connectors/oauth/start"),
+    ("GET", "/api/connectors/oauth/callback/{provider}"),
+    ("POST", "/api/connectors/oauth/{pending_id}/confirm"),
+    ("POST", "/api/connectors/credentials"),
+    ("POST", "/api/connectors/{capability_id}/probe"),
+    ("GET", "/api/connectors/health"),
+    ("POST", "/api/connectors/{capability_id}/reconnect"),
+    ("GET", "/api/connectors/hooks"),
+    ("GET", "/api/events/pending"),
+    ("POST", "/api/events/ack"),
+    ("GET", "/api/events"),
     ("GET", "/api/work/pending"),
     ("PUT", "/api/work/checkin-interval"),
     ("POST", "/api/platform/login"),
@@ -281,6 +298,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             capabilities::declare,
         ),
         api_route(
+            "PATCH",
+            "/capabilities/{capability_id}",
+            "capability.update",
+            capabilities::update,
+        ),
+        api_route(
             "POST",
             "/capabilities/{capability_id}/verify",
             "capability.verify",
@@ -365,6 +388,18 @@ pub fn api_routes() -> Vec<ApiRoute> {
             budget::create_item,
         ),
         api_route(
+            "PATCH",
+            "/budget/items/{budget_item_id}",
+            "budget.items.update",
+            budget::update_item,
+        ),
+        api_route(
+            "POST",
+            "/budget/items/{budget_item_id}/retire",
+            "budget.items.retire",
+            budget::retire_item,
+        ),
+        api_route(
             "POST",
             "/budget/items/{budget_item_id}/spend",
             "budget.spend.record",
@@ -376,6 +411,57 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "budget.spend.list",
             budget::spend,
         ),
+        api_route(
+            "POST",
+            "/connectors/oauth/start",
+            "connector.start_oauth",
+            connector::start_oauth,
+        ),
+        api_route(
+            "GET",
+            "/connectors/oauth/callback/{provider}",
+            "connector.complete_oauth",
+            oauth_callback::callback,
+        ),
+        api_route(
+            "POST",
+            "/connectors/oauth/{pending_id}/confirm",
+            "connector.confirm_assets",
+            connector::confirm_assets,
+        ),
+        api_route(
+            "POST",
+            "/connectors/credentials",
+            "connector.set_credentials",
+            connector::set_credentials,
+        ),
+        api_route(
+            "POST",
+            "/connectors/{capability_id}/probe",
+            "connector.probe",
+            connector::probe,
+        ),
+        api_route(
+            "GET",
+            "/connectors/health",
+            "connector.health",
+            connector::health,
+        ),
+        api_route(
+            "POST",
+            "/connectors/{capability_id}/reconnect",
+            "connector.reconnect",
+            connector::reconnect,
+        ),
+        api_route(
+            "GET",
+            "/connectors/hooks",
+            "connector.hooks",
+            connector::hooks,
+        ),
+        api_route("GET", "/events/pending", "events.pending", events::pending),
+        api_route("POST", "/events/ack", "events.ack", events::ack),
+        api_route("GET", "/events", "events.list", events::list),
         api_route("GET", "/work/pending", "work.pending", work::pending),
         api_route(
             "PUT",
@@ -445,8 +531,8 @@ mod tests {
     use jt_app::usecases::Deps;
     use jt_app::usecases::strategy::{NoChannelsYet, NoopArchivedHook};
     use jt_testkit::fakes::{
-        FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox, RecordingTenantHosts,
-        SeqIdGen,
+        FakeAppConfig, FixedClock, FixedTokenGen, InMemoryUow, PlainHasher, PlainSecretBox,
+        RecordingTenantHosts, ScriptedRegistry, SeqIdGen,
     };
     use time::macros::datetime;
     use tower::ServiceExt;
@@ -487,6 +573,9 @@ mod tests {
                 channels: Arc::new(NoChannelsYet),
                 archived_hook: Arc::new(NoopArchivedHook),
                 hosts: Arc::new(RecordingTenantHosts::new()),
+                apps: Arc::new(FakeAppConfig::default()),
+                connectors: Arc::new(ScriptedRegistry::new()),
+                job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
             },
             gate: Arc::new(NoStrategyYet),
             cookie_secure: false,

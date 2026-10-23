@@ -1,0 +1,6 @@
+{
+  "data": [
+    { "id": "1313131313", "name": "Test Set A", "status": "ACTIVE", "campaign_id": "1212121212", "daily_budget": "15000", "lifetime_budget": "0" },
+    { "id": "1414141414", "name": "Test Set B", "status": "PAUSED", "campaign_id": "1212121212", "lifetime_budget": "500000" }
+  ]
+}

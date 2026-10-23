@@ -8,10 +8,12 @@ import { AgentsPage } from '@/pages/AgentsPage';
 import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { BudgetPage } from '@/pages/BudgetPage';
 import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
+import { ConnectPage } from '@/pages/ConnectPage';
 import { HomePage } from '@/pages/HomePage';
 import { LedgerPage } from '@/pages/LedgerPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+import { OAuthCallbackPage } from '@/pages/OAuthCallbackPage';
 import { RegisterPage } from '@/pages/RegisterPage';
 import { RolesPage } from '@/pages/RolesPage';
 import { StrategyPage } from '@/pages/StrategyPage';
@@ -60,6 +62,9 @@ export const routes: RouteObject[] = [
           { index: true, element: <HomePage /> },
           { path: 'strategy', element: <StrategyPage /> },
           { path: 'capabilities', element: <CapabilitiesPage /> },
+          { path: 'connect', element: <ConnectPage /> },
+          // Where a provider sends the browser back after signing in (the OAuth redirect URI).
+          { path: 'oauth/callback/:provider', element: <OAuthCallbackPage /> },
           { path: 'budget', element: <BudgetPage /> },
           { path: 'team', element: <TeamPage /> },
           { path: 'roles', element: <RolesPage /> },

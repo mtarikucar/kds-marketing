@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { mockFetch } from '@/test/render';
-import { listSpend, recordSpend } from './budget';
+import { listSpend, recordSpend, retireBudgetItem, updateBudgetItem } from './budget';
 import {
   deleteGroup,
   listCapabilities,
   removeGroupMember,
   retireCapability,
   unlinkBudget,
+  updateCapability,
   type CapabilityQuery,
 } from './capabilities';
+import { completeOAuth, confirmAssets, probeConnector, reconnectConnector, setCredentials } from './connectors';
 import { archiveVersion, listConsultation, recordEntry, writeSection } from './strategy';
 import { getPending, setCheckinInterval } from './work';
 
@@ -102,6 +104,37 @@ describe('api wrappers: bodies and answers', () => {
     expect(calls[1].body).toEqual({ kind: 'note', text: 'kısa not' });
   });
 
+  it('edits with only the fields given, never the ones an edit does not take', async () => {
+    const calls = mockFetch({
+      [`PATCH /api/capabilities/${CAP}`]: { capability: {}, effective_status: 'declared', verification_reset: false },
+      [`PATCH /api/budget/items/${ITEM}`]: { item: {}, spent_in_period: 0, remaining: 0 },
+    });
+    await updateCapability(CAP, { name: 'Telefon' });
+    await updateCapability(CAP, {
+      description: '',
+      external_id: 'SN-2',
+      connector_public: { health: true },
+    } as unknown as Parameters<typeof updateCapability>[1]);
+    await updateBudgetItem(ITEM, { cap: 0 });
+    await updateBudgetItem(ITEM, {
+      name: 'Kasa',
+      period: 'weekly',
+      kind: 'cash',
+    } as unknown as Parameters<typeof updateBudgetItem>[1]);
+    expect(calls.map((c) => c.body)).toEqual([
+      { name: 'Telefon' },
+      { description: '', external_id: 'SN-2' },
+      { cap: 0 },
+      { name: 'Kasa', period: 'weekly' },
+    ]);
+  });
+
+  it('retires a budget item with an explicit confirmation', async () => {
+    const calls = mockFetch({ [`POST /api/budget/items/${ITEM}/retire`]: { item: {}, spent_in_period: 0, remaining: 0 } });
+    await retireBudgetItem(ITEM);
+    expect(calls[0].body).toEqual({ confirm: true });
+  });
+
   it('records spend without an empty reference', async () => {
     const calls = mockFetch({ [`POST /api/budget/items/${ITEM}/spend`]: {} });
     await recordSpend(ITEM, { amount: 1250, reference: '' });
@@ -117,5 +150,54 @@ describe('api wrappers: bodies and answers', () => {
     await setCheckinInterval(60);
     expect(calls[0].headers.get('x-requested-with')).toBeNull();
     expect(calls[1].body).toEqual({ minutes: 60 });
+  });
+});
+
+describe('api wrappers: connectors', () => {
+  it('sends credentials with only the fields the server takes', async () => {
+    const calls = mockFetch({ 'POST /api/connectors/credentials': { capability: {}, effective_status: 'verified' } });
+    await setCredentials({
+      capability_id: CAP,
+      external_id: '',
+      credential: { kind: 'netgsm_pbx', username: 'u', password: 'p', trunk: '', pbxnum: '9' },
+    });
+    await setCredentials({
+      kind_key: 'sms_line',
+      name: 'Hat',
+      credential: {
+        kind: 'netgsm_sms',
+        usercode: 'u',
+        password: 'p',
+        msgheader: 'H',
+        stray: 'x',
+      } as unknown as Parameters<typeof setCredentials>[0]['credential'],
+    });
+    expect(calls.map((c) => c.body)).toEqual([
+      { capability_id: CAP, credential: { kind: 'netgsm_pbx', username: 'u', password: 'p', pbxnum: '9' } },
+      { kind_key: 'sms_line', name: 'Hat', credential: { kind: 'netgsm_sms', usercode: 'u', password: 'p', msgheader: 'H' } },
+    ]);
+    expect(calls[0].headers.get('x-requested-with')).toBe('jeeta-panel');
+  });
+
+  it('passes the callback state and code as the only query parameters', async () => {
+    const calls = mockFetch({ 'GET /api/connectors/oauth/callback/meta': { pending_id: 'p', assets: [] } });
+    await completeOAuth('meta', 's&t', 'c=1');
+    expect(Object.fromEntries(new URLSearchParams(calls[0].search))).toEqual({ state: 's&t', code: 'c=1' });
+  });
+
+  it('confirms, probes and reconnects at their routes', async () => {
+    const calls = mockFetch({
+      'POST /api/connectors/oauth/p1/confirm': [],
+      [`POST /api/connectors/${CAP}/probe`]: { result: {}, status: 'verified' },
+      [`POST /api/connectors/${CAP}/reconnect`]: { authorize_url: 'https://x', pending_id: 'p', expires_at: '' },
+    });
+    await confirmAssets('p1', ['a', 'b']);
+    await probeConnector(CAP);
+    await reconnectConnector(CAP);
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ['POST', '/api/connectors/oauth/p1/confirm', { selected: ['a', 'b'] }],
+      ['POST', `/api/connectors/${CAP}/probe`, undefined],
+      ['POST', `/api/connectors/${CAP}/reconnect`, undefined],
+    ]);
   });
 });

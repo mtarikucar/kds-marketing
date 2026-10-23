@@ -10,14 +10,17 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use axum::routing::get;
+use axum::body::Bytes;
+use axum::routing::{any, get};
 use jt_app::error::{AppError, ErrorCode};
 use jt_tenancy::WorkspaceId;
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
+use crate::multipart::{Form, Part};
 use crate::{
-    AllowedHost, Egress, EgressError, EgressScope, Method, Request, Response, StatusCode, Url,
-    header,
+    AllowedHost, Egress, EgressError, EgressScope, FIXED_HOSTS, Method, Request, Response,
+    StatusCode, Url, header,
 };
 
 /// Serves `app` on an ephemeral 127.0.0.1 port for the rest of the test.
@@ -353,4 +356,291 @@ async fn errors_map_to_app_error_codes() {
         "the URL must not leak into the error: {}",
         internal.message
     );
+}
+
+/// A server that answers every request on `/echo` with what it received: the method, the query,
+/// three headers and the body as text.
+async fn echo_server() -> SocketAddr {
+    async fn echo(
+        method: axum::http::Method,
+        uri: axum::http::Uri,
+        headers: axum::http::HeaderMap,
+        body: Bytes,
+    ) -> axum::Json<Value> {
+        let header = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        axum::Json(json!({
+            "method": method.as_str(),
+            "query": uri.query().unwrap_or_default(),
+            "content_type": header("content-type"),
+            "authorization": header("authorization"),
+            "x_test": header("x-test"),
+            "body": String::from_utf8_lossy(&body),
+        }))
+    }
+    serve(Router::new().route("/echo", any(echo))).await
+}
+
+/// The echo of a request that must have completed.
+async fn echoed(result: Result<Response, EgressError>) -> Value {
+    let resp = result.expect("the request should pass the allowlist and complete");
+    assert_eq!(resp.status(), StatusCode::OK);
+    resp.json().await.unwrap()
+}
+
+#[tokio::test]
+async fn prepared_send_goes_through_the_allowlist() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    let url = Url::parse(&format!("http://127.0.0.1:{port}/echo")).unwrap();
+
+    // However it is built, a request the scope may not send is refused before any socket.
+    assert_refused(
+        egress
+            .prepare(Method::POST, url.clone())
+            .header("x-test", "1")
+            .bearer("secret-token")
+            .query(&[("a", "1")])
+            .json(&json!({ "k": "v" }))
+            .timeout(Duration::from_secs(1))
+            .send(EgressScope::Tenant(ws))
+            .await,
+        "127.0.0.1",
+    );
+    assert_refused(
+        egress
+            .prepare(Method::GET, url.clone())
+            .send(EgressScope::Connector("meta"))
+            .await,
+        "127.0.0.1",
+    );
+    assert_refused(
+        egress
+            .prepare(Method::GET, Url::parse("https://evil.example/").unwrap())
+            .send(EgressScope::Tenant(ws))
+            .await,
+        "evil.example",
+    );
+    // The fixed tier's provider hosts are refused to a tenant, and to a scope over http.
+    let egress = Egress::new(FIXED_HOSTS);
+    assert_refused(
+        egress
+            .prepare(
+                Method::GET,
+                Url::parse("https://graph.facebook.com/me").unwrap(),
+            )
+            .send(EgressScope::Tenant(ws))
+            .await,
+        "graph.facebook.com",
+    );
+    assert_refused(
+        egress
+            .prepare(
+                Method::GET,
+                Url::parse("http://graph.facebook.com/me").unwrap(),
+            )
+            .send(EgressScope::Connector("meta"))
+            .await,
+        "graph.facebook.com",
+    );
+    assert_no_connection(&listener).await;
+
+    // Allowed, it is sent as built.
+    let addr = echo_server().await;
+    let egress = Egress::new(&[]);
+    egress.allow_tenant_host(ws, "127.0.0.1");
+    let got = echoed(
+        egress
+            .prepare(
+                Method::PUT,
+                Url::parse(&format!("http://{addr}/echo")).unwrap(),
+            )
+            .query(&[("fields", "id,name")])
+            .header("x-test", "yes")
+            .bearer("tok")
+            .json(&json!({ "a": 1 }))
+            .send(EgressScope::Tenant(ws))
+            .await,
+    )
+    .await;
+    assert_eq!(got["method"], "PUT");
+    assert_eq!(got["query"], "fields=id%2Cname");
+    assert_eq!(got["x_test"], "yes");
+    assert_eq!(got["authorization"], "Bearer tok");
+    assert_eq!(got["content_type"], "application/json");
+    assert_eq!(got["body"], r#"{"a":1}"#);
+}
+
+#[tokio::test]
+async fn multipart_and_form_bodies_build() {
+    let addr = echo_server().await;
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    egress.allow_tenant_host(ws, "127.0.0.1");
+    let url = Url::parse(&format!("http://{addr}/echo")).unwrap();
+    let scope = EgressScope::Tenant(ws);
+
+    let got = echoed(
+        egress
+            .prepare(Method::POST, url.clone())
+            .form(&[("usercode", "850"), ("msg", "merhaba dünya")])
+            .send(scope)
+            .await,
+    )
+    .await;
+    assert_eq!(got["content_type"], "application/x-www-form-urlencoded");
+    assert_eq!(got["body"], "usercode=850&msg=merhaba+d%C3%BCnya");
+
+    let form = Form::new().text("caption", "selam").part(
+        "file",
+        Part::bytes(b"RIFF-voice".to_vec())
+            .file_name("ses.wav")
+            .mime_str("audio/wav")
+            .unwrap(),
+    );
+    let got = echoed(
+        egress
+            .prepare(Method::POST, url.clone())
+            .multipart(form)
+            .send(scope)
+            .await,
+    )
+    .await;
+    let content_type = got["content_type"].as_str().unwrap();
+    assert!(
+        content_type.starts_with("multipart/form-data; boundary="),
+        "{content_type}"
+    );
+    let body = got["body"].as_str().unwrap();
+    for needle in [
+        r#"name="caption""#,
+        "selam",
+        r#"name="file"; filename="ses.wav""#,
+        "content-type: audio/wav",
+        "RIFF-voice",
+    ] {
+        assert!(
+            body.to_ascii_lowercase()
+                .contains(&needle.to_ascii_lowercase()),
+            "{needle:?} in {body:?}"
+        );
+    }
+
+    let got = echoed(
+        egress
+            .prepare(Method::POST, url.clone())
+            .basic_auth("user", Some("pass"))
+            .body("raw bytes")
+            .send(scope)
+            .await,
+    )
+    .await;
+    assert_eq!(got["authorization"], "Basic dXNlcjpwYXNz");
+    assert_eq!(got["body"], "raw bytes");
+    let got = echoed(
+        egress
+            .prepare(Method::GET, url)
+            .basic_auth("user", None::<&str>)
+            .send(scope)
+            .await,
+    )
+    .await;
+    assert_eq!(got["authorization"], "Basic dXNlcjo=");
+}
+
+#[tokio::test]
+async fn prepared_timeouts_and_build_errors() {
+    let addr = serve(Router::new().route(
+        "/slow",
+        get(|| async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            "late"
+        }),
+    ))
+    .await;
+    let egress = Egress::new(&[]);
+    let ws = WorkspaceId::new_v7();
+    egress.allow_tenant_host(ws, "127.0.0.1");
+    let scope = EgressScope::Tenant(ws);
+
+    let started = Instant::now();
+    let err = egress
+        .prepare(
+            Method::GET,
+            Url::parse(&format!("http://{addr}/slow?token=secret")).unwrap(),
+        )
+        .timeout(Duration::from_millis(100))
+        .send(scope)
+        .await
+        .expect_err("the server answers too late");
+    assert!(started.elapsed() < Duration::from_secs(4));
+    match &err {
+        EgressError::Transport(e) => {
+            assert!(e.is_timeout(), "{e:?}");
+            assert!(
+                !format!("{e:?}").contains("secret"),
+                "the URL must not travel in the error: {e:?}"
+            );
+        }
+        other => panic!("expected a timeout, got {other:?}"),
+    }
+
+    // A request that cannot be built is never sent.
+    let err = egress
+        .prepare(
+            Method::GET,
+            Url::parse(&format!("http://{addr}/slow")).unwrap(),
+        )
+        .header("not a header name", "x")
+        .send(scope)
+        .await
+        .expect_err("the header name is invalid");
+    assert!(matches!(err, EgressError::Build(_)), "{err:?}");
+    let internal: AppError = err.into();
+    assert_eq!(internal.code, ErrorCode::Internal);
+}
+
+#[tokio::test]
+async fn test_hosts_join_a_connectors_fixed_tier() {
+    let addr = hello_server().await;
+    let egress = Egress::new(FIXED_HOSTS).with_test_hosts([("netgsm", addr.to_string())]);
+    let url = format!("http://{addr}/");
+
+    assert_hello(
+        egress
+            .send(EgressScope::Connector("netgsm"), get_req(&url))
+            .await,
+    )
+    .await;
+    assert_refused(
+        egress
+            .send(EgressScope::Connector("meta"), get_req(&url))
+            .await,
+        "127.0.0.1",
+    );
+    assert_refused(
+        egress
+            .send(EgressScope::Tenant(WorkspaceId::new_v7()), get_req(&url))
+            .await,
+        "127.0.0.1",
+    );
+}
+
+#[test]
+#[should_panic(expected = "is not a loopback host")]
+fn test_hosts_must_be_loopback() {
+    let _ = Egress::new(&[]).with_test_hosts([("meta", "graph.facebook.com")]);
+}
+
+#[test]
+#[should_panic(expected = "is not a loopback host")]
+fn test_hosts_must_be_valid() {
+    let _ = Egress::new(&[]).with_test_hosts([("meta", "127.0.0.1/path")]);
 }

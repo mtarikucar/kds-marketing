@@ -1,13 +1,35 @@
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
-import type { BudgetItemOut, CapabilityOut, GroupOut, Policy } from '@/api/types';
+import type { BudgetItemOut, CapabilityOut, ConnectorHealth, GroupOut, Policy } from '@/api/types';
 import { Chip } from '@/components/Chip';
+import { ConnectorHealthBadge } from '@/components/ConnectorHealthBadge';
 import { CapabilityStatusBadge } from '@/components/StatusBadges';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
+import { connectsByOAuth, providerOf } from '@/lib/connectors';
 import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/format';
 
-export type CapabilityAction = 'verify' | 'policy' | 'unreachable' | 'link' | 'retire';
+export type CapabilityAction = 'verify' | 'edit' | 'policy' | 'unreachable' | 'link' | 'retire';
+
+/** What can be done about a connector capability's connection. */
+export type ConnectorAction = 'connect' | 'reconnect' | 'probe';
+
+/**
+ * The connection actions that fit `item` for someone who may manage capabilities (`canManage`)
+ * and probe (`canProbe`): connecting a declared one; reconnecting a Meta or X one that names its
+ * account, or giving new credentials to a NetGSM one its probe no longer verifies; probing one
+ * that holds credentials. None for a retired capability, nor for a kind no provider serves.
+ */
+export function connectorActions(item: CapabilityOut, canManage: boolean, canProbe: boolean): ConnectorAction[] {
+  const c = item.capability;
+  if (c.reach !== 'connector' || c.status === 'retired' || providerOf(c.kind_key) === null) return [];
+  const actions: ConnectorAction[] = [];
+  if (canManage && c.status === 'declared') actions.push('connect');
+  const renewable = connectsByOAuth(c.kind_key) ? c.external_id !== null : c.status !== 'verified';
+  if (canManage && c.status !== 'declared' && renewable) actions.push('reconnect');
+  if (canProbe && c.has_sealed_config) actions.push('probe');
+  return actions;
+}
 
 /** A policy in a few short lines: hours, caps, human approval, how long a verification lasts. */
 export function policySummary(t: TFunction, language: string, policy: Policy): string[] {
@@ -49,6 +71,10 @@ export function CapabilityCard({
   onAction,
   onUnlink,
   unlinking,
+  health,
+  canProbe = false,
+  onConnector,
+  connectorBusy = false,
 }: {
   item: CapabilityOut;
   budgetItems: readonly BudgetItemOut[];
@@ -57,11 +83,18 @@ export function CapabilityCard({
   onAction: (action: CapabilityAction, item: CapabilityOut) => void;
   onUnlink: (item: CapabilityOut, budgetItemId: string) => void;
   unlinking: boolean;
+  /** Its health, for a connector capability `connector.health` lists. */
+  health?: ConnectorHealth;
+  canProbe?: boolean;
+  onConnector?: (action: ConnectorAction, item: CapabilityOut) => void;
+  connectorBusy?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const c = item.capability;
   const retired = c.status === 'retired';
   const mutable = canManage && !retired;
+  const connection = c.reach === 'connector' && !retired && providerOf(c.kind_key) !== null;
+  const connecting = onConnector ? connectorActions(item, canManage, canProbe) : [];
   const budgetName = (id: string) => budgetItems.find((b) => b.item.id === id)?.item.name ?? id;
   const memberOf = groups.filter((g) => g.members.some((m) => m.capability.id === c.id));
 
@@ -136,6 +169,29 @@ export function CapabilityCard({
             </dd>
           </div>
         </dl>
+        {connection && (health || connecting.length > 0) && (
+          <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-caption text-muted-foreground">{t('capabilities.connector.label')}</span>
+              {health && <ConnectorHealthBadge health={health} />}
+            </div>
+            {connecting.length > 0 && onConnector && (
+              <div role="group" aria-label={t('capabilities.connector.actionsLabel')} className="flex flex-wrap gap-2">
+                {connecting.map((action) => (
+                  <Button
+                    key={action}
+                    size="sm"
+                    variant={action === 'probe' ? 'outline' : 'primary'}
+                    disabled={connectorBusy}
+                    onClick={() => onConnector(action, item)}
+                  >
+                    {t(`capabilities.connector.${action}`)}
+                  </Button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {mutable && (
           <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
             {c.reach !== 'connector' && (
@@ -143,6 +199,9 @@ export function CapabilityCard({
                 {t('capabilities.actions.verify')}
               </Button>
             )}
+            <Button size="sm" variant="outline" onClick={() => onAction('edit', item)}>
+              {t('capabilities.actions.edit')}
+            </Button>
             <Button size="sm" variant="outline" onClick={() => onAction('policy', item)}>
               {t('capabilities.actions.policy')}
             </Button>

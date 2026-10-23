@@ -1,12 +1,15 @@
 //! The platform-wide bundle: operators, their sessions, every workspace and lookups by secret
 //! hash.
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{
     ApiKeyRow, MembershipRow, OperatorRepo, OperatorRow, PlatformRepos, PlatformSessionRepo,
     PlatformSessionRow, WorkspaceRow,
 };
+use jt_capability::{Capability, StoredStatus};
 use jt_ledger::LedgerEntry;
 use jt_tenancy::{Email, MembershipStatus, WorkspaceId, WorkspaceStatus};
 
@@ -175,6 +178,49 @@ impl PlatformRepos for MemPlatform {
             .iter()
             .find(|m| m.invite_token_hash.as_deref() == Some(token_hash))
             .cloned())
+    }
+
+    async fn capability_by_external(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Option<Capability>, AppError> {
+        let state = self.state();
+        Ok(state
+            .capabilities
+            .iter()
+            .filter(|s| {
+                let c = &s.capability;
+                matches!(c.status, StoredStatus::Verified | StoredStatus::Unreachable)
+                    && s.sealed.is_some()
+                    && c.last_verified_at.is_some()
+                    && kind_keys.contains(&c.kind_key.as_str())
+                    && c.external_id.as_deref() == Some(external_id)
+            })
+            .max_by_key(|s| {
+                let c = &s.capability;
+                (c.status == StoredStatus::Verified, c.created_at, c.id)
+            })
+            .map(|s| state.capability_view(s)))
+    }
+
+    async fn workspaces_with_verified(
+        &mut self,
+        kind_keys: &[&str],
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        let ids: BTreeSet<WorkspaceId> = self
+            .state()
+            .capabilities
+            .iter()
+            .filter(|s| {
+                let c = &s.capability;
+                c.status == StoredStatus::Verified
+                    && s.sealed.is_some()
+                    && kind_keys.contains(&c.kind_key.as_str())
+            })
+            .map(|s| s.capability.workspace_id)
+            .collect();
+        Ok(ids.into_iter().collect())
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

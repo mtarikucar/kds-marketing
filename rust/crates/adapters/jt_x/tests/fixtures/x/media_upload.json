@@ -1,0 +1,9 @@
+{
+  "data": {
+    "id": "1900000000000000001",
+    "media_key": "3_1900000000000000001",
+    "size": 1024,
+    "expires_after_secs": 86400,
+    "image": { "image_type": "image/png", "w": 10, "h": 10 }
+  }
+}

@@ -68,7 +68,7 @@ pub fn risk_tag(risk: Risk) -> &'static str {
 /// Catalog tools not defined here yet: a use case may enter the catalog before its tool, while a
 /// plan lands it in steps. [`registry`] leaves them out. Each entry must still be a catalog tool
 /// without a definition, so defining one stops the server until it is dropped from here. Empty:
-/// every catalog tool is defined.
+/// every catalog tool is defined (M1b Task 8 defined the connection tools).
 pub const NOT_YET_DEFINED: &[&str] = &[];
 
 /// One tool per `CATALOG` row with an MCP tool, in catalog order, but those in

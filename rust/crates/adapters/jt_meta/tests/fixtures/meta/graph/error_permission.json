@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "(#200) Requires pages_messaging permission to manage the object",
+    "type": "OAuthException",
+    "code": 200,
+    "fbtrace_id": "ATESTTRACE2"
+  }
+}

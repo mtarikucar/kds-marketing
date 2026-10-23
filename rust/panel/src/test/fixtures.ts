@@ -3,12 +3,15 @@ import type {
   BudgetItemOut,
   BudgetSpend,
   CapabilityOut,
+  ConnectorHealth,
   ConsultationEntry,
   GroupOut,
+  HooksOut,
   KeySummary,
   LedgerEntryOut,
   MeOut,
   MemberOut,
+  PendingAssetsOut,
   PendingOut,
   Policy,
   RoleDef,
@@ -376,6 +379,7 @@ export const budgetItems: BudgetItemOut[] = [
       period: 'monthly',
       strategy_version_id: null,
       created_at: '2026-10-21T08:00:00Z',
+      retired_at: null,
     },
     spent_in_period: 125000,
     remaining: -25000,
@@ -391,6 +395,7 @@ export const budgetItems: BudgetItemOut[] = [
       period: 'monthly',
       strategy_version_id: null,
       created_at: '2026-10-21T08:00:00Z',
+      retired_at: null,
     },
     spent_in_period: 0,
     remaining: 50000,
@@ -427,4 +432,125 @@ export const pendingOverdue: PendingOut = {
     },
   ],
   agent: { last_seen_at: '2026-10-20T08:00:00Z', interval_minutes: 1440, overdue: true },
+};
+
+// ---------------------------------------------------------------------------------------------
+// Connectors
+// ---------------------------------------------------------------------------------------------
+
+export const PENDING_ID = '0190a000-0000-7000-8000-000000000070';
+export const SMS_LINE_ID = '0190a000-0000-7000-8000-000000000171';
+export const PAGE_ID = '0190a000-0000-7000-8000-000000000172';
+
+/** A NetGSM line connected by credentials and verified by its probe. */
+export const smsLine: CapabilityOut = {
+  capability: {
+    ...capabilities[0].capability,
+    id: SMS_LINE_ID,
+    kind_key: 'sms_line',
+    name: 'Kampanya hattı',
+    status: 'verified',
+    external_id: '8508001234',
+    has_sealed_config: true,
+    last_verified_at: '2026-10-22T08:00:00Z',
+    connector_public: {
+      provider: 'netgsm',
+      hosts: ['api.netgsm.com.tr'],
+      health: { ok: true, at: '2026-10-22T08:00:00Z', latency_ms: 42, error_kind: null },
+      reconnect_required: false,
+    },
+  },
+  effective_status: 'verified',
+};
+
+/** A Facebook page whose login the provider no longer accepts. */
+export const lostPage: CapabilityOut = {
+  capability: {
+    ...capabilities[0].capability,
+    id: PAGE_ID,
+    kind_key: 'facebook_page',
+    name: 'Atölye sayfası',
+    status: 'unreachable',
+    external_id: 'page-1',
+    has_sealed_config: true,
+    connector_public: {
+      provider: 'meta',
+      health: { ok: false, at: '2026-10-22T09:00:00Z', latency_ms: 30, error_kind: 'auth' },
+      reconnect_required: true,
+    },
+  },
+  effective_status: 'unreachable',
+};
+
+export const connectorHealth: ConnectorHealth[] = [
+  {
+    capability_id: capabilities[0].capability.id,
+    kind_key: 'instagram',
+    name: 'Atölye Instagram',
+    provider: 'meta',
+    status: 'declared',
+    last_probe_at: null,
+    ok: null,
+    error_kind: null,
+    token_expires_at: null,
+    reconnect_required: false,
+  },
+  {
+    capability_id: SMS_LINE_ID,
+    kind_key: 'sms_line',
+    name: 'Kampanya hattı',
+    provider: 'netgsm',
+    status: 'verified',
+    last_probe_at: '2026-10-22T08:00:00Z',
+    ok: true,
+    error_kind: null,
+    token_expires_at: null,
+    reconnect_required: false,
+  },
+  {
+    capability_id: PAGE_ID,
+    kind_key: 'facebook_page',
+    name: 'Atölye sayfası',
+    provider: 'meta',
+    status: 'unreachable',
+    last_probe_at: '2026-10-22T09:00:00Z',
+    ok: false,
+    error_kind: 'auth',
+    token_expires_at: '2026-12-01T00:00:00Z',
+    reconnect_required: true,
+  },
+];
+
+/** What a completed Meta flow found: two pages, never a token. */
+export const pendingAssets: PendingAssetsOut = {
+  pending_id: PENDING_ID,
+  assets: [
+    {
+      kind_key: 'facebook_page',
+      external_id: 'page-1',
+      name: 'Kahve Evi',
+      public: { category: 'Cafe', scopes: ['pages_manage_posts', 'pages_read_engagement'] },
+    },
+    {
+      kind_key: 'instagram',
+      external_id: '17841400000000001',
+      name: 'kahveevi',
+      public: { username: 'kahveevi', expires_at: '2026-12-21T09:00:00Z' },
+    },
+  ],
+};
+
+/** A synthetic hook token: 64 hex digits, not any workspace's. */
+const HOOK_TOKEN = 'a1'.repeat(32);
+
+/** The webhook addresses of a workspace on a platform whose Meta app is configured. */
+export const hooks: HooksOut = {
+  meta: {
+    url: 'https://panel.example.invalid/hooks/meta',
+    verify_token_hint: 'set in the Meta app dashboard',
+  },
+  netgsm: (['mo', 'events', 'iys', 'voice-report', 'autocall-report'] as const).map((purpose) => ({
+    purpose,
+    url: `https://panel.example.invalid/hooks/netgsm/${WS_ID}/${HOOK_TOKEN}/${purpose}`,
+  })),
 };

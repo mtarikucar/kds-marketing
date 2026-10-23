@@ -6,15 +6,23 @@ import {
   linkBudget,
   markUnreachable,
   setPolicy,
+  updateCapability,
   verifyCapability,
 } from '@/api/capabilities';
-import { DEFAULT_VERIFY_MAX_AGE_DAYS, type BudgetItemOut, type CapabilityOut, type Policy } from '@/api/types';
+import {
+  DEFAULT_VERIFY_MAX_AGE_DAYS,
+  type BudgetItemOut,
+  type CapabilityOut,
+  type Policy,
+  type UpdateCapabilityInput,
+} from '@/api/types';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { GapList } from '@/components/GapList';
 import { KindSelect } from '@/components/KindSelect';
 import { ListRows, WholeNumberInput } from '@/components/forms';
 import {
   Button,
+  Callout,
   Checkbox,
   Dialog,
   DialogContent,
@@ -254,6 +262,97 @@ export function DeclareDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           )}
         />
       </fieldset>
+    </FormDialog>
+  );
+}
+
+// --- edit -------------------------------------------------------------------------------------
+
+/**
+ * What an edit of `capability` sends: each field whose trimmed value differs from the trimmed
+ * stored one (the server trims too), so whitespace around a stored value never turns a rename
+ * into an account change, which would reset a connector. `null` when the account would be
+ * emptied (an external id is changed, never removed).
+ */
+function capabilityEdit(
+  capability: CapabilityOut['capability'],
+  form: { name: string; description: string; externalId: string },
+): UpdateCapabilityInput | null {
+  const input: UpdateCapabilityInput = {};
+  const name = form.name.trim();
+  const description = form.description.trim();
+  const account = form.externalId.trim();
+  const storedAccount = (capability.external_id ?? '').trim();
+  if (name !== capability.name.trim()) input.name = name;
+  if (description !== capability.description.trim()) input.description = description;
+  if (account === '' && storedAccount !== '') return null;
+  if (account !== storedAccount) input.external_id = account;
+  return input;
+}
+
+export function EditDialog({ target, onClose }: { target: CapabilityOut | null; onClose: () => void }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [externalId, setExternalId] = useState('');
+  const save = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdateCapabilityInput }) => updateCapability(id, input),
+    onSuccess: async (out) => {
+      // A connector bound to another account must be connected again: say so.
+      toast.success(t(out.verification_reset ? 'capabilities.editDialog.savedReset' : 'capabilities.editDialog.saved'));
+      onClose();
+      await invalidateCapabilities(queryClient);
+    },
+  });
+  useEffect(() => {
+    const c = target?.capability;
+    setName(c?.name ?? '');
+    setDescription(c?.description ?? '');
+    setExternalId(c?.external_id ?? '');
+    save.reset();
+  }, [target?.capability.id]);
+  if (!target) return null;
+  const c = target.capability;
+  const input = capabilityEdit(c, { name, description, externalId });
+  const changed = input !== null && Object.keys(input).length > 0;
+  const connector = c.reach === 'connector';
+  const accountChanged = input !== null && input.external_id !== undefined;
+  return (
+    <FormDialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title={t('capabilities.editDialog.title', { name: c.name })}
+      description={t('capabilities.editDialog.description')}
+      error={save.error}
+      submitLabel={t('common.save')}
+      submitting={save.isPending}
+      submitDisabled={!changed || name.trim() === ''}
+      onSubmit={() => input && save.mutate({ id: c.id, input })}
+    >
+      <Field label={t('fields.name')} required>
+        {(ids) => <Input id={ids.id} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />}
+      </Field>
+      <Field label={t('fields.description')}>
+        {(ids) => <Textarea id={ids.id} rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />}
+      </Field>
+      <Field
+        label={t('fields.external_id')}
+        hint={t(connector ? 'capabilities.editDialog.externalIdConnectorHint' : 'capabilities.editDialog.externalIdHint')}
+      >
+        {(ids) => (
+          <Input
+            id={ids.id}
+            aria-describedby={ids.describedBy}
+            autoComplete="off"
+            value={externalId}
+            onChange={(e) => setExternalId(e.target.value)}
+          />
+        )}
+      </Field>
+      {connector && accountChanged && (
+        <Callout tone="warning">{t('capabilities.editDialog.connectorWarning')}</Callout>
+      )}
     </FormDialog>
   );
 }
@@ -559,8 +658,10 @@ export function LinkBudgetDialog({
   }, [target?.capability.id]);
   if (!target) return null;
   const c = target.capability;
+  // A retired item takes no links.
   const fitting = budgetItems.filter(
-    (b) => canLinkBudget(c.kind_key, b.item.kind) && !c.budget_item_ids.includes(b.item.id),
+    (b) =>
+      b.item.retired_at === null && canLinkBudget(c.kind_key, b.item.kind) && !c.budget_item_ids.includes(b.item.id),
   );
   return (
     <FormDialog

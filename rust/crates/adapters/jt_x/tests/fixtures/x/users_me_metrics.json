@@ -1,0 +1,15 @@
+{
+  "data": {
+    "id": "1700000000000000001",
+    "name": "Jeeta Test",
+    "username": "jeeta_test",
+    "public_metrics": {
+      "followers_count": 120,
+      "following_count": 45,
+      "tweet_count": 310,
+      "listed_count": 2,
+      "like_count": 87,
+      "media_count": 12
+    }
+  }
+}

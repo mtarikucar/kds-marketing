@@ -10,16 +10,28 @@ publish.workspace = true
 # it sees the library exactly as a production build does.
 autotests = false
 
+[features]
+# Plain http to loopback literals, and `Egress::with_test_hosts`, for the tests of other crates
+# (a provider adapter against an in-process mock on 127.0.0.1). Only `[dev-dependencies]` sections
+# may enable it and `bin/jeeta` never does: `jt_archtest` asserts both. See the crate docs.
+test-loopback = []
+
 [dependencies]
 jt_tenancy.workspace = true
+jt_capability.workspace = true
 jt_app.workspace = true
 reqwest.workspace = true
 url.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+http.workspace = true
+# `net`: the DNS guard resolves through the system resolver (`tokio::net::lookup_host`).
+tokio = { workspace = true, features = ["net"] }
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+jt_testkit.workspace = true
 axum.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 

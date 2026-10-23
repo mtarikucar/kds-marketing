@@ -32,7 +32,7 @@ impl MemState {
 
     /// The capability as a read returns it: `has_sealed_config` from the sealed blob and the
     /// budget item ids, in id order, from the links.
-    fn capability_view(&self, stored: &StoredCapability) -> Capability {
+    pub(super) fn capability_view(&self, stored: &StoredCapability) -> Capability {
         let c = &stored.capability;
         let mut budget_item_ids: Vec<BudgetItemId> = self
             .capability_budget_links
@@ -101,7 +101,11 @@ impl MemState {
 
 /// `NOT_FOUND` unless capability `id` belongs to `ws`, as `jt_pg` checks before hanging a member
 /// or a link off it.
-fn ensure_capability(state: &MemState, ws: WorkspaceId, id: CapabilityId) -> Result<(), AppError> {
+pub(super) fn ensure_capability(
+    state: &MemState,
+    ws: WorkspaceId,
+    id: CapabilityId,
+) -> Result<(), AppError> {
     state
         .capability_in(ws, id)
         .map(|_| ())
@@ -249,9 +253,13 @@ impl CapabilityRepo for MemTenant {
         &mut self,
         id: CapabilityId,
         sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
     ) -> Result<(), AppError> {
         self.call(|this| {
             let ws = this.ws;
+            if this.tx.set_sealed_fails() {
+                return Err(AppError::internal("injected failure: set_sealed"));
+            }
             ensure_capability(this.state(), ws, id)?;
             this.tx.write(move |s| {
                 if let Some(stored) = s
@@ -260,6 +268,7 @@ impl CapabilityRepo for MemTenant {
                     .find(|c| c.capability.workspace_id == ws && c.capability.id == id)
                 {
                     stored.sealed = sealed.clone();
+                    stored.capability.updated_at = at;
                 }
             });
             Ok(())
@@ -491,6 +500,56 @@ impl BudgetRepo for MemTenant {
 
     async fn find_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError> {
         Ok(self.state().item_in(self.ws, id).cloned())
+    }
+
+    /// The fakes run one bundle at a time in tests, so there is no one to wait for: `find_item`.
+    async fn lock_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError> {
+        BudgetRepo::find_item(self, id).await
+    }
+
+    /// The bundle's workspace first, then the cap's check constraint, then the row, as `jt_pg`
+    /// meets them; only the name, cap, period and retirement time are written.
+    async fn update_item(&mut self, item: BudgetItem) -> Result<(), AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            same_workspace(ws, item.workspace_id)?;
+            if item.cap < 0 {
+                return Err(AppError::internal("budget_items.cap must not be negative"));
+            }
+            ensure_item(this.state(), ws, item.id)?;
+            this.tx.write(move |s| {
+                if let Some(stored) = s
+                    .budget_items
+                    .iter_mut()
+                    .find(|i| i.workspace_id == ws && i.id == item.id)
+                {
+                    stored.name = item.name.clone();
+                    stored.cap = item.cap;
+                    stored.period = item.period;
+                    stored.retired_at = item.retired_at;
+                }
+            });
+            Ok(())
+        })
+    }
+
+    async fn unlink_item(&mut self, item: BudgetItemId) -> Result<u64, AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            let linked = this
+                .state()
+                .capability_budget_links
+                .iter()
+                .filter(|l| l.workspace_id == ws && l.budget_item_id == item)
+                .count() as u64;
+            if linked > 0 {
+                this.tx.write(move |s| {
+                    s.capability_budget_links
+                        .retain(|l| !(l.workspace_id == ws && l.budget_item_id == item));
+                });
+            }
+            Ok(linked)
+        })
     }
 
     async fn link(&mut self, capability: CapabilityId, item: BudgetItemId) -> Result<(), AppError> {

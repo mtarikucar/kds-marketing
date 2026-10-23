@@ -1,0 +1,4 @@
+[
+  { "relationid": "rel-1", "durum": "1", "bilsec": "12", "push_button": "1", "record_link": "https://sesdosya.example.invalid/rapor/rel-1.mp3?token=SECRET-VOICE-TOKEN" },
+  { "durum": "2" }
+]

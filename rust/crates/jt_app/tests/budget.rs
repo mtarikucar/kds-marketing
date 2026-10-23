@@ -1,10 +1,12 @@
-//! The budget use cases over the in-memory fakes: creating and listing budget items, recording
-//! spend from them (over the cap too) and reading their spend. One test per rule.
+//! The budget use cases over the in-memory fakes: creating, listing, editing and retiring budget
+//! items, recording spend from them (over the cap too) and reading their spend. One test per
+//! rule.
 
 mod support;
 
 use jt_app::error::ErrorCode;
-use jt_app::usecases::budget::{self, BudgetItemInput};
+use jt_app::usecases::budget::{self, BudgetItemInput, UpdateBudgetItem};
+use jt_app::usecases::capabilities;
 use jt_capability::{BudgetItemId, BudgetKind, BudgetSpendId, Period, SpendSource, Unit};
 use jt_testkit::fakes::FIXED_NOW;
 use serde_json::json;
@@ -353,4 +355,289 @@ fn spend_cursor_takes_both_halves_or_neither() {
         assert_eq!(e.code, ErrorCode::Validation);
         assert_eq!(e.details, json!({ "field": field }));
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Editing and retiring
+// ---------------------------------------------------------------------------------------------
+
+fn edit(name: Option<&str>, cap: Option<i64>, period: Option<Period>) -> UpdateBudgetItem {
+    UpdateBudgetItem {
+        name: name.map(Into::into),
+        cap,
+        period,
+    }
+}
+
+#[tokio::test]
+async fn budget_item_update_keeps_kind_unit_and_spend() {
+    let w = world().await;
+    let version = w.approve_strategy().await;
+    let item = create(&w, monthly("Kasa", 10_000)).await;
+    budget::record_spend(&w.deps, &w.owner_ctx, item, 6_000, Some("fatura-1".into()))
+        .await
+        .unwrap();
+
+    // A cap below what was already spent is allowed: the spend stays and the item reads over
+    // its cap.
+    let manager = w.member("manager").await;
+    let out = budget::update_item(&w.deps, &manager, item, edit(None, Some(5_000), None))
+        .await
+        .unwrap();
+    assert_eq!(out.item.cap, 5_000);
+    assert_eq!(out.item.kind, BudgetKind::Cash);
+    assert_eq!(out.item.unit, Unit::Currency("TRY".into()));
+    assert_eq!(out.item.period, Period::Monthly);
+    assert_eq!(out.item.name, "Kasa");
+    assert_eq!(out.item.retired_at, None);
+    assert_eq!((out.spent_in_period, out.remaining), (6_000, -1_000));
+    let spend = budget::spend(&w.deps, &w.owner_ctx, item, 10, None)
+        .await
+        .unwrap();
+    assert_eq!(spend.len(), 1);
+    assert_eq!(spend[0].amount, 6_000);
+    let entries = w.entries("budget.items.update");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].payload,
+        json!({ "cap": 5_000, "previous": { "cap": 10_000 } })
+    );
+    let subject = entries[0].subject.as_ref().unwrap();
+    assert_eq!(
+        (subject.kind.as_str(), subject.id.clone()),
+        ("budget_item", item.to_string())
+    );
+    assert_eq!(entries[0].strategy_version_id, Some(version.as_uuid()));
+    assert_eq!(entries[0].actor, manager.actor);
+
+    // The name (trimmed) and the period; only what changed is ledgered.
+    let out = budget::update_item(
+        &w.deps,
+        &w.owner_ctx,
+        item,
+        edit(Some("  Kasa 2  "), Some(5_000), Some(Period::Weekly)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (out.item.name.as_str(), out.item.period),
+        ("Kasa 2", Period::Weekly)
+    );
+    assert_eq!(
+        w.entries("budget.items.update")[1].payload,
+        json!({
+            "name": "Kasa 2",
+            "period": "weekly",
+            "previous": { "name": "Kasa", "period": "monthly" },
+        })
+    );
+    let listed = budget::list_items(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(listed, std::slice::from_ref(&out));
+
+    // Naming what it already is changes nothing and writes nothing.
+    let same = budget::update_item(
+        &w.deps,
+        &w.owner_ctx,
+        item,
+        edit(Some("Kasa 2"), None, None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(same, out);
+    assert_eq!(w.entries("budget.items.update").len(), 2);
+
+    // Nothing named, a bad name or a negative cap is VALIDATION; the kind and the unit are not
+    // fields of an edit at all.
+    let e = err(budget::update_item(&w.deps, &w.owner_ctx, item, edit(None, None, None)).await);
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(e.details, json!({ "fields": ["name", "cap", "period"] }));
+    assert_invalid(
+        &err(budget::update_item(&w.deps, &w.owner_ctx, item, edit(Some(" "), None, None)).await),
+        "name",
+    );
+    assert_invalid(
+        &err(budget::update_item(&w.deps, &w.owner_ctx, item, edit(None, Some(-1), None)).await),
+        "cap",
+    );
+    for body in [
+        json!({ "kind": "ad_budget" }),
+        json!({ "unit": { "kind": "minutes" } }),
+        json!({ "cap": 1, "retired_at": null }),
+        json!({ "period": "yearly" }),
+    ] {
+        assert!(
+            serde_json::from_value::<UpdateBudgetItem>(body.clone()).is_err(),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        serde_json::from_value::<UpdateBudgetItem>(json!({ "period": "daily" })).unwrap(),
+        edit(None, None, Some(Period::Daily))
+    );
+
+    // Only budget.manage edits; an item not this workspace's is NOT_FOUND.
+    let rep = w.member("rep").await;
+    let capability_manager = w.agent(&["workspace.read", "capabilities.manage"]).await;
+    for ctx in [&rep, &capability_manager] {
+        assert_forbidden(
+            &err(budget::update_item(&w.deps, ctx, item, edit(None, Some(1), None)).await),
+            "budget.manage",
+        );
+    }
+    let (_, beta) = w.other_workspace().await;
+    for (ctx, id) in [(&w.owner_ctx, BudgetItemId::new_v7()), (&beta, item)] {
+        let e = err(budget::update_item(&w.deps, ctx, id, edit(None, Some(1), None)).await);
+        assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    }
+    assert_eq!(w.entries("budget.items.update").len(), 2);
+}
+
+#[tokio::test]
+async fn retired_budget_item_takes_no_links_or_spend() {
+    let w = world().await;
+    let item = create(&w, monthly("Saha kasası", 10_000)).await;
+    let other = create(&w, monthly("Ofis kasası", 10_000)).await;
+    let phone = w.declare("phone", "Saha telefonu").await.capability.id;
+    let printer = w.declare("printer", "Yazıcı").await.capability.id;
+    for capability in [phone, printer] {
+        capabilities::link_budget(&w.deps, &w.owner_ctx, capability, item)
+            .await
+            .unwrap();
+    }
+    capabilities::link_budget(&w.deps, &w.owner_ctx, phone, other)
+        .await
+        .unwrap();
+    budget::record_spend(&w.deps, &w.owner_ctx, item, 700, None)
+        .await
+        .unwrap();
+
+    // Retired: its links go in the same transaction, its spend history stays.
+    let later = at(&w.owner_ctx, days_later(1));
+    let out = budget::retire_item(&w.deps, &later, item, true)
+        .await
+        .unwrap();
+    assert_eq!(out.item.retired_at, Some(days_later(1)));
+    assert_eq!(out.item.name, "Saha kasası");
+    let entries = w.entries("budget.items.retire");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].payload, json!({ "links_removed": 2 }));
+    assert_eq!(entries[0].subject.as_ref().unwrap().id, item.to_string());
+    let phone_now = capabilities::get(&w.deps, &w.owner_ctx, phone)
+        .await
+        .unwrap();
+    assert_eq!(phone_now.capability.budget_item_ids, [other]);
+    let printer_now = capabilities::get(&w.deps, &w.owner_ctx, printer)
+        .await
+        .unwrap();
+    assert!(printer_now.capability.budget_item_ids.is_empty());
+    assert_eq!(
+        budget::spend(&w.deps, &w.owner_ctx, item, 10, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // The list still shows it, with its retirement.
+    let listed = budget::list_items(&w.deps, &w.owner_ctx).await.unwrap();
+    let shown = listed.iter().find(|o| o.item.id == item).unwrap();
+    assert_eq!(shown.item.retired_at, Some(days_later(1)));
+    assert_eq!(shown, &out);
+    assert_eq!(
+        serde_json::to_value(shown).unwrap()["item"]["retired_at"],
+        json!("2026-10-23T09:00:00Z")
+    );
+
+    // It takes no spend and no link, from anyone; nothing is written.
+    let agent = w.agent(&["workspace.read"]).await;
+    for ctx in [&w.owner_ctx, &agent] {
+        let e = err(budget::record_spend(&w.deps, ctx, item, 1, None).await);
+        assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+        assert_eq!(e.message, "budget item is retired");
+    }
+    let e = err(capabilities::link_budget(&w.deps, &w.owner_ctx, printer, item).await);
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert_eq!(e.message, "budget item is retired");
+    assert_eq!(w.uow.snapshot().budget_spend.len(), 1);
+    assert_eq!(w.entries("budget.spend.record").len(), 1);
+    assert_eq!(w.entries("capability.link_budget").len(), 3);
+
+    // Retiring it again is CONFLICT; the other item still takes spend.
+    let e = err(budget::retire_item(&w.deps, &w.owner_ctx, item, true).await);
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert_eq!(e.message, "budget item is already retired");
+    budget::record_spend(&w.deps, &w.owner_ctx, other, 1, None)
+        .await
+        .unwrap();
+    assert_eq!(w.entries("budget.items.retire").len(), 1);
+}
+
+#[tokio::test]
+async fn retire_requires_confirm() {
+    let w = world().await;
+    let item = create(&w, monthly("Kasa", 10_000)).await;
+    let phone = w.declare("phone", "Telefon").await.capability.id;
+    capabilities::link_budget(&w.deps, &w.owner_ctx, phone, item)
+        .await
+        .unwrap();
+
+    // Without the confirmation: VALIDATION naming it, and nothing changes.
+    assert_invalid(
+        &err(budget::retire_item(&w.deps, &w.owner_ctx, item, false).await),
+        "confirm",
+    );
+    let stored = budget::list_items(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(stored[0].item.retired_at, None);
+    let linked = capabilities::get(&w.deps, &w.owner_ctx, phone)
+        .await
+        .unwrap();
+    assert_eq!(linked.capability.budget_item_ids, [item]);
+    assert!(w.entries("budget.items.retire").is_empty());
+
+    // Only budget.manage retires; an item not this workspace's is NOT_FOUND.
+    let rep = w.member("rep").await;
+    let capability_manager = w.agent(&["workspace.read", "capabilities.manage"]).await;
+    for ctx in [&rep, &capability_manager] {
+        assert_forbidden(
+            &err(budget::retire_item(&w.deps, ctx, item, true).await),
+            "budget.manage",
+        );
+    }
+    let (_, beta) = w.other_workspace().await;
+    for (ctx, id) in [(&w.owner_ctx, BudgetItemId::new_v7()), (&beta, item)] {
+        let e = err(budget::retire_item(&w.deps, ctx, id, true).await);
+        assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    }
+    assert!(w.entries("budget.items.retire").is_empty());
+
+    // Confirmed, a manager retires it.
+    let manager = w.member("manager").await;
+    let out = budget::retire_item(&w.deps, &manager, item, true)
+        .await
+        .unwrap();
+    assert_eq!(out.item.retired_at, Some(FIXED_NOW));
+}
+
+#[tokio::test]
+async fn update_refuses_a_retired_budget_item() {
+    let w = world().await;
+    let item = create(&w, monthly("Kasa", 10_000)).await;
+    budget::retire_item(&w.deps, &w.owner_ctx, item, true)
+        .await
+        .unwrap();
+    for input in [
+        edit(Some("Yeni"), None, None),
+        edit(None, Some(1), None),
+        edit(None, None, Some(Period::Total)),
+    ] {
+        let e = err(budget::update_item(&w.deps, &w.owner_ctx, item, input).await);
+        assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+        assert_eq!(e.message, "budget item is retired");
+    }
+    let listed = budget::list_items(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(
+        (listed[0].item.name.as_str(), listed[0].item.cap),
+        ("Kasa", 10_000)
+    );
+    assert!(w.entries("budget.items.update").is_empty());
 }

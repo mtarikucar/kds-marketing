@@ -1,5 +1,6 @@
 //! `budget_items`, `capability_budget_links` and `budget_spend_entries`: the workspace's budget
-//! items, which capabilities spend from them, and the append-only ledger of what was spent.
+//! items, which capabilities spend from them, and the append-only ledger of what was spent. A
+//! retired item keeps its row (`retired_at` set) and its spend; its links are deleted.
 //!
 //! `unit` and `source` are the JSON of `jt_capability::Unit` and `SpendSource`; `kind` and
 //! `period` hold their keys. Links and spend entries reference their rows together with the
@@ -34,7 +35,12 @@ struct ItemRecord {
     period: String,
     strategy_version_id: Option<Uuid>,
     created_at: OffsetDateTime,
+    retired_at: Option<OffsetDateTime>,
 }
+
+/// The columns an [`ItemRecord`] is read from.
+const ITEM_COLUMNS: &str =
+    "id, workspace_id, name, kind, unit, cap, period, strategy_version_id, created_at, retired_at";
 
 impl ItemRecord {
     fn into_item(self) -> Result<BudgetItem, AppError> {
@@ -50,6 +56,7 @@ impl ItemRecord {
             period: stored(Period::parse(&self.period), "budget_items.period")?,
             strategy_version_id: self.strategy_version_id,
             created_at: self.created_at,
+            retired_at: self.retired_at,
         })
     }
 }
@@ -108,8 +115,8 @@ impl BudgetRepo for PgTenantRepos {
             .map_err(|e| AppError::internal(format!("a budget unit cannot be stored: {e}")))?;
         let done = sqlx::query(
             "insert into budget_items (id, workspace_id, name, kind, unit, cap, period, \
-             strategy_version_id, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-             on conflict do nothing",
+             strategy_version_id, created_at, retired_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict do nothing",
         )
         .bind(item.id.as_uuid())
         .bind(ws.as_uuid())
@@ -120,6 +127,7 @@ impl BudgetRepo for PgTenantRepos {
         .bind(item.period.key())
         .bind(item.strategy_version_id)
         .bind(item.created_at)
+        .bind(item.retired_at)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "insert budget item"))?;
@@ -131,10 +139,10 @@ impl BudgetRepo for PgTenantRepos {
 
     async fn list_items(&mut self) -> Result<Vec<BudgetItem>, AppError> {
         let ws = self.workspace_id();
-        let records: Vec<ItemRecord> = sqlx::query_as(
-            "select id, workspace_id, name, kind, unit, cap, period, strategy_version_id, \
-             created_at from budget_items where workspace_id = $1 order by created_at, id",
-        )
+        let records: Vec<ItemRecord> = sqlx::query_as(&format!(
+            "select {ITEM_COLUMNS} from budget_items where workspace_id = $1 \
+             order by created_at, id"
+        ))
         .bind(ws.as_uuid())
         .fetch_all(self.tx.conn())
         .await
@@ -144,16 +152,66 @@ impl BudgetRepo for PgTenantRepos {
 
     async fn find_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError> {
         let ws = self.workspace_id();
-        let record: Option<ItemRecord> = sqlx::query_as(
-            "select id, workspace_id, name, kind, unit, cap, period, strategy_version_id, \
-             created_at from budget_items where workspace_id = $1 and id = $2",
-        )
+        let record: Option<ItemRecord> = sqlx::query_as(&format!(
+            "select {ITEM_COLUMNS} from budget_items where workspace_id = $1 and id = $2"
+        ))
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "find budget item"))?;
         record.map(ItemRecord::into_item).transpose()
+    }
+
+    /// `find_item` with `for update`: a second locker waits until this transaction ends, then
+    /// reads the row as it was committed.
+    async fn lock_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError> {
+        let ws = self.workspace_id();
+        let record: Option<ItemRecord> = sqlx::query_as(&format!(
+            "select {ITEM_COLUMNS} from budget_items where workspace_id = $1 and id = $2 \
+             for update"
+        ))
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock budget item"))?;
+        record.map(ItemRecord::into_item).transpose()
+    }
+
+    async fn update_item(&mut self, item: BudgetItem) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        same_workspace(ws, item.workspace_id)?;
+        let done = sqlx::query(
+            "update budget_items set name = $3, cap = $4, period = $5, retired_at = $6 \
+             where workspace_id = $1 and id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(item.id.as_uuid())
+        .bind(&item.name)
+        .bind(item.cap)
+        .bind(item.period.key())
+        .bind(item.retired_at)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "change budget item"))?;
+        if done.rows_affected() == 0 {
+            return Err(AppError::not_found("no such budget item"));
+        }
+        Ok(())
+    }
+
+    async fn unlink_item(&mut self, item: BudgetItemId) -> Result<u64, AppError> {
+        let ws = self.workspace_id();
+        let done = sqlx::query(
+            "delete from capability_budget_links where workspace_id = $1 and budget_item_id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(item.as_uuid())
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "unlink budget item"))?;
+        Ok(done.rows_affected())
     }
 
     async fn link(&mut self, capability: CapabilityId, item: BudgetItemId) -> Result<(), AppError> {

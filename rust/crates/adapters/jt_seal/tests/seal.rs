@@ -131,3 +131,63 @@ fn the_hash_state_behind_the_key_derivation_wipes_itself_on_drop() {
     fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>() {}
     wiped_on_drop::<sha2::Sha256>();
 }
+
+/// The workspace sealing key, derived as the box derives it: HKDF-SHA256, salt `jeeta-seal-v1`,
+/// info the workspace id's 16 bytes.
+fn sealing_key(master: &[u8; 32], w: WorkspaceId) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    hkdf::Hkdf::<sha2::Sha256>::new(Some(b"jeeta-seal-v1"), master)
+        .expand(w.as_uuid().as_bytes(), &mut key)
+        .unwrap();
+    key
+}
+
+/// A workspace's HMAC key for a purpose is HKDF-SHA256 of the master key with its own salt
+/// (`jeeta-hmac-v1`) and info `workspace id (16 bytes) || 0x00 || purpose`: stable for the same
+/// inputs, different for another purpose, another workspace or another master key, and
+/// independent of the sealing key.
+#[test]
+fn hmac_key_is_purpose_and_workspace_bound() {
+    let sb = AesSecretBox::new(MASTER);
+    // Handed back in a buffer that wipes itself when dropped.
+    let key: zeroize::Zeroizing<[u8; 32]> = sb.hmac_key(ws(1), "oauth-state").unwrap();
+    assert_eq!(sb.hmac_key(ws(1), "oauth-state").unwrap(), key);
+    assert_eq!(
+        AesSecretBox::new(MASTER)
+            .hmac_key(ws(1), "oauth-state")
+            .unwrap(),
+        key,
+        "a restart derives the same key"
+    );
+    assert_ne!(sb.hmac_key(ws(1), "netgsm-hook").unwrap(), key);
+    assert_ne!(sb.hmac_key(ws(2), "oauth-state").unwrap(), key);
+    assert_ne!(
+        AesSecretBox::new([8; 32])
+            .hmac_key(ws(1), "oauth-state")
+            .unwrap(),
+        key
+    );
+    // The separator keeps purposes apart from the workspace bytes, and the empty purpose is a
+    // purpose of its own.
+    assert_ne!(sb.hmac_key(ws(1), "").unwrap(), key);
+    assert_ne!(sb.hmac_key(ws(1), "oauth-stat").unwrap(), key);
+
+    // Pinned derivation.
+    let mut info = ws(1).as_uuid().as_bytes().to_vec();
+    info.push(0);
+    info.extend_from_slice(b"oauth-state");
+    let mut expected = [0u8; 32];
+    hkdf::Hkdf::<sha2::Sha256>::new(Some(b"jeeta-hmac-v1"), &MASTER)
+        .expand(&info, &mut expected)
+        .unwrap();
+    assert_eq!(*key, expected);
+
+    // Never the sealing key, whatever the purpose.
+    for purpose in ["", "oauth-state", "netgsm-hook"] {
+        assert_ne!(
+            *sb.hmac_key(ws(1), purpose).unwrap(),
+            sealing_key(&MASTER, ws(1)),
+            "{purpose:?}"
+        );
+    }
+}

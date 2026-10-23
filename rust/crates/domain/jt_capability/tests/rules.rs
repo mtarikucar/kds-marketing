@@ -623,6 +623,7 @@ fn budget_items_and_spend_are_validated() {
     assert_eq!(ok.period, Period::Monthly);
     assert_eq!(ok.created_at, NOW);
     assert_eq!(ok.strategy_version_id, None);
+    assert_eq!(ok.retired_at, None, "a new item takes links and spend");
     assert!(item(Unit::Currency("TRY".to_owned()), 0).is_ok());
     assert!(item(Unit::Minutes, 600).is_ok());
     assert!(item(Unit::Count("filament spools".to_owned()), 3).is_ok());
@@ -1264,6 +1265,16 @@ fn stored_capability_json_without_newer_fields_still_parses() {
     assert_eq!(item.period, Period::Total, "the period that allows least");
     assert_eq!(item.strategy_version_id, None);
     assert_eq!(item.created_at, OffsetDateTime::UNIX_EPOCH);
+    assert_eq!(item.retired_at, None, "a missing retirement reads as live");
+    let retired: BudgetItem = serde_json::from_value(json!({
+        "id": item_id, "workspace_id": ws, "kind": "cash", "retired_at": "2026-10-22T15:30:00Z"
+    }))
+    .unwrap();
+    assert_eq!(retired.retired_at, Some(datetime!(2026-10-22 15:30 UTC)));
+    assert_eq!(
+        serde_json::to_value(&retired).unwrap()["retired_at"],
+        json!("2026-10-22T15:30:00Z")
+    );
     assert!(
         serde_json::from_value::<BudgetItem>(json!({ "id": item_id, "workspace_id": ws })).is_err(),
         "the budget kind is required"
@@ -1332,4 +1343,156 @@ fn unit_fits_its_budget_kind() {
         BudgetKind::AgentQuota,
         &Unit::Count("tokens".into())
     ));
+}
+
+#[test]
+fn edits_run_the_rules_creation_runs() {
+    // A description, an external id and a cap are checked alone by the rules the constructors
+    // run, so an edit refuses exactly what a declaration or a new item refuses.
+    let long = "d".repeat(MAX_DESCRIPTION_CHARS);
+    assert_eq!(validate_description(&long), Ok(()));
+    assert_eq!(validate_description(""), Ok(()));
+    let too_long = "d".repeat(MAX_DESCRIPTION_CHARS + 1);
+    let description_error = CapabilityError::TextTooLong {
+        field: "description",
+        len: MAX_DESCRIPTION_CHARS + 1,
+        max: MAX_DESCRIPTION_CHARS,
+    };
+    assert_eq!(
+        validate_description(&too_long),
+        Err(description_error.clone())
+    );
+    assert_eq!(
+        create(NewCapability {
+            description: too_long,
+            ..input("phone")
+        }),
+        Err(description_error)
+    );
+
+    assert_eq!(validate_external_id("page-1"), Ok(()));
+    assert_eq!(
+        validate_external_id(&"e".repeat(MAX_EXTERNAL_ID_CHARS)),
+        Ok(())
+    );
+    for blank in ["", "  ", "\t"] {
+        assert_eq!(
+            validate_external_id(blank),
+            Err(CapabilityError::BlankExternalId),
+            "{blank:?}"
+        );
+    }
+    for control in ["page\u{7}1", "page\n1", "page-1\u{0}"] {
+        assert_eq!(
+            validate_external_id(control),
+            Err(CapabilityError::ExternalIdHasControlCharacter),
+            "{control:?}"
+        );
+    }
+    assert_eq!(
+        create(NewCapability {
+            external_id: Some("page\r1".into()),
+            ..input("instagram")
+        }),
+        Err(CapabilityError::ExternalIdHasControlCharacter)
+    );
+    let external_error = CapabilityError::TextTooLong {
+        field: "external_id",
+        len: MAX_EXTERNAL_ID_CHARS + 1,
+        max: MAX_EXTERNAL_ID_CHARS,
+    };
+    let too_long = "e".repeat(MAX_EXTERNAL_ID_CHARS + 1);
+    assert_eq!(validate_external_id(&too_long), Err(external_error.clone()));
+    assert_eq!(
+        create(NewCapability {
+            external_id: Some(too_long),
+            ..input("instagram")
+        }),
+        Err(external_error)
+    );
+
+    assert_eq!(validate_cap(0), Ok(()));
+    assert_eq!(validate_cap(i64::MAX), Ok(()));
+    assert_eq!(validate_cap(-1), Err(CapabilityError::NegativeCap(-1)));
+}
+
+#[test]
+fn reserved_public_keys_are_the_ones_connectors_write() {
+    assert_eq!(
+        RESERVED_PUBLIC_KEYS,
+        [
+            "access",
+            "account",
+            "asset",
+            "facts",
+            "health",
+            "provider",
+            "reconnect_required"
+        ]
+    );
+    assert_eq!(check_reserved_public_keys(&json!({})), Ok(()));
+    assert_eq!(check_reserved_public_keys(&Value::Null), Ok(()));
+    // A declaration names its hosts and any public setting of its own; a reserved name deeper
+    // down is the setting's own business.
+    assert_eq!(
+        check_reserved_public_keys(&json!({
+            "hosts": ["imap.example.com"],
+            "page_name": "Brand A",
+            "page": { "health": "fine", "account": "x" },
+        })),
+        Ok(())
+    );
+    for key in RESERVED_PUBLIC_KEYS {
+        match check_reserved_public_keys(&json!({ *key: true, "page_name": "A" })) {
+            Err(CapabilityError::ReservedPublicKey(gaps)) => {
+                assert_eq!(fields(&gaps), [format!("connector_public.{key}").as_str()]);
+                assert!(gaps.iter().all(|g| !g.message.is_empty()), "{gaps:?}");
+            }
+            other => panic!("{key}: expected ReservedPublicKey, got {other:?}"),
+        }
+    }
+    // Every reserved key is named, in sorted order.
+    match check_reserved_public_keys(&json!({
+        "reconnect_required": false,
+        "health": { "ok": true },
+        "access": { "kind": "oauth" },
+    })) {
+        Err(e @ CapabilityError::ReservedPublicKey(_)) => {
+            assert_eq!(e.to_string(), "reserved public key");
+            let CapabilityError::ReservedPublicKey(gaps) = e else {
+                unreachable!()
+            };
+            assert_eq!(
+                fields(&gaps),
+                [
+                    "connector_public.access",
+                    "connector_public.health",
+                    "connector_public.reconnect_required",
+                ]
+            );
+        }
+        other => panic!("expected ReservedPublicKey, got {other:?}"),
+    }
+    // The constructor does not refuse them: the connectors write them through it.
+    let c = create(NewCapability {
+        connector_public: json!({ "health": { "ok": true }, "reconnect_required": false }),
+        ..input("instagram")
+    })
+    .unwrap();
+    assert_eq!(c.connector_public["health"]["ok"], true);
+}
+
+#[test]
+fn a_meta_ad_account_is_held_by_its_number() {
+    assert_eq!(canonical_external_id("meta_ads", "act_1234"), "1234");
+    assert_eq!(canonical_external_id("meta_ads", "1234"), "1234");
+    assert_eq!(canonical_external_id("meta_ads", "act_"), "");
+    // Only a leading prefix, only for that kind, nothing trimmed.
+    assert_eq!(canonical_external_id("meta_ads", "12act_34"), "12act_34");
+    assert_eq!(canonical_external_id("meta_ads", " act_1"), " act_1");
+    assert_eq!(
+        canonical_external_id("facebook_page", "act_1234"),
+        "act_1234"
+    );
+    assert_eq!(META_AD_ACCOUNT_PREFIX, "act_");
 }

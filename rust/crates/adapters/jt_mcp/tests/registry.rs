@@ -37,6 +37,7 @@ const TOOLS: &[&str] = &[
     "jeeta.capability.list",
     "jeeta.capability.get",
     "jeeta.capability.declare",
+    "jeeta.capability.update",
     "jeeta.capability.verify",
     "jeeta.capability.mark_unreachable",
     "jeeta.capability.set_policy",
@@ -51,18 +52,36 @@ const TOOLS: &[&str] = &[
     "jeeta.capability.groups_remove_member",
     "jeeta.budget.items_list",
     "jeeta.budget.items_create",
+    "jeeta.budget.items_update",
+    "jeeta.budget.items_retire",
     "jeeta.budget.spend_record",
     "jeeta.budget.spend_list",
     "jeeta.work.pending",
     "jeeta.work.checkin",
     "jeeta.work.set_checkin_interval",
+    "jeeta.connector.start_oauth",
+    "jeeta.connector.confirm_assets",
+    "jeeta.connector.set_credentials",
+    "jeeta.connector.probe",
+    "jeeta.connector.health",
+    "jeeta.connector.reconnect",
+    "jeeta.connector.hooks",
+    "jeeta.events.pending",
+    "jeeta.events.ack",
+    "jeeta.events.list",
 ];
 
 #[test]
 fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
-    assert!(NOT_YET_DEFINED.is_empty(), "{NOT_YET_DEFINED:?}");
-    assert_eq!(TOOLS.len(), 47);
-    let catalog: BTreeSet<&str> = CATALOG.iter().filter_map(|uc| uc.mcp_tool).collect();
+    // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
+    // addresses and the inbound events).
+    assert!(NOT_YET_DEFINED.is_empty());
+    assert_eq!(TOOLS.len(), 60);
+    let catalog: BTreeSet<&str> = CATALOG
+        .iter()
+        .filter_map(|uc| uc.mcp_tool)
+        .filter(|tool| !NOT_YET_DEFINED.contains(tool))
+        .collect();
     let registered: BTreeSet<&str> = registry().iter().map(|t| t.name).collect();
     assert_eq!(registered, catalog);
     assert_eq!(registered, TOOLS.iter().copied().collect());
@@ -230,7 +249,7 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         .into_iter()
         .filter(|s| s.use_case.starts_with("capability.") || s.use_case.starts_with("budget."))
         .collect();
-    assert_eq!(specs.len(), 19);
+    assert_eq!(specs.len(), 22);
     for spec in &specs {
         let expected = match spec.name {
             // Reading, and what an agent reports about its own hands and spend: the use cases
@@ -242,7 +261,9 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
             | "jeeta.budget.items_list"
             | "jeeta.budget.spend_record"
             | "jeeta.budget.spend_list" => Permission::WorkspaceRead,
-            "jeeta.budget.items_create" => Permission::BudgetManage,
+            "jeeta.budget.items_create"
+            | "jeeta.budget.items_update"
+            | "jeeta.budget.items_retire" => Permission::BudgetManage,
             _ => Permission::CapabilitiesManage,
         };
         assert_eq!(spec.permission, expected, "{}", spec.name);
@@ -254,7 +275,11 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         .collect();
     assert_eq!(
         destructive,
-        BTreeSet::from(["jeeta.capability.retire", "jeeta.capability.groups_delete"])
+        BTreeSet::from([
+            "jeeta.capability.retire",
+            "jeeta.capability.groups_delete",
+            "jeeta.budget.items_retire",
+        ])
     );
 
     let find = |name: &str| specs.iter().find(|s| s.name == name).unwrap();
@@ -304,6 +329,56 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         required(&create),
         BTreeSet::from(["name", "kind", "unit", "cap", "period"])
     );
+
+    // The edits: only the id is required, every other field is optional, nothing else is
+    // allowed; the kind and the unit of a budget item, and a capability's public fields, are not
+    // fields of an edit.
+    for (name, id, fields) in [
+        (
+            "jeeta.capability.update",
+            "capability_id",
+            ["name", "description", "external_id"],
+        ),
+        (
+            "jeeta.budget.items_update",
+            "budget_item_id",
+            ["name", "cap", "period"],
+        ),
+    ] {
+        let schema = find(name).input_schema.clone().to_value();
+        assert_eq!(required(&schema), BTreeSet::from([id]), "{name}");
+        let keys: BTreeSet<&str> = schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut expected = BTreeSet::from(fields);
+        expected.insert(id);
+        assert_eq!(keys, expected, "{name}");
+        assert_eq!(schema["additionalProperties"], false, "{name}");
+    }
+    let update = find("jeeta.capability.update");
+    assert!(
+        update
+            .description
+            .contains("resets its verification and drops its stored credentials"),
+        "{}",
+        update.description
+    );
+    let retire = find("jeeta.budget.items_retire")
+        .input_schema
+        .clone()
+        .to_value();
+    assert_eq!(retire["properties"]["confirm"]["type"], "boolean");
+    assert_eq!(required(&retire), BTreeSet::from(["budget_item_id"]));
+}
+
+/// Whether an object schema requires no property: no `required` list, or an empty one.
+fn requires_nothing(schema: &Value) -> bool {
+    schema
+        .get("required")
+        .is_none_or(|r| r.as_array().is_some_and(Vec::is_empty))
 }
 
 /// The `required` property names of an object schema.
@@ -353,4 +428,188 @@ fn work_tools_read_and_check_in_with_workspace_read_and_set_the_interval_with_te
     assert_eq!(required(&interval), BTreeSet::from(["minutes"]));
     assert_eq!(interval["properties"]["minutes"]["minimum"], 15);
     assert_eq!(interval["properties"]["minutes"]["maximum"], 10_080);
+}
+
+#[test]
+fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_workspace_read() {
+    let specs: Vec<ToolSpec> = registry()
+        .into_iter()
+        .filter(|s| s.use_case.starts_with("connector."))
+        .collect();
+    let permissions: Vec<(&str, Permission, Risk)> = specs
+        .iter()
+        .map(|s| (s.name, s.permission, s.risk))
+        .collect();
+    assert_eq!(
+        permissions,
+        [
+            (
+                "jeeta.connector.start_oauth",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.confirm_assets",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.set_credentials",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.probe",
+                Permission::WorkspaceRead,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.health",
+                Permission::WorkspaceRead,
+                Risk::Read
+            ),
+            (
+                "jeeta.connector.reconnect",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            (
+                "jeeta.connector.hooks",
+                Permission::CapabilitiesManage,
+                Risk::Read
+            ),
+        ]
+    );
+    // No tool completes an OAuth flow: only the owner's browser, on the panel, does.
+    assert!(
+        registry()
+            .iter()
+            .all(|s| s.use_case != "connector.complete_oauth")
+    );
+    let find = |name: &str| specs.iter().find(|s| s.name == name).unwrap();
+    let start = find("jeeta.connector.start_oauth");
+    assert!(
+        start
+            .description
+            .contains("hand the authorize_url to the owner"),
+        "{}",
+        start.description
+    );
+    let schema = start.input_schema.clone().to_value();
+    assert_eq!(required(&schema), BTreeSet::from(["kind_key"]));
+    assert_eq!(schema["additionalProperties"], false);
+
+    let confirm = find("jeeta.connector.confirm_assets")
+        .input_schema
+        .clone()
+        .to_value();
+    assert_eq!(
+        required(&confirm),
+        BTreeSet::from(["pending_id", "selected"])
+    );
+
+    // The credentials' shapes are named in the schema; X takes none.
+    let set = find("jeeta.connector.set_credentials");
+    let schema = set.input_schema.clone().to_value();
+    assert_eq!(required(&schema), BTreeSet::from(["credential"]));
+    assert_eq!(schema["additionalProperties"], false);
+    let shapes: BTreeSet<&str> = schema["properties"]["credential"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["properties"]["kind"]["const"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        shapes,
+        BTreeSet::from(["netgsm_sms", "netgsm_pbx", "meta_token"])
+    );
+    for name in ["jeeta.connector.probe", "jeeta.connector.reconnect"] {
+        let schema = find(name).input_schema.clone().to_value();
+        assert_eq!(
+            required(&schema),
+            BTreeSet::from(["capability_id"]),
+            "{name}"
+        );
+    }
+    // The hook addresses take no argument and say the tokens are the workspace's.
+    let hooks = find("jeeta.connector.hooks");
+    let schema = hooks.input_schema.clone().to_value();
+    assert!(requires_nothing(&schema), "{schema}");
+    assert!(
+        hooks.description.contains("NetGSM"),
+        "{}",
+        hooks.description
+    );
+}
+
+#[test]
+fn event_tools_read_with_workspace_read_and_acknowledge_with_capabilities_manage() {
+    let specs: Vec<ToolSpec> = registry()
+        .into_iter()
+        .filter(|s| s.use_case.starts_with("events."))
+        .collect();
+    let permissions: Vec<(&str, Permission, Risk)> = specs
+        .iter()
+        .map(|s| (s.name, s.permission, s.risk))
+        .collect();
+    assert_eq!(
+        permissions,
+        [
+            (
+                "jeeta.events.pending",
+                Permission::WorkspaceRead,
+                Risk::Read
+            ),
+            (
+                "jeeta.events.ack",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
+            ("jeeta.events.list", Permission::WorkspaceRead, Risk::Read),
+        ]
+    );
+    let find = |name: &str| {
+        specs
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap()
+            .input_schema
+            .clone()
+            .to_value()
+    };
+    let properties = |schema: &Value| -> BTreeSet<String> {
+        schema["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let pending = find("jeeta.events.pending");
+    assert!(requires_nothing(&pending), "{pending}");
+    assert_eq!(pending["additionalProperties"], false);
+    assert_eq!(
+        properties(&pending),
+        ["after_at", "after_id", "limit"].map(String::from).into()
+    );
+    assert_eq!(pending["properties"]["limit"]["maximum"], 200);
+    let list = find("jeeta.events.list");
+    assert!(requires_nothing(&list), "{list}");
+    assert_eq!(
+        properties(&list),
+        [
+            "before_at",
+            "before_id",
+            "include_processed",
+            "kind",
+            "limit",
+            "provider"
+        ]
+        .map(String::from)
+        .into()
+    );
+    let ack = find("jeeta.events.ack");
+    assert_eq!(required(&ack), BTreeSet::from(["ids"]));
+    assert_eq!(ack["properties"]["ids"]["minItems"], 1);
+    assert_eq!(ack["properties"]["ids"]["maxItems"], 200);
 }

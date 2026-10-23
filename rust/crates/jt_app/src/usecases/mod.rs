@@ -10,12 +10,16 @@ pub mod api_keys;
 pub mod auth;
 pub mod budget;
 pub mod capabilities;
+pub mod connector;
+pub mod events;
 pub mod groups;
+pub mod jobs;
 pub mod ledger;
 pub mod platform;
 pub mod roles;
 pub mod strategy;
 pub mod team;
+pub mod webhook;
 pub mod work;
 pub mod workspace;
 
@@ -32,8 +36,9 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
+use crate::ports::connectors::{ConnectorRegistry, PlatformAppConfig};
 use crate::ports::{
-    ChannelCatalog, Clock, IdGen, PasswordHasher, SecretBox, StrategyArchivedHook,
+    ChannelCatalog, Clock, IdGen, JobLock, PasswordHasher, SecretBox, StrategyArchivedHook,
     TenantHostRegistry, TokenGen, UnitOfWork,
 };
 
@@ -54,6 +59,12 @@ pub struct Deps {
     pub archived_hook: Arc<dyn StrategyArchivedHook>,
     /// The hosts each workspace's connectors may reach: the egress allowlist's tenant tier.
     pub hosts: Arc<dyn TenantHostRegistry>,
+    /// The platform's provider apps and public address.
+    pub apps: Arc<dyn PlatformAppConfig>,
+    /// The provider adapters.
+    pub connectors: Arc<dyn ConnectorRegistry>,
+    /// Keeps each scheduled job ([`jobs`]) to one runner across the server's instances.
+    pub job_lock: Arc<dyn JobLock>,
 }
 
 /// The stored form of a secret token (a session, invite or API-key token): the lowercase hex
@@ -132,6 +143,15 @@ pub(crate) fn refusal(ctx: &Ctx, e: TenancyError) -> AppError {
 /// `VALIDATION` naming `field` in `details.field`.
 pub(crate) fn invalid(field: &str, message: &str) -> AppError {
     AppError::validation(message, json!({ "field": field }))
+}
+
+/// `VALIDATION` for an edit that names none of the editable `fields`, listing them in
+/// `details.fields`.
+pub(crate) fn nothing_to_change(fields: &[&str]) -> AppError {
+    AppError::validation(
+        format!("an edit names at least one of {}", fields.join(", ")),
+        json!({ "fields": fields }),
+    )
 }
 
 /// A keyset cursor `(at, id)` from the two halves a caller sends: `before_at`, an RFC 3339 time

@@ -1,0 +1,5 @@
+[
+  { "mesaj": "Birinci", "ceptel": "905000000032", "gorevid": "990000002", "tarih": "23102026101600" },
+  { "mesaj": "Göndericisiz satır", "gorevid": "990000099" },
+  { "message": "İkinci", "msisdn": "5000000033", "id": 990000003 }
+]
