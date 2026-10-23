@@ -10,6 +10,11 @@ unmaintained = "workspace"
 
 [licenses]
 allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CDLA-Permissive-2.0"]
+exceptions = [
+  # MIME parsing/encoding used by the jt_mail-only protocol dependencies below.
+  { crate = "mailparse", allow = ["0BSD"] },
+  { crate = "quoted_printable", allow = ["0BSD"] },
+]
 
 # The workspace crates are `publish = false` and `license = "UNLICENSED"` (not an SPDX id);
 # the allow list above governs third-party crates only.
@@ -51,6 +56,12 @@ skip-tree = [
 # Only jt_outbound may pull an HTTP client, and that client is reqwest: no other HTTP client at
 # all (spec §4.3), so the others are banned outright. Only jt_pg may pull sqlx.
 deny = [
+  { crate = "lettre", wrappers = ["jt_mail"] },
+  { crate = "async-imap", wrappers = ["jt_mail"] },
+  { crate = "mailparse", wrappers = ["jt_mail"] },
+  # HTTP already uses this TLS transport transitively; only jt_mail may name it directly
+  # in the workspace (archtest). Existing HTTP and lettre TLS edges remain allowed.
+  { crate = "tokio-rustls", wrappers = ["jt_mail", "lettre", "hyper-rustls", "reqwest"] },
   { crate = "reqwest", wrappers = ["jt_outbound"] },
   { crate = "ureq" },
   { crate = "isahc" },

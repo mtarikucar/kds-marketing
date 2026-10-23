@@ -25,7 +25,7 @@ mod provider;
 mod redact;
 mod webhook;
 
-pub use credential::Credential;
+pub use credential::{Credential, MailTls};
 pub use error::ConnectorError;
 pub use event::{EventKind, InboundEvent, InboundEventId, dedupe_key};
 pub use health::{ProbeResult, status_after_probe};

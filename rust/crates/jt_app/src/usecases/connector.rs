@@ -1005,7 +1005,7 @@ async fn begin_oauth(
 fn oauth_kind(kind_key: &str) -> Result<Provider, AppError> {
     let kind = connector_kind(kind_key)?;
     match provider_for_kind(kind.key) {
-        Some(Provider::Netgsm) => Err(AppError::validation(
+        Some(Provider::Netgsm | Provider::Mail) => Err(AppError::validation(
             "this kind connects with credentials entered by hand (connector.set_credentials)",
             json!({ "field": "kind_key", "reason": "use_set_credentials" }),
         )),
@@ -1181,9 +1181,9 @@ fn reconnectable(capability: &Capability) -> Result<(), AppError> {
     }
     not_retired(capability)?;
     match provider_for_kind(&capability.kind_key) {
-        Some(Provider::Netgsm) => {
+        Some(Provider::Netgsm | Provider::Mail) => {
             return Err(AppError::validation(
-                "a NetGSM capability takes new credentials by hand (connector.set_credentials)",
+                "this capability takes new credentials by hand (connector.set_credentials)",
                 json!({ "reason": "use_set_credentials" }),
             ));
         }
@@ -1781,6 +1781,7 @@ fn built_credential(
             let expected = match (provider, kind_key) {
                 (Provider::Netgsm, "sms_line") => "netgsm_sms",
                 (Provider::Netgsm, _) => "netgsm_pbx",
+                (Provider::Mail, _) => "mailbox",
                 _ => "meta_token",
             };
             Err(AppError::validation(

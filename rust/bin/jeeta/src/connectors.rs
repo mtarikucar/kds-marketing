@@ -62,6 +62,9 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Meta => self.meta.clone(),
             Provider::Netgsm => self.netgsm.clone(),
             Provider::X => self.x.clone(),
+            // Mail needs a workspace-bound registry lookup. Do not guess the tenant from
+            // credentials or permit tenant hosts through a global provider instance.
+            Provider::Mail => return None,
         })
     }
 
@@ -69,7 +72,7 @@ impl ConnectorRegistry for ProviderRegistry {
         match provider {
             Provider::Meta => Some(self.meta.clone()),
             Provider::X => Some(self.x.clone()),
-            Provider::Netgsm => None,
+            Provider::Netgsm | Provider::Mail => None,
         }
     }
 
@@ -89,7 +92,7 @@ impl ConnectorRegistry for ProviderRegistry {
         match provider {
             Provider::Meta => Some(self.meta.clone()),
             Provider::X => Some(self.x.clone()),
-            Provider::Netgsm => None,
+            Provider::Netgsm | Provider::Mail => None,
         }
     }
 
@@ -97,7 +100,7 @@ impl ConnectorRegistry for ProviderRegistry {
         match provider {
             Provider::Meta => Some(self.meta.clone()),
             Provider::X => Some(self.x.clone()),
-            Provider::Netgsm => None,
+            Provider::Netgsm | Provider::Mail => None,
         }
     }
 
@@ -199,7 +202,16 @@ mod tests {
                 Provider::X,
                 vec!["connector", "oauth", "publisher", "insights"],
             ),
+            (Provider::Mail, vec![]),
         ];
+        assert_eq!(expected.len(), Provider::all().len());
+        assert_eq!(
+            expected
+                .iter()
+                .map(|(provider, _)| *provider)
+                .collect::<BTreeSet<_>>(),
+            Provider::all().iter().copied().collect()
+        );
         for (provider, operations) in expected {
             let operations: BTreeSet<&str> = operations.into_iter().collect();
             assert_eq!(
@@ -213,13 +225,13 @@ mod tests {
 
     #[test]
     fn the_scripted_registry_offers_no_more_than_production() {
-        // The use cases' tests run against `ScriptedRegistry`; with every provider's adapters
-        // registered it offers exactly what production offers.
+        // Register exactly the adapters currently installed by the production factory; mail
+        // remains absent until the registry can bind an adapter to a request's workspace.
         let mut scripted = ScriptedRegistry::new();
-        for provider in Provider::all() {
-            scripted = scripted.with_connector(Arc::new(ScriptedConnector::new(*provider)));
-            if *provider != Provider::Netgsm {
-                scripted = scripted.with_oauth(Arc::new(ScriptedOAuth::new(*provider)));
+        for provider in [Provider::Meta, Provider::Netgsm, Provider::X] {
+            scripted = scripted.with_connector(Arc::new(ScriptedConnector::new(provider)));
+            if provider != Provider::Netgsm {
+                scripted = scripted.with_oauth(Arc::new(ScriptedOAuth::new(provider)));
             }
         }
         let registry = production();
@@ -237,6 +249,11 @@ mod tests {
     fn each_adapter_names_its_provider_and_only_its_fixed_hosts() {
         let registry = production();
         for provider in Provider::all() {
+            if *provider == Provider::Mail {
+                assert!(registry.connector(*provider).is_none());
+                assert!(FIXED_HOSTS.iter().all(|h| h.connector != provider.key()));
+                continue;
+            }
             let connector = registry.connector(*provider).unwrap();
             assert_eq!(connector.provider(), *provider);
             let fixed: BTreeSet<&str> = FIXED_HOSTS

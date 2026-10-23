@@ -293,6 +293,7 @@ fn egress_error(e: EgressError, read_only: bool) -> ConnectorError {
         EgressError::HostNotAllowed { .. } => {
             ConnectorError::permanent("the X host is not allowed for the x connector")
         }
+        EgressError::Socket => ConnectorError::transient("outbound socket failed"),
         EgressError::Build(_) => ConnectorError::permanent("the call to X could not be built"),
     }
 }

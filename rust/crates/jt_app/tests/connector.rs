@@ -1581,8 +1581,12 @@ async fn set_credentials_refuses_oauth_only_kinds() {
     )
     .await);
     assert_invalid(&e, "kind_key");
+    // Mail has its own credential shape; a pasted Meta token cannot configure it.
+    let e = err(connector::set_credentials(&r.w.deps, o, creating("mailbox", "H", token())).await);
+    assert_invalid(&e, "credential.kind");
+    assert_eq!(e.details["expected"], "mailbox");
     // Kinds no provider serves, and capabilities reached otherwise, take no credentials.
-    for kind in ["mailbox", "phone", "claude_code", "nope"] {
+    for kind in ["phone", "claude_code", "nope"] {
         let e = err(connector::set_credentials(&r.w.deps, o, creating(kind, "H", token())).await);
         assert_invalid(&e, "kind_key");
     }
@@ -1924,7 +1928,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 capability_id: mailbox.id,
                 kind_key: "mailbox".into(),
                 name: "Kutu".into(),
-                provider: None,
+                provider: Some(Provider::Mail),
                 status: EffectiveStatus::Declared,
                 last_probe_at: None,
                 ok: None,

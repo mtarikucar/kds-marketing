@@ -164,7 +164,7 @@ impl OAuthCallback {
             Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
             Provider::Meta => Some(OAuthCallback::Meta),
             Provider::X => Some(OAuthCallback::X),
-            Provider::Netgsm => None,
+            Provider::Netgsm | Provider::Mail => None,
         }
     }
 }

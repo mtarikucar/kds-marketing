@@ -12,9 +12,16 @@ pub enum Provider {
     Netgsm,
     /// Posts on X.
     X,
+    /// SMTP and IMAP mailbox.
+    Mail,
 }
 
-const ALL: &[Provider] = &[Provider::Meta, Provider::Netgsm, Provider::X];
+const ALL: &[Provider] = &[
+    Provider::Meta,
+    Provider::Netgsm,
+    Provider::X,
+    Provider::Mail,
+];
 
 /// The capability kinds Meta serves.
 const META_KINDS: &[&str] = &[
@@ -43,7 +50,6 @@ pub const UNSUPPORTED_CONNECTOR_KINDS: &[&str] = &[
     "pinterest",
     "youtube",
     "google_business",
-    "mailbox",
     "webchat",
     "discord",
     "reddit",
@@ -62,6 +68,7 @@ impl Provider {
             Provider::Meta => "meta",
             Provider::Netgsm => "netgsm",
             Provider::X => "x",
+            Provider::Mail => "mail",
         }
     }
 
@@ -81,6 +88,7 @@ impl Provider {
             Provider::Meta => META_KINDS,
             Provider::Netgsm => NETGSM_KINDS,
             Provider::X => X_KINDS,
+            Provider::Mail => &["mailbox"],
         }
     }
 }

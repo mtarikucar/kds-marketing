@@ -15,6 +15,7 @@ members = [
     "crates/adapters/jt_seal",
     "crates/adapters/jt_meta",
     "crates/adapters/jt_netgsm",
+    "crates/adapters/jt_mail",
     "crates/adapters/jt_x",
     "crates/adapters/jt_webhook",
     "crates/jt_testkit",
@@ -44,6 +45,7 @@ jt_outbound = { path = "crates/adapters/jt_outbound" }
 jt_seal = { path = "crates/adapters/jt_seal" }
 jt_meta = { path = "crates/adapters/jt_meta" }
 jt_netgsm = { path = "crates/adapters/jt_netgsm" }
+jt_mail = { path = "crates/adapters/jt_mail" }
 jt_x = { path = "crates/adapters/jt_x" }
 jt_webhook = { path = "crates/adapters/jt_webhook" }
 jt_testkit = { path = "crates/jt_testkit" }
@@ -97,6 +99,14 @@ tower-service = "0.3"
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
 hkdf = "0.13"
 zeroize = "1.9"
+
+# Mail protocol libraries are private to jt_mail (architecture tests enforce this).
+lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "ring", "webpki-roots"] }
+async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+mailparse = "0.16"
+webpki-roots = "1"
+futures-util = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

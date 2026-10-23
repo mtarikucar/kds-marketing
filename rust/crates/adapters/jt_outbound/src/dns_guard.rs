@@ -62,6 +62,7 @@ fn system_lookup(name: String, port: u16) -> LookupFuture {
 /// **No timeout of its own.** The egress client bounds its own lookups with its connect and
 /// total timeouts; any other caller (M2's SMTP and IMAP sockets) wraps this call in
 /// `tokio::time::timeout`, or a slow resolver holds it indefinitely.
+/// [`crate::Egress::connect_public`] supplies that deadline for mail sockets.
 pub async fn resolve_public(host: &str, port: u16) -> Result<Vec<SocketAddr>, HostError> {
     resolve_public_with(system_lookup, host, port).await
 }
@@ -121,7 +122,7 @@ fn loopback_name(_domain: &str) -> bool {
 /// The egress client's resolver: [`resolve_public`] for every name the client looks up. A
 /// refusal fails the request before any socket opens; its [`HostError`] travels in the error's
 /// source chain, where [`crate::Egress`] finds it.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct PublicResolver {
     lookup: Lookup,
 }
@@ -134,8 +135,16 @@ impl PublicResolver {
         }
     }
 
+    pub(crate) async fn addresses(
+        self,
+        host: &str,
+        port: u16,
+    ) -> Result<Vec<SocketAddr>, HostError> {
+        resolve_public_with(self.lookup, host, port).await
+    }
+
     /// Through `lookup` (scripted answers in tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-loopback"))]
     pub(crate) fn with_lookup(lookup: Lookup) -> PublicResolver {
         PublicResolver { lookup }
     }

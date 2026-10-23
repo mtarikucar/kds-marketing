@@ -15,8 +15,8 @@
 //! Then, when the client connects, the DNS guard ([`resolve_public`], the client's resolver)
 //! drops every address a name resolves to that is not public ([`validate_public_address`]) and
 //! fails the request when none is left, for both tiers: a public name pointed at a private
-//! network is never reached. Sockets opened outside this client (SMTP and IMAP, M2) resolve
-//! through [`resolve_public`] too.
+//! network is never reached. SMTP and IMAP use [`Egress::connect_public`], which shares the
+//! registry and address filter and bounds resolution/connection to ten seconds.
 //!
 //! Only `https` is accepted, but for one provider limitation: NetGSM's Netsantral click-to-call
 //! endpoint, plain `http` on `crmsntrl.netgsm.com.tr:9111`, under the `netgsm` connector's scope
@@ -46,6 +46,9 @@ mod client;
 mod dns_guard;
 mod fixed_hosts;
 mod public_host;
+mod socket;
+
+pub use tokio::net::TcpStream;
 mod tenant_rebuild;
 
 pub use allowlist::AllowedHost;
