@@ -1,0 +1,7 @@
+{
+  "code": "00",
+  "balance": [
+    { "balance_name": "TL Kredi", "amount": "125,50" },
+    { "balance_name": "Adet SMS", "amount": "1000" }
+  ]
+}

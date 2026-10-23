@@ -1,0 +1,4 @@
+[
+  { "uniqueid": "sip1-1700000000.101", "date": "23.10.2026 10:00:00", "source": "905000000021", "destination": "101", "duration": "42", "direction": "Inbound" },
+  { "date": "23.10.2026 10:05:00", "source": "905000000022", "destination": "102", "duration": "0", "direction": "Outbound" }
+]

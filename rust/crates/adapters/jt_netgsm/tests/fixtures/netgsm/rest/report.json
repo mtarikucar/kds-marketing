@@ -1,0 +1,10 @@
+{
+  "code": "00",
+  "jobs": [
+    { "jobid": "17000000000000000000000001", "telno": "905000000001", "status": 1, "deliveredDate": "23102026121500", "errorCode": null, "referansID": "ref-1" },
+    { "jobid": "17000000000000000000000002", "telno": "905000000002", "status": "0", "deliveredDate": null, "referansId": "ref-2" },
+    { "jobid": "17000000000000000000000003", "telno": "905000000003", "status": 13, "deliveredDate": "23102026121600", "errorCode": "105" },
+    { "jobid": "17000000000000000000000004", "telno": "905000000004", "status": 99 },
+    { "telno": "905000000005", "status": 1 }
+  ]
+}

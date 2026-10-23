@@ -1,0 +1,4 @@
+[
+  { "relationid": "rel-1", "durum": "1", "bilsec": "12", "push_button": "1" },
+  { "durum": "2" }
+]

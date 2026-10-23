@@ -112,6 +112,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_mcp",
         "jt_seal",
         "jt_meta",
+        "jt_netgsm",
         "jt_testkit",
         "jeeta",
     ] {
@@ -127,8 +128,9 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
 // egress client (its only way out), serialisation, time, ids and URLs, logging, async traits and
 // error derives, the HMAC crates (Meta's `appsecret_proof`) and `tokio` (for timers: the pause
 // between polls). No HTTP client of its own, no database, no web framework: every call goes
-// through `jt_outbound::Egress` under the connector's scope. (A test-only mock server may use a
-// web framework as a dev-dependency.)
+// through `jt_outbound::Egress` under the connector's scope. NetGSM uses `uuid` for the
+// correlation id of the calls it places and `sha2` for the fallback ids of callback items.
+// (A test-only mock server may use a web framework as a dev-dependency.)
 const CONNECTOR_ADAPTER_ALLOW: &[&str] = &[
     "jt_app",
     "jt_connector",
@@ -150,8 +152,8 @@ const CONNECTOR_ADAPTER_ALLOW: &[&str] = &[
     "tokio",
 ];
 
-/// The provider adapter crates (NetGSM and X join them in their tasks).
-const CONNECTOR_ADAPTERS: &[&str] = &["jt_meta"];
+/// The provider adapter crates (X joins them in its task).
+const CONNECTOR_ADAPTERS: &[&str] = &["jt_meta", "jt_netgsm"];
 
 #[test]
 fn connector_adapters_reach_out_only_through_the_egress_client() {
