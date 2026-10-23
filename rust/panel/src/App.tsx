@@ -9,6 +9,8 @@ import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { BudgetPage } from '@/pages/BudgetPage';
 import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { ConnectPage } from '@/pages/ConnectPage';
+import { InboxPage } from '@/pages/InboxPage';
+import { InboxMerges } from '@/pages/InboxMerges';
 import { HomePage } from '@/pages/HomePage';
 import { LedgerPage } from '@/pages/LedgerPage';
 import { LoginPage } from '@/pages/LoginPage';
@@ -60,6 +62,9 @@ export const routes: RouteObject[] = [
         element: <Shell />,
         children: [
           { index: true, element: <HomePage /> },
+          { path: 'inbox', element: <InboxPage /> },
+          { path: 'inbox/:conversationId', element: <InboxPage /> },
+          { path: 'inbox/merges', element: <InboxMerges /> },
           { path: 'strategy', element: <StrategyPage /> },
           { path: 'capabilities', element: <CapabilitiesPage /> },
           { path: 'connect', element: <ConnectPage /> },

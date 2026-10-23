@@ -113,6 +113,23 @@ export function errorMessage(t: TFunction, err: unknown): string {
     return t('errors.providerRefused');
   }
   switch (err.details.reason) {
+    case 'workspace_inactive':
+    case 'strategy_required':
+    case 'unsupported_reply_channel':
+    case 'connector_unavailable':
+    case 'reply_window_closed':
+    case 'journey_lost':
+    case 'person_erased':
+    case 'person_merged':
+    case 'executor_changed':
+    case 'human_holds_conversation':
+    case 'capability_down':
+    case 'owner_or_manager_required':
+    case 'terminal':
+    case 'undo_expired':
+    case 'edited_after_merge':
+    case 'two_open_journeys':
+      return t(`inbox.fence.${err.details.reason}`);
     case 'last_owner':
       return t('errors.lastOwner');
     case 'owner_only':

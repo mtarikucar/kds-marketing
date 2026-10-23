@@ -872,3 +872,207 @@ export interface ConnectorHealth {
   token_expires_at: Rfc3339 | null;
   reconnect_required: boolean;
 }
+
+// Inbox: Rust domain serde enums are externally tagged, not `{ kind: … }` objects.
+export type InboxQueue = 'ours' | 'unassigned' | 'snoozed' | 'all';
+export type InboxSource = { channel: string } | 'meta_ads' | 'import' | 'form' | 'repeat';
+export type InboxActor = 'system' | 'agent' | { human: Uuid };
+export interface InboxPerson {
+  id: Uuid;
+  workspace_id: Uuid;
+  display_name: string;
+  company: string;
+  first_touch: { source: InboxSource; capability_id: Uuid | null; at: Rfc3339 };
+  merged_into: Uuid | null;
+  erased_at: Rfc3339 | null;
+  created_at: Rfc3339;
+  updated_at: Rfc3339;
+}
+export interface InboxConversationRow {
+  id: Uuid;
+  workspace_id: Uuid;
+  person_id: Uuid;
+  capability_id: Uuid;
+  kind_key: string;
+  state: 'open' | 'ours' | 'theirs' | 'closed' | { snoozed: { until: Rfc3339 } };
+  executor: 'agent' | { human: { user_id: Uuid | null } };
+  executor_generation: number;
+  last_inbound_at: Rfc3339 | null;
+  last_outbound_at: Rfc3339 | null;
+  created_at: Rfc3339;
+  updated_at: Rfc3339;
+}
+export interface InboxMessage {
+  id: Uuid;
+  workspace_id: Uuid;
+  conversation_id: Uuid;
+  direction: 'inbound' | 'outbound';
+  author: InboxActor | 'customer';
+  body: string;
+  external_id: string | null;
+  status:
+    | 'received'
+    | 'queued'
+    | 'sent'
+    | 'delivered'
+    | 'failed'
+    | 'unknown'
+    | { refused: { reason: string } };
+  cost_minor: number | null;
+  at: Rfc3339;
+}
+export type JourneyStatus =
+  | 'new'
+  | 'contacted'
+  | 'unreachable'
+  | 'appointment'
+  | 'met'
+  | 'quoted'
+  | 'pending'
+  | 'won'
+  | 'lost';
+export interface InboxJourney {
+  id: Uuid;
+  workspace_id: Uuid;
+  person_id: Uuid;
+  status: JourneyStatus;
+  owner: Uuid | null;
+  opened_at: Rfc3339;
+  closed_at: Rfc3339 | null;
+  updated_at: Rfc3339;
+  lost_reason: { reason_key: string; reason_label: string } | null;
+  unreachable_attempts: number;
+  source: InboxSource;
+}
+export type ReportEvent =
+  | { kind: 'call_made'; payload: { connected: boolean } }
+  | {
+      kind: 'appointment_booked' | 'meeting_held' | 'quote_accepted' | 'reopened';
+      payload: Record<string, never>;
+    }
+  | { kind: 'won'; payload: { product: string; amount_minor: number; currency: string } }
+  | { kind: 'lost'; payload: { reason_key: string } }
+  | { kind: 'snoozed'; payload: { until: Rfc3339 } };
+export type ReportInput = ReportEvent & { idempotency_key: string };
+export type JourneyEventKind =
+  | 'message_received'
+  | 'replied'
+  | 'appointment_booked'
+  | 'meeting_held'
+  | 'quote_sent'
+  | 'quote_accepted'
+  | 'reopened'
+  | { call_made: { connected: boolean } }
+  | { won: { product: string; amount_minor: number; currency: string } }
+  | { lost: { reason_key: string } }
+  | { snoozed: { until: Rfc3339 } }
+  | { merged: { target: Uuid } };
+export interface InboxEvent {
+  id: Uuid;
+  workspace_id: Uuid;
+  journey_id: Uuid;
+  source: InboxActor;
+  kind: JourneyEventKind;
+  idempotency_key: string;
+  reason_label: string | null;
+  at: Rfc3339;
+}
+export interface InboxTask {
+  id: Uuid;
+  workspace_id: Uuid;
+  journey_id: Uuid;
+  title: string;
+  due_at: Rfc3339;
+  assignee: Uuid | null;
+  status: 'open' | 'done' | 'cancelled';
+}
+export interface InboxNote {
+  id: Uuid;
+  workspace_id: Uuid;
+  journey_id: Uuid;
+  author: InboxActor;
+  text: string;
+  at: Rfc3339;
+}
+export interface InboxJourneyOut {
+  journey: InboxJourney;
+  events: InboxEvent[];
+  tasks: InboxTask[];
+  notes: InboxNote[];
+}
+export interface InboxContext {
+  person: InboxPerson;
+  journey: InboxJourney | null;
+  events: InboxEvent[];
+  open_tasks: InboxTask[];
+  recent_conversations: { conversation: InboxConversationRow; messages: InboxMessage[] }[];
+  strategy_guidance: { summary: Identity; segments: Segment[]; hypotheses: Hypothesis[] } | null;
+  prohibitions: string[];
+}
+export interface InboxPersonOut {
+  person: InboxPerson;
+  identities: {
+    id: Uuid;
+    workspace_id: Uuid;
+    person_id: Uuid;
+    channel: string;
+    value_normalized: string;
+    value_display: string;
+    active: boolean;
+    first_seen_at: Rfc3339;
+  }[];
+  open_journey: InboxJourney | null;
+  conversations: InboxConversationRow[];
+}
+export type MergeConflict = 'two_open_journeys' | 'display_name' | 'email' | 'phone' | 'company';
+export interface InboxMerge {
+  id: Uuid;
+  workspace_id: Uuid;
+  source_id: Uuid;
+  target_id: Uuid;
+  decision: { auto: { keep: Uuid; merge: Uuid } } | { suggest: MergeConflict[] };
+  conflicts: MergeConflict[];
+  status: string;
+  moved_snapshot: unknown;
+  at: Rfc3339;
+  applied_by: Uuid | null;
+  undone_at: Rfc3339 | null;
+}
+export interface InboxLostReason {
+  workspace_id: Uuid;
+  key: string;
+  label: string;
+  active: boolean;
+  seeded: boolean;
+}
+export interface InboxPageOut<T> {
+  items: T[];
+  next_cursor: string | null;
+}
+export interface InboxPendingOut {
+  ours: InboxConversationRow[];
+  reopen_questions: InboxConversationRow[];
+  merges: InboxMerge[];
+  tasks_due: InboxTask[];
+}
+export interface InboxReplyOut {
+  message_id: Uuid;
+  state: string;
+}
+export type InboxJourneyEffect =
+  | 'conversation_ours'
+  | 'conversation_theirs'
+  | 'close_tasks'
+  | 'close_conversations'
+  | 'cancel_open_tasks'
+  | { conversation_snoozed: { until: Rfc3339 } }
+  | { commission_due: { amount_minor: number; currency: string } };
+export interface InboxReportOut {
+  transition: {
+    from: JourneyStatus;
+    patch: Pick<InboxJourney, 'status' | 'unreachable_attempts' | 'closed_at' | 'lost_reason' | 'updated_at'>;
+    effects: InboxJourneyEffect[];
+  } | null;
+  effects: InboxJourneyEffect[];
+  duplicate: boolean;
+}

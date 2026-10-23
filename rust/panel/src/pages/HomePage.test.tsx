@@ -232,3 +232,27 @@ describe('HomePage', () => {
     );
   });
 });
+
+it('links all four inbox work kinds to actionable destinations', async () => {
+  mockFetch({
+    'GET /api/auth/me': me,
+    'GET /api/workspace': workspace,
+    'GET /api/work/pending': { ...pendingOverdue, items: [
+      { kind: 'reply_due', conversation_id: 'conv-1', priority: 2, hint: 'private hint' },
+      { kind: 'reopen_question', conversation_id: 'conv-2', priority: 2, hint: 'private hint' },
+      { kind: 'merge_suggested', merge_id: 'merge-1', priority: 3, hint: 'private hint' },
+      { kind: 'task_due', task_id: 'task-1', priority: 3, hint: 'private hint' },
+    ] },
+  });
+  renderAt('/');
+  for (const [copy, href] of [
+    [tr.home.pending.reply_due, '/inbox/conv-1'],
+    [tr.home.pending.reopen_question, '/inbox/conv-2'],
+    [tr.home.pending.merge_suggested, '/inbox/merges?merge=merge-1'],
+    [tr.home.pending.task_due, '/inbox?task=task-1'],
+  ]) {
+    const text = await screen.findByText(copy);
+    expect(within(text.closest('li')!).getByRole('link')).toHaveAttribute('href', href);
+  }
+  expect(screen.queryByText('private hint')).not.toBeInTheDocument();
+});

@@ -48,7 +48,8 @@
     "ledger": "Günlük",
     "strategy": "Strateji",
     "capabilities": "Kabiliyetler",
-    "budget": "Bütçe"
+    "budget": "Bütçe",
+    "inbox": "Gelen kutusu"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -300,7 +301,11 @@
       "inbound_events_other": "{{n}} gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.",
       "open": "Aç",
       "priority": "Öncelik {{priority}}",
-      "reconnect": "Yeniden bağla"
+      "reconnect": "Yeniden bağla",
+      "reply_due": "Yanıt bekleyen konuşma",
+      "reopen_question": "Kaybedilen yolculuğu yeniden açma kararı",
+      "merge_suggested": "Kişi birleştirme önerisi",
+      "task_due": "Zamanı gelen görev"
     }
   },
   "team": {
@@ -1015,6 +1020,161 @@
       "human": "İnsan",
       "agent": "Ajan",
       "connector": "Bağlayıcı ({{name}})"
+    }
+  },
+  "inbox": {
+    "title": "Gelen kutusu",
+    "description": "Konuşmaları yanıtlayın, yolculukları ve takip işlerini yönetin.",
+    "queues": "Kuyruklar",
+    "search": "Kişi ara",
+    "empty": "Bu kuyrukta konuşma yok.",
+    "more": "Daha fazla yükle",
+    "thread": "Konuşma",
+    "choose": "Bir konuşma seçin.",
+    "noConversations": "Bu kişinin henüz konuşması yok.",
+    "taskNotFound": "Görev bulunamadı.",
+    "journey": "Yolculuk",
+    "noJourney": "Gösterilecek yolculuk yok.",
+    "agentExecutor": "Yürütücü: Ajan",
+    "humanExecutor": "Yürütücü: {{user}}",
+    "unassignedExecutor": "Yürütücü: Atanmamış insan",
+    "takeOver": "Devral",
+    "handBack": "Ajana bırak",
+    "unsnooze": "Ertelemeyi kaldır",
+    "close": "Konuşmayı kapat",
+    "snoozedUntil": "Ertelendi:",
+    "moreMessages": "Önceki mesajlar",
+    "messages": "Mesajlar",
+    "noMessages": "Henüz mesaj yok.",
+    "reply": "Yanıtınız",
+    "send": "Yanıt gönder",
+    "snoozeUntil": "Erteleme bitişi (yerel saat)",
+    "snooze": "Ertele",
+    "report": "Olay kaydet",
+    "event": "Olay",
+    "connected": "Görüşme gerçekleşti",
+    "notConnected": "Görüşme gerçekleşmedi",
+    "product": "Ürün",
+    "amount": "Tutar (kuruş / alt birim)",
+    "currency": "Para birimi",
+    "lostReason": "Kayıp nedeni",
+    "chooseReason": "Bir neden seçin",
+    "saved": "Olay kaydedildi.",
+    "reopen": "Yeniden aç?",
+    "owner": "Yolculuk sahibi",
+    "unassigned": "Atanmamış",
+    "timeline": "Zaman çizelgesi",
+    "noEvents": "Henüz olay yok.",
+    "tasks": "Görevler",
+    "addTask": "Görev ekle",
+    "taskTitle": "Görev başlığı",
+    "due": "Son tarih (yerel saat)",
+    "assignee": "Görevli",
+    "complete": "Tamamla",
+    "notes": "Notlar",
+    "note": "Yeni not",
+    "addNote": "Not ekle",
+    "queue": {
+      "ours": "Bizde",
+      "unassigned": "Atanmamış",
+      "snoozed": "Ertelenmiş",
+      "all": "Hepsi"
+    },
+    "state": {
+      "open": "Açık",
+      "ours": "Yanıt bizde",
+      "theirs": "Karşı taraf bekleniyor",
+      "closed": "Kapalı",
+      "snoozed": "Ertelenmiş"
+    },
+    "actor": {
+      "human": "İnsan",
+      "agent": "Ajan",
+      "system": "Sistem",
+      "customer": "Müşteri"
+    },
+    "delivery": {
+      "received": "Alındı",
+      "queued": "Gönderim sırasında",
+      "sent": "Gönderildi",
+      "delivered": "Teslim edildi",
+      "failed": "Gönderilemedi",
+      "unknown": "Teslim durumu belirsiz; tekrar göndermeyin.",
+      "refused": "Gönderim reddedildi: {{reason}}"
+    },
+    "status": {
+      "new": "Yeni",
+      "contacted": "İletişim kuruldu",
+      "unreachable": "Ulaşılamadı",
+      "appointment": "Randevu",
+      "met": "Görüşüldü",
+      "quoted": "Teklif verildi",
+      "pending": "Beklemede",
+      "won": "Kazanıldı",
+      "lost": "Kaybedildi"
+    },
+    "eventKind": {
+      "message_received": "Mesaj alındı",
+      "replied": "Yanıtlandı",
+      "call_made": "Arama yapıldı",
+      "appointment_booked": "Randevu alındı",
+      "meeting_held": "Görüşme yapıldı",
+      "quote_sent": "Teklif gönderildi",
+      "quote_accepted": "Teklif kabul edildi",
+      "won": "Kazanıldı",
+      "lost": "Kaybedildi",
+      "snoozed": "Ertelendi",
+      "reopened": "Yeniden açıldı",
+      "merged": "Birleştirildi"
+    },
+    "taskStatus": {
+      "open": "Açık",
+      "done": "Tamamlandı",
+      "cancelled": "İptal edildi"
+    },
+    "fence": {
+      "reply_window_closed": "Bu kanalda yanıt süresi doldu.",
+      "journey_lost": "Bu yolculuk kaybedilmiş. Yanıtlamak için yetkili bir kişi yeniden açmalı.",
+      "person_erased": "Kişinin verileri silindiği için yanıt gönderilemiyor.",
+      "person_merged": "Bu kişi başka bir kayıtla birleştirildi.",
+      "executor_changed": "Yürütücü değişti. Konuşmayı yenileyin.",
+      "human_holds_conversation": "Konuşma bir insanda; ajan gönderimi durduruldu.",
+      "capability_down": "Bu kanal şu anda kullanılamıyor.",
+      "owner_or_manager_required": "Yeniden açmak için sahip veya yönetici olmalısınız.",
+      "terminal": "Bu yolculuk sonuçlanmış; olay uygulanamıyor.",
+      "undo_expired": "Birleştirmeyi geri alma süresi doldu.",
+      "edited_after_merge": "Korunan kayıt değiştiği için birleştirme geri alınamıyor.",
+      "two_open_journeys": "Birleştirmeden önce iki açık yolculuktan birini sonuçlandırın.",
+      "workspace_inactive": "Çalışma alanı etkin olmadığı için gönderim durduruldu.",
+      "strategy_required": "Gönderim için onaylı bir strateji gerekiyor.",
+      "unsupported_reply_channel": "Bu kanal yanıt göndermeyi desteklemiyor.",
+      "connector_unavailable": "Kanal bağlantısı şu anda kullanılamıyor."
+    },
+    "merges": {
+      "title": "Birleştirmeler",
+      "suggestion": "Kişi birleştirme",
+      "keep": "Korunacak kişi",
+      "apply": "Birleştir",
+      "refuse": "Reddet",
+      "undo": "Birleştirmeyi geri al",
+      "confirm": "Geri al",
+      "confirmHint": "Bu işlem taşınan kayıtları geri yükler. Onaylamak için “{{phrase}}” yazın.",
+      "confirmPhrase": "GERİ AL",
+      "confirmLabel": "Onay metni",
+      "empty": "Gösterilecek birleştirme yok.",
+      "status": {
+        "suggested": "Önerildi",
+        "applied": "Uygulandı",
+        "refused": "Reddedildi",
+        "undone": "Geri alındı"
+      },
+      "conflict": {
+        "two_open_journeys": "İki açık yolculuk var",
+        "display_name": "İsimler farklı",
+        "email": "E-posta adresleri farklı",
+        "phone": "Telefon numaraları farklı",
+        "company": "Şirketler farklı"
+      }
     }
   }
 }

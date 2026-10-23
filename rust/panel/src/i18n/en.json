@@ -48,7 +48,8 @@
     "ledger": "Ledger",
     "strategy": "Strategy",
     "capabilities": "Capabilities",
-    "budget": "Budget"
+    "budget": "Budget",
+    "inbox": "Inbox"
   },
   "shell": {
     "workspace": "Workspace",
@@ -300,7 +301,11 @@
       "inbound_events_other": "{{n}} inbound events (messages, statuses, leads, calls, consent changes) await your agent.",
       "open": "Open",
       "priority": "Priority {{priority}}",
-      "reconnect": "Reconnect"
+      "reconnect": "Reconnect",
+      "reply_due": "Conversation awaiting reply",
+      "reopen_question": "Decision to reopen a lost journey",
+      "merge_suggested": "Contact merge suggestion",
+      "task_due": "Task due"
     }
   },
   "team": {
@@ -1015,6 +1020,161 @@
       "human": "Human",
       "agent": "Agent",
       "connector": "Connector ({{name}})"
+    }
+  },
+  "inbox": {
+    "title": "Inbox",
+    "description": "Reply to conversations and manage journeys and follow-ups.",
+    "queues": "Queues",
+    "search": "Search people",
+    "empty": "No conversations in this queue.",
+    "more": "Load more",
+    "thread": "Conversation",
+    "choose": "Select a conversation.",
+    "noConversations": "This person has no conversations yet.",
+    "taskNotFound": "Task not found.",
+    "journey": "Journey",
+    "noJourney": "No journey to show.",
+    "agentExecutor": "Executor: Agent",
+    "humanExecutor": "Executor: {{user}}",
+    "unassignedExecutor": "Executor: Unassigned human",
+    "takeOver": "Take over",
+    "handBack": "Hand back to agent",
+    "unsnooze": "Unsnooze",
+    "close": "Close conversation",
+    "snoozedUntil": "Snoozed until:",
+    "moreMessages": "Earlier messages",
+    "messages": "Messages",
+    "noMessages": "No messages yet.",
+    "reply": "Your reply",
+    "send": "Send reply",
+    "snoozeUntil": "Snooze until (local time)",
+    "snooze": "Snooze",
+    "report": "Record event",
+    "event": "Event",
+    "connected": "Call connected",
+    "notConnected": "Call not connected",
+    "product": "Product",
+    "amount": "Amount (minor units)",
+    "currency": "Currency",
+    "lostReason": "Lost reason",
+    "chooseReason": "Choose a reason",
+    "saved": "Event recorded.",
+    "reopen": "Reopen?",
+    "owner": "Journey owner",
+    "unassigned": "Unassigned",
+    "timeline": "Timeline",
+    "noEvents": "No events yet.",
+    "tasks": "Tasks",
+    "addTask": "Add task",
+    "taskTitle": "Task title",
+    "due": "Due date (local time)",
+    "assignee": "Assignee",
+    "complete": "Complete",
+    "notes": "Notes",
+    "note": "New note",
+    "addNote": "Add note",
+    "queue": {
+      "ours": "Ours",
+      "unassigned": "Unassigned",
+      "snoozed": "Snoozed",
+      "all": "All"
+    },
+    "state": {
+      "open": "Open",
+      "ours": "Awaiting our reply",
+      "theirs": "Awaiting their reply",
+      "closed": "Closed",
+      "snoozed": "Snoozed"
+    },
+    "actor": {
+      "human": "Human",
+      "agent": "Agent",
+      "system": "System",
+      "customer": "Customer"
+    },
+    "delivery": {
+      "received": "Received",
+      "queued": "Queued",
+      "sent": "Sent",
+      "delivered": "Delivered",
+      "failed": "Failed",
+      "unknown": "Delivery uncertain; do not resend.",
+      "refused": "Send refused: {{reason}}"
+    },
+    "status": {
+      "new": "New",
+      "contacted": "Contacted",
+      "unreachable": "Unreachable",
+      "appointment": "Appointment",
+      "met": "Met",
+      "quoted": "Quoted",
+      "pending": "Pending",
+      "won": "Won",
+      "lost": "Lost"
+    },
+    "eventKind": {
+      "message_received": "Message received",
+      "replied": "Replied",
+      "call_made": "Call made",
+      "appointment_booked": "Appointment booked",
+      "meeting_held": "Meeting held",
+      "quote_sent": "Quote sent",
+      "quote_accepted": "Quote accepted",
+      "won": "Won",
+      "lost": "Lost",
+      "snoozed": "Snoozed",
+      "reopened": "Reopened",
+      "merged": "Merged"
+    },
+    "taskStatus": {
+      "open": "Open",
+      "done": "Done",
+      "cancelled": "Cancelled"
+    },
+    "fence": {
+      "reply_window_closed": "The reply window for this channel has closed.",
+      "journey_lost": "This journey is lost. An authorized person must reopen it before replying.",
+      "person_erased": "Replies are blocked because this person’s data was erased.",
+      "person_merged": "This person was merged into another record.",
+      "executor_changed": "The executor changed. Refresh the conversation.",
+      "human_holds_conversation": "A human holds the conversation; agent sending is blocked.",
+      "capability_down": "This channel is currently unavailable.",
+      "owner_or_manager_required": "Only an owner or manager can reopen a journey.",
+      "terminal": "This journey is terminal; the event cannot be applied.",
+      "undo_expired": "The merge undo window has expired.",
+      "edited_after_merge": "The keeper changed, so this merge cannot be undone.",
+      "two_open_journeys": "Resolve one of the two open journeys before merging.",
+      "workspace_inactive": "Sending is blocked because the workspace is inactive.",
+      "strategy_required": "Sending requires an approved strategy.",
+      "unsupported_reply_channel": "This channel does not support replies.",
+      "connector_unavailable": "The channel connector is currently unavailable."
+    },
+    "merges": {
+      "title": "Merges",
+      "suggestion": "Contact merge",
+      "keep": "Person to keep",
+      "apply": "Merge",
+      "refuse": "Refuse",
+      "undo": "Undo merge",
+      "confirm": "Undo",
+      "confirmHint": "This restores the moved records. Type “{{phrase}}” to confirm.",
+      "confirmPhrase": "UNDO",
+      "confirmLabel": "Confirmation text",
+      "empty": "No merges to show.",
+      "status": {
+        "suggested": "Suggested",
+        "applied": "Applied",
+        "refused": "Refused",
+        "undone": "Undone"
+      },
+      "conflict": {
+        "two_open_journeys": "Two open journeys",
+        "display_name": "Names differ",
+        "email": "Email addresses differ",
+        "phone": "Phone numbers differ",
+        "company": "Companies differ"
+      }
     }
   }
 }
