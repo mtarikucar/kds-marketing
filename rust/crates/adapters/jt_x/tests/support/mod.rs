@@ -497,8 +497,8 @@ impl PlatformAppConfig for TestApps {
         self.x.clone()
     }
 
-    fn public_base_url(&self) -> Url {
-        Url::parse("https://panel.test").unwrap()
+    fn public_base_url(&self) -> Option<Url> {
+        Some(Url::parse("https://panel.test").unwrap())
     }
 }
 

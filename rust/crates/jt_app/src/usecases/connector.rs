@@ -157,6 +157,7 @@ const OLD_ACCOUNT_FACTS: &[&str] = &["health", "facts", "asset", "account"];
 
 const NO_SUCH_FLOW: &str = "no such pending connection";
 const APP_NOT_CONFIGURED: &str = "provider app not configured";
+const PUBLIC_URL_NOT_CONFIGURED: &str = "public base url not configured";
 const NO_ADAPTER: &str = "provider adapter not available";
 
 // ---------------------------------------------------------------------------------------------
@@ -446,8 +447,10 @@ pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 /// (a NetGSM kind with `details.reason = "use_set_credentials"`). The provider's app must be
 /// configured (`instagram` signs in with the Instagram app, the other Meta kinds with the Meta
 /// app, `x` with the X app), else `CONFLICT` "provider app not configured" (`details.reason =
-/// "provider_app_not_configured"`, `details.provider`); and its adapter
-/// present, else `CONFLICT`. The state is signed for the workspace and holds the provider, the
+/// "provider_app_not_configured"`, `details.provider`); its adapter present, else `CONFLICT`; and
+/// the public base URL configured, else `CONFLICT` "public base url not configured"
+/// (`details.reason = "public_base_url_not_configured"`). The state is signed for the workspace
+/// and holds the provider, the
 /// kind, the time and a nonce; for X a PKCE pair is made and its verifier sealed with the flow.
 /// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the key of the
 /// flow's app ([`OAuthCallback`]: `meta`, `instagram` or `x`), and the code exchange sends the
@@ -552,7 +555,7 @@ pub async fn complete_oauth(
         .connectors
         .oauth(flow.provider)
         .ok_or_else(|| AppError::conflict(NO_ADAPTER))?;
-    let redirect = callback_url(deps.apps.as_ref(), callback);
+    let redirect = callback_url(deps.apps.as_ref(), callback)?;
     let credential = oauth
         .exchange(
             &app,
@@ -895,13 +898,19 @@ pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<Start
 /// whose token ([`super::webhook::netgsm_hook_token`]) is what lets NetGSM's calls in. The token
 /// is a capability of the URL, not a sealed secret, but it lets anyone who holds it store events
 /// in the workspace: only who may manage capabilities sees it. Needs `capabilities.manage`.
+///
+/// Without a configured public base URL there is no address to show: `CONFLICT` "public base url
+/// not configured" (`details.reason = "public_base_url_not_configured"`).
 pub async fn hooks(deps: &Deps, ctx: &Ctx) -> Result<HooksOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let apps = deps.apps.as_ref();
-    let meta = apps.meta_app().map(|_| MetaHook {
-        url: public_url(apps, META_HOOK_PATH).to_string(),
-        verify_token_hint: VERIFY_TOKEN_HINT.to_owned(),
-    });
+    let meta = match apps.meta_app() {
+        Some(_) => Some(MetaHook {
+            url: public_url(apps, META_HOOK_PATH)?.to_string(),
+            verify_token_hint: VERIFY_TOKEN_HINT.to_owned(),
+        }),
+        None => None,
+    };
     let mut netgsm = Vec::new();
     for &purpose in NetgsmPurpose::all() {
         let token = netgsm_hook_token(deps, ctx.workspace_id, purpose)?;
@@ -912,7 +921,7 @@ pub async fn hooks(deps: &Deps, ctx: &Ctx) -> Result<HooksOut, AppError> {
         );
         netgsm.push(NetgsmHook {
             purpose: purpose.key().to_owned(),
-            url: public_url(apps, &path).to_string(),
+            url: public_url(apps, &path)?.to_string(),
         });
     }
     Ok(HooksOut { meta, netgsm })
@@ -950,6 +959,9 @@ async fn begin_oauth(
         .connectors
         .oauth(provider)
         .ok_or_else(|| AppError::conflict(NO_ADAPTER))?;
+    let callback =
+        OAuthCallback::of_flow(provider, kind_key).ok_or_else(|| app_not_configured(provider))?;
+    let redirect = callback_url(deps.apps.as_ref(), callback)?;
     let started_by = acting_user(&ctx.actor)
         .ok_or_else(|| AppError::forbidden("only a person or an agent starts an OAuth flow"))?;
     let ws = ctx.workspace_id;
@@ -974,9 +986,6 @@ async fn begin_oauth(
     } else {
         (None, None)
     };
-    let callback =
-        OAuthCallback::of_flow(provider, kind_key).ok_or_else(|| app_not_configured(provider))?;
-    let redirect = callback_url(deps.apps.as_ref(), callback);
     // Before anything is written: a refused URL leaves no pending flow and no ledger entry.
     let authorize_url = oauth
         .authorize_url(&app, &redirect, &token, challenge.as_deref())
@@ -1067,20 +1076,27 @@ fn oauth_app(apps: &dyn PlatformAppConfig, provider: Provider, kind_key: &str) -
 }
 
 /// The redirect URI of the flows that come back to `callback`: the public base URL (its path
-/// kept, without a trailing slash), [`OAUTH_CALLBACK_PATH`] and the callback's key.
-fn callback_url(apps: &dyn PlatformAppConfig, callback: OAuthCallback) -> Url {
+/// kept, without a trailing slash), [`OAUTH_CALLBACK_PATH`] and the callback's key; `CONFLICT`
+/// while no public base URL is configured ([`public_url`]).
+fn callback_url(apps: &dyn PlatformAppConfig, callback: OAuthCallback) -> Result<Url, AppError> {
     public_url(apps, &format!("{OAUTH_CALLBACK_PATH}/{}", callback.key()))
 }
 
 /// The public base URL (its path kept, without a trailing slash) followed by `path`, which
-/// starts with `/`; no query, no fragment.
-fn public_url(apps: &dyn PlatformAppConfig, path: &str) -> Url {
-    let mut url = apps.public_base_url();
+/// starts with `/`; no query, no fragment. `CONFLICT` "public base url not configured"
+/// (`details.reason = "public_base_url_not_configured"`) while there is none: no redirect URI or
+/// webhook URL can be given then.
+fn public_url(apps: &dyn PlatformAppConfig, path: &str) -> Result<Url, AppError> {
+    let mut url = apps.public_base_url().ok_or_else(|| AppError {
+        code: ErrorCode::Conflict,
+        message: PUBLIC_URL_NOT_CONFIGURED.into(),
+        details: json!({ "reason": "public_base_url_not_configured" }),
+    })?;
     let base = url.path().trim_end_matches('/').to_owned();
     url.set_path(&format!("{base}{path}"));
     url.set_query(None);
     url.set_fragment(None);
-    url
+    Ok(url)
 }
 
 /// A state's nonce: [`NONCE_BYTES`] random bytes from the token generator, through SHA-256 so

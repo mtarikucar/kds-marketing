@@ -152,18 +152,11 @@ impl PasswordHasher for Argon2Hasher {
     }
 }
 
-/// No provider app configured: every app is `None`, so no kind can be connected by OAuth; the
-/// public address is the one given.
-#[derive(Clone, Debug)]
-pub struct NoPlatformApps {
-    public_base_url: Url,
-}
-
-impl NoPlatformApps {
-    pub fn new(public_base_url: Url) -> Self {
-        NoPlatformApps { public_base_url }
-    }
-}
+/// No provider app configured and no public address: every app is `None`, so no kind can be
+/// connected by OAuth, and no webhook URL can be shown. (The binary reads the real configuration
+/// from the environment; this stands for "nothing configured" where no configuration is read.)
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoPlatformApps;
 
 impl PlatformAppConfig for NoPlatformApps {
     fn meta_app(&self) -> Option<MetaApp> {
@@ -178,8 +171,8 @@ impl PlatformAppConfig for NoPlatformApps {
         None
     }
 
-    fn public_base_url(&self) -> Url {
-        self.public_base_url.clone()
+    fn public_base_url(&self) -> Option<Url> {
+        None
     }
 }
 
@@ -337,12 +330,12 @@ mod tests {
     }
 
     #[test]
-    fn no_platform_apps_has_no_app_and_the_given_address() {
-        let apps = NoPlatformApps::new(Url::parse("https://jeeta.example/").unwrap());
+    fn no_platform_apps_has_no_app_and_no_address() {
+        let apps = NoPlatformApps;
         assert_eq!(apps.meta_app(), None);
         assert_eq!(apps.instagram_app(), None);
         assert_eq!(apps.x_app(), None);
-        assert_eq!(apps.public_base_url().as_str(), "https://jeeta.example/");
+        assert_eq!(apps.public_base_url(), None);
     }
 
     #[test]

@@ -127,6 +127,114 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
     }
 }
 
+/// The `[dependencies]`-like sections of a manifest (everything but `[dev-dependencies]` and its
+/// target-specific forms), and the `[dev-dependencies]` ones, as text.
+fn manifest_sections(manifest: &str) -> (String, String) {
+    let (mut normal, mut dev) = (String::new(), String::new());
+    let mut in_dev = false;
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_dev = trimmed
+                .trim_matches(|c| c == '[' || c == ']')
+                .ends_with("dev-dependencies");
+        }
+        let into = if in_dev { &mut dev } else { &mut normal };
+        into.push_str(line);
+        into.push('\n');
+    }
+    (normal, dev)
+}
+
+/// Every `.rs` file under `dir`, recursively (`target` directories skipped).
+fn rust_files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                if path
+                    .file_name()
+                    .is_some_and(|n| n != "target" && n != "node_modules")
+                {
+                    pending.push(path);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+/// `reqwest` lives in `jt_outbound` alone (spec §4.3): no other workspace package, the binary
+/// included, depends on it or names it in its manifest's dependency sections or in any of its
+/// Rust sources (library, tests, everything). Two exceptions, both outside what ships: the
+/// architecture tests themselves, which name what they forbid; and `jt_mcp`'s
+/// `[dev-dependencies]`, whose MCP test client is rmcp's HTTP client transport (its feature is
+/// named after reqwest; dev-dependencies never enter the binary, and `cargo deny` bans reqwest
+/// outside `jt_outbound` in the normal graph).
+#[test]
+fn no_crate_but_outbound_names_reqwest() {
+    let metadata = metadata();
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("`cargo metadata` has no `packages` array");
+    let mut checked = 0;
+    for package in packages {
+        let name = package["name"].as_str().expect("a package name");
+        if name == "jt_outbound" || name == "jt_archtest" {
+            continue;
+        }
+        assert!(
+            !direct_deps(name).contains("reqwest"),
+            "{name} depends on reqwest: only jt_outbound may"
+        );
+        let manifest_path =
+            std::path::PathBuf::from(package["manifest_path"].as_str().expect("a manifest path"));
+        let manifest = std::fs::read_to_string(&manifest_path).expect("a readable manifest");
+        let (normal, dev) = manifest_sections(&manifest);
+        assert!(
+            !mentions_word(&normal, "reqwest"),
+            "{} names reqwest outside [dev-dependencies]",
+            manifest_path.display()
+        );
+        if mentions_word(&dev, "reqwest") {
+            let only_the_mcp_test_client = name == "jt_mcp"
+                && !mentions_word(
+                    &dev.replace("transport-streamable-http-client-reqwest", ""),
+                    "reqwest",
+                );
+            assert!(
+                only_the_mcp_test_client,
+                "{} names reqwest in [dev-dependencies]: only jt_mcp's MCP test client may",
+                manifest_path.display()
+            );
+        }
+        let dir = manifest_path.parent().expect("a package directory");
+        let sources = rust_files_under(dir);
+        assert!(!sources.is_empty(), "{name} has no Rust sources");
+        for file in sources {
+            let text = std::fs::read_to_string(&file).expect("a readable file");
+            assert!(
+                !mentions_word(&text, "reqwest"),
+                "{} names reqwest: only jt_outbound may",
+                file.display()
+            );
+        }
+        checked += 1;
+    }
+    // Every crate but the two: not vacuous.
+    assert_eq!(checked, workspace_packages().len() - 2);
+    assert!(checked >= 15, "only {checked} packages checked");
+    // And jt_outbound does use it: the rule is about where, not whether.
+    assert!(direct_deps("jt_outbound").contains("reqwest"));
+}
+
 // A provider adapter: the application core (its ports) and the domain crates it speaks, the
 // egress client (its only way out), serialisation, time, ids and URLs, logging, async traits and
 // error derives, the HMAC crates (Meta's `appsecret_proof`) and `tokio` (for timers: the pause

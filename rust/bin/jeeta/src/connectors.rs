@@ -11,8 +11,9 @@
 //! | X | ✓ | ✓ | — | ✓ | — |
 //!
 //! (the same matrix `jt_testkit::fakes::ScriptedRegistry` offers, so the use cases' tests never
-//! count on more than production has). The OAuth flows still need the platform's provider apps
-//! ([`PlatformAppConfig`]); without them they answer `CONFLICT` "provider app not configured".
+//! count on more than production has). The OAuth flows need the platform's provider apps
+//! ([`PlatformAppConfig`], from the environment: `crate::config::EnvPlatformApps`), read at call
+//! time; without one they answer `CONFLICT` "provider app not configured".
 
 use std::sync::Arc;
 
@@ -121,7 +122,6 @@ impl ConnectorRegistry for ProviderRegistry {
 mod tests {
     use std::collections::BTreeSet;
 
-    use jt_app::ports::connectors::Url;
     use jt_app::std_impls::NoPlatformApps;
     use jt_outbound::FIXED_HOSTS;
     use jt_testkit::fakes::{ScriptedConnector, ScriptedOAuth, ScriptedRegistry};
@@ -153,10 +153,7 @@ mod tests {
 
     fn production() -> Arc<dyn ConnectorRegistry> {
         let egress = Arc::new(Egress::new(FIXED_HOSTS));
-        let apps = Arc::new(NoPlatformApps::new(
-            Url::parse("https://jeeta.example/").unwrap(),
-        ));
-        registry(egress, apps)
+        registry(egress, Arc::new(NoPlatformApps))
     }
 
     #[test]

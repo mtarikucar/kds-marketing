@@ -97,8 +97,10 @@ pub trait PlatformAppConfig: Send + Sync {
     fn meta_app(&self) -> Option<MetaApp>;
     fn instagram_app(&self) -> Option<InstagramApp>;
     fn x_app(&self) -> Option<XApp>;
-    /// Where the panel is reached from outside, for OAuth redirect URIs and webhook URLs.
-    fn public_base_url(&self) -> Url;
+    /// Where the panel is reached from outside, for OAuth redirect URIs and webhook URLs; `None`
+    /// while it is not configured, and then no flow starts and no webhook URL is shown (the
+    /// binary requires it whenever a provider app is configured).
+    fn public_base_url(&self) -> Option<Url>;
 }
 
 /// The app an OAuth flow runs under. Meta serves two login flows: Facebook Login with the Meta

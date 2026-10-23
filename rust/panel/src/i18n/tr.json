@@ -201,6 +201,7 @@
     "draftChanged": "Taslak size gösterildikten sonra değişti. Onaylamadan önce yeniden gözden geçirin.",
     "missingPermission": "Bu işlem için şu izin gerekiyor: {{permission}}.",
     "providerAppMissing": "Bu sağlayıcının platform uygulaması henüz yapılandırılmadı; bu hesap türü şimdilik bağlanamaz.",
+    "publicUrlMissing": "Platformun genel adresi henüz yapılandırılmadı; hesap bağlama ve webhook adresleri şimdilik kullanılamıyor.",
     "useSetCredentials": "Bu hesap türü sağlayıcıda oturum açarak değil, kimlik bilgileriyle bağlanır.",
     "accountMismatch": "Oturum açılan hesap bu kabiliyetin hesabına ulaşmıyor.",
     "providerRefused": "Sağlayıcı isteği reddetti.",

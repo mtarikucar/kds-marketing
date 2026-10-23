@@ -369,8 +369,8 @@ impl PlatformAppConfig for TestApps {
         None
     }
 
-    fn public_base_url(&self) -> Url {
-        Url::parse("https://panel.test").unwrap()
+    fn public_base_url(&self) -> Option<Url> {
+        Some(Url::parse("https://panel.test").unwrap())
     }
 }
 

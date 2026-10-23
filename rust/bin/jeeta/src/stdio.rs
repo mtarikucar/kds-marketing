@@ -9,7 +9,9 @@
 //! refuses a binary built with `jt_outbound`'s test-only loopback paths
 //! (`serve::check_test_loopback`) and a database role that row-level security does not bind
 //! (`serve::check_database_role`), and refills the egress tenant tier from the capability records
-//! before it serves (`serve::boot`).
+//! before it serves (`serve::boot`). It reads the same configuration, provider apps and public
+//! address included (`crate::config::EnvPlatformApps`), so a tool starting an OAuth flow here
+//! builds the same redirect URIs as the server, and logs them the same way.
 
 use anyhow::{Context, Result, bail};
 use jt_app::error::ErrorCode;
@@ -34,6 +36,7 @@ pub async fn run(config: Config) -> Result<()> {
     let pool = serve::connect(&config).await?;
     serve::check_database_role(&pool, config.allow_superuser).await?;
     let (deps, _egress) = serve::boot(pool.clone(), &config).await?;
+    serve::log_providers(&config);
     let principal = match api_keys::authenticate(&deps, key).await {
         Ok(principal) => principal,
         Err(e) if e.code == ErrorCode::Unauthenticated => bail!(

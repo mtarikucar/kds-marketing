@@ -524,6 +524,72 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
     assert_eq!(OAuthCallback::of_flow(Provider::Netgsm, "sms_line"), None);
 }
 
+/// Without a configured public base URL there is no redirect URI and no webhook address: starting
+/// or reconnecting a flow, completing one, and listing the hook addresses are `CONFLICT` with the
+/// reason `public_base_url_not_configured`, and nothing is written nor asked of a provider.
+#[tokio::test]
+async fn hooks_and_start_oauth_conflict_without_public_base_url() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let page = r.connect_page().await;
+    // A flow started while the address was configured.
+    let started = r.start("facebook_page").await;
+    let rows = r.pending_rows().len();
+    let started_entries = r.w.entries("connector.oauth_started").len();
+    let meta_calls = r.meta_oauth.calls().len();
+    let x_calls = r.x_oauth.calls().len();
+
+    let mut unset = r.w.deps.clone();
+    unset.apps = Arc::new(FakeAppConfig {
+        public_base_url: None,
+        ..FakeAppConfig::with_all_apps()
+    });
+    let assert_unset = |e: AppError, what: &str| {
+        assert_eq!(e.code, ErrorCode::Conflict, "{what}: {e:?}");
+        assert_eq!(e.message, "public base url not configured", "{what}");
+        assert_eq!(
+            e.details,
+            json!({ "reason": "public_base_url_not_configured" }),
+            "{what}"
+        );
+    };
+    for kind in ["facebook_page", "instagram", "x"] {
+        assert_unset(
+            err(connector::start_oauth(&unset, o, start(kind)).await),
+            kind,
+        );
+    }
+    assert_unset(
+        err(connector::reconnect(&unset, o, page.id).await),
+        "reconnect",
+    );
+    let owner = r.owner().await;
+    assert_unset(
+        err(r
+            .complete_as(&unset, &owner, &state_of(&started), "code-1")
+            .await),
+        "complete",
+    );
+    assert_unset(err(connector::hooks(&unset, o).await), "hooks");
+    // Nothing written, no provider asked.
+    assert_eq!(r.pending_rows().len(), rows);
+    assert_eq!(
+        r.w.entries("connector.oauth_started").len(),
+        started_entries
+    );
+    assert_eq!(r.meta_oauth.calls().len(), meta_calls);
+    assert_eq!(r.x_oauth.calls().len(), x_calls);
+
+    // A missing app is still named first: without an app, the address does not matter.
+    let mut bare = unset.clone();
+    bare.apps = Arc::new(FakeAppConfig {
+        public_base_url: None,
+        ..FakeAppConfig::default()
+    });
+    let e = err(connector::start_oauth(&bare, o, start("facebook_page")).await);
+    assert_eq!(e.details["reason"], "provider_app_not_configured");
+}
+
 /// A flow completes only at its own app's callback: an Instagram Login flow brought back to the
 /// Meta app's page, a Facebook Login flow to the Instagram app's, or an X flow to either, is
 /// `FORBIDDEN` and the provider is not asked; the flow stays usable at its own callback.

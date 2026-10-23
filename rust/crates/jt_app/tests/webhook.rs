@@ -701,7 +701,7 @@ async fn hooks_urls_use_public_base_and_per_purpose_tokens() {
     assert_eq!(out.meta, None);
 
     w.deps.apps = Arc::new(FakeAppConfig {
-        public_base_url: "https://jeeta.example/panel/".parse().unwrap(),
+        public_base_url: Some("https://jeeta.example/panel/".parse().unwrap()),
         ..FakeAppConfig::with_all_apps()
     });
     let out = connector::hooks(&w.deps, &w.owner_ctx).await.unwrap();

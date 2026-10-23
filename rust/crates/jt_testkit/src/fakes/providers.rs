@@ -40,12 +40,13 @@ pub const TEST_PUBLIC_BASE_URL: &str = "https://panel.test";
 
 /// A platform app configuration a test sets field by field. The default has no app at all and
 /// the public address [`TEST_PUBLIC_BASE_URL`]; [`FakeAppConfig::with_all_apps`] has all three.
+/// `public_base_url: None` stands for a server whose public address is not configured.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FakeAppConfig {
     pub meta: Option<MetaApp>,
     pub instagram: Option<InstagramApp>,
     pub x: Option<XApp>,
-    pub public_base_url: Url,
+    pub public_base_url: Option<Url>,
 }
 
 impl Default for FakeAppConfig {
@@ -54,7 +55,7 @@ impl Default for FakeAppConfig {
             meta: None,
             instagram: None,
             x: None,
-            public_base_url: Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL"),
+            public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
         }
     }
 }
@@ -99,7 +100,7 @@ impl PlatformAppConfig for FakeAppConfig {
         self.x.clone()
     }
 
-    fn public_base_url(&self) -> Url {
+    fn public_base_url(&self) -> Option<Url> {
         self.public_base_url.clone()
     }
 }

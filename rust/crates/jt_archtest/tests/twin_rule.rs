@@ -106,12 +106,12 @@ fn mcp_registry_matches_catalog() {
 
 /// The MCP tools the registry defines, by domain: 15 from M0 (`agent`, `workspace`, `team`,
 /// `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and `budget` from
-/// M1a and the three edits of M1b Task 4b (`jeeta.capability.update`,
-/// `jeeta.budget.items_update`, `jeeta.budget.items_retire`), 3 `work`, the 6 `connector`
-/// tools of M1b Task 8 (the seventh connection use case, completing an OAuth flow, is the
-/// panel's callback only) and, from M1b Task 9, `jeeta.connector.hooks` and the 3 `events`
-/// tools: 60. Written out, so a tool added or dropped without updating the documentation (the
-/// README lists them) fails here.
+/// M1a, 3 `work`: 47; then M1b adds the three edits of Task 4b (`jeeta.capability.update`,
+/// capability +1; `jeeta.budget.items_update` and `jeeta.budget.items_retire`, budget +2), the 7
+/// `connector` tools (six from Task 8 and `jeeta.connector.hooks` from Task 9; the eighth
+/// connection use case, completing an OAuth flow, is the panel's callback only) and the 3
+/// `events` tools: 60. Written out, so a tool added or dropped without updating the
+/// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("agent", 1),
     ("workspace", 1),

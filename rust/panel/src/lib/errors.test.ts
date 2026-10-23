@@ -53,6 +53,12 @@ describe('errorMessage', () => {
       ),
     ).toBe(tr.errors.providerAppMissing);
     expect(
+      errorMessage(
+        t,
+        new ApiError('CONFLICT', 'public base url not configured', { reason: 'public_base_url_not_configured' }, 409),
+      ),
+    ).toBe(tr.errors.publicUrlMissing);
+    expect(
       errorMessage(t, new ApiError('VALIDATION', 'x', { field: 'kind_key', reason: 'use_set_credentials' }, 422)),
     ).toBe(tr.errors.useSetCredentials);
     expect(errorMessage(t, new ApiError('VALIDATION', 'x', { reason: 'account_mismatch' }, 422))).toBe(

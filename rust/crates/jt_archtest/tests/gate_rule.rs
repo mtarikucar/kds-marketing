@@ -93,6 +93,46 @@ fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_wh
     );
 }
 
+/// Connecting accounts and reading the inbound events (M1b) are part of the consultation's
+/// prerequisites and observation, not planned work: every `connector.*` and `events.*` use case
+/// is exempt from the strategy gate, and none is exempt from the workspace-status check (a
+/// workspace awaiting payment or suspended connects nothing and acknowledges nothing).
+#[test]
+fn connection_and_event_use_cases_are_strategy_exempt_but_status_checked() {
+    let rows: Vec<_> = CATALOG
+        .iter()
+        .filter(|uc| uc.id.starts_with("connector.") || uc.id.starts_with("events."))
+        .collect();
+    // Eight connection use cases (seven tools and the panel's OAuth callback) and three event
+    // ones: not vacuous.
+    let ids: Vec<&str> = rows.iter().map(|uc| uc.id).collect();
+    assert_eq!(
+        ids,
+        [
+            "connector.start_oauth",
+            "connector.complete_oauth",
+            "connector.confirm_assets",
+            "connector.set_credentials",
+            "connector.probe",
+            "connector.health",
+            "connector.reconnect",
+            "connector.hooks",
+            "events.pending",
+            "events.ack",
+            "events.list",
+        ]
+    );
+    for uc in rows {
+        assert_eq!(uc.gate, GateMode::Exempt, "{} is strategy-exempt", uc.id);
+        assert_eq!(
+            uc.status_exemption,
+            StatusExemption::Never,
+            "{} is subject to the workspace-status check",
+            uc.id
+        );
+    }
+}
+
 #[test]
 fn the_exempt_list_rejects_other_use_cases() {
     assert!(may_be_exempt("team.invite"));

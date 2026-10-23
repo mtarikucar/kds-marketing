@@ -139,6 +139,8 @@ export function errorMessage(t: TFunction, err: unknown): string {
       return t('errors.versionMoved');
     case 'provider_app_not_configured':
       return t('errors.providerAppMissing');
+    case 'public_base_url_not_configured':
+      return t('errors.publicUrlMissing');
     case 'use_set_credentials':
       return t('errors.useSetCredentials');
     case 'account_mismatch':

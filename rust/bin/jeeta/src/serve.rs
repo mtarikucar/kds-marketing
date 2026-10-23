@@ -1,18 +1,19 @@
 //! `jeeta serve`: the HTTP server. The panel's API and files, `/healthz`, the MCP endpoint at
 //! `/mcp` and the providers' webhooks at `/hooks/*`, on one listener.
 //!
-//! Start order: refuse a binary built with `jt_outbound`'s test-only loopback paths
-//! ([`check_test_loopback`]), connect to the database, refuse a role that row-level security
-//! does not bind ([`check_database_role`]), apply pending migrations, build the shared ports once
-//! and refill the egress tenant tier from the capability records ([`boot`]), create the first
-//! platform operator when configured, bind the listener, start the scheduled jobs
+//! Start order: the configuration (provider apps included) was read and checked before this runs
+//! (a half-configured provider app never starts); refuse a binary built with `jt_outbound`'s
+//! test-only loopback paths ([`check_test_loopback`]), connect to the database, refuse a role that
+//! row-level security does not bind ([`check_database_role`]), apply pending migrations, build the
+//! shared ports once and refill the egress tenant tier from the capability records ([`boot`]),
+//! log which provider apps are configured and the public address ([`log_providers`]), create the
+//! first platform operator when configured, bind the listener, start the scheduled jobs
 //! ([`crate::scheduler`], unless `JEETA_JOBS_ENABLED=false`), then serve until SIGINT or SIGTERM.
 //! On the signal no new job run starts; open connections drain for at most [`DRAIN_TIMEOUT`], then
 //! the job runs still going get up to [`scheduler::SHUTDOWN_GRACE`] to finish before they are
 //! aborted.
 
 use std::future::IntoFuture;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -26,8 +27,7 @@ use axum::response::Response;
 use jt_app::error::ErrorCode;
 use jt_app::gate::StrategyGate;
 use jt_app::ports::connectors::PlatformAppConfig;
-use jt_app::ports::connectors::Url;
-use jt_app::std_impls::{Argon2Hasher, NoPlatformApps, RandTokenGen, SystemClock, UuidV7Gen};
+use jt_app::std_impls::{Argon2Hasher, RandTokenGen, SystemClock, UuidV7Gen};
 use jt_app::usecases::capabilities::UowChannelCatalog;
 use jt_app::usecases::jobs::Job;
 use jt_app::usecases::strategy::NoopArchivedHook;
@@ -69,6 +69,7 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!(applied, total, "migrations are up to date");
 
     let (deps, _egress) = boot(pool.clone(), &config).await?;
+    log_providers(&config);
     if let Some(bootstrap) = &config.bootstrap {
         bootstrap_operator(&deps, bootstrap).await?;
     }
@@ -217,17 +218,17 @@ pub(crate) async fn boot(pool: PgPool, config: &Config) -> Result<(Deps, Arc<Egr
 /// ([`PgJobLock::with_own_pool`], [`JOB_LOCK_CONNECTIONS`] connections opened only when a lock is
 /// asked for), so a job holding its lock never takes a connection the server needs.
 ///
-/// No provider app is configured yet: [`NoPlatformApps`] (public address
-/// [`placeholder_public_base_url`]) stands in until the provider configuration lands (M1b Task
-/// 11), so an OAuth flow answers `CONFLICT` "provider app not configured" until then; NetGSM
-/// credentials entered by hand need no app.
+/// The platform's provider apps and public address are the configuration's
+/// ([`config::EnvPlatformApps`], read from the environment): the use cases and the three
+/// adapters read the same apps. A kind whose app is not configured answers `CONFLICT` "provider
+/// app not configured" to an OAuth flow, and without a public address no flow starts and no
+/// webhook URL is shown (`CONFLICT` "public base url not configured"); NetGSM credentials entered
+/// by hand need no app.
 ///
 /// The tenant tier starts empty: [`boot`] refills it.
 pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
     let egress = Arc::new(Egress::new(FIXED_HOSTS));
-    let apps: Arc<dyn PlatformAppConfig> = Arc::new(NoPlatformApps::new(
-        placeholder_public_base_url(config.bind),
-    ));
+    let apps: Arc<dyn PlatformAppConfig> = Arc::new(config.apps.clone());
     let job_lock = Arc::new(PgJobLock::with_own_pool(&pool, JOB_LOCK_CONNECTIONS));
     let uow = Arc::new(PgUnitOfWork::new(pool));
     let deps = Deps {
@@ -248,20 +249,25 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
     (deps, egress)
 }
 
-/// The public address the ports report until one is configured: plain HTTP on the bound socket
-/// (`http://<bind>/`), or `http://localhost:<port>/` when the server listens on every interface
-/// (`0.0.0.0`, `::`), an address no one can reach and that must never be shown. The OAuth redirect
-/// URI is built from it, but no flow starts without a provider app, which is not configured yet.
-// TODO(Task 11): replace with the configured `JEETA_PUBLIC_BASE_URL`, required whenever a
-// redirect or hook URL can be shown; this placeholder must not survive as a fallback.
-fn placeholder_public_base_url(bind: SocketAddr) -> Url {
-    let text = if bind.ip().is_unspecified() {
-        format!("http://localhost:{}/", bind.port())
+/// One start-log line: which provider apps are configured (their names only, never an id or a
+/// secret) and the public address, or that none is.
+pub(crate) fn log_providers(config: &Config) {
+    let configured = config.apps.configured();
+    let providers = if configured.is_empty() {
+        "none".to_owned()
     } else {
-        format!("http://{bind}/")
+        configured.join(",")
     };
-    // A socket address (or localhost with its port) always forms a valid authority.
-    Url::parse(&text).expect("a socket address forms a valid URL")
+    let public_base_url = config.apps.public_base_url().map_or_else(
+        || format!("unset ({})", config::PUBLIC_BASE_URL),
+        |url| url.to_string(),
+    );
+    tracing::info!(
+        providers,
+        public_base_url,
+        "provider apps: OAuth needs a configured app; webhook and redirect addresses need the \
+         public base URL"
+    );
 }
 
 /// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy
@@ -465,6 +471,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use jt_app::gate::NoStrategyYet;
+    use jt_app::ports::connectors::Url;
     use jt_app::std_impls::{RandTokenGen, SystemClock, UuidV7Gen};
     use jt_app::usecases::strategy::NoChannelsYet;
     use jt_testkit::fakes::{
@@ -520,6 +527,14 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         (status, cookie, body)
+    }
+
+    fn panel_get(uri: &str, cookie: &str) -> Request<Body> {
+        Request::get(uri)
+            .header(header::COOKIE, cookie)
+            .header("x-requested-with", "jeeta-panel")
+            .body(Body::empty())
+            .unwrap()
     }
 
     fn panel_post(uri: &str, cookie: Option<&str>, body: Value) -> Request<Body> {
@@ -766,9 +781,9 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
 
-        // The three provider adapters are served; no provider app is configured yet, so an
-        // OAuth flow cannot start (and nothing reaches a provider). The public address is the
-        // bound socket.
+        // The three provider adapters are served; no provider app is configured here, so an
+        // OAuth flow cannot start (and nothing reaches a provider); nor is a public address, so
+        // no webhook address is shown.
         for provider in jt_connector::Provider::all() {
             let connector = deps.connectors.connector(*provider).expect("an adapter");
             assert_eq!(connector.provider(), *provider);
@@ -786,10 +801,7 @@ mod tests {
         );
         assert_eq!(deps.apps.meta_app(), None);
         assert_eq!(deps.apps.x_app(), None);
-        assert_eq!(
-            deps.apps.public_base_url(),
-            placeholder_public_base_url(config.bind)
-        );
+        assert_eq!(deps.apps.public_base_url(), None);
         let (status, _, body) = call(
             &app,
             panel_post(
@@ -801,6 +813,103 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
         assert_eq!(body["message"], "provider app not configured");
+        let (status, _, body) = call(&app, panel_get("/api/connectors/hooks", session)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["details"]["reason"], "public_base_url_not_configured");
+    }
+
+    /// The provider apps of the configuration reach every part that reads them: the OAuth flows
+    /// (each app's client id, and its own redirect URI under the public address), the hook
+    /// addresses, and the webhook gate's verification (the configured verify token).
+    #[tokio::test]
+    async fn the_configured_apps_reach_oauth_hooks_and_the_webhook_gate() {
+        let db = jt_testkit::TestDb::new().await;
+        let config = test_config(&[
+            (config::META_APP_ID, "meta-id-1"),
+            (config::META_APP_SECRET, "meta-secret-1"),
+            (config::META_VERIFY_TOKEN, "verify-1"),
+            (config::INSTAGRAM_APP_ID, "ig-id-1"),
+            (config::INSTAGRAM_APP_SECRET, "ig-secret-1"),
+            (config::X_CLIENT_ID, "x-id-1"),
+            (config::X_CLIENT_SECRET, "x-secret-1"),
+            (config::PUBLIC_BASE_URL, "https://jeeta.example"),
+        ]);
+        let (mut deps, _) = ports(db.pool.clone(), &config);
+        deps.hasher = Arc::new(PlainHasher);
+        let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
+        let (status, cookie, me) = call(
+            &app,
+            panel_post(
+                "/api/auth/register",
+                None,
+                json!({
+                    "email": "owner@example.test",
+                    "password": "correct horse battery",
+                    "display_name": "Owner",
+                    "workspace_name": "Acme"
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        jt_testkit::flows::activate_workspace(&deps, jt_testkit::panel::workspace_of(&me)).await;
+        let cookie = cookie.unwrap();
+        let session = cookie.split(';').next().unwrap();
+
+        for (kind, client_id, callback) in [
+            ("facebook_page", "meta-id-1", "meta"),
+            ("instagram", "ig-id-1", "instagram"),
+            ("x", "x-id-1", "x"),
+        ] {
+            let (status, _, body) = call(
+                &app,
+                panel_post(
+                    "/api/connectors/oauth/start",
+                    Some(session),
+                    json!({ "kind_key": kind }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{kind}: {body}");
+            let url = Url::parse(body["authorize_url"].as_str().unwrap()).unwrap();
+            let param = |name: &str| {
+                url.query_pairs()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| v.into_owned())
+            };
+            assert_eq!(param("client_id").as_deref(), Some(client_id), "{kind}");
+            assert_eq!(
+                param("redirect_uri"),
+                Some(format!("https://jeeta.example/oauth/callback/{callback}")),
+                "{kind}"
+            );
+            for secret in ["meta-secret-1", "ig-secret-1", "x-secret-1", "verify-1"] {
+                assert!(!body.to_string().contains(secret), "{kind}: {body}");
+            }
+        }
+
+        let (status, _, hooks) = call(&app, panel_get("/api/connectors/hooks", session)).await;
+        assert_eq!(status, StatusCode::OK, "{hooks}");
+        assert_eq!(hooks["meta"]["url"], "https://jeeta.example/hooks/meta");
+        assert!(
+            hooks["netgsm"][0]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://jeeta.example/hooks/netgsm/")
+        );
+        assert!(!hooks.to_string().contains("verify-1"));
+
+        let verify = Request::get(
+            "/hooks/meta?hub.mode=subscribe&hub.verify_token=verify-1&hub.challenge=7",
+        )
+        .body(Body::empty())
+        .unwrap();
+        let resp = app.clone().oneshot(verify).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            &to_bytes(resp.into_body(), usize::MAX).await.unwrap()[..],
+            b"7"
+        );
     }
 
     /// Review Focus 5 end to end: after a restart the egress tenant tier holds the hosts of live
@@ -884,25 +993,6 @@ mod tests {
             jt_outbound::EgressScope::Tenant(ws),
             &Url::parse("https://imap.live.example/").unwrap(),
         ));
-    }
-
-    #[test]
-    fn the_placeholder_public_address_is_the_bound_socket() {
-        // An unspecified address (listening on every interface) is never shown: it names no
-        // host anyone can reach.
-        for (bind, url) in [
-            ("127.0.0.1:8080", "http://127.0.0.1:8080/"),
-            ("192.0.2.10:8080", "http://192.0.2.10:8080/"),
-            ("[::1]:9090", "http://[::1]:9090/"),
-            ("0.0.0.0:8080", "http://localhost:8080/"),
-            ("0.0.0.0:80", "http://localhost/"),
-            ("[::]:9090", "http://localhost:9090/"),
-        ] {
-            assert_eq!(
-                placeholder_public_base_url(bind.parse().unwrap()).as_str(),
-                url
-            );
-        }
     }
 
     #[tokio::test]

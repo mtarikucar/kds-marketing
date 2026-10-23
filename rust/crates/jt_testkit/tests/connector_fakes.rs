@@ -960,7 +960,10 @@ fn fake_app_config_defaults_to_no_apps_and_the_test_panel() {
     assert_eq!(config.meta_app(), None);
     assert_eq!(config.instagram_app(), None);
     assert_eq!(config.x_app(), None);
-    assert_eq!(config.public_base_url().as_str(), "https://panel.test/");
+    assert_eq!(
+        config.public_base_url().unwrap().as_str(),
+        "https://panel.test/"
+    );
 
     let all = FakeAppConfig::with_all_apps();
     assert!(all.meta_app().is_some());
@@ -1410,7 +1413,10 @@ async fn scripted_oauth_builds_urls_and_answers_exchanges_in_order() {
 fn testkit_deps_have_no_apps_and_an_empty_scripted_registry() {
     let (_, deps) = setup();
     assert_eq!(deps.apps.meta_app(), None);
-    assert_eq!(deps.apps.public_base_url().as_str(), "https://panel.test/");
+    assert_eq!(
+        deps.apps.public_base_url().unwrap().as_str(),
+        "https://panel.test/"
+    );
     for provider in Provider::all() {
         assert!(
             deps.connectors.connector(*provider).is_none(),

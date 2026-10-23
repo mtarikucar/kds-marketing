@@ -201,6 +201,7 @@
     "draftChanged": "The draft changed after it was shown to you. Go through it again before approving.",
     "missingPermission": "This needs the permission: {{permission}}.",
     "providerAppMissing": "This provider's platform app is not configured yet, so this kind of account cannot be connected for now.",
+    "publicUrlMissing": "The platform's public address is not configured yet; connecting accounts and webhook addresses are unavailable for now.",
     "useSetCredentials": "This kind of account connects with credentials, not by signing in at the provider.",
     "accountMismatch": "The account you signed in with does not reach this capability's account.",
     "providerRefused": "The provider refused the request.",
