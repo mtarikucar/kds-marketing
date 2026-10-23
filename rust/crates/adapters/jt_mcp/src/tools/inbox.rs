@@ -20,6 +20,20 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "inbox.pending",
+            description: "Read the executor-visible inbox queues. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("pending")).expect("inbox schema"),
+            run: pending,
+        },
+        ToolDef {
+            use_case: "inbox.context",
+            description: "Read recent conversation context and strategy guidance. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("context")).expect("inbox schema"),
+            run: context,
+        },
+        ToolDef {
             use_case: "inbox.conversations.list",
             description: "conversations.list for workspace conversations. [risk: READ]",
             permission: Permission::InboxWork,
@@ -395,5 +409,19 @@ fn reply<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         let id: ConversationId = take_id(&mut raw, "conversation_id")?;
         to_json(&replies::reply(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+fn pending<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let _: NoArgs = args(raw)?;
+        to_json(&jt_app::usecases::inbox::context::pending(deps, ctx).await?)
+    })
+}
+fn context<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&jt_app::usecases::inbox::context::context(deps, ctx, id).await?)
     })
 }

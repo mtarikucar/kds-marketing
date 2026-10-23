@@ -91,7 +91,7 @@ pub async fn set_status_labels(
     input.validate()?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let mut policy = repos.workspace_policy().get().await?;
-    policy.inbox_status_labels = input.labels.clone();
+    policy.inbox.status_labels = input.labels.clone();
     repos.workspace_policy().set(policy, ctx.now).await?;
     record(
         repos.as_mut(),

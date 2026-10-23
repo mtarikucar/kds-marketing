@@ -278,6 +278,8 @@ fn every_job_has_a_lock_named_after_it() {
             "purge_probe_runs",
             "outbox_recover",
             "inbox_consume",
+            "response_sla",
+            "snooze_wake",
         ]
     );
     for job in Job::ALL {

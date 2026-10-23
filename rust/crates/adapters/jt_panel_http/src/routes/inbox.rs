@@ -232,3 +232,18 @@ pub async fn reply(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&replies::reply(&state.deps, &ctx, id, input).await?)
 }
+
+/// Read queues without a strategy; the normal workspace status gate still runs.
+pub async fn pending(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&jt_app::usecases::inbox::context::pending(&state.deps, &ctx).await?)
+}
+pub async fn context(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<jt_app::usecases::inbox::ConversationId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&jt_app::usecases::inbox::context::context(&state.deps, &ctx, id).await?)
+}

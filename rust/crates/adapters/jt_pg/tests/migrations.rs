@@ -32,8 +32,8 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after `0006_inbox`, including outbox and request keys.
 const TABLES_AFTER_ALL: i64 = 36;
 
-/// The migrations there are: `0001_foundation` to `0006_inbox`.
-const MIGRATIONS: i64 = 6;
+/// The migrations there are: `0001_foundation` to `0007_inbox_policy`.
+const MIGRATIONS: i64 = 7;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -171,6 +171,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
 
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
+    run(read("0007_inbox_policy.down.sql")).await;
     run(read("0006_inbox.down.sql")).await;
     run(read("0006_inbox.down.sql")).await;
     run(connectors_down.clone()).await;
@@ -471,4 +472,29 @@ async fn migration_round_trip_23_36_23_36() {
         .unwrap();
         assert_eq!(labels, serde_json::json!({}));
     }
+}
+
+#[tokio::test]
+async fn inbox_policy_round_trip_preserves_existing_labels() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("policy-round-trip").await;
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("insert into workspace_policies(workspace_id,agent_checkin_interval_minutes,updated_at,inbox_status_labels,inbox_policy) values ($1,60,now(),$2,$3)")
+        .bind(ws.as_uuid()).bind(serde_json::json!({"new":"Yeni"})).bind(serde_json::json!({"unreachable_threshold":5})).execute(tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
+    let up = include_str!("../../../../migrations/0007_inbox_policy.up.sql");
+    let down = include_str!("../../../../migrations/0007_inbox_policy.down.sql");
+    for sql in [down, down, up, up] {
+        sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
+    }
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let labels: serde_json::Value = sqlx::query_scalar(
+        "select inbox_status_labels from workspace_policies where workspace_id=$1",
+    )
+    .bind(ws.as_uuid())
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(labels, serde_json::json!({"new":"Yeni"}));
+    assert!(column_exists(&db.pool, ("workspace_policies", "inbox_policy")).await);
 }

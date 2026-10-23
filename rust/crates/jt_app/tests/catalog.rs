@@ -112,6 +112,8 @@ fn catalog_is_the_release_table() {
         .map(|uc| (uc.id, uc.mcp_tool, uc.panel_route, uc.panel_only, uc.risk))
         .collect();
     let expected = [
+        ("inbox.pending", Some("jeeta.inbox.pending"), Some(("GET", "/api/inbox/pending")), false, Risk::Read),
+        ("inbox.context", Some("jeeta.inbox.context"), Some(("GET", "/api/inbox/conversations/{conversation_id}/context")), false, Risk::Read),
         ("inbox.conversations.list", Some("jeeta.inbox.conversations_list"), Some(("GET", "/api/inbox/conversations")), false, Risk::Read),
         ("inbox.conversations.get", Some("jeeta.inbox.conversations_get"), Some(("GET", "/api/inbox/conversations/{conversation_id}")), false, Risk::Read),
         ("inbox.messages.list", Some("jeeta.inbox.messages_list"), Some(("GET", "/api/inbox/conversations/{conversation_id}/messages")), false, Risk::Read),
@@ -212,9 +214,9 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 98);
+    assert_eq!(CATALOG.len(), 100);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if uc.id.starts_with("inbox.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG

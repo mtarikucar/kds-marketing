@@ -6,6 +6,10 @@ use jt_inbox::{Journey, JourneyEvent, JourneyId, JourneyStatus, PersonId, Transi
 const ROW: &str = "to_jsonb(j) || jsonb_build_object('owner',owner_id)";
 #[async_trait]
 impl JourneyRepo for PgTenantRepos {
+    async fn open_owned_by(&mut self, user: jt_tenancy::UserId) -> Result<Vec<Journey>, AppError> {
+        many!(sqlx::query_scalar(&format!("select {ROW} from journeys j where workspace_id=$1 and owner_id=$2 and closed_at is null order by id for update")).bind(self.workspace_id().as_uuid()).bind(user.as_uuid()),self,Journey)
+    }
+
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError> {
         sqlx::query_scalar("select reducer_revision from journeys where workspace_id=$1 and id=$2")
             .bind(self.workspace_id().as_uuid())

@@ -678,7 +678,8 @@ impl WorkspacePolicyRepo for MemTenant {
                 "workspace_policies.workspace_id",
             )?;
             if policy
-                .inbox_status_labels
+                .inbox
+                .status_labels
                 .keys()
                 .any(|key| !jt_app::ports::inbox::INBOX_STATUS_KEYS.contains(&key.as_str()))
             {

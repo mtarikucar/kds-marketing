@@ -236,7 +236,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (88 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (90 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -253,7 +253,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 88 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 90 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -1182,8 +1182,8 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
 
 ## Gelen kutusu çekirdeği (M2a)
 
-Aşağıdaki 28 işlem panel ve MCP üzerinde aynı JSON gövdesini döndürür. Hepsi etkin çalışma
-alanı ve onaylı strateji ister. Günlük çalışma `inbox.work`; sözlük, sahip atama ve
+Aşağıdaki 30 işlem panel ve MCP üzerinde aynı JSON gövdesini döndürür. Hepsi etkin çalışma
+alanı ister; `pending` ve `context` dışındakiler onaylı strateji de ister. Günlük çalışma `inbox.work`; sözlük, sahip atama ve
 birleştirme işlemleri `inbox.manage` gerektirir.
 
 | İşlem | Panel | MCP | Risk / izin |
@@ -1207,6 +1207,8 @@ birleştirme işlemleri `inbox.manage` gerektirir.
 | Görevi tamamla | `POST /api/inbox/tasks/{task_id}/complete` | `jeeta.inbox.tasks_complete` | WRITE / `inbox.work` |
 | Görev kuyruğunu oku (`queue`, `assignee`) | `GET /api/inbox/tasks` | `jeeta.inbox.tasks_list` | READ / `inbox.work` |
 | Not ekle (`{text}`) | `POST /api/inbox/journeys/{journey_id}/notes` | `jeeta.inbox.notes_add` | WRITE / `inbox.work` |
+| `pending` | `GET /api/inbox/pending` | `jeeta.inbox.pending` | READ / `inbox.work` |
+| `context` | `GET /api/inbox/conversations/{conversation_id}/context` | `jeeta.inbox.context` | READ / `inbox.work` |
 | `conversations.list` | `GET /api/inbox/conversations` | `jeeta.inbox.conversations_list` | READ / `inbox.work` |
 | `conversations.get` | `GET /api/inbox/conversations/{conversation_id}` | `jeeta.inbox.conversations_get` | READ / `inbox.work` |
 | `messages.list` | `GET /api/inbox/conversations/{conversation_id}/messages` | `jeeta.inbox.messages_list` | READ / `inbox.work` |
@@ -1303,3 +1305,23 @@ sürümler arasında sabit kalır. Konuşmasız echo için gelen temas zamanı u
 T014 inceleme notu: Lost yolculuktaki PBX olayları şu anda yan etki olmadan ertelenir;
 reducer `CallMade` olayını Lost üzerinde reddeder. Lost Hangup kararının kalıcı kaydı ve
 konuşmasız echo için gelen temas oluşturmayan repository işlemi koordinatör kararı bekler.
+
+
+### Inbox pending/context and timers
+
+Only `inbox.pending` and `inbox.context` are exempt from the strategy gate; both still require
+an active workspace and `inbox.work`. Pending queues follow the executor (unassigned human
+queues are visible to all holders). Context includes at most ten recent conversations for the
+same person, the last three messages each, ten journey events, open tasks, and live strategy
+identity/segments/channel hypotheses plus prohibitions. No strategy produces null guidance.
+`work.pending` derives ReplyDue/ReopenQuestion (priority 2) and MergeSuggested/TaskDue (3), after
+strategy work, and preserves workspace status filtering.
+
+`response_sla` and `snooze_wake` run every minute under separate advisory locks. SLA hands stale
+Ours/Agent conversations to the journey owner or unassigned humans, increments the executor
+fence and records one ledger entry per handover. Snooze wake changes elapsed snoozes to Ours
+once. Member removal unassigns their executor conversations and all owned open journeys in the
+removal transaction, recording each change. `WorkspacePolicy.inbox` holds `max_response_s`
+(whatsapp/instagram_dm/messenger 900; sms 3600), `unreachable_threshold` (3) and fixed-key
+`status_labels`. Migration 0007 stores response settings and preserves existing label overrides;
+its down migration removes only the added policy column.

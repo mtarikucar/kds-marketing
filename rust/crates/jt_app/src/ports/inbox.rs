@@ -151,6 +151,8 @@ pub trait ConversationRepo: Send + Sync {
 
 #[async_trait]
 pub trait MessageRepo: Send + Sync {
+    /// Latest messages in chronological order.
+    async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError>;
     /// Consumer contract: after a NEW inbound insert, call in the SAME transaction with the
     /// normalized/scoped identity that matched its sender. Stores sender_identity_id on the
     /// message and updates the conversation's last_inbound_identity_id only for its latest
@@ -187,6 +189,8 @@ pub trait MessageRepo: Send + Sync {
 
 #[async_trait]
 pub trait JourneyRepo: Send + Sync {
+    /// All open journeys of a departing owner, without a page cap.
+    async fn open_owned_by(&mut self, user: UserId) -> Result<Vec<Journey>, AppError>;
     /// Advances only when a reducer transition is persisted, never for notes/tasks/owner edits
     /// or historical receipts. Read while holding the journey lock.
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError>;

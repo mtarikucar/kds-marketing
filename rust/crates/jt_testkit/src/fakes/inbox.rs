@@ -625,6 +625,20 @@ impl ConversationRepo for MemTenant {
 }
 #[async_trait]
 impl MessageRepo for MemTenant {
+    async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbox
+            .messages
+            .iter()
+            .filter(|m| m.workspace_id == self.ws && m.conversation_id == id)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|m| (m.at, m.id));
+        let skip = rows.len().saturating_sub(limit.clamp(1, 500) as usize);
+        Ok(rows.into_iter().skip(skip).collect())
+    }
+
     async fn record_inbound_sender(
         &mut self,
         message: MessageId,
@@ -817,6 +831,19 @@ impl MessageRepo for MemTenant {
 }
 #[async_trait]
 impl JourneyRepo for MemTenant {
+    async fn open_owned_by(&mut self, user: jt_tenancy::UserId) -> Result<Vec<Journey>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbox
+            .journeys
+            .iter()
+            .filter(|j| j.workspace_id == self.ws && j.owner == Some(user) && j.closed_at.is_none())
+            .cloned()
+            .collect();
+        rows.sort_by_key(|j| j.id);
+        Ok(rows)
+    }
+
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError> {
         journey(self.state(), self.ws, id)?;
         Ok(*self

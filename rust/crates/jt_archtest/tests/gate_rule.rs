@@ -30,7 +30,7 @@ const EXEMPT_PREFIXES: &[&str] = &[
 ];
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
-const EXEMPT_IDS: &[&str] = &["ledger.list"];
+const EXEMPT_IDS: &[&str] = &["ledger.list", "inbox.pending", "inbox.context"];
 
 fn may_be_exempt(id: &str) -> bool {
     EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p)) || EXEMPT_IDS.contains(&id)
@@ -184,14 +184,36 @@ fn catalog_ids_are_dotted_lowercase() {
 }
 
 #[test]
-fn inbox_core_is_strategy_and_status_gated() {
+fn inbox_core_keeps_exact_read_exemptions_and_status_gate() {
     let rows: Vec<_> = CATALOG
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 28);
+    assert_eq!(rows.len(), 30);
     for row in rows {
-        assert_eq!(row.gate, GateMode::Gated);
+        assert_eq!(
+            row.gate,
+            if ["inbox.pending", "inbox.context"].contains(&row.id) {
+                GateMode::Exempt
+            } else {
+                GateMode::Gated
+            }
+        );
+        assert_eq!(row.status_exemption, StatusExemption::Never);
+    }
+}
+
+#[test]
+fn only_pending_and_context_are_exempt_inbox_reads() {
+    for row in CATALOG.iter().filter(|r| r.id.starts_with("inbox.")) {
+        assert_eq!(
+            row.gate,
+            if ["inbox.pending", "inbox.context"].contains(&row.id) {
+                GateMode::Exempt
+            } else {
+                GateMode::Gated
+            }
+        );
         assert_eq!(row.status_exemption, StatusExemption::Never);
     }
 }

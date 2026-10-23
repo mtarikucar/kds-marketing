@@ -1007,6 +1007,32 @@ pub const MIN_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 15;
 /// The longest check-in interval a workspace may set, in minutes: a week.
 pub const MAX_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 10_080;
 
+/// Inbox response deadlines, reachability and fixed-stage display labels.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct InboxPolicy {
+    pub max_response_s: BTreeMap<String, u32>,
+    pub unreachable_threshold: u8,
+    pub status_labels: BTreeMap<String, String>,
+}
+impl Default for InboxPolicy {
+    fn default() -> Self {
+        Self {
+            max_response_s: [
+                ("whatsapp", 900),
+                ("instagram_dm", 900),
+                ("messenger", 900),
+                ("sms", 3600),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.into(), v))
+            .collect(),
+            unreachable_threshold: 3,
+            status_labels: BTreeMap::new(),
+        }
+    }
+}
+
 /// The workspace-wide policies.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkspacePolicy {
@@ -1014,14 +1040,14 @@ pub struct WorkspacePolicy {
     /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES`.
     pub agent_checkin_interval_minutes: u32,
     /// Workspace display labels for the nine fixed inbox stages; absent overrides use defaults.
-    pub inbox_status_labels: BTreeMap<String, String>,
+    pub inbox: InboxPolicy,
 }
 
 impl Default for WorkspacePolicy {
     fn default() -> Self {
         WorkspacePolicy {
             agent_checkin_interval_minutes: DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES,
-            inbox_status_labels: BTreeMap::new(),
+            inbox: InboxPolicy::default(),
         }
     }
 }

@@ -285,7 +285,7 @@ async fn status_labels_require_manage_preserve_policy_and_ledger_only_keys() {
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     let stored = r.workspace_policy().get().await.unwrap();
     assert_eq!(stored.agent_checkin_interval_minutes, 60);
-    assert_eq!(stored.inbox_status_labels, output.labels);
+    assert_eq!(stored.inbox.status_labels, output.labels);
     drop(r);
     let bad = serde_json::from_value(json!({"labels":{"custom":"bad"}})).unwrap();
     assert_eq!(
@@ -313,7 +313,8 @@ async fn status_labels_require_manage_preserve_policy_and_ledger_only_keys() {
             .get()
             .await
             .unwrap()
-            .inbox_status_labels
+            .inbox
+            .status_labels
             .is_empty()
     );
 }

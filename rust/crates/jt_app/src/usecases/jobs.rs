@@ -114,11 +114,13 @@ pub enum Job {
     PurgeProbeRuns,
     OutboxRecover,
     InboxConsume,
+    ResponseSla,
+    SnoozeWake,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 9] = [
+    pub const ALL: [Job; 11] = [
         Job::RefreshTokens,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
@@ -128,6 +130,8 @@ impl Job {
         Job::PurgeProbeRuns,
         Job::OutboxRecover,
         Job::InboxConsume,
+        Job::ResponseSla,
+        Job::SnoozeWake,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -143,6 +147,8 @@ impl Job {
             Job::PurgeProbeRuns => "purge_probe_runs",
             Job::OutboxRecover => "outbox_recover",
             Job::InboxConsume => "inbox_consume",
+            Job::ResponseSla => "response_sla",
+            Job::SnoozeWake => "snooze_wake",
         }
     }
 
@@ -163,6 +169,8 @@ impl Job {
             Job::PurgeProbeRuns => run_purge_probe_runs(deps, now).await,
             Job::OutboxRecover => run_outbox_recover(deps, now).await,
             Job::InboxConsume => run_inbox_consume(deps, now).await,
+            Job::ResponseSla => run_response_sla(deps, now).await,
+            Job::SnoozeWake => run_snooze_wake(deps, now).await,
         }
     }
 }
@@ -1108,4 +1116,86 @@ pub async fn run_inbox_consume(deps: &Deps, now: OffsetDateTime) -> JobReport {
         report.failed += result.failed;
     }
     finish(Job::InboxConsume, report)
+}
+
+/// Hand overdue agent conversations to their journey owner or the unassigned queue.
+pub async fn run_response_sla(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    run_inbox_timer(deps, now, Job::ResponseSla).await
+}
+/// Wake elapsed snoozes; persisted state makes subsequent runs no-ops.
+pub async fn run_snooze_wake(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    run_inbox_timer(deps, now, Job::SnoozeWake).await
+}
+async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobReport {
+    use jt_inbox::{ConvState, Executor};
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let result = async {
+            let mut r = deps.uow.tenant(ws).await?;
+            r.people().lock_workspace().await?;
+            r.people().set_write_time(now).await?;
+            let policy = r.workspace_policy().get().await?.inbox;
+            let mut changed = 0;
+            for c in super::inbox::context::all_conversations(r.as_mut()).await? {
+                if job == Job::SnoozeWake {
+                    if !matches!(c.state,ConvState::Snoozed{until} if until<=now) {
+                        continue;
+                    }
+                    r.conversations()
+                        .update_state(c.id, ConvState::Ours, None)
+                        .await?;
+                } else {
+                    if c.state != ConvState::Ours || c.executor != Executor::Agent {
+                        continue;
+                    }
+                    let channel = match c.kind_key.as_str() {
+                        "sms_line" => "sms",
+                        "whatsapp_cloud" => "whatsapp",
+                        other => other,
+                    };
+                    let Some(seconds) = policy.max_response_s.get(channel) else {
+                        continue;
+                    };
+                    if now - c.last_inbound_at.unwrap_or(c.created_at)
+                        <= Duration::seconds(i64::from(*seconds))
+                    {
+                        continue;
+                    }
+                    let owner = r
+                        .journeys()
+                        .open_for(c.person_id)
+                        .await?
+                        .and_then(|j| j.owner);
+                    r.conversations()
+                        .update_executor(c.id, Executor::Human { user_id: owner })
+                        .await?;
+                }
+                super::inbox::record(
+                    r.as_mut(),
+                    &ctx,
+                    &format!("inbox.{}", job.name()),
+                    "conversation",
+                    c.id,
+                    json!({}),
+                )
+                .await?;
+                changed += 1;
+            }
+            r.commit().await?;
+            Ok::<_, AppError>(changed)
+        }
+        .await;
+        match result {
+            Ok(n) => {
+                report.changed += n;
+                report.touched += n;
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
 }

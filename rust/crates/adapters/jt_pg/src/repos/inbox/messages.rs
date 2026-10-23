@@ -8,6 +8,10 @@ use jt_app::{
 use jt_inbox::{ConversationId, IdentityId, Message, MessageId, MsgStatus};
 #[async_trait]
 impl MessageRepo for PgTenantRepos {
+    async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError> {
+        many!(sqlx::query_scalar("select to_jsonb(m) from (select * from messages where workspace_id=$1 and conversation_id=$2 order by at desc,id desc limit $3) m order by at,id").bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(i64::from(limit.clamp(1,500))),self,Message)
+    }
+
     async fn record_inbound_sender(
         &mut self,
         message: MessageId,

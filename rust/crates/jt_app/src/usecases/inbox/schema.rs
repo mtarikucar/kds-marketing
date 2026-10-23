@@ -83,8 +83,8 @@ pub fn input(action: &str) -> Value {
 pub fn tool(action: &str) -> Value {
     let mut out = input(action);
     let id = match action {
-        "conversations.get" | "messages.list" | "take_over" | "hand_to_agent" | "snooze"
-        | "unsnooze" | "close" | "reply" => Some("conversation_id"),
+        "context" | "conversations.get" | "messages.list" | "take_over" | "hand_to_agent"
+        | "snooze" | "unsnooze" | "close" | "reply" => Some("conversation_id"),
         "people.get" | "identities.add" | "journeys.open" => Some("person_id"),
         "journeys.get"
         | "journeys.assign_owner"

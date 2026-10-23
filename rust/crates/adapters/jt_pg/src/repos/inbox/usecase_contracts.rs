@@ -220,7 +220,11 @@ async fn status_labels_policy_contract_fake_and_pg() {
         let f = Fixture::new(uow.clone()).await;
         let policy = WorkspacePolicy {
             agent_checkin_interval_minutes: 60,
-            inbox_status_labels: [("new".into(), "Yeni".into())].into(),
+            inbox: jt_app::ports::InboxPolicy {
+                status_labels: [("new".into(), "Yeni".into())].into(),
+                unreachable_threshold: 5,
+                max_response_s: [("sms".into(), 42)].into(),
+            },
         };
         let mut r = uow.tenant(f.ws).await.unwrap();
         assert!(
@@ -228,7 +232,8 @@ async fn status_labels_policy_contract_fake_and_pg() {
                 .get()
                 .await
                 .unwrap()
-                .inbox_status_labels
+                .inbox
+                .status_labels
                 .is_empty()
         );
         r.workspace_policy()
@@ -240,7 +245,8 @@ async fn status_labels_policy_contract_fake_and_pg() {
         assert_eq!(r.workspace_policy().get().await.unwrap(), policy);
         let mut edited = policy.clone();
         edited
-            .inbox_status_labels
+            .inbox
+            .status_labels
             .insert("won".into(), "Won".into());
         r.workspace_policy().set(edited, FIXED_NOW).await.unwrap();
         drop(r);
@@ -255,7 +261,8 @@ async fn status_labels_policy_contract_fake_and_pg() {
         drop(other);
         let mut r = uow.tenant(f.ws).await.unwrap();
         let mut bad = policy;
-        bad.inbox_status_labels
+        bad.inbox
+            .status_labels
             .insert("custom".into(), "Invalid".into());
         assert!(r.workspace_policy().set(bad, FIXED_NOW).await.is_err());
     }
@@ -292,7 +299,8 @@ async fn concurrent_policy_edits_preserve_unrelated_fields() {
         };
         assert_eq!(policy.agent_checkin_interval_minutes, interval);
         policy
-            .inbox_status_labels
+            .inbox
+            .status_labels
             .insert("new".into(), "Yeni".into());
         second
             .workspace_policy()
@@ -303,7 +311,7 @@ async fn concurrent_policy_edits_preserve_unrelated_fields() {
         let mut read = f.uow.tenant(f.ws).await.unwrap();
         let policy = read.workspace_policy().get().await.unwrap();
         assert_eq!(policy.agent_checkin_interval_minutes, interval);
-        assert_eq!(policy.inbox_status_labels["new"], "Yeni");
+        assert_eq!(policy.inbox.status_labels["new"], "Yeni");
     }
 }
 

@@ -244,7 +244,15 @@ pub async fn report(
         reason_label,
         at: ctx.now,
     };
-    let transition = reduce(&journey, &event, &ReducePolicy::default()).map_err(reduce_error)?;
+    let policy = ReducePolicy {
+        unreachable_threshold: r
+            .workspace_policy()
+            .get()
+            .await?
+            .inbox
+            .unreachable_threshold,
+    };
+    let transition = reduce(&journey, &event, &policy).map_err(reduce_error)?;
     let out = ReportOut {
         effects: transition.effects().to_vec(),
         transition: Some(transition.clone()),

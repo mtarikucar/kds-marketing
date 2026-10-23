@@ -1525,7 +1525,7 @@ async fn inbox_status_labels_have_http_mcp_parity_and_persist() {
     let uow = PgUnitOfWork::new(db.pool.clone());
     let mut repos = uow.tenant(ws).await.unwrap();
     let stored = serde_json::to_value(repos.workspace_policy().get().await.unwrap()).unwrap();
-    assert_eq!(stored["inbox_status_labels"], input["labels"]);
+    assert_eq!(stored["inbox"]["status_labels"], input["labels"]);
     drop(repos);
     for invalid in [
         json!({"labels":{"custom_stage":"Custom"}}),
@@ -1886,4 +1886,129 @@ async fn inbox_conversation_get_and_reply_have_http_mcp_parity() {
     assert_eq!(human["state"], "sent");
     let mut r = deps.uow.tenant(ws).await.unwrap();
     assert_eq!(r.messages().list(id, 50).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn inbox_pending_and_context_have_http_mcp_parity_without_strategy() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    use jt_inbox::{ConvState, Conversation, ConversationId, Executor};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("conversation-parity").await;
+    let sender =
+        Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(&["api.netgsm.com.tr"]));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(sender.clone())),
+    );
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    sender.push_probe(ProbeResult::success(42, json!({"account_id":"8508001234"})));
+    let cap=ok(send(&app,panel(Method::POST,"/api/connectors/credentials",Some(&cookie),Some(json!({"kind_key":"sms_line","name":"SMS","credential":{"kind":"netgsm_sms","usercode":"8508001234","password":"test-secret","msgheader":"ALFA"}})))).await).await;
+    let person=ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})))).await).await;
+    let id = ConversationId::new_v7();
+    let now = deps.clock.now();
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    r.people().set_write_time(now).await.unwrap();
+    r.conversations()
+        .upsert_on_inbound(Conversation {
+            id,
+            workspace_id: ws,
+            person_id: serde_json::from_value(person["person"]["id"].clone()).unwrap(),
+            capability_id: serde_json::from_value(cap["capability"]["id"].clone()).unwrap(),
+            kind_key: "sms_line".into(),
+            state: ConvState::Ours,
+            executor: Executor::Agent,
+            executor_generation: 0,
+            last_inbound_at: Some(now),
+            last_outbound_at: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let version = r.strategy().current_approved().await.unwrap().unwrap();
+    r.strategy()
+        .set_status(
+            version.id,
+            serde_json::from_value(json!("archived")).unwrap(),
+            now,
+            None,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/inbox/conversations/{id}/context"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.context",
+        json!({"conversation_id":id}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert!(human["strategy_guidance"].is_null());
+    assert_eq!(human["person"]["id"], person["person"]["id"]);
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    r.conversations()
+        .update_executor(id, Executor::Human { user_id: None })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let human = ok(send(
+        &app,
+        panel(Method::GET, "/api/inbox/pending", Some(&cookie), None),
+    )
+    .await)
+    .await;
+    let agent = call_tool(&app, &key, &session, "jeeta.inbox.pending", json!({})).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["ours"][0]["id"], json!(id));
+    for status in ["pending_payment", "suspended"] {
+        let mut r = deps.uow.platform().await.unwrap();
+        r.workspace_set_status(ws, serde_json::from_value(json!(status)).unwrap())
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+        for (path, tool, input) in [
+            (
+                "/api/inbox/pending".to_string(),
+                "jeeta.inbox.pending",
+                json!({}),
+            ),
+            (
+                format!("/api/inbox/conversations/{id}/context"),
+                "jeeta.inbox.context",
+                json!({"conversation_id":id}),
+            ),
+        ] {
+            let response = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+            let human = json_body(response).await;
+            let agent = tool_result(&app, &key, &session, tool, input).await;
+            assert_eq!(human["code"], "WORKSPACE_INACTIVE");
+            assert_eq!(human["code"], agent["structuredContent"]["code"]);
+        }
+    }
 }

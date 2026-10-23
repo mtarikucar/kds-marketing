@@ -735,7 +735,11 @@ export type WorkKind =
   | { kind: 'connect_connector'; capability_id: Uuid; name: string }
   | { kind: 'reconnect_connector'; capability_id: Uuid; name: string }
   /** Unprocessed inbound events, counted up to `INBOUND_EVENTS_COUNT_CAP`. */
-  | { kind: 'inbound_events'; count: number };
+  | { kind: 'inbound_events'; count: number }
+  | { kind: 'reply_due'; conversation_id: string }
+  | { kind: 'reopen_question'; conversation_id: string }
+  | { kind: 'merge_suggested'; merge_id: string }
+  | { kind: 'task_due'; task_id: string };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {
