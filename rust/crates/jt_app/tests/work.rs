@@ -457,9 +457,19 @@ async fn pending_lists_inbound_events_while_some_are_unprocessed() {
     let wire = serde_json::to_value(item).unwrap();
     assert_eq!(wire["kind"], "inbound_events");
     assert_eq!(wire["count"], 3);
-    // A rep sees it too: reading events needs workspace.read.
+    // Only who may acknowledge them is asked to: a rep, or a key without capabilities.manage,
+    // sees no item it could never clear.
     let rep = w.member("rep").await;
-    assert!(kinds(&pending(&w, &rep).await).contains(&WorkKind::InboundEvents { count: 3 }));
+    let reader = w.agent(&["workspace.read"]).await;
+    for ctx in [&rep, &reader] {
+        assert!(
+            !kinds(&pending(&w, ctx).await)
+                .iter()
+                .any(|k| matches!(k, WorkKind::InboundEvents { .. }))
+        );
+    }
+    let acker = w.agent(&["workspace.read", "capabilities.manage"]).await;
+    assert!(kinds(&pending(&w, &acker).await).contains(&WorkKind::InboundEvents { count: 3 }));
 
     events::ack(
         &w.deps,

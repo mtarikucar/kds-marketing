@@ -301,16 +301,129 @@ async fn the_time_an_event_happened_is_kept_in_its_payload() {
     )
     .await
     .unwrap();
-    let events = events_of(&w, w.ws);
+    let payload = |id: &str| {
+        events_of(&w, w.ws)
+            .into_iter()
+            .find(|e| e.external_id == id)
+            .unwrap()
+            .payload
+    };
     assert_eq!(
-        events[0].payload,
+        payload("wamid.t"),
         json!({ "message": { "id": "wamid.t" }, "occurred_at": "2026-10-22T08:57:00Z" })
     );
     assert_eq!(
-        events[1].payload,
+        payload("wamid.o"),
         json!({ "occurred_at": "provider's own" })
     );
-    assert_eq!(events[2].payload, json!("delivered"));
+    assert_eq!(payload("wamid.b"), json!("delivered"));
+}
+
+/// A delivery's raw body is kept once per workspace: beside the first event it newly stores
+/// there; its other events, in that workspace, keep none. A redelivery that brings one new event
+/// keeps the body beside that one.
+#[tokio::test]
+async fn a_delivery_keeps_its_raw_body_once_per_workspace() {
+    let w = world().await;
+    let (beta, _) = w.other_workspace().await;
+    connected(&w, w.ws, "whatsapp_cloud", "1").await;
+    connected(&w, beta, "whatsapp_cloud", "2").await;
+    let delivery = |ids: &[&str]| {
+        ids.iter()
+            .map(|id| {
+                let account = if id.starts_with("b.") { "2" } else { "1" };
+                for_account(WHATSAPP, account, draft(id, EventKind::Message))
+            })
+            .collect::<Vec<_>>()
+    };
+    webhook::receive_for_accounts(
+        &w.deps,
+        Provider::Meta,
+        delivery(&["wamid.3", "wamid.1", "b.1", "wamid.2"]),
+        b"one delivery",
+    )
+    .await
+    .unwrap();
+    let raws = |ws: WorkspaceId| -> Vec<(String, bool)> {
+        stored(&w)
+            .into_iter()
+            .filter(|s| s.event.workspace_id == ws)
+            .map(|s| (s.event.external_id, s.raw.is_some()))
+            .collect()
+    };
+    // Stored in the order of their ids, the body beside the first one only.
+    assert_eq!(
+        raws(w.ws),
+        [
+            ("wamid.1".to_owned(), true),
+            ("wamid.2".to_owned(), false),
+            ("wamid.3".to_owned(), false)
+        ]
+    );
+    assert_eq!(raws(beta), [("b.1".to_owned(), true)]);
+
+    let out = webhook::receive_for_accounts(
+        &w.deps,
+        Provider::Meta,
+        delivery(&["wamid.1", "wamid.4", "wamid.2"]),
+        b"the redelivery",
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        out[..],
+        [
+            Delivery::Duplicate,
+            Delivery::Stored(_),
+            Delivery::Duplicate
+        ]
+    ));
+    let fourth = stored(&w)
+        .into_iter()
+        .find(|s| s.event.external_id == "wamid.4")
+        .unwrap();
+    assert_eq!(fourth.raw.as_deref(), Some(&b"the redelivery"[..]));
+    assert_eq!(stored(&w).iter().filter(|s| s.raw.is_some()).count(), 3);
+}
+
+/// Within a workspace, a delivery's events are written in the order of their provider ids,
+/// whatever their order in the body, so two deliveries of the same events lock them in the same
+/// order; the answers keep the body's order.
+#[tokio::test]
+async fn a_delivery_is_written_in_the_order_of_its_event_ids() {
+    let w = world().await;
+    connected(&w, w.ws, "whatsapp_cloud", "1").await;
+    let out = webhook::receive_for_accounts(
+        &w.deps,
+        Provider::Meta,
+        ["wamid.c", "wamid.a", "wamid.b"]
+            .into_iter()
+            .map(|id| for_account(WHATSAPP, "1", draft(id, EventKind::Message)))
+            .collect(),
+        b"{}",
+    )
+    .await
+    .unwrap();
+    let written: Vec<_> = events_of(&w, w.ws)
+        .into_iter()
+        .map(|e| (e.external_id, e.id))
+        .collect();
+    assert_eq!(
+        written
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["wamid.a", "wamid.b", "wamid.c"]
+    );
+    let by_id = |external: &str| written.iter().find(|(id, _)| id == external).unwrap().1;
+    assert_eq!(
+        out,
+        [
+            Delivery::Stored(by_id("wamid.c")),
+            Delivery::Stored(by_id("wamid.a")),
+            Delivery::Stored(by_id("wamid.b"))
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -398,6 +511,33 @@ async fn netgsm_events_attach_to_the_single_live_capability_of_their_purpose() {
     ));
     let events = events_of(&w, w.ws);
     assert_eq!(events.len(), 1);
+    // A three-item callback keeps its body once, beside the first of its ids.
+    webhook::receive_netgsm(
+        &w.deps,
+        w.ws,
+        NetgsmPurpose::Mo,
+        vec![
+            draft("netgsm-mo:4", EventKind::Message),
+            draft("netgsm-mo:2", EventKind::Message),
+            draft("netgsm-mo:3", EventKind::Message),
+        ],
+        b"three",
+    )
+    .await
+    .unwrap();
+    let three: Vec<(String, bool)> = stored(&w)
+        .into_iter()
+        .filter(|s| s.event.external_id != "netgsm-mo:1")
+        .map(|s| (s.event.external_id, s.raw.is_some()))
+        .collect();
+    assert_eq!(
+        three,
+        [
+            ("netgsm-mo:2".to_owned(), true),
+            ("netgsm-mo:3".to_owned(), false),
+            ("netgsm-mo:4".to_owned(), false)
+        ]
+    );
     assert_eq!(events[0].provider, Provider::Netgsm);
     assert_eq!(events[0].capability_id, Some(line));
     assert_eq!(stored(&w)[0].raw.as_deref(), Some(&raw[..]));

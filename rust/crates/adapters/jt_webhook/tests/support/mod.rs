@@ -35,6 +35,8 @@ use tower::ServiceExt;
 
 /// The Meta app secret and verify token of [`FakeAppConfig::with_all_apps`].
 pub const APP_SECRET: &str = "meta-app-secret";
+/// The Instagram app secret of [`FakeAppConfig::with_all_apps`].
+pub const INSTAGRAM_SECRET: &str = "instagram-app-secret";
 pub const VERIFY_TOKEN: &str = "meta-verify-token";
 
 /// A fixture's bytes, from `tests/fixtures/`.
@@ -102,8 +104,13 @@ impl World {
 
     /// The same world without any provider app.
     pub fn without_apps(&self) -> World {
+        self.with_apps(FakeAppConfig::default())
+    }
+
+    /// The same world with these provider apps.
+    pub fn with_apps(&self, apps: FakeAppConfig) -> World {
         let mut deps = self.deps.clone();
-        deps.apps = Arc::new(FakeAppConfig::default());
+        deps.apps = Arc::new(apps);
         World {
             uow: self.uow.clone(),
             deps,

@@ -291,7 +291,8 @@
       "declare_first_capability": "Çalışma alanının kullanabileceği ilk kabiliyeti bildirin.",
       "connect_connector": "{{name}} bağlanmayı bekliyor.",
       "reconnect_connector": "{{name}} yeniden bağlanmalı: sağlayıcı girişini artık kabul etmiyor.",
-      "inbound_events": "{{n}} gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.",
+      "inbound_events_one": "{{n}} gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.",
+      "inbound_events_other": "{{n}} gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.",
       "open": "Aç",
       "priority": "Öncelik {{priority}}",
       "reconnect": "Yeniden bağla"

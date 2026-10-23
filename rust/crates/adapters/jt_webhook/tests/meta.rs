@@ -11,6 +11,7 @@ use axum::http::{Request, StatusCode, header};
 use jt_app::usecases::Deps;
 use jt_capability::StoredStatus;
 use jt_connector::{EventKind, Provider};
+use jt_testkit::fakes::FakeAppConfig;
 use jt_webhook::{META_BODY_LIMIT, counters};
 use serde_json::json;
 use std::sync::Arc;
@@ -116,10 +117,11 @@ async fn meta_post_with_a_bad_or_missing_signature_is_401_and_stores_nothing() {
     assert!(w.stored().is_empty());
 }
 
+/// WhatsApp Cloud API payloads reach 3 MB: that much is read, more is `413`.
 #[tokio::test]
-async fn meta_post_over_one_megabyte_is_413() {
+async fn meta_post_over_three_megabytes_is_413() {
     let w = World::new().await;
-    assert_eq!(META_BODY_LIMIT, 1024 * 1024);
+    assert_eq!(META_BODY_LIMIT, 3 * 1024 * 1024);
     let big = vec![b' '; META_BODY_LIMIT + 1];
     let (status, _) = answer(&w.app(), signed(&big)).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
@@ -139,18 +141,22 @@ async fn a_whatsapp_delivery_stores_one_event_per_message_and_a_replay_none() {
     let (status, text) = answer(&w.app(), signed(&body)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(text, "EVENT_RECEIVED");
+    // Written in the order of their ids.
     let events = w.events_of(w.ws);
     let ids: Vec<&str> = events.iter().map(|e| e.external_id.as_str()).collect();
     assert_eq!(
         ids,
         [
-            "wamid.TEST-TEXT-1",
             "wamid.TEST-BUTTON-1",
             "wamid.TEST-INTERACTIVE-1",
-            "wamid.TEST-REFERRAL-1"
+            "wamid.TEST-REFERRAL-1",
+            "wamid.TEST-TEXT-1"
         ]
     );
-    let first = &events[0];
+    let first = events
+        .iter()
+        .find(|e| e.external_id == "wamid.TEST-TEXT-1")
+        .unwrap();
     assert_eq!(first.provider, Provider::Meta);
     assert_eq!(first.kind, EventKind::Message);
     assert_eq!(first.capability_id, Some(number));
@@ -160,12 +166,9 @@ async fn a_whatsapp_delivery_stores_one_event_per_message_and_a_replay_none() {
     );
     assert_eq!(first.payload["contact"]["profile"]["name"], "Test Kişi");
     assert_eq!(first.payload["occurred_at"], "2026-09-21T14:13:20Z");
-    // The body as received is kept beside each event.
-    assert!(
-        w.stored()
-            .iter()
-            .all(|s| s.raw.as_deref() == Some(&body[..]))
-    );
+    // The body as received is kept once, beside the first event stored.
+    let raws: Vec<Option<Vec<u8>>> = w.stored().into_iter().map(|s| s.raw).collect();
+    assert_eq!(raws, [Some(body.clone()), None, None, None]);
 
     // Meta redelivers: acknowledged, nothing new (Review Focus 2).
     let (status, text) = answer(&w.app(), signed(&body)).await;
@@ -220,6 +223,37 @@ async fn an_event_for_an_account_no_workspace_holds_connected_is_dropped_with_a_
     ] {
         assert!(!logs.contains(private), "the log names {private}: {logs}");
     }
+}
+
+/// Instagram Login webhooks are signed with the Instagram app's secret: a body that either
+/// platform secret signs passes; with no Instagram app configured, only the Meta secret does.
+#[tokio::test]
+async fn an_instagram_delivery_signed_with_the_instagram_app_secret_is_accepted() {
+    let w = World::new().await;
+    let account = w.connected(w.ws, "instagram_dm", "17841400000000001").await;
+    let body = fixture("meta/instagram_messaging.json");
+    let by_instagram = meta_post(&body, Some(&signature(INSTAGRAM_SECRET, &body)));
+
+    let meta_only = w.with_apps(FakeAppConfig {
+        instagram: None,
+        ..FakeAppConfig::with_all_apps()
+    });
+    let (status, _) = answer(
+        &meta_only.app(),
+        meta_post(&body, Some(&signature(INSTAGRAM_SECRET, &body))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(w.stored().is_empty());
+
+    let (status, text) = answer(&w.app(), by_instagram).await;
+    assert_eq!((status, text.as_str()), (StatusCode::OK, "EVENT_RECEIVED"));
+    let events = w.events_of(w.ws);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|e| e.capability_id == Some(account)));
+    // The Meta secret still signs too.
+    let (status, _) = answer(&meta_only.app(), signed(&body)).await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]

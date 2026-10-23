@@ -620,8 +620,9 @@ her birini kopyalanacak biçimde gösterir, ajan aynı listeyi `jeeta.connector.
   (sesli mesaj raporları) ya da `autocall-report` (otomatik arama raporları). Anahtar, alanın gizli
   anahtarından o amaç için türetilen HMAC'tir (saklanmaz, her istekte yeniden hesaplanır, sabit zamanda
   karşılaştırılır); adresi NetGSM panelinde ilgili geri çağırma alanına yapıştırın ve başkasıyla
-  paylaşmayın. Bilinmeyen amaç, bozuk alan kimliği, yanlış anahtar, var olmayan ya da etkin olmayan alan:
-  hepsi gövde okunmadan çıplak `404` alır ve hiçbir şey yazılmaz. Gövde en çok 256 KB'tır (`413`).
+  paylaşmayın. Çözülemeyen bir adres parçası (bozuk yüzde kodlaması), bilinmeyen amaç, bozuk alan
+  kimliği, yanlış anahtar, var olmayan ya da etkin olmayan alan: hepsi gövde okunmadan çıplak `404` alır
+  ve hiçbir şey yazılmaz. Gövde en çok 256 KB'tır (`413`).
   Okunamayan bir gövde `202` alır, hiçbir şey yazılmaz, yalnız amaç günlüğe yazılır ve sayılır (NetGSM
   başka her yanıtı yeniden denerdi). Olaylar alanın o amaca ait tek canlı kabiliyetine bağlanır (`mo` ve
   `iys` → `sms_line`, ötekiler → `netgsm_pbx`; hiç ya da birden çok varsa hiçbirine). Başarı `202`'dir;
@@ -632,16 +633,21 @@ her birini kopyalanacak biçimde gösterir, ajan aynı listeyi `jeeta.connector.
   operatörünün işidir ve anahtar hiçbir yanıtta görünmez). `GET` doğrulaması `hub.mode=subscribe` ve doğru
   `hub.verify_token` için `hub.challenge`'ı düz metin olarak döndürür, değilse `403`; Meta uygulaması
   yoksa `404`. `POST` teslimleri eşzamanlıdır: imza başlığı (`X-Hub-Signature-256`) yoksa ya da uygulama
-  yoksa gövde okunmadan `401`; gövde en çok 1 MB'tır (`413`); imza, ham gövde üzerinde uygulama sırrıyla
-  her şeyden önce doğrulanır (`401`, hiçbir şey yazılmaz). Her olay hesabıyla (sayfa, Instagram hesabı,
+  yoksa gövde okunmadan `401`; gövde en çok 3 MB'tır (WhatsApp Cloud API yükleri bu boyuta varır;
+  üstü `413`); imza, ham gövde üzerinde her şeyden önce Meta uygulamasının sırrıyla ve platformun
+  Instagram uygulaması yapılandırılmışsa onun sırrıyla da (Instagram Login webhook'ları onunla imzalanır)
+  sabit zamanda doğrulanır; biri imzalıyorsa geçer, hiçbiri imzalamıyorsa `401` ve hiçbir şey yazılmaz. Her olay hesabıyla (sayfa, Instagram hesabı,
   WhatsApp numarası) bütün alanlarda aranır ve hesabı **bağlı** tutan tek alana yazılır (mühürlü kimlik
   bilgisi, en az bir kez yoklamayla doğrulanmış, emekli değil). Hesabı bağlı tutan alan yoksa olay
   **atılır**: hiçbir alana satır yazılmaz, günlüğe yalnız sağlayıcı ve hesap türü yazılır ve sayılır.
   Her şey yazıldıktan sonra `200 EVENT_RECEIVED`; veritabanı hatası `500` (Meta yeniden gönderir).
 
 Bir olay alan, sağlayıcı ve sağlayıcı kimliği (`wamid`, `mid`, `netgsm-mo:<gorevid>` …) başına bir kez
-saklanır: yeniden gönderim ve aynı anda gelen kopyalar tek satır bırakır. Ham gövde olayın yanında 30
-gün tutulur ve hiçbir yanıtta görünmez; daha eskilerini bütün alanlarda `webhook::purge_raw` siler,
+saklanır: yeniden gönderim ve aynı anda gelen kopyalar tek satır bırakır. Bir teslimin olayları her
+alanda sağlayıcı kimliklerinin sırasıyla yazılır (alanlar da kimlik sırasıyla), böylece aynı olayları
+farklı sırada taşıyan iki teslim kilitleri aynı sırada alır ve birbirini kilitlemez. Ham gövde teslim ve
+alan başına bir kez, oraya yeni yazılan ilk olayın yanında tutulur (bin olaylı bir gövde bin kez
+saklanmaz; kardeş olaylar aynı `received_at`'i taşır); 30 gün tutulur ve hiçbir yanıtta görünmez; daha eskilerini bütün alanlarda `webhook::purge_raw` siler,
 olaylar kalır (zamanlayıcı onu günde bir çalıştıracak: M1b'nin sonraki adımı). Olaylar günlüğe
 (ledger) yazılmaz: dış dünyanın kayıtlarıdır.
 
@@ -712,7 +718,7 @@ neyin beklediğini sorabilir; askıya alınmış bir alanda `work.*` de `WORKSPA
 | `verify_capability` (`capability_id`, `name`, `stale`) | 2 | ajan ya da cihazla ulaşılan, `declared` ya da `stale` okunan her kabiliyet |
 | `reconnect_connector` (`capability_id`, `name`) | 1 | bağlayıcıyla ulaşılan, sağlayıcısı girişini artık kabul etmediği için (yoklama `auth` hatası, `connector_public.reconnect_required`) `unreachable` okunan her kabiliyet |
 | `connect_connector` (`capability_id`, `name`) | 2 | bağlayıcıyla ulaşılan, `declared` okunan her kabiliyet (bkz. [Bağlayıcılar](#bağlayıcılar)) |
-| `inbound_events` (`count`) | 2 | işlenmemiş gelen olaylar var; `count` en çok 1000'e kadar sayılır, 1000 "en az 1000" demektir (bkz. [Gelen olaylar](#gelen-olaylar)) |
+| `inbound_events` (`count`) | 2 | işlenmemiş gelen olaylar var ve soran onları işaretleyebilir (`capabilities.manage`; işaretleyemeyen bu işi görmez); `count` en çok 1000'e kadar sayılır, 1000 "en az 1000" demektir (bkz. [Gelen olaylar](#gelen-olaylar)) |
 | `declare_first_capability` | 3 | emekliye ayrılmamış hiçbir kabiliyet yok |
 
 - **`agent`**: `last_seen_at` (alanın ajan bağlantılarından en son görüleni, hiç yoksa `null`),

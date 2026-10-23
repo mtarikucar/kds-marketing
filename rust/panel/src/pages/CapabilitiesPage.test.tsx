@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { EFFECTIVE_STATUSES } from '@/api/types';
@@ -21,6 +21,7 @@ import {
   smsLine,
 } from '@/test/fixtures';
 import { mockFetch, renderAt } from '@/test/render';
+import { HOOKS_KEY } from './capabilities/queries';
 
 const routes = {
   'GET /api/auth/me': me,
@@ -361,5 +362,18 @@ describe('CapabilitiesPage', () => {
     expect(await screen.findByRole('heading', { name: 'Atölye Instagram' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: tr.capabilities.hooks.title })).not.toBeInTheDocument();
     expect(calls.some((c) => c.path === '/api/connectors/hooks')).toBe(false);
+  });
+
+  it('drops the hook addresses from the query cache once they leave the screen', async () => {
+    mockFetch(routes);
+    const { router, client } = renderAt('/capabilities');
+    expect(
+      await screen.findByRole('textbox', { name: i18n.t('capabilities.hooks.purposes.mo') }),
+    ).toHaveValue(hooks.netgsm[0].url);
+    expect(client.getQueryData(HOOKS_KEY)).toEqual(hooks);
+    await act(async () => {
+      await router.navigate('/budget');
+    });
+    await waitFor(() => expect(client.getQueryCache().find({ queryKey: HOOKS_KEY })).toBeUndefined());
   });
 });

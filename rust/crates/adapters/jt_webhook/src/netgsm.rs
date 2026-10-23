@@ -4,6 +4,7 @@
 use std::sync::atomic::Ordering;
 
 use axum::body::Body;
+use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use jt_app::usecases::webhook;
@@ -13,12 +14,16 @@ use jt_tenancy::WorkspaceId;
 use crate::{NETGSM_BODY_LIMIT, UNPARSEABLE_NETGSM, WebhookState, raw};
 
 /// A callback (see the crate docs). The URL is checked, in constant time for the token, before
-/// the body is read; every refusal of the URL is the same bare `404`.
+/// the body is read; every refusal of the URL is the same bare `404`, a segment that does not
+/// even decode (bad percent-encoding, not UTF-8) included.
 pub(crate) async fn receive(
     State(state): State<WebhookState>,
-    Path((workspace_id, token, purpose)): Path<(String, String, String)>,
+    path: Result<Path<(String, String, String)>, PathRejection>,
     body: Body,
 ) -> StatusCode {
+    let Ok(Path((workspace_id, token, purpose))) = path else {
+        return StatusCode::NOT_FOUND;
+    };
     let deps = state.deps.as_ref();
     let (Some(purpose), Ok(ws)) = (
         NetgsmPurpose::parse(&purpose),

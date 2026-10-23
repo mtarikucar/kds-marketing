@@ -17,7 +17,9 @@
 //! - `ConnectConnector` (2): each capability reached through a connector that reads `declared`
 //!   (M1b sets connectors up);
 //! - `InboundEvents` (2): inbound events (webhooks, polls) not yet acknowledged, with how many
-//!   (counted up to [`INBOUND_EVENTS_COUNT_CAP`]: a count of the cap means at least that many);
+//!   (counted up to [`INBOUND_EVENTS_COUNT_CAP`]: a count of the cap means at least that many),
+//!   only for a caller who may acknowledge them ([`events::ACK_PERMISSION`]): anyone else would
+//!   see an item they could never clear;
 //! - `DeclareFirstCapability` (3): no capability that is not retired.
 //!
 //! Each item carries a hint in English, for the agent; the panel shows its own copy.
@@ -41,7 +43,7 @@ use time::{Duration, OffsetDateTime};
 
 use super::capabilities::CapabilityOut;
 use super::strategy::{self, StrategyOut};
-use super::{Deps, agents, connector, invalid, ledger_entry};
+use super::{Deps, agents, connector, events, invalid, ledger_entry};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{
@@ -180,10 +182,15 @@ async fn pending_as_seen(
         .map(|c| CapabilityOut::at(c, ctx.now))
         .collect();
     let agent = agent_state(repos.as_mut(), ctx.now, seen_now).await?;
-    let inbound = repos
-        .inbound_events()
-        .count_pending(INBOUND_EVENTS_COUNT_CAP)
-        .await?;
+    // Only who may acknowledge the events is asked to handle them.
+    let inbound = if ctx.permissions.contains(&events::ACK_PERMISSION) {
+        repos
+            .inbound_events()
+            .count_pending(INBOUND_EVENTS_COUNT_CAP)
+            .await?
+    } else {
+        0
+    };
     drop(repos);
 
     let state = strategy_state(&strategy);

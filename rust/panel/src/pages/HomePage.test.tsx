@@ -201,7 +201,7 @@ describe('HomePage', () => {
     });
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': withEvents(3) });
     const { unmount } = renderAt('/');
-    const item = await screen.findByText(i18n.t('home.pending.inbound_events', { n: '3' }));
+    const item = await screen.findByText(i18n.t('home.pending.inbound_events', { count: 3, n: '3' }));
     // The agent handles them: nothing for the person to open.
     expect(within(item.closest('li') as HTMLElement).queryByRole('link')).not.toBeInTheDocument();
     expect(screen.queryByText('read them')).not.toBeInTheDocument();
@@ -209,6 +209,26 @@ describe('HomePage', () => {
 
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': withEvents(1000) });
     renderAt('/');
-    expect(await screen.findByText(i18n.t('home.pending.inbound_events', { n: '1000+' }))).toBeInTheDocument();
+    expect(
+      await screen.findByText(i18n.t('home.pending.inbound_events', { count: 1000, n: '1000+' })),
+    ).toBeInTheDocument();
+  });
+
+  it('says one inbound event in the singular in English, and keeps one Turkish sentence', () => {
+    const en = i18n.getFixedT('en');
+    expect(en('home.pending.inbound_events', { count: 1, n: '1' })).toBe(
+      '1 inbound event (a message, status, lead, call or consent change) awaits your agent.',
+    );
+    expect(en('home.pending.inbound_events', { count: 3, n: '3' })).toBe(
+      '3 inbound events (messages, statuses, leads, calls, consent changes) await your agent.',
+    );
+    expect(en('home.pending.inbound_events', { count: 1000, n: '1000+' })).toMatch(/^1000\+ inbound events /);
+    const tr = i18n.getFixedT('tr');
+    expect(tr('home.pending.inbound_events', { count: 1, n: '1' })).toBe(
+      '1 gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.',
+    );
+    expect(tr('home.pending.inbound_events', { count: 3, n: '3' })).toBe(
+      '3 gelen olay (mesaj, durum, form, arama, izin) ajanınızın işlemesini bekliyor.',
+    );
   });
 });

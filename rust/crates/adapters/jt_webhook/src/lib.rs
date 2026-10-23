@@ -7,14 +7,16 @@
 //! | Route | Answers |
 //! |---|---|
 //! | `GET /hooks/meta` | Meta's verification: the `hub.challenge` as `text/plain` when `hub.mode` is `subscribe` and `hub.verify_token` is the platform's (constant time); else `403`; `404` while no Meta app is configured |
-//! | `POST /hooks/meta` | `200 EVENT_RECEIVED` once every event is stored, routed or dropped; see **Meta** below |
+//! | `POST /hooks/meta` | `200 EVENT_RECEIVED` once every event is stored or dropped; see **Meta** below |
 //! | `POST /hooks/netgsm/{workspace_id}/{token}/{purpose}` | `202` once every event is stored; see **NetGSM** below |
 //!
 //! **Meta** (synchronous: a delivery is answered only after its events are stored, so a lost
 //! answer is a redelivery, never a lost event): no Meta app configured, or no
 //! `X-Hub-Signature-256` header, is `401` before the body is read; a body over
-//! [`META_BODY_LIMIT`] is `413`; the signature is checked over the raw body with the app secret
-//! before anything is parsed (`401` when it does not sign it, nothing stored). Each event is then
+//! [`META_BODY_LIMIT`] (3 MB) is `413`; the signature is checked over the raw body before
+//! anything is parsed, with the Meta app's secret and, when the platform's Instagram app is
+//! configured, with its secret too (Instagram Login webhooks are signed with it), each in
+//! constant time: either one signing it passes, neither is `401` with nothing stored. Each event is then
 //! routed by its account across workspaces and stored in the one workspace that holds the
 //! account connected (`jt_app::usecases::webhook::receive_for_accounts`); an event no workspace
 //! holds connected is dropped (Review Focus 1), with a warning naming only the provider, the
@@ -23,10 +25,11 @@
 //! acknowledged, counted and stored as nothing (Meta would only redeliver it). A database
 //! failure is `500`: Meta redelivers.
 //!
-//! **NetGSM** (unsigned: the URL carries the workspace's token per purpose): an unknown purpose,
-//! a malformed workspace id, a token that is not the workspace's for the purpose (constant
-//! time), and a workspace that does not exist or is not active are all a bare `404`, before the
-//! body is read and with nothing stored, so a refusal reveals nothing. A body over
+//! **NetGSM** (unsigned: the URL carries the workspace's token per purpose): a path segment that
+//! does not decode, an unknown purpose, a malformed workspace id, a token that is not the
+//! workspace's for the purpose (constant time), and a workspace that does not exist or is not
+//! active are all a bare `404`, before the body is read and with nothing stored, so a refusal
+//! reveals nothing. A body over
 //! [`NETGSM_BODY_LIMIT`] is `413`. A body the parser cannot read is `202` with nothing stored,
 //! a warning (the purpose only) and a count ([`counters`]`().unparseable_netgsm`): NetGSM retries
 //! anything else, and retrying cannot improve it. The events are stored synchronously in the
@@ -47,8 +50,9 @@ use axum::routing::{get, post};
 use jt_app::usecases::Deps;
 use jt_app::usecases::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH};
 
-/// The largest Meta delivery read; a larger one is `413`.
-pub const META_BODY_LIMIT: usize = 1024 * 1024;
+/// The largest Meta delivery read (WhatsApp Cloud API payloads reach 3 MB); a larger one is
+/// `413`.
+pub const META_BODY_LIMIT: usize = 3 * 1024 * 1024;
 /// The largest NetGSM callback body read; a larger one is `413`.
 pub const NETGSM_BODY_LIMIT: usize = 256 * 1024;
 

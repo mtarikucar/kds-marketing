@@ -139,6 +139,35 @@ async fn netgsm_unknown_purpose_is_404() {
     assert!(w.stored().is_empty());
 }
 
+/// A path segment that does not even decode (bad percent-encoding, not UTF-8) is refused like
+/// every other URL: a bare `404`, never the framework's `400` naming the parameter.
+#[tokio::test]
+async fn a_malformed_path_segment_is_404() {
+    let w = World::new().await;
+    let ws = w.ws.to_string();
+    let token = w.token(w.ws, NetgsmPurpose::Mo);
+    let body = fixture("netgsm/mo_object.json");
+    for (segment_ws, segment_token, segment_purpose) in [
+        (ws.as_str(), "%FF", "mo"),
+        (ws.as_str(), "%E0%A4%A", "mo"),
+        ("%FF", token.as_str(), "mo"),
+        (ws.as_str(), token.as_str(), "%C3%28"),
+    ] {
+        let (status, text) = answer(
+            &w.app(),
+            netgsm_post(segment_ws, segment_token, segment_purpose, &body),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{segment_ws}/{segment_token}/{segment_purpose}"
+        );
+        assert!(text.is_empty(), "{text}");
+    }
+    assert!(w.stored().is_empty());
+}
+
 /// A workspace that is suspended or awaits payment, an unknown one and a malformed id all read
 /// alike: `404`, never saying which.
 #[tokio::test]

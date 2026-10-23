@@ -291,7 +291,8 @@
       "declare_first_capability": "Declare the first capability the workspace can act through.",
       "connect_connector": "{{name}} awaits its connection.",
       "reconnect_connector": "{{name}} must be reconnected: its provider no longer accepts its login.",
-      "inbound_events": "{{n}} inbound events (messages, statuses, leads, calls, consent changes) await your agent.",
+      "inbound_events_one": "{{n}} inbound event (a message, status, lead, call or consent change) awaits your agent.",
+      "inbound_events_other": "{{n}} inbound events (messages, statuses, leads, calls, consent changes) await your agent.",
       "open": "Open",
       "priority": "Priority {{priority}}",
       "reconnect": "Reconnect"

@@ -289,8 +289,9 @@ function itemText(t: TFunction, item: WorkItem): string {
     case 'reconnect_connector':
       return t('home.pending.reconnect_connector', { name: item.name });
     case 'inbound_events':
-      // A count of the cap means at least that many.
+      // `count` picks the plural form; `n` is what is shown, a count of the cap as at least that many.
       return t('home.pending.inbound_events', {
+        count: item.count,
         n: item.count >= INBOUND_EVENTS_COUNT_CAP ? `${INBOUND_EVENTS_COUNT_CAP}+` : String(item.count),
       });
     default:

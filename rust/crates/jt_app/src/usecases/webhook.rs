@@ -20,11 +20,16 @@
 //! **Deduplication (Review Focus 2).** An event is stored once per `(workspace, provider,
 //! external_id)`: a replayed delivery, or the same item twice in one body, is
 //! [`Delivery::Duplicate`] and changes nothing. Two deliveries racing on one event store it once
-//! (the repository's unique key; the second waits for the first).
+//! (the repository's unique key; the second waits for the first). Within a delivery, the
+//! workspaces are written in id order and each one's events in the order of their provider ids,
+//! so two deliveries of overlapping events, batched differently, take their locks in one order
+//! and cannot deadlock.
 //!
-//! **What is stored.** Each event with its parsed payload, the time it was received (the clock),
-//! the capability it arrived through when known, and a copy of the raw body as received, kept for
-//! [`RAW_RETENTION`] and then removed by [`purge_raw`]. When the provider said when the event
+//! **What is stored.** Each event with its parsed payload, the time it was received (the clock)
+//! and the capability it arrived through when known; and the raw body as received, **once per
+//! delivery and workspace**: beside the first event the delivery newly stores there (a body of a
+//! thousand events is not kept a thousand times; its siblings share its `received_at`). The body
+//! is kept for [`RAW_RETENTION`] and then removed by [`purge_raw`]. When the provider said when the event
 //! happened, the payload (an object) also carries `occurred_at` (RFC 3339), unless the provider's
 //! item already names that key. Inbound events are records of the outside world: no ledger
 //! entry.
@@ -102,21 +107,20 @@ pub async fn receive_for_accounts(
         }
     }
     let received_at = deps.clock.now();
+    // Workspaces in id order, then each one's events in the order of their ids (`store_all`):
+    // two deliveries of the same events take their locks in the same order.
     for (ws, drafts) in by_workspace {
         let mut repos = deps.uow.tenant(ws).await?;
-        for (i, capability, draft) in drafts {
-            out[i] = store(
-                deps,
-                repos.as_mut(),
-                ws,
-                provider,
-                Some(capability),
-                draft,
-                raw,
-                received_at,
-            )
-            .await?;
-        }
+        let items = drafts
+            .into_iter()
+            .map(|(i, capability, draft)| (i, Some(capability), draft))
+            .collect();
+        let at = Stamp {
+            ws,
+            provider,
+            received_at,
+        };
+        store_all(deps, repos.as_mut(), at, items, raw, &mut out).await?;
         repos.commit().await?;
     }
     Ok(out)
@@ -183,22 +187,18 @@ pub async fn receive_netgsm(
         [only] => Some(only),
         _ => None,
     };
-    let mut out = Vec::with_capacity(drafts.len());
-    for draft in drafts {
-        out.push(
-            store(
-                deps,
-                repos.as_mut(),
-                ws,
-                Provider::Netgsm,
-                capability,
-                draft,
-                raw,
-                received_at,
-            )
-            .await?,
-        );
-    }
+    let mut out = vec![Delivery::Duplicate; drafts.len()];
+    let items = drafts
+        .into_iter()
+        .enumerate()
+        .map(|(i, draft)| (i, capability, draft))
+        .collect();
+    let at = Stamp {
+        ws,
+        provider: Provider::Netgsm,
+        received_at,
+    };
+    store_all(deps, repos.as_mut(), at, items, raw, &mut out).await?;
     repos.commit().await?;
     Ok(out)
 }
@@ -239,17 +239,50 @@ pub async fn purge_raw(deps: &Deps, cutoff: OffsetDateTime) -> Result<u64, AppEr
     Ok(removed)
 }
 
-/// Stores one event in the open bundle `repos` of workspace `ws`.
-#[allow(clippy::too_many_arguments)]
+/// Where and when one delivery's events are stored: the workspace, the provider and the time they
+/// were received.
+#[derive(Clone, Copy)]
+struct Stamp {
+    ws: WorkspaceId,
+    provider: Provider,
+    received_at: OffsetDateTime,
+}
+
+/// Stores one delivery's `items` (each the index of its answer in `out`, its capability and the
+/// event) in the open bundle `repos` of the stamp's workspace, writing each answer into `out`.
+///
+/// The events are written in the order of their provider ids (stable, so a repeated id keeps
+/// its place), whatever their order in the body: two transactions storing overlapping events
+/// then take the unique-key locks in the same order and never wait on each other in a circle.
+/// The raw body is kept once: beside the first event this call newly stores; every later event of
+/// the delivery in this workspace keeps none (they share its `received_at`).
+async fn store_all(
+    deps: &Deps,
+    repos: &mut dyn TenantRepos,
+    at: Stamp,
+    mut items: Vec<(usize, Option<CapabilityId>, InboundEventDraft)>,
+    raw: &[u8],
+    out: &mut [Delivery],
+) -> Result<(), AppError> {
+    items.sort_by(|a, b| a.2.external_id.cmp(&b.2.external_id));
+    let mut raw_kept = false;
+    for (i, capability, draft) in items {
+        let body = (!raw_kept).then(|| raw.to_vec());
+        let delivery = store(deps, repos, at, capability, draft, body).await?;
+        raw_kept |= matches!(delivery, Delivery::Stored(_));
+        out[i] = delivery;
+    }
+    Ok(())
+}
+
+/// Stores one event, with the raw body `raw` when given, in the open bundle `repos`.
 async fn store(
     deps: &Deps,
     repos: &mut dyn TenantRepos,
-    ws: WorkspaceId,
-    provider: Provider,
+    at: Stamp,
     capability_id: Option<CapabilityId>,
     draft: InboundEventDraft,
-    raw: &[u8],
-    received_at: OffsetDateTime,
+    raw: Option<Vec<u8>>,
 ) -> Result<Delivery, AppError> {
     let InboundEventDraft {
         external_id,
@@ -265,21 +298,17 @@ async fn store(
     }
     let event = InboundEvent {
         id: InboundEventId(deps.ids.uuid()),
-        workspace_id: ws,
-        provider,
+        workspace_id: at.ws,
+        provider: at.provider,
         capability_id,
         external_id,
         kind,
         payload,
-        received_at,
+        received_at: at.received_at,
         processed_at: None,
     };
     Ok(
-        match repos
-            .inbound_events()
-            .insert_if_new(event, Some(raw.to_vec()))
-            .await?
-        {
+        match repos.inbound_events().insert_if_new(event, raw).await? {
             Some(id) => Delivery::Stored(id),
             None => Delivery::Duplicate,
         },

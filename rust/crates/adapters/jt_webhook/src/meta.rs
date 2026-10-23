@@ -9,8 +9,8 @@ use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use jt_app::usecases::webhook::{self, AccountEvent, Delivery};
-use jt_connector::{META_SIGNATURE_HEADER, Provider, meta_verify_token_ok};
-use jt_meta::webhook::{ParseError, WebhookError, kinds_of_hint, verify_and_parse};
+use jt_connector::{META_SIGNATURE_HEADER, Provider, meta_signature_ok, meta_verify_token_ok};
+use jt_meta::webhook::{ParseError, kinds_of_hint, parse};
 
 use crate::{META_BODY_LIMIT, UNPARSEABLE_META, UNROUTED_META, WebhookState, raw};
 
@@ -80,10 +80,16 @@ pub(crate) async fn receive(
         Ok(raw) => raw,
         Err(e) => return e.status().into_response(),
     };
-    let parsed = match verify_and_parse(app.app_secret.as_bytes(), &raw, &signature) {
+    // Both secrets are tried, every time (`|`, not `||`): which one signed tells nothing.
+    let instagram = deps.apps.instagram_app();
+    let signed = meta_signature_ok(app.app_secret.as_bytes(), &raw, &signature)
+        | instagram.is_some_and(|ig| meta_signature_ok(ig.app_secret.as_bytes(), &raw, &signature));
+    if !signed {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let parsed = match parse(&raw) {
         Ok(parsed) => parsed,
-        Err(WebhookError::BadSignature) => return StatusCode::UNAUTHORIZED.into_response(),
-        Err(WebhookError::Parse(e)) => {
+        Err(e) => {
             UNPARSEABLE_META.fetch_add(1, Ordering::Relaxed);
             tracing::warn!(
                 provider = "meta",

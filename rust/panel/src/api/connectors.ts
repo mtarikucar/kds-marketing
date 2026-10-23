@@ -11,7 +11,10 @@ import type {
 } from './types';
 
 // Connecting accounts (`/api/connectors`). Credentials and the provider's one-time code only ever
-// travel in mutations: no query, so nothing secret sits in the query cache.
+// travel in mutations, so none of them sits in the query cache. The webhook addresses
+// (`connectorHooks`) are read by a query, but their URLs carry the workspace's hook tokens: the
+// one panel that reads them (`WebhookPanel`) asks with `staleTime: 0, gcTime: 0`, so they are
+// fetched afresh each time it shows and leave the cache as soon as it is gone.
 
 /** `POST /api/connectors/oauth/start`: an OAuth flow for a Meta kind or `x`. */
 export function startOAuth(kindKey: string): Promise<StartOut> {

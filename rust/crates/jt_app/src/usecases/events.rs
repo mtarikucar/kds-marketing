@@ -49,6 +49,10 @@ pub const MAX_EVENT_LIMIT: u32 = 200;
 /// The most ids one `events.ack` takes.
 pub const MAX_ACK_IDS: usize = 200;
 
+/// The permission acknowledging events needs: the one governing the connections they arrive
+/// through. `work.pending` lists the events only to callers holding it.
+pub const ACK_PERMISSION: Permission = Permission::CapabilitiesManage;
+
 // ---------------------------------------------------------------------------------------------
 // Inputs
 // ---------------------------------------------------------------------------------------------
@@ -251,7 +255,7 @@ pub async fn list(
 /// the workspace's; payload `n`, how many were newly marked) when it marked any; acknowledging
 /// only events already processed writes nothing.
 pub async fn ack(deps: &Deps, ctx: &Ctx, input: Ack) -> Result<AckOut, AppError> {
-    ctx.require(Permission::CapabilitiesManage)?;
+    ctx.require(ACK_PERMISSION)?;
     if input.ids.is_empty() || input.ids.len() > MAX_ACK_IDS {
         return Err(invalid(
             "ids",

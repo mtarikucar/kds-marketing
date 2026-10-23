@@ -90,18 +90,64 @@ async fn concurrent_replays_store_one_row() {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(text, "EVENT_RECEIVED");
     }
-    assert_eq!(
-        external_ids(&deps, ws).await,
-        [
-            "wamid.TEST-TEXT-1",
-            "wamid.TEST-BUTTON-1",
-            "wamid.TEST-INTERACTIVE-1",
-            "wamid.TEST-REFERRAL-1"
-        ]
-    );
-    // One raw body per stored event, no more: the purge counts what it removes.
+    assert_eq!(external_ids(&deps, ws).await, WHATSAPP_IDS);
+    // One raw body for the delivery, no more: the purge counts what it removes.
     let far = OffsetDateTime::now_utc() + Duration::days(365);
-    assert_eq!(webhook::purge_raw(&deps, far).await.unwrap(), 4);
+    assert_eq!(webhook::purge_raw(&deps, far).await.unwrap(), 1);
+}
+
+/// The ids of the WhatsApp fixture's first number, in the order they are written.
+const WHATSAPP_IDS: [&str; 4] = [
+    "wamid.TEST-BUTTON-1",
+    "wamid.TEST-INTERACTIVE-1",
+    "wamid.TEST-REFERRAL-1",
+    "wamid.TEST-TEXT-1",
+];
+
+/// Deliveries of the same messages batched in opposite orders, racing: written in one order
+/// (their ids), so no two transactions wait on each other in a circle; every delivery is answered
+/// `200` and each message is stored once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deliveries_batched_in_opposite_orders_store_one_row_each_without_deadlock() {
+    let db = TestDb::new().await;
+    let deps = deps(&db);
+    let (ws, _) = db.seed_workspace("alpha").await;
+    capability(
+        deps.uow.as_ref(),
+        ws,
+        "whatsapp_cloud",
+        "5555555555",
+        StoredStatus::Verified,
+        true,
+    )
+    .await;
+    let app = router(WebhookState {
+        deps: Arc::new(deps.clone()),
+    });
+    let body = fixture("meta/whatsapp_messages.json");
+    let mut reversed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let messages = reversed["entry"][0]["changes"][0]["value"]["messages"]
+        .as_array_mut()
+        .unwrap();
+    messages.reverse();
+    let reversed = serde_json::to_vec(&reversed).unwrap();
+
+    let deliveries: Vec<_> = (0..12)
+        .map(|i| {
+            let app = app.clone();
+            let body = if i % 2 == 0 {
+                body.clone()
+            } else {
+                reversed.clone()
+            };
+            tokio::spawn(async move { answer(&app, signed(&body)).await })
+        })
+        .collect();
+    for delivery in deliveries {
+        let (status, text) = delivery.await.unwrap();
+        assert_eq!((status, text.as_str()), (StatusCode::OK, "EVENT_RECEIVED"));
+    }
+    assert_eq!(external_ids(&deps, ws).await, WHATSAPP_IDS);
 }
 
 #[tokio::test]
@@ -139,7 +185,8 @@ async fn the_raw_purge_clears_old_bodies_in_every_workspace() {
         ["wamid.TEST-OTHER-NUMBER-1"]
     );
 
-    // Nothing is old enough yet; thirty days on, every body goes and every event stays.
+    // One body per workspace the delivery reached. Nothing is old enough yet; thirty days on,
+    // every body goes and every event stays.
     let now = OffsetDateTime::now_utc();
     assert_eq!(
         webhook::purge_raw(&deps, webhook::raw_cutoff(now))
@@ -152,7 +199,7 @@ async fn the_raw_purge_clears_old_bodies_in_every_workspace() {
         webhook::purge_raw(&deps, webhook::raw_cutoff(later))
             .await
             .unwrap(),
-        5
+        2
     );
     assert_eq!(
         webhook::purge_raw(&deps, webhook::raw_cutoff(later))

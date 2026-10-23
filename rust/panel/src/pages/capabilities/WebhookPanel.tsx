@@ -14,7 +14,9 @@ import { HOOKS_KEY } from './queries';
  */
 export function WebhookPanel() {
   const { t } = useTranslation();
-  const hooks = useQuery({ queryKey: HOOKS_KEY, queryFn: connectorHooks });
+  // The URLs carry the workspace's hook tokens: never served stale, dropped from the cache as soon
+  // as this panel is gone.
+  const hooks = useQuery({ queryKey: HOOKS_KEY, queryFn: connectorHooks, staleTime: 0, gcTime: 0 });
   return (
     <section aria-labelledby="webhook-addresses-title">
       <Card>
