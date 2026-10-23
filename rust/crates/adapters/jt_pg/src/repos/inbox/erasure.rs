@@ -12,8 +12,8 @@ impl ErasureRepo for PgTenantRepos {
         let ws = self.workspace_id();
         same_workspace(ws, row.workspace_id)?;
         reference(self.tx.conn(), ws, "people", row.person_id.as_uuid()).await?;
-        sqlx::query("insert into erasure_log select * from jsonb_populate_record(null::erasure_log,$1) on conflict do nothing")
-            .bind(value!(row)).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"record erasure"))?;
+        sqlx::query("insert into erasure_log select * from jsonb_populate_record(null::erasure_log,$1) where workspace_id=$2 on conflict do nothing")
+            .bind(value!(row)).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"record erasure"))?;
         Ok(())
     }
     async fn get(&mut self, person: PersonId) -> Result<Option<ErasureLog>, AppError> {

@@ -22,8 +22,8 @@ impl AppointmentRepo for PgTenantRepos {
         row.appointment
             .validate()
             .map_err(|e| AppError::validation(e.to_string(), serde_json::json!({})))?;
-        inserted(sqlx::query("insert into appointments select * from jsonb_populate_record(null::appointments,$1) on conflict do nothing")
-            .bind(value!(row)).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert appointment"))?)
+        inserted(sqlx::query("insert into appointments select * from jsonb_populate_record(null::appointments,$1) where workspace_id=$2 on conflict do nothing")
+            .bind(value!(row)).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert appointment"))?)
     }
     async fn get(&mut self, id: Uuid) -> Result<Option<AppointmentRow>, AppError> {
         one!(

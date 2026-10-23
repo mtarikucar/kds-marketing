@@ -11,8 +11,8 @@ impl ConsentRepo for PgTenantRepos {
         reference(self.tx.conn(), ws, "people", row.person_id.as_uuid()).await?;
         let mut data = value!(row);
         data["workspace_id"] = value!(ws);
-        inserted(sqlx::query("insert into consents select * from jsonb_populate_record(null::consents,$1) on conflict do nothing")
-            .bind(data).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert consent"))?)
+        inserted(sqlx::query("insert into consents select * from jsonb_populate_record(null::consents,$1) where workspace_id=$2 on conflict do nothing")
+            .bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert consent"))?)
     }
     async fn list(&mut self, person: PersonId) -> Result<Vec<Consent>, AppError> {
         many!(sqlx::query_scalar("select to_jsonb(c) from consents c where workspace_id=$1 and person_id=$2 order by at,id")

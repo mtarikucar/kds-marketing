@@ -201,23 +201,185 @@ begin
 end;
 $$;
 
--- Force tenant isolation on all twelve new tables, including acquisition provenance.
+-- Explicit declarations keep tenant isolation auditable by the architecture scanner.
+-- Each policy remains idempotent, with ENABLE/FORCE and identical tenant/platform semantics.
+
+alter table consents enable row level security;
+alter table consents force row level security;
 do $$
-declare t text;
 begin
-    foreach t in array array['consents','suppressions','quotes','appointments','commissions',
-        'erasure_log','erased_identities','outbound_jobs','mail_cursors','commission_default',
-        'commission_user_rates','journey_attribution'] loop
-        execute format('alter table %I enable row level security', t);
-        execute format('alter table %I force row level security', t);
-        if not exists (select 1 from pg_policies where schemaname = current_schema()
-                       and tablename = t and policyname = t || '_ws') then
-            execute format('create policy %I on %I using
-                (workspace_id = nullif(current_setting(''app.workspace_id'', true), '''')::uuid
-                 or current_setting(''app.platform'', true) = ''on'') with check
-                (workspace_id = nullif(current_setting(''app.workspace_id'', true), '''')::uuid
-                 or current_setting(''app.platform'', true) = ''on'')', t || '_ws', t);
-        end if;
-    end loop;
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'consents' and policyname = 'consents_ws') then
+        create policy consents_ws on consents
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table suppressions enable row level security;
+alter table suppressions force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'suppressions' and policyname = 'suppressions_ws') then
+        create policy suppressions_ws on suppressions
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table quotes enable row level security;
+alter table quotes force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'quotes' and policyname = 'quotes_ws') then
+        create policy quotes_ws on quotes
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table appointments enable row level security;
+alter table appointments force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'appointments' and policyname = 'appointments_ws') then
+        create policy appointments_ws on appointments
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table commissions enable row level security;
+alter table commissions force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'commissions' and policyname = 'commissions_ws') then
+        create policy commissions_ws on commissions
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table erasure_log enable row level security;
+alter table erasure_log force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'erasure_log' and policyname = 'erasure_log_ws') then
+        create policy erasure_log_ws on erasure_log
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table erased_identities enable row level security;
+alter table erased_identities force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'erased_identities' and policyname = 'erased_identities_ws') then
+        create policy erased_identities_ws on erased_identities
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table outbound_jobs enable row level security;
+alter table outbound_jobs force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'outbound_jobs' and policyname = 'outbound_jobs_ws') then
+        create policy outbound_jobs_ws on outbound_jobs
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table mail_cursors enable row level security;
+alter table mail_cursors force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'mail_cursors' and policyname = 'mail_cursors_ws') then
+        create policy mail_cursors_ws on mail_cursors
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table commission_default enable row level security;
+alter table commission_default force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'commission_default' and policyname = 'commission_default_ws') then
+        create policy commission_default_ws on commission_default
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table commission_user_rates enable row level security;
+alter table commission_user_rates force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'commission_user_rates' and policyname = 'commission_user_rates_ws') then
+        create policy commission_user_rates_ws on commission_user_rates
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+alter table journey_attribution enable row level security;
+alter table journey_attribution force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema()
+                   and tablename = 'journey_attribution' and policyname = 'journey_attribution_ws') then
+        create policy journey_attribution_ws on journey_attribution
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
 end;
 $$;

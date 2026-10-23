@@ -31,8 +31,8 @@ impl OutboundJobRepo for PgTenantRepos {
         }
         let data = serde_json::to_value(row)
             .map_err(|_| AppError::internal("cannot encode outbound job"))?;
-        let n=sqlx::query("insert into outbound_jobs select * from jsonb_populate_record(null::outbound_jobs,$1) on conflict do nothing")
-            .bind(data).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert outbound job"))?.rows_affected();
+        let n=sqlx::query("insert into outbound_jobs select * from jsonb_populate_record(null::outbound_jobs,$1) where workspace_id=$2 on conflict do nothing")
+            .bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert outbound job"))?.rows_affected();
         if n == 0 {
             Err(AppError::conflict("outbound job already exists"))
         } else {

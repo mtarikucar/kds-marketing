@@ -10,8 +10,8 @@ impl SuppressionRepo for PgTenantRepos {
         reference(self.tx.conn(), ws, "people", row.person_id.as_uuid()).await?;
         let mut data = value!(row);
         data["workspace_id"] = value!(ws);
-        sqlx::query("insert into suppressions select * from jsonb_populate_record(null::suppressions,$1) on conflict do nothing")
-            .bind(data).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert suppression"))?;
+        sqlx::query("insert into suppressions select * from jsonb_populate_record(null::suppressions,$1) where workspace_id=$2 on conflict do nothing")
+            .bind(data).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert suppression"))?;
         Ok(())
     }
     async fn list(&mut self, person: PersonId) -> Result<Vec<Suppression>, AppError> {

@@ -22,8 +22,8 @@ impl CommissionRepo for PgTenantRepos {
         if let Some(user) = row.commission.payee {
             user_exists(self, user).await?;
         }
-        inserted(sqlx::query("insert into commissions select * from jsonb_populate_record(null::commissions,$1) on conflict do nothing")
-            .bind(value!(row)).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert commission"))?)
+        inserted(sqlx::query("insert into commissions select * from jsonb_populate_record(null::commissions,$1) where workspace_id=$2 on conflict do nothing")
+            .bind(value!(row)).bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"insert commission"))?)
     }
     async fn get(&mut self, id: Uuid) -> Result<Option<CommissionRow>, AppError> {
         one!(
