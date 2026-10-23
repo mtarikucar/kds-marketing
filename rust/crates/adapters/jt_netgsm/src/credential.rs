@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use crate::Masked;
 
-/// An SMS API sub-user and its approved sender name. `Debug` masks the password.
+/// An SMS API sub-user and its approved sender name (trimmed: the name sent, checked and named
+/// as the account is the same). `Debug` masks the password.
 #[derive(Clone, Copy)]
 pub(crate) struct SmsCred<'a> {
     pub(crate) usercode: &'a str,
@@ -66,7 +67,7 @@ impl<'a> SmsCred<'a> {
             } => Ok(SmsCred {
                 usercode: present(usercode, "user code")?,
                 password: present(password, "password")?,
-                msgheader: present(msgheader, "sender name")?,
+                msgheader: present(msgheader, "sender name")?.trim(),
             }),
             other => Err(wrong_credential(other, what)),
         }

@@ -1,6 +1,6 @@
-//! The NetGSM client: URLs, sending through the egress client (with retries only when no answer
-//! arrived), reading answers, and mapping NetGSM's status codes and HTTP statuses to
-//! [`ConnectorError`] (the crate docs hold the table).
+//! The NetGSM client: URLs, sending through the egress client (reads retried only when no answer
+//! arrived, actions never), reading answers, and mapping NetGSM's status codes and HTTP statuses
+//! to [`ConnectorError`] (the crate docs hold the table).
 
 use std::fmt;
 
@@ -10,7 +10,7 @@ use serde_json::Value;
 use time::Duration;
 use url::Url;
 
-use crate::{ATTEMPT_TIMEOUT, Masked, NetgsmConnector, json};
+use crate::{Masked, NetgsmConnector, json};
 
 /// The egress scope of every call.
 const SCOPE: EgressScope = EgressScope::Connector("netgsm");
@@ -28,6 +28,19 @@ const MAX_QUOTED_CHARS: usize = 120;
 pub(crate) const AUTH_HINT: &str = "NetGSM refused the credentials: check the credentials or IP \
      allowlist (the API user and its password, that API access is on for it, and that this \
      server's address is on the account's allowed IP list)";
+
+/// Whether a call may be sent again when no answer arrived (the crate docs, "Retries").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Retry {
+    /// An idempotent read (a report, the inbox, the balance, the sender names, an İYS lookup,
+    /// the queue statistics, the call records): sent again as the retry policy says, but only
+    /// when no answer arrived.
+    Reads,
+    /// An action (an SMS, a call, a hangup, a consent record): sent once, whatever happens. When
+    /// no answer arrives after the request may have reached NetGSM, the error says the outcome
+    /// is unknown.
+    Never,
+}
 
 /// How a call authenticates. `Debug` masks the password.
 #[derive(Clone, Copy)]
@@ -87,8 +100,9 @@ impl fmt::Debug for Answer {
 }
 
 impl Answer {
-    /// NetGSM's status code: `"code"` of a JSON object (a string or a number), or the whole text
-    /// when it is a bare code of two or three digits.
+    /// NetGSM's status code: `"code"` of a JSON object (a string or a number), or, on a 2xx
+    /// answer, the whole text when it is a bare code of two or three digits (a bare `502` of a
+    /// proxy's error page is no NetGSM code).
     pub(crate) fn code(&self) -> Option<String> {
         if let Some(Value::Object(object)) = &self.json {
             return object
@@ -97,7 +111,8 @@ impl Answer {
                 .filter(|c| is_code(c));
         }
         let text = self.text.as_str();
-        ((2..=3).contains(&text.len()) && is_code(text)).then(|| text.to_owned())
+        (self.status.is_success() && (2..=3).contains(&text.len()) && is_code(text))
+            .then(|| text.to_owned())
     }
 }
 
@@ -198,15 +213,50 @@ pub(crate) fn outcome(
     }
 }
 
-/// Provider text fit for a reason: the password `secret` taken out wherever it appears, runs of
-/// seven digits or more (phone numbers) masked, cut to [`MAX_QUOTED_CHARS`]. The reason's
-/// constructor then redacts what still looks like a credential.
+/// The forms a password may be echoed in: as is, form-encoded (`+` for a space) and
+/// percent-encoded (`%20`), with upper- and lowercase hex digits; longest first, each once.
+fn echoed_forms(secret: &str) -> Vec<String> {
+    let form: String = url::form_urlencoded::byte_serialize(secret.as_bytes()).collect();
+    let percent = form.replace('+', "%20");
+    let mut forms = vec![secret.to_owned()];
+    for encoded in [form, percent] {
+        let lower = lower_hex_escapes(&encoded);
+        forms.push(encoded);
+        forms.push(lower);
+    }
+    forms.retain(|f| !f.is_empty());
+    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    forms.dedup();
+    forms
+}
+
+/// `text` with the two hex digits after each `%` in lowercase.
+fn lower_hex_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut after_percent = 0;
+    for c in text.chars() {
+        if after_percent > 0 {
+            out.push(c.to_ascii_lowercase());
+            after_percent -= 1;
+        } else {
+            if c == '%' {
+                after_percent = 2;
+            }
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Provider text fit for a reason: the password `secret` taken out wherever it appears, as is or
+/// form- or percent-encoded, runs of seven digits or more (phone numbers) masked, cut to
+/// [`MAX_QUOTED_CHARS`]. The reason's constructor then redacts what still looks like a
+/// credential.
 pub(crate) fn quoted(text: &str, secret: &str) -> String {
-    let scrubbed = if secret.is_empty() {
-        text.to_owned()
-    } else {
-        text.replace(secret, "***")
-    };
+    let mut scrubbed = text.to_owned();
+    for form in echoed_forms(secret) {
+        scrubbed = scrubbed.replace(&form, "***");
+    }
     let mut out = String::with_capacity(scrubbed.len());
     let mut digits = String::new();
     let flush = |digits: &mut String, out: &mut String| {
@@ -263,25 +313,29 @@ impl NetgsmConnector {
         join(&self.bases.pbx, segments, query)
     }
 
-    /// Sends one call and returns the answer that arrived, whatever its status. When no answer
-    /// arrives (the connection fails or times out), the call is tried again as the retry policy
-    /// says; once any answer arrives it is never sent again, so a message NetGSM accepted is not
-    /// sent twice.
+    /// Sends one call and returns the answer that arrived, whatever its status. A read
+    /// ([`Retry::Reads`]) is tried again as the retry policy says when no answer arrives (the
+    /// connection fails, drops or times out); an action ([`Retry::Never`]) is sent once. Once any
+    /// answer arrives nothing is sent again, so a message NetGSM accepted is never sent twice.
     pub(crate) async fn call(
         &self,
         method: Method,
         url: Url,
         auth: Auth<'_>,
         body: &Body,
+        retry: Retry,
     ) -> Result<Answer, ConnectorError> {
-        let attempts = self.retry.attempts.max(1);
+        let attempts = match retry {
+            Retry::Reads => self.retry.attempts.max(1),
+            Retry::Never => 1,
+        };
         let mut delay = self.retry.base_delay;
         let mut attempt = 1;
         loop {
             let mut request = self
                 .egress
                 .prepare(method.clone(), url.clone())
-                .timeout(ATTEMPT_TIMEOUT);
+                .timeout(self.attempt_timeout);
             if let Auth::Basic { user, password } = auth {
                 request = request.basic_auth(user, Some(password));
             }
@@ -302,15 +356,31 @@ impl NetgsmConnector {
                     delay = delay.saturating_mul(2);
                     attempt += 1;
                 }
-                Err(e) => return Err(egress_error(e)),
+                Err(e) => return Err(egress_error(e, retry)),
             }
         }
     }
 }
 
-/// An egress failure as a [`ConnectorError`] (no URL in it).
-fn egress_error(e: EgressError) -> ConnectorError {
+/// An egress failure of a call of class `retry` as a [`ConnectorError`] (no URL in it). An
+/// action that got no answer after its request may have reached NetGSM says its outcome is
+/// unknown.
+fn egress_error(e: EgressError, retry: Retry) -> ConnectorError {
     match e {
+        EgressError::Transport(err) if err.is_connect() => {
+            ConnectorError::transient("the call to NetGSM could not connect; nothing was sent")
+        }
+        EgressError::Transport(err) if retry == Retry::Never => {
+            let what = if err.is_timeout() {
+                "timed out"
+            } else {
+                "got no answer"
+            };
+            ConnectorError::transient(format!(
+                "the call to NetGSM {what} after the request may have reached it: the outcome \
+                 is unknown, so it was not sent again"
+            ))
+        }
         EgressError::Transport(err) if err.is_timeout() => {
             ConnectorError::transient("the call to NetGSM timed out")
         }
@@ -342,7 +412,8 @@ async fn read(mut response: Response) -> Result<Answer, ConnectorError> {
             // An answer arrived (it may have been acted on): never sent again.
             Err(_) => {
                 return Err(ConnectorError::transient(
-                    "NetGSM's answer broke off in transit",
+                    "NetGSM's answer broke off in transit: whether the request took effect is \
+                     unknown",
                 ));
             }
         }
@@ -394,6 +465,9 @@ mod tests {
         assert_eq!(answer(200, r#"{"code":30}"#).code(), Some("30".into()));
         assert_eq!(answer(200, "30").code(), Some("30".into()));
         assert_eq!(answer(200, "100").code(), Some("100".into()));
+        // A bare number is a NetGSM code only on a 2xx answer; a JSON code on any.
+        assert_eq!(answer(502, "502").code(), None);
+        assert_eq!(answer(500, r#"{"code":"30"}"#).code(), Some("30".into()));
         for none in [
             r#"{"code":"x"}"#,
             r#"{"jobid":"1"}"#,
@@ -487,6 +561,13 @@ mod tests {
             "Gizli-77",
         );
         assert_eq!(text, "hata password=*** *** numara *** kod 30");
+        // Echoed encoded, too: form-encoded, percent-encoded, lowercase hex.
+        let secret = "Pa&ss w+rd";
+        let text = quoted(
+            "a Pa%26ss+w%2Brd b Pa%26ss%20w%2Brd c Pa%26ss%20w%2brd d Pa&ss w+rd e",
+            secret,
+        );
+        assert_eq!(text, "a *** b *** c *** d *** e");
         assert_eq!(
             quoted(&"x".repeat(500), "").chars().count(),
             MAX_QUOTED_CHARS

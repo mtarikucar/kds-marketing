@@ -5,7 +5,7 @@
 mod support;
 
 use jt_connector::{EventKind, NetgsmPurpose};
-use jt_netgsm::webhook::{MAX_MO_ROWS, ParseError, parse};
+use jt_netgsm::webhook::{MAX_ITEMS, MAX_MO_ROWS, ParseError, parse};
 use serde_json::{Value, json};
 use support::fixture_text;
 use time::macros::datetime;
@@ -91,6 +91,35 @@ fn incoming_sms_are_capped_at_a_hundred_per_body() {
 }
 
 #[test]
+fn every_family_but_consent_is_capped_per_body() {
+    let events: Vec<Value> = (0..MAX_ITEMS + 5)
+        .map(|i| json!({ "scenario": "Hangup", "unique_id": format!("1700000000.{i}") }))
+        .collect();
+    let drafts = parse(NetgsmPurpose::Events, &serde_json::to_vec(&events).unwrap()).unwrap();
+    assert_eq!(drafts.len(), MAX_ITEMS);
+    let reports: Vec<Value> = (0..MAX_ITEMS + 5)
+        .map(|i| json!({ "relationid": format!("rel-{i}"), "durum": "1" }))
+        .collect();
+    let body = serde_json::to_vec(&reports).unwrap();
+    assert_eq!(
+        parse(NetgsmPurpose::VoiceReport, &body).unwrap().len(),
+        MAX_ITEMS
+    );
+    // A consent change is never dropped.
+    let changes: Vec<Value> = (0..MAX_ITEMS + 5)
+        .map(|i| {
+            json!({ "transactionid": format!("tx-{i}"), "recipient": "+905000000061",
+                    "type": "MESAJ", "status": "RET" })
+        })
+        .collect();
+    let body = serde_json::to_vec(&changes).unwrap();
+    assert_eq!(
+        parse(NetgsmPurpose::Iys, &body).unwrap().len(),
+        MAX_ITEMS + 5
+    );
+}
+
+#[test]
 fn a_message_without_an_id_gets_a_stable_digest() {
     let body = br#"{"mesaj":"Kimliksiz","ceptel":"905000000038","tarih":"23.10.2026 11:00"}"#;
     let first = parse(NetgsmPurpose::Mo, body).unwrap();
@@ -129,6 +158,20 @@ fn call_events_are_one_per_call_and_scenario() {
     assert_eq!(drafts[3].payload["duration_sec"], 37);
     assert_eq!(drafts[3].payload["direction"], "outbound");
     assert_eq!(drafts[3].payload["raw"]["durum"], "cdr");
+    // Recording links lose the provider's token (query, fragment, user and password), in the
+    // normalised field and in the raw copy alike; their path stays.
+    let link = "https://dosya.example.invalid/kayit/1700000000.201.wav";
+    assert_eq!(drafts[2].payload["recording"], link);
+    assert_eq!(drafts[2].payload["raw"]["seskaydi"], link);
+    assert_eq!(
+        drafts[2].payload["raw"]["caller_record"],
+        "https://dosya.example.invalid/caller.wav"
+    );
+    assert_eq!(drafts[3].payload["raw"]["recording_url"], link);
+    for draft in &drafts {
+        let text = draft.payload.to_string();
+        assert!(!text.contains("SECRET"), "{text}");
+    }
     // A lone object is one event.
     let one = br#"{"scenario":"Hangup","unique_id":"1700000000.300"}"#;
     assert_eq!(
@@ -140,7 +183,7 @@ fn call_events_are_one_per_call_and_scenario() {
 #[test]
 fn consent_changes_are_strict_about_status_and_channel() {
     let drafts = parse(NetgsmPurpose::Iys, &hook("iys.json")).unwrap();
-    // `BELKI` and `FAKS` are never read as consent.
+    // `BELKI`, `FAKS`, and `onay` / `mesaj` in the wrong case are never read as consent.
     assert_eq!(drafts.len(), 3, "{drafts:#?}");
     assert!(drafts.iter().all(|d| d.kind == EventKind::Consent));
     assert_eq!(drafts[0].external_id, "netgsm-iys:tx-1");
@@ -169,6 +212,11 @@ fn voice_and_autocall_reports_are_statuses() {
     assert_eq!(voice[0].kind, EventKind::Status);
     assert_eq!(voice[0].payload["relation_id"], "rel-1");
     assert_eq!(voice[0].payload["duration_sec"], 12);
+    assert_eq!(
+        voice[0].payload["record_link"],
+        "https://sesdosya.example.invalid/rapor/rel-1.mp3"
+    );
+    assert!(!voice[0].payload.to_string().contains("SECRET"));
     assert_eq!(voice[0].payload["push_button"], "1");
     let autocall = parse(NetgsmPurpose::AutocallReport, &hook("autocall_report.json")).unwrap();
     assert_eq!(autocall.len(), 1);

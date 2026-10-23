@@ -17,9 +17,20 @@
 //! `caller_record=1` and `called_record=1` flags are passed only when `public["recording_allowed"]`
 //! is the boolean `true` (the workspace's recording policy); otherwise calls are not recorded.
 //!
-//! An answer is a JSON object (`{status, message, code?}`, an error naming `"Error"`) or plain
-//! text led by a code (`00`–`02` accepted); a failure with a code maps by the crate's table, the
-//! answer "Kullanici dogrulanamadi" (user not verified) is `Auth`, any other failure `Permanent`.
+//! Placing a call and hanging up are actions: sent once, never retried by the adapter (a second
+//! `originate` would ring the customer twice). `queuestats` and the call records are reads,
+//! retried when no answer arrived. `hangup` takes the PBX's own call id (`unique_id`, from the call
+//! events), never the `crm_id` a placed call's receipt carries: an id shaped like a `crm_id` (32
+//! hex digits) is refused.
+//!
+//! An answer is a JSON object (`{status, message, code?}`, an error naming `"Error"`, a success
+//! code `00` accepted) or, on a 2xx answer, plain text led by a code (`00`–`02` accepted); a
+//! failure with a code maps by the crate's table, the answer "Kullanici dogrulanamadi" (user not
+//! verified) is `Auth`, any other failure `Permanent`. A non-2xx answer in plain text is read by
+//! its HTTP status (a proxy's `502 Bad Gateway` is `Transient`).
+//!
+//! Call records keep no recording link's query string (it carries the provider's token), in the
+//! normalised fields and in the `raw` copy alike (see [`crate::webhook`]).
 
 use jt_app::ports::connectors::{InboundEventDraft, SendReceipt};
 use jt_connector::{ConnectorError, Credential, EventKind};
@@ -30,7 +41,7 @@ use uuid::Uuid;
 
 use crate::NetgsmConnector;
 use crate::client::{
-    AUTH_HINT, Answer, Auth, Body, code_error, is_success, quoted, status_error, unreadable,
+    AUTH_HINT, Answer, Auth, Body, Retry, code_error, is_success, quoted, status_error, unreadable,
 };
 use crate::credential::PbxCred;
 use crate::json::{pick, pick_number};
@@ -142,7 +153,7 @@ pub(crate) async fn click_to_call(
         query.push(("caller_record", "1".to_owned()));
         query.push(("called_record", "1".to_owned()));
     }
-    pbx_call(connector, &pbx, verb, &query).await?;
+    pbx_call(connector, &pbx, verb, &query, Retry::Never).await?;
     Ok(SendReceipt {
         provider_id: crm_id,
     })
@@ -159,13 +170,23 @@ pub(crate) async fn hangup(
     if unique_id.is_empty() {
         return Err(ConnectorError::permanent("no call id to hang up"));
     }
+    if looks_like_crm_id(unique_id) {
+        return Err(ConnectorError::permanent(
+            "hangup takes the PBX's call id from the call events, not the crm_id of the receipt",
+        ));
+    }
     let query = [
         ("username", pbx.username.to_owned()),
         ("password", pbx.password.to_owned()),
         ("unique_id", unique_id.to_owned()),
     ];
-    pbx_call(connector, &pbx, "hangup", &query).await?;
+    pbx_call(connector, &pbx, "hangup", &query, Retry::Never).await?;
     Ok(())
+}
+
+/// Whether `id` has the shape of a `crm_id` this adapter generates: 32 hex digits.
+fn looks_like_crm_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// The queue statistics of the PBX account behind `pbx`: the probe's cheap authenticated call.
@@ -177,7 +198,7 @@ pub(crate) async fn queuestats(
         ("username", pbx.username.to_owned()),
         ("password", pbx.password.to_owned()),
     ];
-    pbx_call(connector, pbx, "queuestats", &query).await?;
+    pbx_call(connector, pbx, "queuestats", &query, Retry::Reads).await?;
     Ok(())
 }
 
@@ -187,11 +208,12 @@ async fn pbx_call(
     pbx: &PbxCred<'_>,
     verb: &str,
     query: &[(&str, String)],
+    retry: Retry,
 ) -> Result<(), ConnectorError> {
     let pairs: Vec<(&str, &str)> = query.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let url = connector.pbx_url(&[pbx.username, verb], &pairs);
     let answer = connector
-        .call(Method::GET, url, Auth::InRequest, &Body::Empty)
+        .call(Method::GET, url, Auth::InRequest, &Body::Empty, retry)
         .await?;
     santral_outcome(&answer, verb, pbx.password)
 }
@@ -250,6 +272,12 @@ fn santral_outcome(answer: &Answer, verb: &str, secret: &str) -> Result<(), Conn
             "Netsantral did not accept {what}"
         )));
     }
+    if let Some(e) = status_error(answer) {
+        return Err(e);
+    }
+    if !answer.status.is_success() {
+        return Err(unreadable(answer, &what));
+    }
     let first = answer.text.split_whitespace().next().unwrap_or_default();
     if matches!(first, "00" | "01" | "02") {
         return Ok(());
@@ -257,17 +285,14 @@ fn santral_outcome(answer: &Answer, verb: &str, secret: &str) -> Result<(), Conn
     if (2..=3).contains(&first.len()) && first.bytes().all(|b| b.is_ascii_digit()) {
         return Err(code_error(first, answer.retry_after));
     }
-    if let Some(e) = status_error(answer) {
-        return Err(e);
-    }
     if unverified_user(&answer.text) {
         return Err(ConnectorError::auth(AUTH_HINT));
     }
     Err(unreadable(answer, &what))
 }
 
-/// Whether a Netsantral object accepts `verb`: a call id, a queued or successful status or
-/// message, or the verb echoed back as `response`.
+/// Whether a Netsantral object accepts `verb`: a success code, a call id, a queued or successful
+/// status or message, or the verb echoed back as `response`.
 fn accepted(object: &Value, verb: &str) -> bool {
     let status = object["status"].as_str().unwrap_or_default().to_lowercase();
     let message = object["message"]
@@ -278,7 +303,8 @@ fn accepted(object: &Value, verb: &str) -> bool {
         .as_str()
         .unwrap_or_default()
         .to_lowercase();
-    pick(object, &["unique_id", "uniqueid", "callid"]).is_some()
+    pick(object, &["code"]).is_some_and(|c| is_success(&c))
+        || pick(object, &["unique_id", "uniqueid", "callid"]).is_some()
         || ["success", "queued", "accepted"]
             .iter()
             .any(|w| status.contains(w))
@@ -318,6 +344,7 @@ impl NetgsmConnector {
                 self.api_url(&["netsantral", "report"], &[]),
                 Auth::InRequest,
                 &body,
+                Retry::Reads,
             )
             .await?;
         let what = "the call records";
@@ -343,13 +370,19 @@ impl NetgsmConnector {
         if let Some(e) = status_error(&answer) {
             return Err(e);
         }
-        Ok(records.into_iter().filter_map(call_record).collect())
+        Ok(records
+            .into_iter()
+            .cloned()
+            .filter_map(call_record)
+            .collect())
     }
 }
 
-/// One call record as a `cdr` call event; `None` for an item with neither a call id nor a
-/// destination.
-fn call_record(record: &Value) -> Option<InboundEventDraft> {
+/// One call record as a `cdr` call event, its recording links without their query strings;
+/// `None` for an item with neither a call id nor a destination.
+fn call_record(mut record: Value) -> Option<InboundEventDraft> {
+    webhook::scrub_recordings(&mut record);
+    let record = &record;
     let fields = if record["values"].is_object() {
         &record["values"]
     } else {
@@ -413,6 +446,13 @@ mod tests {
         ] {
             assert!(!recording_allowed(&no), "{no}");
         }
+    }
+
+    #[test]
+    fn crm_ids_are_told_from_pbx_call_ids() {
+        assert!(looks_like_crm_id(&Uuid::now_v7().simple().to_string()));
+        assert!(!looks_like_crm_id("1700000000.9"));
+        assert!(!looks_like_crm_id(&"z".repeat(32)));
     }
 
     #[test]

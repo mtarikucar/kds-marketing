@@ -79,17 +79,25 @@ pub fn basic(user: &str, password: &str) -> String {
     format!("Basic {}", STANDARD.encode(format!("{user}:{password}")))
 }
 
-/// One reply: a status, extra headers and a body.
+/// One reply: a status, extra headers, a body, and how long the mock waits before answering
+/// (the request is recorded first).
 #[derive(Clone, Debug)]
 pub struct Reply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: String,
+    pub delay: Option<std::time::Duration>,
 }
 
 impl Reply {
     pub fn with_header(mut self, name: &str, value: &str) -> Reply {
         self.headers.push((name.to_owned(), value.to_owned()));
+        self
+    }
+
+    /// The reply, sent only after `delay` (to make an attempt time out).
+    pub fn delayed(mut self, delay: std::time::Duration) -> Reply {
+        self.delay = Some(delay);
         self
     }
 }
@@ -105,6 +113,7 @@ pub fn status(status: u16, body: Value) -> Reply {
         status,
         headers: vec![("content-type".into(), "application/json".into())],
         body: body.to_string(),
+        delay: None,
     }
 }
 
@@ -114,6 +123,7 @@ pub fn raw(status: u16, text: &str) -> Reply {
         status,
         headers: vec![("content-type".into(), "text/plain".into())],
         body: text.to_owned(),
+        delay: None,
     }
 }
 
@@ -172,9 +182,14 @@ pub struct Mock {
 
 impl Mock {
     pub async fn start() -> Mock {
+        Mock::start_on("127.0.0.1:0".parse().unwrap()).await
+    }
+
+    /// The mock on `addr` (a port given back by a listener that was dropped).
+    pub async fn start_on(addr: SocketAddr) -> Mock {
         let script = Arc::new(Mutex::new(Script::default()));
         let app = Router::new().fallback(handle).with_state(script.clone());
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind(addr).await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         Mock { addr, script }
@@ -271,6 +286,9 @@ async fn handle(
     };
     let reply =
         reply.unwrap_or_else(|| raw(404, &format!("no mock route for {}", recorded.line())));
+    if let Some(delay) = reply.delay {
+        tokio::time::sleep(delay).await;
+    }
     let mut out_headers = HeaderMap::new();
     for (name, value) in &reply.headers {
         out_headers.insert(
@@ -395,13 +413,39 @@ pub fn no_pause() -> RetryPolicy {
     }
 }
 
+/// An adapter sending both bases to `addr` (a mock, a [`Dropper`], a closed port), retrying reads
+/// as `retry` says and giving each attempt `timeout`.
+pub fn connector_at(
+    addr: SocketAddr,
+    retry: RetryPolicy,
+    timeout: std::time::Duration,
+) -> NetgsmConnector {
+    let base = |prefix: &str| Url::parse(&format!("http://{addr}{prefix}")).unwrap();
+    NetgsmConnector::new(
+        egress(addr.to_string()),
+        NetgsmBases {
+            api: base("/api"),
+            pbx: base("/pbx"),
+        },
+    )
+    .with_budgeter(RateBudgeter::new(Arc::new(ManualClock::new())))
+    .with_retry(retry)
+    .with_attempt_timeout(timeout)
+}
+
 /// A rig whose budgeter reads a [`ManualClock`] and whose retries do not pause.
 pub async fn rig() -> Rig {
+    rig_with_timeout(jt_netgsm::ATTEMPT_TIMEOUT).await
+}
+
+/// A [`rig`] whose attempts time out after `timeout`.
+pub async fn rig_with_timeout(timeout: std::time::Duration) -> Rig {
     let mock = Mock::start().await;
     let clock = ManualClock::new();
     let netgsm = NetgsmConnector::new(egress(mock.host()), bases(&mock))
         .with_budgeter(RateBudgeter::new(Arc::new(clock.clone())))
-        .with_retry(no_pause());
+        .with_retry(no_pause())
+        .with_attempt_timeout(timeout);
     Rig {
         mock,
         netgsm,

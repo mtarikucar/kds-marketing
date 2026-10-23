@@ -36,9 +36,14 @@
 //! | code `100` (system error); HTTP 5xx without a code; no answer at all (connect failure, timeout), an answer broken off, a host resolving to no public address | `Transient` |
 //! | code `20` (message refused), `50` (İYS refused the recipient), `70` (bad parameters), `85` (duplicate limit), any other code; HTTP 200 with a body that cannot be read; any other HTTP status; an answer over 4 MiB; a host the `netgsm` tier does not hold | `Permanent` |
 //!
-//! **Retries.** A call is tried again, up to [`RetryPolicy::attempts`] times in all, only when no
-//! answer arrived (the connection failed or timed out). Never once any answer arrived, readable or
-//! not: NetGSM may already have accepted (and billed) an SMS whose answer could not be read.
+//! **Retries.** Only idempotent reads are tried again (delivery reports, the inbox, the balance,
+//! the sender names, İYS lookups, the queue statistics, the call records), up to
+//! [`RetryPolicy::attempts`] times in all, and only when no answer arrived (the connection
+//! failed, dropped or timed out). Actions are sent once, whatever happens: an SMS, a call
+//! (`originate`, `linkup`), a hangup, a consent record. An action that gets no answer after its
+//! request may have reached NetGSM fails `Transient` with a reason saying its outcome is unknown
+//! (a second send could bill a second SMS or ring a customer twice). Nothing is ever sent again
+//! once any answer arrived, readable or not.
 //!
 //! **Rate budget.** NetGSM limits calls per account and minute; the [`RateBudgeter`] keeps a
 //! sliding window per account (`usercode`) and [`Bucket`] (delivery reports 60, the inbox 2,
@@ -100,7 +105,7 @@ pub const DEFAULT_ATTEMPTS: u32 = 3;
 /// The pause before the first retry, by default; it doubles before each next one.
 pub const DEFAULT_RETRY_DELAY: Duration = Duration::from_millis(300);
 
-/// How long one attempt may take, connect to end of answer.
+/// How long one attempt may take, connect to end of answer, by default.
 pub const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Where the adapter sends its calls: the real hosts by default ([`NetgsmBases::production`]).
@@ -126,8 +131,8 @@ impl NetgsmBases {
     }
 }
 
-/// When a call that got no answer is tried again: up to `attempts` tries in all, the first retry
-/// after `base_delay`, each next one after twice the pause before.
+/// When a read that got no answer is tried again (actions never are): up to `attempts` tries in
+/// all, the first retry after `base_delay`, each next one after twice the pause before.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetryPolicy {
     pub attempts: u32,
@@ -144,13 +149,15 @@ impl Default for RetryPolicy {
 }
 
 /// The NetGSM adapter. Cheap to share behind an `Arc`; it holds the egress client, the bases,
-/// the rate budgeter (the system clock's, [`RateBudgeter::system`], by default) and the retry
-/// policy ([`RetryPolicy::default`]). It holds no credential: each call is given one.
+/// the rate budgeter (the system clock's, [`RateBudgeter::system`], by default), the retry
+/// policy of reads ([`RetryPolicy::default`]) and the time one attempt may take
+/// ([`ATTEMPT_TIMEOUT`]). It holds no credential: each call is given one.
 pub struct NetgsmConnector {
     egress: Arc<Egress>,
     bases: NetgsmBases,
     budget: RateBudgeter,
     retry: RetryPolicy,
+    attempt_timeout: Duration,
 }
 
 impl fmt::Debug for NetgsmConnector {
@@ -158,6 +165,7 @@ impl fmt::Debug for NetgsmConnector {
         f.debug_struct("NetgsmConnector")
             .field("bases", &self.bases)
             .field("retry", &self.retry)
+            .field("attempt_timeout", &self.attempt_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -170,6 +178,7 @@ impl NetgsmConnector {
             bases,
             budget: RateBudgeter::system(),
             retry: RetryPolicy::default(),
+            attempt_timeout: ATTEMPT_TIMEOUT,
         }
     }
 
@@ -180,10 +189,17 @@ impl NetgsmConnector {
         self
     }
 
-    /// The adapter retrying calls that got no answer as `retry` says (tests retry without
+    /// The adapter retrying reads that got no answer as `retry` says (tests retry without
     /// pausing).
     pub fn with_retry(mut self, retry: RetryPolicy) -> NetgsmConnector {
         self.retry = retry;
+        self
+    }
+
+    /// The adapter giving each attempt `timeout`, connect to end of answer, instead of
+    /// [`ATTEMPT_TIMEOUT`] (tests time out in milliseconds).
+    pub fn with_attempt_timeout(mut self, timeout: Duration) -> NetgsmConnector {
+        self.attempt_timeout = timeout;
         self
     }
 

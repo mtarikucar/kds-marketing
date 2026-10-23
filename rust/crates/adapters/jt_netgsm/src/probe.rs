@@ -3,7 +3,7 @@
 //!
 //! | Kind | Credential | Calls | `account_id` | Other facts |
 //! |---|---|---|---|---|
-//! | `sms_line` | SMS | `POST /balance {stip: 3}`, then `GET /sms/rest/v2/msgheader` | the credential's sender name (`msgheader`), once NetGSM lists it among the account's approved names | `balance {credit, packages}`, `headers_approved: true` |
+//! | `sms_line` | SMS | `POST /balance {stip: 3}`, then `GET /sms/rest/v2/msgheader` | the credential's sender name (`msgheader`, trimmed), once NetGSM lists it among the account's approved names | `balance {credit, packages}` (or `null` with `balance_note: "no_package"` when the balance answers code `60`: valid credentials, no package), `headers_approved: true` |
 //! | `netgsm_pbx` | PBX | `GET {pbx}/{username}/queuestats` | the PBX user name the PBX accepted | none |
 //!
 //! A sender name NetGSM does not list (compared exactly) fails `Permission`
@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use crate::NetgsmConnector;
 use crate::credential::{PbxCred, SmsCred, kind_of, wrong_credential};
 use crate::santral;
+use crate::sms::Balance;
 
 /// The probe of `cred` for the capability whose public fields are `public` (never fails: a
 /// failure is the result).
@@ -48,15 +49,18 @@ async fn facts(
             let sms = SmsCred::of(cred, "be probed")?;
             let balance = connector.balance_of(sms.usercode, sms.password).await?;
             let headers = connector.msgheaders_of(sms.usercode, sms.password).await?;
-            let wanted = sms.msgheader.trim();
-            if !headers.iter().any(|h| h.trim() == wanted) {
+            if !headers.iter().any(|h| h.trim() == sms.msgheader) {
                 return Err(ConnectorError::permission("msgheader not approved"));
             }
-            Ok(json!({
+            let mut facts = json!({
                 "account_id": sms.msgheader,
-                "balance": balance.facts(),
+                "balance": balance.as_ref().map(Balance::facts),
                 "headers_approved": true,
-            }))
+            });
+            if balance.is_none() {
+                facts["balance_note"] = json!("no_package");
+            }
+            Ok(facts)
         }
         ("netgsm_pbx", Credential::NetgsmPbx { .. }) => {
             let pbx = PbxCred::of(cred, "be probed")?;

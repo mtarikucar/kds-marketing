@@ -1,7 +1,7 @@
 [
   { "scenario": "Inbound_call", "unique_id": "sip7-1700000000.201", "customer_num": "905000000051", "internal_num": "101", "yon": "inbound" },
   { "scenario": "Answer", "unique_id": "1700000000.201", "customer_num": "905000000051", "internal_num": "101" },
-  { "scenario": "Hangup", "unique_id": "1700000000.201", "crm_id": "crm-synthetic-1", "sondurum": "ANSWER", "bilsec": "37" },
-  { "durum": "cdr", "uniqueid": "1700000000.201", "billsec": 37, "direction": "outbound" },
+  { "scenario": "Hangup", "unique_id": "1700000000.201", "crm_id": "crm-synthetic-1", "sondurum": "ANSWER", "bilsec": "37", "seskaydi": "https://dosya.example.invalid/kayit/1700000000.201.wav?token=SECRET-HOOK-TOKEN&x=1", "caller_record": "https://user:SECRET-HOOK-PASS@dosya.example.invalid/caller.wav?token=SECRET-HOOK-CALLER" },
+  { "durum": "cdr", "uniqueid": "1700000000.201", "billsec": 37, "direction": "outbound", "recording_url": "https://dosya.example.invalid/kayit/1700000000.201.wav#SECRET-HOOK-FRAGMENT" },
   { "scenario": "Transfer_maybe", "unique_id": "1700000000.201" }
 ]

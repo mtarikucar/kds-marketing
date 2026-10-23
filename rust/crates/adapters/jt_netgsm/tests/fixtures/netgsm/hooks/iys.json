@@ -3,5 +3,7 @@
   { "submitid": "sub-2", "recipient": "+905000000062", "type": "ARAMA", "status": "RET", "source": "HS_CAGRI_MERKEZI" },
   { "transactionid": "tx-3", "recipient": "+905000000063", "type": "MESAJ", "status": "BELKI", "source": "HS_WEB" },
   { "transactionid": "tx-4", "recipient": "+905000000064", "type": "FAKS", "status": "ONAY", "source": "HS_WEB" },
+  { "transactionid": "tx-5", "recipient": "+905000000065", "type": "MESAJ", "status": "onay", "source": "HS_WEB" },
+  { "transactionid": "tx-6", "recipient": "+905000000066", "type": "mesaj", "status": "RET", "source": "HS_WEB" },
   { "recipient": "ornek@example.invalid", "type": "EPOSTA", "status": "ONAY", "source": "HS_WEB" }
 ]

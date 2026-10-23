@@ -13,9 +13,19 @@
 //! the text holds a letter only the Turkish alphabet has (it shortens a segment, so plain text
 //! goes without); `iysfilter` is `"0"` (an informational message: the port carries no
 //! commercial flag yet). The inbox is never asked without both dates: NetGSM's dateless form
-//! marks every message as read, racing the callback. The inbox's code `40` says there is no
-//! message to show (the inbox names no sender, so the table's meaning of `40` cannot apply): it
-//! reads as no message.
+//! marks every message as read, racing the callback.
+//!
+//! Codes that say "nothing here" rather than an error, read as such (NetGSM's meaning on these
+//! endpoints, where the table's meaning cannot apply):
+//!
+//! | Endpoint | Code | Read as |
+//! |---|---|---|
+//! | inbox | `40`: no message to show | no message |
+//! | report | `60`: no record for these job ids (not yet reportable, or past the report window) | no row for that chunk; the other chunks' rows are kept |
+//! | balance | `60`: the credentials are valid but the account has no package | no balance (`None`); the probe goes on to the sender names |
+//!
+//! The balance, the sender names, reports and the inbox are reads (retried when no answer
+//! arrived); sending is an action, sent once.
 
 use jt_app::ports::connectors::{DeliveryState, DeliveryStatus, InboundEventDraft, SendReceipt};
 use jt_connector::{ConnectorError, Credential};
@@ -24,7 +34,7 @@ use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
 use crate::budget::Bucket;
-use crate::client::{Auth, Body, outcome};
+use crate::client::{Auth, Body, Retry, outcome};
 use crate::credential::SmsCred;
 use crate::json::{pick, text};
 use crate::tr_time::{fmt_tr, parse_tr};
@@ -38,6 +48,12 @@ const MAX_JOB_ID_DIGITS: usize = 64;
 
 /// The inbox's code for "no message to show".
 const INBOX_EMPTY: &str = "40";
+
+/// The report's code for "no record for these job ids".
+const REPORT_EMPTY: &str = "60";
+
+/// The balance's code for "valid credentials, no package".
+const BALANCE_NO_PACKAGE: &str = "60";
 
 /// The letters only the Turkish alphabet has, which need `encoding: "TR"`.
 const TURKISH_LETTERS: &[char] = &['ç', 'Ç', 'ğ', 'Ğ', 'ı', 'İ', 'ö', 'Ö', 'ş', 'Ş', 'ü', 'Ü'];
@@ -102,8 +118,9 @@ pub(crate) fn take(
 }
 
 impl NetgsmConnector {
-    /// The balance of the SMS account behind `cred` (`POST /balance {stip: 3}`).
-    pub async fn balance(&self, cred: &Credential) -> Result<Balance, ConnectorError> {
+    /// The balance of the SMS account behind `cred` (`POST /balance {stip: 3}`); `None` when the
+    /// credentials are valid but the account has no package (code `60`).
+    pub async fn balance(&self, cred: &Credential) -> Result<Option<Balance>, ConnectorError> {
         let sms = SmsCred::of(cred, "read the balance")?;
         self.balance_of(sms.usercode, sms.password).await
     }
@@ -112,7 +129,7 @@ impl NetgsmConnector {
         &self,
         usercode: &str,
         password: &str,
-    ) -> Result<Balance, ConnectorError> {
+    ) -> Result<Option<Balance>, ConnectorError> {
         let answer = self
             .call(
                 Method::POST,
@@ -122,8 +139,12 @@ impl NetgsmConnector {
                     password,
                 },
                 &Body::Json(json!({ "stip": 3 })),
+                Retry::Reads,
             )
             .await?;
+        if answer.code().as_deref() == Some(BALANCE_NO_PACKAGE) {
+            return Ok(None);
+        }
         let json = outcome(answer, "the balance", true)?;
         let rows = match &json {
             Value::Array(rows) => rows.as_slice(),
@@ -147,10 +168,10 @@ impl NetgsmConnector {
             })
             .and_then(|p| p.remaining.clone());
         let bare_credit = text(&json["balance"]).or_else(|| decimal(&json, &["balance", "credit"]));
-        Ok(Balance {
+        Ok(Some(Balance {
             credit: named_credit.or(bare_credit),
             packages,
-        })
+        }))
     }
 
     /// The sender names approved on the SMS account behind `cred`
@@ -174,6 +195,7 @@ impl NetgsmConnector {
                     password,
                 },
                 &Body::Empty,
+                Retry::Reads,
             )
             .await?;
         let json = outcome(answer, "the sender names", false)?;
@@ -229,6 +251,7 @@ pub(crate) async fn send(
                 password: sms.password,
             },
             &Body::Json(Value::Object(body)),
+            Retry::Never,
         )
         .await?;
     let json = outcome(answer, "the send", false)?;
@@ -276,8 +299,12 @@ pub(crate) async fn report(
                     password: sms.password,
                 },
                 &Body::Json(json!({ "jobids": chunk })),
+                Retry::Reads,
             )
             .await?;
+        if answer.code().as_deref() == Some(REPORT_EMPTY) {
+            continue;
+        }
         let json = outcome(answer, "the delivery report", false)?;
         for row in json["jobs"].as_array().into_iter().flatten() {
             if let Some(status) = delivery_status(row) {
@@ -340,6 +367,7 @@ pub(crate) async fn inbox(
                 password: sms.password,
             },
             &Body::Empty,
+            Retry::Reads,
         )
         .await?;
     if answer.code().as_deref() == Some(INBOX_EMPTY) {

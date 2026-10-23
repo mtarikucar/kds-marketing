@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::NetgsmConnector;
 use crate::budget::Bucket;
-use crate::client::{Auth, Body, outcome};
+use crate::client::{Auth, Body, Retry, outcome};
 use crate::credential::IysCred;
 use crate::json::{pick, text};
 use crate::sms::take;
@@ -79,8 +79,9 @@ fn row(index: usize, row: &ConsentRow) -> Result<Value, ConnectorError> {
 
 /// Records `rows` (see the module docs). The receipt's provider id is the request ids İYS gave
 /// the rows, in order, joined by `,` (empty when it gave none). No rows: nothing is called and the
-/// id is empty. A chunk refused after others were accepted fails the whole request; sending it
-/// again is safe (İYS keeps one record per recipient and channel).
+/// id is empty. Each chunk is sent once, never retried by the adapter (an action). A chunk
+/// refused after others were accepted fails the whole request; the caller sending it again is
+/// safe (İYS keeps one record per recipient and channel).
 pub(crate) async fn add(
     connector: &NetgsmConnector,
     cred: &Credential,
@@ -118,6 +119,7 @@ pub(crate) async fn add(
                     password: iys.password,
                 },
                 &body,
+                Retry::Never,
             )
             .await?;
         let json = outcome(answer, "the consent records", false)?;
@@ -144,8 +146,8 @@ fn request_ids(json: &Value) -> Vec<String> {
 
 impl NetgsmConnector {
     /// The consent İYS holds for `recipient` on `channel` (`MESAJ`, `ARAMA` or `EPOSTA`), with the
-    /// İYS credential `cred`; one call from the account's İYS budget. An answer naming no known
-    /// state is `Permanent` (consent is never guessed).
+    /// İYS credential `cred`; one call from the account's İYS budget. An answer naming no state
+    /// exactly as İYS writes it (`ONAY`, `RET`, `YOK`) is `Permanent` (consent is never guessed).
     pub async fn iys_search(
         &self,
         cred: &Credential,
@@ -173,13 +175,12 @@ impl NetgsmConnector {
                     password: iys.password,
                 },
                 &body,
+                Retry::Reads,
             )
             .await?;
         let json = outcome(answer, "the consent lookup", false)?;
-        match pick(&json, &["status", "durum", "sonuc"])
-            .map(|s| s.to_uppercase())
-            .as_deref()
-        {
+        // Exact, as İYS writes them: consent is never read from a near miss.
+        match pick(&json, &["status", "durum", "sonuc"]).as_deref() {
             Some("ONAY") => Ok(IysStatus::Granted),
             Some("RET") => Ok(IysStatus::Refused),
             Some("YOK") => Ok(IysStatus::Absent),

@@ -513,7 +513,9 @@ pub trait Telephony: Send + Sync {
         from_ext: &str,
         to: &str,
     ) -> Result<SendReceipt, ConnectorError>;
-    /// Ends the call with the correlation id `call_id`.
+    /// Ends the live call whose id at the PBX is `call_id`, as the provider's call events name it
+    /// (NetGSM: the `unique_id`). That is not always the receipt's correlation id: a NetGSM
+    /// receipt carries the `crm_id`, which the call events carry beside the `unique_id`.
     async fn hangup(&self, cred: &Credential, call_id: &str) -> Result<(), ConnectorError>;
 }
 
