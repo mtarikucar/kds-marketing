@@ -143,7 +143,6 @@ fn unsupported_connector_kinds_are_listed_explicitly() {
         "pinterest",
         "youtube",
         "google_business",
-        "mailbox",
         "webchat",
         "discord",
         "reddit",
