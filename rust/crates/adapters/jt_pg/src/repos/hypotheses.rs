@@ -132,7 +132,7 @@ impl HypothesisRepo for PgTenantRepos {
         }
         jt_strategy::parse_hypotheses_strict(&serde_json::json!([input]))
             .map_err(|_| AppError::validation("invalid hypothesis", serde_json::json!({})))?;
-        let id = HypothesisId(Uuid::new_v4());
+        let id = HypothesisId(Uuid::now_v7());
         self.upsert(
             draft_id,
             Hypothesis {
