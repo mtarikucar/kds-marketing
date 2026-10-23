@@ -426,7 +426,13 @@ async fn sms_optional_cost() {
     let s = w.uow.snapshot();
     assert_eq!(s.inbox.messages[0].cost_minor, None);
     match &sms.calls()[0] {
-        jt_testkit::fakes::ConnectorCall::SendSms { reference, to, .. } => {
+        jt_testkit::fakes::ConnectorCall::SendSms {
+            reference,
+            to,
+            commercial,
+            ..
+        } => {
+            assert!(!commercial);
             assert_eq!(
                 reference.as_deref(),
                 Some(s.inbox.outbox[0].id.to_string().as_str())

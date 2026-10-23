@@ -98,6 +98,7 @@ pub struct StoredInboundEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredOutboundJob {
     pub workspace_id: WorkspaceId,
+    pub capability_id: CapabilityId,
     pub job_id: String,
     pub status: Option<jt_app::ports::connectors::DeliveryStatus>,
 }
@@ -426,11 +427,12 @@ impl InMemoryUow {
         self.set_sealed_faults.store(times, Ordering::SeqCst);
     }
 
-    /// Records a message of workspace `ws` sent as the provider's job `job_id`, awaiting its
+    /// Records a message of capability `capability_id` in workspace `ws` as provider job `job_id`, awaiting its
     /// delivery report (the messages are M2's; until then only tests add them).
-    pub fn add_outbound_job(&self, ws: WorkspaceId, job_id: &str) {
+    pub fn add_outbound_job(&self, ws: WorkspaceId, capability_id: CapabilityId, job_id: &str) {
         lock(&self.state).outbound_jobs.push(StoredOutboundJob {
             workspace_id: ws,
+            capability_id,
             job_id: job_id.to_owned(),
             status: None,
         });

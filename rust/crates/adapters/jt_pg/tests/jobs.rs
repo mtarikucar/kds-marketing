@@ -500,3 +500,64 @@ async fn workspaces_with_verified_lists_only_workspaces_holding_a_verified_seale
     );
     assert!(p.workspaces_with_verified(&["x"]).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn outbound_job_stub_accepts_capability_scope_and_rejects_foreign_workspace() {
+    use jt_app::error::ErrorCode;
+    use jt_app::ports::connectors::{DeliveryState, DeliveryStatus};
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let (ws, _) = db.seed_workspace("outbound-scope").await;
+    let other = WorkspaceId::new_v7();
+    for capability_id in [CapabilityId::new_v7(), CapabilityId::new_v7()] {
+        let mut t = uow.tenant(ws).await.unwrap();
+        assert!(
+            t.outbound_jobs()
+                .pending_job_ids(ws, capability_id, 50)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        t.outbound_jobs()
+            .record_status(
+                ws,
+                capability_id,
+                vec![DeliveryStatus {
+                    job_id: "unstored".into(),
+                    recipient: "phone".into(),
+                    status: DeliveryState::Delivered,
+                    at: None,
+                    raw_code: "1".into(),
+                }],
+            )
+            .await
+            .unwrap();
+        assert!(
+            t.outbound_jobs()
+                .pending_job_ids(ws, capability_id, 50)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        t.commit().await.unwrap();
+        let mut t = uow.tenant(ws).await.unwrap();
+        assert_eq!(
+            t.outbound_jobs()
+                .pending_job_ids(other, capability_id, 50)
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::Internal
+        );
+        drop(t);
+        let mut t = uow.tenant(ws).await.unwrap();
+        assert_eq!(
+            t.outbound_jobs()
+                .record_status(other, capability_id, vec![])
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::Internal
+        );
+    }
+}

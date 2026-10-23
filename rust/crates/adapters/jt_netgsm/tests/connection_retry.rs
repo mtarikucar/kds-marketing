@@ -105,7 +105,7 @@ async fn a_read_retries_once_on_a_connect_failure() {
         StdDuration::from_secs(5),
     );
     let e = netgsm
-        .send(&sms_cred(), "905000000001", "Merhaba", None)
+        .send(&sms_cred(), "905000000001", "Merhaba", None, false)
         .with_subscriber(recovery.clone())
         .await
         .unwrap_err();

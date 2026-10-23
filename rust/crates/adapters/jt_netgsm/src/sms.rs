@@ -3,7 +3,7 @@
 //!
 //! | Call | Request | Answer read |
 //! |---|---|---|
-//! | send | `POST /sms/rest/v2/send {msgheader, messages: [{msg, no, referansID?}], encoding?: "TR", iysfilter: "0"}` | `jobid` (a string, or a number kept digit for digit), optional integer `cost_minor` |
+//! | send | `POST /sms/rest/v2/send {msgheader, messages: [{msg, no, referansID?}], encoding?: "TR", iysfilter: "1" | "0"}` | `jobid` (a string, or a number kept digit for digit), optional integer `cost_minor` |
 //! | report | `POST /sms/rest/v2/report {jobids}`, at most 50 per call | `jobs[] {jobid, telno, status, deliveredDate, errorCode}` |
 //! | inbox | `GET /sms/rest/v2/inbox?startdate&stopdate`, always both (`ddMMyyyyHHmm`, Turkish time) | `messages[] {msg, no, date, id}` |
 //! | balance | `POST /balance {stip: 3}` | rows `{balance_name, amount}`, bare or under `balance` |
@@ -11,8 +11,7 @@
 //!
 //! All with HTTP basic authentication (`usercode:password`). `encoding: "TR"` is sent only when
 //! the text holds a letter only the Turkish alphabet has (it shortens a segment, so plain text
-//! goes without); `iysfilter` is `"0"` (an informational message: the port carries no
-//! commercial flag yet). The inbox is never asked without both dates: NetGSM's dateless form
+//! goes without); `iysfilter` is `"1"` for commercial messages and `"0"` for informational replies. The inbox is never asked without both dates: NetGSM's dateless form
 //! marks every message as read, racing the callback.
 //!
 //! Codes that say "nothing here" rather than an error, read as such (NetGSM's meaning on these
@@ -223,6 +222,7 @@ pub(crate) async fn send(
     to: &str,
     text_body: &str,
     reference: Option<&str>,
+    commercial: bool,
 ) -> Result<SendReceipt, ConnectorError> {
     let sms = SmsCred::of(cred, "send SMS")?;
     let no = phone_digits(to, "recipient")?;
@@ -241,7 +241,10 @@ pub(crate) async fn send(
     if text_body.contains(TURKISH_LETTERS) {
         body.insert("encoding".into(), json!("TR"));
     }
-    body.insert("iysfilter".into(), json!("0"));
+    body.insert(
+        "iysfilter".into(),
+        json!(if commercial { "1" } else { "0" }),
+    );
     let answer = connector
         .call(
             Method::POST,

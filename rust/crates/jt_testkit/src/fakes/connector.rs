@@ -403,6 +403,7 @@ impl OutboundJobRepo for MemTenant {
     async fn pending_job_ids(
         &mut self,
         ws: WorkspaceId,
+        capability_id: CapabilityId,
         limit: u32,
     ) -> Result<Vec<String>, AppError> {
         self.call(|this| {
@@ -411,7 +412,11 @@ impl OutboundJobRepo for MemTenant {
                 .state()
                 .outbound_jobs
                 .iter()
-                .filter(|j| j.workspace_id == ws && awaiting(j.status.as_ref()))
+                .filter(|j| {
+                    j.workspace_id == ws
+                        && j.capability_id == capability_id
+                        && awaiting(j.status.as_ref())
+                })
                 .map(|j| j.job_id.clone())
                 .take(limit.clamp(1, MAX_PENDING_JOBS) as usize)
                 .collect())
@@ -421,17 +426,18 @@ impl OutboundJobRepo for MemTenant {
     async fn record_status(
         &mut self,
         ws: WorkspaceId,
+        capability_id: CapabilityId,
         statuses: Vec<DeliveryStatus>,
     ) -> Result<(), AppError> {
         self.call(|this| {
             same_workspace(this.ws, ws)?;
             this.tx.write(move |s| {
                 for status in &statuses {
-                    for job in s
-                        .outbound_jobs
-                        .iter_mut()
-                        .filter(|j| j.workspace_id == ws && j.job_id == status.job_id)
-                    {
+                    for job in s.outbound_jobs.iter_mut().filter(|j| {
+                        j.workspace_id == ws
+                            && j.capability_id == capability_id
+                            && j.job_id == status.job_id
+                    }) {
                         job.status = Some(status.clone());
                     }
                 }

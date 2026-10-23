@@ -1441,3 +1441,25 @@ use the call key as an index condition under forced RLS. The BEFORE append-only 
 the database-generated key; rollback drops the key/index and restores the original guard. Shared
 fake/PostgreSQL contracts cover time/tenant/provider/kind boundaries and processing updates; a tenant
 EXPLAIN regression verifies the indexed lookup and a schema test checks up → down → up.
+
+
+### M2b connector port prerequisites
+
+`SmsSender::send` takes `commercial: bool`: NetGSM sends `iysfilter="1"` for commercial SMS
+and `"0"` for informational messages. M2a reply callers explicitly pass `false`; commercial
+consent enforcement is supplied by the later M2b use cases.
+
+`MailSender` accepts a typed `MailMessage` with recipient, subject, text, stable Message-ID,
+thread headers and `Attachment` values. Credentials remain a separate argument. Attachment
+`Debug` includes only filename, MIME type and byte count; attachment bytes are never logged or
+written to the ledger. The message and attachment types deliberately do not implement serde.
+`MailboxPoller` returns inbound drafts and a `MailboxCursor` with a `MailboxPosition`
+(`uidvalidity`, `last_uid`) for each mailbox name (INBOX/Sent). The caller must persist the cursor
+atomically with drafts. These ports add no storage or mail provider yet: `mail_sender` and
+`mailbox_poller` registry getters return `None` for all existing providers. Scripted connectors
+implement both contracts directly and record arguments and queued outcomes for tests.
+
+`OutboundJobRepo::pending_job_ids` and `record_status` both require a capability ID. The NetGSM
+DLR job reads pending jobs, polls and records statuses separately for each verified SMS capability;
+provider job IDs shared by different capabilities cannot update one another. The PostgreSQL
+implementation remains an empty stub until M2b outbound job persistence ships.

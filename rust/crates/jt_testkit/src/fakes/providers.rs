@@ -21,9 +21,10 @@ use async_trait::async_trait;
 use jt_app::ports::connectors::{
     AccountMetrics, AdBudgetWriter, AdInsights, AdSet, Asset, Connector, ConnectorRegistry,
     ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus, InboundEventDraft, InsightsReader,
-    InstagramApp, LeadGenFetcher, LeadGenRecord, MessagingSender, MetaApp, OAuthApp, OAuthProvider,
-    PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt,
-    SmsSender, Telephony, Url, XApp,
+    InstagramApp, LeadGenFetcher, LeadGenRecord, MailMessage, MailSender, MailboxCursor,
+    MailboxPoller, MessagingSender, MetaApp, OAuthApp, OAuthProvider, PlatformAppConfig,
+    PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt, SmsSender, Telephony, Url,
+    XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use serde_json::Value;
@@ -167,6 +168,16 @@ pub enum ConnectorCall {
         to: String,
         text: String,
         reference: Option<String>,
+        commercial: bool,
+    },
+    SendMail {
+        credential: Credential,
+        message: MailMessage,
+    },
+    MailboxPoll {
+        credential: Credential,
+        public: Value,
+        cursor: MailboxCursor,
     },
     Publish {
         credential: Credential,
@@ -250,6 +261,8 @@ pub struct ScriptedConnector {
     refresh: Script<Result<Option<Credential>, ConnectorError>>,
     on_connected: Script<Result<Value, ConnectorError>>,
     sms: Script<Result<SendReceipt, ConnectorError>>,
+    mail: Script<Result<SendReceipt, ConnectorError>>,
+    mailbox_poll: Script<Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>>,
     send_hooks: Script<SendHook>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
@@ -281,6 +294,8 @@ impl ScriptedConnector {
             refresh: Script::default(),
             on_connected: Script::default(),
             sms: Script::default(),
+            mail: Script::default(),
+            mailbox_poll: Script::default(),
             send_hooks: Script::default(),
             publish: Script::default(),
             post_metrics: Script::default(),
@@ -338,6 +353,17 @@ impl ScriptedConnector {
     /// Queue the exact outcome, including uncertain writes and an optional reported cost.
     pub fn push_sms(&self, result: Result<SendReceipt, ConnectorError>) {
         self.sms.push(result);
+    }
+
+    pub fn push_mail(&self, result: Result<SendReceipt, ConnectorError>) {
+        self.mail.push(result);
+    }
+
+    pub fn push_mailbox_poll(
+        &self,
+        result: Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>,
+    ) {
+        self.mailbox_poll.push(result);
     }
 
     pub fn push_publish(&self, result: Result<PublishReceipt, ConnectorError>) {
@@ -466,15 +492,50 @@ impl SmsSender for ScriptedConnector {
         to: &str,
         text: &str,
         reference: Option<&str>,
+        commercial: bool,
     ) -> Result<SendReceipt, ConnectorError> {
         self.record(ConnectorCall::SendSms {
             credential: cred.clone(),
             to: to.to_owned(),
             text: text.to_owned(),
             reference: reference.map(str::to_owned),
+            commercial,
         });
         self.after_send().await;
         self.next(&self.sms, "sms result")
+    }
+}
+
+#[async_trait]
+impl MailSender for ScriptedConnector {
+    async fn send(
+        &self,
+        cred: &Credential,
+        message: MailMessage,
+    ) -> Result<SendReceipt, ConnectorError> {
+        self.record(ConnectorCall::SendMail {
+            credential: cred.clone(),
+            message,
+        });
+        self.after_send().await;
+        self.next(&self.mail, "mail result")
+    }
+}
+
+#[async_trait]
+impl MailboxPoller for ScriptedConnector {
+    async fn poll(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        cursor: &MailboxCursor,
+    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError> {
+        self.record(ConnectorCall::MailboxPoll {
+            credential: cred.clone(),
+            public: public.clone(),
+            cursor: cursor.clone(),
+        });
+        self.next(&self.mailbox_poll, "mailbox poll result")
     }
 }
 
@@ -890,6 +951,14 @@ impl ConnectorRegistry for ScriptedRegistry {
             .get(&provider)
             .cloned()
             .map(|o| o as Arc<dyn OAuthProvider>)
+    }
+
+    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
+        None
+    }
+
+    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
+        None
     }
 
     fn sms(&self, provider: Provider) -> Option<Arc<dyn SmsSender>> {

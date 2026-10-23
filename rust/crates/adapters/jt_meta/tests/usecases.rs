@@ -7,7 +7,8 @@ use std::sync::Arc;
 use jt_app::error::ErrorCode;
 use jt_app::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
-    LeadGenFetcher, MessagingSender, OAuthProvider, Publisher, SmsSender, Telephony,
+    LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider, Publisher,
+    SmsSender, Telephony,
 };
 use jt_app::usecases::auth::{self, RegisterInput};
 use jt_app::usecases::capabilities::{self, DeclareInput};
@@ -30,6 +31,14 @@ impl ConnectorRegistry for MetaRegistry {
 
     fn oauth(&self, provider: Provider) -> Option<Arc<dyn OAuthProvider>> {
         (provider == Provider::Meta).then(|| self.0.clone() as Arc<dyn OAuthProvider>)
+    }
+
+    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
+        None
+    }
+
+    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
+        None
     }
 
     fn sms(&self, _: Provider) -> Option<Arc<dyn SmsSender>> {

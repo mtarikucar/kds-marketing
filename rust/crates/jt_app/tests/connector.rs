@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::connectors::{
     AdBudgetWriter, Asset, AssetPublic, Connector, ConnectorRegistry, ConsentSync, DeliveryReports,
-    InsightsReader, LeadGenFetcher, MessagingSender, OAuthApp, OAuthProvider, Publisher, SmsSender,
-    Telephony, Url,
+    InsightsReader, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthApp,
+    OAuthProvider, Publisher, SmsSender, Telephony, Url,
 };
 use jt_app::ports::{OAuthPendingRow, SecretBox, UnitOfWork};
 use jt_app::usecases::Deps;
@@ -3196,6 +3196,14 @@ impl ConnectorRegistry for RacingRegistry {
 
     fn oauth(&self, provider: Provider) -> Option<Arc<dyn OAuthProvider>> {
         (provider == Provider::Meta).then(|| self.oauth.clone() as Arc<dyn OAuthProvider>)
+    }
+
+    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
+        None
+    }
+
+    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
+        None
     }
 
     fn sms(&self, provider: Provider) -> Option<Arc<dyn SmsSender>> {

@@ -1364,20 +1364,22 @@ pub const MAX_PENDING_JOBS: u32 = 50;
 /// writes nothing, so the delivery-report poll runs and never reaches a provider.
 #[async_trait]
 pub trait OutboundJobRepo: Send + Sync {
-    /// The job ids of workspace `ws`'s messages whose delivery is not final, oldest first, at
-    /// most `limit` (clamped to `1..=MAX_PENDING_JOBS`). `ws` must be the bundle's workspace,
+    /// The pending job ids of capability `capability_id` in workspace `ws`, oldest first,
+    /// at most `limit` (clamped to `1..=MAX_PENDING_JOBS`). `ws` must be the bundle's workspace,
     /// else `INTERNAL`.
     async fn pending_job_ids(
         &mut self,
         ws: WorkspaceId,
+        capability_id: CapabilityId,
         limit: u32,
     ) -> Result<Vec<String>, AppError>;
-    /// Records each status against the job it names in workspace `ws`; a status naming a job
-    /// the workspace does not hold is ignored. `ws` must be the bundle's workspace, else
-    /// `INTERNAL`.
+    /// Records each status against the job it names in capability `capability_id` and workspace
+    /// `ws`; a status naming a job outside that pair is ignored. `ws` must be the bundle's
+    /// workspace, else `INTERNAL`.
     async fn record_status(
         &mut self,
         ws: WorkspaceId,
+        capability_id: CapabilityId,
         statuses: Vec<connectors::DeliveryStatus>,
     ) -> Result<(), AppError>;
 }

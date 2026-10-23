@@ -470,6 +470,7 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
                 &p.recipient,
                 &p.message.body,
                 Some(&id.to_string()),
+                false,
             )
             .await
     } else {

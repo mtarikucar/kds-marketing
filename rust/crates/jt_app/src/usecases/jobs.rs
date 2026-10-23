@@ -567,18 +567,13 @@ fn due_for_probe(capability: &Capability, now: OffsetDateTime) -> bool {
 // NetGSM polls
 // ---------------------------------------------------------------------------------------------
 
-/// Asks NetGSM how the messages sent earlier fared, in every active workspace holding a verified
-/// SMS line (found with one platform-wide read; no other workspace's transaction is opened): the
-/// job ids of the workspace's messages whose delivery is not final yet
-/// ([`crate::ports::OutboundJobRepo`], at most [`MAX_PENDING_JOBS`]) are put to its delivery
-/// reports with the credentials of each of its verified SMS lines, and every status heard is
-/// recorded. A workspace with nothing waiting asks nothing. (Until the next milestone stores
-/// sent messages, nothing ever waits: the Postgres repository is a stub. M2 also ties each job to
-/// the line that sent it, so that a line is asked about its own jobs only.)
+/// Asks each verified SMS capability in active workspaces about its own pending jobs only.
+/// Both the pending read and status write are scoped by workspace and capability, even when
+/// different accounts use the same provider job id. Provider I/O holds no transaction.
+/// The Postgres repository remains a stub until M2b adds outbound job storage.
 ///
-/// `touched` counts the jobs asked about, `changed` the statuses recorded, `skipped` the jobs
-/// waiting in a workspace whose lines changed meanwhile, `failed` the lines whose report could
-/// not be had (and the workspaces that could not be read or written).
+/// `touched` counts jobs asked about, `changed` statuses recorded, and `failed` the capabilities
+/// whose pending jobs, reports or statuses could not be read or written.
 pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport {
     let job = Job::NetgsmDlrPoll;
     let mut report = JobReport::default();
@@ -586,17 +581,6 @@ pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport
         return finish(job, report);
     };
     for ws in netgsm_workspaces(deps, job, ACTIVE, &mut report).await {
-        let pending = match pending_jobs(deps, ws).await {
-            Ok(pending) => pending,
-            Err(e) => {
-                report.failed += 1;
-                step_failed(job, ws, None, &Failure::App(e));
-                continue;
-            }
-        };
-        if pending.is_empty() {
-            continue;
-        }
         let lines = match live_connector_capabilities(deps, ws).await {
             Ok(capabilities) => verified_lines(&capabilities),
             Err(e) => {
@@ -605,42 +589,53 @@ pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport
                 continue;
             }
         };
-        if lines.is_empty() {
-            report.skipped += pending.len() as u64;
-            continue;
-        }
-        report.touched += pending.len() as u64;
-        let mut statuses = Vec::new();
         for line in lines {
-            match report_for(deps, reports.as_ref(), ws, line, &pending).await {
-                Ok(heard) => statuses.extend(heard),
+            let pending = match pending_jobs(deps, ws, line).await {
+                Ok(pending) => pending,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(line), &Failure::App(e));
+                    continue;
+                }
+            };
+            if pending.is_empty() {
+                continue;
+            }
+            report.touched += pending.len() as u64;
+            let statuses = match report_for(deps, reports.as_ref(), ws, line, &pending).await {
+                Ok(heard) => heard,
                 Err(e) => {
                     report.failed += 1;
                     step_failed(job, ws, Some(line), &e);
+                    continue;
                 }
+            };
+            if statuses.is_empty() {
+                continue;
             }
-        }
-        if statuses.is_empty() {
-            continue;
-        }
-        let heard = statuses.len() as u64;
-        match record_statuses(deps, ws, statuses).await {
-            Ok(()) => report.changed += heard,
-            Err(e) => {
-                report.failed += 1;
-                step_failed(job, ws, None, &Failure::App(e));
+            let heard = statuses.len() as u64;
+            match record_statuses(deps, ws, line, statuses).await {
+                Ok(()) => report.changed += heard,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(line), &Failure::App(e));
+                }
             }
         }
     }
     finish(job, report)
 }
 
-/// The job ids awaiting a delivery report in `ws`.
-async fn pending_jobs(deps: &Deps, ws: WorkspaceId) -> Result<Vec<String>, AppError> {
+/// The job ids awaiting a delivery report for `capability_id` in `ws`.
+async fn pending_jobs(
+    deps: &Deps,
+    ws: WorkspaceId,
+    capability_id: CapabilityId,
+) -> Result<Vec<String>, AppError> {
     let mut repos = deps.uow.tenant(ws).await?;
     repos
         .outbound_jobs()
-        .pending_job_ids(ws, MAX_PENDING_JOBS)
+        .pending_job_ids(ws, capability_id, MAX_PENDING_JOBS)
         .await
 }
 
@@ -660,14 +655,18 @@ async fn report_for(
     heard.map_err(Failure::Provider)
 }
 
-/// Records `statuses` in `ws`.
+/// Records `statuses` for `capability_id` in `ws`.
 async fn record_statuses(
     deps: &Deps,
     ws: WorkspaceId,
+    capability_id: CapabilityId,
     statuses: Vec<DeliveryStatus>,
 ) -> Result<(), AppError> {
     let mut repos = deps.uow.tenant(ws).await?;
-    repos.outbound_jobs().record_status(ws, statuses).await?;
+    repos
+        .outbound_jobs()
+        .record_status(ws, capability_id, statuses)
+        .await?;
     repos.commit().await
 }
 

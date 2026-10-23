@@ -40,8 +40,9 @@ impl SmsSender for NetgsmConnector {
         to: &str,
         text: &str,
         reference: Option<&str>,
+        commercial: bool,
     ) -> Result<SendReceipt, ConnectorError> {
-        sms::send(self, cred, to, text, reference).await
+        sms::send(self, cred, to, text, reference, commercial).await
     }
 }
 

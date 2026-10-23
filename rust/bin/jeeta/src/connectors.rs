@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use jt_app::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
-    LeadGenFetcher, MessagingSender, OAuthProvider, PlatformAppConfig, Publisher, SmsSender,
-    Telephony,
+    LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider, PlatformAppConfig,
+    Publisher, SmsSender, Telephony,
 };
 use jt_connector::Provider;
 use jt_meta::{MetaBases, MetaConnector};
@@ -71,6 +71,14 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Netgsm => None,
         }
+    }
+
+    fn mail_sender(&self, _provider: Provider) -> Option<Arc<dyn MailSender>> {
+        None
+    }
+
+    fn mailbox_poller(&self, _provider: Provider) -> Option<Arc<dyn MailboxPoller>> {
+        None
     }
 
     fn sms(&self, provider: Provider) -> Option<Arc<dyn SmsSender>> {
@@ -134,6 +142,11 @@ mod tests {
             ("connector", registry.connector(provider).is_some()),
             ("oauth", registry.oauth(provider).is_some()),
             ("sms", registry.sms(provider).is_some()),
+            ("mail_sender", registry.mail_sender(provider).is_some()),
+            (
+                "mailbox_poller",
+                registry.mailbox_poller(provider).is_some(),
+            ),
             ("publisher", registry.publisher(provider).is_some()),
             ("insights", registry.insights(provider).is_some()),
             ("messaging", registry.messaging(provider).is_some()),
