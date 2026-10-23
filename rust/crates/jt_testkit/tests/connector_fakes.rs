@@ -110,6 +110,7 @@ fn pending(
         kind_key: "facebook_page".into(),
         state_hash: hash.into(),
         started_by: user,
+        capability_id: None,
         pkce_verifier_sealed: None,
         assets_sealed: None,
         assets_public: json!([]),
@@ -503,6 +504,57 @@ async fn oauth_pending_state_hash_is_unique_and_purgeable() {
 }
 
 #[tokio::test]
+async fn oauth_pending_locks_by_id_and_binds_a_reconnection_to_its_own_capability() {
+    let (_, deps) = setup();
+    let (a, owner_a) = workspace(&deps, "a").await;
+    let (b, _) = workspace(&deps, "b").await;
+    let page = capability(a, "facebook_page", "page-1", FIXED_NOW);
+    let theirs = capability(b, "facebook_page", "page-1", FIXED_NOW);
+    insert_capability(&deps, &page).await;
+    insert_capability(&deps, &theirs).await;
+
+    let renewal = OAuthPendingRow {
+        capability_id: Some(page.id),
+        ..pending(a, owner_a, "hash-renew", FIXED_NOW + Duration::minutes(10))
+    };
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    t.oauth_pending().insert(renewal.clone()).await.unwrap();
+    t.commit().await.unwrap();
+
+    // `lock` reads the flow by its id (the fakes run one bundle at a time, so it waits for no
+    // one), and only in its own workspace.
+    let mut t = deps.uow.tenant(a).await.unwrap();
+    assert_eq!(
+        t.oauth_pending().lock(renewal.id).await.unwrap(),
+        Some(renewal.clone())
+    );
+    assert_eq!(
+        t.oauth_pending()
+            .lock(OAuthPendingId::new_v7())
+            .await
+            .unwrap(),
+        None
+    );
+    drop(t);
+    let mut t = deps.uow.tenant(b).await.unwrap();
+    assert_eq!(t.oauth_pending().lock(renewal.id).await.unwrap(), None);
+    drop(t);
+
+    // A reconnection names a capability of its own workspace, else NOT_FOUND.
+    for capability in [theirs.id, CapabilityId::new_v7()] {
+        let mut t = deps.uow.tenant(a).await.unwrap();
+        let row = OAuthPendingRow {
+            capability_id: Some(capability),
+            ..pending(a, owner_a, "hash-other", FIXED_NOW)
+        };
+        assert_eq!(
+            code(t.oauth_pending().insert(row).await),
+            ErrorCode::NotFound
+        );
+    }
+}
+
+#[tokio::test]
 async fn probe_runs_read_newest_first_and_stay_in_their_workspace() {
     let (_, deps) = setup();
     let (a, _) = workspace(&deps, "a").await;
@@ -723,6 +775,11 @@ async fn scripted_connector_answers_in_order_and_records_calls() {
     use jt_app::ports::connectors::ConnectorRegistry as _;
     let connector = registry.connector(Provider::Netgsm).expect("netgsm");
     assert_eq!(connector.provider(), Provider::Netgsm);
+    // It names no host unless given some.
+    assert!(connector.hosts().is_empty());
+    let hosted = ScriptedConnector::new(Provider::Netgsm).with_hosts(&["api.netgsm.test"]);
+    use jt_app::ports::connectors::Connector as _;
+    assert_eq!(hosted.hosts(), ["api.netgsm.test"]);
     let cred = Credential::NetgsmSms {
         usercode: "850".into(),
         password: "pw".into(),

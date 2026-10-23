@@ -15,16 +15,17 @@
 -- workspace. The PKCE code verifier never travels in the state: it is sealed server-side here
 -- (`pkce_verifier_sealed`). Once the provider calls back, the assets the account can reach are
 -- stored sealed (`assets_sealed`, credentials included) and as their public facts
--- (`assets_public`, a JSON array). Rows are short-lived: confirmed or abandoned flows are deleted
--- (`delete`, `purge_expired`).
+-- (`assets_public`, a JSON array). A reconnection names the capability it renews
+-- (`capability_id`, null for a new connection). Rows are short-lived: confirmed or abandoned
+-- flows are deleted (`delete`, `purge_expired`).
 --
 -- A probe run records one probe of a connector capability; the log is append-only (a trigger
 -- refuses updates and deletes), read newest first per capability.
 --
--- Events and probe runs reference their capability together with the workspace (composite
--- foreign keys on `capabilities (id, workspace_id)`), so a row can never tie in another
--- workspace's capability, even where row-level security is off. An event's capability is
--- optional (null: not routed to one).
+-- Events, probe runs and reconnections reference their capability together with the workspace
+-- (composite foreign keys on `capabilities (id, workspace_id)`), so a row can never tie in
+-- another workspace's capability, even where row-level security is off. An event's capability
+-- is optional (null: not routed to one), and so is a pending flow's.
 --
 -- An inbound webhook is routed, across workspaces, to the capability that holds the provider's
 -- account and was connected through the provider: sealed credentials, and stored status verified
@@ -91,11 +92,14 @@ create table if not exists oauth_pending (
     kind_key text not null,
     state_hash text not null unique,
     started_by uuid not null references users (id) on delete cascade,
+    capability_id uuid,
     pkce_verifier_sealed bytea,
     assets_sealed bytea,
     assets_public jsonb not null default '[]'::jsonb,
     expires_at timestamptz not null,
-    created_at timestamptz not null
+    created_at timestamptz not null,
+    constraint oauth_pending_capability_fkey foreign key (capability_id, workspace_id)
+        references capabilities (id, workspace_id) on delete cascade
 );
 create index if not exists oauth_pending_expires_idx
     on oauth_pending (workspace_id, expires_at);

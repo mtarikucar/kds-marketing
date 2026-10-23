@@ -10,6 +10,7 @@ pub mod api_keys;
 pub mod auth;
 pub mod budget;
 pub mod capabilities;
+pub mod connector;
 pub mod groups;
 pub mod ledger;
 pub mod platform;

@@ -15,7 +15,7 @@
 //! **Retired is final.** A retired capability keeps its row for the record and can no longer be
 //! verified, marked unreachable, given a policy, grouped or linked to a budget item (`CONFLICT`
 //! "capability is retired"); retiring it again is `CONFLICT` too. Retiring detaches it from its
-//! groups and budget items in the same transaction.
+//! groups and budget items and drops its sealed credentials in the same transaction.
 //!
 //! **Tenant hosts.** A connector capability may name the hosts its connector reaches in
 //! `connector_public.hosts` (an array of `host` or `host:port` strings). Declaring one checks
@@ -51,7 +51,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
-use super::{Deps, invalid, ledger_entry};
+use super::{Deps, connector, invalid, ledger_entry};
 use crate::ctx::Ctx;
 use crate::error::AppError;
 use crate::ports::{CapabilityFilter, ChannelCatalog, TenantRepos, UnitOfWork};
@@ -442,10 +442,13 @@ pub async fn set_policy(
 ///
 /// An unknown id is `NOT_FOUND`; a capability already retired `CONFLICT`. In one transaction it
 /// becomes `retired`, is unlinked from every budget item and removed from every group (both
-/// stay), and `capability.retire` is written (payload `budget_links`, `groups`: how many it left,
-/// `hosts_revoked`: how many tenant hosts go). Once committed, each host it named that no other
-/// live connector capability of the workspace names is revoked; a host that cannot be revoked
-/// then is logged as a warning and the retirement is answered all the same, since it holds.
+/// stay), loses its sealed credentials (a connection ends with it) and no longer asks to be
+/// reconnected (`connector_public.reconnect_required` becomes `false`; its last probe stays for
+/// the record), and `capability.retire` is written (payload `budget_links`, `groups`: how many it
+/// left, `hosts_revoked`: how many tenant hosts go). Once committed, each host it named that no
+/// other live connector capability of the workspace names is revoked; a host that cannot be
+/// revoked then is logged as a warning and the retirement is answered all the same, since it
+/// holds.
 pub async fn retire(
     deps: &Deps,
     ctx: &Ctx,
@@ -468,6 +471,20 @@ pub async fn retire(
         .capabilities()
         .set_status(id, StoredStatus::Retired, ctx.now)
         .await?;
+    if capability.has_sealed_config {
+        repos.capabilities().set_sealed(id, None, ctx.now).await?;
+    }
+    if connector::reconnect_required(&capability) {
+        repos
+            .capabilities()
+            .update(Capability {
+                status: StoredStatus::Retired,
+                connector_public: connector::retired_public(&capability),
+                updated_at: ctx.now,
+                ..capability.clone()
+            })
+            .await?;
+    }
     for item in &capability.budget_item_ids {
         repos.budget().unlink(id, *item).await?;
     }

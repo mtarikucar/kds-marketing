@@ -319,14 +319,17 @@ impl CapabilityRepo for PgTenantRepos {
         &mut self,
         id: CapabilityId,
         sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
     ) -> Result<(), AppError> {
         let ws = self.workspace_id();
         let done = sqlx::query(
-            "update capabilities set connector_sealed = $3 where workspace_id = $1 and id = $2",
+            "update capabilities set connector_sealed = $3, updated_at = $4 \
+             where workspace_id = $1 and id = $2",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
         .bind(sealed)
+        .bind(at)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "set sealed connector config"))?;

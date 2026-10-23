@@ -3,18 +3,27 @@
 //! `provider` holds its key, `assets_public` a JSON array. The state hash is unique across every
 //! workspace (a plain unique index, which row-level security does not hide), so an insert that
 //! clashes with another workspace's flow is skipped like any other clash. The sealed columns are
-//! opaque bytes sealed for the row's workspace.
+//! opaque bytes sealed for the row's workspace. A reconnection's capability references the
+//! capability together with the workspace (a composite foreign key); `insert` checks first that
+//! it is this workspace's, so another workspace's capability is `NOT_FOUND` before the key would
+//! refuse it.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::{OAuthPendingId, OAuthPendingRepo, OAuthPendingRow};
+use jt_capability::CapabilityId;
 use jt_connector::Provider;
 use jt_tenancy::{UserId, WorkspaceId};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use super::capabilities::ensure_capability;
 use super::{map_sqlx, same_workspace, stored};
 use crate::uow::PgTenantRepos;
+
+const COLUMNS: &str = "id, workspace_id, provider, kind_key, state_hash, started_by, \
+                       capability_id, pkce_verifier_sealed, assets_sealed, assets_public, \
+                       expires_at, created_at";
 
 #[derive(sqlx::FromRow)]
 struct PendingRecord {
@@ -24,6 +33,7 @@ struct PendingRecord {
     kind_key: String,
     state_hash: String,
     started_by: Uuid,
+    capability_id: Option<Uuid>,
     pkce_verifier_sealed: Option<Vec<u8>>,
     assets_sealed: Option<Vec<u8>>,
     assets_public: serde_json::Value,
@@ -40,6 +50,7 @@ impl PendingRecord {
             kind_key: self.kind_key,
             state_hash: self.state_hash,
             started_by: UserId(self.started_by),
+            capability_id: self.capability_id.map(CapabilityId),
             pkce_verifier_sealed: self.pkce_verifier_sealed,
             assets_sealed: self.assets_sealed,
             assets_public: self.assets_public,
@@ -56,10 +67,13 @@ impl OAuthPendingRepo for PgTenantRepos {
     async fn insert(&mut self, row: OAuthPendingRow) -> Result<(), AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, row.workspace_id)?;
+        if let Some(capability) = row.capability_id {
+            ensure_capability(self.tx.conn(), ws, capability).await?;
+        }
         let done = sqlx::query(
             "insert into oauth_pending (id, workspace_id, provider, kind_key, state_hash, \
-             started_by, pkce_verifier_sealed, assets_sealed, assets_public, expires_at, \
-             created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             started_by, capability_id, pkce_verifier_sealed, assets_sealed, assets_public, \
+             expires_at, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              on conflict do nothing",
         )
         .bind(row.id.as_uuid())
@@ -68,6 +82,7 @@ impl OAuthPendingRepo for PgTenantRepos {
         .bind(&row.kind_key)
         .bind(&row.state_hash)
         .bind(row.started_by.as_uuid())
+        .bind(row.capability_id.map(|c| c.as_uuid()))
         .bind(&row.pkce_verifier_sealed)
         .bind(&row.assets_sealed)
         .bind(&row.assets_public)
@@ -89,16 +104,27 @@ impl OAuthPendingRepo for PgTenantRepos {
         state_hash: &str,
     ) -> Result<Option<OAuthPendingRow>, AppError> {
         let ws = self.workspace_id();
-        let record: Option<PendingRecord> = sqlx::query_as(
-            "select id, workspace_id, provider, kind_key, state_hash, started_by, \
-             pkce_verifier_sealed, assets_sealed, assets_public, expires_at, created_at \
-             from oauth_pending where workspace_id = $1 and state_hash = $2",
-        )
+        let record: Option<PendingRecord> = sqlx::query_as(&format!(
+            "select {COLUMNS} from oauth_pending where workspace_id = $1 and state_hash = $2"
+        ))
         .bind(ws.as_uuid())
         .bind(state_hash)
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "find pending oauth flow"))?;
+        record.map(PendingRecord::into_row).transpose()
+    }
+
+    async fn lock(&mut self, id: OAuthPendingId) -> Result<Option<OAuthPendingRow>, AppError> {
+        let ws = self.workspace_id();
+        let record: Option<PendingRecord> = sqlx::query_as(&format!(
+            "select {COLUMNS} from oauth_pending where workspace_id = $1 and id = $2 for update"
+        ))
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock pending oauth flow"))?;
         record.map(PendingRecord::into_row).transpose()
     }
 

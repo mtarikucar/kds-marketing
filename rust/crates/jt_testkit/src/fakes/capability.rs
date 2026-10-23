@@ -253,6 +253,7 @@ impl CapabilityRepo for MemTenant {
         &mut self,
         id: CapabilityId,
         sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
     ) -> Result<(), AppError> {
         self.call(|this| {
             let ws = this.ws;
@@ -264,6 +265,7 @@ impl CapabilityRepo for MemTenant {
                     .find(|c| c.capability.workspace_id == ws && c.capability.id == id)
                 {
                     stored.sealed = sealed.clone();
+                    stored.capability.updated_at = at;
                 }
             });
             Ok(())

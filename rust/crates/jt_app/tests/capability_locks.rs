@@ -21,13 +21,16 @@ use jt_app::ports::{
 use jt_app::usecases::Deps;
 use jt_app::usecases::budget::{self, BudgetItemInput};
 use jt_app::usecases::capabilities;
+use jt_app::usecases::connector::{self, CredentialInput, SetCredentials};
 use jt_app::usecases::groups;
 use jt_capability::{
     BudgetItem, BudgetItemId, BudgetKind, BudgetSpend, BudgetSpendId, Capability, CapabilityGroup,
     CapabilityGroupId, CapabilityId, Evidence, Period, Policy, StoredStatus, Unit,
 };
+use jt_connector::{ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
-use jt_testkit::fakes::InMemoryUow;
+use jt_testkit::fakes::{InMemoryUow, ScriptedConnector, ScriptedRegistry};
+use serde_json::json;
 use support::*;
 use time::OffsetDateTime;
 
@@ -189,9 +192,10 @@ impl CapabilityRepo for SpyTenant {
         &mut self,
         id: CapabilityId,
         sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
     ) -> Result<(), AppError> {
         self.spy.push("capabilities.set_sealed");
-        self.inner.capabilities().set_sealed(id, sealed).await
+        self.inner.capabilities().set_sealed(id, sealed, at).await
     }
 
     async fn read_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {
@@ -411,4 +415,46 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
     locked_first("groups::add_member", &spy.take());
     capabilities::retire(&deps, o, ads, true).await.unwrap();
     locked_first("retire", &spy.take());
+}
+
+#[tokio::test]
+async fn connector_mutations_lock_the_capability_before_writing() {
+    let mut w = world().await;
+    let netgsm = Arc::new(ScriptedConnector::new(Provider::Netgsm));
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(netgsm.clone()));
+    let spy = Spy {
+        inner: w.uow.clone(),
+        log: Arc::default(),
+    };
+    let deps = Deps {
+        uow: Arc::new(spy.clone()),
+        ..w.deps.clone()
+    };
+    let o = &w.owner_ctx;
+    let line = w.declare("sms_line", "Hat").await.capability.id;
+    spy.take();
+
+    let reached = || ProbeResult::success(5, json!({ "account_id": "KAHVE" }));
+    netgsm.push_probe(reached());
+    connector::set_credentials(
+        &deps,
+        o,
+        SetCredentials {
+            capability_id: Some(line),
+            kind_key: None,
+            name: None,
+            external_id: None,
+            credential: CredentialInput::NetgsmSms {
+                usercode: "8508850000".into(),
+                password: "pw".into(),
+                msgheader: "KAHVE".into(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    locked_first("connector::set_credentials", &spy.take());
+    netgsm.push_probe(reached());
+    connector::probe(&deps, o, line).await.unwrap();
+    locked_first("connector::probe", &spy.take());
 }

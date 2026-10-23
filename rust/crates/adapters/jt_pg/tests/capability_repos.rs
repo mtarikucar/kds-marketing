@@ -260,11 +260,11 @@ async fn capability_insert_find_list_update_and_sealed_round_trip() {
     // The sealed blob changes only through `set_sealed`.
     let mut t = uow.tenant(a).await.unwrap();
     t.capabilities()
-        .set_sealed(instagram.id, None)
+        .set_sealed(instagram.id, None, t1)
         .await
         .unwrap();
     t.capabilities()
-        .set_sealed(phone.id, Some(b"v1-other".to_vec()))
+        .set_sealed(phone.id, Some(b"v1-other".to_vec()), t1)
         .await
         .unwrap();
     t.commit().await.unwrap();
@@ -311,7 +311,7 @@ async fn capability_insert_find_list_update_and_sealed_round_trip() {
         let mut t = uow.tenant(a).await.unwrap();
         let r = match attempt {
             0 => t.capabilities().update(unknown.clone()).await,
-            1 => t.capabilities().set_sealed(unknown.id, None).await,
+            1 => t.capabilities().set_sealed(unknown.id, None, T0).await,
             _ => {
                 t.capabilities()
                     .set_status(unknown.id, StoredStatus::Verified, T0)
@@ -374,6 +374,58 @@ async fn capability_insert_find_list_update_and_sealed_round_trip() {
     assert_eq!(
         code(t.capabilities().insert(phone.clone(), None).await),
         ErrorCode::Conflict
+    );
+}
+
+/// The repo contract the fakes keep too: a credential change shows in the capability's update
+/// time, and nothing else about the capability moves.
+#[tokio::test]
+async fn set_sealed_stamps_updated_at() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("a").await;
+    let instagram = capability(a, "instagram", Some("ig-1"), T0);
+    let mut t = uow.tenant(a).await.unwrap();
+    t.capabilities()
+        .insert(instagram.clone(), None)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+
+    let sealed_at = T0 + Duration::hours(1);
+    let mut t = uow.tenant(a).await.unwrap();
+    t.capabilities()
+        .set_sealed(instagram.id, Some(b"v1-sealed".to_vec()), sealed_at)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    assert_eq!(
+        find(&uow, a, instagram.id).await,
+        Capability {
+            has_sealed_config: true,
+            updated_at: sealed_at,
+            ..instagram.clone()
+        }
+    );
+
+    let cleared_at = sealed_at + Duration::hours(1);
+    let mut t = uow.tenant(a).await.unwrap();
+    t.capabilities()
+        .set_sealed(instagram.id, None, cleared_at)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    assert_eq!(
+        find(&uow, a, instagram.id).await,
+        Capability {
+            updated_at: cleared_at,
+            ..instagram.clone()
+        }
+    );
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        t.capabilities().read_sealed(instagram.id).await.unwrap(),
+        None
     );
 }
 

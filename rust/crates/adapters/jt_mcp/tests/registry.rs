@@ -60,9 +60,24 @@ const TOOLS: &[&str] = &[
 
 #[test]
 fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
-    assert!(NOT_YET_DEFINED.is_empty(), "{NOT_YET_DEFINED:?}");
+    // The connection tools are in the catalog ahead of their definitions (M1b Task 8).
+    assert_eq!(
+        NOT_YET_DEFINED,
+        [
+            "jeeta.connector.start_oauth",
+            "jeeta.connector.confirm_assets",
+            "jeeta.connector.set_credentials",
+            "jeeta.connector.probe",
+            "jeeta.connector.health",
+            "jeeta.connector.reconnect",
+        ]
+    );
     assert_eq!(TOOLS.len(), 47);
-    let catalog: BTreeSet<&str> = CATALOG.iter().filter_map(|uc| uc.mcp_tool).collect();
+    let catalog: BTreeSet<&str> = CATALOG
+        .iter()
+        .filter_map(|uc| uc.mcp_tool)
+        .filter(|tool| !NOT_YET_DEFINED.contains(tool))
+        .collect();
     let registered: BTreeSet<&str> = registry().iter().map(|t| t.name).collect();
     assert_eq!(registered, catalog);
     assert_eq!(registered, TOOLS.iter().copied().collect());

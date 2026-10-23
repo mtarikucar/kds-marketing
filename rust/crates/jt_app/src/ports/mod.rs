@@ -844,11 +844,13 @@ pub trait CapabilityRepo: Send + Sync {
     /// `NOT_FOUND`; moving it onto an external account another live capability of its kind
     /// holds is `CONFLICT` (in Postgres the transaction is then aborted).
     async fn update(&mut self, capability: Capability) -> Result<(), AppError>;
-    /// Replaces the sealed credentials (`None` removes them). An unknown id is `NOT_FOUND`.
+    /// Replaces the sealed credentials (`None` removes them) and sets `updated_at = at`, so a
+    /// credential change shows in the capability's update time. An unknown id is `NOT_FOUND`.
     async fn set_sealed(
         &mut self,
         id: CapabilityId,
         sealed: Option<Vec<u8>>,
+        at: OffsetDateTime,
     ) -> Result<(), AppError>;
     /// The sealed credentials, `None` when there are none. An unknown id is `NOT_FOUND`.
     ///
@@ -1057,6 +1059,9 @@ pub struct OAuthPendingRow {
     pub state_hash: String,
     /// The user who started it (for an agent, the user who issued its key).
     pub started_by: UserId,
+    /// The capability a reconnection renews: confirming the flow replaces this capability's
+    /// sealed credentials instead of creating capabilities. `None` for a new connection.
+    pub capability_id: Option<CapabilityId>,
     /// The PKCE code verifier, sealed for the workspace.
     pub pkce_verifier_sealed: Option<Vec<u8>>,
     /// The assets the account can reach, credentials included, sealed for the workspace; set
@@ -1078,6 +1083,7 @@ impl std::fmt::Debug for OAuthPendingRow {
             .field("kind_key", &self.kind_key)
             .field("state_hash", &Masked)
             .field("started_by", &self.started_by)
+            .field("capability_id", &self.capability_id)
             .field(
                 "pkce_verifier_sealed",
                 &self.pkce_verifier_sealed.as_ref().map(|_| Masked),
@@ -1098,14 +1104,23 @@ impl std::fmt::Debug for OAuthPendingRow {
 #[async_trait]
 pub trait OAuthPendingRepo: Send + Sync {
     /// Stores the flow. A `row.workspace_id` other than the bundle's is `INTERNAL`; a
-    /// `started_by` that names no user is `NOT_FOUND`; a taken id, or a state hash any workspace
-    /// already holds, is `CONFLICT`.
+    /// `started_by` that names no user, or a `capability_id` that is not the workspace's, is
+    /// `NOT_FOUND`; a taken id, or a state hash any workspace already holds, is `CONFLICT`.
     async fn insert(&mut self, row: OAuthPendingRow) -> Result<(), AppError>;
-    /// The workspace's flow with this state hash, expired ones included; the caller checks.
+    /// The workspace's flow with this state hash, expired ones included, read without a lock;
+    /// the caller checks.
     async fn find_by_state_hash(
         &mut self,
         state_hash: &str,
     ) -> Result<Option<OAuthPendingRow>, AppError>;
+    /// The workspace's flow `id`, expired ones included, its row locked against every other
+    /// `lock` (and every write to it) until this bundle commits or is dropped; `None` when the id
+    /// is not the workspace's. A call that has to wait for another bundle holding the lock
+    /// returns what that bundle committed (`None` once it deleted the flow). Every write that
+    /// decides on a flow's state (storing its assets, confirming it) reads it through here first.
+    /// In Postgres it is `select .. for update`; the in-memory fakes run one bundle at a time in
+    /// tests, so there it is a plain read.
+    async fn lock(&mut self, id: OAuthPendingId) -> Result<Option<OAuthPendingRow>, AppError>;
     /// Stores the assets the provider's callback found: `sealed` (credentials included, sealed
     /// for the workspace) and their public facts. An unknown id is `NOT_FOUND`.
     async fn set_assets(

@@ -12,8 +12,17 @@ const INFRASTRUCTURE_ROUTES: &[(&str, &str)] = &[("GET", "/healthz")];
 
 /// Catalog panel routes not served yet: a use case may enter the catalog before its route, while
 /// a plan lands it in steps. Each entry must still be unserved, so serving one fails this test
-/// until it is dropped from here. Empty: every catalog route is served.
-const NOT_YET_SERVED: &[(&str, &str)] = &[];
+/// until it is dropped from here. The connection use cases (M1b Task 4) are served by M1b Task 8,
+/// which empties this list.
+const NOT_YET_SERVED: &[(&str, &str)] = &[
+    ("POST", "/api/connectors/oauth/start"),
+    ("GET", "/api/connectors/oauth/callback/{provider}"),
+    ("POST", "/api/connectors/oauth/{pending_id}/confirm"),
+    ("POST", "/api/connectors/credentials"),
+    ("POST", "/api/connectors/{capability_id}/probe"),
+    ("GET", "/api/connectors/health"),
+    ("POST", "/api/connectors/{capability_id}/reconnect"),
+];
 
 #[test]
 fn panel_routes_table_matches_catalog() {
@@ -103,10 +112,11 @@ fn mcp_registry_matches_catalog() {
     }
 }
 
-/// The MCP tools there are after M1a, by domain: 15 from M0 (`agent`, `workspace`, `team`,
-/// `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and `budget`, and 3
-/// `work`. Written out, so a tool added or dropped without updating the documentation (the README
-/// lists them) fails here.
+/// The MCP tools the registry defines after M1a, by domain: 15 from M0 (`agent`, `workspace`,
+/// `team`, `roles`, `api_keys`, `agents`, `ledger`), 10 `strategy`, 19 `capability` and
+/// `budget`, and 3 `work`. Written out, so a tool added or dropped without updating the
+/// documentation (the README lists them) fails here. The six `connector` tools are in the catalog
+/// but not yet defined (`jt_mcp::NOT_YET_DEFINED`); M1b Task 8 defines them and adds the domain.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("agent", 1),
     ("workspace", 1),

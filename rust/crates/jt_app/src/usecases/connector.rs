@@ -1,0 +1,1805 @@
+//! Connecting the workspace's accounts through their providers (spec §4.2 rule 1, §6.1, §6.4):
+//! `connector.start_oauth`, `connector.complete_oauth`, `connector.confirm_assets`,
+//! `connector.set_credentials`, `connector.probe`, `connector.health` and `connector.reconnect`.
+//!
+//! **Two ways in.** Meta and X accounts connect through the platform's provider apps by OAuth: a
+//! flow starts ([`start_oauth`], or [`reconnect`] for a capability whose login expired), the
+//! provider sends the owner's browser back with a code ([`complete_oauth`], the panel's callback
+//! route), and the owner chooses which of the assets the account reaches become capabilities
+//! ([`confirm_assets`]). NetGSM lines, and a pasted Meta token, are entered by hand
+//! ([`set_credentials`]); X has no manual way in.
+//!
+//! **The OAuth state** is signed with the workspace's MAC key for [`OAUTH_STATE_PURPOSE`] and
+//! carries nothing secret; it is accepted for [`STATE_TTL`] after it was issued, only from a
+//! session whose current workspace is the one that started it, and only once: the flow is found
+//! by the state's hash, and a flow that already holds its assets (or was confirmed and deleted)
+//! refuses it. Every refusal of a state is `FORBIDDEN` (Review Focus 4). The PKCE verifier of an
+//! X flow is sealed with the flow and never travels in the state or the URL.
+//!
+//! **Credentials are sealed** (`SecretBox`) into the capability's sealed configuration, and the
+//! assets of a flow, credentials included, into the flow until it is confirmed. No answer, ledger
+//! entry, log line or `Debug` output holds a token, a password, a code or sealed bytes;
+//! `connector_public` holds only the non-secret facts, under these keys:
+//!
+//! - `provider`: the provider's key; `name`: the provider's name of the account, when it has one;
+//! - `hosts`: the hosts its adapter reaches ([`crate::ports::connectors::Connector::hosts`]),
+//!   which the workspace's tenant tier is given once the change is committed;
+//! - `access`: `Credential::redact_for_public` of the sealed credential (its kind, and for an
+//!   OAuth token its `expires_at` and `scopes`), written when it is sealed, so the token's expiry
+//!   is read without opening anything ([`health`]);
+//! - `asset`: the provider's public facts of an asset connected through OAuth;
+//! - `health`: the last probe, `{ok, at, latency_ms, error_kind}`; `facts`: what the last
+//!   successful probe reported;
+//! - `reconnect_required`: `true` once a probe found the login no longer accepted (`Auth`),
+//!   `false` again after a successful probe or a retirement.
+//!
+//! (The flag is not called `reauth_required` and the facts not `credential`: `connector_public`
+//! refuses every key that looks like a secret's name, `auth` and `credential` among them.)
+//!
+//! **Probes** are the system's own trial call, the only way a connector capability is verified
+//! (spec §6.4). A probe binds the account: a successful probe must name the account it reached
+//! (`facts.account_id`), and an account other than the capability's external id (or none at all)
+//! counts as `Permission` "account mismatch", so a credential can never verify an account it does
+//! not reach. A capability without an external id takes the probe's account, unless another live
+//! capability of its kind holds it. The run is logged ([`crate::ports::ProbeRunRepo`]), the
+//! status follows [`jt_connector::status_after_probe`], and `connector.probe` is written only
+//! when the status changed.
+//!
+//! **Gates.** Every use case here is exempt from the strategy gate (connecting accounts is part
+//! of the consultation's prerequisites) and subject to the workspace-status check. Changes need
+//! `capabilities.manage`; probing and reading health need `workspace.read` (an agent checks its
+//! hands with them).
+//!
+//! **Locks and the network.** A change of an existing capability locks it first
+//! (`CapabilityRepo::lock`), and a change of a flow locks the flow (`OAuthPendingRepo::lock`).
+//! A probe, and entering credentials for an existing capability, call the provider while holding
+//! the capability's lock, so a concurrent change of the capability waits for the probe's verdict
+//! instead of having it written over a newer credential. Completing a flow calls the provider
+//! with no transaction open and locks the flow only to store what it found.
+
+use std::collections::BTreeSet;
+use std::fmt;
+use std::sync::Arc;
+
+use jt_capability::{
+    Capability, CapabilityId, CapabilityKind, EffectiveStatus, Evidence, MAX_EXTERNAL_ID_CHARS,
+    MAX_NAME_CHARS, NewCapability, Policy, Reach, StoredStatus, effective_status,
+    validate_connector_public,
+};
+use jt_connector::{
+    ConnectorError, Credential, OAuthState, ProbeResult, Provider, STATE_TTL, pkce_challenge_s256,
+    provider_for_kind, status_after_probe,
+};
+use jt_tenancy::Permission;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+use time::format_description::well_known::Rfc3339;
+use time::{Duration, OffsetDateTime};
+use zeroize::Zeroizing;
+
+use super::auth::{self, Principal};
+use super::capabilities::{
+    CapabilityOut, append, capability_error, find, locked, not_retired, version_in_force,
+};
+use super::{Deps, acting_user, hash_token, invalid};
+use crate::ctx::Ctx;
+use crate::error::{AppError, ErrorCode};
+use crate::ports::connectors::{Asset, AssetPublic, Connector, OAuthApp, PlatformAppConfig, Url};
+use crate::ports::{
+    CapabilityFilter, Masked, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, TenantRepos,
+};
+
+/// The purpose of the workspace MAC key that signs OAuth states
+/// ([`crate::ports::SecretBox::hmac_key`]).
+pub const OAUTH_STATE_PURPOSE: &str = "oauth-state";
+
+/// Where a provider sends the owner's browser back to, under the public base URL, followed by
+/// `/{provider}`: the redirect URI of every flow.
+pub const OAUTH_CALLBACK_PATH: &str = "/api/connectors/oauth/callback";
+
+/// How long a started flow can be confirmed. Its state is accepted for [`STATE_TTL`] only (the
+/// time to sign in at the provider); the owner then has the rest of this time to choose assets.
+pub const PENDING_TTL: Duration = Duration::minutes(30);
+
+/// The longest secret (a password, a pasted token) entered by hand, in characters.
+pub const MAX_SECRET_CHARS: usize = 4_096;
+
+/// The longest other credential field (a user code, a sender name, a trunk), in characters.
+pub const MAX_CREDENTIAL_FIELD_CHARS: usize = 256;
+
+/// The random bytes of a PKCE code verifier (64 characters in base64url).
+const PKCE_VERIFIER_BYTES: usize = 48;
+
+/// The random bytes behind an OAuth state's nonce.
+const NONCE_BYTES: usize = 16;
+
+/// The `connector_public` key of the reconnection flag.
+const RECONNECT_REQUIRED: &str = "reconnect_required";
+
+const NO_SUCH_FLOW: &str = "no such pending connection";
+const APP_NOT_CONFIGURED: &str = "provider app not configured";
+const NO_ADAPTER: &str = "provider adapter not available";
+
+// ---------------------------------------------------------------------------------------------
+// Inputs and outputs
+// ---------------------------------------------------------------------------------------------
+
+/// What starting an OAuth flow takes: the kind of capability to connect (a Meta kind or `x`).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartOAuth {
+    pub kind_key: String,
+}
+
+/// A started OAuth flow: where to send the owner's browser (an agent hands it to the owner), the
+/// flow's id, and until when the provider may call back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StartOut {
+    pub authorize_url: String,
+    pub pending_id: OAuthPendingId,
+    #[serde(with = "time::serde::rfc3339")]
+    pub expires_at: OffsetDateTime,
+}
+
+/// The provider's callback: the `state` and `code` it sent back, and the signed-in user whose
+/// browser brought them. `Debug` masks the state and the code.
+pub struct CompleteOAuth<'a> {
+    pub state: String,
+    pub code: String,
+    pub principal: &'a Principal,
+}
+
+impl fmt::Debug for CompleteOAuth<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompleteOAuth")
+            .field("state", &Masked)
+            .field("code", &Masked)
+            .field("user_id", &self.principal.user_id)
+            .finish()
+    }
+}
+
+/// The assets a completed flow found, as the owner chooses from them: never a credential.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PendingAssetsOut {
+    pub pending_id: OAuthPendingId,
+    pub assets: Vec<AssetPublic>,
+}
+
+/// The owner's choice of assets: their external ids, as [`PendingAssetsOut`] lists them. Each id
+/// chooses every asset the flow found with it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmAssets {
+    pub pending_id: OAuthPendingId,
+    pub selected: Vec<String>,
+}
+
+/// Credentials entered by hand, one shape per credential (`kind`): the NetGSM SMS API sub-user
+/// of an `sms_line`, the Netsantral user of a `netgsm_pbx`, or a Meta access token pasted for a
+/// Meta kind (a Page token for `facebook_page`, a WhatsApp Cloud token for `whatsapp_cloud`, a
+/// user token otherwise). Mirrors [`Credential`]'s shapes; X has none (it connects through OAuth
+/// only), and neither has İYS, which no capability kind takes yet.
+///
+/// Read strictly: an unknown shape or field is refused, and so is a field that is not a string,
+/// without the refusal repeating any value. `Debug` masks the secrets.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CredentialInput {
+    NetgsmSms {
+        usercode: String,
+        password: String,
+        msgheader: String,
+    },
+    NetgsmPbx {
+        username: String,
+        password: String,
+        #[serde(default)]
+        trunk: Option<String>,
+        #[serde(default)]
+        pbxnum: Option<String>,
+    },
+    MetaToken {
+        access_token: String,
+    },
+}
+
+impl CredentialInput {
+    /// The shape's key, e.g. `"netgsm_sms"`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            CredentialInput::NetgsmSms { .. } => "netgsm_sms",
+            CredentialInput::NetgsmPbx { .. } => "netgsm_pbx",
+            CredentialInput::MetaToken { .. } => "meta_token",
+        }
+    }
+}
+
+impl fmt::Debug for CredentialInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CredentialInput::NetgsmSms {
+                usercode,
+                msgheader,
+                ..
+            } => f
+                .debug_struct("NetgsmSms")
+                .field("usercode", usercode)
+                .field("password", &Masked)
+                .field("msgheader", msgheader)
+                .finish(),
+            CredentialInput::NetgsmPbx {
+                username,
+                trunk,
+                pbxnum,
+                ..
+            } => f
+                .debug_struct("NetgsmPbx")
+                .field("username", username)
+                .field("password", &Masked)
+                .field("trunk", trunk)
+                .field("pbxnum", pbxnum)
+                .finish(),
+            CredentialInput::MetaToken { .. } => f
+                .debug_struct("MetaToken")
+                .field("access_token", &Masked)
+                .finish(),
+        }
+    }
+}
+
+/// What entering credentials by hand takes: the capability, either an existing one
+/// (`capability_id`) or a new one (`kind_key` and `name`), the account it is expected to reach
+/// (`external_id`, optional) and the credentials. From JSON, an unknown field is refused.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetCredentials {
+    #[serde(default)]
+    pub capability_id: Option<CapabilityId>,
+    #[serde(default)]
+    pub kind_key: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The provider's id of the account. Absent, the probe's account becomes it; given, the
+    /// probe must reach exactly it.
+    #[serde(default)]
+    pub external_id: Option<String>,
+    #[serde(deserialize_with = "credential_strict")]
+    pub credential: CredentialInput,
+}
+
+/// A probe's outcome as it may be shown: never the credential, the reason redacted.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProbeResultPublic {
+    pub ok: bool,
+    pub latency_ms: u32,
+    /// The `ConnectorError` kind of a failure, e.g. `"auth"`.
+    pub error_kind: Option<String>,
+    /// Why it failed, redacted when the error was built.
+    pub error_reason: Option<String>,
+    /// What a successful probe reported; `{}` for a failure.
+    pub facts: Value,
+}
+
+/// A probe's outcome and the capability's stored status after it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProbeOut {
+    pub result: ProbeResultPublic,
+    pub status: StoredStatus,
+}
+
+/// One connector capability's health: its status now, its last probe, and when its token
+/// expires, when the provider said.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConnectorHealth {
+    pub capability_id: CapabilityId,
+    pub kind_key: String,
+    pub name: String,
+    /// The provider that serves its kind; `None` for a connector kind no provider serves yet.
+    pub provider: Option<Provider>,
+    pub status: EffectiveStatus,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_probe_at: Option<OffsetDateTime>,
+    pub ok: Option<bool>,
+    pub error_kind: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub token_expires_at: Option<OffsetDateTime>,
+    pub reconnect_required: bool,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Use cases
+// ---------------------------------------------------------------------------------------------
+
+/// Starts an OAuth flow to connect capabilities of kind `input.kind_key` and returns where to
+/// send the owner's browser. Needs `capabilities.manage`.
+///
+/// The kind must be one OAuth connects (a Meta kind or `x`), else `VALIDATION` naming `kind_key`
+/// (a NetGSM kind with `details.reason = "use_set_credentials"`). The provider's app must be
+/// configured (`instagram` signs in with the Instagram app, the other Meta kinds with the Meta
+/// app, `x` with the X app), else `CONFLICT` "provider app not configured"; and its adapter
+/// present, else `CONFLICT`. The state is signed for the workspace and holds the provider, the
+/// kind, the time and a nonce; for X a PKCE pair is made and its verifier sealed with the flow.
+/// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the
+/// provider's key. `expires_at` is when the state stops being accepted ([`STATE_TTL`]).
+///
+/// Writes `connector.oauth_started` about the flow (`subject.kind = "oauth_pending"`, payload
+/// `provider`, `kind_key`).
+pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<StartOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    begin_oauth(deps, ctx, input.kind_key.trim(), None).await
+}
+
+/// Completes the flow the provider called back for, and returns the assets it found for the
+/// owner to choose from. The panel's callback route only: the signed-in user's current workspace
+/// must be the one that started the flow, and they need `capabilities.manage` there.
+///
+/// Refused with `FORBIDDEN` (Review Focus 4), and the provider is not asked: no current
+/// workspace; a state not signed for it, malformed, or issued more than [`STATE_TTL`] ago; a
+/// flow that is unknown, expired, or already completed (a state is used once). Then the code is
+/// exchanged for a credential and the account's assets are listed; a provider refusal (`Auth`,
+/// `Permission`, `Permanent`) is `VALIDATION` and a busy or unreachable provider (`Throttle`,
+/// `Transient`) `INTERNAL` with `details.retryable = true`, both with the error's kind and
+/// redacted reason in `details` (`provider_error`, `reason`, and `retry_after_s` when the
+/// provider said). Assets of kinds the provider does not serve are dropped; a reconnection keeps
+/// only its capability's account, and an account that does not reach it is `VALIDATION` with
+/// `details.reason = "account_mismatch"`.
+///
+/// The assets, credentials included, are sealed with the flow and their public facts stored
+/// beside them. Writes `connector.oauth_completed` (payload `provider`, `assets`: how many).
+pub async fn complete_oauth(
+    deps: &Deps,
+    input: CompleteOAuth<'_>,
+) -> Result<PendingAssetsOut, AppError> {
+    let CompleteOAuth {
+        state,
+        code,
+        principal,
+    } = input;
+    let ws = principal
+        .current_workspace
+        .ok_or_else(|| AppError::forbidden("no current workspace"))?;
+    let now = deps.clock.now();
+    let ctx = auth::ctx_for(principal, ws, now)?;
+    ctx.require(Permission::CapabilitiesManage)?;
+    let key = deps.seal.hmac_key(ws, OAUTH_STATE_PURPOSE)?;
+    let signed = OAuthState::verify(&state, &key, now).map_err(|_| refused_state())?;
+    if signed.workspace_id != ws {
+        return Err(refused_state());
+    }
+
+    // Read the flow in a bundle of its own: the provider is asked with no transaction open.
+    let (flow, verifier, bound) = {
+        let mut repos = deps.uow.tenant(ws).await?;
+        let flow = repos
+            .oauth_pending()
+            .find_by_state_hash(&hash_token(&state))
+            .await?
+            .ok_or_else(refused_state)?;
+        let usable = flow.expires_at >= now
+            && flow.assets_sealed.is_none()
+            && flow.provider == signed.provider
+            && flow.kind_key == signed.kind_key;
+        if !usable {
+            return Err(refused_state());
+        }
+        let verifier = match &flow.pkce_verifier_sealed {
+            Some(sealed) => {
+                let plain = deps.seal.open(ws, sealed)?;
+                let text = std::str::from_utf8(&plain)
+                    .map_err(|_| AppError::internal("the sealed PKCE verifier is not text"))?;
+                Some(Zeroizing::new(text.to_owned()))
+            }
+            None => None,
+        };
+        let bound = match flow.capability_id {
+            Some(id) => Some(find(repos.as_mut(), id).await?),
+            None => None,
+        };
+        (flow, verifier, bound)
+    };
+
+    let app = oauth_app(deps.apps.as_ref(), flow.provider, &flow.kind_key)
+        .ok_or_else(|| AppError::conflict(APP_NOT_CONFIGURED))?;
+    let oauth = deps
+        .connectors
+        .oauth(flow.provider)
+        .ok_or_else(|| AppError::conflict(NO_ADAPTER))?;
+    let redirect = callback_url(deps.apps.as_ref(), flow.provider);
+    let credential = oauth
+        .exchange(
+            &app,
+            &redirect,
+            &code,
+            verifier.as_ref().map(|v| v.as_str()),
+        )
+        .await
+        .map_err(provider_error)?;
+    let mut assets = oauth
+        .list_assets(&credential)
+        .await
+        .map_err(provider_error)?;
+    drop(credential);
+    // Only kinds the provider serves, each account once per kind.
+    let mut seen = BTreeSet::new();
+    assets.retain(|a| {
+        provider_for_kind(&a.kind_key) == Some(flow.provider)
+            && seen.insert((a.kind_key.clone(), a.external_id.clone()))
+    });
+    if let Some(capability) = &bound {
+        assets.retain(|a| {
+            a.kind_key == capability.kind_key
+                && capability.external_id.as_deref() == Some(a.external_id.as_str())
+        });
+        if assets.is_empty() {
+            return Err(AppError::validation(
+                "the account signed in with does not reach this capability's account",
+                json!({ "reason": "account_mismatch" }),
+            ));
+        }
+    }
+    let public: Vec<AssetPublic> = assets.iter().map(Asset::public_facts).collect();
+    let sealed = seal_assets(deps, &ctx, assets)?;
+    let public_json = serde_json::to_value(&public)
+        .map_err(|_| AppError::internal("the assets' public facts cannot be written"))?;
+
+    let mut repos = deps.uow.tenant(ws).await?;
+    let current = repos
+        .oauth_pending()
+        .lock(flow.id)
+        .await?
+        .ok_or_else(refused_state)?;
+    if current.assets_sealed.is_some() {
+        return Err(refused_state());
+    }
+    repos
+        .oauth_pending()
+        .set_assets(flow.id, sealed, public_json)
+        .await?;
+    let in_force = version_in_force(repos.as_mut()).await?;
+    append(
+        repos.as_mut(),
+        &ctx,
+        "connector.oauth_completed",
+        "oauth_pending",
+        flow.id,
+        in_force,
+        json!({ "provider": flow.provider.key(), "assets": public.len() }),
+    )
+    .await?;
+    repos.commit().await?;
+    Ok(PendingAssetsOut {
+        pending_id: flow.id,
+        assets: public,
+    })
+}
+
+/// Turns the chosen assets of a completed flow into capabilities, probes each, and returns them
+/// as they stand after their probes. Needs `capabilities.manage`.
+///
+/// `selected` (trimmed, each once) must name at least one asset, else `VALIDATION` naming
+/// `selected`; ids the flow did not find are `VALIDATION` naming `selected`, listed in
+/// `details.unknown`. An unknown flow is `NOT_FOUND`; one past [`PENDING_TTL`], or one the
+/// provider has not called back for yet, `CONFLICT`; a provider without an adapter `CONFLICT`.
+///
+/// A new connection creates one capability per chosen asset: declared, reached through its
+/// connector, holding the asset's account (`external_id`), named after it (cut to the longest
+/// name allowed), its credential sealed and its public facts in `connector_public`, under the
+/// strategy version in force. An account another live capability of the kind holds is
+/// `CONFLICT` (`details` naming `kind_key` and `external_id`), and nothing is created. A
+/// reconnection ([`reconnect`]) instead seals the new credential into its capability, which must
+/// be the one chosen asset (else `VALIDATION` naming `selected`) and not retired (`CONFLICT`).
+/// The flow is deleted in the same transaction.
+///
+/// Writes `connector.connected` per capability (payload `kind_key`, `external_id`, and
+/// `reconnected: true` for a reconnection). Once committed, the adapter's hosts are allowed for
+/// the workspace (a host that cannot be is logged), and each capability is probed as
+/// [`probe`] does; a probe that cannot run is logged and does not undo the connection.
+pub async fn confirm_assets(
+    deps: &Deps,
+    ctx: &Ctx,
+    input: ConfirmAssets,
+) -> Result<Vec<CapabilityOut>, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    let mut selected: Vec<String> = Vec::new();
+    for id in &input.selected {
+        let id = id.trim();
+        if !id.is_empty() && !selected.iter().any(|s| s == id) {
+            selected.push(id.to_owned());
+        }
+    }
+    if selected.is_empty() {
+        return Err(invalid("selected", "choose at least one asset"));
+    }
+    let ws = ctx.workspace_id;
+    let mut repos = deps.uow.tenant(ws).await?;
+    let flow = repos
+        .oauth_pending()
+        .lock(input.pending_id)
+        .await?
+        .ok_or_else(|| AppError::not_found(NO_SUCH_FLOW))?;
+    if flow.expires_at < ctx.now {
+        return Err(AppError::conflict(
+            "the connection flow has expired; start it again",
+        ));
+    }
+    let Some(sealed) = &flow.assets_sealed else {
+        return Err(AppError::conflict("the provider has not called back yet"));
+    };
+    let connector = adapter(deps, flow.provider)?;
+    let hosts = adapter_hosts(deps, connector.as_ref())?;
+    let assets = open_assets(deps, ws, sealed)?;
+    let unknown: Vec<&String> = selected
+        .iter()
+        .filter(|id| !assets.iter().any(|a| &a.external_id == *id))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(AppError::validation(
+            "the flow found no asset with these ids",
+            json!({ "field": "selected", "unknown": unknown }),
+        ));
+    }
+    let chosen: Vec<Asset> = assets
+        .into_iter()
+        .filter(|a| selected.contains(&a.external_id))
+        .collect();
+    let touched = if let Some(id) = flow.capability_id {
+        let renewed = renew(deps, repos.as_mut(), ctx, &flow, id, chosen, &hosts).await?;
+        vec![renewed]
+    } else {
+        create(deps, repos.as_mut(), ctx, &flow, chosen, &hosts).await?
+    };
+    repos.oauth_pending().delete(flow.id).await?;
+    repos.commit().await?;
+
+    allow_hosts(deps, ctx, &hosts);
+    let mut out = Vec::with_capacity(touched.len());
+    for id in touched {
+        if let Err(e) = probe_locked(deps, ctx, id).await {
+            tracing::warn!(
+                workspace_id = %ws,
+                capability_id = %id,
+                error = %e,
+                "a connected capability could not be probed"
+            );
+        }
+        out.push(current(deps, ctx, id).await?);
+    }
+    Ok(out)
+}
+
+/// Enters credentials by hand for an existing capability or a new one, probes them, and returns
+/// the capability. Needs `capabilities.manage`.
+///
+/// The target is `capability_id`, or `kind_key` and `name` for a new capability; both or
+/// neither is `VALIDATION` (naming `capability_id`, or `kind_key`, or `name` when only the name
+/// is missing). The kind must be one reached through a connector whose provider takes
+/// credentials by hand (`sms_line`, `netgsm_pbx` and the Meta kinds), else `VALIDATION` naming
+/// `kind_key` (`x`: "this kind connects through OAuth"). The credential's shape must fit the kind
+/// (else `VALIDATION` naming `credential.kind`), every field must be 1 to
+/// [`MAX_CREDENTIAL_FIELD_CHARS`] characters (a secret up to [`MAX_SECRET_CHARS`]) without
+/// control characters (else `VALIDATION` naming `credential.<field>`, never echoing a value), and
+/// a pasted Page or WhatsApp token needs its account's id (`external_id`). A new capability is
+/// validated as a declaration is (its `name`); an existing one must be the workspace's
+/// (`NOT_FOUND`), not retired and not verified (`CONFLICT`: a verified capability keeps its
+/// credentials until a probe fails), and a given `external_id` must be the one it holds.
+///
+/// The credential is probed with the adapter ([`probe`]'s rules, account binding included: the
+/// probe must reach the given or held external id; without one, the probe's account becomes
+/// it), sealed, and written in one transaction with the capability and its probe. Writes
+/// `connector.credentials_set` (payload `kind_key` and `by_agent`; never a value), and
+/// `connector.probe` when the status changed. Once committed, the adapter's hosts are allowed for
+/// the workspace.
+pub async fn set_credentials(
+    deps: &Deps,
+    ctx: &Ctx,
+    input: SetCredentials,
+) -> Result<CapabilityOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    let SetCredentials {
+        capability_id,
+        kind_key,
+        name,
+        external_id,
+        credential,
+    } = input;
+    let external_id = match external_id {
+        Some(raw) => Some(checked_external_id(&raw)?),
+        None => None,
+    };
+    let credential = normalised(credential)?;
+    match (capability_id, kind_key, name) {
+        (Some(id), None, None) => credentials_for(deps, ctx, id, external_id, credential).await,
+        (Some(_), _, _) => Err(invalid(
+            "capability_id",
+            "name either the capability (capability_id) or a new one (kind_key and name), not \
+             both",
+        )),
+        (None, Some(kind_key), Some(name)) => {
+            credentials_for_new(deps, ctx, kind_key.trim(), name, external_id, credential).await
+        }
+        (None, Some(_), None) => Err(invalid("name", "a new capability needs a name")),
+        (None, None, _) => Err(invalid(
+            "kind_key",
+            "name the capability (capability_id) or the kind and name of a new one (kind_key, \
+             name)",
+        )),
+    }
+}
+
+/// Probes connector capability `id` with its sealed credentials and returns the outcome and its
+/// stored status after it. Needs `workspace.read` (an agent's check of its hands, and a
+/// person's).
+///
+/// An unknown id is `NOT_FOUND`; a capability not reached through a connector, a retired one, one
+/// whose kind no provider serves or whose provider has no adapter here, and one without
+/// credentials (`CONFLICT` "no credentials") are `CONFLICT`. The capability is locked while the
+/// provider is asked. The run is logged; the status follows `status_after_probe`;
+/// `connector_public.health` becomes the run; `Auth` sets `connector_public.reconnect_required`
+/// and a success clears it, verifies the capability (`last_verified_at`, evidence
+/// `{text: "probe", refs: [run id]}`) and keeps its facts in `connector_public.facts`. The
+/// account is bound as the module docs say. Writes `connector.probe` (payload `ok`, and
+/// `error_kind` for a failure) only when the status changed.
+pub async fn probe(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<ProbeOut, AppError> {
+    ctx.require(Permission::WorkspaceRead)?;
+    probe_locked(deps, ctx, id).await
+}
+
+/// The health of every connector capability that is not retired, oldest first: its status at
+/// `ctx.now`, its last probe (when, whether it succeeded, the error's kind) and when its token
+/// expires, read from `connector_public.access.expires_at` (no sealed credential is opened), and
+/// whether it must be reconnected. Needs `workspace.read`.
+pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppError> {
+    ctx.require(Permission::WorkspaceRead)?;
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let capabilities = repos
+        .capabilities()
+        .list(CapabilityFilter::default())
+        .await?;
+    let mut out = Vec::new();
+    for c in capabilities
+        .into_iter()
+        .filter(|c| c.reach == Reach::Connector && c.status != StoredStatus::Retired)
+    {
+        let last = repos.probe_runs().latest(c.id).await?;
+        let token_expires_at = c.connector_public["access"]["expires_at"]
+            .as_str()
+            .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok());
+        out.push(ConnectorHealth {
+            capability_id: c.id,
+            provider: provider_for_kind(&c.kind_key),
+            status: effective_status(&c, ctx.now),
+            last_probe_at: last.as_ref().map(|r| r.at),
+            ok: last.as_ref().map(|r| r.ok),
+            error_kind: last.and_then(|r| r.error_kind),
+            token_expires_at,
+            reconnect_required: reconnect_required(&c),
+            kind_key: c.kind_key,
+            name: c.name,
+        });
+    }
+    Ok(out)
+}
+
+/// Starts an OAuth flow bound to capability `id`, so that confirming it renews the capability's
+/// sealed credentials instead of creating capabilities ([`confirm_assets`]), and returns it as
+/// [`start_oauth`] does. Needs `capabilities.manage`.
+///
+/// An unknown id is `NOT_FOUND`; a capability not reached through a connector, a retired one,
+/// one of a kind no provider serves, and one without an external account are `CONFLICT`; a
+/// NetGSM capability is `VALIDATION` with `details.reason = "use_set_credentials"` (it takes new
+/// credentials by hand). Otherwise as [`start_oauth`]; the ledger payload also names the
+/// `capability_id`.
+pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<StartOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    let capability = {
+        let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+        find(repos.as_mut(), id).await?
+    };
+    reconnectable(&capability)?;
+    begin_oauth(deps, ctx, &capability.kind_key, Some(id)).await
+}
+
+/// Whether `capability` must be reconnected: `connector_public.reconnect_required` is `true`.
+pub(crate) fn reconnect_required(capability: &Capability) -> bool {
+    capability.connector_public[RECONNECT_REQUIRED].as_bool() == Some(true)
+}
+
+/// `capability`'s public connector fields as they stand once it is retired: no reconnection is
+/// asked for any more; the rest (its last probe included) stays for the record.
+pub(crate) fn retired_public(capability: &Capability) -> Value {
+    let mut public = object(&capability.connector_public);
+    public.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
+    Value::Object(public)
+}
+
+// ---------------------------------------------------------------------------------------------
+// OAuth steps
+// ---------------------------------------------------------------------------------------------
+
+/// Starts a flow for `kind_key`, bound to capability `bound` for a reconnection (which is locked
+/// and checked again in the bundle that writes the flow).
+async fn begin_oauth(
+    deps: &Deps,
+    ctx: &Ctx,
+    kind_key: &str,
+    bound: Option<CapabilityId>,
+) -> Result<StartOut, AppError> {
+    let provider = oauth_kind(kind_key)?;
+    let app = oauth_app(deps.apps.as_ref(), provider, kind_key)
+        .ok_or_else(|| AppError::conflict(APP_NOT_CONFIGURED))?;
+    let oauth = deps
+        .connectors
+        .oauth(provider)
+        .ok_or_else(|| AppError::conflict(NO_ADAPTER))?;
+    let started_by = acting_user(&ctx.actor)
+        .ok_or_else(|| AppError::forbidden("only a person or an agent starts an OAuth flow"))?;
+    let ws = ctx.workspace_id;
+
+    let state = OAuthState {
+        workspace_id: ws,
+        provider,
+        kind_key: kind_key.to_owned(),
+        issued_at: ctx.now,
+        nonce: nonce(deps),
+    };
+    let key = deps.seal.hmac_key(ws, OAUTH_STATE_PURPOSE)?;
+    let token = state.sign(&key);
+    let (pkce_verifier_sealed, challenge) = if provider == Provider::X {
+        // The token generator's random bytes in base64url: exactly what `pkce_pair` makes.
+        let verifier = Zeroizing::new(deps.tokens.token(PKCE_VERIFIER_BYTES));
+        let challenge = pkce_challenge_s256(&verifier);
+        (
+            Some(deps.seal.seal(ws, verifier.as_bytes())?),
+            Some(challenge),
+        )
+    } else {
+        (None, None)
+    };
+    let redirect = callback_url(deps.apps.as_ref(), provider);
+    let authorize_url = oauth.authorize_url(&app, &redirect, &token, challenge.as_deref());
+
+    let id = OAuthPendingId(deps.ids.uuid());
+    let mut repos = deps.uow.tenant(ws).await?;
+    if let Some(capability) = bound {
+        let capability = locked(repos.as_mut(), capability).await?;
+        reconnectable(&capability)?;
+    }
+    repos
+        .oauth_pending()
+        .insert(OAuthPendingRow {
+            id,
+            workspace_id: ws,
+            provider,
+            kind_key: kind_key.to_owned(),
+            state_hash: hash_token(&token),
+            started_by,
+            capability_id: bound,
+            pkce_verifier_sealed,
+            assets_sealed: None,
+            assets_public: json!([]),
+            expires_at: ctx.now + PENDING_TTL,
+            created_at: ctx.now,
+        })
+        .await?;
+    let mut payload = json!({ "provider": provider.key(), "kind_key": kind_key });
+    if let Some(capability) = bound {
+        payload["capability_id"] = json!(capability);
+    }
+    let in_force = version_in_force(repos.as_mut()).await?;
+    append(
+        repos.as_mut(),
+        ctx,
+        "connector.oauth_started",
+        "oauth_pending",
+        id,
+        in_force,
+        payload,
+    )
+    .await?;
+    repos.commit().await?;
+    Ok(StartOut {
+        authorize_url: authorize_url.to_string(),
+        pending_id: id,
+        expires_at: ctx.now + STATE_TTL,
+    })
+}
+
+/// The provider whose OAuth flow connects `kind_key`, else `VALIDATION` naming `kind_key`.
+fn oauth_kind(kind_key: &str) -> Result<Provider, AppError> {
+    let kind = connector_kind(kind_key)?;
+    match provider_for_kind(kind.key) {
+        Some(Provider::Netgsm) => Err(AppError::validation(
+            "this kind connects with credentials entered by hand (connector.set_credentials)",
+            json!({ "field": "kind_key", "reason": "use_set_credentials" }),
+        )),
+        Some(provider) => Ok(provider),
+        None => Err(invalid("kind_key", "no provider connects this kind yet")),
+    }
+}
+
+/// The kind `kind_key` when it is reached through a connector, else `VALIDATION` naming
+/// `kind_key`.
+fn connector_kind(kind_key: &str) -> Result<&'static CapabilityKind, AppError> {
+    let kind = CapabilityKind::parse(kind_key)
+        .ok_or_else(|| invalid("kind_key", &format!("unknown capability kind {kind_key:?}")))?;
+    if kind.default_reach() != Reach::Connector {
+        return Err(invalid(
+            "kind_key",
+            "only a capability reached through a connector connects through a provider",
+        ));
+    }
+    Ok(kind)
+}
+
+/// The app the flow for `kind_key` runs under, when configured: Instagram Login for
+/// `instagram`, the Meta app for the other Meta kinds, the X app for `x`.
+fn oauth_app(apps: &dyn PlatformAppConfig, provider: Provider, kind_key: &str) -> Option<OAuthApp> {
+    match provider {
+        Provider::Meta if kind_key == "instagram" => apps.instagram_app().map(OAuthApp::Instagram),
+        Provider::Meta => apps.meta_app().map(OAuthApp::Meta),
+        Provider::X => apps.x_app().map(OAuthApp::X),
+        Provider::Netgsm => None,
+    }
+}
+
+/// The redirect URI of `provider`'s flows: the public base URL (its path kept, without a
+/// trailing slash), [`OAUTH_CALLBACK_PATH`] and the provider's key.
+fn callback_url(apps: &dyn PlatformAppConfig, provider: Provider) -> Url {
+    let mut url = apps.public_base_url();
+    let base = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&format!("{base}{OAUTH_CALLBACK_PATH}/{}", provider.key()));
+    url.set_query(None);
+    url.set_fragment(None);
+    url
+}
+
+/// A state's nonce: [`NONCE_BYTES`] random bytes from the token generator, through SHA-256 so
+/// any encoding of the token fits.
+fn nonce(deps: &Deps) -> [u8; NONCE_BYTES] {
+    let token = Zeroizing::new(deps.tokens.token(NONCE_BYTES));
+    let digest = Sha256::digest(token.as_bytes());
+    let mut nonce = [0u8; NONCE_BYTES];
+    nonce.copy_from_slice(&digest[..NONCE_BYTES]);
+    nonce
+}
+
+/// `FORBIDDEN` for every refused OAuth state, with the same message whatever the reason.
+fn refused_state() -> AppError {
+    AppError::forbidden("the OAuth state is not valid for this workspace, or was already used")
+}
+
+/// A provider's refusal as the caller sees it: `VALIDATION` for `Auth`, `Permission` and
+/// `Permanent` (trying again will not help), `INTERNAL` with `details.retryable = true` for
+/// `Throttle` and `Transient`; `details` names the error's kind (`provider_error`) and its
+/// redacted reason (`reason`, `null` for `Throttle`), and `retry_after_s` when the provider said.
+fn provider_error(e: ConnectorError) -> AppError {
+    let mut details = json!({ "provider_error": e.kind(), "reason": e.reason() });
+    match &e {
+        ConnectorError::Throttle { retry_after } => {
+            details["retryable"] = json!(true);
+            if let Some(wait) = retry_after {
+                details["retry_after_s"] = json!(wait.whole_seconds());
+            }
+            AppError {
+                code: ErrorCode::Internal,
+                message: "the provider asks to slow down; try again later".into(),
+                details,
+            }
+        }
+        ConnectorError::Transient { .. } => {
+            details["retryable"] = json!(true);
+            AppError {
+                code: ErrorCode::Internal,
+                message: "the provider could not be reached; try again".into(),
+                details,
+            }
+        }
+        ConnectorError::Auth { .. }
+        | ConnectorError::Permission { .. }
+        | ConnectorError::Permanent { .. } => {
+            AppError::validation(format!("the provider refused ({})", e.kind()), details)
+        }
+    }
+}
+
+/// `CONFLICT` (or `VALIDATION` for NetGSM) unless `capability` can be reconnected by OAuth.
+fn reconnectable(capability: &Capability) -> Result<(), AppError> {
+    if capability.reach != Reach::Connector {
+        return Err(AppError::conflict(
+            "only a capability reached through a connector is reconnected",
+        ));
+    }
+    not_retired(capability)?;
+    match provider_for_kind(&capability.kind_key) {
+        Some(Provider::Netgsm) => {
+            return Err(AppError::validation(
+                "a NetGSM capability takes new credentials by hand (connector.set_credentials)",
+                json!({ "reason": "use_set_credentials" }),
+            ));
+        }
+        None => return Err(AppError::conflict("no provider connects this kind yet")),
+        Some(Provider::Meta | Provider::X) => {}
+    }
+    if capability.external_id.is_none() {
+        return Err(AppError::conflict(
+            "the capability names no external account to reconnect",
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Confirming assets
+// ---------------------------------------------------------------------------------------------
+
+/// An asset as sealed with its flow: every field, its credential included. Private, so the
+/// serialisable form of an asset exists only between sealing and opening.
+#[derive(Serialize, Deserialize)]
+struct SealedAsset {
+    kind_key: String,
+    external_id: String,
+    name: String,
+    credential: Credential,
+    public: Value,
+}
+
+/// `assets` sealed for the context's workspace.
+fn seal_assets(deps: &Deps, ctx: &Ctx, assets: Vec<Asset>) -> Result<Vec<u8>, AppError> {
+    let sealed: Vec<SealedAsset> = assets
+        .into_iter()
+        .map(|a| SealedAsset {
+            kind_key: a.kind_key,
+            external_id: a.external_id,
+            name: a.name,
+            credential: a.credential,
+            public: a.public,
+        })
+        .collect();
+    let plain = Zeroizing::new(
+        serde_json::to_vec(&sealed).map_err(|_| AppError::internal("assets cannot be sealed"))?,
+    );
+    deps.seal.seal(ctx.workspace_id, &plain)
+}
+
+/// The assets sealed with a flow, opened.
+fn open_assets(
+    deps: &Deps,
+    ws: jt_tenancy::WorkspaceId,
+    sealed: &[u8],
+) -> Result<Vec<Asset>, AppError> {
+    let plain = deps.seal.open(ws, sealed)?;
+    let assets: Vec<SealedAsset> = serde_json::from_slice(&plain)
+        .map_err(|_| AppError::internal("the sealed assets cannot be read"))?;
+    Ok(assets
+        .into_iter()
+        .map(|a| Asset {
+            kind_key: a.kind_key,
+            external_id: a.external_id,
+            name: a.name,
+            credential: a.credential,
+            public: a.public,
+        })
+        .collect())
+}
+
+/// Creates a capability per asset of a new connection, in `repos`, and returns their ids.
+async fn create(
+    deps: &Deps,
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    flow: &OAuthPendingRow,
+    chosen: Vec<Asset>,
+    hosts: &[String],
+) -> Result<Vec<CapabilityId>, AppError> {
+    let in_force = version_in_force(repos).await?;
+    let live: Vec<Capability> = repos
+        .capabilities()
+        .list(CapabilityFilter::default())
+        .await?
+        .into_iter()
+        .filter(|c| c.status != StoredStatus::Retired)
+        .collect();
+    for asset in &chosen {
+        let held = live.iter().any(|c| {
+            c.kind_key == asset.kind_key && c.external_id.as_deref() == Some(&asset.external_id)
+        });
+        if held {
+            return Err(account_taken(&asset.kind_key, &asset.external_id));
+        }
+    }
+    let mut ids = Vec::with_capacity(chosen.len());
+    for asset in chosen {
+        let public = connected_public(
+            &Value::Object(Map::new()),
+            flow.provider,
+            Some(&asset.name),
+            hosts,
+            asset.credential.redact_for_public(),
+            Some(&asset.public),
+        );
+        let mut capability = Capability::new(
+            CapabilityId(deps.ids.uuid()),
+            ctx.workspace_id,
+            NewCapability {
+                kind_key: asset.kind_key.clone(),
+                key_detail: None,
+                name: fitted_name(&asset.name, &asset.external_id),
+                description: String::new(),
+                external_id: Some(asset.external_id.clone()),
+                connector_public: public,
+                policy: Policy::default(),
+            },
+            ctx.now,
+        )
+        .map_err(capability_error)?;
+        if capability.reach != Reach::Connector {
+            return Err(AppError::internal(
+                "a provider listed an asset of a kind not reached through a connector",
+            ));
+        }
+        capability.declared_by_connection = ctx.agent_connection_id;
+        capability.strategy_version_id = in_force.map(|v| v.as_uuid());
+        let sealed = seal_credential(deps, ctx, &asset.credential)?;
+        repos
+            .capabilities()
+            .insert(capability.clone(), Some(sealed))
+            .await
+            .map_err(|e| match e.code {
+                // Another connection took the account since the check above.
+                ErrorCode::Conflict => account_taken(&asset.kind_key, &asset.external_id),
+                _ => e,
+            })?;
+        append(
+            repos,
+            ctx,
+            "connector.connected",
+            "capability",
+            capability.id,
+            in_force,
+            json!({ "kind_key": asset.kind_key, "external_id": asset.external_id }),
+        )
+        .await?;
+        ids.push(capability.id);
+    }
+    Ok(ids)
+}
+
+/// Seals the chosen asset's credential into capability `id`, the one a reconnection renews, in
+/// `repos`, and returns its id.
+async fn renew(
+    deps: &Deps,
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    flow: &OAuthPendingRow,
+    id: CapabilityId,
+    mut chosen: Vec<Asset>,
+    hosts: &[String],
+) -> Result<CapabilityId, AppError> {
+    let mut capability = locked(repos, id).await?;
+    not_retired(&capability)?;
+    let own = chosen.len() == 1
+        && chosen[0].kind_key == capability.kind_key
+        && capability.external_id.as_deref() == Some(chosen[0].external_id.as_str());
+    if !own {
+        return Err(invalid(
+            "selected",
+            "a reconnection confirms the capability's own account, and only it",
+        ));
+    }
+    let asset = chosen.remove(0);
+    capability.connector_public = connected_public(
+        &capability.connector_public,
+        flow.provider,
+        Some(&asset.name),
+        hosts,
+        asset.credential.redact_for_public(),
+        Some(&asset.public),
+    );
+    capability.updated_at = ctx.now;
+    repos.capabilities().update(capability.clone()).await?;
+    let sealed = seal_credential(deps, ctx, &asset.credential)?;
+    repos
+        .capabilities()
+        .set_sealed(id, Some(sealed), ctx.now)
+        .await?;
+    let in_force = version_in_force(repos).await?;
+    append(
+        repos,
+        ctx,
+        "connector.connected",
+        "capability",
+        id,
+        in_force,
+        json!({
+            "kind_key": capability.kind_key,
+            "external_id": asset.external_id,
+            "reconnected": true,
+        }),
+    )
+    .await?;
+    Ok(id)
+}
+
+/// `CONFLICT`: a live capability of `kind_key` already holds the account `external_id`.
+fn account_taken(kind_key: &str, external_id: &str) -> AppError {
+    AppError {
+        code: ErrorCode::Conflict,
+        message: "a capability of this kind already holds the account".into(),
+        details: json!({ "kind_key": kind_key, "external_id": external_id }),
+    }
+}
+
+/// A capability name from a provider's name of an account: control characters as spaces,
+/// trimmed, cut to [`MAX_NAME_CHARS`] characters; the external id when nothing is left.
+fn fitted_name(name: &str, external_id: &str) -> String {
+    let fit = |raw: &str| -> String {
+        let cleaned: String = raw
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        cleaned
+            .trim()
+            .chars()
+            .take(MAX_NAME_CHARS)
+            .collect::<String>()
+            .trim()
+            .to_owned()
+    };
+    let name = fit(name);
+    if name.is_empty() {
+        fit(external_id)
+    } else {
+        name
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Credentials by hand
+// ---------------------------------------------------------------------------------------------
+
+/// The provider whose credentials `kind` takes by hand, else `VALIDATION` naming `kind_key`.
+fn manual_provider(kind: &CapabilityKind) -> Result<Provider, AppError> {
+    match provider_for_kind(kind.key) {
+        Some(Provider::X) => Err(invalid("kind_key", "this kind connects through OAuth")),
+        Some(provider) => Ok(provider),
+        None => Err(invalid("kind_key", "no provider connects this kind yet")),
+    }
+}
+
+/// [`set_credentials`] for a new capability of `kind_key` called `name`.
+async fn credentials_for_new(
+    deps: &Deps,
+    ctx: &Ctx,
+    kind_key: &str,
+    name: String,
+    external_id: Option<String>,
+    input: CredentialInput,
+) -> Result<CapabilityOut, AppError> {
+    let kind = connector_kind(kind_key)?;
+    let provider = manual_provider(kind)?;
+    let credential = built_credential(kind.key, provider, input, external_id.as_deref())?;
+    let connector = adapter(deps, provider)?;
+    let hosts = adapter_hosts(deps, connector.as_ref())?;
+    let public = connected_public(
+        &Value::Object(Map::new()),
+        provider,
+        None,
+        &hosts,
+        credential.redact_for_public(),
+        None,
+    );
+    let mut capability = Capability::new(
+        CapabilityId(deps.ids.uuid()),
+        ctx.workspace_id,
+        NewCapability {
+            kind_key: kind.key.to_owned(),
+            key_detail: None,
+            name,
+            description: String::new(),
+            external_id,
+            connector_public: public,
+            policy: Policy::default(),
+        },
+        ctx.now,
+    )
+    .map_err(capability_error)?;
+    capability.declared_by_connection = ctx.agent_connection_id;
+
+    // A new row has no one to wait for: the provider is asked before the transaction opens.
+    let result = connector
+        .probe(&credential, &capability.connector_public)
+        .await;
+    let sealed = seal_credential(deps, ctx, &credential)?;
+    drop(credential);
+
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let in_force = version_in_force(repos.as_mut()).await?;
+    capability.strategy_version_id = in_force.map(|v| v.as_uuid());
+    repos
+        .capabilities()
+        .insert(capability.clone(), Some(sealed))
+        .await
+        .map_err(|e| match (&capability.external_id, e.code) {
+            (Some(external_id), ErrorCode::Conflict) => {
+                account_taken(&capability.kind_key, external_id)
+            }
+            _ => e,
+        })?;
+    record_credentials(repos.as_mut(), ctx, &capability, in_force).await?;
+    let id = capability.id;
+    apply_probe(deps, repos.as_mut(), ctx, capability, result).await?;
+    let out = current_in(repos.as_mut(), ctx, id).await?;
+    repos.commit().await?;
+    allow_hosts(deps, ctx, &hosts);
+    Ok(out)
+}
+
+/// [`set_credentials`] for existing capability `id`.
+async fn credentials_for(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    external_id: Option<String>,
+    input: CredentialInput,
+) -> Result<CapabilityOut, AppError> {
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut capability = locked(repos.as_mut(), id).await?;
+    if capability.reach != Reach::Connector {
+        return Err(invalid(
+            "kind_key",
+            "only a capability reached through a connector takes credentials",
+        ));
+    }
+    not_retired(&capability)?;
+    let kind = connector_kind(&capability.kind_key)?;
+    let provider = manual_provider(kind)?;
+    if capability.status == StoredStatus::Verified {
+        return Err(AppError::conflict(
+            "a verified capability keeps its credentials until a probe fails",
+        ));
+    }
+    let bound = match (&capability.external_id, external_id) {
+        (Some(held), Some(given)) if *held != given => {
+            return Err(invalid(
+                "external_id",
+                "the capability holds another external account",
+            ));
+        }
+        (Some(held), _) => Some(held.clone()),
+        (None, given) => given,
+    };
+    let credential = built_credential(kind.key, provider, input, bound.as_deref())?;
+    let connector = adapter(deps, provider)?;
+    let hosts = adapter_hosts(deps, connector.as_ref())?;
+    capability.connector_public = connected_public(
+        &capability.connector_public,
+        provider,
+        None,
+        &hosts,
+        credential.redact_for_public(),
+        None,
+    );
+    capability.external_id = bound;
+    capability.updated_at = ctx.now;
+
+    // The provider is asked while the capability is locked (see the module docs).
+    let result = connector
+        .probe(&credential, &capability.connector_public)
+        .await;
+    let sealed = seal_credential(deps, ctx, &credential)?;
+    drop(credential);
+
+    repos.capabilities().update(capability.clone()).await?;
+    repos
+        .capabilities()
+        .set_sealed(id, Some(sealed), ctx.now)
+        .await?;
+    let in_force = version_in_force(repos.as_mut()).await?;
+    record_credentials(repos.as_mut(), ctx, &capability, in_force).await?;
+    apply_probe(deps, repos.as_mut(), ctx, capability, result).await?;
+    let out = current_in(repos.as_mut(), ctx, id).await?;
+    repos.commit().await?;
+    allow_hosts(deps, ctx, &hosts);
+    Ok(out)
+}
+
+/// Writes `connector.credentials_set` about `capability`.
+async fn record_credentials(
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    capability: &Capability,
+    in_force: Option<jt_strategy::StrategyVersionId>,
+) -> Result<(), AppError> {
+    let by_agent = matches!(ctx.actor, jt_ledger::Actor::Agent { .. });
+    append(
+        repos,
+        ctx,
+        "connector.credentials_set",
+        "capability",
+        capability.id,
+        in_force,
+        json!({ "kind_key": capability.kind_key, "by_agent": by_agent }),
+    )
+    .await
+}
+
+/// `raw` trimmed, as an external id: not blank and at most [`MAX_EXTERNAL_ID_CHARS`] characters,
+/// else `VALIDATION` naming `external_id`.
+fn checked_external_id(raw: &str) -> Result<String, AppError> {
+    let id = raw.trim();
+    if id.is_empty()
+        || id.chars().count() > MAX_EXTERNAL_ID_CHARS
+        || id.chars().any(char::is_control)
+    {
+        return Err(invalid(
+            "external_id",
+            &format!(
+                "external_id must be 1 to {MAX_EXTERNAL_ID_CHARS} characters without control \
+                 characters"
+            ),
+        ));
+    }
+    Ok(id.to_owned())
+}
+
+/// `input` with every field checked: identifiers trimmed, secrets as given; each 1 to its limit
+/// in characters, without control characters, else `VALIDATION` naming `credential.<field>`.
+fn normalised(input: CredentialInput) -> Result<CredentialInput, AppError> {
+    let field = |name: &str, raw: &str| checked_field(name, raw, MAX_CREDENTIAL_FIELD_CHARS, true);
+    let secret = |name: &str, raw: &str| checked_field(name, raw, MAX_SECRET_CHARS, false);
+    let optional = |name: &str, raw: Option<String>| raw.map(|v| field(name, &v)).transpose();
+    Ok(match input {
+        CredentialInput::NetgsmSms {
+            usercode,
+            password,
+            msgheader,
+        } => CredentialInput::NetgsmSms {
+            usercode: field("usercode", &usercode)?,
+            password: secret("password", &password)?,
+            msgheader: field("msgheader", &msgheader)?,
+        },
+        CredentialInput::NetgsmPbx {
+            username,
+            password,
+            trunk,
+            pbxnum,
+        } => CredentialInput::NetgsmPbx {
+            username: field("username", &username)?,
+            password: secret("password", &password)?,
+            trunk: optional("trunk", trunk)?,
+            pbxnum: optional("pbxnum", pbxnum)?,
+        },
+        // A pasted token is trimmed: the whitespace around it comes from copying it.
+        CredentialInput::MetaToken { access_token } => CredentialInput::MetaToken {
+            access_token: checked_field("access_token", &access_token, MAX_SECRET_CHARS, true)?,
+        },
+    })
+}
+
+/// One credential field checked (see [`normalised`]); the refusal never repeats the value.
+fn checked_field(name: &str, raw: &str, max: usize, trim: bool) -> Result<String, AppError> {
+    let value = if trim { raw.trim() } else { raw };
+    let field = format!("credential.{name}");
+    if value.trim().is_empty() {
+        return Err(invalid(&field, &format!("{field} must not be blank")));
+    }
+    if value.chars().count() > max {
+        return Err(invalid(
+            &field,
+            &format!("{field} must be at most {max} characters"),
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(invalid(
+            &field,
+            &format!("{field} must not hold control characters"),
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+/// The credential `input` makes for a capability of `kind_key`, served by `provider`, holding
+/// the account `external_id`; `VALIDATION` naming `credential.kind` when the shape does not fit
+/// the kind, or `external_id` when a pasted Page or WhatsApp token comes without its account.
+fn built_credential(
+    kind_key: &str,
+    provider: Provider,
+    input: CredentialInput,
+    external_id: Option<&str>,
+) -> Result<Credential, AppError> {
+    let account = |what: &str| {
+        external_id.map(str::to_owned).ok_or_else(|| {
+            invalid(
+                "external_id",
+                &format!("a pasted {what} token needs its id in external_id"),
+            )
+        })
+    };
+    let shape = input.kind();
+    match (provider, kind_key, input) {
+        (
+            Provider::Netgsm,
+            "sms_line",
+            CredentialInput::NetgsmSms {
+                usercode,
+                password,
+                msgheader,
+            },
+        ) => Ok(Credential::NetgsmSms {
+            usercode,
+            password,
+            msgheader,
+        }),
+        (
+            Provider::Netgsm,
+            "netgsm_pbx",
+            CredentialInput::NetgsmPbx {
+                username,
+                password,
+                trunk,
+                pbxnum,
+            },
+        ) => Ok(Credential::NetgsmPbx {
+            username,
+            password,
+            trunk,
+            pbxnum,
+        }),
+        (Provider::Meta, "facebook_page", CredentialInput::MetaToken { access_token }) => {
+            Ok(Credential::PageToken {
+                page_id: account("page")?,
+                token: access_token,
+            })
+        }
+        (Provider::Meta, "whatsapp_cloud", CredentialInput::MetaToken { access_token }) => {
+            Ok(Credential::WhatsAppCloud {
+                phone_number_id: account("WhatsApp phone number")?,
+                token: access_token,
+                waba_id: None,
+            })
+        }
+        (Provider::Meta, _, CredentialInput::MetaToken { access_token }) => Ok(Credential::OAuth {
+            access_token,
+            refresh_token: None,
+            expires_at: None,
+            scopes: Vec::new(),
+        }),
+        _ => {
+            let expected = match (provider, kind_key) {
+                (Provider::Netgsm, "sms_line") => "netgsm_sms",
+                (Provider::Netgsm, _) => "netgsm_pbx",
+                _ => "meta_token",
+            };
+            Err(AppError::validation(
+                format!("a {kind_key} capability takes {expected} credentials, not {shape}"),
+                json!({ "field": "credential.kind", "expected": expected }),
+            ))
+        }
+    }
+}
+
+/// [`SetCredentials::credential`] read strictly, its refusal repeating no value: an unknown or a
+/// missing field keeps serde's message (which names the field only); an unknown `kind` and every
+/// other refusal (a field that is not a string, a credential that is not an object) get a fixed
+/// one.
+fn credential_strict<'de, D: Deserializer<'de>>(d: D) -> Result<CredentialInput, D::Error> {
+    let value = Value::deserialize(d)?;
+    serde_json::from_value(value).map_err(|e| {
+        let message = e.to_string();
+        let message = if message.starts_with("unknown field")
+            || message.starts_with("missing field")
+        {
+            format!("invalid credential: {message}")
+        } else if message.starts_with("unknown variant") {
+            "invalid credential: `kind` must be netgsm_sms, netgsm_pbx or meta_token".to_owned()
+        } else {
+            "invalid credential: it must be an object with a `kind` and string fields".to_owned()
+        };
+        serde::de::Error::custom(message)
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Probing
+// ---------------------------------------------------------------------------------------------
+
+/// [`probe`] without its permission check: also run for capabilities just connected.
+async fn probe_locked(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<ProbeOut, AppError> {
+    let ws = ctx.workspace_id;
+    let mut repos = deps.uow.tenant(ws).await?;
+    let capability = locked(repos.as_mut(), id).await?;
+    if capability.reach != Reach::Connector {
+        return Err(AppError::conflict(
+            "only a capability reached through a connector is probed",
+        ));
+    }
+    not_retired(&capability)?;
+    let provider = provider_for_kind(&capability.kind_key)
+        .ok_or_else(|| AppError::conflict("no provider connects this kind yet"))?;
+    let connector = adapter(deps, provider)?;
+    let sealed = repos
+        .capabilities()
+        .read_sealed(id)
+        .await?
+        .ok_or_else(|| AppError::conflict("no credentials"))?;
+    let credential = open_credential(deps, ws, &sealed)?;
+    let result = connector
+        .probe(&credential, &capability.connector_public)
+        .await;
+    drop(credential);
+    let out = apply_probe(deps, repos.as_mut(), ctx, capability, result).await?;
+    repos.commit().await?;
+    Ok(out)
+}
+
+/// Records probe `result` of `capability` (read through `lock` in `repos`): binds the account,
+/// logs the run, moves the status, updates the public connector fields and writes
+/// `connector.probe` when the status changed (see [`probe`]).
+async fn apply_probe(
+    deps: &Deps,
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    mut capability: Capability,
+    result: ProbeResult,
+) -> Result<ProbeOut, AppError> {
+    let result = bound_to_account(repos, &mut capability, result).await?;
+    let run_id = ProbeRunId(deps.ids.uuid());
+    repos
+        .probe_runs()
+        .append(ProbeRun::from_result(
+            run_id,
+            ctx.workspace_id,
+            capability.id,
+            ctx.now,
+            &result,
+        ))
+        .await?;
+    let previous = capability.status;
+    let status = status_after_probe(previous, &result);
+    let error = if result.ok {
+        None
+    } else {
+        result.error.as_ref()
+    };
+    let error_kind = error.map(|e| e.kind().to_owned());
+
+    let mut public = object(&capability.connector_public);
+    public.insert(
+        "health".to_owned(),
+        json!({
+            "ok": result.ok,
+            "at": rfc3339(ctx.now)?,
+            "latency_ms": result.latency_ms,
+            "error_kind": error_kind,
+        }),
+    );
+    if result.ok {
+        public.insert(RECONNECT_REQUIRED.to_owned(), json!(false));
+        let facts = json!({ "facts": result.facts });
+        if result.facts.is_object() && validate_connector_public(&facts).is_empty() {
+            public.insert("facts".to_owned(), result.facts.clone());
+        }
+        capability.last_verified_at = Some(ctx.now);
+        capability.evidence = Some(Evidence {
+            text: "probe".into(),
+            refs: vec![run_id.to_string()],
+        });
+    } else if matches!(error, Some(ConnectorError::Auth { .. })) {
+        public.insert(RECONNECT_REQUIRED.to_owned(), json!(true));
+    }
+    capability.connector_public = Value::Object(public);
+    capability.status = status;
+    capability.updated_at = ctx.now;
+    repos.capabilities().update(capability.clone()).await?;
+
+    if status != previous {
+        let mut payload = json!({ "ok": result.ok });
+        if let Some(kind) = &error_kind {
+            payload["error_kind"] = json!(kind);
+        }
+        let in_force = version_in_force(repos).await?;
+        append(
+            repos,
+            ctx,
+            "connector.probe",
+            "capability",
+            capability.id,
+            in_force,
+            payload,
+        )
+        .await?;
+    }
+    Ok(ProbeOut {
+        result: ProbeResultPublic {
+            ok: result.ok,
+            latency_ms: result.latency_ms,
+            error_kind,
+            error_reason: error.and_then(|e| e.reason()).map(str::to_owned),
+            facts: result.facts.clone(),
+        },
+        status,
+    })
+}
+
+/// `result` once the account it reached is checked against `capability`'s (see the module docs):
+/// a success naming another account, or none while the capability holds one, becomes
+/// `Permission`; a capability without an external id takes the account named, unless another
+/// live capability of its kind holds it (`Permission` too).
+async fn bound_to_account(
+    repos: &mut dyn TenantRepos,
+    capability: &mut Capability,
+    result: ProbeResult,
+) -> Result<ProbeResult, AppError> {
+    if !result.ok {
+        return Ok(result);
+    }
+    let account = match &result.facts["account_id"] {
+        Value::String(id) => Some(id.trim().to_owned()).filter(|id| !id.is_empty()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    };
+    let refused =
+        |reason: &str| ProbeResult::failure(result.latency_ms, ConnectorError::permission(reason));
+    match (&capability.external_id, account) {
+        (Some(held), Some(account)) if *held == account => Ok(result),
+        (Some(_), Some(_)) => Ok(refused("account mismatch")),
+        (Some(_), None) => Ok(refused("account not confirmed: the probe named no account")),
+        (None, None) => Ok(result),
+        (None, Some(account)) => {
+            if account.chars().count() > MAX_EXTERNAL_ID_CHARS {
+                return Ok(refused("the probe named an account id that is too long"));
+            }
+            let kind = CapabilityKind::parse(&capability.kind_key).map(|k| k.key);
+            let taken = repos
+                .capabilities()
+                .list(CapabilityFilter {
+                    kind,
+                    ..CapabilityFilter::default()
+                })
+                .await?
+                .iter()
+                .any(|c| {
+                    c.id != capability.id
+                        && c.kind_key == capability.kind_key
+                        && c.status != StoredStatus::Retired
+                        && c.external_id.as_deref() == Some(account.as_str())
+                });
+            if taken {
+                return Ok(refused("the account is held by another capability"));
+            }
+            capability.external_id = Some(account);
+            Ok(result)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shared steps
+// ---------------------------------------------------------------------------------------------
+
+/// The adapter of `provider`, else `CONFLICT`.
+fn adapter(deps: &Deps, provider: Provider) -> Result<Arc<dyn Connector>, AppError> {
+    deps.connectors
+        .connector(provider)
+        .ok_or_else(|| AppError::conflict(NO_ADAPTER))
+}
+
+/// The hosts `connector` reaches, each checked with the tenant host registry before anything is
+/// written.
+fn adapter_hosts(deps: &Deps, connector: &dyn Connector) -> Result<Vec<String>, AppError> {
+    let hosts: Vec<String> = connector.hosts().iter().map(|h| (*h).to_owned()).collect();
+    for host in &hosts {
+        deps.hosts.check(host)?;
+    }
+    Ok(hosts)
+}
+
+/// Allows `hosts` for the context's workspace, after a commit; a host that cannot be allowed is
+/// logged, since the committed change holds.
+fn allow_hosts(deps: &Deps, ctx: &Ctx, hosts: &[String]) {
+    let distinct: BTreeSet<&String> = hosts.iter().collect();
+    for host in distinct {
+        if let Err(e) = deps.hosts.allow(ctx.workspace_id, host) {
+            tracing::warn!(
+                workspace_id = %ctx.workspace_id,
+                host,
+                error = %e,
+                "a connector's host could not be allowed"
+            );
+        }
+    }
+}
+
+/// `public` (an object, or none) with the facts of a connection: the provider, the account's
+/// name when given, the adapter's hosts added to those already named, the credential's public
+/// facts (`access`), the asset's when given, and `reconnect_required` as it was (`false` when
+/// it was not set).
+fn connected_public(
+    public: &Value,
+    provider: Provider,
+    name: Option<&str>,
+    hosts: &[String],
+    access: Value,
+    asset: Option<&Value>,
+) -> Value {
+    let mut out = object(public);
+    out.insert("provider".to_owned(), json!(provider.key()));
+    if let Some(name) = name {
+        out.insert("name".to_owned(), json!(name));
+    }
+    let mut all: Vec<String> = out
+        .get("hosts")
+        .and_then(Value::as_array)
+        .map(|named| {
+            named
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    for host in hosts {
+        if !all.iter().any(|h| h.trim().eq_ignore_ascii_case(host)) {
+            all.push(host.clone());
+        }
+    }
+    out.insert("hosts".to_owned(), json!(all));
+    out.insert("access".to_owned(), access);
+    if let Some(asset) = asset {
+        out.insert("asset".to_owned(), asset.clone());
+    }
+    out.entry(RECONNECT_REQUIRED.to_owned())
+        .or_insert(json!(false));
+    Value::Object(out)
+}
+
+/// `value`'s fields, or none when it is not an object.
+fn object(value: &Value) -> Map<String, Value> {
+    match value {
+        Value::Object(map) => map.clone(),
+        _ => Map::new(),
+    }
+}
+
+/// `credential` sealed for the context's workspace.
+fn seal_credential(deps: &Deps, ctx: &Ctx, credential: &Credential) -> Result<Vec<u8>, AppError> {
+    let plain = Zeroizing::new(
+        serde_json::to_vec(credential)
+            .map_err(|_| AppError::internal("the credentials cannot be sealed"))?,
+    );
+    deps.seal.seal(ctx.workspace_id, &plain)
+}
+
+/// The credential sealed in `sealed`, opened for `ws`.
+fn open_credential(
+    deps: &Deps,
+    ws: jt_tenancy::WorkspaceId,
+    sealed: &[u8],
+) -> Result<Credential, AppError> {
+    let plain = deps.seal.open(ws, sealed)?;
+    serde_json::from_slice(&plain)
+        .map_err(|_| AppError::internal("the sealed credentials cannot be read"))
+}
+
+/// Capability `id` as it stands, at `ctx.now`, read in a bundle of its own.
+async fn current(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<CapabilityOut, AppError> {
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    current_in(repos.as_mut(), ctx, id).await
+}
+
+/// Capability `id` as it stands in `repos`, at `ctx.now`.
+async fn current_in(
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    id: CapabilityId,
+) -> Result<CapabilityOut, AppError> {
+    Ok(CapabilityOut::at(find(repos, id).await?, ctx.now))
+}
+
+/// `at` in RFC 3339.
+fn rfc3339(at: OffsetDateTime) -> Result<String, AppError> {
+    at.format(&Rfc3339)
+        .map_err(|_| AppError::internal("a time cannot be written in RFC 3339"))
+}

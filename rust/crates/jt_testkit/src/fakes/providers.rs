@@ -2,7 +2,8 @@
 //! adapters ([`ScriptedConnector`], [`ScriptedOAuth`]) handed out by a [`ScriptedRegistry`].
 //!
 //! A scripted adapter answers each method with the results a test queued for that method, in
-//! order, and records every call (with its arguments) for assertions. A call with nothing queued
+//! order, and records every call (with its arguments) for assertions; a [`ScriptedConnector`]
+//! names the hosts it was given ([`ScriptedConnector::with_hosts`], none by default). A call with nothing queued
 //! panics, naming the provider and the method: the test scripted too few answers. Nothing reaches
 //! a network.
 
@@ -207,6 +208,7 @@ pub enum ConnectorCall {
 /// queues its `push_*` methods fill (one queue per method) and recording every call.
 pub struct ScriptedConnector {
     provider: Provider,
+    hosts: &'static [&'static str],
     calls: Mutex<Vec<ConnectorCall>>,
     probe: Script<ProbeResult>,
     refresh: Script<Result<Option<Credential>, ConnectorError>>,
@@ -225,10 +227,12 @@ pub struct ScriptedConnector {
 }
 
 impl ScriptedConnector {
-    /// An adapter for `provider` with nothing queued.
+    /// An adapter for `provider` with nothing queued, reaching no host
+    /// ([`with_hosts`](Self::with_hosts) names some).
     pub fn new(provider: Provider) -> Self {
         ScriptedConnector {
             provider,
+            hosts: &[],
             calls: Mutex::new(Vec::new()),
             probe: Script::default(),
             refresh: Script::default(),
@@ -245,6 +249,12 @@ impl ScriptedConnector {
             hangup: Script::default(),
             consent_add: Script::default(),
         }
+    }
+
+    /// The adapter answering `hosts` from [`Connector::hosts`].
+    pub fn with_hosts(mut self, hosts: &'static [&'static str]) -> Self {
+        self.hosts = hosts;
+        self
     }
 
     /// Every call so far, in order.
@@ -321,6 +331,10 @@ impl ScriptedConnector {
 impl Connector for ScriptedConnector {
     fn provider(&self) -> Provider {
         self.provider
+    }
+
+    fn hosts(&self) -> &'static [&'static str] {
+        self.hosts
     }
 
     async fn probe(&self, cred: &Credential, public: &Value) -> ProbeResult {

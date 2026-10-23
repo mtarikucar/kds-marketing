@@ -83,6 +83,7 @@ fn pending(
         kind_key: "x".into(),
         state_hash: state_hash.into(),
         started_by: user,
+        capability_id: None,
         pkce_verifier_sealed: Some(b"sealed-verifier".to_vec()),
         assets_sealed: None,
         assets_public: json!([]),
@@ -703,6 +704,90 @@ async fn oauth_pending_state_hash_is_unique_and_purgeable() {
             .unwrap(),
         Some(theirs)
     );
+}
+
+#[tokio::test]
+async fn oauth_pending_lock_waits_and_a_reconnection_names_its_own_capability() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, owner_a) = db.seed_workspace("a").await;
+    let (b, _) = db.seed_workspace("b").await;
+    let page = capability(a, "facebook_page", "page-1", T0);
+    let theirs = capability(b, "facebook_page", "page-1", T0);
+    insert_capability(&uow, &page).await;
+    insert_capability(&uow, &theirs).await;
+
+    let renewal = OAuthPendingRow {
+        capability_id: Some(page.id),
+        ..pending(a, owner_a, "hash-renew", T0 + Duration::minutes(10))
+    };
+    let mut t = uow.tenant(a).await.unwrap();
+    t.oauth_pending().insert(renewal.clone()).await.unwrap();
+    t.commit().await.unwrap();
+
+    // Read back by its id, the capability included; never across workspaces.
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        t.oauth_pending().lock(renewal.id).await.unwrap(),
+        Some(renewal.clone())
+    );
+    assert_eq!(
+        t.oauth_pending()
+            .find_by_state_hash("hash-renew")
+            .await
+            .unwrap(),
+        Some(renewal.clone())
+    );
+    assert_eq!(
+        t.oauth_pending()
+            .lock(OAuthPendingId::new_v7())
+            .await
+            .unwrap(),
+        None
+    );
+    drop(t);
+    let mut t = uow.tenant(b).await.unwrap();
+    assert_eq!(t.oauth_pending().lock(renewal.id).await.unwrap(), None);
+    drop(t);
+
+    // Another workspace's capability, or none at all, is NOT_FOUND, before the composite key
+    // would refuse it.
+    for capability in [theirs.id, CapabilityId::new_v7()] {
+        let mut t = uow.tenant(a).await.unwrap();
+        let row = OAuthPendingRow {
+            capability_id: Some(capability),
+            ..pending(a, owner_a, "hash-other", T0)
+        };
+        assert_eq!(
+            code(t.oauth_pending().insert(row).await),
+            ErrorCode::NotFound
+        );
+    }
+
+    // A second `lock` waits for the bundle holding the first, then sees what it committed:
+    // nothing, once it deleted the flow.
+    let mut holder = uow.tenant(a).await.unwrap();
+    assert!(
+        holder
+            .oauth_pending()
+            .lock(renewal.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let waiter = {
+        let uow = uow.clone();
+        let id = renewal.id;
+        tokio::spawn(async move {
+            let mut t = uow.tenant(a).await.unwrap();
+            t.oauth_pending().lock(id).await.unwrap()
+        })
+    };
+    wait_for_a_lock_waiter(&db).await;
+    assert!(!waiter.is_finished(), "the second lock did not wait");
+    holder.oauth_pending().delete(renewal.id).await.unwrap();
+    holder.commit().await.unwrap();
+    assert_eq!(waiter.await.unwrap(), None);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -1,0 +1,1816 @@
+//! The connection use cases over the in-memory fakes and the scripted provider adapters:
+//! starting, completing and confirming OAuth flows, entering credentials by hand, probing,
+//! health, reconnecting, and what retiring does to a connection. One test per rule.
+
+mod support;
+
+use std::sync::Arc;
+
+use jt_app::error::{AppError, ErrorCode};
+use jt_app::ports::connectors::{Asset, AssetPublic, Url};
+use jt_app::ports::{OAuthPendingRow, SecretBox};
+use jt_app::usecases::Deps;
+use jt_app::usecases::auth::{self, LoginInput, Principal};
+use jt_app::usecases::capabilities::{self, CapabilityOut, DeclareInput};
+use jt_app::usecases::connector::{
+    self, CompleteOAuth, ConfirmAssets, ConnectorHealth, CredentialInput, OAUTH_STATE_PURPOSE,
+    PendingAssetsOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
+};
+use jt_app::usecases::hash_token;
+use jt_app::usecases::work::{self, WorkKind};
+use jt_capability::{Capability, CapabilityId, EffectiveStatus, Reach, StoredStatus};
+use jt_connector::{
+    ConnectorError, Credential, OAuthState, ProbeResult, Provider, pkce_challenge_s256,
+};
+use jt_tenancy::WorkspaceId;
+use jt_testkit::fakes::{
+    ConnectorCall, FIXED_NOW, FakeAppConfig, FixedClock, HostCall, OAuthCall, PlainSecretBox,
+    ScriptedConnector, ScriptedOAuth, ScriptedRegistry,
+};
+use serde_json::{Value, json};
+use support::*;
+use time::Duration;
+use time::format_description::well_known::Rfc3339;
+use zeroize::Zeroizing;
+
+const META_HOSTS: &[&str] = &["graph.facebook.com", "rupload.facebook.com"];
+const NETGSM_HOSTS: &[&str] = &["api.netgsm.com.tr", "crmsntrl.netgsm.com.tr:9111"];
+const X_HOSTS: &[&str] = &["api.x.com"];
+
+/// Every secret the flows below hand to the system; none may come back out.
+const SECRETS: &[&str] = &[
+    "EAAB-user-1",
+    "EAAB-user-2",
+    "EAAB-refresh",
+    "EAAB-page-1",
+    "EAAB-page-2",
+    "EAAB-page-1-v2",
+    "IGQ-ig-token",
+    "netgsm-pass-1",
+    "pbx-pass-1",
+    "code-1",
+    "code-2",
+    "meta-app-secret",
+    "instagram-app-secret",
+    "x-client-secret",
+];
+
+// ---------------------------------------------------------------------------------------------
+// The rig
+// ---------------------------------------------------------------------------------------------
+
+/// The world with every provider app configured and a scripted adapter per provider.
+struct Rig {
+    w: World,
+    meta: Arc<ScriptedConnector>,
+    meta_oauth: Arc<ScriptedOAuth>,
+    netgsm: Arc<ScriptedConnector>,
+    x_oauth: Arc<ScriptedOAuth>,
+}
+
+async fn rig() -> Rig {
+    let mut w = world().await;
+    let meta = Arc::new(ScriptedConnector::new(Provider::Meta).with_hosts(META_HOSTS));
+    let netgsm = Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(NETGSM_HOSTS));
+    let x = Arc::new(ScriptedConnector::new(Provider::X).with_hosts(X_HOSTS));
+    let meta_oauth = Arc::new(ScriptedOAuth::new(Provider::Meta));
+    let x_oauth = Arc::new(ScriptedOAuth::new(Provider::X));
+    let registry = ScriptedRegistry::new()
+        .with_connector(meta.clone())
+        .with_connector(netgsm.clone())
+        .with_connector(x)
+        .with_oauth(meta_oauth.clone())
+        .with_oauth(x_oauth.clone());
+    w.deps.apps = Arc::new(FakeAppConfig::with_all_apps());
+    w.deps.connectors = Arc::new(registry);
+    Rig {
+        w,
+        meta,
+        meta_oauth,
+        netgsm,
+        x_oauth,
+    }
+}
+
+fn start(kind: &str) -> StartOAuth {
+    StartOAuth {
+        kind_key: kind.into(),
+    }
+}
+
+/// The `state` query parameter of a started flow's authorize URL.
+fn state_of(out: &StartOut) -> String {
+    query(out, "state").expect("a state")
+}
+
+fn query(out: &StartOut, name: &str) -> Option<String> {
+    Url::parse(&out.authorize_url)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.into_owned())
+}
+
+/// A long-lived Meta user token.
+fn user_token(token: &str) -> Credential {
+    Credential::OAuth {
+        access_token: token.into(),
+        refresh_token: Some("EAAB-refresh".into()),
+        expires_at: Some(FIXED_NOW + Duration::days(60)),
+        scopes: vec!["pages_manage_posts".into()],
+    }
+}
+
+fn page_asset(id: &str, name: &str, token: &str) -> Asset {
+    Asset {
+        kind_key: "facebook_page".into(),
+        external_id: id.into(),
+        name: name.into(),
+        credential: Credential::PageToken {
+            page_id: id.into(),
+            token: token.into(),
+        },
+        public: json!({ "category": "Cafe" }),
+    }
+}
+
+/// A probe that succeeded and names `account`.
+fn ok_probe(account: &str) -> ProbeResult {
+    ProbeResult::success(42, json!({ "account_id": account, "followers": 120 }))
+}
+
+fn code<T: std::fmt::Debug>(r: Result<T, AppError>) -> ErrorCode {
+    err(r).code
+}
+
+impl Rig {
+    /// The principal behind a fresh session of `email`, an owner the support world registered.
+    async fn principal_of(&self, email: &str) -> Principal {
+        self.principal_with(email, "correct horse battery").await
+    }
+
+    /// The principal behind a fresh session of `email` signing in with `password`.
+    async fn principal_with(&self, email: &str, password: &str) -> Principal {
+        let session = auth::login(
+            &self.w.deps,
+            LoginInput {
+                email: email.into(),
+                password: password.into(),
+            },
+        )
+        .await
+        .unwrap();
+        auth::resolve_session(&self.w.deps, &session.token)
+            .await
+            .unwrap()
+    }
+
+    async fn owner(&self) -> Principal {
+        self.principal_of("owner@acme.example").await
+    }
+
+    async fn start(&self, kind: &str) -> StartOut {
+        connector::start_oauth(&self.w.deps, &self.w.owner_ctx, start(kind))
+            .await
+            .unwrap()
+    }
+
+    async fn complete_as(
+        &self,
+        deps: &Deps,
+        principal: &Principal,
+        state: &str,
+        code: &str,
+    ) -> Result<PendingAssetsOut, AppError> {
+        connector::complete_oauth(
+            deps,
+            CompleteOAuth {
+                state: state.into(),
+                code: code.into(),
+                principal,
+            },
+        )
+        .await
+    }
+
+    /// Starts a Facebook Page flow and completes it as the owner with `assets`.
+    async fn completed_with(&self, assets: Vec<Asset>) -> (StartOut, PendingAssetsOut) {
+        let out = self.start("facebook_page").await;
+        self.meta_oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+        self.meta_oauth.push_assets(Ok(assets));
+        let owner = self.owner().await;
+        let pending = self
+            .complete_as(&self.w.deps, &owner, &state_of(&out), "code-1")
+            .await
+            .unwrap();
+        (out, pending)
+    }
+
+    async fn confirm(&self, pending: &PendingAssetsOut, selected: &[&str]) -> Vec<CapabilityOut> {
+        connector::confirm_assets(
+            &self.w.deps,
+            &self.w.owner_ctx,
+            ConfirmAssets {
+                pending_id: pending.pending_id,
+                selected: selected.iter().map(|s| (*s).to_owned()).collect(),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Connects the page `page-1` ("Kahve") through OAuth, its first probe succeeding.
+    async fn connect_page(&self) -> Capability {
+        let (_, pending) = self
+            .completed_with(vec![page_asset("page-1", "Kahve", "EAAB-page-1")])
+            .await;
+        self.meta.push_probe(ok_probe("page-1"));
+        let mut out = self.confirm(&pending, &["page-1"]).await;
+        assert_eq!(out.len(), 1);
+        out.remove(0).capability
+    }
+
+    async fn probe(&self, id: CapabilityId) -> ProbeOut {
+        connector::probe(&self.w.deps, &self.w.owner_ctx, id)
+            .await
+            .unwrap()
+    }
+
+    /// Capability `id` as stored (its derived fields, `has_sealed_config` and the budget links,
+    /// are not filled in: [`Rig::stored`] has the sealed bytes).
+    fn capability(&self, id: CapabilityId) -> Capability {
+        self.stored(id).capability
+    }
+
+    fn stored(&self, id: CapabilityId) -> jt_testkit::fakes::StoredCapability {
+        self.w
+            .uow
+            .snapshot()
+            .capabilities
+            .into_iter()
+            .find(|c| c.capability.id == id)
+            .expect("the capability")
+    }
+
+    /// The credential sealed for capability `id`, opened.
+    fn sealed_credential(&self, id: CapabilityId) -> Credential {
+        let sealed = self.stored(id).sealed.expect("sealed credentials");
+        let plain = PlainSecretBox.open(self.w.ws, &sealed).unwrap();
+        serde_json::from_slice(&plain).unwrap()
+    }
+
+    fn pending_rows(&self) -> Vec<OAuthPendingRow> {
+        self.w.uow.snapshot().oauth_pending
+    }
+}
+
+/// Asserts that `text` holds none of [`SECRETS`].
+fn assert_no_secret(what: &str, text: &str) {
+    for secret in SECRETS {
+        assert!(!text.contains(secret), "{what} leaks {secret}: {text}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// start_oauth
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+
+    // Without the provider's app, nothing can start: CONFLICT, nothing written.
+    let mut bare = r.w.deps.clone();
+    bare.apps = Arc::new(FakeAppConfig::default());
+    for kind in ["facebook_page", "instagram", "x"] {
+        let e = err(connector::start_oauth(&bare, o, start(kind)).await);
+        assert_eq!(e.code, ErrorCode::Conflict, "{kind}");
+        assert_eq!(e.message, "provider app not configured", "{kind}");
+    }
+    // Instagram Login runs under the Instagram app; the other Meta kinds under the Meta app.
+    let mut no_instagram = FakeAppConfig::with_all_apps();
+    no_instagram.instagram = None;
+    let mut partial = r.w.deps.clone();
+    partial.apps = Arc::new(no_instagram);
+    assert_eq!(
+        code(connector::start_oauth(&partial, o, start("instagram")).await),
+        ErrorCode::Conflict
+    );
+    assert!(r.pending_rows().is_empty());
+
+    // Only capabilities.manage starts a flow; kinds without an OAuth provider are refused.
+    let rep = r.w.member("rep").await;
+    assert_forbidden(
+        &err(connector::start_oauth(&r.w.deps, &rep, start("facebook_page")).await),
+        "capabilities.manage",
+    );
+    for kind in [
+        "nope",
+        "sms_line",
+        "netgsm_pbx",
+        "mailbox",
+        "phone",
+        "claude_code",
+    ] {
+        let e = err(connector::start_oauth(&r.w.deps, o, start(kind)).await);
+        assert_invalid(&e, "kind_key");
+    }
+    assert!(r.pending_rows().is_empty());
+
+    // Meta: the URL of its provider for the Meta app, back to the panel's callback, no PKCE.
+    let out = r.start("facebook_page").await;
+    assert_eq!(out.expires_at, FIXED_NOW + Duration::minutes(10));
+    assert_eq!(query(&out, "client_id").as_deref(), Some("meta-app-id"));
+    assert_eq!(
+        query(&out, "redirect_uri").as_deref(),
+        Some("https://panel.test/api/connectors/oauth/callback/meta")
+    );
+    assert_eq!(query(&out, "code_challenge"), None);
+    let state = state_of(&out);
+    let key = PlainSecretBox
+        .hmac_key(r.w.ws, OAUTH_STATE_PURPOSE)
+        .unwrap();
+    let signed = OAuthState::verify(&state, &key, FIXED_NOW).unwrap();
+    assert_eq!(signed.workspace_id, r.w.ws);
+    assert_eq!(signed.provider, Provider::Meta);
+    assert_eq!(signed.kind_key, "facebook_page");
+    assert_eq!(signed.issued_at, FIXED_NOW);
+
+    let rows = r.pending_rows();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.id, out.pending_id);
+    assert_eq!(row.workspace_id, r.w.ws);
+    assert_eq!(row.provider, Provider::Meta);
+    assert_eq!(row.kind_key, "facebook_page");
+    assert_eq!(row.state_hash, hash_token(&state));
+    assert_eq!(row.started_by, r.w.owner);
+    assert_eq!(row.capability_id, None);
+    assert_eq!(row.pkce_verifier_sealed, None);
+    assert_eq!(row.assets_sealed, None);
+    assert_eq!(row.assets_public, json!([]));
+    assert!(row.expires_at >= out.expires_at);
+
+    // Instagram Login uses the Instagram app; Instagram messaging the Meta app.
+    let ig = r.start("instagram").await;
+    assert_eq!(query(&ig, "client_id").as_deref(), Some("instagram-app-id"));
+    let dm = r.start("instagram_dm").await;
+    assert_eq!(query(&dm, "client_id").as_deref(), Some("meta-app-id"));
+
+    // X: PKCE; the verifier is sealed with the flow and travels neither in the state nor in
+    // the URL, which carries only its S256 challenge.
+    let x = r.start("x").await;
+    assert_eq!(query(&x, "client_id").as_deref(), Some("x-client-id"));
+    assert_eq!(
+        query(&x, "redirect_uri").as_deref(),
+        Some("https://panel.test/api/connectors/oauth/callback/x")
+    );
+    assert_eq!(query(&x, "code_challenge_method").as_deref(), Some("S256"));
+    let challenge = query(&x, "code_challenge").unwrap();
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.id == x.pending_id)
+        .unwrap();
+    let verifier: Zeroizing<Vec<u8>> = PlainSecretBox
+        .open(r.w.ws, row.pkce_verifier_sealed.as_ref().unwrap())
+        .unwrap();
+    let verifier = String::from_utf8(verifier.to_vec()).unwrap();
+    assert!(!verifier.is_empty());
+    assert_eq!(pkce_challenge_s256(&verifier), challenge);
+    assert!(!x.authorize_url.contains(&verifier));
+    assert!(!state_of(&x).contains(&verifier));
+    assert_eq!(r.x_oauth.calls().len(), 1);
+
+    // Each start is ledgered, about its flow.
+    let entries = r.w.entries("connector.oauth_started");
+    assert_eq!(entries.len(), 4);
+    assert_eq!(
+        entries[0].payload,
+        json!({ "provider": "meta", "kind_key": "facebook_page" })
+    );
+    let subject = entries[0].subject.as_ref().unwrap();
+    assert_eq!(
+        (subject.kind.as_str(), subject.id.clone()),
+        ("oauth_pending", out.pending_id.to_string())
+    );
+    assert_eq!(
+        entries[3].payload,
+        json!({ "provider": "x", "kind_key": "x" })
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// complete_oauth
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn state_cannot_be_reused_or_completed_by_another_workspace() {
+    let r = rig().await;
+    let out = r.start("facebook_page").await;
+    let state = state_of(&out);
+
+    // Beta's owner, signed in to Beta, cannot complete Acme's flow; the provider is not asked.
+    let (beta, _) = r.w.other_workspace().await;
+    let stranger = r.principal_of("owner@beta.example").await;
+    assert_eq!(stranger.current_workspace, Some(beta));
+    let e = err(r.complete_as(&r.w.deps, &stranger, &state, "code-1").await);
+    assert_eq!(e.code, ErrorCode::Forbidden);
+    // Nor can a session without a current workspace, nor a tampered state.
+    let mut adrift = r.owner().await;
+    adrift.current_workspace = None;
+    assert_eq!(
+        code(r.complete_as(&r.w.deps, &adrift, &state, "code-1").await),
+        ErrorCode::Forbidden
+    );
+    let owner = r.owner().await;
+    let (payload, _) = state.split_once('.').unwrap();
+    let forged = format!("{payload}.{}", "0".repeat(64));
+    assert_eq!(
+        code(r.complete_as(&r.w.deps, &owner, &forged, "code-1").await),
+        ErrorCode::Forbidden
+    );
+    assert_eq!(
+        code(
+            r.complete_as(&r.w.deps, &owner, "not-a-state", "code-1")
+                .await
+        ),
+        ErrorCode::Forbidden
+    );
+    // A member of Acme without capabilities.manage cannot either.
+    r.w.member("rep").await;
+    // The support world's members sign in with the password "pw".
+    let rep = r.principal_with("rep@acme.example", "pw").await;
+    assert_forbidden(
+        &err(r.complete_as(&r.w.deps, &rep, &state, "code-1").await),
+        "capabilities.manage",
+    );
+    assert_eq!(r.meta_oauth.calls().len(), 1, "only the authorize URL");
+
+    // The owner completes it once.
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+    r.meta_oauth
+        .push_assets(Ok(vec![page_asset("page-1", "Kahve", "EAAB-page-1")]));
+    let done = r
+        .complete_as(&r.w.deps, &owner, &state, "code-1")
+        .await
+        .unwrap();
+    assert_eq!(done.pending_id, out.pending_id);
+    assert_eq!(
+        done.assets,
+        vec![AssetPublic {
+            kind_key: "facebook_page".into(),
+            external_id: "page-1".into(),
+            name: "Kahve".into(),
+            public: json!({ "category": "Cafe" }),
+        }]
+    );
+    assert_eq!(
+        r.meta_oauth.calls()[1],
+        OAuthCall::Exchange {
+            client_id: "meta-app-id".into(),
+            redirect: Url::parse("https://panel.test/api/connectors/oauth/callback/meta").unwrap(),
+            code: "code-1".into(),
+            pkce_verifier: None,
+        }
+    );
+
+    // A second completion of the same state is refused, and the provider is not asked again.
+    assert_eq!(
+        code(r.complete_as(&r.w.deps, &owner, &state, "code-2").await),
+        ErrorCode::Forbidden
+    );
+    assert_eq!(r.meta_oauth.calls().len(), 3);
+
+    // A state is refused ten minutes after it was issued.
+    let late = r.start("facebook_page").await;
+    let mut later = r.w.deps.clone();
+    later.clock = Arc::new(FixedClock(FIXED_NOW + Duration::minutes(11)));
+    assert_eq!(
+        code(
+            r.complete_as(&later, &owner, &state_of(&late), "code-1")
+                .await
+        ),
+        ErrorCode::Forbidden
+    );
+
+    // Once confirmed, the flow is gone: its state cannot be completed again.
+    r.meta.push_probe(ok_probe("page-1"));
+    r.confirm(&done, &["page-1"]).await;
+    assert_eq!(
+        code(r.complete_as(&r.w.deps, &owner, &state, "code-2").await),
+        ErrorCode::Forbidden
+    );
+    // Nothing but the confirmed page was ever created.
+    assert_eq!(r.w.uow.snapshot().capabilities.len(), 1);
+    assert_eq!(r.w.entries("connector.oauth_completed").len(), 1);
+    assert_eq!(
+        r.w.entries("connector.oauth_completed")[0].payload,
+        json!({ "provider": "meta", "assets": 1 })
+    );
+}
+
+#[tokio::test]
+async fn complete_oauth_maps_provider_errors() {
+    let r = rig().await;
+    let owner = r.owner().await;
+    let cases = [
+        (
+            Err(ConnectorError::auth(
+                "the code access_token=EAAB-user-1 expired",
+            )),
+            None,
+            ErrorCode::Validation,
+            "auth",
+            false,
+        ),
+        (
+            Err(ConnectorError::permission("missing pages_show_list")),
+            None,
+            ErrorCode::Validation,
+            "permission",
+            false,
+        ),
+        (
+            Err(ConnectorError::permanent("app is in development mode")),
+            None,
+            ErrorCode::Validation,
+            "permanent",
+            false,
+        ),
+        (
+            Err(ConnectorError::throttle(Some(Duration::seconds(30)))),
+            None,
+            ErrorCode::Internal,
+            "throttle",
+            true,
+        ),
+        (
+            Err(ConnectorError::transient("connection reset")),
+            None,
+            ErrorCode::Internal,
+            "transient",
+            true,
+        ),
+        // The exchange succeeds and listing the assets fails.
+        (
+            Ok(user_token("EAAB-user-1")),
+            Some(ConnectorError::permission("missing business_management")),
+            ErrorCode::Validation,
+            "permission",
+            false,
+        ),
+    ];
+    for (exchange, listing, expected, kind, retryable) in cases {
+        let out = r.start("facebook_page").await;
+        let failing = exchange
+            .as_ref()
+            .err()
+            .cloned()
+            .or(listing.clone())
+            .unwrap();
+        r.meta_oauth.push_exchange(exchange);
+        if let Some(e) = listing {
+            r.meta_oauth.push_assets(Err(e));
+        }
+        let e = err(r
+            .complete_as(&r.w.deps, &owner, &state_of(&out), "code-1")
+            .await);
+        assert_eq!(e.code, expected, "{kind}: {e:?}");
+        assert_eq!(e.details["provider_error"], kind, "{e:?}");
+        assert_eq!(
+            e.details["reason"],
+            json!(failing.reason()),
+            "the redacted reason: {e:?}"
+        );
+        assert_eq!(
+            e.details.get("retryable").and_then(Value::as_bool),
+            retryable.then_some(true),
+            "{e:?}"
+        );
+        assert_no_secret("the error", &serde_json::to_string(&e).unwrap());
+        // Nothing was stored with the flow.
+        let row = r
+            .pending_rows()
+            .into_iter()
+            .find(|p| p.id == out.pending_id)
+            .unwrap();
+        assert_eq!(row.assets_sealed, None);
+    }
+    let throttled = r.start("facebook_page").await;
+    r.meta_oauth
+        .push_exchange(Err(ConnectorError::throttle(Some(Duration::seconds(30)))));
+    let e = err(r
+        .complete_as(&r.w.deps, &owner, &state_of(&throttled), "code-1")
+        .await);
+    assert_eq!(e.details["retry_after_s"], 30);
+    assert!(r.w.entries("connector.oauth_completed").is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// confirm_assets
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn confirm_seals_credentials_and_outputs_never_contain_them() {
+    let r = rig().await;
+    let started = r.start("facebook_page").await;
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-1")));
+    r.meta_oauth.push_assets(Ok(vec![
+        page_asset("page-1", "Kahve", "EAAB-page-1"),
+        page_asset("page-2", "Çay Evi", "EAAB-page-2"),
+    ]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&started), "code-1")
+        .await
+        .unwrap();
+    // The assets are stored sealed with the flow; their public facts in the clear.
+    let row = r.pending_rows().into_iter().next().unwrap();
+    let sealed = PlainSecretBox
+        .open(r.w.ws, row.assets_sealed.as_ref().unwrap())
+        .unwrap();
+    assert!(String::from_utf8_lossy(&sealed).contains("EAAB-page-1"));
+    assert_eq!(
+        row.assets_public,
+        serde_json::to_value(&pending.assets).unwrap()
+    );
+    assert_no_secret(
+        "the pending row's public facts",
+        &row.assets_public.to_string(),
+    );
+    assert_no_secret("the pending row's Debug", &format!("{row:?}"));
+
+    r.meta.push_probe(ok_probe("page-1"));
+    r.meta.push_probe(ok_probe("page-2"));
+    let created = r.confirm(&pending, &["page-1", "page-2"]).await;
+    assert_eq!(created.len(), 2);
+    for (out, (id, name, token)) in created.iter().zip([
+        ("page-1", "Kahve", "EAAB-page-1"),
+        ("page-2", "Çay Evi", "EAAB-page-2"),
+    ]) {
+        let c = &out.capability;
+        assert_eq!(c.kind_key, "facebook_page");
+        assert_eq!(c.reach, Reach::Connector);
+        assert_eq!(c.external_id.as_deref(), Some(id));
+        assert_eq!(c.name, name);
+        // Probed at once: verified on the probe's evidence.
+        assert_eq!(c.status, StoredStatus::Verified);
+        assert_eq!(out.effective_status, EffectiveStatus::Verified);
+        assert_eq!(c.last_verified_at, Some(FIXED_NOW));
+        assert_eq!(c.evidence.as_ref().unwrap().text, "probe");
+        assert!(c.has_sealed_config);
+        let public = &c.connector_public;
+        assert_eq!(public["provider"], "meta");
+        assert_eq!(public["name"], name);
+        assert_eq!(public["hosts"], json!(META_HOSTS));
+        assert_eq!(
+            public["access"],
+            json!({ "kind": "page_token", "page_id": id })
+        );
+        assert_eq!(public["asset"], json!({ "category": "Cafe" }));
+        assert_eq!(public["health"]["ok"], true);
+        assert_eq!(public["reconnect_required"], false);
+        assert_eq!(
+            r.sealed_credential(c.id),
+            Credential::PageToken {
+                page_id: id.into(),
+                token: token.into(),
+            }
+        );
+    }
+    // The probe reached each page with its own credential and public fields.
+    let calls = r.meta.calls();
+    assert_eq!(calls.len(), 2);
+    assert!(matches!(
+        &calls[0],
+        ConnectorCall::Probe { credential: Credential::PageToken { token, .. }, .. }
+            if token == "EAAB-page-1"
+    ));
+    // The flow is gone; the hosts are allowed for the workspace.
+    assert!(r.pending_rows().is_empty());
+    let allowed: Vec<HostCall> = META_HOSTS
+        .iter()
+        .map(|h| HostCall::Allow(r.w.ws, (*h).to_owned()))
+        .collect();
+    assert_eq!(r.w.hosts.calls()[..2], allowed[..]);
+
+    // Each connection is ledgered without a secret.
+    let connected = r.w.entries("connector.connected");
+    assert_eq!(connected.len(), 2);
+    assert_eq!(
+        connected[0].payload,
+        json!({ "kind_key": "facebook_page", "external_id": "page-1" })
+    );
+    assert_eq!(
+        connected[0].subject.as_ref().unwrap().id,
+        created[0].capability.id.to_string()
+    );
+    assert_eq!(r.w.entries("connector.probe").len(), 2);
+
+    // Nothing that comes out holds a secret.
+    let health = connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap();
+    for (what, text) in [
+        ("start", wire(&started)),
+        ("pending assets", wire(&pending)),
+        ("created", wire(&created)),
+        ("created Debug", format!("{created:?}")),
+        ("health", wire(&health)),
+        ("ledger", wire(&r.w.ledger(""))),
+    ] {
+        assert_no_secret(what, &text);
+    }
+}
+
+#[tokio::test]
+async fn confirm_rejects_unknown_and_duplicate_assets() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let confirm = |pending_id, selected: &[&str]| ConfirmAssets {
+        pending_id,
+        selected: selected.iter().map(|s| (*s).to_owned()).collect(),
+    };
+
+    // Before the provider has called back, there is nothing to confirm.
+    let early = r.start("facebook_page").await;
+    assert_eq!(
+        code(connector::confirm_assets(&r.w.deps, o, confirm(early.pending_id, &["page-1"])).await),
+        ErrorCode::Conflict
+    );
+
+    let (_, pending) = r
+        .completed_with(vec![
+            page_asset("page-1", "Kahve", "EAAB-page-1"),
+            page_asset("page-2", "Çay Evi", "EAAB-page-2"),
+        ])
+        .await;
+    // Choosing nothing, or an asset the flow did not find.
+    assert_invalid(
+        &err(connector::confirm_assets(&r.w.deps, o, confirm(pending.pending_id, &[])).await),
+        "selected",
+    );
+    let e = err(connector::confirm_assets(
+        &r.w.deps,
+        o,
+        confirm(pending.pending_id, &["page-1", "page-9"]),
+    )
+    .await);
+    assert_invalid(&e, "selected");
+    assert_eq!(e.details["unknown"], json!(["page-9"]));
+
+    // An account a live capability of the kind already holds: CONFLICT, and nothing is created.
+    capabilities::declare(
+        &r.w.deps,
+        o,
+        DeclareInput {
+            external_id: Some("page-2".into()),
+            ..declaring("facebook_page", "Çay Evi elle")
+        },
+    )
+    .await
+    .unwrap();
+    let e = err(connector::confirm_assets(
+        &r.w.deps,
+        o,
+        confirm(pending.pending_id, &["page-1", "page-2"]),
+    )
+    .await);
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert_eq!(
+        e.details,
+        json!({ "kind_key": "facebook_page", "external_id": "page-2" })
+    );
+    assert_eq!(r.w.uow.snapshot().capabilities.len(), 1);
+    assert!(r.w.entries("connector.connected").is_empty());
+    assert!(r.meta.calls().is_empty(), "nothing was probed");
+
+    // Only capabilities.manage confirms; an unknown flow is NOT_FOUND.
+    let rep = r.w.member("rep").await;
+    assert_forbidden(
+        &err(
+            connector::confirm_assets(&r.w.deps, &rep, confirm(pending.pending_id, &["page-1"]))
+                .await,
+        ),
+        "capabilities.manage",
+    );
+    assert_eq!(
+        code(
+            connector::confirm_assets(
+                &r.w.deps,
+                o,
+                confirm(jt_app::ports::OAuthPendingId::new_v7(), &["page-1"])
+            )
+            .await
+        ),
+        ErrorCode::NotFound
+    );
+    // A flow past its time is refused.
+    let stale = at(o, FIXED_NOW + Duration::hours(1));
+    assert_eq!(
+        code(
+            connector::confirm_assets(&r.w.deps, &stale, confirm(pending.pending_id, &["page-1"]))
+                .await
+        ),
+        ErrorCode::Conflict
+    );
+
+    // The flow survived every refusal: the owner can still confirm what is free, once.
+    r.meta.push_probe(ok_probe("page-1"));
+    let created = r.confirm(&pending, &["page-1"]).await;
+    assert_eq!(created.len(), 1);
+    assert_eq!(
+        code(
+            connector::confirm_assets(&r.w.deps, o, confirm(pending.pending_id, &["page-1"])).await
+        ),
+        ErrorCode::NotFound
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// set_credentials
+// ---------------------------------------------------------------------------------------------
+
+fn netgsm_sms(password: &str) -> CredentialInput {
+    CredentialInput::NetgsmSms {
+        usercode: "8508850000".into(),
+        password: password.into(),
+        msgheader: "KAHVE".into(),
+    }
+}
+
+fn creating(kind: &str, name: &str, credential: CredentialInput) -> SetCredentials {
+    SetCredentials {
+        capability_id: None,
+        kind_key: Some(kind.into()),
+        name: Some(name.into()),
+        external_id: None,
+        credential,
+    }
+}
+
+#[tokio::test]
+async fn set_credentials_seals_probes_and_binds_the_account() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+
+    // A new SMS line: no external id given, so the probe's account becomes it.
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    let line = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating("sms_line", "SMS hattı", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap();
+    let c = &line.capability;
+    assert_eq!(c.kind_key, "sms_line");
+    assert_eq!(c.name, "SMS hattı");
+    assert_eq!(c.external_id.as_deref(), Some("KAHVE"));
+    assert_eq!(c.status, StoredStatus::Verified);
+    assert!(c.has_sealed_config);
+    assert_eq!(c.connector_public["provider"], "netgsm");
+    assert_eq!(c.connector_public["hosts"], json!(NETGSM_HOSTS));
+    assert_eq!(
+        c.connector_public["access"],
+        json!({ "kind": "netgsm_sms", "usercode": "8508850000", "msgheader": "KAHVE" })
+    );
+    assert_eq!(
+        r.sealed_credential(c.id),
+        Credential::NetgsmSms {
+            usercode: "8508850000".into(),
+            password: "netgsm-pass-1".into(),
+            msgheader: "KAHVE".into(),
+        }
+    );
+    assert_eq!(
+        r.w.entries("connector.credentials_set")[0].payload,
+        json!({ "kind_key": "sms_line", "by_agent": false })
+    );
+    assert_eq!(
+        r.w.entries("connector.probe")[0].payload,
+        json!({ "ok": true })
+    );
+    for host in NETGSM_HOSTS {
+        assert!(
+            r.w.hosts
+                .calls()
+                .contains(&HostCall::Allow(r.w.ws, (*host).to_owned())),
+            "{host}"
+        );
+    }
+
+    // An agent holding capabilities.manage may enter credentials the owner gave it; the ledger
+    // says an agent did. A given external id must be the probe's account, else the line is
+    // unreachable, never verified.
+    let agent = r.w.agent(&["capabilities.manage"]).await;
+    r.netgsm.push_probe(ok_probe("OTHER"));
+    let mismatched = connector::set_credentials(
+        &r.w.deps,
+        &agent,
+        SetCredentials {
+            external_id: Some("KAHVE2".into()),
+            ..creating("sms_line", "İkinci hat", netgsm_sms("netgsm-pass-1"))
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(mismatched.capability.status, StoredStatus::Unreachable);
+    assert_eq!(mismatched.capability.external_id.as_deref(), Some("KAHVE2"));
+    assert_eq!(
+        mismatched.capability.connector_public["health"]["error_kind"],
+        "permission"
+    );
+    assert_eq!(
+        r.w.entries("connector.credentials_set")[1].payload,
+        json!({ "kind_key": "sms_line", "by_agent": true })
+    );
+
+    // An account another live capability of the kind holds is not taken over.
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    let twin = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating("sms_line", "Kopya hat", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(twin.capability.status, StoredStatus::Unreachable);
+    assert_eq!(twin.capability.external_id, None);
+
+    // A PBX capability declared by hand takes credentials: locked, sealed, probed, updated now.
+    let declared = capabilities::declare(
+        &r.w.deps,
+        o,
+        DeclareInput {
+            external_id: Some("pbx-user".into()),
+            ..declaring("netgsm_pbx", "Santral")
+        },
+    )
+    .await
+    .unwrap()
+    .capability;
+    r.netgsm.push_probe(ok_probe("pbx-user"));
+    let later = at(o, FIXED_NOW + Duration::minutes(5));
+    let pbx = connector::set_credentials(
+        &r.w.deps,
+        &later,
+        SetCredentials {
+            capability_id: Some(declared.id),
+            kind_key: None,
+            name: None,
+            external_id: None,
+            credential: CredentialInput::NetgsmPbx {
+                username: "pbx-user".into(),
+                password: "pbx-pass-1".into(),
+                trunk: Some("8508850000".into()),
+                pbxnum: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(pbx.capability.id, declared.id);
+    assert_eq!(pbx.capability.status, StoredStatus::Verified);
+    assert_eq!(pbx.capability.updated_at, FIXED_NOW + Duration::minutes(5));
+    assert_eq!(pbx.capability.name, "Santral");
+    // A verified capability keeps its credentials: CONFLICT.
+    assert_eq!(
+        code(
+            connector::set_credentials(
+                &r.w.deps,
+                o,
+                SetCredentials {
+                    capability_id: Some(declared.id),
+                    kind_key: None,
+                    name: None,
+                    external_id: None,
+                    credential: CredentialInput::NetgsmPbx {
+                        username: "pbx-user".into(),
+                        password: "pbx-pass-1".into(),
+                        trunk: None,
+                        pbxnum: None,
+                    },
+                },
+            )
+            .await
+        ),
+        ErrorCode::Conflict
+    );
+
+    // A pasted Meta page token needs the page id; with it, the page is reached as a page.
+    r.meta.push_probe(ok_probe("page-7"));
+    let pasted = connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            external_id: Some("page-7".into()),
+            ..creating(
+                "facebook_page",
+                "Yapıştırılan sayfa",
+                CredentialInput::MetaToken {
+                    access_token: "EAAB-page-2".into(),
+                },
+            )
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(pasted.capability.status, StoredStatus::Verified);
+    assert_eq!(
+        r.sealed_credential(pasted.capability.id),
+        Credential::PageToken {
+            page_id: "page-7".into(),
+            token: "EAAB-page-2".into(),
+        }
+    );
+    assert_no_secret("the ledger", &wire(&r.w.ledger("")));
+    assert_no_secret(
+        "the outputs",
+        &wire(&[&line, &mismatched, &twin, &pbx, &pasted]),
+    );
+}
+
+#[tokio::test]
+async fn set_credentials_rejects_malformed_shapes() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+
+    // From JSON: unknown shapes, unknown and missing fields are refused, and the error never
+    // repeats a value.
+    for body in [
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_iys", "usercode": "u", "password": "netgsm-pass-1", "brand_code": "b" } }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "password": "netgsm-pass-1", "msgheader": "K", "extra": "x" } }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "msgheader": "K" } }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm_sms", "usercode": "u", "password": 98765432, "msgheader": "K" } }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": "netgsm-pass-1" }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "password": "netgsm-pass-1" } }),
+        json!({ "kind_key": "sms_line", "name": "H", "credential": { "kind": "netgsm-pass-1", "password": "x" } }),
+        json!({ "kind_key": "sms_line", "name": "H", "password": "netgsm-pass-1", "credential": { "kind": "netgsm_sms", "usercode": "u", "password": "netgsm-pass-1", "msgheader": "K" } }),
+    ] {
+        let e: AppError = serde_json::from_value::<SetCredentials>(body.clone())
+            .expect_err(&body.to_string())
+            .into();
+        assert_eq!(e.code, ErrorCode::Validation);
+        assert_no_secret("a parse error", &e.message);
+        assert!(!e.message.contains("98765432"), "{}", e.message);
+    }
+    // The same input, well formed, reads; its Debug masks the secret.
+    let input: SetCredentials = serde_json::from_value(json!({
+        "kind_key": "sms_line",
+        "name": "H",
+        "credential": { "kind": "netgsm_sms", "usercode": "u", "password": "netgsm-pass-1", "msgheader": "K" }
+    }))
+    .unwrap();
+    assert_no_secret("SetCredentials Debug", &format!("{input:?}"));
+    for credential in [
+        CredentialInput::NetgsmPbx {
+            username: "u".into(),
+            password: "pbx-pass-1".into(),
+            trunk: None,
+            pbxnum: None,
+        },
+        CredentialInput::MetaToken {
+            access_token: "EAAB-page-1".into(),
+        },
+    ] {
+        assert_no_secret("CredentialInput Debug", &format!("{credential:?}"));
+    }
+
+    // Values: blank, over-long or control characters, the wrong shape for the kind, a page token
+    // without its page, and a target that is neither or both.
+    let cases: Vec<(SetCredentials, &str)> = vec![
+        (
+            creating("sms_line", "H", netgsm_sms("  ")),
+            "credential.password",
+        ),
+        (
+            creating("sms_line", "H", netgsm_sms(&"p".repeat(5_000))),
+            "credential.password",
+        ),
+        (
+            creating(
+                "sms_line",
+                "H",
+                CredentialInput::NetgsmSms {
+                    usercode: "u\nx".into(),
+                    password: "netgsm-pass-1".into(),
+                    msgheader: "K".into(),
+                },
+            ),
+            "credential.usercode",
+        ),
+        (
+            creating(
+                "sms_line",
+                "H",
+                CredentialInput::MetaToken {
+                    access_token: "EAAB-page-1".into(),
+                },
+            ),
+            "credential.kind",
+        ),
+        (
+            creating("netgsm_pbx", "H", netgsm_sms("netgsm-pass-1")),
+            "credential.kind",
+        ),
+        (
+            creating(
+                "facebook_page",
+                "H",
+                CredentialInput::MetaToken {
+                    access_token: "EAAB-page-1".into(),
+                },
+            ),
+            "external_id",
+        ),
+        (
+            SetCredentials {
+                kind_key: None,
+                ..creating("sms_line", "H", netgsm_sms("netgsm-pass-1"))
+            },
+            "kind_key",
+        ),
+        (
+            SetCredentials {
+                name: None,
+                ..creating("sms_line", "H", netgsm_sms("netgsm-pass-1"))
+            },
+            "name",
+        ),
+        (
+            SetCredentials {
+                capability_id: Some(CapabilityId::new_v7()),
+                ..creating("sms_line", "H", netgsm_sms("netgsm-pass-1"))
+            },
+            "capability_id",
+        ),
+        (
+            creating("sms_line", "  ", netgsm_sms("netgsm-pass-1")),
+            "name",
+        ),
+    ];
+    for (input, field) in cases {
+        let e = err(connector::set_credentials(&r.w.deps, o, input).await);
+        assert_invalid(&e, field);
+        assert_no_secret("a refusal", &wire(&e));
+    }
+    // Only capabilities.manage enters credentials.
+    let reader = r.w.agent(&["workspace.read"]).await;
+    assert_forbidden(
+        &err(connector::set_credentials(
+            &r.w.deps,
+            &reader,
+            creating("sms_line", "H", netgsm_sms("netgsm-pass-1")),
+        )
+        .await),
+        "capabilities.manage",
+    );
+    // Nothing was written and no provider was asked.
+    assert!(r.w.uow.snapshot().capabilities.is_empty());
+    assert!(r.netgsm.calls().is_empty());
+    assert!(r.meta.calls().is_empty());
+    assert!(r.w.ledger("connector.").is_empty());
+}
+
+#[tokio::test]
+async fn set_credentials_refuses_oauth_only_kinds() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let token = || CredentialInput::MetaToken {
+        access_token: "EAAB-page-1".into(),
+    };
+    // X connects only through OAuth: neither a new capability nor a declared one.
+    let e = err(connector::set_credentials(&r.w.deps, o, creating("x", "X hesabı", token())).await);
+    assert_invalid(&e, "kind_key");
+    assert_eq!(e.message, "this kind connects through OAuth");
+    let declared = r.w.declare("x", "X hesabı").await.capability.id;
+    let e = err(connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            capability_id: Some(declared),
+            kind_key: None,
+            name: None,
+            external_id: None,
+            credential: token(),
+        },
+    )
+    .await);
+    assert_invalid(&e, "kind_key");
+    // Kinds no provider serves, and capabilities reached otherwise, take no credentials.
+    for kind in ["mailbox", "phone", "claude_code", "nope"] {
+        let e = err(connector::set_credentials(&r.w.deps, o, creating(kind, "H", token())).await);
+        assert_invalid(&e, "kind_key");
+    }
+    let phone = r.w.declare("phone", "Telefon").await.capability.id;
+    let e = err(connector::set_credentials(
+        &r.w.deps,
+        o,
+        SetCredentials {
+            capability_id: Some(phone),
+            kind_key: None,
+            name: None,
+            external_id: None,
+            credential: token(),
+        },
+    )
+    .await);
+    assert_invalid(&e, "kind_key");
+    // An unknown capability is NOT_FOUND; a retired one CONFLICT.
+    let unknown = SetCredentials {
+        capability_id: Some(CapabilityId::new_v7()),
+        kind_key: None,
+        name: None,
+        external_id: None,
+        credential: netgsm_sms("netgsm-pass-1"),
+    };
+    assert_eq!(
+        code(connector::set_credentials(&r.w.deps, o, unknown).await),
+        ErrorCode::NotFound
+    );
+    let line = r.w.declare("sms_line", "Hat").await.capability.id;
+    capabilities::retire(&r.w.deps, o, line, true)
+        .await
+        .unwrap();
+    let retired = SetCredentials {
+        capability_id: Some(line),
+        kind_key: None,
+        name: None,
+        external_id: None,
+        credential: netgsm_sms("netgsm-pass-1"),
+    };
+    assert_eq!(
+        code(connector::set_credentials(&r.w.deps, o, retired).await),
+        ErrorCode::Conflict
+    );
+    assert!(r.netgsm.calls().is_empty());
+    assert!(r.w.ledger("connector.").is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// probe
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn probe_auth_failure_marks_unreachable_and_pending_lists_reconnect() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    let phone = r.w.declare("phone", "Telefon").await.capability;
+    let before = r.w.ledger("").len();
+
+    // The token expired: unreachable, and the owner must reconnect it.
+    r.meta.push_probe(ProbeResult::failure(
+        55,
+        ConnectorError::auth("token expired"),
+    ));
+    let later = FIXED_NOW + Duration::hours(1);
+    let out = connector::probe(&r.w.deps, &at(&r.w.owner_ctx, later), page.id)
+        .await
+        .unwrap();
+    assert_eq!(out.status, StoredStatus::Unreachable);
+    assert!(!out.result.ok);
+    assert_eq!(out.result.error_kind.as_deref(), Some("auth"));
+    assert_eq!(out.result.error_reason.as_deref(), Some("token expired"));
+    assert_eq!(out.result.latency_ms, 55);
+    let c = r.capability(page.id);
+    assert_eq!(c.status, StoredStatus::Unreachable);
+    assert_eq!(c.connector_public["reconnect_required"], true);
+    assert_eq!(
+        c.connector_public["health"],
+        json!({
+            "ok": false,
+            "at": later.format(&Rfc3339).unwrap(),
+            "latency_ms": 55,
+            "error_kind": "auth",
+        })
+    );
+    // The last verification stands as it was; the credential is kept for the record.
+    assert_eq!(c.last_verified_at, Some(FIXED_NOW));
+    assert!(r.stored(page.id).sealed.is_some());
+    let runs = r.w.uow.snapshot().probe_runs;
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[1].error_kind.as_deref(), Some("auth"));
+    assert_eq!(
+        r.w.entries("connector.probe").last().unwrap().payload,
+        json!({ "ok": false, "error_kind": "auth" })
+    );
+    // Nothing else changed: one ledger entry, the other capability untouched.
+    assert_eq!(r.w.ledger("").len(), before + 1);
+    assert_eq!(r.capability(phone.id), phone);
+
+    // What is pending asks for the reconnection, among the most urgent items.
+    let pending = work::pending(&r.w.deps, &r.w.owner_ctx).await.unwrap();
+    let reconnect = pending
+        .items
+        .iter()
+        .find(|i| matches!(i.kind, WorkKind::ReconnectConnector { .. }))
+        .expect("a reconnection is pending");
+    assert_eq!(reconnect.priority, 1);
+    assert_eq!(
+        reconnect.kind,
+        WorkKind::ReconnectConnector {
+            capability_id: page.id,
+            name: "Kahve".into(),
+        }
+    );
+
+    // The same failure again changes no status: no ledger entry.
+    r.meta.push_probe(ProbeResult::failure(
+        50,
+        ConnectorError::auth("token expired"),
+    ));
+    r.probe(page.id).await;
+    assert_eq!(r.w.entries("connector.probe").len(), 2);
+
+    // A busy provider says nothing about the connection either way.
+    r.meta
+        .push_probe(ProbeResult::failure(5, ConnectorError::throttle(None)));
+    assert_eq!(r.probe(page.id).await.status, StoredStatus::Unreachable);
+    assert_eq!(
+        r.capability(page.id).connector_public["reconnect_required"],
+        true
+    );
+
+    // An agent may probe with workspace.read alone; a success clears the reconnection.
+    let reader = r.w.agent(&["workspace.read"]).await;
+    r.meta.push_probe(ok_probe("page-1"));
+    let out = connector::probe(&r.w.deps, &reader, page.id).await.unwrap();
+    assert_eq!(out.status, StoredStatus::Verified);
+    assert_eq!(out.result.facts["followers"], 120);
+    let c = r.capability(page.id);
+    assert_eq!(c.connector_public["reconnect_required"], false);
+    assert_eq!(
+        r.w.entries("connector.probe").last().unwrap().payload,
+        json!({ "ok": true })
+    );
+    let pending = work::pending(&r.w.deps, &r.w.owner_ctx).await.unwrap();
+    assert!(
+        !pending
+            .items
+            .iter()
+            .any(|i| matches!(i.kind, WorkKind::ReconnectConnector { .. }))
+    );
+    // Without workspace.read, no probe.
+    let blind = r.w.agent(&["capabilities.manage"]).await;
+    assert_forbidden(
+        &err(connector::probe(&r.w.deps, &blind, page.id).await),
+        "workspace.read",
+    );
+}
+
+#[tokio::test]
+async fn probe_refuses_an_account_mismatch() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+
+    // The credential reaches another account: never verified, whatever the provider says.
+    r.meta.push_probe(ok_probe("page-2"));
+    let out = r.probe(page.id).await;
+    assert!(!out.result.ok);
+    assert_eq!(out.result.error_kind.as_deref(), Some("permission"));
+    assert_eq!(out.result.error_reason.as_deref(), Some("account mismatch"));
+    assert_eq!(out.status, StoredStatus::Unreachable);
+    let c = r.capability(page.id);
+    assert_eq!(c.external_id.as_deref(), Some("page-1"));
+    // Not an expired login: no reconnection is asked for.
+    assert_eq!(c.connector_public["reconnect_required"], false);
+    let run = r.w.uow.snapshot().probe_runs.last().cloned().unwrap();
+    assert!(!run.ok);
+    assert_eq!(run.error_kind.as_deref(), Some("permission"));
+
+    // A success that names no account cannot confirm the binding either.
+    r.meta
+        .push_probe(ProbeResult::success(10, json!({ "followers": 3 })));
+    let out = r.probe(page.id).await;
+    assert!(!out.result.ok);
+    assert_eq!(out.result.error_kind.as_deref(), Some("permission"));
+    assert_eq!(out.status, StoredStatus::Unreachable);
+
+    // The right account verifies it again.
+    r.meta.push_probe(ok_probe("page-1"));
+    assert_eq!(r.probe(page.id).await.status, StoredStatus::Verified);
+
+    // What cannot be probed: an agent or device capability, a connector without credentials,
+    // one whose provider has no adapter here, a retired one, an unknown id.
+    let o = &r.w.owner_ctx;
+    let phone = r.w.declare("phone", "Telefon").await.capability.id;
+    assert_eq!(
+        code(connector::probe(&r.w.deps, o, phone).await),
+        ErrorCode::Conflict
+    );
+    let bare =
+        r.w.declare("facebook_page", "Elle sayfa")
+            .await
+            .capability
+            .id;
+    let e = err(connector::probe(&r.w.deps, o, bare).await);
+    assert_eq!(
+        (e.code, e.message.as_str()),
+        (ErrorCode::Conflict, "no credentials")
+    );
+    let mailbox = r.w.declare("mailbox", "Kutu").await.capability.id;
+    assert_eq!(
+        code(connector::probe(&r.w.deps, o, mailbox).await),
+        ErrorCode::Conflict
+    );
+    let mut no_adapters = r.w.deps.clone();
+    no_adapters.connectors = Arc::new(ScriptedRegistry::new());
+    assert_eq!(
+        code(connector::probe(&no_adapters, o, page.id).await),
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        code(connector::probe(&r.w.deps, o, CapabilityId::new_v7()).await),
+        ErrorCode::NotFound
+    );
+    capabilities::retire(&r.w.deps, o, page.id, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        code(connector::probe(&r.w.deps, o, page.id).await),
+        ErrorCode::Conflict
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// health
+// ---------------------------------------------------------------------------------------------
+
+/// A secret box that seals and derives keys as [`PlainSecretBox`] does but refuses to open
+/// anything, so a use case that opens a credential fails.
+struct NeverOpens;
+
+impl SecretBox for NeverOpens {
+    fn seal(&self, ws: WorkspaceId, plaintext: &[u8]) -> Result<Vec<u8>, AppError> {
+        PlainSecretBox.seal(ws, plaintext)
+    }
+
+    fn open(&self, _ws: WorkspaceId, _sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, AppError> {
+        panic!("health must not open a sealed credential")
+    }
+
+    fn hmac_key(&self, ws: WorkspaceId, purpose: &str) -> Result<Zeroizing<[u8; 32]>, AppError> {
+        PlainSecretBox.hmac_key(ws, purpose)
+    }
+}
+
+#[tokio::test]
+async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
+    let r = rig().await;
+    // An Instagram account connected through Instagram Login: its token expires in 60 days.
+    let started = r.start("instagram").await;
+    let expires = FIXED_NOW + Duration::days(60);
+    let ig_token = Credential::OAuth {
+        access_token: "IGQ-ig-token".into(),
+        refresh_token: None,
+        expires_at: Some(expires),
+        scopes: vec!["instagram_business_basic".into()],
+    };
+    r.meta_oauth.push_exchange(Ok(ig_token.clone()));
+    r.meta_oauth.push_assets(Ok(vec![Asset {
+        kind_key: "instagram".into(),
+        external_id: "ig-1".into(),
+        name: "@kahve".into(),
+        credential: ig_token,
+        public: json!({ "username": "kahve" }),
+    }]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&started), "code-1")
+        .await
+        .unwrap();
+    r.meta.push_probe(ok_probe("ig-1"));
+    let ig = r.confirm(&pending, &["ig-1"]).await.remove(0).capability;
+    assert_eq!(
+        ig.connector_public["access"],
+        json!({
+            "kind": "oauth",
+            "expires_at": expires.format(&Rfc3339).unwrap(),
+            "scopes": ["instagram_business_basic"],
+        })
+    );
+    // A page whose last probe failed, a mailbox never probed, a device and a retired page.
+    let page = r.connect_page().await;
+    r.meta
+        .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
+    r.probe(page.id).await;
+    let mailbox = r.w.declare("mailbox", "Kutu").await.capability;
+    r.w.declare("phone", "Telefon").await;
+    let gone = r.w.declare("facebook_page", "Eski").await.capability.id;
+    capabilities::retire(&r.w.deps, &r.w.owner_ctx, gone, true)
+        .await
+        .unwrap();
+
+    let mut deps = r.w.deps.clone();
+    deps.seal = Arc::new(NeverOpens);
+    let reader = r.w.agent(&["workspace.read"]).await;
+    let health = connector::health(&deps, &reader).await.unwrap();
+    assert_eq!(
+        health,
+        vec![
+            ConnectorHealth {
+                capability_id: ig.id,
+                kind_key: "instagram".into(),
+                name: "@kahve".into(),
+                provider: Some(Provider::Meta),
+                status: EffectiveStatus::Verified,
+                last_probe_at: Some(FIXED_NOW),
+                ok: Some(true),
+                error_kind: None,
+                token_expires_at: Some(expires),
+                reconnect_required: false,
+            },
+            ConnectorHealth {
+                capability_id: page.id,
+                kind_key: "facebook_page".into(),
+                name: "Kahve".into(),
+                provider: Some(Provider::Meta),
+                status: EffectiveStatus::Unreachable,
+                last_probe_at: Some(FIXED_NOW),
+                ok: Some(false),
+                error_kind: Some("auth".into()),
+                token_expires_at: None,
+                reconnect_required: true,
+            },
+            ConnectorHealth {
+                capability_id: mailbox.id,
+                kind_key: "mailbox".into(),
+                name: "Kutu".into(),
+                provider: None,
+                status: EffectiveStatus::Declared,
+                last_probe_at: None,
+                ok: None,
+                error_kind: None,
+                token_expires_at: None,
+                reconnect_required: false,
+            },
+        ]
+    );
+    let wire_health = serde_json::to_value(&health[0]).unwrap();
+    assert_eq!(
+        wire_health["token_expires_at"],
+        expires.format(&Rfc3339).unwrap()
+    );
+    // Reading needs workspace.read.
+    let blind = r.w.agent(&["capabilities.manage"]).await;
+    assert_forbidden(
+        &err(connector::health(&r.w.deps, &blind).await),
+        "workspace.read",
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// reconnect
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reconnect_replaces_the_sealed_credential_on_confirm() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let page = r.connect_page().await;
+    r.meta
+        .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
+    r.probe(page.id).await;
+
+    // A new flow bound to the capability.
+    let out = connector::reconnect(&r.w.deps, o, page.id).await.unwrap();
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.id == out.pending_id)
+        .unwrap();
+    assert_eq!(row.capability_id, Some(page.id));
+    assert_eq!(row.kind_key, "facebook_page");
+    assert_eq!(
+        r.w.entries("connector.oauth_started")
+            .last()
+            .unwrap()
+            .payload,
+        json!({
+            "provider": "meta",
+            "kind_key": "facebook_page",
+            "capability_id": page.id,
+        })
+    );
+
+    // Signing in again finds the page among others; only the bound page is offered.
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth.push_assets(Ok(vec![
+        page_asset_v2(),
+        page_asset("page-3", "Başka", "EAAB-page-2"),
+    ]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&out), "code-2")
+        .await
+        .unwrap();
+    assert_eq!(
+        pending
+            .assets
+            .iter()
+            .map(|a| a.external_id.as_str())
+            .collect::<Vec<_>>(),
+        ["page-1"]
+    );
+    // Choosing another account is refused.
+    let e = err(connector::confirm_assets(
+        &r.w.deps,
+        o,
+        ConfirmAssets {
+            pending_id: pending.pending_id,
+            selected: vec!["page-3".into()],
+        },
+    )
+    .await);
+    assert_invalid(&e, "selected");
+
+    // Confirming renews the capability: no new one, the new credential sealed, probed at once.
+    r.meta.push_probe(ok_probe("page-1"));
+    let renewed = r.confirm(&pending, &["page-1"]).await;
+    assert_eq!(renewed.len(), 1);
+    assert_eq!(renewed[0].capability.id, page.id);
+    assert_eq!(renewed[0].capability.status, StoredStatus::Verified);
+    assert_eq!(
+        renewed[0].capability.connector_public["reconnect_required"],
+        false
+    );
+    assert_eq!(r.w.uow.snapshot().capabilities.len(), 1);
+    assert_eq!(
+        r.sealed_credential(page.id),
+        Credential::PageToken {
+            page_id: "page-1".into(),
+            token: "EAAB-page-1-v2".into(),
+        }
+    );
+    assert!(r.pending_rows().iter().all(|p| p.id != pending.pending_id));
+    assert_eq!(
+        r.w.entries("connector.connected").last().unwrap().payload,
+        json!({ "kind_key": "facebook_page", "external_id": "page-1", "reconnected": true })
+    );
+
+    // Signing in with an account that does not reach the page: VALIDATION, nothing stored.
+    let again = connector::reconnect(&r.w.deps, o, page.id).await.unwrap();
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth
+        .push_assets(Ok(vec![page_asset("page-3", "Başka", "EAAB-page-2")]));
+    let e = err(r
+        .complete_as(&r.w.deps, &owner, &state_of(&again), "code-2")
+        .await);
+    assert_eq!(e.code, ErrorCode::Validation);
+    assert_eq!(e.details["reason"], "account_mismatch");
+
+    // NetGSM reconnects by credentials; capabilities reached otherwise, unknown or retired ones
+    // cannot be reconnected.
+    r.netgsm.push_probe(ok_probe("KAHVE"));
+    let line = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating("sms_line", "Hat", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap()
+    .capability
+    .id;
+    let e = err(connector::reconnect(&r.w.deps, o, line).await);
+    assert_eq!(e.code, ErrorCode::Validation);
+    assert_eq!(e.details["reason"], "use_set_credentials");
+    let phone = r.w.declare("phone", "Telefon").await.capability.id;
+    assert_eq!(
+        code(connector::reconnect(&r.w.deps, o, phone).await),
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        code(connector::reconnect(&r.w.deps, o, CapabilityId::new_v7()).await),
+        ErrorCode::NotFound
+    );
+    let rep = r.w.member("rep").await;
+    assert_forbidden(
+        &err(connector::reconnect(&r.w.deps, &rep, page.id).await),
+        "capabilities.manage",
+    );
+    capabilities::retire(&r.w.deps, o, page.id, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        code(connector::reconnect(&r.w.deps, o, page.id).await),
+        ErrorCode::Conflict
+    );
+}
+
+fn page_asset_v2() -> Asset {
+    page_asset("page-1", "Kahve", "EAAB-page-1-v2")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Retiring, pending work
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn retire_clears_sealed_config() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    r.meta
+        .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
+    r.probe(page.id).await;
+    assert!(r.stored(page.id).sealed.is_some());
+
+    let later = at(&r.w.owner_ctx, FIXED_NOW + Duration::hours(2));
+    let out = capabilities::retire(&r.w.deps, &later, page.id, true)
+        .await
+        .unwrap();
+    assert_eq!(out.capability.status, StoredStatus::Retired);
+    assert!(!out.capability.has_sealed_config);
+    assert_eq!(r.stored(page.id).sealed, None);
+    assert_eq!(out.capability.updated_at, FIXED_NOW + Duration::hours(2));
+    // No reconnection is asked for a retired capability; its health stays for the record.
+    assert_eq!(out.capability.connector_public["reconnect_required"], false);
+    assert_eq!(
+        out.capability.connector_public["health"]["error_kind"],
+        "auth"
+    );
+    // Its hosts leave the tenant tier, since no other capability names them.
+    for host in META_HOSTS {
+        assert!(
+            r.w.hosts
+                .calls()
+                .contains(&HostCall::Revoke(r.w.ws, (*host).to_owned())),
+            "{host}"
+        );
+    }
+    assert!(
+        connector::health(&r.w.deps, &r.w.owner_ctx)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let pending = work::pending(&r.w.deps, &r.w.owner_ctx).await.unwrap();
+    assert!(
+        !pending
+            .items
+            .iter()
+            .any(|i| matches!(i.kind, WorkKind::ReconnectConnector { .. }))
+    );
+    // The retirement's own record is unchanged.
+    assert_eq!(
+        r.w.entries("capability.retire")[0].payload,
+        json!({ "budget_links": 0, "groups": 0, "hosts_revoked": 2 })
+    );
+}
+
+#[tokio::test]
+async fn pending_lists_reconnect_at_priority_one() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    r.w.declare("phone", "Telefon").await;
+    // Marked unreachable by hand: not a login to renew, so no reconnection is asked for.
+    let line = r.w.declare("sms_line", "Hat").await.capability.id;
+    capabilities::mark_unreachable(&r.w.deps, &r.w.owner_ctx, line, "kapalı".into())
+        .await
+        .unwrap();
+    r.meta
+        .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
+    r.probe(page.id).await;
+
+    let pending = work::pending(&r.w.deps, &r.w.owner_ctx).await.unwrap();
+    let reconnects: Vec<&WorkKind> = pending
+        .items
+        .iter()
+        .map(|i| &i.kind)
+        .filter(|k| matches!(k, WorkKind::ReconnectConnector { .. }))
+        .collect();
+    assert_eq!(
+        reconnects,
+        [&WorkKind::ReconnectConnector {
+            capability_id: page.id,
+            name: "Kahve".into(),
+        }]
+    );
+    // Priority 1, ahead of verifying the phone (2); its wire form is stable.
+    let position = pending
+        .items
+        .iter()
+        .position(|i| matches!(i.kind, WorkKind::ReconnectConnector { .. }))
+        .unwrap();
+    let verify = pending
+        .items
+        .iter()
+        .position(|i| matches!(i.kind, WorkKind::VerifyCapability { .. }))
+        .unwrap();
+    assert!(position < verify);
+    let item = serde_json::to_value(&pending.items[position]).unwrap();
+    assert_eq!(item["kind"], "reconnect_connector");
+    assert_eq!(item["capability_id"], json!(page.id));
+    assert_eq!(item["name"], "Kahve");
+    assert_eq!(item["priority"], 1);
+    assert!(
+        item["hint"]
+            .as_str()
+            .unwrap()
+            .contains("jeeta.connector.reconnect")
+    );
+    assert_eq!(
+        item.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["capability_id", "hint", "kind", "name", "priority"]
+    );
+}

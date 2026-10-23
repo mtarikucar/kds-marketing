@@ -9,6 +9,9 @@
 //! - `ConsultStrategy` (priority 1): no strategy at all, or a draft open (not submitted);
 //! - `ApproveStrategy` (1): a submitted draft, for a caller who may approve it (the role owner or
 //!   manager, and `team.manage`, as `strategy.approve` asks);
+//! - `ReconnectConnector` (1): each capability reached through a connector that reads
+//!   `unreachable` because its provider no longer accepts its login (a probe failed with `Auth`:
+//!   `connector_public.reconnect_required`);
 //! - `VerifyCapability` (2): each capability reached through an agent or a device that reads
 //!   `declared` or `stale` (a lapsed verification is asked for again);
 //! - `ConnectConnector` (2): each capability reached through a connector that reads `declared`
@@ -36,7 +39,7 @@ use time::{Duration, OffsetDateTime};
 
 use super::capabilities::CapabilityOut;
 use super::strategy::{self, StrategyOut};
-use super::{Deps, agents, invalid, ledger_entry};
+use super::{Deps, agents, connector, invalid, ledger_entry};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{
@@ -117,6 +120,11 @@ pub enum WorkKind {
     DeclareFirstCapability,
     /// Connect a declared connector capability (M1b sets connectors up).
     ConnectConnector {
+        capability_id: CapabilityId,
+        name: String,
+    },
+    /// Reconnect a connector capability whose credentials its provider no longer accepts.
+    ReconnectConnector {
         capability_id: CapabilityId,
         name: String,
     },
@@ -342,6 +350,22 @@ fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
                     },
                     priority: 2,
                     hint: hint.to_owned(),
+                });
+            }
+            Reach::Connector
+                if status == EffectiveStatus::Unreachable && connector::reconnect_required(c) =>
+            {
+                items.push(WorkItem {
+                    kind: WorkKind::ReconnectConnector {
+                        capability_id: c.id,
+                        name: c.name.clone(),
+                    },
+                    priority: 1,
+                    hint: "Its provider no longer accepts its login: ask the owner to reconnect \
+                           it (jeeta.connector.reconnect gives the sign-in link to hand them; a \
+                           NetGSM line takes new credentials with \
+                           jeeta.connector.set_credentials)."
+                        .to_owned(),
                 });
             }
             Reach::Connector if status == EffectiveStatus::Declared => items.push(WorkItem {

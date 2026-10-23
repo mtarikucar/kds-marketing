@@ -194,7 +194,7 @@ async fn capability_round_trip_keeps_the_sealed_blob_behind_read_sealed() {
         c.read_sealed(ig.id).await.unwrap(),
         Some(b"sealed".to_vec())
     );
-    c.set_sealed(ig.id, None).await.unwrap();
+    c.set_sealed(ig.id, None, at).await.unwrap();
     c.set_status(phone.id, StoredStatus::Retired, at)
         .await
         .unwrap();
@@ -225,6 +225,12 @@ async fn capability_round_trip_keeps_the_sealed_blob_behind_read_sealed() {
 
     // Another workspace sees none of it, and a row for another workspace is INTERNAL.
     let mut t = deps.uow.tenant(other).await.unwrap();
+    assert_eq!(
+        code(t.capabilities().set_sealed(ig.id, None, at).await),
+        ErrorCode::NotFound
+    );
+    drop(t);
+    let mut t = deps.uow.tenant(other).await.unwrap();
     assert_eq!(t.capabilities().find(ig.id).await.unwrap(), None);
     assert_eq!(
         code(t.capabilities().read_sealed(ig.id).await),
@@ -238,6 +244,50 @@ async fn capability_round_trip_keeps_the_sealed_blob_behind_read_sealed() {
     );
 }
 
+/// The repo contract `jt_pg` keeps too: a credential change shows in the capability's update
+/// time, and nothing else about the capability moves.
+#[tokio::test]
+async fn set_sealed_stamps_updated_at() {
+    let (_, deps) = setup();
+    let ws = workspace(&deps, "a").await;
+    let ig = capability(ws, "instagram", Some("ig-1"), FIXED_NOW);
+    insert(&deps, &ig, None).await;
+
+    let sealed_at = FIXED_NOW + Duration::hours(1);
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    t.capabilities()
+        .set_sealed(ig.id, Some(b"v1-sealed".to_vec()), sealed_at)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.capabilities().find(ig.id).await.unwrap(),
+        Some(Capability {
+            has_sealed_config: true,
+            updated_at: sealed_at,
+            ..ig.clone()
+        })
+    );
+    drop(t);
+
+    let cleared_at = sealed_at + Duration::hours(1);
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    t.capabilities()
+        .set_sealed(ig.id, None, cleared_at)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = deps.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.capabilities().find(ig.id).await.unwrap(),
+        Some(Capability {
+            updated_at: cleared_at,
+            ..ig.clone()
+        })
+    );
+    assert_eq!(t.capabilities().read_sealed(ig.id).await.unwrap(), None);
+}
 #[tokio::test]
 async fn same_external_account_twice_is_conflict_until_retired() {
     let (_, deps) = setup();

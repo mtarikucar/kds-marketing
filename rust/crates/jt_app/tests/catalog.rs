@@ -162,6 +162,13 @@ fn catalog_is_the_release_table() {
         ("budget.items.create", Some("jeeta.budget.items_create"), Some(("POST", "/api/budget/items")), false, Risk::Write),
         ("budget.spend.record", Some("jeeta.budget.spend_record"), Some(("POST", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Spend),
         ("budget.spend.list", Some("jeeta.budget.spend_list"), Some(("GET", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Read),
+        ("connector.start_oauth", Some("jeeta.connector.start_oauth"), Some(("POST", "/api/connectors/oauth/start")), false, Risk::Write),
+        ("connector.complete_oauth", None, Some(("GET", "/api/connectors/oauth/callback/{provider}")), true, Risk::Write),
+        ("connector.confirm_assets", Some("jeeta.connector.confirm_assets"), Some(("POST", "/api/connectors/oauth/{pending_id}/confirm")), false, Risk::Write),
+        ("connector.set_credentials", Some("jeeta.connector.set_credentials"), Some(("POST", "/api/connectors/credentials")), false, Risk::Write),
+        ("connector.probe", Some("jeeta.connector.probe"), Some(("POST", "/api/connectors/{capability_id}/probe")), false, Risk::Write),
+        ("connector.health", Some("jeeta.connector.health"), Some(("GET", "/api/connectors/health")), false, Risk::Read),
+        ("connector.reconnect", Some("jeeta.connector.reconnect"), Some(("POST", "/api/connectors/{capability_id}/reconnect")), false, Risk::Write),
         ("work.pending", Some("jeeta.work.pending"), Some(("GET", "/api/work/pending")), false, Risk::Read),
         ("work.checkin", Some("jeeta.work.checkin"), None, false, Risk::Write),
         ("work.set_checkin_interval", Some("jeeta.work.set_checkin_interval"), Some(("PUT", "/api/work/checkin-interval")), false, Risk::Write),
@@ -170,7 +177,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 56);
+    assert_eq!(CATALOG.len(), 63);
     assert!(CATALOG.iter().all(|uc| uc.gate == GateMode::Exempt), "no use case is gated yet");
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG

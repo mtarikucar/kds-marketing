@@ -1178,7 +1178,7 @@ async fn outputs_and_ledger_never_contain_sealed_bytes() {
     {
         let mut t = w.uow.tenant(w.ws).await.unwrap();
         t.capabilities()
-            .set_sealed(inbox, Some(sealed.clone()))
+            .set_sealed(inbox, Some(sealed.clone()), FIXED_NOW)
             .await
             .unwrap();
         t.commit().await.unwrap();

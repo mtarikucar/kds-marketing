@@ -125,6 +125,9 @@ impl OAuthPendingRepo for MemTenant {
         self.call(|this| {
             same_workspace(this.ws, row.workspace_id)?;
             let state = this.state();
+            if let Some(capability) = row.capability_id {
+                ensure_capability(state, this.ws, capability)?;
+            }
             unique(
                 !state
                     .oauth_pending
@@ -154,6 +157,15 @@ impl OAuthPendingRepo for MemTenant {
             .oauth_pending
             .iter()
             .find(|p| p.workspace_id == self.ws && p.state_hash == state_hash)
+            .cloned())
+    }
+
+    async fn lock(&mut self, id: OAuthPendingId) -> Result<Option<OAuthPendingRow>, AppError> {
+        Ok(self
+            .state()
+            .oauth_pending
+            .iter()
+            .find(|p| p.workspace_id == self.ws && p.id == id)
             .cloned())
     }
 

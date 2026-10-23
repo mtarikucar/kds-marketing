@@ -295,6 +295,10 @@ pub struct AssetPublic {
 #[async_trait]
 pub trait Connector: Send + Sync {
     fn provider(&self) -> Provider;
+    /// The hosts the adapter reaches (`host` or `host:port`), as the egress allowlist's fixed
+    /// tier names them for its provider. A capability connected through it names them in
+    /// `connector_public.hosts`, and the workspace's tenant tier is given them.
+    fn hosts(&self) -> &'static [&'static str];
     /// A cheap authenticated call that says whether the capability can be reached. Never fails:
     /// a failure is a [`ProbeResult`] with `ok == false` and its error.
     async fn probe(&self, cred: &Credential, public: &Value) -> ProbeResult;
