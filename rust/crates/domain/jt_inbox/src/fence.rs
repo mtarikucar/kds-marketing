@@ -4,6 +4,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ConvState, JourneyStatus};
 
+/// Sending purpose shared by the domain fence and application inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendIntent {
+    /// Response in an inbound conversation; the application enforces its reply window.
+    Reply,
+    /// Commercial contact requiring permission and no suppression.
+    Commercial,
+}
+
 /// Fresh application snapshot for one queued send.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FenceCtx {
@@ -24,6 +34,12 @@ pub struct FenceCtx {
     pub executor_is_agent: bool,
     /// Whether the capability is currently live.
     pub capability_live: bool,
+    /// Whether commercial contact is suppressed on the contact channel.
+    pub suppressed: bool,
+    /// Whether the latest effective decision permits commercial contact.
+    pub consent_ok: bool,
+    /// Purpose persisted with the outbound message.
+    pub intent: SendIntent,
 }
 
 /// Stable refusal reasons for a send that must not reach the provider.
@@ -48,10 +64,16 @@ pub enum FenceRefusal {
     /// The capability is no longer live.
     #[error("capability_down")]
     CapabilityDown,
+    /// Commercial contact has no effective permission.
+    #[error("IZIN_YOK")]
+    IzinYok,
+    /// Commercial contact is suppressed (same public refusal code as missing permission).
+    #[error("IZIN_YOK")]
+    Suppressed,
 }
 
 /// Check the domain send fence. Human sends ignore holder identity, but obey all other fences.
-/// Reply-window, suppression and consent checks belong to their application use cases.
+/// The application supplies fresh consent/suppression and enforces the Reply time window.
 pub fn may_send(ctx: &FenceCtx, by_agent: bool) -> Result<(), FenceRefusal> {
     if ctx.journey_status == Some(JourneyStatus::Lost) {
         return Err(FenceRefusal::JourneyLost);
@@ -70,6 +92,14 @@ pub fn may_send(ctx: &FenceCtx, by_agent: bool) -> Result<(), FenceRefusal> {
     }
     if !ctx.capability_live {
         return Err(FenceRefusal::CapabilityDown);
+    }
+    if ctx.intent == SendIntent::Commercial {
+        if ctx.suppressed {
+            return Err(FenceRefusal::Suppressed);
+        }
+        if !ctx.consent_ok {
+            return Err(FenceRefusal::IzinYok);
+        }
     }
     Ok(())
 }

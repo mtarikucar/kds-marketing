@@ -21,12 +21,7 @@ use serde_json::{Value, json};
 use time::Duration;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SendIntent {
-    Reply,
-    Commercial,
-}
+pub use jt_inbox::SendIntent;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplyInput {
@@ -225,6 +220,9 @@ async fn fence(
     may_send(
         &FenceCtx {
             journey_status: j.map(|j| j.status),
+            suppressed: false,
+            consent_ok: true,
+            intent: SendIntent::Reply,
             person_erased: person.erased_at.is_some(),
             person_merged: person.merged_into.is_some(),
             conversation_state: c.state.clone(),

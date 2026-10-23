@@ -18,14 +18,14 @@ const DOMAIN_ALLOW: &[&str] = &[
 
 // The connector domain also uses `jt_capability` (capability ids, kinds, statuses and the
 // secret-key predicate), and it computes webhook signatures, the OAuth state's MAC and the PKCE
-// challenge itself (pure functions over bytes, no I/O), so it alone may use the HMAC, SHA-256,
-// base64 and constant-time comparison crates. No cipher: sealing stays behind the `SecretBox`
+// challenge itself (pure functions over bytes, no I/O). HMAC, base64 and constant-time
+// comparison stay connector-only; inbox also uses SHA-256 below. No cipher: sealing stays behind `SecretBox`
 // port.
 const CONNECTOR_EXTRA_ALLOW: &[&str] = &["jt_capability", "hmac", "sha2", "base64", "subtle"];
 
-// Inbox records refer to capabilities and may speak connector domain types. Only this crate
-// gets these additions; the shared domain and application allowlists remain unchanged.
-const INBOX_EXTRA_ALLOW: &[&str] = &["jt_capability", "jt_connector"];
+// Inbox records refer to capabilities and may speak connector domain types. SHA-256 produces
+// pure erasure replay keys; no I/O. The shared domain/application allowlists remain unchanged.
+const INBOX_EXTRA_ALLOW: &[&str] = &["jt_capability", "jt_connector", "sha2"];
 
 /// Every domain crate, with what it may depend on beyond [`DOMAIN_ALLOW`].
 const DOMAIN_CRATES: &[(&str, &[&str])] = &[
@@ -50,16 +50,16 @@ fn domain_crates_depend_only_on_pure_crates() {
 }
 
 /// Read from each domain crate's manifest: the connector and inbox use capability types,
-/// while only the connector uses its crypto crates (so the rule is not vacuous either).
+/// both hash bytes, while the other crypto crates remain connector-only (non-vacuous).
 #[test]
-fn only_connector_and_inbox_use_capability_and_only_connector_uses_crypto() {
+fn only_connector_and_inbox_use_capability_and_sha2_other_crypto_stays_connector_only() {
     for krate in CONNECTOR_EXTRA_ALLOW {
         let users: BTreeSet<&str> = DOMAIN_CRATES
             .iter()
             .map(|(c, _)| *c)
             .filter(|c| direct_deps(c).contains(*krate))
             .collect();
-        let expected = if *krate == "jt_capability" {
+        let expected = if matches!(*krate, "jt_capability" | "sha2") {
             BTreeSet::from(["jt_connector", "jt_inbox"])
         } else {
             BTreeSet::from(["jt_connector"])

@@ -11,6 +11,9 @@ fn fence() -> FenceCtx {
         current_generation: 7,
         executor_is_agent: true,
         capability_live: true,
+        suppressed: false,
+        consent_ok: true,
+        intent: SendIntent::Reply,
     }
 }
 
