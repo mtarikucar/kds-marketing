@@ -3,7 +3,7 @@ use crate::uow::PgTenantRepos;
 use async_trait::async_trait;
 use jt_app::{
     error::AppError,
-    ports::inbox::{ConversationRepo, MAX_INBOX_PAGE},
+    ports::inbox::{ConversationQueue, ConversationRepo, MAX_INBOX_PAGE},
 };
 use jt_capability::CapabilityId;
 use jt_inbox::{ConvState, Conversation, ConversationId, Executor, PersonId};
@@ -21,6 +21,23 @@ fn state_columns(state: &ConvState) -> (&'static str, Option<OffsetDateTime>) {
 }
 #[async_trait]
 impl ConversationRepo for PgTenantRepos {
+    async fn page(
+        &mut self,
+        queue: ConversationQueue,
+        after: Option<(OffsetDateTime, ConversationId)>,
+        limit: u32,
+    ) -> Result<Vec<Conversation>, AppError> {
+        let filter = match queue {
+            ConversationQueue::All => "true",
+            ConversationQueue::Ours => "state='ours'",
+            ConversationQueue::Unassigned => {
+                "executor_kind='human' and executor_user_id is null and state <> 'closed'"
+            }
+            ConversationQueue::Snoozed => "state='snoozed'",
+        };
+        many!(sqlx::query_scalar(&format!("select {ROW} from conversations c where workspace_id=$1 and ({filter}) and ($2::timestamptz is null or (created_at,id)>($2,$3)) order by created_at,id limit $4"))
+            .bind(self.workspace_id().as_uuid()).bind(after.map(|v|v.0)).bind(after.map(|v|v.1.as_uuid())).bind(i64::from(limit.clamp(1,MAX_INBOX_PAGE))),self,Conversation)
+    }
     async fn lock_for_person(&mut self, person: PersonId) -> Result<Vec<Conversation>, AppError> {
         many!(sqlx::query_scalar(&format!("select {ROW} from conversations c where workspace_id=$1 and person_id=$2 order by id for update"))
             .bind(self.workspace_id().as_uuid()).bind(person.as_uuid()),self,Conversation)

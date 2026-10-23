@@ -164,3 +164,71 @@ pub async fn notes_add(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&tasks::add_note(&state.deps, &ctx, id, input).await?)
 }
+
+use jt_app::usecases::inbox::{ConversationId, conversations, replies};
+pub async fn conversations_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(input): ApiQuery<conversations::ListInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&conversations::list(&state.deps, &ctx, input).await?)
+}
+pub async fn conversations_get(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ConversationId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&conversations::get(&state.deps, &ctx, id).await?)
+}
+pub async fn messages_list(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ConversationId>,
+    ApiQuery(input): ApiQuery<conversations::MessagesInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&conversations::messages(&state.deps, &ctx, id, input).await?)
+}
+pub async fn take_over(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ConversationId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&conversations::take_over(&state.deps, &ctx, id).await?)
+}
+pub async fn hand_to_agent(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ConversationId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&conversations::hand_to_agent(&state.deps, &ctx, id).await?)
+}
+pub async fn snooze(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ConversationId>,
+    ApiJson(input): ApiJson<conversations::SnoozeInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&conversations::snooze(&state.deps, &ctx, id, input).await?)
+}
+pub async fn unsnooze(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ConversationId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&conversations::unsnooze(&state.deps, &ctx, id).await?)
+}
+pub async fn close(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ConversationId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&conversations::close(&state.deps, &ctx, id).await?)
+}
+pub async fn reply(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ConversationId>,
+    ApiJson(input): ApiJson<replies::ReplyInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&replies::reply(&state.deps, &ctx, id, input).await?)
+}

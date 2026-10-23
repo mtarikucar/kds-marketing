@@ -112,6 +112,15 @@ fn catalog_is_the_release_table() {
         .map(|uc| (uc.id, uc.mcp_tool, uc.panel_route, uc.panel_only, uc.risk))
         .collect();
     let expected = [
+        ("inbox.conversations.list", Some("jeeta.inbox.conversations_list"), Some(("GET", "/api/inbox/conversations")), false, Risk::Read),
+        ("inbox.conversations.get", Some("jeeta.inbox.conversations_get"), Some(("GET", "/api/inbox/conversations/{conversation_id}")), false, Risk::Read),
+        ("inbox.messages.list", Some("jeeta.inbox.messages_list"), Some(("GET", "/api/inbox/conversations/{conversation_id}/messages")), false, Risk::Read),
+        ("inbox.take_over", Some("jeeta.inbox.take_over"), Some(("POST", "/api/inbox/conversations/{conversation_id}/take-over")), false, Risk::Write),
+        ("inbox.hand_to_agent", Some("jeeta.inbox.hand_to_agent"), Some(("POST", "/api/inbox/conversations/{conversation_id}/hand-to-agent")), false, Risk::Write),
+        ("inbox.snooze", Some("jeeta.inbox.snooze"), Some(("POST", "/api/inbox/conversations/{conversation_id}/snooze")), false, Risk::Write),
+        ("inbox.unsnooze", Some("jeeta.inbox.unsnooze"), Some(("POST", "/api/inbox/conversations/{conversation_id}/unsnooze")), false, Risk::Write),
+        ("inbox.close", Some("jeeta.inbox.close"), Some(("POST", "/api/inbox/conversations/{conversation_id}/close")), false, Risk::Write),
+        ("inbox.reply", Some("jeeta.inbox.reply"), Some(("POST", "/api/inbox/conversations/{conversation_id}/reply")), false, Risk::Write),
         ("inbox.people.search", Some("jeeta.inbox.people_search"), Some(("GET", "/api/inbox/people")), false, Risk::Read),
         ("inbox.people.get", Some("jeeta.inbox.people_get"), Some(("GET", "/api/inbox/people/{person_id}")), false, Risk::Read),
         ("inbox.people.create", Some("jeeta.inbox.people_create"), Some(("POST", "/api/inbox/people")), false, Risk::Write),
@@ -203,7 +212,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 89);
+    assert_eq!(CATALOG.len(), 98);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id.starts_with("inbox.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

@@ -276,6 +276,7 @@ fn every_job_has_a_lock_named_after_it() {
             "purge_raw_bodies",
             "purge_oauth_pending",
             "purge_probe_runs",
+            "outbox_recover",
         ]
     );
     for job in Job::ALL {

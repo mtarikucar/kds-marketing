@@ -76,8 +76,26 @@ pub trait IdentityRepo: Send + Sync {
     async fn move_to(&mut self, from: PersonId, to: PersonId) -> Result<(), AppError>;
 }
 
+/// Filter before applying the cursor and page limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationQueue {
+    #[default]
+    Ours,
+    Unassigned,
+    Snoozed,
+    All,
+}
+
 #[async_trait]
 pub trait ConversationRepo: Send + Sync {
+    /// Stable ascending (created_at,id) keyset page; queue filtering precedes the limit.
+    async fn page(
+        &mut self,
+        queue: ConversationQueue,
+        after: Option<(OffsetDateTime, ConversationId)>,
+        limit: u32,
+    ) -> Result<Vec<Conversation>, AppError>;
     /// All conversations for terminal/snooze effects, locked in id order; never page effects.
     async fn lock_for_person(&mut self, person: PersonId) -> Result<Vec<Conversation>, AppError>;
     async fn get(&mut self, id: ConversationId) -> Result<Option<Conversation>, AppError>;
@@ -115,6 +133,14 @@ pub trait ConversationRepo: Send + Sync {
 
 #[async_trait]
 pub trait MessageRepo: Send + Sync {
+    async fn get(&mut self, id: MessageId) -> Result<Option<Message>, AppError>;
+    /// Stable ascending (at,id) keyset page.
+    async fn page(
+        &mut self,
+        conversation: ConversationId,
+        after: Option<(OffsetDateTime, MessageId)>,
+        limit: u32,
+    ) -> Result<Vec<Message>, AppError>;
     /// A replay of (conversation,external_id) returns None. A conflicting id is CONFLICT.
     async fn insert_if_new(&mut self, message: Message) -> Result<Option<MessageId>, AppError>;
     async fn list(
@@ -325,6 +351,14 @@ pub trait ConsumptionRepo: Send + Sync {
 
 #[async_trait]
 pub trait RequestKeyRepo: Send + Sync {
+    /// Replace only the matching response without extending the original 24-hour expiry.
+    /// A completion for an expired/reused key cannot overwrite the new request's response.
+    async fn complete(
+        &mut self,
+        key: &str,
+        expected: Value,
+        response: Value,
+    ) -> Result<bool, AppError>;
     /// Live strictly before at+24h. The supplied time comes from the application's clock.
     async fn get(&mut self, key: &str, now: OffsetDateTime) -> Result<Option<Value>, AppError>;
     /// First writer wins until expiry; an expired entry is replaced atomically. False means

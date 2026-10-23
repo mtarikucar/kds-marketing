@@ -10,6 +10,22 @@ pub fn input(action: &str) -> Value {
         &["channel", "value"],
     );
     match action {
+        "conversations.list" => object(
+            json!({"queue":{"type":"string","enum":["ours","unassigned","snoozed","all"],"default":"ours"},"cursor":{"type":["string","null"]},"limit":{"type":["integer","null"],"minimum":1,"maximum":499,"default":50}}),
+            &[],
+        ),
+        "messages.list" => object(
+            json!({"cursor":{"type":["string","null"]},"limit":{"type":["integer","null"],"minimum":1,"maximum":499,"default":50}}),
+            &[],
+        ),
+        "snooze" => object(
+            json!({"until":{"type":"string","format":"date-time"}}),
+            &["until"],
+        ),
+        "reply" => object(
+            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]}}),
+            &["text", "intent"],
+        ),
         "merges.apply" => object(json!({"keep":{"type":"string","format":"uuid"}}), &["keep"]),
         "merges.undo" => object(json!({"confirm":{"type":"boolean","default":false}}), &[]),
         "tasks.create" => object(
@@ -67,6 +83,8 @@ pub fn input(action: &str) -> Value {
 pub fn tool(action: &str) -> Value {
     let mut out = input(action);
     let id = match action {
+        "conversations.get" | "messages.list" | "take_over" | "hand_to_agent" | "snooze"
+        | "unsnooze" | "close" | "reply" => Some("conversation_id"),
         "people.get" | "identities.add" | "journeys.open" => Some("person_id"),
         "journeys.get"
         | "journeys.assign_owner"

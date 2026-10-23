@@ -26,8 +26,8 @@ impl MergeRepo for PgTenantRepos {
     async fn snapshot(&mut self, a: PersonId, b: PersonId) -> Result<MergeSnapshot, AppError> {
         let ws = self.workspace_id().as_uuid();
         let people = vec![a.as_uuid(), b.as_uuid()];
-        let journeys:Vec<JourneyParent>=many!(sqlx::query_scalar("select to_jsonb(j) from journeys j where workspace_id=$1 and person_id=any($2) order by id for update").bind(ws).bind(&people),self,JourneyParent)?;
         let conversations:Vec<Conversation>=many!(sqlx::query_scalar(&format!("select {} from conversations c where workspace_id=$1 and person_id=any($2) order by id for update",super::conversations::ROW)).bind(ws).bind(&people),self,Conversation)?;
+        let journeys:Vec<JourneyParent>=many!(sqlx::query_scalar("select to_jsonb(j) from journeys j where workspace_id=$1 and person_id=any($2) order by id for update").bind(ws).bind(&people),self,JourneyParent)?;
         let journey_ids: Vec<Uuid> = journeys.iter().map(|j| j.id.as_uuid()).collect();
         let conversation_ids: Vec<Uuid> = conversations.iter().map(|c| c.id.as_uuid()).collect();
         let latest_write_at:OffsetDateTime=sqlx::query_scalar("select max(updated_at) from (select updated_at from people where workspace_id=$1 and id=any($2) union all select updated_at from journeys where workspace_id=$1 and person_id=any($2) union all select updated_at from conversations where workspace_id=$1 and person_id=any($2)) aggregates").bind(ws).bind(&people).fetch_one(self.tx.conn()).await.map_err(|e|map_sqlx(e,"merge checkpoint"))?;

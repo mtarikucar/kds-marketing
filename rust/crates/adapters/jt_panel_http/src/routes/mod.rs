@@ -38,6 +38,24 @@ use crate::state::AppState;
 /// Every route the panel HTTP adapter serves, as (method, path), in axum's path syntax as
 /// `CATALOG.panel_route` writes it. The twin-rule test compares it with the catalog.
 pub const ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/inbox/conversations"),
+    ("GET", "/api/inbox/conversations/{conversation_id}"),
+    ("GET", "/api/inbox/conversations/{conversation_id}/messages"),
+    (
+        "POST",
+        "/api/inbox/conversations/{conversation_id}/take-over",
+    ),
+    (
+        "POST",
+        "/api/inbox/conversations/{conversation_id}/hand-to-agent",
+    ),
+    ("POST", "/api/inbox/conversations/{conversation_id}/snooze"),
+    (
+        "POST",
+        "/api/inbox/conversations/{conversation_id}/unsnooze",
+    ),
+    ("POST", "/api/inbox/conversations/{conversation_id}/close"),
+    ("POST", "/api/inbox/conversations/{conversation_id}/reply"),
     ("GET", "/api/inbox/merges"),
     ("POST", "/api/inbox/merges/{merge_id}/apply"),
     ("POST", "/api/inbox/merges/{merge_id}/undo"),
@@ -198,6 +216,60 @@ where
 /// The JSON API's routes.
 pub fn api_routes() -> Vec<ApiRoute> {
     vec![
+        api_route(
+            "GET",
+            "/inbox/conversations",
+            "inbox.conversations.list",
+            inbox::conversations_list,
+        ),
+        api_route(
+            "GET",
+            "/inbox/conversations/{conversation_id}",
+            "inbox.conversations.get",
+            inbox::conversations_get,
+        ),
+        api_route(
+            "GET",
+            "/inbox/conversations/{conversation_id}/messages",
+            "inbox.messages.list",
+            inbox::messages_list,
+        ),
+        api_route(
+            "POST",
+            "/inbox/conversations/{conversation_id}/take-over",
+            "inbox.take_over",
+            inbox::take_over,
+        ),
+        api_route(
+            "POST",
+            "/inbox/conversations/{conversation_id}/hand-to-agent",
+            "inbox.hand_to_agent",
+            inbox::hand_to_agent,
+        ),
+        api_route(
+            "POST",
+            "/inbox/conversations/{conversation_id}/snooze",
+            "inbox.snooze",
+            inbox::snooze,
+        ),
+        api_route(
+            "POST",
+            "/inbox/conversations/{conversation_id}/unsnooze",
+            "inbox.unsnooze",
+            inbox::unsnooze,
+        ),
+        api_route(
+            "POST",
+            "/inbox/conversations/{conversation_id}/close",
+            "inbox.close",
+            inbox::close,
+        ),
+        api_route(
+            "POST",
+            "/inbox/conversations/{conversation_id}/reply",
+            "inbox.reply",
+            inbox::reply,
+        ),
         api_route(
             "GET",
             "/inbox/merges",

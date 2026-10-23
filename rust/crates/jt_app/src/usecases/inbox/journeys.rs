@@ -185,6 +185,14 @@ pub async fn report(
     // Covers workspace-wide key races even when two requests name different journeys.
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
+    // Reply phases and terminal effects share conversation → journey lock order.
+    let person = r
+        .journeys()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such journey"))?
+        .person_id;
+    r.conversations().lock_for_person(person).await?;
     let mut journey = r
         .journeys()
         .lock(id)

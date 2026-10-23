@@ -236,7 +236,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (79 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (88 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -253,7 +253,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 79 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 88 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -891,6 +891,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
+| `outbox_recover` | 1 dakika | 2 dakikadan eski `sending` → `unknown` (yeniden göndermez); 5 dakikadan eski `queued` kayıtlarını iki çitli gönderim adımına verir | `jeeta.jobs.outbox_recover` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -1180,7 +1181,7 @@ Crate sınırları iki yerden denetlenir; ikisi de `make check` içinde çalış
 
 ## Gelen kutusu çekirdeği (M2a)
 
-Aşağıdaki 19 işlem panel ve MCP üzerinde aynı JSON gövdesini döndürür. Hepsi etkin çalışma
+Aşağıdaki 28 işlem panel ve MCP üzerinde aynı JSON gövdesini döndürür. Hepsi etkin çalışma
 alanı ve onaylı strateji ister. Günlük çalışma `inbox.work`; sözlük, sahip atama ve
 birleştirme işlemleri `inbox.manage` gerektirir.
 
@@ -1205,6 +1206,27 @@ birleştirme işlemleri `inbox.manage` gerektirir.
 | Görevi tamamla | `POST /api/inbox/tasks/{task_id}/complete` | `jeeta.inbox.tasks_complete` | WRITE / `inbox.work` |
 | Görev kuyruğunu oku (`queue`, `assignee`) | `GET /api/inbox/tasks` | `jeeta.inbox.tasks_list` | READ / `inbox.work` |
 | Not ekle (`{text}`) | `POST /api/inbox/journeys/{journey_id}/notes` | `jeeta.inbox.notes_add` | WRITE / `inbox.work` |
+| `conversations.list` | `GET /api/inbox/conversations` | `jeeta.inbox.conversations_list` | READ / `inbox.work` |
+| `conversations.get` | `GET /api/inbox/conversations/{conversation_id}` | `jeeta.inbox.conversations_get` | READ / `inbox.work` |
+| `messages.list` | `GET /api/inbox/conversations/{conversation_id}/messages` | `jeeta.inbox.messages_list` | READ / `inbox.work` |
+| `take_over` | `POST /api/inbox/conversations/{conversation_id}/take-over` | `jeeta.inbox.take_over` | WRITE / `inbox.work` |
+| `hand_to_agent` | `POST /api/inbox/conversations/{conversation_id}/hand-to-agent` | `jeeta.inbox.hand_to_agent` | WRITE / `inbox.work` |
+| `snooze` | `POST /api/inbox/conversations/{conversation_id}/snooze` | `jeeta.inbox.snooze` | WRITE / `inbox.work` |
+| `unsnooze` | `POST /api/inbox/conversations/{conversation_id}/unsnooze` | `jeeta.inbox.unsnooze` | WRITE / `inbox.work` |
+| `close` | `POST /api/inbox/conversations/{conversation_id}/close` | `jeeta.inbox.close` | WRITE / `inbox.work` |
+| `reply` | `POST /api/inbox/conversations/{conversation_id}/reply` | `jeeta.inbox.reply` | WRITE / `inbox.work` |
+
+`reply`: `{text,intent:"reply",request_key?}`. M2a'da `commercial` doğrulama hatasıdır.
+Yanıt penceresi aynı konuşmadaki son gelen mesajdan itibaren 24 saattir. İki gönderim çiti
+kayıp yolculuk, silinmiş/birleştirilmiş kişi, canlı kabiliyet ve yürütücü neslini denetler.
+İnsan yanıtı yürütücüyü değiştirmez. Niyet, sağlayıcı çağrısından önce kalıcıdır; çağrı sırasında
+veritabanı kilidi tutulmaz. Sonuç ve sistem `replied` olayı birlikte kaydedilir. Çağrı sırasında
+terminal olan yolculuk değişmez; kabul edilmiş mesaj `sent` kalır ve `inbox.sent_after_terminal`
+yazılır. Geç kabul, daha yeni gelen mesajı veya operatörün konuşma durumunu değiştirmez; gönderim
+zamanı ilk denemenin zamanıdır. Kurtarma, göndermeden önce strateji onayını yeniden denetler.
+Belirsiz gönderim `unknown` olur ve otomatik yeniden gönderilmez. Aynı çalışma alanındaki
+`request_key` 24 saat boyunca kayıtlı yanıtı döndürür; sürmekte olan isteğin yanıtı `queued` olabilir.
+`SendIntent` şimdilik uygulamanın `usecases::inbox::replies` modülündedir.
 
 `people.create`: `{display_name, identities:[{channel,value,capability_id?}], source}`.
 Telefonlar SMS/WhatsApp/arama arasında ortak, opak kimlikler kabiliyetin dış hesap kimliğiyle
@@ -1240,3 +1262,5 @@ bir birleştirme önceki geri alma korumasını silemez.
 Görevlerde varsayılan `queue=due_24h`, şu andan 24 saat sonrasına kadar olanları (iki sınır dahil)
 gösterir; `overdue` şu andan önceki görevleri, `all` zaman sınırı olmadan görevleri getirir.
 `assignee` isteğe bağlı kullanıcı filtresidir. Not metni işlem defterine yazılmaz.
+
+Conversation and message lists return `{items,next_cursor}` with stable keyset pagination (default 50, maximum 499). Pass `next_cursor` unchanged to continue. Conversation queues: `ours`, `unassigned` (human executor without a user, excluding closed), `snoozed`, `all`. Takeover requires a human principal and increments the executor generation; hand-to-agent also increments it. Snooze accepts a future RFC3339 `until`; unsnooze returns to `ours`. Reply accepts `{text,intent:"reply",request_key?}`; commercial intent is reserved for M2b. Human replies preserve the executor.

@@ -195,6 +195,15 @@ const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk
 /// Every use case of this release. Inbox operations require an approved strategy.
 #[rustfmt::skip]
 pub static CATALOG: &[UseCase] = &[
+    twin("inbox.conversations.list", GateMode::Gated, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),
+    twin("inbox.conversations.get", GateMode::Gated, "jeeta.inbox.conversations_get", ("GET", "/api/inbox/conversations/{conversation_id}"), Read),
+    twin("inbox.messages.list", GateMode::Gated, "jeeta.inbox.messages_list", ("GET", "/api/inbox/conversations/{conversation_id}/messages"), Read),
+    twin("inbox.take_over", GateMode::Gated, "jeeta.inbox.take_over", ("POST", "/api/inbox/conversations/{conversation_id}/take-over"), Write),
+    twin("inbox.hand_to_agent", GateMode::Gated, "jeeta.inbox.hand_to_agent", ("POST", "/api/inbox/conversations/{conversation_id}/hand-to-agent"), Write),
+    twin("inbox.snooze", GateMode::Gated, "jeeta.inbox.snooze", ("POST", "/api/inbox/conversations/{conversation_id}/snooze"), Write),
+    twin("inbox.unsnooze", GateMode::Gated, "jeeta.inbox.unsnooze", ("POST", "/api/inbox/conversations/{conversation_id}/unsnooze"), Write),
+    twin("inbox.close", GateMode::Gated, "jeeta.inbox.close", ("POST", "/api/inbox/conversations/{conversation_id}/close"), Write),
+    twin("inbox.reply", GateMode::Gated, "jeeta.inbox.reply", ("POST", "/api/inbox/conversations/{conversation_id}/reply"), Write),
     twin("inbox.people.search", GateMode::Gated, "jeeta.inbox.people_search", ("GET", "/api/inbox/people"), Read),
     twin("inbox.people.get", GateMode::Gated, "jeeta.inbox.people_get", ("GET", "/api/inbox/people/{person_id}"), Read),
     twin("inbox.people.create", GateMode::Gated, "jeeta.inbox.people_create", ("POST", "/api/inbox/people"), Write),

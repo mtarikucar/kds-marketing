@@ -112,11 +112,12 @@ pub enum Job {
     PurgeRawBodies,
     PurgeOAuthPending,
     PurgeProbeRuns,
+    OutboxRecover,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 7] = [
+    pub const ALL: [Job; 8] = [
         Job::RefreshTokens,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
@@ -124,6 +125,7 @@ impl Job {
         Job::PurgeRawBodies,
         Job::PurgeOAuthPending,
         Job::PurgeProbeRuns,
+        Job::OutboxRecover,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -137,6 +139,7 @@ impl Job {
             Job::PurgeRawBodies => "purge_raw_bodies",
             Job::PurgeOAuthPending => "purge_oauth_pending",
             Job::PurgeProbeRuns => "purge_probe_runs",
+            Job::OutboxRecover => "outbox_recover",
         }
     }
 
@@ -155,6 +158,7 @@ impl Job {
             Job::PurgeRawBodies => run_purge_raw_bodies(deps, now).await,
             Job::PurgeOAuthPending => run_purge_oauth_pending(deps, now).await,
             Job::PurgeProbeRuns => run_purge_probe_runs(deps, now).await,
+            Job::OutboxRecover => run_outbox_recover(deps, now).await,
         }
     }
 }
@@ -1029,4 +1033,62 @@ fn public_time(value: &Value) -> Option<OffsetDateTime> {
     value
         .as_str()
         .and_then(|at| OffsetDateTime::parse(at, &Rfc3339).ok())
+}
+
+/// Reconcile interrupted sends in every workspace; resume old queued intents only in active
+/// workspaces, with fresh fences in the shared send step. Each candidate is claimed under lock.
+pub async fn run_outbox_recover(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::inbox::replies;
+    let job = Job::OutboxRecover;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let candidates = async {
+            let mut r = deps.uow.tenant(ws).await?;
+            let sending = r
+                .outbox()
+                .list_pending("sending", now - Duration::minutes(2), 500)
+                .await?;
+            let queued = if r.workspace().get().await?.status == WorkspaceStatus::Active {
+                r.outbox()
+                    .list_pending("queued", now - Duration::minutes(5), 500)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            Ok::<_, AppError>((sending, queued))
+        }
+        .await;
+        let (sending, queued) = match candidates {
+            Ok(v) => v,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for row in sending {
+            report.touched += 1;
+            match replies::recover_sending(deps, &ctx, row.id).await {
+                Ok(true) => report.changed += 1,
+                Ok(false) => report.skipped += 1,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, None, &Failure::App(e));
+                }
+            }
+        }
+        for row in queued {
+            report.touched += 1;
+            match replies::send_step(deps, &ctx, row.id).await {
+                Ok(out) if out.state != "queued" => report.changed += 1,
+                Ok(_) => report.skipped += 1,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, None, &Failure::App(e));
+                }
+            }
+        }
+    }
+    finish(job, report)
 }

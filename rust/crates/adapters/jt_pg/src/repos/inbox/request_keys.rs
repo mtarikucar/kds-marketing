@@ -6,6 +6,25 @@ use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 #[async_trait]
 impl RequestKeyRepo for PgTenantRepos {
+    async fn complete(
+        &mut self,
+        key: &str,
+        expected: Value,
+        response: Value,
+    ) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            "update request_keys set response=$4 where workspace_id=$1 and key=$2 and response=$3",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(key)
+        .bind(expected)
+        .bind(response)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "complete request key"))?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn get(&mut self, key: &str, now: OffsetDateTime) -> Result<Option<Value>, AppError> {
         sqlx::query_scalar(
             "select response from request_keys where workspace_id=$1 and key=$2 and at>$3",

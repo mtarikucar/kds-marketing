@@ -8,6 +8,25 @@ use jt_app::{
 use jt_inbox::{ConversationId, Message, MessageId, MsgStatus};
 #[async_trait]
 impl MessageRepo for PgTenantRepos {
+    async fn get(&mut self, id: MessageId) -> Result<Option<Message>, AppError> {
+        one!(
+            sqlx::query_scalar(
+                "select to_jsonb(m) from messages m where workspace_id=$1 and id=$2"
+            )
+            .bind(self.workspace_id().as_uuid())
+            .bind(id.as_uuid()),
+            self,
+            Message
+        )
+    }
+    async fn page(
+        &mut self,
+        conversation: ConversationId,
+        after: Option<(time::OffsetDateTime, MessageId)>,
+        limit: u32,
+    ) -> Result<Vec<Message>, AppError> {
+        many!(sqlx::query_scalar("select to_jsonb(m) from messages m where workspace_id=$1 and conversation_id=$2 and ($3::timestamptz is null or (at,id)>($3,$4)) order by at,id limit $5").bind(self.workspace_id().as_uuid()).bind(conversation.as_uuid()).bind(after.map(|v|v.0)).bind(after.map(|v|v.1.as_uuid())).bind(i64::from(limit.clamp(1,MAX_INBOX_PAGE))),self,Message)
+    }
     async fn insert_if_new(&mut self, row: Message) -> Result<Option<MessageId>, AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, row.workspace_id)?;

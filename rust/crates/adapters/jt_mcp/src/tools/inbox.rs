@@ -20,6 +20,69 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "inbox.conversations.list",
+            description: "conversations.list for workspace conversations. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("conversations.list")).expect("inbox schema"),
+            run: conversations_list,
+        },
+        ToolDef {
+            use_case: "inbox.conversations.get",
+            description: "conversations.get for workspace conversations. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("conversations.get")).expect("inbox schema"),
+            run: conversations_get,
+        },
+        ToolDef {
+            use_case: "inbox.messages.list",
+            description: "messages.list for workspace conversations. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("messages.list")).expect("inbox schema"),
+            run: messages_list,
+        },
+        ToolDef {
+            use_case: "inbox.take_over",
+            description: "take_over for workspace conversations. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("take_over")).expect("inbox schema"),
+            run: take_over,
+        },
+        ToolDef {
+            use_case: "inbox.hand_to_agent",
+            description: "hand_to_agent for workspace conversations. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("hand_to_agent")).expect("inbox schema"),
+            run: hand_to_agent,
+        },
+        ToolDef {
+            use_case: "inbox.snooze",
+            description: "snooze for workspace conversations. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("snooze")).expect("inbox schema"),
+            run: snooze,
+        },
+        ToolDef {
+            use_case: "inbox.unsnooze",
+            description: "unsnooze for workspace conversations. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("unsnooze")).expect("inbox schema"),
+            run: unsnooze,
+        },
+        ToolDef {
+            use_case: "inbox.close",
+            description: "close for workspace conversations. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("close")).expect("inbox schema"),
+            run: close,
+        },
+        ToolDef {
+            use_case: "inbox.reply",
+            description: "reply for workspace conversations. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("reply")).expect("inbox schema"),
+            run: reply,
+        },
+        ToolDef {
             use_case: "inbox.merges.list",
             description: "List merge suggestions and their decisions. [risk: READ]",
             permission: Permission::InboxManage,
@@ -274,5 +337,63 @@ fn notes_add<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a>
     Box::pin(async move {
         let id: JourneyId = take_id(&mut raw, "journey_id")?;
         to_json(&tasks::add_note(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+use jt_app::usecases::inbox::{ConversationId, conversations, replies};
+fn conversations_list<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&conversations::list(deps, ctx, args(raw)?).await?) })
+}
+fn conversations_get<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&conversations::get(deps, ctx, id).await?)
+    })
+}
+fn messages_list<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        to_json(&conversations::messages(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn take_over<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&conversations::take_over(deps, ctx, id).await?)
+    })
+}
+fn hand_to_agent<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&conversations::hand_to_agent(deps, ctx, id).await?)
+    })
+}
+fn snooze<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        to_json(&conversations::snooze(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn unsnooze<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&conversations::unsnooze(deps, ctx, id).await?)
+    })
+}
+fn close<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&conversations::close(deps, ctx, id).await?)
+    })
+}
+fn reply<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: ConversationId = take_id(&mut raw, "conversation_id")?;
+        to_json(&replies::reply(deps, ctx, id, args(raw)?).await?)
     })
 }

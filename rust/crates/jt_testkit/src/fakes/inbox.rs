@@ -361,6 +361,36 @@ impl IdentityRepo for MemTenant {
 }
 #[async_trait]
 impl ConversationRepo for MemTenant {
+    async fn page(
+        &mut self,
+        queue: ConversationQueue,
+        after: Option<(OffsetDateTime, ConversationId)>,
+        limit: u32,
+    ) -> Result<Vec<Conversation>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbox
+            .conversations
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && after.is_none_or(|key| (r.created_at, r.id) > key)
+                    && match queue {
+                        ConversationQueue::All => true,
+                        ConversationQueue::Ours => r.state == ConvState::Ours,
+                        ConversationQueue::Unassigned => {
+                            r.executor == Executor::Human { user_id: None }
+                                && r.state != ConvState::Closed
+                        }
+                        ConversationQueue::Snoozed => matches!(r.state, ConvState::Snoozed { .. }),
+                    }
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|r| (r.created_at, r.id));
+        rows.truncate(limit.clamp(1, MAX_INBOX_PAGE) as usize);
+        Ok(rows)
+    }
     async fn lock_for_person(&mut self, person: PersonId) -> Result<Vec<Conversation>, AppError> {
         let mut rows: Vec<_> = self
             .state()
@@ -530,6 +560,37 @@ impl ConversationRepo for MemTenant {
 }
 #[async_trait]
 impl MessageRepo for MemTenant {
+    async fn get(&mut self, id: MessageId) -> Result<Option<Message>, AppError> {
+        Ok(self
+            .state()
+            .inbox
+            .messages
+            .iter()
+            .find(|r| r.workspace_id == self.ws && r.id == id)
+            .cloned())
+    }
+    async fn page(
+        &mut self,
+        conversation: ConversationId,
+        after: Option<(OffsetDateTime, MessageId)>,
+        limit: u32,
+    ) -> Result<Vec<Message>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbox
+            .messages
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && r.conversation_id == conversation
+                    && after.is_none_or(|key| (r.at, r.id) > key)
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|r| (r.at, r.id));
+        rows.truncate(limit.clamp(1, MAX_INBOX_PAGE) as usize);
+        Ok(rows)
+    }
     async fn insert_if_new(&mut self, row: Message) -> Result<Option<MessageId>, AppError> {
         self.call(|t| {
             let ws = t.ws;
@@ -1035,6 +1096,38 @@ impl ConsumptionRepo for MemTenant {
 }
 #[async_trait]
 impl RequestKeyRepo for MemTenant {
+    async fn complete(
+        &mut self,
+        key: &str,
+        expected: Value,
+        response: Value,
+    ) -> Result<bool, AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            if !t
+                .state()
+                .inbox
+                .request_keys
+                .iter()
+                .any(|r| r.workspace_id == ws && r.key == key && r.response == expected)
+            {
+                return Ok(false);
+            }
+            let key = key.to_owned();
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .request_keys
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.key == key && r.response == expected)
+                {
+                    r.response = response.clone();
+                }
+            });
+            Ok(true)
+        })
+    }
+
     async fn get(&mut self, key: &str, now: OffsetDateTime) -> Result<Option<Value>, AppError> {
         Ok(self
             .state()

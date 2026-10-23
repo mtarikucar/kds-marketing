@@ -1179,6 +1179,7 @@ dependencies = [
  "axum",
  "jt_app",
  "jt_connector",
+ "jt_inbox",
  "jt_mcp",
  "jt_panel_http",
  "jt_pg",
