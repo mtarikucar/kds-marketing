@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt } from '@/test/render';
 import { inboxAnswers } from '@/test/inbox';
 
-it('requires explicit confirmation before erasing a person', async () => {
+it('requires typed confirmation before erasing a person', async () => {
   const calls = mockFetch({ ...inboxAnswers, 'POST /api/inbox/people/person-1/erase': { person_id: 'person-1', erased: true } });
   renderAt('/inbox?person=person-1');
   const user = userEvent.setup();
@@ -13,7 +13,11 @@ it('requires explicit confirmation before erasing a person', async () => {
   const submit = within(dialog).getByRole('button', { name: 'Kalıcı olarak sil' });
   expect(submit).toBeDisabled();
   expect(calls.some(c => c.path.endsWith('/erase'))).toBe(false);
-  await user.click(within(dialog).getByRole('checkbox'));
+  const confirmation = within(dialog).getByRole('textbox');
+  await user.type(confirmation, 'wrong');
+  expect(submit).toBeDisabled();
+  await user.clear(confirmation);
+  await user.type(confirmation, 'SİL');
   await user.click(submit);
   await waitFor(() => expect(calls.find(c => c.path.endsWith('/erase'))?.body).toEqual({ confirm: true }));
 });

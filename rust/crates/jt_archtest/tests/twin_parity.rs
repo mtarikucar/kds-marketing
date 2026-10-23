@@ -2703,6 +2703,32 @@ async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
     }
     assert_eq!(human["notification"], agent["notification"]);
     assert_eq!(human["reminder"]["due_at"], "2099-01-01T11:00:00Z");
+    // Existing journey reads expose persisted bookings on both surfaces after reload.
+    let read = ok(send(&app, panel(Method::GET, &base, Some(&cookie), None)).await).await;
+    assert_eq!(read["appointments"].as_array().unwrap().len(), 2);
+    assert!(
+        read["appointments"]
+            .as_array()
+            .unwrap()
+            .contains(&human["appointment"])
+    );
+    assert!(
+        read["appointments"]
+            .as_array()
+            .unwrap()
+            .contains(&agent["appointment"])
+    );
+    assert_eq!(
+        read,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.journeys_get",
+            json!({"journey_id":j.id})
+        )
+        .await
+    );
     let held_id = human["appointment"]["id"].as_str().unwrap();
     let cancel_id = agent["appointment"]["id"].as_str().unwrap();
     for (id, action) in [(held_id, "held"), (cancel_id, "cancel")] {

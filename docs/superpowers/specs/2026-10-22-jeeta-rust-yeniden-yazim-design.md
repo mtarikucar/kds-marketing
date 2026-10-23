@@ -710,6 +710,13 @@ Komisyon yalnız insan temsilciye düşer ve `kazanildi` olayının sonucudur: t
 ayarıdır. Durumları `beklemede`, `onaylandı`, `ödendi`. Yönetici onaylar ve öder. Komisyon gelen
 kutusunun bir parçasıdır; stüdyoda yoktur.
 
+**(M2b uygulamasında kesinleşti)** Won ile oran ve insan alıcı anlık görüntüsü tek işlemde
+kaydedilir; aynı olay anahtarı aynı sonucu döndürür, başka anahtarla Won tekrarında terminal
+CONFLICT oluşur. Yolculuk başına bir komisyon vardır. Sahip yoksa `no_payee`; oran kullanıcı
+geçersiz kılması, alan varsayılanı, ardından sıfır olarak çözülür. Tutar ve para birimi korunur.
+`inbox.work` listeler; `inbox.manage` onaylar, ödendi işaretler ve oranı ayarlar. Bu bir ödeme
+sağlayıcısına para transferi değildir.
+
 ### 7.6 Uyum: izin, bastırma, silme
 
 Türkiye'de ticari SMS ve e-posta için İYS izni zorunludur; bu nedenle uyum kapsam içidir ve benim
@@ -717,9 +724,23 @@ kararımla M2'dedir. Kişi başına **izin defteri** (kanal, izin türü, kaynak
 bağlayıcısı üzerinden İYS eşitlemesi; **bastırma listesi** (abonelikten çıkma, geri sıçrama,
 şikâyet); ticari gönderim öncesi izin denetimi, izinsiz gönderim `IZIN_YOK` döner. Birebir yanıt
 (müşterinin açtığı konuşma) ticari gönderim sayılmaz. **Silme:** KVKK gereği kişi talep ederse
-kişi, kimlikleri, mesajları ve dosyaları kalıcı silinir, yerine yalnız silme kaydı (tarih, talep
-yolu) kalır; günlükteki kişisel alanlar maskelenir. Bu, §10'daki "sınırsız saklama"nın tek
-istisnasıdır.
+kişisel içerik temizlenir; Q4 saklama kararı aşağıdaki gibi uygulanır. Bu, §10'daki
+"sınırsız saklama"nın istisnasıdır.
+
+**(M2b uygulamasında kesinleşti)** Kişi `silinmiş kişi` adı ve `erased_at` ile mezar taşı olarak
+kalır; kimlikler silinir, alan kapsamlı kimlik özetleri tekrar oluşturmayı önler. Mesaj/not/olay
+metinleri, randevu yeri ve teklif `file_ref` temizlenir; yolculuk/olay/komisyon kimlikleri ve
+mali tutarlar korunur. Ajanın sahip olduğu `file_ref` unutulur, platform dosyayı getirmez veya
+silmez. Günlük fiziksel olarak değişmez: `payload.person_id` silme kaydında ise kişisel anahtarlar
+okumada maskelenir. İlgili gelen olayların ham gövdeleri temizlenir; webhook/IMAP yeniden oynatımı
+kişiyi canlandıramaz. Silme `inbox.manage`, strateji kapısı ve `confirm: true` ister; panelde
+Türkçe `SİL` / İngilizce `ERASE` yazılır. Lost ve arşiv silme değildir; arşiv M2c'dir.
+
+Ticari ileti en son etkili açık/sözleşmeye dayalı izni ve engelleme olmamasını gerektirir;
+eşit zamanda geri çekme kazanır. Yanıt aynı konuşmada en çok 24 saat önce gelen ileti ister.
+Kuyruğa yazarken ve sağlayıcıya çıkarken izin/engelleme tekrar okunur; reddin nedeni `IZIN_YOK`.
+Ticari SMS `iysfilter=1`, yanıt `0` kullanır. İYS saatlik, beş deneme ile sınırlıdır;
+`failed_final` insan işi açar; sağlayıcı için exactly-once garantisi yoktur.
 
 ### 7.7 Panel
 
@@ -739,13 +760,28 @@ kapısından muaftır; çalışma alanı durum kapısı hepsinde kalır. M1b'nin
 kutusu aracı eklenmiştir: toplam 90, yeni araçların hepsi HTTP ikizi ve ortak şemaya sahiptir.
 `make smoke-inbox`, gerçek sağlayıcı veya veritabanı olmadan WhatsApp → consumer → bağlam →
 yanıt → Replied → events ack akışını süreç içinde doğrular. Teklif/randevu/komisyon hesaplama
-ve uyum M2b; takvim sağlayıcıları, HTML posta, webchat ve arşiv M2c kapsamıdır.
+ve uyum M2b'de eklenmiştir; takvim sağlayıcıları, HTML posta, webchat ve arşiv M2c kapsamıdır.
 
 ### 7.8 Araçlar (özet)
 
 `jeeta.gelen.bekleyenler`, `baglam`, `yanitla`, `not_ekle`, `olay_bildir`, `kimlik_ekle`,
 `birlestir`, `devral`, `ajana_birak`, `ertele`, `gorev_olustur`, `teklif_gonder`, `randevu_al`,
 `kisi_ara`, `yolculuk_ac`, `izin_kaydet`, `silme_talebi`.
+
+**(M2b uygulamasında kesinleşti)** Gerçek araç adları `jeeta.inbox.*` altındadır.
+M2a'nın 30 aracına izin/engelleme/gönderim 5, teklif/randevu 6, komisyon 4 ve kişi silme 1
+eklenir: gelen kutusu 46, genel toplam **106**. Her yeni satırın panel rotası, MCP aracı ve
+ortak girdi şeması vardır. Pending/context muafiyeti korunur; merges.undo ve people.erase açık
+onay ister. Panel kişi/konuşma bağlamında izin ve engellemeleri, yolculukta teklif/randevu
+formlarını, ayrı komisyon ekranını ve posta/İYS bağlantısını sunar. `journeys.get` kalıcı
+randevuları iki yüzeyde de döndürür.
+
+Teklif tutarı/para birimi/geçerliliği ile opak dosya referansı taşır; teslim durumu iş durumundan
+ayrıdır. Randevular dahilidir; bir saat önce görev ve olanak varsa ICS e-postası üretir.
+Bildirim reddi veya yokluğu randevuyu geri almaz. ICS de normal outbox ve iki çit üzerinden
+geçer. Kalıcı Message-ID uzlaşma için kullanılır; belirsiz gönderim otomatik tekrarlanmaz.
+Sağlayıcı iş kimliği olmayan belirsiz SMS eşleştirilemez ve belirsiz kalır. Takvim
+uygunluğu/OAuth/etkinlikler, HTML posta, webchat ve arşiv komutu M2c kapsamındadır.
 
 ## 8. Başlık 3: Growth Studio
 
@@ -866,6 +902,14 @@ tamamlar. Bu kod başka hiçbir eylemde yoktur.
   önce rolü denetler; süper kullanıcı ya da `BYPASSRLS` ise rolün adını söyleyerek açılmayı reddeder.
   Yalnız yerel geliştirme için açıkça verilen `JEETA_ALLOW_SUPERUSER=true` bunu geçer ve yalıtımın
   uygulanmadığını her açılışta uyarı olarak yazar.
+
+**(M2b uygulamasında kesinleşti)** Sekiz geri alınabilir göç ve 48 alan tablosu vardır.
+Uyum göçü `0008`'dir; mail satırı yoksa down sağlayıcı CHECK'ini daraltır, mail satırı varsa
+veriyi korumak için geniş CHECK kalır. Silme istisnası yalnız işlem içinde `SET LOCAL
+jeeta.erasure` ve hedef kişi ayarı ile, aynı alanın silme kaydı eşliğinde geçerlidir. Günlük ve
+değişmez yolculuk atfı bu yazma istisnasına dahil değildir. SMTP/IMAP yalnız tenant yetkili
+`connect_public` üzerinden, 10 saniyelik DNS zaman aşımı ve özel adres reddinden sonra açılır;
+çözülen SocketAddr tekrar DNS çözmeden kullanılır, TLS ve beyan edilen sunucu adı doğrulanır.
 
 ## 11. Ekip, roller, güvenlik
 

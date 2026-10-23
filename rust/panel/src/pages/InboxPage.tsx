@@ -7,7 +7,8 @@ import type { InboxConversationRow, InboxQueue } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { can } from '@/lib/roles';
 import { QueryState } from '@/components/QueryState';
-import { Button, Callout, Input, PageHeader } from '@/components/ui';
+import { Button, Callout, Disclosure, Input, PageHeader } from '@/components/ui';
+import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
 import { InboxConversation } from './InboxConversation';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
@@ -165,7 +166,10 @@ export function InboxPage() {
                 {selectedPerson.data?.person.display_name || t('inbox.thread')}
               </h2>
               <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>
-              {selectedPerson.data && <InboxErasure key={selectedPerson.data.person.id} personId={selectedPerson.data.person.id} />}
+              {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into && <>
+                <Disclosure key={selectedPerson.data.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={selectedPerson.data.person.id} /></Disclosure>
+                <InboxErasure key={`erase:${selectedPerson.data.person.id}`} personId={selectedPerson.data.person.id} />
+              </>}
               {personId && (
                 <QueryState query={selectedPerson}>
                   {selectedPerson.data?.conversations.map((row) => (

@@ -28,6 +28,7 @@ pub struct ReportOut {
 }
 #[derive(Debug, Serialize)]
 pub struct JourneyOut {
+    pub appointments: Vec<crate::ports::compliance::AppointmentRow>,
     pub status_labels: std::collections::BTreeMap<String, String>,
     pub journey: Journey,
     pub attribution: Option<crate::ports::inbox::JourneyAttribution>,
@@ -108,6 +109,7 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: JourneyId) -> Result<JourneyOut, Ap
         .ok_or_else(|| AppError::not_found("no such journey"))?;
     let events = r.journeys().events(id, 50).await?;
     Ok(JourneyOut {
+        appointments: r.appointments().list(id).await?,
         status_labels: super::dictionaries::effective_status_labels(r.as_mut()).await?,
         attribution: r.attribution().by_journey(id).await?,
         journey,

@@ -123,6 +123,8 @@ export const inboxAnswers: Record<string, unknown> = {
     },
   ],
   'GET /api/inbox/tasks': [],
+  'GET /api/inbox/people/person-1/consents': { consents: [], suppressions: [] },
+  'GET /api/inbox/journeys/journey-1/quotes': [],
   'POST /api/inbox/conversations/conv-1/reply': { message_id: 'reply-1', state: 'sent' },
   'POST /api/inbox/journeys/journey-1/events': { transition: null, effects: [], duplicate: false },
   'POST /api/inbox/conversations/conv-1/unsnooze': conversation,

@@ -102,8 +102,8 @@ Silme altyapısında `jeeta.erasure = 'on'` ve `jeeta.erasure_person_id` yalnız
 kişisel metni temizlenebilir, olay kimlikleri, geçişler ve tutarlar korunur. Gelen olayların
 `payload.person_id`, prob kayıtlarının `facts.person_id` bağı kullanılır; silme izni başka kişinin
 satırını açmaz. `ledger_entries` ve `journey_attribution` bu istisnaya dahil değildir; atıf hiçbir
-şekilde değiştirilemez veya silinemez. Tam silme akışı ve daha geniş olay bağlantıları M2b Task 8'de
-eklenir; bu göç yalnız korumaları ve kalıcı veri sözleşmesini sağlar.
+şekilde değiştirilemez veya silinemez. Tam silme akışı aşağıdaki kişi silme bölümünde açıklanır; bu göç korumaları ve kalıcı veri
+sözleşmesini sağlar.
 
 
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
@@ -253,7 +253,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (101 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (106 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -270,13 +270,14 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 101 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 106 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
 emekliye ayırır) ve `jeeta.budget.items_retire` (bütçe kalemini kesin olarak emekliye ayırır), ayrıca
 `confirm: true` ister, yoksa `VALIDATION`. Birleştirmeyi geri alan
-`jeeta.inbox.merges_undo` da `DESTRUCTIVE` olarak işaretlidir ve `confirm: true` ister.
+`jeeta.inbox.merges_undo` ve `jeeta.inbox.people_erase` de `DESTRUCTIVE` olarak işaretlidir
+ve `confirm: true` ister. Panel, silme onayı için Türkçe `SİL`, İngilizce `ERASE` yazılmasını ister.
 Öteki yıkıcı araçlar istemez, çünkü
 etkileri onarılabilir: çıkarılan üye yeniden davet edilir, silinen rol ya da grup yeniden açılır, iptal
 edilen anahtarın yerine yenisi çıkarılır; bir grup ancak strateji ona başvurmuyorsa silinir (başvuruyorsa
@@ -1527,14 +1528,15 @@ Sent evidence is correlated by exact persisted Message-ID and capability, in the
 claim transaction. It resolves an unknown send once, reuses the request-key response, and
 records `inbox.sent_after_terminal` without reopening a terminal journey. DSNs record failure.
 Unknown SMS without a provider job ID stays unknown: no reference lookup or automatic resend.
-Mailbox flows add no catalog rows. Task 5 adds five compliance tools, bringing the release to 95.
+Mailbox flows add no catalog rows. The completed M2b release has 106 tools, including the five
+compliance tools below.
 Commercial sending/consent ingestion remain Task 5; calendar integration, archive, HTML mail
 composition and webchat remain M2c.
 
 
 ## M2b consent, suppression and commercial sending
 
-Five strategy-gated operations extend the inbox to 35 tools (95 total):
+Five strategy-gated compliance operations are included in the 46 inbox tools (106 total):
 
 | Row | Panel route | MCP tool | Permission |
 |---|---|---|---|
@@ -1690,7 +1692,8 @@ shows snapshot rates and amounts, and offers only permitted next actions and fut
 
 `POST /api/inbox/people/{person_id}/erase` and `jeeta.inbox.people_erase` require
 `inbox.manage`, the strategy gate and explicit `{ "confirm": true }`. The panel provides
-this action on the selected person's page, with a confirmation dialog in Turkish and English.
+this action on the selected person's page and conversation, with a typed confirmation dialog:
+`SİL` in Turkish, `ERASE` in English. Dismissal/reopening clears the typed confirmation.
 The operation is atomic and repeatable: it keeps the person as `silinmiş kişi` with
 `erased_at`, keeps journey/event/commission IDs and financial amounts, and removes identities
 while retaining tenant-scoped hashes of their normalized, account-scoped values.
@@ -1762,3 +1765,58 @@ no public catalog row, route, permission, or tool, so release counts remain unch
 ordered by acquisition time and journey ID. The historical Task 9 migration-test name mentions
 0007; the compliance schema lives in unreleased **0008**, whose reversible round trip retains
 unrelated inbox rows.
+
+
+## M2b panel and architecture completion
+
+The inbox has **46 tools**, of which **16** are new in M2b: consent/suppression/commercial send
+(5), quotes/internal appointments (6), commissions/rates (4), and person erasure (1).
+Together with M1b's 60 tools, the release has **106**. Catalog rows, panel HTTP routes, MCP
+registry entries and shared input schemas have exact-set parity checks. Only `inbox.pending`
+and `inbox.context` bypass the strategy gate; workspace-status checks remain on every inbox row.
+Both `inbox.merges.undo` and `inbox.people.erase` require explicit confirmation.
+
+The panel exposes consent history, effective time/source, İYS synchronization status and active
+suppressions in the person's or conversation's **Consent and suppressions** disclosure.
+`inbox.work` records consent and sends commercial messages; `inbox.manage` adds manual blocks,
+removes a specific reason/channel, and erases personal data. Commercial sends always declare
+Commercial intent; neither changing a form nor removing one suppression substitutes for consent.
+Quote and appointment forms use the same fields validated by the HTTP/MCP shared schemas.
+Quote sends retain the request key across transport retries and report delivery state separately
+from business state. An unknown delivery must not be resent. File references are opaque text,
+never fetched or rendered as asset links.
+
+Journey disclosures list quotes and internal bookings, accept a quote, book an appointment,
+cancel a booking or mark it held. `journeys.get` now includes persisted `appointments` on both
+surfaces so those actions remain available after reloading. A booking remains recorded when its
+ICS notification is refused or unavailable; the panel shows that outcome explicitly. Cancellation
+remains available on a closed journey. Input times use the browser's local timezone and are sent
+as RFC3339 instants. The commission page and mailbox/optional İYS connection forms retain their
+existing permission checks and secret-clearing lifecycle. Panel strings and forms have TR/EN parity.
+
+`mail_crate_has_no_direct_dns_or_connect` is a **supplementary source scan**, backed by the mail
+adapter's real socket tests (including a public hostname resolving into private space and DNS
+timeouts). Dependency allowlists keep domain/application code independent of mail libraries;
+only `jt_mail` uses the mail protocol libraries and its sockets come from authorized outbound
+egress. Tests also cover commercial consent at both fences, identity replay after erasure,
+and duplicate Won events/commission creation.
+
+Q4 retention keeps a `silinmiş kişi` tombstone and accounting IDs/amounts; it scrubs personal
+content and masks append-only ledger payloads at read time. Migration 0008's conditional CHECK
+downgrade retains the widened provider constraint if mail rows exist. Unknown SMS without a
+provider job ID stays unknown, without correlation or automatic resend; İYS synchronization has
+bounded retries and no exactly-once guarantee. External calendar OAuth/availability/events,
+HTML mail, webchat and an inbox archive command remain **M2c**. Erasure, Lost and archive are
+not interchangeable operations; no erase/lost/archive parity is claimed.
+
+Task verification (from `rust/`, with `JEETA_TEST_DATABASE_URL` configured):
+
+```sh
+cargo test --locked --workspace --test inbox_rules --test twin_rule --test gate_rule
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+cd panel && pnpm test && pnpm build
+```
+
+The wider `make check`/CI checks documented above remain the release checks.

@@ -69,3 +69,21 @@ export const setCommissionRate = (input: { user_id: string | null; rate_bp: numb
   request<{ user_id: string | null; rate_bp: number }>('PUT', `${root}/commission-rates`, { body: input });
 
 export const erasePerson = (id: string) => request<{ person_id: string; erased: boolean }>('POST', `${root}/people/${seg(id)}/erase`, { body: { confirm: true } });
+
+export const listConsents = (id: string) => request<import('./types').ConsentList>('GET', `${root}/people/${seg(id)}/consents`);
+export const recordConsent = (id: string, input: import('./types').ConsentInput) =>
+  request('POST', `${root}/people/${seg(id)}/consents`, { body: input });
+export const addSuppression = (id: string, channel: import('./types').ContactChannel) =>
+  request('POST', `${root}/people/${seg(id)}/suppressions`, { body: { channel, reason: 'manual' } });
+export const removeSuppression = (id: string, channel: import('./types').ContactChannel, reason: import('./types').SuppressionReason) =>
+  request('DELETE', `${root}/people/${seg(id)}/suppressions/${seg(channel)}/${seg(reason)}`);
+export const sendCommercial = (id: string, input: { channel: import('./types').SendChannel; text: string; intent: 'commercial'; request_key: string }) =>
+  request<InboxReplyOut>('POST', `${root}/people/${seg(id)}/send`, { body: input });
+export const listQuotes = (id: string) => request<import('./types').InboxQuote[]>('GET', `${journey(id)}/quotes`);
+export const sendQuote = (id: string, input: import('./types').QuoteInput) =>
+  request<{ quote: import('./types').InboxQuote; delivery: InboxReplyOut }>('POST', `${journey(id)}/quotes`, { body: input });
+export const acceptQuote = (id: string) => request('POST', `${root}/quotes/${seg(id)}/accept`);
+export const bookAppointment = (id: string, input: import('./types').AppointmentInput) =>
+  request<{ appointment: import('./types').InboxAppointment; notification: { state: string; message_id: string | null } }>('POST', `${journey(id)}/appointments`, { body: input });
+export const appointmentAction = (id: string, action: 'cancel' | 'held') =>
+  request('POST', `${root}/appointments/${seg(id)}/${action}`);

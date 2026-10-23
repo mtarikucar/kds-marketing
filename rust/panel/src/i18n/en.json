@@ -1046,7 +1046,13 @@
     }
   },
   "inbox": {
-    "erasure": {"open": "Erase personal data", "description": "Permanently removes contact identities, message and note text, appointment details and file references. Anonymous journey, event and commission records and amounts remain. Files held by your agent are not deleted.", "confirm": "I understand that personal data will be permanently erased.", "submit": "Erase permanently"},
+    "erasure": {
+      "open": "Erase personal data",
+      "description": "Permanently removes contact identities, message and note text, appointment details and file references. Anonymous journey, event and commission records and amounts remain. Files held by your agent are not deleted.",
+      "confirm": "Type “{{phrase}}” to confirm.",
+      "submit": "Erase permanently",
+      "phrase": "ERASE"
+    },
     "commissions": {
       "title": "Commissions",
       "description": "Human representative commissions from won journeys.",
@@ -1224,6 +1230,96 @@
         "email": "Email addresses differ",
         "phone": "Phone numbers differ",
         "company": "Companies differ"
+      }
+    },
+    "compliance": {
+      "channels": {
+        "email": "Email",
+        "sms": "SMS",
+        "phone": "Telephone",
+        "whats_app": "WhatsApp",
+        "messenger": "Messenger",
+        "instagram_dm": "Instagram DM",
+        "webchat": "Webchat"
+      },
+      "kinds": {
+        "explicit": "Explicit consent",
+        "implied_by_contract": "Contractual consent",
+        "withdrawn": "Withdrawn"
+      },
+      "sources": {
+        "form": "Form",
+        "agent": "Agent",
+        "import": "Import",
+        "iys_sync": "İYS",
+        "customer": "Customer"
+      },
+      "reasons": {
+        "manual": "Manual block",
+        "unsubscribe": "Unsubscribe",
+        "bounce": "Bounce",
+        "complaint": "Complaint"
+      },
+      "sync": {
+        "pending": "İYS pending",
+        "sent": "İYS synchronized",
+        "failed": "İYS retry pending",
+        "failed_final": "İYS needs human attention"
+      },
+      "intents": {
+        "reply": "Reply to customer",
+        "commercial": "Commercial contact"
+      },
+      "title": "Consent and suppressions",
+      "channel": "Channel",
+      "kind": "Decision",
+      "source": "Source",
+      "at": "Effective time",
+      "record": "Record consent",
+      "add": "Block selected channel",
+      "remove": "Remove suppression",
+      "removeNamed": "Remove suppression: {{channel}} / {{reason}}",
+      "send": "Send commercial message",
+      "intent": "Send intent",
+      "sendHint": "Commercial contact requires effective consent. Suppressions are checked again immediately before sending."
+    },
+    "offers": {
+      "quotes": "Quotes",
+      "send": "Send quote",
+      "accept": "Accept quote",
+      "validUntil": "Valid until",
+      "file": "File reference (optional)",
+      "fileHint": "The agent owns this reference; no file is uploaded or downloaded here.",
+      "text": "Message",
+      "delivery": "Delivery state",
+      "notification": "Notification",
+      "deliveryState": {
+        "queued": "Queued",
+        "sending": "Sending",
+        "sent": "Sent",
+        "delivered": "Delivered",
+        "failed": "Failed",
+        "unknown": "Unknown; do not resend.",
+        "refused": "Refused",
+        "unavailable": "No email connection or address"
+      },
+      "quoteState": {
+        "sent": "Send recorded",
+        "accepted": "Accepted",
+        "expired": "Expired"
+      },
+      "appointments": "Appointments",
+      "book": "Book appointment",
+      "start": "Start",
+      "end": "End",
+      "location": "Location",
+      "cancel": "Cancel appointment",
+      "held": "Meeting held",
+      "internal": "Internal booking with an ICS notification when email is available. Reminder one hour before. Calendar availability is not checked. Times use your local timezone.",
+      "appointmentState": {
+        "booked": "Booked",
+        "held": "Held",
+        "cancelled": "Cancelled"
       }
     }
   }
