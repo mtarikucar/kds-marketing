@@ -561,3 +561,304 @@ async fn outbound_job_stub_accepts_capability_scope_and_rejects_foreign_workspac
         );
     }
 }
+
+#[tokio::test]
+async fn iys_snapshot_refreshes_after_list_and_holds_the_row_lock() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let (ws, _) = db.seed_workspace("iys-snapshot").await;
+    let (other, _) = db.seed_workspace("iys-foreign").await;
+    let id = capability(&uow, ws).await;
+    let now = OffsetDateTime::now_utc();
+    let mut writer = uow.tenant(ws).await.unwrap();
+    let mut cap = writer.capabilities().lock(id).await.unwrap().unwrap();
+    cap.connector_public = json!({"iys":{"brand_code":"old-brand"}});
+    writer.capabilities().update(cap).await.unwrap();
+    writer
+        .capabilities()
+        .set_sealed(id, Some(b"old-sms".to_vec()), now)
+        .await
+        .unwrap();
+    writer
+        .capabilities()
+        .set_iys_sealed(id, Some(b"old-iys".to_vec()), now)
+        .await
+        .unwrap();
+    writer.commit().await.unwrap();
+
+    let mut reader = uow.tenant(ws).await.unwrap();
+    let listed = reader
+        .capabilities()
+        .list(Default::default())
+        .await
+        .unwrap();
+    assert_eq!(listed[0].connector_public["iys"]["brand_code"], "old-brand");
+    // An attach commits between discovery and credential reading on READ COMMITTED.
+    let mut writer = uow.tenant(ws).await.unwrap();
+    let mut cap = writer.capabilities().lock(id).await.unwrap().unwrap();
+    cap.connector_public = json!({"iys":{"brand_code":"new-brand"}});
+    writer.capabilities().update(cap).await.unwrap();
+    writer
+        .capabilities()
+        .set_sealed(id, Some(b"new-sms".to_vec()), now)
+        .await
+        .unwrap();
+    writer
+        .capabilities()
+        .set_iys_sealed(id, Some(b"new-iys".to_vec()), now)
+        .await
+        .unwrap();
+    writer.commit().await.unwrap();
+    let snapshot = reader
+        .capabilities()
+        .lock_iys_snapshot(id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        snapshot.capability.connector_public["iys"]["brand_code"],
+        "new-brand"
+    );
+    assert_eq!(snapshot.sms_sealed.as_deref(), Some(b"new-sms".as_slice()));
+    assert_eq!(snapshot.iys_sealed.as_deref(), Some(b"new-iys".as_slice()));
+    let mut foreign = uow.tenant(other).await.unwrap();
+    assert!(
+        foreign
+            .capabilities()
+            .lock_iys_snapshot(id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(foreign);
+
+    // The snapshot protects both slots until its transaction ends.
+    let mut competing = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("set local lock_timeout = '100ms'")
+        .execute(competing.conn())
+        .await
+        .unwrap();
+    let error =
+        sqlx::query("update capabilities set iys_sealed = $3 where workspace_id = $1 and id = $2")
+            .bind(ws.as_uuid())
+            .bind(id.as_uuid())
+            .bind(b"racing-iys".as_slice())
+            .execute(competing.conn())
+            .await
+            .unwrap_err();
+    assert_eq!(
+        error.as_database_error().unwrap().code().as_deref(),
+        Some("55P03")
+    );
+    drop(competing);
+    reader.commit().await.unwrap();
+    let mut writer = uow.tenant(ws).await.unwrap();
+    writer
+        .capabilities()
+        .set_iys_sealed(id, Some(b"after-release".to_vec()), now)
+        .await
+        .unwrap();
+    writer.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn mail_send_and_probe_do_not_nest_tenant_connections() {
+    use jt_app::{
+        ctx::Ctx,
+        usecases::{connector, inbox::replies},
+    };
+    use jt_connector::{Credential, ProbeResult, Provider};
+    use jt_inbox::{Identity, IdentityChannel, IdentityId};
+    use jt_ledger::Actor;
+    use jt_testkit::{
+        fakes::{FIXED_NOW, ScriptedConnector, ScriptedRegistry},
+        inbox_contract::Fixture,
+    };
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("mail-one-connection").await;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(StdDuration::from_millis(200))
+        .connect_with(db.connect_options())
+        .await
+        .unwrap();
+    let uow = Arc::new(PgUnitOfWork::new(pool));
+    let f = Fixture {
+        uow: uow.clone(),
+        ws,
+        other: ws,
+        user,
+    };
+    let mut deps = jt_testkit::fakes::deps(uow.clone());
+    let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
+    deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(mail.clone()));
+    let person = f.insert_person("Recipient").await;
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        ws,
+        NewCapability {
+            kind_key: "mailbox".into(),
+            name: "Mail".into(),
+            external_id: Some("support@example.com".into()),
+            connector_public: json!({"hosts":["smtp.example.com", "imap.example.com"]}),
+            ..Default::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    cap.status = StoredStatus::Verified;
+    cap.last_verified_at = Some(FIXED_NOW);
+    let credential = Credential::Mailbox {
+        smtp_host: "smtp.example.com".into(),
+        smtp_port: 465,
+        imap_host: "imap.example.com".into(),
+        imap_port: 993,
+        username: "support@example.com".into(),
+        password: "secret".into(),
+        from_address: "support@example.com".into(),
+        tls: jt_connector::MailTls::Implicit,
+    };
+    let sealed = deps
+        .seal
+        .seal(ws, &serde_json::to_vec(&credential).unwrap())
+        .unwrap();
+    let mut conversation = f.conversation(person.id, cap.id);
+    conversation.kind_key = "mailbox".into();
+    let mut r = uow.tenant(ws).await.unwrap();
+    r.capabilities()
+        .insert(cap.clone(), Some(sealed))
+        .await
+        .unwrap();
+    r.identities()
+        .insert(Identity {
+            id: IdentityId::new_v7(),
+            workspace_id: ws,
+            person_id: person.id,
+            channel: IdentityChannel::Email,
+            value_normalized: "recipient@example.com".into(),
+            value_display: "recipient@example.com".into(),
+            active: true,
+            first_seen_at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    r.strategy()
+        .insert(jt_strategy::StrategyVersion {
+            id: jt_strategy::StrategyVersionId::new_v7(),
+            workspace_id: ws,
+            number: 1,
+            status: jt_strategy::VersionStatus::Approved,
+            sections: Default::default(),
+            created_at: FIXED_NOW,
+            created_by: Actor::Human { user_id: user },
+            submitted_at: Some(FIXED_NOW),
+            approved_at: Some(FIXED_NOW),
+            approved_by: Some(user),
+            archived_at: None,
+        })
+        .await
+        .unwrap();
+    r.conversations()
+        .upsert_on_inbound(conversation.clone())
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let ctx = Ctx {
+        workspace_id: ws,
+        actor: Actor::Human { user_id: user },
+        permissions: jt_tenancy::SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    mail.push_mail(Ok(jt_app::ports::connectors::SendReceipt {
+        provider_id: "accepted".into(),
+        cost_minor: None,
+    }));
+    let result = replies::reply(
+        &deps,
+        &ctx,
+        conversation.id,
+        serde_json::from_value(json!({"text":"Hello", "intent":"reply"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.state, "sent");
+    mail.push_probe(ProbeResult::success(
+        1,
+        json!({"account_id":"support@example.com"}),
+    ));
+    connector::probe(&deps, &ctx, cap.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn iys_provisioning_takes_inbox_lock_before_capability_lock() {
+    use jt_inbox::{Channel, Consent, ConsentId, ConsentKind, ConsentSource, SyncState};
+    use jt_testkit::{fakes::FIXED_NOW, inbox_contract::Fixture};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("iys-lock-order").await;
+    let pool = PgPoolOptions::new()
+        .connect_with(db.connect_options().application_name("iys-lock-order"))
+        .await
+        .unwrap();
+    let uow = Arc::new(PgUnitOfWork::new(pool));
+    let f = Fixture {
+        uow: uow.clone(),
+        ws,
+        other: ws,
+        user,
+    };
+    let person = f.insert_person("Recipient").await;
+    let cap = f.capability().await;
+    let mut r = uow.tenant(ws).await.unwrap();
+    r.consents()
+        .insert(Consent {
+            id: ConsentId::new_v7(),
+            person_id: person.id,
+            channel: Channel::Sms,
+            kind: ConsentKind::Withdrawn,
+            source: ConsentSource::Customer,
+            at: FIXED_NOW,
+            sync_state: SyncState::Pending,
+            attempts: 0,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut sender = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended('inbox:' || $1::text, 0))")
+        .bind(ws.as_uuid())
+        .execute(sender.conn())
+        .await
+        .unwrap();
+    let deps = jt_testkit::fakes::deps(uow);
+    let sync =
+        tokio::spawn(async move { jt_app::usecases::jobs::run_iys_sync(&deps, FIXED_NOW).await });
+    // Wait until sync reaches the workspace lock, without relying on task scheduling timing.
+    tokio::time::timeout(StdDuration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("select exists(select 1 from pg_stat_activity where application_name = 'iys-lock-order' and wait_event = 'advisory')")
+                .fetch_one(&db.pool).await.unwrap();
+            if waiting { break; }
+            tokio::time::sleep(StdDuration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    // A conversation insert takes this FK key-share lock while holding the inbox lock.
+    sqlx::query("set local lock_timeout = '200ms'")
+        .execute(sender.conn())
+        .await
+        .unwrap();
+    let key_share =
+        sqlx::query("select 1 from capabilities where workspace_id = $1 and id = $2 for key share")
+            .bind(ws.as_uuid())
+            .bind(cap.as_uuid())
+            .execute(sender.conn())
+            .await;
+    drop(sender);
+    let report = sync.await.unwrap();
+    assert!(
+        key_share.is_ok(),
+        "sync held the capability while waiting for the inbox: {key_share:?}"
+    );
+    assert_eq!(report.failed, 0);
+}

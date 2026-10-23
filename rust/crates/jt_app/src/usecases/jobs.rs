@@ -106,6 +106,7 @@ pub struct JobReport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Job {
     RefreshTokens,
+    RefreshTenantHosts,
     ProbeAll,
     NetgsmDlrPoll,
     NetgsmInboxPoll,
@@ -122,8 +123,9 @@ pub enum Job {
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 13] = [
+    pub const ALL: [Job; 14] = [
         Job::RefreshTokens,
+        Job::RefreshTenantHosts,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
         Job::NetgsmInboxPoll,
@@ -143,6 +145,7 @@ impl Job {
     pub fn name(&self) -> &'static str {
         match self {
             Job::RefreshTokens => "refresh_tokens",
+            Job::RefreshTenantHosts => "refresh_tenant_hosts",
             Job::ProbeAll => "probe_all",
             Job::NetgsmDlrPoll => "netgsm_dlr_poll",
             Job::NetgsmInboxPoll => "netgsm_inbox_poll",
@@ -167,6 +170,7 @@ impl Job {
     pub async fn run(&self, deps: &Deps, now: OffsetDateTime) -> JobReport {
         match self {
             Job::RefreshTokens => run_refresh_tokens(deps, now).await,
+            Job::RefreshTenantHosts => run_refresh_tenant_hosts(deps, now).await,
             Job::ProbeAll => run_probe_all(deps, now).await,
             Job::NetgsmDlrPoll => run_netgsm_dlr_poll(deps, now).await,
             Job::NetgsmInboxPoll => run_netgsm_inbox_poll(deps, now).await,
@@ -1207,6 +1211,25 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
     finish(job, report)
 }
 
+/// Refresh this instance's full tenant egress tier for active/pending-payment workspaces.
+/// The scheduler holds `jeeta.jobs.refresh_tenant_hosts`; per-workspace guards serialize
+/// replacements with live host mutations. Mail calls also refresh on demand on every instance.
+pub async fn run_refresh_tenant_hosts(deps: &Deps, _now: OffsetDateTime) -> JobReport {
+    let job = Job::RefreshTenantHosts;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, RECEIVING, &mut report).await {
+        report.touched += 1;
+        match super::connector::refresh_tenant_hosts(deps, ws).await {
+            Ok(()) => report.changed += 1,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
 /// Poll each receiving workspace's verified mailboxes. Network I/O owns no transaction;
 /// cursor and drafts commit together only if the account, credential and cursor still match.
 pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
@@ -1230,6 +1253,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
         {
             report.touched += 1;
             let outcome = async {
+                super::connector::refresh_tenant_hosts(deps, ws).await?;
                 let (sealed, cursor) = {
                     let mut r = deps.uow.tenant(ws).await?;
                     (
@@ -1311,22 +1335,30 @@ pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
         let result = async {
             let (credential, rows) = {
                 let mut r = deps.uow.tenant(ws).await?;
+                // Match commercial sends: inbox workspace before capability/FK row locks.
+                // Provisioning may need this lock too; never acquire it in reverse order.
+                r.people().lock_workspace().await?;
                 let rows = r.consents().pending_sync(1000).await?;
                 if rows.is_empty() {
                     return Ok::<_, AppError>(());
                 }
                 let mut credentials = Vec::new();
-                for cap in r.capabilities().list(CapabilityFilter::default()).await? {
+                for hint in r.capabilities().list(CapabilityFilter::default()).await? {
+                    if hint.kind_key != "sms_line" {
+                        continue;
+                    }
+                    let Some(snapshot) = r.capabilities().lock_iys_snapshot(hint.id).await? else {
+                        continue;
+                    };
+                    let cap = snapshot.capability;
                     if cap.status == StoredStatus::Retired
                         || cap.reach != jt_capability::Reach::Connector
                         || cap.kind_key != "sms_line"
                     {
                         continue;
                     }
-                    let Some(sealed) = r.capabilities().read_iys_sealed(cap.id).await? else {
-                        continue;
-                    };
-                    let Some(sms) = r.capabilities().read_sealed(cap.id).await? else {
+                    let (Some(sealed), Some(sms)) = (snapshot.iys_sealed, snapshot.sms_sealed)
+                    else {
                         continue;
                     };
                     let Credential::NetgsmSms {
@@ -1336,24 +1368,16 @@ pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
                     else {
                         continue;
                     };
-                    let Credential::NetgsmIys {
-                        usercode, password, ..
-                    } = open_credential(deps, ws, &sealed)?
-                    else {
-                        continue;
-                    };
-                    let Some(brand) = cap.connector_public["iys"]["brand_code"]
-                        .as_str()
-                        .filter(|b| !b.trim().is_empty())
-                    else {
-                        continue;
-                    };
-                    if usercode == line_user {
-                        credentials.push(Credential::NetgsmIys {
-                            usercode,
-                            password,
-                            brand_code: brand.into(),
-                        });
+                    let credential = open_credential(deps, ws, &sealed)?;
+                    if let Credential::NetgsmIys {
+                        usercode,
+                        brand_code,
+                        ..
+                    } = &credential
+                        && usercode == &line_user
+                        && !brand_code.trim().is_empty()
+                    {
+                        credentials.push(credential);
                     }
                 }
                 // No usable slot (or ambiguous brands) must leave consent pending and ask the owner.

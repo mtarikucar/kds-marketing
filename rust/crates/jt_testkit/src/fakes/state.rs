@@ -401,6 +401,7 @@ pub struct InMemoryUow {
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
     mail_cursor_faults: Arc<AtomicUsize>,
+    capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
 }
 
 impl InMemoryUow {
@@ -411,6 +412,12 @@ impl InMemoryUow {
     /// A copy of the committed tables, for assertions.
     pub fn snapshot(&self) -> MemState {
         lock(&self.state).clone()
+    }
+
+    /// Model an attach committing after a capability list under READ COMMITTED. The next
+    /// list returns the old row; subsequent reads see this committed replacement.
+    pub fn replace_capability_after_list(&self, row: StoredCapability) {
+        *lock(&self.capability_after_list) = Some(row);
     }
 
     pub fn fail_mail_cursor(&self, times: usize) {
@@ -466,6 +473,7 @@ pub(super) struct MemTx {
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
     mail_cursor_faults: Arc<AtomicUsize>,
+    capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
     ops: Vec<Op>,
@@ -482,10 +490,30 @@ impl MemTx {
             inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
             inbox_consumption_faults: Arc::clone(&uow.inbox_consumption_faults),
             mail_cursor_faults: Arc::clone(&uow.mail_cursor_faults),
+            capability_after_list: Arc::clone(&uow.capability_after_list),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
             ops: Vec::new(),
             spoiled: false,
+        }
+    }
+
+    pub(super) fn commit_capability_after_list(&mut self, ws: WorkspaceId) {
+        let mut pending = lock(&self.capability_after_list);
+        if pending
+            .as_ref()
+            .is_none_or(|r| r.capability.workspace_id != ws)
+        {
+            return;
+        }
+        let row = pending.take().expect("checked above");
+        for state in [&mut *lock(&self.shared), &mut self.work] {
+            let stored = state
+                .capabilities
+                .iter_mut()
+                .find(|c| c.capability.id == row.capability.id)
+                .expect("existing capability");
+            *stored = row.clone();
         }
     }
 

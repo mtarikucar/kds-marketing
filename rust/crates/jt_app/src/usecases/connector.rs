@@ -2051,6 +2051,13 @@ pub(crate) async fn probe_locked(
     connected: bool,
 ) -> Result<ProbeOut, AppError> {
     let ws = ctx.workspace_id;
+    // Match mutation lock order (host guard before capability row) so a refresh cannot
+    // overwrite a newer declaration or deadlock a concurrent credential attachment.
+    let host_guard = if connected {
+        None
+    } else {
+        Some(host_mutation_lock(deps, ws).await?)
+    };
     let mut repos = deps.uow.tenant(ws).await?;
     let mut capability = locked(repos.as_mut(), id).await?;
     if capability.reach != Reach::Connector {
@@ -2068,6 +2075,12 @@ pub(crate) async fn probe_locked(
         .await?
         .ok_or_else(|| AppError::conflict("no credentials"))?;
     let credential = open_credential(deps, ws, &sealed)?;
+    if capability.kind_key == "mailbox" {
+        sync_hosts_in(deps, ws, repos.as_mut()).await?;
+    }
+    if let Some(guard) = host_guard {
+        guard.release().await?;
+    }
     let public = adapter_public(&capability);
     let step = if connected {
         Some(connector.on_connected(&credential, &public).await)
@@ -2536,10 +2549,31 @@ fn credential_hosts(
     }
     Ok(hosts)
 }
+/// Refresh one instance's tenant tier under the same workspace guard as host mutations.
+/// Mail calls use this even on instances where the scheduler is disabled.
+pub(crate) async fn refresh_tenant_hosts(
+    deps: &Deps,
+    ws: jt_tenancy::WorkspaceId,
+) -> Result<(), AppError> {
+    let guard = host_mutation_lock(deps, ws).await?;
+    let result = sync_hosts(deps, ws).await;
+    guard.release().await?;
+    result
+}
+
 /// Rebuild from committed live declarations, removing obsolete mailbox hosts while preserving
 /// hosts shared by another capability. Called before probing the newly committed credentials.
 pub(crate) async fn sync_hosts(deps: &Deps, ws: jt_tenancy::WorkspaceId) -> Result<(), AppError> {
     let mut r = deps.uow.tenant(ws).await?;
+    sync_hosts_in(deps, ws, r.as_mut()).await
+}
+
+/// Reuse a held tenant connection during a probe; the caller owns the host-mutation guard.
+async fn sync_hosts_in(
+    deps: &Deps,
+    ws: jt_tenancy::WorkspaceId,
+    r: &mut dyn TenantRepos,
+) -> Result<(), AppError> {
     let hosts = r
         .capabilities()
         .list(CapabilityFilter::default())

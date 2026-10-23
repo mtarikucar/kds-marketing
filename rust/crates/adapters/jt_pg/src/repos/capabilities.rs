@@ -3,7 +3,7 @@
 //! `policy`, `evidence` and `connector_public` are the JSON of `jt_capability::Policy`,
 //! `Evidence` and the public connector fields (read tolerantly: a missing field reads as its
 //! default); `reach` and `status` hold their keys. The sealed credentials sit in
-//! `connector_sealed`, which only `insert`, `set_sealed` and `read_sealed` touch: every read of a
+//! `connector_sealed`, which credential-specific operations touch: an ordinary read of a
 //! capability selects `connector_sealed is not null` instead of the bytes. The budget item ids
 //! come from `capability_budget_links`, in the same statement. The partial unique index
 //! `capabilities_live_external_account` keeps one live capability per external account.
@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
-use jt_app::ports::{CapabilityFilter, CapabilityRepo};
+use jt_app::ports::{CapabilityFilter, CapabilityRepo, IysCapabilitySnapshot};
 use jt_capability::{
     BudgetItemId, Capability, CapabilityId, Evidence, Policy, Reach, StoredStatus, kinds_in_group,
 };
@@ -396,6 +396,38 @@ impl CapabilityRepo for PgTenantRepos {
             return Err(AppError::not_found("no such capability"));
         }
         Ok(())
+    }
+
+    async fn lock_iys_snapshot(
+        &mut self,
+        id: CapabilityId,
+    ) -> Result<Option<IysCapabilitySnapshot>, AppError> {
+        #[derive(sqlx::FromRow)]
+        struct Record {
+            #[sqlx(flatten)]
+            capability: CapabilityRecord,
+            connector_sealed: Option<Vec<u8>>,
+            iys_sealed: Option<Vec<u8>>,
+        }
+        let ws = self.workspace_id();
+        let record: Option<Record> = sqlx::query_as(&format!(
+            "select {COLUMNS}, c.connector_sealed, c.iys_sealed from capabilities c \
+             where c.workspace_id = $1 and c.id = $2 for update of c"
+        ))
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock IYS capability snapshot"))?;
+        record
+            .map(|r| {
+                Ok(IysCapabilitySnapshot {
+                    capability: r.capability.into_capability()?,
+                    sms_sealed: r.connector_sealed,
+                    iys_sealed: r.iys_sealed,
+                })
+            })
+            .transpose()
     }
 
     async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {

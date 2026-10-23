@@ -285,6 +285,14 @@ impl CapabilityRepo for SpyTenant {
             .await
     }
 
+    async fn lock_iys_snapshot(
+        &mut self,
+        id: CapabilityId,
+    ) -> Result<Option<jt_app::ports::IysCapabilitySnapshot>, AppError> {
+        self.spy.push("capabilities.lock_iys_snapshot");
+        self.inner.capabilities().lock_iys_snapshot(id).await
+    }
+
     async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {
         self.spy.push("capabilities.read_iys_sealed");
         self.inner.capabilities().read_iys_sealed(id).await

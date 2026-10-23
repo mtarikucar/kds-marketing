@@ -270,6 +270,7 @@ fn every_job_has_a_lock_named_after_it() {
         names,
         [
             "refresh_tokens",
+            "refresh_tenant_hosts",
             "probe_all",
             "netgsm_dlr_poll",
             "netgsm_inbox_poll",
@@ -1785,6 +1786,66 @@ async fn poll_crash_keeps_cursor_and_events_consistent() {
             } else {
                 cursor.clone()
             }
+        );
+    }
+}
+
+#[tokio::test]
+async fn tenant_host_refresh_covers_receiving_workspaces_and_live_connector_hosts() {
+    let rig = rig().await;
+    let pending = workspace(&rig, "pending-hosts", WorkspaceStatus::PendingPayment).await;
+    let suspended = workspace(&rig, "suspended-hosts", WorkspaceStatus::Suspended).await;
+    for ws in [rig.ws(), pending, suspended] {
+        rig.store(
+            ws,
+            "mailbox",
+            "live",
+            StoredStatus::Verified,
+            json!({"hosts":["smtp.example.com", "imap.example.com"]}),
+            None,
+        )
+        .await;
+        rig.store(
+            ws,
+            "mailbox",
+            "retired",
+            StoredStatus::Retired,
+            json!({"hosts":["retired.example.com"]}),
+            None,
+        )
+        .await;
+        rig.store(
+            ws,
+            "notion",
+            "agent",
+            StoredStatus::Declared,
+            json!({"hosts":["agent.example.com"]}),
+            None,
+        )
+        .await;
+    }
+    assert_eq!(
+        jobs::run_refresh_tenant_hosts(&rig.w.deps, NOW).await,
+        report(2, 2, 0, 0)
+    );
+    let calls = rig.w.hosts.calls();
+    assert_eq!(calls.len(), 2);
+    for ws in [rig.ws(), pending] {
+        let hosts = calls
+            .iter()
+            .find_map(|c| match c {
+                jt_testkit::fakes::HostCall::Rebuild(id, hosts) if *id == ws => Some(hosts),
+                _ => None,
+            })
+            .expect("receiving workspace refreshed");
+        assert_eq!(
+            hosts
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["imap.example.com", "smtp.example.com"]
+                .into_iter()
+                .collect()
         );
     }
 }

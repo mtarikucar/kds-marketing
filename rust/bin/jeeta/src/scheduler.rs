@@ -48,6 +48,7 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Intervals {
     pub refresh_tokens: Duration,
+    pub refresh_tenant_hosts: Duration,
     pub probe_all: Duration,
     pub netgsm_dlr_poll: Duration,
     pub netgsm_inbox_poll: Duration,
@@ -75,6 +76,7 @@ impl Default for Intervals {
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
+            refresh_tenant_hosts: MINUTE,
             probe_all: 15 * MINUTE,
             netgsm_dlr_poll: MINUTE,
             netgsm_inbox_poll: HOUR,
@@ -97,6 +99,7 @@ impl Intervals {
     pub fn of(&self, job: Job) -> Duration {
         match job {
             Job::RefreshTokens => self.refresh_tokens,
+            Job::RefreshTenantHosts => self.refresh_tenant_hosts,
             Job::ProbeAll => self.probe_all,
             Job::NetgsmDlrPoll => self.netgsm_dlr_poll,
             Job::NetgsmInboxPoll => self.netgsm_inbox_poll,
@@ -381,6 +384,7 @@ mod tests {
     fn every(every: Duration) -> Intervals {
         Intervals {
             refresh_tokens: every,
+            refresh_tenant_hosts: every,
             probe_all: every,
             netgsm_dlr_poll: every,
             netgsm_inbox_poll: every,
@@ -470,6 +474,7 @@ mod tests {
     fn the_production_schedule() {
         let i = Intervals::default();
         assert_eq!(i.of(Job::RefreshTokens), HOUR);
+        assert_eq!(i.of(Job::RefreshTenantHosts), MINUTE);
         assert_eq!(i.of(Job::ProbeAll), Duration::from_secs(15 * 60));
         assert_eq!(i.of(Job::NetgsmDlrPoll), MINUTE);
         assert_eq!(i.of(Job::NetgsmInboxPoll), HOUR);

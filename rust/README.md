@@ -906,6 +906,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `netgsm_dlr_poll` | 1 dakika | İletimi kesinleşmemiş gönderilerin iş kimliklerini (en çok 50) alanın doğrulanmış SMS hatlarının kimlik bilgisiyle NetGSM iletim raporuna sorar ve duyduğu durumları kaydeder. Gönderiler M2'nin tablosundadır; o gelene dek bekleyen iş yoktur ve sağlayıcıya hiç gidilmez | `jeeta.jobs.netgsm_dlr_poll` |
 | `netgsm_inbox_poll` | 1 saat | Her doğrulanmış SMS hattının NetGSM gelen kutusunu son iki saat için okur (başlangıç ve bitiş tarihi her zaman verilir) ve webhook'un kaçırdığı mesajları o hatta bağlı gelen olay olarak saklar. Kimlik webhook'unkiyle aynıdır (`netgsm-mo:<gorevid>`): webhook'un ya da önceki yoklamanın sakladığı mesaj ikinci kez yazılmaz. Yoklamanın ham gövdesi yoktur | `jeeta.jobs.netgsm_inbox_poll` |
 | `iys_sync` | 1 saat | İYS izin kararlarını eşitler; beş hatadan sonra insan takip görevi açar | `jeeta.jobs.iys_sync` |
+| `refresh_tenant_hosts` | 1 dakika | Active/pending_payment çalışma alanlarının canlı connector host listesinden bu instance'ın tenant egress katmanını yeniler | `jeeta.jobs.refresh_tenant_hosts` |
 | `mail_inbox_poll` | 2 dakika | Doğrulanmış posta kutularında INBOX/Sent UID imleçlerini okur; olaylarla imleçleri aynı işlemde kaydeder ve gelen kutusu tüketicisini çalıştırır | `jeeta.jobs.mail_inbox_poll` |
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
@@ -1554,7 +1555,10 @@ configured capability for that channel; ambiguous capability or recipient select
 It creates an outbound conversation without manufacturing inbound activity. Both enqueue and
 provider fences read current consent and suppression; missing permission or suppression returns
 FORBIDDEN `IZIN_YOK`, ledgered without message/identity text. Reply intent keeps its same-conversation
-24-hour inbound window; commercial replies use consent instead. SMS commercial sends use
+24-hour inbound window. Commercial sends require consent; WhatsApp, Messenger and Instagram
+also require an open provider 24-hour window at enqueue and send time, otherwise returning
+VALIDATION `provider_window_closed`. Templates and message-tag sends are deferred to M2c.
+SMS and email commercial sends have no inbound-window requirement. SMS commercial sends use
 `iysfilter=1`; Reply uses 0. Both send/reply share the 24-hour workspace request-key response cache
 and existing outbox recovery, including never automatically retrying unknown sends.
 
@@ -1563,6 +1567,13 @@ provider's effective timestamp; undated, invalid or future grants are deferred i
 using arrival time. Incoming mail withdrawals suppress the matched person.
 Correlated mail bounces and ARF abuse/fraud/virus complaints add email suppression and refuse subsequent queued commercial
 mail at its provider fence. Unknown identities are deferred without creating a person.
+
+Mail sends, polls and probes refresh the instance's tenant egress registry from the workspace's
+committed live connector host declarations before provider I/O, including on instances with jobs
+disabled. `refresh_tenant_hosts` also runs every minute for active/pending_payment workspaces under
+the scheduler advisory lock. Both refresh paths use the workspace host-mutation guard, replace the
+whole tenant tier, preserve hosts shared by live connectors, and remove obsolete hosts. This keeps
+a mailbox connected on one instance usable on the next mail call on another instance.
 
 The hourly `iys_sync` job uses the existing advisory-lock scheduler. It submits pending/failed
 SMS (`MESAJ`), telephone (`ARAMA`) and email (`EPOSTA`) decisions. Withdrawals send `granted=false`.
@@ -1584,8 +1595,10 @@ brand is `connector_public.iys.brand_code`; `iys` is reserved against ordinary c
 Migration 0008 adds the nullable slot and its down removes only that added column.
 The optional İYS section on ConnectPage attaches to an existing SMS line, including immediately
 after saving a new line. Its password is cleared after success and excluded from query caches.
-Sync reads the slot and public brand on exactly one live SMS line, checks its usercode
-against the SMS credential, and leaves consent pending when none or multiple are usable.
+Sync reads each candidate capability and both sealed slots in one row-locked snapshot, rechecks
+liveness, and takes the brand from inside the sealed İYS credential; the public brand is display only.
+It checks the usercode against the SMS credential and leaves consent pending when none or multiple
+are usable. The row lock is released before provider I/O.
 One open owner task asks for provisioning; repeated hourly runs do not duplicate it or spend
 consent retry attempts. Provisioning can be retried without replacing the SMS credential.
 The capabilities page offers İYS setup for live SMS lines with credentials, including verified

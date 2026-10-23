@@ -210,6 +210,7 @@ impl CapabilityRepo for MemTenant {
             .filter(|c| filter.group_id.is_none_or(|g| in_group(c, g)))
             .collect();
         rows.sort_by_key(|c| (c.created_at, c.id));
+        self.tx.commit_capability_after_list(ws);
         Ok(rows)
     }
 
@@ -309,6 +310,20 @@ impl CapabilityRepo for MemTenant {
             });
             Ok(())
         })
+    }
+
+    async fn lock_iys_snapshot(
+        &mut self,
+        id: CapabilityId,
+    ) -> Result<Option<jt_app::ports::IysCapabilitySnapshot>, AppError> {
+        let state = self.state();
+        Ok(state
+            .capability_in(self.ws, id)
+            .map(|row| jt_app::ports::IysCapabilitySnapshot {
+                capability: state.capability_view(row),
+                sms_sealed: row.sealed.clone(),
+                iys_sealed: row.iys_sealed.clone(),
+            }))
     }
 
     async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError> {

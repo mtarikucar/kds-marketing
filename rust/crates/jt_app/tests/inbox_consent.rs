@@ -911,3 +911,227 @@ async fn rebinding_sms_line_clears_iys_slot_and_brand() {
     assert_eq!(r.capabilities().read_sealed(id).await.unwrap(), None);
     assert_eq!(r.capabilities().read_iys_sealed(id).await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn commercial_meta_outside_window_is_refused() {
+    for kind in [
+        "whatsapp_cloud",
+        "messenger",
+        "instagram_dm",
+        "sms_line",
+        "mailbox",
+    ] {
+        let (w, id, connector) = setup_channel(kind).await;
+        let mut r = w.uow.tenant(w.ws).await.unwrap();
+        let person = w.uow.snapshot().inbox.people[0].id;
+        r.consents()
+            .insert(Consent {
+                id: ConsentId::new_v7(),
+                person_id: person,
+                channel: channel_for_kind(kind).unwrap(),
+                kind: ConsentKind::Explicit,
+                source: ConsentSource::Customer,
+                at: w.owner_ctx.now,
+                sync_state: SyncState::Pending,
+                attempts: 0,
+            })
+            .await
+            .unwrap();
+        if matches!(kind, "messenger" | "instagram_dm") {
+            let mut cap = w.uow.snapshot().capabilities[0].capability.clone();
+            cap.external_id = Some("page".into());
+            r.capabilities().update(cap).await.unwrap();
+            r.identities()
+                .insert(Identity {
+                    id: IdentityId::new_v7(),
+                    workspace_id: w.ws,
+                    person_id: person,
+                    channel: if kind == "messenger" {
+                        IdentityChannel::Messenger
+                    } else {
+                        IdentityChannel::InstagramDm
+                    },
+                    value_normalized: "page:recipient".into(),
+                    value_display: "recipient".into(),
+                    active: true,
+                    first_seen_at: w.owner_ctx.now,
+                })
+                .await
+                .unwrap();
+        }
+        r.commit().await.unwrap();
+        let mut late = w.owner_ctx.clone();
+        late.now += time::Duration::hours(25);
+        if matches!(kind, "sms_line" | "mailbox") {
+            if kind == "sms_line" {
+                connector.push_sms(accepted());
+            } else {
+                connector.push_mail(accepted());
+            }
+            assert_eq!(
+                replies::reply(&w.deps, &late, id, commercial())
+                    .await
+                    .unwrap()
+                    .state,
+                "sent"
+            );
+            continue;
+        }
+        // An expired provider window must fail before enqueue.
+        let error = replies::enqueue(&w.deps, &late, id, commercial())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, jt_app::error::ErrorCode::Validation);
+        assert_eq!(error.details["reason"], "provider_window_closed");
+        assert!(w.uow.snapshot().inbox.outbox.is_empty());
+        // A valid queued send must be refused if its provider window expires before claim.
+        let replies::Enqueued::New(q) = replies::enqueue(&w.deps, &w.owner_ctx, id, commercial())
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let error = replies::send_step(&w.deps, &late, q).await.unwrap_err();
+        assert_eq!(error.code, jt_app::error::ErrorCode::Validation);
+        assert_eq!(error.details["reason"], "provider_window_closed");
+        assert_eq!(w.uow.snapshot().inbox.outbox[0].state, "refused");
+        assert_eq!(
+            w.uow.snapshot().inbox.outbox[0].last_error.as_deref(),
+            Some("provider_window_closed")
+        );
+        assert!(connector.calls().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn iys_sync_uses_one_consistent_snapshot() {
+    for public_brand in ["new-brand", "display-only"] {
+        let (w, connector) = iys_setup().await;
+        grant(&w, ConsentKind::Withdrawn, w.owner_ctx.now).await;
+        let mut replacement = w.uow.snapshot().capabilities[0].clone();
+        let credential = Credential::NetgsmIys {
+            usercode: "user".into(),
+            password: "new-iys-password".into(),
+            brand_code: "new-brand".into(),
+        };
+        replacement.iys_sealed = Some(
+            w.deps
+                .seal
+                .seal(w.ws, &serde_json::to_vec(&credential).unwrap())
+                .unwrap(),
+        );
+        replacement.capability.connector_public["iys"]["brand_code"] = json!(public_brand);
+        w.uow.replace_capability_after_list(replacement);
+        connector.push_consent_add(accepted());
+        let result = jt_app::usecases::jobs::run_iys_sync(&w.deps, w.owner_ctx.now).await;
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.changed, 1);
+        let calls = connector.calls();
+        let jt_testkit::fakes::ConnectorCall::ConsentAdd {
+            credential: sent, ..
+        } = calls.last().unwrap()
+        else {
+            panic!("expected consent submission")
+        };
+        assert_eq!(sent, &credential);
+        assert_eq!(
+            w.uow.snapshot().inbox.consents[0].1.sync_state,
+            SyncState::Sent
+        );
+    }
+}
+
+#[tokio::test]
+async fn mail_hosts_refresh_across_instances() {
+    use jt_app::{
+        ports::TenantHostRegistry,
+        usecases::{connector as connection, jobs},
+    };
+    use jt_outbound::{Egress, EgressScope, EgressTenantHosts, Url};
+    let (mut w, conversation, mail) = setup_channel("mailbox").await;
+    let a = Arc::new(Egress::new(&[]));
+    w.deps.hosts = Arc::new(EgressTenantHosts::new(a.clone()));
+    let id = w.uow.snapshot().capabilities[0].capability.id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.capabilities()
+        .set_status(id, StoredStatus::Unreachable, w.owner_ctx.now)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+
+    mail.push_probe(jt_connector::ProbeResult::success(
+        1,
+        json!({"account_id":"support@example.com"}),
+    ));
+    connection::set_credentials(
+        &w.deps,
+        &w.owner_ctx,
+        serde_json::from_value(json!({
+            "capability_id": id,
+            "credential":{"kind":"mailbox", "smtp_host":"smtp.example.com", "smtp_port":465,
+            "imap_host":"imap.example.com", "imap_port":993, "username":"support@example.com",
+            "password":"secret", "from_address":"support@example.com", "tls":"implicit"}
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let smtp = Url::parse("https://smtp.example.com:465").unwrap();
+    let imap = Url::parse("https://imap.example.com:993").unwrap();
+    assert!(a.permits(EgressScope::Tenant(w.ws), &smtp));
+    assert!(a.permits(EgressScope::Tenant(w.ws), &imap));
+    for call in ["send", "poll", "probe", "scheduled"] {
+        let b = Arc::new(Egress::new(&[]));
+        let hosts_b = Arc::new(EgressTenantHosts::new(b.clone()));
+        let mut instance_b = w.deps.clone();
+        instance_b.hosts = hosts_b.clone();
+        assert!(!b.permits(EgressScope::Tenant(w.ws), &smtp));
+        assert!(!b.permits(EgressScope::Tenant(w.ws), &imap));
+        match call {
+            "send" => {
+                mail.push_mail(accepted());
+                assert_eq!(
+                    replies::reply(&instance_b, &w.owner_ctx, conversation, input(None))
+                        .await
+                        .unwrap()
+                        .state,
+                    "sent"
+                );
+            }
+            "poll" => {
+                mail.push_mailbox_poll(Ok((vec![], Default::default())));
+                let report = jobs::run_mail_inbox_poll(&instance_b, w.owner_ctx.now).await;
+                assert_eq!(report.touched, 1);
+                assert_eq!(report.failed, 0);
+            }
+            "probe" => {
+                mail.push_probe(jt_connector::ProbeResult::success(
+                    1,
+                    json!({"account_id":"support@example.com"}),
+                ));
+                connection::probe(&instance_b, &w.owner_ctx, id)
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                // An obsolete local grant is removed by a full workspace replacement.
+                hosts_b.allow(w.ws, "obsolete.example.com").unwrap();
+                let job = jobs::Job::ALL
+                    .iter()
+                    .find(|j| j.name() == "refresh_tenant_hosts")
+                    .expect("refresh job");
+                assert_eq!(job.run(&instance_b, w.owner_ctx.now).await.failed, 0);
+                assert!(!b.permits(
+                    EgressScope::Tenant(w.ws),
+                    &Url::parse("https://obsolete.example.com").unwrap()
+                ));
+            }
+        }
+        assert!(b.permits(EgressScope::Tenant(w.ws), &smtp), "{call}: SMTP");
+        assert!(b.permits(EgressScope::Tenant(w.ws), &imap), "{call}: IMAP");
+        assert!(!b.permits(
+            EgressScope::Tenant(jt_tenancy::WorkspaceId::new_v7()),
+            &smtp
+        ));
+    }
+}

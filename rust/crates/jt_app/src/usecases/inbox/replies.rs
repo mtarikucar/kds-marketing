@@ -517,12 +517,26 @@ async fn fence(
         matches!(author, Author::Agent),
     )
     .map_err(|e| refused(e.to_string()))?;
-    if intent == SendIntent::Reply
-        && !c.last_inbound_at.is_some_and(|at| {
-            at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
-        })
-    {
-        return Err(refused("reply_window_closed"));
+    let window_open = c.last_inbound_at.is_some_and(|at| {
+        at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
+    });
+    if !window_open {
+        if intent == SendIntent::Commercial
+            && matches!(
+                channel,
+                Channel::WhatsApp | Channel::Messenger | Channel::InstagramDm
+            )
+        {
+            // Templates and message tags are deferred to M2c; ordinary Meta sends require
+            // the provider's window even when local commercial consent is present.
+            return Err(AppError::validation(
+                "provider_window_closed",
+                json!({"reason": "provider_window_closed"}),
+            ));
+        }
+        if intent == SendIntent::Reply {
+            return Err(refused("reply_window_closed"));
+        }
     }
     // Recovery must honor the same workspace gate as the public surfaces.
     if r.workspace().get().await?.status != WorkspaceStatus::Active {
@@ -614,7 +628,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
     )
     .await
     {
-        if e.code != ErrorCode::Forbidden {
+        if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) {
             return Err(e);
         }
         row.state = "refused".into();
@@ -623,13 +637,18 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         r.messages()
             .set_status(
                 row.message_id,
-                MsgStatus::Refused { reason: e.message },
+                MsgStatus::Refused {
+                    reason: e.message.clone(),
+                },
                 None,
                 None,
             )
             .await?;
         save_result(r.as_mut(), ctx, &row).await?;
         r.commit().await?;
+        if e.code == ErrorCode::Validation {
+            return Err(e);
+        }
         return Ok(Claim::Done(output(&row)));
     }
     let prepared = prepare(deps, r.as_mut(), &c, &cap)
@@ -791,6 +810,18 @@ async fn recipient(
 
 /// Claim at most once. A sending or terminal entry is never put to the provider again.
 pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, AppError> {
+    // Mail intent is stored only by enqueue's mailbox branch. Release this discovery read
+    // before refreshing: never wait for another pooled connection while holding inbox locks.
+    let mail_queued = {
+        let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+        r.outbox()
+            .get(id)
+            .await?
+            .is_some_and(|row| row.state == "queued" && row.intent.get("mail").is_some())
+    };
+    if mail_queued {
+        crate::usecases::connector::refresh_tenant_hosts(deps, ctx.workspace_id).await?;
+    }
     let ctx = fresh(deps, ctx);
     let p = match claim(deps, &ctx, id).await? {
         Claim::Done(out) => return Ok(out),

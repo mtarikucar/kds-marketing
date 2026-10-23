@@ -124,7 +124,7 @@ pub trait ChannelCatalog: Send + Sync {
 /// The tier is one set of hosts per workspace, not counted per capability: a caller revoking a
 /// host first makes sure no other capability of the workspace still needs it. It lives in memory,
 /// so every method is synchronous, and it starts empty: it is rebuilt from the capability records
-/// at start-up (`rebuild_from`).
+/// at start-up and before mail calls (`rebuild_from`).
 pub trait TenantHostRegistry: Send + Sync {
     /// `Ok` when `host` (`host` or `host:port`, an IPv6 literal in brackets) may enter a tenant
     /// tier, else `VALIDATION` "host is not public" naming it in `details.host`. Changes nothing:
@@ -819,6 +819,14 @@ pub struct CapabilityFilter {
     pub group_id: Option<CapabilityGroupId>,
 }
 
+/// One locked capability-row snapshot for IYS sync. Kept internal to credential use cases;
+/// never serialized or debug-printed because both slots contain sealed secrets.
+pub struct IysCapabilitySnapshot {
+    pub capability: Capability,
+    pub sms_sealed: Option<Vec<u8>>,
+    pub iys_sealed: Option<Vec<u8>>,
+}
+
 /// The workspace's capabilities.
 ///
 /// A kind may have many capabilities (B10), but one external account (the same `kind_key` and
@@ -894,6 +902,13 @@ pub trait CapabilityRepo: Send + Sync {
         sealed: Option<Vec<u8>>,
         at: OffsetDateTime,
     ) -> Result<(), AppError>;
+    /// Reads the capability and BOTH sealed slots in one statement under a row lock, held
+    /// until commit/drop. Unknown/foreign ids return None. A list result is only an ID hint:
+    /// callers recheck liveness and use the brand INSIDE the sealed IYS credential.
+    async fn lock_iys_snapshot(
+        &mut self,
+        id: CapabilityId,
+    ) -> Result<Option<IysCapabilitySnapshot>, AppError>;
     /// Reads the separate IYS slot; unknown/foreign ids are NOT_FOUND. Never returned publicly.
     async fn read_iys_sealed(&mut self, id: CapabilityId) -> Result<Option<Vec<u8>>, AppError>;
     /// Sets the stored status and `updated_at = at`. An unknown id is `NOT_FOUND`; bringing a
