@@ -128,6 +128,14 @@ impl<T> LimitedRead<T> {
     pub(crate) fn into_inner(self) -> T {
         self.inner
     }
+    pub(crate) fn inner_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
+}
+impl<T> LimitedRead<crate::search_read::SearchRead<T>> {
+    pub(crate) fn begin_search(&mut self, tag: String, esearch: bool) {
+        self.inner.begin(tag, esearch, &self.pending);
+    }
 }
 impl<T> LimitedRead<T> {
     // Inspect the same grammar as the protocol library before giving it more bytes. Its

@@ -5,6 +5,7 @@ mod imap;
 mod parse;
 pub use parse::event as parse_message;
 mod probe;
+mod search_read;
 mod smtp;
 mod socket;
 

@@ -26,16 +26,26 @@ never automatically retried. A conclusive SMTP refusal retains its permanent/tra
 
 Polling discovers the Sent folder through LIST special-use flags (with common-name fallbacks),
 and reads it and INBOX with BODY.PEEK. Missing Sent folders do not block INBOX. Each actual folder
-has an independent UIDVALIDITY/UID cursor. `UID SEARCH UID <last+1>:*` selects existing UIDs,
-with at most 100 messages per poll across folders, size metadata preflight,
+has an independent UIDVALIDITY/UID cursor. UIDNEXT bounds discovery. When ESEARCH is advertised,
+`UID SEARCH RETURN (MIN) UID <last+1>:*` locates the next existing UID before windowed fetching.
+Otherwise, `UID SEARCH UID a:b` starts with a 5,000-UID window and doubles after empty ranges.
+SEARCH responses retain at most 1,000 UIDs while streaming; larger results are drained and
+retried on the lower half. Only completely scanned accepted ranges can advance the cursor.
+The shared poll limits are 20 window searches (including bisection retries) and 100 messages.
+The reader validates ESEARCH's UID marker and optional command tag, preserves fragmented
+unsolicited responses and opaque literals across mode changes, and retains size metadata preflight,
 partial body fetches, and a shared 20 MiB poll budget. Operations have ten-second deadlines;
-long batches return completed cursor progress after eight seconds between commands. Completed
+discovery reserves two seconds of the eight-second poll budget for fetching. If one slow
+SEARCH overruns that reserve, one bounded fetch still makes progress before yielding. A known
+ESEARCH minimum remains eligible for fetching immediately. If no UID is selected yet, overflow
+bisection can finish beyond the soft time budget, still subject to the 20-search limit. Completed
 polls drop their session without waiting for LOGOUT.
 Mail over 10 MiB or malformed/excessively complex MIME produces a metadata-only `mail_rejected`
 event and advances that UID, so one poison message cannot block later mail. A byte ceiling below
 the protocol parser also limits dishonest server responses. Persist the returned cursor atomically with the event drafts. Changed
-UIDVALIDITY starts a new generation. The cursor advances to the highest processed UID, never
-by numeric distance. Event IDs are `imap:<account>:<binding>:<mailbox>:<uidvalidity>:<uid>`;
+UIDVALIDITY starts a new generation. The cursor advances to the highest processed UID or the
+end of a fully scanned empty range, never past UIDNEXT-1 or across an unprocessed selected UID.
+A message limit reached within a window leaves its remaining UIDs for the next poll. Event IDs are `imap:<account>:<binding>:<mailbox>:<uidvalidity>:<uid>`;
 `binding` is the first 12 lowercase hex characters of SHA-256 of `imap_host:imap_port`, with
 the host trimmed and ASCII-lowercased. Switching servers therefore cannot collide with stored
 events, including rejected mail. Old IDs remain readable as opaque legacy IDs without migration;

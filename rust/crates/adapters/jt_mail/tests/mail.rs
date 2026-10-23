@@ -1116,6 +1116,7 @@ async fn imap_poll_fetches_sparse_high_uids_immediately() {
         2,
         ImapMode {
             sent: None,
+            esearch: true,
             ..Default::default()
         },
     )
@@ -1141,38 +1142,545 @@ async fn imap_poll_fetches_sparse_high_uids_immediately() {
 
 #[tokio::test]
 async fn imap_poll_caps_total_messages_and_resumes_existing_uids() {
-    let messages = (1..=101)
-        .map(|n| (n * 10_000, BODY.len() as u32, BODY.to_vec()))
+    for esearch in [false, true] {
+        let messages = (1..=101)
+            .map(|n| (n * 10, BODY.len() as u32, BODY.to_vec()))
+            .collect();
+        let (port, task) = imap_with_mode(
+            false,
+            42,
+            messages,
+            3,
+            ImapMode {
+                esearch,
+                ..Default::default()
+            },
+        )
+        .await;
+        let conn = connector();
+        let cred = credential(465, port, MailTls::Implicit);
+        let public = json!({"external_id":"account"});
+        let (first, cursor) = conn
+            .poll(workspace(), &cred, &public, &MailboxCursor::default())
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 100);
+        assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_000);
+        let (second, cursor) = conn
+            .poll(workspace(), &cred, &public, &cursor)
+            .await
+            .unwrap();
+        assert_eq!(second.len(), 100);
+        assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_010);
+        assert_eq!(cursor.mailboxes["Sent"].last_uid, 990);
+        let (third, cursor) = conn
+            .poll(workspace(), &cred, &public, &cursor)
+            .await
+            .unwrap();
+        assert_eq!(third.len(), 2);
+        assert_eq!(cursor.mailboxes["Sent"].last_uid, 1_010);
+        let ids: std::collections::HashSet<_> = first
+            .iter()
+            .chain(&second)
+            .chain(&third)
+            .map(|e| &e.external_id)
+            .collect();
+        assert_eq!(ids.len(), 202);
+        task.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn imap_large_mailbox_makes_progress_with_bounded_search_results() {
+    let searches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let messages = (1..=200_000)
+        .map(|uid| (uid, BODY.len() as u32, BODY.to_vec()))
         .collect();
-    let (port, task) = imap_messages(false, 42, messages, 3).await;
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        messages,
+        3,
+        ImapMode {
+            sent: None,
+            searches: Some(searches.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
     let conn = connector();
     let cred = credential(465, port, MailTls::Implicit);
     let public = json!({"external_id":"account"});
-    let (first, cursor) = conn
+    let mut cursor = MailboxCursor::default();
+    let mut ids = std::collections::HashSet::new();
+    for poll in 1..=3 {
+        let (events, next) = conn
+            .poll(workspace(), &cred, &public, &cursor)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 100);
+        assert_eq!(next.mailboxes["INBOX"].last_uid, poll * 100);
+        for event in events {
+            assert!(ids.insert(event.external_id));
+        }
+        cursor = next;
+    }
+    assert_eq!(
+        *searches.lock().unwrap(),
+        [
+            "1:5000", "1:2500", "1:1250", "1:625", "101:5100", "101:2600", "101:1350", "101:725",
+            "201:5200", "201:2700", "201:1450", "201:825"
+        ]
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_empty_scan_stops_at_uidnext_and_does_not_rescan() {
+    let searches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        vec![],
+        2,
+        ImapMode {
+            sent: None,
+            uid_next: Some(12_346),
+            searches: Some(searches.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let conn = connector();
+    let cred = credential(465, port, MailTls::Implicit);
+    let public = json!({"external_id":"account"});
+    let (events, cursor) = conn
         .poll(workspace(), &cred, &public, &MailboxCursor::default())
         .await
         .unwrap();
-    assert_eq!(first.len(), 100);
+    assert!(events.is_empty());
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 12_345);
+    let (events, next) = conn
+        .poll(workspace(), &cred, &public, &cursor)
+        .await
+        .unwrap();
+    assert!(events.is_empty());
+    assert_eq!(next, cursor);
+    assert_eq!(*searches.lock().unwrap(), ["1:5000", "5001:12345"]);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_empty_windows_never_skip_a_pending_body() {
+    let messages = vec![
+        (1, BODY.len() as u32, BODY.to_vec()),
+        (2, BODY.len() as u32, BODY.to_vec()),
+    ];
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        messages,
+        1,
+        ImapMode {
+            sent: None,
+            uid_next: Some(20_001),
+            body_delay: Duration::from_millis(8100),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (events, cursor) = connector()
+        .poll(
+            workspace(),
+            &credential(465, port, MailTls::Implicit),
+            &json!({"external_id":"account"}),
+            &MailboxCursor::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        cursor.mailboxes["INBOX"].last_uid, 1,
+        "empty windows after UID 2 cannot skip its unfetched body"
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_window_budget_never_skips_an_unscanned_uid() {
+    let searches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        (1..=21)
+            .map(|n| (n * 5_000, BODY.len() as u32, BODY.to_vec()))
+            .collect(),
+        2,
+        ImapMode {
+            searches: Some(searches.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let conn = connector();
+    let cred = credential(465, port, MailTls::Implicit);
+    let public = json!({"external_id":"account"});
+    let (events, cursor) = conn
+        .poll(workspace(), &cred, &public, &MailboxCursor::default())
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 20);
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 100_000);
+    assert!(
+        !cursor.mailboxes.contains_key("Sent"),
+        "the 20-window budget is shared across folders"
+    );
+    assert_eq!(searches.lock().unwrap().len(), 20);
+    assert_eq!(searches.lock().unwrap().last().unwrap(), "95001:100000");
+    let (events, next) = conn
+        .poll(workspace(), &cred, &public, &cursor)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 20);
+    assert_eq!(events[0].kind, EventKind::Message);
+    assert_eq!(next.mailboxes["INBOX"].last_uid, 105_000);
+    assert_eq!(next.mailboxes["Sent"].last_uid, 95_000);
+    assert_eq!(searches.lock().unwrap()[20], "100001:105000");
+    assert_eq!(searches.lock().unwrap().len(), 40);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_empty_tail_advances_only_after_all_selected_uids_are_fetched() {
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        vec![(7, BODY.len() as u32, BODY.to_vec())],
+        1,
+        ImapMode {
+            sent: None,
+            uid_next: Some(12_346),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (events, cursor) = connector()
+        .poll(
+            workspace(),
+            &credential(465, port, MailTls::Implicit),
+            &json!({"external_id":"account"}),
+            &MailboxCursor::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 12_345);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_fallback_fetches_sparse_high_uid_within_three_polls() {
+    let searches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        vec![(1_000_000, BODY.len() as u32, BODY.to_vec())],
+        3,
+        ImapMode {
+            sent: None,
+            searches: Some(searches.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let conn = connector();
+    let cred = credential(465, port, MailTls::Implicit);
+    let public = json!({"external_id":"account"});
+    let mut cursor = MailboxCursor::default();
+    let mut received = Vec::new();
+    for _ in 0..3 {
+        let (events, next) = conn
+            .poll(workspace(), &cred, &public, &cursor)
+            .await
+            .unwrap();
+        received.extend(events);
+        cursor = next;
+    }
+    assert_eq!(received.len(), 1);
     assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_000_000);
-    let (second, cursor) = conn
-        .poll(workspace(), &cred, &public, &cursor)
-        .await
-        .unwrap();
-    assert_eq!(second.len(), 100);
-    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_010_000);
-    assert_eq!(cursor.mailboxes["Sent"].last_uid, 990_000);
-    let (third, cursor) = conn
-        .poll(workspace(), &cred, &public, &cursor)
-        .await
-        .unwrap();
-    assert_eq!(third.len(), 2);
-    assert_eq!(cursor.mailboxes["Sent"].last_uid, 1_010_000);
-    let ids: std::collections::HashSet<_> = first
-        .iter()
-        .chain(&second)
-        .chain(&third)
-        .map(|e| &e.external_id)
+    let scans = searches.lock().unwrap().clone();
+    assert_eq!(&scans[..3], ["1:5000", "5001:15000", "15001:35000"]);
+    assert!(scans.len() <= 60);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_grown_window_is_bisected_without_losing_dense_tail() {
+    let messages = (635_001..=835_000)
+        .map(|uid| (uid, BODY.len() as u32, BODY.to_vec()))
         .collect();
-    assert_eq!(ids.len(), 202);
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        messages,
+        3,
+        ImapMode {
+            sent: None,
+            ..Default::default()
+        },
+    )
+    .await;
+    let conn = connector();
+    let cred = credential(465, port, MailTls::Implicit);
+    let public = json!({"external_id":"account"});
+    let mut cursor = MailboxCursor::default();
+    for poll in 1..=3 {
+        let (events, next) = conn
+            .poll(workspace(), &cred, &public, &cursor)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 100);
+        assert_eq!(next.mailboxes["INBOX"].last_uid, 635_000 + poll * 100);
+        cursor = next;
+    }
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_esearch_empty_result_is_bounded_by_uidnext() {
+    let searches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        vec![],
+        1,
+        ImapMode {
+            sent: None,
+            esearch: true,
+            uid_next: Some(12_346),
+            esearch_response: Some("* eSeArCh uId"),
+            searches: Some(searches.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (events, cursor) = connector()
+        .poll(
+            workspace(),
+            &credential(465, port, MailTls::Implicit),
+            &json!({"external_id":"account"}),
+            &MailboxCursor::default(),
+        )
+        .await
+        .unwrap();
+    assert!(events.is_empty());
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 12_345);
+    assert_eq!(*searches.lock().unwrap(), ["MIN 1:*"]);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_esearch_rejects_invalid_or_uncorrelated_results() {
+    for response in [
+        "* ESEARCH (TAG \"wrong-command\") UID MIN 7",
+        "* ESEARCH MIN 7",
+        "* ESEARCH UID MIN 0",
+        "* ESEARCH UID MIN 7 MIN 8",
+        "* SEARCH 7",
+    ] {
+        let (port, task) = imap_with_mode(
+            false,
+            42,
+            vec![(7, BODY.len() as u32, BODY.to_vec())],
+            1,
+            ImapMode {
+                sent: None,
+                esearch: true,
+                esearch_response: Some(response),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            connector()
+                .poll(
+                    workspace(),
+                    &credential(465, port, MailTls::Implicit),
+                    &json!({"external_id":"account"}),
+                    &MailboxCursor::default()
+                )
+                .await
+                .is_err(),
+            "{response}"
+        );
+        task.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn imap_slow_discovery_still_dispatches_selected_messages() {
+    let messages = (1..=21)
+        .map(|n| (n * 5_000, BODY.len() as u32, BODY.to_vec()))
+        .collect();
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        messages,
+        2,
+        ImapMode {
+            sent: None,
+            search_delay: Duration::from_millis(500),
+            ..Default::default()
+        },
+    )
+    .await;
+    let conn = connector();
+    let cred = credential(465, port, MailTls::Implicit);
+    let public = json!({"external_id":"account"});
+    let mut cursor = MailboxCursor::default();
+    let mut previous = 0;
+    for _ in 0..2 {
+        let (events, next) = conn
+            .poll(workspace(), &cred, &public, &cursor)
+            .await
+            .unwrap();
+        assert!(!events.is_empty());
+        let last = next.mailboxes["INBOX"].last_uid;
+        assert!(last > previous);
+        assert_eq!((last - previous) / 5_000, events.len() as u32);
+        previous = last;
+        cursor = next;
+    }
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_search_preserves_fragmented_unsolicited_responses() {
+    for esearch in [false, true] {
+        for fragment in [
+            ("* 2 EX", "ISTS\r\n"),
+            ("", "* 1 FETCH (UID 7 BODY[] {14}\r\n* SEARCH 999\r\n)\r\n"),
+            ("* 1 FETCH (UID 7 BODY[] {14}\r\n* SE", "ARCH 999\r\n)\r\n"),
+        ] {
+            let (port, task) = imap_with_mode(
+                false,
+                42,
+                vec![(7, BODY.len() as u32, BODY.to_vec())],
+                1,
+                ImapMode {
+                    sent: None,
+                    esearch,
+                    examine_fragment: Some(fragment),
+                    ..Default::default()
+                },
+            )
+            .await;
+            let result = connector()
+                .poll(
+                    workspace(),
+                    &credential(465, port, MailTls::Implicit),
+                    &json!({"external_id":"account"}),
+                    &MailboxCursor::default(),
+                )
+                .await;
+            let (events, cursor) = result.unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(cursor.mailboxes["INBOX"].last_uid, 7);
+            task.await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn imap_one_slow_search_cannot_starve_selected_uids() {
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        vec![(7, BODY.len() as u32, BODY.to_vec())],
+        1,
+        ImapMode {
+            sent: None,
+            search_delay: Duration::from_millis(8500),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (events, cursor) = connector()
+        .poll(
+            workspace(),
+            &credential(465, port, MailTls::Implicit),
+            &json!({"external_id":"account"}),
+            &MailboxCursor::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 7);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_slow_esearch_minimum_still_makes_progress() {
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        vec![(1, BODY.len() as u32, BODY.to_vec())],
+        1,
+        ImapMode {
+            sent: None,
+            esearch: true,
+            search_delay: Duration::from_millis(8500),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (events, cursor) = connector()
+        .poll(
+            workspace(),
+            &credential(465, port, MailTls::Implicit),
+            &json!({"external_id":"account"}),
+            &MailboxCursor::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_slow_overflow_retries_still_make_progress() {
+    let messages = (1..=5_000)
+        .map(|uid| (uid, BODY.len() as u32, BODY.to_vec()))
+        .collect();
+    let (port, task) = imap_with_mode(
+        false,
+        42,
+        messages,
+        2,
+        ImapMode {
+            sent: None,
+            search_delay: Duration::from_millis(2800),
+            ..Default::default()
+        },
+    )
+    .await;
+    let conn = connector();
+    let cred = credential(465, port, MailTls::Implicit);
+    let public = json!({"external_id":"account"});
+    let mut cursor = MailboxCursor::default();
+    let mut previous = 0;
+    for _ in 0..2 {
+        let (events, next) = conn
+            .poll(workspace(), &cred, &public, &cursor)
+            .await
+            .unwrap();
+        assert!(!events.is_empty());
+        let last = next.mailboxes["INBOX"].last_uid;
+        assert!(last > previous);
+        assert_eq!(last - previous, events.len() as u32);
+        previous = last;
+        cursor = next;
+    }
     task.await.unwrap();
 }

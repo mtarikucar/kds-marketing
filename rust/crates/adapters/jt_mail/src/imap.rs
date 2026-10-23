@@ -1,3 +1,4 @@
+use crate::search_read::SearchRead;
 use crate::{IO_TIMEOUT, MAX_MESSAGE_BYTES, MailConnector, MailCred, parse, socket};
 use async_imap::{Client, Session};
 use futures_util::TryStreamExt;
@@ -10,7 +11,9 @@ use sha2::{Digest, Sha256};
 use tokio_rustls::client::TlsStream;
 
 const POLL_BYTES: usize = 20 * 1024 * 1024;
-type MailSession = Session<socket::LimitedRead<TlsStream<TcpStream>>>;
+const UID_WINDOW: u32 = 5_000;
+const POLL_WINDOWS: usize = 20;
+type MailSession = Session<socket::LimitedRead<SearchRead<TlsStream<TcpStream>>>>;
 fn error(_: async_imap::error::Error) -> ConnectorError {
     ConnectorError::transient("IMAP operation failed")
 }
@@ -21,11 +24,18 @@ pub(crate) async fn login(
     cred: &MailCred<'_>,
 ) -> Result<MailSession, ConnectorError> {
     let socket = socket::open(connector, ws, cred.imap_host, cred.imap_port).await?;
+    // IMAP writes command tags and arguments separately. Disable Nagle so discovery and
+    // bounded body fetches do not each wait for a delayed ACK.
+    socket
+        .set_nodelay(true)
+        .map_err(|_| ConnectorError::transient("IMAP socket configuration failed"))?;
     let client = match cred.tls {
         MailTls::Implicit => {
             let stream = socket::encrypt(connector, cred.imap_host, socket).await?;
-            let mut client =
-                Client::new(socket::LimitedRead::new(stream, POLL_BYTES + 1024 * 1024));
+            let mut client = Client::new(socket::LimitedRead::new(
+                SearchRead::new(stream, POLL_BYTES + 1024 * 1024),
+                POLL_BYTES + 1024 * 1024,
+            ));
             client
                 .read_response()
                 .await
@@ -47,7 +57,10 @@ pub(crate) async fn login(
             let stream =
                 socket::encrypt(connector, cred.imap_host, client.into_inner().into_inner())
                     .await?;
-            Client::new(socket::LimitedRead::new(stream, POLL_BYTES + 1024 * 1024))
+            Client::new(socket::LimitedRead::new(
+                SearchRead::new(stream, POLL_BYTES + 1024 * 1024),
+                POLL_BYTES + 1024 * 1024,
+            ))
         }
     };
     client
@@ -81,6 +94,14 @@ pub(crate) async fn poll(
         .map(|byte| format!("{byte:02x}"))
         .collect();
     let mut session = bounded(login(connector, ws, cred)).await?;
+    let esearch = bounded(async {
+        session
+            .capabilities()
+            .await
+            .map(|caps| caps.iter().any(|cap| matches!(cap, async_imap::types::Capability::Atom(name) if name.eq_ignore_ascii_case("ESEARCH"))))
+            .map_err(error)
+    })
+    .await?;
     let sent = sent_mailbox(&mut session).await?;
     // Finish the current command before returning a partial batch, so only fully consumed
     // FETCH responses can advance the persisted cursor. Each command has its own hard limit.
@@ -89,10 +110,11 @@ pub(crate) async fn poll(
     let mut events = Vec::new();
     let mut budget = POLL_BYTES;
     let mut remaining = 100;
+    let mut windows_left = POLL_WINDOWS;
     for (mailbox, is_sent) in
         std::iter::once(("INBOX", false)).chain(sent.as_deref().map(|name| (name, true)))
     {
-        if remaining == 0 || tokio::time::Instant::now() >= deadline {
+        if remaining == 0 || windows_left == 0 || tokio::time::Instant::now() >= deadline {
             break;
         }
         let info = match bounded(async {
@@ -122,22 +144,100 @@ pub(crate) async fn poll(
             uidvalidity: validity,
             last_uid: last,
         };
-        // SEARCH finds existing UIDs immediately even when most numeric IDs were expunged.
-        // IMAP ranges may be reversed when '*' is below the lower bound; filter old UIDs.
-        let selected: std::collections::BTreeSet<_> = if let Some(start) = last.checked_add(1) {
-            let found = bounded(async {
-                session
-                    .uid_search(format!("UID {start}:*"))
-                    .await
-                    .map_err(error)
-            })
+        let upper = info
+            .uid_next
+            .filter(|n| *n != 0)
+            .ok_or_else(|| ConnectorError::transient("IMAP UIDNEXT missing"))?
+            - 1;
+        let mut selected = std::collections::BTreeSet::new();
+        let mut scanned = last;
+        let mut last_empty_end = last;
+        if esearch && scanned < upper {
+            let (_, minimum) = search(
+                &mut session,
+                &format!("RETURN (MIN) UID {}:*", scanned + 1),
+                true,
+            )
             .await?;
-            let sorted: std::collections::BTreeSet<_> =
-                found.into_iter().filter(|uid| *uid > last).collect();
-            sorted.into_iter().take(remaining).collect()
-        } else {
-            std::collections::BTreeSet::new()
-        };
+            match minimum
+                .first()
+                .copied()
+                .filter(|uid| *uid > scanned && *uid <= upper)
+            {
+                Some(uid) => {
+                    // MIN itself is an existing UID; retain it even if the lookup consumed
+                    // the poll budget and no window search can start this time.
+                    selected.insert(uid);
+                    scanned = uid - 1;
+                    last_empty_end = scanned;
+                    position.last_uid = scanned;
+                }
+                None => {
+                    scanned = upper;
+                    last_empty_end = upper;
+                    position.last_uid = upper;
+                }
+            }
+        }
+        let mut width = UID_WINDOW;
+        // Empty windows grow; overflowing responses are drained with bounded storage and
+        // retried on the lower half. Only a fully scanned, accepted range advances `scanned`.
+        while scanned < upper && windows_left > 0 && selected.len() < remaining {
+            // Leave time to ingest selected messages rather than rediscovering them forever.
+            let discovery_deadline = if selected.is_empty() {
+                deadline
+            } else {
+                deadline - std::time::Duration::from_secs(2)
+            };
+            if tokio::time::Instant::now() >= discovery_deadline {
+                break;
+            }
+            let start = scanned + 1;
+            let mut end = start.saturating_add(width - 1).min(upper);
+            let found = loop {
+                // Do not discard narrowing progress solely because a slow overflowing
+                // response consumed the soft deadline. Finish a bounded bisection when
+                // nothing can be fetched yet; the shared search-count limit still applies.
+                if windows_left == 0
+                    || (!selected.is_empty() && tokio::time::Instant::now() >= discovery_deadline)
+                {
+                    break None;
+                }
+                windows_left -= 1;
+                let (overflow, found) =
+                    search(&mut session, &format!("UID {start}:{end}"), false).await?;
+                if !overflow {
+                    break Some(found);
+                }
+                if end == start {
+                    return Err(ConnectorError::transient("IMAP SEARCH range overflow"));
+                }
+                end = start + (end - start) / 2;
+            };
+            let Some(found) = found else {
+                break;
+            };
+            scanned = end;
+            let sorted: std::collections::BTreeSet<_> = found
+                .into_iter()
+                .filter(|uid| (start..=end).contains(uid))
+                .collect();
+            if sorted.is_empty() {
+                last_empty_end = end;
+                if selected.is_empty() {
+                    position.last_uid = end;
+                }
+                width = (end - start + 1).saturating_mul(2);
+            } else {
+                let additional: Vec<_> = sorted
+                    .difference(&selected)
+                    .take(remaining - selected.len())
+                    .copied()
+                    .collect();
+                selected.extend(additional);
+                width = UID_WINDOW;
+            }
+        }
         // The standalone MIME parser retains its legacy IDs. Every polled event, including
         // rejected mail, receives the server binding before it reaches durable deduplication.
         let bind = |mut draft: InboundEventDraft, uid| {
@@ -171,10 +271,14 @@ pub(crate) async fn poll(
                 Ok(())
             })
             .await?;
+            let mut processed = false;
             for (uid, size) in sizes {
-                if tokio::time::Instant::now() >= deadline {
+                // A single slow SEARCH can overrun the discovery reserve. Allow one bounded
+                // fetch to make progress; subsequent messages still honor the poll deadline.
+                if tokio::time::Instant::now() >= deadline && (processed || !events.is_empty()) {
                     break;
                 }
+                processed = true;
                 if size > MAX_MESSAGE_BYTES {
                     events.push(bind(
                         parse::rejected(account, mailbox, validity, uid, "message_too_large"),
@@ -232,6 +336,9 @@ pub(crate) async fn poll(
                 position.last_uid = uid;
             }
         }
+        if selected.last().is_none_or(|uid| *uid <= position.last_uid) {
+            position.last_uid = position.last_uid.max(last_empty_end);
+        }
         next.mailboxes.insert(mailbox.to_owned(), position);
     }
     // TLS close_notify is bounded cleanup, never an IMAP LOGOUT round trip and never a reason
@@ -243,6 +350,54 @@ pub(crate) async fn poll(
     )
     .await;
     Ok((events, next))
+}
+
+/// Drain each tagged command completely before using any returned UID or overflow signal.
+async fn search(
+    session: &mut MailSession,
+    query: &str,
+    esearch: bool,
+) -> Result<(bool, std::collections::BTreeSet<u32>), ConnectorError> {
+    use async_imap::imap_proto::{MailboxDatum, Response, Status};
+    bounded(async {
+        let tag = session
+            .run_command(format!("UID SEARCH {query}"))
+            .await
+            .map_err(error)?;
+        session.get_mut().begin_search(tag.0.clone(), esearch);
+        let mut found = std::collections::BTreeSet::new();
+        loop {
+            let response = session
+                .read_response()
+                .await
+                .map_err(|e| error(e.into()))?
+                .ok_or_else(|| ConnectorError::transient("IMAP SEARCH response missing"))?;
+            match response.parsed() {
+                Response::MailboxData(MailboxDatum::Search(uids)) => found.extend(uids),
+                Response::Done {
+                    tag: actual,
+                    status,
+                    ..
+                } => {
+                    if *actual != tag || *status != Status::Ok {
+                        return Err(ConnectorError::transient("IMAP SEARCH refused"));
+                    }
+                    let overflow = session
+                        .get_mut()
+                        .inner_mut()
+                        .finish()
+                        .map_err(|e| error(e.into()))?;
+                    return Ok((overflow, found));
+                }
+                Response::Data {
+                    status: Status::Bye,
+                    ..
+                } => return Err(ConnectorError::transient("IMAP SEARCH disconnected")),
+                _ => {}
+            }
+        }
+    })
+    .await
 }
 
 async fn bounded<T>(

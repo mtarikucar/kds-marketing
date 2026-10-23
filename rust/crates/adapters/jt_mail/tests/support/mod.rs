@@ -236,6 +236,12 @@ pub struct ImapMode {
     pub missing_sent: bool,
     pub body_delay: std::time::Duration,
     pub stall_logout: bool,
+    pub uid_next: Option<u32>,
+    pub esearch: bool,
+    pub esearch_response: Option<&'static str>,
+    pub search_delay: std::time::Duration,
+    pub examine_fragment: Option<(&'static str, &'static str)>,
+    pub searches: Option<Arc<std::sync::Mutex<Vec<String>>>>,
 }
 impl Default for ImapMode {
     fn default() -> Self {
@@ -245,6 +251,12 @@ impl Default for ImapMode {
             missing_sent: false,
             body_delay: std::time::Duration::ZERO,
             stall_logout: false,
+            uid_next: None,
+            esearch: false,
+            esearch_response: None,
+            search_delay: std::time::Duration::ZERO,
+            examine_fragment: None,
+            searches: None,
         }
     }
 }
@@ -255,6 +267,10 @@ pub async fn imap_with_mode(
     sessions: usize,
     mode: ImapMode,
 ) -> (u16, tokio::task::JoinHandle<()>) {
+    let messages: std::collections::BTreeMap<_, _> = messages
+        .into_iter()
+        .map(|(uid, size, body)| (uid, (size, body)))
+        .collect();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let task = tokio::spawn(async move {
@@ -277,6 +293,7 @@ pub async fn imap_with_mode(
                 ));
             }
             let mut authenticated = false;
+            let mut pending_suffix = None;
             loop {
                 let command = line(&mut stream).await;
                 if command.is_empty() {
@@ -287,6 +304,13 @@ pub async fn imap_with_mode(
                     assert!(command.contains("mail-password"));
                     authenticated = true;
                     reply(&mut stream, &format!("{tag} OK authenticated\r\n")).await;
+                } else if command.contains(" CAPABILITY") {
+                    let extension = if mode.esearch { " ESEARCH" } else { "" };
+                    reply(
+                        &mut stream,
+                        &format!("* CAPABILITY IMAP4rev1{extension}\r\n{tag} OK capabilities\r\n"),
+                    )
+                    .await;
                 } else if command.contains(" LIST ") {
                     reply(&mut stream, "* LIST () \"/\" \"INBOX\"\r\n").await;
                     if let Some(sent) = mode.sent {
@@ -307,26 +331,63 @@ pub async fn imap_with_mode(
                         reply(&mut stream, &format!("{tag} NO mailbox not found\r\n")).await;
                         continue;
                     }
-                    let next = messages.iter().map(|(uid, _, _)| *uid).max().unwrap_or(0) + 1;
-                    reply(&mut stream, &format!("* 1 EXISTS\r\n* OK [UIDVALIDITY {validity}] validity\r\n* OK [UIDNEXT {next}] next\r\n{tag} OK [READ-ONLY] selected\r\n")).await;
+                    let next = mode.uid_next.unwrap_or_else(|| {
+                        messages
+                            .last_key_value()
+                            .map_or(1, |(uid, _)| uid.saturating_add(1))
+                    });
+                    let exists = messages.len();
+                    let fragment = mode.examine_fragment.map_or("", |(prefix, _)| prefix);
+                    pending_suffix = mode.examine_fragment.map(|(_, suffix)| suffix);
+                    reply(&mut stream, &format!("* {exists} EXISTS\r\n* OK [UIDVALIDITY {validity}] validity\r\n* OK [UIDNEXT {next}] next\r\n{tag} OK [READ-ONLY] selected\r\n{fragment}")).await;
                 } else if command.contains(" UID SEARCH ") {
-                    assert!(command.contains(" UID SEARCH UID "));
-                    let start: u32 = command
-                        .split_whitespace()
-                        .nth(4)
-                        .unwrap()
-                        .split(':')
-                        .next()
-                        .unwrap()
-                        .parse()
-                        .unwrap();
-                    let highest = messages.iter().map(|(uid, _, _)| *uid).max().unwrap_or(0);
-                    // Match IMAP's reversed range semantics, including the old highest UID.
+                    if let Some(suffix) = pending_suffix.take() {
+                        reply(&mut stream, suffix).await;
+                    }
+                    tokio::time::sleep(mode.search_delay).await;
+                    let minimum = command.contains(" RETURN (MIN) ");
+                    assert!(!minimum || mode.esearch);
+                    let range = command.split_whitespace().last().unwrap();
+                    if let Some(searches) = &mode.searches {
+                        searches.lock().unwrap().push(if minimum {
+                            format!("MIN {range}")
+                        } else {
+                            range.to_owned()
+                        });
+                    }
+                    let (start, end) = range.split_once(':').unwrap();
+                    let start: u32 = start.parse().unwrap();
+                    let end = if end == "*" {
+                        messages.last_key_value().map_or(0, |(uid, _)| *uid)
+                    } else {
+                        end.parse().unwrap()
+                    };
+                    if minimum {
+                        if let Some(response) = mode.esearch_response {
+                            reply(&mut stream, &format!("{response}\r\n{tag} OK searched\r\n"))
+                                .await;
+                            // Custom terminal responses also cover peers dropped on parse errors.
+                            break;
+                        }
+                        let minimum = messages
+                            .range(start.min(end)..=start.max(end))
+                            .next()
+                            .map(|(uid, _)| format!(" MIN {uid}"))
+                            .unwrap_or_default();
+                        reply(
+                            &mut stream,
+                            &format!(
+                                "* ESEARCH (TAG \"{tag}\") UID{minimum}\r\n{tag} OK searched\r\n"
+                            ),
+                        )
+                        .await;
+                        continue;
+                    }
+                    // Deliberately return descending UIDs; clients must sort before truncating.
                     let found = messages
-                        .iter()
+                        .range(start.min(end)..=start.max(end))
                         .rev()
-                        .filter(|(uid, _, _)| *uid >= start.min(highest))
-                        .map(|(uid, _, _)| uid.to_string())
+                        .map(|(uid, _)| uid.to_string())
                         .collect::<Vec<_>>()
                         .join(" ");
                     reply(
@@ -337,18 +398,20 @@ pub async fn imap_with_mode(
                 } else if command.contains(" UID FETCH ") {
                     let range = command.split_whitespace().nth(3).unwrap();
                     let is_body = command.contains("BODY.PEEK");
-                    for (uid, size, body) in &messages {
-                        let selected = range.split(',').any(|part| {
-                            if let Some((start, end)) = part.split_once(':') {
-                                (start.parse::<u32>().unwrap()..=end.parse::<u32>().unwrap())
-                                    .contains(uid)
+                    let selected: std::collections::BTreeSet<_> = range
+                        .split(',')
+                        .flat_map(|part| {
+                            let (start, end) = if let Some((start, end)) = part.split_once(':') {
+                                (start.parse::<u32>().unwrap(), end.parse::<u32>().unwrap())
                             } else {
-                                part.parse::<u32>().unwrap() == *uid
-                            }
-                        });
-                        if !selected {
-                            continue;
-                        }
+                                let uid = part.parse::<u32>().unwrap();
+                                (uid, uid)
+                            };
+                            messages.range(start..=end).map(|(uid, _)| *uid)
+                        })
+                        .collect();
+                    for uid in selected {
+                        let (size, body) = &messages[&uid];
                         if is_body {
                             tokio::time::sleep(mode.body_delay).await;
                             assert!(
@@ -432,6 +495,12 @@ pub async fn malicious_imap() -> (u16, tokio::task::JoinHandle<()>) {
             let tag = command.split_whitespace().next().unwrap();
             if command.contains(" LOGIN ") {
                 reply(&mut stream, &format!("{tag} OK authenticated\r\n")).await;
+            } else if command.contains(" CAPABILITY") {
+                reply(
+                    &mut stream,
+                    &format!("* CAPABILITY IMAP4rev1\r\n{tag} OK capabilities\r\n"),
+                )
+                .await;
             } else if command.contains(" LIST ") {
                 reply(&mut stream, &format!("{tag} OK listed\r\n")).await;
             } else if command.contains(" EXAMINE ") {
