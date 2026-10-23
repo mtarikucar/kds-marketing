@@ -20,7 +20,8 @@
 //! (`Permanent`, "kind_key missing") before anything is sent, so a Page token of an Instagram
 //! capability can never post to the Page by default.
 //!
-//! Media are public URLs handed to Meta as they are (M3 supplies them); nothing is fetched here.
+//! Media are public URLs handed to Meta as they are (M3 supplies them); nothing is fetched here,
+//! and the request's `media` (file bytes, for providers that take uploads only) is ignored.
 //! A URL is a video when its path ends in `.mp4`, `.mov`, `.m4v`, `.webm` or `.avi`, an image
 //! otherwise.
 

@@ -141,13 +141,43 @@ pub struct SendReceipt {
     pub provider_id: String,
 }
 
-/// A post to publish: its text, the media to attach (public URLs the adapter fetches or hands to
-/// the provider) and an optional link.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A post to publish: its text, the media to attach and an optional link.
+///
+/// Media come in one of two forms, as the provider takes them: `media_urls`, public URLs an
+/// adapter hands to a provider that fetches them itself (Meta), or `media`, the files' bytes for a
+/// provider that takes uploads only (X). The caller (M3) supplies the bytes, read from the asset
+/// store through the egress client; an adapter never fetches a URL itself. An adapter that hands
+/// URLs over ignores `media`; one that uploads refuses `media_urls` without `media`.
+///
+/// `media` is never serialised: a request written out carries no bytes, and one read back has
+/// none (`media` empty), so the bytes are supplied again where they are needed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub text: String,
     pub media_urls: Vec<Url>,
     pub link: Option<Url>,
+    /// The files to upload, in the order they are attached. Never serialised.
+    #[serde(skip)]
+    pub media: Vec<MediaUpload>,
+}
+
+/// One file to upload with a post: its bytes, its media type (e.g. `"image/png"`) and a file
+/// name for the upload. `Debug` shows the size, not the bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct MediaUpload {
+    pub bytes: Vec<u8>,
+    pub mime: String,
+    pub filename: String,
+}
+
+impl fmt::Debug for MediaUpload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MediaUpload")
+            .field("bytes", &format_args!("<{} bytes>", self.bytes.len()))
+            .field("mime", &self.mime)
+            .field("filename", &self.filename)
+            .finish()
+    }
 }
 
 /// A published post: the provider's id and, when it gives one, its public URL.
@@ -640,6 +670,48 @@ mod tests {
         assert_eq!(json[1]["status"], serde_json::json!({ "unknown": "99" }));
         let back: Vec<DeliveryStatus> = serde_json::from_value(json).unwrap();
         assert_eq!(back, statuses);
+    }
+
+    #[test]
+    fn publish_request_media_bytes_are_never_serialised() {
+        let request = PublishRequest {
+            text: "Merhaba".into(),
+            media_urls: vec![Url::parse("https://cdn.test/a.png").unwrap()],
+            link: None,
+            media: vec![MediaUpload {
+                bytes: vec![0x89, b'P', b'N', b'G', 1, 2, 3],
+                mime: "image/png".into(),
+                filename: "a.png".into(),
+            }],
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "text": "Merhaba",
+                "media_urls": ["https://cdn.test/a.png"],
+                "link": null,
+            })
+        );
+        // Read back, it carries no bytes: they are supplied again where they are needed.
+        let back: PublishRequest = serde_json::from_value(json).unwrap();
+        assert!(back.media.is_empty());
+        assert_eq!(back.text, request.text);
+        assert_eq!(PublishRequest::default().media, vec![]);
+    }
+
+    #[test]
+    fn media_upload_debug_shows_its_size_not_its_bytes() {
+        let media = MediaUpload {
+            bytes: vec![7; 4096],
+            mime: "image/jpeg".into(),
+            filename: "photo.jpg".into(),
+        };
+        let printed = format!("{media:?}");
+        assert!(printed.contains("4096"), "{printed}");
+        assert!(printed.contains("image/jpeg"), "{printed}");
+        assert!(printed.contains("photo.jpg"), "{printed}");
+        assert!(!printed.contains("7, 7"), "{printed}");
     }
 
     #[test]

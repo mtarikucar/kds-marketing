@@ -946,6 +946,7 @@ async fn scripted_connector_covers_every_operation() {
         text: "Yeni menü".into(),
         media_urls: vec![Url::parse("https://cdn.test/a.jpg").unwrap()],
         link: None,
+        media: vec![],
     };
     let publisher = registry.publisher(Provider::Meta).unwrap();
     assert_eq!(

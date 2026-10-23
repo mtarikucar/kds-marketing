@@ -622,6 +622,7 @@ async fn no_appsecret_proof_on_instagram_graph() {
                 text: "Merhaba".into(),
                 media_urls: vec![Url::parse("https://cdn.test/a.jpg").unwrap()],
                 link: None,
+                media: vec![],
             },
         )
         .await
@@ -1168,6 +1169,7 @@ fn post(text: &str, media: &[&str], link: Option<&str>) -> PublishRequest {
         text: text.into(),
         media_urls: media.iter().map(|m| Url::parse(m).unwrap()).collect(),
         link: link.map(|l| Url::parse(l).unwrap()),
+        media: vec![],
     }
 }
 
