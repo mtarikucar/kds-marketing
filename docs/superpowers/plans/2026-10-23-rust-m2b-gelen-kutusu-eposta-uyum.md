@@ -68,10 +68,12 @@ async fn add(&self, cred: &Credential, rows: &[ConsentRow]) -> Result<SendReceip
 
 ### Task 1: Domain additions
 
-**Files:** `jt_inbox/src/{consent,suppression,quote,appointment,commission,erasure}.rs`.
+**Files:** `jt_inbox/src/{consent,suppression,quote,appointment,commission,erasure,sms,lib}.rs`.
 **Interfaces:** Consent{id,person_id,channel,kind:Explicit|ImpliedByContract|Withdrawn,source:Form|Agent|Import|IysSync|Customer,at,sync_state:Pending|Sent|Failed|FailedFinal,attempts}; effective = latest at per(person,contact-channel), not insertion order; equal-at ties choose Withdrawn (M2b-2). Suppression reason Unsubscribe|Bounce|Complaint|Manual. `commercial_allowed(consents:&[Consent],suppressions:&[Suppression],channel)->Result<(),IzinYok>`; fence gains suppressed/consent_ok/intent. Identity phone sharing does not collapse SMS/call consent channels.
 
 Quote{journey_id,amount_minor,currency,valid_until,file_ref?,channel,state:Sent|Accepted|Expired}; ISO4217 validation. Appointment{journey_id,starts_at,ends_at,location,state:Booked|Held|Cancelled}; ends>starts. `ics(appointment,organizer_email,attendee_email,uid)->String`: VCALENDAR2, CRLF/escaped text/UTC times. Commission{journey_id,payee?,amount_minor,currency,rate_bp,state:NoPayee|Pending|Approved|Paid}; `commission_for(amount_minor,rate_bp)->i64` round_half_even(amount_minor*rate_bp/10000). `identity_hash(channel,normalized)->String`: SHA256 hex of scoped normalized identity.
+
+Q2 (M3 pricing prerequisite): export `jt_inbox::sms_segments(text: &str) -> u16`; empty text→0 (send validation rejects empty), GSM-7 basic/extension alphabet counts septets (extension characters count two), 160 single / 153 per concatenated part. Any non-GSM-7 character selects UCS-2 accounting by UTF-16 code units, 70 single / 67 per concatenated part; no transliteration of ş/ğ. Ceil division; reject oversized send bodies before segment count can overflow u16. Budget `unit_cost_minor` in M3 prices ONE segment, not one message. Fixtures `sms_segments_ascii_160_161` assert 1/2; `sms_segments_turkish_70_71` uses repeated ş/ğ and asserts 1/2; also `sms_segments_extension_and_surrogate_units`. If the helper is absent when M3 dispatches after this milestone merges, M3 T0 supplies this exact domain contract/tests.
 
 - [ ] Tests: `older_grant_cannot_override_withdrawal`, `equal_at_withdrawn_wins_in_either_order`, `commercial_requires_consent_without_suppression`, `commission_rounds_half_even`, `ics_crlf_utc_escaping`, `quote_currency_validated`, `identity_hash_uses_account_scope`.
 - [ ] Commit `feat(inbox): compliance, quote, appointment and commission rules`
@@ -79,11 +81,11 @@ Quote{journey_id,amount_minor,currency,valid_until,file_ref?,channel,state:Sent|
 ### Task 2: Migration 0007, ports, repos, fakes
 
 **Files:** `migrations/0007_inbox_compliance.{up,down}.sql`, inbox ports/TenantRepos, `jt_pg/src/repos/inbox/{consents,suppressions,quotes,appointments,commissions,erasure,outbound_jobs,mail_cursors}.rs`, testkit/tests.
-**Interfaces/SQL:** eleven tenant tables, **36→47** (M2a now includes request_keys): consents (sync_state pending|sent|failed|failed_final, attempts); suppressions PK(workspace,person,channel,reason); quotes; appointments; commissions unique(workspace,journey); erasure_log(person_id,workspace_id,requested_via,at); erased_identities PK(workspace,channel,value_hash); outbound_jobs(capability_id,provider_job_id,message_id,state,last_status,timestamps) unique(workspace,capability,provider_job_id); mail_cursors PK(workspace,capability,mailbox) with uidvalidity/last_uid; **commission_default(workspace_id PK,rate_bp)** and **commission_user_rates(workspace_id,user_id,rate_bp,PK(workspace_id,user_id))**. No competing commission_rates table/expression PK. RLS/composite FKs and idempotent up/down as M2a. Retained person tombstone keeps financial FKs valid.
+**Interfaces/SQL:** twelve tenant tables, **36→48** (M2a now includes request_keys): consents (sync_state pending|sent|failed|failed_final, attempts); suppressions PK(workspace,person,channel,reason); quotes; appointments; commissions unique(workspace,journey); erasure_log(person_id,workspace_id,requested_via,at); erased_identities PK(workspace,channel,value_hash); outbound_jobs(capability_id,provider_job_id,message_id,state,last_status,timestamps) unique(workspace,capability,provider_job_id); mail_cursors PK(workspace,capability,mailbox) with uidvalidity/last_uid; **commission_default(workspace_id PK,rate_bp)** and **commission_user_rates(workspace_id,user_id,rate_bp,PK(workspace_id,user_id))**; **journey_attribution** (T9 immutable intake provenance). No competing commission_rates table/expression PK. RLS/composite FKs and idempotent up/down as M2a. Retained person tombstone keeps financial FKs valid.
 
 Widen 0005 inbound provider CHECK meta/netgsm/x to include mail in 0007; down restores the old CHECK only if no mail rows exist; otherwise retains the widened CHECK in place. This documented downgrade exception is idempotent and never deletes runtime mail events (M2b-3). Cursor+draft inserts share transaction. OutboundJobRepo replaces stub: pending queued/sent <72h, capability-scoped status updates. T8 non-ledger guards allow person-scoped DELETE/UPDATE when current_setting('jeeta.erasure', true) = 'on', set locally only in the erasure transaction; down restores the guards. Ledger trigger remains unchanged.
 
-- [ ] Tests: `migration_round_trip_36_47_36_47`, `commission_unique_per_journey`, `dlr_capability_isolation`, `mail_cursor_and_drafts_atomic`, `mail_provider_check_restored_without_mail_rows`, `mail_provider_check_retained_with_mail_rows_down_idempotent`, RLS/fake contracts; T8 guard tests.
+- [ ] Tests: `migration_round_trip_36_48_36_48`, `commission_unique_per_journey`, `dlr_capability_isolation`, `mail_cursor_and_drafts_atomic`, `mail_provider_check_restored_without_mail_rows`, `mail_provider_check_retained_with_mail_rows_down_idempotent`, RLS/fake contracts; T8 guard tests.
 - [ ] Commit `feat(pg): inbox compliance and mailbox persistence`
 
 ### Task 3: Mail adapter
@@ -152,9 +154,14 @@ Inventory explicitly includes raw delivery batches, parsed inbound payloads, mer
 
 ### Task 9: Lead-gen intake
 
-**Files:** `usecases/inbox/{leadgen,consumer}.rs`, adapter-generated fixture tests.
+**Files:** `usecases/inbox/{leadgen,consumer}.rs`, `jt_inbox/src/{journey,lib}.rs`, `jt_app/src/ports/{inbox,mod}.rs`, `migrations/0007_inbox_compliance.{up,down}.sql`, `jt_pg/src/repos/inbox/attribution.rs`/mod, `jt_testkit/src/fakes/inbox.rs`/wiring and attribution contract tests; adapter-generated fixture tests.
 **Interfaces:** system inbox@2 consumer, no new public row; M2a people_get/journeys_get display results. `LeadGenFetcher::fetch(cred,leadgen_id)` returns LeadGenRecord.fields (BTreeMap<String,Vec<String>>), not field_data. Map email/phone through single match_or_create; a non-message split→CONFLICT identity_split with both person IDs and a merge suggestion, retry with one identity (M2a-3); Source::MetaAds for new first touch, existing person gains later touch; initial New journey only as applicable under terminal rules; follow-up TaskDue in 1 h. Claim/effects/ledger atomic and replay-idempotent.
 
+M3 Q1 amendment: 0007 adds `journey_attribution(workspace_id, journey_id PK, provider, ad_id, adset_id, campaign_id, form_id, leadgen_id, acquired_at)` with composite tenant journey FK, ENABLE/FORCE RLS and index `(workspace_id,ad_id,acquired_at)`. `JourneyAttribution` mirrors these fields; provider/leadgen_id/acquired_at are required, unavailable ad/set/campaign/form IDs are nullable, never guessed. Intake writes once in the same transaction as journey/effects/claim/ledger (`ON CONFLICT (journey_id) DO NOTHING`); acquired_at is provider acquisition time, replay preserves it and every original field. Existing-journey later touches cannot replace initial attribution. No update API; enforce immutability in Pg and fake, retain anonymous journey provenance through raw-event retention/erasure. Down drops only this new table/index/guard idempotently; up→down→up verifies its addition, without deleting unrelated inbox data.
+
+Read port `AttributionReader { fn by_ad(&self, ws, ad_id, from, to) -> Vec<JourneyAttribution>; fn by_journey(&self, ws, journey_id) -> Option<JourneyAttribution> }`: application-owned async Send+Sync trait uses `WorkspaceId`, `&str`, `OffsetDateTime` bounds and `JourneyId`, wrapping returns in `Result<_, AppError>` under existing fallible port conventions. Pg and fake enforce workspace context/RLS; by_ad uses half-open acquired_at `[from,to)` and orders by `(acquired_at,journey_id)`. Wire into Deps/testkit for M3 reads; no new public tool or M3 lead consumer. Page credential remains the intake credential; missing adset_id stays None for M3's verified ad→set read mapping.
+
+- [ ] Attribution tests: `leadgen_attribution_written_atomically_once`, `leadgen_replay_and_later_touch_preserve_attribution`, `journey_attribution_is_immutable`, `attribution_by_ad_half_open_window_and_tenant_isolation`, `attribution_by_journey_pg_fake_parity`, `attribution_survives_raw_retention_and_erasure`, `attribution_0007_up_down_up_preserves_unrelated_rows`; include failure rollback with event claim and existing first-touch tests.
 - [ ] Tests: `leadgen_adapter_fields_create_meta_ads_person_and_task`, `leadgen_existing_person_preserves_first_touch`, `deferred_leadgen_reclaimed_once`, `leadgen_failure_rolls_back_claim`, `leadgen_split_returns_conflict_ids_and_merge_suggestion`.
 - [ ] Commit `feat(inbox): lead-gen intake`
 
@@ -173,10 +180,12 @@ Q1→T1/T3/T9 + M2a T1/T4; Q2→T7/T9 + M2a T2/T7; Q3→T4/T6 + M2a T6; Q4→T2/
 Gaps: quote file_ref→T6/T8; reminder→T6; calendar/HTML/webchat/archive→M2c scope; acquisition/person-created/first-touch→T9+M2a T1/T4/T5; unsnooze/timezones/lost-label/tasks/status-label/work view→M2a T4–T8. Pre-rulings inherited via M2a, especially send intent/reconciliation→T0/T4–T6; M2 GLOBAL CONSTRAINT→T3.
 
 
-M2a-1→T2/T4/T5/T6 + M2a T2/T3/T6 (request_keys changes totals to 23→36→47); M2a-2→M2a T3; M2a-3→T9 + M2a T4/T7. M2b-1→T0/T3/T4/T6; M2b-2→T1/T2/T5; M2b-3→T2/T8/T10.
+M2a-1→T2/T4/T5/T6 + M2a T2/T3/T6 (request_keys changes totals to 23→36→48); M2a-2→M2a T3; M2a-3→T9 + M2a T4/T7. M2b-1→T0/T3/T4/T6; M2b-2→T1/T2/T5; M2b-3→T2/T8/T10.
 
 ## Controller decisions
 
 - M2b-1: MailSender carries persisted headers/body/ICS attachments; SMS without a provider job ID remains unknown, without correlation.
 - M2b-2: equal-at Withdrawn wins; hourly retries stop at five attempts with failed_final and human work. No exactly-once İYS claim.
 - M2b-3: person-scoped erasure uses transaction-local jeeta.erasure and nulls matching inbound raw; retain widened CHECK on downgrade if mail rows remain. Archive is M2c.
+
+M3 integration rulings: Q1→T2/T9 (immutable journey_attribution in 0007 and AttributionReader Pg/fake, table total 48); Q2→T1 (sms_segments, one segment per priced unit). Task count stays 11 (T0–T10); tool total stays 106.
