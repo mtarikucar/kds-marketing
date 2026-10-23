@@ -57,7 +57,7 @@ fn inserted(done: PgQueryResult) -> Result<(), AppError> {
 }
 
 /// Check tenant relationships before writing, matching the established repo NOT_FOUND contract.
-async fn reference(
+pub(super) async fn reference(
     conn: &mut PgConnection,
     ws: WorkspaceId,
     kind: &str,
@@ -99,7 +99,7 @@ mod tasks_notes;
 mod usecase_contracts;
 
 /// The caller can pin the transaction's logical clock; direct repository users use wall time.
-async fn write_time(
+pub(super) async fn write_time(
     repos: &mut crate::uow::PgTenantRepos,
 ) -> Result<time::OffsetDateTime, AppError> {
     sqlx::query_scalar("select coalesce(nullif(current_setting('app.inbox_write_at',true), '')::timestamptz, clock_timestamp())")
@@ -141,3 +141,12 @@ async fn touch_conversation(
     }
     Ok(())
 }
+
+mod appointments;
+mod attribution;
+mod commissions;
+mod consents;
+mod erasure;
+mod mail_cursors;
+mod quotes;
+mod suppressions;

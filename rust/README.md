@@ -80,7 +80,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. Beş göç vardır:
+döndürür. Sekiz göç vardır:
 
 | Göç | Ne yapar |
 |---|---|
@@ -90,6 +90,21 @@ döndürür. Beş göç vardır:
 | `0004_role_permissions_backfill` | M1a'dan önce açılmış alanların sistem `owner` ve `manager` rollerine `capabilities.manage` ve `budget.manage` izinlerini ekler (özel rollere ve `rep`'e dokunmaz; `down` yalnız bu iki anahtarı o iki rolden çıkarır) ve ajan yoklamasının son kaydını bulan kısmi dizini (`ledger_entries_agent_connection_idx`, yalnız `action = 'work.checkin'` satırları) açar |
 | `0005_connectors` | gelen olaylar (`inbound_events`: alan, sağlayıcı ve sağlayıcının kimliği başına bir kez; ham gövde ayrı sütunda; bir tetikleyici yalnız `processed_at`'in yazılmasına ve `raw`'ın silinmesine izin verir, satır silinmez; geçmiş için en yenisi başta bir dizin), bekleyen OAuth akışları (`oauth_pending`: imzalı durumun özeti bütün alanlarda tek, PKCE doğrulayıcısı ve varlıklar mühürlü; akışın oturum açtığı uygulama `app`; yeniden bağlama akışı yenilediği kabiliyeti `capability_id` ile adlar), prob kayıtları (`probe_runs`, yalnız eklenir; bir tetikleyici her değişikliği ve 30 günden genç bir kaydın silinmesini reddeder); bütçe kalemlerine emekliye ayrılma zamanı (`budget_items.retired_at`, canlı kalemde `null`; `down` yalnız bu sütunu düşürür) |
 | `0006_inbox` | Gelen kutusu için 13 alan tablosu (36 toplam): kişiler, kimlikler, konuşmalar, mesajlar, yolculuklar ve olayları, görevler, notlar, birleştirmeler, kayıp nedenleri, tüketici kayıtları, gönderim kuyruğu ve 24 saatlik istek anahtarları. FORCE RLS ve bileşik yabancı anahtarlar; varsayılan kayıp nedenleri ve sistem rollerinin gelen kutusu izinleri geriye dönük eklenir. |
+| `0007_inbox_policy` | Alan politikalarına `inbox_policy` sütunu ekler; mevcut durum etiketlerini korur, yeni tablo eklemez. |
+| `0008_inbox_compliance` | İzinler, engellemeler, teklifler, randevular, komisyonlar, silme kayıtları ve kimlik özetleri, gönderim işleri, posta imleçleri, varsayılan/kullanıcı komisyon oranları ve değişmez yolculuk atfı: 12 yeni alan tablosu, toplam 48. FORCE RLS, bileşik alan anahtarları ve yinelenebilir up/down. |
+
+`0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
+`meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
+alma istisnası uygulama verisini silmez ve tekrar çalıştırılabilir.
+
+Silme altyapısında `jeeta.erasure = 'on'` ve `jeeta.erasure_person_id` yalnız işlem içinde
+`SET LOCAL` ile ayarlanır; hedefin aynı alandaki `erasure_log` kaydı da gerekir. Yolculuk olaylarının
+kişisel metni temizlenebilir, olay kimlikleri, geçişler ve tutarlar korunur. Gelen olayların
+`payload.person_id`, prob kayıtlarının `facts.person_id` bağı kullanılır; silme izni başka kişinin
+satırını açmaz. `ledger_entries` ve `journey_attribution` bu istisnaya dahil değildir; atıf hiçbir
+şekilde değiştirilemez veya silinemez. Tam silme akışı ve daha geniş olay bağlantıları M2b Task 8'de
+eklenir; bu göç yalnız korumaları ve kalıcı veri sözleşmesini sağlar.
+
 
 **Geliştirme veritabanını yeniden açın.** `0002`, `0003` ve `0004` M1a sırasında, yayımlanmadan önce
 değiştirildi (en son: `0003`'e `capabilities.declared_by_connection` sütunu ve grup adlarının büyük/küçük
@@ -1462,5 +1477,17 @@ implement both contracts directly and record arguments and queued outcomes for t
 
 `OutboundJobRepo::pending_job_ids` and `record_status` both require a capability ID. The NetGSM
 DLR job reads pending jobs, polls and records statuses separately for each verified SMS capability;
-provider job IDs shared by different capabilities cannot update one another. The PostgreSQL
-implementation remains an empty stub until M2b outbound job persistence ships.
+provider job IDs shared by different capabilities cannot update one another. PostgreSQL and the
+in-memory adapter persist jobs and poll only queued/sent rows younger than 72 hours, with a known
+provider job ID. Unknown submissions are not automatically polled or resent.
+
+Compliance repository getters on `TenantRepos` share the transaction with inbound event inserts,
+mailbox cursor updates, journey changes and ledger writes. `consents` preserves effective history
+while updating only synchronization state; suppression inserts are idempotent; commissions are
+unique per journey. `commission_default` and `commission_user_rates` store independent rate settings.
+`erasure` records first requests and channel-scoped identity hashes for replay protection.
+
+`attribution().insert_once` preserves the first acquisition record on replay or later touches.
+`Deps::attribution()` supplies the application-owned `AttributionReader` over the configured Pg or
+in-memory unit of work. Reads establish the workspace context, use the half-open acquisition window
+`[from,to)` and order by `(acquired_at,journey_id)`. No update or delete API exists.

@@ -3,6 +3,7 @@
 use super::state::{MemBundle, MemState, exists, same_workspace, unique};
 use super::tenant::MemTenant;
 use async_trait::async_trait;
+use jt_app::ports::connectors::MailboxCursor;
 use jt_app::{error::AppError, ports::inbox::*};
 use jt_capability::CapabilityId;
 use jt_connector::InboundEventId;
@@ -28,6 +29,17 @@ pub struct StoredRequestKey {
 }
 #[derive(Clone, Debug, Default)]
 pub struct MemInbox {
+    pub consents: Vec<(WorkspaceId, Consent)>,
+    pub suppressions: Vec<(WorkspaceId, Suppression)>,
+    pub quotes: Vec<QuoteRow>,
+    pub appointments: Vec<AppointmentRow>,
+    pub commissions: Vec<CommissionRow>,
+    pub commission_defaults: Vec<(WorkspaceId, u16)>,
+    pub commission_user_rates: Vec<(WorkspaceId, UserId, u16)>,
+    pub erasure_logs: Vec<ErasureLog>,
+    pub erased_identities: Vec<(WorkspaceId, IdentityChannel, String)>,
+    pub mail_cursors: Vec<(WorkspaceId, CapabilityId, MailboxCursor)>,
+    pub attribution: Vec<JourneyAttribution>,
     pub journey_reducer_revisions: std::collections::BTreeMap<JourneyId, i64>,
     pub conversation_send_states: std::collections::BTreeMap<ConversationId, ConversationSendState>,
     pub message_senders: std::collections::BTreeMap<MessageId, IdentityId>,
@@ -70,7 +82,7 @@ fn found(ok: bool) -> Result<(), AppError> {
         Err(AppError::not_found("no such inbox reference"))
     }
 }
-fn person(s: &MemState, ws: WorkspaceId, id: PersonId) -> Result<(), AppError> {
+pub(super) fn person(s: &MemState, ws: WorkspaceId, id: PersonId) -> Result<(), AppError> {
     found(
         s.inbox
             .people
@@ -78,7 +90,7 @@ fn person(s: &MemState, ws: WorkspaceId, id: PersonId) -> Result<(), AppError> {
             .any(|r| r.workspace_id == ws && r.id == id),
     )
 }
-fn journey(s: &MemState, ws: WorkspaceId, id: JourneyId) -> Result<(), AppError> {
+pub(super) fn journey(s: &MemState, ws: WorkspaceId, id: JourneyId) -> Result<(), AppError> {
     found(
         s.inbox
             .journeys

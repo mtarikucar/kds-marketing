@@ -92,11 +92,11 @@ pub struct StoredInboundEvent {
     pub raw: Option<Vec<u8>>,
 }
 
-/// A message sent from a workspace, by the provider's job id, with the last delivery report
-/// recorded for it (`None` until one is). Only tests queue them
-/// ([`InMemoryUow::add_outbound_job`]): the messages are M2's.
+/// An outbound row plus the original provider-job and status views used by job assertions.
+/// Both views are updated together when a delivery report is recorded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredOutboundJob {
+    pub row: jt_app::ports::compliance::OutboundJobRow,
     pub workspace_id: WorkspaceId,
     pub capability_id: CapabilityId,
     pub job_id: String,
@@ -427,10 +427,21 @@ impl InMemoryUow {
         self.set_sealed_faults.store(times, Ordering::SeqCst);
     }
 
-    /// Records a message of capability `capability_id` in workspace `ws` as provider job `job_id`, awaiting its
-    /// delivery report (the messages are M2's; until then only tests add them).
+    /// Seeds a queued provider job at the current time for delivery-poll tests.
     pub fn add_outbound_job(&self, ws: WorkspaceId, capability_id: CapabilityId, job_id: &str) {
+        let now = OffsetDateTime::now_utc();
         lock(&self.state).outbound_jobs.push(StoredOutboundJob {
+            row: jt_app::ports::compliance::OutboundJobRow {
+                id: uuid::Uuid::now_v7(),
+                workspace_id: ws,
+                capability_id,
+                provider_job_id: Some(job_id.to_owned()),
+                message_id: None,
+                state: jt_app::ports::compliance::OutboundJobState::Queued,
+                last_status: None,
+                created_at: now,
+                updated_at: now,
+            },
             workspace_id: ws,
             capability_id,
             job_id: job_id.to_owned(),

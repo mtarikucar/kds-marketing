@@ -19,6 +19,7 @@
 //! The provider adapters and the platform's provider apps have their own module,
 //! [`connectors`].
 
+pub mod compliance;
 pub mod connectors;
 pub mod inbox;
 use inbox::*;
@@ -1359,11 +1360,16 @@ pub const MAX_PENDING_JOBS: u32 = 50;
 /// The workspace's sent messages whose delivery is not final yet, by the provider's job id (the
 /// `provider_id` of a [`connectors::SendReceipt`]), and what the delivery reports said of them.
 ///
-/// The messages themselves are the next milestone's (M2 stores them in its own table); until
-/// then the Postgres bundle holds none: `pending_job_ids` answers nothing and `record_status`
-/// writes nothing, so the delivery-report poll runs and never reaches a provider.
+/// Only queued/sent jobs created less than 72 hours ago are polled. Missing provider IDs and
+/// unknown submissions are excluded. Reads and updates always include the capability scope.
 #[async_trait]
 pub trait OutboundJobRepo: Send + Sync {
+    async fn insert(&mut self, row: OutboundJobRow) -> Result<(), AppError>;
+    async fn get(
+        &mut self,
+        capability: CapabilityId,
+        id: Uuid,
+    ) -> Result<Option<OutboundJobRow>, AppError>;
     /// The pending job ids of capability `capability_id` in workspace `ws`, oldest first,
     /// at most `limit` (clamped to `1..=MAX_PENDING_JOBS`). `ws` must be the bundle's workspace,
     /// else `INTERNAL`.
@@ -1418,6 +1424,15 @@ pub trait PlatformSessionRepo: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait TenantRepos: Send + Sync {
+    fn consents(&mut self) -> &mut dyn ConsentRepo;
+    fn suppressions(&mut self) -> &mut dyn SuppressionRepo;
+    fn quotes(&mut self) -> &mut dyn QuoteRepo;
+    fn appointments(&mut self) -> &mut dyn AppointmentRepo;
+    fn commissions(&mut self) -> &mut dyn CommissionRepo;
+    fn erasure(&mut self) -> &mut dyn ErasureRepo;
+    fn mail_cursors(&mut self) -> &mut dyn MailCursorRepo;
+    fn attribution(&mut self) -> &mut dyn AttributionRepo;
+
     fn people(&mut self) -> &mut dyn PersonRepo;
     fn identities(&mut self) -> &mut dyn IdentityRepo;
     fn conversations(&mut self) -> &mut dyn ConversationRepo;

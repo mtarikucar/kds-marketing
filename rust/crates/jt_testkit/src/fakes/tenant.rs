@@ -51,6 +51,31 @@ impl MemBundle for MemTenant {
 
 #[async_trait]
 impl TenantRepos for MemTenant {
+    fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
+        self
+    }
+    fn suppressions(&mut self) -> &mut dyn jt_app::ports::inbox::SuppressionRepo {
+        self
+    }
+    fn quotes(&mut self) -> &mut dyn jt_app::ports::inbox::QuoteRepo {
+        self
+    }
+    fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
+        self
+    }
+    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
+        self
+    }
+    fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {
+        self
+    }
+    fn mail_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::MailCursorRepo {
+        self
+    }
+    fn attribution(&mut self) -> &mut dyn jt_app::ports::inbox::AttributionRepo {
+        self
+    }
+
     fn people(&mut self) -> &mut dyn PersonRepo {
         self
     }

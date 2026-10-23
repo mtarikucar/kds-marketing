@@ -29,11 +29,11 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
-/// Tables after `0006_inbox`, including outbox and request keys.
-const TABLES_AFTER_ALL: i64 = 36;
+/// Tables after `0008_inbox_compliance`, including twelve compliance/mailbox tables.
+const TABLES_AFTER_ALL: i64 = 48;
 
-/// The migrations there are: `0001_foundation` to `0007_inbox_policy`.
-const MIGRATIONS: i64 = 7;
+/// The migrations there are: `0001_foundation` to `0008_inbox_compliance`.
+const MIGRATIONS: i64 = 8;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -171,6 +171,8 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
 
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
+    run(read("0008_inbox_compliance.down.sql")).await;
+    run(read("0008_inbox_compliance.down.sql")).await;
     run(read("0007_inbox_policy.down.sql")).await;
     run(read("0006_inbox.down.sql")).await;
     run(read("0006_inbox.down.sql")).await;
@@ -415,6 +417,12 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0008_inbox_compliance.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     assert_eq!(table_count(&db.pool).await, 36);
     assert!(index_exists(&db.pool, "messages_external_lookup").await);
     assert!(index_exists(&db.pool, "messages_echo_candidates").await);
@@ -506,4 +514,37 @@ async fn inbox_policy_round_trip_preserves_existing_labels() {
     .unwrap();
     assert_eq!(labels, serde_json::json!({"new":"Yeni"}));
     assert!(column_exists(&db.pool, ("workspace_policies", "inbox_policy")).await);
+}
+
+#[tokio::test]
+async fn migration_round_trip_36_48_36_48() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("compliance-roundtrip").await;
+    let person = Uuid::now_v7();
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("insert into people(id,workspace_id,display_name,first_touch,created_at,updated_at) values($1,$2,'Keep me','{}',now(),now())")
+        .bind(person).bind(ws.as_uuid()).execute(tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
+    let up = include_str!("../../../../migrations/0008_inbox_compliance.up.sql");
+    let down = include_str!("../../../../migrations/0008_inbox_compliance.down.sql");
+    assert_eq!(table_count(&db.pool).await, 48);
+    for sql in [down, down] {
+        sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, 36);
+        assert!(!function_exists(&db.pool, "inbox_erasure_matches").await);
+        assert!(!function_exists(&db.pool, "journey_attribution_immutable").await);
+        assert!(!index_exists(&db.pool, "journey_attribution_ad_idx").await);
+    }
+    for sql in [up, up] {
+        sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, 48);
+        assert!(index_exists(&db.pool, "journey_attribution_ad_idx").await);
+    }
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let name: String = sqlx::query_scalar("select display_name from people where id=$1")
+        .bind(person)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(name, "Keep me");
 }

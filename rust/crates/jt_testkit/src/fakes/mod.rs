@@ -46,6 +46,7 @@
 //! bundles' repos.
 
 mod capability;
+mod compliance;
 mod connector;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};

@@ -2,6 +2,8 @@
 //! return NOT_FOUND; duplicate keys return CONFLICT unless a method explicitly returns a boolean
 //! or optional id. Locks last until the enclosing bundle commits or rolls back.
 
+pub use super::compliance::*;
+
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
 use jt_connector::InboundEventId;

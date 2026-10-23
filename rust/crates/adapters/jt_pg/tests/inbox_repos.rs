@@ -269,3 +269,57 @@ async fn initial_journey_is_scoped_and_immutable() {
     let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
     jt_testkit::inbox_contract::initial_journey_is_scoped_and_immutable(uow).await;
 }
+
+#[tokio::test]
+async fn compliance_history_rates_and_financial_rows() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::compliance_contract::compliance_history_rates_and_financial_rows(
+        std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone())),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn commission_unique_per_journey() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::compliance_contract::commission_unique_per_journey(std::sync::Arc::new(
+        jt_pg::PgUnitOfWork::new(db.pool.clone()),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn erasure_replay_and_tenant_isolation() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::compliance_contract::erasure_replay_and_tenant_isolation(std::sync::Arc::new(
+        jt_pg::PgUnitOfWork::new(db.pool.clone()),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn mail_cursor_and_drafts_atomic() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::compliance_contract::mail_cursor_and_drafts_atomic(std::sync::Arc::new(
+        jt_pg::PgUnitOfWork::new(db.pool.clone()),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn dlr_capability_isolation() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::compliance_contract::dlr_capability_isolation(std::sync::Arc::new(
+        jt_pg::PgUnitOfWork::new(db.pool.clone()),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn attribution_by_ad_half_open_window_and_tenant_isolation() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::compliance_contract::attribution_by_ad_half_open_window_and_tenant_isolation(
+        std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone())),
+    )
+    .await;
+}
