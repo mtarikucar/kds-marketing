@@ -486,6 +486,7 @@ fn daily_measurement(
         date: Some(date),
         currency: Some("TRY".into()),
         status: jt_studio::MeasurementStatus::Complete,
+        failure: None,
         rule_version: jt_studio::LEARNING_RULE.into(),
     }
 }
@@ -1298,4 +1299,71 @@ async fn replay_preserves_current_move_rollover_and_resume_authorization() {
         );
         assert_eq!(w.ads.calls(), before);
     }
+}
+
+#[tokio::test]
+async fn external_increase_after_resume_is_detected() {
+    let w = support::world().await;
+    let (b, _) = w.paid().await;
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_set_status(Ok(()));
+    w.brake(true, None, 0).await;
+    w.provider_status("PAUSED", 10);
+    w.ads.push_set_status(Ok(()));
+    w.brake(false, None, 1).await;
+    let s = w.uow.snapshot();
+    assert!(
+        s.studio
+            .moves
+            .iter()
+            .all(|m| m.state != BudgetMoveState::Succeeded)
+    );
+    let (reservation, outcome) = s.studio.reservations.last().unwrap();
+    assert_eq!(reservation.request.binding_id, Some(b.id));
+    assert_eq!(reservation.request.daily_budget_minor, Some(10));
+    assert!(matches!(outcome, Some(SpendOutcome::Applied { .. })));
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_adset_insights(Ok(vec![]));
+    jt_app::usecases::studio::measure::measure_due(&w.d, w.f.ws)
+        .await
+        .unwrap();
+    assert!(!w.uow.snapshot().studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
+    w.provider_status("ACTIVE", 200);
+    w.ads.push_adset_insights(Ok(vec![]));
+    w.provider_status("ACTIVE", 200);
+    w.ads.push_set_status(Ok(()));
+    jt_app::usecases::studio::measure::measure_due(&w.d, w.f.ws)
+        .await
+        .unwrap();
+    let s = w.uow.snapshot();
+    assert!(s.studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
+    assert!(s.studio.binding_controls[0].confirmed_paused());
+    let pending = jt_app::usecases::studio::work::pending(&w.d, &w.ctx)
+        .await
+        .unwrap();
+    assert_eq!(pending.paid_alerts.len(), 1);
+    assert_eq!(pending.paid_alerts[0]["residual_provider_exposure"], false);
+}
+
+#[tokio::test]
+async fn latest_resume_supersedes_older_budget_move_for_drift() {
+    let w = support::world().await;
+    let (b, _) = w.paid().await;
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_set_daily_budget(Ok(()));
+    budget_move(&w.d, &w.ctx, move_input(&b, "old-move", 20))
+        .await
+        .unwrap();
+    w.provider_status("ACTIVE", 20);
+    w.ads.push_set_status(Ok(()));
+    w.brake(true, None, 0).await;
+    w.provider_status("PAUSED", 10);
+    w.ads.push_set_status(Ok(()));
+    w.brake(false, None, 1).await;
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_adset_insights(Ok(vec![]));
+    jt_app::usecases::studio::measure::measure_due(&w.d, w.f.ws)
+        .await
+        .unwrap();
+    assert!(!w.uow.snapshot().studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
 }

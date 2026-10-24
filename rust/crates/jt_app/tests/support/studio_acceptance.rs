@@ -112,7 +112,16 @@ pub async fn historical_jobs() {
     r.commit().await.unwrap();
     w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(3)));
     let before = x.calls().len();
-    assert!(measure::measure_due(&w.d, w.f.ws).await.is_err());
+    let learning = w.uow.snapshot().studio.arms.clone();
+    assert_eq!(measure::measure_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let state = w.uow.snapshot();
+    assert_eq!(state.studio.arms, learning);
+    assert!(state.studio.measurements.iter().any(|m| {
+        m.status == jt_studio::MeasurementStatus::Failed
+            && m.failure
+                .as_ref()
+                .is_some_and(|f| f.category == "historical_account_changed")
+    }));
     assert_eq!(x.calls().len(), before);
 }
 pub async fn cleanup_after_archive() {

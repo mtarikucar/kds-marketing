@@ -173,6 +173,7 @@ impl Fixture {
             date: None,
             currency: None,
             status: MeasurementStatus::Missing,
+            failure: None,
             rule_version: "studio-learning-v1".into(),
         }
     }

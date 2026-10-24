@@ -53,6 +53,41 @@ async fn measurement_correction_learning_and_retirement_are_atomic_in_postgres()
     let mut r = uow.tenant(f.ws).await.unwrap();
     let p = r.studio().list_publications().await.unwrap().remove(0);
     drop(r);
+    // Failed access is persisted without requiring the unavailable credential, and a
+    // fresh tenant transaction observes the retry time before attempting another read.
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    r.capabilities()
+        .set_sealed(f.slot.capability_id, None, FIXED_NOW)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    assert_eq!(
+        jt_app::usecases::studio::measure::measure_due(&d, f.ws)
+            .await
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        jt_app::usecases::studio::measure::measure_due(&d, f.ws)
+            .await
+            .unwrap(),
+        0
+    );
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let failed = r.studio().list_measurements().await.unwrap();
+    assert!(failed.iter().all(|m| {
+        m.status == MeasurementStatus::Failed
+            && m.failure.as_ref().is_some_and(|f| {
+                f.category == "capability_unavailable"
+                    && f.attempts == 1
+                    && f.retry_at == d.clock.now() + Duration::hours(1)
+            })
+    }));
+    r.capabilities()
+        .set_sealed(f.slot.capability_id, Some(vec![1, 2, 3]), FIXED_NOW)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
     let mut final_measurement = None;
     for (window, events, rev) in [
         (MeasurementWindow::Hours24, 20, 0),
@@ -82,6 +117,7 @@ async fn measurement_correction_learning_and_retirement_are_atomic_in_postgres()
             date: None,
             currency: None,
             status: MeasurementStatus::Complete,
+            failure: None,
             rule_version: "studio-learning-v1".into(),
         };
         assert!(record(&d, m.clone()).await.unwrap());

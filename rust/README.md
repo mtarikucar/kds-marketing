@@ -2337,6 +2337,12 @@ cap accounting atomically with evidence. Complete elapsed buckets transfer reser
 exposure to observed spend; uncertain and overlapping buckets remain conservatively
 held. The six-hour measurement cycle brakes only the paid lane on budget/status drift,
 exposes a work item in `studio.pending.paid_alerts`, and requests `Paused` status.
+The comparison uses the latest Applied reservation, including brake-release resumes
+and their authorised daily budget. Publication access/provider failures persist a
+category and retry time (1 hour, 6 hours, then daily), without learning or blocking
+other publications and paid spend/drift checks. Binding failures are audited per
+target and do not stop checks of other bindings. Insight requests and accepted daily
+buckets use the ad account timezone (`timezone_name` from Meta; Europe/Istanbul fallback).
 Observed spend is checked against lane and linked item caps independently of work
 hours and operation limits; those eligibility checks gate new budget moves only.
 An active binding and its required safety brake commit together. Receipt replay

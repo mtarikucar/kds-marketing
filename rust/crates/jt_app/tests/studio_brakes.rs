@@ -484,6 +484,7 @@ async fn archive_then_due_measurement_records_evidence_without_execution() {
             date: None,
             currency: None,
             status: MeasurementStatus::Complete,
+            failure: None,
             rule_version: "v1".into(),
         })
         .await

@@ -4071,6 +4071,7 @@ async fn studio_learning_has_result_filter_judgment_and_error_parity() {
         date: Some(d.clock.now().date()),
         currency: Some("TRY".into()),
         status: MeasurementStatus::Complete,
+        failure: None,
         rule_version: "studio-learning-v1".into(),
     };
     r.studio().record_measurement(m.clone()).await.unwrap();

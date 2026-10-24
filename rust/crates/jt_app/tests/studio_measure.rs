@@ -65,6 +65,10 @@ async fn failed_read_retries_without_learning() {
     measure_due(&w.d, w.f.ws).await.unwrap();
     assert!(w.uow.snapshot().studio.learning.is_empty());
     metrics(&c, 20);
+    assert_eq!(measure_due(&w.d, w.f.ws).await.unwrap(), 0);
+    w.d.clock = Arc::new(FixedClock(
+        FIXED_NOW + Duration::days(1) + Duration::hours(1),
+    ));
     measure_due(&w.d, w.f.ws).await.unwrap();
     assert_eq!(w.uow.snapshot().studio.measurements.len(), 1);
     assert!((w.uow.snapshot().studio.arms[0].alpha - 1.2).abs() < 1e-12);
@@ -78,7 +82,20 @@ async fn late_24h_read_cannot_replace_7d_reward() {
     metrics(&c, 80);
     measure_due(&w.d, w.f.ws).await.unwrap();
     metrics(&c, 20);
+    w.d.clock = Arc::new(FixedClock(
+        FIXED_NOW + Duration::days(7) + Duration::hours(1),
+    ));
     measure_due(&w.d, w.f.ws).await.unwrap();
+    assert_eq!(
+        w.uow
+            .snapshot()
+            .studio
+            .measurements
+            .iter()
+            .filter(|m| m.status == jt_studio::MeasurementStatus::Complete)
+            .count(),
+        3
+    );
     let a = &w.uow.snapshot().studio.arms[0];
     assert!((a.alpha - 1.8).abs() < 1e-12);
     assert!((a.beta - 1.2).abs() < 1e-12);
@@ -463,4 +480,204 @@ async fn learned_range_filters_numbers_and_evidence_together() {
     assert!(out.arms[0].evidence.is_empty());
     assert_eq!(out.hypotheses[0].derived_confidence, None);
     assert_eq!(out.arms[0].arm.alpha, 1.0);
+}
+
+async fn break_access(w: &support::World, kind: &str) {
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut c = r
+        .capabilities()
+        .find(w.f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    match kind {
+        "disconnected" => c.status = jt_capability::StoredStatus::Unreachable,
+        "expired" => {
+            c.connector_public["access"]["expires_at"] = serde_json::json!("2020-01-01T00:00:00Z")
+        }
+        "rebound" => c.external_id = Some("other_account".into()),
+        "permission" => c.connector_public["access"]["scopes"] = serde_json::json!([]),
+        _ => unreachable!(),
+    }
+    r.capabilities().update(c).await.unwrap();
+    r.commit().await.unwrap();
+}
+fn paid_metrics(w: &support::World, b: &jt_studio::AdSetBinding, date: time::Date) {
+    w.ads
+        .push_adset_insights(Ok(vec![jt_app::ports::connectors::AdSetInsights {
+            account_id: "act_1".into(),
+            adset_id: b.adset_id.clone(),
+            campaign_id: b.campaign_id.clone(),
+            date,
+            spend_minor: Some(23),
+            impressions: Some(100),
+            clicks: Some(20),
+        }]));
+}
+#[tokio::test]
+async fn broken_publication_does_not_block_paid_checks() {
+    for (kind, category) in [
+        ("disconnected", "capability_unavailable"),
+        ("expired", "access_expired"),
+        ("rebound", "historical_account_changed"),
+        ("permission", "credential_scope_missing"),
+    ] {
+        let mut w = support::world().await;
+        let id = w.publish_evidence().await;
+        let (b, _) = w.paid().await;
+        break_access(&w, kind).await;
+        w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(1)));
+        w.provider_status("ACTIVE", 200);
+        paid_metrics(&w, &b, (FIXED_NOW + Duration::days(1)).date());
+        w.provider_status("ACTIVE", 200);
+        w.ads.push_set_status(Ok(()));
+        measure_due(&w.d, w.f.ws).await.unwrap();
+        let s = w.uow.snapshot();
+        let failed = s
+            .studio
+            .measurements
+            .iter()
+            .find(|m| m.publication_id == Some(id))
+            .unwrap();
+        assert_eq!(failed.status, jt_studio::MeasurementStatus::Failed);
+        assert_eq!(
+            serde_json::to_value(failed).unwrap()["failure"]["category"],
+            category
+        );
+        assert!(
+            s.studio
+                .measurements
+                .iter()
+                .any(|m| m.binding_id == Some(b.id) && m.raw_metrics["spend_minor"] == Some(23))
+        );
+        assert!(s.studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
+        assert!(
+            s.studio
+                .learning
+                .iter()
+                .all(|l| l.chain.arm_id == b.chain.arm_id)
+        );
+    }
+}
+#[tokio::test]
+async fn deferred_measurement_backs_off() {
+    let (mut w, c) = published().await;
+    break_access(&w, "disconnected").await;
+    let mut at = FIXED_NOW + Duration::days(1);
+    for (attempt, hours) in [(1, 1), (2, 6), (3, 24), (4, 24)] {
+        w.d.clock = Arc::new(FixedClock(at));
+        measure_due(&w.d, w.f.ws).await.unwrap();
+        let s = w.uow.snapshot();
+        let m = s
+            .studio
+            .measurements
+            .iter()
+            .find(|m| m.window == jt_studio::MeasurementWindow::Hours24)
+            .unwrap();
+        let failure = serde_json::to_value(m).unwrap()["failure"].clone();
+        assert_eq!(failure["attempts"], attempt);
+        assert_eq!(
+            serde_json::from_value::<time::OffsetDateTime>(failure["retry_at"].clone()).unwrap(),
+            at + Duration::hours(hours)
+        );
+        w.d.clock = Arc::new(FixedClock(at + Duration::minutes(59)));
+        assert_eq!(measure_due(&w.d, w.f.ws).await.unwrap(), 0);
+        assert_eq!(w.uow.snapshot().studio.measurements, s.studio.measurements);
+        at += Duration::hours(hours);
+    }
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut cap = r
+        .capabilities()
+        .find(w.f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    cap.status = jt_capability::StoredStatus::Verified;
+    r.capabilities().update(cap).await.unwrap();
+    r.commit().await.unwrap();
+    w.d.clock = Arc::new(FixedClock(at));
+    metrics(&c, 20);
+    metrics(&c, 40); // The 72-hour window is now due too.
+    measure_due(&w.d, w.f.ws).await.unwrap();
+    let s = w.uow.snapshot();
+    let m = s
+        .studio
+        .measurements
+        .iter()
+        .find(|m| m.window == jt_studio::MeasurementWindow::Hours24)
+        .unwrap();
+    assert_eq!(m.status, jt_studio::MeasurementStatus::Complete);
+    assert!(serde_json::to_value(m).unwrap()["failure"].is_null());
+}
+#[tokio::test]
+async fn istanbul_account_current_day_bucket_accepted_at_2200_utc() {
+    let mut w = support::world().await;
+    let (b, _) = w.paid().await;
+    w.d.clock = Arc::new(FixedClock(time::macros::datetime!(2026-10-24 22:00 UTC)));
+    w.provider_status("PAUSED", 10);
+    paid_metrics(&w, &b, time::macros::date!(2026 - 10 - 25));
+    assert_eq!(measure_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    assert_eq!(
+        s.studio.measurements[0].date,
+        Some(time::macros::date!(2026 - 10 - 25))
+    );
+    assert_eq!(
+        s.studio.measurements[0].raw_metrics["spend_minor"],
+        Some(23)
+    );
+    assert!(
+        w.ads.calls().iter().any(|call| matches!(call,
+        jt_testkit::fakes::ConnectorCall::AdSetInsights { since, until, .. }
+        if *since == time::macros::date!(2026-10-18) && *until == time::macros::date!(2026-10-25)))
+    );
+}
+
+#[tokio::test]
+async fn broken_binding_does_not_block_later_binding() {
+    let w = support::world().await;
+    let (b, _) = w.paid().await;
+    let mut other = b.clone();
+    other.id = jt_studio::AdSetBindingId::new_v7();
+    other.adset_id = "set_2".into();
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio()
+        .bind_adset(other.clone(), "second")
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    w.ads
+        .push_account_context(Err(jt_connector::ConnectorError::permission(
+            "scope revoked",
+        )));
+    w.ads
+        .push_account_context(Ok(jt_app::ports::connectors::AdAccountContext {
+            account_id: "act_1".into(),
+            currency: "TRY".into(),
+            minor_unit_exponent: 2,
+            timezone: "Europe/Istanbul".into(),
+        }));
+    w.ads
+        .push_list_adsets(Ok(vec![jt_app::ports::connectors::AdSet {
+            id: other.adset_id.clone(),
+            name: "set".into(),
+            status: "PAUSED".into(),
+            campaign_id: other.campaign_id.clone(),
+            daily_budget_minor: Some(10),
+            lifetime_budget_minor: None,
+        }]));
+    paid_metrics(&w, &other, FIXED_NOW.date());
+    assert_eq!(measure_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    assert_eq!(s.studio.measurements[0].binding_id, Some(other.id));
+    assert_eq!(
+        s.studio.measurements[0].raw_metrics["spend_minor"],
+        Some(23)
+    );
+    assert!(
+        s.ledger
+            .iter()
+            .any(|e| e.entry.action.as_str() == "studio.measurement.failed"
+                && e.entry.payload["category"] == "permission")
+    );
 }

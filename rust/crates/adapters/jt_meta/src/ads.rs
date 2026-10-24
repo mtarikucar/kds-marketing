@@ -251,7 +251,7 @@ pub(crate) async fn account_context(
     let currency = text(&row["currency"]).ok_or_else(|| missing("currency"))?;
     let timezone = text(&row["timezone_name"])
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| missing("account timezone"))?;
+        .unwrap_or_else(|| "Europe/Istanbul".into());
     Ok(AdAccountContext {
         account_id,
         minor_unit_exponent: exponent(&currency)?,

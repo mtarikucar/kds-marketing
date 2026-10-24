@@ -26,6 +26,13 @@ pub enum MeasurementStatus {
     Missing,
     Failed,
 }
+/// A failed read has no reward and is retried independently of other targets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeasurementFailure {
+    pub category: String,
+    pub attempts: u32,
+    pub retry_at: OffsetDateTime,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Measurement {
     pub id: MeasurementId,
@@ -50,6 +57,8 @@ pub struct Measurement {
     pub date: Option<Date>,
     pub currency: Option<String>,
     pub status: MeasurementStatus,
+    #[serde(default)]
+    pub failure: Option<MeasurementFailure>,
     pub rule_version: String,
 }
 impl Measurement {

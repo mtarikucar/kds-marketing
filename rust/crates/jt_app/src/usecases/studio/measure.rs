@@ -169,106 +169,261 @@ pub async fn measure_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             {
                 continue;
             }
-            let (c, cred) = {
-                let mut r = d.uow.tenant(ws).await?;
-                access(d, r.as_mut(), HistoricalTarget::Publication(p.id)).await?
-            };
-            let provider = provider_for_kind(&c.kind_key)
-                .ok_or_else(|| AppError::conflict("unsupported insights"))?;
-            let reader = d
-                .connectors
-                .insights(provider)
-                .ok_or_else(|| AppError::conflict("unsupported insights"))?;
-            let result = reader
-                .post_metrics(&cred, &adapter_public(&c), &p.external_id)
-                .await;
-            let failed = result.is_err();
-            let mut raw: std::collections::BTreeMap<String, Option<i64>> = result
-                .unwrap_or_default()
-                .metrics
-                .into_iter()
-                .map(|(k, v)| (k, Some(v)))
-                .collect();
-            if !raw.contains_key("impressions")
-                && let Some(n) = raw
-                    .get("impression_count")
-                    .or_else(|| raw.get("post_impressions"))
-                    .copied()
-            {
-                raw.insert("impressions".into(), n);
-            }
-            if !raw.contains_key("engagements")
-                && let Some(n) = raw.get("total_interactions").copied()
-            {
-                raw.insert("engagements".into(), n);
-            }
-            // Provider-specific engagement counters are optional, never filled with zero.
-            if !raw.contains_key("engagements") {
-                let values: Vec<_> = [
-                    "likes",
-                    "comments",
-                    "shares",
-                    "retweets",
-                    "replies",
-                    "reposts",
-                    "like_count",
-                    "reply_count",
-                    "retweet_count",
-                    "quote_count",
-                    "saved",
-                    "post_reactions_like_total",
-                    "post_clicks",
-                ]
+            let previous = rows
                 .iter()
-                .filter_map(|k| raw.get(*k).copied().flatten())
-                .collect();
-                if !values.is_empty() && values.iter().all(|v| *v >= 0) {
-                    raw.insert(
-                        "engagements".into(),
-                        values.into_iter().try_fold(0i64, |a, b| a.checked_add(b)),
-                    );
-                }
-            }
-            let key = format!("post:{}:{window:?}", p.id);
-            let mut m = Measurement {
-                id: MeasurementId(super::planner::stable_id(ws, &key)),
-                chain: p.chain.clone(),
-                evidence_key: key,
-                publication_id: Some(p.id),
-                binding_id: None,
-                window,
-                evidence_revision: 0,
-                scheduled_at: Some(scheduled),
-                account_timezone: None,
-                minor_unit_exponent: None,
-                measured_at: now,
-                source: c.kind_key,
-                raw_metrics: raw,
-                metric_scope: "post".into(),
-                date: None,
-                currency: None,
-                status: if failed {
-                    MeasurementStatus::Failed
-                } else {
-                    MeasurementStatus::Complete
-                },
-                rule_version: LEARNING_RULE.into(),
-            };
-            if !failed
-                && reward(&m, &LearningPolicy::default())
-                    .map_err(invalid)?
-                    .is_none()
+                .find(|m| m.publication_id == Some(p.id) && m.window == window);
+            if previous
+                .and_then(|m| m.failure.as_ref())
+                .is_some_and(|f| f.retry_at > now)
             {
-                m.status = MeasurementStatus::Missing;
+                continue;
             }
-            changed += u32::from(record(d, m).await?);
+            let result = match measure_publication(d, &p, window, scheduled).await {
+                Ok(m) => record(d, m).await,
+                Err(e) => Err(e),
+            };
+            match result {
+                Ok(recorded) => changed += u32::from(recorded),
+                Err(e) if target_failure(&e) => {
+                    changed +=
+                        u32::from(defer_publication(d, &p, window, scheduled, previous, &e).await?);
+                }
+                Err(e) => return Err(e),
+            }
         }
     }
     for b in bindings {
-        changed += measure_binding(d, &b).await?;
+        match measure_binding(d, &b).await {
+            Ok(n) => changed += n,
+            Err(e) if target_failure(&e) => {
+                let mut r = d.uow.tenant(ws).await?;
+                log_failure(
+                    r.as_mut(),
+                    &b.chain,
+                    "studio_binding",
+                    b.id.0,
+                    &e,
+                    None,
+                    now,
+                )
+                .await?;
+                r.commit().await?;
+            }
+            Err(e) => return Err(e),
+        }
     }
     Ok(changed)
 }
+async fn measure_publication(
+    d: &Deps,
+    p: &Publication,
+    window: MeasurementWindow,
+    scheduled: time::OffsetDateTime,
+) -> Result<Measurement, AppError> {
+    let ws = p.chain.workspace_id;
+    let now = d.clock.now();
+    let (c, cred) = {
+        let mut r = d.uow.tenant(ws).await?;
+        access(d, r.as_mut(), HistoricalTarget::Publication(p.id)).await?
+    };
+    let provider =
+        provider_for_kind(&c.kind_key).ok_or_else(|| AppError::conflict("unsupported insights"))?;
+    let reader = d
+        .connectors
+        .insights(provider)
+        .ok_or_else(|| AppError::conflict("unsupported insights"))?;
+    let result = reader
+        .post_metrics(&cred, &adapter_public(&c), &p.external_id)
+        .await
+        .map_err(provider_failure)?;
+    let mut raw: std::collections::BTreeMap<String, Option<i64>> = result
+        .metrics
+        .into_iter()
+        .map(|(k, v)| (k, Some(v)))
+        .collect();
+    if !raw.contains_key("impressions")
+        && let Some(n) = raw
+            .get("impression_count")
+            .or_else(|| raw.get("post_impressions"))
+            .copied()
+    {
+        raw.insert("impressions".into(), n);
+    }
+    if !raw.contains_key("engagements")
+        && let Some(n) = raw.get("total_interactions").copied()
+    {
+        raw.insert("engagements".into(), n);
+    }
+    // Provider-specific engagement counters are optional, never filled with zero.
+    if !raw.contains_key("engagements") {
+        let values: Vec<_> = [
+            "likes",
+            "comments",
+            "shares",
+            "retweets",
+            "replies",
+            "reposts",
+            "like_count",
+            "reply_count",
+            "retweet_count",
+            "quote_count",
+            "saved",
+            "post_reactions_like_total",
+            "post_clicks",
+        ]
+        .iter()
+        .filter_map(|k| raw.get(*k).copied().flatten())
+        .collect();
+        if !values.is_empty() && values.iter().all(|v| *v >= 0) {
+            raw.insert(
+                "engagements".into(),
+                values.into_iter().try_fold(0i64, |a, b| a.checked_add(b)),
+            );
+        }
+    }
+    let key = format!("post:{}:{window:?}", p.id);
+    let mut m = Measurement {
+        id: MeasurementId(super::planner::stable_id(ws, &key)),
+        chain: p.chain.clone(),
+        evidence_key: key,
+        publication_id: Some(p.id),
+        binding_id: None,
+        window,
+        evidence_revision: 0,
+        scheduled_at: Some(scheduled),
+        account_timezone: None,
+        minor_unit_exponent: None,
+        measured_at: now,
+        source: c.kind_key,
+        raw_metrics: raw,
+        metric_scope: "post".into(),
+        date: None,
+        currency: None,
+        status: MeasurementStatus::Complete,
+        failure: None,
+        rule_version: LEARNING_RULE.into(),
+    };
+    if reward(&m, &LearningPolicy::default())
+        .map_err(invalid)?
+        .is_none()
+    {
+        m.status = MeasurementStatus::Missing;
+    }
+    Ok(m)
+}
+
+// Storage/workspace errors are run failures; target access/provider failures are isolated.
+fn target_failure(e: &AppError) -> bool {
+    use crate::error::ErrorCode;
+    matches!(
+        e.code,
+        ErrorCode::Conflict
+            | ErrorCode::NotFound
+            | ErrorCode::Forbidden
+            | ErrorCode::Unauthenticated
+            | ErrorCode::UpstreamUnavailable
+    )
+}
+fn provider_failure(e: jt_connector::ConnectorError) -> AppError {
+    super::chain::refuse(e.kind())
+}
+fn failure_category(e: &AppError) -> &str {
+    e.details["reason"].as_str().unwrap_or(e.code.as_str())
+}
+async fn log_failure(
+    r: &mut dyn TenantRepos,
+    chain: &Chain,
+    entity: &str,
+    id: uuid::Uuid,
+    error: &AppError,
+    retry: Option<&MeasurementFailure>,
+    now: time::OffsetDateTime,
+) -> Result<(), AppError> {
+    let ctx = system_ctx(chain.workspace_id, now);
+    let mut entry = crate::usecases::ledger_entry(
+        &ctx,
+        "studio.measurement.failed",
+        entity,
+        id,
+        json!({"chain":chain,"category":failure_category(error),"code":error.code,"retry":retry}),
+    )?;
+    entry.strategy_version_id = Some(chain.born_version_id.0);
+    r.ledger().append(entry).await?;
+    Ok(())
+}
+fn retry_delay(attempts: u32) -> time::Duration {
+    time::Duration::hours(match attempts {
+        0 | 1 => 1,
+        2 => 6,
+        _ => 24,
+    })
+}
+async fn defer_publication(
+    d: &Deps,
+    p: &Publication,
+    window: MeasurementWindow,
+    scheduled: time::OffsetDateTime,
+    previous: Option<&Measurement>,
+    error: &AppError,
+) -> Result<bool, AppError> {
+    let now = d.clock.now();
+    let attempts = previous
+        .and_then(|m| m.failure.as_ref())
+        .map_or(1, |f| f.attempts.saturating_add(1));
+    let failure = MeasurementFailure {
+        category: failure_category(error).into(),
+        attempts,
+        retry_at: now + retry_delay(attempts),
+    };
+    let key = format!("post:{}:{window:?}", p.id);
+    let m = Measurement {
+        id: MeasurementId(super::planner::stable_id(p.chain.workspace_id, &key)),
+        chain: p.chain.clone(),
+        evidence_key: key,
+        publication_id: Some(p.id),
+        binding_id: None,
+        window,
+        evidence_revision: 0,
+        scheduled_at: Some(scheduled),
+        account_timezone: None,
+        minor_unit_exponent: None,
+        measured_at: now,
+        source: "studio".into(),
+        raw_metrics: Default::default(),
+        metric_scope: "post".into(),
+        date: None,
+        currency: None,
+        status: MeasurementStatus::Failed,
+        failure: Some(failure.clone()),
+        rule_version: LEARNING_RULE.into(),
+    };
+    let mut r = d.uow.tenant(p.chain.workspace_id).await?;
+    r.strategy().lock_execution_frame().await?;
+    r.studio_control().lock_control().await?;
+    // Only this private path may store an inaccessible target's empty failure record.
+    // The repository validates the tenant/target chain; normal evidence still needs access.
+    if r.studio().list_measurements().await?.iter().any(|m| {
+        m.publication_id == Some(p.id)
+            && m.window == window
+            && m.status == MeasurementStatus::Complete
+    }) {
+        return Ok(false);
+    }
+    let changed = r.studio().record_measurement(m).await?;
+    log_failure(
+        r.as_mut(),
+        &p.chain,
+        "studio_publication",
+        p.id.0,
+        error,
+        Some(&failure),
+        now,
+    )
+    .await?;
+    r.commit().await?;
+    Ok(changed)
+}
+
 async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
     let ws = b.chain.workspace_id;
     let now = d.clock.now();
@@ -284,7 +439,7 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
     let context = ads
         .account_context(&cred, &public)
         .await
-        .map_err(|_| AppError::conflict("ad account context unavailable"))?;
+        .map_err(provider_failure)?;
     if !super::chain::same_account(&c.kind_key, &context.account_id, &b.account_id)
         || jt_connector::currency_minor_exponent(&context.currency)
             != Some(context.minor_unit_exponent)
@@ -295,7 +450,7 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
     let sets = ads
         .list_adsets(&cred, &public)
         .await
-        .map_err(|_| AppError::conflict("ad set membership unavailable"))?;
+        .map_err(provider_failure)?;
     if !sets
         .iter()
         .any(|s| s.id == b.adset_id && s.campaign_id == b.campaign_id)
@@ -311,15 +466,26 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
     if drift {
         let _ = super::control::reconcile_bindings(d, ws).await;
     }
+    use chrono::Datelike;
+    let timezone: chrono_tz::Tz = context
+        .timezone
+        .parse()
+        .unwrap_or(chrono_tz::Europe::Istanbul);
+    let local = chrono::DateTime::from_timestamp(now.unix_timestamp(), now.nanosecond())
+        .ok_or_else(|| AppError::internal("invalid measurement time"))?
+        .with_timezone(&timezone);
+    let today = time::Date::from_calendar_date(
+        local.year(),
+        (local.month() as u8)
+            .try_into()
+            .map_err(|_| AppError::internal("invalid measurement month"))?,
+        local.day() as u8,
+    )
+    .map_err(|_| AppError::internal("invalid measurement date"))?;
     let rows = ads
-        .adset_insights(
-            &cred,
-            &public,
-            now.date() - time::Duration::days(7),
-            now.date(),
-        )
+        .adset_insights(&cred, &public, today - time::Duration::days(7), today)
         .await
-        .map_err(|_| AppError::conflict("ad set metrics unavailable"))?;
+        .map_err(provider_failure)?;
     let existing = {
         let mut r = d.uow.tenant(ws).await?;
         r.studio().list_measurements().await?
@@ -329,8 +495,8 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
         m.account_id == context.account_id
             && m.adset_id == b.adset_id
             && m.campaign_id == b.campaign_id
-            && m.date <= now.date()
-            && m.date >= now.date() - time::Duration::days(7)
+            && m.date <= today
+            && m.date >= today - time::Duration::days(7)
     }) {
         let raw = std::collections::BTreeMap::from([
             ("impressions".into(), row.impressions),
@@ -370,7 +536,7 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
             window: MeasurementWindow::Hours24,
             evidence_revision: revision,
             scheduled_at: Some(row.date.midnight().assume_utc()),
-            account_timezone: Some(context.timezone.clone()),
+            account_timezone: Some(timezone.name().into()),
             minor_unit_exponent: Some(context.minor_unit_exponent),
             measured_at: now,
             source: c.kind_key.clone(),
@@ -379,6 +545,7 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
             date: Some(row.date),
             currency: Some(context.currency.clone()),
             status: MeasurementStatus::Complete,
+            failure: None,
             rule_version: LEARNING_RULE.into(),
         };
         if reward(&m, &LearningPolicy::default())
@@ -426,35 +593,24 @@ async fn detect_drift(
     r.strategy().lock_execution_frame().await?;
     let flags = r.studio_control().lock_control().await?;
     let old = r.studio_control().binding_control(b.id).await?;
-    let move_ = r
-        .studio()
-        .list_budget_moves()
-        .await?
-        .into_iter()
-        .filter(|m| m.binding_id == b.id && m.state == BudgetMoveState::Succeeded)
-        .max_by_key(|m| m.id);
     let observed = match set.status.as_str() {
         "ACTIVE" => Some(AdStatus::Active),
         "PAUSED" => Some(AdStatus::Paused),
         _ => None,
     };
-    let authorized = r
-        .studio_budget()
-        .list_reservations()
-        .await?
+    let reservations = r.studio_budget().list_reservations().await?;
+    let authorized = reservations
         .iter()
-        .any(|(r, o)| {
+        .filter(|(r, o)| {
             r.request.binding_id == Some(b.id) && matches!(o, Some(SpendOutcome::Applied { .. }))
-        });
-    let drift = (observed == Some(AdStatus::Active) && !authorized)
-        || move_
-            .as_ref()
-            .filter(|m| m.state == BudgetMoveState::Succeeded)
-            .is_some_and(|m| {
-                Some(m.daily_budget_minor) != set.daily_budget_minor
-                    || m.currency != currency
-                    || set.lifetime_budget_minor.is_some()
-            })
+        })
+        .max_by_key(|(r, _)| (r.request.at, r.id));
+    let drift = (observed == Some(AdStatus::Active) && authorized.is_none())
+        || authorized.is_some_and(|(r, _)| {
+            r.request.daily_budget_minor != set.daily_budget_minor
+                || r.request.currency != currency
+                || set.lifetime_budget_minor.is_some()
+        })
         || old
             .as_ref()
             .filter(|o| matches!(o.outcome, Some(BindingStatusOutcome::Applied { .. })))

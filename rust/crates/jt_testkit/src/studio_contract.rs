@@ -315,6 +315,7 @@ pub async fn measurement_and_learning_dedupe(uow: &dyn UnitOfWork) {
         date: Some(FIXED_NOW.date()),
         currency: Some("TRY".into()),
         status: MeasurementStatus::Failed,
+        failure: None,
         rule_version: "1".into(),
     };
     assert!(tx.studio().record_measurement(m.clone()).await.unwrap());

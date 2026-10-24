@@ -43,6 +43,7 @@ fn fixture() -> (Arm, Measurement) {
         date: None,
         currency: None,
         status: MeasurementStatus::Complete,
+        failure: None,
         rule_version: "studio-learning-v1".into(),
     };
     (a, m)

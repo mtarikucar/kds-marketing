@@ -2509,3 +2509,24 @@ async fn ad_status_meta_and_fake_contract() {
         Some("222".into())
     );
 }
+
+#[tokio::test]
+async fn account_timezone_uses_meta_facts_with_istanbul_fallback() {
+    let r = rig().await;
+    let p = public("meta_ads", Some("1111111111"));
+    for (timezone, expected) in [
+        (json!("America/New_York"), "America/New_York"),
+        (json!(null), "Europe/Istanbul"),
+        (json!(""), "Europe/Istanbul"),
+    ] {
+        r.mock.set(
+            "GET",
+            "/fb/v19.0/act_1111111111",
+            ok(json!({
+                "account_id":"1111111111", "currency":"TRY", "timezone_name":timezone
+            })),
+        );
+        let context = r.meta.account_context(&user_cred(), &p).await.unwrap();
+        assert_eq!(context.timezone, expected);
+    }
+}
