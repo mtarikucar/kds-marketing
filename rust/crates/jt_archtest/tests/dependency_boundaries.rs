@@ -300,7 +300,9 @@ fn connector_adapters_reach_out_only_through_the_egress_client() {
         for d in &deps {
             assert!(
                 CONNECTOR_ADAPTER_ALLOW.contains(&d.as_str())
-                    || (*c == "jt_mail" && MAIL_ADAPTER_EXTRA_ALLOW.contains(&d.as_str())),
+                    || (*c == "jt_mail" && MAIL_ADAPTER_EXTRA_ALLOW.contains(&d.as_str()))
+                    // X measures visible emoji clusters before publishing.
+                    || (*c == "jt_x" && d == "unicode-segmentation"),
                 "{c} depends on {d}, which is not on its allowlist"
             );
         }

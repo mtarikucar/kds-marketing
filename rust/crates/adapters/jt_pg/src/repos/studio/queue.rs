@@ -28,9 +28,33 @@ impl PgTenantRepos {
         .fetch_one(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "read dispatch piece"))?;
-        let account = jt_app::ports::CapabilityRepo::find(self, slot.capability_id)
+        let capability = jt_app::ports::CapabilityRepo::lock(self, slot.capability_id)
             .await?
-            .and_then(|c| c.external_id);
+            .ok_or_else(|| AppError::not_found("capability"))?;
+        if let Some(cap) = capability.policy.daily_ops_cap {
+            // Count each durable claim once, including completed/uncertain writes. The frame
+            // and capability locks keep this read and the insertion one atomic reservation.
+            let rows: Vec<Value> = sqlx::query_scalar("select p.data from studio_publish_attempts p join studio_slots s on s.workspace_id=p.workspace_id and s.id=p.slot_id where p.workspace_id=$1 and s.capability_id=$2")
+                .bind(self.workspace_id().0).bind(slot.capability_id.0)
+                .fetch_all(self.tx.conn()).await.map_err(|e| map_sqlx(e, "count daily Studio claims"))?;
+            let offset = time::UtcOffset::from_hms(3, 0, 0).expect("Istanbul offset");
+            let day = now.to_offset(offset).date();
+            let mut used = 0u64;
+            for row in rows {
+                let attempt: PublishAttempt = decode(row)?;
+                if attempt.claimed_at().to_offset(offset).date() == day {
+                    used += 1;
+                }
+            }
+            if used >= u64::from(cap) {
+                return Err(AppError {
+                    code: jt_app::error::ErrorCode::Conflict,
+                    message: "daily operation cap reached".into(),
+                    details: json!({"reason":"daily_ops_cap"}),
+                });
+            }
+        }
+        let account = capability.external_id;
         let attempt = PublishAttempt::claim(
             PublishAttemptId::new_v7(),
             &slot,

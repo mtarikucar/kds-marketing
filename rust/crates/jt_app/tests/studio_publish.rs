@@ -406,3 +406,175 @@ async fn held_queue_head_does_not_starve_an_eligible_slot() {
     assert!(s.studio.attempts.iter().all(|a| a.slot_id() != w.f.slot.id));
     assert_eq!(sends(&c), 1);
 }
+
+async fn second_slot(w: &support::World) -> jt_studio::SlotId {
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut slot = w.f.slot.clone();
+    slot.id = jt_studio::SlotId::new_v7();
+    r.studio()
+        .insert_slots("second", vec![slot.clone()])
+        .await
+        .unwrap();
+    let mut piece = w.f.piece.clone();
+    piece.id = jt_studio::PieceId::new_v7();
+    r.studio()
+        .save_piece(slot.id, 0, piece, "second")
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    slot.id
+}
+
+#[tokio::test]
+async fn daily_ops_cap_limits_claims() {
+    let (mut w, c) = world().await;
+    let second = second_slot(&w).await;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut cap = r
+        .capabilities()
+        .find(w.f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    cap.policy.daily_ops_cap = Some(1);
+    r.capabilities().update(cap).await.unwrap();
+    r.commit().await.unwrap();
+    // Istanbul midnight is 21:00 UTC. Both timestamps are on the same UTC date.
+    let before = FIXED_NOW.date().with_hms(20, 59, 59).unwrap().assume_utc();
+    w.d.clock = Arc::new(FixedClock(before));
+    c.push_publish(Ok(receipt()));
+    assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    assert_eq!(s.studio.attempts.len(), 1);
+    assert_eq!(
+        s.studio
+            .slots
+            .iter()
+            .find(|s| s.id == second)
+            .unwrap()
+            .state,
+        SlotState::Ready
+    );
+    assert!(
+        s.ledger
+            .iter()
+            .any(|r| r.entry.payload["reason"] == "daily_ops_cap")
+    );
+    assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 0);
+    w.d.clock = Arc::new(FixedClock(before + Duration::seconds(1)));
+    c.push_publish(Ok(PublishReceipt {
+        external_id: "124".into(),
+        url: None,
+    }));
+    assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 1);
+    assert_eq!(sends(&c), 2);
+}
+
+struct BrokenMedia(jt_app::error::ErrorCode);
+#[async_trait::async_trait]
+impl jt_app::ports::files::MediaFetcher for BrokenMedia {
+    async fn fetch(
+        &self,
+        _: jt_tenancy::WorkspaceId,
+        _: &url::Url,
+        _: &str,
+        _: &str,
+    ) -> Result<jt_studio::MediaUpload, jt_app::error::AppError> {
+        Err(jt_app::error::AppError {
+            code: self.0,
+            message: "private diagnostic".into(),
+            details: serde_json::json!({}),
+        })
+    }
+}
+#[tokio::test]
+async fn broken_media_does_not_starve_healthy_slots() {
+    use jt_app::error::ErrorCode;
+    for (code, category) in [
+        (
+            ErrorCode::UpstreamUnavailable,
+            jt_studio::RedactedPublishError::Transient,
+        ),
+        (
+            ErrorCode::Validation,
+            jt_studio::RedactedPublishError::Permanent,
+        ),
+    ] {
+        let (mut w, c) = world().await;
+        let healthy = second_slot(&w).await;
+        w.d.media_fetch = Arc::new(BrokenMedia(code));
+        let mut piece = w.f.piece.clone();
+        piece.id = jt_studio::PieceId::new_v7();
+        piece.revision = 2;
+        piece.media = vec![jt_studio::MediaAsset::HostedUrl {
+            url: "https://example.com/broken.png".parse().unwrap(),
+            mime: "image/png".into(),
+            size_bytes: 10,
+        }];
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        r.studio()
+            .save_piece(w.f.slot.id, 1, piece, "broken")
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+        c.push_publish(Ok(receipt()));
+        assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 2);
+        let s = w.uow.snapshot();
+        assert_eq!(s.studio.publications.len(), 1);
+        assert_eq!(s.studio.publications[0].slot_id, healthy);
+        let a = s
+            .studio
+            .attempts
+            .iter()
+            .find(|a| a.slot_id() == w.f.slot.id)
+            .unwrap();
+        assert_eq!(a.state(), PublishState::Failed);
+        assert_eq!(
+            a.outcome(),
+            Some(&jt_studio::PublishOutcome::Failed(category))
+        );
+        if category == jt_studio::RedactedPublishError::Permanent {
+            assert_ne!(
+                s.studio
+                    .slots
+                    .iter()
+                    .find(|s| s.id == w.f.slot.id)
+                    .unwrap()
+                    .state,
+                SlotState::Ready
+            );
+        }
+        assert!(
+            !serde_json::to_string(a)
+                .unwrap()
+                .contains("private diagnostic")
+        );
+        assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 0);
+        assert_eq!(sends(&c), 1);
+    }
+}
+
+#[tokio::test]
+async fn zero_daily_ops_cap_records_reason_without_claiming() {
+    let (w, c) = world().await;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut cap = r
+        .capabilities()
+        .find(w.f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    cap.policy.daily_ops_cap = Some(0);
+    r.capabilities().update(cap).await.unwrap();
+    r.commit().await.unwrap();
+    assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 0);
+    let s = w.uow.snapshot();
+    assert!(s.studio.attempts.is_empty());
+    assert!(
+        s.ledger
+            .iter()
+            .any(|r| r.entry.payload["reason"] == "daily_ops_cap")
+    );
+    assert_eq!(s.studio.slots[0].state, SlotState::Ready);
+    assert_eq!(sends(&c), 0);
+}

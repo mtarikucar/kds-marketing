@@ -1,6 +1,7 @@
 //! Posts: the checks made before anything is sent, the image uploads, the post and its receipt
 //! (see the crate docs, "Posts").
 
+mod emoji;
 use jt_app::ports::connectors::{MediaUpload, PublishReceipt, PublishRequest};
 use jt_connector::{ConnectorError, Credential};
 use jt_outbound::Method;
@@ -78,13 +79,23 @@ fn safe_filename(name: &str) -> String {
 }
 
 /// URLs, including bare domains, consume 23 weighted characters. Non-URL Unicode
-/// uses X's single-weight ranges; CJK and emoji code points consume two.
+/// uses extended grapheme clusters and X's single-weight ranges; CJK and emoji weigh two.
 fn weighted_length(text: &str) -> usize {
     fn chars(s: &str) -> usize {
-        s.chars()
-            .map(|c| match c as u32 {
-                0..=0x10ff | 0x2000..=0x200d | 0x2010..=0x201f | 0x2032..=0x2037 => 1,
-                _ => 2,
+        use unicode_segmentation::UnicodeSegmentation;
+        s.graphemes(true)
+            .map(|cluster| {
+                if emoji::is_emoji(cluster) {
+                    2
+                } else {
+                    cluster
+                        .chars()
+                        .map(|c| match c as u32 {
+                            0..=0x10ff | 0x2000..=0x200d | 0x2010..=0x201f | 0x2032..=0x2037 => 1,
+                            _ => 2,
+                        })
+                        .sum()
+                }
             })
             .sum()
     }

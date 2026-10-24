@@ -230,12 +230,12 @@ async fn publication_fence_serializes_consent_and_group_revocation() {
 }
 
 #[tokio::test]
-async fn waiting_for_probe_does_not_block_emergency_brake() {
+async fn probe_publication_and_brake_follow_frame_then_capability_order() {
     use jt_app::usecases::studio::{
         chain::authorize_execution_at,
         control::{BrakeInput, brake},
     };
-    let (_db, uow, f, d, ctx, _group) = fence_fixture().await;
+    let (db, uow, f, d, ctx, _group) = fence_fixture().await;
     let mut probe = uow.tenant(f.ws).await.unwrap();
     probe
         .capabilities()
@@ -249,9 +249,8 @@ async fn waiting_for_probe_does_not_block_emergency_brake() {
         let mut r = other.tenant(ws).await.unwrap();
         authorize_execution_at(r.as_mut(), input, FIXED_NOW).await
     });
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(500),
+    wait_for_lock(&db, "%select 1 from capabilities%for no key update%").await;
+    let braking = tokio::spawn(async move {
         brake(
             &d,
             &ctx,
@@ -260,14 +259,172 @@ async fn waiting_for_probe_does_not_block_emergency_brake() {
                 lane: None,
                 expected_revision: 0,
             },
-        ),
-    )
-    .await;
+        )
+        .await
+    });
+    wait_for_lock(&db, "%select id from workspaces%for no key update%").await;
     probe.commit().await.unwrap();
-    assert!(
-        result.is_ok(),
-        "a blocked capability must not hold the brake frame"
+    worker.await.unwrap().unwrap();
+    braking.await.unwrap().unwrap();
+    let mut r = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        authorize_execution_at(r.as_mut(), execution(&f), FIXED_NOW)
+            .await
+            .unwrap_err()
+            .details["reason"],
+        "studio_braked"
     );
-    result.unwrap().unwrap();
-    assert!(worker.await.unwrap().is_err());
+}
+
+async fn wait_for_lock(db: &TestDb, query: &str) {
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar("select exists(select 1 from pg_stat_activity where datname=current_database() and pid <> pg_backend_pid() and wait_event_type='Lock' and query like $1)")
+                .bind(query).fetch_one(&db.pool).await.unwrap();
+            if waiting { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await;
+    if result.is_err() {
+        let activity: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as("select query,state,wait_event_type from pg_stat_activity where datname=current_database()")
+            .fetch_all(&db.pool).await.unwrap();
+        panic!("worker did not reach {query}: {activity:?}");
+    }
+}
+
+#[tokio::test]
+async fn publish_and_plan_never_deadlock() {
+    use jt_app::usecases::studio::{planner::plan, publish::publish_due};
+    use jt_testkit::fakes::{ScriptedConnector, ScriptedRegistry};
+    use std::sync::Arc;
+    let (db, uow, f, mut d, _, _) = fence_fixture().await;
+    let connector = Arc::new(ScriptedConnector::new(jt_connector::Provider::X));
+    connector.push_publish(Ok(PublishReceipt {
+        external_id: "published".into(),
+        url: None,
+    }));
+    d.connectors = Arc::new(ScriptedRegistry::new().with_connector(connector));
+    d.clock = Arc::new(jt_testkit::fakes::FixedClock(
+        FIXED_NOW + time::Duration::seconds(1),
+    ));
+    let cred = jt_connector::Credential::OAuth {
+        access_token: "test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec!["tweet.write".into(), "tweet.read".into()],
+    };
+    let sealed = d
+        .seal
+        .seal(f.ws, &serde_json::to_vec(&cred).unwrap())
+        .unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    r.capabilities()
+        .set_sealed(f.slot.capability_id, Some(sealed), FIXED_NOW)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    // Pause the real planner after it acquires the workspace frame, before slot insertion.
+    let mut blocker = uow.tenant(f.ws).await.unwrap();
+    blocker.studio_control().lock_control().await.unwrap();
+    let d = Arc::new(d);
+    let ws = f.ws;
+    let planning = {
+        let d = d.clone();
+        tokio::spawn(async move { plan(&d, ws, FIXED_NOW).await })
+    };
+    wait_for_lock(&db, "%studio_control%").await;
+    let publishing = {
+        let d = d.clone();
+        tokio::spawn(async move { publish_due(&d, ws).await })
+    };
+    wait_for_lock(&db, "%select id from workspaces%for no key update%").await;
+    blocker.commit().await.unwrap();
+    let (planned, published) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(planning, publishing)
+    })
+    .await
+    .expect("planner and publisher must finish without deadlock");
+    assert!(planned.unwrap().unwrap() > 0);
+    assert_eq!(published.unwrap().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn daily_ops_cap_limits_claims() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let f = ready(&uow).await;
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let mut cap = r
+        .capabilities()
+        .find(f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    cap.policy.daily_ops_cap = Some(1);
+    r.capabilities().update(cap).await.unwrap();
+    let mut second = f.slot.clone();
+    second.id = jt_studio::SlotId::new_v7();
+    r.studio()
+        .insert_slots("second", vec![second.clone()])
+        .await
+        .unwrap();
+    let mut piece = f.piece.clone();
+    piece.id = jt_studio::PieceId::new_v7();
+    r.studio()
+        .save_piece(second.id, 0, piece, "second")
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let now = FIXED_NOW.date().with_hms(20, 59, 59).unwrap().assume_utc();
+    let mut first = uow.tenant(f.ws).await.unwrap();
+    let a = first
+        .studio()
+        .claim_publication_for(f.slot.id, now)
+        .await
+        .unwrap()
+        .unwrap();
+    let other = uow.clone();
+    let ws = f.ws;
+    let contender = tokio::spawn(async move {
+        let mut r = other.tenant(ws).await.unwrap();
+        r.studio().claim_publication_for(second.id, now).await
+    });
+    wait_for_lock(&db, "%select id from workspaces%for no key update%").await;
+    first.commit().await.unwrap();
+    assert_eq!(
+        contender.await.unwrap().unwrap_err().details["reason"],
+        "daily_ops_cap"
+    );
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    r.studio()
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Succeeded(PublishReceipt {
+                external_id: "first".into(),
+                url: None,
+            }),
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.studio()
+            .claim_publication_for(second.id, now)
+            .await
+            .unwrap_err()
+            .details["reason"],
+        "daily_ops_cap"
+    );
+    assert_eq!(
+        r.studio().get_slot(second.id).await.unwrap().unwrap().state,
+        jt_studio::SlotState::Ready
+    );
+    assert!(
+        r.studio()
+            .claim_publication_for(second.id, now + time::Duration::seconds(1))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    r.commit().await.unwrap();
 }

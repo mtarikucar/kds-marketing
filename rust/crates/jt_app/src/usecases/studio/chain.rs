@@ -121,7 +121,7 @@ pub(crate) fn hours(c: &Capability, now: OffsetDateTime) -> Result<(), AppError>
         }
     }
     if c.policy.daily_ops_cap == Some(0) {
-        return Err(refuse("daily_operations_disabled"));
+        return Err(refuse("daily_ops_cap"));
     }
     Ok(())
 }
@@ -137,19 +137,18 @@ pub async fn authorize_execution_at(
     input: ExecutionInput,
     now: OffsetDateTime,
 ) -> Result<ExecutionPermit, AppError> {
-    // Capability-only connector probes can hold this row during HTTP. Wait for them before
-    // taking the frame/control fence so the emergency brake remains available. Callers must
-    // begin a fresh short transaction for this gate, without already holding the frame.
-    let c = r
-        .capabilities()
-        .lock(input.capability_id)
-        .await?
-        .ok_or_else(|| AppError::not_found("capability"))?;
+    // All Studio execution paths take the workspace frame before the capability.
+    // The capability lock permits FK key-share checks while fencing policy/access changes.
     let version = r
         .strategy()
         .lock_execution_frame()
         .await?
         .ok_or_else(AppError::strategy_required)?;
+    let c = r
+        .capabilities()
+        .lock(input.capability_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("capability"))?;
     let control = r.studio_control().lock_control().await?;
     let ws = active(r).await?;
     if ws != input.chain.workspace_id {

@@ -2176,9 +2176,11 @@ no public operation and no migration. Existing `studio.pending` and
 Publication checks the active workspace, current strategy/hypothesis/channel/group,
 capability access and policy, revision-bound consent when required, and the brake.
 Capability changes serialize on the capability row; group removals share the short
-execution frame. Dispatch waits for capability locks before taking that frame, so
-a slow connector probe cannot prevent the emergency brake. Held queue entries are skipped, and a
-targeted claim can only capture the selected authorized slot.
+execution frame. Studio paths lock the workspace execution frame before the capability;
+capability locks use `FOR NO KEY UPDATE` so planner foreign-key checks remain compatible.
+A brake queued behind an admitted authorization takes effect after that transaction releases
+its frame. Held queue entries are skipped, and a targeted claim can only capture the selected
+authorized slot.
 The default policy needs no human approval. Media preparation uses the existing
 bounded fetch/file transport outside tenant locks. A fresh execution fence then
 freezes the piece, account, actor, birth/execution versions and control revision in
@@ -2189,6 +2191,16 @@ and attachments; X receives bytes, Meta receives approved or signed URLs.
 Budget-bound publishing (including a capability spend ceiling) refuses with
 `publication_spend_gate_unavailable` until T8 wires its atomic reservation gate.
 It must not be enabled by interpreting an unknown price/currency as zero.
+`daily_ops_cap` reserves operations atomically with each claim under the capability lock.
+Each attempt counts once for its claim's Europe/Istanbul calendar day, including completed
+and uncertain writes. At the limit, the run records `daily_ops_cap` and leaves the slot Ready
+for the next day; concurrent workers cannot claim beyond the cap.
+
+Candidate-specific media preparation errors record redacted Failed attempts and let the run
+continue. Unreachable hosts are Transient; invalid/missing media is Permanent and retires the
+slot. The concrete fetcher preserves transient transport/body failures and HTTP 408/429/5xx
+responses without storing URLs or response diagnostics. Infrastructure errors still fail the run.
+Preparation failures share the no-retry policy.
 
 There are **zero automatic publish retries**, for every connector error category.
 Auth/Permission produce reconnection work. Permanent/Throttle/Transient produce
@@ -2208,7 +2220,9 @@ or archive retains late-completion evidence and never reactivates a retired slot
 This is not a claim of exactly-once delivery at the provider.
 
 X preflight retains GIF-alone and URL/byte-count rules, counts explicit URLs and
-bare domains as 23 characters and applies Unicode character weights. Meta/X
+bare domains as 23 characters. Emoji clusters including variation selectors, skin tones,
+flags and ZWJ families weigh two; non-emoji combining text retains its scalar weights.
+Emoji recognition uses Unicode 17 property data and sequence syntax; CJK characters weigh two. Meta/X
 successful writes with unreadable responses or missing publication IDs remain
 Unknown. Provider text, credentials, file bytes and URL query tokens are absent
 from durable failure/receipt evidence.
@@ -2216,4 +2230,6 @@ from durable failure/receipt evidence.
 `studio_publish` targets cover the application, real PostgreSQL receipt persistence
 and Meta/X mock HTTP behavior. The application tests also cover concurrent claims,
 no locks during provider I/O, all error classes, restart recovery, historical
-read-back, immutable version/arm links, late completion and full adapted media.
+read-back, immutable version/arm links, late completion and full adapted media. PostgreSQL
+regressions overlap planning/publication and cap-limited claims; application tests cover
+Istanbul midnight rollover and broken media followed by healthy work.

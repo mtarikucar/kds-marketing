@@ -1323,6 +1323,31 @@ impl MemTenant {
                         .any(|a| a.piece().chain.workspace_id == self.ws && a.slot_id() == s.id)
             });
         let Some(slot) = slot else { return Ok(None) };
+        let capability = CapabilityRepo::lock(self, slot.capability_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("capability"))?;
+        if let Some(cap) = capability.policy.daily_ops_cap {
+            let offset = time::UtcOffset::from_hms(3, 0, 0).expect("Istanbul offset");
+            let day = now.to_offset(offset).date();
+            let used = self
+                .state()
+                .studio
+                .attempts
+                .iter()
+                .filter(|a| {
+                    a.piece().chain.workspace_id == self.ws
+                        && a.capability_id() == slot.capability_id
+                        && a.claimed_at().to_offset(offset).date() == day
+                })
+                .count();
+            if used as u64 >= u64::from(cap) {
+                return Err(AppError {
+                    code: jt_app::error::ErrorCode::Conflict,
+                    message: "daily operation cap reached".into(),
+                    details: json!({"reason":"daily_ops_cap"}),
+                });
+            }
+        }
         let piece = self
             .state()
             .studio

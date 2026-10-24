@@ -62,7 +62,7 @@ async fn request(
     c: &Capability,
 ) -> Result<PublishRequest, AppError> {
     p.validate_persisted()
-        .map_err(|_| chain::refuse("invalid_piece"))?;
+        .map_err(|_| AppError::validation("invalid piece", json!({"reason":"invalid_piece"})))?;
     let adaptation = c.external_id.as_ref().and_then(|id| p.adaptations.get(id));
     let (text, media, link) = match adaptation {
         Some(a) => (a.text.clone(), &a.media, a.link.clone()),
@@ -77,10 +77,29 @@ async fn request(
     };
     Ok(out)
 }
+async fn record_daily_cap(
+    r: &mut dyn TenantRepos,
+    slot: &jt_studio::Slot,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    let entry = jt_ledger::LedgerEntry::new(
+        slot.chain.workspace_id,
+        jt_ledger::Actor::System {
+            component: "studio.publisher".into(),
+        },
+        jt_ledger::Action::new("studio.publish.skipped")
+            .map_err(|_| AppError::internal("action"))?,
+        json!({"slot_id":slot.id,"capability_id":slot.capability_id,"reason":"daily_ops_cap"}),
+        now,
+    );
+    r.ledger().append(entry).await?;
+    Ok(())
+}
 /// Each iteration releases discovery locks for media preparation, then checks the current
 /// frame under the claim fence. A racing worker can win the claim; it cannot duplicate I/O.
 pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     let mut count = 0;
+    let mut skipped = std::collections::HashSet::new();
     for _ in 0..100 {
         let candidate = {
             let slots = {
@@ -93,15 +112,21 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             let mut found = None;
             let mut refusal = None;
             for s in slots {
-                // A refused candidate must release its frame before waiting for the next
-                // capability; a slow probe must never pin the workspace brake.
+                // Release each refused candidate's transaction before considering another.
                 let mut r = d.uow.tenant(ws).await?;
-                if s.state != SlotState::Ready
+                if skipped.contains(&s.id)
+                    || s.state != SlotState::Ready
                     || !r.studio().slot_evidence(s.id).await?.0.is_empty()
                 {
                     continue;
                 }
                 if let Err(e) = authorize_execution_at(r.as_mut(), input(&s), d.clock.now()).await {
+                    if e.details["reason"] == "daily_ops_cap" {
+                        record_daily_cap(r.as_mut(), &s, d.clock.now()).await?;
+                        r.commit().await?;
+                        skipped.insert(s.id);
+                        continue;
+                    }
                     if e.code == crate::error::ErrorCode::Internal {
                         return Err(e);
                     }
@@ -142,10 +167,31 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             .connectors
             .publisher(provider)
             .ok_or_else(|| chain::refuse("connector_unavailable"))?;
-        let req = request(d, ws, &piece, &cap).await?;
+        let req = request(d, ws, &piece, &cap).await;
+        if let Err(e) = &req
+            && !matches!(
+                e.code,
+                crate::error::ErrorCode::Validation
+                    | crate::error::ErrorCode::NotFound
+                    | crate::error::ErrorCode::HostNotAllowed
+                    | crate::error::ErrorCode::UpstreamUnavailable
+            )
+        {
+            return Err(e.clone());
+        }
         let (attempt, cred, public) = {
             let mut r = d.uow.tenant(ws).await?;
-            let permit = authorize_execution_at(r.as_mut(), input(&slot), d.clock.now()).await?;
+            let permit = match authorize_execution_at(r.as_mut(), input(&slot), d.clock.now()).await
+            {
+                Ok(permit) => permit,
+                Err(e) if e.details["reason"] == "daily_ops_cap" => {
+                    record_daily_cap(r.as_mut(), &slot, d.clock.now()).await?;
+                    r.commit().await?;
+                    skipped.insert(slot.id);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             let c = r
                 .capabilities()
                 .find(slot.capability_id)
@@ -156,12 +202,23 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                 return Err(chain::refuse("publication_account_changed"));
             }
             let cred = credential(d, r.as_mut(), &c).await?;
-            let Some(a) = r
+            let a = match r
                 .studio()
                 .claim_publication_for(slot.id, d.clock.now())
-                .await?
-            else {
-                break;
+                .await
+            {
+                Ok(Some(a)) => a,
+                Ok(None) => {
+                    skipped.insert(slot.id);
+                    continue;
+                }
+                Err(e) if e.details["reason"] == "daily_ops_cap" => {
+                    record_daily_cap(r.as_mut(), &slot, d.clock.now()).await?;
+                    r.commit().await?;
+                    skipped.insert(slot.id);
+                    continue;
+                }
+                Err(e) => return Err(e),
             };
             if a.slot_id() != slot.id
                 || a.piece() != &piece
@@ -170,10 +227,30 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             {
                 break;
             }
+            if let Err(e) = &req {
+                let permanent = e.code != crate::error::ErrorCode::UpstreamUnavailable;
+                let error = AppError::validation(
+                    "media preparation failed",
+                    json!({"provider_error": if permanent { "permanent" } else { "transient" }}),
+                );
+                r.studio()
+                    .finish_publication(a.id(), PublishOutcome::Failed(error), d.clock.now())
+                    .await?;
+                if permanent {
+                    r.studio()
+                        .retire_slot(slot.id, slot.revision, "cancelled")
+                        .await?;
+                }
+                r.commit().await?;
+                count += 1;
+                continue;
+            }
             r.commit().await?;
             (a, cred, adapter_public(&c))
         };
-        let result = publisher.publish(&cred, &public, &req).await;
+        let result = publisher
+            .publish(&cred, &public, &req.expect("prepared request"))
+            .await;
         match result {
             Ok(receipt) => {
                 // The small receipt checkpoint survives interruption before final bookkeeping.
