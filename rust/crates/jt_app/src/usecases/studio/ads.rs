@@ -232,7 +232,13 @@ pub async fn adset_bind(d: &Deps, ctx: &Ctx, i: BindAdSetInput) -> Result<AdSetB
             .request_replay("studio.adset_bind", &i.request_key, &payload)
             .await?
         {
-            return Ok(serde_json::from_value(out)?);
+            let b = serde_json::from_value(out)?;
+            let braked = reassert_binding_brake(r.as_mut(), &b, d.clock.now()).await?;
+            r.commit().await?;
+            if braked {
+                let _ = super::control::reconcile_bindings(d, ctx.workspace_id).await;
+            }
+            return Ok(b);
         }
     }
     let (c, account, sets) = listing(d, ctx, i.capability_id).await?;
@@ -251,7 +257,13 @@ pub async fn adset_bind(d: &Deps, ctx: &Ctx, i: BindAdSetInput) -> Result<AdSetB
         .request_replay("studio.adset_bind", &i.request_key, &payload)
         .await?
     {
-        return Ok(serde_json::from_value(out)?);
+        let b = serde_json::from_value(out)?;
+        let braked = reassert_binding_brake(r.as_mut(), &b, d.clock.now()).await?;
+        r.commit().await?;
+        if braked {
+            let _ = super::control::reconcile_bindings(d, ctx.workspace_id).await;
+        }
+        return Ok(b);
     }
     let frame = r
         .strategy()
@@ -326,9 +338,17 @@ pub async fn adset_bind(d: &Deps, ctx: &Ctx, i: BindAdSetInput) -> Result<AdSetB
     )?;
     e.strategy_version_id = Some(frame.id.0);
     r.ledger().append(e).await?;
+    if was_active {
+        brake_paid_in(
+            r.as_mut(),
+            &b,
+            d.clock.now(),
+            "new_binding_requires_budget_authorization",
+        )
+        .await?;
+    }
     r.commit().await?;
     if was_active {
-        brake_paid(d, &b, "new_binding_requires_budget_authorization").await?;
         let _ = super::control::reconcile_bindings(d, ctx.workspace_id).await;
     }
     Ok(b)
@@ -793,7 +813,8 @@ async fn refresh_period(d: &Deps, b: &AdSetBinding) -> Result<bool, AppError> {
         })
         .max_by_key(|(r, _)| r.id)
     else {
-        return Ok(false);
+        // No reservation is not evidence that the externally managed set is inactive.
+        return Err(refuse("binding_requires_budget_authorization"));
     };
     let frame = frame.ok_or_else(AppError::strategy_required)?;
     if old.request.executed_version_id == frame.id
@@ -887,16 +908,113 @@ async fn refresh_period(d: &Deps, b: &AdSetBinding) -> Result<bool, AppError> {
     r.commit().await?;
     Ok(true)
 }
+async fn reassert_binding_brake(
+    r: &mut dyn TenantRepos,
+    b: &AdSetBinding,
+    now: time::OffsetDateTime,
+) -> Result<bool, AppError> {
+    let current = r
+        .studio()
+        .get_binding(b.id)
+        .await?
+        .ok_or_else(|| AppError::not_found("binding"))?;
+    let frame = r.strategy().current_approved().await?;
+    let rows = r.studio_budget().list_reservations().await?;
+    let moves = r.studio().list_budget_moves().await?;
+    let control = r.studio_control().binding_control(b.id).await?;
+    let resume_prefix = control
+        .as_ref()
+        .filter(|c| {
+            c.desired == AdStatus::Active
+                && matches!(
+                    c.outcome,
+                    Some(BindingStatusOutcome::Applied {
+                        observed: AdStatus::Active
+                    })
+                )
+        })
+        .and_then(|c| c.resume_operation_id)
+        .map(|id| format!("studio.resume:{}:{id}:", b.id));
+    let authorized = rows.iter().any(|(reservation, outcome)| {
+        if reservation.request.binding_id != Some(b.id)
+            || reservation.request.chain.as_ref() != Some(&current.chain)
+            || !matches!(outcome, Some(SpendOutcome::Applied { .. }))
+            || frame
+                .as_ref()
+                .is_none_or(|v| reservation.request.executed_version_id != v.id)
+            || !reservation
+                .lane_window
+                .is_some_and(|(from, until)| from <= now && now < until)
+            || !reservation
+                .item_windows
+                .values()
+                .all(|(from, until)| *from <= now && now < *until)
+            || rows.iter().any(|(next, outcome)| {
+                next.request.replaces == Some(reservation.id)
+                    && !matches!(outcome, Some(SpendOutcome::Refused))
+            })
+        {
+            return false;
+        }
+        // Rollover carries its original authorization forward, never across a binding
+        // verification change. A current resume intent is cleared on binding refresh.
+        let mut ancestor = reservation;
+        for _ in 0..rows.len() {
+            if moves.iter().any(|m| {
+                m.binding_id == current.id
+                    && m.state == BudgetMoveState::Succeeded
+                    && m.binding_verified_at == current.verified_at
+                    && m.binding_verification_evidence == current.verification_evidence
+                    && m.reservation_id == Some(ancestor.id)
+            }) || resume_prefix
+                .as_ref()
+                .is_some_and(|prefix| ancestor.request.evidence_key.starts_with(prefix))
+            {
+                return true;
+            }
+            let Some(previous) = ancestor
+                .request
+                .replaces
+                .and_then(|id| rows.iter().find(|(row, _)| row.id == id))
+            else {
+                return false;
+            };
+            ancestor = &previous.0;
+        }
+        false
+    });
+    if !authorized
+        && control
+            .as_ref()
+            .is_none_or(|c| c.observed != Some(AdStatus::Paused) || c.paused_by_brake)
+    {
+        brake_paid_in(r, b, now, "binding_requires_budget_authorization").await?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 pub(crate) async fn brake_paid(d: &Deps, b: &AdSetBinding, reason: &str) -> Result<(), AppError> {
     let mut r = d.uow.tenant(b.chain.workspace_id).await?;
     r.strategy().lock_execution_frame().await?;
+    brake_paid_in(r.as_mut(), b, d.clock.now(), reason).await?;
+    r.commit().await
+}
+
+/// Persist safety intent alongside the evidence/binding, before any provider I/O.
+pub(super) async fn brake_paid_in(
+    r: &mut dyn TenantRepos,
+    b: &AdSetBinding,
+    now: time::OffsetDateTime,
+    reason: &str,
+) -> Result<(), AppError> {
     let flags = r.studio_control().lock_control().await?;
     if !flags.is_braked(LaneKind::Paid) {
         r.studio_control()
             .set_brake(flags.revision, Some(LaneKind::Paid), true)
             .await?;
-        let ctx = super::measure::system_ctx(b.chain.workspace_id, d.clock.now());
+        let ctx = super::measure::system_ctx(b.chain.workspace_id, now);
         r.ledger().append(ledger_entry(&ctx,"studio.paid.refused","studio_binding",b.id,json!({"chain":b.chain,"reason":reason,"requires_action":true,"residual_provider_exposure":true}))?).await?;
     }
-    r.commit().await
+    Ok(())
 }

@@ -971,3 +971,331 @@ async fn unchanged_intraday_spend_is_refreshed_after_bucket_close() {
     assert_eq!(latest.measured_at, w.d.clock.now());
     assert_eq!(latest.raw_metrics["spend_minor"], Some(0));
 }
+
+async fn observed_overspend_with_execution_disabled(outside_hours: bool) {
+    // Exercise lane and item caps independently; neither may be hidden by eligibility.
+    for item_cap in [false, true] {
+        let w = support::world().await;
+        let (b, _) = w.paid().await;
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        let mut c = r
+            .capabilities()
+            .find(b.capability_id)
+            .await
+            .unwrap()
+            .unwrap();
+        if outside_hours {
+            c.policy.active_hours = Some(
+                serde_json::from_value(serde_json::json!({
+                    "tz":"UTC", "days":[1,2,3,4,5,6,7], "from":0, "to":1
+                }))
+                .unwrap(),
+            );
+        } else {
+            c.policy.daily_ops_cap = Some(0);
+        }
+        let mut item = r
+            .budget()
+            .find_item(c.budget_item_ids[0])
+            .await
+            .unwrap()
+            .unwrap();
+        item.cap = if item_cap { 50 } else { 200_000 };
+        r.budget().update_item(item).await.unwrap();
+        r.capabilities().update(c).await.unwrap();
+        r.commit().await.unwrap();
+        let spend = if item_cap { 51 } else { 100_001 };
+        w.provider_status("ACTIVE", 10);
+        w.ads.push_set_status(Ok(()));
+        let m = daily_measurement(&b, FIXED_NOW.date(), 0, spend);
+        jt_app::usecases::studio::measure::record(&w.d, m.clone())
+            .await
+            .unwrap();
+        let state = w.uow.snapshot();
+        assert_eq!(state.studio.measurements, vec![m]);
+        assert!(state.studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
+        assert!(state.studio.binding_controls[0].confirmed_paused());
+        assert!(w.ads.calls().iter().any(|call| matches!(call,
+            ConnectorCall::SetAdStatus { entity_id, status: jt_app::ports::connectors::AdStatus::Paused, .. }
+                if entity_id == &b.adset_id)));
+        let pending = jt_app::usecases::studio::work::pending(&w.d, &w.ctx)
+            .await
+            .unwrap();
+        assert_eq!(pending.paid_alerts.len(), 1);
+        assert_eq!(pending.paid_alerts[0]["residual_provider_exposure"], false);
+        assert_eq!(
+            writes(&w),
+            0,
+            "safety pauses must never change the daily budget"
+        );
+    }
+}
+
+#[tokio::test]
+async fn over_cap_spend_outside_work_hours_engages_brake() {
+    observed_overspend_with_execution_disabled(true).await;
+}
+
+#[tokio::test]
+async fn zero_daily_ops_does_not_hide_overspend() {
+    observed_overspend_with_execution_disabled(false).await;
+}
+
+fn bind_input(b: &jt_studio::AdSetBinding, key: &str) -> BindAdSetInput {
+    BindAdSetInput {
+        hypothesis_id: b.chain.hypothesis_id,
+        arm_id: b.chain.arm_id,
+        capability_id: b.capability_id,
+        adset_id: b.adset_id.clone(),
+        request_key: key.into(),
+    }
+}
+
+#[tokio::test]
+async fn interrupted_bind_never_leaves_unbraked_binding() {
+    let w = support::world().await;
+    let (mut b, _) = w.paid().await;
+    b.adset_id = "new_set".into();
+    w.ads
+        .push_account_context(Ok(jt_app::ports::connectors::AdAccountContext {
+            account_id: b.account_id.clone(),
+            currency: "TRY".into(),
+            minor_unit_exponent: 2,
+            timezone: "UTC".into(),
+        }));
+    w.ads
+        .push_list_adsets(Ok(vec![jt_app::ports::connectors::AdSet {
+            id: b.adset_id.clone(),
+            name: "new".into(),
+            status: "ACTIVE".into(),
+            campaign_id: b.campaign_id.clone(),
+            daily_budget_minor: Some(10),
+            lifetime_budget_minor: None,
+        }]));
+    w.uow.fail_studio_brake(1);
+    let input = bind_input(&b, "interrupted");
+    let error = adset_bind(&w.d, &w.ctx, input.clone()).await.unwrap_err();
+    assert!(error.message.contains("injected brake write failure"));
+    let state = w.uow.snapshot();
+    assert!(
+        !state
+            .studio
+            .bindings
+            .iter()
+            .any(|row| row.adset_id == "new_set"),
+        "a failed safety write must roll back the new binding"
+    );
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    assert!(
+        r.studio()
+            .request_replay(
+                "studio.adset_bind",
+                "interrupted",
+                &serde_json::to_value(input).unwrap()
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn replay_reasserts_missing_brake() {
+    let w = support::world().await;
+    let (b, _) = w.paid().await;
+    let input = bind_input(&b, "replay-brake");
+    w.provider_status("ACTIVE", 10);
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_set_status(Ok(()));
+    let saved = adset_bind(&w.d, &w.ctx, input.clone()).await.unwrap();
+    // Simulate a lost brake from an older committed receipt, without authorizing any spend.
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let flags = r.studio_control().lock_control().await.unwrap();
+    r.studio_control()
+        .set_brake(flags.revision, Some(jt_strategy::LaneKind::Paid), false)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_set_status(Ok(()));
+    assert_eq!(adset_bind(&w.d, &w.ctx, input).await.unwrap(), saved);
+    let state = w.uow.snapshot();
+    assert!(state.studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
+    assert!(state.studio.binding_controls[0].confirmed_paused());
+    assert!(state.studio.reservations.is_empty());
+}
+
+#[tokio::test]
+async fn recheck_covers_unreserved_bindings() {
+    let w = support::world().await;
+    w.paid().await;
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_set_status(Ok(()));
+    recheck_periods(&w.d, w.f.ws).await.unwrap();
+    let state = w.uow.snapshot();
+    assert!(state.studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
+    assert!(state.studio.binding_controls[0].confirmed_paused());
+    assert!(state.studio.reservations.is_empty());
+    assert_eq!(
+        jt_app::usecases::studio::work::pending(&w.d, &w.ctx)
+            .await
+            .unwrap()
+            .paid_alerts
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn disabled_execution_under_cap_keeps_measurement_without_braking() {
+    let w = support::world().await;
+    let (b, _) = w.paid().await;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut c = r
+        .capabilities()
+        .find(b.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    c.policy.daily_ops_cap = Some(0);
+    r.capabilities().update(c).await.unwrap();
+    r.commit().await.unwrap();
+    let m = daily_measurement(&b, FIXED_NOW.date(), 0, 50);
+    jt_app::usecases::studio::measure::record(&w.d, m.clone())
+        .await
+        .unwrap();
+    let state = w.uow.snapshot();
+    assert_eq!(state.studio.measurements, vec![m]);
+    assert!(!state.studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
+    assert!(w.ads.calls().is_empty());
+}
+
+#[tokio::test]
+async fn overspend_without_write_scope_keeps_brake_and_residual_work_item() {
+    let w = support::world().await;
+    let (b, _) = w.paid().await;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut c = r
+        .capabilities()
+        .find(b.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    c.connector_public["access"]["scopes"] = serde_json::json!(["ads_read"]);
+    c.policy.daily_ops_cap = Some(0);
+    r.capabilities().update(c).await.unwrap();
+    r.commit().await.unwrap();
+    let m = daily_measurement(&b, FIXED_NOW.date(), 0, 100_001);
+    jt_app::usecases::studio::measure::record(&w.d, m.clone())
+        .await
+        .unwrap();
+    let state = w.uow.snapshot();
+    assert_eq!(state.studio.measurements, vec![m]);
+    assert!(state.studio.controls[0].is_braked(jt_strategy::LaneKind::Paid));
+    assert!(
+        w.ads.calls().is_empty(),
+        "measurement read access must not authorize a pause"
+    );
+    let pending = jt_app::usecases::studio::work::pending(&w.d, &w.ctx)
+        .await
+        .unwrap();
+    assert_eq!(pending.paid_alerts.len(), 1);
+    assert_eq!(pending.paid_alerts[0]["residual_provider_exposure"], true);
+}
+
+#[tokio::test]
+async fn replay_does_not_accept_historical_authorization() {
+    for refresh_generation in [false, true] {
+        let mut w = support::world().await;
+        let (b, _) = w.paid().await;
+        w.provider_status("ACTIVE", 10);
+        w.ads.push_set_daily_budget(Ok(()));
+        budget_move(&w.d, &w.ctx, move_input(&b, "old-authorization", 10))
+            .await
+            .unwrap();
+        let now = if refresh_generation {
+            FIXED_NOW + time::Duration::seconds(1)
+        } else {
+            time::macros::datetime!(2026-11-01 01:00 UTC)
+        };
+        w.d.clock = std::sync::Arc::new(jt_testkit::fakes::FixedClock(now));
+        if refresh_generation {
+            let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+            let mut c = r
+                .capabilities()
+                .find(b.capability_id)
+                .await
+                .unwrap()
+                .unwrap();
+            c.last_verified_at = Some(now);
+            r.capabilities().update(c).await.unwrap();
+            r.commit().await.unwrap();
+        }
+        let input = bind_input(&b, "active-rebind");
+        w.provider_status("ACTIVE", 10);
+        w.provider_status("ACTIVE", 10);
+        w.ads.push_set_status(Ok(()));
+        let saved = adset_bind(&w.d, &w.ctx, input.clone()).await.unwrap();
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        let flags = r.studio_control().lock_control().await.unwrap();
+        r.studio_control()
+            .set_brake(flags.revision, Some(jt_strategy::LaneKind::Paid), false)
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+        w.provider_status("ACTIVE", 10);
+        w.ads.push_set_status(Ok(()));
+        assert_eq!(adset_bind(&w.d, &w.ctx, input).await.unwrap(), saved);
+        let state = w.uow.snapshot();
+        assert!(
+            state.studio.controls[0].is_braked(jt_strategy::LaneKind::Paid),
+            "historical authorization must not suppress replay recovery (refresh={refresh_generation})"
+        );
+        assert!(state.studio.binding_controls[0].confirmed_paused());
+        assert_eq!(state.studio.reservations.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn replay_preserves_current_move_rollover_and_resume_authorization() {
+    for mode in ["move", "rollover", "resume"] {
+        let mut w = support::world().await;
+        let (b, _) = w.paid().await;
+        let input = bind_input(&b, "authorized-replay");
+        w.provider_status("ACTIVE", 10);
+        w.provider_status("ACTIVE", 10);
+        w.ads.push_set_status(Ok(()));
+        adset_bind(&w.d, &w.ctx, input.clone()).await.unwrap();
+        if mode == "resume" {
+            w.provider_status("PAUSED", 10);
+            w.ads.push_set_status(Ok(()));
+            w.brake(false, Some(jt_strategy::LaneKind::Paid), 1).await;
+        } else {
+            let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+            let flags = r.studio_control().lock_control().await.unwrap();
+            r.studio_control()
+                .set_brake(flags.revision, Some(jt_strategy::LaneKind::Paid), false)
+                .await
+                .unwrap();
+            r.commit().await.unwrap();
+            w.provider_status("ACTIVE", 10);
+            w.ads.push_set_daily_budget(Ok(()));
+            budget_move(&w.d, &w.ctx, move_input(&b, "current-authorization", 10))
+                .await
+                .unwrap();
+            if mode == "rollover" {
+                w.d.clock = std::sync::Arc::new(jt_testkit::fakes::FixedClock(
+                    time::macros::datetime!(2026-11-01 01:00 UTC),
+                ));
+                assert_eq!(recheck_periods(&w.d, w.f.ws).await.unwrap(), 1);
+            }
+        }
+        let before = w.ads.calls();
+        adset_bind(&w.d, &w.ctx, input).await.unwrap();
+        assert!(
+            !w.uow.snapshot().studio.controls[0].is_braked(jt_strategy::LaneKind::Paid),
+            "current authorization must survive receipt replay ({mode})"
+        );
+        assert_eq!(w.ads.calls(), before);
+    }
+}

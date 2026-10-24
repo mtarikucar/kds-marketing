@@ -137,36 +137,7 @@ pub async fn validate_reservation(
         combined.push((proposed.clone(), None));
         combined.len() - 1
     };
-    // Attribute external spend even before the first authorized write. These zero-value
-    // accounting rows are transient; the only persisted row is the requested reservation.
-    for binding in r.studio().list_bindings().await? {
-        if let Some(capability) = r.capabilities().find(binding.capability_id).await? {
-            combined.push((
-                SpendReservation {
-                    id: ReservationId::new_v7(),
-                    lane_window: None,
-                    item_windows: BTreeMap::new(),
-                    item_amounts: BTreeMap::new(),
-                    request: ReserveSpend {
-                        workspace_id: req.workspace_id,
-                        capability_id: capability.id,
-                        budget_item_ids: capability.budget_item_ids,
-                        lane: LaneKind::Paid,
-                        executed_version_id: req.executed_version_id,
-                        amount_minor: 0,
-                        daily_budget_minor: None,
-                        currency: req.currency.clone(),
-                        evidence_key: String::new(),
-                        at: req.at,
-                        binding_id: Some(binding.id),
-                        chain: Some(binding.chain),
-                        replaces: None,
-                    },
-                },
-                None,
-            ));
-        }
-    }
+    attribute_bindings(r, &mut combined, req).await?;
     let mut items = req.budget_item_ids.clone();
     items.sort();
     items.dedup();
@@ -255,6 +226,156 @@ pub async fn validate_reservation(
     }
     Ok(proposed)
 }
+/// Observation accounting deliberately has no execution, work-hour, or operation gates.
+/// Call with the frame/control locks held, after persisting the measurement.
+pub(super) async fn validate_observed_spend(
+    r: &mut dyn TenantRepos,
+    binding: &AdSetBinding,
+    currency: &str,
+    at: OffsetDateTime,
+) -> Result<(), AppError> {
+    let frame = r.strategy().current_approved().await?;
+    let c = r
+        .capabilities()
+        .find(binding.capability_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("capability"))?;
+    let req = ReserveSpend {
+        workspace_id: binding.chain.workspace_id,
+        capability_id: c.id,
+        budget_item_ids: c.budget_item_ids.clone(),
+        lane: LaneKind::Paid,
+        executed_version_id: frame
+            .as_ref()
+            .map_or(binding.chain.born_version_id, |v| v.id),
+        amount_minor: 0,
+        daily_budget_minor: None,
+        currency: currency.into(),
+        evidence_key: String::new(),
+        at,
+        binding_id: Some(binding.id),
+        chain: Some(binding.chain.clone()),
+        replaces: None,
+    };
+    let mut rows = r.studio_budget().list_reservations().await?;
+    attribute_bindings(r, &mut rows, &req).await?;
+    let measurements = r.studio().list_measurements().await?;
+    if let Some(lane) = frame.as_ref().and_then(|v| {
+        v.sections
+            .budget_frame
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneKind::Paid && l.currency == currency)
+    }) {
+        let (from, until) = period_window(lane_period(lane.period), at);
+        let mut manual = 0i128;
+        for item in r.budget().list_items().await? {
+            if item.unit == Unit::Currency(currency.into()) {
+                manual += i128::from(r.budget().spent_between(item.id, from, until).await?);
+            }
+        }
+        check(
+            manual
+                + occupied(
+                    &rows,
+                    &measurements,
+                    None,
+                    Some(LaneKind::Paid),
+                    None,
+                    currency,
+                    from,
+                    until,
+                    at,
+                ),
+            lane.cap_minor,
+        )?;
+        if let Some(cap) = c.policy.spend_cap_minor {
+            check(
+                occupied(
+                    &rows,
+                    &measurements,
+                    None,
+                    None,
+                    Some(c.id),
+                    currency,
+                    from,
+                    until,
+                    at,
+                ),
+                cap,
+            )?;
+        }
+    }
+    // Item caps still apply without a current lane/frame and even to retired items:
+    // those restrictions cannot erase spend that the provider already incurred.
+    for id in &c.budget_item_ids {
+        let item = r
+            .budget()
+            .lock_item(*id)
+            .await?
+            .ok_or_else(|| AppError::not_found("budget item"))?;
+        if item.unit != Unit::Currency(currency.into()) {
+            continue;
+        }
+        let (from, until) = period_window(item.period, at);
+        let manual = r.budget().spent_between(*id, from, until).await?;
+        check(
+            i128::from(manual)
+                + occupied(
+                    &rows,
+                    &measurements,
+                    Some(*id),
+                    None,
+                    None,
+                    currency,
+                    from,
+                    until,
+                    at,
+                ),
+            item.cap,
+        )?;
+    }
+    Ok(())
+}
+
+async fn attribute_bindings(
+    r: &mut dyn TenantRepos,
+    combined: &mut Vec<(SpendReservation, Option<SpendOutcome>)>,
+    req: &ReserveSpend,
+) -> Result<(), AppError> {
+    // Attribute external spend even before the first authorized write. These zero-value
+    // accounting rows are transient; they never authorize a provider operation.
+    for binding in r.studio().list_bindings().await? {
+        if let Some(capability) = r.capabilities().find(binding.capability_id).await? {
+            combined.push((
+                SpendReservation {
+                    id: ReservationId::new_v7(),
+                    lane_window: None,
+                    item_windows: BTreeMap::new(),
+                    item_amounts: BTreeMap::new(),
+                    request: ReserveSpend {
+                        workspace_id: req.workspace_id,
+                        capability_id: capability.id,
+                        budget_item_ids: capability.budget_item_ids,
+                        lane: LaneKind::Paid,
+                        executed_version_id: req.executed_version_id,
+                        amount_minor: 0,
+                        daily_budget_minor: None,
+                        currency: req.currency.clone(),
+                        evidence_key: String::new(),
+                        at: req.at,
+                        binding_id: Some(binding.id),
+                        chain: Some(binding.chain),
+                        replaces: None,
+                    },
+                },
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn check(used: i128, cap: i64) -> Result<(), AppError> {
     if used > i128::from(cap) {
         Err(AppError::budget_cap(

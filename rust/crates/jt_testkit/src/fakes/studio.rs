@@ -208,6 +208,12 @@ impl StudioControlRepo for MemTenant {
         lane: Option<LaneKind>,
         engaged: bool,
     ) -> Result<StudioControl, AppError> {
+        self.call(|this| {
+            if this.tx.studio_brake_fails() {
+                return Err(AppError::conflict("injected brake write failure"));
+            }
+            Ok(())
+        })?;
         let mut c = self.lock_control().await?;
         if c.revision != expected {
             return Err(AppError::conflict("control revision changed"));

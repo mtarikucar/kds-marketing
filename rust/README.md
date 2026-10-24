@@ -2337,6 +2337,10 @@ cap accounting atomically with evidence. Complete elapsed buckets transfer reser
 exposure to observed spend; uncertain and overlapping buckets remain conservatively
 held. The six-hour measurement cycle brakes only the paid lane on budget/status drift,
 exposes a work item in `studio.pending.paid_alerts`, and requests `Paused` status.
+Observed spend is checked against lane and linked item caps independently of work
+hours and operation limits; those eligibility checks gate new budget moves only.
+An active binding and its required safety brake commit together. Receipt replay
+restores a missing brake, and periodic rechecks cover bindings without reservations.
 Rollover refusal likewise persists the brake before pausing. Unknown pause outcomes
 report residual provider exposure. Jeeta guarantees preflight authorization caps;
 providers can still incur in-flight or externally initiated spend, which remains

@@ -83,42 +83,29 @@ pub async fn record(d: &Deps, m: Measurement) -> Result<bool, AppError> {
                 .await?;
         }
     }
+    let mut pause_paid = false;
     if let Some(id) = m.binding_id {
         let b = r
             .studio()
             .get_binding(id)
             .await?
             .ok_or_else(|| AppError::not_found("binding"))?;
-        if let Some(frame) = r.strategy().current_approved().await? {
-            let c = r
-                .capabilities()
-                .find(b.capability_id)
-                .await?
-                .ok_or_else(|| AppError::not_found("capability"))?;
-            let req = ReserveSpend {
-                binding_id: None,
-                chain: None,
-                replaces: None,
-                workspace_id: m.chain.workspace_id,
-                capability_id: c.id,
-                budget_item_ids: c.budget_item_ids,
-                lane: jt_strategy::LaneKind::Paid,
-                executed_version_id: frame.id,
-                amount_minor: 0,
-                daily_budget_minor: None,
-                currency: m.currency.clone().unwrap_or_default(),
-                evidence_key: format!("measurement-cap:{}", m.id),
-                at: d.clock.now(),
-            };
-            if let Err(e) = super::budget::validate_reservation(r.as_mut(), &req).await
-                && e.code == crate::error::ErrorCode::BudgetCap
+        if let Some(currency) = &m.currency {
+            match super::budget::validate_observed_spend(r.as_mut(), &b, currency, d.clock.now())
+                .await
             {
-                let flags = r.studio_control().lock_control().await?;
-                if !flags.is_braked(jt_strategy::LaneKind::Paid) {
-                    r.studio_control()
-                        .set_brake(flags.revision, Some(jt_strategy::LaneKind::Paid), true)
-                        .await?;
+                Err(e) if e.code == crate::error::ErrorCode::BudgetCap => {
+                    super::ads::brake_paid_in(
+                        r.as_mut(),
+                        &b,
+                        d.clock.now(),
+                        "observed_spend_over_cap",
+                    )
+                    .await?;
+                    pause_paid = true;
                 }
+                Err(e) => return Err(e),
+                Ok(()) => {}
             }
         }
     }
@@ -133,6 +120,9 @@ pub async fn record(d: &Deps, m: Measurement) -> Result<bool, AppError> {
     e.strategy_version_id = Some(m.chain.born_version_id.0);
     r.ledger().append(e).await?;
     r.commit().await?;
+    if pause_paid {
+        let _ = super::control::reconcile_bindings(d, m.chain.workspace_id).await;
+    }
     Ok(changed)
 }
 fn invalid(e: StudioError) -> AppError {

@@ -404,6 +404,7 @@ pub struct InMemoryUow {
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
     mail_cursor_faults: Arc<AtomicUsize>,
+    studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
 }
 
@@ -421,6 +422,11 @@ impl InMemoryUow {
     /// list returns the old row; subsequent reads see this committed replacement.
     pub fn replace_capability_after_list(&self, row: StoredCapability) {
         *lock(&self.capability_after_list) = Some(row);
+    }
+
+    /// Fail the next brake writes to exercise atomic binding rollback.
+    pub fn fail_studio_brake(&self, times: usize) {
+        self.studio_brake_faults.store(times, Ordering::SeqCst);
     }
 
     pub fn fail_mail_cursor(&self, times: usize) {
@@ -478,6 +484,7 @@ pub(super) struct MemTx {
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
     mail_cursor_faults: Arc<AtomicUsize>,
+    studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
@@ -509,6 +516,7 @@ impl MemTx {
             inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
             inbox_consumption_faults: Arc::clone(&uow.inbox_consumption_faults),
             mail_cursor_faults: Arc::clone(&uow.mail_cursor_faults),
+            studio_brake_faults: Arc::clone(&uow.studio_brake_faults),
             capability_after_list: Arc::clone(&uow.capability_after_list),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
@@ -591,6 +599,12 @@ impl MemTx {
             }
         });
         Ok(())
+    }
+
+    pub(super) fn studio_brake_fails(&self) -> bool {
+        self.studio_brake_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 
     pub(super) fn mail_cursor_fails(&self) -> bool {
