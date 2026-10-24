@@ -599,6 +599,7 @@ impl Publisher for ScriptedConnector {
             public: public.clone(),
             request: request.clone(),
         });
+        self.after_send().await;
         self.next(&self.publish, "publish result")
     }
 }

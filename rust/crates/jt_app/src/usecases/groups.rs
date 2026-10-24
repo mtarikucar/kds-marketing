@@ -149,6 +149,7 @@ pub async fn delete(deps: &Deps, ctx: &Ctx, id: CapabilityGroupId) -> Result<(),
     ctx.require(Permission::CapabilitiesManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let draft = repos.strategy().lock_draft().await?;
+    repos.strategy().lock_execution_frame().await?;
     let (group, members) = find_group(repos.as_mut(), id).await?;
     let approved = repos.strategy().current_approved().await?;
     let referencing: Vec<StrategyVersionId> = approved
@@ -215,6 +216,7 @@ pub async fn remove_member(
 ) -> Result<GroupOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    repos.strategy().lock_execution_frame().await?;
     find_group(repos.as_mut(), id).await?;
     repos
         .capability_groups()

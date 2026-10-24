@@ -137,6 +137,14 @@ pub async fn authorize_execution_at(
     input: ExecutionInput,
     now: OffsetDateTime,
 ) -> Result<ExecutionPermit, AppError> {
+    // Capability-only connector probes can hold this row during HTTP. Wait for them before
+    // taking the frame/control fence so the emergency brake remains available. Callers must
+    // begin a fresh short transaction for this gate, without already holding the frame.
+    let c = r
+        .capabilities()
+        .lock(input.capability_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("capability"))?;
     let version = r
         .strategy()
         .lock_execution_frame()
@@ -156,11 +164,6 @@ pub async fn authorize_execution_at(
     if control.is_braked(lane) {
         return Err(refuse("studio_braked"));
     }
-    let c = r
-        .capabilities()
-        .find(input.capability_id)
-        .await?
-        .ok_or_else(|| AppError::not_found("capability"))?;
     let birth = r
         .strategy()
         .find(input.chain.born_version_id)
@@ -438,4 +441,30 @@ pub(crate) fn binding_current(b: &jt_studio::AdSetBinding, c: &Capability) -> Re
         return Err(refuse("binding_stale"));
     }
     Ok(())
+}
+
+/// Historical read authority for a captured receipt before Publication bookkeeping completes.
+/// This cannot authorize a write, and deliberately survives strategy archive and the brake.
+pub(crate) async fn authorize_publication_recovery(
+    r: &mut dyn TenantRepos,
+    attempt: &jt_studio::PublishAttempt,
+    now: OffsetDateTime,
+) -> Result<Capability, AppError> {
+    let ws = active(r).await?;
+    let c = r
+        .capabilities()
+        .find(attempt.capability_id())
+        .await?
+        .ok_or_else(|| AppError::not_found("capability"))?;
+    if attempt.piece().chain.workspace_id != ws
+        || c.workspace_id != ws
+        || !attempt
+            .account_id()
+            .zip(c.external_id.as_deref())
+            .is_some_and(|(a, b)| same_account(&c.kind_key, a, b))
+    {
+        return Err(refuse("historical_account_changed"));
+    }
+    capability_access(&c, now, false)?;
+    Ok(c)
 }

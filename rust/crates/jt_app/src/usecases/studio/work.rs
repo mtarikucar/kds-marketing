@@ -97,10 +97,47 @@ pub(crate) async fn pending_in(
         })
         .await?;
     let mut out = PendingStudioOut::default();
-    for s in slots
-        .into_iter()
-        .filter(|s| matches!(s.state, SlotState::Planned | SlotState::Ready))
-    {
+    for s in slots {
+        let target = ApprovalTarget::Slot(s.id);
+        for a in r.studio().slot_evidence(s.id).await?.0 {
+            let category = match a.outcome() {
+                Some(
+                    jt_studio::PublishOutcome::Failed(e)
+                    | jt_studio::PublishOutcome::Unknown(e)
+                    | jt_studio::PublishOutcome::Refused(e),
+                ) => Some(*e),
+                Some(jt_studio::PublishOutcome::Observed(_)) => {
+                    Some(jt_studio::RedactedPublishError::Unknown)
+                }
+                _ => None,
+            };
+            if let Some(e) = category {
+                let reason = serde_json::to_value(e)?
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_owned();
+                out.blockers.push(Blocker {
+                    target,
+                    reason: format!("publish_{reason}"),
+                    next_action: Some(
+                        if matches!(
+                            e,
+                            jt_studio::RedactedPublishError::Auth
+                                | jt_studio::RedactedPublishError::Permission
+                        ) {
+                            "reconnect_capability"
+                        } else {
+                            "review_publication_duplicate_risk"
+                        }
+                        .into(),
+                    ),
+                });
+            }
+        }
+
+        if !matches!(s.state, SlotState::Planned | SlotState::Ready) {
+            continue;
+        }
         let arm = r
             .studio()
             .get_arm(s.chain.arm_id)
@@ -111,7 +148,7 @@ pub(crate) async fn pending_in(
             .find(s.capability_id)
             .await?
             .ok_or_else(|| AppError::not_found("capability"))?;
-        let target = ApprovalTarget::Slot(s.id);
+
         if control.is_braked(arm.key.lane) {
             out.blockers.push(Blocker {
                 next_action: None,

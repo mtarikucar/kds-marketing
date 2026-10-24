@@ -695,67 +695,14 @@ impl StudioRepo for MemTenant {
         &mut self,
         now: OffsetDateTime,
     ) -> Result<Option<PublishAttempt>, AppError> {
-        let Some(v) = StrategyRepo::lock_execution_frame(self).await? else {
-            return Ok(None);
-        };
-        let control = self.lock_control().await?;
-        if control.is_braked(LaneKind::Organic) {
-            return Ok(None);
-        }
-        let slot = self
-            .list_slots(SlotQuery {
-                from: OffsetDateTime::UNIX_EPOCH,
-                until: now + time::Duration::nanoseconds(1),
-                hypothesis_id: None,
-                lane: Some(LaneKind::Organic),
-            })
-            .await?
-            .into_iter()
-            .find(|s| {
-                s.state == SlotState::Ready
-                    && !self
-                        .state()
-                        .studio
-                        .attempts
-                        .iter()
-                        .any(|a| a.piece().chain.workspace_id == self.ws && a.slot_id() == s.id)
-            });
-        let Some(slot) = slot else { return Ok(None) };
-        let piece = self
-            .state()
-            .studio
-            .pieces
-            .iter()
-            .find(|(id, p)| {
-                *id == slot.id && p.chain.workspace_id == self.ws && p.revision == slot.revision
-            })
-            .map(|(_, p)| p)
-            .ok_or_else(|| AppError::not_found("piece"))?;
-        let account = self
-            .state()
-            .capabilities
-            .iter()
-            .find(|c| c.capability.workspace_id == self.ws && c.capability.id == slot.capability_id)
-            .and_then(|c| c.capability.external_id.clone());
-        let a = PublishAttempt::claim(
-            PublishAttemptId::new_v7(),
-            &slot,
-            piece,
-            v.id,
-            control.revision,
-            Actor::System {
-                component: "studio.publisher".into(),
-            },
-            now,
-        )
-        .map_err(invalid)?
-        .with_account(account);
-        self.studio_write(|s, _| {
-            s.attempts.push(a.clone());
-            Ok(())
-        })?;
-        self.attempt_ledger(&a, "studio.publish.claimed", now)?;
-        Ok(Some(a))
+        self.claim_studio(now, None).await
+    }
+    async fn claim_publication_for(
+        &mut self,
+        slot: SlotId,
+        now: OffsetDateTime,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        self.claim_studio(now, Some(slot)).await
     }
     async fn finish_publication(
         &mut self,
@@ -763,7 +710,8 @@ impl StudioRepo for MemTenant {
         o: PublishOutcome,
         observed_at: OffsetDateTime,
     ) -> Result<(), AppError> {
-        self.tx.lock_studio().await;
+        let current = StrategyRepo::lock_execution_frame(self).await?;
+        let control = self.lock_control().await?;
         let old = self
             .state()
             .studio
@@ -798,6 +746,14 @@ impl StudioRepo for MemTenant {
                 state.publications.push(p);
                 Ok(())
             })?;
+            if s.state == SlotState::Retired
+                || control.is_braked(LaneKind::Organic)
+                || current
+                    .as_ref()
+                    .is_none_or(|v| v.id != a.executed_version_id())
+            {
+                self.attempt_ledger(&a, "studio.publish.late_completion", observed_at)?;
+            }
             if s.state != SlotState::Retired {
                 s.state = SlotState::Published;
                 s.revision = s
@@ -1136,7 +1092,7 @@ impl MemTenant {
             self.ws,
             a.actor().clone(),
             Action::new(action).map_err(|_| AppError::internal("action"))?,
-            json!({"attempt_id":a.id(),"slot_id":a.slot_id(),"born_version_id":a.piece().chain.born_version_id,"executed_version_id":a.executed_version_id(),"state":a.state()}),
+            json!({"attempt_id":a.id(),"slot_id":a.slot_id(),"born_version_id":a.piece().chain.born_version_id,"executed_version_id":a.executed_version_id(),"hypothesis_id":a.piece().chain.hypothesis_id,"arm_id":a.piece().chain.arm_id,"piece_id":a.piece().id,"state":a.state()}),
             at,
         );
         e.subject = Some(jt_ledger::Subject {
@@ -1331,5 +1287,76 @@ fn cap_check(used: i128, amount: i64, cap: i64) -> Result<(), AppError> {
         ))
     } else {
         Ok(())
+    }
+}
+
+impl MemTenant {
+    async fn claim_studio(
+        &mut self,
+        now: OffsetDateTime,
+        target: Option<SlotId>,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        let Some(v) = StrategyRepo::lock_execution_frame(self).await? else {
+            return Ok(None);
+        };
+        let control = self.lock_control().await?;
+        if control.is_braked(LaneKind::Organic) {
+            return Ok(None);
+        }
+        let slot = self
+            .list_slots(SlotQuery {
+                from: OffsetDateTime::UNIX_EPOCH,
+                until: now + time::Duration::nanoseconds(1),
+                hypothesis_id: None,
+                lane: Some(LaneKind::Organic),
+            })
+            .await?
+            .into_iter()
+            .find(|s| {
+                target.is_none_or(|id| s.id == id)
+                    && s.state == SlotState::Ready
+                    && !self
+                        .state()
+                        .studio
+                        .attempts
+                        .iter()
+                        .any(|a| a.piece().chain.workspace_id == self.ws && a.slot_id() == s.id)
+            });
+        let Some(slot) = slot else { return Ok(None) };
+        let piece = self
+            .state()
+            .studio
+            .pieces
+            .iter()
+            .find(|(id, p)| {
+                *id == slot.id && p.chain.workspace_id == self.ws && p.revision == slot.revision
+            })
+            .map(|(_, p)| p)
+            .ok_or_else(|| AppError::not_found("piece"))?;
+        let account = self
+            .state()
+            .capabilities
+            .iter()
+            .find(|c| c.capability.workspace_id == self.ws && c.capability.id == slot.capability_id)
+            .and_then(|c| c.capability.external_id.clone());
+        let a = PublishAttempt::claim(
+            PublishAttemptId::new_v7(),
+            &slot,
+            piece,
+            v.id,
+            control.revision,
+            Actor::System {
+                component: "studio.publisher".into(),
+            },
+            now,
+        )
+        .map_err(invalid)?
+        .with_account(account);
+        self.studio_write(|s, _| {
+            s.attempts.push(a.clone());
+            Ok(())
+        })?;
+        self.attempt_ledger(&a, "studio.publish.claimed", now)?;
+        Ok(Some(a))
     }
 }

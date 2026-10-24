@@ -2160,3 +2160,60 @@ older than 24 hours that have no tenant metadata, under the same control lock.
 Tracked uploads and pending content are protected. Submission checks byte availability
 under that lock, so a crash between deletion and its marker cannot create Ready
 work that references missing bytes.
+
+## M3 Task 6 — fenced publication and recovery
+
+The release remains **116 MCP tools / 10 Studio operations**, **62 tables** and
+migration **0009_studio**. T6 adds two system-only jobs (19 scheduled jobs total),
+no public operation and no migration. Existing `studio.pending` and
+`studio.slot_get` HTTP/MCP twins expose attempts and actionable failure blockers.
+
+| Job | Interval | Advisory lock |
+|---|---|---|
+| `studio_publish` | 1 minute | `jeeta.jobs.studio_publish` |
+| `studio_publish_recover` | 1 minute | `jeeta.jobs.studio_publish_recover` |
+
+Publication checks the active workspace, current strategy/hypothesis/channel/group,
+capability access and policy, revision-bound consent when required, and the brake.
+Capability changes serialize on the capability row; group removals share the short
+execution frame. Dispatch waits for capability locks before taking that frame, so
+a slow connector probe cannot prevent the emergency brake. Held queue entries are skipped, and a
+targeted claim can only capture the selected authorized slot.
+The default policy needs no human approval. Media preparation uses the existing
+bounded fetch/file transport outside tenant locks. A fresh execution fence then
+freezes the piece, account, actor, birth/execution versions and control revision in
+a durable Sending attempt before calling Publisher without tenant locks. Each
+subsequent dispatch repeats authorization. Account adaptations retain text, link
+and attachments; X receives bytes, Meta receives approved or signed URLs.
+
+Budget-bound publishing (including a capability spend ceiling) refuses with
+`publication_spend_gate_unavailable` until T8 wires its atomic reservation gate.
+It must not be enabled by interpreting an unknown price/currency as zero.
+
+There are **zero automatic publish retries**, for every connector error category.
+Auth/Permission produce reconnection work. Permanent/Throttle/Transient produce
+Failed work; retry-after is retained only as diagnostic ledger data. Lost responses
+and Sending claims abandoned for two minutes become Unknown with explicit
+publication/duplicate-risk review work. Failed/Unknown slots are never reclaimed,
+even if they still say Ready; a deliberate new publication needs separate work.
+
+A receipt checkpoint preserves the exact external ID/URL before final bookkeeping.
+Recovery only calls `InsightsReader::post_metrics` for that captured ID under
+historical read authorization; it never calls Publisher, discovers IDs or treats
+account totals or duplicate-content errors as success. Missing IDs, unavailable
+read support, changed accounts and failed reads retain Unknown. Successful
+completion atomically records Publication, slot state and redacted linked ledger
+evidence; replay is idempotent. A late result after a brake, strategy replacement
+or archive retains late-completion evidence and never reactivates a retired slot.
+This is not a claim of exactly-once delivery at the provider.
+
+X preflight retains GIF-alone and URL/byte-count rules, counts explicit URLs and
+bare domains as 23 characters and applies Unicode character weights. Meta/X
+successful writes with unreadable responses or missing publication IDs remain
+Unknown. Provider text, credentials, file bytes and URL query tokens are absent
+from durable failure/receipt evidence.
+
+`studio_publish` targets cover the application, real PostgreSQL receipt persistence
+and Meta/X mock HTTP behavior. The application tests also cover concurrent claims,
+no locks during provider I/O, all error classes, restart recovery, historical
+read-back, immutable version/arm links, late completion and full adapted media.

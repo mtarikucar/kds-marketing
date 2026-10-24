@@ -313,7 +313,11 @@ async fn read(
         match response.chunk().await {
             Ok(Some(chunk)) => {
                 if body.len() + chunk.len() > MAX_BODY_BYTES {
-                    return Err(ConnectorError::permanent("X's answer is too large"));
+                    return Err(if !read_only && status.is_success() {
+                        ConnectorError::unknown("X answer too large after write")
+                    } else {
+                        ConnectorError::permanent("X's answer is too large")
+                    });
                 }
                 body.extend_from_slice(&chunk);
             }
@@ -334,6 +338,11 @@ async fn read(
     let json = serde_json::from_slice::<Value>(&body).ok();
     if status.is_success() {
         let Some(json) = json else {
+            if !read_only {
+                return Err(ConnectorError::unknown(
+                    "unreadable successful write response",
+                ));
+            }
             return Err(classify(status, None, wait, endpoint, secrets));
         };
         let failed = endpoint == Endpoint::Api

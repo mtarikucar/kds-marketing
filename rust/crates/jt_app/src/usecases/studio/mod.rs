@@ -9,3 +9,5 @@ pub mod schema;
 pub mod planner;
 pub mod trends;
 pub mod work;
+
+pub mod publish;

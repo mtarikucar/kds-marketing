@@ -21,6 +21,7 @@ pub use jt_studio::{
 /// AppError message/details may contain provider diagnostics and is not durable evidence.
 #[derive(Clone, Debug)]
 pub enum PublishOutcome {
+    Observed(PublishReceipt),
     Succeeded(PublishReceipt),
     Failed(AppError),
     Unknown(AppError),
@@ -32,6 +33,13 @@ impl PublishOutcome {
     pub fn into_redacted(self) -> jt_studio::PublishOutcome {
         use jt_studio::PublishOutcome as O;
         match self {
+            Self::Observed(mut r) => {
+                if let Some(u) = &mut r.url {
+                    u.set_query(None);
+                    u.set_fragment(None);
+                }
+                O::Observed(r)
+            }
             Self::Succeeded(r) => {
                 let mut url = r.url;
                 if let Some(u) = &mut url {
@@ -180,6 +188,16 @@ pub trait StudioRepo: Send + Sync {
         &mut self,
         now: OffsetDateTime,
     ) -> Result<Option<PublishAttempt>, AppError>;
+    /// Claim only the candidate authorized by the dispatcher. Existing generic claim callers
+    /// retain their contract; unsupported wrappers fail closed rather than claim another slot.
+    async fn claim_publication_for(
+        &mut self,
+        slot: SlotId,
+        now: OffsetDateTime,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        let _ = (slot, now);
+        Err(AppError::internal("targeted publication claim unsupported"))
+    }
     /// Record when completion was observed; replay keeps the first observation unchanged.
     async fn finish_publication(
         &mut self,

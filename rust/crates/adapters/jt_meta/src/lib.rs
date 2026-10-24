@@ -38,7 +38,7 @@
 //! | Graph code 3, 10, 200–299, 803 | `Permission` |
 //! | HTTP 401; code 190, 102, 104, 2500; subcode 458, 459, 460, 463, 464, 467; type `OAuthException` without a code | `Auth` |
 //! | HTTP 5xx; `is_transient`; code 1, 2; a read transport failure or broken response, a connect failure, a host resolving to no public address | `Transient` |
-//! | A non-idempotent write may have reached the provider, but its answer was lost or broke off | `Unknown` (never retry blindly) |
+//! | A non-idempotent write may have reached the provider, but its answer was lost, broke off, was oversized/unreadable on success, or omitted the publication ID | `Unknown` (never retry blindly) |
 //! | anything else: another Graph code (`(#100)` invalid parameter included), a body that is not JSON (but for HTTP 429 and 5xx), an answer over 4 MiB, a host the `meta` tier does not hold | `Permanent` |
 //!
 //! (`OAuthException` is the type of nearly every Graph error, throttles and permission errors

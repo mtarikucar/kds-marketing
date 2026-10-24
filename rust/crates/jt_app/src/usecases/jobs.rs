@@ -122,11 +122,13 @@ pub enum Job {
     StudioControl,
     StudioFilesCleanup,
     StudioPlan,
+    StudioPublish,
+    StudioPublishRecover,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 17] = [
+    pub const ALL: [Job; 19] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -144,6 +146,8 @@ impl Job {
         Job::StudioControl,
         Job::StudioFilesCleanup,
         Job::StudioPlan,
+        Job::StudioPublish,
+        Job::StudioPublishRecover,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -167,6 +171,8 @@ impl Job {
             Job::StudioControl => "studio_control",
             Job::StudioFilesCleanup => "studio_files_cleanup",
             Job::StudioPlan => "studio_plan",
+            Job::StudioPublish => "studio_publish",
+            Job::StudioPublishRecover => "studio_publish_recover",
         }
     }
 
@@ -195,6 +201,9 @@ impl Job {
             Job::StudioControl => run_studio_control(deps).await,
             Job::StudioFilesCleanup => run_studio_files_cleanup(deps).await,
             Job::StudioPlan => run_studio_plan(deps, now).await,
+            Job::StudioPublish | Job::StudioPublishRecover => {
+                run_studio_publications(deps, *self).await
+            }
         }
     }
 }
@@ -1693,4 +1702,25 @@ pub async fn run_studio_files_cleanup(deps: &Deps) -> JobReport {
         }
     }
     finish(Job::StudioFilesCleanup, report)
+}
+
+/// System-only jobs: the scheduler owns their distinct advisory locks.
+async fn run_studio_publications(deps: &Deps, job: Job) -> JobReport {
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, &[WorkspaceStatus::Active], &mut report).await {
+        report.touched += 1;
+        let result = if job == Job::StudioPublish {
+            super::studio::publish::publish_due(deps, ws).await
+        } else {
+            super::studio::publish::recover_publications(deps, ws).await
+        };
+        match result {
+            Ok(n) => report.changed += u64::from(n),
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
 }

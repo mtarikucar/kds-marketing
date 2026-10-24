@@ -88,6 +88,8 @@ pub enum RedactedPublishError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "evidence", rename_all = "snake_case")]
 pub enum PublishOutcome {
+    /// Receipt captured durably; recovery must verify this exact ID before completing.
+    Observed(PublishReceipt),
     Succeeded(PublishReceipt),
     Failed(RedactedPublishError),
     Unknown(RedactedPublishError),
@@ -167,7 +169,8 @@ impl PublishAttempt {
         }
         match (&self.state, &self.outcome) {
             (PublishState::Queued | PublishState::Sending, None) => Ok(()),
-            (PublishState::Succeeded, Some(PublishOutcome::Succeeded(receipt))) => {
+            (PublishState::Succeeded, Some(PublishOutcome::Succeeded(receipt)))
+            | (PublishState::Unknown, Some(PublishOutcome::Observed(receipt))) => {
                 validate_receipt(receipt)
             }
             (PublishState::Failed, Some(PublishOutcome::Failed(_)))
@@ -187,6 +190,9 @@ impl PublishAttempt {
     }
     pub fn capability_id(&self) -> CapabilityId {
         self.capability_id
+    }
+    pub fn account_id(&self) -> Option<&str> {
+        self.account_id.as_deref()
     }
     pub fn slot_revision(&self) -> u64 {
         self.slot_revision
@@ -222,6 +228,10 @@ impl PublishAttempt {
         }
         let mut next = self.clone();
         next.state = match outcome {
+            PublishOutcome::Observed(receipt) => {
+                validate_receipt(receipt)?;
+                PublishState::Unknown
+            }
             PublishOutcome::Succeeded(receipt) => {
                 validate_receipt(receipt)?;
                 PublishState::Succeeded

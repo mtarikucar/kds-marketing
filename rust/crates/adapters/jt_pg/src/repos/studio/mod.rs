@@ -418,7 +418,14 @@ impl StudioRepo for PgTenantRepos {
         &mut self,
         now: OffsetDateTime,
     ) -> Result<Option<PublishAttempt>, AppError> {
-        self.studio_claim(now).await
+        self.studio_claim(now, None).await
+    }
+    async fn claim_publication_for(
+        &mut self,
+        slot: SlotId,
+        now: OffsetDateTime,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        self.studio_claim(now, Some(slot)).await
     }
     async fn finish_publication(
         &mut self,

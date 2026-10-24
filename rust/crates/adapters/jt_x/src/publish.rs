@@ -77,11 +77,47 @@ fn safe_filename(name: &str) -> String {
     }
 }
 
-/// The length of `text` as X counts URLs: every `http://` or `https://` (any case, wherever it
-/// starts) up to the next whitespace counts [`LINK_CHARS`] (X wraps it in a `t.co` link),
-/// every other character one. X also weighs some characters as two (most CJK characters,
-/// emoji); this count does not, and M3 checks that weighted length before it posts.
+/// URLs, including bare domains, consume 23 weighted characters. Non-URL Unicode
+/// uses X's single-weight ranges; CJK and emoji code points consume two.
 fn weighted_length(text: &str) -> usize {
+    fn chars(s: &str) -> usize {
+        s.chars()
+            .map(|c| match c as u32 {
+                0..=0x10ff | 0x2000..=0x200d | 0x2010..=0x201f | 0x2032..=0x2037 => 1,
+                _ => 2,
+            })
+            .sum()
+    }
+    fn bare(s: &str) -> usize {
+        s.split_inclusive(char::is_whitespace)
+            .map(|token| {
+                let trimmed = token.trim_end();
+                let leading = trimmed.len()
+                    - trimmed
+                        .trim_start_matches(|c: char| !c.is_alphanumeric())
+                        .len();
+                let candidate =
+                    trimmed[leading..].trim_end_matches(['.', ',', ';', '!', '?', ')', ']', '}']);
+                let host = candidate.split('/').next().unwrap_or("");
+                let valid = !host.contains(['@', ':'])
+                    && host.split('.').count() >= 2
+                    && host.split('.').all(|p| {
+                        !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '-')
+                    })
+                    && host
+                        .rsplit('.')
+                        .next()
+                        .is_some_and(|t| t.len() >= 2 && t.chars().all(char::is_alphabetic));
+                if valid {
+                    chars(&token[..leading])
+                        + LINK_CHARS
+                        + chars(&token[leading + candidate.len()..])
+                } else {
+                    chars(token)
+                }
+            })
+            .sum()
+    }
     let lower = text.to_ascii_lowercase();
     let mut length = 0;
     let mut rest = lower.as_str();
@@ -91,9 +127,9 @@ fn weighted_length(text: &str) -> usize {
             .filter_map(|scheme| rest.find(scheme))
             .min();
         let Some(at) = next else {
-            return length + rest.chars().count();
+            return length + bare(rest);
         };
-        length += rest[..at].chars().count() + LINK_CHARS;
+        length += bare(&rest[..at]) + LINK_CHARS;
         let url = &rest[at..];
         let end = url.find(char::is_whitespace).unwrap_or(url.len());
         rest = &url[end..];
@@ -230,7 +266,7 @@ pub(crate) async fn publish(
         .await?;
     let id = text(&answer["data"]["id"])
         .filter(|id| post_id(id).is_ok())
-        .ok_or_else(|| missing("post id"))?;
+        .ok_or_else(|| ConnectorError::unknown("accepted response lacks a valid post id"))?;
     Ok(PublishReceipt {
         url: permalink(public, &id),
         external_id: id,
