@@ -4,7 +4,7 @@ use jt_app::{
     ctx::Ctx,
     usecases::{
         Deps,
-        studio::{control, schema},
+        studio::{control, schema, trends, work},
     },
 };
 use jt_tenancy::Permission;
@@ -12,6 +12,43 @@ use schemars::Schema;
 use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
+        ToolDef {
+            use_case: "studio.pending",
+            description: "Read pending Studio slots, revision consent, budget moves and blockers. [risk: READ]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("pending")).expect("studio schema"),
+            run: pending,
+        },
+        ToolDef {
+            use_case: "studio.slot_get",
+            description: "Read slot content, hypothesis, brand rules, learning and evidence. [risk: READ]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("slot_get")).expect("studio schema"),
+            run: slot_get,
+        },
+        ToolDef {
+            use_case: "studio.slot_cancel",
+            description: "Cancel a Planned or Ready slot at its expected revision with a reason. [risk: WRITE]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("slot_cancel")).expect("studio schema"),
+            run: slot_cancel,
+        },
+        ToolDef {
+            use_case: "studio.trend_record",
+            description: "Record agent-observed context; trends never influence M3 selection. [risk: WRITE]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("trend_record")).expect("studio schema"),
+            run: trend_record,
+        },
+        ToolDef {
+            use_case: "studio.hypothesis_propose",
+            description: "Append one hypothesis to the strategy draft, requiring team.manage as well as studio.work. [risk: WRITE]",
+            permission: Permission::StudioWork,
+            schema: || {
+                Schema::try_from(schema::input("hypothesis_propose")).expect("studio schema")
+            },
+            run: hypothesis_propose,
+        },
         ToolDef {
             use_case: "studio.brake",
             description: "Engage or release the workspace or lane brake. Flags persist before Meta status calls. Requires studio.manage. [risk: WRITE]",
@@ -43,4 +80,26 @@ fn policy_set<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
 }
 fn approve<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move { to_json(&control::approve(d, c, args(v)?).await?) })
+}
+
+fn pending<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let _: work::EmptyInput = args(v)?;
+        to_json(&work::pending(d, c).await?)
+    })
+}
+fn slot_get<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let i: work::SlotInput = args(v)?;
+        to_json(&work::slot_get(d, c, i.slot_id).await?)
+    })
+}
+fn slot_cancel<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&work::slot_cancel(d, c, args(v)?).await?) })
+}
+fn trend_record<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&trends::trend_record(d, c, args(v)?).await?) })
+}
+fn hypothesis_propose<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&trends::hypothesis_propose(d, c, args(v)?).await?) })
 }

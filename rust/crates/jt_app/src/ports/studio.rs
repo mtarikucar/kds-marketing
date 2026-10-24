@@ -28,6 +28,8 @@ pub enum PublishOutcome {
 }
 
 /// Half-open schedule window; optional filters compose with AND.
+/// `Date::MIN.midnight().assume_utc()` is an unbounded lower endpoint: adapters must not
+/// encode it as a timestamp when their database has a narrower calendar range.
 #[derive(Clone, Debug)]
 pub struct SlotQuery {
     pub from: OffsetDateTime,
@@ -37,6 +39,15 @@ pub struct SlotQuery {
 }
 #[async_trait]
 pub trait StudioRepo: Send + Sync {
+    /// Tenant-scoped planning and work projections; never a second queue.
+    async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError>;
+    async fn list_budget_moves(&mut self) -> Result<Vec<BudgetMove>, AppError>;
+    async fn slot_evidence(
+        &mut self,
+        slot: SlotId,
+    ) -> Result<(Vec<PublishAttempt>, Vec<Measurement>), AppError>;
+    async fn get_trend(&mut self, id: TrendSignalId) -> Result<Option<TrendSignal>, AppError>;
+
     async fn get_approval(
         &mut self,
         target: ApprovalTarget,

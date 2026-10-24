@@ -3577,3 +3577,231 @@ async fn studio_controls_have_schema_error_effect_and_actor_parity() {
         assert_eq!(human["code"], agent["structuredContent"]["code"]);
     }
 }
+
+#[tokio::test]
+async fn studio_planning_rows_have_effect_and_error_parity() {
+    use jt_app::ports::studio::{Arm, ArmId, ArmKey, Chain, Slot, SlotId, SlotState};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-twins").await;
+    let d = deps(&db);
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let capability = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/capabilities",
+                Some(&cookie),
+                Some(json!({"kind_key":"x","name":"Studio account","external_id":"studio-twins"})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let v = r.strategy().current_approved().await.unwrap().unwrap();
+    let h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    let arm = Arm::new(
+        ArmId(d.ids.uuid()),
+        ws,
+        ArmKey {
+            hypothesis_id: h.id,
+            content_type: "text".into(),
+            channel: "x".into(),
+            lane: serde_json::from_value(json!("organic")).unwrap(),
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    let first = Slot {
+        id: SlotId(d.ids.uuid()),
+        chain: Chain {
+            workspace_id: ws,
+            born_version_id: v.id,
+            hypothesis_id: h.id,
+            arm_id: arm.id,
+        },
+        capability_id: serde_json::from_value(capability["capability"]["id"].clone()).unwrap(),
+        scheduled_at: d.clock.now() + time::Duration::hours(1),
+        state: SlotState::Planned,
+        revision: 0,
+    };
+    let second = Slot {
+        id: SlotId(d.ids.uuid()),
+        ..first.clone()
+    };
+    r.studio()
+        .insert_slots("twins", vec![first.clone(), second.clone()])
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    for (path, tool, args) in [
+        (
+            "/api/studio/pending".to_owned(),
+            "jeeta.studio.pending",
+            json!({}),
+        ),
+        (
+            format!("/api/studio/slots/{}", first.id),
+            "jeeta.studio.slot_get",
+            json!({"slot_id":first.id}),
+        ),
+    ] {
+        let response = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_body(response).await,
+            call_tool(&app, &key, &session, tool, args).await
+        );
+    }
+    let cancel = |id| format!("/api/studio/slots/{id}/cancel");
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            &cancel(first.id),
+            Some(&cookie),
+            Some(json!({"expected_revision":0,"reason":"new plan"})),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let human = json_body(response).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.slot_cancel",
+        json!({"slot_id":second.id,"expected_revision":0,"reason":"new plan"}),
+    )
+    .await;
+    assert_eq!(human["slot"]["state"], "retired");
+    assert_eq!(human["slot"]["state"], agent["slot"]["state"]);
+    assert_eq!(human["slot"]["revision"], agent["slot"]["revision"]);
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            &cancel(first.id),
+            Some(&cookie),
+            Some(json!({"expected_revision":0,"reason":"new plan"})),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let err = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.slot_cancel",
+        json!({"slot_id":first.id,"expected_revision":0,"reason":"new plan"}),
+    )
+    .await;
+    assert_eq!(err["isError"], true);
+    assert!(err.to_string().contains("CONFLICT"));
+    for (path, tool, input) in [
+        (
+            "/api/studio/trends",
+            "jeeta.studio.trend_record",
+            json!({"hypothesis_id":h.id,"channel":"x","summary":"Observation","observed_at":"2026-10-22T00:00:00Z","request_key":"panel-trend"}),
+        ),
+        (
+            "/api/studio/hypotheses/proposals",
+            "jeeta.studio.hypothesis_propose",
+            json!({"title":"A new angle","channel":"x","metric":"reply"}),
+        ),
+    ] {
+        let response = send(
+            &app,
+            panel(Method::POST, path, Some(&cookie), Some(input.clone())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let human = json_body(response).await;
+        let mut args = input.clone();
+        if tool.ends_with("trend_record") {
+            args["request_key"] = json!("agent-trend");
+        }
+        let agent = call_tool(&app, &key, &session, tool, args).await;
+        if tool.ends_with("trend_record") {
+            assert_eq!(human["summary"], agent["summary"]);
+            assert_eq!(human["hypothesis_id"], agent["hypothesis_id"]);
+        } else {
+            assert_eq!(human["draft_version_id"], agent["draft_version_id"]);
+            assert_ne!(human["hypothesis_id"], agent["hypothesis_id"]);
+        }
+        let mut invalid = input;
+        invalid["unexpected"] = json!(true);
+        let response = send(
+            &app,
+            panel(Method::POST, path, Some(&cookie), Some(invalid.clone())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let err = tool_result(&app, &key, &session, tool, invalid).await;
+        assert_eq!(err["isError"], true);
+        assert!(err.to_string().contains("VALIDATION"));
+    }
+    let missing = SlotId(d.ids.uuid());
+    for (method, path, tool, args, body) in [
+        (
+            Method::GET,
+            format!("/api/studio/slots/{missing}"),
+            "jeeta.studio.slot_get",
+            json!({"slot_id":missing}),
+            None,
+        ),
+        (
+            Method::POST,
+            cancel(missing),
+            "jeeta.studio.slot_cancel",
+            json!({"slot_id":missing,"expected_revision":0,"reason":"cancel"}),
+            Some(json!({"expected_revision":0,"reason":"cancel"})),
+        ),
+    ] {
+        assert_eq!(
+            send(&app, panel(method, &path, Some(&cookie), body))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let err = tool_result(&app, &key, &session, tool, args).await;
+        assert_eq!(err["isError"], true);
+        assert!(err.to_string().contains("NOT_FOUND"));
+    }
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    assert_eq!(r.hypotheses().list(v.id).await.unwrap().len(), 1);
+    let draft = r.strategy().current_draft().await.unwrap().unwrap();
+    assert_eq!(r.hypotheses().list(draft.id).await.unwrap().len(), 3);
+    assert_eq!(r.studio().list_arms().await.unwrap(), vec![arm]);
+    drop(r);
+    assert_eq!(
+        send(
+            &app,
+            panel(
+                Method::GET,
+                "/api/studio/pending?unknown=true",
+                Some(&cookie),
+                None
+            )
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        tool_result(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.pending",
+            json!({"unknown":true})
+        )
+        .await["isError"],
+        true
+    );
+}

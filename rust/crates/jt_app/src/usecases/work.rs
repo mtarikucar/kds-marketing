@@ -122,6 +122,16 @@ pub struct WorkItem {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkKind {
+    StudioSlot {
+        slot_id: jt_studio::SlotId,
+        overdue: bool,
+    },
+    StudioApproval {
+        target: crate::ports::studio::ApprovalTarget,
+    },
+    StudioBudgetMove {
+        budget_move_id: jt_studio::BudgetMoveId,
+    },
     /// A visible conversation needs a reply.
     ReplyDue {
         conversation_id: jt_inbox::ConversationId,
@@ -166,6 +176,9 @@ impl WorkKind {
     /// connection): an item is listed only while the workspace's status lets it run.
     pub fn cleared_by(&self) -> &'static str {
         match self {
+            WorkKind::StudioSlot { .. } => "studio.slot_get",
+            WorkKind::StudioApproval { .. } => "studio.approve",
+            WorkKind::StudioBudgetMove { .. } => "studio.pending",
             WorkKind::ReplyDue { .. } => "inbox.reply",
             WorkKind::ReopenQuestion { .. } => "inbox.events.report",
             WorkKind::MergeSuggested { .. } => "inbox.merges.apply",
@@ -242,6 +255,14 @@ async fn pending_as_seen(
     } else {
         None
     };
+    let studio = if ctx.permissions.contains(&Permission::StudioWork)
+        && status_exemption("studio.pending").allows(status)
+        && strategy.approved.is_some()
+    {
+        Some(super::studio::work::pending_in(repos.as_mut(), ctx).await?)
+    } else {
+        None
+    };
     drop(repos);
 
     let state = strategy_state(&strategy);
@@ -270,6 +291,28 @@ async fn pending_as_seen(
             kind: WorkKind::TaskDue { task_id: t.id },
             priority: 3,
             hint: "Complete the due journey task.".into(),
+        }));
+    }
+    if let Some(p) = studio {
+        items.extend(p.slots.into_iter().map(|s| WorkItem {
+            kind: WorkKind::StudioSlot {
+                slot_id: s.slot.id,
+                overdue: s.overdue,
+            },
+            priority: if s.overdue { 1 } else { 2 },
+            hint: "Read jeeta.studio.slot_get and supply the scheduled content.".into(),
+        }));
+        items.extend(p.approvals.into_iter().map(|target| WorkItem {
+            kind: WorkKind::StudioApproval { target },
+            priority: 2,
+            hint: "An owner or manager human must grant revision-bound Studio consent.".into(),
+        }));
+        items.extend(p.budget_moves.into_iter().map(|m| WorkItem {
+            kind: WorkKind::StudioBudgetMove {
+                budget_move_id: m.id,
+            },
+            priority: 2,
+            hint: "Review the queued Studio budget move and its blockers.".into(),
         }));
     }
     items.extend(capability_items(&capabilities));

@@ -39,6 +39,11 @@ use crate::state::AppState;
 /// Every route the panel HTTP adapter serves, as (method, path), in axum's path syntax as
 /// `CATALOG.panel_route` writes it. The twin-rule test compares it with the catalog.
 pub const ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/studio/pending"),
+    ("GET", "/api/studio/slots/{slot_id}"),
+    ("POST", "/api/studio/slots/{slot_id}/cancel"),
+    ("POST", "/api/studio/trends"),
+    ("POST", "/api/studio/hypotheses/proposals"),
     ("POST", "/api/studio/brake"),
     ("PUT", "/api/studio/policy"),
     ("POST", "/api/studio/approvals"),
@@ -241,6 +246,31 @@ where
 /// The JSON API's routes.
 pub fn api_routes() -> Vec<ApiRoute> {
     vec![
+        api_route("GET", "/studio/pending", "studio.pending", studio::pending),
+        api_route(
+            "GET",
+            "/studio/slots/{slot_id}",
+            "studio.slot_get",
+            studio::slot_get,
+        ),
+        api_route(
+            "POST",
+            "/studio/slots/{slot_id}/cancel",
+            "studio.slot_cancel",
+            studio::slot_cancel,
+        ),
+        api_route(
+            "POST",
+            "/studio/trends",
+            "studio.trend_record",
+            studio::trend_record,
+        ),
+        api_route(
+            "POST",
+            "/studio/hypotheses/proposals",
+            "studio.hypothesis_propose",
+            studio::hypothesis_propose,
+        ),
         api_route("POST", "/studio/brake", "studio.brake", studio::brake),
         api_route(
             "PUT",

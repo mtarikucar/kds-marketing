@@ -3,3 +3,7 @@ pub mod chain;
 pub mod control;
 pub mod lifecycle;
 pub mod schema;
+
+pub mod planner;
+pub mod trends;
+pub mod work;

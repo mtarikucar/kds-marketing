@@ -103,6 +103,37 @@ impl PgTenantRepos {
 }
 #[async_trait]
 impl StudioRepo for PgTenantRepos {
+    async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError> {
+        let rows: Vec<Value> =
+            sqlx::query_scalar("select data from studio_arms where workspace_id=$1 order by id")
+                .bind(self.workspace_id().0)
+                .fetch_all(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "planning arms"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn list_budget_moves(&mut self) -> Result<Vec<BudgetMove>, AppError> {
+        let rows: Vec<Value> = sqlx::query_scalar("select data from studio_budget_moves where workspace_id=$1 and data->>'state'='queued' order by id").bind(self.workspace_id().0).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"pending budget moves"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn get_trend(&mut self, id: TrendSignalId) -> Result<Option<TrendSignal>, AppError> {
+        self.studio_record("studio_trends", id.0).await
+    }
+    async fn slot_evidence(
+        &mut self,
+        slot: SlotId,
+    ) -> Result<(Vec<PublishAttempt>, Vec<Measurement>), AppError> {
+        let attempts:Vec<Value> = sqlx::query_scalar("select data from studio_publish_attempts where workspace_id=$1 and slot_id=$2 order by id").bind(self.workspace_id().0).bind(slot.0).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"slot attempts"))?;
+        let measurements:Vec<Value> = sqlx::query_scalar("select m.data from studio_measurements m join studio_publications p on p.workspace_id=m.workspace_id and p.id=m.publication_id where m.workspace_id=$1 and p.slot_id=$2 order by m.id").bind(self.workspace_id().0).bind(slot.0).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"slot measurements"))?;
+        Ok((
+            attempts.into_iter().map(decode).collect::<Result<_, _>>()?,
+            measurements
+                .into_iter()
+                .map(decode)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+
     async fn get_approval(
         &mut self,
         target: ApprovalTarget,
@@ -242,8 +273,8 @@ impl StudioRepo for PgTenantRepos {
         self.studio_record("studio_slots", id.0).await
     }
     async fn list_slots(&mut self, q: SlotQuery) -> Result<Vec<Slot>, AppError> {
-        let rows:Vec<Value>=sqlx::query_scalar("select s.data from studio_slots s join studio_arms a on a.workspace_id=s.workspace_id and a.id=s.arm_id where s.workspace_id=$1 and s.scheduled_at >= $2 and s.scheduled_at < $3 and ($4::uuid is null or s.hypothesis_id=$4) and ($5::text is null or a.lane=$5) order by s.scheduled_at,s.id")
-            .bind(self.workspace_id().0).bind(q.from).bind(q.until).bind(q.hypothesis_id.map(|h|h.0)).bind(q.lane.map(|l|encode(&l)).transpose()?.and_then(|v|v.as_str().map(str::to_owned))).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"list Studio slots"))?;
+        let rows:Vec<Value>=sqlx::query_scalar("select s.data from studio_slots s join studio_arms a on a.workspace_id=s.workspace_id and a.id=s.arm_id where s.workspace_id=$1 and ($2::timestamptz is null or s.scheduled_at >= $2) and s.scheduled_at < $3 and ($4::uuid is null or s.hypothesis_id=$4) and ($5::text is null or a.lane=$5) order by s.scheduled_at,s.id")
+            .bind(self.workspace_id().0).bind((q.from != time::Date::MIN.midnight().assume_utc()).then_some(q.from)).bind(q.until).bind(q.hypothesis_id.map(|h|h.0)).bind(q.lane.map(|l|encode(&l)).transpose()?.and_then(|v|v.as_str().map(str::to_owned))).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"list Studio slots"))?;
         rows.into_iter().map(decode).collect()
     }
     async fn insert_slots(&mut self, key: &str, slots: Vec<Slot>) -> Result<Vec<Slot>, AppError> {

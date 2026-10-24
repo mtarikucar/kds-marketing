@@ -254,7 +254,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (109 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (114 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -271,7 +271,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 109 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 114 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -1976,7 +1976,7 @@ HTTP route or MCP tool; later public rows must ship all twins and parity tests.
 
 ## M3 Task 3 — strategy lifecycle, permissions and brakes
 
-The current release contains **109 MCP tools**, including **3 Studio operations**.
+At the T3 boundary the release contained **109 MCP tools**, including **3 Studio operations**.
 The T0–T2 tables above describe their historical boundaries; T3 keeps **62 tables**
 and migration **0009**, with no new migration or permission seed.
 
@@ -2047,3 +2047,55 @@ catalog/routes, strict schema, live HTTP/MCP effects and the human-only consent 
 
 The plan-named `studio_control` target also runs the control checks; permission checks
 remain in `studio_permissions`.
+
+
+## M3 Task 4 — weekly planning and suggestions
+
+The current release has **114 MCP tools**, including **8 Studio operations**;
+the schema remains **62 tables** at migration **0009**. No provider or content
+generation service was added.
+
+| Use case / MCP suffix after `jeeta.` | HTTP | Permission | Strategy gate |
+|---|---|---|---|
+| `studio.pending` | `GET /api/studio/pending` | `studio.work` | Required |
+| `studio.slot_get` | `GET /api/studio/slots/{slot_id}` | `studio.work` | Required |
+| `studio.slot_cancel` | `POST /api/studio/slots/{slot_id}/cancel` | `studio.work` | Required |
+| `studio.trend_record` | `POST /api/studio/trends` | `studio.work` | Required |
+| `studio.hypothesis_propose` | `POST /api/studio/hypotheses/proposals` | `studio.work` + `team.manage` | Required |
+
+All five require an active workspace, including direct application calls.
+`studio_plan` runs hourly under `jeeta.jobs.studio_plan`. Weeks start Monday
+00:00 Europe/Istanbul; cadence positions are spaced evenly across the week and
+only positions in the next seven days are materialized. Missed positions are not
+caught up. Stable workspace/hypothesis/lane/week/ordinal IDs survive overlapping
+runs, retries, cancellations and strategy replacement. Birth versions stay fixed.
+At week-end, overdue Planned slots retire; Ready work and evidence remain.
+
+Only connected, supported accounts in the strategy's selected channels/groups
+are eligible, and brakes stop planning that lane. Paid planning also needs the
+strategy's paid lane. Integer type minima use ceiling and maxima use floor;
+infeasible quotas return validation details. Remaining positions use posterior
+mean weights and bounded largest remainders, with type-key ties. Within a type,
+injected Beta samples select the largest sample (stable arm-ID ties); exploration
+uses a separate uniform draw. Trends never alter this selection or learning.
+
+`pending` derives slots with overdue flags, revision consent, queued budget moves
+and blockers. `slot_get` includes the piece, hypothesis, current brand identity
+and prohibitions, arm learning, publication attempts and measurements. The same
+slot/consent/budget summaries appear in `work.pending` and `work.checkin`, preserving
+the existing last-seen and overdue calculation. The scheduler never wakes agents.
+Cancellation takes `{expected_revision, reason}`; it retires Planned/Ready work
+and records the reason without deleting content or evidence.
+
+Trend input is `{hypothesis_id, channel, summary, source_url?, observed_at,
+request_key}`. The agent supplies the observation; recording performs no research.
+Retries preserve the stored identity; changed payloads conflict. URL query tokens
+and fragments are removed before storage. A hypothesis proposal uses the strict
+strategy hypothesis input, without an existing ID. It opens or locks a draft and
+appends one new hypothesis, preserving approved/draft hypotheses and derived
+learning. Concurrent first proposals share draft creation; suggestions never
+activate themselves or alter the approved strategy.
+
+Validation: `studio_planning` covers the pure planner, application flows and real
+Postgres draft concurrency; `studio_work` covers absent-agent overdue projections;
+`studio_http`, `studio_mcp` and `twin_parity` cover registration, schema and effects.

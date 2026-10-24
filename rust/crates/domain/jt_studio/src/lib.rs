@@ -8,6 +8,7 @@ mod learning;
 mod measurement;
 mod paid;
 mod piece;
+mod planning;
 mod publication;
 mod slot;
 mod trend;
@@ -19,6 +20,7 @@ pub use learning::*;
 pub use measurement::*;
 pub use paid::*;
 pub use piece::*;
+pub use planning::*;
 pub use publication::*;
 pub use slot::*;
 pub use trend::*;
@@ -35,6 +37,8 @@ pub enum StudioError {
     HypothesisInactive,
     #[error("target channel, group or lane is not selected and supported")]
     TargetNotSelected,
+    #[error("invalid planning: {0}")]
+    InvalidPlanning(&'static str),
     #[error("invalid learning parameters")]
     InvalidLearning,
     #[error("stale studio revision")]

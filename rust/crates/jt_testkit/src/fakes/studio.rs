@@ -233,6 +233,70 @@ impl StudioControlRepo for MemTenant {
 }
 #[async_trait]
 impl StudioRepo for MemTenant {
+    async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .studio
+            .arms
+            .iter()
+            .filter(|a| a.workspace_id == self.ws)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|a| a.id);
+        Ok(rows)
+    }
+    async fn list_budget_moves(&mut self) -> Result<Vec<BudgetMove>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .studio
+            .moves
+            .iter()
+            .filter(|m| {
+                m.chain.workspace_id == self.ws && m.state == jt_studio::BudgetMoveState::Queued
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|m| m.id);
+        Ok(rows)
+    }
+    async fn get_trend(&mut self, id: TrendSignalId) -> Result<Option<TrendSignal>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .trends
+            .iter()
+            .find(|t| t.workspace_id == self.ws && t.id == id)
+            .cloned())
+    }
+    async fn slot_evidence(
+        &mut self,
+        slot: SlotId,
+    ) -> Result<(Vec<PublishAttempt>, Vec<Measurement>), AppError> {
+        let s = &self.state().studio;
+        let mut attempts: Vec<_> = s
+            .attempts
+            .iter()
+            .filter(|a| a.piece().chain.workspace_id == self.ws && a.slot_id() == slot)
+            .cloned()
+            .collect();
+        attempts.sort_by_key(|a| a.id());
+        let mut measurements: Vec<_> = s
+            .measurements
+            .iter()
+            .filter(|m| {
+                m.chain.workspace_id == self.ws
+                    && s.publications.iter().any(|p| {
+                        p.chain.workspace_id == self.ws
+                            && p.slot_id == slot
+                            && m.publication_id == Some(p.id)
+                    })
+            })
+            .cloned()
+            .collect();
+        measurements.sort_by_key(|m| m.id);
+        Ok((attempts, measurements))
+    }
+
     async fn get_approval(
         &mut self,
         target: ApprovalTarget,

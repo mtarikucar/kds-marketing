@@ -120,11 +120,12 @@ pub enum Job {
     ResponseSla,
     SnoozeWake,
     StudioControl,
+    StudioPlan,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 15] = [
+    pub const ALL: [Job; 16] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -140,6 +141,7 @@ impl Job {
         Job::ResponseSla,
         Job::SnoozeWake,
         Job::StudioControl,
+        Job::StudioPlan,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -161,6 +163,7 @@ impl Job {
             Job::ResponseSla => "response_sla",
             Job::SnoozeWake => "snooze_wake",
             Job::StudioControl => "studio_control",
+            Job::StudioPlan => "studio_plan",
         }
     }
 
@@ -187,6 +190,7 @@ impl Job {
             Job::ResponseSla => run_response_sla(deps, now).await,
             Job::SnoozeWake => run_snooze_wake(deps, now).await,
             Job::StudioControl => run_studio_control(deps).await,
+            Job::StudioPlan => run_studio_plan(deps, now).await,
         }
     }
 }
@@ -1634,4 +1638,31 @@ pub async fn run_studio_control(deps: &Deps) -> JobReport {
         }
     }
     report
+}
+
+/// Plan active workspaces hourly under `jeeta.jobs.studio_plan` (scheduler owns the lock).
+pub async fn run_studio_plan(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let mut report = JobReport::default();
+    let workspaces = match deps.uow.platform().await {
+        Ok(mut r) => r.workspaces_list().await,
+        Err(e) => Err(e),
+    };
+    let Ok(workspaces) = workspaces else {
+        report.failed = 1;
+        return finish(Job::StudioPlan, report);
+    };
+    for w in workspaces
+        .into_iter()
+        .filter(|w| w.status == WorkspaceStatus::Active)
+    {
+        report.touched += 1;
+        match super::studio::planner::plan(deps, w.id, now).await {
+            Ok(n) => report.changed += n,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(Job::StudioPlan, w.id, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(Job::StudioPlan, report)
 }

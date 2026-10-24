@@ -236,6 +236,10 @@ impl StrategyRepo for PgTenantRepos {
     /// re-reads the row as committed and drops it if it is no longer a draft.
     async fn lock_draft(&mut self) -> Result<Option<StrategyVersion>, AppError> {
         let ws = self.workspace_id();
+        // Serialize first-draft creation too, before frame/control locks. A row lock alone
+        // cannot protect two concurrent suggestions when there is no draft yet.
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended('strategy-draft:' || $1::uuid::text, 0))")
+            .bind(ws.as_uuid()).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"lock draft creation"))?;
         let record: Option<VersionRecord> = sqlx::query_as(
             "select id, workspace_id, number, status, sections, created_at, created_by_user, \
              created_by_connection, created_by_component, submitted_at, approved_at, \
