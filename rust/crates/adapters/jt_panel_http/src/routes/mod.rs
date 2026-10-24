@@ -10,6 +10,7 @@
 pub mod agents;
 pub mod api_keys;
 pub mod auth;
+pub mod billing;
 pub mod budget;
 pub mod capabilities;
 pub mod connector;
@@ -120,6 +121,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/auth/logout"),
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/switch-workspace"),
+    ("GET", "/api/billing"),
+    ("POST", "/api/billing/payments"),
     ("GET", "/api/workspace"),
     ("GET", "/api/team"),
     ("POST", "/api/team/invites"),
@@ -620,6 +623,13 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "workspace.switch",
             auth::switch_workspace,
         ),
+        api_route("GET", "/billing", "billing.status", billing::status),
+        api_route(
+            "POST",
+            "/billing/payments",
+            "billing.report_payment",
+            billing::report_payment,
+        ),
         api_route("GET", "/workspace", "workspace.info", workspace::info),
         api_route("GET", "/team", "team.list", team::list),
         api_route("POST", "/team/invites", "team.invite", team::invite),
@@ -1011,6 +1021,11 @@ mod tests {
                 hosts: Arc::new(RecordingTenantHosts::new()),
                 apps: Arc::new(FakeAppConfig::default()),
                 connectors: Arc::new(ScriptedRegistry::new()),
+                billing: jt_app::usecases::billing::BillingConfig {
+                    price_minor: 123,
+                    price_currency: "TRY".into(),
+                    bank_instructions: "Synthetic bank instructions".into(),
+                },
                 job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
             },
             gate: Arc::new(NoStrategyYet),

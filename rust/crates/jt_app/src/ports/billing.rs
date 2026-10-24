@@ -101,6 +101,12 @@ pub trait BillingRepo: Send + Sync {
     async fn reference_get_or_create(&mut self) -> Result<String, AppError>;
     /// The open grant, whether activated or awaiting redemption.
     async fn entitlement(&mut self) -> Result<Option<WorkspaceEntitlement>, AppError>;
+    /// Latest grant, including revoked history, for the tenant status projection.
+    async fn latest_entitlement(&mut self) -> Result<Option<WorkspaceEntitlement>, AppError>;
+    /// Latest reported evidence, independent of settlement and activation.
+    async fn latest_payment(&mut self) -> Result<Option<PaymentNotification>, AppError>;
+    /// Whether any paid grant has existed for this tenant's payment, including revoked grants.
+    async fn payment_confirmed(&mut self, id: PaymentId) -> Result<bool, AppError>;
     async fn activate_entitlement(
         &mut self,
         id: EntitlementId,

@@ -23,6 +23,9 @@ use jt_app::ports::connectors::{InstagramApp, MetaApp, PlatformAppConfig, Url, X
 use tracing_subscriber::EnvFilter;
 
 /// The application's PostgreSQL URL (required).
+pub const PRICE_MINOR: &str = "JEETA_PRICE_MINOR";
+pub const PRICE_CURRENCY: &str = "JEETA_PRICE_CURRENCY";
+pub const BANK_INSTRUCTIONS: &str = "JEETA_BANK_INSTRUCTIONS";
 pub const DATABASE_URL: &str = "JEETA_DATABASE_URL";
 /// The HTTP listen address, `ip:port` (default [`DEFAULT_BIND`]).
 pub const BIND: &str = "JEETA_BIND";
@@ -79,6 +82,9 @@ pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
 
 /// Every variable the binary reads.
 const VARS: &[&str] = &[
+    PRICE_MINOR,
+    PRICE_CURRENCY,
+    BANK_INSTRUCTIONS,
     DATABASE_URL,
     BIND,
     PANEL_DIR,
@@ -248,6 +254,7 @@ pub enum LogFormat {
 /// The validated configuration. `Debug` masks the database URL and every secret.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Config {
+    pub billing: jt_app::usecases::billing::BillingConfig,
     pub database_url: String,
     pub bind: SocketAddr,
     pub panel_dir: Option<PathBuf>,
@@ -402,7 +409,26 @@ impl Config {
 
         let apps = parse_apps(&get)?;
 
+        let price_minor = get(PRICE_MINOR)
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|v| *v > 0)
+            .ok_or_else(|| ConfigError::new(PRICE_MINOR, "must be a positive integer"))?;
+        let price_currency = get(PRICE_CURRENCY)
+            .filter(|s| s.len() == 3 && s.bytes().all(|b| b.is_ascii_uppercase()))
+            .ok_or_else(|| {
+                ConfigError::new(PRICE_CURRENCY, "must be three uppercase ASCII letters")
+            })?
+            .to_owned();
+        let bank_instructions = get(BANK_INSTRUCTIONS)
+            .filter(|s| s.len() <= 4096)
+            .ok_or_else(|| ConfigError::new(BANK_INSTRUCTIONS, "must contain 1 to 4096 bytes"))?
+            .to_owned();
         Ok(Config {
+            billing: jt_app::usecases::billing::BillingConfig {
+                price_minor,
+                price_currency,
+                bank_instructions,
+            },
             database_url,
             bind,
             panel_dir,
@@ -671,6 +697,9 @@ mod tests {
         let mut all = vars(&[
             (DATABASE_URL, "postgres://jeeta:pw@localhost:5432/jeeta"),
             (SECRET_KEY, KEY),
+            (PRICE_MINOR, "123"),
+            (PRICE_CURRENCY, "TRY"),
+            (BANK_INSTRUCTIONS, "Synthetic bank instructions"),
         ]);
         all.extend(vars(extra));
         all
@@ -678,6 +707,39 @@ mod tests {
 
     fn error(vars: &HashMap<String, String>) -> ConfigError {
         Config::from_map(vars).expect_err("the configuration must be refused")
+    }
+
+    #[test]
+    fn billing_config_rejects_missing_or_invalid_values() {
+        for var in [PRICE_MINOR, PRICE_CURRENCY, BANK_INSTRUCTIONS] {
+            let mut values = with(&[]);
+            values.remove(var);
+            assert_eq!(error(&values).var, var);
+        }
+        for (var, value) in [
+            (PRICE_MINOR, "0"),
+            (PRICE_MINOR, "-1"),
+            (PRICE_MINOR, "1.2"),
+            (PRICE_MINOR, "9223372036854775808"),
+            (PRICE_CURRENCY, "try"),
+            (PRICE_CURRENCY, "TR"),
+            (PRICE_CURRENCY, "TÜR"),
+            (BANK_INSTRUCTIONS, " "),
+        ] {
+            assert_eq!(error(&with(&[(var, value)])).var, var);
+        }
+        assert_eq!(
+            error(&with(&[(BANK_INSTRUCTIONS, &"x".repeat(4097))])).var,
+            BANK_INSTRUCTIONS
+        );
+        assert_eq!(
+            Config::from_map(&with(&[(BANK_INSTRUCTIONS, &"x".repeat(4096))]))
+                .unwrap()
+                .billing
+                .bank_instructions
+                .len(),
+            4096
+        );
     }
 
     #[test]

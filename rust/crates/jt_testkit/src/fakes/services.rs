@@ -350,6 +350,11 @@ pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
         connectors: Arc::new(ScriptedRegistry::new()),
+        billing: jt_app::usecases::billing::BillingConfig {
+            price_minor: 123,
+            price_currency: "TRY".into(),
+            bank_instructions: "Synthetic bank instructions".into(),
+        },
         job_lock: Arc::new(FakeJobLock::new()),
     }
 }

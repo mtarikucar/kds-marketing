@@ -244,6 +244,7 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
     let job_lock = Arc::new(PgJobLock::with_own_pool(&pool, JOB_LOCK_CONNECTIONS));
     let uow = Arc::new(PgUnitOfWork::new(pool));
     let deps = Deps {
+        billing: config.billing.clone(),
         uow: uow.clone(),
         clock: Arc::new(SystemClock),
         ids: Arc::new(UuidV7Gen),
@@ -523,6 +524,11 @@ mod tests {
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),
             connectors: Arc::new(ScriptedRegistry::new()),
+            billing: jt_app::usecases::billing::BillingConfig {
+                price_minor: 123,
+                price_currency: "TRY".into(),
+                bank_instructions: "Synthetic bank instructions".into(),
+            },
             job_lock: Arc::new(FakeJobLock::new()),
         }
     }
@@ -538,6 +544,12 @@ mod tests {
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect();
         vars.retain(|_, v| !v.is_empty());
+        vars.insert("JEETA_PRICE_MINOR".into(), "123".into());
+        vars.insert("JEETA_PRICE_CURRENCY".into(), "TRY".into());
+        vars.insert(
+            "JEETA_BANK_INSTRUCTIONS".into(),
+            "Synthetic bank instructions".into(),
+        );
         Config::from_map(&vars).unwrap()
     }
 

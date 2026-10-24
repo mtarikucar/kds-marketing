@@ -69,6 +69,11 @@ impl World {
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::with_all_apps()),
             connectors: Arc::new(registry),
+            billing: jt_app::usecases::billing::BillingConfig {
+                price_minor: 123,
+                price_currency: "TRY".into(),
+                bank_instructions: "Synthetic bank instructions".into(),
+            },
             job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
         };
         let (ws, owner) = db.seed_workspace("alpha").await;

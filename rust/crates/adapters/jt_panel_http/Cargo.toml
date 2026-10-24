@@ -21,6 +21,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+sqlx.workspace = true
 jt_ledger.workspace = true
 # The MCP endpoint, merged with the panel's router in the tests where an agent acts and the panel
 # shows the result.

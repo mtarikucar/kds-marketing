@@ -398,6 +398,12 @@ mod tests {
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect();
         vars.retain(|_, v| !v.is_empty());
+        vars.insert("JEETA_PRICE_MINOR".into(), "123".into());
+        vars.insert("JEETA_PRICE_CURRENCY".into(), "TRY".into());
+        vars.insert(
+            "JEETA_BANK_INSTRUCTIONS".into(),
+            "Synthetic bank instructions".into(),
+        );
         Config::from_map(&vars).unwrap()
     }
 

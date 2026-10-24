@@ -74,6 +74,7 @@ const TOOLS: &[&str] = &[
     "jeeta.inbox.tasks_list",
     "jeeta.inbox.notes_add",
     "jeeta.agent.whoami",
+    "jeeta.billing.report_payment",
     "jeeta.workspace.info",
     "jeeta.team.list",
     "jeeta.team.invite",
@@ -140,7 +141,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 124);
+    assert_eq!(TOOLS.len(), 125);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)

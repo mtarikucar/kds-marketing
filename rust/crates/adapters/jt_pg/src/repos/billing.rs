@@ -320,6 +320,24 @@ impl BillingRepo for PgTenantRepos {
         let ws = self.workspace_id();
         entitlement_get(self.tx.conn(), ws).await
     }
+    async fn latest_entitlement(&mut self) -> Result<Option<WorkspaceEntitlement>, AppError> {
+        let ws = self.workspace_id();
+        sqlx::query_as::<_, EntitlementRecord>("select * from workspace_entitlements where workspace_id=$1 order by confirmed_at desc,id desc limit 1")
+            .bind(ws.as_uuid()).fetch_optional(self.tx.conn()).await.map_err(|e| map_sqlx(e,"latest entitlement"))?.map(EntitlementRecord::into_row).transpose()
+    }
+    async fn latest_payment(&mut self) -> Result<Option<PaymentNotification>, AppError> {
+        let ws = self.workspace_id();
+        sqlx::query_as::<_, PaymentRecord>("select * from payment_notifications where workspace_id=$1 order by reported_at desc,id desc limit 1")
+            .bind(ws.as_uuid()).fetch_optional(self.tx.conn()).await.map_err(|e| map_sqlx(e,"latest payment"))?.map(PaymentRecord::into_row).transpose()
+    }
+    async fn payment_confirmed(&mut self, id: PaymentId) -> Result<bool, AppError> {
+        let ws = self.workspace_id();
+        payment_get(self.tx.conn(), ws, id)
+            .await?
+            .ok_or_else(|| AppError::not_found("payment"))?;
+        sqlx::query_scalar("select exists(select 1 from workspace_entitlements where workspace_id=$1 and payment_id=$2 and source='paid')")
+            .bind(ws.as_uuid()).bind(id.as_uuid()).fetch_one(self.tx.conn()).await.map_err(|e| map_sqlx(e,"payment confirmed"))
+    }
     async fn activate_entitlement(
         &mut self,
         id: EntitlementId,

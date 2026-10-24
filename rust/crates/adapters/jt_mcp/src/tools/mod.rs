@@ -7,6 +7,7 @@
 
 mod agents;
 mod api_keys;
+mod billing;
 mod budget;
 mod capabilities;
 mod connector;
@@ -51,6 +52,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         strategy::definitions(),
         capabilities::definitions(),
         budget::definitions(),
+        billing::definitions(),
         connector::definitions(),
         events::definitions(),
         inbox::definitions(),

@@ -364,6 +364,36 @@ impl BillingRepo for MemTenant {
     async fn entitlement(&mut self) -> Result<Option<WorkspaceEntitlement>, AppError> {
         Ok(self.tx.billing_grant(self.ws))
     }
+    async fn latest_entitlement(&mut self) -> Result<Option<WorkspaceEntitlement>, AppError> {
+        Ok(self
+            .tx
+            .work
+            .entitlements
+            .iter()
+            .filter(|r| r.workspace_id == self.ws)
+            .max_by_key(|r| (r.confirmed_at, r.id))
+            .cloned())
+    }
+    async fn latest_payment(&mut self) -> Result<Option<PaymentNotification>, AppError> {
+        Ok(self
+            .tx
+            .work
+            .payments
+            .iter()
+            .filter(|r| r.workspace_id == self.ws)
+            .max_by_key(|r| (r.reported_at, r.id))
+            .cloned())
+    }
+    async fn payment_confirmed(&mut self, id: PaymentId) -> Result<bool, AppError> {
+        self.tx
+            .billing_payment(self.ws, id)
+            .ok_or_else(|| AppError::not_found("payment"))?;
+        Ok(self.tx.work.entitlements.iter().any(|r| {
+            r.workspace_id == self.ws
+                && r.payment_id == Some(id)
+                && r.source == EntitlementSource::Paid
+        }))
+    }
     async fn activate_entitlement(
         &mut self,
         id: EntitlementId,
