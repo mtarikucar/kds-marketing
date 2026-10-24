@@ -221,7 +221,13 @@ impl StudioRepo for PgTenantRepos {
         rows.into_iter().map(decode).collect()
     }
     async fn list_budget_moves(&mut self) -> Result<Vec<BudgetMove>, AppError> {
-        let rows: Vec<Value> = sqlx::query_scalar("select data from studio_budget_moves where workspace_id=$1 and data->>'state'='queued' order by id").bind(self.workspace_id().0).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"pending budget moves"))?;
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_budget_moves where workspace_id=$1 order by id",
+        )
+        .bind(self.workspace_id().0)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "pending budget moves"))?;
         rows.into_iter().map(decode).collect()
     }
     async fn get_trend(&mut self, id: TrendSignalId) -> Result<Option<TrendSignal>, AppError> {
@@ -502,6 +508,21 @@ impl StudioRepo for PgTenantRepos {
         key: &str,
     ) -> Result<AdSetBinding, AppError> {
         self.studio_bind(binding, key).await
+    }
+    async fn transition_budget_move(
+        &mut self,
+        m: BudgetMove,
+        expected: jt_studio::BudgetMoveState,
+    ) -> Result<(), AppError> {
+        StudioControlRepo::lock_control(self).await?;
+        let old = self
+            .get_budget_move(m.id)
+            .await?
+            .ok_or_else(|| AppError::not_found("budget move"))?;
+        jt_app::usecases::studio::ads::validate_move_transition(&old, &m, expected)?;
+        sqlx::query("update studio_budget_moves set data=$3,reservation_id=$4,executed_version_id=$5 where workspace_id=$1 and id=$2")
+            .bind(self.workspace_id().0).bind(m.id.0).bind(encode(&m)?).bind(m.reservation_id.map(|id|id.0)).bind(m.executed_version_id.map(|id|id.0)).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"transition budget move"))?;
+        Ok(())
     }
     async fn save_budget_move(&mut self, m: BudgetMove, key: &str) -> Result<BudgetMove, AppError> {
         self.studio_move(m, key).await

@@ -6,7 +6,7 @@ use super::{
 use async_trait::async_trait;
 use jt_app::{
     error::AppError,
-    ports::{BudgetRepo, CapabilityRepo, StrategyRepo, files::StoredFile, studio::*},
+    ports::{CapabilityRepo, StrategyRepo, files::StoredFile, studio::*},
 };
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_strategy::LaneKind;
@@ -352,9 +352,7 @@ impl StudioRepo for MemTenant {
             .studio
             .moves
             .iter()
-            .filter(|m| {
-                m.chain.workspace_id == self.ws && m.state == jt_studio::BudgetMoveState::Queued
-            })
+            .filter(|m| m.chain.workspace_id == self.ws)
             .cloned()
             .collect();
         rows.sort_by_key(|m| m.id);
@@ -963,6 +961,24 @@ impl StudioRepo for MemTenant {
         self.receipt("adset.bind", key, &p, &b)?;
         Ok(b)
     }
+    async fn transition_budget_move(
+        &mut self,
+        m: BudgetMove,
+        expected: jt_studio::BudgetMoveState,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        let ws = self.ws;
+        self.studio_write(|s, _| {
+            let old = s
+                .moves
+                .iter_mut()
+                .find(|v| v.chain.workspace_id == ws && v.id == m.id)
+                .ok_or_else(|| AppError::not_found("budget move"))?;
+            jt_app::usecases::studio::ads::validate_move_transition(old, &m, expected)?;
+            *old = m.clone();
+            Ok(())
+        })
+    }
     async fn save_budget_move(
         &mut self,
         mut m: BudgetMove,
@@ -1210,6 +1226,19 @@ impl MemTenant {
 }
 #[async_trait]
 impl StudioBudgetRepo for MemTenant {
+    async fn list_reservations(
+        &mut self,
+    ) -> Result<Vec<(SpendReservation, Option<SpendOutcome>)>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .reservations
+            .iter()
+            .filter(|(r, _)| r.request.workspace_id == self.ws)
+            .cloned()
+            .collect())
+    }
+
     async fn find_reservation(&mut self, key: &str) -> Result<Option<SpendReservation>, AppError> {
         Ok(self
             .state()
@@ -1238,81 +1267,8 @@ impl StudioBudgetRepo for MemTenant {
         if let Some(saved) = self.replay("spend.reserve", &r.evidence_key, &payload)? {
             return Ok(saved);
         }
-        let frame = frame.ok_or_else(AppError::strategy_required)?;
-        if frame.id != r.executed_version_id {
-            return Err(AppError::conflict("strategy changed"));
-        }
-        if self.lock_control().await?.is_braked(r.lane) {
-            return Err(AppError::conflict("lane is braked"));
-        }
-        let cap = CapabilityRepo::find(self, r.capability_id)
-            .await?
-            .ok_or_else(|| AppError::not_found("capability"))?;
-        if cap
-            .budget_item_ids
-            .iter()
-            .any(|id| !r.budget_item_ids.contains(id))
-        {
-            return Err(AppError::conflict(
-                "reservation must include every linked budget cap",
-            ));
-        }
-        let lane = frame
-            .sections
-            .budget_frame
-            .lanes
-            .iter()
-            .find(|l| l.lane == r.lane && l.currency == r.currency)
-            .ok_or_else(|| AppError::conflict("strategy lane has no matching currency cap"))?;
-        let period = match lane.period {
-            jt_strategy::Period::Weekly => jt_capability::Period::Weekly,
-            jt_strategy::Period::Monthly => jt_capability::Period::Monthly,
-        };
-        let (from, until) = jt_capability::period_window(period, r.at);
-        cap_check(
-            self.reserved(from, until, None, Some(r.lane), &r.currency),
-            r.amount_minor,
-            lane.cap_minor,
-        )?;
-        let strategy_until = until;
-        if let Some(daily) = r.daily_budget_minor {
-            let expected =
-                jt_studio::daily_liability(daily, period, r.at, until).map_err(invalid)?;
-            if r.amount_minor != expected {
-                return Err(AppError::conflict("lane liability changed"));
-            }
-        }
-        let mut item_amounts = std::collections::BTreeMap::new();
-        for id in &r.budget_item_ids {
-            let item = BudgetRepo::lock_item(self, *id)
-                .await?
-                .ok_or_else(|| AppError::not_found("budget item"))?;
-            if item.retired_at.is_some()
-                || item.unit != jt_capability::Unit::Currency(r.currency.clone())
-            {
-                return Err(AppError::conflict(
-                    "budget item is retired or currency differs",
-                ));
-            }
-            let amount = match r.daily_budget_minor {
-                Some(daily) => jt_studio::daily_liability(daily, item.period, r.at, strategy_until)
-                    .map_err(invalid)?,
-                None => r.amount_minor,
-            };
-            item_amounts.insert(*id, amount);
-            let (from, until) = jt_capability::period_window(item.period, r.at);
-            let spent = BudgetRepo::spent_between(self, *id, from, until).await?;
-            cap_check(
-                i128::from(spent) + self.reserved(from, until, Some(*id), None, &r.currency),
-                amount,
-                item.cap,
-            )?;
-        }
-        let saved = SpendReservation {
-            item_amounts,
-            id: ReservationId::new_v7(),
-            request: r.clone(),
-        };
+        let _ = frame;
+        let saved = jt_app::usecases::studio::budget::validate_reservation(self, &r).await?;
         self.studio_write(|s, _| {
             s.reservations.push((saved.clone(), None));
             Ok(())
@@ -1350,50 +1306,6 @@ impl StudioBudgetRepo for MemTenant {
         })
     }
 }
-impl MemTenant {
-    fn reserved(
-        &self,
-        from: OffsetDateTime,
-        until: OffsetDateTime,
-        item: Option<jt_capability::BudgetItemId>,
-        lane: Option<LaneKind>,
-        currency: &str,
-    ) -> i128 {
-        self.state()
-            .studio
-            .reservations
-            .iter()
-            .filter(|(r, _)| {
-                r.request.workspace_id == self.ws
-                    && r.request.at >= from
-                    && r.request.at < until
-                    && r.request.currency == currency
-                    && item.is_none_or(|id| r.request.budget_item_ids.contains(&id))
-                    && lane.is_none_or(|l| r.request.lane == l)
-            })
-            .map(|(r, o)| {
-                i128::from(match o {
-                    Some(SpendOutcome::Refused) => 0,
-                    Some(SpendOutcome::Settled { actual_minor, .. }) => *actual_minor,
-                    _ => item
-                        .and_then(|id| r.item_amounts.get(&id))
-                        .copied()
-                        .unwrap_or(r.request.amount_minor),
-                })
-            })
-            .sum()
-    }
-}
-fn cap_check(used: i128, amount: i64, cap: i64) -> Result<(), AppError> {
-    if used + i128::from(amount) > i128::from(cap) {
-        Err(AppError::budget_cap(
-            json!({"cap_minor":cap,"requested_minor":amount}),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 impl MemTenant {
     async fn claim_studio(
         &mut self,

@@ -223,12 +223,10 @@ pub(crate) async fn set_status(
 
 /// Explicit supported currency units; unknown currencies refuse instead of assuming cents.
 fn exponent(currency: &str) -> Result<u8, ConnectorError> {
-    match currency {
-        "JPY" | "KRW" | "VND" | "CLP" | "PYG" => Ok(0),
-        "TRY" | "EUR" | "USD" | "GBP" | "CAD" | "AUD" | "CHF" => Ok(2),
-        _ => Err(ConnectorError::permanent("unsupported ad account currency")),
-    }
+    jt_connector::currency_minor_exponent(currency)
+        .ok_or_else(|| ConnectorError::permanent("unsupported ad account currency"))
 }
+
 pub(crate) async fn account_context(
     connector: &MetaConnector,
     cred: &Credential,

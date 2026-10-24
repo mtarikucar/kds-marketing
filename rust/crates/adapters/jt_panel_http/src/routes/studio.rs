@@ -141,3 +141,26 @@ pub async fn judgment_record(
         jt_app::usecases::studio::learning::judgment_record(&s.deps, &ctx, i).await?,
     ))
 }
+
+use jt_app::usecases::studio::ads;
+pub async fn adsets_list(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(body): ApiQuery<ads::AdSetsQuery>,
+) -> Result<Json<Vec<jt_app::ports::connectors::AdSet>>, ApiError> {
+    Ok(Json(ads::adsets_list(&s.deps, &ctx, body).await?))
+}
+pub async fn adset_bind(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(body): ApiJson<ads::BindAdSetInput>,
+) -> Result<Json<jt_app::ports::studio::AdSetBinding>, ApiError> {
+    Ok(Json(ads::adset_bind(&s.deps, &ctx, body).await?))
+}
+pub async fn budget_move(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(body): ApiJson<ads::BudgetMoveInput>,
+) -> Result<Json<ads::BudgetMoveOut>, ApiError> {
+    Ok(Json(ads::budget_move(&s.deps, &ctx, body).await?))
+}

@@ -127,6 +127,12 @@ impl BudgetMove {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReserveSpend {
+    #[serde(default)]
+    pub binding_id: Option<AdSetBindingId>,
+    #[serde(default)]
+    pub chain: Option<Chain>,
+    #[serde(default)]
+    pub replaces: Option<ReservationId>,
     pub workspace_id: WorkspaceId,
     pub capability_id: CapabilityId,
     pub budget_item_ids: Vec<BudgetItemId>,
@@ -142,6 +148,10 @@ pub struct ReserveSpend {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpendReservation {
+    #[serde(default)]
+    pub lane_window: Option<(OffsetDateTime, OffsetDateTime)>,
+    #[serde(default)]
+    pub item_windows: std::collections::BTreeMap<BudgetItemId, (OffsetDateTime, OffsetDateTime)>,
     pub id: ReservationId,
     pub request: ReserveSpend,
     /// Frozen liabilities for each linked cap, independent of the lane amount.
@@ -151,6 +161,10 @@ pub struct SpendReservation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SpendOutcome {
+    /// Provider acknowledged an absolute budget; this is liability, never actual spend.
+    Applied {
+        evidence_key: String,
+    },
     Settled {
         actual_minor: i64,
         evidence_key: String,
@@ -222,9 +236,12 @@ pub fn daily_liability(
     } else {
         jt_capability::period_window(period, at).1
     };
-    let days = (until.date() - at.to_offset(time::UtcOffset::UTC).date())
-        .whole_days()
-        .max(1);
+    let seconds = (until - at).whole_seconds();
+    if daily < 0 || until <= at {
+        return Err(StudioError::InvalidEvidence("expired daily budget period"));
+    }
+    let days =
+        seconds / 86400 + i64::from(seconds % 86400 != 0 || (until - at).subsec_nanoseconds() > 0);
     daily
         .checked_mul(days)
         .filter(|n| *n >= 0)

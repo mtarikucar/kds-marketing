@@ -7,6 +7,29 @@ pub fn input(action: &str) -> Value {
     let revision = json!({"type":"integer","minimum":0,"maximum":18446744073709551615_u64});
     let lane = json!({"type":"string","enum":["organic","paid"]});
     let (properties, required) = match action {
+        "adsets_list" => (
+            json!({"capability_id":{"type":"string","format":"uuid"}}),
+            vec!["capability_id"],
+        ),
+        "adset_bind" => (
+            json!({"hypothesis_id":{"type":"string","format":"uuid"},"arm_id":{"type":"string","format":"uuid"},"capability_id":{"type":"string","format":"uuid"},"adset_id":{"type":"string","minLength":1,"maxLength":200},"request_key":{"type":"string","minLength":1,"maxLength":200}}),
+            vec![
+                "hypothesis_id",
+                "arm_id",
+                "capability_id",
+                "adset_id",
+                "request_key",
+            ],
+        ),
+        "budget_move" => (
+            json!({"binding_id":{"type":"string","format":"uuid"},"daily_budget_minor":{"type":"integer","minimum":1,"maximum":9223372036854775807_i64},"currency":{"type":"string","pattern":"^[A-Z]{3}$"},"request_key":{"type":"string","minLength":1,"maxLength":200}}),
+            vec![
+                "binding_id",
+                "daily_budget_minor",
+                "currency",
+                "request_key",
+            ],
+        ),
         "learned" => (
             json!({"hypothesis_id":{"type":["string","null"],"format":"uuid"},"lane":{"enum":["organic","paid",null]},"from":{"type":"string","format":"date-time"},"until":{"type":"string","format":"date-time"}}),
             vec!["from", "until"],

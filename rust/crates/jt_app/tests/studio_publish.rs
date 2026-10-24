@@ -257,7 +257,7 @@ async fn two_dispatchers_send_once() {
     assert_eq!(w.uow.snapshot().studio.publications.len(), 1);
 }
 #[tokio::test]
-async fn metered_publication_waits_for_atomic_spend_gate() {
+async fn metered_publication_requires_persisted_price() {
     let (w, c) = world().await;
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
     let mut cap = r
@@ -271,7 +271,7 @@ async fn metered_publication_waits_for_atomic_spend_gate() {
     r.commit().await.unwrap();
     assert_eq!(
         publish_due(&w.d, w.f.ws).await.unwrap_err().details["reason"],
-        "publication_spend_gate_unavailable"
+        "unknown_unit_price"
     );
     assert_eq!(sends(&c), 0);
     assert!(w.uow.snapshot().studio.attempts.is_empty());
@@ -577,4 +577,100 @@ async fn zero_daily_ops_cap_records_reason_without_claiming() {
     );
     assert_eq!(s.studio.slots[0].state, SlotState::Ready);
     assert_eq!(sends(&c), 0);
+}
+
+#[tokio::test]
+async fn unpriced_queue_head_does_not_starve() {
+    use jt_capability::{Capability, CapabilityId, NewCapability};
+    use jt_studio::{PieceId, SlotId};
+    let (w, c) = world().await;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut held = r
+        .capabilities()
+        .find(w.f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut other = Capability::new(
+        CapabilityId::new_v7(),
+        w.f.ws,
+        NewCapability {
+            kind_key: held.kind_key.clone(),
+            key_detail: None,
+            name: "other".into(),
+            description: String::new(),
+            external_id: Some("other-account".into()),
+            connector_public: held.connector_public.clone(),
+            policy: held.policy.clone(),
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    other.status = held.status;
+    other.last_verified_at = held.last_verified_at;
+    let sealed = r.capabilities().read_sealed(held.id).await.unwrap();
+    r.capabilities()
+        .insert(other.clone(), sealed)
+        .await
+        .unwrap();
+    held.policy.spend_cap_minor = Some(1000);
+    r.capabilities().update(held).await.unwrap();
+    let mut slot = w.f.slot.clone();
+    slot.id = SlotId::new_v7();
+    slot.capability_id = other.id;
+    slot.scheduled_at = FIXED_NOW + Duration::seconds(1);
+    r.studio()
+        .insert_slots("second-slot", vec![slot.clone()])
+        .await
+        .unwrap();
+    let mut piece = w.f.piece.clone();
+    piece.id = PieceId::new_v7();
+    r.studio()
+        .save_piece(slot.id, 0, piece, "second-piece")
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut d = w.d;
+    d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::seconds(2)));
+    c.push_publish(Ok(receipt()));
+    assert_eq!(publish_due(&d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    assert_eq!(s.studio.publications[0].slot_id, slot.id);
+    assert!(s.studio.attempts.iter().all(|a| a.slot_id() != w.f.slot.id));
+    assert_eq!(sends(&c), 1);
+}
+#[tokio::test]
+async fn media_failure_does_not_leak_reservation() {
+    let (mut w, c) = world().await;
+    let item=jt_app::usecases::budget::create_item(&w.d,&w.ctx,serde_json::from_value(serde_json::json!({"name":"metered publish","kind":"cash","unit":{"kind":"currency","value":"TRY"},"cap":1000,"period":"monthly","unit_cost_minor":3})).unwrap()).await.unwrap();
+    w.d.media_fetch = Arc::new(BrokenMedia(jt_app::error::ErrorCode::Validation));
+    let mut piece = w.f.piece.clone();
+    piece.id = jt_studio::PieceId::new_v7();
+    piece.revision = 2;
+    piece.media = vec![jt_studio::MediaAsset::HostedUrl {
+        url: "https://example.com/broken.png".parse().unwrap(),
+        mime: "image/png".into(),
+        size_bytes: 10,
+    }];
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.budget()
+        .link(w.f.slot.capability_id, item.item.id)
+        .await
+        .unwrap();
+    r.studio()
+        .save_piece(w.f.slot.id, 1, piece, "broken")
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 1);
+    assert_eq!(sends(&c), 0);
+    let s = w.uow.snapshot();
+    assert!(s.studio.reservations.is_empty());
+    assert!(
+        s.studio
+            .reservations
+            .iter()
+            .all(|(_, o)| *o == Some(jt_studio::SpendOutcome::Refused)),
+        "no provider I/O occurred but the upper bound remains held"
+    );
 }

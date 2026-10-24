@@ -45,6 +45,7 @@ pub struct Blocker {
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct PendingStudioOut {
+    pub paid_alerts: Vec<serde_json::Value>,
     pub slots: Vec<PendingSlot>,
     pub approvals: Vec<ApprovalTarget>,
     pub budget_moves: Vec<BudgetMove>,
@@ -97,6 +98,13 @@ pub(crate) async fn pending_in(
         })
         .await?;
     let mut out = PendingStudioOut::default();
+    if control.is_braked(jt_strategy::LaneKind::Paid) {
+        for binding in r.studio().list_bindings().await? {
+            let status = r.studio_control().binding_control(binding.id).await?;
+            out.paid_alerts.push(json!({"binding_id":binding.id,"reason":"paid_lane_braked","next_action":"review_budget_and_provider_status","residual_provider_exposure":status.as_ref().is_none_or(|s|!s.confirmed_paused())}));
+        }
+    }
+
     for s in slots {
         let target = ApprovalTarget::Slot(s.id);
         for a in r.studio().slot_evidence(s.id).await?.0 {
@@ -184,7 +192,13 @@ pub(crate) async fn pending_in(
             slot: s,
         });
     }
-    out.budget_moves = r.studio().list_budget_moves().await?;
+    out.budget_moves = r
+        .studio()
+        .list_budget_moves()
+        .await?
+        .into_iter()
+        .filter(|m| m.state == BudgetMoveState::Queued)
+        .collect();
     for m in &out.budget_moves {
         let b = r
             .studio()

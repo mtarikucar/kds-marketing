@@ -83,6 +83,45 @@ pub async fn record(d: &Deps, m: Measurement) -> Result<bool, AppError> {
                 .await?;
         }
     }
+    if let Some(id) = m.binding_id {
+        let b = r
+            .studio()
+            .get_binding(id)
+            .await?
+            .ok_or_else(|| AppError::not_found("binding"))?;
+        if let Some(frame) = r.strategy().current_approved().await? {
+            let c = r
+                .capabilities()
+                .find(b.capability_id)
+                .await?
+                .ok_or_else(|| AppError::not_found("capability"))?;
+            let req = ReserveSpend {
+                binding_id: None,
+                chain: None,
+                replaces: None,
+                workspace_id: m.chain.workspace_id,
+                capability_id: c.id,
+                budget_item_ids: c.budget_item_ids,
+                lane: jt_strategy::LaneKind::Paid,
+                executed_version_id: frame.id,
+                amount_minor: 0,
+                daily_budget_minor: None,
+                currency: m.currency.clone().unwrap_or_default(),
+                evidence_key: format!("measurement-cap:{}", m.id),
+                at: d.clock.now(),
+            };
+            if let Err(e) = super::budget::validate_reservation(r.as_mut(), &req).await
+                && e.code == crate::error::ErrorCode::BudgetCap
+            {
+                let flags = r.studio_control().lock_control().await?;
+                if !flags.is_braked(jt_strategy::LaneKind::Paid) {
+                    r.studio_control()
+                        .set_brake(flags.revision, Some(jt_strategy::LaneKind::Paid), true)
+                        .await?;
+                }
+            }
+        }
+    }
     let ctx = system_ctx(m.chain.workspace_id, d.clock.now());
     let mut e = crate::usecases::ledger_entry(
         &ctx,
@@ -257,7 +296,8 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
         .await
         .map_err(|_| AppError::conflict("ad account context unavailable"))?;
     if !super::chain::same_account(&c.kind_key, &context.account_id, &b.account_id)
-        || context.minor_unit_exponent > 4
+        || jt_connector::currency_minor_exponent(&context.currency)
+            != Some(context.minor_unit_exponent)
     {
         return Err(AppError::conflict("ad account units mismatch"));
     }
@@ -276,7 +316,11 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
         .iter()
         .find(|s| s.id == b.adset_id)
         .expect("verified membership");
+    super::ads::reconcile_budget(d, b, set, &context.currency).await?;
     let drift = detect_drift(d, b, set, &context.currency).await?;
+    if drift {
+        let _ = super::control::reconcile_bindings(d, ws).await;
+    }
     let rows = ads
         .adset_insights(
             &cred,
@@ -318,6 +362,8 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
             .max_by_key(|m| m.evidence_revision);
         if old.is_some_and(|m| {
             m.raw_metrics == raw
+                && super::budget::bucket_window(m)
+                    .is_none_or(|(_, end)| now < end || m.measured_at >= end)
                 && m.currency.as_ref() == Some(&context.currency)
                 && m.minor_unit_exponent == Some(context.minor_unit_exponent)
         }) {
@@ -353,7 +399,14 @@ async fn measure_binding(d: &Deps, b: &AdSetBinding) -> Result<u32, AppError> {
         }
         changed += u32::from(record(d, m).await?);
     }
-    if drift {
+    let braked = {
+        let mut r = d.uow.tenant(ws).await?;
+        r.studio_control()
+            .lock_control()
+            .await?
+            .is_braked(jt_strategy::LaneKind::Paid)
+    };
+    if braked && !drift {
         let _ = super::control::reconcile_bindings(d, ws).await;
     }
     Ok(changed)
@@ -383,20 +436,35 @@ async fn detect_drift(
     r.strategy().lock_execution_frame().await?;
     let flags = r.studio_control().lock_control().await?;
     let old = r.studio_control().binding_control(b.id).await?;
-    let move_ = r.studio().latest_budget_move(b.id).await?;
+    let move_ = r
+        .studio()
+        .list_budget_moves()
+        .await?
+        .into_iter()
+        .filter(|m| m.binding_id == b.id && m.state == BudgetMoveState::Succeeded)
+        .max_by_key(|m| m.id);
     let observed = match set.status.as_str() {
         "ACTIVE" => Some(AdStatus::Active),
         "PAUSED" => Some(AdStatus::Paused),
         _ => None,
     };
-    let drift = move_
-        .as_ref()
-        .filter(|m| m.state == BudgetMoveState::Succeeded)
-        .is_some_and(|m| {
-            Some(m.daily_budget_minor) != set.daily_budget_minor
-                || m.currency != currency
-                || set.lifetime_budget_minor.is_some()
-        })
+    let authorized = r
+        .studio_budget()
+        .list_reservations()
+        .await?
+        .iter()
+        .any(|(r, o)| {
+            r.request.binding_id == Some(b.id) && matches!(o, Some(SpendOutcome::Applied { .. }))
+        });
+    let drift = (observed == Some(AdStatus::Active) && !authorized)
+        || move_
+            .as_ref()
+            .filter(|m| m.state == BudgetMoveState::Succeeded)
+            .is_some_and(|m| {
+                Some(m.daily_budget_minor) != set.daily_budget_minor
+                    || m.currency != currency
+                    || set.lifetime_budget_minor.is_some()
+            })
         || old
             .as_ref()
             .filter(|o| matches!(o.outcome, Some(BindingStatusOutcome::Applied { .. })))

@@ -674,7 +674,7 @@ async fn safety_pause_normalizes_meta_account_prefix() {
     );
 }
 #[tokio::test]
-async fn resume_recovery_reuses_reservation_after_clock_advance() {
+async fn resume_recovery_refreshes_expired_period() {
     let mut w = support::world().await;
     w.paid().await;
     w.provider_status("ACTIVE", 10);
@@ -691,7 +691,15 @@ async fn resume_recovery_reuses_reservation_after_clock_advance() {
     w.provider_status("PAUSED", 10);
     w.ads.push_set_status(Ok(()));
     reconcile_bindings(&w.d, w.f.ws).await.unwrap();
-    assert_eq!(w.uow.snapshot().studio.reservations.len(), 1);
+    assert_eq!(w.uow.snapshot().studio.reservations.len(), 2);
+    assert_eq!(
+        w.uow.snapshot().studio.reservations[0].1,
+        Some(jt_studio::SpendOutcome::Unknown)
+    );
+    assert_eq!(
+        w.uow.snapshot().studio.reservations[1].0.request.at,
+        w.d.clock.now()
+    );
     assert_eq!(
         w.uow.snapshot().studio.binding_controls[0].observed,
         Some(AdStatus::Active)

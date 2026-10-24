@@ -620,6 +620,9 @@ pub async fn budget_fixture(
     tx.budget().link(f.slot.capability_id, b.id).await.unwrap();
     tx.commit().await.unwrap();
     let r = ReserveSpend {
+        binding_id: None,
+        chain: None,
+        replaces: None,
         daily_budget_minor: None,
         workspace_id: f.ws,
         capability_id: f.slot.capability_id,
@@ -1050,6 +1053,84 @@ pub async fn liability_uses_each_item_period(uow: &dyn UnitOfWork) {
     use jt_capability::{BudgetItemId, Period};
     let (f, item, mut request) = budget_fixture(uow).await;
     let mut tx = uow.tenant(f.ws).await.unwrap();
+    let mut version = tx.strategy().current_approved().await.unwrap().unwrap();
+    let mut hypothesis = tx.hypotheses().list(version.id).await.unwrap().remove(0);
+    tx.strategy()
+        .set_status(version.id, VersionStatus::Archived, FIXED_NOW, None)
+        .await
+        .unwrap();
+    version.id = StrategyVersionId::new_v7();
+    version.number += 1;
+    version.sections.paid_enabled = true;
+    version.sections.channels = vec![jt_strategy::ChannelChoice {
+        channel: "meta_ads".into(),
+        rationale: "paid contract".into(),
+        group_id: None,
+    }];
+    version.sections.budget_frame.lanes[0].lane = LaneKind::Paid;
+    hypothesis.channel = "meta_ads".into();
+    hypothesis.cadence.insert(
+        LaneKind::Paid,
+        jt_strategy::HypothesisCadence {
+            slots_per_week: 7,
+            exploration_bps: 0,
+            content_types: vec![jt_strategy::ContentTypeShare {
+                key: "text".into(),
+                min_bps: 0,
+                max_bps: 10000,
+            }],
+        },
+    );
+    tx.strategy().insert(version.clone()).await.unwrap();
+    tx.hypotheses()
+        .upsert(version.id, hypothesis.clone())
+        .await
+        .unwrap();
+    let mut capability=Capability::new(CapabilityId::new_v7(),f.ws,NewCapability{kind_key:"meta_ads".into(),name:"paid".into(),external_id:Some("act_contract".into()),connector_public:serde_json::json!({"access":{"scopes":["ads_read","ads_management"]}}),..Default::default()},FIXED_NOW).unwrap();
+    capability.status = jt_capability::StoredStatus::Verified;
+    capability.last_verified_at = Some(FIXED_NOW);
+    tx.capabilities()
+        .insert(capability.clone(), Some(vec![1]))
+        .await
+        .unwrap();
+    tx.budget().link(capability.id, item.id).await.unwrap();
+    let arm = Arm::new(
+        ArmId::new_v7(),
+        f.ws,
+        ArmKey {
+            hypothesis_id: hypothesis.id,
+            content_type: "text".into(),
+            channel: "meta_ads".into(),
+            lane: LaneKind::Paid,
+        },
+    )
+    .unwrap();
+    tx.studio().insert_arm(arm.clone()).await.unwrap();
+    let chain = Chain {
+        workspace_id: f.ws,
+        born_version_id: version.id,
+        hypothesis_id: hypothesis.id,
+        arm_id: arm.id,
+    };
+    let binding = AdSetBinding {
+        id: AdSetBindingId::new_v7(),
+        chain: chain.clone(),
+        capability_id: capability.id,
+        account_id: "act_contract".into(),
+        adset_id: "set_contract".into(),
+        campaign_id: None,
+        verified_at: Some(FIXED_NOW),
+        verification_evidence: None,
+    };
+    tx.studio()
+        .bind_adset(binding.clone(), "paid-liability")
+        .await
+        .unwrap();
+    request.binding_id = Some(binding.id);
+    request.chain = Some(chain);
+    request.capability_id = capability.id;
+    request.lane = LaneKind::Paid;
+    request.executed_version_id = version.id;
     let mut daily = item.clone();
     daily.id = BudgetItemId::new_v7();
     daily.period = Period::Daily;

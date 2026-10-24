@@ -472,22 +472,60 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
             jt_strategy::Period::Monthly => jt_capability::Period::Monthly,
             jt_strategy::Period::Weekly => jt_capability::Period::Weekly,
         };
-        let key = format!(
-            "studio.resume:{}:{}",
+        let (current_from, current_until) = jt_capability::period_window(period, d.clock.now());
+        let mut key = format!(
+            "studio.resume:{}:{}:{}:{}:{}",
             b.id,
-            record.resume_operation_id.expect("resume intent")
+            record.resume_operation_id.expect("resume intent"),
+            v.id,
+            current_from.unix_timestamp(),
+            current_until.unix_timestamp()
         );
+        let mut item_ids = c.budget_item_ids.clone();
+        item_ids.sort();
+        for id in item_ids {
+            let item = r
+                .budget()
+                .lock_item(id)
+                .await?
+                .ok_or_else(|| AppError::not_found("budget item"))?;
+            let (a, b) = jt_capability::period_window(item.period, d.clock.now());
+            key.push_str(&format!(
+                ":{id}:{}:{}",
+                a.unix_timestamp(),
+                b.unix_timestamp()
+            ));
+        }
         let previous = r.studio_budget().find_reservation(&key).await?;
+        let rows = r.studio_budget().list_reservations().await?;
+        let replaces = if let Some(previous) = &previous {
+            previous.request.replaces
+        } else {
+            rows.iter()
+                .filter(|(v, o)| {
+                    v.request.binding_id == Some(b.id)
+                        && matches!(o, Some(SpendOutcome::Applied { .. }))
+                        && !rows.iter().any(|(next, o)| {
+                            next.request.replaces == Some(v.id)
+                                && !matches!(o, Some(SpendOutcome::Refused))
+                        })
+                })
+                .max_by_key(|(v, _)| v.id)
+                .map(|(v, _)| v.id)
+        };
         // Preserve the original payload when retrying a durable reservation. The current frame,
         // caps and live provider daily budget were rechecked above; changed payloads still refuse.
         let at = previous.as_ref().map_or(d.clock.now(), |p| p.request.at);
         let (_, until) = jt_capability::period_window(period, at);
-        let amount = daily
-            .checked_mul((until.date() - at.date()).whole_days().max(1))
-            .ok_or_else(|| refuse("unknown_budget_cost"))?;
+        let amount = jt_studio::daily_liability(daily, period, at, until)
+            .map_err(|_| refuse("unknown_budget_cost"))?;
         reservation = Some(
-            r.studio_budget()
-                .reserve(ReserveSpend {
+            super::budget::reserve_connector_spend(
+                r.as_mut(),
+                ReserveSpend {
+                    binding_id: Some(b.id),
+                    chain: Some(b.chain.clone()),
+                    replaces,
                     daily_budget_minor: Some(daily),
                     workspace_id: ws,
                     capability_id: c.id,
@@ -498,9 +536,10 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
                     currency: account.currency,
                     evidence_key: key,
                     at,
-                })
-                .await?
-                .id,
+                },
+            )
+            .await?
+            .id,
         );
     }
     // Persist intent before I/O, including on restart. Re-reading observed state resolves a lost
@@ -543,7 +582,14 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
         .save_binding_control(record.clone())
         .await?;
     if let Some(id) = reservation {
-        r.studio_budget().settle(id, SpendOutcome::Unknown).await?;
+        let outcome = if record.observed == Some(AdStatus::Active) {
+            SpendOutcome::Applied {
+                evidence_key: format!("studio.resume:{id}"),
+            }
+        } else {
+            SpendOutcome::Unknown
+        };
+        r.studio_budget().settle(id, outcome).await?;
     }
     let ctx = Ctx {
         workspace_id: ws,

@@ -112,6 +112,9 @@ fn catalog_is_the_release_table() {
         .map(|uc| (uc.id, uc.mcp_tool, uc.panel_route, uc.panel_only, uc.risk))
         .collect();
     let expected = [
+        ("studio.adsets_list", Some("jeeta.studio.adsets_list"), Some(("GET", "/api/studio/adsets")), false, Risk::Read),
+        ("studio.adset_bind", Some("jeeta.studio.adset_bind"), Some(("POST", "/api/studio/adsets/bind")), false, Risk::Write),
+        ("studio.budget_move", Some("jeeta.studio.budget_move"), Some(("POST", "/api/studio/budget-moves")), false, Risk::Spend),
         ("studio.learned", Some("jeeta.studio.learned"), Some(("GET", "/api/studio/learned")), false, Risk::Read),
         ("studio.judgment_record", Some("jeeta.studio.judgment_record"), Some(("POST", "/api/studio/judgments")), false, Risk::Write),
         ("studio.file_upload", Some("jeeta.studio.file_upload"), Some(("POST", "/api/studio/files")), false, Risk::Write),
@@ -242,7 +245,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 128);
+    assert_eq!(CATALOG.len(), 131);
     for uc in CATALOG {
         assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && uc.id != "studio.brake") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

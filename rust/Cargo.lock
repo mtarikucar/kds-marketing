@@ -1402,6 +1402,7 @@ dependencies = [
  "jt_mcp",
  "jt_panel_http",
  "jt_pg",
+ "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
  "proc-macro2",

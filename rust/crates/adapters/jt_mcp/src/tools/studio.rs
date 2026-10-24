@@ -13,6 +13,27 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "studio.adsets_list",
+            description: "Manage externally created ad sets and hard spend caps. [risk: READ]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("adsets_list")).expect("studio schema"),
+            run: adsets_list,
+        },
+        ToolDef {
+            use_case: "studio.adset_bind",
+            description: "Manage externally created ad sets and hard spend caps. [risk: WRITE]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("adset_bind")).expect("studio schema"),
+            run: adset_bind,
+        },
+        ToolDef {
+            use_case: "studio.budget_move",
+            description: "Manage externally created ad sets and hard spend caps. [risk: SPEND]",
+            permission: Permission::StudioManage,
+            schema: || Schema::try_from(schema::input("budget_move")).expect("studio schema"),
+            run: budget_move,
+        },
+        ToolDef {
             use_case: "studio.learned",
             description: "Read hypothesis results and evidence, lane performance and spend versus caps. [risk: READ]",
             permission: Permission::StudioWork,
@@ -152,4 +173,22 @@ fn judgment_record<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         to_json(&jt_app::usecases::studio::learning::judgment_record(d, c, args(v)?).await?)
     })
+}
+
+fn adsets_list<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(
+        async move { to_json(&jt_app::usecases::studio::ads::adsets_list(d, c, args(v)?).await?) },
+    )
+}
+
+fn adset_bind<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(
+        async move { to_json(&jt_app::usecases::studio::ads::adset_bind(d, c, args(v)?).await?) },
+    )
+}
+
+fn budget_move<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(
+        async move { to_json(&jt_app::usecases::studio::ads::budget_move(d, c, args(v)?).await?) },
+    )
 }

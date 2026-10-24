@@ -739,9 +739,14 @@ fn trends_reservations_and_measurement_windows_round_trip() {
     trend.summary.clear();
     assert!(trend.validate().is_err());
     let reservation = SpendReservation {
+        lane_window: None,
+        item_windows: Default::default(),
         item_amounts: Default::default(),
         id: ReservationId::new_v7(),
         request: ReserveSpend {
+            binding_id: None,
+            chain: None,
+            replaces: None,
             daily_budget_minor: None,
             workspace_id: f.chain.workspace_id,
             capability_id: f.target.id,

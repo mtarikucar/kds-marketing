@@ -303,11 +303,8 @@ pub(crate) async fn check_caps(
         jt_strategy::Period::Monthly => jt_capability::Period::Monthly,
     };
     let (_, until) = jt_capability::period_window(period, now);
-    let days = (until.date() - now.date()).whole_days().max(1);
-    let amount = daily
-        .checked_mul(days)
-        .filter(|a| *a >= 0)
-        .ok_or_else(|| refuse("unknown_budget_cost"))?;
+    let amount = jt_studio::daily_liability(daily, period, now, until)
+        .map_err(|_| refuse("unknown_budget_cost"))?;
     if amount > l.cap_minor || c.policy.spend_cap_minor.is_some_and(|cap| amount > cap) {
         return Err(AppError::budget_cap(
             json!({"requested_minor":amount,"cap_minor":l.cap_minor}),

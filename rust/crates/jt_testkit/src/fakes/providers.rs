@@ -287,6 +287,7 @@ pub struct ScriptedConnector {
     mail: Script<Result<SendReceipt, ConnectorError>>,
     mailbox_poll: Script<Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>>,
     send_hooks: Script<SendHook>,
+    ad_read_hooks: Script<SendHook>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
     account_metrics: Script<Result<AccountMetrics, ConnectorError>>,
@@ -336,6 +337,7 @@ impl ScriptedConnector {
             mail: Script::default(),
             mailbox_poll: Script::default(),
             send_hooks: Script::default(),
+            ad_read_hooks: Script::default(),
             publish: Script::default(),
             post_metrics: Script::default(),
             account_metrics: Script::default(),
@@ -422,6 +424,13 @@ impl ScriptedConnector {
     }
 
     /// Run after recording a provider write, before its result. Supports races and crashes.
+    pub fn push_ad_read_hook<F, Fut>(&self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.ad_read_hooks.push(Box::new(move || Box::pin(hook())));
+    }
     pub fn push_send_hook<F, Fut>(&self, hook: F)
     where
         F: FnOnce() -> Fut + Send + 'static,
@@ -743,6 +752,9 @@ impl AdBudgetWriter for ScriptedConnector {
             credential: cred.clone(),
             public: public.clone(),
         });
+        if let Some(hook) = self.ad_read_hooks.try_next() {
+            hook().await;
+        }
         self.next(&self.list_adsets, "list_adsets result")
     }
 

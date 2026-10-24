@@ -47,14 +47,6 @@ fn input(s: &jt_studio::Slot) -> ExecutionInput {
         expected_revision: s.revision,
     }
 }
-/// Until T8 supplies the atomic spend gate, refuse every budget-bound publishing capability.
-/// No missing unit price, unknown currency or cap is treated as zero cost.
-fn unmetered(c: &Capability) -> Result<(), AppError> {
-    if !c.budget_item_ids.is_empty() || c.policy.spend_cap_minor.is_some() {
-        return Err(chain::refuse("publication_spend_gate_unavailable"));
-    }
-    Ok(())
-}
 async fn request(
     d: &Deps,
     ws: WorkspaceId,
@@ -99,6 +91,7 @@ async fn record_daily_cap(
 /// frame under the claim fence. A racing worker can win the claim; it cannot duplicate I/O.
 pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     let mut count = 0;
+    let mut spend_refusal = None;
     let mut skipped = std::collections::HashSet::new();
     for _ in 0..100 {
         let candidate = {
@@ -138,10 +131,6 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                     .find(s.capability_id)
                     .await?
                     .ok_or_else(|| AppError::not_found("capability"))?;
-                if let Err(e) = unmetered(&c) {
-                    refusal = Some(e);
-                    continue;
-                }
                 let p = r
                     .studio()
                     .get_piece(s.id, s.revision)
@@ -179,7 +168,7 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
         {
             return Err(e.clone());
         }
-        let (attempt, cred, public) = {
+        let (attempt, cred, public, spend) = {
             let mut r = d.uow.tenant(ws).await?;
             let permit = match authorize_execution_at(r.as_mut(), input(&slot), d.clock.now()).await
             {
@@ -197,7 +186,6 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                 .find(slot.capability_id)
                 .await?
                 .ok_or_else(|| AppError::not_found("capability"))?;
-            unmetered(&c)?;
             if c.external_id != cap.external_id || c.kind_key != cap.kind_key {
                 return Err(chain::refuse("publication_account_changed"));
             }
@@ -245,12 +233,41 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                 count += 1;
                 continue;
             }
+            let spend = match super::budget::reserve_metered(
+                r.as_mut(),
+                &c,
+                Some(slot.chain.clone()),
+                Some(1),
+                format!("publish:{}:{}", slot.id, slot.revision),
+                d.clock.now(),
+            )
+            .await
+            {
+                Ok(spend) => spend,
+                Err(e) if e.code != crate::error::ErrorCode::Internal => {
+                    spend_refusal = Some(e);
+                    skipped.insert(slot.id);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             r.commit().await?;
-            (a, cred, adapter_public(&c))
+            (a, cred, adapter_public(&c), spend)
         };
         let result = publisher
             .publish(&cred, &public, &req.expect("prepared request"))
             .await;
+        if let Some(spend) = spend {
+            let mut r = d.uow.tenant(ws).await?;
+            r.strategy().lock_execution_frame().await?;
+            super::budget::settle_metered(
+                r.as_mut(),
+                spend,
+                result.as_ref().map(|_| None).map_err(|e| e.kind()),
+            )
+            .await?;
+            r.commit().await?;
+        }
         match result {
             Ok(receipt) => {
                 // The small receipt checkpoint survives interruption before final bookkeeping.
@@ -289,6 +306,11 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             }
         }
         count += 1;
+    }
+    if count == 0
+        && let Some(e) = spend_refusal
+    {
+        return Err(e);
     }
     Ok(count)
 }

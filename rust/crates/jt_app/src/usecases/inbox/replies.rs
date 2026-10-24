@@ -565,6 +565,7 @@ enum Claim {
 /// it, acquire conversation → journey → outbox. All are released before returning Ready.
 async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.strategy().lock_execution_frame().await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
     let hint = r
@@ -733,6 +734,22 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             return Ok(Claim::Done(output(&row)));
         }
     };
+    let spend = crate::usecases::studio::budget::reserve_metered(
+        r.as_mut(),
+        &cap,
+        None,
+        Some(if cap.kind_key == "sms_line" {
+            u64::from(jt_inbox::sms_segments(&message.body))
+        } else {
+            1
+        }),
+        format!("outbox:{id}"),
+        ctx.now,
+    )
+    .await?;
+    if let Some(spend) = &spend {
+        row.intent["spend_reservation"] = json!(spend.id);
+    }
     let activity_revision = r.conversations().send_state(c.id).await?.activity_revision;
     let journey_reducer_revision = match &j {
         Some(j) => Some(r.journeys().reducer_revision(j.id).await?),
@@ -942,6 +959,21 @@ pub(super) async fn record_result_in(
         && !(row.state == "unknown" && (result.is_ok() || recovered || evidence))
     {
         return Ok(output(&row));
+    }
+    if let Some(spend) = r
+        .studio_budget()
+        .find_reservation(&format!("outbox:{id}"))
+        .await?
+    {
+        crate::usecases::studio::budget::settle_metered(
+            r,
+            spend,
+            result
+                .as_ref()
+                .map(|receipt| receipt.cost_minor)
+                .map_err(|e| e.kind()),
+        )
+        .await?;
     }
     let (status, external, cost) = match result {
         Ok(receipt) => {

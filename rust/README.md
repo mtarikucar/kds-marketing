@@ -254,7 +254,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (118 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (121 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -271,7 +271,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 118 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 121 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -2237,7 +2237,7 @@ Istanbul midnight rollover and broken media followed by healthy work.
 
 ### M3 Task 7 — measurements, learning and results
 
-The current release has **118 MCP tools / 12 Studio operations**, **62 tables**,
+At the Task 7 boundary the release had **118 MCP tools / 12 Studio operations**, **62 tables**,
 migration **0009_studio**, and **21 scheduled jobs**. The two new operations are
 `studio.learned` (`GET /api/studio/learned`, `jeeta.studio.learned`) and
 `studio.judgment_record` (`POST /api/studio/judgments`, `jeeta.studio.judgment_record`).
@@ -2289,3 +2289,59 @@ archive reads, draft preservation, paid correction and shared-campaign isolation
 filtered results/judgments, real PostgreSQL atomicity and tenant isolation, and
 HTTP/MCP result, filter, replay and error parity. Migration 0009 retains its scoped
 idempotent down script; the workspace suite verifies up → down → up.
+
+
+### M3 Task 8 — external paid bindings and hard connector caps
+
+The current release has **121 MCP tools / 15 Studio operations**, **62 tables**,
+migration **0009_studio**, and **21 scheduled jobs**. No campaign, ad set or creative
+creation is exposed. No schema migration is added by T8; reservation accounting
+metadata lives in the existing tenant-scoped durable JSON records.
+
+| Catalog / tool suffix | HTTP route | Permission |
+|---|---|---|
+| `studio.adsets_list` / `jeeta.studio.adsets_list` | `GET /api/studio/adsets?capability_id=…` | `studio.work` |
+| `studio.adset_bind` / `jeeta.studio.adset_bind` | `POST /api/studio/adsets/bind` | `studio.work` |
+| `studio.budget_move` / `jeeta.studio.budget_move` | `POST /api/studio/budget-moves` | `studio.manage` |
+
+All three require an active workspace, approved paid strategy, selected channel/group
+and a connected, scoped ad account. Binding checks authenticated account membership;
+replay keys reject changed payloads. Binding an already active set brakes the paid
+lane and requests a safety pause until its budget is authorized.
+
+A budget move is an **absolute daily setting**, never an actual spend entry.
+Default policy dispatches immediately. Revision-bound human consent, when configured,
+leaves the move queued; the existing minute `studio_control` job dispatches it through
+fresh authorization after consent. It also refreshes period/frame exposure before
+reconciling status. No new budget amount is chosen automatically.
+
+The shared reservation gate locks the current strategy, capability, Studio control
+and all linked live budget caps before recording `Sending`. Provider calls run after
+commit. A daily reservation multiplies the amount by the ceiling of remaining days
+in each cap's own UTC period (Total caps use the finite strategy period). Capability
+spending policy, lane caps, observed spend, manual historical spend and outstanding
+exposure all apply. `BUDGET_CAP` is HTTP 409 and the identical structured MCP error.
+Known replacements hold max(old,new) while uncertain; confirmed replacements retain
+unobserved elapsed exposure. Unknown writes remain reserved across restarts and are
+never blindly retried. Read-back of the matching absolute setting can resolve them.
+
+SMS outbox claims price the shared GSM-7/UCS-2 segment count using persisted
+`unit_cost_minor`; 160/161 ASCII and 70/71 Turkish characters cost 3/6/3/6 at a
+three-minor-unit segment price. Budget-bound publishing uses one explicit publication
+operation. Missing price, unsupported units, mismatched currencies or undefined
+quantities refuse before provider I/O. Existing unmetered publishing remains available.
+An accepted send with no reported actual cost retains its upper bound as exposure.
+
+Measurement corrections replace the provider's ad-set/day/currency bucket and adjust
+cap accounting atomically with evidence. Complete elapsed buckets transfer reserved
+exposure to observed spend; uncertain and overlapping buckets remain conservatively
+held. The six-hour measurement cycle brakes only the paid lane on budget/status drift,
+exposes a work item in `studio.pending.paid_alerts`, and requests `Paused` status.
+Rollover refusal likewise persists the brake before pausing. Unknown pause outcomes
+report residual provider exposure. Jeeta guarantees preflight authorization caps;
+providers can still incur in-flight or externally initiated spend, which remains
+recordable even above a cap. Status changes never use `set_daily_budget(0)`.
+
+Validation: `studio_paid` covers the application and real PostgreSQL concurrency;
+`budget` preserves truthful historical spend; `twin_parity`, `studio_http` and
+`studio_mcp` exercise surface effects, strict schemas and errors.

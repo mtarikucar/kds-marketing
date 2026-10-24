@@ -170,6 +170,12 @@ pub trait StudioRepo: Send + Sync {
         binding: AdSetBinding,
         key: &str,
     ) -> Result<AdSetBinding, AppError>;
+    /// Compare and swap durable dispatch state; payload and identity stay immutable.
+    async fn transition_budget_move(
+        &mut self,
+        move_: BudgetMove,
+        expected: jt_studio::BudgetMoveState,
+    ) -> Result<(), AppError>;
     async fn save_budget_move(
         &mut self,
         move_: BudgetMove,
@@ -215,6 +221,9 @@ pub trait StudioRepo: Send + Sync {
 }
 #[async_trait]
 pub trait StudioBudgetRepo: Send + Sync {
+    async fn list_reservations(
+        &mut self,
+    ) -> Result<Vec<(SpendReservation, Option<SpendOutcome>)>, AppError>;
     async fn find_reservation(
         &mut self,
         evidence_key: &str,

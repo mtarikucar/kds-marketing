@@ -1891,6 +1891,7 @@ async fn inbox_conversation_get_and_reply_have_http_mcp_parity() {
     )
     .await;
     assert_eq!(human, agent);
+    jt_testkit::flows::price_sms(&deps, ws).await;
     sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
         provider_id: "receipt-1".into(),
         cost_minor: None,
@@ -2564,6 +2565,7 @@ async fn inbox_consent_suppressions_and_send_have_http_mcp_parity() {
         )
         .await
     );
+    jt_testkit::flows::price_sms(&deps, ws).await;
     sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
         provider_id: "commercial-1".into(),
         cost_minor: None,
@@ -2636,6 +2638,7 @@ async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
     let base = format!("/api/inbox/journeys/{}", j.id);
     ok(send(&app,panel(Method::POST,&format!("/api/inbox/people/{person}/consents"),Some(&cookie),Some(json!({"channel":"sms","kind":"explicit","source":"agent","at":"2020-01-01T00:00:00Z"})))).await).await;
     let quote_input = json!({"amount_minor":12500,"currency":"TRY","valid_until":"2099-01-01T00:00:00Z","file_ref":"opaque:owner-reference","channel":"sms","text":"Quote details","intent":"commercial","request_key":"quote-parity"});
+    jt_testkit::flows::price_sms(&deps, ws).await;
     sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
         provider_id: "quote-parity".into(),
         cost_minor: None,
@@ -2821,6 +2824,7 @@ async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
     )
     .await)
     .await;
+    jt_testkit::flows::price_sms(&deps, ws).await;
     sender.push_sms(Err(ConnectorError::unknown(
         "provider acknowledgement lost",
     )));
@@ -4158,4 +4162,249 @@ async fn studio_learning_has_result_filter_judgment_and_error_parity() {
     .await;
     assert_eq!(human["code"], "CONFLICT");
     assert_eq!(human["code"], agent["structuredContent"]["code"]);
+}
+
+#[tokio::test]
+async fn studio_budget_cap_http_409_mcp_parity() {
+    use jt_connector::Credential;
+    let ok = |resp: Response| async move {
+        let status = resp.status();
+        let body = json_body(resp).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    };
+    use jt_app::ports::studio::*;
+    use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("paid-twins").await;
+    let provider = Arc::new(ScriptedConnector::new(Provider::Meta));
+    let mut d = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(provider.clone())),
+    );
+    d.clock = Arc::new(jt_testkit::fakes::FixedClock(d.clock.now()));
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let now = d.clock.now();
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let mut v = r.strategy().current_approved().await.unwrap().unwrap();
+    let mut hs = r.hypotheses().list(v.id).await.unwrap();
+    for h in &mut hs {
+        h.cadence.insert(
+            jt_strategy::LaneKind::Paid,
+            jt_strategy::HypothesisCadence {
+                slots_per_week: 7,
+                exploration_bps: 0,
+                content_types: vec![jt_strategy::ContentTypeShare {
+                    key: "text".into(),
+                    min_bps: 0,
+                    max_bps: 10000,
+                }],
+            },
+        );
+    }
+    r.strategy()
+        .set_status(v.id, jt_strategy::VersionStatus::Archived, now, None)
+        .await
+        .unwrap();
+    v.id = jt_strategy::StrategyVersionId::new_v7();
+    v.number += 1;
+    v.sections.paid_enabled = true;
+    v.sections.budget_frame.lanes.push(jt_strategy::Lane {
+        lane: jt_strategy::LaneKind::Paid,
+        period: jt_strategy::Period::Monthly,
+        cap_minor: 10000,
+        currency: "TRY".into(),
+    });
+    r.strategy().insert(v.clone()).await.unwrap();
+    for h in &hs {
+        r.hypotheses().upsert(v.id, h.clone()).await.unwrap();
+    }
+    let mut c = Capability::new(
+        CapabilityId::new_v7(),
+        ws,
+        NewCapability {
+            kind_key: "meta_ads".into(),
+            name: "Ads".into(),
+            external_id: Some("act_1".into()),
+            connector_public: json!({"access":{"scopes":["ads_read","ads_management"]}}),
+            ..Default::default()
+        },
+        now,
+    )
+    .unwrap();
+    c.status = StoredStatus::Verified;
+    c.last_verified_at = Some(now);
+    let cred = Credential::OAuth {
+        access_token: "test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec!["ads_read".into(), "ads_management".into()],
+    };
+    let seal = d
+        .seal
+        .seal(ws, &serde_json::to_vec(&cred).unwrap())
+        .unwrap();
+    r.capabilities()
+        .insert(c.clone(), Some(seal))
+        .await
+        .unwrap();
+    let item = jt_capability::BudgetItem {
+        id: jt_capability::BudgetItemId::new_v7(),
+        workspace_id: ws,
+        name: "paid cap".into(),
+        kind: jt_capability::BudgetKind::AdBudget,
+        unit: jt_capability::Unit::Currency("TRY".into()),
+        cap: 10000,
+        unit_cost_minor: Some(1),
+        period: jt_capability::Period::Monthly,
+        strategy_version_id: Some(v.id.0),
+        created_at: now,
+        retired_at: None,
+    };
+    r.budget().insert_item(item.clone()).await.unwrap();
+    r.budget().link(c.id, item.id).await.unwrap();
+    let arm = Arm::new(
+        ArmId::new_v7(),
+        ws,
+        ArmKey {
+            hypothesis_id: hs[0].id,
+            content_type: "text".into(),
+            channel: "meta_ads".into(),
+            lane: jt_strategy::LaneKind::Paid,
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    let script = || {
+        provider.push_account_context(Ok(jt_app::ports::connectors::AdAccountContext {
+            account_id: "act_1".into(),
+            currency: "TRY".into(),
+            minor_unit_exponent: 2,
+            timezone: "UTC".into(),
+        }));
+        provider.push_list_adsets(Ok(vec![jt_app::ports::connectors::AdSet {
+            id: "set".into(),
+            name: "external".into(),
+            status: "PAUSED".into(),
+            campaign_id: Some("campaign".into()),
+            daily_budget_minor: Some(10),
+            lifetime_budget_minor: None,
+        }]));
+    };
+    script();
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/studio/adsets?capability_id={}", c.id),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    script();
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.adsets_list",
+        json!({"capability_id":c.id}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    let bind = json!({"hypothesis_id":hs[0].id,"arm_id":arm.id,"capability_id":c.id,"adset_id":"set","request_key":"bind-twins"});
+    script();
+    let bound = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/adsets/bind",
+            Some(&cookie),
+            Some(bind.clone()),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        bound,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.adset_bind",
+            bind.clone()
+        )
+        .await
+    );
+    let input = json!({"binding_id":bound["id"],"daily_budget_minor":10,"currency":"TRY","request_key":"move-twins"});
+    script();
+    provider.push_set_daily_budget(Ok(()));
+    let moved = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/budget-moves",
+            Some(&cookie),
+            Some(input.clone()),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(moved["outcome"], "succeeded");
+    assert_eq!(
+        moved,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.budget_move",
+            input.clone()
+        )
+        .await
+    );
+    let mut over = input.clone();
+    over["daily_budget_minor"] = json!(10001);
+    over["request_key"] = json!("over-twins");
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/budget-moves",
+            Some(&cookie),
+            Some(over.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let human = json_body(response).await;
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.budget_move", over).await;
+    assert_eq!(human["code"], "BUDGET_CAP");
+    assert_eq!(human, agent["structuredContent"]);
+    for (path, name, mut body) in [
+        ("/api/studio/adsets/bind", "jeeta.studio.adset_bind", bind),
+        (
+            "/api/studio/budget-moves",
+            "jeeta.studio.budget_move",
+            input,
+        ),
+    ] {
+        body["extra"] = json!(true);
+        let human = json_body(
+            send(
+                &app,
+                panel(Method::POST, path, Some(&cookie), Some(body.clone())),
+            )
+            .await,
+        )
+        .await;
+        let agent = tool_result(&app, &key, &session, name, body).await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    }
 }

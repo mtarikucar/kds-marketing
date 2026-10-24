@@ -1648,6 +1648,16 @@ pub async fn run_studio_control(deps: &Deps) -> JobReport {
         .filter(|w| w.status == WorkspaceStatus::Active)
     {
         report.touched += 1;
+        if let Ok(n) = super::studio::ads::recheck_periods(deps, w.id).await {
+            report.changed += u64::from(n);
+        } else {
+            report.failed += 1;
+        }
+        if let Ok(n) = super::studio::ads::dispatch_due(deps, w.id).await {
+            report.changed += u64::from(n);
+        } else {
+            report.failed += 1;
+        }
         if super::studio::control::reconcile_bindings(deps, w.id)
             .await
             .is_err()
