@@ -287,6 +287,53 @@ impl StudioRepo for MemTenant {
         })
     }
 
+    async fn list_publications(&mut self) -> Result<Vec<Publication>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .publications
+            .iter()
+            .filter(|x| x.chain.workspace_id == self.ws)
+            .cloned()
+            .collect())
+    }
+    async fn list_measurements(&mut self) -> Result<Vec<Measurement>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .measurements
+            .iter()
+            .filter(|x| x.chain.workspace_id == self.ws)
+            .cloned()
+            .collect())
+    }
+    async fn list_trends(&mut self) -> Result<Vec<TrendSignal>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .trends
+            .iter()
+            .filter(|x| x.workspace_id == self.ws)
+            .cloned()
+            .collect())
+    }
+    async fn save_arm_weights(&mut self, arms: Vec<Arm>) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        for a in arms {
+            same_workspace(self.ws, a.workspace_id)?;
+            a.validate().map_err(invalid)?;
+            self.studio_write(|s, _| {
+                let old = s
+                    .arms
+                    .iter_mut()
+                    .find(|x| x.workspace_id == a.workspace_id && x.id == a.id)
+                    .ok_or_else(|| AppError::not_found("arm"))?;
+                old.weight = a.weight;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
     async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError> {
         let mut rows: Vec<_> = self
             .state()
@@ -992,7 +1039,7 @@ impl StudioRepo for MemTenant {
             .studio
             .measurements
             .iter()
-            .find(|r| {
+            .filter(|r| {
                 r.chain.workspace_id == self.ws
                     && ((m.publication_id.is_some()
                         && m.publication_id == r.publication_id
@@ -1002,19 +1049,23 @@ impl StudioRepo for MemTenant {
                             && m.date == r.date
                             && m.metric_scope == r.metric_scope))
             })
+            .max_by_key(|r| r.evidence_revision)
             .cloned();
         if let Some(old) = &old {
             if *old == m {
                 return Ok(false);
             }
-            if old.status == MeasurementStatus::Complete {
+            if old.status == MeasurementStatus::Complete
+                && (m.evidence_revision <= old.evidence_revision
+                    || old.evidence_key == m.evidence_key)
+            {
                 return Err(AppError::conflict(
                     "complete measurement requires an explicit correction",
                 ));
             }
         }
         self.studio_write(|s, _| {
-            if let Some(old) = old {
+            if let Some(old) = old.filter(|r| r.status != MeasurementStatus::Complete) {
                 s.measurements.retain(|r| {
                     !(r.id == old.id && r.chain.workspace_id == old.chain.workspace_id)
                 });
@@ -1025,7 +1076,60 @@ impl StudioRepo for MemTenant {
             }) {
                 return Err(AppError::conflict("measurement identity"));
             }
-            s.measurements.push(m);
+            s.measurements.push(m.clone());
+            if let Some(id) = m.publication_id
+                && m.status == MeasurementStatus::Complete
+            {
+                let p = s
+                    .publications
+                    .iter()
+                    .find(|p| p.id == id && p.chain.workspace_id == m.chain.workspace_id)
+                    .expect("validated")
+                    .clone();
+                let slot = s
+                    .slots
+                    .iter_mut()
+                    .find(|x| x.id == p.slot_id && x.chain.workspace_id == m.chain.workspace_id)
+                    .expect("publication slot");
+                *slot = transition_slot(
+                    slot,
+                    &SlotEvent::Measured {
+                        publication: Box::new(p),
+                        measurement: m.clone(),
+                    },
+                    &StudioPolicy {
+                        expected_revision: slot.revision,
+                        ..Default::default()
+                    },
+                )
+                .map_err(invalid)?;
+                if [
+                    MeasurementWindow::Hours24,
+                    MeasurementWindow::Hours72,
+                    MeasurementWindow::Days7,
+                ]
+                .iter()
+                .all(|w| {
+                    s.measurements.iter().any(|r| {
+                        r.chain.workspace_id == m.chain.workspace_id
+                            && r.publication_id == Some(id)
+                            && r.window == *w
+                            && r.status == MeasurementStatus::Complete
+                    })
+                }) {
+                    *slot = transition_slot(
+                        slot,
+                        &SlotEvent::Retire {
+                            reason: RetirementReason::MeasurementsComplete,
+                        },
+                        &StudioPolicy {
+                            expected_revision: slot.revision,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(invalid)?;
+                }
+            }
             Ok(())
         })?;
         Ok(true)

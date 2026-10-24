@@ -122,3 +122,22 @@ pub async fn piece_submit(
         jt_app::usecases::studio::pieces::piece_submit(&s.deps, &ctx, input).await?,
     ))
 }
+
+pub async fn learned(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(q): ApiQuery<jt_app::usecases::studio::learning::LearnedQuery>,
+) -> Result<Json<jt_app::usecases::studio::learning::LearnedOut>, ApiError> {
+    Ok(Json(
+        jt_app::usecases::studio::learning::learned(&s.deps, &ctx, q).await?,
+    ))
+}
+pub async fn judgment_record(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(i): ApiJson<jt_app::usecases::studio::learning::JudgmentInput>,
+) -> Result<Json<jt_app::usecases::studio::learning::JudgmentOut>, ApiError> {
+    Ok(Json(
+        jt_app::usecases::studio::learning::judgment_record(&s.deps, &ctx, i).await?,
+    ))
+}

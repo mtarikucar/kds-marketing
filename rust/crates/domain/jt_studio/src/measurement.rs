@@ -35,6 +35,14 @@ pub struct Measurement {
     pub publication_id: Option<PublicationId>,
     pub binding_id: Option<AdSetBindingId>,
     pub window: MeasurementWindow,
+    #[serde(default)]
+    pub evidence_revision: u64,
+    #[serde(default)]
+    pub scheduled_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub account_timezone: Option<String>,
+    #[serde(default)]
+    pub minor_unit_exponent: Option<u8>,
     pub measured_at: OffsetDateTime,
     pub source: String,
     pub raw_metrics: BTreeMap<String, Option<i64>>,

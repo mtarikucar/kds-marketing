@@ -3987,3 +3987,175 @@ async fn studio_file_upload_and_piece_submission_have_effect_error_and_replay_pa
     assert_eq!(usage.pieces.len(), 1);
     r.commit().await.unwrap();
 }
+
+#[tokio::test]
+async fn studio_learning_has_result_filter_judgment_and_error_parity() {
+    use jt_app::ports::studio::*;
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("learning-twins").await;
+    let d = deps(&db);
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let capability = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/capabilities",
+                Some(&cookie),
+                Some(json!({"kind_key":"meta_ads","name":"Ads","external_id":"act_twins"})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let v = r.strategy().current_approved().await.unwrap().unwrap();
+    let h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    let arm = Arm::new(
+        ArmId(d.ids.uuid()),
+        ws,
+        ArmKey {
+            hypothesis_id: h.id,
+            content_type: "text".into(),
+            channel: "meta_ads".into(),
+            lane: serde_json::from_value(json!("paid")).unwrap(),
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    let chain = Chain {
+        workspace_id: ws,
+        born_version_id: v.id,
+        hypothesis_id: h.id,
+        arm_id: arm.id,
+    };
+    let b = AdSetBinding {
+        id: AdSetBindingId(d.ids.uuid()),
+        chain: chain.clone(),
+        capability_id: serde_json::from_value(capability["capability"]["id"].clone()).unwrap(),
+        account_id: "act_twins".into(),
+        adset_id: "external".into(),
+        campaign_id: Some("context".into()),
+        verified_at: None,
+        verification_evidence: None,
+    };
+    r.studio().bind_adset(b.clone(), "binding").await.unwrap();
+    let m = Measurement {
+        id: MeasurementId(d.ids.uuid()),
+        chain,
+        evidence_key: "set-day-r0".into(),
+        publication_id: None,
+        binding_id: Some(b.id),
+        window: MeasurementWindow::Hours24,
+        evidence_revision: 0,
+        scheduled_at: Some(d.clock.now()),
+        account_timezone: Some("Europe/Istanbul".into()),
+        minor_unit_exponent: Some(2),
+        measured_at: d.clock.now(),
+        source: "meta_ads".into(),
+        raw_metrics: [
+            ("clicks".into(), Some(20)),
+            ("impressions".into(), Some(100)),
+            ("spend_minor".into(), Some(5)),
+        ]
+        .into(),
+        metric_scope: "adset".into(),
+        date: Some(d.clock.now().date()),
+        currency: Some("TRY".into()),
+        status: MeasurementStatus::Complete,
+        rule_version: "studio-learning-v1".into(),
+    };
+    r.studio().record_measurement(m.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    let from = (d.clock.now() - time::Duration::days(1))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let until = (d.clock.now() + time::Duration::days(1))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let query = json!({"from":from,"until":until,"hypothesis_id":h.id,"lane":"paid"});
+    let path = format!(
+        "/api/studio/learned?from={from}&until={until}&hypothesis_id={}&lane=paid",
+        h.id
+    );
+    let human = json_body(send(&app, panel(Method::GET, &path, Some(&cookie), None)).await).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.studio.learned", query.clone()).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["arms"][0]["evidence"][0]["id"], json!(m.id));
+    assert_eq!(human["lane_performance"][0]["reward"], json!(0.2));
+    let body = json!({"hypothesis_id":h.id,"evidence_ids":[m.id],"text":"Test the next angle","request_key":"judgment-twin"});
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/judgments",
+                Some(&cookie),
+                Some(body.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.judgment_record",
+        body.clone(),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["chains"][0]["born_version_id"], json!(v.id));
+    let human = json_body(send(&app, panel(Method::GET, &path, Some(&cookie), None)).await).await;
+    assert_eq!(human["judgments"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        human,
+        call_tool(&app, &key, &session, "jeeta.studio.learned", query).await
+    );
+    let empty_path = format!("/api/studio/learned?from={from}&until={until}&lane=organic");
+    let human =
+        json_body(send(&app, panel(Method::GET, &empty_path, Some(&cookie), None)).await).await;
+    assert_eq!(human["arms"], json!([]));
+    assert_eq!(human["judgments"], json!([]));
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.learned",
+            json!({"from":from,"until":until,"lane":"organic"})
+        )
+        .await
+    );
+    let mut changed = body;
+    changed["text"] = json!("changed");
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/judgments",
+                Some(&cookie),
+                Some(changed.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.judgment_record",
+        changed,
+    )
+    .await;
+    assert_eq!(human["code"], "CONFLICT");
+    assert_eq!(human["code"], agent["structuredContent"]["code"]);
+}

@@ -163,6 +163,54 @@ impl StudioRepo for PgTenantRepos {
         Ok(out)
     }
 
+    async fn list_publications(&mut self) -> Result<Vec<Publication>, AppError> {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_publications where workspace_id=$1 order by id",
+        )
+        .bind(self.workspace_id().0)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "Studio evidence"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn list_measurements(&mut self) -> Result<Vec<Measurement>, AppError> {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_measurements where workspace_id=$1 order by id",
+        )
+        .bind(self.workspace_id().0)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "Studio evidence"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn list_trends(&mut self) -> Result<Vec<TrendSignal>, AppError> {
+        let rows: Vec<Value> =
+            sqlx::query_scalar("select data from studio_trends where workspace_id=$1 order by id")
+                .bind(self.workspace_id().0)
+                .fetch_all(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "Studio evidence"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn save_arm_weights(&mut self, arms: Vec<Arm>) -> Result<(), AppError> {
+        StudioControlRepo::lock_control(self).await?;
+        for a in arms {
+            same_workspace(self.workspace_id(), a.workspace_id)?;
+            a.validate().map_err(invalid)?;
+            let mut old = StudioRepo::get_arm(self, a.id)
+                .await?
+                .ok_or_else(|| AppError::not_found("arm"))?;
+            old.weight = a.weight;
+            sqlx::query("update studio_arms set data=$3 where workspace_id=$1 and id=$2")
+                .bind(self.workspace_id().0)
+                .bind(a.id.0)
+                .bind(encode(&old)?)
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "reweight arm"))?;
+        }
+        Ok(())
+    }
     async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError> {
         let rows: Vec<Value> =
             sqlx::query_scalar("select data from studio_arms where workspace_id=$1 order by id")

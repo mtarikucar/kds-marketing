@@ -13,6 +13,20 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "studio.learned",
+            description: "Read hypothesis results and evidence, lane performance and spend versus caps. [risk: READ]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("learned")).expect("studio schema"),
+            run: learned,
+        },
+        ToolDef {
+            use_case: "studio.judgment_record",
+            description: "Record an evidence-linked judgment separately from measured results. [risk: WRITE]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("judgment_record")).expect("studio schema"),
+            run: judgment_record,
+        },
+        ToolDef {
             use_case: "studio.file_upload",
             description: "Store validated tenant media with a replay key. [risk: WRITE]",
             permission: Permission::StudioWork,
@@ -126,5 +140,16 @@ fn file_upload<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
 fn piece_submit<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         to_json(&jt_app::usecases::studio::pieces::piece_submit(d, c, args(v)?).await?)
+    })
+}
+
+fn learned<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(
+        async move { to_json(&jt_app::usecases::studio::learning::learned(d, c, args(v)?).await?) },
+    )
+}
+fn judgment_record<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        to_json(&jt_app::usecases::studio::learning::judgment_record(d, c, args(v)?).await?)
     })
 }

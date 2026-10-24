@@ -113,6 +113,11 @@ pub trait StudioRepo: Send + Sync {
     async fn file_usage(&mut self) -> Result<super::files::FileUsage, AppError>;
 
     /// Tenant-scoped planning and work projections; never a second queue.
+    /// Historical evidence reads and weekly posterior persistence, within the tenant transaction.
+    async fn list_publications(&mut self) -> Result<Vec<Publication>, AppError>;
+    async fn list_measurements(&mut self) -> Result<Vec<Measurement>, AppError>;
+    async fn list_trends(&mut self) -> Result<Vec<TrendSignal>, AppError>;
+    async fn save_arm_weights(&mut self, arms: Vec<Arm>) -> Result<(), AppError>;
     async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError>;
     async fn list_budget_moves(&mut self) -> Result<Vec<BudgetMove>, AppError>;
     async fn slot_evidence(

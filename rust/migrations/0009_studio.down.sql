@@ -16,6 +16,7 @@ drop table if exists studio_request_keys;
 drop table if exists studio_budget_moves;
 drop table if exists studio_spend_reservations;
 drop table if exists studio_learning_applications;
+-- Drops every immutable measurement correction revision together with the M3-owned table.
 drop table if exists studio_measurements;
 drop table if exists studio_trends;
 drop table if exists studio_publications;

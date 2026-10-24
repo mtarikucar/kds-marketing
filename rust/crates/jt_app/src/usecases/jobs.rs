@@ -124,11 +124,13 @@ pub enum Job {
     StudioPlan,
     StudioPublish,
     StudioPublishRecover,
+    StudioMeasure,
+    StudioReweight,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 19] = [
+    pub const ALL: [Job; 21] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -148,6 +150,8 @@ impl Job {
         Job::StudioPlan,
         Job::StudioPublish,
         Job::StudioPublishRecover,
+        Job::StudioMeasure,
+        Job::StudioReweight,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -173,6 +177,8 @@ impl Job {
             Job::StudioPlan => "studio_plan",
             Job::StudioPublish => "studio_publish",
             Job::StudioPublishRecover => "studio_publish_recover",
+            Job::StudioMeasure => "studio_measure",
+            Job::StudioReweight => "studio_reweight",
         }
     }
 
@@ -201,6 +207,7 @@ impl Job {
             Job::StudioControl => run_studio_control(deps).await,
             Job::StudioFilesCleanup => run_studio_files_cleanup(deps).await,
             Job::StudioPlan => run_studio_plan(deps, now).await,
+            Job::StudioMeasure | Job::StudioReweight => run_studio_learning(deps, *self, now).await,
             Job::StudioPublish | Job::StudioPublishRecover => {
                 run_studio_publications(deps, *self).await
             }
@@ -1716,6 +1723,30 @@ async fn run_studio_publications(deps: &Deps, job: Job) -> JobReport {
         };
         match result {
             Ok(n) => report.changed += u64::from(n),
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+async fn run_studio_learning(deps: &Deps, job: Job, now: OffsetDateTime) -> JobReport {
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        report.touched += 1;
+        let result = if job == Job::StudioMeasure {
+            super::studio::measure::measure_due(deps, ws)
+                .await
+                .map(u64::from)
+        } else {
+            super::studio::learning::reweight_week(deps, ws, now)
+                .await
+                .map(u64::from)
+        };
+        match result {
+            Ok(n) => report.changed += n,
             Err(e) => {
                 report.failed += 1;
                 step_failed(job, ws, None, &Failure::App(e));

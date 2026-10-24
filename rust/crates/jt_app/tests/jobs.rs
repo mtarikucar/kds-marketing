@@ -288,6 +288,8 @@ fn every_job_has_a_lock_named_after_it() {
             "studio_plan",
             "studio_publish",
             "studio_publish_recover",
+            "studio_measure",
+            "studio_reweight",
         ]
     );
     for job in Job::ALL {

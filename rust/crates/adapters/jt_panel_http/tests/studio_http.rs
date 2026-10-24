@@ -8,6 +8,8 @@ fn studio_routes_have_exact_catalog_twins() {
     assert_eq!(
         routes,
         [
+            ("GET", "/api/studio/learned"),
+            ("POST", "/api/studio/judgments"),
             ("POST", "/api/studio/files"),
             ("POST", "/api/studio/slots/{slot_id}/piece"),
             ("GET", "/api/studio/pending"),

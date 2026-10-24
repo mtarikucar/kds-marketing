@@ -147,26 +147,74 @@ impl PgTenantRepos {
         }
         .ok_or_else(|| AppError::not_found("measurement target"))?;
         chain.require_same(&m.chain).map_err(invalid)?;
-        let old:Option<Value>=sqlx::query_scalar("select data from studio_measurements where workspace_id=$1 and ((publication_id=$2 and measurement_window=$3) or (binding_id=$4 and date=$5 and metric_scope=$6))")
+        let old:Option<Value>=sqlx::query_scalar("select data from studio_measurements where workspace_id=$1 and ((publication_id=$2 and measurement_window=$3) or (binding_id=$4 and date=$5 and metric_scope=$6)) order by (data->>'evidence_revision')::bigint desc, id desc limit 1")
             .bind(self.workspace_id().0).bind(m.publication_id.map(|p|p.0)).bind(encode(&m.window)?.as_str()).bind(m.binding_id.map(|b|b.0)).bind(m.date).bind(&m.metric_scope).fetch_optional(self.tx.conn()).await.map_err(|e|map_sqlx(e,"find measurement"))?;
         if let Some(old) = old {
             let old: Measurement = decode(old)?;
             if old == m {
                 return Ok(false);
             }
-            if old.status == MeasurementStatus::Complete {
-                return if old.evidence_key == m.evidence_key {
-                    Err(AppError::conflict("measurement evidence changed"))
-                } else {
-                    Err(AppError::conflict(
-                        "complete measurement requires an explicit correction",
-                    ))
-                };
+            if old.status == MeasurementStatus::Complete
+                && (m.evidence_revision <= old.evidence_revision
+                    || old.evidence_key == m.evidence_key)
+            {
+                return Err(AppError::conflict(
+                    "complete measurement requires a newer explicit correction",
+                ));
             }
             sqlx::query("delete from studio_measurements where workspace_id=$1 and id=$2 and status <> 'complete'").bind(self.workspace_id().0).bind(old.id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"replace retryable measurement"))?;
         }
         sqlx::query("insert into studio_measurements(workspace_id,id,data,publication_id,binding_id,measurement_window,date,metric_scope,evidence_key,status,born_version_id,hypothesis_id,arm_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
             .bind(self.workspace_id().0).bind(m.id.0).bind(encode(&m)?).bind(m.publication_id.map(|p|p.0)).bind(m.binding_id.map(|b|b.0)).bind(encode(&m.window)?.as_str()).bind(m.date).bind(&m.metric_scope).bind(&m.evidence_key).bind(encode(&m.status)?.as_str()).bind(m.chain.born_version_id.0).bind(m.chain.hypothesis_id.0).bind(m.chain.arm_id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"record Studio measurement"))?;
+        if let Some(id) = m.publication_id {
+            let p = StudioRepo::get_publication(self, id)
+                .await?
+                .ok_or_else(|| AppError::not_found("publication"))?;
+            let mut slot = StudioRepo::get_slot(self, p.slot_id)
+                .await?
+                .ok_or_else(|| AppError::not_found("slot"))?;
+            if m.status == MeasurementStatus::Complete {
+                slot = transition_slot(
+                    &slot,
+                    &SlotEvent::Measured {
+                        publication: Box::new(p),
+                        measurement: m.clone(),
+                    },
+                    &StudioPolicy {
+                        expected_revision: slot.revision,
+                        ..Default::default()
+                    },
+                )
+                .map_err(invalid)?;
+                let rows = StudioRepo::list_measurements(self).await?;
+                if [
+                    MeasurementWindow::Hours24,
+                    MeasurementWindow::Hours72,
+                    MeasurementWindow::Days7,
+                ]
+                .iter()
+                .all(|w| {
+                    rows.iter().any(|r| {
+                        r.publication_id == Some(id)
+                            && r.window == *w
+                            && r.status == MeasurementStatus::Complete
+                    })
+                }) {
+                    slot = transition_slot(
+                        &slot,
+                        &SlotEvent::Retire {
+                            reason: RetirementReason::MeasurementsComplete,
+                        },
+                        &StudioPolicy {
+                            expected_revision: slot.revision,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(invalid)?;
+                }
+                sqlx::query("update studio_slots set data=$3,state=$4,revision=$5 where workspace_id=$1 and id=$2").bind(self.workspace_id().0).bind(slot.id.0).bind(encode(&slot)?).bind(encode(&slot.state)?.as_str()).bind(revision(slot.revision)?).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"measurement lifecycle"))?;
+            }
+        }
         Ok(true)
     }
     pub(super) async fn studio_learn(&mut self, u: LearningUpdate) -> Result<bool, AppError> {

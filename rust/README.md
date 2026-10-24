@@ -254,7 +254,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (116 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (118 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -271,7 +271,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 116 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 118 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -2103,7 +2103,7 @@ Postgres draft concurrency; `studio_work` covers absent-agent overdue projection
 
 ## M3 Task 5 — tenant files and agent content
 
-The current release has **116 MCP tools / 10 Studio operations**, **62 tables**,
+At completion of Task 5, the release had **116 MCP tools / 10 Studio operations**, **62 tables**,
 and migration **0009_studio**. T5 adds no migration.
 
 | Operation / MCP suffix | HTTP | Permission / gate |
@@ -2163,7 +2163,7 @@ work that references missing bytes.
 
 ## M3 Task 6 — fenced publication and recovery
 
-The release remains **116 MCP tools / 10 Studio operations**, **62 tables** and
+At completion of Task 6, the release had **116 MCP tools / 10 Studio operations**, **62 tables** and
 migration **0009_studio**. T6 adds two system-only jobs (19 scheduled jobs total),
 no public operation and no migration. Existing `studio.pending` and
 `studio.slot_get` HTTP/MCP twins expose attempts and actionable failure blockers.
@@ -2233,3 +2233,59 @@ no locks during provider I/O, all error classes, restart recovery, historical
 read-back, immutable version/arm links, late completion and full adapted media. PostgreSQL
 regressions overlap planning/publication and cap-limited claims; application tests cover
 Istanbul midnight rollover and broken media followed by healthy work.
+
+
+### M3 Task 7 — measurements, learning and results
+
+The current release has **118 MCP tools / 12 Studio operations**, **62 tables**,
+migration **0009_studio**, and **21 scheduled jobs**. The two new operations are
+`studio.learned` (`GET /api/studio/learned`, `jeeta.studio.learned`) and
+`studio.judgment_record` (`POST /api/studio/judgments`, `jeeta.studio.judgment_record`).
+Both require `studio.work`, an active workspace and a current approved strategy,
+and use shared strict schemas. Learned queries take RFC3339 `from`/`until` and
+optional `hypothesis_id`/`lane`; intervals are half-open. Judgments require a
+nonempty list of same-hypothesis measurement IDs, text and an idempotency key.
+They are typed ledger entries and never change measured results or confidence.
+
+`studio_measure` runs every six hours under its advisory lock. It reads each
+publication's 24-hour, 72-hour and seven-day windows independently, including
+windows due after Measured, strategy archive or hypothesis retirement. Historical
+reads still require an active workspace and the original connected account with
+valid read access. Provider calls run outside database locks. Failed or incomplete
+reads remain retryable, contribute no reward and never manufacture zero counters.
+All three complete windows retire the slot without deleting publication evidence.
+Measurements retain the original chain/version, scheduled and read instants, raw
+counters, source, scope, completeness, rule and correction revision.
+
+Learning uses `studio-learning-v1`: organic engagements/impressions or paid
+clicks/impressions, clipped to [0,1]. X's `impression_count` is normalized while
+preserving the raw counter; reach, unique reach and account followers are never
+substitutes for impressions. Missing denominators therefore remain unknown even
+when an adapter can supply reach. Each arm starts Beta(1,1). One publication
+contributes once, with 7d taking precedence over 72h and 24h; explicit corrections
+replace that contribution. Paid evidence is account/set/day, never campaign totals.
+Evidence insertion, replacement deltas and derived confidence share one tenant
+transaction. Replays add nothing. Editable priors remain separate, including when
+an older draft is approved after newer learning.
+
+`studio_reweight` runs Monday 00:00 Europe/Istanbul, under its own advisory lock,
+with one receipt per local week. Stored weights are posterior means; normalization
+belongs to slot allocation. Learned results recompute posteriors from the selected
+evidence range and expose original evidence/version links, lane performance,
+observed spend versus strategy caps, trends and separate judgments. Missing spend
+and unproven attribution are explicit nulls, never inferred zeros.
+
+Paid reads use account/set/day metrics even for paused sets and retain currency,
+minor-unit exponent, account timezone, observed budget and status. Day corrections
+replace spend in the report instead of adding it twice. Mismatches against confirmed
+budget moves or status controls persist a paid-lane brake and an actionable ledger
+entry; the existing safety reconciliation requests pauses and retains uncertain
+outcomes. Task 8 owns spend-reservation transfer, rollover and budget-write services;
+Task 9 owns proven inbox attribution. No campaign creation, lead ingestion or
+automatic budget allocation is introduced here.
+
+Coverage includes pure ruling vectors, window/revision ordering, retry/replay,
+archive reads, draft preservation, paid correction and shared-campaign isolation,
+filtered results/judgments, real PostgreSQL atomicity and tenant isolation, and
+HTTP/MCP result, filter, replay and error parity. Migration 0009 retains its scoped
+idempotent down script; the workspace suite verifies up → down → up.

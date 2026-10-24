@@ -5,7 +5,7 @@ use jt_strategy::{ChannelChoice, HypothesisCadence, HypothesisId, LaneKind};
 use time::{Duration, OffsetDateTime, UtcOffset};
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LearningPolicy {
     pub exploration_bps: u16,
 }

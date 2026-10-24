@@ -7,6 +7,14 @@ pub fn input(action: &str) -> Value {
     let revision = json!({"type":"integer","minimum":0,"maximum":18446744073709551615_u64});
     let lane = json!({"type":"string","enum":["organic","paid"]});
     let (properties, required) = match action {
+        "learned" => (
+            json!({"hypothesis_id":{"type":["string","null"],"format":"uuid"},"lane":{"enum":["organic","paid",null]},"from":{"type":"string","format":"date-time"},"until":{"type":"string","format":"date-time"}}),
+            vec!["from", "until"],
+        ),
+        "judgment_record" => (
+            json!({"hypothesis_id":{"type":"string","format":"uuid"},"evidence_ids":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string","format":"uuid"}},"text":{"type":"string","minLength":1,"maxLength":4000},"request_key":{"type":"string","minLength":1,"maxLength":200}}),
+            vec!["hypothesis_id", "evidence_ids", "text", "request_key"],
+        ),
         "file_upload" => (
             json!({"request_key":{"type":"string","minLength":1,"maxLength":200},"filename":{"type":"string","minLength":1,"maxLength":255},"mime":mime(),"content":{"oneOf":[object(json!({"kind":{"const":"bytes_base64"},"data":{"type":"string"}}),&["kind","data"]),object(json!({"kind":{"const":"source_url"},"url":{"type":"string","format":"uri"}}),&["kind","url"]) ]}}),
             vec!["request_key", "filename", "mime", "content"],

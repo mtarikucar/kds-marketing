@@ -102,7 +102,7 @@ create table if not exists studio_measurements (
     status text not null check(status in ('complete','missing','failed')),
     check((publication_id is not null and binding_id is null and metric_scope='post') or
           (binding_id is not null and publication_id is null and date is not null and metric_scope='adset')),
-    unique(workspace_id,publication_id,measurement_window), unique(workspace_id,binding_id,date,metric_scope),
+    -- Immutable revisions; application serializes target/window/revision under Studio control.
     unique(workspace_id,evidence_key),
     foreign key(workspace_id,publication_id) references studio_publications(workspace_id,id),
     foreign key(workspace_id,binding_id) references studio_adset_bindings(workspace_id,id),

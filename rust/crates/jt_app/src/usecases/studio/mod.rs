@@ -11,3 +11,6 @@ pub mod trends;
 pub mod work;
 
 pub mod publish;
+
+pub mod learning;
+pub mod measure;
