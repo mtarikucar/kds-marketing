@@ -1,6 +1,6 @@
 //! Emoji syntax recognition; other graphemes retain their scalar weights.
 //! Unicode 17 Emoji and Emoji_Modifier_Base ranges, matching unicode-segmentation's data.
-//! Source: https://www.unicode.org/Public/17.0.0/ucd/emoji/emoji-data.txt
+//! Source: <https://www.unicode.org/Public/17.0.0/ucd/emoji/emoji-data.txt>
 //! Unicode data © 2025 Unicode, Inc.; see UNICODE-LICENSE in this directory.
 //! This recognizes emoji syntax, not a complete versioned RGI-sequence allowlist.
 
