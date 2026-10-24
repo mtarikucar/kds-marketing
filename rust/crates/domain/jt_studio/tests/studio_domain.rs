@@ -575,6 +575,8 @@ fn serde_round_trips_and_bytes_are_not_persistable() {
 fn paid_move_checks_binding_revision_currency_and_execution_fence() {
     let f = Fixture::new();
     let binding = AdSetBinding {
+        verified_at: None,
+        verification_evidence: None,
         id: AdSetBindingId::new_v7(),
         chain: f.chain.clone(),
         capability_id: f.target.id,
@@ -583,6 +585,8 @@ fn paid_move_checks_binding_revision_currency_and_execution_fence() {
         campaign_id: Some("campaign_1".into()),
     };
     let mut movement = BudgetMove {
+        binding_verified_at: None,
+        binding_verification_evidence: None,
         id: BudgetMoveId::new_v7(),
         chain: f.chain.clone(),
         binding_id: binding.id,
@@ -649,6 +653,7 @@ fn unknown_pause_is_not_confirmed_stopped_and_brakes_are_lane_scoped() {
     control.brake_engaged = true;
     assert!(control.is_braked(LaneKind::Organic));
     let binding = BindingControl {
+        resume_operation_id: None,
         binding_id: AdSetBindingId::new_v7(),
         chain: f.chain,
         desired: AdStatus::Paused,
@@ -730,8 +735,10 @@ fn trends_reservations_and_measurement_windows_round_trip() {
     trend.summary.clear();
     assert!(trend.validate().is_err());
     let reservation = SpendReservation {
+        item_amounts: Default::default(),
         id: ReservationId::new_v7(),
         request: ReserveSpend {
+            daily_budget_minor: None,
             workspace_id: f.chain.workspace_id,
             capability_id: f.target.id,
             budget_item_ids: vec![jt_capability::BudgetItemId::new_v7()],

@@ -295,3 +295,54 @@ async fn agent_inherits_issuer_scope_rep_has_no_studio_grants() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn reservation_replay_after_archive() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::reservation_replay_after_archive(&uow).await;
+}
+
+#[tokio::test]
+async fn outcome_categories_survive_redaction() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::outcome_categories_survive_redaction(&uow).await;
+}
+
+#[tokio::test]
+async fn completion_time_differs_from_claim_time() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    let ws = jt_testkit::studio_contract::completion_time_differs_from_claim_time(&uow).await;
+    let mut tx = db.pool.begin().await.unwrap();
+    sqlx::query("select set_config('app.workspace_id',$1,true)")
+        .bind(ws.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let data: serde_json::Value =
+        sqlx::query_scalar("select data from studio_publications where external_id='delayed'")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    let p: jt_app::ports::studio::Publication = serde_json::from_value(data).unwrap();
+    assert_eq!(
+        p.published_at,
+        jt_testkit::fakes::FIXED_NOW + time::Duration::hours(2)
+    );
+}
+
+#[tokio::test]
+async fn liability_uses_each_item_period() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::liability_uses_each_item_period(&uow).await;
+}
+
+#[tokio::test]
+async fn binding_refresh_invalidates_old_intents() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::binding_refresh_invalidates_old_intents(&uow).await;
+}

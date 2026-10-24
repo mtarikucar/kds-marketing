@@ -81,6 +81,7 @@ pub enum RedactedPublishError {
     Permanent,
     Throttle,
     Transient,
+    Unknown,
     Policy,
     Internal,
 }
@@ -108,6 +109,8 @@ pub struct PublishAttempt {
     control_revision: u64,
     actor: Actor,
     claimed_at: OffsetDateTime,
+    #[serde(default)]
+    observed_at: Option<OffsetDateTime>,
     state: PublishState,
     outcome: Option<PublishOutcome>,
 }
@@ -137,6 +140,7 @@ impl PublishAttempt {
             control_revision,
             actor,
             claimed_at,
+            observed_at: None,
             state: PublishState::Sending,
             outcome: None,
         };
@@ -228,6 +232,21 @@ impl PublishAttempt {
         };
         next.outcome = Some(outcome.clone());
         Ok(next)
+    }
+    /// Observation time is supplied by the completion caller, independently of dispatch time.
+    pub fn finish_at(
+        &self,
+        outcome: &PublishOutcome,
+        observed_at: OffsetDateTime,
+    ) -> Result<Self, StudioError> {
+        let mut next = self.finish(outcome)?;
+        if next != *self {
+            next.observed_at = Some(observed_at);
+        }
+        Ok(next)
+    }
+    pub fn observed_at(&self) -> Option<OffsetDateTime> {
+        self.observed_at
     }
     pub fn publication(
         &self,

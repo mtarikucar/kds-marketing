@@ -312,7 +312,15 @@ async fn pending_as_seen(
                 budget_move_id: m.id,
             },
             priority: 2,
-            hint: "Review the queued Studio budget move and its blockers.".into(),
+            hint: if p.blockers.iter().any(|b| {
+                b.target == crate::ports::studio::ApprovalTarget::BudgetMove(m.id)
+                    && b.reason == "binding_stale"
+            }) {
+                "Rebind the ad set to the current verified account, then create a new budget move."
+                    .into()
+            } else {
+                "Review the queued Studio budget move and its blockers.".into()
+            },
         }));
     }
     items.extend(capability_items(&capabilities));

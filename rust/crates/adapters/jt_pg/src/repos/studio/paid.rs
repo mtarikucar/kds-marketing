@@ -27,9 +27,7 @@ impl StudioBudgetRepo for PgTenantRepos {
         }
         r.budget_item_ids.sort();
         r.budget_item_ids.dedup();
-        let frame = StrategyRepo::lock_execution_frame(self)
-            .await?
-            .ok_or_else(AppError::strategy_required)?;
+        let frame = StrategyRepo::lock_execution_frame(self).await?;
         let payload = encode(&r)?;
         if let Some(saved) = self
             .studio_replay("spend.reserve", &r.evidence_key, &payload)
@@ -37,6 +35,7 @@ impl StudioBudgetRepo for PgTenantRepos {
         {
             return Ok(saved);
         }
+        let frame = frame.ok_or_else(AppError::strategy_required)?;
         if frame.id != r.executed_version_id {
             return Err(AppError::conflict("strategy changed"));
         }
@@ -72,6 +71,15 @@ impl StudioBudgetRepo for PgTenantRepos {
             .studio_reserved(from, until, None, Some(r.lane), &r.currency)
             .await?;
         check_cap(held, r.amount_minor, lane.cap_minor)?;
+        let strategy_until = until;
+        if let Some(daily) = r.daily_budget_minor {
+            let expected =
+                jt_studio::daily_liability(daily, period, r.at, until).map_err(invalid)?;
+            if r.amount_minor != expected {
+                return Err(AppError::conflict("lane liability changed"));
+            }
+        }
+        let mut item_amounts = std::collections::BTreeMap::new();
         for id in &r.budget_item_ids {
             let item = BudgetRepo::lock_item(self, *id)
                 .await?
@@ -81,14 +89,21 @@ impl StudioBudgetRepo for PgTenantRepos {
                     "budget item is retired or currency differs",
                 ));
             }
+            let amount = match r.daily_budget_minor {
+                Some(daily) => jt_studio::daily_liability(daily, item.period, r.at, strategy_until)
+                    .map_err(invalid)?,
+                None => r.amount_minor,
+            };
+            item_amounts.insert(*id, amount);
             let (from, until) = period_window(item.period, r.at);
             let spent = BudgetRepo::spent_between(self, *id, from, until).await?;
             let held = self
                 .studio_reserved(from, until, Some(id.0), None, &r.currency)
                 .await?;
-            check_cap(i128::from(spent) + held, r.amount_minor, item.cap)?;
+            check_cap(i128::from(spent) + held, amount, item.cap)?;
         }
         let reservation = SpendReservation {
+            item_amounts,
             id: ReservationId::new_v7(),
             request: r.clone(),
         };
@@ -154,7 +169,10 @@ impl PgTenantRepos {
             let amount = match outcome.map(decode).transpose()? {
                 Some(SpendOutcome::Refused) => 0,
                 Some(SpendOutcome::Settled { actual_minor, .. }) => actual_minor,
-                _ => r.request.amount_minor,
+                _ => item
+                    .and_then(|id| r.item_amounts.get(&jt_capability::BudgetItemId(id)))
+                    .copied()
+                    .unwrap_or(r.request.amount_minor),
             };
             total += i128::from(amount);
         }

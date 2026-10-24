@@ -161,8 +161,6 @@ pub async fn authorize_execution_at(
         .find(input.capability_id)
         .await?
         .ok_or_else(|| AppError::not_found("capability"))?;
-    capability_access(&c, now, true)?;
-    hours(&c, now)?;
     let birth = r
         .strategy()
         .find(input.chain.born_version_id)
@@ -209,6 +207,8 @@ pub async fn authorize_execution_at(
     };
     match input.target {
         ApprovalTarget::Slot(id) => {
+            capability_access(&c, now, true)?;
+            hours(&c, now)?;
             let s = r
                 .studio()
                 .get_slot(id)
@@ -252,6 +252,12 @@ pub async fn authorize_execution_at(
             {
                 return Err(refuse("execution_target_changed"));
             }
+            binding_current(&b, &c)?;
+            if !m.matches_binding_generation(&b) {
+                return Err(refuse("binding_stale"));
+            }
+            capability_access(&c, now, true)?;
+            hours(&c, now)?;
             m.check_approval(&policy)
                 .map_err(|e| refuse(&e.to_string()))?;
             check_caps(
@@ -320,6 +326,8 @@ pub(crate) async fn check_caps(
         }
         let (from, to) = jt_capability::period_window(item.period, now);
         let used = r.budget().spent_between(*id, from, to).await?;
+        let amount = jt_studio::daily_liability(daily, item.period, now, until)
+            .map_err(|_| refuse("unknown_budget_cost"))?;
         if i128::from(used) + i128::from(amount) > i128::from(item.cap) {
             return Err(AppError::budget_cap(
                 json!({"requested_minor":amount,"cap_minor":item.cap}),
@@ -415,4 +423,19 @@ where
     let permit = authorize_execution_at(r.as_mut(), input, d.clock.now()).await?;
     r.commit().await?;
     call(permit).await
+}
+
+pub(crate) fn binding_current(b: &jt_studio::AdSetBinding, c: &Capability) -> Result<(), AppError> {
+    if b.capability_id != c.id
+        || b.verified_at.is_none()
+        || b.verified_at != c.last_verified_at
+        || b.verification_evidence != c.evidence
+        || !c
+            .external_id
+            .as_deref()
+            .is_some_and(|id| same_account(&c.kind_key, id, &b.account_id))
+    {
+        return Err(refuse("binding_stale"));
+    }
+    Ok(())
 }

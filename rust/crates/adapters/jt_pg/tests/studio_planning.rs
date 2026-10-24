@@ -68,6 +68,7 @@ async fn planning_read_projections_are_tenant_scoped_and_keep_evidence() {
                     url: None,
                 },
             ),
+            jt_testkit::fakes::FIXED_NOW,
         )
         .await
         .unwrap();

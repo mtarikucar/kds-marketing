@@ -77,3 +77,37 @@ async fn controls_approval_and_transition_are_atomic() {
     let uow = jt_testkit::fakes::InMemoryUow::new();
     jt_testkit::studio_contract::controls_approval_and_transition_are_atomic(&uow).await;
 }
+
+#[tokio::test]
+async fn reservation_replay_after_archive() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::reservation_replay_after_archive(&uow).await;
+}
+
+#[tokio::test]
+async fn outcome_categories_survive_redaction() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::outcome_categories_survive_redaction(&uow).await;
+}
+
+#[tokio::test]
+async fn completion_time_differs_from_claim_time() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::completion_time_differs_from_claim_time(&uow).await;
+    assert_eq!(
+        uow.snapshot().studio.publications[0].published_at,
+        jt_testkit::fakes::FIXED_NOW + time::Duration::hours(2)
+    );
+}
+
+#[tokio::test]
+async fn liability_uses_each_item_period() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::liability_uses_each_item_period(&uow).await;
+}
+
+#[tokio::test]
+async fn binding_refresh_invalidates_old_intents() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::binding_refresh_invalidates_old_intents(&uow).await;
+}

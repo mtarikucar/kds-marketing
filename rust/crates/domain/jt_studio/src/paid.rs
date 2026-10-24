@@ -15,10 +15,26 @@ pub struct AdSetBinding {
     pub chain: Chain,
     pub capability_id: CapabilityId,
     pub account_id: String,
+    /// Verification generation frozen at binding; legacy bindings fail closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<OffsetDateTime>,
+    /// Successful connector probes carry a unique run id in their evidence references.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_evidence: Option<jt_capability::Evidence>,
     pub adset_id: String,
     pub campaign_id: Option<String>,
 }
 impl AdSetBinding {
+    /// Refresh verification only: historical chain and external target identity are immutable.
+    pub fn validate_refresh_of(&self, old: &Self) -> Result<(), StudioError> {
+        let mut expected = old.clone();
+        expected.verified_at = self.verified_at;
+        expected.verification_evidence = self.verification_evidence.clone();
+        if *self != expected {
+            return Err(StudioError::InvalidEvidence("binding identity changed"));
+        }
+        Ok(())
+    }
     pub fn validate(&self) -> Result<(), StudioError> {
         self.chain.validate()?;
         require_id(self.id.0, "binding_id")?;
@@ -51,6 +67,10 @@ pub struct BudgetMove {
     pub id: BudgetMoveId,
     pub chain: Chain,
     pub binding_id: AdSetBindingId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_verified_at: Option<OffsetDateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_verification_evidence: Option<jt_capability::Evidence>,
     pub revision: u64,
     pub daily_budget_minor: i64,
     pub currency: String,
@@ -60,6 +80,12 @@ pub struct BudgetMove {
     pub executed_version_id: Option<StrategyVersionId>,
 }
 impl BudgetMove {
+    pub fn matches_binding_generation(&self, b: &AdSetBinding) -> bool {
+        self.binding_id == b.id
+            && self.binding_verified_at == b.verified_at
+            && self.binding_verification_evidence == b.verification_evidence
+    }
+
     pub fn validate_for_binding(&self, binding: &AdSetBinding) -> Result<(), StudioError> {
         binding.validate()?;
         self.chain.require_same(&binding.chain)?;
@@ -107,6 +133,9 @@ pub struct ReserveSpend {
     pub lane: LaneKind,
     pub executed_version_id: StrategyVersionId,
     pub amount_minor: i64,
+    /// Daily liability, when this reserves a recurring ad budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_budget_minor: Option<i64>,
     pub currency: String,
     pub evidence_key: String,
     pub at: OffsetDateTime,
@@ -115,6 +144,9 @@ pub struct ReserveSpend {
 pub struct SpendReservation {
     pub id: ReservationId,
     pub request: ReserveSpend,
+    /// Frozen liabilities for each linked cap, independent of the lane amount.
+    #[serde(default)]
+    pub item_amounts: std::collections::BTreeMap<BudgetItemId, i64>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -146,6 +178,9 @@ pub struct BindingControl {
     pub binding_id: AdSetBindingId,
     pub chain: Chain,
     pub desired: AdStatus,
+    /// Stable across unrelated control changes and ambiguous provider outcomes.
+    #[serde(default)]
+    pub resume_operation_id: Option<ReservationId>,
     pub observed: Option<AdStatus>,
     pub paused_by_brake: bool,
     pub outcome: Option<BindingStatusOutcome>,
@@ -173,4 +208,25 @@ impl BindingControl {
                 })
             )
     }
+}
+
+/// Liability through this cap's own window; total caps use the remaining strategy lane period.
+pub fn daily_liability(
+    daily: i64,
+    period: jt_capability::Period,
+    at: OffsetDateTime,
+    strategy_until: OffsetDateTime,
+) -> Result<i64, StudioError> {
+    let until = if period == jt_capability::Period::Total {
+        strategy_until
+    } else {
+        jt_capability::period_window(period, at).1
+    };
+    let days = (until.date() - at.to_offset(time::UtcOffset::UTC).date())
+        .whole_days()
+        .max(1);
+    daily
+        .checked_mul(days)
+        .filter(|n| *n >= 0)
+        .ok_or(StudioError::InvalidEvidence("daily budget liability"))
 }

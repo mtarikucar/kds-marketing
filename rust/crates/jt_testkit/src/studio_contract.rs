@@ -277,6 +277,8 @@ pub async fn measurement_and_learning_dedupe(uow: &dyn UnitOfWork) {
     let f = seed(uow).await;
     let mut tx = uow.tenant(f.ws).await.unwrap();
     let binding = AdSetBinding {
+        verified_at: None,
+        verification_evidence: None,
         id: AdSetBindingId::new_v7(),
         chain: f.slot.chain.clone(),
         capability_id: f.slot.capability_id,
@@ -397,6 +399,8 @@ pub async fn files_trends_moves_and_retirement_round_trip(uow: &dyn UnitOfWork) 
         trend
     );
     let b = AdSetBinding {
+        verified_at: None,
+        verification_evidence: None,
         id: AdSetBindingId::new_v7(),
         chain: f.slot.chain.clone(),
         capability_id: f.slot.capability_id,
@@ -406,6 +410,8 @@ pub async fn files_trends_moves_and_retirement_round_trip(uow: &dyn UnitOfWork) 
     };
     tx.studio().bind_adset(b.clone(), "binding").await.unwrap();
     let m = BudgetMove {
+        binding_verified_at: None,
+        binding_verification_evidence: None,
         id: BudgetMoveId::new_v7(),
         chain: f.slot.chain.clone(),
         binding_id: b.id,
@@ -465,6 +471,7 @@ pub async fn accepted_publish_response_lost_never_blindly_retries(uow: &dyn Unit
             PublishOutcome::Unknown(jt_app::error::AppError::internal(
                 "secret-token provider diagnostic",
             )),
+            FIXED_NOW,
         )
         .await
         .unwrap();
@@ -482,11 +489,15 @@ pub async fn accepted_publish_response_lost_never_blindly_retries(uow: &dyn Unit
         url: None,
     };
     tx.studio()
-        .finish_publication(a.id(), PublishOutcome::Succeeded(receipt.clone()))
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Succeeded(receipt.clone()),
+            FIXED_NOW,
+        )
         .await
         .unwrap();
     tx.studio()
-        .finish_publication(a.id(), PublishOutcome::Succeeded(receipt))
+        .finish_publication(a.id(), PublishOutcome::Succeeded(receipt), FIXED_NOW)
         .await
         .unwrap();
     assert_eq!(
@@ -605,6 +616,7 @@ pub async fn budget_fixture(
     tx.budget().link(f.slot.capability_id, b.id).await.unwrap();
     tx.commit().await.unwrap();
     let r = ReserveSpend {
+        daily_budget_minor: None,
         workspace_id: f.ws,
         capability_id: f.slot.capability_id,
         budget_item_ids: vec![b.id],
@@ -770,6 +782,8 @@ pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
     );
     r.commit().await.unwrap();
     let b = AdSetBinding {
+        verified_at: None,
+        verification_evidence: None,
         id: AdSetBindingId::new_v7(),
         chain: f.slot.chain.clone(),
         capability_id: f.slot.capability_id,
@@ -778,6 +792,8 @@ pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
         campaign_id: None,
     };
     let m = BudgetMove {
+        binding_verified_at: None,
+        binding_verification_evidence: None,
         id: BudgetMoveId::new_v7(),
         chain: b.chain.clone(),
         binding_id: b.id,
@@ -803,6 +819,7 @@ pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
         .await
         .unwrap();
     let control = BindingControl {
+        resume_operation_id: None,
         binding_id: b.id,
         chain: b.chain.clone(),
         desired: jt_studio::AdStatus::Paused,
@@ -867,4 +884,348 @@ pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
     assert_eq!(r.studio().get_slot(f.slot.id).await.unwrap(), Some(retired));
     assert_eq!(r.studio().get_arm(f.arm.id).await.unwrap(), Some(f.arm));
     r.commit().await.unwrap();
+}
+
+pub async fn reservation_replay_after_archive(uow: &dyn UnitOfWork) {
+    let (f, _, request) = budget_fixture(uow).await;
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let saved = tx.studio_budget().reserve(request.clone()).await.unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    tx.strategy()
+        .set_status(
+            request.executed_version_id,
+            jt_strategy::VersionStatus::Archived,
+            FIXED_NOW,
+            None,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        tx.studio_budget().reserve(request.clone()).await.unwrap(),
+        saved
+    );
+    let mut changed = request.clone();
+    changed.amount_minor += 1;
+    assert_eq!(
+        tx.studio_budget().reserve(changed).await.unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    drop(tx);
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let mut fresh = request;
+    fresh.evidence_key = "new-after-archive".into();
+    assert_eq!(
+        tx.studio_budget().reserve(fresh).await.unwrap_err().code,
+        ErrorCode::StrategyRequired
+    );
+}
+
+pub async fn outcome_categories_survive_redaction(uow: &dyn UnitOfWork) {
+    use jt_app::error::AppError;
+    for (error, category) in [
+        (AppError::unauthenticated("secret"), "auth"),
+        (AppError::forbidden("secret"), "permission"),
+        (
+            AppError::upstream_unavailable("x", "secret", Some(2)),
+            "throttle",
+        ),
+        (
+            AppError::upstream_unavailable("x", "secret", None),
+            "transient",
+        ),
+        (
+            AppError::validation("secret", serde_json::json!({})),
+            "permanent",
+        ),
+        (AppError::internal("secret"), "unknown"),
+    ] {
+        let f = ready(uow).await;
+        let mut tx = uow.tenant(f.ws).await.unwrap();
+        let a = tx
+            .studio()
+            .claim_publication(FIXED_NOW)
+            .await
+            .unwrap()
+            .unwrap();
+        tx.studio()
+            .finish_publication(a.id(), PublishOutcome::Failed(error.clone()), FIXED_NOW)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let mut tx = uow.tenant(f.ws).await.unwrap();
+        let (attempts, _) = tx.studio().slot_evidence(f.slot.id).await.unwrap();
+        let evidence = serde_json::to_value(attempts[0].outcome()).unwrap();
+        assert_eq!(evidence["evidence"], category);
+        assert!(!evidence.to_string().contains("secret"));
+        tx.studio()
+            .finish_publication(a.id(), PublishOutcome::Failed(error), FIXED_NOW)
+            .await
+            .unwrap();
+        let different = if category == "auth" {
+            AppError::forbidden("other")
+        } else {
+            AppError::unauthenticated("other")
+        };
+        assert!(
+            tx.studio()
+                .finish_publication(a.id(), PublishOutcome::Failed(different), FIXED_NOW)
+                .await
+                .is_err()
+        );
+    }
+}
+
+pub async fn completion_time_differs_from_claim_time(uow: &dyn UnitOfWork) -> WorkspaceId {
+    let f = ready(uow).await;
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let a = tx
+        .studio()
+        .claim_publication(FIXED_NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    tx.studio()
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Unknown(jt_app::error::AppError::internal("lost")),
+            FIXED_NOW + Duration::hours(1),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    tx.studio()
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Succeeded(jt_app::ports::connectors::PublishReceipt {
+                external_id: "delayed".into(),
+                url: None,
+            }),
+            FIXED_NOW + Duration::hours(2),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    tx.studio()
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Succeeded(jt_app::ports::connectors::PublishReceipt {
+                external_id: "delayed".into(),
+                url: None,
+            }),
+            FIXED_NOW + Duration::hours(3),
+        )
+        .await
+        .unwrap();
+    let entries = tx
+        .ledger()
+        .list(jt_app::ports::LedgerFilter {
+            action_prefix: Some("studio.publish.finished".into()),
+            actor_kind: None,
+            agent_connection_id: None,
+            limit: 10,
+            before_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(entries[0].entry.at, FIXED_NOW + Duration::hours(2));
+    let (attempts, _) = tx.studio().slot_evidence(f.slot.id).await.unwrap();
+    assert_eq!(attempts[0].claimed_at(), FIXED_NOW);
+    assert_eq!(
+        attempts[0].observed_at(),
+        Some(FIXED_NOW + Duration::hours(2))
+    );
+    f.ws
+}
+
+pub async fn liability_uses_each_item_period(uow: &dyn UnitOfWork) {
+    use jt_capability::{BudgetItemId, Period};
+    let (f, item, mut request) = budget_fixture(uow).await;
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let mut daily = item.clone();
+    daily.id = BudgetItemId::new_v7();
+    daily.period = Period::Daily;
+    daily.cap = 10;
+    let mut total = item.clone();
+    total.id = BudgetItemId::new_v7();
+    total.period = Period::Total;
+    for b in [&daily, &total] {
+        tx.budget().insert_item(b.clone()).await.unwrap();
+        tx.budget().link(request.capability_id, b.id).await.unwrap();
+        request.budget_item_ids.push(b.id);
+    }
+    request.daily_budget_minor = Some(10);
+    request.amount_minor = 100; // Oct 22 through Oct 31 inclusive.
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let saved = tx.studio_budget().reserve(request.clone()).await.unwrap();
+    assert_eq!(saved.item_amounts[&daily.id], 10);
+    assert_eq!(saved.item_amounts[&item.id], 100);
+    assert_eq!(saved.item_amounts[&total.id], 100);
+    tx.studio_budget()
+        .settle(saved.id, SpendOutcome::Unknown)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        tx.studio_budget().reserve(request.clone()).await.unwrap(),
+        saved
+    );
+    request.evidence_key = "second-liability".into();
+    assert_eq!(
+        tx.studio_budget()
+            .reserve(request.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::BudgetCap
+    );
+    drop(tx);
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    tx.studio_budget()
+        .settle(saved.id, SpendOutcome::Refused)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    tx.studio_budget().reserve(request).await.unwrap();
+}
+
+pub async fn binding_refresh_invalidates_old_intents(uow: &dyn UnitOfWork) {
+    let f = ready(uow).await;
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let mut c = tx
+        .capabilities()
+        .find(f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    c.external_id = Some("account".into());
+    c.last_verified_at = Some(FIXED_NOW);
+    tx.capabilities().update(c.clone()).await.unwrap();
+    let b = AdSetBinding {
+        id: AdSetBindingId::new_v7(),
+        chain: f.slot.chain.clone(),
+        capability_id: c.id,
+        account_id: "account".into(),
+        adset_id: "set".into(),
+        campaign_id: None,
+        verified_at: None,
+        verification_evidence: None,
+    };
+    let original = tx
+        .studio()
+        .bind_adset(b.clone(), "original-binding")
+        .await
+        .unwrap();
+    let m = BudgetMove {
+        binding_verified_at: None,
+        binding_verification_evidence: None,
+        id: BudgetMoveId::new_v7(),
+        chain: b.chain.clone(),
+        binding_id: b.id,
+        revision: 1,
+        daily_budget_minor: 10,
+        currency: "TRY".into(),
+        state: jt_studio::BudgetMoveState::Queued,
+        approval: None,
+        reservation_id: None,
+        executed_version_id: None,
+    };
+    tx.studio()
+        .save_budget_move(m.clone(), "old-move")
+        .await
+        .unwrap();
+    let v = tx.strategy().lock_execution_frame().await.unwrap().unwrap();
+    tx.studio()
+        .approve_target(
+            ApprovalTarget::BudgetMove(m.id),
+            ApprovalReceipt {
+                revision: 1,
+                by: v.approved_by.unwrap(),
+                at: FIXED_NOW,
+            },
+        )
+        .await
+        .unwrap();
+    tx.studio_control()
+        .save_binding_control(BindingControl {
+            binding_id: b.id,
+            chain: b.chain.clone(),
+            desired: jt_studio::AdStatus::Active,
+            observed: None,
+            paused_by_brake: true,
+            outcome: Some(jt_studio::BindingStatusOutcome::Unknown),
+            at: FIXED_NOW,
+            resume_operation_id: Some(ReservationId::new_v7()),
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    c.last_verified_at = Some(FIXED_NOW + Duration::hours(1));
+    tx.capabilities().update(c).await.unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let rebound = tx
+        .studio()
+        .bind_adset(b.clone(), "explicit-rebind")
+        .await
+        .unwrap();
+    assert_eq!(rebound.verified_at, Some(FIXED_NOW + Duration::hours(1)));
+    let old_move = tx.studio().get_budget_move(m.id).await.unwrap().unwrap();
+    assert!(old_move.matches_binding_generation(&original));
+    assert!(!old_move.matches_binding_generation(&rebound));
+    assert!(
+        tx.studio()
+            .get_approval(ApprovalTarget::BudgetMove(m.id), 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        tx.studio_control()
+            .binding_control(b.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut changed_identity = rebound.clone();
+    changed_identity.account_id = "different-account".into();
+    assert!(
+        tx.studio()
+            .bind_adset(changed_identity, "wrong-identity")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        tx.studio()
+            .get_budget_move(m.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        jt_studio::BudgetMoveState::Cancelled
+    );
+    assert_eq!(
+        tx.studio()
+            .bind_adset(b.clone(), "original-binding")
+            .await
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        tx.studio().bind_adset(b, "explicit-rebind").await.unwrap(),
+        rebound
+    );
+    assert_eq!(
+        tx.studio().get_binding(rebound.id).await.unwrap(),
+        Some(rebound)
+    );
+    tx.commit().await.unwrap();
 }

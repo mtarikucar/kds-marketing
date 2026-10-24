@@ -700,13 +700,14 @@ impl StudioRepo for MemTenant {
             s.attempts.push(a.clone());
             Ok(())
         })?;
-        self.attempt_ledger(&a, "studio.publish.claimed")?;
+        self.attempt_ledger(&a, "studio.publish.claimed", now)?;
         Ok(Some(a))
     }
     async fn finish_publication(
         &mut self,
         id: PublishAttemptId,
         o: PublishOutcome,
+        observed_at: OffsetDateTime,
     ) -> Result<(), AppError> {
         self.tx.lock_studio().await;
         let old = self
@@ -717,30 +718,14 @@ impl StudioRepo for MemTenant {
             .find(|a| a.piece().chain.workspace_id == self.ws && a.id() == id)
             .cloned()
             .ok_or_else(|| AppError::not_found("attempt"))?;
-        use jt_studio::{PublishOutcome as O, RedactedPublishError as E};
-        let outcome = match o {
-            PublishOutcome::Succeeded(r) => {
-                let mut url = r.url;
-                if let Some(u) = &mut url {
-                    u.set_query(None);
-                    u.set_fragment(None);
-                }
-                O::Succeeded(jt_studio::PublishReceipt {
-                    external_id: r.external_id,
-                    url,
-                })
-            }
-            PublishOutcome::Failed(_) => O::Failed(E::Permanent),
-            PublishOutcome::Unknown(_) => O::Unknown(E::Transient),
-            PublishOutcome::Refused(_) => O::Refused(E::Policy),
-        };
-        let a = old.finish(&outcome).map_err(invalid)?;
+        let outcome = o.into_redacted();
+        let a = old.finish_at(&outcome, observed_at).map_err(invalid)?;
         if a == old {
             return Ok(());
         }
         if a.state() == PublishState::Succeeded {
             let p = a
-                .publication(PublicationId::new_v7(), a.claimed_at())
+                .publication(PublicationId::new_v7(), observed_at)
                 .map_err(invalid)?;
             let mut s = self
                 .get_slot(a.slot_id())
@@ -775,7 +760,7 @@ impl StudioRepo for MemTenant {
                 .expect("loaded") = a.clone();
             Ok(())
         })?;
-        self.attempt_ledger(&a, "studio.publish.finished")?;
+        self.attempt_ledger(&a, "studio.publish.finished", observed_at)?;
         Ok(())
     }
     async fn save_file(&mut self, f: StoredFile) -> Result<(), AppError> {
@@ -848,7 +833,12 @@ impl StudioRepo for MemTenant {
         self.receipt("trend.save", key, &p, &t)?;
         Ok(t)
     }
-    async fn bind_adset(&mut self, b: AdSetBinding, key: &str) -> Result<AdSetBinding, AppError> {
+    async fn bind_adset(
+        &mut self,
+        mut b: AdSetBinding,
+        key: &str,
+    ) -> Result<AdSetBinding, AppError> {
+        StrategyRepo::lock_execution_frame(self).await?;
         self.tx.lock_studio().await;
         self.check_chain(&b.chain)?;
         b.validate().map_err(invalid)?;
@@ -864,6 +854,44 @@ impl StudioRepo for MemTenant {
         {
             return Err(AppError::not_found("capability"));
         }
+        let capability = CapabilityRepo::find(self, b.capability_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("capability"))?;
+        b.verified_at = capability.last_verified_at;
+        b.verification_evidence = capability.evidence;
+        if let Some(old) = StudioRepo::get_binding(self, b.id).await? {
+            b.validate_refresh_of(&old).map_err(invalid)?;
+            if old != b {
+                if b.verified_at.is_none()
+                    || !capability.external_id.as_deref().is_some_and(|id| {
+                        jt_capability::canonical_external_id(&capability.kind_key, id)
+                            == jt_capability::canonical_external_id(
+                                &capability.kind_key,
+                                &b.account_id,
+                            )
+                    })
+                {
+                    return Err(AppError::conflict("binding_stale"));
+                }
+                let ws = self.ws;
+                self.studio_write(|s, _| {
+                    let mut cancelled = Vec::new();
+                    for m in &mut s.moves {
+                        if m.chain.workspace_id == ws && m.binding_id == b.id && m.state == jt_studio::BudgetMoveState::Queued {
+                            m.state = jt_studio::BudgetMoveState::Cancelled;
+                            m.approval = None;
+                            cancelled.push(m.id);
+                        }
+                    }
+                    s.approvals.retain(|(w,t,_)| *w != ws || !matches!(t, ApprovalTarget::BudgetMove(id) if cancelled.contains(id)));
+                    s.binding_controls.retain(|c| c.chain.workspace_id != ws || c.binding_id != b.id);
+                    *s.bindings.iter_mut().find(|r| r.chain.workspace_id == ws && r.id == b.id).expect("loaded binding") = b.clone();
+                    Ok(())
+                })?;
+            }
+            self.receipt("adset.bind", key, &p, &b)?;
+            return Ok(b);
+        }
         self.studio_write(|s, _| {
             if s.bindings.iter().any(|r| {
                 r.chain.workspace_id == b.chain.workspace_id
@@ -878,7 +906,11 @@ impl StudioRepo for MemTenant {
         self.receipt("adset.bind", key, &p, &b)?;
         Ok(b)
     }
-    async fn save_budget_move(&mut self, m: BudgetMove, key: &str) -> Result<BudgetMove, AppError> {
+    async fn save_budget_move(
+        &mut self,
+        mut m: BudgetMove,
+        key: &str,
+    ) -> Result<BudgetMove, AppError> {
         self.tx.lock_studio().await;
         self.check_chain(&m.chain)?;
         let p = enc(&m)?;
@@ -893,6 +925,8 @@ impl StudioRepo for MemTenant {
             .find(|b| b.chain.workspace_id == self.ws && b.id == m.binding_id)
             .ok_or_else(|| AppError::not_found("binding"))?;
         m.validate_for_binding(b).map_err(invalid)?;
+        m.binding_verified_at = b.verified_at;
+        m.binding_verification_evidence = b.verification_evidence.clone();
         if m.reservation_id.is_some_and(|id| {
             !self
                 .state()
@@ -1038,13 +1072,18 @@ impl StudioRepo for MemTenant {
     }
 }
 impl MemTenant {
-    fn attempt_ledger(&mut self, a: &PublishAttempt, action: &str) -> Result<(), AppError> {
+    fn attempt_ledger(
+        &mut self,
+        a: &PublishAttempt,
+        action: &str,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
         let mut e = LedgerEntry::new(
             self.ws,
             a.actor().clone(),
             Action::new(action).map_err(|_| AppError::internal("action"))?,
             json!({"attempt_id":a.id(),"slot_id":a.slot_id(),"born_version_id":a.piece().chain.born_version_id,"executed_version_id":a.executed_version_id(),"state":a.state()}),
-            a.claimed_at(),
+            at,
         );
         e.subject = Some(jt_ledger::Subject {
             kind: "studio_slot".into(),
@@ -1079,14 +1118,13 @@ impl StudioBudgetRepo for MemTenant {
         }
         r.budget_item_ids.sort();
         r.budget_item_ids.dedup();
-        let frame = StrategyRepo::lock_execution_frame(self)
-            .await?
-            .ok_or_else(AppError::strategy_required)?;
+        let frame = StrategyRepo::lock_execution_frame(self).await?;
         self.tx.lock_studio().await;
         let payload = enc(&r)?;
         if let Some(saved) = self.replay("spend.reserve", &r.evidence_key, &payload)? {
             return Ok(saved);
         }
+        let frame = frame.ok_or_else(AppError::strategy_required)?;
         if frame.id != r.executed_version_id {
             return Err(AppError::conflict("strategy changed"));
         }
@@ -1122,6 +1160,15 @@ impl StudioBudgetRepo for MemTenant {
             r.amount_minor,
             lane.cap_minor,
         )?;
+        let strategy_until = until;
+        if let Some(daily) = r.daily_budget_minor {
+            let expected =
+                jt_studio::daily_liability(daily, period, r.at, until).map_err(invalid)?;
+            if r.amount_minor != expected {
+                return Err(AppError::conflict("lane liability changed"));
+            }
+        }
+        let mut item_amounts = std::collections::BTreeMap::new();
         for id in &r.budget_item_ids {
             let item = BudgetRepo::lock_item(self, *id)
                 .await?
@@ -1133,15 +1180,22 @@ impl StudioBudgetRepo for MemTenant {
                     "budget item is retired or currency differs",
                 ));
             }
+            let amount = match r.daily_budget_minor {
+                Some(daily) => jt_studio::daily_liability(daily, item.period, r.at, strategy_until)
+                    .map_err(invalid)?,
+                None => r.amount_minor,
+            };
+            item_amounts.insert(*id, amount);
             let (from, until) = jt_capability::period_window(item.period, r.at);
             let spent = BudgetRepo::spent_between(self, *id, from, until).await?;
             cap_check(
                 i128::from(spent) + self.reserved(from, until, Some(*id), None, &r.currency),
-                r.amount_minor,
+                amount,
                 item.cap,
             )?;
         }
         let saved = SpendReservation {
+            item_amounts,
             id: ReservationId::new_v7(),
             request: r.clone(),
         };
@@ -1207,7 +1261,10 @@ impl MemTenant {
                 i128::from(match o {
                     Some(SpendOutcome::Refused) => 0,
                     Some(SpendOutcome::Settled { actual_minor, .. }) => *actual_minor,
-                    _ => r.request.amount_minor,
+                    _ => item
+                        .and_then(|id| r.item_amounts.get(&id))
+                        .copied()
+                        .unwrap_or(r.request.amount_minor),
                 })
             })
             .sum()

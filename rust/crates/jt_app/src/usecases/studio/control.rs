@@ -209,8 +209,12 @@ pub async fn reconcile_bindings(d: &Deps, ws: WorkspaceId) -> Result<(), AppErro
 async fn record_refusal(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
     let mut r = d.uow.tenant(b.chain.workspace_id).await?;
     let flags = r.studio_control().lock_control().await?;
+    if r.studio().get_binding(b.id).await?.as_ref() != Some(b) {
+        return Ok(());
+    }
     let old = r.studio_control().binding_control(b.id).await?;
     let record = BindingControl {
+        resume_operation_id: old.as_ref().and_then(|o| o.resume_operation_id),
         binding_id: b.id,
         chain: b.chain.clone(),
         desired: if flags.is_braked(LaneKind::Paid) {
@@ -318,6 +322,16 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
         AdStatus::Active
     };
     let mut record = BindingControl {
+        resume_operation_id: if desired == AdStatus::Active {
+            Some(
+                old.as_ref()
+                    .filter(|o| o.desired == AdStatus::Active)
+                    .and_then(|o| o.resume_operation_id)
+                    .unwrap_or_else(ReservationId::new_v7),
+            )
+        } else {
+            None
+        },
         binding_id: b.id,
         chain: b.chain.clone(),
         desired,
@@ -330,6 +344,9 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
     let frame = r.strategy().lock_execution_frame().await?;
     let fresh = r.studio_control().lock_control().await?;
     active(r.as_mut()).await?;
+    if r.studio().get_binding(b.id).await?.as_ref() != Some(b) {
+        return Err(refuse("binding_stale"));
+    }
     if fresh.revision != control.revision {
         return Err(refuse("control_changed"));
     }
@@ -354,6 +371,7 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
     let dispatch_credential = open_credential(d, ws, &sealed)?;
     let mut reservation = None;
     if desired == AdStatus::Active {
+        super::chain::binding_current(b, &current_cap)?;
         let v = frame.ok_or_else(AppError::strategy_required)?;
         let c = r
             .capabilities()
@@ -412,7 +430,8 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
                 .latest_budget_move(b.id)
                 .await?
                 .ok_or_else(|| refuse("resume_requires_budget_move_approval"))?;
-            if m.chain != b.chain
+            if !m.matches_binding_generation(b)
+                || m.chain != b.chain
                 || m.daily_budget_minor != daily
                 || m.currency != account.currency
                 || !matches!(
@@ -453,23 +472,23 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
             jt_strategy::Period::Monthly => jt_capability::Period::Monthly,
             jt_strategy::Period::Weekly => jt_capability::Period::Weekly,
         };
-        let (from, until) = jt_capability::period_window(period, d.clock.now());
         let key = format!(
-            "studio.resume:{}:{}:{}",
+            "studio.resume:{}:{}",
             b.id,
-            fresh.revision,
-            from.unix_timestamp()
+            record.resume_operation_id.expect("resume intent")
         );
         let previous = r.studio_budget().find_reservation(&key).await?;
         // Preserve the original payload when retrying a durable reservation. The current frame,
         // caps and live provider daily budget were rechecked above; changed payloads still refuse.
         let at = previous.as_ref().map_or(d.clock.now(), |p| p.request.at);
+        let (_, until) = jt_capability::period_window(period, at);
         let amount = daily
             .checked_mul((until.date() - at.date()).whole_days().max(1))
             .ok_or_else(|| refuse("unknown_budget_cost"))?;
         reservation = Some(
             r.studio_budget()
                 .reserve(ReserveSpend {
+                    daily_budget_minor: Some(daily),
                     workspace_id: ws,
                     capability_id: c.id,
                     budget_item_ids: c.budget_item_ids,
@@ -516,6 +535,10 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
         record.paused_by_brake = false;
     }
     let mut r = d.uow.tenant(ws).await?;
+    r.studio_control().lock_control().await?;
+    if r.studio().get_binding(b.id).await?.as_ref() != Some(b) {
+        return Err(refuse("binding_stale"));
+    }
     r.studio_control()
         .save_binding_control(record.clone())
         .await?;

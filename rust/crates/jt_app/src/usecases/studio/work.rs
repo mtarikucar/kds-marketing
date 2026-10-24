@@ -40,6 +40,8 @@ pub struct PendingSlot {
 pub struct Blocker {
     pub target: ApprovalTarget,
     pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_action: Option<String>,
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct PendingStudioOut {
@@ -112,12 +114,14 @@ pub(crate) async fn pending_in(
         let target = ApprovalTarget::Slot(s.id);
         if control.is_braked(arm.key.lane) {
             out.blockers.push(Blocker {
+                next_action: None,
                 target,
                 reason: "studio_braked".into(),
             });
         }
         if let Err(e) = capability_access(&cap, ctx.now, true) {
             out.blockers.push(Blocker {
+                next_action: None,
                 target,
                 reason: e.message,
             });
@@ -133,6 +137,7 @@ pub(crate) async fn pending_in(
         {
             out.approvals.push(target);
             out.blockers.push(Blocker {
+                next_action: None,
                 target,
                 reason: "human_approval_required".into(),
             });
@@ -155,14 +160,23 @@ pub(crate) async fn pending_in(
             .await?
             .ok_or_else(|| AppError::not_found("capability"))?;
         let target = ApprovalTarget::BudgetMove(m.id);
+        if super::chain::binding_current(&b, &cap).is_err() || !m.matches_binding_generation(&b) {
+            out.blockers.push(Blocker {
+                target,
+                reason: "binding_stale".into(),
+                next_action: Some("rebind_adset".into()),
+            });
+        }
         if control.is_braked(jt_strategy::LaneKind::Paid) {
             out.blockers.push(Blocker {
+                next_action: None,
                 target,
                 reason: "studio_braked".into(),
             });
         }
         if let Err(e) = capability_access(&cap, ctx.now, true) {
             out.blockers.push(Blocker {
+                next_action: None,
                 target,
                 reason: e.message,
             });
@@ -176,6 +190,7 @@ pub(crate) async fn pending_in(
         {
             out.approvals.push(target);
             out.blockers.push(Blocker {
+                next_action: None,
                 target,
                 reason: "human_approval_required".into(),
             });

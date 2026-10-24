@@ -45,7 +45,7 @@ impl PgTenantRepos {
         .with_account(account);
         sqlx::query("insert into studio_publish_attempts(workspace_id,id,data,slot_id,piece_id,executed_version_id,state) values($1,$2,$3,$4,$5,$6,'sending')")
             .bind(self.workspace_id().0).bind(attempt.id().0).bind(encode(&attempt)?).bind(slot.id.0).bind(attempt.piece().id.0).bind(version.id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"persist Studio Sending claim"))?;
-        self.studio_attempt_ledger(&attempt, "studio.publish.claimed")
+        self.studio_attempt_ledger(&attempt, "studio.publish.claimed", now)
             .await?;
         Ok(Some(attempt))
     }
@@ -53,14 +53,15 @@ impl PgTenantRepos {
         &mut self,
         id: PublishAttemptId,
         outcome: PublishOutcome,
+        observed_at: OffsetDateTime,
     ) -> Result<(), AppError> {
         StudioControlRepo::lock_control(self).await?;
         let old: PublishAttempt = self
             .studio_record("studio_publish_attempts", id.0)
             .await?
             .ok_or_else(|| AppError::not_found("publish attempt"))?;
-        let outcome = redacted_outcome(outcome);
-        let next = old.finish(&outcome).map_err(invalid)?;
+        let outcome = outcome.into_redacted();
+        let next = old.finish_at(&outcome, observed_at).map_err(invalid)?;
         if old == next {
             return Ok(());
         }
@@ -69,7 +70,7 @@ impl PgTenantRepos {
             .ok_or_else(|| AppError::not_found("slot"))?;
         if next.state() == PublishState::Succeeded {
             let p = next
-                .publication(PublicationId::new_v7(), next.claimed_at())
+                .publication(PublicationId::new_v7(), observed_at)
                 .map_err(invalid)?;
             p.validate_for_slot(&slot).map_err(invalid)?;
             sqlx::query("insert into studio_publications(workspace_id,id,data,slot_id,attempt_id,piece_id,capability_id,external_id,executed_version_id,born_version_id,hypothesis_id,arm_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
@@ -93,7 +94,7 @@ impl PgTenantRepos {
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "finish Studio claim"))?;
-        self.studio_attempt_ledger(&next, "studio.publish.finished")
+        self.studio_attempt_ledger(&next, "studio.publish.finished", observed_at)
             .await?;
         Ok(())
     }
@@ -101,13 +102,14 @@ impl PgTenantRepos {
         &mut self,
         a: &PublishAttempt,
         action: &str,
+        at: OffsetDateTime,
     ) -> Result<(), AppError> {
         let mut entry = LedgerEntry::new(
             self.workspace_id(),
             a.actor().clone(),
             Action::new(action).map_err(|_| AppError::internal("invalid action"))?,
             json!({"attempt_id":a.id(),"slot_id":a.slot_id(),"born_version_id":a.piece().chain.born_version_id,"executed_version_id":a.executed_version_id(),"state":a.state()}),
-            a.claimed_at(),
+            at,
         );
         entry.subject = Some(Subject {
             kind: "studio_slot".into(),
@@ -116,25 +118,5 @@ impl PgTenantRepos {
         entry.strategy_version_id = Some(a.executed_version_id().0);
         LedgerRepo::append(self, entry).await?;
         Ok(())
-    }
-}
-fn redacted_outcome(outcome: PublishOutcome) -> jt_studio::PublishOutcome {
-    use jt_studio::{PublishOutcome as O, RedactedPublishError as E};
-    // AppError diagnostics are never evidence. Keep only the closed failure category.
-    match outcome {
-        PublishOutcome::Succeeded(r) => {
-            let mut url = r.url;
-            if let Some(url) = &mut url {
-                url.set_query(None);
-                url.set_fragment(None);
-            }
-            O::Succeeded(jt_studio::PublishReceipt {
-                external_id: r.external_id,
-                url,
-            })
-        }
-        PublishOutcome::Failed(_) => O::Failed(E::Permanent),
-        PublishOutcome::Unknown(_) => O::Unknown(E::Transient),
-        PublishOutcome::Refused(_) => O::Refused(E::Policy),
     }
 }

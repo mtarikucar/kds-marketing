@@ -364,8 +364,9 @@ impl StudioRepo for PgTenantRepos {
         &mut self,
         id: PublishAttemptId,
         outcome: PublishOutcome,
+        observed_at: OffsetDateTime,
     ) -> Result<(), AppError> {
-        self.studio_finish(id, outcome).await
+        self.studio_finish(id, outcome, observed_at).await
     }
     async fn save_file(&mut self, file: StoredFile) -> Result<(), AppError> {
         self.studio_save_file(file).await

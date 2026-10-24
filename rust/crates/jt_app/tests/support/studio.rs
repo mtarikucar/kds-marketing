@@ -239,6 +239,8 @@ impl World {
             ..self.f.slot.chain.clone()
         };
         let b = AdSetBinding {
+            verified_at: Some(FIXED_NOW),
+            verification_evidence: None,
             id: AdSetBindingId::new_v7(),
             chain: chain.clone(),
             capability_id: c.id,
@@ -248,6 +250,8 @@ impl World {
         };
         r.studio().bind_adset(b.clone(), "binding").await.unwrap();
         let m = BudgetMove {
+            binding_verified_at: None,
+            binding_verification_evidence: None,
             id: BudgetMoveId::new_v7(),
             chain,
             binding_id: b.id,
@@ -318,6 +322,7 @@ impl World {
                     external_id: "post_1".into(),
                     url: None,
                 }),
+                FIXED_NOW,
             )
             .await
             .unwrap();

@@ -682,7 +682,7 @@ async fn resume_recovery_reuses_reservation_after_clock_advance() {
     w.brake(false, None, 1).await;
     assert_eq!(w.uow.snapshot().studio.reservations.len(), 1);
     w.d.clock = Arc::new(jt_testkit::fakes::FixedClock(
-        FIXED_NOW + time::Duration::minutes(1),
+        FIXED_NOW + time::Duration::days(10),
     ));
     w.provider_status("PAUSED", 10);
     w.ads.push_set_status(Ok(()));
@@ -692,4 +692,131 @@ async fn resume_recovery_reuses_reservation_after_clock_advance() {
         w.uow.snapshot().studio.binding_controls[0].observed,
         Some(AdStatus::Active)
     );
+}
+
+#[tokio::test]
+async fn budget_execution_refused_after_account_rebind() {
+    for change in ["account", "timestamp", "probe", "unverified"] {
+        let w = support::world().await;
+        let (b, m) = w.paid().await;
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        let mut c = r
+            .capabilities()
+            .lock(b.capability_id)
+            .await
+            .unwrap()
+            .unwrap();
+        match change {
+            "account" => c.external_id = Some("act_2".into()),
+            "timestamp" => c.last_verified_at = Some(FIXED_NOW + time::Duration::seconds(1)),
+            "unverified" => {
+                c.status = jt_capability::StoredStatus::Declared;
+                c.last_verified_at = None;
+            }
+            _ => {
+                c.evidence = Some(jt_capability::Evidence {
+                    text: "probe".into(),
+                    refs: vec!["new-probe-generation".into()],
+                })
+            }
+        }
+        r.capabilities().update(c).await.unwrap();
+        r.commit().await.unwrap();
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        let err = authorize_execution_at(
+            r.as_mut(),
+            ExecutionInput {
+                chain: m.chain,
+                capability_id: b.capability_id,
+                target: ApprovalTarget::BudgetMove(m.id),
+                expected_revision: 1,
+            },
+            FIXED_NOW + time::Duration::seconds(2),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::Conflict);
+        assert_eq!(err.details["reason"], "binding_stale");
+        drop(r);
+        let pending = jt_app::usecases::studio::work::pending(&w.d, &w.ctx)
+            .await
+            .unwrap();
+        assert!(
+            pending
+                .blockers
+                .iter()
+                .any(|x| x.target == ApprovalTarget::BudgetMove(m.id)
+                    && x.reason == "binding_stale"
+                    && x.next_action.as_deref() == Some("rebind_adset"))
+        );
+        let work = jt_app::usecases::work::pending(&w.d, &w.ctx).await.unwrap();
+        assert!(work.items.iter().any(|item| matches!(item.kind, jt_app::usecases::work::WorkKind::StudioBudgetMove { budget_move_id } if budget_move_id == m.id) && item.hint.contains("Rebind the ad set")));
+    }
+}
+
+#[tokio::test]
+async fn resume_reservation_stable_across_control_revisions() {
+    let w = support::world().await;
+    w.paid().await;
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_set_status(Ok(()));
+    w.brake(true, None, 0).await;
+    w.provider_status("PAUSED", 10);
+    w.ads
+        .push_set_status(Err(jt_connector::ConnectorError::unknown("lost")));
+    w.brake(false, None, 1).await;
+    let original = w.uow.snapshot().studio.reservations[0].0.clone();
+    w.policy(true, 2).await;
+    w.provider_status("PAUSED", 10);
+    w.ads.push_set_status(Ok(()));
+    reconcile_bindings(&w.d, w.f.ws).await.unwrap();
+    let s = w.uow.snapshot();
+    assert_eq!(s.studio.reservations.len(), 1);
+    assert_eq!(s.studio.reservations[0].0, original);
+    assert_eq!(
+        s.studio.binding_controls[0].observed,
+        Some(AdStatus::Active)
+    );
+}
+
+#[tokio::test]
+async fn liability_uses_each_item_period() {
+    for (period, cap) in [
+        (jt_capability::Period::Daily, 10),
+        (jt_capability::Period::Monthly, 100),
+        (jt_capability::Period::Total, 100),
+    ] {
+        let w = support::world().await;
+        let (b, _) = w.paid().await;
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        let c = r
+            .capabilities()
+            .find(b.capability_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut item = r
+            .budget()
+            .lock_item(c.budget_item_ids[0])
+            .await
+            .unwrap()
+            .unwrap();
+        item.period = period;
+        item.cap = cap;
+        r.budget().update_item(item).await.unwrap();
+        r.commit().await.unwrap();
+        w.provider_status("ACTIVE", 10);
+        w.ads.push_set_status(Ok(()));
+        w.brake(true, None, 0).await;
+        w.provider_status("PAUSED", 10);
+        w.ads.push_set_status(Ok(()));
+        w.brake(false, None, 1).await;
+        let s = w.uow.snapshot();
+        assert_eq!(
+            s.studio.binding_controls[0].observed,
+            Some(AdStatus::Active),
+            "{period:?}"
+        );
+        assert_eq!(s.studio.reservations.len(), 1);
+    }
 }

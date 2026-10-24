@@ -62,23 +62,53 @@ impl PgTenantRepos {
     }
     pub(super) async fn studio_bind(
         &mut self,
-        b: AdSetBinding,
+        mut b: AdSetBinding,
         key: &str,
     ) -> Result<AdSetBinding, AppError> {
         same_workspace(self.workspace_id(), b.chain.workspace_id)?;
         b.validate().map_err(invalid)?;
+        jt_app::ports::StrategyRepo::lock_execution_frame(self).await?;
+        StudioControlRepo::lock_control(self).await?;
         let payload = encode(&b)?;
         if let Some(saved) = self.studio_replay("adset.bind", key, &payload).await? {
             return Ok(saved);
         }
+        let capability = jt_app::ports::CapabilityRepo::find(self, b.capability_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("capability"))?;
+        b.verified_at = capability.last_verified_at;
+        b.verification_evidence = capability.evidence;
+        if let Some(old) = StudioRepo::get_binding(self, b.id).await? {
+            b.validate_refresh_of(&old).map_err(invalid)?;
+            if old != b {
+                if b.verified_at.is_none()
+                    || !capability.external_id.as_deref().is_some_and(|id| {
+                        jt_capability::canonical_external_id(&capability.kind_key, id)
+                            == jt_capability::canonical_external_id(
+                                &capability.kind_key,
+                                &b.account_id,
+                            )
+                    })
+                {
+                    return Err(AppError::conflict("binding_stale"));
+                }
+                // Explicitly rebinding never revives old consent or a pending resume operation.
+                sqlx::query("update studio_budget_moves set data=jsonb_set(jsonb_set(data,'{state}','\"cancelled\"'),'{approval}','null') where workspace_id=$1 and binding_id=$2 and data->>'state'='queued'")
+                    .bind(self.workspace_id().0).bind(b.id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"cancel rebound budget moves"))?;
+                sqlx::query("update studio_adset_bindings set data=$3,control=null where workspace_id=$1 and id=$2")
+                    .bind(self.workspace_id().0).bind(b.id.0).bind(encode(&b)?).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"refresh binding verification"))?;
+            }
+            self.studio_receipt("adset.bind", key, &payload, &b).await?;
+            return Ok(b);
+        }
         sqlx::query("insert into studio_adset_bindings(workspace_id,id,data,capability_id,adset_id,born_version_id,hypothesis_id,arm_id) values($1,$2,$3,$4,$5,$6,$7,$8)")
-            .bind(self.workspace_id().0).bind(b.id.0).bind(&payload).bind(b.capability_id.0).bind(&b.adset_id).bind(b.chain.born_version_id.0).bind(b.chain.hypothesis_id.0).bind(b.chain.arm_id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"bind external ad set"))?;
+            .bind(self.workspace_id().0).bind(b.id.0).bind(encode(&b)?).bind(b.capability_id.0).bind(&b.adset_id).bind(b.chain.born_version_id.0).bind(b.chain.hypothesis_id.0).bind(b.chain.arm_id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"bind external ad set"))?;
         self.studio_receipt("adset.bind", key, &payload, &b).await?;
         Ok(b)
     }
     pub(super) async fn studio_move(
         &mut self,
-        m: BudgetMove,
+        mut m: BudgetMove,
         key: &str,
     ) -> Result<BudgetMove, AppError> {
         same_workspace(self.workspace_id(), m.chain.workspace_id)?;
@@ -91,8 +121,10 @@ impl PgTenantRepos {
             .await?
             .ok_or_else(|| AppError::not_found("binding"))?;
         m.validate_for_binding(&b).map_err(invalid)?;
+        m.binding_verified_at = b.verified_at;
+        m.binding_verification_evidence = b.verification_evidence;
         sqlx::query("insert into studio_budget_moves(workspace_id,id,data,binding_id,reservation_id,executed_version_id,born_version_id,hypothesis_id,arm_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-            .bind(self.workspace_id().0).bind(m.id.0).bind(&payload).bind(m.binding_id.0).bind(m.reservation_id.map(|r|r.0)).bind(m.executed_version_id.map(|v|v.0)).bind(m.chain.born_version_id.0).bind(m.chain.hypothesis_id.0).bind(m.chain.arm_id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"save Studio budget move"))?;
+            .bind(self.workspace_id().0).bind(m.id.0).bind(encode(&m)?).bind(m.binding_id.0).bind(m.reservation_id.map(|r|r.0)).bind(m.executed_version_id.map(|v|v.0)).bind(m.chain.born_version_id.0).bind(m.chain.hypothesis_id.0).bind(m.chain.arm_id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"save Studio budget move"))?;
         self.studio_receipt("budget.move", key, &payload, &m)
             .await?;
         Ok(m)

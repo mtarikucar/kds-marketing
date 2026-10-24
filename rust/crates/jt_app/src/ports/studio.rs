@@ -27,6 +27,56 @@ pub enum PublishOutcome {
     Refused(AppError),
 }
 
+impl PublishOutcome {
+    /// Retain only closed categories and public receipt fields, never diagnostic text.
+    pub fn into_redacted(self) -> jt_studio::PublishOutcome {
+        use jt_studio::PublishOutcome as O;
+        match self {
+            Self::Succeeded(r) => {
+                let mut url = r.url;
+                if let Some(u) = &mut url {
+                    u.set_query(None);
+                    u.set_fragment(None);
+                }
+                O::Succeeded(jt_studio::PublishReceipt {
+                    external_id: r.external_id,
+                    url,
+                })
+            }
+            Self::Failed(e) => O::Failed(publish_error_category(&e)),
+            Self::Unknown(e) => O::Unknown(publish_error_category(&e)),
+            Self::Refused(e) => O::Refused(publish_error_category(&e)),
+        }
+    }
+}
+fn publish_error_category(e: &AppError) -> jt_studio::RedactedPublishError {
+    use crate::error::ErrorCode as C;
+    use jt_studio::RedactedPublishError as E;
+    match e.details["provider_error"].as_str() {
+        Some("auth") => return E::Auth,
+        Some("permission") => return E::Permission,
+        Some("throttle") => return E::Throttle,
+        Some("transient") => return E::Transient,
+        Some("permanent") => return E::Permanent,
+        Some("unknown") => return E::Unknown,
+        _ => {}
+    }
+    match e.code {
+        C::Unauthenticated => E::Auth,
+        C::Forbidden => E::Permission,
+        C::UpstreamUnavailable if e.details["retryable"] == false => E::Unknown,
+        C::UpstreamUnavailable
+            if e.details["retry_after_s"].is_number() || e.details["reason"] == "rate limited" =>
+        {
+            E::Throttle
+        }
+        C::UpstreamUnavailable => E::Transient,
+        C::Internal => E::Unknown,
+        C::Validation | C::NotFound => E::Permanent,
+        _ => E::Policy,
+    }
+}
+
 /// Half-open schedule window; optional filters compose with AND.
 /// `Date::MIN.midnight().assume_utc()` is an unbounded lower endpoint: adapters must not
 /// encode it as a timestamp when their database has a narrower calendar range.
@@ -85,6 +135,8 @@ pub trait StudioRepo: Send + Sync {
     async fn get_file(&mut self, id: FileId) -> Result<Option<StoredFile>, AppError>;
     async fn save_trend(&mut self, signal: TrendSignal, key: &str)
     -> Result<TrendSignal, AppError>;
+    /// A fresh key with the same binding identity explicitly refreshes verification.
+    /// Refresh cancels queued moves/consent and clears pending status intent; old receipts remain.
     async fn bind_adset(
         &mut self,
         binding: AdSetBinding,
@@ -113,10 +165,12 @@ pub trait StudioRepo: Send + Sync {
         &mut self,
         now: OffsetDateTime,
     ) -> Result<Option<PublishAttempt>, AppError>;
+    /// Record when completion was observed; replay keeps the first observation unchanged.
     async fn finish_publication(
         &mut self,
         attempt: PublishAttemptId,
         outcome: PublishOutcome,
+        observed_at: OffsetDateTime,
     ) -> Result<(), AppError>;
     async fn record_measurement(&mut self, measurement: Measurement) -> Result<bool, AppError>;
     async fn apply_learning(&mut self, update: LearningUpdate) -> Result<bool, AppError>;
