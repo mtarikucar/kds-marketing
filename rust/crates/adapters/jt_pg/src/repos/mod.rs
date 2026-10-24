@@ -193,3 +193,5 @@ pub(crate) fn stored<T>(parsed: Option<T>, column: &str) -> Result<T, AppError> 
 }
 
 mod studio;
+
+pub(crate) mod billing;

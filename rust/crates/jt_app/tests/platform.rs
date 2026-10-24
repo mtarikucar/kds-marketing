@@ -326,7 +326,7 @@ async fn set_status_activates_and_ledgers() {
     assert_eq!(entry.at, pctx.now);
     assert_eq!(
         entry.payload,
-        json!({ "from": "pending_payment", "to": "active" })
+        json!({ "from": "pending_payment", "to": "active", "reason":"operator status transition", "by":actor })
     );
     let subject = entry.subject.as_ref().unwrap();
     assert_eq!(
@@ -357,7 +357,7 @@ async fn set_status_activates_and_ledgers() {
     assert_eq!(entries.len(), 2);
     assert_eq!(
         entries[0].payload,
-        json!({ "from": "active", "to": "suspended" })
+        json!({ "from": "active", "to": "suspended", "reason":"operator status transition", "by":actor })
     );
     assert_eq!(entries[0].actor, actor);
 

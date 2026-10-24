@@ -557,7 +557,16 @@ async fn receiving_workspaces_consume_without_strategy_but_suspended_waits() {
         )
         .await;
         let mut r = w.uow.platform().await.unwrap();
-        r.workspace_set_status(w.ws, status).await.unwrap();
+        r.workspace_set_status(
+            w.ws,
+            status,
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
         r.commit().await.unwrap();
         assert_eq!(run(&w).await.changed, count);
         assert_eq!(w.uow.snapshot().inbox.messages.len(), count as usize);

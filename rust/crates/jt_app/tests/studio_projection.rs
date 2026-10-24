@@ -163,7 +163,14 @@ async fn ledger_survives_archive_but_is_status_gated() {
     assert!(overview(&w.d, &w.ctx, query()).await.is_err());
     let mut platform = w.uow.platform().await.unwrap();
     platform
-        .workspace_set_status(w.f.ws, jt_tenancy::WorkspaceStatus::Suspended)
+        .workspace_set_status(
+            w.f.ws,
+            jt_tenancy::WorkspaceStatus::Suspended,
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
         .await
         .unwrap();
     platform.commit().await.unwrap();

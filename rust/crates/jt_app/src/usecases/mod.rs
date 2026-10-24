@@ -48,6 +48,7 @@ use crate::ports::{
 /// adapter.
 #[derive(Clone)]
 pub struct Deps {
+    pub billing: billing::BillingConfig,
     pub file_maintenance: Arc<dyn crate::ports::files::FileMaintenance>,
     pub media_fetch: Arc<dyn crate::ports::files::MediaFetcher>,
     pub files: Arc<dyn crate::ports::files::FileStore>,
@@ -250,3 +251,5 @@ mod tests {
         assert_eq!(hash_token("").len(), 64);
     }
 }
+
+pub mod billing;

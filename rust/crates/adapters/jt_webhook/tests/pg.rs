@@ -45,6 +45,11 @@ fn deps(db: &TestDb) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::with_all_apps()),
         connectors: Arc::new(ScriptedRegistry::new()),
+        billing: jt_app::usecases::billing::BillingConfig {
+            price_minor: 123,
+            price_currency: "TRY".into(),
+            bank_instructions: "Synthetic bank instructions".into(),
+        },
         job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
     }
 }

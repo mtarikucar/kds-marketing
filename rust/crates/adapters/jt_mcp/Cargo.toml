@@ -25,7 +25,7 @@ uuid.workspace = true
 [dev-dependencies]
 jt_ledger.workspace = true
 jt_pg.workspace = true
-jt_testkit.workspace = true
+jt_testkit = { workspace = true, features = ["panel"] }
 # An MCP client for the integration tests only; it brings an HTTP client, which the normal
 # dependency graph must never contain (dev-dependencies are outside the `cargo deny` ban graph
 # and the architecture tests).

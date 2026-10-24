@@ -1066,17 +1066,31 @@ async fn platform_workspaces_list_and_set_status() {
     assert_eq!(p.workspace_get(a).await.unwrap(), Some(list[0].clone()));
     assert_eq!(p.workspace_get(WorkspaceId::new_v7()).await.unwrap(), None);
 
-    p.workspace_set_status(a, WorkspaceStatus::Suspended)
-        .await
-        .unwrap();
+    p.workspace_set_status(
+        a,
+        WorkspaceStatus::Suspended,
+        "test status transition",
+        &jt_ledger::Actor::System {
+            component: "test".into(),
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         p.workspace_get(a).await.unwrap().unwrap().status,
         WorkspaceStatus::Suspended
     );
     assert_eq!(
         code(
-            p.workspace_set_status(WorkspaceId::new_v7(), WorkspaceStatus::Active)
-                .await
+            p.workspace_set_status(
+                WorkspaceId::new_v7(),
+                WorkspaceStatus::Active,
+                "test status transition",
+                &jt_ledger::Actor::System {
+                    component: "test".into()
+                }
+            )
+            .await
         ),
         ErrorCode::NotFound
     );

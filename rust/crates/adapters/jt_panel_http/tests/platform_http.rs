@@ -116,7 +116,7 @@ async fn operator_lists_workspaces_and_activates_one() {
     assert_eq!(entry["action"], "platform.workspace_status");
     assert_eq!(
         entry["payload"],
-        json!({ "from": "pending_payment", "to": "active" })
+        json!({ "from": "pending_payment", "to": "active", "reason":"operator status transition", "by":entry["actor"] })
     );
     assert_eq!(entry["actor"]["kind"], "system", "{entry}");
     assert!(

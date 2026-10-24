@@ -98,13 +98,17 @@ pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."
 /// ([`StatusExemption::PendingPayment`]), but not while it is `suspended`.
 pub const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
 
-/// The status exemption of use case `id`, from its prefix: [`StatusExemption::Always`] for one of
+/// The status exemption of use case `id`. The exact `billing.status` row is Always and
+/// `billing.report_payment` is PendingPayment; other billing names have no exemption.
+/// For other rows: [`StatusExemption::Always`] for one of
 /// [`STATUS_EXEMPT_PREFIXES`], [`StatusExemption::PendingPayment`] for one of
 /// [`PENDING_PAYMENT_EXEMPT_PREFIXES`], else [`StatusExemption::Never`].
 pub const fn status_exemption(id: &str) -> StatusExemption {
-    if starts_with_any(id, STATUS_EXEMPT_PREFIXES) {
+    if equals(id, "billing.status") || starts_with_any(id, STATUS_EXEMPT_PREFIXES) {
         StatusExemption::Always
-    } else if starts_with_any(id, PENDING_PAYMENT_EXEMPT_PREFIXES) {
+    } else if equals(id, "billing.report_payment")
+        || starts_with_any(id, PENDING_PAYMENT_EXEMPT_PREFIXES)
+    {
         StatusExemption::PendingPayment
     } else {
         StatusExemption::Never
@@ -112,6 +116,10 @@ pub const fn status_exemption(id: &str) -> StatusExemption {
 }
 
 /// Whether `id` starts with one of `prefixes`, usable in a constant.
+const fn equals(a: &str, b: &str) -> bool {
+    a.len() == b.len() && starts_with(a, b)
+}
+
 const fn starts_with_any(id: &str, prefixes: &[&str]) -> bool {
     let mut i = 0;
     while i < prefixes.len() {
@@ -265,6 +273,8 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),
     panel_only("auth.logout", Exempt, ("POST", "/api/auth/logout"), Write),
     panel_only("auth.me", Exempt, ("GET", "/api/auth/me"), Read),
+    panel_only("billing.status", Exempt, ("GET", "/api/billing"), Read),
+    twin("billing.report_payment", Exempt, "jeeta.billing.report_payment", ("POST", "/api/billing/payments"), Write),
     twin("workspace.info", Exempt, "jeeta.workspace.info", ("GET", "/api/workspace"), Read),
     panel_only("workspace.switch", Exempt, ("POST", "/api/auth/switch-workspace"), Write),
     twin("team.list", Exempt, "jeeta.team.list", ("GET", "/api/team"), Read),

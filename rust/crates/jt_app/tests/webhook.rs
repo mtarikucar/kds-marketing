@@ -255,7 +255,17 @@ async fn an_event_for_an_account_no_workspace_holds_connected_writes_nothing() {
 /// Sets workspace `ws`'s status, as the platform operator would.
 async fn set_status(w: &World, ws: WorkspaceId, status: WorkspaceStatus) {
     let mut platform = w.uow.platform().await.unwrap();
-    platform.workspace_set_status(ws, status).await.unwrap();
+    platform
+        .workspace_set_status(
+            ws,
+            status,
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
     platform.commit().await.unwrap();
 }
 

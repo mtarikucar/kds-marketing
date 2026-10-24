@@ -45,6 +45,9 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
    # .env içinde en azından:
    #   JEETA_DATABASE_URL=postgres://jeeta:yerel-bir-parola@localhost:5432/jeeta
    #   JEETA_SECRET_KEY=<openssl rand -hex 32 çıktısı>
+   #   JEETA_PRICE_MINOR=<işletmenin belirlediği pozitif küçük birim tutarı>
+   #   JEETA_PRICE_CURRENCY=<üç büyük ASCII harfi>
+   #   JEETA_BANK_INSTRUCTIONS=<havale bilgileri>
    #   JEETA_COOKIE_SECURE=false        (yalnızca http://localhost için)
    #   JEETA_PANEL_DIR=panel/dist
    ```
@@ -93,6 +96,9 @@ döndürür. Sekiz göç vardır:
 | `0007_inbox_policy` | Alan politikalarına `inbox_policy` sütunu ekler; mevcut durum etiketlerini korur, yeni tablo eklemez. |
 | `0008_inbox_compliance` | İzinler, engellemeler, teklifler, randevular, komisyonlar, silme kayıtları ve kimlik özetleri, gönderim işleri, posta imleçleri, varsayılan/kullanıcı komisyon oranları ve değişmez yolculuk atfı: 12 yeni alan tablosu, toplam 48. FORCE RLS, bileşik alan anahtarları ve yinelenebilir up/down. |
 | `0009_studio` | Growth Studio tenant persistence: 14 tables, total 62; durable claims, replay receipts, learning, spend reservations and reversible owner/manager grant backfill. Includes hypothesis cadence/prior and nullable unit price. |
+| `0010_m4_billing` | Payment evidence, permanent entitlement history, stable workspace reference and a platform-only backfill manifest; 66 tables. Schema rollback refuses live rows. |
+| `0011_m4_activation_codes` | Workspace-locked keyed activation challenges, attempt cap and replay history; 67 tables. No plaintext or recipient binding. |
+| `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -135,6 +141,9 @@ hiçbir günlük satırında görünmez.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
+| `JEETA_PRICE_MINOR` | — (zorunlu) | Tek seferlik fiyat, pozitif tamsayı küçük para birimi |
+| `JEETA_PRICE_CURRENCY` | — (zorunlu) | Üç büyük ASCII harfi |
+| `JEETA_BANK_INSTRUCTIONS` | — (zorunlu) | Salt okunur havale açıklaması, boş olamaz, en çok 4096 bayt |
 | `JEETA_DATABASE_URL` | — (zorunlu) | Uygulamanın PostgreSQL adresi, `postgres://kullanıcı:parola@sunucu:port/veritabanı` |
 | `JEETA_SECRET_KEY` | — (zorunlu) | Tam 64 onaltılık karakter (32 bayt): `openssl rand -hex 32`. Açılışta doğrulanır. Sır kutusunun (`jt_seal`) ana anahtarıdır: bağlayıcı sırları, her çalışma alanı için bundan türetilen ayrı bir anahtarla mühürlenir (bkz. [Sırların mühürlenmesi](#sırların-mühürlenmesi)). Değiştirilirse önceden mühürlenmiş sırlar açılamaz |
 | `JEETA_BIND` | `127.0.0.1:8080` | Dinlenen `ip:port` |
@@ -254,7 +263,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (124 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (125 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -271,7 +280,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 124 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 125 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -294,6 +303,7 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | Alan | Araç | Ne yapar | Risk |
 |---|---|---|---|
 | ajan | `jeeta.agent.whoami` | Anahtarın kimin adına çalıştığı: ajan bağlantısı, anahtarı çıkaran üye, alan, rol ve etkin izinler | READ |
+| ödeme | `jeeta.billing.report_payment` | Sahip yetkisi ve `team.manage` kapsamında havale kanıtı kaydeder; ödeme doğrulamaz, alanı açmaz, kod almaz | WRITE |
 | alan | `jeeta.workspace.info` | Çalışma alanının kimliği, adı, kısa adı ve durumu | READ |
 | ekip | `jeeta.team.list` | Üyeler ve açık davetler | READ |
 | | `jeeta.team.invite` | Bir e-postayı bir rolle davet eder; tek seferlik davet jetonunu döndürür | WRITE |
@@ -2404,7 +2414,7 @@ its immutable repository contract. No provider-live verification is claimed.
 
 ## M3 Task 10 — Five-region Growth Studio
 
-The current release has **124 MCP tools / 18 Studio operations**, **62 tables**,
+At the M3 Task 10 boundary the release had **124 MCP tools / 18 Studio operations**, **62 tables**,
 migration **0009_studio**, and **21 scheduled jobs**. This task adds no tables or jobs.
 
 | Shared row / MCP tool | HTTP | Strategy gate / permission |
@@ -2497,3 +2507,98 @@ checks. `twin_parity`, `studio_http`, `studio_mcp`, `studio_paid`, `studio_brake
 contracts; the smoke does not replace those PostgreSQL tests. These fixtures prove
 application behavior, not live Meta/X approval, provider availability, actual billing
 or the provider's eventual spend. The broader release checks remain `make check panel-test panel-build`.
+
+
+## M4 Task 1 — durable billing storage
+
+The implemented storage boundary is **67 tables**, **12 migration pairs** (latest
+`0012_m4_grandfathered_backfill`), **124 MCP tools** and **21 scheduled jobs**.
+This task adds repository contracts; payment reporting, operator confirmation and panel
+redemption surfaces belong to M4 Tasks 2–4. The existing M3 release tables above are historical.
+There is no payment provider, subscription, credit balance or automatic entitlement expiry.
+Price, currency and bank instructions remain deployment inputs for the subsequent billing
+operations, not business constants derived from test fixtures.
+
+`payment_notifications` stores immutable evidence through insert-only repository methods:
+reporter, request key, amount in minor units, currency, payment/report timestamps and a sealed
+bank reference. The same request key is unique within a workspace. Secret-bearing payment and
+challenge rows have masked Debug and do not implement serialization. `workspace_billing`
+creates a stable `JEETA-<8 uppercase workspace UUID hex digits>-<6 random decimal digits>`
+reference once under the workspace lock, retrying unique-reference collisions.
+
+A paid entitlement requires a payment from the same workspace and a confirming platform
+operator. Confirmation stores an unactivated grant; activation records time and the redeeming
+user. Grandfathered grants have no payment or operator. Only one nonrevoked grant may exist per
+workspace; revocation retains the row and its reason, and a later grant may reuse the same
+payment. `activation_codes` stores only a keyed 32-byte digest and challenge metadata. Challenges
+are restricted to `billing.activate`, have no designated recipient, retain consumed rows for
+replay refusal, and cap failed attempts at five. Current-owner authorization and code generation
+are implemented by the later redemption use case.
+
+Billing writers lock the workspace before grants/challenges, retaining the lock until the
+caller commits or drops its bundle. PostgreSQL uses `FOR NO KEY UPDATE`, compatible with
+unrelated ledger foreign-key locks; the fake serializes writes and refreshes its snapshot.
+Tenant status mutation rejects another workspace. Both status mutation ports require a reason
+and actor and atomically append `platform.workspace_status` with `from`, `to`, `reason`, `by`.
+A repeated status is a no-op. This specified port has no timestamp parameter, so its audit uses
+transaction time (fixed transaction time in the fake); other billing timestamps come from callers.
+Registration still creates pending workspaces and `workspace.info` remains read-only. Task 3
+replaces the legacy console status operation with the ruled payment/status state machine.
+
+All four billing tables have ENABLE/FORCE RLS and tenant composite foreign keys. Platform access
+uses the existing explicit platform transaction, with no superuser/BYPASSRLS role. The separate
+backfill manifest is platform-only. Backfill IDs are deterministic per workspace and the manifest
+retains the entire original row plus its workspace ledger watermark. Repeated up skips existing
+grants. Data down removes only untouched owned rows without later ledger history, other grants
+or challenge references; edited/revoked/runtime-associated rows and their manifest entries stay.
+It never changes workspace status. Schema downs preflight and lock their tables, then refuse
+atomically if live rows remain. Roll back live installations through a preserved backup, not by
+dropping durable payment history. Migrations 0001–0009 are unchanged.
+
+Verification: `cargo test --locked --workspace --test billing_repos --test migrations` runs
+shared fake/Pg contracts, ordinary-role RLS and composite FK checks, challenge replay/attempt
+checks, concurrent grants/reference creation, and up/down/up/repeated-down/live-row preservation.
+The named `m4_billing_storage` and `m4_billing_contracts` targets also run in the workspace suite.
+
+
+## M4 Task 2 — tenant payment status and bank-transfer evidence
+
+Current implemented boundary: **136 catalog rows**, **125 MCP tools**, **67 tables**,
+**12 migration pairs**, **21 scheduled jobs**. Task 2 adds no migrations or provider calls.
+Operator confirmation and panel code redemption remain Tasks 3–4; this change does not
+claim those flows are implemented.
+
+| Use case | Panel route | MCP tool | Permission / status |
+|---|---|---|---|
+| `billing.status` | `GET /api/billing` | None (panel only) | Active membership + `workspace.read`; every workspace status |
+| `billing.report_payment` | `POST /api/billing/payments` | `jeeta.billing.report_payment` | Current owner + `team.manage`, including effective key scopes; active or pending, never suspended |
+
+Both are strategy-exempt. These are exact status exceptions; team, keys and capabilities
+remain unavailable while pending. Fresh registrations report through their panel session;
+existing authorized keys can report after a workspace returns to pending. No unpaid key
+issuance or alternate agent authentication is introduced.
+
+The required deployment variables `JEETA_PRICE_MINOR`, `JEETA_PRICE_CURRENCY` and
+`JEETA_BANK_INSTRUCTIONS` apply to both `serve` and `mcp-stdio`. No price, currency or bank
+instructions default is supplied. Status returns those read-only instructions and the stable
+workspace payment reference, the latest payment, and the latest grant including revoked history.
+`confirmed` means a paid grant has existed for that payment, even after revocation; it does not
+mean active access. Codes, sealed evidence and operator identity are absent from these DTOs.
+
+Report JSON contains exactly `reference`, `amount_minor`, `paid_at` and `request_key`.
+Reference matching ignores whitespace and ASCII letter case. Amount must be positive;
+amounts different from the configured price are retained for operator review. `paid_at` is a
+nonfuture RFC 3339 timestamp with at most microsecond precision (PostgreSQL's precision).
+The nonblank request key is at most 128 bytes. Workspace and reporter come from authentication.
+Unknown fields, including codes and caller-supplied workspace/currency, are rejected.
+
+Reports seal the normalized reference and append an ID-only `billing.payment_reported` event
+in the same workspace-locked transaction. The same request key with identical normalized
+reference, amount and payment time returns the stored payment and currency; changed evidence
+is `CONFLICT`. Payment reporting never changes workspace status, entitlement, strategy,
+capability verification or connection status. Concurrent retries produce one payment/event.
+
+`cargo test --locked --workspace --test billing` covers the Task 2 app, PostgreSQL HTTP and
+real MCP transport tests (the `billing/m4_billing_*` modules), including cross-surface retries,
+owner/scopes, rollback, restart, history and exact billing schemas/status exceptions. Binary
+unit test `billing_config_rejects_missing_or_invalid_values` verifies required configuration.

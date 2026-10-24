@@ -140,7 +140,16 @@ impl World {
     /// Sets workspace `ws`'s status straight in the repos.
     pub async fn set_status(&self, ws: WorkspaceId, status: WorkspaceStatus) {
         let mut p = self.uow.platform().await.unwrap();
-        p.workspace_set_status(ws, status).await.unwrap();
+        p.workspace_set_status(
+            ws,
+            status,
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
         p.commit().await.unwrap();
     }
 
@@ -197,9 +206,16 @@ async fn register(deps: &Deps, email: &str, workspace: &str) -> WorkspaceId {
     .unwrap();
     let ws = out.me.current_workspace.unwrap();
     let mut p = deps.uow.platform().await.unwrap();
-    p.workspace_set_status(ws, WorkspaceStatus::Active)
-        .await
-        .unwrap();
+    p.workspace_set_status(
+        ws,
+        WorkspaceStatus::Active,
+        "test status transition",
+        &jt_ledger::Actor::System {
+            component: "test".into(),
+        },
+    )
+    .await
+    .unwrap();
     p.commit().await.unwrap();
     ws
 }
@@ -265,6 +281,14 @@ impl UnitOfWork for FailingInserts {
 
 #[async_trait]
 impl TenantRepos for FailingTenant {
+    fn billing(&mut self) -> &mut dyn jt_app::ports::billing::BillingRepo {
+        self.0.billing()
+    }
+
+    fn activation_codes(&mut self) -> &mut dyn jt_app::ports::billing::ActivationCodeRepo {
+        self.0.activation_codes()
+    }
+
     fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
         self.0.studio()
     }

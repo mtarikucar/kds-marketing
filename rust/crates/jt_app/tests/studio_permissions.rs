@@ -157,9 +157,16 @@ async fn direct_controls_preserve_workspace_and_strategy_gates() {
     );
     w.brake(true, None, 0).await;
     let mut r = w.uow.platform().await.unwrap();
-    r.workspace_set_status(w.f.ws, WorkspaceStatus::Suspended)
-        .await
-        .unwrap();
+    r.workspace_set_status(
+        w.f.ws,
+        WorkspaceStatus::Suspended,
+        "test status transition",
+        &jt_ledger::Actor::System {
+            component: "test".into(),
+        },
+    )
+    .await
+    .unwrap();
     r.commit().await.unwrap();
     assert_eq!(
         brake(
