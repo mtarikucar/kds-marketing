@@ -61,3 +61,60 @@ impl FileStore for UnavailableFileStore {
         Err(AppError::internal("file storage is not configured"))
     }
 }
+
+/// Checked, bounded tenant HTTP ingestion; the adapter uses the shared egress client.
+#[async_trait]
+pub trait MediaFetcher: Send + Sync {
+    async fn fetch(
+        &self,
+        ws: WorkspaceId,
+        url: &Url,
+        mime: &str,
+        filename: &str,
+    ) -> Result<MediaUpload, AppError>;
+}
+pub struct UnavailableMediaFetcher;
+#[async_trait]
+impl MediaFetcher for UnavailableMediaFetcher {
+    async fn fetch(
+        &self,
+        _: WorkspaceId,
+        _: &Url,
+        _: &str,
+        _: &str,
+    ) -> Result<MediaUpload, AppError> {
+        Err(AppError::internal("media fetch is not configured"))
+    }
+}
+
+/// Permanent evidence used to derive retention under the Studio control lock.
+#[derive(Default)]
+pub struct FileUsage {
+    pub files: Vec<StoredFile>,
+    pub pieces: Vec<(super::studio::SlotId, super::studio::Piece)>,
+    pub slots: Vec<super::studio::Slot>,
+    pub attempts: Vec<super::studio::PublishAttempt>,
+    pub publications: Vec<super::studio::Publication>,
+}
+
+/// Enumerates old physical objects so a crash before metadata commit can be repaired.
+/// It never decides whether a file is referenced; the application holds the tenant fence.
+#[async_trait]
+pub trait FileMaintenance: Send + Sync {
+    async fn orphan_candidates(
+        &self,
+        ws: WorkspaceId,
+        older_than: OffsetDateTime,
+    ) -> Result<Vec<FileId>, AppError>;
+}
+pub struct NoFileMaintenance;
+#[async_trait]
+impl FileMaintenance for NoFileMaintenance {
+    async fn orphan_candidates(
+        &self,
+        _: WorkspaceId,
+        _: OffsetDateTime,
+    ) -> Result<Vec<FileId>, AppError> {
+        Ok(vec![])
+    }
+}

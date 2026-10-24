@@ -13,6 +13,20 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "studio.file_upload",
+            description: "Store validated tenant media with a replay key. [risk: WRITE]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("file_upload")).expect("studio schema"),
+            run: file_upload,
+        },
+        ToolDef {
+            use_case: "studio.piece_submit",
+            description: "Submit agent content and revision-bound Ready work atomically. [risk: WRITE]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("piece_submit")).expect("studio schema"),
+            run: piece_submit,
+        },
+        ToolDef {
             use_case: "studio.pending",
             description: "Read pending Studio slots, revision consent, budget moves and blockers. [risk: READ]",
             permission: Permission::StudioWork,
@@ -102,4 +116,15 @@ fn trend_record<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
 }
 fn hypothesis_propose<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move { to_json(&trends::hypothesis_propose(d, c, args(v)?).await?) })
+}
+
+fn file_upload<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        to_json(&jt_app::usecases::studio::files::file_upload(d, c, args(v)?).await?)
+    })
+}
+fn piece_submit<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        to_json(&jt_app::usecases::studio::pieces::piece_submit(d, c, args(v)?).await?)
+    })
 }

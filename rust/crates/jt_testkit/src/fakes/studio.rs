@@ -233,6 +233,60 @@ impl StudioControlRepo for MemTenant {
 }
 #[async_trait]
 impl StudioRepo for MemTenant {
+    async fn request_replay(
+        &mut self,
+        action: &str,
+        key: &str,
+        payload: &Value,
+    ) -> Result<Option<Value>, AppError> {
+        StudioControlRepo::lock_control(self).await?;
+        self.replay(action, key, payload)
+    }
+    async fn request_receipt(
+        &mut self,
+        action: &str,
+        key: &str,
+        payload: &Value,
+        response: &Value,
+    ) -> Result<(), AppError> {
+        self.receipt(action, key, payload, response)
+    }
+    async fn file_usage(&mut self) -> Result<jt_app::ports::files::FileUsage, AppError> {
+        let s = &self.state().studio;
+        Ok(jt_app::ports::files::FileUsage {
+            files: s
+                .files
+                .iter()
+                .filter(|v| v.workspace_id == self.ws)
+                .cloned()
+                .collect(),
+            pieces: s
+                .pieces
+                .iter()
+                .filter(|(_, v)| v.chain.workspace_id == self.ws)
+                .cloned()
+                .collect(),
+            slots: s
+                .slots
+                .iter()
+                .filter(|v| v.chain.workspace_id == self.ws)
+                .cloned()
+                .collect(),
+            attempts: s
+                .attempts
+                .iter()
+                .filter(|v| v.piece().chain.workspace_id == self.ws)
+                .cloned()
+                .collect(),
+            publications: s
+                .publications
+                .iter()
+                .filter(|v| v.chain.workspace_id == self.ws)
+                .cloned()
+                .collect(),
+        })
+    }
+
     async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError> {
         let mut rows: Vec<_> = self
             .state()

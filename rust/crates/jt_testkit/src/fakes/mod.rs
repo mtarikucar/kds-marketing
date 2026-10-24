@@ -78,3 +78,5 @@ mod erasure;
 
 mod studio;
 pub use studio::MemStudio;
+
+pub mod files;

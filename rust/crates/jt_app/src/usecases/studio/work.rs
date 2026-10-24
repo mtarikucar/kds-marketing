@@ -16,12 +16,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::Duration;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrandRules {
     pub identity: Identity,
     pub prohibitions: Vec<String>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SlotOut {
     pub slot: Slot,
     pub piece: Option<Piece>,
@@ -31,12 +31,12 @@ pub struct SlotOut {
     pub attempts: Vec<PublishAttempt>,
     pub measurements: Vec<Measurement>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingSlot {
     pub slot: Slot,
     pub overdue: bool,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Blocker {
     pub target: ApprovalTarget,
     pub reason: String,
@@ -204,7 +204,7 @@ pub async fn slot_get(d: &Deps, ctx: &Ctx, id: SlotId) -> Result<SlotOut, AppErr
     let frame = gated(r.as_mut(), ctx).await?;
     slot_in(r.as_mut(), id, &frame).await
 }
-async fn slot_in(
+pub(crate) async fn slot_in(
     r: &mut dyn TenantRepos,
     id: SlotId,
     frame: &StrategyVersion,

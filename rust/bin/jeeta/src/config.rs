@@ -27,6 +27,7 @@ pub const DATABASE_URL: &str = "JEETA_DATABASE_URL";
 /// The HTTP listen address, `ip:port` (default [`DEFAULT_BIND`]).
 pub const BIND: &str = "JEETA_BIND";
 /// The built panel's directory (optional).
+pub const FILES_DIR: &str = "JEETA_FILES_DIR";
 pub const PANEL_DIR: &str = "JEETA_PANEL_DIR";
 /// Whether the session cookies carry `Secure` (default `true`).
 pub const COOKIE_SECURE: &str = "JEETA_COOKIE_SECURE";
@@ -81,6 +82,7 @@ const VARS: &[&str] = &[
     DATABASE_URL,
     BIND,
     PANEL_DIR,
+    FILES_DIR,
     COOKIE_SECURE,
     SECRET_KEY,
     ALLOWED_HOSTS,
@@ -249,6 +251,7 @@ pub struct Config {
     pub database_url: String,
     pub bind: SocketAddr,
     pub panel_dir: Option<PathBuf>,
+    pub files_dir: Option<PathBuf>,
     pub cookie_secure: bool,
     /// The master key of the secret box (`jt_seal`), which seals connector secrets.
     pub secret_key: SecretKey,
@@ -403,6 +406,7 @@ impl Config {
             database_url,
             bind,
             panel_dir,
+            files_dir: get(FILES_DIR).map(PathBuf::from),
             cookie_secure,
             secret_key,
             allowed_hosts,

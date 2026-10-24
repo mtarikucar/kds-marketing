@@ -195,7 +195,19 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
 /// serves anything, so no request or job reaches out before the tier is whole. Returns the ports
 /// and the egress client they share.
 pub(crate) async fn boot(pool: PgPool, config: &Config) -> Result<(Deps, Arc<Egress>)> {
-    let (deps, egress) = ports(pool, config);
+    let (mut deps, egress) = ports(pool, config);
+    let dir = config
+        .files_dir
+        .as_deref()
+        .context("JEETA_FILES_DIR is required")?;
+    let base = config
+        .apps
+        .public_base_url()
+        .context("JEETA_PUBLIC_BASE_URL is required for file transport")?;
+    let files=Arc::new(jt_files::DiskFiles::new(dir,base,*config.secret_key.bytes(),deps.clock.clone()).map_err(|_|anyhow::anyhow!("JEETA_FILES_DIR must be an existing absolute private directory and JEETA_PUBLIC_BASE_URL a public HTTPS origin"))?);
+    deps.files = files.clone();
+    deps.file_maintenance = files;
+    deps.media_fetch = Arc::new(jt_files::CheckedMediaFetcher(egress.clone()));
     rebuild_tenant_hosts(&egress, deps.uow.as_ref())
         .await
         .context("cannot rebuild the egress tenant tier from the capability records")?;
@@ -240,6 +252,8 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
         seal: Arc::new(AesSecretBox::new(*config.secret_key.bytes())),
         channels: Arc::new(UowChannelCatalog::new(uow)),
         // Studio cancellation shares the strategy transition transaction; file storage follows in T5.
+        file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+        media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
         files: Arc::new(jt_app::ports::files::UnavailableFileStore),
         transition_hook: Arc::new(jt_app::usecases::studio::lifecycle::StudioTransition),
         archived_hook: Arc::new(NoopArchivedHook),
@@ -310,10 +324,16 @@ pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> R
     let hooks = WebhookState {
         deps: Arc::new(deps.clone()),
     };
+    let files = jt_files::router(
+        deps.files.clone(),
+        deps.clock.clone(),
+        *config.secret_key.bytes(),
+    );
     let mcp = McpState::new(deps, gate).with_allowed_hosts(mcp_hosts(&config.allowed_hosts));
     jt_panel_http::router(panel)
         .merge(jt_mcp::http_service(mcp))
         .merge(jt_webhook::router(hooks))
+        .merge(files)
         // The panel's router sets them on its own responses already (idempotently); this
         // covers the MCP endpoint and the webhook gate too.
         .layer(middleware::from_fn(jt_panel_http::security_headers))
@@ -495,6 +515,8 @@ mod tests {
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
+            file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+            media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
             files: Arc::new(jt_app::ports::files::UnavailableFileStore),
             transition_hook: Arc::new(jt_app::usecases::studio::lifecycle::StudioTransition),
             archived_hook: Arc::new(NoopArchivedHook),
@@ -931,7 +953,10 @@ mod tests {
     #[tokio::test]
     async fn boot_rebuilds_the_tenant_tier_with_live_connector_hosts_only() {
         let db = jt_testkit::TestDb::new().await;
-        let config = test_config(&[]);
+        let config = test_config(&[
+            (config::FILES_DIR, "/tmp"),
+            (config::PUBLIC_BASE_URL, "https://files.example.com"),
+        ]);
         let (mut deps, _) = boot(db.pool.clone(), &config).await.unwrap();
         deps.hasher = Arc::new(PlainHasher);
         let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);

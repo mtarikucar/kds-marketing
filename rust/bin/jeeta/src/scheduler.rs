@@ -62,6 +62,7 @@ pub struct Intervals {
     pub response_sla: Duration,
     pub snooze_wake: Duration,
     pub studio_control: Duration,
+    pub studio_files_cleanup: Duration,
     pub studio_plan: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
@@ -92,6 +93,7 @@ impl Default for Intervals {
             response_sla: MINUTE,
             snooze_wake: MINUTE,
             studio_control: MINUTE,
+            studio_files_cleanup: DAY,
             studio_plan: HOUR,
             first_run_jitter: Duration::from_secs(30),
         }
@@ -117,6 +119,7 @@ impl Intervals {
             Job::ResponseSla => self.response_sla,
             Job::SnoozeWake => self.snooze_wake,
             Job::StudioControl => self.studio_control,
+            Job::StudioFilesCleanup => self.studio_files_cleanup,
             Job::StudioPlan => self.studio_plan,
         }
     }
@@ -404,6 +407,7 @@ mod tests {
             response_sla: every,
             snooze_wake: every,
             studio_control: every,
+            studio_files_cleanup: every,
             studio_plan: every,
             first_run_jitter: Duration::ZERO,
         }
@@ -496,6 +500,11 @@ mod tests {
         assert_eq!(i.of(Job::ResponseSla), MINUTE);
         assert_eq!(i.of(Job::SnoozeWake), MINUTE);
         assert_eq!(i.of(Job::StudioControl), MINUTE);
+        assert_eq!(i.of(Job::StudioFilesCleanup), DAY);
+        assert_eq!(
+            Job::StudioFilesCleanup.lock_name(),
+            "jeeta.jobs.studio_files_cleanup"
+        );
         assert_eq!(i.of(Job::StudioPlan), HOUR);
         assert_eq!(Job::ResponseSla.lock_name(), "jeeta.jobs.response_sla");
         assert_eq!(Job::SnoozeWake.lock_name(), "jeeta.jobs.snooze_wake");

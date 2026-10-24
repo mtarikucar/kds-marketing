@@ -284,6 +284,7 @@ fn every_job_has_a_lock_named_after_it() {
             "response_sla",
             "snooze_wake",
             "studio_control",
+            "studio_files_cleanup",
             "studio_plan",
         ]
     );

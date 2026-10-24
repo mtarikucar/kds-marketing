@@ -254,7 +254,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (114 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (116 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -271,7 +271,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 114 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 116 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -2051,7 +2051,7 @@ remain in `studio_permissions`.
 
 ## M3 Task 4 — weekly planning and suggestions
 
-The current release has **114 MCP tools**, including **8 Studio operations**;
+At the T4 boundary the release had **114 MCP tools**, including **8 Studio operations**;
 the schema remains **62 tables** at migration **0009**. No provider or content
 generation service was added.
 
@@ -2099,3 +2099,64 @@ activate themselves or alter the approved strategy.
 Validation: `studio_planning` covers the pure planner, application flows and real
 Postgres draft concurrency; `studio_work` covers absent-agent overdue projections;
 `studio_http`, `studio_mcp` and `twin_parity` cover registration, schema and effects.
+
+
+## M3 Task 5 — tenant files and agent content
+
+The current release has **116 MCP tools / 10 Studio operations**, **62 tables**,
+and migration **0009_studio**. T5 adds no migration.
+
+| Operation / MCP suffix | HTTP | Permission / gate |
+|---|---|---|
+| `studio.file_upload` | `POST /api/studio/files` | `studio.work`, approved strategy and active workspace |
+| `studio.piece_submit` | `POST /api/studio/slots/{slot_id}/piece` | `studio.work`, approved strategy and active workspace |
+
+Both surfaces accept strict tagged media inputs. Upload content is
+`{"kind":"bytes_base64","data":"..."}` or `{"kind":"source_url","url":"https://..."}`.
+Piece media is `file` (id), `hosted_url` (url, mime, size_bytes), or `bytes`
+(data in base64, mime, filename). Account adaptations are keyed by the slot
+capability's external account ID. Raw bytes normalize to tenant file IDs before
+persistence; HostedUrl references remain direct. X transport reloads file bytes or
+uses the same bounded, tenant-authorized fetch. No content generation or provider
+publication occurs during submission.
+
+File startup requires **JEETA_FILES_DIR**, an existing absolute directory on a Linux
+persistent volume, and a **public HTTPS JEETA_PUBLIC_BASE_URL** origin. Create the
+storage directory owned by the service user with mode 0700; mount the same volume
+on instances serving the same database. Keep JEETA_SECRET_KEY stable: it signs file
+transport as well as sealing credentials. Tenant/file IDs choose paths; filenames
+never do. Directory descriptors and no-follow opens prevent symlink escapes.
+Atomic durable writes include a SHA-256 integrity envelope, survive restart, and
+refuse corrupt assets. Abandoned temporary writes older than 24 hours are repaired
+on the next write to that tenant root. Disk operations run on blocking workers.
+
+Allowed MIME values are image/jpeg, image/png, image/webp, image/gif (25,000,000
+bytes maximum) and video/mp4 (200,000,000 bytes maximum), checked against actual
+bytes and signatures. URL ingestion uses the existing tenant egress allowlist and
+DNS guard, bounds streamed bytes, and refuses redirects. The source host must
+already be authorized for that tenant. HTTP upload/submission and MCP messages
+have a 280,000,000-byte envelope limit to accommodate base64 video.
+
+`GET /files/{id}` requires a signature bound to workspace, file and expiry. URLs
+expire 24 hours after signing and responses use no-store/nosniff headers. Signed
+queries, bytes and content are absent from application logs and mutation ledgers;
+request receipts store a payload digest and original result. Same key/body replays
+the original result even after a later edit. Different bodies conflict. Submission
+commits content, Ready revision, ledger and receipt together, validates current
+chain/account/file ownership, and leaves previous consent unable to authorize an
+edited revision. In-flight or uncertain publication content cannot be replaced.
+
+The daily `studio_files_cleanup` job uses `jeeta.jobs.studio_files_cleanup` and
+runs independently of live strategy. It deletes bytes only 30 days after the last
+successful publication using them, while retaining files referenced by current
+pending work or Queued/Sending/Unknown attempts. Never-published assets are retained.
+Deletion is idempotent across a crash before the metadata marker; hashes, piece,
+publication, measurement and ledger evidence remain permanent. Hosted assets are
+never deleted by Jeeta.
+
+Failed writes are compensated before a commit is attempted. If the process stops
+or commit acknowledgement is uncertain, daily cleanup reconciles physical files
+older than 24 hours that have no tenant metadata, under the same control lock.
+Tracked uploads and pending content are protected. Submission checks byte availability
+under that lock, so a crash between deletion and its marker cannot create Ready
+work that references missing bytes.

@@ -39,6 +39,8 @@ use crate::state::AppState;
 /// Every route the panel HTTP adapter serves, as (method, path), in axum's path syntax as
 /// `CATALOG.panel_route` writes it. The twin-rule test compares it with the catalog.
 pub const ROUTES: &[(&str, &str)] = &[
+    ("POST", "/api/studio/files"),
+    ("POST", "/api/studio/slots/{slot_id}/piece"),
     ("GET", "/api/studio/pending"),
     ("GET", "/api/studio/slots/{slot_id}"),
     ("POST", "/api/studio/slots/{slot_id}/cancel"),
@@ -246,6 +248,18 @@ where
 /// The JSON API's routes.
 pub fn api_routes() -> Vec<ApiRoute> {
     vec![
+        api_route(
+            "POST",
+            "/studio/files",
+            "studio.file_upload",
+            studio::file_upload,
+        ),
+        api_route(
+            "POST",
+            "/studio/slots/{slot_id}/piece",
+            "studio.piece_submit",
+            studio::piece_submit,
+        ),
         api_route("GET", "/studio/pending", "studio.pending", studio::pending),
         api_route(
             "GET",
@@ -943,6 +957,8 @@ mod tests {
                 hasher: Arc::new(PlainHasher),
                 seal: Arc::new(PlainSecretBox),
                 channels: Arc::new(NoChannelsYet),
+                file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+                media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
                 files: Arc::new(jt_app::ports::files::UnavailableFileStore),
                 transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
                 archived_hook: Arc::new(NoopArchivedHook),

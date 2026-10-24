@@ -88,3 +88,37 @@ pub async fn hypothesis_propose(
 ) -> Result<Json<trends::HypothesisProposalOut>, ApiError> {
     Ok(Json(trends::hypothesis_propose(&s.deps, &ctx, body).await?))
 }
+
+pub async fn file_upload(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(body): ApiJson<jt_app::usecases::studio::files::FileUploadInput>,
+) -> Result<Json<jt_app::ports::files::StoredFile>, ApiError> {
+    Ok(Json(
+        jt_app::usecases::studio::files::file_upload(&s.deps, &ctx, body).await?,
+    ))
+}
+pub async fn piece_submit(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<SlotId>,
+    ApiJson(mut body): ApiJson<serde_json::Value>,
+) -> Result<Json<work::SlotOut>, ApiError> {
+    let object = body.as_object_mut().ok_or_else(|| {
+        jt_app::error::AppError::validation("expected object", serde_json::json!({}))
+    })?;
+    if object.contains_key("slot_id") {
+        return Err(jt_app::error::AppError::validation(
+            "slot_id is a path parameter",
+            serde_json::json!({}),
+        )
+        .into());
+    }
+    object.insert("slot_id".into(), serde_json::json!(id));
+    let input = serde_json::from_value(body).map_err(|_| {
+        jt_app::error::AppError::validation("invalid piece input", serde_json::json!({}))
+    })?;
+    Ok(Json(
+        jt_app::usecases::studio::pieces::piece_submit(&s.deps, &ctx, input).await?,
+    ))
+}

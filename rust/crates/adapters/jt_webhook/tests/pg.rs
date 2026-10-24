@@ -37,6 +37,8 @@ fn deps(db: &TestDb) -> Deps {
         hasher: Arc::new(PlainHasher),
         seal: Arc::new(PlainSecretBox),
         channels: Arc::new(NoChannelsYet),
+        file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+        media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
         files: Arc::new(jt_app::ports::files::UnavailableFileStore),
         transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
         archived_hook: Arc::new(NoopArchivedHook),

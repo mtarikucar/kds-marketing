@@ -7,6 +7,21 @@ pub fn input(action: &str) -> Value {
     let revision = json!({"type":"integer","minimum":0,"maximum":18446744073709551615_u64});
     let lane = json!({"type":"string","enum":["organic","paid"]});
     let (properties, required) = match action {
+        "file_upload" => (
+            json!({"request_key":{"type":"string","minLength":1,"maxLength":200},"filename":{"type":"string","minLength":1,"maxLength":255},"mime":mime(),"content":{"oneOf":[object(json!({"kind":{"const":"bytes_base64"},"data":{"type":"string"}}),&["kind","data"]),object(json!({"kind":{"const":"source_url"},"url":{"type":"string","format":"uri"}}),&["kind","url"]) ]}}),
+            vec!["request_key", "filename", "mime", "content"],
+        ),
+        "piece_submit" => (
+            json!({"slot_id":{"type":"string","format":"uuid"},"expected_revision":revision,"request_key":{"type":"string","minLength":1,"maxLength":200},"text":{"type":"string"},"media":{"type":"array","items":media()},"adaptations":{"type":"object","additionalProperties":object(json!({"text":{"type":"string"},"media":{"type":"array","items":media()},"link":{"type":["string","null"],"format":"uri"}}),&["text","media"])}}),
+            vec![
+                "slot_id",
+                "expected_revision",
+                "request_key",
+                "text",
+                "media",
+                "adaptations",
+            ],
+        ),
         "pending" => (json!({}), vec![]),
         "slot_get" => (
             json!({"slot_id":{"type":"string","format":"uuid"}}),
@@ -46,7 +61,7 @@ pub fn input(action: &str) -> Value {
 /// HTTP path parameters are excluded from the JSON body.
 pub fn panel_input(action: &str) -> Value {
     let mut schema = input(action);
-    if matches!(action, "slot_get" | "slot_cancel") {
+    if matches!(action, "slot_get" | "slot_cancel" | "piece_submit") {
         schema["properties"]
             .as_object_mut()
             .expect("object")
@@ -57,4 +72,18 @@ pub fn panel_input(action: &str) -> Value {
             .retain(|v| v != "slot_id");
     }
     schema
+}
+
+fn object(properties: Value, required: &[&str]) -> Value {
+    json!({"type":"object","additionalProperties":false,"properties":properties,"required":required})
+}
+fn mime() -> Value {
+    json!({"type":"string","enum":["image/jpeg","image/png","image/webp","image/gif","video/mp4"]})
+}
+fn media() -> Value {
+    json!({"oneOf":[
+     object(json!({"kind":{"const":"file"},"id":{"type":"string","format":"uuid"}}),&["kind","id"]),
+     object(json!({"kind":{"const":"hosted_url"},"url":{"type":"string","format":"uri"},"mime":mime(),"size_bytes":{"type":"integer","minimum":1,"maximum":200000000}}),&["kind","url","mime","size_bytes"]),
+     object(json!({"kind":{"const":"bytes"},"data":{"type":"string"},"mime":mime(),"filename":{"type":"string","minLength":1,"maxLength":255}}),&["kind","data","mime","filename"])
+    ]})
 }

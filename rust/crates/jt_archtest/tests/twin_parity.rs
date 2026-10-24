@@ -87,6 +87,8 @@ fn deps_with(db: &TestDb, connectors: Arc<dyn ConnectorRegistry>) -> Deps {
         hasher: Arc::new(PlainHasher),
         seal: Arc::new(PlainSecretBox),
         channels: Arc::new(UowChannelCatalog::new(uow)),
+        file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+        media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
         files: Arc::new(jt_app::ports::files::UnavailableFileStore),
         transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
         archived_hook: Arc::new(NoopArchivedHook),
@@ -3804,4 +3806,184 @@ async fn studio_planning_rows_have_effect_and_error_parity() {
         .await["isError"],
         true
     );
+}
+
+#[tokio::test]
+async fn studio_file_upload_and_piece_submission_have_effect_error_and_replay_parity() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    }
+
+    use jt_app::ports::studio::{Arm, ArmId, ArmKey, Chain, Slot, SlotId, SlotState};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-twins").await;
+    let mut d = deps(&db);
+    d.files = Arc::new(jt_testkit::fakes::files::MemoryFiles::default());
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let capability = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/capabilities",
+                Some(&cookie),
+                Some(json!({"kind_key":"x","name":"Studio account","external_id":"studio-twins"})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let v = r.strategy().current_approved().await.unwrap().unwrap();
+    let mut h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    h.cadence=serde_json::from_value(json!({"organic":{"slots_per_week":7,"exploration_bps":0,"content_types":[{"key":"text","min_bps":0,"max_bps":10000}]}})).unwrap();
+    r.hypotheses().upsert(v.id, h.clone()).await.unwrap();
+    let arm = Arm::new(
+        ArmId(d.ids.uuid()),
+        ws,
+        ArmKey {
+            hypothesis_id: h.id,
+            content_type: "text".into(),
+            channel: "x".into(),
+            lane: serde_json::from_value(json!("organic")).unwrap(),
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    let first = Slot {
+        id: SlotId(d.ids.uuid()),
+        chain: Chain {
+            workspace_id: ws,
+            born_version_id: v.id,
+            hypothesis_id: h.id,
+            arm_id: arm.id,
+        },
+        capability_id: serde_json::from_value(capability["capability"]["id"].clone()).unwrap(),
+        scheduled_at: d.clock.now() + time::Duration::hours(1),
+        state: SlotState::Planned,
+        revision: 0,
+    };
+    let second = Slot {
+        id: SlotId(d.ids.uuid()),
+        ..first.clone()
+    };
+    r.studio()
+        .insert_slots("twins", vec![first.clone(), second.clone()])
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+
+    let upload = json!({"request_key":"twins-upload","filename":"a.png","mime":"image/png","content":{"kind":"bytes_base64","data":"iVBORw0KGgphc3NldA=="}});
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/files",
+            Some(&cookie),
+            Some(upload.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.file_upload",
+        upload.clone(),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["size_bytes"], 13);
+    let mut changed = upload.clone();
+    changed["filename"] = json!("changed.png");
+    let err = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/files",
+                Some(&cookie),
+                Some(changed.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let tool = tool_result(&app, &key, &session, "jeeta.studio.file_upload", changed).await;
+    assert_eq!(err["code"], "CONFLICT");
+    assert_eq!(err["code"], tool["structuredContent"]["code"]);
+    let path = format!("/api/studio/slots/{}/piece", first.id);
+    let body = json!({"expected_revision":0,"request_key":"twins-piece","text":"agent content","media":[{"kind":"file","id":human["id"]}],"adaptations":{"studio-twins":{"text":"account content","media":[]}}});
+    let out = ok(send(
+        &app,
+        panel(Method::POST, &path, Some(&cookie), Some(body.clone())),
+    )
+    .await)
+    .await;
+    let mut args = body.clone();
+    args["slot_id"] = json!(first.id);
+    let replay = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.piece_submit",
+        args.clone(),
+    )
+    .await;
+    assert_eq!(out, replay);
+    assert_eq!(out["slot"]["revision"], 1);
+    assert_eq!(out["slot"]["state"], "ready");
+    let mut bad = body.clone();
+    bad["request_key"] = json!("bad");
+    bad["expected_revision"] = json!(1);
+    bad["media"] = json!([{"kind":"file","id":SlotId::new_v7()}]);
+    let human = json_body(
+        send(
+            &app,
+            panel(Method::POST, &path, Some(&cookie), Some(bad.clone())),
+        )
+        .await,
+    )
+    .await;
+    bad["slot_id"] = json!(first.id);
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.piece_submit", bad).await;
+    assert_eq!(human["code"], "NOT_FOUND");
+    assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    for (path, name, mut value) in [
+        (
+            "/api/studio/files".to_owned(),
+            "jeeta.studio.file_upload",
+            upload,
+        ),
+        (path, "jeeta.studio.piece_submit", body),
+    ] {
+        value["extra"] = json!(true);
+        let human = json_body(
+            send(
+                &app,
+                panel(Method::POST, &path, Some(&cookie), Some(value.clone())),
+            )
+            .await,
+        )
+        .await;
+        if name.ends_with("piece_submit") {
+            value["slot_id"] = json!(first.id)
+        }
+        let agent = tool_result(&app, &key, &session, name, value).await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    }
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let usage = r.studio().file_usage().await.unwrap();
+    assert_eq!(usage.files.len(), 1);
+    assert_eq!(usage.pieces.len(), 1);
+    r.commit().await.unwrap();
 }

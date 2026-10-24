@@ -120,12 +120,13 @@ pub enum Job {
     ResponseSla,
     SnoozeWake,
     StudioControl,
+    StudioFilesCleanup,
     StudioPlan,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 16] = [
+    pub const ALL: [Job; 17] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -141,6 +142,7 @@ impl Job {
         Job::ResponseSla,
         Job::SnoozeWake,
         Job::StudioControl,
+        Job::StudioFilesCleanup,
         Job::StudioPlan,
     ];
 
@@ -163,6 +165,7 @@ impl Job {
             Job::ResponseSla => "response_sla",
             Job::SnoozeWake => "snooze_wake",
             Job::StudioControl => "studio_control",
+            Job::StudioFilesCleanup => "studio_files_cleanup",
             Job::StudioPlan => "studio_plan",
         }
     }
@@ -190,6 +193,7 @@ impl Job {
             Job::ResponseSla => run_response_sla(deps, now).await,
             Job::SnoozeWake => run_snooze_wake(deps, now).await,
             Job::StudioControl => run_studio_control(deps).await,
+            Job::StudioFilesCleanup => run_studio_files_cleanup(deps).await,
             Job::StudioPlan => run_studio_plan(deps, now).await,
         }
     }
@@ -1665,4 +1669,28 @@ pub async fn run_studio_plan(deps: &Deps, now: OffsetDateTime) -> JobReport {
         }
     }
     finish(Job::StudioPlan, report)
+}
+
+/// Tenant maintenance independent of strategy, once daily under its scheduler lock.
+pub async fn run_studio_files_cleanup(deps: &Deps) -> JobReport {
+    let mut report = JobReport::default();
+    let workspaces = match deps.uow.platform().await {
+        Ok(mut r) => r.workspaces_list().await,
+        Err(e) => Err(e),
+    };
+    let Ok(workspaces) = workspaces else {
+        report.failed = 1;
+        return finish(Job::StudioFilesCleanup, report);
+    };
+    for w in workspaces {
+        report.touched += 1;
+        match super::studio::files::cleanup_files(deps, w.id).await {
+            Ok(n) => report.changed += u64::from(n),
+            Err(e) => {
+                report.failed += 1;
+                step_failed(Job::StudioFilesCleanup, w.id, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(Job::StudioFilesCleanup, report)
 }

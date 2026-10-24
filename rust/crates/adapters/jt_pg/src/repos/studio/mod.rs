@@ -103,6 +103,66 @@ impl PgTenantRepos {
 }
 #[async_trait]
 impl StudioRepo for PgTenantRepos {
+    async fn request_replay(
+        &mut self,
+        action: &str,
+        key: &str,
+        payload: &Value,
+    ) -> Result<Option<Value>, AppError> {
+        self.studio_replay(action, key, payload).await
+    }
+    async fn request_receipt(
+        &mut self,
+        action: &str,
+        key: &str,
+        payload: &Value,
+        response: &Value,
+    ) -> Result<(), AppError> {
+        self.studio_receipt(action, key, payload, response).await
+    }
+    async fn file_usage(&mut self) -> Result<jt_app::ports::files::FileUsage, AppError> {
+        let mut out = jt_app::ports::files::FileUsage::default();
+        for table in [
+            "studio_files",
+            "studio_slots",
+            "studio_publish_attempts",
+            "studio_publications",
+        ] {
+            let rows: Vec<Value> =
+                sqlx::query_scalar(&format!("select data from {table} where workspace_id=$1"))
+                    .bind(self.workspace_id().0)
+                    .fetch_all(self.tx.conn())
+                    .await
+                    .map_err(|e| map_sqlx(e, "file retention evidence"))?;
+            match table {
+                "studio_files" => {
+                    out.files = rows.into_iter().map(decode).collect::<Result<_, _>>()?
+                }
+                "studio_slots" => {
+                    out.slots = rows.into_iter().map(decode).collect::<Result<_, _>>()?
+                }
+                "studio_publish_attempts" => {
+                    out.attempts = rows.into_iter().map(decode).collect::<Result<_, _>>()?
+                }
+                "studio_publications" => {
+                    out.publications = rows.into_iter().map(decode).collect::<Result<_, _>>()?
+                }
+                _ => {}
+            }
+        }
+        let rows: Vec<(Uuid, Value)> =
+            sqlx::query_as("select slot_id,data from studio_pieces where workspace_id=$1")
+                .bind(self.workspace_id().0)
+                .fetch_all(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "file piece references"))?;
+        out.pieces = rows
+            .into_iter()
+            .map(|(id, v)| Ok((SlotId(id), decode(v)?)))
+            .collect::<Result<_, AppError>>()?;
+        Ok(out)
+    }
+
     async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError> {
         let rows: Vec<Value> =
             sqlx::query_scalar("select data from studio_arms where workspace_id=$1 order by id")

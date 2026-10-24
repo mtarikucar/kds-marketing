@@ -90,6 +90,11 @@ fn build(state: AppState, api_routes: Vec<ApiRoute>, catalog: &[UseCase]) -> Rou
         let handler = route
             .handler
             .route_layer(middleware::from_fn_with_state(gate, gate::require_gate));
+        let handler = if matches!(use_case.id, "studio.file_upload" | "studio.piece_submit") {
+            handler.layer(axum::extract::DefaultBodyLimit::max(280_000_000))
+        } else {
+            handler
+        };
         api = api.route(route.path, handler);
     }
     let api = api
@@ -177,6 +182,8 @@ mod tests {
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
+            file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+            media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
             files: Arc::new(jt_app::ports::files::UnavailableFileStore),
             transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
             archived_hook: Arc::new(NoopArchivedHook),

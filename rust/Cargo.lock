@@ -1323,6 +1323,7 @@ dependencies = [
  "hex",
  "jt_app",
  "jt_connector",
+ "jt_files",
  "jt_mail",
  "jt_mcp",
  "jt_meta",
@@ -1438,6 +1439,32 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "time",
+ "uuid",
+]
+
+[[package]]
+name = "jt_files"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "hex",
+ "hmac 0.13.0",
+ "jt_app",
+ "jt_outbound",
+ "jt_studio",
+ "jt_tenancy",
+ "jt_testkit",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

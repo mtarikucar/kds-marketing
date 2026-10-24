@@ -89,6 +89,21 @@ pub struct SlotQuery {
 }
 #[async_trait]
 pub trait StudioRepo: Send + Sync {
+    async fn request_replay(
+        &mut self,
+        action: &str,
+        key: &str,
+        payload: &serde_json::Value,
+    ) -> Result<Option<serde_json::Value>, AppError>;
+    async fn request_receipt(
+        &mut self,
+        action: &str,
+        key: &str,
+        payload: &serde_json::Value,
+        response: &serde_json::Value,
+    ) -> Result<(), AppError>;
+    async fn file_usage(&mut self) -> Result<super::files::FileUsage, AppError>;
+
     /// Tenant-scoped planning and work projections; never a second queue.
     async fn list_arms(&mut self) -> Result<Vec<Arm>, AppError>;
     async fn list_budget_moves(&mut self) -> Result<Vec<BudgetMove>, AppError>;
