@@ -1,6 +1,16 @@
 //! Strict request schemas shared by the two surfaces.
 use serde_json::{Value, json};
 pub fn input(action: &str) -> Value {
+    if action == "ledger_export" {
+        return object(json!({"filter":input("ledger")}), &["filter"]);
+    }
+    if action == "ledger" {
+        let mut schema = input("overview");
+        schema["properties"]["before"] =
+            json!({"type":["integer","null"],"minimum":1,"maximum":9223372036854775807_i64});
+        schema["properties"]["limit"] = json!({"type":"integer","minimum":1,"maximum":500});
+        return schema;
+    }
     if action == "hypothesis_propose" {
         return crate::usecases::strategy::hypotheses_schema()["items"].clone();
     }
@@ -30,7 +40,7 @@ pub fn input(action: &str) -> Value {
                 "request_key",
             ],
         ),
-        "learned" => (
+        "learned" | "overview" => (
             json!({"hypothesis_id":{"type":["string","null"],"format":"uuid"},"lane":{"enum":["organic","paid",null]},"from":{"type":"string","format":"date-time"},"until":{"type":"string","format":"date-time"}}),
             vec!["from", "until"],
         ),

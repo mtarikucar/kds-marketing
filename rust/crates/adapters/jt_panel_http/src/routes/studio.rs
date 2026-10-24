@@ -164,3 +164,26 @@ pub async fn budget_move(
 ) -> Result<Json<ads::BudgetMoveOut>, ApiError> {
     Ok(Json(ads::budget_move(&s.deps, &ctx, body).await?))
 }
+
+use jt_app::usecases::studio::views;
+pub async fn overview(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(input): ApiQuery<views::StudioQuery>,
+) -> Result<Json<views::StudioOverview>, ApiError> {
+    Ok(Json(views::overview(&s.deps, &ctx, input).await?))
+}
+pub async fn ledger(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(input): ApiQuery<views::StudioLedgerQuery>,
+) -> Result<Json<views::StudioLedgerPage>, ApiError> {
+    Ok(Json(views::ledger(&s.deps, &ctx, input).await?))
+}
+pub async fn ledger_export(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(input): ApiJson<views::StudioLedgerExportInput>,
+) -> Result<Json<views::LedgerExportOut>, ApiError> {
+    Ok(Json(views::ledger_export(&s.deps, &ctx, input).await?))
+}

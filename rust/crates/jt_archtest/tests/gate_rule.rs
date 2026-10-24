@@ -35,6 +35,8 @@ const EXEMPT_IDS: &[&str] = &[
     "inbox.pending",
     "inbox.context",
     "studio.brake",
+    "studio.ledger",
+    "studio.ledger_export",
 ];
 
 fn may_be_exempt(id: &str) -> bool {

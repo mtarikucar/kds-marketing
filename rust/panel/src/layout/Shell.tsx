@@ -38,6 +38,7 @@ import { currentMembership } from '@/lib/roles';
 import { Brand } from './Brand';
 
 type NavKey =
+  | 'studio'
   | 'inbox'
   | 'home'
   | 'strategy'
@@ -59,6 +60,7 @@ const NAV: { to: string; key: NavKey; Icon: LucideIcon }[] = [
   { to: '/roles', key: 'roles', Icon: ShieldCheck },
   { to: '/api-keys', key: 'apiKeys', Icon: KeyRound },
   { to: '/agents', key: 'agents', Icon: Bot },
+  { to: '/studio', key: 'studio', Icon: BookText },
   { to: '/ledger', key: 'ledger', Icon: BookText },
 ];
 

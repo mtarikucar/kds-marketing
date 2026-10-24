@@ -1,3 +1,4 @@
+import { StudioPage } from './pages/StudioPage';
 import { Navigate, type RouteObject } from 'react-router-dom';
 import { AppRoot } from '@/layout/AppRoot';
 import { PlatformShell } from '@/layout/PlatformShell';
@@ -78,6 +79,7 @@ export const routes: RouteObject[] = [
           { path: 'api-keys', element: <ApiKeysPage /> },
           { path: 'agents', element: <AgentsPage /> },
           { path: 'ledger', element: <LedgerPage /> },
+          { path: 'studio', element: <StudioPage /> },
         ],
       },
       { path: '*', element: <NotFoundPage /> },

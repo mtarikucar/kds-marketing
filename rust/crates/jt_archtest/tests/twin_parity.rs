@@ -4408,3 +4408,145 @@ async fn studio_budget_cap_http_409_mcp_parity() {
         assert_eq!(human["code"], agent["structuredContent"]["code"]);
     }
 }
+
+#[tokio::test]
+async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() {
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-projection-twins").await;
+    let mut d = deps(&db);
+    d.clock = Arc::new(jt_testkit::fakes::FixedClock(d.clock.now()));
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    // A real mutation supplies evidence to both projections, including takeover and actor.
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/brake",
+            Some(&cookie),
+            Some(json!({"engaged":true,"expected_revision":0})),
+        ),
+    )
+    .await;
+    assert!(response.status().is_success());
+    let q = json!({"from":"2020-01-01T00:00:00Z","until":"2099-01-01T00:00:00Z","limit":1});
+    for action in ["overview", "ledger", "ledger_export"] {
+        let export = action == "ledger_export";
+        let path = if export {
+            "/api/studio/ledger/export".to_owned()
+        } else {
+            format!(
+                "/api/studio/{action}?from=2020-01-01T00:00:00Z&until=2099-01-01T00:00:00Z{}",
+                if action == "ledger" { "&limit=1" } else { "" }
+            )
+        };
+        let args = if export {
+            json!({"filter":q})
+        } else if action == "overview" {
+            json!({"from":q["from"],"until":q["until"]})
+        } else {
+            q.clone()
+        };
+        let response = send(
+            &app,
+            panel(
+                if export { Method::POST } else { Method::GET },
+                &path,
+                Some(&cookie),
+                export.then(|| args.clone()),
+            ),
+        )
+        .await;
+        assert!(response.status().is_success(), "{action}");
+        let http = json_body(response).await;
+        let mcp = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.studio.{action}"),
+            args,
+        )
+        .await["structuredContent"]
+            .clone();
+        assert_eq!(http, mcp, "{action}");
+        if action == "ledger" {
+            assert_eq!(http["entries"][0]["entry"]["action"], "studio.brake");
+        }
+        if export {
+            assert!(http["content"].as_str().unwrap().contains("studio.brake"));
+        }
+        let invalid = if export {
+            json!({"filter":{"from":q["until"],"until":q["from"]}})
+        } else {
+            json!({"from":q["until"],"until":q["from"]})
+        };
+        let path = if export {
+            path
+        } else {
+            format!("/api/studio/{action}?from=2099-01-01T00:00:00Z&until=2020-01-01T00:00:00Z")
+        };
+        let http = json_body(
+            send(
+                &app,
+                panel(
+                    if export { Method::POST } else { Method::GET },
+                    &path,
+                    Some(&cookie),
+                    export.then(|| invalid.clone()),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let mcp = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.studio.{action}"),
+            invalid,
+        )
+        .await["structuredContent"]
+            .clone();
+        assert_eq!(http, mcp, "invalid {action}");
+        assert_eq!(http["code"], "VALIDATION");
+    }
+    // The ledger remains readable after archive; overview still requires the approved strategy.
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let current = r.strategy().lock_execution_frame().await.unwrap().unwrap();
+    drop(r);
+    let archived = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/strategy/archive",
+            Some(&cookie),
+            Some(json!({"version_id":current.id,"confirm":true})),
+        ),
+    )
+    .await;
+    assert!(archived.status().is_success());
+    for action in ["overview", "ledger"] {
+        let path =
+            format!("/api/studio/{action}?from=2020-01-01T00:00:00Z&until=2099-01-01T00:00:00Z");
+        let http =
+            json_body(send(&app, panel(Method::GET, &path, Some(&cookie), None)).await).await;
+        let mcp = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.studio.{action}"),
+            json!({"from":q["from"],"until":q["until"]}),
+        )
+        .await["structuredContent"]
+            .clone();
+        assert_eq!(http, mcp);
+        if action == "overview" {
+            assert_eq!(http["code"], "STRATEGY_REQUIRED");
+        } else {
+            assert!(http["entries"].is_array());
+        }
+    }
+}

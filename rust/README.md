@@ -254,7 +254,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (121 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (124 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -271,7 +271,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 121 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 124 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -2293,7 +2293,7 @@ idempotent down script; the workspace suite verifies up → down → up.
 
 ### M3 Task 8 — external paid bindings and hard connector caps
 
-The current release has **121 MCP tools / 15 Studio operations**, **62 tables**,
+At the Task 8 boundary the release had **121 MCP tools / 15 Studio operations**, **62 tables**,
 migration **0009_studio**, and **21 scheduled jobs**. No campaign, ad set or creative
 creation is exposed. No schema migration is added by T8; reservation accounting
 metadata lives in the existing tenant-scoped durable JSON records.
@@ -2352,7 +2352,7 @@ Validation: `studio_paid` covers the application and real PostgreSQL concurrency
 
 ### M3 Task 9 — read-only inbox attribution
 
-The release remains at **121 MCP tools / 15 Studio operations**, **62 tables**,
+At the Task 9 boundary the release remained at **121 MCP tools / 15 Studio operations**, **62 tables**,
 migration **0009_studio**, and **21 scheduled jobs**. Task 9 adds the internal
 `studio::attribution::attribution_for_ad` projection for learned/overview callers;
 it adds no catalog row, HTTP route, MCP tool, migration or intake job. The public
@@ -2394,3 +2394,46 @@ permission/status/window, archive/pagination and concurrent-group-change cases
 against both the transactional fake and real PostgreSQL: **12 tests per adapter**.
 Fixtures use the M2b consumer; optional stored ad-set variants additionally exercise
 its immutable repository contract. No provider-live verification is claimed.
+
+
+## M3 Task 10 — Five-region Growth Studio
+
+The current release has **124 MCP tools / 18 Studio operations**, **62 tables**,
+migration **0009_studio**, and **21 scheduled jobs**. This task adds no tables or jobs.
+
+| Shared row / MCP tool | HTTP | Strategy gate / permission |
+|---|---|---|
+| `studio.overview` / `jeeta.studio.overview` | `GET /api/studio/overview` | Gated / `studio.work` |
+| `studio.ledger` / `jeeta.studio.ledger` | `GET /api/studio/ledger` | Exempt / `studio.work` |
+| `studio.ledger_export` / `jeeta.studio.ledger_export` | `POST /api/studio/ledger/export` | Exempt / `studio.work` |
+
+All three independently require an active workspace. Ledger read/export remain available
+when the strategy is absent or archived. Queries use a half-open RFC3339 `from`/`until`
+window, optional stable `hypothesis_id` and `lane`; ledger also accepts an exclusive
+sequence cursor `before` and `limit` from 1 to 500 (default 50). Filtering resolves
+historical target chains in the tenant repository, preserving relevant global brake/policy
+and takeover evidence. Sparse matches continue across bounded 500-row storage chunks.
+Export follows the same cursor/filter to exhaustion and returns identical
+`{filename, media_type, content}` on HTTP and MCP. CSV cells are quoted, dangerous
+spreadsheet prefixes neutralized, payload secrets masked and transport URLs/bytes removed.
+The response contains the full export in memory; this is not a streaming download service.
+
+`/studio` is one responsive screen with five regions: Strateji, Plan, Bugün,
+Öğrenilenler and Günlük. The hypothesis, lane and time filters drive the shared projections;
+the seven-day Istanbul plan switches Liste/Takvim over the same slot IDs. Mobile stacks
+these same regions. Confidence bars distinguish prior from derived confidence. Human
+approval remains a blocker on Ready, never a lifecycle state. Unknown publication warns
+against resending; agent overdue status comes from existing `work.pending`.
+
+Contextual controls cover proposal into the strategy draft, slot detail/cancel, file upload
+and content submission, human consent, lane policy and brakes, trend/judgment entry,
+external ad-set binding and daily-budget moves. The server remains authoritative for
+permissions, revision fences, paid eligibility and budget caps. Organic stays visible
+when blocked; paid actions require the connected account and selected strategy lane.
+No ad creation, independent calendar/trend screen, installation or commission feature
+is added. Existing inbox commissions remain at `/inbox/commissions`.
+
+Verification targets: `studio_projection` (also named `studio_views` by the plan),
+`studio_http`, `studio_mcp`, behavioral `twin_parity`, and `StudioPage.test.tsx`, plus
+TR/EN key parity, panel type checking/build and the full workspace checks. Provider
+operations in these tests use local fixtures, not live customer accounts.

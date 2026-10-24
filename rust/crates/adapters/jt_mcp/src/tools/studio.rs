@@ -13,6 +13,27 @@ use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "studio.overview",
+            description: "Read shared five-region Studio overview. [risk: READ]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("overview")).expect("studio schema"),
+            run: overview,
+        },
+        ToolDef {
+            use_case: "studio.ledger",
+            description: "Read tenant-filtered Studio evidence, also after strategy archive. [risk: READ]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("ledger")).expect("studio schema"),
+            run: ledger,
+        },
+        ToolDef {
+            use_case: "studio.ledger_export",
+            description: "Export the same filtered, redacted ledger as formula-safe CSV. [risk: READ]",
+            permission: Permission::StudioWork,
+            schema: || Schema::try_from(schema::input("ledger_export")).expect("studio schema"),
+            run: ledger_export,
+        },
+        ToolDef {
             use_case: "studio.adsets_list",
             description: "Manage externally created ad sets and hard spend caps. [risk: READ]",
             permission: Permission::StudioWork,
@@ -191,4 +212,22 @@ fn budget_move<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(
         async move { to_json(&jt_app::usecases::studio::ads::budget_move(d, c, args(v)?).await?) },
     )
+}
+
+fn overview<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(
+        async move { to_json(&jt_app::usecases::studio::views::overview(d, c, args(v)?).await?) },
+    )
+}
+
+fn ledger<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(
+        async move { to_json(&jt_app::usecases::studio::views::ledger(d, c, args(v)?).await?) },
+    )
+}
+
+fn ledger_export<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        to_json(&jt_app::usecases::studio::views::ledger_export(d, c, args(v)?).await?)
+    })
 }
