@@ -92,7 +92,7 @@ döndürür. Sekiz göç vardır:
 | `0006_inbox` | Gelen kutusu için 13 alan tablosu (36 toplam): kişiler, kimlikler, konuşmalar, mesajlar, yolculuklar ve olayları, görevler, notlar, birleştirmeler, kayıp nedenleri, tüketici kayıtları, gönderim kuyruğu ve 24 saatlik istek anahtarları. FORCE RLS ve bileşik yabancı anahtarlar; varsayılan kayıp nedenleri ve sistem rollerinin gelen kutusu izinleri geriye dönük eklenir. |
 | `0007_inbox_policy` | Alan politikalarına `inbox_policy` sütunu ekler; mevcut durum etiketlerini korur, yeni tablo eklemez. |
 | `0008_inbox_compliance` | İzinler, engellemeler, teklifler, randevular, komisyonlar, silme kayıtları ve kimlik özetleri, gönderim işleri, posta imleçleri, varsayılan/kullanıcı komisyon oranları ve değişmez yolculuk atfı: 12 yeni alan tablosu, toplam 48. FORCE RLS, bileşik alan anahtarları ve yinelenebilir up/down. |
-| `0009_studio` | M3 controller prerequisites: hypothesis cadence/prior, nullable unit price and stable learning evidence; 1 new table, current total 49. T2 extends this unreleased reversible pair. |
+| `0009_studio` | Growth Studio tenant persistence: 14 tables, total 62; durable claims, replay receipts, learning, spend reservations and reversible owner/manager grant backfill. Includes hypothesis cadence/prior and nullable unit price. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -1839,15 +1839,16 @@ shows derived confidence when present, otherwise the prior, and draft edits keep
 cadence and authoritative learning. Explicit null clears a price to unknown; zero
 is a known price, and negative prices refuse. Manual historical spend is unchanged.
 
-`0009_studio` is reserved for unreleased M3. To keep these existing Pg operations
-usable in this commit, it already migrates the cadence/prior/price columns and
-creates `studio_learning_applications`: **49 current tables**. Its tested idempotent
-up/down/up preserves baseline rows and prior confidence; down removes M3 evidence
-and columns. T2 extends this pair in place with the remaining **13** Studio tables
-and the reversible existing-role grant backfill. Final M3 remains **62 tables and
-124 tools**. Migrations 0001–0008 are unchanged. New owner/manager seeds include
-`studio.work` and `studio.manage`; rep has neither, and agent scopes cannot exceed
-the issuer's authority.
+`0009_studio` is the unreleased M3 migration. T0 introduced cadence/prior/price
+columns and learning evidence; T2 completes all **14 Studio tables**, giving **62
+current tables**. Up/down/up is exercised as a non-bypass-RLS role; down is safe to
+repeat and removes Studio schema/data and M3 fields while preserving baseline
+strategy, budget, inbox and ledger rows. Migrations 0001–0008 are unchanged.
+New and existing owner/manager roles have `studio.work` and `studio.manage`; rep
+receives neither, and authenticated agents retain only their issuer's current
+permissions. The backfill records only migration-added role UUID/permission pairs
+in `studio_control.seed_grants`, so down preserves preexisting grants. Startup does
+not change grants. **106 tools are implemented**; the final M3 target remains 124.
 
 Strategy approval/archive lock the draft before acquiring `lock_execution_frame`,
 including when there is no approved version, then invoke `StrategyTransitionHook`
@@ -1856,8 +1857,8 @@ frame users while allowing the `FOR KEY SHARE` checks taken by ledger foreign ke
 Any frame user that also needs the draft must take the draft lock first; Studio
 control locks follow the frame. Hook failure rolls back the transition and its writes.
 The existing post-commit archive hook is preserved. T3 supplies Studio cancellation;
-T0's default hook has no queue to cancel. Studio repository accessors and FileStore
-are wired everywhere and explicitly refuse while their T2/T5 adapters are absent.
+T0's default hook has no queue to cancel. Studio repositories are implemented in PostgreSQL and the transactional fake.
+FileStore remains unavailable until T5 wires its byte-storage adapter.
 Shared contract rows now live in `jt_studio` and are re-exported from
 `jt_app::ports::studio` (T1). No new public Studio routes are exposed yet.
 
@@ -1922,3 +1923,52 @@ trends remain display context.
 
 No migrations or new public surface schemas are introduced in T1. The later Studio
 rows require catalog, HTTP, MCP and parity coverage together when implemented.
+
+
+### M3 Task 2 — durable tenant storage
+
+The fourteen Studio tables are `studio_arms`, `studio_slots`, `studio_pieces`,
+`studio_files`, `studio_publications`, `studio_publish_attempts`,
+`studio_measurements`, `studio_learning_applications`, `studio_trends`,
+`studio_adset_bindings`, `studio_budget_moves`, `studio_spend_reservations`,
+`studio_control` and `studio_request_keys`. All have forced RLS; relational
+references include workspace identity. Birth chains retain their original strategy
+version, while an arm's identity survives strategy replacement.
+
+Repository writes participate in the caller's tenant transaction. Request keys are
+scoped by workspace/action, store a SHA-256 payload digest and the original response,
+and reject a changed payload. Slot reads use half-open schedule windows; edits and
+retirement require the expected revision. File rows store metadata only. Bindings
+reference externally created ad sets; no provider creation operations are added.
+
+A claim freezes its piece, current strategy, control revision and system scheduler
+actor as Sending. Commit the claim before provider I/O; rollback leaves the slot
+unclaimed. Committed Sending/Unknown attempts are never automatically queued again.
+Completion stores redacted outcome evidence, the unique successful publication and
+an existing-ledger entry together; an identical completion is a no-op. A late
+receipt preserves retirement. The control row serializes competing claims and
+receipts; the strategy frame precedes that lock. Public execution authorization and
+human/agent attribution are supplied by the later application tasks, not by treating
+these storage operations as public execution permits.
+
+Measurement uniqueness is publication/window or external binding/day/scope. Failed
+and missing reads can be replaced; complete evidence is required for learning.
+Evidence keys apply arm deltas and derived confidence once. Reservations serialize
+lane and budget-item caps, include existing recorded item spend, retain uncertain
+costs, and settle idempotently. Absolute daily budgets remain distinct from actual
+spend. T8 supplies provider-specific cost calculations and reconciliation. The fake
+holds a transaction lock and refreshes committed dependency state to exercise the
+same claim, replay, rollback and cap contracts as PostgreSQL.
+
+| Release boundary after T2 | Current state |
+|---|---|
+| MCP tools / Studio public operations | **106 / 0** (Task 2 adds repository contracts only) |
+| Tables / latest migration | **62 / 0009_studio** |
+| Fast verification | `cargo test --locked --workspace --test migrations --test studio_repos` |
+| Plan-named contract targets | `studio_pg`, `studio_fakes` |
+
+Tests cover real non-bypass-RLS migration up/down/up, double rollback, sentinel and
+grant preservation, tenant/composite-FK refusal, version-stable arms, concurrent
+claims/reservations, replay conflicts, learning dedupe, file/trend/budget records,
+issuer-scope inheritance and price/cadence round trips. Task 2 adds no catalog row,
+HTTP route or MCP tool; later public rows must ship all twins and parity tests.

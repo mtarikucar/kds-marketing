@@ -699,9 +699,3 @@ impl WorkspaceRepo for MemTenant {
         })
     }
 }
-
-impl jt_app::ports::studio::StudioRepo for MemTenant {}
-
-impl jt_app::ports::studio::StudioBudgetRepo for MemTenant {}
-
-impl jt_app::ports::studio::StudioControlRepo for MemTenant {}

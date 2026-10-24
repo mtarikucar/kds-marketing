@@ -75,3 +75,6 @@ pub use state::{
 mod inbox_merge;
 
 mod erasure;
+
+mod studio;
+pub use studio::MemStudio;

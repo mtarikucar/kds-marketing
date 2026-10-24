@@ -555,12 +555,14 @@ impl BudgetRepo for MemTenant {
 
     /// The fakes run one bundle at a time in tests, so there is no one to wait for: `find_item`.
     async fn lock_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError> {
+        self.tx.lock_studio().await;
         BudgetRepo::find_item(self, id).await
     }
 
     /// The bundle's workspace first, then the cap's check constraint, then the row, as `jt_pg`
     /// meets them; only the name, cap, period and retirement time are written.
     async fn update_item(&mut self, item: BudgetItem) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, item.workspace_id)?;
@@ -647,6 +649,7 @@ impl BudgetRepo for MemTenant {
     /// The item reference first, as `jt_pg` checks it, then the amount's check constraint, then
     /// the unique id.
     async fn append_spend(&mut self, spend: BudgetSpend) -> Result<BudgetSpendId, AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, spend.workspace_id)?;

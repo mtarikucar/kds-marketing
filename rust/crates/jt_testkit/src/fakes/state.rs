@@ -115,6 +115,7 @@ pub struct StoredWorkspacePolicy {
 /// Every table, in insertion order.
 #[derive(Clone, Debug, Default)]
 pub struct MemState {
+    pub studio: super::studio::MemStudio,
     pub inbox: super::inbox::MemInbox,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
@@ -394,6 +395,7 @@ pub(super) fn actor_kind(actor: &Actor) -> &'static str {
 /// An in-memory `UnitOfWork`. Clones share the same tables.
 #[derive(Clone, Default)]
 pub struct InMemoryUow {
+    studio_lock: Arc<tokio::sync::Mutex<()>>,
     state: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
     /// How many of the next `CapabilityRepo::set_sealed` calls fail
@@ -468,6 +470,8 @@ type Op = Box<dyn Fn(&mut MemState) + Send + Sync>;
 
 /// One bundle's transaction: a private working copy plus the writes to replay on commit.
 pub(super) struct MemTx {
+    studio_lock: Arc<tokio::sync::Mutex<()>>,
+    studio_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
     shared: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
     set_sealed_faults: Arc<AtomicUsize>,
@@ -483,8 +487,22 @@ pub(super) struct MemTx {
 }
 
 impl MemTx {
+    // Studio writes keep their lock until commit/drop, and refresh after waiting, so a fake
+    // cannot hand two workers ownership of the same Sending attempt.
+    pub(super) async fn lock_studio(&mut self) {
+        if self.studio_guard.is_none() {
+            self.studio_guard = Some(Arc::clone(&self.studio_lock).lock_owned().await);
+            self.work = lock(&self.shared).clone();
+            for op in &self.ops {
+                op(&mut self.work);
+            }
+        }
+    }
+
     pub(super) fn begin(uow: &InMemoryUow) -> MemTx {
         MemTx {
+            studio_lock: Arc::clone(&uow.studio_lock),
+            studio_guard: None,
             shared: Arc::clone(&uow.state),
             ledger_seq: Arc::clone(&uow.ledger_seq),
             set_sealed_faults: Arc::clone(&uow.set_sealed_faults),

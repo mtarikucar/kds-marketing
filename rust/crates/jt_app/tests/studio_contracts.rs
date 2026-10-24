@@ -115,9 +115,17 @@ async fn studio_contracts_compile_for_every_adapter_and_fake() {
             .studio()
             .claim_publication(w.owner_ctx.now)
             .await
-            .is_err()
+            .unwrap()
+            .is_none()
     );
-    assert!(repos.studio_control().lock_control().await.is_err());
+    assert!(
+        !repos
+            .studio_control()
+            .lock_control()
+            .await
+            .unwrap()
+            .brake_engaged
+    );
     let _budget: &mut dyn jt_app::ports::studio::StudioBudgetRepo = repos.studio_budget();
     assert!(
         w.deps

@@ -406,9 +406,3 @@ impl PlatformRepos for PgPlatformRepos {
         this.tx.commit().await.map_err(|e| map_sqlx(e, "commit"))
     }
 }
-
-impl jt_app::ports::studio::StudioRepo for PgTenantRepos {}
-
-impl jt_app::ports::studio::StudioBudgetRepo for PgTenantRepos {}
-
-impl jt_app::ports::studio::StudioControlRepo for PgTenantRepos {}

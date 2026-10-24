@@ -1,6 +1,6 @@
-//! Controller contracts. T1 owns pure domain behavior; T2 supplies durable repositories.
+//! Durable Studio repositories; pure records live in jt_studio.
 //! Repo calls run inside the caller's tenant transaction; no provider I/O under its locks.
-use super::{TenantRepos, connectors::PublishReceipt};
+use super::{TenantRepos, connectors::PublishReceipt, files::StoredFile};
 use crate::error::AppError;
 use async_trait::async_trait;
 use jt_strategy::{HypothesisId, LaneKind, StrategyVersionId};
@@ -27,76 +27,77 @@ pub enum PublishOutcome {
     Refused(AppError),
 }
 
-/// Pending T2: refuse explicitly rather than pretend persistence or spend authorization succeeded.
-fn unavailable() -> AppError {
-    AppError::internal("Studio persistence is not configured")
+/// Half-open schedule window; optional filters compose with AND.
+#[derive(Clone, Debug)]
+pub struct SlotQuery {
+    pub from: OffsetDateTime,
+    pub until: OffsetDateTime,
+    pub hypothesis_id: Option<HypothesisId>,
+    pub lane: Option<LaneKind>,
 }
 #[async_trait]
 pub trait StudioRepo: Send + Sync {
-    async fn insert_arm(&mut self, _arm: Arm) -> Result<Arm, AppError> {
-        Err(unavailable())
-    }
-    async fn get_slot(&mut self, _id: SlotId) -> Result<Option<Slot>, AppError> {
-        Err(unavailable())
-    }
+    async fn list_slots(&mut self, query: SlotQuery) -> Result<Vec<Slot>, AppError>;
+    async fn retire_slot(
+        &mut self,
+        id: SlotId,
+        expected_revision: u64,
+        reason: &str,
+    ) -> Result<Slot, AppError>;
+    async fn save_file(&mut self, file: StoredFile) -> Result<(), AppError>;
+    async fn get_file(&mut self, id: FileId) -> Result<Option<StoredFile>, AppError>;
+    async fn save_trend(&mut self, signal: TrendSignal, key: &str)
+    -> Result<TrendSignal, AppError>;
+    async fn bind_adset(
+        &mut self,
+        binding: AdSetBinding,
+        key: &str,
+    ) -> Result<AdSetBinding, AppError>;
+    async fn save_budget_move(
+        &mut self,
+        move_: BudgetMove,
+        key: &str,
+    ) -> Result<BudgetMove, AppError>;
+    async fn insert_arm(&mut self, arm: Arm) -> Result<Arm, AppError>;
+    async fn get_slot(&mut self, id: SlotId) -> Result<Option<Slot>, AppError>;
     async fn insert_slots(
         &mut self,
-        _run_key: &str,
-        _slots: Vec<Slot>,
-    ) -> Result<Vec<Slot>, AppError> {
-        Err(unavailable())
-    }
+        run_key: &str,
+        slots: Vec<Slot>,
+    ) -> Result<Vec<Slot>, AppError>;
     async fn save_piece(
         &mut self,
-        _slot: SlotId,
-        _expected_revision: u64,
-        _piece: Piece,
-        _key: &str,
-    ) -> Result<Slot, AppError> {
-        Err(unavailable())
-    }
+        slot: SlotId,
+        expected_revision: u64,
+        piece: Piece,
+        key: &str,
+    ) -> Result<Slot, AppError>;
     async fn claim_publication(
         &mut self,
-        _now: OffsetDateTime,
-    ) -> Result<Option<PublishAttempt>, AppError> {
-        Err(unavailable())
-    }
+        now: OffsetDateTime,
+    ) -> Result<Option<PublishAttempt>, AppError>;
     async fn finish_publication(
         &mut self,
-        _attempt: PublishAttemptId,
-        _outcome: PublishOutcome,
-    ) -> Result<(), AppError> {
-        Err(unavailable())
-    }
-    async fn record_measurement(&mut self, _measurement: Measurement) -> Result<bool, AppError> {
-        Err(unavailable())
-    }
-    async fn apply_learning(&mut self, _update: LearningUpdate) -> Result<bool, AppError> {
-        Err(unavailable())
-    }
+        attempt: PublishAttemptId,
+        outcome: PublishOutcome,
+    ) -> Result<(), AppError>;
+    async fn record_measurement(&mut self, measurement: Measurement) -> Result<bool, AppError>;
+    async fn apply_learning(&mut self, update: LearningUpdate) -> Result<bool, AppError>;
 }
 #[async_trait]
 pub trait StudioBudgetRepo: Send + Sync {
-    async fn reserve(&mut self, _request: ReserveSpend) -> Result<SpendReservation, AppError> {
-        Err(unavailable())
-    }
-    async fn settle(&mut self, _id: ReservationId, _outcome: SpendOutcome) -> Result<(), AppError> {
-        Err(unavailable())
-    }
+    async fn reserve(&mut self, request: ReserveSpend) -> Result<SpendReservation, AppError>;
+    async fn settle(&mut self, id: ReservationId, outcome: SpendOutcome) -> Result<(), AppError>;
 }
 #[async_trait]
 pub trait StudioControlRepo: Send + Sync {
-    async fn lock_control(&mut self) -> Result<StudioControl, AppError> {
-        Err(unavailable())
-    }
+    async fn lock_control(&mut self) -> Result<StudioControl, AppError>;
     async fn set_brake(
         &mut self,
-        _expected_revision: u64,
-        _lane: Option<LaneKind>,
-        _engaged: bool,
-    ) -> Result<StudioControl, AppError> {
-        Err(unavailable())
-    }
+        expected_revision: u64,
+        lane: Option<LaneKind>,
+        engaged: bool,
+    ) -> Result<StudioControl, AppError>;
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StrategyChange {

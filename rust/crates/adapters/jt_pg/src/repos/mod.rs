@@ -191,3 +191,5 @@ pub(crate) fn stored_email(raw: &str, column: &str) -> Result<Email, AppError> {
 pub(crate) fn stored<T>(parsed: Option<T>, column: &str) -> Result<T, AppError> {
     parsed.ok_or_else(|| AppError::internal(format!("stored {column} has an unknown value")))
 }
+
+mod studio;

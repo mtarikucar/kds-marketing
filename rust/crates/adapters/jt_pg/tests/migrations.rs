@@ -29,8 +29,8 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
-/// Tables after `0009_studio`, including the first Studio learning table.
-const TABLES_AFTER_ALL: i64 = 49;
+/// Tables after `0009_studio`, including all 14 Studio tables.
+const TABLES_AFTER_ALL: i64 = 62;
 
 /// The migrations there are: `0001_foundation` to `0009_studio`.
 const MIGRATIONS: i64 = 9;
@@ -572,7 +572,7 @@ async fn compliance_round_trip_preserving_people() {
 }
 
 #[tokio::test]
-async fn studio_migration_up_down_up_preserves_baseline_rows() {
+async fn studio_migration_up_down_up() {
     let db = TestDb::new().await;
     let (ws, _) = db.seed_workspace("studio-roundtrip").await;
     let up = include_str!("../../../../migrations/0009_studio.up.sql");
@@ -586,7 +586,7 @@ async fn studio_migration_up_down_up_preserves_baseline_rows() {
     for sql in [up, down, down, up, up] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
-    assert_eq!(table_count(&db.pool).await, 49);
+    assert_eq!(table_count(&db.pool).await, 62);
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     let saved: (String,f32,serde_json::Value) = sqlx::query_as("select title,prior_confidence,cadence from strategy_hypotheses where workspace_id = $1 and hypothesis_id = $2").bind(ws.as_uuid()).bind(h).fetch_one(tx.conn()).await.unwrap();
     assert_eq!(saved, ("keep".into(), 0.7, serde_json::json!({})));

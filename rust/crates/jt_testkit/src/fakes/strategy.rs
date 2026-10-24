@@ -43,10 +43,12 @@ fn ensure_draft(state: &MemState, ws: WorkspaceId, id: StrategyVersionId) -> Res
 #[async_trait]
 impl StrategyRepo for MemTenant {
     async fn lock_execution_frame(&mut self) -> Result<Option<StrategyVersion>, AppError> {
+        self.tx.lock_studio().await;
         self.current_approved().await
     }
 
     async fn insert(&mut self, version: StrategyVersion) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, version.workspace_id)?;
@@ -125,6 +127,7 @@ impl StrategyRepo for MemTenant {
         sections: Sections,
         _at: OffsetDateTime,
     ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             ensure_draft(this.state(), ws, id)?;
@@ -169,6 +172,7 @@ impl StrategyRepo for MemTenant {
         at: OffsetDateTime,
         by: Option<UserId>,
     ) -> Result<u64, AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             let from: &[VersionStatus] = match status {

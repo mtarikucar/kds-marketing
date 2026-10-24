@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
 use url::Url;
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StoredFile {
     pub id: FileId,
     pub workspace_id: WorkspaceId,
