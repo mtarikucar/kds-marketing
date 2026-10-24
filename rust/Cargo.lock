@@ -358,6 +358,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf",
+]
+
+[[package]]
 name = "cipher"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1313,6 +1323,7 @@ dependencies = [
  "hex",
  "jt_app",
  "jt_connector",
+ "jt_files",
  "jt_mail",
  "jt_mcp",
  "jt_meta",
@@ -1351,6 +1362,8 @@ dependencies = [
  "argon2",
  "async-trait",
  "base64 0.23.1",
+ "chrono",
+ "chrono-tz",
  "jt_capability",
  "jt_connector",
  "jt_inbox",
@@ -1360,6 +1373,7 @@ dependencies = [
  "jt_netgsm",
  "jt_outbound",
  "jt_strategy",
+ "jt_studio",
  "jt_tenancy",
  "jt_testkit",
  "rand 0.10.3",
@@ -1388,6 +1402,8 @@ dependencies = [
  "jt_mcp",
  "jt_panel_http",
  "jt_pg",
+ "jt_strategy",
+ "jt_studio",
  "jt_tenancy",
  "jt_testkit",
  "proc-macro2",
@@ -1425,6 +1441,32 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "time",
+ "uuid",
+]
+
+[[package]]
+name = "jt_files"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "hex",
+ "hmac 0.13.0",
+ "jt_app",
+ "jt_outbound",
+ "jt_studio",
+ "jt_tenancy",
+ "jt_testkit",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -1595,15 +1637,19 @@ name = "jt_pg"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
  "jt_app",
  "jt_capability",
  "jt_connector",
  "jt_inbox",
  "jt_ledger",
  "jt_strategy",
+ "jt_studio",
  "jt_tenancy",
  "jt_testkit",
+ "serde",
  "serde_json",
+ "sha2 0.11.1",
  "sqlx",
  "time",
  "tokio",
@@ -1641,6 +1687,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_studio"
+version = "0.1.0"
+dependencies = [
+ "jt_capability",
+ "jt_ledger",
+ "jt_strategy",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "jt_tenancy"
 version = "0.1.0"
 dependencies = [
@@ -1666,8 +1728,10 @@ dependencies = [
  "jt_panel_http",
  "jt_pg",
  "jt_strategy",
+ "jt_studio",
  "jt_tenancy",
  "rand 0.10.3",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "sqlx",
@@ -1720,6 +1784,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "unicode-segmentation",
  "url",
 ]
 
@@ -2065,6 +2130,24 @@ dependencies = [
  "base64ct",
  "ctutils",
  "getrandom 0.4.3",
+]
+
+[[package]]
+name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
+dependencies = [
+ "siphasher",
 ]
 
 [[package]]
@@ -2771,6 +2854,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
+name = "siphasher"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3440,6 +3529,12 @@ name = "unicode-properties"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "universal-hash"

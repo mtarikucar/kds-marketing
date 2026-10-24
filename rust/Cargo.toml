@@ -7,7 +7,9 @@ members = [
     "crates/domain/jt_capability",
     "crates/domain/jt_connector",
     "crates/domain/jt_inbox",
+    "crates/domain/jt_studio",
     "crates/jt_app",
+    "crates/adapters/jt_files",
     "crates/adapters/jt_pg",
     "crates/adapters/jt_panel_http",
     "crates/adapters/jt_mcp",
@@ -37,7 +39,9 @@ jt_strategy = { path = "crates/domain/jt_strategy" }
 jt_capability = { path = "crates/domain/jt_capability" }
 jt_connector = { path = "crates/domain/jt_connector" }
 jt_inbox = { path = "crates/domain/jt_inbox" }
+jt_studio = { path = "crates/domain/jt_studio" }
 jt_app = { path = "crates/jt_app" }
+jt_files = { path = "crates/adapters/jt_files" }
 jt_pg = { path = "crates/adapters/jt_pg" }
 jt_panel_http = { path = "crates/adapters/jt_panel_http" }
 jt_mcp = { path = "crates/adapters/jt_mcp" }
@@ -90,6 +94,9 @@ url = { version = "2", features = ["serde"] }
 dotenvy = "0.15"
 toml = "1"
 async-trait = "0.1"
+# Pure IANA timezone rules for capability working-hour fences.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
 http = "1"
 # The webhook gate tells a body over its limit apart (`LengthLimitError`); the release axum uses.
 http-body-util = "0.1"

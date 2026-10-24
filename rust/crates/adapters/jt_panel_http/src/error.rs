@@ -31,7 +31,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::Unauthenticated => StatusCode::UNAUTHORIZED,
         ErrorCode::Forbidden => StatusCode::FORBIDDEN,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
-        ErrorCode::Conflict => StatusCode::CONFLICT,
+        ErrorCode::Conflict | ErrorCode::BudgetCap => StatusCode::CONFLICT,
         ErrorCode::Validation => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::StrategyRequired => StatusCode::CONFLICT,
         ErrorCode::WorkspaceInactive => StatusCode::LOCKED,

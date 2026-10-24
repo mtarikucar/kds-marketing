@@ -813,7 +813,7 @@ async fn state_cannot_be_reused_or_completed_by_another_workspace() {
             kind_key: "facebook_page".into(),
             external_id: "page-1".into(),
             name: "Kahve".into(),
-            public: json!({ "category": "Cafe" }),
+            public: json!({ "category": "Cafe", "granted_scopes": ["pages_manage_posts"] }),
         }]
     );
     assert_eq!(
@@ -1044,9 +1044,12 @@ async fn confirm_seals_credentials_and_outputs_never_contain_them() {
         // The credential's public facts, and the app that issued it (Facebook Login).
         assert_eq!(
             public["access"],
-            json!({ "kind": "page_token", "page_id": id, "app": "meta" })
+            json!({ "kind": "page_token", "page_id": id, "app": "meta", "scopes": ["pages_manage_posts"] })
         );
-        assert_eq!(public["asset"], json!({ "category": "Cafe" }));
+        assert_eq!(
+            public["asset"],
+            json!({ "category": "Cafe", "granted_scopes": ["pages_manage_posts"] })
+        );
         assert_eq!(public["health"]["ok"], true);
         assert_eq!(public["reconnect_required"], false);
         assert_eq!(
@@ -2478,7 +2481,7 @@ async fn bound_confirm_binds_first_asset_and_creates_the_rest() {
     assert_eq!(bound.connector_public["hosts"], json!(META_HOSTS));
     assert_eq!(
         bound.connector_public["asset"],
-        json!({ "category": "Cafe" })
+        json!({ "category": "Cafe", "granted_scopes": ["pages_manage_posts"] })
     );
     assert_eq!(
         r.sealed_credential(declared.id),
@@ -3022,7 +3025,7 @@ async fn secret_looking_facts_are_dropped_from_every_output() {
         .complete_as(&r.w.deps, &owner, &state_of(&started), "code-1")
         .await
         .unwrap();
-    let screened_asset = json!({ "category": "Cafe", "nested": [{ "fans": 1 }] });
+    let screened_asset = json!({ "category": "Cafe", "granted_scopes": ["pages_manage_posts"], "nested": [{ "fans": 1 }] });
     assert_eq!(pending.assets[0].public, screened_asset);
     assert_eq!(
         r.pending_rows()[0].assets_public[0]["public"],

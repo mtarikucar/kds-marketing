@@ -87,6 +87,7 @@ async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedConnec
     r.capabilities().insert(cap, Some(sealed)).await.unwrap();
     r.conversations().upsert_on_inbound(c).await.unwrap();
     r.commit().await.unwrap();
+    jt_testkit::flows::price_sms(&w.deps, w.ws).await;
     (w, id, connector)
 }
 fn input(key: Option<&str>) -> replies::ReplyInput {

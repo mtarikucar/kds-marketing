@@ -61,6 +61,13 @@ pub struct Intervals {
     pub inbox_consume: Duration,
     pub response_sla: Duration,
     pub snooze_wake: Duration,
+    pub studio_control: Duration,
+    pub studio_files_cleanup: Duration,
+    pub studio_plan: Duration,
+    pub studio_publish: Duration,
+    pub studio_publish_recover: Duration,
+    pub studio_measure: Duration,
+    pub studio_reweight: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -89,6 +96,13 @@ impl Default for Intervals {
             inbox_consume: Duration::from_secs(10),
             response_sla: MINUTE,
             snooze_wake: MINUTE,
+            studio_control: MINUTE,
+            studio_files_cleanup: DAY,
+            studio_plan: HOUR,
+            studio_publish: MINUTE,
+            studio_publish_recover: MINUTE,
+            studio_measure: HOUR * 6,
+            studio_reweight: DAY * 7,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -112,6 +126,13 @@ impl Intervals {
             Job::InboxConsume => self.inbox_consume,
             Job::ResponseSla => self.response_sla,
             Job::SnoozeWake => self.snooze_wake,
+            Job::StudioControl => self.studio_control,
+            Job::StudioFilesCleanup => self.studio_files_cleanup,
+            Job::StudioPlan => self.studio_plan,
+            Job::StudioPublish => self.studio_publish,
+            Job::StudioPublishRecover => self.studio_publish_recover,
+            Job::StudioMeasure => self.studio_measure,
+            Job::StudioReweight => self.studio_reweight,
         }
     }
 }
@@ -194,7 +215,14 @@ pub fn spawn(deps: Arc<Deps>, intervals: Intervals) -> Scheduler {
             name: job.name(),
             lock: job.lock_name(),
             every: intervals.of(job),
-            first: jitter(job.name(), intervals.first_run_jitter),
+            first: if job == Job::StudioReweight && intervals.of(job) == DAY * 7 {
+                let now = deps.clock.now();
+                let next =
+                    jt_app::usecases::studio::learning::week_start(now) + time::Duration::days(7);
+                Duration::try_from(next - now).unwrap_or_default()
+            } else {
+                jitter(job.name(), intervals.first_run_jitter)
+            },
         };
         let run: Run = Arc::new(move |deps: Arc<Deps>, now| {
             Box::pin(async move { job.run(&deps, now).await })
@@ -397,6 +425,13 @@ mod tests {
             inbox_consume: every,
             response_sla: every,
             snooze_wake: every,
+            studio_control: every,
+            studio_files_cleanup: every,
+            studio_plan: every,
+            studio_publish: every,
+            studio_publish_recover: every,
+            studio_measure: every,
+            studio_reweight: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -487,6 +522,17 @@ mod tests {
         assert_eq!(i.of(Job::InboxConsume), Duration::from_secs(10));
         assert_eq!(i.of(Job::ResponseSla), MINUTE);
         assert_eq!(i.of(Job::SnoozeWake), MINUTE);
+        assert_eq!(i.of(Job::StudioControl), MINUTE);
+        assert_eq!(i.of(Job::StudioMeasure), HOUR * 6);
+        assert_eq!(i.of(Job::StudioReweight), DAY * 7);
+        assert_eq!(i.of(Job::StudioFilesCleanup), DAY);
+        assert_eq!(
+            Job::StudioFilesCleanup.lock_name(),
+            "jeeta.jobs.studio_files_cleanup"
+        );
+        assert_eq!(i.of(Job::StudioPlan), HOUR);
+        assert_eq!(i.of(Job::StudioPublish), MINUTE);
+        assert_eq!(i.of(Job::StudioPublishRecover), MINUTE);
         assert_eq!(Job::ResponseSla.lock_name(), "jeeta.jobs.response_sla");
         assert_eq!(Job::SnoozeWake.lock_name(), "jeeta.jobs.snooze_wake");
         assert_eq!(Job::InboxConsume.lock_name(), "jeeta.jobs.inbox_consume");

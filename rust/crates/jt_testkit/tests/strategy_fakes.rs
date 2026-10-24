@@ -76,15 +76,17 @@ fn sections(product: &str) -> Sections {
     }
 }
 
-fn hypothesis(title: &str, confidence: f32) -> Hypothesis {
+fn hypothesis(title: &str, prior_confidence: f32) -> Hypothesis {
     Hypothesis {
+        cadence: Default::default(),
+        derived_confidence: None,
         id: HypothesisId::new_v7(),
         title: title.into(),
         segment_key: "esnaf".into(),
         angle: "zaman".into(),
         channel: "any".into(),
         metric: "replies".into(),
-        confidence,
+        prior_confidence,
         state: HypothesisState::Kept,
     }
 }

@@ -523,7 +523,7 @@ impl BudgetRepo for MemTenant {
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, item.workspace_id)?;
-            if item.cap < 0 {
+            if item.cap < 0 || item.unit_cost_minor.is_some_and(|p| p < 0) {
                 return Err(AppError::internal("budget_items.cap must not be negative"));
             }
             let state = this.state();
@@ -555,16 +555,18 @@ impl BudgetRepo for MemTenant {
 
     /// The fakes run one bundle at a time in tests, so there is no one to wait for: `find_item`.
     async fn lock_item(&mut self, id: BudgetItemId) -> Result<Option<BudgetItem>, AppError> {
+        self.tx.lock_studio().await;
         BudgetRepo::find_item(self, id).await
     }
 
     /// The bundle's workspace first, then the cap's check constraint, then the row, as `jt_pg`
     /// meets them; only the name, cap, period and retirement time are written.
     async fn update_item(&mut self, item: BudgetItem) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, item.workspace_id)?;
-            if item.cap < 0 {
+            if item.cap < 0 || item.unit_cost_minor.is_some_and(|p| p < 0) {
                 return Err(AppError::internal("budget_items.cap must not be negative"));
             }
             ensure_item(this.state(), ws, item.id)?;
@@ -576,6 +578,7 @@ impl BudgetRepo for MemTenant {
                 {
                     stored.name = item.name.clone();
                     stored.cap = item.cap;
+                    stored.unit_cost_minor = item.unit_cost_minor;
                     stored.period = item.period;
                     stored.retired_at = item.retired_at;
                 }
@@ -646,6 +649,7 @@ impl BudgetRepo for MemTenant {
     /// The item reference first, as `jt_pg` checks it, then the amount's check constraint, then
     /// the unique id.
     async fn append_spend(&mut self, spend: BudgetSpend) -> Result<BudgetSpendId, AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, spend.workspace_id)?;

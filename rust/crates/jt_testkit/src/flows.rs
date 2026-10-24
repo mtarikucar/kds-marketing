@@ -35,3 +35,73 @@ pub async fn activate_workspace(deps: &Deps, ws: WorkspaceId) {
         .await
         .expect("the operator activates the workspace");
 }
+
+/// Give SMS fixtures an explicit price and a finite strategy cap. Existing prices stay intact.
+pub async fn price_sms(deps: &Deps, ws: WorkspaceId) {
+    use jt_strategy::{LaneKind, StrategyVersionId, VersionStatus};
+    let now = deps.clock.now();
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let caps: Vec<_> = r
+        .capabilities()
+        .list(Default::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind_key == "sms_line" && c.budget_item_ids.is_empty())
+        .collect();
+    if caps.is_empty() {
+        return;
+    }
+    let mut v = r
+        .strategy()
+        .current_approved()
+        .await
+        .unwrap()
+        .expect("approved SMS fixture strategy");
+    if !v
+        .sections
+        .budget_frame
+        .lanes
+        .iter()
+        .any(|l| l.lane == LaneKind::Organic)
+    {
+        let hs = r.hypotheses().list(v.id).await.unwrap();
+        r.strategy()
+            .set_status(v.id, VersionStatus::Archived, now, None)
+            .await
+            .unwrap();
+        v.id = StrategyVersionId::new_v7();
+        v.number = r.strategy().next_number().await.unwrap();
+        v.sections.budget_frame.lanes.push(jt_strategy::Lane {
+            lane: LaneKind::Organic,
+            period: jt_strategy::Period::Monthly,
+            cap_minor: 100000,
+            currency: "TRY".into(),
+        });
+        r.strategy().insert(v.clone()).await.unwrap();
+        for h in hs {
+            r.hypotheses().upsert(v.id, h).await.unwrap();
+        }
+    }
+    for c in caps {
+        let id = jt_capability::BudgetItemId::new_v7();
+        r.budget()
+            .insert_item(jt_capability::BudgetItem {
+                id,
+                workspace_id: ws,
+                name: "SMS test price".into(),
+                kind: jt_capability::BudgetKind::SmsBudget,
+                unit: jt_capability::Unit::Currency("TRY".into()),
+                cap: 100000,
+                unit_cost_minor: Some(3),
+                period: jt_capability::Period::Monthly,
+                strategy_version_id: Some(v.id.0),
+                created_at: now,
+                retired_at: None,
+            })
+            .await
+            .unwrap();
+        r.budget().link(c.id, id).await.unwrap();
+    }
+    r.commit().await.unwrap();
+}

@@ -195,6 +195,25 @@ const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk
 /// Every use case of this release. Inbox operations require an approved strategy.
 #[rustfmt::skip]
 pub static CATALOG: &[UseCase] = &[
+    twin("studio.overview", GateMode::Gated, "jeeta.studio.overview", ("GET", "/api/studio/overview"), Read),
+    twin("studio.ledger", Exempt, "jeeta.studio.ledger", ("GET", "/api/studio/ledger"), Read),
+    twin("studio.ledger_export", Exempt, "jeeta.studio.ledger_export", ("POST", "/api/studio/ledger/export"), Read),
+    twin("studio.adsets_list", GateMode::Gated, "jeeta.studio.adsets_list", ("GET", "/api/studio/adsets"), Read),
+    twin("studio.adset_bind", GateMode::Gated, "jeeta.studio.adset_bind", ("POST", "/api/studio/adsets/bind"), Write),
+    twin("studio.budget_move", GateMode::Gated, "jeeta.studio.budget_move", ("POST", "/api/studio/budget-moves"), Spend),
+
+    twin("studio.learned", GateMode::Gated, "jeeta.studio.learned", ("GET", "/api/studio/learned"), Read),
+    twin("studio.judgment_record", GateMode::Gated, "jeeta.studio.judgment_record", ("POST", "/api/studio/judgments"), Write),
+    twin("studio.file_upload", GateMode::Gated, "jeeta.studio.file_upload", ("POST", "/api/studio/files"), Write),
+    twin("studio.piece_submit", GateMode::Gated, "jeeta.studio.piece_submit", ("POST", "/api/studio/slots/{slot_id}/piece"), Write),
+    twin("studio.pending", GateMode::Gated, "jeeta.studio.pending", ("GET", "/api/studio/pending"), Read),
+    twin("studio.slot_get", GateMode::Gated, "jeeta.studio.slot_get", ("GET", "/api/studio/slots/{slot_id}"), Read),
+    twin("studio.slot_cancel", GateMode::Gated, "jeeta.studio.slot_cancel", ("POST", "/api/studio/slots/{slot_id}/cancel"), Write),
+    twin("studio.trend_record", GateMode::Gated, "jeeta.studio.trend_record", ("POST", "/api/studio/trends"), Write),
+    twin("studio.hypothesis_propose", GateMode::Gated, "jeeta.studio.hypothesis_propose", ("POST", "/api/studio/hypotheses/proposals"), Write),
+    twin("studio.brake", Exempt, "jeeta.studio.brake", ("POST", "/api/studio/brake"), Write),
+    twin("studio.policy_set", GateMode::Gated, "jeeta.studio.policy_set", ("PUT", "/api/studio/policy"), Write),
+    twin("studio.approve", GateMode::Gated, "jeeta.studio.approve", ("POST", "/api/studio/approvals"), Write),
     twin("inbox.pending", GateMode::Exempt, "jeeta.inbox.pending", ("GET", "/api/inbox/pending"), Read),
     twin("inbox.context", GateMode::Exempt, "jeeta.inbox.context", ("GET", "/api/inbox/conversations/{conversation_id}/context"), Read),
     twin("inbox.conversations.list", GateMode::Gated, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),

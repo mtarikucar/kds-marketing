@@ -185,7 +185,24 @@ pub fn parse_section_strict(key: &str, value: &Value) -> Result<SectionValue, Ve
 /// [`parse_section_strict`] does; paths are `hypotheses[i].<key>`, matching
 /// [`crate::validate_for_approval`].
 pub fn parse_hypotheses_strict(value: &Value) -> Result<Vec<HypothesisInput>, Vec<Gap>> {
-    strict(value, &Shape::List(&HYPOTHESIS_INPUT), "hypotheses")
+    let inputs: Vec<HypothesisInput> =
+        strict(value, &Shape::List(&HYPOTHESIS_INPUT), "hypotheses")?;
+    let mut gaps = Vec::new();
+    for (i, input) in inputs.iter().enumerate() {
+        for (lane, cadence) in &input.cadence {
+            if let Err(message) = cadence.validate() {
+                gaps.push(Gap {
+                    field: format!("hypotheses[{i}].cadence.{}", lane.key()),
+                    message: message.into(),
+                });
+            }
+        }
+    }
+    if gaps.is_empty() {
+        Ok(inputs)
+    } else {
+        Err(gaps)
+    }
 }
 
 /// Deserialises `value` as `T`, failing with every shape gap under `path` and any type error.
@@ -195,6 +212,7 @@ fn strict<T: DeserializeOwned>(value: &Value, shape: &Shape, path: &str) -> Resu
     match T::deserialize(value) {
         Ok(parsed) if gaps.is_empty() => Ok(parsed),
         Ok(_) => Err(gaps),
+        Err(e) if !gaps.is_empty() && e.to_string().starts_with("unknown field") => Err(gaps),
         Err(e) => {
             gaps.push(Gap {
                 field: path.to_owned(),

@@ -188,7 +188,7 @@ async fn facebook(
     };
     let id = text(&answer["post_id"])
         .or_else(|| text(&answer["id"]))
-        .ok_or_else(|| missing("post id"))?;
+        .ok_or_else(|| ConnectorError::unknown("accepted response lacks post id"))?;
     let url = node(&id)
         .ok()
         .map(|id| join(&connector.bases().facebook_dialog, &[id], &[]));
@@ -307,7 +307,8 @@ async fn instagram(
             json!({ "creation_id": container }),
         )
         .await?;
-    let id = text(&published["id"]).ok_or_else(|| missing("media id"))?;
+    let id = text(&published["id"])
+        .ok_or_else(|| ConnectorError::unknown("accepted response lacks media id"))?;
     // The permalink, best effort: the post stands without it.
     let url = match ig
         .get(connector, &[node(&id)?], &[("fields", "permalink")])

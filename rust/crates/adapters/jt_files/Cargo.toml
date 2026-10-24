@@ -1,0 +1,32 @@
+[package]
+name = "jt_files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+[dependencies]
+jt_app.workspace = true
+jt_studio.workspace = true
+jt_tenancy.workspace = true
+jt_outbound.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+url.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+libc = "0.2"
+axum.workspace = true
+tokio = {workspace = true, features = ["rt", "fs"]}
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+jt_testkit.workspace = true
+jt_outbound = {workspace = true, features = ["test-loopback"]}
+tower.workspace = true
+[lints]
+workspace = true

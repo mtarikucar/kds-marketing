@@ -21,6 +21,7 @@ pub mod oauth_callback;
 pub mod platform;
 pub mod roles;
 pub mod strategy;
+pub mod studio;
 pub mod team;
 pub mod work;
 pub mod workspace;
@@ -38,6 +39,24 @@ use crate::state::AppState;
 /// Every route the panel HTTP adapter serves, as (method, path), in axum's path syntax as
 /// `CATALOG.panel_route` writes it. The twin-rule test compares it with the catalog.
 pub const ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/studio/overview"),
+    ("GET", "/api/studio/ledger"),
+    ("POST", "/api/studio/ledger/export"),
+    ("GET", "/api/studio/adsets"),
+    ("POST", "/api/studio/adsets/bind"),
+    ("POST", "/api/studio/budget-moves"),
+    ("GET", "/api/studio/learned"),
+    ("POST", "/api/studio/judgments"),
+    ("POST", "/api/studio/files"),
+    ("POST", "/api/studio/slots/{slot_id}/piece"),
+    ("GET", "/api/studio/pending"),
+    ("GET", "/api/studio/slots/{slot_id}"),
+    ("POST", "/api/studio/slots/{slot_id}/cancel"),
+    ("POST", "/api/studio/trends"),
+    ("POST", "/api/studio/hypotheses/proposals"),
+    ("POST", "/api/studio/brake"),
+    ("PUT", "/api/studio/policy"),
+    ("POST", "/api/studio/approvals"),
     ("GET", "/api/inbox/pending"),
     ("POST", "/api/inbox/people/{person_id}/consents"),
     ("GET", "/api/inbox/people/{person_id}/consents"),
@@ -237,6 +256,94 @@ where
 /// The JSON API's routes.
 pub fn api_routes() -> Vec<ApiRoute> {
     vec![
+        api_route(
+            "GET",
+            "/studio/overview",
+            "studio.overview",
+            studio::overview,
+        ),
+        api_route("GET", "/studio/ledger", "studio.ledger", studio::ledger),
+        api_route(
+            "POST",
+            "/studio/ledger/export",
+            "studio.ledger_export",
+            studio::ledger_export,
+        ),
+        api_route(
+            "GET",
+            "/studio/adsets",
+            "studio.adsets_list",
+            studio::adsets_list,
+        ),
+        api_route(
+            "POST",
+            "/studio/adsets/bind",
+            "studio.adset_bind",
+            studio::adset_bind,
+        ),
+        api_route(
+            "POST",
+            "/studio/budget-moves",
+            "studio.budget_move",
+            studio::budget_move,
+        ),
+        api_route("GET", "/studio/learned", "studio.learned", studio::learned),
+        api_route(
+            "POST",
+            "/studio/judgments",
+            "studio.judgment_record",
+            studio::judgment_record,
+        ),
+        api_route(
+            "POST",
+            "/studio/files",
+            "studio.file_upload",
+            studio::file_upload,
+        ),
+        api_route(
+            "POST",
+            "/studio/slots/{slot_id}/piece",
+            "studio.piece_submit",
+            studio::piece_submit,
+        ),
+        api_route("GET", "/studio/pending", "studio.pending", studio::pending),
+        api_route(
+            "GET",
+            "/studio/slots/{slot_id}",
+            "studio.slot_get",
+            studio::slot_get,
+        ),
+        api_route(
+            "POST",
+            "/studio/slots/{slot_id}/cancel",
+            "studio.slot_cancel",
+            studio::slot_cancel,
+        ),
+        api_route(
+            "POST",
+            "/studio/trends",
+            "studio.trend_record",
+            studio::trend_record,
+        ),
+        api_route(
+            "POST",
+            "/studio/hypotheses/proposals",
+            "studio.hypothesis_propose",
+            studio::hypothesis_propose,
+        ),
+        api_route("POST", "/studio/brake", "studio.brake", studio::brake),
+        api_route(
+            "PUT",
+            "/studio/policy",
+            "studio.policy_set",
+            studio::policy_set,
+        ),
+        api_route(
+            "POST",
+            "/studio/approvals",
+            "studio.approve",
+            studio::approve,
+        ),
         api_route("GET", "/inbox/pending", "inbox.pending", inbox::pending),
         api_route(
             "POST",
@@ -896,6 +1003,10 @@ mod tests {
                 hasher: Arc::new(PlainHasher),
                 seal: Arc::new(PlainSecretBox),
                 channels: Arc::new(NoChannelsYet),
+                file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+                media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
+                files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+                transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
                 archived_hook: Arc::new(NoopArchivedHook),
                 hosts: Arc::new(RecordingTenantHosts::new()),
                 apps: Arc::new(FakeAppConfig::default()),

@@ -262,36 +262,7 @@ fn optional_section_key_schema(_: &mut SchemaGenerator) -> Schema {
 /// it asks for no field (a missing one is empty, and the use case lists what a hypothesis lacks
 /// as gaps) and takes a null `id` for a new hypothesis; it still refuses unknown fields.
 fn hypotheses_schema(_: &mut SchemaGenerator) -> Schema {
-    json_schema!({
-        "type": "array",
-        "items": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": ["string", "null"],
-                    "format": "uuid",
-                    "description": "The id of a hypothesis to keep; leave it out (or null) to \
-                                    add one.",
-                },
-                "title": { "type": "string" },
-                "segment_key": {
-                    "type": "string",
-                    "description": "The key of one of the audience's segments.",
-                },
-                "angle": {
-                    "type": "string",
-                    "description": "What the segment is expected to respond to.",
-                },
-                "channel": {
-                    "type": "string",
-                    "description": "One of the strategy's channels, or \"any\".",
-                },
-                "metric": { "type": "string", "description": "The measure that decides it." },
-                "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-            },
-            "additionalProperties": false,
-        },
-    })
+    Schema::try_from(strategy::hypotheses_schema()).expect("valid hypothesis schema")
 }
 
 fn get<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {

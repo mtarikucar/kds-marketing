@@ -15,6 +15,7 @@ use time::Duration;
 
 fn monthly(name: &str, cap: i64) -> BudgetItemInput {
     BudgetItemInput {
+        unit_cost_minor: None,
         name: name.into(),
         kind: BudgetKind::Cash,
         unit: Unit::Currency("TRY".into()),
@@ -117,6 +118,7 @@ async fn create_item_starts_with_nothing_spent() {
         &w.deps,
         &manager,
         BudgetItemInput {
+            unit_cost_minor: None,
             name: " Filament ".into(),
             kind: BudgetKind::Consumable,
             unit: Unit::Count("makara".into()),
@@ -140,6 +142,7 @@ async fn create_item_starts_with_nothing_spent() {
             "kind": "consumable",
             "unit": { "kind": "count", "value": "makara" },
             "cap": 4,
+            "unit_cost_minor": null,
             "period": "weekly",
         })
     );
@@ -363,6 +366,7 @@ fn spend_cursor_takes_both_halves_or_neither() {
 
 fn edit(name: Option<&str>, cap: Option<i64>, period: Option<Period>) -> UpdateBudgetItem {
     UpdateBudgetItem {
+        unit_cost_minor: None,
         name: name.map(Into::into),
         cap,
         period,
@@ -450,7 +454,10 @@ async fn budget_item_update_keeps_kind_unit_and_spend() {
     // fields of an edit at all.
     let e = err(budget::update_item(&w.deps, &w.owner_ctx, item, edit(None, None, None)).await);
     assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
-    assert_eq!(e.details, json!({ "fields": ["name", "cap", "period"] }));
+    assert_eq!(
+        e.details,
+        json!({ "fields": ["name", "cap", "period", "unit_cost_minor"] })
+    );
     assert_invalid(
         &err(budget::update_item(&w.deps, &w.owner_ctx, item, edit(Some(" "), None, None)).await),
         "name",

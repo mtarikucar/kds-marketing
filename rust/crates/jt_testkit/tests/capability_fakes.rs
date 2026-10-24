@@ -82,6 +82,7 @@ fn item(ws: WorkspaceId, at: OffsetDateTime) -> BudgetItem {
         BudgetItemId::new_v7(),
         ws,
         NewBudgetItem {
+            unit_cost_minor: None,
             name: "Reklam".into(),
             kind: BudgetKind::AdBudget,
             unit: Unit::Currency("TRY".into()),

@@ -116,6 +116,18 @@ struct SpyTenant {
 
 #[async_trait]
 impl TenantRepos for SpyTenant {
+    fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
+        self.inner.studio()
+    }
+
+    fn studio_budget(&mut self) -> &mut dyn jt_app::ports::studio::StudioBudgetRepo {
+        self.inner.studio_budget()
+    }
+
+    fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
+        self.inner.studio_control()
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.inner.consents()
     }
@@ -253,6 +265,11 @@ impl TenantRepos for SpyTenant {
 
 #[async_trait]
 impl StrategyRepo for SpyTenant {
+    async fn lock_execution_frame(&mut self) -> Result<Option<StrategyVersion>, AppError> {
+        self.spy.push("strategy.lock_execution_frame");
+        self.inner.strategy().lock_execution_frame().await
+    }
+
     async fn insert(&mut self, version: StrategyVersion) -> Result<(), AppError> {
         self.spy.push("strategy.insert");
         self.inner.strategy().insert(version).await
@@ -333,6 +350,28 @@ impl StrategyRepo for SpyTenant {
 
 #[async_trait]
 impl HypothesisRepo for SpyTenant {
+    async fn set_derived_confidence(
+        &mut self,
+        id: HypothesisId,
+        confidence: f32,
+        evidence_key: &str,
+    ) -> Result<(), AppError> {
+        self.inner
+            .hypotheses()
+            .set_derived_confidence(id, confidence, evidence_key)
+            .await
+    }
+    async fn append_draft_hypothesis(
+        &mut self,
+        id: StrategyVersionId,
+        input: jt_strategy::HypothesisInput,
+    ) -> Result<HypothesisId, AppError> {
+        self.inner
+            .hypotheses()
+            .append_draft_hypothesis(id, input)
+            .await
+    }
+
     async fn replace_all(
         &mut self,
         version_id: StrategyVersionId,
@@ -647,7 +686,7 @@ fn one_hypothesis(channel: &str) -> Value {
         "angle": "gece açık",
         "channel": channel,
         "metric": "dm",
-        "confidence": 0.6,
+        "prior_confidence": 0.6,
     }])
 }
 
@@ -1276,7 +1315,7 @@ async fn set_hypotheses_adds_new_ones_with_fresh_ids() {
     let mut two = one_hypothesis("instagram");
     two.as_array_mut().unwrap().push(json!({
         "title": "Kahve molası", "segment_key": "students", "angle": "ucuz",
-        "channel": "any", "metric": "ziyaret", "confidence": 0.3,
+        "channel": "any", "metric": "ziyaret", "prior_confidence": 0.3,
     }));
     let out = strategy::set_hypotheses(&w.deps, &w.owner_ctx, two)
         .await
@@ -1299,7 +1338,7 @@ async fn set_hypotheses_adds_new_ones_with_fresh_ids() {
     let first = &out.hypotheses[0];
     let again = json!([{
         "id": first.id, "title": "Sınav haftası (gece)", "segment_key": "students",
-        "angle": "gece açık", "channel": "instagram", "metric": "dm", "confidence": 0.7,
+        "angle": "gece açık", "channel": "instagram", "metric": "dm", "prior_confidence": 0.7,
     }]);
     let out = strategy::set_hypotheses(&w.deps, &w.owner_ctx, again)
         .await
@@ -1321,9 +1360,9 @@ async fn set_hypotheses_keeps_retires_and_adds_against_the_approved_version() {
     // Another hypothesis approved in version 1 as well: approve a second version holding two.
     let two = json!([
         { "id": kept_id, "title": "Sınav haftası", "segment_key": "students", "angle": "gece açık",
-          "channel": "instagram", "metric": "dm", "confidence": 0.6 },
+          "channel": "instagram", "metric": "dm", "prior_confidence": 0.6 },
         { "title": "Kahve molası", "segment_key": "students", "angle": "ucuz",
-          "channel": "any", "metric": "ziyaret", "confidence": 0.3 },
+          "channel": "any", "metric": "ziyaret", "prior_confidence": 0.3 },
     ]);
     strategy::set_hypotheses(&w.deps, &w.owner_ctx, two)
         .await
@@ -1340,9 +1379,9 @@ async fn set_hypotheses_keeps_retires_and_adds_against_the_approved_version() {
         .unwrap();
     let input = json!([
         { "id": kept_id, "title": "Sınav haftası", "segment_key": "students", "angle": "sabah",
-          "channel": "instagram", "metric": "dm", "confidence": 0.8 },
+          "channel": "instagram", "metric": "dm", "prior_confidence": 0.8 },
         { "title": "Termos", "segment_key": "students", "angle": "hediye",
-          "channel": "instagram", "metric": "satış", "confidence": 0.2 },
+          "channel": "instagram", "metric": "satış", "prior_confidence": 0.2 },
     ]);
     let out = strategy::set_hypotheses(&w.deps, &w.owner_ctx, input)
         .await
@@ -1367,7 +1406,7 @@ async fn set_hypotheses_keeps_retires_and_adds_against_the_approved_version() {
     // Listing the retired one again brings it back as kept.
     let input = json!([
         { "id": retired_id, "title": "Kahve molası", "segment_key": "students", "angle": "ucuz",
-          "channel": "any", "metric": "ziyaret", "confidence": 0.3 },
+          "channel": "any", "metric": "ziyaret", "prior_confidence": 0.3 },
     ]);
     let out = strategy::set_hypotheses(&w.deps, &w.owner_ctx, input)
         .await
@@ -1401,8 +1440,8 @@ async fn set_hypotheses_refuses_unknown_keys_unknown_ids_duplicates_and_bad_conf
 
     let unknown = HypothesisId::new_v7();
     let input = json!([
-        { "id": unknown, "title": "a", "confidence": 0.5 },
-        { "title": "b", "confidence": 1.5 },
+        { "id": unknown, "title": "a", "prior_confidence": 0.5 },
+        { "title": "b", "prior_confidence": 1.5 },
     ]);
     let err = strategy::set_hypotheses(&w.deps, &w.owner_ctx, input)
         .await
@@ -1410,7 +1449,7 @@ async fn set_hypotheses_refuses_unknown_keys_unknown_ids_duplicates_and_bad_conf
     assert_eq!(err.code, ErrorCode::Validation);
     assert_eq!(
         gap_fields(&err),
-        ["hypotheses[0].id", "hypotheses[1].confidence"]
+        ["hypotheses[0].id", "hypotheses[1].prior_confidence"]
     );
 
     let out = strategy::set_hypotheses(&w.deps, &w.owner_ctx, one_hypothesis("instagram"))
@@ -1418,8 +1457,8 @@ async fn set_hypotheses_refuses_unknown_keys_unknown_ids_duplicates_and_bad_conf
         .unwrap();
     let id = out.hypotheses[0].id;
     let twice = json!([
-        { "id": id, "title": "a", "confidence": 0.5 },
-        { "id": id, "title": "b", "confidence": 0.5 },
+        { "id": id, "title": "a", "prior_confidence": 0.5 },
+        { "id": id, "title": "b", "prior_confidence": 0.5 },
     ]);
     let err = strategy::set_hypotheses(&w.deps, &w.owner_ctx, twice)
         .await
@@ -2056,6 +2095,10 @@ async fn archive_calls_the_hook_after_commit() {
         seen: Arc::default(),
     };
     let deps = Deps {
+        file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+        media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
+        files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+        transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
         archived_hook: Arc::new(hook.clone()),
         ..w.deps.clone()
     };
@@ -2257,11 +2300,19 @@ async fn every_draft_mutation_locks_the_draft() {
             .map(String::as_str)
             .filter(|c| *c != "open" && *c != "commit")
             .collect();
-        assert_eq!(
-            strategy_calls.first(),
-            Some(&"strategy.lock_draft"),
-            "{name}: {calls:?}"
-        );
+        if matches!(name, "approve" | "archive") {
+            assert_eq!(
+                &strategy_calls[..2],
+                &["strategy.lock_draft", "strategy.lock_execution_frame"],
+                "{name}: {calls:?}"
+            );
+        } else {
+            assert_eq!(
+                strategy_calls.first(),
+                Some(&"strategy.lock_draft"),
+                "{name}: {calls:?}"
+            );
+        }
         assert!(
             strategy_calls.iter().any(|c| WRITES.contains(c)),
             "{name} wrote nothing: {calls:?}"

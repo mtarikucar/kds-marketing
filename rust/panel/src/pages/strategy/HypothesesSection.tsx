@@ -39,6 +39,7 @@ interface Row {
   metric: string;
   /** As typed; read as a number between 0 and 1 on save. */
   confidence: string;
+  cadence?: HypothesisInput['cadence'];
   retired: boolean;
 }
 
@@ -51,7 +52,8 @@ function toRow(h: Hypothesis): Row {
     angle: h.angle,
     channel: h.channel,
     metric: h.metric,
-    confidence: String(h.confidence),
+    confidence: String(h.prior_confidence),
+    cadence: h.cadence,
     retired: h.state === 'retired',
   };
 }
@@ -70,7 +72,8 @@ function toInputs(rows: readonly Row[]): HypothesisInput[] {
         angle: r.angle,
         channel: r.channel,
         metric: r.metric,
-        confidence: Number(r.confidence.replace(',', '.')) || 0,
+        prior_confidence: Number(r.confidence.replace(',', '.')) || 0,
+        cadence: r.cadence,
       };
       return r.id ? { id: r.id, ...input } : input;
     });

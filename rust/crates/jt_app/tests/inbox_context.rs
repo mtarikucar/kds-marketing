@@ -173,13 +173,15 @@ async fn context_only_same_person_and_channel_hypotheses() {
             .upsert(
                 version,
                 Hypothesis {
+                    cadence: Default::default(),
+                    derived_confidence: None,
                     id: HypothesisId::new_v7(),
                     title: channel.into(),
                     segment_key: "buyers".into(),
                     angle: "help".into(),
                     channel: channel.into(),
                     metric: "replies".into(),
-                    confidence: 0.5,
+                    prior_confidence: 0.5,
                     state,
                 },
             )

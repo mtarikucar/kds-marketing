@@ -74,13 +74,15 @@ fn complete_sections() -> Sections {
 
 fn hypothesis(segment_key: &str, channel: &str, state: HypothesisState) -> Hypothesis {
     Hypothesis {
+        cadence: Default::default(),
+        derived_confidence: None,
         id: HypothesisId::new_v7(),
         title: format!("{segment_key} answer on {channel}"),
         segment_key: segment_key.to_owned(),
         angle: "morning ritual".to_owned(),
         channel: channel.to_owned(),
         metric: "click-through rate".to_owned(),
-        confidence: 0.5,
+        prior_confidence: 0.5,
         state,
     }
 }
@@ -166,13 +168,13 @@ fn approval_requires_a_live_hypothesis_and_known_channels() {
     );
 
     // A channel the workspace has no capability for, in the channels section and in a
-    // hypothesis; an unknown segment; an out-of-range confidence. Every gap at once, plus the
+    // hypothesis; an unknown segment; an out-of-range prior_confidence. Every gap at once, plus the
     // section gaps.
     let mut s = complete_sections();
     s.identity.product.clear();
     s.channels.push(channel("tiktok"));
     let mut bad_confidence = hypothesis("students", "mailbox", HypothesisState::Kept);
-    bad_confidence.confidence = 1.5;
+    bad_confidence.prior_confidence = 1.5;
     let hyps = vec![
         hypothesis("students", "instagram", HypothesisState::Kept),
         hypothesis("retirees", "tiktok", HypothesisState::Added),
@@ -186,7 +188,7 @@ fn approval_requires_a_live_hypothesis_and_known_channels() {
             "channels[2].channel",
             "hypotheses[1].segment_key",
             "hypotheses[1].channel",
-            "hypotheses[2].confidence",
+            "hypotheses[2].prior_confidence",
         ]
     );
 
@@ -199,10 +201,10 @@ fn approval_requires_a_live_hypothesis_and_known_channels() {
     // Confidence must be a number in 0..=1; a NaN is a gap too.
     for c in [-0.1_f32, 1.01, f32::NAN] {
         let mut h = hypothesis("students", "instagram", HypothesisState::Kept);
-        h.confidence = c;
+        h.prior_confidence = c;
         assert_eq!(
             fields(&validate_for_approval(&complete_sections(), &[h], &kinds)),
-            ["hypotheses[0].confidence"],
+            ["hypotheses[0].prior_confidence"],
             "{c}"
         );
     }
@@ -255,7 +257,7 @@ fn next_draft_keeps_every_hypothesis() {
     );
     assert!(draft.iter().all(|h| h.state == HypothesisState::Kept));
     assert_eq!(draft[1].title, hyps[2].title);
-    assert_eq!(draft[1].confidence, hyps[2].confidence);
+    assert_eq!(draft[1].prior_confidence, hyps[2].prior_confidence);
 }
 
 #[test]
@@ -509,13 +511,13 @@ fn old_shaped_json_without_newer_fields_still_parses() {
     );
 
     // A lane missing its kind reads as the organic lane; a hypothesis missing its state reads as
-    // kept, and one missing its confidence as 0.
+    // kept, and one missing its prior_confidence as 0.
     let l: Lane = serde_json::from_value(json!({ "cap_minor": 1, "currency": "TRY" })).unwrap();
     assert_eq!(l.lane, LaneKind::Organic);
     let id = HypothesisId::new_v7();
     let h: Hypothesis = serde_json::from_value(json!({ "id": id, "title": "t" })).unwrap();
     assert_eq!(
-        (h.id, h.state, h.confidence),
+        (h.id, h.state, h.prior_confidence),
         (id, HypothesisState::Kept, 0.0)
     );
     // Without its identity a hypothesis cannot be read.
@@ -741,9 +743,9 @@ fn parse_hypotheses_strict_rejects_unknown_keys_and_reads_inputs() {
     let id = HypothesisId::new_v7();
     let parsed = parse_hypotheses_strict(&json!([
         { "id": id, "title": "t", "segment_key": "students", "angle": "a", "channel": "instagram",
-          "metric": "m", "confidence": 0.4 },
+          "metric": "m", "prior_confidence": 0.4 },
         { "title": "new one", "segment_key": "students", "angle": "a", "channel": "any",
-          "metric": "m", "confidence": 0.6 }
+          "metric": "m", "prior_confidence": 0.6 }
     ]))
     .unwrap();
     assert_eq!(parsed.len(), 2);

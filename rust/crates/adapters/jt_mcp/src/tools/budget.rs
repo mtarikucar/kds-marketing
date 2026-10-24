@@ -106,6 +106,9 @@ struct ItemCreateArgs {
     /// The most that may be spent per period, in the unit; not negative.
     #[schemars(range(min = 0))]
     cap: i64,
+    #[serde(default)]
+    #[schemars(range(min = 0))]
+    unit_cost_minor: Option<i64>,
     /// The period the cap applies to.
     #[schemars(schema_with = "period_schema")]
     period: Period,
@@ -124,6 +127,9 @@ struct ItemUpdateArgs {
     #[serde(default)]
     #[schemars(range(min = 0))]
     cap: Option<i64>,
+    #[serde(default, deserialize_with = "budget::nullable_price")]
+    #[schemars(with = "Option<i64>", range(min = 0))]
+    unit_cost_minor: Option<Option<i64>>,
     /// The new period.
     #[serde(default)]
     #[schemars(schema_with = "optional_period_schema")]
@@ -241,6 +247,7 @@ fn items_create<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
             kind,
             unit,
             cap,
+            unit_cost_minor,
             period,
         } = args(raw)?;
         let input = BudgetItemInput {
@@ -248,6 +255,7 @@ fn items_create<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
             kind,
             unit,
             cap,
+            unit_cost_minor,
             period,
         };
         to_json(&budget::create_item(deps, ctx, input).await?)
@@ -260,9 +268,15 @@ fn items_update<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
             budget_item_id,
             name,
             cap,
+            unit_cost_minor,
             period,
         } = args(raw)?;
-        let input = UpdateBudgetItem { name, cap, period };
+        let input = UpdateBudgetItem {
+            name,
+            cap,
+            period,
+            unit_cost_minor,
+        };
         to_json(&budget::update_item(deps, ctx, BudgetItemId(budget_item_id), input).await?)
     })
 }

@@ -92,6 +92,7 @@ döndürür. Sekiz göç vardır:
 | `0006_inbox` | Gelen kutusu için 13 alan tablosu (36 toplam): kişiler, kimlikler, konuşmalar, mesajlar, yolculuklar ve olayları, görevler, notlar, birleştirmeler, kayıp nedenleri, tüketici kayıtları, gönderim kuyruğu ve 24 saatlik istek anahtarları. FORCE RLS ve bileşik yabancı anahtarlar; varsayılan kayıp nedenleri ve sistem rollerinin gelen kutusu izinleri geriye dönük eklenir. |
 | `0007_inbox_policy` | Alan politikalarına `inbox_policy` sütunu ekler; mevcut durum etiketlerini korur, yeni tablo eklemez. |
 | `0008_inbox_compliance` | İzinler, engellemeler, teklifler, randevular, komisyonlar, silme kayıtları ve kimlik özetleri, gönderim işleri, posta imleçleri, varsayılan/kullanıcı komisyon oranları ve değişmez yolculuk atfı: 12 yeni alan tablosu, toplam 48. FORCE RLS, bileşik alan anahtarları ve yinelenebilir up/down. |
+| `0009_studio` | Growth Studio tenant persistence: 14 tables, total 62; durable claims, replay receipts, learning, spend reservations and reversible owner/manager grant backfill. Includes hypothesis cadence/prior and nullable unit price. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -253,7 +254,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (106 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (124 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -270,7 +271,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 106 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 124 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -1820,3 +1821,679 @@ cd panel && pnpm test && pnpm build
 ```
 
 The wider `make check`/CI checks documented above remain the release checks.
+
+### M3 Task 0 — controller contracts and baseline
+
+The integrated M2b baseline is **106 tools, 48 tables, migrations 0001–0008**.
+`journey_attribution` is in **0008** (0007 is inbox policy); `Deps::attribution()`
+already supplies the tenant-scoped `AttributionReader`. `jt_inbox::sms_segments`
+already supplies the Q2 fixtures: ASCII 160/161 → 1/2 and ş/ğ 70/71 → 1/2;
+a segment price of 3 therefore reserves 3/6/3/6 minor units.
+
+Task 0 adds **zero tools**. Existing strategy and budget HTTP/MCP twins carry
+strict per-hypothesis/lane cadence and nullable `unit_cost_minor`. An absent lane
+has no slots; exploration defaults to zero; weekly scheduling uses Europe/Istanbul.
+Editable `prior_confidence` replaces legacy `confidence`; read-only
+`derived_confidence` is projected from stable tenant/hypothesis evidence. The panel
+shows derived confidence when present, otherwise the prior, and draft edits keep
+cadence and authoritative learning. Explicit null clears a price to unknown; zero
+is a known price, and negative prices refuse. Manual historical spend is unchanged.
+
+`0009_studio` is the unreleased M3 migration. T0 introduced cadence/prior/price
+columns and learning evidence; T2 completes all **14 Studio tables**, giving **62
+current tables**. Up/down/up is exercised as a non-bypass-RLS role; down is safe to
+repeat and removes Studio schema/data and M3 fields while preserving baseline
+strategy, budget, inbox and ledger rows. Migrations 0001–0008 are unchanged.
+New and existing owner/manager roles have `studio.work` and `studio.manage`; rep
+receives neither, and authenticated agents retain only their issuer's current
+permissions. The backfill records only migration-added role UUID/permission pairs
+in `studio_control.seed_grants`, so down preserves preexisting grants. Startup does
+not change grants. At the T0 boundary **106 tools were implemented**; M3 now has 124.
+
+Strategy approval/archive lock the draft before acquiring `lock_execution_frame`,
+including when there is no approved version, then invoke `StrategyTransitionHook`
+inside their transaction. The workspace frame uses `FOR NO KEY UPDATE` to serialize
+frame users while allowing the `FOR KEY SHARE` checks taken by ledger foreign keys.
+Any frame user that also needs the draft must take the draft lock first; Studio
+control locks follow the frame. Hook failure rolls back the transition and its writes.
+The existing post-commit archive hook is preserved. T3 supplies Studio cancellation;
+T0's default hook has no queue to cancel. Studio repositories are implemented in PostgreSQL and the transactional fake.
+FileStore remains unavailable until T5 wires its byte-storage adapter.
+Shared contract rows now live in `jt_studio` and are re-exported from
+`jt_app::ports::studio` (T1). No public Studio routes were added at the T0/T1 boundary.
+
+Meta adds pause/active status writes, verified account currency/timezone context,
+ad-set/day insights, and account-checked ad→ad-set resolution. Missing ad-set
+counters remain `None`; malformed money and unsupported currencies refuse.
+Supported currency exponents are explicit: JPY/KRW/VND/CLP/PYG (0) and
+TRY/EUR/USD/GBP/CAD/AUD/CHF (2). See Meta's
+[account field definitions](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/adaccount.py).
+There is no ad creation API and no zero-budget pause. `BUDGET_CAP` maps to HTTP 409
+with the same MCP structured code and details. Atomic reservations and connector
+spend enforcement remain T8's implementation task; this baseline does not claim
+that enforcement has shipped.
+
+
+### M3 Task 1 — pure Studio domain
+
+`crates/domain/jt_studio` defines the typed chain, arms, slots, pieces, publication
+snapshots/outcomes, measurements, learning deltas, trends, external ad-set bindings,
+budget moves and controls. Its dependencies are pure domain types, serialization,
+UUID/time/error types and the URL parser; it performs no I/O. Existing application
+port paths re-export the shared records, including connector `MediaUpload` and
+`PublishReceipt`, without changing repository or provider method signatures.
+The T0 application `PublishOutcome` still transports `AppError`; persistence must
+map it to the domain's closed redacted outcome codes, never store diagnostic text.
+
+`validate_chain` checks nonnil tenant/birth/hypothesis/arm identities against loaded
+birth and current strategy versions, a live hypothesis, enabled lane cadence,
+selected content type, supported concrete capability kind and the target account's
+`ChannelChoice.group_id` memberships. Its context must come from tenant-scoped
+repositories and the operation's connector registry. Birth identity is retained
+when a newer approved strategy authorizes execution. Arms start at Beta(1,1),
+weight 0.5, independently of hypothesis prior confidence; kept arms retain learning.
+Nonfinite/invalid arm parameters refuse, including on deserialization. Learning
+updates validate finite deltas and confidence; there is no public confidence setter.
+
+The reducer follows Planned → Ready → Published → Measured → Retired. Editing
+Ready creates a new revision. Cancellation, hypothesis retirement and archive retire
+only unstarted work; week-end cleanup retires only Planned work. Consent is optional
+revision-bound metadata, with lane and capability requirements composed by OR.
+Budget moves carry their own revision so changing the amount invalidates consent.
+Human identity/permission checks and fresh brake/spend authorization remain T3/T8
+responsibilities; a domain transition is not an execution permit.
+
+Publication claims freeze the piece revision, actor, capability, strategy and control
+fences. Failed/refused attempts never return to the queue; unknown outcomes may be
+resolved by evidence without another publish. Retired slots remain retired when late
+in-flight outcomes or historical measurements arrive. Measurements require exactly
+one publication or ad-set/day target, preserve missing counters as `None`, and keep
+24h/72h/7d windows separate. An unknown pause is never evidence that an ad set stopped.
+Raw bytes cannot be serialized as persisted media; T5 must normalize them to File IDs.
+HostedUrl references remain direct. DNS/egress checks, file ownership, durable evidence
+immutability and transactional replay enforcement belong to the application/storage
+tasks. Stored records must be validated before writes. T4/T7 add planning/reward math;
+trends remain display context.
+
+| Release boundary after T1 | Current state |
+|---|---|
+| MCP tools / Studio public operations | **106 / 0** (T1 specifies no public rows) |
+| Tables / latest migration | **49 / 0009_studio**, unchanged by T1 |
+| Studio domain verification | `cargo test --locked --workspace --test studio_domain` |
+
+No migrations or new public surface schemas are introduced in T1. The later Studio
+rows require catalog, HTTP, MCP and parity coverage together when implemented.
+
+
+### M3 Task 2 — durable tenant storage
+
+The fourteen Studio tables are `studio_arms`, `studio_slots`, `studio_pieces`,
+`studio_files`, `studio_publications`, `studio_publish_attempts`,
+`studio_measurements`, `studio_learning_applications`, `studio_trends`,
+`studio_adset_bindings`, `studio_budget_moves`, `studio_spend_reservations`,
+`studio_control` and `studio_request_keys`. All have forced RLS; relational
+references include workspace identity. Birth chains retain their original strategy
+version, while an arm's identity survives strategy replacement.
+
+Repository writes participate in the caller's tenant transaction. Request keys are
+scoped by workspace/action, store a SHA-256 payload digest and the original response,
+and reject a changed payload. Slot reads use half-open schedule windows; edits and
+retirement require the expected revision. File rows store metadata only. Bindings
+reference externally created ad sets; no provider creation operations are added.
+
+A claim freezes its piece, current strategy, control revision and system scheduler
+actor as Sending. Commit the claim before provider I/O; rollback leaves the slot
+unclaimed. Committed Sending/Unknown attempts are never automatically queued again.
+Completion stores redacted outcome evidence, the unique successful publication and
+an existing-ledger entry together; an identical completion is a no-op. A late
+receipt preserves retirement. The control row serializes competing claims and
+receipts; the strategy frame precedes that lock. Public execution authorization and
+human/agent attribution are supplied by the later application tasks, not by treating
+these storage operations as public execution permits.
+
+Measurement uniqueness is publication/window or external binding/day/scope. Failed
+and missing reads can be replaced; complete evidence is required for learning.
+Evidence keys apply arm deltas and derived confidence once. Reservations serialize
+lane and budget-item caps, include existing recorded item spend, retain uncertain
+costs, and settle idempotently. Absolute daily budgets remain distinct from actual
+spend. T8 supplies provider-specific cost calculations and reconciliation. The fake
+holds a transaction lock and refreshes committed dependency state to exercise the
+same claim, replay, rollback and cap contracts as PostgreSQL.
+
+| Release boundary after T2 | Current state |
+|---|---|
+| MCP tools / Studio public operations | **106 / 0** (Task 2 adds repository contracts only) |
+| Tables / latest migration | **62 / 0009_studio** |
+| Fast verification | `cargo test --locked --workspace --test migrations --test studio_repos` |
+| Plan-named contract targets | `studio_pg`, `studio_fakes` |
+
+Tests cover real non-bypass-RLS migration up/down/up, double rollback, sentinel and
+grant preservation, tenant/composite-FK refusal, version-stable arms, concurrent
+claims/reservations, replay conflicts, learning dedupe, file/trend/budget records,
+issuer-scope inheritance and price/cadence round trips. Task 2 adds no catalog row,
+HTTP route or MCP tool; later public rows must ship all twins and parity tests.
+
+
+## M3 Task 3 — strategy lifecycle, permissions and brakes
+
+At the T3 boundary the release contained **109 MCP tools**, including **3 Studio operations**.
+The T0–T2 tables above describe their historical boundaries; T3 keeps **62 tables**
+and migration **0009**, with no new migration or permission seed.
+
+| Use case / MCP suffix after `jeeta.` | HTTP | Permission | Strategy gate |
+|---|---|---|---|
+| `studio.brake` | `POST /api/studio/brake` | `studio.manage` | Exempt |
+| `studio.policy_set` | `PUT /api/studio/policy` | `studio.manage` | Required |
+| `studio.approve` | `POST /api/studio/approvals` | `studio.manage`, owner/manager human | Required |
+
+All three still require an **active workspace**, including direct application calls.
+Owners and managers have `studio.work` and `studio.manage`; reps have neither.
+Agent authority is the intersection of issuer permissions and connection scopes.
+An agent can operate a brake or policy but cannot provide human consent.
+
+Brake input is `{engaged, lane?: organic|paid|null, expected_revision}`. Omit the
+lane for the workspace brake. Policy input is `{lane, requires_human_approval,
+expected_revision}`. Approval input is `{target: {slot: UUID}|{budget_move: UUID},
+expected_revision}`. Unknown fields are rejected on both surfaces. Control writes
+use compare-and-swap revisions; approvals bind the immutable piece/move revision
+and do not change the five-state slot lifecycle. Lane and capability requirements
+compose with OR; both default to false. Consent never overrides a brake or cap.
+
+Strategy approval/archive invokes `StudioTransition` inside the same transaction
+as the frame change. Retired hypotheses and archive retire Planned/Ready slots
+(including Ready work waiting for consent) and cancel queued budget moves. Kept
+hypotheses retain their arms, learning and queue. Birth versions and published
+history remain immutable; old-born execution uses the current approved frame.
+
+`authorize_execution` checks the workspace, current strategy, hypothesis, channel,
+group, capability health, access expiry/scopes, working hours, current payload
+revision, consent and brake. `dispatch_execution` also checks registry support and
+runs one freshly fenced provider call after releasing transaction locks. T6/T8
+execution workers must use this boundary for **every call and every queue item**,
+and T8 must atomically reserve connector cost before spend. A call already admitted
+when a concurrent brake commits may finish and record its result; the next iteration
+is held. There is no one-second timing guarantee and no automatic publication retry.
+
+Brake flags commit before Meta status reconciliation. Queued work stays in place,
+with no reset of attempts. The `studio_control` job runs every minute under its
+scheduler advisory lock and a per-workspace status lock, and also runs immediately
+after a control write. It reads bound external Meta sets, pauses active ones and
+persists pending/applied/unknown status evidence. Safety pauses work while braked.
+Release rechecks the current frame, capability, consent and budget caps, reserves
+the remaining-period daily-budget liability, and resumes only sets this brake
+paused. Manually paused sets remain paused. A failed/unknown provider operation
+never clears the persisted brake; reconciliation reads provider status after restart.
+No campaigns, ad sets or creatives are created.
+OAuth-derived Page/Instagram assets retain the trusted parent grant scopes. Older or
+manually pasted credentials without permission evidence fail closed and need an OAuth
+reconnection; a successful identity probe alone does not prove publishing/read scopes.
+Meta account comparisons accept both numeric and `act_`-prefixed identities. Resume
+recovery reuses the durable reservation timestamp within its budget period, so a lost
+status response cannot create a new payload under an existing request key.
+
+`authorize_measurement` is a separate system-only read path: published/bound
+immutable evidence, original capability/account and current healthy read credentials
+are required. It remains usable after retirement/archive and under a brake, but
+cannot authorize publishing, budget changes or ad resume. Publication attempts now
+freeze the account identity; a later capability rebind cannot read old evidence
+through the replacement account. Missing original account evidence fails closed.
+
+Fast checks: `cargo test --locked --workspace --test studio_brakes --test studio_permissions`.
+These include the PostgreSQL/fake control contract, two-worker admission and iteration
+barriers, revision-bound consent, archive/retirement, historical reads, scoped restart,
+Meta pause/resume and unknown-response reconciliation. `studio_http`, `studio_mcp`
+and the `studio_controls_have_schema_error_effect_and_actor_parity` test exercise
+catalog/routes, strict schema, live HTTP/MCP effects and the human-only consent rule.
+
+The plan-named `studio_control` target also runs the control checks; permission checks
+remain in `studio_permissions`.
+
+
+## M3 Task 4 — weekly planning and suggestions
+
+At the T4 boundary the release had **114 MCP tools**, including **8 Studio operations**;
+the schema remains **62 tables** at migration **0009**. No provider or content
+generation service was added.
+
+| Use case / MCP suffix after `jeeta.` | HTTP | Permission | Strategy gate |
+|---|---|---|---|
+| `studio.pending` | `GET /api/studio/pending` | `studio.work` | Required |
+| `studio.slot_get` | `GET /api/studio/slots/{slot_id}` | `studio.work` | Required |
+| `studio.slot_cancel` | `POST /api/studio/slots/{slot_id}/cancel` | `studio.work` | Required |
+| `studio.trend_record` | `POST /api/studio/trends` | `studio.work` | Required |
+| `studio.hypothesis_propose` | `POST /api/studio/hypotheses/proposals` | `studio.work` + `team.manage` | Required |
+
+All five require an active workspace, including direct application calls.
+`studio_plan` runs hourly under `jeeta.jobs.studio_plan`. Weeks start Monday
+00:00 Europe/Istanbul; cadence positions are spaced evenly across the week and
+only positions in the next seven days are materialized. Missed positions are not
+caught up. Stable workspace/hypothesis/lane/week/ordinal IDs survive overlapping
+runs, retries, cancellations and strategy replacement. Birth versions stay fixed.
+At week-end, overdue Planned slots retire; Ready work and evidence remain.
+
+Only connected, supported accounts in the strategy's selected channels/groups
+are eligible, and brakes stop planning that lane. Paid planning also needs the
+strategy's paid lane. Integer type minima use ceiling and maxima use floor;
+infeasible quotas return validation details. Remaining positions use posterior
+mean weights and bounded largest remainders, with type-key ties. Within a type,
+injected Beta samples select the largest sample (stable arm-ID ties); exploration
+uses a separate uniform draw. Trends never alter this selection or learning.
+
+`pending` derives slots with overdue flags, revision consent, queued budget moves
+and blockers. `slot_get` includes the piece, hypothesis, current brand identity
+and prohibitions, arm learning, publication attempts and measurements. The same
+slot/consent/budget summaries appear in `work.pending` and `work.checkin`, preserving
+the existing last-seen and overdue calculation. The scheduler never wakes agents.
+Cancellation takes `{expected_revision, reason}`; it retires Planned/Ready work
+and records the reason without deleting content or evidence.
+
+Trend input is `{hypothesis_id, channel, summary, source_url?, observed_at,
+request_key}`. The agent supplies the observation; recording performs no research.
+Retries preserve the stored identity; changed payloads conflict. URL query tokens
+and fragments are removed before storage. A hypothesis proposal uses the strict
+strategy hypothesis input, without an existing ID. It opens or locks a draft and
+appends one new hypothesis, preserving approved/draft hypotheses and derived
+learning. Concurrent first proposals share draft creation; suggestions never
+activate themselves or alter the approved strategy.
+
+Validation: `studio_planning` covers the pure planner, application flows and real
+Postgres draft concurrency; `studio_work` covers absent-agent overdue projections;
+`studio_http`, `studio_mcp` and `twin_parity` cover registration, schema and effects.
+
+
+## M3 Task 5 — tenant files and agent content
+
+At completion of Task 5, the release had **116 MCP tools / 10 Studio operations**, **62 tables**,
+and migration **0009_studio**. T5 adds no migration.
+
+| Operation / MCP suffix | HTTP | Permission / gate |
+|---|---|---|
+| `studio.file_upload` | `POST /api/studio/files` | `studio.work`, approved strategy and active workspace |
+| `studio.piece_submit` | `POST /api/studio/slots/{slot_id}/piece` | `studio.work`, approved strategy and active workspace |
+
+Both surfaces accept strict tagged media inputs. Upload content is
+`{"kind":"bytes_base64","data":"..."}` or `{"kind":"source_url","url":"https://..."}`.
+Piece media is `file` (id), `hosted_url` (url, mime, size_bytes), or `bytes`
+(data in base64, mime, filename). Account adaptations are keyed by the slot
+capability's external account ID. Raw bytes normalize to tenant file IDs before
+persistence; HostedUrl references remain direct. X transport reloads file bytes or
+uses the same bounded, tenant-authorized fetch. No content generation or provider
+publication occurs during submission.
+
+File startup requires **JEETA_FILES_DIR**, an existing absolute directory on a Linux
+persistent volume, and a **public HTTPS JEETA_PUBLIC_BASE_URL** origin. Create the
+storage directory owned by the service user with mode 0700; mount the same volume
+on instances serving the same database. Keep JEETA_SECRET_KEY stable: it signs file
+transport as well as sealing credentials. Tenant/file IDs choose paths; filenames
+never do. Directory descriptors and no-follow opens prevent symlink escapes.
+Atomic durable writes include a SHA-256 integrity envelope, survive restart, and
+refuse corrupt assets. Abandoned temporary writes older than 24 hours are repaired
+on the next write to that tenant root. Disk operations run on blocking workers.
+
+Allowed MIME values are image/jpeg, image/png, image/webp, image/gif (25,000,000
+bytes maximum) and video/mp4 (200,000,000 bytes maximum), checked against actual
+bytes and signatures. URL ingestion uses the existing tenant egress allowlist and
+DNS guard, bounds streamed bytes, and refuses redirects. The source host must
+already be authorized for that tenant. HTTP upload/submission and MCP messages
+have a 280,000,000-byte envelope limit to accommodate base64 video.
+
+`GET /files/{id}` requires a signature bound to workspace, file and expiry. URLs
+expire 24 hours after signing and responses use no-store/nosniff headers. Signed
+queries, bytes and content are absent from application logs and mutation ledgers;
+request receipts store a payload digest and original result. Same key/body replays
+the original result even after a later edit. Different bodies conflict. Submission
+commits content, Ready revision, ledger and receipt together, validates current
+chain/account/file ownership, and leaves previous consent unable to authorize an
+edited revision. In-flight or uncertain publication content cannot be replaced.
+
+The daily `studio_files_cleanup` job uses `jeeta.jobs.studio_files_cleanup` and
+runs independently of live strategy. It deletes bytes only 30 days after the last
+successful publication using them, while retaining files referenced by current
+pending work or Queued/Sending/Unknown attempts. Never-published assets are retained.
+Deletion is idempotent across a crash before the metadata marker; hashes, piece,
+publication, measurement and ledger evidence remain permanent. Hosted assets are
+never deleted by Jeeta.
+
+Failed writes are compensated before a commit is attempted. If the process stops
+or commit acknowledgement is uncertain, daily cleanup reconciles physical files
+older than 24 hours that have no tenant metadata, under the same control lock.
+Tracked uploads and pending content are protected. Submission checks byte availability
+under that lock, so a crash between deletion and its marker cannot create Ready
+work that references missing bytes.
+
+## M3 Task 6 — fenced publication and recovery
+
+At completion of Task 6, the release had **116 MCP tools / 10 Studio operations**, **62 tables** and
+migration **0009_studio**. T6 adds two system-only jobs (19 scheduled jobs total),
+no public operation and no migration. Existing `studio.pending` and
+`studio.slot_get` HTTP/MCP twins expose attempts and actionable failure blockers.
+
+| Job | Interval | Advisory lock |
+|---|---|---|
+| `studio_publish` | 1 minute | `jeeta.jobs.studio_publish` |
+| `studio_publish_recover` | 1 minute | `jeeta.jobs.studio_publish_recover` |
+
+Publication checks the active workspace, current strategy/hypothesis/channel/group,
+capability access and policy, revision-bound consent when required, and the brake.
+Capability changes serialize on the capability row; group removals share the short
+execution frame. Studio paths lock the workspace execution frame before the capability;
+capability locks use `FOR NO KEY UPDATE` so planner foreign-key checks remain compatible.
+A brake queued behind an admitted authorization takes effect after that transaction releases
+its frame. Held queue entries are skipped, and a targeted claim can only capture the selected
+authorized slot.
+The default policy needs no human approval. Media preparation uses the existing
+bounded fetch/file transport outside tenant locks. A fresh execution fence then
+freezes the piece, account, actor, birth/execution versions and control revision in
+a durable Sending attempt before calling Publisher without tenant locks. Each
+subsequent dispatch repeats authorization. Account adaptations retain text, link
+and attachments; X receives bytes, Meta receives approved or signed URLs.
+
+Budget-bound publishing (including a capability spend ceiling) refuses with
+`publication_spend_gate_unavailable` until T8 wires its atomic reservation gate.
+It must not be enabled by interpreting an unknown price/currency as zero.
+`daily_ops_cap` reserves operations atomically with each claim under the capability lock.
+Each attempt counts once for its claim's Europe/Istanbul calendar day, including completed
+and uncertain writes. At the limit, the run records `daily_ops_cap` and leaves the slot Ready
+for the next day; concurrent workers cannot claim beyond the cap.
+
+Candidate-specific media preparation errors record redacted Failed attempts and let the run
+continue. Unreachable hosts are Transient; invalid/missing media is Permanent and retires the
+slot. The concrete fetcher preserves transient transport/body failures and HTTP 408/429/5xx
+responses without storing URLs or response diagnostics. Infrastructure errors still fail the run.
+Preparation failures share the no-retry policy.
+
+There are **zero automatic publish retries**, for every connector error category.
+Auth/Permission produce reconnection work. Permanent/Throttle/Transient produce
+Failed work; retry-after is retained only as diagnostic ledger data. Lost responses
+and Sending claims abandoned for two minutes become Unknown with explicit
+publication/duplicate-risk review work. Failed/Unknown slots are never reclaimed,
+even if they still say Ready; a deliberate new publication needs separate work.
+
+A receipt checkpoint preserves the exact external ID/URL before final bookkeeping.
+Recovery only calls `InsightsReader::post_metrics` for that captured ID under
+historical read authorization; it never calls Publisher, discovers IDs or treats
+account totals or duplicate-content errors as success. Missing IDs, unavailable
+read support, changed accounts and failed reads retain Unknown. Successful
+completion atomically records Publication, slot state and redacted linked ledger
+evidence; replay is idempotent. A late result after a brake, strategy replacement
+or archive retains late-completion evidence and never reactivates a retired slot.
+This is not a claim of exactly-once delivery at the provider.
+
+X preflight retains GIF-alone and URL/byte-count rules, counts explicit URLs and
+bare domains as 23 characters. Emoji clusters including variation selectors, skin tones,
+flags and ZWJ families weigh two; non-emoji combining text retains its scalar weights.
+Emoji recognition uses Unicode 17 property data and sequence syntax; CJK characters weigh two. Meta/X
+successful writes with unreadable responses or missing publication IDs remain
+Unknown. Provider text, credentials, file bytes and URL query tokens are absent
+from durable failure/receipt evidence.
+
+`studio_publish` targets cover the application, real PostgreSQL receipt persistence
+and Meta/X mock HTTP behavior. The application tests also cover concurrent claims,
+no locks during provider I/O, all error classes, restart recovery, historical
+read-back, immutable version/arm links, late completion and full adapted media. PostgreSQL
+regressions overlap planning/publication and cap-limited claims; application tests cover
+Istanbul midnight rollover and broken media followed by healthy work.
+
+
+### M3 Task 7 — measurements, learning and results
+
+At the Task 7 boundary the release had **118 MCP tools / 12 Studio operations**, **62 tables**,
+migration **0009_studio**, and **21 scheduled jobs**. The two new operations are
+`studio.learned` (`GET /api/studio/learned`, `jeeta.studio.learned`) and
+`studio.judgment_record` (`POST /api/studio/judgments`, `jeeta.studio.judgment_record`).
+Both require `studio.work`, an active workspace and a current approved strategy,
+and use shared strict schemas. Learned queries take RFC3339 `from`/`until` and
+optional `hypothesis_id`/`lane`; intervals are half-open. Judgments require a
+nonempty list of same-hypothesis measurement IDs, text and an idempotency key.
+They are typed ledger entries and never change measured results or confidence.
+
+`studio_measure` runs every six hours under its advisory lock. It reads each
+publication's 24-hour, 72-hour and seven-day windows independently, including
+windows due after Measured, strategy archive or hypothesis retirement. Historical
+reads still require an active workspace and the original connected account with
+valid read access. Provider calls run outside database locks. Failed or incomplete
+reads remain retryable, contribute no reward and never manufacture zero counters.
+All three complete windows retire the slot without deleting publication evidence.
+Measurements retain the original chain/version, scheduled and read instants, raw
+counters, source, scope, completeness, rule and correction revision.
+
+Learning uses `studio-learning-v1`: organic engagements/impressions or paid
+clicks/impressions, clipped to [0,1]. X's `impression_count` is normalized while
+preserving the raw counter; reach, unique reach and account followers are never
+substitutes for impressions. Missing denominators therefore remain unknown even
+when an adapter can supply reach. Each arm starts Beta(1,1). One publication
+contributes once, with 7d taking precedence over 72h and 24h; explicit corrections
+replace that contribution. Paid evidence is account/set/day, never campaign totals.
+Evidence insertion, replacement deltas and derived confidence share one tenant
+transaction. Replays add nothing. Editable priors remain separate, including when
+an older draft is approved after newer learning.
+
+`studio_reweight` runs Monday 00:00 Europe/Istanbul, under its own advisory lock,
+with one receipt per local week. Stored weights are posterior means; normalization
+belongs to slot allocation. Learned results recompute posteriors from the selected
+evidence range and expose original evidence/version links, lane performance,
+observed spend versus strategy caps, trends and separate judgments. Missing spend
+and unproven attribution are explicit nulls, never inferred zeros.
+
+Paid reads use account/set/day metrics even for paused sets and retain currency,
+minor-unit exponent, account timezone, observed budget and status. Day corrections
+replace spend in the report instead of adding it twice. Mismatches against confirmed
+budget moves or status controls persist a paid-lane brake and an actionable ledger
+entry; the existing safety reconciliation requests pauses and retains uncertain
+outcomes. Task 8 owns spend-reservation transfer, rollover and budget-write services;
+Task 9 owns proven inbox attribution. No campaign creation, lead ingestion or
+automatic budget allocation is introduced here.
+
+Coverage includes pure ruling vectors, window/revision ordering, retry/replay,
+archive reads, draft preservation, paid correction and shared-campaign isolation,
+filtered results/judgments, real PostgreSQL atomicity and tenant isolation, and
+HTTP/MCP result, filter, replay and error parity. Migration 0009 retains its scoped
+idempotent down script; the workspace suite verifies up → down → up.
+
+
+### M3 Task 8 — external paid bindings and hard connector caps
+
+At the Task 8 boundary the release had **121 MCP tools / 15 Studio operations**, **62 tables**,
+migration **0009_studio**, and **21 scheduled jobs**. No campaign, ad set or creative
+creation is exposed. No schema migration is added by T8; reservation accounting
+metadata lives in the existing tenant-scoped durable JSON records.
+
+| Catalog / tool suffix | HTTP route | Permission |
+|---|---|---|
+| `studio.adsets_list` / `jeeta.studio.adsets_list` | `GET /api/studio/adsets?capability_id=…` | `studio.work` |
+| `studio.adset_bind` / `jeeta.studio.adset_bind` | `POST /api/studio/adsets/bind` | `studio.work` |
+| `studio.budget_move` / `jeeta.studio.budget_move` | `POST /api/studio/budget-moves` | `studio.manage` |
+
+All three require an active workspace, approved paid strategy, selected channel/group
+and a connected, scoped ad account. Binding checks authenticated account membership;
+replay keys reject changed payloads. Binding an already active set brakes the paid
+lane and requests a safety pause until its budget is authorized.
+
+A budget move is an **absolute daily setting**, never an actual spend entry.
+Default policy dispatches immediately. Revision-bound human consent, when configured,
+leaves the move queued; the existing minute `studio_control` job dispatches it through
+fresh authorization after consent. It also refreshes period/frame exposure before
+reconciling status. No new budget amount is chosen automatically.
+
+The shared reservation gate locks the current strategy, capability, Studio control
+and all linked live budget caps before recording `Sending`. Provider calls run after
+commit. A daily reservation multiplies the amount by the ceiling of remaining days
+in each cap's own UTC period (Total caps use the finite strategy period). Capability
+spending policy, lane caps, observed spend, manual historical spend and outstanding
+exposure all apply. `BUDGET_CAP` is HTTP 409 and the identical structured MCP error.
+Known replacements hold max(old,new) while uncertain; confirmed replacements retain
+unobserved elapsed exposure. Unknown writes remain reserved across restarts and are
+never blindly retried. Read-back of the matching absolute setting can resolve them.
+
+SMS outbox claims price the shared GSM-7/UCS-2 segment count using persisted
+`unit_cost_minor`; 160/161 ASCII and 70/71 Turkish characters cost 3/6/3/6 at a
+three-minor-unit segment price. Budget-bound publishing uses one explicit publication
+operation. Missing price, unsupported units, mismatched currencies or undefined
+quantities refuse before provider I/O. Existing unmetered publishing remains available.
+An accepted send with no reported actual cost retains its upper bound as exposure.
+
+Measurement corrections replace the provider's ad-set/day/currency bucket and adjust
+cap accounting atomically with evidence. Complete elapsed buckets transfer reserved
+exposure to observed spend; uncertain and overlapping buckets remain conservatively
+held. The six-hour measurement cycle brakes only the paid lane on budget/status drift,
+exposes a work item in `studio.pending.paid_alerts`, and requests `Paused` status.
+The comparison uses the latest Applied reservation, including brake-release resumes
+and their authorised daily budget. Publication access/provider failures persist a
+category and retry time (1 hour, 6 hours, then daily), without learning or blocking
+other publications and paid spend/drift checks. Binding failures are audited per
+target and do not stop checks of other bindings. Insight requests and accepted daily
+buckets use the ad account timezone (`timezone_name` from Meta; Europe/Istanbul fallback).
+Observed spend is checked against lane and linked item caps independently of work
+hours and operation limits; those eligibility checks gate new budget moves only.
+An active binding and its required safety brake commit together. Receipt replay
+restores a missing brake, and periodic rechecks cover bindings without reservations.
+Rollover refusal likewise persists the brake before pausing. Unknown pause outcomes
+report residual provider exposure. Jeeta guarantees preflight authorization caps;
+providers can still incur in-flight or externally initiated spend, which remains
+recordable even above a cap. Status changes never use `set_daily_budget(0)`.
+
+Validation: `studio_paid` covers the application and real PostgreSQL concurrency;
+`budget` preserves truthful historical spend; `twin_parity`, `studio_http` and
+`studio_mcp` exercise surface effects, strict schemas and errors.
+
+### M3 Task 9 — read-only inbox attribution
+
+At the Task 9 boundary the release remained at **121 MCP tools / 15 Studio operations**, **62 tables**,
+migration **0009_studio**, and **21 scheduled jobs**. Task 9 adds the internal
+`studio::attribution::attribution_for_ad` projection for learned/overview callers;
+it adds no catalog row, HTTP route, MCP tool, migration or intake job. The public
+learned/overview integration belongs to the five-region panel task (T10).
+`Deps::attribution()` reuses M2b's tenant-scoped reader over immutable
+`journey_attribution` (migration **0008**, not the plan's prereconciliation 0007).
+
+`AttributionQuery { binding_id, ad_id, from, to }` requires `studio.work`, an active
+workspace, and a nonempty half-open acquisition window `[from,to)`. A foreign
+binding is not found. Historical reads remain possible after strategy archive;
+they authorize evidence only, never publication or spending. The current strategy
+selects capability groups when present; after archive the binding's birth strategy
+supplies that selection. Actual group membership and connected Ads access are read
+again after provider calls.
+
+A result carries only the journey ID, original provider acquisition time, erasure
+flag, and an optional binding/chain. Attribution requires all of these proofs:
+
+- The retained Meta lead-gen event identifies the actual acquisition's Page
+  capability and Page ID, including for repeat journeys. Raw form bodies are never
+  read. Keyset pagination reaches older events after raw-body retention.
+- The Page (or Page-bound Messenger capability) and Ads capability share a group
+  explicitly selected for the paid channel. An arbitrary shared group is insufficient.
+- The Ads credential verifies the account and its listed ad set/campaign. The ad
+  resolves to that set, or immutable stored ad-set evidence matches it. A missing
+  resolution does not discard independently verified stored evidence; contradictory
+  set/campaign evidence cannot be used.
+- The account/set has one binding, and its chain identifies the persisted paid arm
+  and birth hypothesis. A shared campaign alone never selects an arm.
+
+Missing or changed proof leaves the journey in the result with null binding/chain.
+The projection never fetches leads, consumes events, changes first touch or journey
+ownership, writes inbox data, updates rewards, or returns personal lead content.
+Erased people remain safe ID/time-only tombstone projections. Event metadata is
+scanned through the existing paginated read port; no new indexed lookup is added.
+
+`studio_attribution` runs the eight named T9 contracts plus stored-evidence,
+permission/status/window, archive/pagination and concurrent-group-change cases
+against both the transactional fake and real PostgreSQL: **12 tests per adapter**.
+Fixtures use the M2b consumer; optional stored ad-set variants additionally exercise
+its immutable repository contract. No provider-live verification is claimed.
+
+
+## M3 Task 10 — Five-region Growth Studio
+
+The current release has **124 MCP tools / 18 Studio operations**, **62 tables**,
+migration **0009_studio**, and **21 scheduled jobs**. This task adds no tables or jobs.
+
+| Shared row / MCP tool | HTTP | Strategy gate / permission |
+|---|---|---|
+| `studio.overview` / `jeeta.studio.overview` | `GET /api/studio/overview` | Gated / `studio.work` |
+| `studio.ledger` / `jeeta.studio.ledger` | `GET /api/studio/ledger` | Exempt / `studio.work` |
+| `studio.ledger_export` / `jeeta.studio.ledger_export` | `POST /api/studio/ledger/export` | Exempt / `studio.work` |
+
+All three independently require an active workspace. Ledger read/export remain available
+when the strategy is absent or archived. Queries use a half-open RFC3339 `from`/`until`
+window, optional stable `hypothesis_id` and `lane`; ledger also accepts an exclusive
+sequence cursor `before` and `limit` from 1 to 500 (default 50). Filtering resolves
+historical target chains in the tenant repository, preserving relevant global brake/policy
+and takeover evidence. Sparse matches continue across bounded 500-row storage chunks.
+Export follows the same cursor/filter to exhaustion and returns identical
+`{filename, media_type, content}` on HTTP and MCP. CSV cells are quoted, dangerous
+spreadsheet prefixes neutralized, payload secrets masked and transport URLs/bytes removed.
+The response contains the full export in memory; this is not a streaming download service.
+
+`/studio` is one responsive screen with five regions: Strateji, Plan, Bugün,
+Öğrenilenler and Günlük. The hypothesis, lane and time filters drive the shared projections;
+the seven-day Istanbul plan switches Liste/Takvim over the same slot IDs. Mobile stacks
+these same regions. Confidence bars distinguish prior from derived confidence. Human
+approval remains a blocker on Ready, never a lifecycle state. Unknown publication warns
+against resending; agent overdue status comes from existing `work.pending`.
+
+Contextual controls cover proposal into the strategy draft, slot detail/cancel, file upload
+and content submission, human consent, lane policy and brakes, trend/judgment entry,
+external ad-set binding and daily-budget moves. The server remains authoritative for
+permissions, revision fences, paid eligibility and budget caps. Organic stays visible
+when blocked; paid actions require the connected account and selected strategy lane.
+No ad creation, independent calendar/trend screen, installation or commission feature
+is added. Existing inbox commissions remain at `/inbox/commissions`.
+
+Verification targets: `studio_projection` (also named `studio_views` by the plan),
+`studio_http`, `studio_mcp`, behavioral `twin_parity`, and `StudioPage.test.tsx`, plus
+TR/EN key parity, panel type checking/build and the full workspace checks. Provider
+operations in these tests use local fixtures, not live customer accounts.
+
+## M3 Task 11 — Growth Studio acceptance
+
+M3's implemented release contains **62 tables (48 + 14)**, **124 MCP tools
+(106 + 18)**, **18 Studio operations**, **21 scheduled jobs** and migration
+**0009_studio**. The earlier Task 0–9 release tables above are historical snapshots.
+Task 11 adds tests and documentation; it adds no product operation, provider or migration.
+
+The exact `studio.*` / `jeeta.studio.*` suffix set is:
+`brake`, `policy_set`, `approve`, `pending`, `slot_get`, `slot_cancel`,
+`trend_record`, `hypothesis_propose`, `file_upload`, `piece_submit`, `learned`,
+`judgment_record`, `adsets_list`, `adset_bind`, `budget_move`, `overview`,
+`ledger`, `ledger_export`. Only brake and ledger read/export are strategy-exempt;
+all 18 independently require an active workspace. Jobs, signed asset retrieval,
+M2b attribution reads and the existing work integration add no tools.
+
+```sh
+cd rust
+make smoke-studio
+cargo test --locked --workspace --test studio_rules --test twin_rule --test gate_rule
+```
+
+`smoke-studio` runs seven in-process scenarios with the transactional fake and
+scripted connectors, without a database, provider credentials or live customer data:
+
+- Real strategy approval, seven-day planning, upload/submission, default publication,
+  receipt replay, 24h/72h/7d measurement, idempotent learning and shared projections.
+- An externally seeded Meta set, public binding and reserved absolute budget update,
+  M2b intake-generated journey attribution, read-only chain join and paid projection.
+- Lost publication response followed by a new service instance: no blind resend.
+- Archive followed by due historical measurement; new execution refuses and a rebound
+  account cannot read the earlier account's evidence.
+- Thirty-day file cleanup after archive, with hashes, publication and ledger retained.
+- Both workers held at pre-dispatch barriers when the brake is pressed, with restart
+  persistence and tenant isolation.
+- Two concurrent consumers of the same remaining cap, plus idempotent settlement.
+
+`studio_rules` calls every public write dispatcher directly with missing strategy and
+inactive workspace contexts, so middleware alone cannot satisfy the gate invariant.
+It injects forged chain components, runs scheduled jobs under each execution blocker,
+checks default consent behavior, exercises hard-cap refusal and concurrent reservations,
+and attempts to overwrite measured confidence through ordinary hypothesis updates.
+Syntax-tree checks additionally pin real HTTP/MCP handlers to shared services, the
+paid port's operation set, dependency/connector boundaries and connector write sites.
+The exact catalog excludes ad creation, commissions and field installations; only
+M2b consumes lead events. B6/B7/B9 evidence includes behavior and races, not just scans.
+
+For database-backed parity, tenant isolation and reversible migration contracts,
+configure `JEETA_TEST_DATABASE_URL` as described above and run the full workspace
+checks. `twin_parity`, `studio_http`, `studio_mcp`, `studio_paid`, `studio_brakes`,
+`studio_measure`, `studio_attribution` and `studio_projection` cover the lower-level
+contracts; the smoke does not replace those PostgreSQL tests. These fixtures prove
+application behavior, not live Meta/X approval, provider availability, actual billing
+or the provider's eventual spend. The broader release checks remain `make check panel-test panel-build`.

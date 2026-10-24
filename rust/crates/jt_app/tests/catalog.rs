@@ -112,6 +112,24 @@ fn catalog_is_the_release_table() {
         .map(|uc| (uc.id, uc.mcp_tool, uc.panel_route, uc.panel_only, uc.risk))
         .collect();
     let expected = [
+        ("studio.overview", Some("jeeta.studio.overview"), Some(("GET", "/api/studio/overview")), false, Risk::Read),
+        ("studio.ledger", Some("jeeta.studio.ledger"), Some(("GET", "/api/studio/ledger")), false, Risk::Read),
+        ("studio.ledger_export", Some("jeeta.studio.ledger_export"), Some(("POST", "/api/studio/ledger/export")), false, Risk::Read),
+        ("studio.adsets_list", Some("jeeta.studio.adsets_list"), Some(("GET", "/api/studio/adsets")), false, Risk::Read),
+        ("studio.adset_bind", Some("jeeta.studio.adset_bind"), Some(("POST", "/api/studio/adsets/bind")), false, Risk::Write),
+        ("studio.budget_move", Some("jeeta.studio.budget_move"), Some(("POST", "/api/studio/budget-moves")), false, Risk::Spend),
+        ("studio.learned", Some("jeeta.studio.learned"), Some(("GET", "/api/studio/learned")), false, Risk::Read),
+        ("studio.judgment_record", Some("jeeta.studio.judgment_record"), Some(("POST", "/api/studio/judgments")), false, Risk::Write),
+        ("studio.file_upload", Some("jeeta.studio.file_upload"), Some(("POST", "/api/studio/files")), false, Risk::Write),
+        ("studio.piece_submit", Some("jeeta.studio.piece_submit"), Some(("POST", "/api/studio/slots/{slot_id}/piece")), false, Risk::Write),
+        ("studio.pending", Some("jeeta.studio.pending"), Some(("GET", "/api/studio/pending")), false, Risk::Read),
+        ("studio.slot_get", Some("jeeta.studio.slot_get"), Some(("GET", "/api/studio/slots/{slot_id}")), false, Risk::Read),
+        ("studio.slot_cancel", Some("jeeta.studio.slot_cancel"), Some(("POST", "/api/studio/slots/{slot_id}/cancel")), false, Risk::Write),
+        ("studio.trend_record", Some("jeeta.studio.trend_record"), Some(("POST", "/api/studio/trends")), false, Risk::Write),
+        ("studio.hypothesis_propose", Some("jeeta.studio.hypothesis_propose"), Some(("POST", "/api/studio/hypotheses/proposals")), false, Risk::Write),
+        ("studio.brake", Some("jeeta.studio.brake"), Some(("POST", "/api/studio/brake")), false, Risk::Write),
+        ("studio.policy_set", Some("jeeta.studio.policy_set"), Some(("PUT", "/api/studio/policy")), false, Risk::Write),
+        ("studio.approve", Some("jeeta.studio.approve"), Some(("POST", "/api/studio/approvals")), false, Risk::Write),
         ("inbox.pending", Some("jeeta.inbox.pending"), Some(("GET", "/api/inbox/pending")), false, Risk::Read),
         ("inbox.context", Some("jeeta.inbox.context"), Some(("GET", "/api/inbox/conversations/{conversation_id}/context")), false, Risk::Read),
         ("inbox.conversations.list", Some("jeeta.inbox.conversations_list"), Some(("GET", "/api/inbox/conversations")), false, Risk::Read),
@@ -230,9 +248,9 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 116);
+    assert_eq!(CATALOG.len(), 134);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG
@@ -307,3 +325,6 @@ fn gate_mode_and_risk_serialise_snake_case() {
         assert_eq!(serde_json::to_value(risk).unwrap(), name);
     }
 }
+
+#[path = "studio_contracts.rs"]
+mod studio_contracts;

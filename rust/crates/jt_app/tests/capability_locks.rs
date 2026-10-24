@@ -96,6 +96,18 @@ struct SpyTenant {
 
 #[async_trait]
 impl TenantRepos for SpyTenant {
+    fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
+        self.inner.studio()
+    }
+
+    fn studio_budget(&mut self) -> &mut dyn jt_app::ports::studio::StudioBudgetRepo {
+        self.inner.studio_budget()
+    }
+
+    fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
+        self.inner.studio_control()
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.inner.consents()
     }
@@ -501,6 +513,7 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
         &w.deps,
         o,
         BudgetItemInput {
+            unit_cost_minor: None,
             name: "Kasa".into(),
             kind: BudgetKind::Cash,
             unit: Unit::Currency("TRY".into()),
@@ -578,6 +591,7 @@ async fn budget_item_mutations_lock_the_item_before_writing() {
         &w.deps,
         o,
         BudgetItemInput {
+            unit_cost_minor: None,
             name: "Kasa".into(),
             kind: BudgetKind::Cash,
             unit: Unit::Currency("TRY".into()),

@@ -534,6 +534,11 @@ async fn list_assets_for_an_instagram_login_token() {
 async fn appsecret_proof_present_on_every_call_including_paging() {
     let r = rig().await;
     let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/act_1111111111",
+        ok(json!({"account_id":"1111111111","currency":"TRY","timezone_name":"Europe/Istanbul"})),
+    );
     script_listing(m);
     m.on(
         "GET",
@@ -1869,6 +1874,11 @@ async fn leadgen_fetch_reads_every_field() {
 #[tokio::test]
 async fn ads_adsets_budgets_and_insights_follow_paging() {
     let r = rig().await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/act_1111111111",
+        ok(json!({"account_id":"1111111111","currency":"TRY","timezone_name":"Europe/Istanbul"})),
+    );
     let m = &r.mock;
     let p = public("meta_ads", Some("1111111111"));
     m.on(
@@ -2410,5 +2420,113 @@ async fn post_write_transport_failure_is_unknown() {
             .error
             .unwrap();
         assert_eq!(e.kind(), "transient", "{e}");
+    }
+}
+
+#[tokio::test]
+async fn adset_metrics_preserve_missing_and_currency_exponent() {
+    let r = rig().await;
+    let p = public("meta_ads", Some("1111111111"));
+    for (currency, spend, expected, exponent) in [("JPY", "123", 123, 0), ("TRY", "12.34", 1234, 2)]
+    {
+        r.mock.set("GET", "/fb/v19.0/act_1111111111", ok(json!({"account_id":"1111111111","currency":currency,"timezone_name":"Europe/Istanbul"})));
+        r.mock.set("GET", "/fb/v19.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend,"clicks":"0"}]})));
+        let context = r.meta.account_context(&user_cred(), &p).await.unwrap();
+        assert_eq!(context.minor_unit_exponent, exponent);
+        let rows = r
+            .meta
+            .adset_insights(
+                &user_cred(),
+                &p,
+                date!(2026 - 10 - 01),
+                date!(2026 - 10 - 02),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows[0].spend_minor, Some(expected));
+        assert_eq!(rows[0].impressions, None);
+        assert_eq!(rows[0].clicks, Some(0));
+        assert_eq!(rows[0].campaign_id, None);
+    }
+    for spend in [
+        json!("bad"),
+        json!("-1"),
+        json!("1.001"),
+        json!("9223372036854775808"),
+    ] {
+        r.mock.set("GET", "/fb/v19.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend}]})));
+        assert!(
+            r.meta
+                .adset_insights(
+                    &user_cred(),
+                    &p,
+                    date!(2026 - 10 - 01),
+                    date!(2026 - 10 - 02)
+                )
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn ad_status_meta_and_fake_contract() {
+    use jt_app::ports::connectors::AdStatus;
+    let r = rig().await;
+    r.mock
+        .set("POST", "/fb/v19.0/222", ok(json!({"success":true})));
+    for (status, wire) in [(AdStatus::Paused, "PAUSED"), (AdStatus::Active, "ACTIVE")] {
+        r.meta
+            .set_status(&user_cred(), "222", status)
+            .await
+            .unwrap();
+        let requests = r.mock.requests("POST", "/fb/v19.0/222");
+        let body: Value = serde_json::from_str(&requests.last().unwrap().body).unwrap();
+        assert_eq!(body["status"], wire);
+        assert!(body.get("daily_budget").is_none());
+    }
+    r.mock.set("POST", "/fb/v19.0/222", ok(json!({})));
+    assert!(
+        r.meta
+            .set_status(&user_cred(), "222", AdStatus::Paused)
+            .await
+            .is_err()
+    );
+    let p = public("meta_ads", Some("1111111111"));
+    r.mock.set(
+        "GET",
+        "/fb/v19.0/333",
+        ok(json!({"account_id":"other","adset_id":"222"})),
+    );
+    assert!(r.meta.resolve_adset(&user_cred(), &p, "333").await.is_err());
+    r.mock.set(
+        "GET",
+        "/fb/v19.0/333",
+        ok(json!({"account_id":"1111111111","adset_id":"222"})),
+    );
+    assert_eq!(
+        r.meta.resolve_adset(&user_cred(), &p, "333").await.unwrap(),
+        Some("222".into())
+    );
+}
+
+#[tokio::test]
+async fn account_timezone_uses_meta_facts_with_istanbul_fallback() {
+    let r = rig().await;
+    let p = public("meta_ads", Some("1111111111"));
+    for (timezone, expected) in [
+        (json!("America/New_York"), "America/New_York"),
+        (json!(null), "Europe/Istanbul"),
+        (json!(""), "Europe/Istanbul"),
+    ] {
+        r.mock.set(
+            "GET",
+            "/fb/v19.0/act_1111111111",
+            ok(json!({
+                "account_id":"1111111111", "currency":"TRY", "timezone_name":timezone
+            })),
+        );
+        let context = r.meta.account_context(&user_cred(), &p).await.unwrap();
+        assert_eq!(context.timezone, expected);
     }
 }

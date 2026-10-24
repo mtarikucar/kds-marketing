@@ -15,6 +15,7 @@ mod inbox;
 mod ledger;
 mod roles;
 mod strategy;
+mod studio;
 mod team;
 mod work;
 mod workspace;
@@ -40,6 +41,7 @@ pub(crate) struct ToolDef {
 /// Every tool definition.
 pub(crate) fn definitions() -> Vec<ToolDef> {
     [
+        studio::definitions(),
         agents::definitions(),
         workspace::definitions(),
         team::definitions(),

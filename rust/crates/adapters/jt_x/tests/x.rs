@@ -1005,14 +1005,14 @@ async fn publish_receipt_url_uses_username() {
         receipt.url.as_ref().map(Url::as_str),
         Some("https://x.com/jeeta_test/status/1800000000000000001")
     );
-    // An answer without a post id is refused.
+    // An answer without a post id is uncertain; it may already have published.
     r.mock.set("POST", TWEETS, ok(json!({ "data": {} })));
     assert_eq!(
         kind_of(
             r.x.publish(&cred(), &public(), &post("Merhaba", vec![]))
                 .await
         ),
-        "permanent"
+        "unknown"
     );
 }
 
@@ -1191,8 +1191,8 @@ async fn error_mapping_incl_429_retry_after() {
         (raw(400, "<html>bad</html>"), "permanent", Some("HTTP 400")),
         (
             raw(200, "<html>not json</html>"),
-            "permanent",
-            Some("HTTP 200"),
+            "unknown",
+            Some("unreadable successful write response"),
         ),
         (raw(302, ""), "permanent", Some("HTTP 302")),
     ] {
@@ -1205,10 +1205,18 @@ async fn error_mapping_incl_429_retry_after() {
         if let Some(quoted) = quoted {
             assert!(e.reason().unwrap().contains(quoted), "{quoted}: {e}");
         }
-        // Reads map the same way.
+        // An unreadable successful read has no uncertain write outcome.
         r.mock.set("GET", ME, reply.clone());
         let e = r.x.account_metrics(&cred(), &public()).await.unwrap_err();
-        assert_eq!(e.kind(), expected, "GET {reply:?}: {e}");
+        assert_eq!(
+            e.kind(),
+            if expected == "unknown" {
+                "permanent"
+            } else {
+                expected
+            },
+            "GET {reply:?}: {e}"
+        );
     }
 
     // 429 carries the wait the headers name.

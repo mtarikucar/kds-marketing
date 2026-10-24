@@ -2,9 +2,13 @@
 //! database: the repos' contracts, the partial unique indexes behind "one draft, one approved",
 //! the append-only log, workspace scoping, and the gate opening on approval.
 
+use std::sync::Arc;
+
+use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::gate::StrategyGate;
 use jt_app::ports::UnitOfWork;
+use jt_app::usecases::strategy::{self, ApproveInput, ArchiveInput, RecordInput, RecordKind};
 use jt_ledger::Actor;
 use jt_pg::{PgStrategyGate, PgUnitOfWork, PlatformTx, TenantTx};
 use jt_strategy::{
@@ -12,8 +16,9 @@ use jt_strategy::{
     HypothesisState, Identity, Sections, Segment, StrategyVersion, StrategyVersionId,
     VersionStatus,
 };
-use jt_tenancy::{AgentConnectionId, UserId, WorkspaceId};
+use jt_tenancy::{AgentConnectionId, SystemRole, UserId, WorkspaceId};
 use jt_testkit::TestDb;
+use serde_json::json;
 use time::macros::datetime;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -67,15 +72,17 @@ fn sections(product: &str) -> Sections {
     }
 }
 
-fn hypothesis(title: &str, confidence: f32) -> Hypothesis {
+fn hypothesis(title: &str, prior_confidence: f32) -> Hypothesis {
     Hypothesis {
+        cadence: Default::default(),
+        derived_confidence: None,
         id: HypothesisId::new_v7(),
         title: title.into(),
         segment_key: "esnaf".into(),
         angle: "zaman kazancı".into(),
         channel: "instagram".into(),
         metric: "dm_replies".into(),
-        confidence,
+        prior_confidence,
         state: HypothesisState::Kept,
     }
 }
@@ -676,7 +683,7 @@ async fn hypotheses_replace_and_set_state() {
     };
     t.hypotheses().upsert(v2.id, h4.clone()).await.unwrap();
     let h3_edited = Hypothesis {
-        confidence: 0.0,
+        prior_confidence: 0.0,
         ..h3.clone()
     };
     t.hypotheses()
@@ -920,6 +927,10 @@ async fn consultation_pages_by_keyset_through_entries_sharing_an_instant() {
 
 /// Waits until another backend of this database waits for a lock; panics after ten seconds.
 async fn wait_for_a_lock_waiter(db: &TestDb) {
+    wait_for_lock_waiters(db, 1).await;
+}
+
+async fn wait_for_lock_waiters(db: &TestDb, expected: i64) {
     for _ in 0..500 {
         let waiting: i64 = sqlx::query_scalar(
             "select count(*) from pg_stat_activity where datname = current_database() \
@@ -928,12 +939,12 @@ async fn wait_for_a_lock_waiter(db: &TestDb) {
         .fetch_one(&db.pool)
         .await
         .unwrap();
-        if waiting > 0 {
+        if waiting >= expected {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    panic!("no backend ever waited for a lock");
+    panic!("fewer than {expected} backends waited for a lock");
 }
 
 #[tokio::test]
@@ -1010,7 +1021,7 @@ async fn the_schema_ties_hypotheses_and_entries_to_a_version_of_their_own_worksp
     // cannot hang off a version of `b`.
     for statement in [
         "insert into strategy_hypotheses (version_id, workspace_id, hypothesis_id, title, \
-         segment_key, angle, channel, metric, confidence, state, position) \
+         segment_key, angle, channel, metric, prior_confidence, state, position) \
          values ($1, $2, $3, 't', 's', 'a', 'c', 'm', 0.5, 'kept', 0)",
         "insert into consultation_entries (version_id, workspace_id, id, kind, text, \
          actor_kind, actor_component, at) values ($1, $2, $3, 'note', 't', 'system', 'x', now())",
@@ -1133,4 +1144,333 @@ async fn strategy_gate_flips_when_a_version_is_approved() {
         .unwrap();
     t.commit().await.unwrap();
     assert!(!gate.has_approved_strategy(a).await.unwrap());
+}
+
+#[tokio::test]
+async fn derived_confidence_cannot_edit_hypothesis_content() {
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-confidence").await;
+    let u = uow(&db);
+    let approved = version(ws, 1, VersionStatus::Approved, human(user));
+    insert(&u, &approved).await;
+    let mut h = hypothesis("Original", 0.2);
+    h.cadence.insert(
+        jt_strategy::LaneKind::Organic,
+        jt_strategy::HypothesisCadence {
+            slots_per_week: 7,
+            exploration_bps: 1000,
+            content_types: vec![jt_strategy::ContentTypeShare {
+                key: "image".into(),
+                min_bps: 0,
+                max_bps: 10000,
+            }],
+        },
+    );
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .upsert(approved.id, h.clone())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let draft = version(ws, 2, VersionStatus::Draft, human(user));
+    insert(&u, &draft).await;
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .replace_all(draft.id, vec![h.clone()])
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .set_derived_confidence(h.id, 0.8, "post:one:24h")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut edited = h.clone();
+    edited.title = "Edited".into();
+    edited.prior_confidence = 0.1;
+    edited.derived_confidence = Some(0.99); // content writes cannot author learning.
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .replace_all(draft.id, vec![edited])
+        .await
+        .unwrap();
+    let row = tx.hypotheses().list(draft.id).await.unwrap().remove(0);
+    assert_eq!(row.cadence, h.cadence);
+    assert_eq!(
+        (
+            row.title.as_str(),
+            row.prior_confidence,
+            row.derived_confidence
+        ),
+        ("Edited", 0.1, Some(0.8))
+    );
+    assert_eq!(
+        tx.hypotheses().list(approved.id).await.unwrap()[0].title,
+        "Original"
+    );
+    tx.commit().await.unwrap();
+    let (other, _) = db.seed_workspace("studio-other").await;
+    let mut tx = u.tenant(other).await.unwrap();
+    assert_eq!(
+        tx.hypotheses()
+            .set_derived_confidence(h.id, 0.9, "foreign")
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    drop(tx);
+    let mut tx = u.tenant(ws).await.unwrap();
+    tx.hypotheses()
+        .set_derived_confidence(h.id, 0.8, "post:one:24h")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = u.tenant(ws).await.unwrap();
+    assert_eq!(
+        tx.hypotheses()
+            .set_derived_confidence(h.id, 0.9, "post:one:24h")
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+}
+
+#[tokio::test]
+async fn execution_frame_serializes_even_without_an_approved_version() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("studio-frame").await;
+    let u = uow(&db);
+    let mut first = u.tenant(ws).await.unwrap();
+    assert!(
+        first
+            .strategy()
+            .lock_execution_frame()
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut second = u.tenant(ws).await.unwrap();
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            second.strategy().lock_execution_frame()
+        )
+        .await
+        .is_err()
+    );
+    first.commit().await.unwrap();
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            second.strategy().lock_execution_frame()
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[tokio::test]
+async fn execution_frame_allows_ledger_foreign_key_checks() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("frame-ledger").await;
+    let u = uow(&db);
+    let mut frame = u.tenant(ws).await.unwrap();
+    frame.strategy().lock_execution_frame().await.unwrap();
+    let mut writer = u.tenant(ws).await.unwrap();
+    let entry = jt_ledger::LedgerEntry {
+        workspace_id: ws,
+        at: T0,
+        actor: human(owner),
+        action: jt_ledger::Action::new("strategy.record").unwrap(),
+        subject: None,
+        payload: json!({}),
+        strategy_version_id: None,
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        writer.ledger().append(entry),
+    )
+    .await
+    .expect("workspace frame must allow ledger foreign-key checks")
+    .unwrap();
+    writer.commit().await.unwrap();
+    frame.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn strategy_transition_and_draft_edits_never_deadlock() {
+    let db = TestDb::new().await;
+    let u = uow(&db);
+    let deps = jt_testkit::fakes::deps(Arc::new(u.clone()));
+    // Queue the editor before the transition behind a held draft lock. With the old order,
+    // the transition holds the workspace while waiting for the draft; after release the
+    // editor holds the draft while its ledger FK waits for the workspace: a real deadlock.
+    for iteration in 0..10 {
+        for archive in [false, true] {
+            for edit in ["record", "write_section", "set_hypotheses"] {
+                let (ws, owner) = db.seed_workspace("transition-edit").await;
+                let ctx = Ctx {
+                    workspace_id: ws,
+                    actor: human(owner),
+                    permissions: SystemRole::Owner.permissions(),
+                    role_key: Some("owner".into()),
+                    now: T0,
+                    agent_connection_id: None,
+                };
+                let previous = version(ws, 1, VersionStatus::Approved, human(owner));
+                insert(&u, &previous).await;
+                let mut draft = version(ws, 2, VersionStatus::Draft, human(owner));
+                draft.sections = sections("Coffee");
+                draft.sections.paid_enabled = false;
+                jt_strategy::parse_section_strict(
+                    "channels",
+                    &json!([{"channel": "any", "rationale": "reach"}]),
+                )
+                .unwrap()
+                .apply(&mut draft.sections);
+                draft.submitted_at = Some(T0);
+                insert(&u, &draft).await;
+                let mut h = hypothesis("Original", 0.5);
+                h.channel = "any".into();
+                let mut seed = u.tenant(ws).await.unwrap();
+                seed.hypotheses()
+                    .replace_all(draft.id, vec![h])
+                    .await
+                    .unwrap();
+                seed.commit().await.unwrap();
+                // Ensure the record race can actually approve; edits must instead withdraw it.
+                assert!(strategy::get(&deps, &ctx).await.unwrap().gaps.is_empty());
+
+                let mut blocker = u.tenant(ws).await.unwrap();
+                blocker.strategy().lock_draft().await.unwrap().unwrap();
+                let editor = {
+                    let deps = deps.clone();
+                    let ctx = ctx.clone();
+                    tokio::spawn(async move {
+                        match edit {
+                            "record" => strategy::record(
+                                &deps,
+                                &ctx,
+                                RecordInput {
+                                    kind: RecordKind::Note,
+                                    section_key: None,
+                                    text: "Concurrent note".into(),
+                                },
+                            )
+                            .await
+                            .map(|_| ()),
+                            "write_section" => strategy::write_section(
+                                &deps,
+                                &ctx,
+                                "identity".into(),
+                                json!({"product": "Edited coffee"}),
+                            )
+                            .await
+                            .map(|_| ()),
+                            "set_hypotheses" => strategy::set_hypotheses(
+                                &deps,
+                                &ctx,
+                                json!([{
+                                    "title": "Edited hypothesis", "segment_key": "esnaf",
+                                    "angle": "time saved", "channel": "any", "metric": "dm",
+                                    "prior_confidence": 0.6,
+                                }]),
+                            )
+                            .await
+                            .map(|_| ()),
+                            _ => unreachable!(),
+                        }
+                    })
+                };
+                wait_for_lock_waiters(&db, 1).await;
+                let transition = {
+                    let deps = deps.clone();
+                    let ctx = ctx.clone();
+                    let draft_id = draft.id;
+                    let previous_id = previous.id;
+                    tokio::spawn(async move {
+                        if archive {
+                            strategy::archive(
+                                &deps,
+                                &ctx,
+                                ArchiveInput {
+                                    version_id: previous_id,
+                                    confirm: true,
+                                },
+                            )
+                            .await
+                        } else {
+                            strategy::approve(
+                                &deps,
+                                &ctx,
+                                ApproveInput {
+                                    version_id: draft_id,
+                                    submitted_at: T0,
+                                },
+                            )
+                            .await
+                            .map(|_| ())
+                        }
+                    })
+                };
+                wait_for_lock_waiters(&db, 2).await;
+                blocker.commit().await.unwrap();
+                let (edited, transitioned) =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                        tokio::join!(editor, transition)
+                    })
+                    .await
+                    .unwrap_or_else(|_| {
+                        panic!("timeout: iteration {iteration}, archive={archive}, {edit}")
+                    });
+                edited
+                    .unwrap()
+                    .unwrap_or_else(|e| panic!("edit {edit}: {e:?}"));
+                let transitioned = transitioned.unwrap();
+                if !archive && edit != "record" {
+                    let err = transitioned.expect_err("editing must withdraw the submission");
+                    assert_eq!(err.code, ErrorCode::Conflict);
+                    assert_eq!(err.details["reason"], "not_submitted");
+                } else {
+                    transitioned.unwrap();
+                }
+                let stored = find(&u, ws, draft.id).await;
+                assert_eq!(
+                    stored.status,
+                    if !archive && edit == "record" {
+                        VersionStatus::Approved
+                    } else {
+                        VersionStatus::Draft
+                    }
+                );
+                assert_eq!(
+                    find(&u, ws, previous.id).await.status,
+                    if archive || edit == "record" {
+                        VersionStatus::Archived
+                    } else {
+                        VersionStatus::Approved
+                    }
+                );
+                let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+                let count: i64 = sqlx::query_scalar(
+                    "select count(*) from ledger_entries where workspace_id = $1 and action = $2",
+                )
+                .bind(ws.as_uuid())
+                .bind(format!("strategy.{edit}"))
+                .fetch_one(tx.conn())
+                .await
+                .unwrap();
+                assert_eq!(
+                    count, 1,
+                    "the edit and its ledger entry must commit together"
+                );
+                tx.rollback().await.unwrap();
+            }
+        }
+    }
 }

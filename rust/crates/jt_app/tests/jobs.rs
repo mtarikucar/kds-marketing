@@ -283,6 +283,13 @@ fn every_job_has_a_lock_named_after_it() {
             "inbox_consume",
             "response_sla",
             "snooze_wake",
+            "studio_control",
+            "studio_files_cleanup",
+            "studio_plan",
+            "studio_publish",
+            "studio_publish_recover",
+            "studio_measure",
+            "studio_reweight",
         ]
     );
     for job in Job::ALL {

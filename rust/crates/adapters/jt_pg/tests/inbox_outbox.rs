@@ -123,6 +123,7 @@ async fn ready(
         .await
         .unwrap();
     r.commit().await.unwrap();
+    jt_testkit::flows::price_sms(&deps, f.ws).await;
     let ctx = Ctx {
         workspace_id: f.ws,
         actor: Actor::Human { user_id: f.user },

@@ -53,8 +53,8 @@
 //! | HTTP 401; a token call's `invalid_grant` (a spent code, a verifier that does not match, a spent or revoked refresh token); a refresh's `invalid_request` (X's answer to a refresh token it no longer accepts) | `Auth`: the owner must reconnect |
 //! | HTTP 403 | `Permission` |
 //! | HTTP 5xx; a read transport failure or broken response, a connect failure, a host resolving to no public address | `Transient` |
-//! | A non-idempotent write may have reached the provider, but its answer was lost or broke off | `Unknown` (never retry blindly) |
-//! | any other status (another 4xx, a redirect, which is never followed); a 2xx answer that is not JSON, or that carries `errors` and no `data` (a deleted post); an answer lacking what the call needs; an answer over 4 MiB; a host the `x` tier does not hold | `Permanent` |
+//! | A non-idempotent write may have reached the provider, but its answer was lost, broke off, was oversized/unreadable on success, or omitted the publication ID | `Unknown` (never retry blindly) |
+//! | any other status (another 4xx, a redirect, which is never followed); a read 2xx answer that is not JSON, or an answer that carries `errors` and no `data` (a deleted post); a read answer lacking what the call needs; a read answer over 4 MiB; a host the `x` tier does not hold | `Permanent` |
 //!
 //! **Retries.** Reads (`GET`) are tried once more ([`READ_ATTEMPTS`] in all) when no answer
 //! arrived (the connection failed, dropped or timed out), after [`DEFAULT_RETRY_DELAY`]. Posts,
@@ -72,11 +72,9 @@
 //! when both are given ("media bytes and urls disagree"; with equal counts the bytes are
 //! uploaded, the URLs being where they were read from), something to post (text, a link or an
 //! image), and the length. A link is put after the text, on a line of its own. The length is
-//! counted in characters, not bytes, at most [`MAX_TEXT_CHARS`], every URL counting
-//! [`LINK_CHARS`] as X counts it (the link, and each `http://` or `https://` in the text up to
-//! the next whitespace: X wraps them in `t.co` links); X also weighs some characters (most CJK
-//! characters, emoji) as two, which this count does not: that weighted length is M3's pre-check
-//! before it posts, and X refuses what slips through (`Permanent`). Images are uploaded one after
+//! counted with Unicode single/double-weight ranges, at most [`MAX_TEXT_CHARS`], every
+//! explicit URL or bare domain counting [`LINK_CHARS`] (X wraps them in `t.co` links).
+//! Images are uploaded one after
 //! the other (`media_category=tweet_image`, a GIF `tweet_gif`), then the post is made with their
 //! ids; a failed upload stops the post (the images uploaded before it expire unused at X). The receipt's URL is
 //! `https://x.com/<username>/status/<id>`, the username being the first X handle among

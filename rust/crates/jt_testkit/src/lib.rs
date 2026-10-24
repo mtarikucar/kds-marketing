@@ -14,3 +14,7 @@ pub mod inbox_contract;
 pub mod inbox_merge_contract;
 
 pub mod compliance_contract;
+
+pub mod studio_contract;
+
+pub mod studio_attribution_contract;

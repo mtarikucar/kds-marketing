@@ -19,6 +19,7 @@ pub mod ledger;
 pub mod platform;
 pub mod roles;
 pub mod strategy;
+pub mod studio;
 pub mod team;
 pub mod webhook;
 pub mod work;
@@ -47,6 +48,10 @@ use crate::ports::{
 /// adapter.
 #[derive(Clone)]
 pub struct Deps {
+    pub file_maintenance: Arc<dyn crate::ports::files::FileMaintenance>,
+    pub media_fetch: Arc<dyn crate::ports::files::MediaFetcher>,
+    pub files: Arc<dyn crate::ports::files::FileStore>,
+    pub transition_hook: Arc<dyn crate::ports::studio::StrategyTransitionHook>,
     pub uow: Arc<dyn UnitOfWork>,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdGen>,

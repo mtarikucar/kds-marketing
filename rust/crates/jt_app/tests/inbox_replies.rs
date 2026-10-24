@@ -87,6 +87,7 @@ async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedConnec
     r.capabilities().insert(cap, Some(sealed)).await.unwrap();
     r.conversations().upsert_on_inbound(c).await.unwrap();
     r.commit().await.unwrap();
+    jt_testkit::flows::price_sms(&w.deps, w.ws).await;
     (w, id, connector)
 }
 fn input(key: Option<&str>) -> replies::ReplyInput {
@@ -440,6 +441,7 @@ async fn sms_optional_cost() {
     r.capabilities().insert(cap, Some(sealed)).await.unwrap();
     r.conversations().upsert_on_inbound(c).await.unwrap();
     r.commit().await.unwrap();
+    jt_testkit::flows::price_sms(&w.deps, w.ws).await;
     sms.push_sms(accepted());
     assert_eq!(
         replies::reply(&w.deps, &w.owner_ctx, id, input(None))
@@ -1237,4 +1239,70 @@ async fn email_rebound_account_refuses_persisted_send() {
     );
     assert!(c.calls().is_empty());
     assert_eq!(w.uow.snapshot().inbox.outbox[0].state, "refused");
+}
+
+#[tokio::test]
+async fn sms_outbox_reserves_each_billable_segment_before_send() {
+    for (text, amount) in [
+        ("a".repeat(160), 3),
+        ("a".repeat(161), 6),
+        ("ş".repeat(70), 3),
+        ("ğ".repeat(71), 6),
+    ] {
+        let (w, id, c) = setup_channel("sms_line").await;
+        c.push_sms(accepted());
+        let mut body = input(None);
+        body.text = text;
+        assert_eq!(
+            replies::reply(&w.deps, &w.owner_ctx, id, body)
+                .await
+                .unwrap()
+                .state,
+            "sent"
+        );
+        let s = w.uow.snapshot();
+        assert_eq!(s.studio.reservations.len(), 1);
+        assert_eq!(s.studio.reservations[0].0.request.amount_minor, amount);
+        assert_eq!(
+            s.studio.reservations[0].1,
+            Some(jt_studio::SpendOutcome::Unknown)
+        );
+        assert_eq!(c.calls().len(), 1);
+    }
+}
+#[tokio::test]
+async fn unpriced_sms_outbox_refuses_before_sending() {
+    let (w, id, c) = setup_channel("sms_line").await;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let conversation = r.conversations().get(id).await.unwrap().unwrap();
+    let cap = r
+        .capabilities()
+        .find(conversation.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut item = r
+        .budget()
+        .find_item(cap.budget_item_ids[0])
+        .await
+        .unwrap()
+        .unwrap();
+    item.unit_cost_minor = None;
+    r.budget().update_item(item).await.unwrap();
+    r.commit().await.unwrap();
+    assert!(
+        replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+            .await
+            .is_err()
+    );
+    assert!(c.calls().is_empty());
+    assert!(w.uow.snapshot().studio.reservations.is_empty());
+    assert!(
+        w.uow
+            .snapshot()
+            .inbox
+            .outbox
+            .iter()
+            .all(|o| o.state != "sending")
+    );
 }

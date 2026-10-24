@@ -32,6 +32,7 @@ struct ItemRecord {
     kind: String,
     unit: serde_json::Value,
     cap: i64,
+    unit_cost_minor: Option<i64>,
     period: String,
     strategy_version_id: Option<Uuid>,
     created_at: OffsetDateTime,
@@ -39,14 +40,14 @@ struct ItemRecord {
 }
 
 /// The columns an [`ItemRecord`] is read from.
-const ITEM_COLUMNS: &str =
-    "id, workspace_id, name, kind, unit, cap, period, strategy_version_id, created_at, retired_at";
+const ITEM_COLUMNS: &str = "id, workspace_id, name, kind, unit, cap, unit_cost_minor, period, strategy_version_id, created_at, retired_at";
 
 impl ItemRecord {
     fn into_item(self) -> Result<BudgetItem, AppError> {
         let unit: Unit = serde_json::from_value(self.unit)
             .map_err(|_| AppError::internal("stored budget item unit cannot be read"))?;
         Ok(BudgetItem {
+            unit_cost_minor: self.unit_cost_minor,
             id: BudgetItemId(self.id),
             workspace_id: WorkspaceId(self.workspace_id),
             name: self.name,
@@ -115,8 +116,8 @@ impl BudgetRepo for PgTenantRepos {
             .map_err(|e| AppError::internal(format!("a budget unit cannot be stored: {e}")))?;
         let done = sqlx::query(
             "insert into budget_items (id, workspace_id, name, kind, unit, cap, period, \
-             strategy_version_id, created_at, retired_at) \
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict do nothing",
+             strategy_version_id, created_at, retired_at, unit_cost_minor) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict do nothing",
         )
         .bind(item.id.as_uuid())
         .bind(ws.as_uuid())
@@ -128,6 +129,7 @@ impl BudgetRepo for PgTenantRepos {
         .bind(item.strategy_version_id)
         .bind(item.created_at)
         .bind(item.retired_at)
+        .bind(item.unit_cost_minor)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "insert budget item"))?;
@@ -183,7 +185,7 @@ impl BudgetRepo for PgTenantRepos {
         let ws = self.workspace_id();
         same_workspace(ws, item.workspace_id)?;
         let done = sqlx::query(
-            "update budget_items set name = $3, cap = $4, period = $5, retired_at = $6 \
+            "update budget_items set name = $3, cap = $4, period = $5, retired_at = $6, unit_cost_minor = $7 \
              where workspace_id = $1 and id = $2",
         )
         .bind(ws.as_uuid())
@@ -192,6 +194,7 @@ impl BudgetRepo for PgTenantRepos {
         .bind(item.cap)
         .bind(item.period.key())
         .bind(item.retired_at)
+        .bind(item.unit_cost_minor)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "change budget item"))?;

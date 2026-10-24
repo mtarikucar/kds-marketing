@@ -165,6 +165,8 @@ pub struct BudgetItem {
     /// allows nothing.
     #[serde(default)]
     pub cap: i64,
+    /// Price per billable unit in minor currency units; None means unknown.
+    pub unit_cost_minor: Option<i64>,
     /// Missing reads as `Total`.
     #[serde(default)]
     pub period: Period,
@@ -187,6 +189,8 @@ pub struct NewBudgetItem {
     pub kind: BudgetKind,
     pub unit: Unit,
     pub cap: i64,
+    /// Price per billable unit in minor currency units; None means unknown.
+    pub unit_cost_minor: Option<i64>,
     pub period: Period,
 }
 
@@ -205,11 +209,15 @@ impl BudgetItem {
             kind,
             unit,
             cap,
+            unit_cost_minor,
             period,
         } = input;
         let name = checked_name(name)?;
         validate_unit(&unit)?;
         validate_cap(cap)?;
+        if let Some(price) = unit_cost_minor {
+            validate_cap(price)?;
+        }
         Ok(BudgetItem {
             id,
             workspace_id,
@@ -217,6 +225,7 @@ impl BudgetItem {
             kind,
             unit,
             cap,
+            unit_cost_minor,
             period,
             strategy_version_id: None,
             created_at: now,

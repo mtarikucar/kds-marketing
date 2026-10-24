@@ -115,6 +115,7 @@ pub struct StoredWorkspacePolicy {
 /// Every table, in insertion order.
 #[derive(Clone, Debug, Default)]
 pub struct MemState {
+    pub studio: super::studio::MemStudio,
     pub inbox: super::inbox::MemInbox,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
@@ -128,6 +129,7 @@ pub struct MemState {
     pub platform_sessions: Vec<PlatformSessionRow>,
     pub strategy_versions: Vec<StrategyVersion>,
     pub hypotheses: Vec<StoredHypothesis>,
+    pub studio_learning: Vec<(WorkspaceId, jt_strategy::HypothesisId, String, f32)>,
     pub consultation: Vec<StoredConsultationEntry>,
     pub capabilities: Vec<StoredCapability>,
     pub capability_groups: Vec<StoredCapabilityGroup>,
@@ -393,6 +395,7 @@ pub(super) fn actor_kind(actor: &Actor) -> &'static str {
 /// An in-memory `UnitOfWork`. Clones share the same tables.
 #[derive(Clone, Default)]
 pub struct InMemoryUow {
+    studio_lock: Arc<tokio::sync::Mutex<()>>,
     state: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
     /// How many of the next `CapabilityRepo::set_sealed` calls fail
@@ -401,6 +404,7 @@ pub struct InMemoryUow {
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
     mail_cursor_faults: Arc<AtomicUsize>,
+    studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
 }
 
@@ -418,6 +422,11 @@ impl InMemoryUow {
     /// list returns the old row; subsequent reads see this committed replacement.
     pub fn replace_capability_after_list(&self, row: StoredCapability) {
         *lock(&self.capability_after_list) = Some(row);
+    }
+
+    /// Fail the next brake writes to exercise atomic binding rollback.
+    pub fn fail_studio_brake(&self, times: usize) {
+        self.studio_brake_faults.store(times, Ordering::SeqCst);
     }
 
     pub fn fail_mail_cursor(&self, times: usize) {
@@ -467,12 +476,15 @@ type Op = Box<dyn Fn(&mut MemState) + Send + Sync>;
 
 /// One bundle's transaction: a private working copy plus the writes to replay on commit.
 pub(super) struct MemTx {
+    studio_lock: Arc<tokio::sync::Mutex<()>>,
+    studio_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
     shared: Arc<Mutex<MemState>>,
     ledger_seq: Arc<AtomicI64>,
     set_sealed_faults: Arc<AtomicUsize>,
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
     mail_cursor_faults: Arc<AtomicUsize>,
+    studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
@@ -482,14 +494,29 @@ pub(super) struct MemTx {
 }
 
 impl MemTx {
+    // Studio writes keep their lock until commit/drop, and refresh after waiting, so a fake
+    // cannot hand two workers ownership of the same Sending attempt.
+    pub(super) async fn lock_studio(&mut self) {
+        if self.studio_guard.is_none() {
+            self.studio_guard = Some(Arc::clone(&self.studio_lock).lock_owned().await);
+            self.work = lock(&self.shared).clone();
+            for op in &self.ops {
+                op(&mut self.work);
+            }
+        }
+    }
+
     pub(super) fn begin(uow: &InMemoryUow) -> MemTx {
         MemTx {
+            studio_lock: Arc::clone(&uow.studio_lock),
+            studio_guard: None,
             shared: Arc::clone(&uow.state),
             ledger_seq: Arc::clone(&uow.ledger_seq),
             set_sealed_faults: Arc::clone(&uow.set_sealed_faults),
             inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
             inbox_consumption_faults: Arc::clone(&uow.inbox_consumption_faults),
             mail_cursor_faults: Arc::clone(&uow.mail_cursor_faults),
+            studio_brake_faults: Arc::clone(&uow.studio_brake_faults),
             capability_after_list: Arc::clone(&uow.capability_after_list),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
@@ -572,6 +599,12 @@ impl MemTx {
             }
         });
         Ok(())
+    }
+
+    pub(super) fn studio_brake_fails(&self) -> bool {
+        self.studio_brake_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 
     pub(super) fn mail_cursor_fails(&self) -> bool {

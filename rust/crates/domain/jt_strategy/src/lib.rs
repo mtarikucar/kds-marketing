@@ -11,7 +11,9 @@ mod version;
 pub use consultation::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, MAX_CONSULTATION_TEXT_CHARS,
 };
-pub use hypothesis::{Hypothesis, HypothesisId, HypothesisInput, HypothesisState};
+pub use hypothesis::{
+    ContentTypeShare, Hypothesis, HypothesisCadence, HypothesisId, HypothesisInput, HypothesisState,
+};
 pub use parse::{
     MAX_PROHIBITION_CHARS, MAX_SECTION_NAME_CHARS, MAX_SECTION_TEXT_CHARS, SectionValue,
     parse_hypotheses_strict, parse_section_strict,

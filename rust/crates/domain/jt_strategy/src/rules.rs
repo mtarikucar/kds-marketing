@@ -189,7 +189,7 @@ pub fn validate_sections(s: &Sections) -> Vec<Gap> {
 /// kinds of its capabilities) or [`ANY_CHANNEL`]; at least one hypothesis that is not retired;
 /// no hypothesis listed twice; and for every live hypothesis a title, an angle and a metric, a
 /// segment of the audience and a known channel. Retired hypotheses are neither counted nor
-/// checked for segment and channel. Every hypothesis's confidence is in `0.0..=1.0`.
+/// checked for segment and channel. Every hypothesis's prior_confidence is in `0.0..=1.0`.
 pub fn validate_for_approval(
     s: &Sections,
     hyps: &[Hypothesis],
@@ -246,10 +246,10 @@ pub fn validate_for_approval(
                 gaps.add(field("metric"), "a metric is required");
             }
         }
-        if !(0.0..=1.0).contains(&h.confidence) {
+        if !(0.0..=1.0).contains(&h.prior_confidence) {
             gaps.add(
-                field("confidence"),
-                "the confidence must be between 0 and 1",
+                field("prior_confidence"),
+                "the prior_confidence must be between 0 and 1",
             );
         }
     }

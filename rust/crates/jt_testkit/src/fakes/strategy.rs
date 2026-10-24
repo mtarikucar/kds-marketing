@@ -17,13 +17,13 @@ use super::state::{
 };
 use super::tenant::MemTenant;
 
-/// `INTERNAL` for a confidence the check constraint of `strategy_hypotheses` refuses.
+/// `INTERNAL` for a prior_confidence the check constraint of `strategy_hypotheses` refuses.
 fn check_confidence(h: &Hypothesis) -> Result<(), AppError> {
-    if (0.0..=1.0).contains(&h.confidence) {
+    if (0.0..=1.0).contains(&h.prior_confidence) {
         Ok(())
     } else {
         Err(AppError::internal(
-            "strategy_hypotheses.confidence must be between 0 and 1",
+            "strategy_hypotheses.prior_confidence must be between 0 and 1",
         ))
     }
 }
@@ -42,7 +42,13 @@ fn ensure_draft(state: &MemState, ws: WorkspaceId, id: StrategyVersionId) -> Res
 
 #[async_trait]
 impl StrategyRepo for MemTenant {
+    async fn lock_execution_frame(&mut self) -> Result<Option<StrategyVersion>, AppError> {
+        self.tx.lock_studio().await;
+        self.current_approved().await
+    }
+
     async fn insert(&mut self, version: StrategyVersion) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             same_workspace(ws, version.workspace_id)?;
@@ -121,6 +127,7 @@ impl StrategyRepo for MemTenant {
         sections: Sections,
         _at: OffsetDateTime,
     ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             ensure_draft(this.state(), ws, id)?;
@@ -165,6 +172,7 @@ impl StrategyRepo for MemTenant {
         at: OffsetDateTime,
         by: Option<UserId>,
     ) -> Result<u64, AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             let ws = this.ws;
             let from: &[VersionStatus] = match status {
@@ -228,6 +236,92 @@ impl StrategyRepo for MemTenant {
 
 #[async_trait]
 impl HypothesisRepo for MemTenant {
+    async fn set_derived_confidence(
+        &mut self,
+        id: HypothesisId,
+        confidence: f32,
+        evidence_key: &str,
+    ) -> Result<(), AppError> {
+        let evidence_key = evidence_key.to_owned();
+        self.call(|this| {
+            let ws = this.ws;
+            if !(0.0..=1.0).contains(&confidence) || evidence_key.trim().is_empty() {
+                return Err(AppError::validation(
+                    "invalid learning evidence",
+                    serde_json::json!({}),
+                ));
+            }
+            let state = this.state();
+            if !state.hypotheses.iter().any(|h| {
+                h.workspace_id == ws
+                    && h.hypothesis.id == id
+                    && state
+                        .version_in(ws, h.version_id)
+                        .is_some_and(|v| v.status != VersionStatus::Draft)
+            }) {
+                return Err(AppError::not_found("no such executed hypothesis"));
+            }
+            if let Some((_, _, _, old)) = state
+                .studio_learning
+                .iter()
+                .find(|(w, h, k, _)| *w == ws && *h == id && *k == evidence_key)
+            {
+                return if *old == confidence {
+                    Ok(())
+                } else {
+                    Err(AppError::conflict("learning evidence changed"))
+                };
+            }
+            this.tx.write(move |s| {
+                s.studio_learning
+                    .push((ws, id, evidence_key.clone(), confidence))
+            });
+            Ok(())
+        })
+    }
+    async fn append_draft_hypothesis(
+        &mut self,
+        draft_id: StrategyVersionId,
+        input: jt_strategy::HypothesisInput,
+    ) -> Result<HypothesisId, AppError> {
+        let draft = self
+            .lock_draft()
+            .await?
+            .ok_or_else(|| AppError::conflict("no draft"))?;
+        if draft.id != draft_id || input.id.is_some() {
+            return Err(AppError::conflict(
+                "append requires the current draft and a new hypothesis",
+            ));
+        }
+        if !(0.0..=1.0).contains(&input.prior_confidence) {
+            return Err(AppError::validation(
+                "prior confidence must be between 0 and 1",
+                serde_json::json!({"field":"prior_confidence"}),
+            ));
+        }
+        jt_strategy::parse_hypotheses_strict(&serde_json::json!([input]))
+            .map_err(|_| AppError::validation("invalid hypothesis", serde_json::json!({})))?;
+        let id = HypothesisId(uuid::Uuid::now_v7());
+        self.upsert(
+            draft_id,
+            Hypothesis {
+                id,
+                title: input.title,
+                segment_key: input.segment_key,
+                angle: input.angle,
+                channel: input.channel,
+                metric: input.metric,
+                prior_confidence: input.prior_confidence,
+                derived_confidence: None,
+                cadence: input.cadence,
+                state: HypothesisState::Added,
+            },
+        )
+        .await?;
+        self.set_submitted(draft_id, None).await?;
+        Ok(id)
+    }
+
     async fn replace_all(
         &mut self,
         version_id: StrategyVersionId,
@@ -268,7 +362,20 @@ impl HypothesisRepo for MemTenant {
             .filter(|h| h.workspace_id == self.ws && h.version_id == version_id)
             .collect();
         rows.sort_by_key(|h| (h.position, h.hypothesis.id));
-        Ok(rows.into_iter().map(|h| h.hypothesis.clone()).collect())
+        Ok(rows
+            .into_iter()
+            .map(|h| {
+                let mut hypothesis = h.hypothesis.clone();
+                hypothesis.derived_confidence = self
+                    .state()
+                    .studio_learning
+                    .iter()
+                    .rev()
+                    .find(|(w, id, _, _)| *w == self.ws && *id == hypothesis.id)
+                    .map(|(_, _, _, c)| *c);
+                hypothesis
+            })
+            .collect())
     }
 
     async fn upsert(

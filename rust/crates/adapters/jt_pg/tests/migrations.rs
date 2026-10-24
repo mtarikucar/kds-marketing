@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use jt_pg::PlatformTx;
+use jt_pg::{PlatformTx, TenantTx};
 use jt_testkit::TestDb;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -29,11 +29,11 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
-/// Tables after `0008_inbox_compliance`, including twelve compliance/mailbox tables.
-const TABLES_AFTER_ALL: i64 = 48;
+/// Tables after `0009_studio`, including all 14 Studio tables.
+const TABLES_AFTER_ALL: i64 = 62;
 
-/// The migrations there are: `0001_foundation` to `0008_inbox_compliance`.
-const MIGRATIONS: i64 = 8;
+/// The migrations there are: `0001_foundation` to `0009_studio`.
+const MIGRATIONS: i64 = 9;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -171,6 +171,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
 
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
+    run(read("0009_studio.down.sql")).await;
     run(read("0008_inbox_compliance.down.sql")).await;
     run(read("0008_inbox_compliance.down.sql")).await;
     run(read("0007_inbox_policy.down.sql")).await;
@@ -417,6 +418,10 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(include_str!("../../../../migrations/0009_studio.down.sql"))
+        .execute(&db.pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0008_inbox_compliance.down.sql"
     ))
@@ -529,6 +534,10 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(include_str!("../../../../migrations/0009_studio.down.sql"))
+        .execute(&db.pool)
+        .await
+        .unwrap();
     let (ws, _) = db.seed_workspace("compliance-roundtrip").await;
     let person = Uuid::now_v7();
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
@@ -560,4 +569,34 @@ async fn compliance_round_trip_preserving_people() {
         .await
         .unwrap();
     assert_eq!(name, "Keep me");
+}
+
+#[tokio::test]
+async fn studio_migration_up_down_up() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("studio-roundtrip").await;
+    let up = include_str!("../../../../migrations/0009_studio.up.sql");
+    let down = include_str!("../../../../migrations/0009_studio.down.sql");
+    let id = Uuid::now_v7();
+    let h = Uuid::now_v7();
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("insert into strategy_versions(id,workspace_id,number,status,sections,created_by_component,created_at) values($1,$2,1,'draft','{}','test','2026-10-24T00:00:00Z')").bind(id).bind(ws.as_uuid()).execute(tx.conn()).await.unwrap();
+    sqlx::query("insert into strategy_hypotheses(version_id,workspace_id,hypothesis_id,title,segment_key,angle,channel,metric,prior_confidence,state,position) values($1,$2,$3,'keep','all','help','any','reply',0.7,'added',0)").bind(id).bind(ws.as_uuid()).bind(h).execute(tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
+    for sql in [up, down, down, up, up] {
+        sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
+    }
+    assert_eq!(table_count(&db.pool).await, 62);
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    let saved: (String,f32,serde_json::Value) = sqlx::query_as("select title,prior_confidence,cadence from strategy_hypotheses where workspace_id = $1 and hypothesis_id = $2").bind(ws.as_uuid()).bind(h).fetch_one(tx.conn()).await.unwrap();
+    assert_eq!(saved, ("keep".into(), 0.7, serde_json::json!({})));
+    let bypass: bool = sqlx::query_scalar(
+        "select rolsuper or rolbypassrls from pg_roles where rolname=current_user",
+    )
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    assert!(!bypass);
+    let forced: bool = sqlx::query_scalar("select relrowsecurity and relforcerowsecurity from pg_class where relname='studio_learning_applications'").fetch_one(tx.conn()).await.unwrap();
+    assert!(forced);
 }

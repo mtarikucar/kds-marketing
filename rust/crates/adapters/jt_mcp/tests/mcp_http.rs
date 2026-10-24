@@ -107,6 +107,10 @@ impl World {
             hasher: Arc::new(PlainHasher),
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
+            file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+            media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
+            files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+            transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),
@@ -1064,7 +1068,7 @@ async fn gated_test_tool_passes_only_after_a_real_approval() {
         "angle": "gece açık",
         "channel": "any",
         "metric": "dm",
-        "confidence": 0.6,
+        "prior_confidence": 0.6,
     }]);
     let written = ok(&call(
         &client,

@@ -19,12 +19,12 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
-    AccountMetrics, AdBudgetWriter, AdInsights, AdSet, Asset, Connector, ConnectorRegistry,
-    ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus, InboundEventDraft, InsightsReader,
-    InstagramApp, LeadGenFetcher, LeadGenRecord, MailMessage, MailSender, MailboxCursor,
-    MailboxPoller, MessagingSender, MetaApp, OAuthApp, OAuthProvider, PlatformAppConfig,
-    PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt, SmsSender, Telephony, Url,
-    XApp,
+    AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
+    Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus,
+    InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, MailMessage,
+    MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp, OAuthApp, OAuthProvider,
+    PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt,
+    SmsSender, Telephony, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -153,6 +153,26 @@ impl<T> Script<T> {
 /// One call a [`ScriptedConnector`] received, with its arguments.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectorCall {
+    SetAdStatus {
+        credential: Credential,
+        entity_id: String,
+        status: AdStatus,
+    },
+    AdAccountContext {
+        credential: Credential,
+        public: Value,
+    },
+    AdSetInsights {
+        credential: Credential,
+        public: Value,
+        since: Date,
+        until: Date,
+    },
+    ResolveAdset {
+        credential: Credential,
+        public: Value,
+        ad_id: String,
+    },
     Probe {
         credential: Credential,
         public: Value,
@@ -267,10 +287,15 @@ pub struct ScriptedConnector {
     mail: Script<Result<SendReceipt, ConnectorError>>,
     mailbox_poll: Script<Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>>,
     send_hooks: Script<SendHook>,
+    ad_read_hooks: Script<SendHook>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
     account_metrics: Script<Result<AccountMetrics, ConnectorError>>,
     send_text: Script<Result<SendReceipt, ConnectorError>>,
+    set_status: Script<Result<(), ConnectorError>>,
+    account_context: Script<Result<AdAccountContext, ConnectorError>>,
+    adset_insights: Script<Result<Vec<AdSetInsights>, ConnectorError>>,
+    resolve_adset: Script<Result<Option<String>, ConnectorError>>,
     set_daily_budget: Script<Result<(), ConnectorError>>,
     list_adsets: Script<Result<Vec<AdSet>, ConnectorError>>,
     insights: Script<Result<Vec<AdInsights>, ConnectorError>>,
@@ -283,6 +308,18 @@ pub struct ScriptedConnector {
 }
 
 impl ScriptedConnector {
+    pub fn push_resolve_adset(&self, result: Result<Option<String>, ConnectorError>) {
+        self.resolve_adset.push(result);
+    }
+    pub fn push_adset_insights(&self, result: Result<Vec<AdSetInsights>, ConnectorError>) {
+        self.adset_insights.push(result);
+    }
+    pub fn push_account_context(&self, result: Result<AdAccountContext, ConnectorError>) {
+        self.account_context.push(result);
+    }
+    pub fn push_set_status(&self, result: Result<(), ConnectorError>) {
+        self.set_status.push(result);
+    }
     /// An adapter for `provider` with nothing queued, reaching no host
     /// ([`with_hosts`](Self::with_hosts) names some).
     pub fn new(provider: Provider) -> Self {
@@ -300,10 +337,15 @@ impl ScriptedConnector {
             mail: Script::default(),
             mailbox_poll: Script::default(),
             send_hooks: Script::default(),
+            ad_read_hooks: Script::default(),
             publish: Script::default(),
             post_metrics: Script::default(),
             account_metrics: Script::default(),
             send_text: Script::default(),
+            set_status: Script::default(),
+            account_context: Script::default(),
+            adset_insights: Script::default(),
+            resolve_adset: Script::default(),
             set_daily_budget: Script::default(),
             list_adsets: Script::default(),
             insights: Script::default(),
@@ -382,6 +424,13 @@ impl ScriptedConnector {
     }
 
     /// Run after recording a provider write, before its result. Supports races and crashes.
+    pub fn push_ad_read_hook<F, Fut>(&self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.ad_read_hooks.push(Box::new(move || Box::pin(hook())));
+    }
     pub fn push_send_hook<F, Fut>(&self, hook: F)
     where
         F: FnOnce() -> Fut + Send + 'static,
@@ -559,6 +608,7 @@ impl Publisher for ScriptedConnector {
             public: public.clone(),
             request: request.clone(),
         });
+        self.after_send().await;
         self.next(&self.publish, "publish result")
     }
 }
@@ -614,6 +664,71 @@ impl MessagingSender for ScriptedConnector {
 
 #[async_trait]
 impl AdBudgetWriter for ScriptedConnector {
+    async fn set_status(
+        &self,
+        cred: &Credential,
+        entity_id: &str,
+        status: AdStatus,
+    ) -> Result<(), ConnectorError> {
+        self.record(ConnectorCall::SetAdStatus {
+            credential: cred.clone(),
+            entity_id: entity_id.into(),
+            status,
+        });
+        self.set_status
+            .try_next()
+            .unwrap_or_else(|| Err(ConnectorError::permanent("ad status is unsupported")))
+    }
+    async fn account_context(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<AdAccountContext, ConnectorError> {
+        self.record(ConnectorCall::AdAccountContext {
+            credential: cred.clone(),
+            public: public.clone(),
+        });
+        self.account_context.try_next().unwrap_or_else(|| {
+            Err(ConnectorError::permanent(
+                "ad account context is unsupported",
+            ))
+        })
+    }
+    async fn adset_insights(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        since: Date,
+        until: Date,
+    ) -> Result<Vec<AdSetInsights>, ConnectorError> {
+        self.record(ConnectorCall::AdSetInsights {
+            credential: cred.clone(),
+            public: public.clone(),
+            since,
+            until,
+        });
+        self.adset_insights
+            .try_next()
+            .unwrap_or_else(|| Err(ConnectorError::permanent("ad set insights are unsupported")))
+    }
+    async fn resolve_adset(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        ad_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        self.record(ConnectorCall::ResolveAdset {
+            credential: cred.clone(),
+            public: public.clone(),
+            ad_id: ad_id.into(),
+        });
+        self.resolve_adset.try_next().unwrap_or_else(|| {
+            Err(ConnectorError::permanent(
+                "ad set resolution is unsupported",
+            ))
+        })
+    }
+
     async fn set_daily_budget(
         &self,
         cred: &Credential,
@@ -637,6 +752,9 @@ impl AdBudgetWriter for ScriptedConnector {
             credential: cred.clone(),
             public: public.clone(),
         });
+        if let Some(hook) = self.ad_read_hooks.try_next() {
+            hook().await;
+        }
         self.next(&self.list_adsets, "list_adsets result")
     }
 

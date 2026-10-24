@@ -328,8 +328,8 @@ async fn oauth_round_trip_creates_capabilities_from_selected_assets() {
     assert_eq!(
         pending["assets"],
         json!([
-            { "kind_key": "facebook_page", "external_id": "page-1", "name": "Kahve", "public": { "category": "Cafe" } },
-            { "kind_key": "facebook_page", "external_id": "page-2", "name": "Çay", "public": { "category": "Cafe" } },
+            { "kind_key": "facebook_page", "external_id": "page-1", "name": "Kahve", "public": { "category": "Cafe", "granted_scopes": ["pages_manage_posts"] } },
+            { "kind_key": "facebook_page", "external_id": "page-2", "name": "Çay", "public": { "category": "Cafe", "granted_scopes": ["pages_manage_posts"] } },
         ])
     );
     assert!(matches!(

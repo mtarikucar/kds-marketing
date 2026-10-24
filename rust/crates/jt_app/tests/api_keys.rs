@@ -280,7 +280,9 @@ async fn create_returns_plaintext_once_and_list_hides_it() {
             "capabilities.manage",
             "budget.manage",
             "inbox.work",
-            "inbox.manage"
+            "inbox.manage",
+            "studio.work",
+            "studio.manage",
         ])
     );
     assert!(created.get("key_hash").is_none());

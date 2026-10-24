@@ -607,6 +607,7 @@ fn budget_items_and_spend_are_validated() {
             BudgetItemId::new_v7(),
             ws,
             NewBudgetItem {
+                unit_cost_minor: None,
                 name: " Meta ads ".to_owned(),
                 kind: BudgetKind::AdBudget,
                 unit,
@@ -652,6 +653,7 @@ fn budget_items_and_spend_are_validated() {
             BudgetItemId::new_v7(),
             ws,
             NewBudgetItem {
+                unit_cost_minor: None,
                 name: String::new(),
                 kind: BudgetKind::Cash,
                 unit: Unit::Minutes,

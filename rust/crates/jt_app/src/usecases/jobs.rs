@@ -119,11 +119,18 @@ pub enum Job {
     InboxConsume,
     ResponseSla,
     SnoozeWake,
+    StudioControl,
+    StudioFilesCleanup,
+    StudioPlan,
+    StudioPublish,
+    StudioPublishRecover,
+    StudioMeasure,
+    StudioReweight,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 14] = [
+    pub const ALL: [Job; 21] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -138,6 +145,13 @@ impl Job {
         Job::InboxConsume,
         Job::ResponseSla,
         Job::SnoozeWake,
+        Job::StudioControl,
+        Job::StudioFilesCleanup,
+        Job::StudioPlan,
+        Job::StudioPublish,
+        Job::StudioPublishRecover,
+        Job::StudioMeasure,
+        Job::StudioReweight,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -158,6 +172,13 @@ impl Job {
             Job::InboxConsume => "inbox_consume",
             Job::ResponseSla => "response_sla",
             Job::SnoozeWake => "snooze_wake",
+            Job::StudioControl => "studio_control",
+            Job::StudioFilesCleanup => "studio_files_cleanup",
+            Job::StudioPlan => "studio_plan",
+            Job::StudioPublish => "studio_publish",
+            Job::StudioPublishRecover => "studio_publish_recover",
+            Job::StudioMeasure => "studio_measure",
+            Job::StudioReweight => "studio_reweight",
         }
     }
 
@@ -183,6 +204,13 @@ impl Job {
             Job::InboxConsume => run_inbox_consume(deps, now).await,
             Job::ResponseSla => run_response_sla(deps, now).await,
             Job::SnoozeWake => run_snooze_wake(deps, now).await,
+            Job::StudioControl => run_studio_control(deps).await,
+            Job::StudioFilesCleanup => run_studio_files_cleanup(deps).await,
+            Job::StudioPlan => run_studio_plan(deps, now).await,
+            Job::StudioMeasure | Job::StudioReweight => run_studio_learning(deps, *self, now).await,
+            Job::StudioPublish | Job::StudioPublishRecover => {
+                run_studio_publications(deps, *self).await
+            }
         }
     }
 }
@@ -1602,4 +1630,138 @@ async fn consent_recipient_person(
             return Ok(Some(person));
         }
     }
+}
+
+/// Reconciles durable brake intents after restart; no content or budget decisions are made.
+pub async fn run_studio_control(deps: &Deps) -> JobReport {
+    let mut report = JobReport::default();
+    let workspaces = match deps.uow.platform().await {
+        Ok(mut r) => r.workspaces_list().await,
+        Err(e) => Err(e),
+    };
+    let Ok(workspaces) = workspaces else {
+        report.failed = 1;
+        return report;
+    };
+    for w in workspaces
+        .into_iter()
+        .filter(|w| w.status == WorkspaceStatus::Active)
+    {
+        report.touched += 1;
+        if let Ok(n) = super::studio::ads::recheck_periods(deps, w.id).await {
+            report.changed += u64::from(n);
+        } else {
+            report.failed += 1;
+        }
+        if let Ok(n) = super::studio::ads::dispatch_due(deps, w.id).await {
+            report.changed += u64::from(n);
+        } else {
+            report.failed += 1;
+        }
+        if super::studio::control::reconcile_bindings(deps, w.id)
+            .await
+            .is_err()
+        {
+            report.failed += 1;
+        } else {
+            report.changed += 1;
+        }
+    }
+    report
+}
+
+/// Plan active workspaces hourly under `jeeta.jobs.studio_plan` (scheduler owns the lock).
+pub async fn run_studio_plan(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let mut report = JobReport::default();
+    let workspaces = match deps.uow.platform().await {
+        Ok(mut r) => r.workspaces_list().await,
+        Err(e) => Err(e),
+    };
+    let Ok(workspaces) = workspaces else {
+        report.failed = 1;
+        return finish(Job::StudioPlan, report);
+    };
+    for w in workspaces
+        .into_iter()
+        .filter(|w| w.status == WorkspaceStatus::Active)
+    {
+        report.touched += 1;
+        match super::studio::planner::plan(deps, w.id, now).await {
+            Ok(n) => report.changed += n,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(Job::StudioPlan, w.id, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(Job::StudioPlan, report)
+}
+
+/// Tenant maintenance independent of strategy, once daily under its scheduler lock.
+pub async fn run_studio_files_cleanup(deps: &Deps) -> JobReport {
+    let mut report = JobReport::default();
+    let workspaces = match deps.uow.platform().await {
+        Ok(mut r) => r.workspaces_list().await,
+        Err(e) => Err(e),
+    };
+    let Ok(workspaces) = workspaces else {
+        report.failed = 1;
+        return finish(Job::StudioFilesCleanup, report);
+    };
+    for w in workspaces {
+        report.touched += 1;
+        match super::studio::files::cleanup_files(deps, w.id).await {
+            Ok(n) => report.changed += u64::from(n),
+            Err(e) => {
+                report.failed += 1;
+                step_failed(Job::StudioFilesCleanup, w.id, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(Job::StudioFilesCleanup, report)
+}
+
+/// System-only jobs: the scheduler owns their distinct advisory locks.
+async fn run_studio_publications(deps: &Deps, job: Job) -> JobReport {
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, &[WorkspaceStatus::Active], &mut report).await {
+        report.touched += 1;
+        let result = if job == Job::StudioPublish {
+            super::studio::publish::publish_due(deps, ws).await
+        } else {
+            super::studio::publish::recover_publications(deps, ws).await
+        };
+        match result {
+            Ok(n) => report.changed += u64::from(n),
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+async fn run_studio_learning(deps: &Deps, job: Job, now: OffsetDateTime) -> JobReport {
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        report.touched += 1;
+        let result = if job == Job::StudioMeasure {
+            super::studio::measure::measure_due(deps, ws)
+                .await
+                .map(u64::from)
+        } else {
+            super::studio::learning::reweight_week(deps, ws, now)
+                .await
+                .map(u64::from)
+        };
+        match result {
+            Ok(n) => report.changed += n,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
 }

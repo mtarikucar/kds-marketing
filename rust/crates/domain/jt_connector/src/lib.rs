@@ -47,3 +47,12 @@ impl std::fmt::Debug for Masked {
         f.write_str("***")
     }
 }
+
+/// Supported advertising account currencies; unknown units fail closed before a write.
+pub fn currency_minor_exponent(currency: &str) -> Option<u8> {
+    match currency {
+        "JPY" | "KRW" | "VND" | "CLP" | "PYG" => Some(0),
+        "TRY" | "EUR" | "USD" | "GBP" | "CAD" | "AUD" | "CHF" => Some(2),
+        _ => None,
+    }
+}

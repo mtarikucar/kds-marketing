@@ -87,6 +87,10 @@ fn deps_with(db: &TestDb, connectors: Arc<dyn ConnectorRegistry>) -> Deps {
         hasher: Arc::new(PlainHasher),
         seal: Arc::new(PlainSecretBox),
         channels: Arc::new(UowChannelCatalog::new(uow)),
+        file_maintenance: Arc::new(jt_app::ports::files::NoFileMaintenance),
+        media_fetch: Arc::new(jt_app::ports::files::UnavailableMediaFetcher),
+        files: Arc::new(jt_app::ports::files::UnavailableFileStore),
+        transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
@@ -275,7 +279,9 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
             "capabilities.manage",
             "budget.manage",
             "inbox.work",
-            "inbox.manage"
+            "inbox.manage",
+            "studio.work",
+            "studio.manage",
         ])
     );
 
@@ -332,7 +338,7 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
         "angle": "gece açık",
         "channel": "any",
         "metric": "dm",
-        "confidence": 0.6,
+        "prior_confidence": 0.6,
     }]);
     ok(put("/api/strategy/draft/hypotheses".to_owned(), hypotheses).await).await;
     let as_read = |draft: &Value| {
@@ -840,7 +846,7 @@ async fn capability_update_answers_the_same_over_the_panel_and_mcp() {
 }
 
 #[tokio::test]
-async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
+async fn budget_unit_cost_schema_and_twins() {
     let db = TestDb::new().await;
     let (_, user) = db.seed_workspace("alpha").await;
     let deps = deps(&db);
@@ -873,6 +879,7 @@ async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
             "kind": "cash",
             "unit": { "kind": "currency", "value": "TRY" },
             "cap": 100000,
+            "unit_cost_minor": 3,
             "period": "monthly",
         });
         let out = ok(post("/api/budget/items".into(), body).await).await;
@@ -899,7 +906,7 @@ async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
     // Editing: each gate's answer is the item as the other gate then lists it.
     let human = ok(patch(
         format!("/api/budget/items/{first}"),
-        json!({ "cap": 5000, "period": "weekly" }),
+        json!({ "cap": 5000, "period": "weekly", "unit_cost_minor": 6 }),
     )
     .await)
     .await;
@@ -917,11 +924,32 @@ async fn budget_item_edits_answer_the_same_over_the_panel_and_mcp() {
         &key,
         &session,
         "jeeta.budget.items_update",
-        json!({ "budget_item_id": second, "cap": 5000, "period": "weekly" }),
+        json!({ "budget_item_id": second, "cap": 5000, "period": "weekly", "unit_cost_minor": 6 }),
     )
     .await;
     let listed = ok(list().await).await;
     assert_eq!(agent, entry(&listed, &second));
+
+    assert_eq!(agent["item"]["unit_cost_minor"], 6);
+    let cleared = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.budget.items_update",
+        json!({"budget_item_id":second,"unit_cost_minor":null}),
+    )
+    .await;
+    assert!(cleared["item"]["unit_cost_minor"].is_null());
+    assert_eq!(cleared, entry(&ok(list().await).await, &second));
+    let human = ok(patch(
+        format!("/api/budget/items/{first}"),
+        json!({"unit_cost_minor":null}),
+    )
+    .await)
+    .await;
+    assert!(human["item"]["unit_cost_minor"].is_null());
+    let listed = call_tool(&app, &key, &session, "jeeta.budget.items_list", json!({})).await;
+    assert_eq!(human, entry(&listed["items"], &first));
 
     // Retiring: the same, with its retirement time; the phone's link goes.
     let human = ok(post(
@@ -1350,7 +1378,7 @@ async fn approve_inbox_strategy(app: &Router, cookie: &str) {
         .await)
         .await;
     }
-    ok(send(app,panel(Method::PUT,"/api/strategy/draft/hypotheses",Some(cookie),Some(json!([{"title":"Contact","segment_key":"all","angle":"Help","channel":"any","metric":"dm","confidence":0.6}])))).await).await;
+    ok(send(app,panel(Method::PUT,"/api/strategy/draft/hypotheses",Some(cookie),Some(json!([{"title":"Contact","segment_key":"all","angle":"Help","channel":"any","metric":"dm","prior_confidence":0.6}])))).await).await;
     let draft = ok(send(
         app,
         panel(
@@ -1863,6 +1891,7 @@ async fn inbox_conversation_get_and_reply_have_http_mcp_parity() {
     )
     .await;
     assert_eq!(human, agent);
+    jt_testkit::flows::price_sms(&deps, ws).await;
     sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
         provider_id: "receipt-1".into(),
         cost_minor: None,
@@ -2536,6 +2565,7 @@ async fn inbox_consent_suppressions_and_send_have_http_mcp_parity() {
         )
         .await
     );
+    jt_testkit::flows::price_sms(&deps, ws).await;
     sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
         provider_id: "commercial-1".into(),
         cost_minor: None,
@@ -2608,6 +2638,7 @@ async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
     let base = format!("/api/inbox/journeys/{}", j.id);
     ok(send(&app,panel(Method::POST,&format!("/api/inbox/people/{person}/consents"),Some(&cookie),Some(json!({"channel":"sms","kind":"explicit","source":"agent","at":"2020-01-01T00:00:00Z"})))).await).await;
     let quote_input = json!({"amount_minor":12500,"currency":"TRY","valid_until":"2099-01-01T00:00:00Z","file_ref":"opaque:owner-reference","channel":"sms","text":"Quote details","intent":"commercial","request_key":"quote-parity"});
+    jt_testkit::flows::price_sms(&deps, ws).await;
     sender.push_sms(Ok(jt_app::ports::connectors::SendReceipt {
         provider_id: "quote-parity".into(),
         cost_minor: None,
@@ -2793,6 +2824,7 @@ async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
     )
     .await)
     .await;
+    jt_testkit::flows::price_sms(&deps, ws).await;
     sender.push_sms(Err(ConnectorError::unknown(
         "provider acknowledgement lost",
     )));
@@ -3308,6 +3340,1214 @@ async fn leadgen_people_and_journey_results_have_http_mcp_parity() {
             );
         } else {
             assert_eq!(human["person"]["first_touch"]["source"], "meta_ads");
+        }
+    }
+}
+
+#[tokio::test]
+async fn budget_cap_http_409_mcp_parity() {
+    use axum::response::IntoResponse;
+    let error =
+        jt_app::error::AppError::budget_cap(json!({"remaining_minor":2,"requested_minor":3}));
+    let http = jt_panel_http::error::ApiError(error.clone()).into_response();
+    assert_eq!(http.status(), StatusCode::CONFLICT);
+    let body = json_body(http).await;
+    let mcp = jt_mcp::errors::tool_error(error);
+    assert_eq!(mcp.is_error, Some(true));
+    assert_eq!(mcp.structured_content, Some(body.clone()));
+    assert_eq!(body["code"], "BUDGET_CAP");
+    assert_eq!(
+        body["details"],
+        json!({"remaining_minor":2,"requested_minor":3})
+    );
+}
+
+#[tokio::test]
+async fn studio_controls_have_schema_error_effect_and_actor_parity() {
+    use jt_app::{ctx::Ctx, ports::studio::*};
+    use jt_ledger::Actor;
+    use jt_tenancy::SystemRole;
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-twins").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(jt_testkit::fakes::FIXED_NOW));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    // Brake is available before strategy; policy is not. Status gating remains independent.
+    let blocked = json!({"lane":"organic","requires_human_approval":true,"expected_revision":0});
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::PUT,
+                "/api/studio/policy",
+                Some(&cookie),
+                Some(blocked.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.policy_set", blocked).await;
+    assert_eq!(human, agent["structuredContent"]);
+    assert_eq!(human["code"], "STRATEGY_REQUIRED");
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/brake",
+                Some(&cookie),
+                Some(json!({"engaged":true,"expected_revision":0})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human["revision"], 1);
+    assert_eq!(human["brake_engaged"], true);
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.brake",
+        json!({"engaged":false,"expected_revision":1}),
+    )
+    .await;
+    assert_eq!(agent["revision"], 2);
+    assert_eq!(agent["brake_engaged"], false);
+    let stale = json!({"engaged":true,"expected_revision":0});
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/brake",
+            Some(&cookie),
+            Some(stale.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let human = json_body(response).await;
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.brake", stale).await;
+    assert_eq!(human, agent["structuredContent"]);
+    approve_inbox_strategy(&app, &cookie).await;
+    let body = json!({"lane":"organic","requires_human_approval":true,"expected_revision":2});
+    let human = json_body(
+        send(
+            &app,
+            panel(Method::PUT, "/api/studio/policy", Some(&cookie), Some(body)),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human["lanes"]["organic"]["requires_human_approval"], true);
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.policy_set",
+        json!({"lane":"organic","requires_human_approval":false,"expected_revision":3}),
+    )
+    .await;
+    assert_eq!(agent["lanes"]["organic"]["requires_human_approval"], false);
+    assert_eq!(agent["revision"], 4);
+    // Build immutable work under the same real tenant transaction used by both surfaces.
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let version = r.strategy().current_approved().await.unwrap().unwrap();
+    let h = r.hypotheses().list(version.id).await.unwrap().remove(0);
+    let cap = jt_capability::Capability::new(
+        jt_capability::CapabilityId::new_v7(),
+        ws,
+        jt_capability::NewCapability {
+            kind_key: "x".into(),
+            name: "studio".into(),
+            ..Default::default()
+        },
+        deps.clock.now(),
+    )
+    .unwrap();
+    r.capabilities().insert(cap.clone(), None).await.unwrap();
+    let arm = Arm::new(
+        ArmId::new_v7(),
+        ws,
+        ArmKey {
+            hypothesis_id: h.id,
+            channel: "x".into(),
+            content_type: "text".into(),
+            lane: serde_json::from_value(json!("organic")).unwrap(),
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    let chain = Chain {
+        workspace_id: ws,
+        born_version_id: version.id,
+        hypothesis_id: h.id,
+        arm_id: arm.id,
+    };
+    let slot = Slot {
+        id: SlotId::new_v7(),
+        chain: chain.clone(),
+        capability_id: cap.id,
+        scheduled_at: deps.clock.now(),
+        state: SlotState::Planned,
+        revision: 0,
+    };
+    r.studio()
+        .insert_slots("twins", vec![slot.clone()])
+        .await
+        .unwrap();
+    r.studio()
+        .save_piece(
+            slot.id,
+            0,
+            Piece {
+                id: PieceId::new_v7(),
+                chain,
+                revision: 1,
+                text: "draft".into(),
+                media: vec![],
+                adaptations: Default::default(),
+            },
+            "piece",
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let approval = json!({"target":{"slot":slot.id},"expected_revision":1});
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/approvals",
+                Some(&cookie),
+                Some(approval.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human["revision"], 1);
+    assert_eq!(human["approval"]["by"], json!(user));
+    let ctx = Ctx {
+        workspace_id: ws,
+        actor: Actor::Human { user_id: user },
+        permissions: SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: deps.clock.now(),
+        agent_connection_id: None,
+    };
+    let tool = jt_mcp::registry()
+        .into_iter()
+        .find(|t| t.name == "jeeta.studio.approve")
+        .unwrap();
+    assert_eq!(
+        human,
+        (tool.run)(&deps, &ctx, approval.clone()).await.unwrap()
+    );
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.approve", approval).await;
+    assert_eq!(agent["structuredContent"]["code"], "FORBIDDEN");
+    assert_eq!(
+        agent["structuredContent"]["details"]["reason"],
+        "owner_or_manager_human"
+    );
+    for (method, path, name, body) in [
+        (
+            Method::POST,
+            "/api/studio/brake",
+            "jeeta.studio.brake",
+            json!({"engaged":true,"expected_revision":4,"extra":true}),
+        ),
+        (
+            Method::PUT,
+            "/api/studio/policy",
+            "jeeta.studio.policy_set",
+            json!({"lane":"paid","requires_human_approval":true,"expected_revision":4,"extra":true}),
+        ),
+        (
+            Method::POST,
+            "/api/studio/approvals",
+            "jeeta.studio.approve",
+            json!({"target":{"slot":slot.id},"expected_revision":1,"extra":true}),
+        ),
+    ] {
+        let human =
+            json_body(send(&app, panel(method, path, Some(&cookie), Some(body.clone()))).await)
+                .await;
+        let agent = tool_result(&app, &key, &session, name, body).await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    }
+}
+
+#[tokio::test]
+async fn studio_planning_rows_have_effect_and_error_parity() {
+    use jt_app::ports::studio::{Arm, ArmId, ArmKey, Chain, Slot, SlotId, SlotState};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-twins").await;
+    let d = deps(&db);
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let capability = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/capabilities",
+                Some(&cookie),
+                Some(json!({"kind_key":"x","name":"Studio account","external_id":"studio-twins"})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let v = r.strategy().current_approved().await.unwrap().unwrap();
+    let h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    let arm = Arm::new(
+        ArmId(d.ids.uuid()),
+        ws,
+        ArmKey {
+            hypothesis_id: h.id,
+            content_type: "text".into(),
+            channel: "x".into(),
+            lane: serde_json::from_value(json!("organic")).unwrap(),
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    let first = Slot {
+        id: SlotId(d.ids.uuid()),
+        chain: Chain {
+            workspace_id: ws,
+            born_version_id: v.id,
+            hypothesis_id: h.id,
+            arm_id: arm.id,
+        },
+        capability_id: serde_json::from_value(capability["capability"]["id"].clone()).unwrap(),
+        scheduled_at: d.clock.now() + time::Duration::hours(1),
+        state: SlotState::Planned,
+        revision: 0,
+    };
+    let second = Slot {
+        id: SlotId(d.ids.uuid()),
+        ..first.clone()
+    };
+    r.studio()
+        .insert_slots("twins", vec![first.clone(), second.clone()])
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    for (path, tool, args) in [
+        (
+            "/api/studio/pending".to_owned(),
+            "jeeta.studio.pending",
+            json!({}),
+        ),
+        (
+            format!("/api/studio/slots/{}", first.id),
+            "jeeta.studio.slot_get",
+            json!({"slot_id":first.id}),
+        ),
+    ] {
+        let response = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_body(response).await,
+            call_tool(&app, &key, &session, tool, args).await
+        );
+    }
+    let cancel = |id| format!("/api/studio/slots/{id}/cancel");
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            &cancel(first.id),
+            Some(&cookie),
+            Some(json!({"expected_revision":0,"reason":"new plan"})),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let human = json_body(response).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.slot_cancel",
+        json!({"slot_id":second.id,"expected_revision":0,"reason":"new plan"}),
+    )
+    .await;
+    assert_eq!(human["slot"]["state"], "retired");
+    assert_eq!(human["slot"]["state"], agent["slot"]["state"]);
+    assert_eq!(human["slot"]["revision"], agent["slot"]["revision"]);
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            &cancel(first.id),
+            Some(&cookie),
+            Some(json!({"expected_revision":0,"reason":"new plan"})),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let err = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.slot_cancel",
+        json!({"slot_id":first.id,"expected_revision":0,"reason":"new plan"}),
+    )
+    .await;
+    assert_eq!(err["isError"], true);
+    assert!(err.to_string().contains("CONFLICT"));
+    for (path, tool, input) in [
+        (
+            "/api/studio/trends",
+            "jeeta.studio.trend_record",
+            json!({"hypothesis_id":h.id,"channel":"x","summary":"Observation","observed_at":"2026-10-22T00:00:00Z","request_key":"panel-trend"}),
+        ),
+        (
+            "/api/studio/hypotheses/proposals",
+            "jeeta.studio.hypothesis_propose",
+            json!({"title":"A new angle","channel":"x","metric":"reply"}),
+        ),
+    ] {
+        let response = send(
+            &app,
+            panel(Method::POST, path, Some(&cookie), Some(input.clone())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let human = json_body(response).await;
+        let mut args = input.clone();
+        if tool.ends_with("trend_record") {
+            args["request_key"] = json!("agent-trend");
+        }
+        let agent = call_tool(&app, &key, &session, tool, args).await;
+        if tool.ends_with("trend_record") {
+            assert_eq!(human["summary"], agent["summary"]);
+            assert_eq!(human["hypothesis_id"], agent["hypothesis_id"]);
+        } else {
+            assert_eq!(human["draft_version_id"], agent["draft_version_id"]);
+            assert_ne!(human["hypothesis_id"], agent["hypothesis_id"]);
+        }
+        let mut invalid = input;
+        invalid["unexpected"] = json!(true);
+        let response = send(
+            &app,
+            panel(Method::POST, path, Some(&cookie), Some(invalid.clone())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let err = tool_result(&app, &key, &session, tool, invalid).await;
+        assert_eq!(err["isError"], true);
+        assert!(err.to_string().contains("VALIDATION"));
+    }
+    let missing = SlotId(d.ids.uuid());
+    for (method, path, tool, args, body) in [
+        (
+            Method::GET,
+            format!("/api/studio/slots/{missing}"),
+            "jeeta.studio.slot_get",
+            json!({"slot_id":missing}),
+            None,
+        ),
+        (
+            Method::POST,
+            cancel(missing),
+            "jeeta.studio.slot_cancel",
+            json!({"slot_id":missing,"expected_revision":0,"reason":"cancel"}),
+            Some(json!({"expected_revision":0,"reason":"cancel"})),
+        ),
+    ] {
+        assert_eq!(
+            send(&app, panel(method, &path, Some(&cookie), body))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let err = tool_result(&app, &key, &session, tool, args).await;
+        assert_eq!(err["isError"], true);
+        assert!(err.to_string().contains("NOT_FOUND"));
+    }
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    assert_eq!(r.hypotheses().list(v.id).await.unwrap().len(), 1);
+    let draft = r.strategy().current_draft().await.unwrap().unwrap();
+    assert_eq!(r.hypotheses().list(draft.id).await.unwrap().len(), 3);
+    assert_eq!(r.studio().list_arms().await.unwrap(), vec![arm]);
+    drop(r);
+    assert_eq!(
+        send(
+            &app,
+            panel(
+                Method::GET,
+                "/api/studio/pending?unknown=true",
+                Some(&cookie),
+                None
+            )
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        tool_result(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.pending",
+            json!({"unknown":true})
+        )
+        .await["isError"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn studio_file_upload_and_piece_submission_have_effect_error_and_replay_parity() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    }
+
+    use jt_app::ports::studio::{Arm, ArmId, ArmKey, Chain, Slot, SlotId, SlotState};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-twins").await;
+    let mut d = deps(&db);
+    d.files = Arc::new(jt_testkit::fakes::files::MemoryFiles::default());
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let capability = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/capabilities",
+                Some(&cookie),
+                Some(json!({"kind_key":"x","name":"Studio account","external_id":"studio-twins"})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let v = r.strategy().current_approved().await.unwrap().unwrap();
+    let mut h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    h.cadence=serde_json::from_value(json!({"organic":{"slots_per_week":7,"exploration_bps":0,"content_types":[{"key":"text","min_bps":0,"max_bps":10000}]}})).unwrap();
+    r.hypotheses().upsert(v.id, h.clone()).await.unwrap();
+    let arm = Arm::new(
+        ArmId(d.ids.uuid()),
+        ws,
+        ArmKey {
+            hypothesis_id: h.id,
+            content_type: "text".into(),
+            channel: "x".into(),
+            lane: serde_json::from_value(json!("organic")).unwrap(),
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    let first = Slot {
+        id: SlotId(d.ids.uuid()),
+        chain: Chain {
+            workspace_id: ws,
+            born_version_id: v.id,
+            hypothesis_id: h.id,
+            arm_id: arm.id,
+        },
+        capability_id: serde_json::from_value(capability["capability"]["id"].clone()).unwrap(),
+        scheduled_at: d.clock.now() + time::Duration::hours(1),
+        state: SlotState::Planned,
+        revision: 0,
+    };
+    let second = Slot {
+        id: SlotId(d.ids.uuid()),
+        ..first.clone()
+    };
+    r.studio()
+        .insert_slots("twins", vec![first.clone(), second.clone()])
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+
+    let upload = json!({"request_key":"twins-upload","filename":"a.png","mime":"image/png","content":{"kind":"bytes_base64","data":"iVBORw0KGgphc3NldA=="}});
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/files",
+            Some(&cookie),
+            Some(upload.clone()),
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.file_upload",
+        upload.clone(),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["size_bytes"], 13);
+    let mut changed = upload.clone();
+    changed["filename"] = json!("changed.png");
+    let err = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/files",
+                Some(&cookie),
+                Some(changed.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let tool = tool_result(&app, &key, &session, "jeeta.studio.file_upload", changed).await;
+    assert_eq!(err["code"], "CONFLICT");
+    assert_eq!(err["code"], tool["structuredContent"]["code"]);
+    let path = format!("/api/studio/slots/{}/piece", first.id);
+    let body = json!({"expected_revision":0,"request_key":"twins-piece","text":"agent content","media":[{"kind":"file","id":human["id"]}],"adaptations":{"studio-twins":{"text":"account content","media":[]}}});
+    let out = ok(send(
+        &app,
+        panel(Method::POST, &path, Some(&cookie), Some(body.clone())),
+    )
+    .await)
+    .await;
+    let mut args = body.clone();
+    args["slot_id"] = json!(first.id);
+    let replay = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.piece_submit",
+        args.clone(),
+    )
+    .await;
+    assert_eq!(out, replay);
+    assert_eq!(out["slot"]["revision"], 1);
+    assert_eq!(out["slot"]["state"], "ready");
+    let mut bad = body.clone();
+    bad["request_key"] = json!("bad");
+    bad["expected_revision"] = json!(1);
+    bad["media"] = json!([{"kind":"file","id":SlotId::new_v7()}]);
+    let human = json_body(
+        send(
+            &app,
+            panel(Method::POST, &path, Some(&cookie), Some(bad.clone())),
+        )
+        .await,
+    )
+    .await;
+    bad["slot_id"] = json!(first.id);
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.piece_submit", bad).await;
+    assert_eq!(human["code"], "NOT_FOUND");
+    assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    for (path, name, mut value) in [
+        (
+            "/api/studio/files".to_owned(),
+            "jeeta.studio.file_upload",
+            upload,
+        ),
+        (path, "jeeta.studio.piece_submit", body),
+    ] {
+        value["extra"] = json!(true);
+        let human = json_body(
+            send(
+                &app,
+                panel(Method::POST, &path, Some(&cookie), Some(value.clone())),
+            )
+            .await,
+        )
+        .await;
+        if name.ends_with("piece_submit") {
+            value["slot_id"] = json!(first.id)
+        }
+        let agent = tool_result(&app, &key, &session, name, value).await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    }
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let usage = r.studio().file_usage().await.unwrap();
+    assert_eq!(usage.files.len(), 1);
+    assert_eq!(usage.pieces.len(), 1);
+    r.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn studio_learning_has_result_filter_judgment_and_error_parity() {
+    use jt_app::ports::studio::*;
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("learning-twins").await;
+    let d = deps(&db);
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let capability = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/capabilities",
+                Some(&cookie),
+                Some(json!({"kind_key":"meta_ads","name":"Ads","external_id":"act_twins"})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let v = r.strategy().current_approved().await.unwrap().unwrap();
+    let h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    let arm = Arm::new(
+        ArmId(d.ids.uuid()),
+        ws,
+        ArmKey {
+            hypothesis_id: h.id,
+            content_type: "text".into(),
+            channel: "meta_ads".into(),
+            lane: serde_json::from_value(json!("paid")).unwrap(),
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    let chain = Chain {
+        workspace_id: ws,
+        born_version_id: v.id,
+        hypothesis_id: h.id,
+        arm_id: arm.id,
+    };
+    let b = AdSetBinding {
+        id: AdSetBindingId(d.ids.uuid()),
+        chain: chain.clone(),
+        capability_id: serde_json::from_value(capability["capability"]["id"].clone()).unwrap(),
+        account_id: "act_twins".into(),
+        adset_id: "external".into(),
+        campaign_id: Some("context".into()),
+        verified_at: None,
+        verification_evidence: None,
+    };
+    r.studio().bind_adset(b.clone(), "binding").await.unwrap();
+    let m = Measurement {
+        id: MeasurementId(d.ids.uuid()),
+        chain,
+        evidence_key: "set-day-r0".into(),
+        publication_id: None,
+        binding_id: Some(b.id),
+        window: MeasurementWindow::Hours24,
+        evidence_revision: 0,
+        scheduled_at: Some(d.clock.now()),
+        account_timezone: Some("Europe/Istanbul".into()),
+        minor_unit_exponent: Some(2),
+        measured_at: d.clock.now(),
+        source: "meta_ads".into(),
+        raw_metrics: [
+            ("clicks".into(), Some(20)),
+            ("impressions".into(), Some(100)),
+            ("spend_minor".into(), Some(5)),
+        ]
+        .into(),
+        metric_scope: "adset".into(),
+        date: Some(d.clock.now().date()),
+        currency: Some("TRY".into()),
+        status: MeasurementStatus::Complete,
+        failure: None,
+        rule_version: "studio-learning-v1".into(),
+    };
+    r.studio().record_measurement(m.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    let from = (d.clock.now() - time::Duration::days(1))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let until = (d.clock.now() + time::Duration::days(1))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let query = json!({"from":from,"until":until,"hypothesis_id":h.id,"lane":"paid"});
+    let path = format!(
+        "/api/studio/learned?from={from}&until={until}&hypothesis_id={}&lane=paid",
+        h.id
+    );
+    let human = json_body(send(&app, panel(Method::GET, &path, Some(&cookie), None)).await).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.studio.learned", query.clone()).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["arms"][0]["evidence"][0]["id"], json!(m.id));
+    assert_eq!(human["lane_performance"][0]["reward"], json!(0.2));
+    let body = json!({"hypothesis_id":h.id,"evidence_ids":[m.id],"text":"Test the next angle","request_key":"judgment-twin"});
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/judgments",
+                Some(&cookie),
+                Some(body.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.judgment_record",
+        body.clone(),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["chains"][0]["born_version_id"], json!(v.id));
+    let human = json_body(send(&app, panel(Method::GET, &path, Some(&cookie), None)).await).await;
+    assert_eq!(human["judgments"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        human,
+        call_tool(&app, &key, &session, "jeeta.studio.learned", query).await
+    );
+    let empty_path = format!("/api/studio/learned?from={from}&until={until}&lane=organic");
+    let human =
+        json_body(send(&app, panel(Method::GET, &empty_path, Some(&cookie), None)).await).await;
+    assert_eq!(human["arms"], json!([]));
+    assert_eq!(human["judgments"], json!([]));
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.learned",
+            json!({"from":from,"until":until,"lane":"organic"})
+        )
+        .await
+    );
+    let mut changed = body;
+    changed["text"] = json!("changed");
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/judgments",
+                Some(&cookie),
+                Some(changed.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.judgment_record",
+        changed,
+    )
+    .await;
+    assert_eq!(human["code"], "CONFLICT");
+    assert_eq!(human["code"], agent["structuredContent"]["code"]);
+}
+
+#[tokio::test]
+async fn studio_budget_cap_http_409_mcp_parity() {
+    use jt_connector::Credential;
+    let ok = |resp: Response| async move {
+        let status = resp.status();
+        let body = json_body(resp).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    };
+    use jt_app::ports::studio::*;
+    use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("paid-twins").await;
+    let provider = Arc::new(ScriptedConnector::new(Provider::Meta));
+    let mut d = deps_with(
+        &db,
+        Arc::new(ScriptedRegistry::new().with_connector(provider.clone())),
+    );
+    d.clock = Arc::new(jt_testkit::fakes::FixedClock(d.clock.now()));
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let now = d.clock.now();
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let mut v = r.strategy().current_approved().await.unwrap().unwrap();
+    let mut hs = r.hypotheses().list(v.id).await.unwrap();
+    for h in &mut hs {
+        h.cadence.insert(
+            jt_strategy::LaneKind::Paid,
+            jt_strategy::HypothesisCadence {
+                slots_per_week: 7,
+                exploration_bps: 0,
+                content_types: vec![jt_strategy::ContentTypeShare {
+                    key: "text".into(),
+                    min_bps: 0,
+                    max_bps: 10000,
+                }],
+            },
+        );
+    }
+    r.strategy()
+        .set_status(v.id, jt_strategy::VersionStatus::Archived, now, None)
+        .await
+        .unwrap();
+    v.id = jt_strategy::StrategyVersionId::new_v7();
+    v.number += 1;
+    v.sections.paid_enabled = true;
+    v.sections.budget_frame.lanes.push(jt_strategy::Lane {
+        lane: jt_strategy::LaneKind::Paid,
+        period: jt_strategy::Period::Monthly,
+        cap_minor: 10000,
+        currency: "TRY".into(),
+    });
+    r.strategy().insert(v.clone()).await.unwrap();
+    for h in &hs {
+        r.hypotheses().upsert(v.id, h.clone()).await.unwrap();
+    }
+    let mut c = Capability::new(
+        CapabilityId::new_v7(),
+        ws,
+        NewCapability {
+            kind_key: "meta_ads".into(),
+            name: "Ads".into(),
+            external_id: Some("act_1".into()),
+            connector_public: json!({"access":{"scopes":["ads_read","ads_management"]}}),
+            ..Default::default()
+        },
+        now,
+    )
+    .unwrap();
+    c.status = StoredStatus::Verified;
+    c.last_verified_at = Some(now);
+    let cred = Credential::OAuth {
+        access_token: "test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec!["ads_read".into(), "ads_management".into()],
+    };
+    let seal = d
+        .seal
+        .seal(ws, &serde_json::to_vec(&cred).unwrap())
+        .unwrap();
+    r.capabilities()
+        .insert(c.clone(), Some(seal))
+        .await
+        .unwrap();
+    let item = jt_capability::BudgetItem {
+        id: jt_capability::BudgetItemId::new_v7(),
+        workspace_id: ws,
+        name: "paid cap".into(),
+        kind: jt_capability::BudgetKind::AdBudget,
+        unit: jt_capability::Unit::Currency("TRY".into()),
+        cap: 10000,
+        unit_cost_minor: Some(1),
+        period: jt_capability::Period::Monthly,
+        strategy_version_id: Some(v.id.0),
+        created_at: now,
+        retired_at: None,
+    };
+    r.budget().insert_item(item.clone()).await.unwrap();
+    r.budget().link(c.id, item.id).await.unwrap();
+    let arm = Arm::new(
+        ArmId::new_v7(),
+        ws,
+        ArmKey {
+            hypothesis_id: hs[0].id,
+            content_type: "text".into(),
+            channel: "meta_ads".into(),
+            lane: jt_strategy::LaneKind::Paid,
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    let script = || {
+        provider.push_account_context(Ok(jt_app::ports::connectors::AdAccountContext {
+            account_id: "act_1".into(),
+            currency: "TRY".into(),
+            minor_unit_exponent: 2,
+            timezone: "UTC".into(),
+        }));
+        provider.push_list_adsets(Ok(vec![jt_app::ports::connectors::AdSet {
+            id: "set".into(),
+            name: "external".into(),
+            status: "PAUSED".into(),
+            campaign_id: Some("campaign".into()),
+            daily_budget_minor: Some(10),
+            lifetime_budget_minor: None,
+        }]));
+    };
+    script();
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/studio/adsets?capability_id={}", c.id),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    script();
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.adsets_list",
+        json!({"capability_id":c.id}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    let bind = json!({"hypothesis_id":hs[0].id,"arm_id":arm.id,"capability_id":c.id,"adset_id":"set","request_key":"bind-twins"});
+    script();
+    let bound = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/adsets/bind",
+            Some(&cookie),
+            Some(bind.clone()),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(
+        bound,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.adset_bind",
+            bind.clone()
+        )
+        .await
+    );
+    let input = json!({"binding_id":bound["id"],"daily_budget_minor":10,"currency":"TRY","request_key":"move-twins"});
+    script();
+    provider.push_set_daily_budget(Ok(()));
+    let moved = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/budget-moves",
+            Some(&cookie),
+            Some(input.clone()),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(moved["outcome"], "succeeded");
+    assert_eq!(
+        moved,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.budget_move",
+            input.clone()
+        )
+        .await
+    );
+    let mut over = input.clone();
+    over["daily_budget_minor"] = json!(10001);
+    over["request_key"] = json!("over-twins");
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/budget-moves",
+            Some(&cookie),
+            Some(over.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let human = json_body(response).await;
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.budget_move", over).await;
+    assert_eq!(human["code"], "BUDGET_CAP");
+    assert_eq!(human, agent["structuredContent"]);
+    for (path, name, mut body) in [
+        ("/api/studio/adsets/bind", "jeeta.studio.adset_bind", bind),
+        (
+            "/api/studio/budget-moves",
+            "jeeta.studio.budget_move",
+            input,
+        ),
+    ] {
+        body["extra"] = json!(true);
+        let human = json_body(
+            send(
+                &app,
+                panel(Method::POST, path, Some(&cookie), Some(body.clone())),
+            )
+            .await,
+        )
+        .await;
+        let agent = tool_result(&app, &key, &session, name, body).await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    }
+}
+
+#[tokio::test]
+async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() {
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-projection-twins").await;
+    let mut d = deps(&db);
+    d.clock = Arc::new(jt_testkit::fakes::FixedClock(d.clock.now()));
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    // A real mutation supplies evidence to both projections, including takeover and actor.
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/brake",
+            Some(&cookie),
+            Some(json!({"engaged":true,"expected_revision":0})),
+        ),
+    )
+    .await;
+    assert!(response.status().is_success());
+    let q = json!({"from":"2020-01-01T00:00:00Z","until":"2099-01-01T00:00:00Z","limit":1});
+    for action in ["overview", "ledger", "ledger_export"] {
+        let export = action == "ledger_export";
+        let path = if export {
+            "/api/studio/ledger/export".to_owned()
+        } else {
+            format!(
+                "/api/studio/{action}?from=2020-01-01T00:00:00Z&until=2099-01-01T00:00:00Z{}",
+                if action == "ledger" { "&limit=1" } else { "" }
+            )
+        };
+        let args = if export {
+            json!({"filter":q})
+        } else if action == "overview" {
+            json!({"from":q["from"],"until":q["until"]})
+        } else {
+            q.clone()
+        };
+        let response = send(
+            &app,
+            panel(
+                if export { Method::POST } else { Method::GET },
+                &path,
+                Some(&cookie),
+                export.then(|| args.clone()),
+            ),
+        )
+        .await;
+        assert!(response.status().is_success(), "{action}");
+        let http = json_body(response).await;
+        let mcp = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.studio.{action}"),
+            args,
+        )
+        .await["structuredContent"]
+            .clone();
+        assert_eq!(http, mcp, "{action}");
+        if action == "ledger" {
+            assert_eq!(http["entries"][0]["entry"]["action"], "studio.brake");
+        }
+        if export {
+            assert!(http["content"].as_str().unwrap().contains("studio.brake"));
+        }
+        let invalid = if export {
+            json!({"filter":{"from":q["until"],"until":q["from"]}})
+        } else {
+            json!({"from":q["until"],"until":q["from"]})
+        };
+        let path = if export {
+            path
+        } else {
+            format!("/api/studio/{action}?from=2099-01-01T00:00:00Z&until=2020-01-01T00:00:00Z")
+        };
+        let http = json_body(
+            send(
+                &app,
+                panel(
+                    if export { Method::POST } else { Method::GET },
+                    &path,
+                    Some(&cookie),
+                    export.then(|| invalid.clone()),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let mcp = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.studio.{action}"),
+            invalid,
+        )
+        .await["structuredContent"]
+            .clone();
+        assert_eq!(http, mcp, "invalid {action}");
+        assert_eq!(http["code"], "VALIDATION");
+    }
+    // The ledger remains readable after archive; overview still requires the approved strategy.
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let current = r.strategy().lock_execution_frame().await.unwrap().unwrap();
+    drop(r);
+    let archived = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/strategy/archive",
+            Some(&cookie),
+            Some(json!({"version_id":current.id,"confirm":true})),
+        ),
+    )
+    .await;
+    assert!(archived.status().is_success());
+    for action in ["overview", "ledger"] {
+        let path =
+            format!("/api/studio/{action}?from=2020-01-01T00:00:00Z&until=2099-01-01T00:00:00Z");
+        let http =
+            json_body(send(&app, panel(Method::GET, &path, Some(&cookie), None)).await).await;
+        let mcp = tool_result(
+            &app,
+            &key,
+            &session,
+            &format!("jeeta.studio.{action}"),
+            json!({"from":q["from"],"until":q["until"]}),
+        )
+        .await["structuredContent"]
+            .clone();
+        assert_eq!(http, mcp);
+        if action == "overview" {
+            assert_eq!(http["code"], "STRATEGY_REQUIRED");
+        } else {
+            assert!(http["entries"].is_array());
         }
     }
 }

@@ -30,7 +30,14 @@ const EXEMPT_PREFIXES: &[&str] = &[
 ];
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
-const EXEMPT_IDS: &[&str] = &["ledger.list", "inbox.pending", "inbox.context"];
+const EXEMPT_IDS: &[&str] = &[
+    "ledger.list",
+    "inbox.pending",
+    "inbox.context",
+    "studio.brake",
+    "studio.ledger",
+    "studio.ledger_export",
+];
 
 fn may_be_exempt(id: &str) -> bool {
     EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p)) || EXEMPT_IDS.contains(&id)

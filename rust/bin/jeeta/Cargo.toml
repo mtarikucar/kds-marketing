@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 jt_app.workspace = true
+jt_files.workspace = true
 jt_pg.workspace = true
 jt_panel_http.workspace = true
 jt_mcp.workspace = true

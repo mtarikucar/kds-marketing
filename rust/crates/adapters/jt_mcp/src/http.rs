@@ -20,6 +20,7 @@ pub const MCP_PATH: &str = "/mcp";
 /// fallback, so the binary can merge it with the panel's.
 pub fn http_service(state: McpState) -> Router {
     let config = StreamableHttpServerConfig::default()
+        .with_max_request_body_bytes(280_000_000)
         .with_allowed_hosts(state.allowed_hosts().iter().cloned());
     let handler_state = state.clone();
     let service = StreamableHttpService::new(

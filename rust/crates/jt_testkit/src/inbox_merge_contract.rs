@@ -930,6 +930,7 @@ pub async fn merge_during_provider_io_reconciles_without_conversation_effects(
                 .unwrap();
             }
         });
+        crate::flows::price_sms(&deps, f.ws).await;
         connector.push_sms(match scenario {
             "failed" | "recovered_failed" => Err(ConnectorError::auth("rejected")),
             "unknown" | "recovered_unknown" => Err(ConnectorError::unknown("uncertain write")),

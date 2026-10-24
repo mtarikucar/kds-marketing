@@ -265,6 +265,18 @@ impl UnitOfWork for FailingInserts {
 
 #[async_trait]
 impl TenantRepos for FailingTenant {
+    fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
+        self.0.studio()
+    }
+
+    fn studio_budget(&mut self) -> &mut dyn jt_app::ports::studio::StudioBudgetRepo {
+        self.0.studio_budget()
+    }
+
+    fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
+        self.0.studio_control()
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.0.consents()
     }

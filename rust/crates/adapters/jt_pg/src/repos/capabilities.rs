@@ -262,7 +262,7 @@ impl CapabilityRepo for PgTenantRepos {
     async fn lock(&mut self, id: CapabilityId) -> Result<Option<Capability>, AppError> {
         let ws = self.workspace_id();
         let locked: Option<i32> = sqlx::query_scalar(
-            "select 1 from capabilities where workspace_id = $1 and id = $2 for update",
+            "select 1 from capabilities where workspace_id = $1 and id = $2 for no key update",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())

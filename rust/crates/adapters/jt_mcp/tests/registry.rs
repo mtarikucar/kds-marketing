@@ -9,6 +9,24 @@ use jt_tenancy::Permission;
 use serde_json::Value;
 
 const TOOLS: &[&str] = &[
+    "jeeta.studio.adsets_list",
+    "jeeta.studio.adset_bind",
+    "jeeta.studio.budget_move",
+    "jeeta.studio.learned",
+    "jeeta.studio.judgment_record",
+    "jeeta.studio.file_upload",
+    "jeeta.studio.piece_submit",
+    "jeeta.studio.pending",
+    "jeeta.studio.slot_get",
+    "jeeta.studio.slot_cancel",
+    "jeeta.studio.trend_record",
+    "jeeta.studio.hypothesis_propose",
+    "jeeta.studio.overview",
+    "jeeta.studio.ledger",
+    "jeeta.studio.ledger_export",
+    "jeeta.studio.brake",
+    "jeeta.studio.policy_set",
+    "jeeta.studio.approve",
     "jeeta.inbox.pending",
     "jeeta.inbox.context",
     "jeeta.inbox.conversations_list",
@@ -122,7 +140,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 106);
+    assert_eq!(TOOLS.len(), 124);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -383,12 +401,12 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         (
             "jeeta.capability.update",
             "capability_id",
-            ["name", "description", "external_id"],
+            &["name", "description", "external_id"][..],
         ),
         (
             "jeeta.budget.items_update",
             "budget_item_id",
-            ["name", "cap", "period"],
+            &["name", "cap", "period", "unit_cost_minor"][..],
         ),
     ] {
         let schema = find(name).input_schema.clone().to_value();
@@ -399,7 +417,7 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
             .keys()
             .map(String::as_str)
             .collect();
-        let mut expected = BTreeSet::from(fields);
+        let mut expected: BTreeSet<&str> = fields.iter().copied().collect();
         expected.insert(id);
         assert_eq!(keys, expected, "{name}");
         assert_eq!(schema["additionalProperties"], false, "{name}");
