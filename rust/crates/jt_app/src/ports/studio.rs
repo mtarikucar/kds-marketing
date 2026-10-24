@@ -37,6 +37,32 @@ pub struct SlotQuery {
 }
 #[async_trait]
 pub trait StudioRepo: Send + Sync {
+    async fn get_approval(
+        &mut self,
+        target: ApprovalTarget,
+        revision: u64,
+    ) -> Result<Option<ApprovalReceipt>, AppError>;
+    async fn get_arm(&mut self, id: ArmId) -> Result<Option<Arm>, AppError>;
+    async fn get_piece(&mut self, slot: SlotId, revision: u64) -> Result<Option<Piece>, AppError>;
+    async fn get_budget_move(&mut self, id: BudgetMoveId) -> Result<Option<BudgetMove>, AppError>;
+    /// Most recently created move for this binding; older consent cannot authorize a newer move.
+    async fn latest_budget_move(
+        &mut self,
+        binding: AdSetBindingId,
+    ) -> Result<Option<BudgetMove>, AppError>;
+    async fn get_publication(&mut self, id: PublicationId)
+    -> Result<Option<Publication>, AppError>;
+    async fn get_binding(&mut self, id: AdSetBindingId) -> Result<Option<AdSetBinding>, AppError>;
+    async fn list_bindings(&mut self) -> Result<Vec<AdSetBinding>, AppError>;
+    /// Consent changes metadata only, under the frame/control locks. Payload is immutable.
+    async fn approve_target(
+        &mut self,
+        target: ApprovalTarget,
+        receipt: ApprovalReceipt,
+    ) -> Result<(), AppError>;
+    /// Retire only queued work; never erase evidence, learning or in-flight outcomes.
+    async fn apply_transition(&mut self, change: &StrategyChange) -> Result<(), AppError>;
+
     async fn list_slots(&mut self, query: SlotQuery) -> Result<Vec<Slot>, AppError>;
     async fn retire_slot(
         &mut self,
@@ -86,11 +112,27 @@ pub trait StudioRepo: Send + Sync {
 }
 #[async_trait]
 pub trait StudioBudgetRepo: Send + Sync {
+    async fn find_reservation(
+        &mut self,
+        evidence_key: &str,
+    ) -> Result<Option<SpendReservation>, AppError>;
     async fn reserve(&mut self, request: ReserveSpend) -> Result<SpendReservation, AppError>;
     async fn settle(&mut self, id: ReservationId, outcome: SpendOutcome) -> Result<(), AppError>;
 }
 #[async_trait]
 pub trait StudioControlRepo: Send + Sync {
+    async fn set_policy(
+        &mut self,
+        expected_revision: u64,
+        lane: LaneKind,
+        requires_human_approval: bool,
+    ) -> Result<StudioControl, AppError>;
+    async fn binding_control(
+        &mut self,
+        id: AdSetBindingId,
+    ) -> Result<Option<BindingControl>, AppError>;
+    async fn save_binding_control(&mut self, control: BindingControl) -> Result<(), AppError>;
+
     async fn lock_control(&mut self) -> Result<StudioControl, AppError>;
     async fn set_brake(
         &mut self,
@@ -128,4 +170,12 @@ impl StrategyTransitionHook for NoStrategyTransition {
     ) -> Result<(), AppError> {
         Ok(())
     }
+}
+
+/// Strict shared target shape on HTTP and MCP; a consent receipt names its immutable revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalTarget {
+    Slot(SlotId),
+    BudgetMove(BudgetMoveId),
 }

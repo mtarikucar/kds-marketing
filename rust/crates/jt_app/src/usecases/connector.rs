@@ -547,6 +547,12 @@ pub async fn complete_oauth(
         .list_assets(&credential)
         .await
         .map_err(|e| provider_error(flow.provider, e))?;
+    // Page tokens are derived from this authenticated OAuth grant but have no scopes field
+    // of their own. Preserve its trusted permission evidence through the sealed asset choice.
+    let granted_scopes = match &credential {
+        Credential::OAuth { scopes, .. } => scopes.clone(),
+        _ => Vec::new(),
+    };
     drop(credential);
     // Only kinds the provider serves, each account once per kind, no secret-looking facts.
     let mut seen = BTreeSet::new();
@@ -556,6 +562,11 @@ pub async fn complete_oauth(
     });
     for asset in &mut assets {
         asset.public = screened(&asset.public);
+        if matches!(asset.credential, Credential::PageToken { .. }) {
+            let mut public = object(&asset.public);
+            public.insert("granted_scopes".into(), json!(granted_scopes));
+            asset.public = Value::Object(public);
+        }
     }
     if let Some(capability) = &bound {
         // A reconnection keeps its capability's account only; a declared capability's first
@@ -1194,6 +1205,19 @@ fn issued_access(credential: &Credential, app: OAuthCallback) -> Value {
     access
 }
 
+/// Only called with assets recovered from the authenticated, sealed OAuth selection.
+fn issued_asset_access(asset: &Asset, app: OAuthCallback) -> Value {
+    let mut access = issued_access(&asset.credential, app);
+    if matches!(asset.credential, Credential::PageToken { .. }) {
+        access["scopes"] = asset
+            .public
+            .get("granted_scopes")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+    }
+    access
+}
+
 /// The public facts of `credential` of `provider`, entered by hand, in place of `previous` (the
 /// capability's earlier `connector_public.access`, or none): a pasted Meta token names the Meta
 /// app, as a Facebook Login token does (its calls go out under the Meta app), so a reconnection
@@ -1406,7 +1430,7 @@ async fn create(
             flow.provider,
             Some(&asset.name),
             hosts,
-            issued_access(&asset.credential, flow.app),
+            issued_asset_access(&asset, flow.app),
             Some(&asset.public),
         );
         let mut capability = Capability::new(
@@ -1498,7 +1522,7 @@ async fn renew(
         flow.provider,
         Some(&asset.name),
         hosts,
-        issued_access(&asset.credential, flow.app),
+        issued_asset_access(&asset, flow.app),
         Some(&asset.public),
     );
     capability.updated_at = ctx.now;

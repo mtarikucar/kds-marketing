@@ -21,6 +21,7 @@ pub mod oauth_callback;
 pub mod platform;
 pub mod roles;
 pub mod strategy;
+pub mod studio;
 pub mod team;
 pub mod work;
 pub mod workspace;
@@ -38,6 +39,9 @@ use crate::state::AppState;
 /// Every route the panel HTTP adapter serves, as (method, path), in axum's path syntax as
 /// `CATALOG.panel_route` writes it. The twin-rule test compares it with the catalog.
 pub const ROUTES: &[(&str, &str)] = &[
+    ("POST", "/api/studio/brake"),
+    ("PUT", "/api/studio/policy"),
+    ("POST", "/api/studio/approvals"),
     ("GET", "/api/inbox/pending"),
     ("POST", "/api/inbox/people/{person_id}/consents"),
     ("GET", "/api/inbox/people/{person_id}/consents"),
@@ -237,6 +241,19 @@ where
 /// The JSON API's routes.
 pub fn api_routes() -> Vec<ApiRoute> {
     vec![
+        api_route("POST", "/studio/brake", "studio.brake", studio::brake),
+        api_route(
+            "PUT",
+            "/studio/policy",
+            "studio.policy_set",
+            studio::policy_set,
+        ),
+        api_route(
+            "POST",
+            "/studio/approvals",
+            "studio.approve",
+            studio::approve,
+        ),
         api_route("GET", "/inbox/pending", "inbox.pending", inbox::pending),
         api_route(
             "POST",

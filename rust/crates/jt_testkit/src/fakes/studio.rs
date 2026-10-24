@@ -31,6 +31,8 @@ pub struct MemStudio {
     pub moves: Vec<BudgetMove>,
     pub reservations: Vec<(SpendReservation, Option<SpendOutcome>)>,
     pub controls: Vec<StudioControl>,
+    pub binding_controls: Vec<BindingControl>,
+    pub approvals: Vec<(WorkspaceId, ApprovalTarget, ApprovalReceipt)>,
     receipts: Vec<(WorkspaceId, String, String, String, Value)>,
 }
 fn invalid(e: StudioError) -> AppError {
@@ -126,6 +128,57 @@ impl MemTenant {
 }
 #[async_trait]
 impl StudioControlRepo for MemTenant {
+    async fn set_policy(
+        &mut self,
+        expected: u64,
+        lane: LaneKind,
+        required: bool,
+    ) -> Result<StudioControl, AppError> {
+        let mut c = self.lock_control().await?;
+        if c.revision != expected {
+            return Err(AppError::conflict("control revision changed"));
+        }
+        c.lanes.entry(lane).or_default().requires_human_approval = required;
+        c.revision = c
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| AppError::conflict("revision overflow"))?;
+        self.studio_write(|s, _| {
+            *s.controls
+                .iter_mut()
+                .find(|r| r.workspace_id == c.workspace_id)
+                .expect("locked") = c.clone();
+            Ok(())
+        })?;
+        Ok(c)
+    }
+    async fn binding_control(
+        &mut self,
+        id: AdSetBindingId,
+    ) -> Result<Option<BindingControl>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .binding_controls
+            .iter()
+            .find(|c| c.chain.workspace_id == self.ws && c.binding_id == id)
+            .cloned())
+    }
+    async fn save_binding_control(&mut self, c: BindingControl) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        let b = self
+            .get_binding(c.binding_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("binding"))?;
+        b.chain.require_same(&c.chain).map_err(invalid)?;
+        self.studio_write(|s, _| {
+            s.binding_controls.retain(|r| {
+                !(r.chain.workspace_id == c.chain.workspace_id && r.binding_id == c.binding_id)
+            });
+            s.binding_controls.push(c);
+            Ok(())
+        })
+    }
     async fn lock_control(&mut self) -> Result<StudioControl, AppError> {
         self.tx.lock_studio().await;
         if let Some(c) = self
@@ -180,6 +233,164 @@ impl StudioControlRepo for MemTenant {
 }
 #[async_trait]
 impl StudioRepo for MemTenant {
+    async fn get_approval(
+        &mut self,
+        target: ApprovalTarget,
+        revision: u64,
+    ) -> Result<Option<ApprovalReceipt>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .approvals
+            .iter()
+            .find(|(w, t, a)| *w == self.ws && *t == target && a.revision == revision)
+            .map(|(_, _, a)| a.clone()))
+    }
+    async fn get_arm(&mut self, id: ArmId) -> Result<Option<Arm>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .arms
+            .iter()
+            .find(|r| r.workspace_id == self.ws && r.id == id)
+            .cloned())
+    }
+    async fn get_piece(&mut self, slot: SlotId, revision: u64) -> Result<Option<Piece>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .pieces
+            .iter()
+            .find(|(s, p)| *s == slot && p.chain.workspace_id == self.ws && p.revision == revision)
+            .map(|(_, p)| p.clone()))
+    }
+    async fn get_budget_move(&mut self, id: BudgetMoveId) -> Result<Option<BudgetMove>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .moves
+            .iter()
+            .find(|r| r.chain.workspace_id == self.ws && r.id == id)
+            .cloned())
+    }
+    async fn latest_budget_move(
+        &mut self,
+        binding: AdSetBindingId,
+    ) -> Result<Option<BudgetMove>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .moves
+            .iter()
+            .filter(|m| m.chain.workspace_id == self.ws && m.binding_id == binding)
+            .max_by_key(|m| m.id)
+            .cloned())
+    }
+    async fn get_publication(
+        &mut self,
+        id: PublicationId,
+    ) -> Result<Option<Publication>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .publications
+            .iter()
+            .find(|r| r.chain.workspace_id == self.ws && r.id == id)
+            .cloned())
+    }
+    async fn get_binding(&mut self, id: AdSetBindingId) -> Result<Option<AdSetBinding>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .bindings
+            .iter()
+            .find(|r| r.chain.workspace_id == self.ws && r.id == id)
+            .cloned())
+    }
+    async fn list_bindings(&mut self) -> Result<Vec<AdSetBinding>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .bindings
+            .iter()
+            .filter(|r| r.chain.workspace_id == self.ws)
+            .cloned()
+            .collect())
+    }
+    async fn approve_target(
+        &mut self,
+        target: ApprovalTarget,
+        receipt: ApprovalReceipt,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        let ws = self.ws;
+        self.studio_write(|s, _| {
+            match target {
+                ApprovalTarget::Slot(id) => {
+                    let slot = s
+                        .slots
+                        .iter()
+                        .find(|s| s.chain.workspace_id == ws && s.id == id)
+                        .ok_or_else(|| AppError::not_found("slot"))?;
+                    if slot.state != SlotState::Ready || slot.revision != receipt.revision {
+                        return Err(AppError::conflict("approval revision changed"));
+                    }
+                    let _p = s
+                        .pieces
+                        .iter_mut()
+                        .find(|(s, p)| {
+                            *s == id && p.chain.workspace_id == ws && p.revision == receipt.revision
+                        })
+                        .ok_or_else(|| AppError::not_found("piece"))?;
+                }
+                ApprovalTarget::BudgetMove(id) => {
+                    let m = s
+                        .moves
+                        .iter_mut()
+                        .find(|m| m.chain.workspace_id == ws && m.id == id)
+                        .ok_or_else(|| AppError::not_found("budget move"))?;
+                    if m.state != jt_studio::BudgetMoveState::Queued
+                        || m.revision != receipt.revision
+                    {
+                        return Err(AppError::conflict("approval revision changed"));
+                    }
+                    m.approval = Some(receipt.clone());
+                }
+            }
+            s.approvals
+                .retain(|(w, t, a)| !(*w == ws && *t == target && a.revision == receipt.revision));
+            s.approvals.push((ws, target, receipt));
+            Ok(())
+        })
+    }
+    async fn apply_transition(&mut self, change: &StrategyChange) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        let ws = self.ws;
+        self.studio_write(|s, _| {
+            for slot in &mut s.slots {
+                if slot.chain.workspace_id == ws
+                    && (change.current.is_none()
+                        || change.retired.contains(&slot.chain.hypothesis_id))
+                    && matches!(slot.state, SlotState::Planned | SlotState::Ready)
+                {
+                    slot.state = SlotState::Retired;
+                    slot.revision = slot
+                        .revision
+                        .checked_add(1)
+                        .ok_or_else(|| AppError::conflict("revision overflow"))?;
+                }
+            }
+            for m in &mut s.moves {
+                if m.chain.workspace_id == ws
+                    && (change.current.is_none() || change.retired.contains(&m.chain.hypothesis_id))
+                    && m.state == jt_studio::BudgetMoveState::Queued
+                {
+                    m.state = jt_studio::BudgetMoveState::Cancelled;
+                }
+            }
+            Ok(())
+        })
+    }
     async fn insert_arm(&mut self, a: Arm) -> Result<Arm, AppError> {
         same_workspace(self.ws, a.workspace_id)?;
         a.validate().map_err(invalid)?;
@@ -402,6 +613,12 @@ impl StudioRepo for MemTenant {
             })
             .map(|(_, p)| p)
             .ok_or_else(|| AppError::not_found("piece"))?;
+        let account = self
+            .state()
+            .capabilities
+            .iter()
+            .find(|c| c.capability.workspace_id == self.ws && c.capability.id == slot.capability_id)
+            .and_then(|c| c.capability.external_id.clone());
         let a = PublishAttempt::claim(
             PublishAttemptId::new_v7(),
             &slot,
@@ -413,7 +630,8 @@ impl StudioRepo for MemTenant {
             },
             now,
         )
-        .map_err(invalid)?;
+        .map_err(invalid)?
+        .with_account(account);
         self.studio_write(|s, _| {
             s.attempts.push(a.clone());
             Ok(())
@@ -775,6 +993,15 @@ impl MemTenant {
 }
 #[async_trait]
 impl StudioBudgetRepo for MemTenant {
+    async fn find_reservation(&mut self, key: &str) -> Result<Option<SpendReservation>, AppError> {
+        Ok(self
+            .state()
+            .studio
+            .reservations
+            .iter()
+            .find(|(r, _)| r.request.workspace_id == self.ws && r.request.evidence_key == key)
+            .map(|(r, _)| r.clone()))
+    }
     async fn reserve(&mut self, mut r: ReserveSpend) -> Result<SpendReservation, AppError> {
         same_workspace(self.ws, r.workspace_id)?;
         if r.amount_minor < 0

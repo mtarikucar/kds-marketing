@@ -21,6 +21,9 @@ pub struct Publication {
     pub slot_id: SlotId,
     pub piece_id: PieceId,
     pub capability_id: CapabilityId,
+    /// Account frozen at dispatch, used to reject later credential rebinding.
+    #[serde(default)]
+    pub account_id: Option<String>,
     pub executed_version_id: StrategyVersionId,
     pub external_id: String,
     pub url: Option<Url>,
@@ -98,6 +101,8 @@ pub struct PublishAttempt {
     slot_id: SlotId,
     piece: Piece,
     capability_id: CapabilityId,
+    #[serde(default)]
+    account_id: Option<String>,
     slot_revision: u64,
     executed_version_id: StrategyVersionId,
     control_revision: u64,
@@ -126,6 +131,7 @@ impl PublishAttempt {
             slot_id: slot.id,
             piece: piece.clone(),
             capability_id: slot.capability_id,
+            account_id: None,
             slot_revision: slot.revision,
             executed_version_id,
             control_revision,
@@ -136,6 +142,11 @@ impl PublishAttempt {
         };
         attempt.validate()?;
         Ok(attempt)
+    }
+    /// Freeze the connector account before persisting this new Sending attempt.
+    pub fn with_account(mut self, account_id: Option<String>) -> Self {
+        self.account_id = account_id;
+        self
     }
     pub fn validate(&self) -> Result<(), StudioError> {
         self.piece.validate_persisted()?;
@@ -234,6 +245,7 @@ impl PublishAttempt {
             slot_id: self.slot_id,
             piece_id: self.piece.id,
             capability_id: self.capability_id,
+            account_id: self.account_id.clone(),
             executed_version_id: self.executed_version_id,
             external_id: receipt.external_id.clone(),
             url: receipt.url.clone(),

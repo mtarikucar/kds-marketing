@@ -27,6 +27,9 @@ impl PgTenantRepos {
         .fetch_one(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "read dispatch piece"))?;
+        let account = jt_app::ports::CapabilityRepo::find(self, slot.capability_id)
+            .await?
+            .and_then(|c| c.external_id);
         let attempt = PublishAttempt::claim(
             PublishAttemptId::new_v7(),
             &slot,
@@ -38,7 +41,8 @@ impl PgTenantRepos {
             },
             now,
         )
-        .map_err(invalid)?;
+        .map_err(invalid)?
+        .with_account(account);
         sqlx::query("insert into studio_publish_attempts(workspace_id,id,data,slot_id,piece_id,executed_version_id,state) values($1,$2,$3,$4,$5,$6,'sending')")
             .bind(self.workspace_id().0).bind(attempt.id().0).bind(encode(&attempt)?).bind(slot.id.0).bind(attempt.piece().id.0).bind(version.id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"persist Studio Sending claim"))?;
         self.studio_attempt_ledger(&attempt, "studio.publish.claimed")

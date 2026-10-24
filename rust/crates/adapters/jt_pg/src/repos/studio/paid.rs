@@ -3,6 +3,17 @@ use jt_app::ports::{BudgetRepo, CapabilityRepo, StrategyRepo};
 use jt_capability::{Unit, period_window};
 #[async_trait]
 impl StudioBudgetRepo for PgTenantRepos {
+    async fn find_reservation(&mut self, key: &str) -> Result<Option<SpendReservation>, AppError> {
+        let row: Option<Value> = sqlx::query_scalar(
+            "select data from studio_spend_reservations where workspace_id=$1 and evidence_key=$2",
+        )
+        .bind(self.workspace_id().0)
+        .bind(key)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "find reservation"))?;
+        row.map(decode).transpose()
+    }
     async fn reserve(&mut self, mut r: ReserveSpend) -> Result<SpendReservation, AppError> {
         same_workspace(self.workspace_id(), r.workspace_id)?;
         if r.amount_minor < 0

@@ -19,6 +19,7 @@ pub mod ledger;
 pub mod platform;
 pub mod roles;
 pub mod strategy;
+pub mod studio;
 pub mod team;
 pub mod webhook;
 pub mod work;

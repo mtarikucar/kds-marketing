@@ -740,3 +740,131 @@ pub async fn agent_inherits_issuer_scope_rep_has_no_studio_grants(
     let p = api_keys::authenticate(&deps, &key.plaintext).await.unwrap();
     assert!(p.permissions.is_empty());
 }
+
+/// T3 metadata and lifecycle contracts run against the real RLS adapter and the fake.
+pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
+    let f = ready(uow).await;
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let v = r.strategy().lock_execution_frame().await.unwrap().unwrap();
+    let c = r
+        .studio_control()
+        .set_policy(0, LaneKind::Organic, true)
+        .await
+        .unwrap();
+    assert_eq!(c.revision, 1);
+    let approval = ApprovalReceipt {
+        revision: 1,
+        by: v.approved_by.unwrap(),
+        at: FIXED_NOW,
+    };
+    r.studio()
+        .approve_target(ApprovalTarget::Slot(f.slot.id), approval.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        r.studio()
+            .get_approval(ApprovalTarget::Slot(f.slot.id), 1)
+            .await
+            .unwrap(),
+        Some(approval.clone())
+    );
+    r.commit().await.unwrap();
+    let b = AdSetBinding {
+        id: AdSetBindingId::new_v7(),
+        chain: f.slot.chain.clone(),
+        capability_id: f.slot.capability_id,
+        account_id: "account".into(),
+        adset_id: "set".into(),
+        campaign_id: None,
+    };
+    let m = BudgetMove {
+        id: BudgetMoveId::new_v7(),
+        chain: b.chain.clone(),
+        binding_id: b.id,
+        revision: 1,
+        daily_budget_minor: 1,
+        currency: "TRY".into(),
+        state: jt_studio::BudgetMoveState::Queued,
+        approval: None,
+        reservation_id: None,
+        executed_version_id: None,
+    };
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    r.studio()
+        .bind_adset(b.clone(), "control-binding")
+        .await
+        .unwrap();
+    r.studio()
+        .save_budget_move(m.clone(), "control-move")
+        .await
+        .unwrap();
+    r.studio()
+        .approve_target(ApprovalTarget::BudgetMove(m.id), approval.clone())
+        .await
+        .unwrap();
+    let control = BindingControl {
+        binding_id: b.id,
+        chain: b.chain.clone(),
+        desired: jt_studio::AdStatus::Paused,
+        observed: None,
+        paused_by_brake: true,
+        outcome: Some(jt_studio::BindingStatusOutcome::Unknown),
+        at: FIXED_NOW,
+    };
+    r.studio_control()
+        .save_binding_control(control.clone())
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        r.studio_control().binding_control(b.id).await.unwrap(),
+        Some(control)
+    );
+    assert_eq!(r.studio().get_binding(b.id).await.unwrap(), Some(b.clone()));
+    assert_eq!(r.studio().list_bindings().await.unwrap(), vec![b]);
+    assert_eq!(
+        r.studio()
+            .get_budget_move(m.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .approval,
+        Some(approval)
+    );
+    let change = StrategyChange {
+        previous: Some(v.id),
+        current: None,
+        kept: vec![],
+        retired: vec![f.slot.chain.hypothesis_id],
+        added: vec![],
+        at: FIXED_NOW,
+    };
+    r.strategy().lock_execution_frame().await.unwrap();
+    r.studio().apply_transition(&change).await.unwrap();
+    drop(r); // rollback
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        r.studio().get_slot(f.slot.id).await.unwrap().unwrap().state,
+        SlotState::Ready
+    );
+    r.strategy().lock_execution_frame().await.unwrap();
+    r.studio().apply_transition(&change).await.unwrap();
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let retired = r.studio().get_slot(f.slot.id).await.unwrap().unwrap();
+    assert_eq!(retired.state, SlotState::Retired);
+    assert_eq!(
+        r.studio()
+            .get_budget_move(m.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        jt_studio::BudgetMoveState::Cancelled
+    );
+    r.studio().apply_transition(&change).await.unwrap();
+    assert_eq!(r.studio().get_slot(f.slot.id).await.unwrap(), Some(retired));
+    assert_eq!(r.studio().get_arm(f.arm.id).await.unwrap(), Some(f.arm));
+    r.commit().await.unwrap();
+}

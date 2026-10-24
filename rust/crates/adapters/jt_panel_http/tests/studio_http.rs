@@ -1,0 +1,25 @@
+#[test]
+fn studio_routes_have_exact_catalog_twins() {
+    let routes: Vec<_> = jt_panel_http::ROUTES
+        .iter()
+        .copied()
+        .filter(|(_, p)| p.starts_with("/api/studio/"))
+        .collect();
+    assert_eq!(
+        routes,
+        [
+            ("POST", "/api/studio/brake"),
+            ("PUT", "/api/studio/policy"),
+            ("POST", "/api/studio/approvals")
+        ]
+    );
+    for route in routes {
+        assert_eq!(
+            jt_app::catalog::CATALOG
+                .iter()
+                .filter(|r| r.panel_route == Some(route))
+                .count(),
+            1
+        );
+    }
+}

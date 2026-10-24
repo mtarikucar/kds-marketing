@@ -140,6 +140,7 @@ impl Fixture {
     }
     fn publication(&self, slot: &Slot, piece: &Piece) -> Publication {
         Publication {
+            account_id: Some("test_account".into()),
             id: PublicationId::new_v7(),
             chain: self.chain.clone(),
             slot_id: slot.id,

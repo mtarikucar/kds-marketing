@@ -92,6 +92,9 @@ url = { version = "2", features = ["serde"] }
 dotenvy = "0.15"
 toml = "1"
 async-trait = "0.1"
+# Pure IANA timezone rules for capability working-hour fences.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
 http = "1"
 # The webhook gate tells a body over its limit apart (`LengthLimitError`); the release axum uses.
 http-body-util = "0.1"

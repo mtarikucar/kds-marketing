@@ -3355,3 +3355,225 @@ async fn budget_cap_http_409_mcp_parity() {
         json!({"remaining_minor":2,"requested_minor":3})
     );
 }
+
+#[tokio::test]
+async fn studio_controls_have_schema_error_effect_and_actor_parity() {
+    use jt_app::{ctx::Ctx, ports::studio::*};
+    use jt_ledger::Actor;
+    use jt_tenancy::SystemRole;
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("studio-twins").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(jt_testkit::fakes::FIXED_NOW));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    // Brake is available before strategy; policy is not. Status gating remains independent.
+    let blocked = json!({"lane":"organic","requires_human_approval":true,"expected_revision":0});
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::PUT,
+                "/api/studio/policy",
+                Some(&cookie),
+                Some(blocked.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.policy_set", blocked).await;
+    assert_eq!(human, agent["structuredContent"]);
+    assert_eq!(human["code"], "STRATEGY_REQUIRED");
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/brake",
+                Some(&cookie),
+                Some(json!({"engaged":true,"expected_revision":0})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human["revision"], 1);
+    assert_eq!(human["brake_engaged"], true);
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.brake",
+        json!({"engaged":false,"expected_revision":1}),
+    )
+    .await;
+    assert_eq!(agent["revision"], 2);
+    assert_eq!(agent["brake_engaged"], false);
+    let stale = json!({"engaged":true,"expected_revision":0});
+    let response = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/brake",
+            Some(&cookie),
+            Some(stale.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let human = json_body(response).await;
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.brake", stale).await;
+    assert_eq!(human, agent["structuredContent"]);
+    approve_inbox_strategy(&app, &cookie).await;
+    let body = json!({"lane":"organic","requires_human_approval":true,"expected_revision":2});
+    let human = json_body(
+        send(
+            &app,
+            panel(Method::PUT, "/api/studio/policy", Some(&cookie), Some(body)),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human["lanes"]["organic"]["requires_human_approval"], true);
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.policy_set",
+        json!({"lane":"organic","requires_human_approval":false,"expected_revision":3}),
+    )
+    .await;
+    assert_eq!(agent["lanes"]["organic"]["requires_human_approval"], false);
+    assert_eq!(agent["revision"], 4);
+    // Build immutable work under the same real tenant transaction used by both surfaces.
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    let version = r.strategy().current_approved().await.unwrap().unwrap();
+    let h = r.hypotheses().list(version.id).await.unwrap().remove(0);
+    let cap = jt_capability::Capability::new(
+        jt_capability::CapabilityId::new_v7(),
+        ws,
+        jt_capability::NewCapability {
+            kind_key: "x".into(),
+            name: "studio".into(),
+            ..Default::default()
+        },
+        deps.clock.now(),
+    )
+    .unwrap();
+    r.capabilities().insert(cap.clone(), None).await.unwrap();
+    let arm = Arm::new(
+        ArmId::new_v7(),
+        ws,
+        ArmKey {
+            hypothesis_id: h.id,
+            channel: "x".into(),
+            content_type: "text".into(),
+            lane: serde_json::from_value(json!("organic")).unwrap(),
+        },
+    )
+    .unwrap();
+    r.studio().insert_arm(arm.clone()).await.unwrap();
+    let chain = Chain {
+        workspace_id: ws,
+        born_version_id: version.id,
+        hypothesis_id: h.id,
+        arm_id: arm.id,
+    };
+    let slot = Slot {
+        id: SlotId::new_v7(),
+        chain: chain.clone(),
+        capability_id: cap.id,
+        scheduled_at: deps.clock.now(),
+        state: SlotState::Planned,
+        revision: 0,
+    };
+    r.studio()
+        .insert_slots("twins", vec![slot.clone()])
+        .await
+        .unwrap();
+    r.studio()
+        .save_piece(
+            slot.id,
+            0,
+            Piece {
+                id: PieceId::new_v7(),
+                chain,
+                revision: 1,
+                text: "draft".into(),
+                media: vec![],
+                adaptations: Default::default(),
+            },
+            "piece",
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let approval = json!({"target":{"slot":slot.id},"expected_revision":1});
+    let human = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/studio/approvals",
+                Some(&cookie),
+                Some(approval.clone()),
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human["revision"], 1);
+    assert_eq!(human["approval"]["by"], json!(user));
+    let ctx = Ctx {
+        workspace_id: ws,
+        actor: Actor::Human { user_id: user },
+        permissions: SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: deps.clock.now(),
+        agent_connection_id: None,
+    };
+    let tool = jt_mcp::registry()
+        .into_iter()
+        .find(|t| t.name == "jeeta.studio.approve")
+        .unwrap();
+    assert_eq!(
+        human,
+        (tool.run)(&deps, &ctx, approval.clone()).await.unwrap()
+    );
+    let agent = tool_result(&app, &key, &session, "jeeta.studio.approve", approval).await;
+    assert_eq!(agent["structuredContent"]["code"], "FORBIDDEN");
+    assert_eq!(
+        agent["structuredContent"]["details"]["reason"],
+        "owner_or_manager_human"
+    );
+    for (method, path, name, body) in [
+        (
+            Method::POST,
+            "/api/studio/brake",
+            "jeeta.studio.brake",
+            json!({"engaged":true,"expected_revision":4,"extra":true}),
+        ),
+        (
+            Method::PUT,
+            "/api/studio/policy",
+            "jeeta.studio.policy_set",
+            json!({"lane":"paid","requires_human_approval":true,"expected_revision":4,"extra":true}),
+        ),
+        (
+            Method::POST,
+            "/api/studio/approvals",
+            "jeeta.studio.approve",
+            json!({"target":{"slot":slot.id},"expected_revision":1,"extra":true}),
+        ),
+    ] {
+        let human =
+            json_body(send(&app, panel(method, path, Some(&cookie), Some(body.clone()))).await)
+                .await;
+        let agent = tool_result(&app, &key, &session, name, body).await;
+        assert_eq!(human["code"], "VALIDATION");
+        assert_eq!(human["code"], agent["structuredContent"]["code"]);
+    }
+}

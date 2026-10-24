@@ -254,7 +254,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (106 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (109 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -271,7 +271,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 106 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 109 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -1972,3 +1972,78 @@ grant preservation, tenant/composite-FK refusal, version-stable arms, concurrent
 claims/reservations, replay conflicts, learning dedupe, file/trend/budget records,
 issuer-scope inheritance and price/cadence round trips. Task 2 adds no catalog row,
 HTTP route or MCP tool; later public rows must ship all twins and parity tests.
+
+
+## M3 Task 3 — strategy lifecycle, permissions and brakes
+
+The current release contains **109 MCP tools**, including **3 Studio operations**.
+The T0–T2 tables above describe their historical boundaries; T3 keeps **62 tables**
+and migration **0009**, with no new migration or permission seed.
+
+| Use case / MCP suffix after `jeeta.` | HTTP | Permission | Strategy gate |
+|---|---|---|---|
+| `studio.brake` | `POST /api/studio/brake` | `studio.manage` | Exempt |
+| `studio.policy_set` | `PUT /api/studio/policy` | `studio.manage` | Required |
+| `studio.approve` | `POST /api/studio/approvals` | `studio.manage`, owner/manager human | Required |
+
+All three still require an **active workspace**, including direct application calls.
+Owners and managers have `studio.work` and `studio.manage`; reps have neither.
+Agent authority is the intersection of issuer permissions and connection scopes.
+An agent can operate a brake or policy but cannot provide human consent.
+
+Brake input is `{engaged, lane?: organic|paid|null, expected_revision}`. Omit the
+lane for the workspace brake. Policy input is `{lane, requires_human_approval,
+expected_revision}`. Approval input is `{target: {slot: UUID}|{budget_move: UUID},
+expected_revision}`. Unknown fields are rejected on both surfaces. Control writes
+use compare-and-swap revisions; approvals bind the immutable piece/move revision
+and do not change the five-state slot lifecycle. Lane and capability requirements
+compose with OR; both default to false. Consent never overrides a brake or cap.
+
+Strategy approval/archive invokes `StudioTransition` inside the same transaction
+as the frame change. Retired hypotheses and archive retire Planned/Ready slots
+(including Ready work waiting for consent) and cancel queued budget moves. Kept
+hypotheses retain their arms, learning and queue. Birth versions and published
+history remain immutable; old-born execution uses the current approved frame.
+
+`authorize_execution` checks the workspace, current strategy, hypothesis, channel,
+group, capability health, access expiry/scopes, working hours, current payload
+revision, consent and brake. `dispatch_execution` also checks registry support and
+runs one freshly fenced provider call after releasing transaction locks. T6/T8
+execution workers must use this boundary for **every call and every queue item**,
+and T8 must atomically reserve connector cost before spend. A call already admitted
+when a concurrent brake commits may finish and record its result; the next iteration
+is held. There is no one-second timing guarantee and no automatic publication retry.
+
+Brake flags commit before Meta status reconciliation. Queued work stays in place,
+with no reset of attempts. The `studio_control` job runs every minute under its
+scheduler advisory lock and a per-workspace status lock, and also runs immediately
+after a control write. It reads bound external Meta sets, pauses active ones and
+persists pending/applied/unknown status evidence. Safety pauses work while braked.
+Release rechecks the current frame, capability, consent and budget caps, reserves
+the remaining-period daily-budget liability, and resumes only sets this brake
+paused. Manually paused sets remain paused. A failed/unknown provider operation
+never clears the persisted brake; reconciliation reads provider status after restart.
+No campaigns, ad sets or creatives are created.
+OAuth-derived Page/Instagram assets retain the trusted parent grant scopes. Older or
+manually pasted credentials without permission evidence fail closed and need an OAuth
+reconnection; a successful identity probe alone does not prove publishing/read scopes.
+Meta account comparisons accept both numeric and `act_`-prefixed identities. Resume
+recovery reuses the durable reservation timestamp within its budget period, so a lost
+status response cannot create a new payload under an existing request key.
+
+`authorize_measurement` is a separate system-only read path: published/bound
+immutable evidence, original capability/account and current healthy read credentials
+are required. It remains usable after retirement/archive and under a brake, but
+cannot authorize publishing, budget changes or ad resume. Publication attempts now
+freeze the account identity; a later capability rebind cannot read old evidence
+through the replacement account. Missing original account evidence fails closed.
+
+Fast checks: `cargo test --locked --workspace --test studio_brakes --test studio_permissions`.
+These include the PostgreSQL/fake control contract, two-worker admission and iteration
+barriers, revision-bound consent, archive/retirement, historical reads, scoped restart,
+Meta pause/resume and unknown-response reconciliation. `studio_http`, `studio_mcp`
+and the `studio_controls_have_schema_error_effect_and_actor_parity` test exercise
+catalog/routes, strict schema, live HTTP/MCP effects and the human-only consent rule.
+
+The plan-named `studio_control` target also runs the control checks; permission checks
+remain in `studio_permissions`.

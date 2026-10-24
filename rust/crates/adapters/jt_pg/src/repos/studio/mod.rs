@@ -103,6 +103,123 @@ impl PgTenantRepos {
 }
 #[async_trait]
 impl StudioRepo for PgTenantRepos {
+    async fn get_approval(
+        &mut self,
+        target: ApprovalTarget,
+        rev: u64,
+    ) -> Result<Option<ApprovalReceipt>, AppError> {
+        let row: Option<Option<Value>> = match target {
+            ApprovalTarget::Slot(id) => sqlx::query_scalar("select data->'approval' from studio_pieces where workspace_id=$1 and slot_id=$2 and revision=$3").bind(self.workspace_id().0).bind(id.0).bind(revision(rev)?).fetch_optional(self.tx.conn()).await,
+            ApprovalTarget::BudgetMove(id) => sqlx::query_scalar("select data->'approval' from studio_budget_moves where workspace_id=$1 and id=$2 and (data->>'revision')::bigint=$3").bind(self.workspace_id().0).bind(id.0).bind(revision(rev)?).fetch_optional(self.tx.conn()).await,
+        }.map_err(|e|map_sqlx(e,"read approval"))?;
+        row.flatten()
+            .filter(|v| !v.is_null())
+            .map(decode)
+            .transpose()
+    }
+    async fn get_arm(&mut self, id: ArmId) -> Result<Option<Arm>, AppError> {
+        self.studio_record("studio_arms", id.0).await
+    }
+    async fn get_piece(&mut self, slot: SlotId, rev: u64) -> Result<Option<Piece>, AppError> {
+        let row: Option<Value> = sqlx::query_scalar(
+            "select data from studio_pieces where workspace_id=$1 and slot_id=$2 and revision=$3",
+        )
+        .bind(self.workspace_id().0)
+        .bind(slot.0)
+        .bind(revision(rev)?)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "get piece"))?;
+        row.map(decode).transpose()
+    }
+    async fn get_budget_move(&mut self, id: BudgetMoveId) -> Result<Option<BudgetMove>, AppError> {
+        self.studio_record("studio_budget_moves", id.0).await
+    }
+    async fn latest_budget_move(
+        &mut self,
+        binding: AdSetBindingId,
+    ) -> Result<Option<BudgetMove>, AppError> {
+        let row: Option<Value> = sqlx::query_scalar("select data from studio_budget_moves where workspace_id=$1 and binding_id=$2 order by id desc limit 1").bind(self.workspace_id().0).bind(binding.0).fetch_optional(self.tx.conn()).await.map_err(|e|map_sqlx(e,"latest binding move"))?;
+        row.map(decode).transpose()
+    }
+    async fn get_publication(
+        &mut self,
+        id: PublicationId,
+    ) -> Result<Option<Publication>, AppError> {
+        self.studio_record("studio_publications", id.0).await
+    }
+    async fn get_binding(&mut self, id: AdSetBindingId) -> Result<Option<AdSetBinding>, AppError> {
+        self.studio_record("studio_adset_bindings", id.0).await
+    }
+    async fn list_bindings(&mut self) -> Result<Vec<AdSetBinding>, AppError> {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_adset_bindings where workspace_id=$1 order by id",
+        )
+        .bind(self.workspace_id().0)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list bindings"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn approve_target(
+        &mut self,
+        target: ApprovalTarget,
+        receipt: ApprovalReceipt,
+    ) -> Result<(), AppError> {
+        StudioControlRepo::lock_control(self).await?;
+        match target {
+            ApprovalTarget::Slot(id) => {
+                let slot = self
+                    .get_slot(id)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("slot"))?;
+                if slot.state != SlotState::Ready || slot.revision != receipt.revision {
+                    return Err(AppError::conflict("approval revision changed"));
+                }
+                let p = self
+                    .get_piece(id, receipt.revision)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("piece"))?;
+                sqlx::query("update studio_pieces set data=jsonb_set(data,'{approval}',$3) where workspace_id=$1 and id=$2").bind(self.workspace_id().0).bind(p.id.0).bind(encode(&receipt)?).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"approve piece"))?;
+            }
+            ApprovalTarget::BudgetMove(id) => {
+                let mut m = self
+                    .get_budget_move(id)
+                    .await?
+                    .ok_or_else(|| AppError::not_found("budget move"))?;
+                if m.state != jt_studio::BudgetMoveState::Queued || m.revision != receipt.revision {
+                    return Err(AppError::conflict("approval revision changed"));
+                }
+                m.approval = Some(receipt);
+                sqlx::query(
+                    "update studio_budget_moves set data=$3 where workspace_id=$1 and id=$2",
+                )
+                .bind(self.workspace_id().0)
+                .bind(id.0)
+                .bind(encode(&m)?)
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "approve budget move"))?;
+            }
+        }
+        Ok(())
+    }
+    async fn apply_transition(&mut self, change: &StrategyChange) -> Result<(), AppError> {
+        StudioControlRepo::lock_control(self).await?;
+        let retired: Vec<Uuid> = change.retired.iter().map(|id| id.0).collect();
+        let rows: Vec<Value> = sqlx::query_scalar("select data from studio_slots where workspace_id=$1 and state in ('planned','ready') and ($2 or hypothesis_id=any($3)) order by id for update").bind(self.workspace_id().0).bind(change.current.is_none()).bind(&retired).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"retire strategy slots"))?;
+        for row in rows {
+            let mut s: Slot = decode(row)?;
+            s.state = SlotState::Retired;
+            s.revision = s
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| AppError::conflict("revision overflow"))?;
+            self.studio_write_slot(&s).await?;
+        }
+        sqlx::query("update studio_budget_moves set data=jsonb_set(data,'{state}','\"cancelled\"') where workspace_id=$1 and data->>'state'='queued' and ($2 or hypothesis_id=any($3))").bind(self.workspace_id().0).bind(change.current.is_none()).bind(&retired).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"cancel strategy budget moves"))?;
+        Ok(())
+    }
     async fn insert_arm(&mut self, arm: Arm) -> Result<Arm, AppError> {
         same_workspace(self.workspace_id(), arm.workspace_id)?;
         arm.validate().map_err(invalid)?;

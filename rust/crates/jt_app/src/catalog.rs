@@ -195,6 +195,9 @@ const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk
 /// Every use case of this release. Inbox operations require an approved strategy.
 #[rustfmt::skip]
 pub static CATALOG: &[UseCase] = &[
+    twin("studio.brake", Exempt, "jeeta.studio.brake", ("POST", "/api/studio/brake"), Write),
+    twin("studio.policy_set", GateMode::Gated, "jeeta.studio.policy_set", ("PUT", "/api/studio/policy"), Write),
+    twin("studio.approve", GateMode::Gated, "jeeta.studio.approve", ("POST", "/api/studio/approvals"), Write),
     twin("inbox.pending", GateMode::Exempt, "jeeta.inbox.pending", ("GET", "/api/inbox/pending"), Read),
     twin("inbox.context", GateMode::Exempt, "jeeta.inbox.context", ("GET", "/api/inbox/conversations/{conversation_id}/context"), Read),
     twin("inbox.conversations.list", GateMode::Gated, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),

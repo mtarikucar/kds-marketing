@@ -72,3 +72,8 @@ async fn agent_inherits_issuer_scope_rep_has_no_studio_grants() {
     )
     .await;
 }
+#[tokio::test]
+async fn controls_approval_and_transition_are_atomic() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::controls_approval_and_transition_are_atomic(&uow).await;
+}

@@ -89,6 +89,8 @@ const APP_ALLOW: &[&str] = &[
     "serde_json",
     "uuid",
     "time",
+    "chrono",
+    "chrono-tz",
     "thiserror",
     "async-trait",
     "argon2",

@@ -239,9 +239,9 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
         hasher: Arc::new(Argon2Hasher::default()),
         seal: Arc::new(AesSecretBox::new(*config.secret_key.bytes())),
         channels: Arc::new(UowChannelCatalog::new(uow)),
-        // Nothing is planned under a strategy yet, so nothing is called off when one is archived.
+        // Studio cancellation shares the strategy transition transaction; file storage follows in T5.
         files: Arc::new(jt_app::ports::files::UnavailableFileStore),
-        transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
+        transition_hook: Arc::new(jt_app::usecases::studio::lifecycle::StudioTransition),
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(EgressTenantHosts::new(Arc::clone(&egress))),
         connectors: connectors::registry(Arc::clone(&egress), Arc::clone(&apps)),
@@ -496,7 +496,7 @@ mod tests {
             seal: Arc::new(PlainSecretBox),
             channels: Arc::new(NoChannelsYet),
             files: Arc::new(jt_app::ports::files::UnavailableFileStore),
-            transition_hook: Arc::new(jt_app::ports::studio::NoStrategyTransition),
+            transition_hook: Arc::new(jt_app::usecases::studio::lifecycle::StudioTransition),
             archived_hook: Arc::new(NoopArchivedHook),
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),

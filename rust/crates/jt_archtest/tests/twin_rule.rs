@@ -110,7 +110,7 @@ fn mcp_registry_matches_catalog() {
 /// capability +1; `jeeta.budget.items_update` and `jeeta.budget.items_retire`, budget +2), the 7
 /// `connector` tools (six from Task 8 and `jeeta.connector.hooks` from Task 9; the eighth
 /// connection use case, completing an OAuth flow, is the panel's callback only) and the 3
-/// `events` tools: 60. Inbox adds 46, giving 106.
+/// `events` tools: 60. Inbox adds 46 and Studio controls add 3, giving 109.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -128,14 +128,15 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("connector", 7),
     ("events", 3),
     ("inbox", 46),
+    ("studio", 3),
 ];
 
 #[test]
-fn the_registry_holds_106_tools() {
+fn the_registry_holds_109_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 106);
+    assert_eq!(specs.len(), 109);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 106);
+    assert_eq!(total, 109);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -144,7 +145,7 @@ fn the_registry_holds_106_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 106);
+    assert_eq!(catalog, 109);
 }
 
 /// An MCP-only use case has no human caller: only an agent's check-in is one.
