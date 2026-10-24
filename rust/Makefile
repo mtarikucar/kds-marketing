@@ -54,3 +54,8 @@ panel-build:
 # Entire connector/consumer/reply/ack flow in process; no database or provider required.
 smoke-inbox:
 	cargo test --locked -p jt_app --test smoke_inbox
+
+.PHONY: smoke-studio
+# In-process M3 acceptance with scripted connectors; no database or provider credentials.
+smoke-studio:
+	./scripts/smoke-studio.sh

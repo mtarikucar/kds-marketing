@@ -1403,6 +1403,7 @@ dependencies = [
  "jt_panel_http",
  "jt_pg",
  "jt_strategy",
+ "jt_studio",
  "jt_tenancy",
  "jt_testkit",
  "proc-macro2",

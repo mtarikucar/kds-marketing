@@ -1848,7 +1848,7 @@ New and existing owner/manager roles have `studio.work` and `studio.manage`; rep
 receives neither, and authenticated agents retain only their issuer's current
 permissions. The backfill records only migration-added role UUID/permission pairs
 in `studio_control.seed_grants`, so down preserves preexisting grants. Startup does
-not change grants. **106 tools are implemented**; the final M3 target remains 124.
+not change grants. At the T0 boundary **106 tools were implemented**; M3 now has 124.
 
 Strategy approval/archive lock the draft before acquiring `lock_execution_frame`,
 including when there is no approved version, then invoke `StrategyTransitionHook`
@@ -1860,7 +1860,7 @@ The existing post-commit archive hook is preserved. T3 supplies Studio cancellat
 T0's default hook has no queue to cancel. Studio repositories are implemented in PostgreSQL and the transactional fake.
 FileStore remains unavailable until T5 wires its byte-storage adapter.
 Shared contract rows now live in `jt_studio` and are re-exported from
-`jt_app::ports::studio` (T1). No new public Studio routes are exposed yet.
+`jt_app::ports::studio` (T1). No public Studio routes were added at the T0/T1 boundary.
 
 Meta adds pause/active status writes, verified account currency/timezone context,
 ad-set/day insights, and account-checked ad→ad-set resolution. Missing ad-set
@@ -2437,3 +2437,57 @@ Verification targets: `studio_projection` (also named `studio_views` by the plan
 `studio_http`, `studio_mcp`, behavioral `twin_parity`, and `StudioPage.test.tsx`, plus
 TR/EN key parity, panel type checking/build and the full workspace checks. Provider
 operations in these tests use local fixtures, not live customer accounts.
+
+## M3 Task 11 — Growth Studio acceptance
+
+M3's implemented release contains **62 tables (48 + 14)**, **124 MCP tools
+(106 + 18)**, **18 Studio operations**, **21 scheduled jobs** and migration
+**0009_studio**. The earlier Task 0–9 release tables above are historical snapshots.
+Task 11 adds tests and documentation; it adds no product operation, provider or migration.
+
+The exact `studio.*` / `jeeta.studio.*` suffix set is:
+`brake`, `policy_set`, `approve`, `pending`, `slot_get`, `slot_cancel`,
+`trend_record`, `hypothesis_propose`, `file_upload`, `piece_submit`, `learned`,
+`judgment_record`, `adsets_list`, `adset_bind`, `budget_move`, `overview`,
+`ledger`, `ledger_export`. Only brake and ledger read/export are strategy-exempt;
+all 18 independently require an active workspace. Jobs, signed asset retrieval,
+M2b attribution reads and the existing work integration add no tools.
+
+```sh
+cd rust
+make smoke-studio
+cargo test --locked --workspace --test studio_rules --test twin_rule --test gate_rule
+```
+
+`smoke-studio` runs seven in-process scenarios with the transactional fake and
+scripted connectors, without a database, provider credentials or live customer data:
+
+- Real strategy approval, seven-day planning, upload/submission, default publication,
+  receipt replay, 24h/72h/7d measurement, idempotent learning and shared projections.
+- An externally seeded Meta set, public binding and reserved absolute budget update,
+  M2b intake-generated journey attribution, read-only chain join and paid projection.
+- Lost publication response followed by a new service instance: no blind resend.
+- Archive followed by due historical measurement; new execution refuses and a rebound
+  account cannot read the earlier account's evidence.
+- Thirty-day file cleanup after archive, with hashes, publication and ledger retained.
+- Both workers held at pre-dispatch barriers when the brake is pressed, with restart
+  persistence and tenant isolation.
+- Two concurrent consumers of the same remaining cap, plus idempotent settlement.
+
+`studio_rules` calls every public write dispatcher directly with missing strategy and
+inactive workspace contexts, so middleware alone cannot satisfy the gate invariant.
+It injects forged chain components, runs scheduled jobs under each execution blocker,
+checks default consent behavior, exercises hard-cap refusal and concurrent reservations,
+and attempts to overwrite measured confidence through ordinary hypothesis updates.
+Syntax-tree checks additionally pin real HTTP/MCP handlers to shared services, the
+paid port's operation set, dependency/connector boundaries and connector write sites.
+The exact catalog excludes ad creation, commissions and field installations; only
+M2b consumes lead events. B6/B7/B9 evidence includes behavior and races, not just scans.
+
+For database-backed parity, tenant isolation and reversible migration contracts,
+configure `JEETA_TEST_DATABASE_URL` as described above and run the full workspace
+checks. `twin_parity`, `studio_http`, `studio_mcp`, `studio_paid`, `studio_brakes`,
+`studio_measure`, `studio_attribution` and `studio_projection` cover the lower-level
+contracts; the smoke does not replace those PostgreSQL tests. These fixtures prove
+application behavior, not live Meta/X approval, provider availability, actual billing
+or the provider's eventual spend. The broader release checks remain `make check panel-test panel-build`.

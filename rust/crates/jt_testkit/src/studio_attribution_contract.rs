@@ -676,3 +676,214 @@ pub async fn group_change_during_account_read_discards_proof(uow: Arc<dyn UnitOf
             .is_none()
     );
 }
+
+/// Offline cross-module acceptance: externally seeded set, binding and reserved budget,
+/// M2b-owned intake, read-only attribution and the shared Studio projection.
+pub async fn paid_smoke(uow: Arc<dyn UnitOfWork>) {
+    use jt_app::usecases::{
+        budget,
+        studio::{ads, views},
+    };
+    let w = setup(uow.clone()).await;
+    let mut r = uow.tenant(w.ctx.workspace_id).await.unwrap();
+    let mut version = r
+        .strategy()
+        .find(w.binding.chain.born_version_id)
+        .await
+        .unwrap()
+        .unwrap();
+    version.sections.budget_frame.lanes = vec![jt_strategy::Lane {
+        lane: LaneKind::Paid,
+        period: jt_strategy::Period::Monthly,
+        cap_minor: 100_000,
+        currency: "TRY".into(),
+    }];
+    let hypotheses = r.hypotheses().list(version.id).await.unwrap();
+    r.strategy()
+        .set_status(version.id, VersionStatus::Archived, FIXED_NOW, None)
+        .await
+        .unwrap();
+    version.id = StrategyVersionId::new_v7();
+    version.number += 1;
+    r.strategy().insert(version.clone()).await.unwrap();
+    for mut h in hypotheses {
+        h.cadence.insert(
+            LaneKind::Paid,
+            jt_strategy::HypothesisCadence {
+                slots_per_week: 7,
+                exploration_bps: 0,
+                content_types: vec![jt_strategy::ContentTypeShare {
+                    key: "text".into(),
+                    min_bps: 0,
+                    max_bps: 10000,
+                }],
+            },
+        );
+        r.hypotheses().upsert(version.id, h).await.unwrap();
+    }
+    let mut cap = r
+        .capabilities()
+        .find(w.binding.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    cap.connector_public = json!({"access":{"scopes":["ads_read","ads_management"]}});
+    r.capabilities().update(cap).await.unwrap();
+    r.commit().await.unwrap();
+    let item = budget::create_item(
+        &w.d,
+        &w.ctx,
+        serde_json::from_value(json!({
+            "name":"paid smoke", "kind":"ad_budget", "unit":{"kind":"currency","value":"TRY"},
+            "cap":100_000, "period":"monthly", "unit_cost_minor":1
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let mut r = uow.tenant(w.ctx.workspace_id).await.unwrap();
+    r.budget()
+        .link(w.binding.capability_id, item.item.id)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    w.proof(Some("set_1"));
+    let binding = ads::adset_bind(
+        &w.d,
+        &w.ctx,
+        ads::BindAdSetInput {
+            hypothesis_id: w.binding.chain.hypothesis_id,
+            arm_id: w.binding.chain.arm_id,
+            capability_id: w.binding.capability_id,
+            adset_id: "set_1".into(),
+            request_key: "public-bind".into(),
+        },
+    )
+    .await
+    .unwrap();
+    w.proof(Some("set_1"));
+    w.ads.push_set_daily_budget(Ok(()));
+    let input = ads::BudgetMoveInput {
+        binding_id: binding.id,
+        daily_budget_minor: 20,
+        currency: "TRY".into(),
+        request_key: "smoke-move".into(),
+    };
+    let movement = ads::budget_move(&w.d, &w.ctx, input.clone()).await.unwrap();
+    assert_eq!(movement.outcome, jt_studio::BudgetMoveState::Succeeded);
+    assert!(movement.move_.reservation_id.is_some());
+    assert_eq!(
+        ads::budget_move(&w.d, &w.ctx, input).await.unwrap().move_,
+        movement.move_
+    );
+    // A new provider event arrives after the budget move. Only the M2b consumer may
+    // turn it into a journey; replaying the event must not fetch or ingest it twice.
+    let event = InboundEvent {
+        id: InboundEventId::new_v7(),
+        workspace_id: w.ctx.workspace_id,
+        capability_id: Some(w.page),
+        provider: Provider::Meta,
+        external_id: "leadgen:smoke-lead".into(),
+        kind: EventKind::LeadGen,
+        payload: json!({"leadgen":{"page_id":"page","leadgen_id":"smoke-lead","created_time":1790000040}}),
+        received_at: FIXED_NOW,
+        processed_at: None,
+    };
+    let mut r = uow.tenant(w.ctx.workspace_id).await.unwrap();
+    assert!(
+        r.inbound_events()
+            .insert_if_new(event.clone(), None)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        r.inbound_events()
+            .insert_if_new(event, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    r.commit().await.unwrap();
+    w.ads.push_leadgen(Ok(LeadGenRecord {
+        leadgen_id: "smoke-lead".into(),
+        form_id: Some("form".into()),
+        ad_id: Some("smoke-ad".into()),
+        campaign_id: Some("campaign".into()),
+        campaign_name: None,
+        created_time: Some(FIXED_NOW - Duration::hours(1)),
+        fields: [(
+            "email".into(),
+            vec!["smoke-after-budget@example.test".into()],
+        )]
+        .into(),
+    }));
+    assert_eq!(
+        consumer::consume_workspace(&w.d, w.ctx.workspace_id, FIXED_NOW)
+            .await
+            .changed,
+        1
+    );
+    assert_eq!(
+        consumer::consume_workspace(&w.d, w.ctx.workspace_id, FIXED_NOW)
+            .await
+            .changed,
+        0
+    );
+    let before = w.ads.calls().len();
+    w.proof(Some("set_1"));
+    let mut query = w.query();
+    query.ad_id = "smoke-ad".into();
+    let attribution = attribution_for_ad(&w.d, &w.ctx, query).await.unwrap();
+    assert_eq!(attribution.len(), 1);
+    assert_ne!(attribution[0].journey_id, w.journey);
+    let mut r = uow.tenant(w.ctx.workspace_id).await.unwrap();
+    assert!(
+        r.journeys()
+            .get(attribution[0].journey_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    r.commit().await.unwrap();
+    assert_eq!(attribution[0].chain, Some(binding.chain.clone()));
+    assert!(
+        w.ads.calls()[before..]
+            .iter()
+            .all(|c| !matches!(c, crate::fakes::ConnectorCall::FetchLeadGen { .. }))
+    );
+    let overview = views::overview(
+        &w.d,
+        &w.ctx,
+        views::StudioQuery {
+            hypothesis_id: Some(binding.chain.hypothesis_id),
+            lane: Some(LaneKind::Paid),
+            from: FIXED_NOW - Duration::days(1),
+            until: FIXED_NOW + Duration::days(1),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(overview.lane_support.organic.visible && overview.lane_support.paid.visible);
+    assert_eq!(overview.bindings, vec![binding]);
+    assert_eq!(
+        w.ads
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, crate::fakes::ConnectorCall::SetDailyBudget { .. }))
+            .count(),
+        1
+    );
+    let mut r = uow.tenant(w.ctx.workspace_id).await.unwrap();
+    assert_eq!(
+        r.budget()
+            .spent_between(
+                item.item.id,
+                FIXED_NOW - Duration::days(1),
+                FIXED_NOW + Duration::days(1)
+            )
+            .await
+            .unwrap(),
+        0
+    );
+}

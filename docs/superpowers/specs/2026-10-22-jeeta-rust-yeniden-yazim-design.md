@@ -792,6 +792,14 @@ Strateji sürümü → **hipotez** → **deney kolu** → **iş parçası** → 
 hipotezin deney koludur. Hiçbir iş parçası hipotezsiz, dolayısıyla stratejisiz var olamaz (B6).
 Stüdyodaki her sayı bu zincir boyunca geriye izlenir.
 
+**(M3 uygulamasında kesinleşti)** Zincir `workspace_id → born_version_id →
+hypothesis_id → arm_id` olarak saklanır. Doğum sürümü değişmez; yayın ve bütçe
+hamlesi ayrıca yürütmeyi yetkilendiren güncel sürümü kaydeder. Grup kısıtı
+`ChannelChoice.group_id` üzerinden gelir. Sürüm değişimi ve yürütme aynı çalışma
+alanı kilidinde sıralanır; korunan hipotezin öğrenmesi yeni sürüme taşınır.
+Arşiv, yeni yürütmeyi durdurur; eski yayın ve bağlama kanıtıyla yapılan ölçüm
+ayrı okuma yetkisini kullanır ve yeni yayın/harcama yetkisi vermez.
+
 ### 8.2 İki şerit
 
 | Şerit | Ne yürütür | Ne zaman görünür |
@@ -808,6 +816,15 @@ formlarını gelen kutusuna düşürür. Yaratma gerekiyorsa ajan kendi elleriyl
 bağlantısının bildirdiği bir kabiliyettir. Gerekçe: pazarlama API'siyle yaratma ek uygulama izni ve
 inceleme ister ve M3'ü yaklaşık ikiye katlar; bağlama ve bütçe ise zincirin bütünlüğü için yeterlidir.
 
+**(M3 uygulamasında kesinleşti)** Organik şerit daima görünür. Ücretli şerit için
+bağlı, erişilebilir reklam hesabı ile ücretli kanalı seçen onaylı strateji birlikte
+gerekir; sunucu da bu koşulları denetler. Yayın/ölçüm Meta ve X, reklam işlemleri
+Meta bağlayıcısının gerçekten desteklediği portlarla sınırlıdır. Kayıt defterinde
+`None` dönen işlem desteklenmez. K12 uyarınca kampanya, set veya kreatif yaratma
+API'si yoktur. Lead alımının tek sahibi M2b gelen kutusudur; Studio yalnızca
+`AttributionReader` ile kalıcı ilk temas kayıtlarını okur. `journey_attribution`
+0008 göçündedir; 0007 gelen kutusu politikasına aittir.
+
 ### 8.3 Varlıklar
 
 | Varlık | Anlam |
@@ -821,6 +838,14 @@ inceleme ister ve M3'ü yaklaşık ikiye katlar; bağlama ve bütçe ise zinciri
 | **Trend sinyali** | ajanın araştırıp kaydettiği sinyal; hangi hipotez ve kanalla ilgili olduğu işaretli |
 | **Bütçe hamlesi** | ücretli şeritte ajanın önerdiği değişiklik; çerçeve içindeyse sistem uygular, dışındaysa `BUTCE_TAVANI` (B7) |
 | **Günlük kaydı** | her eylem: kim, ne, nereye, ne zaman, hangi strateji sürümüyle, kanıt |
+
+**(M3 uygulamasında kesinleşti)** Yuva durumları tam olarak
+`Planned → Ready → Published → Measured → Retired` kümesidir. Onay veya ajanda
+ayrı bir durum değildir. Onay gerekiyorsa hedef revizyonuna bağlı metadata'dır;
+parça değiştiğinde geçersizleşir. `prior_confidence` düzenlenebilir,
+`derived_confidence` yalnız ölçüm kanıtına dayalı öğrenmeden gelir. Taslak
+kaydı/onayı türetilmiş değeri sıfırlayamaz. M3, 0009_studio up/down çiftiyle
+14 kiracı tablosu ekler; toplam 62 tablodur. Yayın ve günlük kanıtı süresizdir.
 
 ### 8.4 Döngü
 
@@ -841,6 +866,34 @@ inceleme ister ve M3'ü yaklaşık ikiye katlar; bağlama ve bütçe ise zinciri
    ile öneri yazar; çerçeve içindeyse bağlayıcı anında uygular; reklam lead formları gelen kutusuna
    kişi olarak düşer.
 
+**(M3 uygulamasında kesinleşti)** Tempo hipotez ve şerit başına tanımlanır;
+hafta pazartesi 00:00 Europe/Istanbul'da başlar. Planlayıcı saatte bir yedi günlük
+pencereyi doldurur; aynı çalışmanın tekrarı yuvaları çoğaltmaz. Ajan metin,
+onaylı kaynak URL'si veya dosya/byte verir; sunucuda model SDK'sı, içerik üretimi,
+ffmpeg hattı, trend kazıyıcısı veya ajan uyandırma servisi yoktur. Dosya sınırları
+görselde 25 MB, videoda 200 MB; MIME kümesi JPEG/PNG/WebP/GIF/MP4'tür.
+Sağlayıcıya verilen imzalı dosya URL'si 24 saat geçerlidir. Son yayından 30 gün
+sonra dosya byte'ları temizlenir; bekleyen/belirsiz iş korunur, hash ve yayın
+kanıtı silinmez.
+
+Yayın hataları otomatik yeniden gönderilmez. Yanıt kaybolduysa `Unknown`
+saklanır; bilinen dış kimlikle okuma yoluyla uzlaştırılabilir, kimlik yoksa iş
+listesinde insan/ajan incelemesi bekler. Ölçüm işi altı saatte bir 24 saat,
+72 saat ve 7 gün pencerelerini işler. Eksik sayaç sıfır ödül sayılmaz;
+kampanya toplamı iki kola dağıtılamaz. Başlangıç Beta(1,1), organik ödül
+kırpılmış etkileşim/gösterim oranı, haftalık ağırlık posterior ortalamasıdır.
+Tekrarlanan ölçüm yalnız bir kez etki eder; sonraki pencere eski katkının
+yerini alır. Trend kaydı gözlemdir; seçim bonusu ertelenmiştir.
+
+Günlük reklam bütçesi gerçek harcama değildir. Yazımdan önce günlük bütçe ×
+dönemde kalan gün kadar rezervasyon, strateji/şerit/kabiliyet/bağlı bütçe
+kalemlerinin tüm tavanlarına karşı atomik denetlenir; aşım `BUDGET_CAP`/409'dur.
+Gerçek harcama günlük sağlayıcı ölçümünden gelir; tekrar/düzeltme çift sayılmaz.
+Dış bütçe veya durum sapması ücretli şeridi frenler. Ölçülü gönderimde bilinmeyen
+birim fiyat/para birimi sıfır sayılmaz. SMS fiyatı segment başınadır:
+ASCII 160/161 ve Türkçe 70/71 karakter 1/2 segmenttir. Elle geçmiş harcama kaydı
+tavan aşılmış olsa da gerçeği kaydeder; tavanı aşan yeni gönderimi yetkilendirmez.
+
 ### 8.5 Özerklik ve fren
 
 - Varsayılan: yayın ve bütçe hamlesi insan görmeden gider (K8). Kiracı şerit başına "insan onayı
@@ -848,6 +901,21 @@ inceleme ister ve M3'ü yaklaşık ikiye katlar; bağlama ve bütçe ise zinciri
 - Her çalışma alanında tek **acil fren** vardır; basılınca iki şerit de bir saniye içinde durur,
   kuyruktaki yayın gitmez, bütçe hamlesi uygulanmaz (B9). Fren panelde ve araçta aynıdır.
 - Bütçe çerçevesi aşılamaz; büyütmek stratejinin yeni sürümüdür (§5).
+
+**(M3 uygulamasında kesinleşti)** K8 varsayılanı insan onaysız yayın ve bütçe
+hamlesidir. İsteğe bağlı şerit politikası ile kabiliyetin
+`requires_human_approval` koşulu OR ile birleşir. Yalnız `studio.manage` yetkili
+owner/manager insan revizyon onayı verebilir; ajan sahibinin yetkisini devralır
+ama insan yerine geçemez. Onay bütçe tavanını aşamaz.
+
+Frenin garantisi bir sonraki sağlayıcı çağrısı/iterasyon sınırıdır; sabit bir
+saniyelik duvar saati sözü değildir. Başlamış HTTP isteği tamamlanıp kanıtı
+kaydedilebilir. Kuyruk tutulur, aktif Meta setleri duraklatılır; güvenlik
+amaçlı duraklatma fren altında da mümkündür. Yeniden başlatma freni silmez,
+başka kiracıyı etkilemez. Yayın, bütçe ve yeniden etkinleştirme güncel strateji,
+aktif çalışma alanı, grup, kabiliyet, politika, onay, fren ve harcama sınırlarını
+yeniden denetler. Yalnız `brake`, `ledger`, `ledger_export` stratejiden muaftır;
+hiçbir Studio işlemi çalışma alanı durum kapısından muaf değildir.
 
 ### 8.6 Panel: tek ekran, beş bölge
 
@@ -859,6 +927,14 @@ inceleme ister ve M3'ü yaklaşık ikiye katlar; bağlama ve bütçe ise zinciri
 | Öğrenilenler (sağ) | hipotez ve kol başına sonuç, ajanın yargısı, trend sinyalleri; rapor sayfası budur |
 | Günlük (alt) | her eylem kanıtıyla; devralmalar ve fren dahil; süzülebilir, dışa aktarılabilir |
 
+**(M3 uygulamasında kesinleşti)** `/studio` tek ekrandır; Strateji, Plan, Bugün,
+Öğrenilenler ve Günlük aynı hipotez/şerit/zaman süzgecini kullanır. Liste ve
+takvim aynı yuvaların iki görünümüdür. Organik şerit engelliyken de görünür;
+ücretli şerit uygunluk koşullarıyla açılır. Revizyon onayı Ready üzerinde
+engelleyici olarak gösterilir. Günlük okuma/CSV dışa aktarımı arşivden sonra da
+sürer; kimlikler ve kanıt bağlantıları kalır, sırlar, içerik byte'ları ve imzalı
+URL tokenları günlüğe girmez. Formül başlangıçları CSV'de etkisizleştirilir.
+
 ### 8.7 Gidenler
 
 Saha kurulumları; komisyonlar (gelen kutusuna); satış raporları (lead kaynakları, bölge, dönüşüm
@@ -867,11 +943,29 @@ işleyiş, kitle); ayrı fikir paneli (fikir, hipotez önerisidir ve strateji ş
 trend sistemi (tek sinyal kalır); iki takvim; otopilot çubuğu (ücretli şeride dönüşür); cüzdan ve
 kredi bakiyesi (K4).
 
+**(M3 uygulamasında kesinleşti)** Studio'da saha Kurulum'u, komisyon, cüzdan,
+reklam yaratma veya ayrı otopilot yoktur. Komisyon gelen kutusunda kalır;
+kabiliyetin bağlantı/kurulum hazırlığı saha Kurulum ürünü değildir. Reklam
+atıfı kanıtlı ad → set → kol bağlantısı gerektirir; eksik eşleme tahmin edilmez.
+M2b ham webhook gövdesini 30 gün sonra silse de kalıcı ilk temas satırı kalır.
+
 ### 8.8 Araçlar (özet)
 
 `jeeta.studio.bekleyen_isler`, `yuva_oku`, `dosya_yukle`, `parca_gonder`, `yuva_iptal`,
 `trend_kaydet`, `ogrenilenler`, `reklam_seti_bagla`, `butce_hamlesi`, `fren`, `gunluk`,
 `hipotez_oner` (strateji taslağına düşer).
+
+**(M3 uygulamasında kesinleşti)** Çalışan İngilizce araç kümesi tam 18 sonektir:
+`brake`, `policy_set`, `approve`, `pending`, `slot_get`, `slot_cancel`,
+`trend_record`, `hypothesis_propose`, `file_upload`, `piece_submit`, `learned`,
+`judgment_record`, `adsets_list`, `adset_bind`, `budget_move`, `overview`,
+`ledger`, `ledger_export`. Her biri `studio.*` katalog satırı,
+`jeeta.studio.*` MCP aracı ve `/api/studio/...` HTTP uygulamasına sahiptir;
+katı giriş şeması ve servisleri ortaktır. 106 + 18 = 124 araçtır. İşler,
+`work.*` entegrasyonu, imzalı dosya taşıması ve atıf okuması yeni iş aracı eklemez.
+`make smoke-studio`, canlı sağlayıcı olmadan senaryolu bağlayıcılarla zinciri,
+ölçüm tekrarını, belirsiz yayın sonrası yeniden başlatmayı, arşiv/temizliği,
+iki şerit fren yarışını ve eşzamanlı tavan tüketimini çalıştırır.
 
 ## 9. Para modeli
 
