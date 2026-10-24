@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::billing;
 use jt_app::ports::inbox::*;
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, ApiKeyRow, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
@@ -94,6 +95,14 @@ impl PgTenantRepos {
 
 #[async_trait]
 impl TenantRepos for PgTenantRepos {
+    fn billing(&mut self) -> &mut dyn jt_app::ports::billing::BillingRepo {
+        self
+    }
+
+    fn activation_codes(&mut self) -> &mut dyn jt_app::ports::billing::ActivationCodeRepo {
+        self
+    }
+
     fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
         self
     }
@@ -335,6 +344,78 @@ pub struct PgPlatformRepos {
 
 #[async_trait]
 impl PlatformRepos for PgPlatformRepos {
+    async fn workspace_lock(&mut self, ws: WorkspaceId) -> Result<WorkspaceRow, AppError> {
+        workspaces::lock(self.tx.conn(), ws).await
+    }
+    async fn payment_get(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::PaymentId,
+    ) -> Result<Option<billing::PaymentNotification>, AppError> {
+        crate::repos::billing::payment_get(self.tx.conn(), ws, id).await
+    }
+    async fn payments_list(&mut self) -> Result<Vec<billing::PaymentNotification>, AppError> {
+        crate::repos::billing::payments_list(&mut self.tx).await
+    }
+    async fn entitlement_get(
+        &mut self,
+        ws: WorkspaceId,
+    ) -> Result<Option<billing::WorkspaceEntitlement>, AppError> {
+        crate::repos::billing::entitlement_get(self.tx.conn(), ws).await
+    }
+    async fn entitlement_insert(
+        &mut self,
+        row: billing::WorkspaceEntitlement,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::entitlement_insert(self.tx.conn(), row).await
+    }
+    async fn entitlement_revoke(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::EntitlementId,
+        at: OffsetDateTime,
+        reason: &str,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::entitlement_revoke(self.tx.conn(), ws, id, at, reason).await
+    }
+    async fn activation_code_insert(
+        &mut self,
+        ws: WorkspaceId,
+        row: billing::ActivationCodeRow,
+    ) -> Result<(), AppError> {
+        crate::repos::same_workspace(ws, row.workspace_id)?;
+        crate::repos::billing::code_insert(self.tx.conn(), row).await
+    }
+    async fn activation_code_lock_current_by_workspace(
+        &mut self,
+        ws: WorkspaceId,
+    ) -> Result<Option<billing::ActivationCodeRow>, AppError> {
+        crate::repos::billing::code_current(self.tx.conn(), ws).await
+    }
+    async fn activation_code_record_failed_attempt(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::ActivationCodeId,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::code_fail(self.tx.conn(), ws, id).await
+    }
+    async fn activation_code_invalidate_current(
+        &mut self,
+        ws: WorkspaceId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::code_invalidate(self.tx.conn(), ws, at).await
+    }
+    async fn activation_code_consume(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::ActivationCodeId,
+        at: OffsetDateTime,
+        by: UserId,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::code_consume(self.tx.conn(), ws, id, at, by).await
+    }
+
     fn operators(&mut self) -> &mut dyn OperatorRepo {
         self
     }
@@ -355,8 +436,10 @@ impl PlatformRepos for PgPlatformRepos {
         &mut self,
         ws: WorkspaceId,
         status: WorkspaceStatus,
+        reason: &str,
+        by: &jt_ledger::Actor,
     ) -> Result<(), AppError> {
-        workspaces::set_status(&mut self.tx, ws, status).await
+        workspaces::set_status(self.tx.conn(), ws, status, reason, by).await
     }
 
     async fn workspace_owner_email(&mut self, ws: WorkspaceId) -> Result<Option<Email>, AppError> {

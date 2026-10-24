@@ -18,3 +18,5 @@ pub mod compliance_contract;
 pub mod studio_contract;
 
 pub mod studio_attribution_contract;
+
+pub mod billing_contract;

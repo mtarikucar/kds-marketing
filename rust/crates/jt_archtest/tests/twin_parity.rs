@@ -2028,9 +2028,16 @@ async fn inbox_pending_and_context_have_http_mcp_parity_without_strategy() {
     assert_eq!(human["ours"][0]["id"], json!(id));
     for status in ["pending_payment", "suspended"] {
         let mut r = deps.uow.platform().await.unwrap();
-        r.workspace_set_status(ws, serde_json::from_value(json!(status)).unwrap())
-            .await
-            .unwrap();
+        r.workspace_set_status(
+            ws,
+            serde_json::from_value(json!(status)).unwrap(),
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
         r.commit().await.unwrap();
         for (path, tool, input) in [
             (

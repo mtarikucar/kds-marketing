@@ -177,7 +177,17 @@ impl Team {
 
 async fn set_status(uow: &InMemoryUow, ws: WorkspaceId, status: WorkspaceStatus) {
     let mut platform = uow.platform().await.unwrap();
-    platform.workspace_set_status(ws, status).await.unwrap();
+    platform
+        .workspace_set_status(
+            ws,
+            status,
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
     platform.commit().await.unwrap();
 }
 

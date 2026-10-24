@@ -250,3 +250,5 @@ mod tests {
         assert_eq!(hash_token("").len(), 64);
     }
 }
+
+pub mod billing;

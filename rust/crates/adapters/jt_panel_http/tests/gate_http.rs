@@ -133,7 +133,14 @@ impl World {
     async fn set_status(&self, status: WorkspaceStatus) {
         let mut platform = self.uow.platform().await.unwrap();
         platform
-            .workspace_set_status(self.ws, status)
+            .workspace_set_status(
+                self.ws,
+                status,
+                "test status transition",
+                &jt_ledger::Actor::System {
+                    component: "test".into(),
+                },
+            )
             .await
             .unwrap();
         platform.commit().await.unwrap();

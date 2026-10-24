@@ -206,7 +206,16 @@ impl World {
 
     async fn set_status(&self, ws: WorkspaceId, status: WorkspaceStatus) {
         let mut p = self.deps.uow.platform().await.unwrap();
-        p.workspace_set_status(ws, status).await.unwrap();
+        p.workspace_set_status(
+            ws,
+            status,
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
         p.commit().await.unwrap();
     }
 }
@@ -938,11 +947,19 @@ async fn gated_tool_passes_after_operator_activates_and_gate_stub_says_strategy_
         component: format!("platform_operator:{}", pctx.operator_id),
     };
     let changes = w.entries(w.a, "platform.workspace_status").await;
-    assert_eq!(changes.len(), 1);
+    assert_eq!(changes.len(), 2);
+    let setup_actor = Actor::System {
+        component: "test".into(),
+    };
+    assert_eq!(changes[1].actor, setup_actor);
+    assert_eq!(
+        changes[1].payload,
+        json!({"from":"active","to":"pending_payment","reason":"test status transition","by":setup_actor})
+    );
     assert_eq!(changes[0].actor, operator);
     assert_eq!(
         changes[0].payload,
-        json!({ "from": "pending_payment", "to": "active" })
+        json!({ "from": "pending_payment", "to": "active", "reason":"operator status transition", "by":operator })
     );
     assert!(w.entries(w.b, "platform.workspace_status").await.is_empty());
 
@@ -981,7 +998,7 @@ async fn gated_tool_passes_after_operator_activates_and_gate_stub_says_strategy_
     }
     let info = ok(&call(&client, "jeeta.workspace.info", json!({})).await);
     assert_eq!(info["status"], "suspended");
-    assert_eq!(w.entries(w.a, "platform.workspace_status").await.len(), 2);
+    assert_eq!(w.entries(w.a, "platform.workspace_status").await.len(), 3);
 }
 
 /// The sections of a minimal approvable strategy, on the `any` channel (no workspace has a

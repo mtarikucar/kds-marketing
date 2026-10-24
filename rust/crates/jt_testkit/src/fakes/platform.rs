@@ -5,13 +5,16 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::billing::*;
 use jt_app::ports::{
     ApiKeyRow, MembershipRow, OperatorRepo, OperatorRow, PlatformRepos, PlatformSessionRepo,
     PlatformSessionRow, WorkspaceRow,
 };
 use jt_capability::{Capability, StoredStatus};
 use jt_ledger::LedgerEntry;
+use jt_tenancy::UserId;
 use jt_tenancy::{Email, MembershipStatus, WorkspaceId, WorkspaceStatus};
+use time::OffsetDateTime;
 
 use super::state::{MemBundle, MemState, MemTx, exists, unique};
 
@@ -100,6 +103,87 @@ impl PlatformSessionRepo for MemPlatform {
 
 #[async_trait]
 impl PlatformRepos for MemPlatform {
+    async fn workspace_lock(&mut self, ws: WorkspaceId) -> Result<WorkspaceRow, AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.billing_workspace(ws))
+    }
+    async fn payment_get(
+        &mut self,
+        ws: WorkspaceId,
+        id: PaymentId,
+    ) -> Result<Option<PaymentNotification>, AppError> {
+        Ok(self.tx.billing_payment(ws, id))
+    }
+    async fn payments_list(&mut self) -> Result<Vec<PaymentNotification>, AppError> {
+        let mut rows = self.tx.work.payments.clone();
+        rows.sort_by_key(|p| (p.reported_at, p.id));
+        Ok(rows)
+    }
+    async fn entitlement_get(
+        &mut self,
+        ws: WorkspaceId,
+    ) -> Result<Option<WorkspaceEntitlement>, AppError> {
+        Ok(self.tx.billing_grant(ws))
+    }
+    async fn entitlement_insert(&mut self, row: WorkspaceEntitlement) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.entitlement_insert(row))
+    }
+    async fn entitlement_revoke(
+        &mut self,
+        ws: WorkspaceId,
+        id: EntitlementId,
+        at: OffsetDateTime,
+        reason: &str,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.entitlement_revoke(ws, id, at, reason))
+    }
+    async fn activation_code_insert(
+        &mut self,
+        ws: WorkspaceId,
+        row: ActivationCodeRow,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.code_insert(ws, row))
+    }
+    async fn activation_code_lock_current_by_workspace(
+        &mut self,
+        ws: WorkspaceId,
+    ) -> Result<Option<ActivationCodeRow>, AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| {
+            t.tx.billing_workspace(ws)?;
+            Ok(t.tx.billing_code(ws))
+        })
+    }
+    async fn activation_code_record_failed_attempt(
+        &mut self,
+        ws: WorkspaceId,
+        id: ActivationCodeId,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.code_fail(ws, id))
+    }
+    async fn activation_code_invalidate_current(
+        &mut self,
+        ws: WorkspaceId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.code_invalidate(ws, at))
+    }
+    async fn activation_code_consume(
+        &mut self,
+        ws: WorkspaceId,
+        id: ActivationCodeId,
+        at: OffsetDateTime,
+        by: UserId,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.code_consume(ws, id, at, by))
+    }
+
     fn operators(&mut self) -> &mut dyn OperatorRepo {
         self
     }
@@ -122,20 +206,12 @@ impl PlatformRepos for MemPlatform {
         &mut self,
         ws: WorkspaceId,
         status: WorkspaceStatus,
+        reason: &str,
+        by: &jt_ledger::Actor,
     ) -> Result<(), AppError> {
-        self.call(|this| {
-            if this.state().workspace(ws).is_none() {
-                return Err(AppError::not_found("no such workspace"));
-            }
-            this.tx.write(move |s| {
-                if let Some(w) = s.workspaces.iter_mut().find(|w| w.id == ws) {
-                    w.status = status;
-                }
-            });
-            Ok(())
-        })
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.billing_status(ws, status, reason, by))
     }
-
     async fn workspace_owner_email(&mut self, ws: WorkspaceId) -> Result<Option<Email>, AppError> {
         let state = self.state();
         Ok(state

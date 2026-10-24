@@ -103,7 +103,7 @@ async fn studio_exact_catalog_and_gate_set() {
             all_tables.insert(name.to_owned());
         }
     }
-    assert_eq!(all_tables.len(), 62);
+    assert_eq!(all_tables.len(), 67);
 
     // All fourteen Studio tables are tenant-scoped.
     assert_eq!(
@@ -263,9 +263,16 @@ async fn every_studio_write_reaches_shared_execution_gate() {
         let w = scenarios::world::world().await;
         if inactive {
             let mut r = w.uow.platform().await.unwrap();
-            r.workspace_set_status(w.f.ws, WorkspaceStatus::Suspended)
-                .await
-                .unwrap();
+            r.workspace_set_status(
+                w.f.ws,
+                WorkspaceStatus::Suspended,
+                "test status transition",
+                &jt_ledger::Actor::System {
+                    component: "test".into(),
+                },
+            )
+            .await
+            .unwrap();
             r.commit().await.unwrap();
         } else {
             w.archive().await;
@@ -343,9 +350,16 @@ async fn studio_execution_jobs_enforce_status_strategy_and_brake() {
         match blocked {
             "status" => {
                 let mut r = w.uow.platform().await.unwrap();
-                r.workspace_set_status(w.f.ws, WorkspaceStatus::Suspended)
-                    .await
-                    .unwrap();
+                r.workspace_set_status(
+                    w.f.ws,
+                    WorkspaceStatus::Suspended,
+                    "test status transition",
+                    &jt_ledger::Actor::System {
+                        component: "test".into(),
+                    },
+                )
+                .await
+                .unwrap();
                 r.commit().await.unwrap();
             }
             "strategy" => w.archive().await,

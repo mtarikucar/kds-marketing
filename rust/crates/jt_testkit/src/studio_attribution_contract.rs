@@ -605,7 +605,14 @@ pub async fn attribution_checks_permissions_windows_and_capability_access(
     assert_eq!(w.ads.calls().len(), before);
     let mut platform = w.d.uow.platform().await.unwrap();
     platform
-        .workspace_set_status(w.ctx.workspace_id, jt_tenancy::WorkspaceStatus::Suspended)
+        .workspace_set_status(
+            w.ctx.workspace_id,
+            jt_tenancy::WorkspaceStatus::Suspended,
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
         .await
         .unwrap();
     platform.commit().await.unwrap();

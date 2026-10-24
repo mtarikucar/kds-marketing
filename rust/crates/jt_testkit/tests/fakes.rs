@@ -728,14 +728,28 @@ async fn a_failed_call_spoils_the_bundle_so_commit_fails() {
 
     // Platform bundle.
     let mut p = uow.platform().await.unwrap();
-    p.workspace_set_status(ws, WorkspaceStatus::Suspended)
-        .await
-        .unwrap();
+    p.workspace_set_status(
+        ws,
+        WorkspaceStatus::Suspended,
+        "test status transition",
+        &jt_ledger::Actor::System {
+            component: "test".into(),
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         code(
-            p.workspace_set_status(WorkspaceId::new_v7(), WorkspaceStatus::Active)
-                .await
-                .unwrap_err()
+            p.workspace_set_status(
+                WorkspaceId::new_v7(),
+                WorkspaceStatus::Active,
+                "test status transition",
+                &jt_ledger::Actor::System {
+                    component: "test".into()
+                }
+            )
+            .await
+            .unwrap_err()
         ),
         ErrorCode::NotFound
     );

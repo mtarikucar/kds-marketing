@@ -293,7 +293,14 @@ mod tests {
 
         let mut platform = uow.platform().await.unwrap();
         platform
-            .workspace_set_status(ws, WorkspaceStatus::Active)
+            .workspace_set_status(
+                ws,
+                WorkspaceStatus::Active,
+                "test status transition",
+                &jt_ledger::Actor::System {
+                    component: "test".into(),
+                },
+            )
             .await
             .unwrap();
         platform.commit().await.unwrap();

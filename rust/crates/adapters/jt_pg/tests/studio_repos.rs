@@ -27,7 +27,7 @@ async fn studio_schema_exact_table_delta() {
         ]
     );
     let count: i64 = sqlx::query_scalar("select count(*) from pg_tables where schemaname='public' and tablename <> '_sqlx_migrations'").fetch_one(&db.pool).await.unwrap();
-    assert_eq!(count, 48 + 14);
+    assert_eq!(count, 48 + 14 + 5);
 }
 
 #[tokio::test]

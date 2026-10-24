@@ -15,14 +15,13 @@
 use std::cmp::Reverse;
 use std::fmt;
 
-use jt_ledger::{Actor, LedgerEntry, Subject};
+use jt_ledger::Actor;
 use jt_tenancy::{Email, OperatorId, WorkspaceId, WorkspaceStatus};
 use serde::Serialize;
-use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
 use super::auth::LoginInput;
-use super::{Deps, action, hash_token, invalid};
+use super::{Deps, hash_token, invalid};
 use crate::ctx::PlatformCtx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{OperatorRow, PlatformRepos, PlatformSessionRow, WorkspaceRow};
@@ -34,8 +33,6 @@ pub const MIN_OPERATOR_PASSWORD_CHARS: usize = 12;
 /// Random bytes in an operator session token.
 pub const PLATFORM_TOKEN_BYTES: usize = 32;
 
-/// The ledger action written into a workspace whose status an operator changes.
-const STATUS_ACTION: &str = "platform.workspace_status";
 /// The single answer to every failed operator login, so it never reveals whether an email
 /// belongs to an operator.
 const INVALID_CREDENTIALS: &str = "invalid credentials";
@@ -212,9 +209,10 @@ pub async fn list_workspaces(
 ///
 /// An unknown workspace is `NOT_FOUND`. Setting the status it already has is a successful no-op
 /// that writes nothing. Otherwise one platform transaction stores the status and appends
-/// `platform.workspace_status` (payload `{"from", "to"}`, subject the workspace) to that
-/// workspace's own ledger, by `Actor::System { component: "platform_operator:<operator id>" }`
-/// at the context's time.
+/// `platform.workspace_status` (from/to/reason/by, subject the workspace) to that
+/// workspace's ledger by `Actor::System { component: "platform_operator:<operator id>" }`.
+/// The repository supplies transaction time; M4 Task 3 replaces this legacy console operation
+/// with explicit suspend/resume/revoke operations.
 pub async fn set_status(
     deps: &Deps,
     pctx: &PlatformCtx,
@@ -222,29 +220,17 @@ pub async fn set_status(
     status: WorkspaceStatus,
 ) -> Result<WorkspaceAdminOut, AppError> {
     let mut repos = deps.uow.platform().await?;
-    let row = repos
-        .workspace_get(ws)
-        .await?
-        .ok_or_else(|| AppError::not_found("no such workspace"))?;
-    if row.status == status {
-        return admin_view(repos.as_mut(), row).await;
-    }
-    let from = row.status;
-    repos.workspace_set_status(ws, status).await?;
-    let mut entry = LedgerEntry::new(
-        ws,
-        Actor::System {
-            component: format!("platform_operator:{}", pctx.operator_id),
-        },
-        action(STATUS_ACTION)?,
-        json!({ "from": from.key(), "to": status.key() }),
-        pctx.now,
-    );
-    entry.subject = Some(Subject {
-        kind: "workspace".to_owned(),
-        id: ws.to_string(),
-    });
-    repos.ledger_append(entry).await?;
+    let row = repos.workspace_lock(ws).await?;
+    repos
+        .workspace_set_status(
+            ws,
+            status,
+            "operator status transition",
+            &Actor::System {
+                component: format!("platform_operator:{}", pctx.operator_id),
+            },
+        )
+        .await?;
     let out = admin_view(repos.as_mut(), WorkspaceRow { status, ..row }).await?;
     repos.commit().await?;
     Ok(out)

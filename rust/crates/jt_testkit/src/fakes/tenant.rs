@@ -51,6 +51,14 @@ impl MemBundle for MemTenant {
 
 #[async_trait]
 impl TenantRepos for MemTenant {
+    fn billing(&mut self) -> &mut dyn jt_app::ports::billing::BillingRepo {
+        self
+    }
+
+    fn activation_codes(&mut self) -> &mut dyn jt_app::ports::billing::ActivationCodeRepo {
+        self
+    }
+
     fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
         self
     }
@@ -690,6 +698,24 @@ impl LedgerRepo for MemTenant {
 
 #[async_trait]
 impl WorkspaceRepo for MemTenant {
+    async fn lock(&mut self) -> Result<WorkspaceRow, AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.billing_workspace(t.ws))
+    }
+    async fn set_status(
+        &mut self,
+        ws: WorkspaceId,
+        status: jt_tenancy::WorkspaceStatus,
+        reason: &str,
+        by: &Actor,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| {
+            same_workspace(t.ws, ws)?;
+            t.tx.billing_status(ws, status, reason, by)
+        })
+    }
+
     async fn get(&mut self) -> Result<WorkspaceRow, AppError> {
         self.call(|this| {
             this.state()

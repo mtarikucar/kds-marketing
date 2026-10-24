@@ -93,6 +93,9 @@ döndürür. Sekiz göç vardır:
 | `0007_inbox_policy` | Alan politikalarına `inbox_policy` sütunu ekler; mevcut durum etiketlerini korur, yeni tablo eklemez. |
 | `0008_inbox_compliance` | İzinler, engellemeler, teklifler, randevular, komisyonlar, silme kayıtları ve kimlik özetleri, gönderim işleri, posta imleçleri, varsayılan/kullanıcı komisyon oranları ve değişmez yolculuk atfı: 12 yeni alan tablosu, toplam 48. FORCE RLS, bileşik alan anahtarları ve yinelenebilir up/down. |
 | `0009_studio` | Growth Studio tenant persistence: 14 tables, total 62; durable claims, replay receipts, learning, spend reservations and reversible owner/manager grant backfill. Includes hypothesis cadence/prior and nullable unit price. |
+| `0010_m4_billing` | Payment evidence, permanent entitlement history, stable workspace reference and a platform-only backfill manifest; 66 tables. Schema rollback refuses live rows. |
+| `0011_m4_activation_codes` | Workspace-locked keyed activation challenges, attempt cap and replay history; 67 tables. No plaintext or recipient binding. |
+| `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -2404,7 +2407,7 @@ its immutable repository contract. No provider-live verification is claimed.
 
 ## M3 Task 10 — Five-region Growth Studio
 
-The current release has **124 MCP tools / 18 Studio operations**, **62 tables**,
+At the M3 Task 10 boundary the release had **124 MCP tools / 18 Studio operations**, **62 tables**,
 migration **0009_studio**, and **21 scheduled jobs**. This task adds no tables or jobs.
 
 | Shared row / MCP tool | HTTP | Strategy gate / permission |
@@ -2497,3 +2500,55 @@ checks. `twin_parity`, `studio_http`, `studio_mcp`, `studio_paid`, `studio_brake
 contracts; the smoke does not replace those PostgreSQL tests. These fixtures prove
 application behavior, not live Meta/X approval, provider availability, actual billing
 or the provider's eventual spend. The broader release checks remain `make check panel-test panel-build`.
+
+
+## M4 Task 1 — durable billing storage
+
+The implemented storage boundary is **67 tables**, **12 migration pairs** (latest
+`0012_m4_grandfathered_backfill`), **124 MCP tools** and **21 scheduled jobs**.
+This task adds repository contracts; payment reporting, operator confirmation and panel
+redemption surfaces belong to M4 Tasks 2–4. The existing M3 release tables above are historical.
+There is no payment provider, subscription, credit balance or automatic entitlement expiry.
+Price, currency and bank instructions remain deployment inputs for the subsequent billing
+operations, not business constants derived from test fixtures.
+
+`payment_notifications` stores immutable evidence through insert-only repository methods:
+reporter, request key, amount in minor units, currency, payment/report timestamps and a sealed
+bank reference. The same request key is unique within a workspace. Secret-bearing payment and
+challenge rows have masked Debug and do not implement serialization. `workspace_billing`
+creates a stable `JEETA-<8 uppercase workspace UUID hex digits>-<6 random decimal digits>`
+reference once under the workspace lock, retrying unique-reference collisions.
+
+A paid entitlement requires a payment from the same workspace and a confirming platform
+operator. Confirmation stores an unactivated grant; activation records time and the redeeming
+user. Grandfathered grants have no payment or operator. Only one nonrevoked grant may exist per
+workspace; revocation retains the row and its reason, and a later grant may reuse the same
+payment. `activation_codes` stores only a keyed 32-byte digest and challenge metadata. Challenges
+are restricted to `billing.activate`, have no designated recipient, retain consumed rows for
+replay refusal, and cap failed attempts at five. Current-owner authorization and code generation
+are implemented by the later redemption use case.
+
+Billing writers lock the workspace before grants/challenges, retaining the lock until the
+caller commits or drops its bundle. PostgreSQL uses `FOR NO KEY UPDATE`, compatible with
+unrelated ledger foreign-key locks; the fake serializes writes and refreshes its snapshot.
+Tenant status mutation rejects another workspace. Both status mutation ports require a reason
+and actor and atomically append `platform.workspace_status` with `from`, `to`, `reason`, `by`.
+A repeated status is a no-op. This specified port has no timestamp parameter, so its audit uses
+transaction time (fixed transaction time in the fake); other billing timestamps come from callers.
+Registration still creates pending workspaces and `workspace.info` remains read-only. Task 3
+replaces the legacy console status operation with the ruled payment/status state machine.
+
+All four billing tables have ENABLE/FORCE RLS and tenant composite foreign keys. Platform access
+uses the existing explicit platform transaction, with no superuser/BYPASSRLS role. The separate
+backfill manifest is platform-only. Backfill IDs are deterministic per workspace and the manifest
+retains the entire original row plus its workspace ledger watermark. Repeated up skips existing
+grants. Data down removes only untouched owned rows without later ledger history, other grants
+or challenge references; edited/revoked/runtime-associated rows and their manifest entries stay.
+It never changes workspace status. Schema downs preflight and lock their tables, then refuse
+atomically if live rows remain. Roll back live installations through a preserved backup, not by
+dropping durable payment history. Migrations 0001–0009 are unchanged.
+
+Verification: `cargo test --locked --workspace --test billing_repos --test migrations` runs
+shared fake/Pg contracts, ordinary-role RLS and composite FK checks, challenge replay/attempt
+checks, concurrent grants/reference creation, and up/down/up/repeated-down/live-row preservation.
+The named `m4_billing_storage` and `m4_billing_contracts` targets also run in the workspace suite.

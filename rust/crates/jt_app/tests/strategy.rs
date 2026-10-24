@@ -116,6 +116,14 @@ struct SpyTenant {
 
 #[async_trait]
 impl TenantRepos for SpyTenant {
+    fn billing(&mut self) -> &mut dyn jt_app::ports::billing::BillingRepo {
+        self.inner.billing()
+    }
+
+    fn activation_codes(&mut self) -> &mut dyn jt_app::ports::billing::ActivationCodeRepo {
+        self.inner.activation_codes()
+    }
+
     fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
         self.inner.studio()
     }

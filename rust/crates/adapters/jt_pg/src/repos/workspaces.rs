@@ -88,24 +88,53 @@ pub(crate) async fn get(
     record.map(WorkspaceRecord::into_row).transpose()
 }
 
-/// An unknown workspace is `NOT_FOUND`.
-pub(crate) async fn set_status(
-    tx: &mut PlatformTx<'_>,
+/// Workspace lock shared by tenant activation and platform grant/status writers. NO KEY
+/// UPDATE avoids conflicting with unrelated ledger foreign-key KEY SHARE locks.
+pub(crate) async fn lock(
+    conn: &mut sqlx::PgConnection,
     ws: WorkspaceId,
-    status: WorkspaceStatus,
-) -> Result<(), AppError> {
-    let done = sqlx::query(
-        // archtest: platform-wide
-        "update workspaces set status = $2 where id = $1",
+) -> Result<WorkspaceRow, AppError> {
+    let row: Option<WorkspaceRecord> = sqlx::query_as(
+        "select id,name,slug,status,created_at from workspaces where id=$1 for no key update",
     )
     .bind(ws.as_uuid())
-    .bind(status.key())
-    .execute(tx.conn())
+    .fetch_optional(conn)
     .await
-    .map_err(|e| map_sqlx(e, "set workspace status"))?;
-    if done.rows_affected() == 0 {
-        return Err(AppError::not_found("no such workspace"));
+    .map_err(|e| map_sqlx(e, "lock workspace"))?;
+    row.ok_or_else(|| AppError::not_found("no such workspace"))?
+        .into_row()
+}
+/// The specified port has no time argument: status audit uses the transaction timestamp.
+pub(crate) async fn set_status(
+    conn: &mut sqlx::PgConnection,
+    ws: WorkspaceId,
+    status: WorkspaceStatus,
+    reason: &str,
+    by: &jt_ledger::Actor,
+) -> Result<(), AppError> {
+    let row = lock(conn, ws).await?;
+    if reason.trim().is_empty() {
+        return Err(AppError::validation(
+            "reason is required",
+            serde_json::json!({"field":"reason"}),
+        ));
     }
+    if row.status == status {
+        return Ok(());
+    }
+    let at: OffsetDateTime = sqlx::query_scalar("select transaction_timestamp()")
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|e| map_sqlx(e, "status audit time"))?;
+    let entry =
+        jt_app::usecases::billing::schema::status_entry(ws, row.status, status, reason, by, at)?;
+    sqlx::query("update workspaces set status=$2 where id=$1")
+        .bind(ws.as_uuid())
+        .bind(status.key())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| map_sqlx(e, "set workspace status"))?;
+    super::ledger::insert(conn, &entry).await?;
     Ok(())
 }
 
@@ -150,6 +179,21 @@ pub(crate) async fn member_count(
 
 #[async_trait]
 impl WorkspaceRepo for PgTenantRepos {
+    async fn lock(&mut self) -> Result<WorkspaceRow, AppError> {
+        let ws = self.workspace_id();
+        lock(self.tx.conn(), ws).await
+    }
+    async fn set_status(
+        &mut self,
+        ws: WorkspaceId,
+        status: WorkspaceStatus,
+        reason: &str,
+        by: &jt_ledger::Actor,
+    ) -> Result<(), AppError> {
+        super::same_workspace(self.workspace_id(), ws)?;
+        set_status(self.tx.conn(), ws, status, reason, by).await
+    }
+
     async fn get(&mut self) -> Result<WorkspaceRow, AppError> {
         let ws = self.workspace_id();
         let record: Option<WorkspaceRecord> = sqlx::query_as(
