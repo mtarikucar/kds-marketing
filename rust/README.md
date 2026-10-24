@@ -2345,3 +2345,48 @@ recordable even above a cap. Status changes never use `set_daily_budget(0)`.
 Validation: `studio_paid` covers the application and real PostgreSQL concurrency;
 `budget` preserves truthful historical spend; `twin_parity`, `studio_http` and
 `studio_mcp` exercise surface effects, strict schemas and errors.
+
+### M3 Task 9 — read-only inbox attribution
+
+The release remains at **121 MCP tools / 15 Studio operations**, **62 tables**,
+migration **0009_studio**, and **21 scheduled jobs**. Task 9 adds the internal
+`studio::attribution::attribution_for_ad` projection for learned/overview callers;
+it adds no catalog row, HTTP route, MCP tool, migration or intake job. The public
+learned/overview integration belongs to the five-region panel task (T10).
+`Deps::attribution()` reuses M2b's tenant-scoped reader over immutable
+`journey_attribution` (migration **0008**, not the plan's prereconciliation 0007).
+
+`AttributionQuery { binding_id, ad_id, from, to }` requires `studio.work`, an active
+workspace, and a nonempty half-open acquisition window `[from,to)`. A foreign
+binding is not found. Historical reads remain possible after strategy archive;
+they authorize evidence only, never publication or spending. The current strategy
+selects capability groups when present; after archive the binding's birth strategy
+supplies that selection. Actual group membership and connected Ads access are read
+again after provider calls.
+
+A result carries only the journey ID, original provider acquisition time, erasure
+flag, and an optional binding/chain. Attribution requires all of these proofs:
+
+- The retained Meta lead-gen event identifies the actual acquisition's Page
+  capability and Page ID, including for repeat journeys. Raw form bodies are never
+  read. Keyset pagination reaches older events after raw-body retention.
+- The Page (or Page-bound Messenger capability) and Ads capability share a group
+  explicitly selected for the paid channel. An arbitrary shared group is insufficient.
+- The Ads credential verifies the account and its listed ad set/campaign. The ad
+  resolves to that set, or immutable stored ad-set evidence matches it. A missing
+  resolution does not discard independently verified stored evidence; contradictory
+  set/campaign evidence cannot be used.
+- The account/set has one binding, and its chain identifies the persisted paid arm
+  and birth hypothesis. A shared campaign alone never selects an arm.
+
+Missing or changed proof leaves the journey in the result with null binding/chain.
+The projection never fetches leads, consumes events, changes first touch or journey
+ownership, writes inbox data, updates rewards, or returns personal lead content.
+Erased people remain safe ID/time-only tombstone projections. Event metadata is
+scanned through the existing paginated read port; no new indexed lookup is added.
+
+`studio_attribution` runs the eight named T9 contracts plus stored-evidence,
+permission/status/window, archive/pagination and concurrent-group-change cases
+against both the transactional fake and real PostgreSQL: **12 tests per adapter**.
+Fixtures use the M2b consumer; optional stored ad-set variants additionally exercise
+its immutable repository contract. No provider-live verification is claimed.
