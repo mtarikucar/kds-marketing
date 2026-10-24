@@ -352,3 +352,63 @@ async fn file_bytes_and_signed_tokens_absent_from_logs() {
     assert!(!logs.contains(url.as_str()));
     std::fs::remove_dir_all(p).unwrap();
 }
+
+#[tokio::test]
+async fn fragmented_mp4_url_ingestion_accepts_iso5_with_iso6_mp41() {
+    use axum::{Router, routing::get};
+    use jt_app::{
+        ctx::Ctx,
+        ports::UnitOfWork,
+        usecases::studio::files::{FileUploadInput, UploadContent, file_upload},
+    };
+    // ftyp size 24: major iso5, minor version 0, compatible iso6/mp41.
+    const HEADER: &[u8] = b"\0\0\0\x18ftypiso5\0\0\0\0iso6mp41";
+    let app = Router::new().route(
+        "/fragmented.mp4",
+        get(|| async { ([("content-type", "video/mp4")], HEADER) }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let uow = Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    let fixture = jt_testkit::studio_contract::ready(uow.as_ref()).await;
+    let mut r = uow.tenant(fixture.ws).await.unwrap();
+    let frame = r.strategy().current_approved().await.unwrap().unwrap();
+    drop(r);
+    let ctx = Ctx {
+        workspace_id: fixture.ws,
+        actor: frame.created_by,
+        permissions: jt_tenancy::SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    let egress = Arc::new(jt_outbound::Egress::new(&[]));
+    egress.allow_tenant_host(fixture.ws, &addr.to_string());
+    let p = root();
+    let mut d = jt_testkit::fakes::deps(uow);
+    d.files = Arc::new(disk(&p));
+    d.media_fetch = Arc::new(jt_files::CheckedMediaFetcher(egress));
+    let result = file_upload(
+        &d,
+        &ctx,
+        FileUploadInput {
+            request_key: "fragmented-url".into(),
+            filename: "fragmented.mp4".into(),
+            mime: "video/mp4".into(),
+            content: UploadContent::SourceUrl {
+                url: format!("http://{addr}/fragmented.mp4").parse().unwrap(),
+            },
+        },
+    )
+    .await;
+    server.abort();
+    let stored = result.unwrap();
+    assert_eq!(stored.mime, "video/mp4");
+    assert_eq!(stored.size_bytes, HEADER.len() as u64);
+    assert_eq!(
+        d.files.read(fixture.ws, stored.id).await.unwrap().bytes,
+        HEADER
+    );
+    std::fs::remove_dir_all(p).unwrap();
+}

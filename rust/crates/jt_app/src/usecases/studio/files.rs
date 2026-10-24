@@ -57,22 +57,8 @@ pub fn validate_upload(u: &MediaUpload) -> Result<(), AppError> {
         "image/png" => b.starts_with(b"\x89PNG\r\n\x1a\n"),
         "image/gif" => b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a"),
         "image/webp" => b.starts_with(b"RIFF") && b.get(8..12) == Some(b"WEBP"),
-        "video/mp4" => {
-            b.get(4..8) == Some(b"ftyp")
-                && b.len() >= 12
-                && b.get(8..12).is_some_and(|v| {
-                    [
-                        b"isom".as_slice(),
-                        b"iso2",
-                        b"mp41",
-                        b"mp42",
-                        b"avc1",
-                        b"M4V ",
-                        b"MSNV",
-                    ]
-                    .contains(&v)
-                })
-        }
+        "video/mp4" => mp4_file_type(b)
+            .is_some_and(|ftyp| mp4_brand(&ftyp[..4]) || ftyp[8..].chunks_exact(4).any(mp4_brand)),
         _ => false,
     };
     if !matches {
@@ -80,6 +66,45 @@ pub fn validate_upload(u: &MediaUpload) -> Result<(), AppError> {
     }
     Ok(())
 }
+/// Read only the declared ftyp box: major brand, minor version, then four-byte
+/// compatible brands. Never interpret following boxes or the minor version as brands.
+fn mp4_file_type(bytes: &[u8]) -> Option<&[u8]> {
+    if bytes.get(4..8)? != b"ftyp" {
+        return None;
+    }
+    let size = u32::from_be_bytes(bytes.get(..4)?.try_into().ok()?);
+    let (size, header) = match size {
+        0 => (bytes.len(), 8),
+        1 => (
+            usize::try_from(u64::from_be_bytes(bytes.get(8..16)?.try_into().ok()?)).ok()?,
+            16,
+        ),
+        size => (usize::try_from(size).ok()?, 8),
+    };
+    let payload = bytes.get(..size)?.get(header..)?;
+    if payload.len() < 8 || !(payload.len() - 8).is_multiple_of(4) {
+        return None;
+    }
+    Some(payload)
+}
+
+fn mp4_brand(brand: &[u8]) -> bool {
+    matches!(
+        brand,
+        b"isom"
+            | b"iso2"
+            | b"iso3"
+            | b"iso4"
+            | b"iso5"
+            | b"iso6"
+            | b"mp41"
+            | b"mp42"
+            | b"avc1"
+            | b"dash"
+            | b"M4V "
+    )
+}
+
 pub(crate) fn key(key: &str) -> Result<(), AppError> {
     if key.trim().is_empty() || key.len() > 200 {
         Err(AppError::validation(

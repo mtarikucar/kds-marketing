@@ -286,3 +286,88 @@ async fn paused_upload_cannot_commit_after_orphan_cleanup() {
     assert!(pending.await.unwrap().is_err());
     assert!(w.uow.snapshot().studio.files.is_empty());
 }
+
+fn ftyp(major: &[u8; 4], compatible: &[[u8; 4]]) -> Vec<u8> {
+    let mut bytes = ((16 + compatible.len() * 4) as u32).to_be_bytes().to_vec();
+    bytes.extend_from_slice(b"ftyp");
+    bytes.extend_from_slice(major);
+    bytes.extend_from_slice(&0_u32.to_be_bytes());
+    for brand in compatible {
+        bytes.extend_from_slice(brand);
+    }
+    bytes
+}
+
+#[tokio::test]
+async fn fragmented_mp4_byte_upload_accepts_iso5_with_iso6_mp41() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let mut w = support::world().await;
+    w.d.files = Arc::new(MemoryFiles::default());
+    let bytes = ftyp(b"iso5", &[*b"iso6", *b"mp41"]);
+    let input = serde_json::from_value(json!({
+        "request_key":"fragmented-mp4", "filename":"fragmented.mp4", "mime":"video/mp4",
+        "content":{"kind":"bytes_base64","data":STANDARD.encode(&bytes)}
+    }))
+    .unwrap();
+    let stored = file_upload(&w.d, &w.ctx, input).await.unwrap();
+    assert_eq!(stored.mime, "video/mp4");
+    assert_eq!(stored.size_bytes, bytes.len() as u64);
+    assert_eq!(
+        w.d.files.read(w.f.ws, stored.id).await.unwrap().bytes,
+        bytes
+    );
+}
+
+#[test]
+fn mp4_major_or_compatible_brands_are_checked_within_the_ftyp_box() {
+    let check = |bytes: Vec<u8>| {
+        validate_upload(&MediaUpload {
+            bytes,
+            mime: "video/mp4".into(),
+            filename: "video.mp4".into(),
+        })
+    };
+    for brand in [
+        *b"isom", *b"iso2", *b"iso3", *b"iso4", *b"iso5", *b"iso6", *b"mp41", *b"mp42", *b"avc1",
+        *b"dash", *b"M4V ",
+    ] {
+        assert!(check(ftyp(&brand, &[])).is_ok(), "major {brand:?}");
+        assert!(
+            check(ftyp(b"zzzz", &[*b"zzzz", brand])).is_ok(),
+            "compatible {brand:?}"
+        );
+    }
+    for major in [*b"qt  ", *b"heic", *b"avif", *b"3gp4", *b"MSNV"] {
+        assert!(check(ftyp(&major, &[major])).is_err(), "non-MP4 {major:?}");
+    }
+    assert!(check(b"\x1a\x45\xdf\xa3webm".to_vec()).is_err());
+    assert!(check(b"RIFF\0\0\0\0AVI ".to_vec()).is_err());
+    let good = ftyp(b"iso5", &[*b"iso6", *b"mp41"]);
+    for length in 0..good.len() {
+        assert!(
+            check(good[..length].to_vec()).is_err(),
+            "truncated {length}"
+        );
+    }
+    for size in [8_u32, 12, 17, 25, u32::MAX] {
+        let mut bytes = good.clone();
+        bytes[..4].copy_from_slice(&size.to_be_bytes());
+        assert!(check(bytes).is_err(), "invalid size {size}");
+    }
+    let mut outside = ftyp(b"qt  ", &[]);
+    outside.extend_from_slice(b"mp41");
+    assert!(check(outside).is_err(), "bytes beyond ftyp are not brands");
+    let mut minor = ftyp(b"qt  ", &[]);
+    minor[12..16].copy_from_slice(b"mp41");
+    assert!(check(minor).is_err(), "minor version is not a brand");
+    let mut extended = vec![0, 0, 0, 1];
+    extended.extend_from_slice(b"ftyp");
+    extended.extend_from_slice(&32_u64.to_be_bytes());
+    extended.extend_from_slice(&good[8..]);
+    assert!(check(extended.clone()).is_ok());
+    extended[8..16].copy_from_slice(&u64::MAX.to_be_bytes());
+    assert!(check(extended).is_err());
+    let mut to_end = good;
+    to_end[..4].fill(0);
+    assert!(check(to_end).is_ok());
+}
