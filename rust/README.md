@@ -2893,3 +2893,51 @@ absolute `JEETA_WAL_ARCHIVE_DIR` plus `JEETA_RECOVERY_STATUS_DIR`, the server wr
 presence; `archived_at` is the PostgreSQL timestamp, `observed_at` the probe time.
 Failures retain the old marker and degrade WAL health; disabled is unknown.
 Both artifacts are bounded JSON with RFC3339 times, never credentials or URLs.
+
+
+## M4 Task 8 — reproducible deployment and boot/shutdown
+
+One package contains the production `jeeta`, matching `panel/`, reversible
+`migrations/`, `scripts/`, `deploy/`, operation documents and `manifest.json`.
+From a clean committed revision in `rust/`:
+
+```sh
+cargo build --release --locked -p jeeta
+pnpm --dir panel install --frozen-lockfile
+pnpm --dir panel build
+python3 scripts/package-release.py /absolute/new/jeeta-release
+```
+
+The manifest records the source SHA, binary SHA-256, a sorted `panel.sha256` and
+its SHA-256, ordered migration versions/up-down SHA-384 checksums, highest schema
+version and toolchain versions. Source files come only from the committed tree.
+This is a repeatable packaging recipe; it does not promise identical bytes
+across build hosts. CI's `release-artifact` job archives the package without
+publishing/deploying. `rust-test` tests that exact candidate, preserving executable
+permissions by extracting its tar archive.
+
+Build the package-scoped release candidate **before** running workspace tests:
+workspace dev features enable test-only loopback paths in the debug binary.
+`bin/jeeta/tests/m4_deployment.rs` drives real children against disposable
+`JEETA_TEST_DATABASE_URL` databases. It requires `target/release/jeeta` and the built
+`panel/dist`, or explicit `JEETA_RELEASE_BINARY` / `JEETA_RELEASE_PANEL_DIR` paths
+for an extracted package. It covers all eight named Task 8 contracts, production
+egress refusal and panel/API/MCP smoke checks. It does not recursively build Cargo.
+
+After configuration validation, serve rejects test-loopback builds, connects,
+rejects unsafe database roles, checks the existing schema and applies pending up
+migrations under sqlx locking. Adapters/egress and optional operator bootstrap/reset
+finish before HTTP binds and jobs start. Failures abort startup with redacted
+runtime diagnostics. `mcp-stdio` never migrates or runs jobs; it requires a compatible
+schema and authenticates its key at startup. Restart affected stdio clients after
+key revocation or issuer demotion. `JEETA_JOBS_ENABLED=false` starts no scheduled
+provider work; configured WAL health probing remains enabled.
+
+SIGTERM/SIGINT stops scheduling and drains HTTP for at most 10 seconds, followed
+by up to 30 seconds for remaining job runs. The supplied systemd unit allows 60
+seconds. Use an existing absolute private FileStore at `/var/lib/jeeta/files` and
+include it with the original master key in recovery sets. Metrics, operator reset
+and recovery status/WAL variables are implemented; see the
+[deployment runbook](../docs/operations/deployment.md) and
+[backup/restore runbook](../docs/operations/backup-restore.md) for custody, units,
+proxy limits, upgrade/rollback and the required monthly isolated restore drill.

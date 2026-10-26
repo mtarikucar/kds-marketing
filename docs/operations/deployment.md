@@ -6,12 +6,10 @@ against one PostgreSQL database. This runbook covers the deployment artefacts of
 All examples are synthetic. Keep actual hosts, credentials, bank details,
 recovery sets and change records in private operational storage.
 
-This is the documentation half (T070). Release CI, boot-contract tests and the
-Rust README reconciliation remain T066. Metrics/status probes (Task 5), operator
-reset (Task 6), and the [backup/restore runbook](backup-restore.md) and scripts
-(Task 9) are pending in this revision. **Deployment is not recovery-ready until
-Task 9's logical/PITR restore drill passes.** The pending link is intentional;
-these instructions do not claim that its scripts or reset flag already work.
+Boot/shutdown contracts, release CI, metrics/status probes, operator reset and the
+[backup/restore runbook](backup-restore.md) and scripts are implemented. CI builds
+an artifact only; it does not publish or deploy it. **Production recovery readiness
+still requires a successful logical/PITR drill on the owner's actual recovery set.**
 
 ## Build and distribution
 
@@ -26,13 +24,18 @@ pnpm --dir panel build
 
 Use the package-scoped production build. Whole-workspace test feature unification
 can enable `jt_outbound/test-loopback`; such a binary must not be deployed.
-The release build and panel build must pass for the actual packaged candidate;
-this documentation task does not execute either build.
+The release build and panel build must pass for the actual packaged candidate.
+CI builds them in the `release-artifact` job and supplies that same binary and
+panel to the `rust-test` deployment contracts, outside Cargo feature unification.
 
 Package `rust/target/release/jeeta`, the **contents** of `rust/panel/dist/`,
 `rust/migrations/`, `rust/scripts/`, `rust/deploy/` and operation documents from
-the same revision. Include Task 9's scripts once implemented; their absence
-blocks recovery readiness. Install the complete release before moving `current`:
+the same revision. From a clean committed checkout, assemble the candidate with
+`python3 scripts/package-release.py /absolute/new/jeeta-release` from `rust/`.
+The script takes source files from `git archive HEAD` (no untracked or ignored
+source files), requires the built binary/panel, and records the toolchain.
+CI uploads a tar archive to preserve executable permissions. Extract that archive
+before validation. Install the complete release before moving `current`:
 
 ```text
 /opt/jeeta/releases/<revision>/
@@ -43,6 +46,7 @@ blocks recovery readiness. Install the complete release before moving `current`:
   deploy/
   docs/operations/
   manifest.json
+  REVISION                         # source SHA consumed by backup/restore scripts
 /opt/jeeta/current -> /opt/jeeta/releases/<revision>
 ```
 
@@ -57,7 +61,11 @@ that package, never copied from another build:
 | `migration_versions` | Ordered shipped sqlx versions, with checksums for the up/down files |
 | `schema_version` | Recovery-compatible schema version for this binary, checked against the database's applied migration set |
 
-Record the checksum method and toolchain versions alongside the manifest.
+The assembler records SHA-256 for binary and panel, and SHA-384 for migration
+SQL (sqlx-compatible). `schema_version` is the highest forward migration version;
+compatibility still requires checking the entire version/checksum set. The
+manifest records `rustc`, Cargo, Node and pnpm versions. This is a reproducible
+recipe and integrity inventory, not a claim of bit-identical builds across hosts.
 Retain the prior complete release and its matching recovery set. A retained
 binary alone does not make schema rollback safe.
 
@@ -206,8 +214,9 @@ protected home and strict read-only system paths except `/var/lib/jeeta`.
 It restarts on failure after 5 seconds. Confirm the service stays healthy;
 `Type=simple` being active alone is not proof that startup/migrations succeeded.
 Validate panel assets, authenticated API/MCP and synthetic webhook handling,
-and confirm one scheduler owner. Task 5 will add operational health/metrics;
-do not use nonexistent endpoints as current readiness evidence.
+and confirm one scheduler owner. `/healthz` is liveness, `/readyz` checks readiness;
+`/metrics` requires the bearer secret in `JEETA_METRICS_TOKEN`. Keep metrics access
+restricted at the proxy and do not record its authorization header.
 
 ## Boot, operator setup and recovery
 
@@ -215,13 +224,16 @@ After config validation, [serve.rs](../../rust/bin/jeeta/src/serve.rs) orders bo
 
 1. Reject a binary compiled with test-loopback egress enabled.
 2. Connect to PostgreSQL; reject a superuser/BYPASSRLS application role.
-3. Refuse unknown/dirty migration versions or changed applied checksums, then apply pending sqlx **up** migrations. Concurrent migrators serialize via sqlx
+3. Refuse unknown/dirty migration versions or changed applied checksums, then
+   apply pending sqlx **up** migrations. Concurrent migrators serialize via sqlx
    locking. A failure aborts before listening or starting jobs.
 4. Construct adapters, FileStore and egress; rebuild allowed tenant hosts.
 5. Bootstrap the operator if configured, or perform the explicit sole-operator
    reset when `JEETA_PLATFORM_BOOTSTRAP_RESET=1`. Recovery commits before binding.
 6. Bind HTTP, then start jobs when enabled.
 
+Fatal runtime startup errors deliberately use a generic redacted diagnostic;
+absence of a detailed SQL error does not mean boot succeeded.
 There is no automatic down migration or destructive fallback. The boot process
 rejects a newer schema before serve binds or starts jobs. For isolated recovery,
 `jeeta recovery-verify` requires the exact embedded applied set without migrating.
@@ -257,6 +269,11 @@ already committed recovery.
 `JEETA_METRICS_TOKEN` is required for serve. `JEETA_RECOVERY_STATUS_DIR` optionally
 names the absolute directory containing `backup-status.json` and `wal-status.json`;
 missing artifacts yield unknown freshness (see README Task 5).
+`JEETA_WAL_ARCHIVE_DIR` optionally names the absolute archive path and requires
+`JEETA_RECOVERY_STATUS_DIR`; the process checks confirmed PostgreSQL archiver
+success every 60 seconds. Provide read access to archive evidence while keeping
+backup storage outside the app's writable tree. Jobs disabled does not disable
+this local/database health probe or initiate provider traffic.
 
 ## Shutdown and stdio clients
 
@@ -298,16 +315,16 @@ demotion**. Do not promise immediate revocation within an existing process.
 For the v1 transition, additionally follow [v1 cutover](v1-cutover.md); restarting
 an older sender without fencing the new sender can duplicate external writes.
 
-## Backup and restore prerequisites — Task 9 pending
+## Backup and restore prerequisites
 
-The full procedure will live in [backup-restore.md](backup-restore.md). Before
+The full procedure is in [backup-restore.md](backup-restore.md). Before
 live recovery acceptance, provision protected, separately mounted backup storage,
 a nightly full backup, continuous WAL archiving, physical base backups and a
 monthly owner-run restore drill. Target **RPO 24 h / RTO 1 h**; retain 30 daily
 logical sets and a verified 30-day base/WAL chain. Prune only after a newer
 complete chain is verified, never the only recoverable key/base/WAL set.
 
-Logical recipe (inside the future backup procedure, with private paths and
+Logical recipe (inside the implemented backup procedure, with private paths and
 protected libpq service/passfile; `backup_dir` denotes its recovery-set directory):
 
 ```sh
@@ -330,7 +347,7 @@ FileStore data append-only through the PITR retention window and snapshot at
 base backups and before drills. Verify archive successes and destination data;
 a nightly timer firing is not evidence of either backup or WAL health.
 
-After Task 9 ships, the owner runs and records monthly, using protected paths:
+The owner runs and records monthly, using protected paths:
 
 ```text
 /opt/jeeta/current/scripts/restore-drill.sh <recovery-set> <isolated-target-config>

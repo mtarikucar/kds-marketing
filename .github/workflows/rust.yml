@@ -44,6 +44,7 @@ jobs:
   # a superuser; jt_testkit::TestDb only uses it to create and drop each test's own ordinary
   # (non-superuser, non-BYPASSRLS) role and database, so row-level security binds the tests.
   rust-test:
+    needs: release-artifact
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -70,7 +71,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+      # Download the package-scoped candidate; never build it with workspace test features.
+      - uses: actions/download-artifact@v4
+        with:
+          name: jeeta-release-${{ github.sha }}
+          path: release-candidate
+      - run: tar -xf ../release-candidate/jeeta-release.tar -C "$RUNNER_TEMP"
       - run: cargo test --locked --workspace
+        env:
+          JEETA_RELEASE_BINARY: ${{ runner.temp }}/jeeta-release/jeeta
+          JEETA_RELEASE_PANEL_DIR: ${{ runner.temp }}/jeeta-release/panel
       # A whole-workspace run unifies the dev-only `test-loopback` feature into jt_outbound, so the
       # production-build egress test is compiled separately, without dev features.
       - run: cargo test --locked -p jt_outbound --test production_build
@@ -146,3 +156,40 @@ jobs:
           path: rust/restore-drill-report.txt
           if-no-files-found: error
           retention-days: 30
+
+  # Build and assemble only. No registry publication, deployment, or secret inputs.
+  release-artifact:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: release-production
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: rust/panel/pnpm-lock.yaml
+      - run: cargo build --release --locked -p jeeta
+      - run: pnpm --dir panel install --frozen-lockfile
+      - run: pnpm --dir panel build
+      - name: Assemble candidate and checksums
+        run: |
+          set -euo pipefail
+          python3 scripts/package-release.py "$RUNNER_TEMP/jeeta-release"
+          tar -cf "$RUNNER_TEMP/jeeta-release.tar" -C "$RUNNER_TEMP" jeeta-release
+      # Tar preserves the executable bits that upload-artifact alone does not preserve.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-release-${{ github.sha }}
+          path: ${{ runner.temp }}/jeeta-release.tar
+          if-no-files-found: error
+          retention-days: 14

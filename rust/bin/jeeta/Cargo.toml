@@ -38,6 +38,9 @@ hex.workspace = true
 time.workspace = true
 
 [dev-dependencies]
+jt_strategy.workspace = true
+jt_ledger.workspace = true
+tokio = { workspace = true, features = ["process", "io-util"] }
 jt_tenancy.workspace = true
 jt_capability.workspace = true
 jt_testkit = { workspace = true, features = ["panel"] }

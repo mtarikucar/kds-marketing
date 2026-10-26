@@ -192,9 +192,17 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
         .acquire()
         .await
         .context("cannot read the applied migrations")?;
-    conn.ensure_migrations_table()
-        .await
-        .context("cannot create the migrations table")?;
+    // Only sqlx's migrator creates this table, under its advisory lock. Even
+    // CREATE TABLE IF NOT EXISTS races on PostgreSQL catalog uniqueness when
+    // two fresh processes create it before acquiring that lock.
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await
+            .context("cannot inspect the migrations table")?;
+    if !exists {
+        return Ok(0);
+    }
     let applied = conn
         .list_applied_migrations()
         .await
