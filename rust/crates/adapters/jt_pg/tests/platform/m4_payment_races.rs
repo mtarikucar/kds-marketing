@@ -201,3 +201,12 @@ async fn activation_suspend_revoke_serialize() {
     jt_testkit::activation_contract::activation_suspend_revoke_serialize(std::sync::Arc::new(uow))
         .await;
 }
+
+#[tokio::test]
+async fn payment_list_retains_revoked_history() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::platform_payment_contract::payment_list_retains_revoked_history(
+        std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone())),
+    )
+    .await;
+}

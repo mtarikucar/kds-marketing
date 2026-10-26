@@ -46,16 +46,22 @@ pub struct ConfirmationOut {
 pub async fn list(deps: &Deps, _pctx: &PlatformCtx) -> Result<Vec<PlatformPaymentOut>, AppError> {
     let mut repos = deps.uow.platform().await?;
     let rows = repos.payments_list().await?;
+    // Two bulk reads for the entire list, never a query per payment. Historical grants are
+    // keyed by both workspace and payment, so another payment's open grant cannot mask them.
+    let mut entitlements: std::collections::BTreeMap<_, _> = repos
+        .payment_entitlements_latest()
+        .await?
+        .into_iter()
+        .filter_map(|e| e.payment_id.map(|payment| ((e.workspace_id, payment), e)))
+        .collect();
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let reference = deps.seal.open(row.workspace_id, &row.reference_sealed)?;
         let reference = std::str::from_utf8(&reference)
             .map_err(|_| AppError::internal("payment reference unavailable"))?
             .to_owned();
-        let entitlement = repos
-            .entitlement_get(row.workspace_id)
-            .await?
-            .filter(|e| e.payment_id == Some(row.id))
+        let entitlement = entitlements
+            .remove(&(row.workspace_id, row.id))
             .map(Into::into);
         out.push(PlatformPaymentOut {
             workspace_id: row.workspace_id,

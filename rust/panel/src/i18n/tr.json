@@ -474,7 +474,7 @@
       "confirmed": "Havale doğrulandı",
       "activated": "Etkinleştirildi",
       "revoked": "Geri alındı",
-      "noGrant": "Onay bekliyor veya geri alındı",
+      "pending": "Onay bekliyor",
       "confirm": "Havale doğrulandı",
       "code": "Etkinleştirme kodu",
       "reissue": "Kodu yeniden oluştur",

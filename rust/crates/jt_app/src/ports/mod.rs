@@ -1608,6 +1608,12 @@ pub trait PlatformRepos: Send + Sync {
         id: billing::PaymentId,
     ) -> Result<Option<billing::PaymentNotification>, AppError>;
     async fn payments_list(&mut self) -> Result<Vec<billing::PaymentNotification>, AppError>;
+    /// Latest entitlement for each (workspace, payment), including revoked grants. One bulk
+    /// read, ordered by confirmed_at then ID descending within each pair; excludes grants
+    /// without a payment. Does not change the open-grant semantics of entitlement_get.
+    async fn payment_entitlements_latest(
+        &mut self,
+    ) -> Result<Vec<billing::WorkspaceEntitlement>, AppError>;
     async fn entitlement_get(
         &mut self,
         ws: WorkspaceId,

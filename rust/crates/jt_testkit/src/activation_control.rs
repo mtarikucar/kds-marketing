@@ -265,6 +265,11 @@ impl PlatformRepos for Platform {
     async fn payments_list(&mut self) -> Result<Vec<billing::PaymentNotification>, AppError> {
         self.inner.payments_list().await
     }
+    async fn payment_entitlements_latest(
+        &mut self,
+    ) -> Result<Vec<billing::WorkspaceEntitlement>, AppError> {
+        self.inner.payment_entitlements_latest().await
+    }
     async fn entitlement_get(
         &mut self,
         ws: WorkspaceId,

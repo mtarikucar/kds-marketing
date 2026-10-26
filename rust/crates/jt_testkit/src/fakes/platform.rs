@@ -175,6 +175,23 @@ impl PlatformRepos for MemPlatform {
         rows.sort_by_key(|p| (p.reported_at, p.id));
         Ok(rows)
     }
+    async fn payment_entitlements_latest(&mut self) -> Result<Vec<WorkspaceEntitlement>, AppError> {
+        let mut latest: std::collections::BTreeMap<_, WorkspaceEntitlement> =
+            std::collections::BTreeMap::new();
+        for row in &self.tx.work.entitlements {
+            let Some(payment) = row.payment_id else {
+                continue;
+            };
+            let key = (row.workspace_id, payment);
+            if latest
+                .get(&key)
+                .is_none_or(|old| (row.confirmed_at, row.id) > (old.confirmed_at, old.id))
+            {
+                latest.insert(key, row.clone());
+            }
+        }
+        Ok(latest.into_values().collect())
+    }
     async fn entitlement_get(
         &mut self,
         ws: WorkspaceId,

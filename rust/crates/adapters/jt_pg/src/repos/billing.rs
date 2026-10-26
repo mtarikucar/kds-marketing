@@ -142,6 +142,20 @@ pub(crate) async fn payments_list(
     .map_err(|e| map_sqlx(e, "payments_list"))?;
     rows.into_iter().map(PaymentRecord::into_row).collect()
 }
+pub(crate) async fn payment_entitlements_latest(
+    tx: &mut PlatformTx<'_>,
+) -> Result<Vec<WorkspaceEntitlement>, AppError> {
+    let rows = sqlx::query_as::<_, EntitlementRecord>(
+        // archtest: platform-wide
+        "select distinct on (workspace_id, payment_id) * from workspace_entitlements \
+         where payment_id is not null \
+         order by workspace_id, payment_id, confirmed_at desc, id desc",
+    )
+    .fetch_all(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "payment_entitlements_latest"))?;
+    rows.into_iter().map(EntitlementRecord::into_row).collect()
+}
 pub(crate) async fn entitlement_get(
     conn: &mut PgConnection,
     ws: WorkspaceId,

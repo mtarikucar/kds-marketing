@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt } from '@/test/render';
 const row = { workspace_id:'ws',payment_id:'payment',reference:'SYNTHETIC-TRANSFER',amount_minor:12300,currency:'TRY',paid_at:'2026-10-24T09:00:00Z',reported_at:'2026-10-24T09:00:00Z',entitlement:null };
@@ -42,4 +42,27 @@ it('console_code_reissue_and_reason_forms', async () => {
   await act(()=>router.navigate('/platform/payments'));
   await screen.findByText('SYNTHETIC-TRANSFER');
   expect(screen.queryByText('ABCD1234')).not.toBeInTheDocument();
+});
+
+it('console_distinguishes_revoked_from_pending_and_reconfirmed_payments', async () => {
+  const revoked = { ...row, entitlement: { ...entitlement, activated_at: row.paid_at, revoked_at: row.paid_at } };
+  mockFetch({
+    'GET /api/platform/workspaces': [],
+    'GET /api/platform/payments': [revoked, { ...row, payment_id: 'unconfirmed', reference: 'SYNTHETIC-PENDING' }],
+    [`POST ${base}/payments/payment/confirm`]: { workspace, entitlement: { ...entitlement, id: 'new-grant' }, activation: null },
+  });
+  const user = userEvent.setup();
+  renderAt('/platform/payments');
+  const card = (await screen.findByText('SYNTHETIC-TRANSFER')).closest('section')!;
+  const pendingCard = screen.getByText('SYNTHETIC-PENDING').closest('section')!;
+  expect(within(card).getByText('Geri alındı')).toBeInTheDocument();
+  expect(within(card).queryByText('Etkinleştirildi')).not.toBeInTheDocument();
+  expect(within(card).getByRole('button', { name: 'Kodu yeniden oluştur' })).toBeDisabled();
+  expect(within(pendingCard).getByText('Onay bekliyor')).toBeInTheDocument();
+  expect(screen.queryByText('Onay bekliyor veya geri alındı')).not.toBeInTheDocument();
+  await user.click(within(card).getByRole('button', { name: 'Havale doğrulandı' }));
+  await waitFor(() => expect(within(card).queryByText('Geri alındı')).not.toBeInTheDocument());
+  expect(within(card).getByRole('button', { name: 'Kodu yeniden oluştur' })).toBeEnabled();
+  expect(within(card).getByText('Havale doğrulandı', { selector: 'dd' })).toBeInTheDocument();
+  expect(within(pendingCard).getByText('Onay bekliyor')).toBeInTheDocument();
 });

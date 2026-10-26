@@ -588,3 +588,104 @@ pub async fn first_confirmation_and_reissue_require_pending_and_matching_grant(
     let mut r = w.deps.uow.platform().await.unwrap();
     assert!(r.entitlement_get(w.f.ws).await.unwrap().is_none());
 }
+
+/// The operator projection retains revoked grants per payment, without changing open-grant reads.
+pub async fn payment_list_retains_revoked_history(uow: Arc<dyn UnitOfWork>) {
+    let w = World::new(uow.clone()).await;
+    let other = World::new(uow).await;
+    let mut pending = w.payment.clone();
+    pending.id = PaymentId::new_v7();
+    pending.request_key = "second-payment".into();
+    let mut r = w.deps.uow.tenant(w.f.ws).await.unwrap();
+    r.billing().insert_payment(pending.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    let unrelated =
+        platform_payments::confirm(&other.deps, &other.ctx, other.f.ws, other.payment.id)
+            .await
+            .unwrap();
+    let first = platform_payments::confirm(&w.deps, &w.ctx, w.f.ws, w.payment.id)
+        .await
+        .unwrap();
+    w.activate(&first.activation.unwrap().code).await;
+    platform_payments::revoke_activation(&w.deps, &w.ctx, w.f.ws, "synthetic revocation")
+        .await
+        .unwrap();
+    let rows = platform_payments::list(&w.deps, &w.ctx).await.unwrap();
+    assert_eq!(rows.len(), 3);
+    let closed = rows
+        .iter()
+        .find(|p| p.workspace_id == w.f.ws && p.payment_id == w.payment.id)
+        .unwrap()
+        .entitlement
+        .as_ref()
+        .unwrap();
+    assert_eq!(closed.id, first.entitlement.id);
+    assert_eq!(closed.activated_at, Some(FIXED_NOW));
+    assert_eq!(closed.revoked_at, Some(FIXED_NOW));
+    assert!(
+        rows.iter()
+            .find(|p| p.payment_id == pending.id)
+            .unwrap()
+            .entitlement
+            .is_none()
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|p| p.payment_id == other.payment.id)
+            .unwrap()
+            .entitlement
+            .as_ref()
+            .unwrap()
+            .id,
+        unrelated.entitlement.id
+    );
+    let mut r = w.deps.uow.platform().await.unwrap();
+    assert!(r.entitlement_get(w.f.ws).await.unwrap().is_none());
+    drop(r);
+    // Same confirmation timestamp exercises the deterministic ID tie-breaker.
+    let next = platform_payments::confirm(&w.deps, &w.ctx, w.f.ws, w.payment.id)
+        .await
+        .unwrap();
+    assert_ne!(next.entitlement.id, first.entitlement.id);
+    let rows = platform_payments::list(&w.deps, &w.ctx).await.unwrap();
+    let current = rows
+        .iter()
+        .find(|p| p.payment_id == w.payment.id)
+        .unwrap()
+        .entitlement
+        .as_ref()
+        .unwrap();
+    assert_eq!(current, &next.entitlement);
+    assert!(current.revoked_at.is_none());
+    assert!(current.activated_at.is_none());
+    platform_payments::revoke_activation(&w.deps, &w.ctx, w.f.ws, "second synthetic revocation")
+        .await
+        .unwrap();
+    let different = platform_payments::confirm(&w.deps, &w.ctx, w.f.ws, pending.id)
+        .await
+        .unwrap();
+    let rows = platform_payments::list(&w.deps, &w.ctx).await.unwrap();
+    let closed = rows
+        .iter()
+        .find(|p| p.payment_id == w.payment.id)
+        .unwrap()
+        .entitlement
+        .as_ref()
+        .unwrap();
+    assert_eq!(closed.id, next.entitlement.id);
+    assert_eq!(closed.revoked_at, Some(FIXED_NOW));
+    assert_eq!(
+        rows.iter()
+            .find(|p| p.payment_id == pending.id)
+            .unwrap()
+            .entitlement
+            .as_ref()
+            .unwrap(),
+        &different.entitlement
+    );
+    let mut r = w.deps.uow.platform().await.unwrap();
+    assert_eq!(
+        r.entitlement_get(w.f.ws).await.unwrap().unwrap().id,
+        different.entitlement.id
+    );
+}

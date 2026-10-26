@@ -2802,12 +2802,17 @@ navigation discards it. Confirmation retries retain the returned current workspa
 status. Suspend/revoke require reasons; resume reads “Yeniden aç”. Health renders
 explicit sanitized fields and hosts the other-operator reset form.
 
-**Review decision needed:** the existing payment list only returns an open
-entitlement. It cannot distinguish never-confirmed payments from revoked grants
-after reload. The console accurately says “Onay bekliyor veya geri alındı” when
-no open grant exists. A payment-scoped historical-entitlement repository query
-(and list projection) needs approval under the task's unmentioned-signature rule;
-no existing entitlement lookup semantics were changed.
+The operator payment list uses `PlatformRepos::payment_entitlements_latest` to
+read the latest grant per `(workspace_id, payment_id)`, including revoked grants.
+PostgreSQL uses one bulk `DISTINCT ON` query; the fake and wrappers share the same
+ordering (`confirmed_at DESC, id DESC`). Together with the payment evidence read,
+listing uses two fixed queries rather than one entitlement lookup per payment.
+`entitlement_get` retains its open-grant semantics for confirm, reissue and resume.
+The console distinguishes “Geri alındı” from “Onay bekliyor” after reload, and
+re-confirming a payment displays its new open grant. A shared fake/Pg contract
+covers confirm → activate → revoke → list → re-confirm, multiple workspaces and
+separate payments within one workspace; a browser test verifies the Turkish
+states and reissue availability.
 
 Fast verification includes `platform/m4_platform_access.rs` in app/Pg aggregates,
 `platform/m4_platform_access_http.rs`, `m4_operator_reset` and exact catalog/twin

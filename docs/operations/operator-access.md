@@ -35,10 +35,11 @@ code. **Kodu yeniden oluştur** explicitly invalidates the previous code.
 **Askıya al** requires a reason and retains the entitlement. **Yeniden aç**
 resumes a suspended workspace with an activated entitlement. **Etkinleştirmeyi
 geri al** requires a reason, closes the grant and returns the workspace to
-pending payment. Refunds happen outside the application. The current payment
-list exposes only open grants; “Onay bekliyor veya geri alındı” means no open
-grant, not proof that the payment was never confirmed. A separate historical
-projection is awaiting the Task 6 review decision.
+pending payment. Refunds happen outside the application. The payment list shows
+the latest entitlement for each payment, including revoked ones. “Geri alındı”
+means its latest grant was revoked; “Onay bekliyor” means it has no grant. These
+states survive reloading the console. Re-confirming a revoked payment displays
+its new open grant while retaining the previous grant in history.
 
 ## Reset by another operator
 

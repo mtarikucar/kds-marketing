@@ -398,6 +398,11 @@ impl PlatformRepos for PgPlatformRepos {
     async fn payments_list(&mut self) -> Result<Vec<billing::PaymentNotification>, AppError> {
         crate::repos::billing::payments_list(&mut self.tx).await
     }
+    async fn payment_entitlements_latest(
+        &mut self,
+    ) -> Result<Vec<billing::WorkspaceEntitlement>, AppError> {
+        crate::repos::billing::payment_entitlements_latest(&mut self.tx).await
+    }
     async fn entitlement_get(
         &mut self,
         ws: WorkspaceId,

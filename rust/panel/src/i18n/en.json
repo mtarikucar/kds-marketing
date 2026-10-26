@@ -474,7 +474,7 @@
       "confirmed": "Transfer confirmed",
       "activated": "Activated",
       "revoked": "Revoked",
-      "noGrant": "Awaiting confirmation or revoked",
+      "pending": "Awaiting confirmation",
       "confirm": "Transfer confirmed",
       "code": "Activation code",
       "reissue": "Reissue code",

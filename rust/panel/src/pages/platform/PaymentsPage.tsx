@@ -55,7 +55,7 @@ export function PaymentsPage() {
           <div><dt>{t('platform.payments.workspace')}</dt><dd className="font-mono text-caption">{row.workspace_id}</dd></div>
           <div><dt>{t('platform.payments.amount')}</dt><dd>{formatMoney(row.amount_minor,row.currency,i18n.language)} · {row.currency}</dd></div>
           <div><dt>{t('platform.payments.paidAt')}</dt><dd>{formatDateTime(row.paid_at,i18n.language)}</dd></div>
-          <div><dt>{t('platform.payments.state')}</dt><dd>{t(row.entitlement?.revoked_at?'platform.payments.revoked':row.entitlement?.activated_at?'platform.payments.activated':row.entitlement?'platform.payments.confirmed':'platform.payments.noGrant')}</dd></div>
+          <div><dt>{t('platform.payments.state')}</dt><dd>{t(row.entitlement?.revoked_at?'platform.payments.revoked':row.entitlement?.activated_at?'platform.payments.activated':row.entitlement?'platform.payments.confirmed':'platform.payments.pending')}</dd></div>
         </dl>
         {statuses[row.workspace_id] && <WorkspaceStatusBadge status={statuses[row.workspace_id]} />}
         <div className="flex flex-wrap gap-2">
