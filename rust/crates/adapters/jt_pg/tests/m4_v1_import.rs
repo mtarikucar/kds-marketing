@@ -859,7 +859,7 @@ async fn three_thousand_fresh_leads_preview_in_bounded_transactions_without_writ
         ),
         (3000, 0, 3000, 9000)
     );
-    assert_eq!(store.begins(), 30);
+    assert_eq!(store.begins(), 31); // 30 data chunks plus the rolled-back ledger write
     for table in [
         "people",
         "identities",
@@ -931,6 +931,7 @@ async fn competing_operator_runs_are_refused_without_holding_the_inbox_lock() {
         inner: PgImportStore,
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
+        paused: std::sync::atomic::AtomicBool,
     }
     #[async_trait::async_trait]
     impl ImportStore for PausedStore {
@@ -945,8 +946,10 @@ async fn competing_operator_runs_are_refused_without_holding_the_inbox_lock() {
             &self,
             ws: jt_tenancy::WorkspaceId,
         ) -> Result<Box<dyn ImportRepos>, jt_app::error::AppError> {
-            self.entered.notify_one();
-            self.release.notified().await;
+            if !self.paused.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
             self.inner.begin(ws).await
         }
     }
@@ -956,6 +959,7 @@ async fn competing_operator_runs_are_refused_without_holding_the_inbox_lock() {
         inner: PgImportStore(db.pool.clone()),
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Notify::new(),
+        paused: false.into(),
     });
     let first = {
         let store = store.clone();
@@ -984,4 +988,136 @@ async fn competing_operator_runs_are_refused_without_holding_the_inbox_lock() {
     .await
     .unwrap()
     .unwrap();
+}
+
+#[test]
+fn normalized_import_identity_lengths_are_bounded() {
+    let mut row = lead("length boundaries");
+    row.whatsapp = None;
+    row.phone = Some("+123456789012345".into());
+    row.email = Some(format!("{}@example.test", "a".repeat(241)));
+    assert_eq!((row.identities().0.len(), row.identities().1), (2, 0));
+    row.phone = Some("+1234567890123456".into());
+    row.email = Some(format!("{}@example.test", "a".repeat(242)));
+    assert_eq!(row.identities(), (vec![], 2));
+}
+
+#[tokio::test]
+async fn six_thousand_character_email_is_invalid_in_both_dry_run_and_import() {
+    use sha2::{Digest, Sha256};
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("oversized identity").await;
+    let mut row = lead("oversized synthetic email");
+    let local: String = (0u32..188)
+        .map(|i| hex::encode(Sha256::digest(i.to_le_bytes())))
+        .collect();
+    row.email = Some(format!("{}@example.test", &local[..6000]));
+    row.phone = None;
+    row.whatsapp = None;
+    let store = PgImportStore(db.pool.clone());
+    let rows = [row];
+    let dry = v1_import::run(&store, ws, &rows, Mode::DryRun, FIXED_NOW).await;
+    let real = v1_import::run(&store, ws, &rows, Mode::Import, FIXED_NOW).await;
+    assert_eq!(
+        dry.is_ok(),
+        real.is_ok(),
+        "dry run and import must agree on oversized identities"
+    );
+    let dry = dry.unwrap();
+    let real = real.unwrap();
+    assert_eq!((dry.imported, dry.identities_invalid), (1, 1));
+    assert_eq!(
+        serde_json::to_value(dry).unwrap(),
+        serde_json::to_value(real).unwrap()
+    );
+    assert_eq!(count(&db, ws, "identities").await, 0);
+}
+
+#[tokio::test]
+async fn dry_run_executes_every_write_and_matches_import_across_chunks() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("write rehearsal").await;
+    // Sequences survive transaction rollback: observe real INSERTs without persisting PII.
+    sqlx::raw_sql("create function v1_insert_probe() returns trigger language plpgsql as $$ begin perform nextval(TG_ARGV[0]); return NEW; end $$;")
+        .execute(&db.pool).await.unwrap();
+    let tables = [
+        "people",
+        "identities",
+        "journeys",
+        "notes",
+        "tasks",
+        "consents",
+        "suppressions",
+        "ledger_entries",
+    ];
+    for table in tables {
+        sqlx::raw_sql(&format!("create sequence v1_writes_{table}; create trigger v1_insert_probe before insert on {table} for each row execute function v1_insert_probe('v1_writes_{table}');"))
+            .execute(&db.pool).await.unwrap();
+    }
+    let mut rows = (0..201)
+        .map(|i| lead(&format!("writes-{i}")))
+        .collect::<Vec<_>>();
+    rows.push(rows[0].clone());
+    let store = ObservedImportStore::new(&db);
+    let dry = v1_import::run(&store, ws, &rows, Mode::DryRun, FIXED_NOW)
+        .await
+        .unwrap();
+    for table in tables {
+        let attempts: i64 = sqlx::query_scalar(&format!(
+            "select case when is_called then last_value else 0 end from v1_writes_{table}"
+        ))
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(attempts > 0, "dry run bypassed {table} writes");
+        assert_eq!(count(&db, ws, table).await, 0, "dry run persisted {table}");
+        if table == "notes" {
+            assert_eq!(attempts, 201, "prior chunks must not be replayed wholesale");
+        }
+    }
+    assert!((3..=4).contains(&store.begins()));
+    let real = v1_import::run(
+        &PgImportStore(db.pool.clone()),
+        ws,
+        &rows,
+        Mode::Import,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(dry).unwrap(),
+        serde_json::to_value(real).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn dry_run_obeys_database_write_constraints() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("constraint rehearsal").await;
+    sqlx::raw_sql("alter table notes add constraint synthetic_rehearsal_rejection check (text not like '%PII_CANARY_ONLY_SYNTHETIC_73%');")
+        .execute(&db.pool).await.unwrap();
+    let rows = [lead("database rejection")];
+    let store = PgImportStore(db.pool.clone());
+    let dry = v1_import::run(&store, ws, &rows, Mode::DryRun, FIXED_NOW).await;
+    // Drop-on-error closes the session lock connection asynchronously.
+    let real = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let result = v1_import::run(&store, ws, &rows, Mode::Import, FIXED_NOW).await;
+            if result
+                .as_ref()
+                .err()
+                .is_some_and(|e| e.message == "v1 import already_running")
+            {
+                tokio::task::yield_now().await;
+                continue;
+            }
+            break result;
+        }
+    })
+    .await
+    .expect("failed dry run must release its operator lock");
+    assert!(real.is_err());
+    assert!(dry.is_err(), "dry run skipped database constraints");
+    assert_eq!(count(&db, ws, "people").await, 0);
 }

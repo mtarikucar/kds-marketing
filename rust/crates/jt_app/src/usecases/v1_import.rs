@@ -148,6 +148,13 @@ impl Lead {
                 invalid += 1;
                 continue;
             };
+            if (channel == IdentityChannel::Email && canonical.chars().count() > 254)
+                || (channel == IdentityChannel::Phone
+                    && canonical.chars().filter(char::is_ascii_digit).count() > 15)
+            {
+                invalid += 1;
+                continue;
+            }
             let mut aliases = vec![canonical.clone()];
             if let Ok(shared) = normalise(channel, raw) {
                 aliases.push(shared);
@@ -244,11 +251,13 @@ fn marker_candidates(
     ids
 }
 
-/// Projected writes survive rolled-back dry-run chunks only in memory.
+/// Successful dry-run writes survive rollback only as duplicate-accounting and parent context.
+/// Restore only a selected person/open journey, never replay earlier leads or their children.
 #[derive(Default)]
 struct Preview {
     leads: HashSet<String>,
-    new_people: HashSet<PersonId>,
+    people: HashMap<PersonId, Person>,
+    open_journeys: HashMap<PersonId, InitialJourney>,
     identities: HashMap<(IdentityChannel, String), PersonId>,
 }
 
@@ -259,7 +268,7 @@ async fn intake(
     now: OffsetDateTime,
     report: &mut Report,
     markers: &mut HashMap<String, PersonId>,
-    preview: Option<&mut Preview>,
+    mut preview: Option<&mut Preview>,
 ) -> Result<(), AppError> {
     report.total += 1;
     if preview.as_ref().is_some_and(|p| p.leads.contains(&lead.id)) {
@@ -304,7 +313,7 @@ async fn intake(
         // Multiple alias owners are ambiguous: never attach to or steal either identity.
         if matches.len() == 1 && person.is_none() {
             let id = *matches.first().expect("one owner");
-            if preview.as_ref().is_some_and(|p| p.new_people.contains(&id))
+            if preview.as_ref().is_some_and(|p| p.people.contains_key(&id))
                 || r.untouched(id).await?
             {
                 person = Some(id);
@@ -326,47 +335,32 @@ async fn intake(
         .iter()
         .filter(|owners| !owners.is_empty() && (owners.len() != 1 || !owners.contains(&person_id)))
         .count() as u64;
-    if let Some(preview) = preview {
-        if person.is_none() {
-            preview.new_people.insert(person_id);
-        }
-        for (key, owners) in keys.into_iter().zip(owners) {
-            if owners.is_empty() {
-                preview
-                    .identities
-                    .insert((key.channel, key.canonical), person_id);
-            }
-        }
-        preview.leads.insert(lead.id.clone());
-        let status = map_status(&lead.status)?;
-        if !matches!(status, JourneyStatus::Won | JourneyStatus::Lost)
-            && let Some(due) = &lead.next_follow_up
-            && timestamp(due)? > now
-        {
-            report.tasks += 1;
-        }
-        report.opt_outs += lead.withdrawals().len() as u64;
-        report.imported += 1;
-        return Ok(());
-    }
     if person.is_none() {
-        r.people()
-            .insert(Person {
-                id: person_id,
-                workspace_id: ws,
-                display_name: lead.contact_person.clone(),
-                company: lead.business_name.clone(),
-                first_touch: FirstTouch {
-                    source: Source::Import,
-                    capability_id: None,
-                    at: created,
-                },
-                merged_into: None,
-                erased_at: None,
-                created_at: created,
-                updated_at: updated,
-            })
-            .await?;
+        let row = Person {
+            id: person_id,
+            workspace_id: ws,
+            display_name: lead.contact_person.clone(),
+            company: lead.business_name.clone(),
+            first_touch: FirstTouch {
+                source: Source::Import,
+                capability_id: None,
+                at: created,
+            },
+            merged_into: None,
+            erased_at: None,
+            created_at: created,
+            updated_at: updated,
+        };
+        r.people().insert(row.clone()).await?;
+        if let Some(preview) = preview.as_mut() {
+            preview.people.insert(person_id, row);
+        }
+    } else if let Some(row) = preview.as_ref().and_then(|p| p.people.get(&person_id))
+        && r.people().get(person_id).await?.is_none()
+    {
+        // Its earlier chunk was rolled back. Recreate the exact parent via the tenant repo
+        // so this chunk exercises the same foreign keys and write policies as import.
+        r.people().insert(row.clone()).await?;
     }
     for (index, (key, owners)) in keys.into_iter().zip(owners).enumerate() {
         if !owners.is_empty() {
@@ -379,18 +373,33 @@ async fn intake(
                 person_id,
                 channel: key.channel,
                 value_display: key.canonical.clone(),
-                value_normalized: key.canonical,
+                value_normalized: key.canonical.clone(),
                 active: true,
                 first_seen_at: created,
             })
             .await?;
+        if let Some(preview) = preview.as_mut() {
+            preview
+                .identities
+                .insert((key.channel, key.canonical), person_id);
+        }
     }
     let status = map_status(&lead.status)?;
     // The first open opportunity wins for duplicate input. Terminal rows remain closed histories.
     let open = if matches!(status, JourneyStatus::Won | JourneyStatus::Lost) {
         None
     } else {
-        r.journeys().open_for(person_id).await?
+        let open = r.journeys().open_for(person_id).await?;
+        if open.is_none()
+            && let Some(initial) = preview
+                .as_ref()
+                .and_then(|p| p.open_journeys.get(&person_id))
+        {
+            r.journeys().insert_initial(initial.clone()).await?;
+            Some(initial.journey().clone())
+        } else {
+            open
+        }
     };
     let journey = if let Some(journey) = open {
         journey
@@ -408,7 +417,12 @@ async fn intake(
         })
         .ok_or_else(invalid_input)?;
         let journey = initial.journey().clone();
-        r.journeys().insert_initial(initial).await?;
+        r.journeys().insert_initial(initial.clone()).await?;
+        if journey.closed_at.is_none()
+            && let Some(preview) = preview.as_mut()
+        {
+            preview.open_journeys.insert(person_id, initial);
+        }
         journey
     };
     if let Some(text) = lead.note() {
@@ -475,6 +489,9 @@ async fn intake(
     }
     r.checkpoint(person_id, &lead.id, json!({"kind":"import","system":"v1", "v1_lead_id":lead.id, "v1_source":lead.source, "v1_status":lead.status})).await?;
     markers.insert(lead.id.clone(), person_id);
+    if let Some(preview) = preview {
+        preview.leads.insert(lead.id.clone());
+    }
     report.imported += 1;
     Ok(())
 }
@@ -483,7 +500,7 @@ fn invalid_input() -> AppError {
 }
 
 /// Prevalidate before any commit. Every mode uses 100-row transactions; dry runs roll each
-/// chunk back and retain projected identities and lead IDs in memory for duplicate accounting.
+/// chunk back after executing real writes, retaining duplicate keys and parent context in memory.
 pub async fn run(
     store: &dyn ImportStore,
     ws: WorkspaceId,
@@ -540,8 +557,8 @@ pub async fn run(
             r.commit().await?;
         }
     }
-    // A dry run must leave absolutely no durable writes, including ledger entries.
-    if mode != Mode::DryRun {
+    // Rehearse the ledger write as well; a dry run must leave no durable entries.
+    {
         let mut r = store.begin(ws).await?;
         r.ledger()
             .append(LedgerEntry::new(
@@ -554,7 +571,11 @@ pub async fn run(
                 now,
             ))
             .await?;
-        r.commit().await?;
+        if mode == Mode::DryRun {
+            r.rollback().await?;
+        } else {
+            r.commit().await?;
+        }
     }
     guard.release().await?;
     Ok(report)

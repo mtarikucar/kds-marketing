@@ -277,10 +277,14 @@ set +a
   --input /root/v1-leads.jsonl
 ```
 
-Dry run evaluates chunks of 100 leads and explicitly rolls back each transaction,
-releasing the workspace inbox lock between chunks. Projected lead IDs and identity
-keys stay in memory so duplicates across chunks have the same counts as import
-against unchanged data. It leaves **no rows, including no ledger entry**. Import
+Dry run executes the same repository writes as import in chunks of 100 leads,
+then explicitly rolls back each transaction, releasing the workspace inbox lock
+between chunks. Successful lead IDs, identity ownership and minimal person/open
+journey context stay in memory; later chunks restore only needed parents rather
+than replaying earlier leads. Constraints, indexes and RLS are exercised, and
+counts match import against unchanged data. The counts-only ledger write is also
+rehearsed and rolled back. It leaves **no durable rows, including no ledger entry**;
+PostgreSQL sequences can advance on rolled-back inserts. Import
 commits chunks of 100; a successful import or rollback appends one `import.v1_leads` counts-only ledger
 entry by System `v1_import`. If interrupted after a chunk, retry the same file;
 committed leads are skipped. Import markers are loaded once per run and rechecked
@@ -290,10 +294,11 @@ workspace (`already_running`); retry after the active command ends. It reserves
 one database connection, and chunk processing requires another. Ordinary inbox
 work can proceed between chunks. Erasure and active
 identity checks include shared-intake phone keys as well as TR-canonical keys;
-new imported TR identities still use `+90` E.164. The shared normalizer currently
-mis-handles ten-digit TR national numbers (for example, `5321234567` becomes
-`+5321234567`); this importer checks that historical alias without changing shared
-intake behavior. Keep the original export until verification ends.
+new imported TR identities still use `+90` E.164. The shared normalizer now treats
+ten-digit TR national numbers as `+90`; the importer also checks historical aliases
+created before that fix. In both modes, normalized emails over 254 characters and
+phones over 15 digits are skipped and counted as invalid identities.
+Keep the original export until verification ends.
 In the panel, select the destination workspace and verify people, companies,
 normalized identities, stage counts, closed Won/Lost journeys, imported notes,
 future follow-up tasks and channel withdrawals/suppressions. Confirm another

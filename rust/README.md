@@ -3037,8 +3037,10 @@ keeps M4 acceptance open. Automated verification does not tag, publish or deploy
 
 The 2026-10-26 owner ruling permits **allowlisted leads only** from v1.
 `jeeta import-v1-leads --workspace <uuid> --input /root/v1-leads.jsonl --dry-run`
-previews in rolled-back 100-lead transactions with cross-chunk duplicate tracking
-in memory; omit `--dry-run` to import or replace it with
+rehearses every repository write (including the ledger) in rolled-back 100-lead
+transactions, with cross-chunk duplicate and parent context held in memory.
+Normalized emails over 254 characters and phones over 15 digits are skipped and
+counted as invalid in both modes. Omit `--dry-run` to import or replace it with
 `--rollback` to remove unchanged imported aggregates. Existing identities are
 never stolen; touched records survive rollback. Use the protected serve database
 and secret-key environment, an ordinary RLS role and an exactly matching schema.
