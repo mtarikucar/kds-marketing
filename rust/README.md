@@ -2705,7 +2705,11 @@ Boundary: **143 catalog rows, 125 MCP tools, 67 tables, 12 migration pairs,
 operator `jt_platform` session; tenant sessions and API keys cannot open it.
 `GET /healthz` remains liveness (`200 {"ok":true}`). `GET /readyz` returns only
 `{"ok":true|false}` with 200/503, checking completed boot/migrations, database
-connectivity and local FileStore read/write availability. Connector reports,
+connectivity and local FileStore read/write availability. The file probe writes a nonempty
+4 KiB payload, fsyncs, reads and compares it, then removes its reserved non-tenant file
+through the active store's directory handle. A changed directory identity is degraded,
+including a rename followed by recreation at the configured path. Readiness and health
+bound the store probe to two seconds; results are not cached. Connector reports,
 recovery markers and disk capacity do not gate readiness. Neither `/readyz` nor
 `/metrics` has a catalog row or MCP tool; both paths are reserved from SPA fallback.
 

@@ -205,16 +205,6 @@ pub(crate) async fn boot(
     config: &Config,
 ) -> Result<(Deps, Arc<Egress>, Arc<crate::ops::RuntimeOps>)> {
     let (mut deps, egress) = ports(pool.clone(), config);
-    let ops = Arc::new(crate::ops::RuntimeOps {
-        pool,
-        uow: deps.uow.clone(),
-        signals: deps.ops_signals.clone(),
-        files_dir: config.files_dir.clone(),
-        recovery_dir: config.recovery_status_dir.clone(),
-        started_at: crate::ops::process_started_at(),
-        boot_complete: std::sync::atomic::AtomicBool::new(false),
-    });
-    deps.ops = ops.clone();
     let dir = config
         .files_dir
         .as_deref()
@@ -227,6 +217,17 @@ pub(crate) async fn boot(
     deps.files = files.clone();
     deps.file_maintenance = files;
     deps.media_fetch = Arc::new(jt_files::CheckedMediaFetcher(egress.clone()));
+    let ops = Arc::new(crate::ops::RuntimeOps {
+        pool,
+        uow: deps.uow.clone(),
+        signals: deps.ops_signals.clone(),
+        files: deps.files.clone(),
+        files_dir: config.files_dir.clone(),
+        recovery_dir: config.recovery_status_dir.clone(),
+        started_at: crate::ops::process_started_at(),
+        boot_complete: std::sync::atomic::AtomicBool::new(false),
+    });
+    deps.ops = ops.clone();
     rebuild_tenant_hosts(&egress, deps.uow.as_ref())
         .await
         .context("cannot rebuild the egress tenant tier from the capability records")?;

@@ -112,8 +112,25 @@ impl Drop for Temp {
     }
 }
 fn probe(pool: sqlx::PgPool, dir: PathBuf) -> Arc<ops::RuntimeOps> {
+    let files = Arc::new(
+        jt_files::DiskFiles::new(
+            &dir,
+            "https://files.example.com".parse().unwrap(),
+            [7; 32],
+            Arc::new(jt_testkit::fakes::FixedClock(FIXED_NOW)),
+        )
+        .unwrap(),
+    );
+    probe_with_files(pool, dir, files)
+}
+fn probe_with_files(
+    pool: sqlx::PgPool,
+    dir: PathBuf,
+    files: Arc<dyn jt_app::ports::files::FileStore>,
+) -> Arc<ops::RuntimeOps> {
     Arc::new(ops::RuntimeOps {
         pool,
+        files,
         uow: Arc::new(InMemoryUow::new()),
         signals: Arc::new(OpsSignals::default()),
         files_dir: Some(dir),
@@ -625,4 +642,123 @@ fn disk_capacity_threshold_is_strict_and_overflow_safe() {
     assert_eq!(ops::disk_state(10, 100), HealthState::Ok);
     assert_eq!(ops::disk_state(u64::MAX, u64::MAX), HealthState::Ok);
     assert_eq!(ops::disk_state(0, 0), HealthState::Degraded);
+}
+
+#[tokio::test]
+async fn readiness_and_health_fail_when_probe_payload_write_fails() {
+    let db = TestDb::new().await;
+    let dir = Temp::new();
+    let files = Arc::new(jt_testkit::fakes::files::MemoryFiles::default());
+    let p = probe_with_files(db.pool.clone(), dir.0.clone(), files.clone());
+    p.booted();
+    assert!(p.ready().await);
+    assert_eq!(p.snapshot().await.unwrap().files, HealthState::Ok);
+    files
+        .probe_write_fails
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert!(!p.ready().await);
+    let out = p.snapshot().await.unwrap();
+    assert_eq!(out.database, HealthState::Ok);
+    assert_eq!(out.files, HealthState::Degraded);
+    assert!(!out.ready());
+    files
+        .probe_write_fails
+        .store(false, std::sync::atomic::Ordering::Release);
+    assert!(p.ready().await);
+}
+
+#[tokio::test]
+async fn readiness_fails_when_active_file_store_directory_is_replaced() {
+    let db = TestDb::new().await;
+    let dir = Temp::new();
+    let active = dir.0.join("active");
+    let old = dir.0.join("old");
+    std::fs::create_dir(&active).unwrap();
+    let p = probe(db.pool.clone(), active.clone());
+    p.booted();
+    assert!(p.ready().await);
+    std::fs::rename(&active, &old).unwrap();
+    std::fs::create_dir(&active).unwrap();
+    assert!(!p.ready().await);
+    assert_eq!(p.snapshot().await.unwrap().files, HealthState::Degraded);
+    assert_eq!(std::fs::read_dir(&active).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(&old).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn signed_meta_without_routing_account_is_unresolved_once() {
+    let uow = Arc::new(InMemoryUow::new());
+    let mut deps = jt_testkit::fakes::deps(uow.clone());
+    deps.apps = Arc::new(jt_testkit::fakes::FakeAppConfig::with_all_apps());
+    let signals = deps.ops_signals.clone();
+    let app = jt_webhook::router(jt_webhook::WebhookState {
+        deps: Arc::new(deps),
+    });
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::post("/hooks/meta")
+                .header("X-Hub-Signature-256", "sha256=wrong")
+                .body(Body::from(r#"{"object":"page","entry":[{}]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(signals.read().webhooks.unresolved, 0);
+    for (body, signature, unresolved) in [
+        (
+            r#"{"object":"page","entry":[]}"#,
+            "sha256=5dcb51eb590634700c8d9cc1fde4d2d5981ca7bb83f250eb3fb71bfd849057ed",
+            0,
+        ),
+        (
+            r#"{"object":"page","entry":[{"messaging":[{"message":{"mid":"m"}}]}]}"#,
+            "sha256=48e9bae4eba8eca47f26c1dde2d327480f649f81d6fd2f18085b809575b67c42",
+            1,
+        ),
+        (
+            r#"{"object":"page","entry":[{},{}]}"#,
+            "sha256=a16b40deecce90b822b84831e0de79bd992a03781f4a36574b7ca3258ba13b6d",
+            2,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/hooks/meta")
+                    .header("X-Hub-Signature-256", signature)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(signals.read().webhooks.unresolved, unresolved);
+        assert_eq!(signals.read().webhooks.unrouted, 0);
+        assert_eq!(signals.read().webhooks.accepted, 0);
+        assert!(uow.snapshot().inbound_events.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn hung_file_probe_times_out_in_readiness_and_health() {
+    let db = TestDb::new().await;
+    let dir = Temp::new();
+    let files = Arc::new(jt_testkit::fakes::files::MemoryFiles::default());
+    files
+        .probe_hangs
+        .store(true, std::sync::atomic::Ordering::Release);
+    let p = probe_with_files(db.pool.clone(), dir.0.clone(), files);
+    p.booted();
+    let ready = tokio::time::timeout(std::time::Duration::from_secs(3), p.ready())
+        .await
+        .unwrap();
+    assert!(!ready);
+    let out = tokio::time::timeout(std::time::Duration::from_secs(3), p.snapshot())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(out.files, HealthState::Degraded);
+    assert!(!out.ready());
 }

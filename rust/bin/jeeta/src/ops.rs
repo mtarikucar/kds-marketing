@@ -31,6 +31,7 @@ pub struct RuntimeOps {
     pub pool: PgPool,
     pub uow: Arc<dyn UnitOfWork>,
     pub signals: Arc<OpsSignals>,
+    pub files: Arc<dyn jt_app::ports::files::FileStore>,
     pub files_dir: Option<PathBuf>,
     pub recovery_dir: Option<PathBuf>,
     pub started_at: OffsetDateTime,
@@ -41,15 +42,20 @@ impl RuntimeOps {
         if !self.boot_complete.load(Ordering::Acquire) {
             return false;
         }
-        let files = self.files_dir.clone();
         let (database, files) = tokio::join!(
             tokio::time::timeout(
                 Duration::from_secs(2),
                 sqlx::query("SELECT 1").execute(&self.pool)
             ),
-            tokio::task::spawn_blocking(move || files.as_deref().is_some_and(file_ready))
+            self.files_ready()
         );
-        matches!(database, Ok(Ok(_))) && matches!(files, Ok(true))
+        matches!(database, Ok(Ok(_))) && files
+    }
+    async fn files_ready(&self) -> bool {
+        matches!(
+            tokio::time::timeout(Duration::from_secs(2), self.files.probe()).await,
+            Ok(Ok(()))
+        )
     }
     pub fn booted(&self) {
         self.boot_complete.store(true, Ordering::Release);
@@ -76,7 +82,6 @@ impl OpsSnapshot for RuntimeOps {
         let files = self.files_dir.clone();
         let recovery = self.recovery_dir.clone();
         let probes = tokio::task::spawn_blocking(move || {
-            let files_ok = files.as_deref().is_some_and(file_ready);
             let disk = files.as_deref().and_then(disk_free);
             let backup = marker(
                 recovery.as_deref(),
@@ -92,15 +97,18 @@ impl OpsSnapshot for RuntimeOps {
                 now,
                 15 * 60,
             );
-            (files_ok, disk, backup, wal)
-        })
-        .await;
-        if let Ok((files, disk, backup, wal)) = probes {
-            out.files = if files {
-                HealthState::Ok
-            } else {
-                HealthState::Degraded
-            };
+            (disk, backup, wal)
+        });
+        let (files_ok, probes) = tokio::join!(
+            self.files_ready(),
+            tokio::time::timeout(Duration::from_secs(2), probes)
+        );
+        out.files = if files_ok {
+            HealthState::Ok
+        } else {
+            HealthState::Degraded
+        };
+        if let Ok(Ok((disk, backup, wal))) = probes {
             if let Some((available, total)) = disk {
                 out.disk_available_bytes = Some(available);
                 out.disk = disk_state(available, total);
@@ -139,29 +147,6 @@ impl OpsSnapshot for RuntimeOps {
             }
         }
         Ok(out)
-    }
-}
-// A successful boot is insufficient if the local directory has since disappeared or become
-// unwritable. Use a unique, empty probe file and remove only the file we just created.
-fn file_ready(path: &Path) -> bool {
-    if !path.is_absolute() || !path.is_dir() {
-        return false;
-    }
-    let name = path.join(format!(
-        ".readiness-{}-{}",
-        std::process::id(),
-        OffsetDateTime::now_utc().unix_timestamp_nanos()
-    ));
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&name)
-    {
-        Ok(file) => {
-            drop(file);
-            std::fs::remove_file(name).is_ok()
-        }
-        Err(_) => false,
     }
 }
 // GNU coreutils is part of the deployment image. Fixed argv (no shell) avoids unsafe FFI;

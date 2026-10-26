@@ -323,3 +323,19 @@ async fn acks_in_opposite_orders_mark_each_event_once_without_deadlock() {
         .sum();
     assert_eq!(total as usize, ROUNDS * EVENTS);
 }
+
+#[tokio::test]
+async fn authenticated_netgsm_without_parseable_events_is_unresolved_once() {
+    let w = World::new().await;
+    let token = w.token(w.ws, jt_connector::NetgsmPurpose::Mo);
+    let (status, _) = answer(
+        &w.app(),
+        netgsm_post(&w.ws.to_string(), &token, "mo", br#"{"messages":[{},{}]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(w.deps.ops_signals.read().webhooks.unresolved, 1);
+    assert_eq!(w.deps.ops_signals.read().webhooks.accepted, 0);
+    assert_eq!(w.deps.ops_signals.read().webhooks.unrouted, 0);
+    assert!(w.stored().is_empty());
+}

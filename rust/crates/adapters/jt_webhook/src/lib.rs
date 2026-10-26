@@ -29,7 +29,8 @@
 //! accounts leaves none of them another's items, and an item no workspace took is kept nowhere. A
 //! signed body that is not a webhook the parser knows is
 //! acknowledged, counted and stored as nothing (Meta would only redeliver it). A database
-//! failure is `500`: Meta redelivers.
+//! failure is `500`: Meta redelivers. A successful parse with entries but no routable event
+//! increments the operational `unresolved` counter once per request and keeps nothing.
 //!
 //! **NetGSM** (unsigned: the URL carries the workspace's token per purpose): a path segment that
 //! does not decode, an unknown purpose, a malformed workspace id, a token that is not the
@@ -41,7 +42,8 @@
 //! a warning (the purpose only) and a count ([`counters`]`().unparseable_netgsm`): NetGSM retries
 //! anything else, and retrying cannot improve it. The events are stored synchronously in the
 //! URL's workspace (`receive_netgsm`), the body kept as received (it names that workspace alone);
-//! a database failure is `503`, which NetGSM redelivers.
+//! a database failure is `503`, which NetGSM redelivers. An authenticated callback whose parse
+//! yields no events is also counted once as operational `unresolved`, with `202` unchanged.
 //!
 //! Replays store nothing new (Review Focus 2): events are unique per workspace, provider and
 //! provider id. No answer, log line or counter carries a body, an account id or a token.
