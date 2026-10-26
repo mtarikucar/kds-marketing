@@ -4,7 +4,7 @@ set -euo pipefail
 sql() { psql -XAt --set=ON_ERROR_STOP=1 -c "$1"; }
 case "$1" in
   prepare)
-    sql "CREATE ROLE recovery_app NOSUPERUSER NOBYPASSRLS NOLOGIN" ;;
+    sql "CREATE ROLE recovery_app NOSUPERUSER NOBYPASSRLS LOGIN" ;;
   verify)
     [[ $(sql "SELECT pg_encoding_to_char(encoding) || ':' || datcollate || ':' || datctype FROM pg_database WHERE datname=current_database()") == UTF8:C.utf8:C.utf8 ]]
     sql 'GRANT USAGE ON SCHEMA public TO recovery_app; GRANT SELECT ON ALL TABLES IN SCHEMA public TO recovery_app'

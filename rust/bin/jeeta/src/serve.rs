@@ -81,7 +81,7 @@ pub async fn run(config: Config) -> Result<()> {
     }
     let gate = strategy_gate(pool.clone());
 
-    let app = app_with_probes(deps.clone(), gate, &config, Some(runtime_ops));
+    let app = app_with_probes(deps.clone(), gate, &config, Some(runtime_ops.clone()));
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("cannot listen on {} ({})", config.bind, config::BIND))?;
@@ -93,8 +93,13 @@ pub async fn run(config: Config) -> Result<()> {
         "jeeta is listening"
     );
 
+    let wal_probe = runtime_ops.start_wal_probe(config.wal_archive_dir.clone());
     let jobs = scheduler::start(&config, Arc::new(deps));
     let served = serve(listener, app, jobs.stopper()).await;
+    if let Some(probe) = wal_probe {
+        probe.abort();
+        let _ = probe.await;
+    }
     jobs.shutdown(scheduler::SHUTDOWN_GRACE).await;
     served?;
     pool.close().await;
@@ -171,6 +176,9 @@ pub(crate) async fn check_database_role(pool: &PgPool, allow: bool) -> Result<()
 
 /// Applies every pending migration; returns how many it applied and how many are applied now.
 async fn migrate(pool: &PgPool) -> Result<(usize, usize)> {
+    jt_pg::recovery::check_schema(pool, false)
+        .await
+        .map_err(|_| anyhow::anyhow!("schema refused"))?;
     let before = applied_migrations(pool).await?;
     jt_pg::migrate_up(pool)
         .await
@@ -224,6 +232,7 @@ pub(crate) async fn boot(
         files: deps.files.clone(),
         files_dir: config.files_dir.clone(),
         recovery_dir: config.recovery_status_dir.clone(),
+        wal_probe_state: std::sync::atomic::AtomicU8::new(0),
         started_at: crate::ops::process_started_at(),
         boot_complete: std::sync::atomic::AtomicBool::new(false),
     });

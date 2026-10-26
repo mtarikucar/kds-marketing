@@ -11,6 +11,7 @@
 mod config;
 mod connectors;
 mod ops;
+mod recovery;
 mod scheduler;
 mod serve;
 mod stdio;
@@ -28,6 +29,9 @@ Commands:
   serve       Run the HTTP server: the panel, its API, the MCP endpoint at /mcp and the
               providers' webhooks at /hooks
   mcp-stdio   Serve MCP over stdin/stdout as the API key in JEETA_STDIO_API_KEY
+  recovery-verify       Verify restored schema, RLS and sealed canary without serving
+  recovery-canary-up    Provision a retired canary in JEETA_RECOVERY_WORKSPACE_ID
+  recovery-canary-down  Remove that reserved canary (idempotent rollback)
   --help      Show this help
 
 Configuration comes from JEETA_* environment variables; rust/.env (or ./.env) is loaded first
@@ -42,6 +46,9 @@ enum Command {
     Serve,
     McpStdio,
     Help,
+    RecoveryVerify,
+    RecoveryCanaryUp,
+    RecoveryCanaryDown,
 }
 
 /// The command named by the arguments after the program name; `None` for anything else.
@@ -50,6 +57,9 @@ fn parse(args: &[OsString]) -> Option<Command> {
         return None;
     };
     match arg.to_str()? {
+        "recovery-verify" => Some(Command::RecoveryVerify),
+        "recovery-canary-up" => Some(Command::RecoveryCanaryUp),
+        "recovery-canary-down" => Some(Command::RecoveryCanaryDown),
         "serve" => Some(Command::Serve),
         "mcp-stdio" => Some(Command::McpStdio),
         "--help" | "-h" | "help" => Some(Command::Help),
@@ -73,6 +83,9 @@ fn main() -> ExitCode {
             print!("{USAGE}");
             ExitCode::SUCCESS
         }
+        Command::RecoveryVerify => recovery::run("recovery-verify"),
+        Command::RecoveryCanaryUp => recovery::run("recovery-canary-up"),
+        Command::RecoveryCanaryDown => recovery::run("recovery-canary-down"),
         Command::Serve => start(serve::run, true),
         Command::McpStdio => start(stdio::run, false),
     }

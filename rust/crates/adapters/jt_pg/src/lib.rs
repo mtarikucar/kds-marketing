@@ -12,11 +12,13 @@
 mod job_lock;
 mod migrate;
 mod pool;
+pub mod recovery;
 pub mod repos;
 mod role;
 mod strategy_gate;
 pub mod tx;
 pub mod uow;
+pub mod wal;
 
 pub use job_lock::{JOB_LOCK_APPLICATION_NAME, PgJobLock};
 pub use migrate::{migrate_down_all, migrate_up, migrator};

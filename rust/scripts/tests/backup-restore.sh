@@ -8,39 +8,64 @@ fail() { printf 'FAIL %s\n' "$*" >&2; exit 1; }
 # Prefer host PostgreSQL tools when available. A separate network namespace is
 # mandatory on both paths; no connections to pre-existing services are possible.
 if [[ ${JEETA_HARNESS_INNER:-} != yes ]]; then
+  (cd "$scripts/.." && cargo build --locked -p jeeta)
+  binary="$scripts/../target/debug/jeeta"
   scratch=$(mktemp -d /tmp/jeeta-drill-XXXXXXXX)
   container=jeeta-drill-$(basename "$scratch")
   cleanup_outer() { docker rm -f "$container" >/dev/null 2>&1 || true; rm -rf "$scratch"; }
   trap cleanup_outer EXIT
-  pg_bin=$(find /usr/lib/postgresql -path '*/bin/initdb' -print -quit 2>/dev/null || true)
+  pg_bin=/usr/lib/postgresql/16/bin/initdb
+  [[ -x "$pg_bin" ]] || pg_bin=""
   if [[ -n "$pg_bin" ]]; then export PATH="${pg_bin%/*}:$PATH"; fi
   if command -v pg_dump >/dev/null && command -v initdb >/dev/null && command -v pg_verifybackup >/dev/null && unshare -U --map-current-user -n true 2>/dev/null && ((EUID != 0)); then
-    JEETA_HARNESS_INNER=yes JEETA_TEST_ROOT="$scratch" unshare -U --map-current-user -n bash "$0"
+    if sudo -n true 2>/dev/null; then sudo -n bash "$scripts/tests/status-permissions.sh"; fi
+    JEETA_HARNESS_BINARY="$binary" JEETA_HARNESS_INNER=yes JEETA_TEST_ROOT="$scratch" unshare -U --map-current-user -n bash "$0"
   elif command -v pg_dump >/dev/null && command -v initdb >/dev/null && ((EUID == 0)) && unshare -n true 2>/dev/null; then
+    bash "$scripts/tests/status-permissions.sh"
     chown postgres "$scratch"
-    unshare -n runuser -u postgres -- env PATH="$PATH" JEETA_HARNESS_INNER=yes JEETA_TEST_ROOT="$scratch" bash "$0"
+    unshare -n runuser -u postgres -- env PATH="$PATH" JEETA_HARNESS_BINARY="$binary" JEETA_HARNESS_INNER=yes JEETA_TEST_ROOT="$scratch" bash "$0"
+  elif command -v pg_dump >/dev/null && command -v initdb >/dev/null && command -v pg_verifybackup >/dev/null && sudo -n unshare -n true 2>/dev/null; then
+    sudo -n bash "$scripts/tests/status-permissions.sh"
+    sudo -n unshare -n --setgid "$(id -g)" --setuid "$(id -u)" env PATH="$PATH" JEETA_HARNESS_BINARY="$binary" JEETA_HARNESS_INNER=yes JEETA_TEST_ROOT="$scratch" bash "$0"
   else
     # Work is a disposable bind mount, no anonymous/named PostgreSQL volumes.
-    docker run --rm --name "$container" --network none --mount "type=bind,src=$scripts/../,dst=/src,readonly" \
-      --mount "type=bind,src=$scratch,dst=/work" --env "JEETA_TEST_FILTER=${JEETA_TEST_FILTER:-}" --env "JEETA_OUTER_OWNER=$(id -u):$(id -g)" --entrypoint bash postgres:16 -c \
-      'trap '"'"'chown -R "$JEETA_OUTER_OWNER" /work'"'"' EXIT; chown postgres:postgres /work; runuser -u postgres -- env JEETA_HARNESS_INNER=yes JEETA_TEST_ROOT=/work JEETA_TEST_FILTER="${JEETA_TEST_FILTER:-}" bash /src/scripts/tests/backup-restore.sh'
+    [[ ${JEETA_REQUIRE_HOST_TOOLS:-no} != yes ]] || fail "host PostgreSQL tools and private network namespace required"
+    python3 "$scripts/tests/recovery-binary-bridge.py" "$scratch" "$binary" docker run --rm --name "$container" --network none --mount "type=bind,src=$scripts/../,dst=/src,readonly" \
+      --mount "type=bind,src=$scratch,dst=/work" --env "JEETA_TEST_FILTER=${JEETA_TEST_FILTER:-}" --env "JEETA_OUTER_OWNER=$(id -u):$(id -g)" --env "JEETA_OUTER_UID=$(id -u)" --env "JEETA_OUTER_GID=$(id -g)" --entrypoint bash postgres:16 -c \
+      'trap '"'"'chown -R "$JEETA_OUTER_OWNER" /work'"'"' EXIT; groupmod -g "$JEETA_OUTER_GID" postgres; usermod -u "$JEETA_OUTER_UID" -g "$JEETA_OUTER_GID" postgres; chown postgres:postgres /work; bash /src/scripts/tests/status-permissions.sh && runuser -u postgres -- env JEETA_HARNESS_INNER=yes JEETA_TEST_ROOT=/work JEETA_TEST_FILTER="${JEETA_TEST_FILTER:-}" bash /src/scripts/tests/backup-restore.sh'
   fi
   exit 0
 fi
 work=$JEETA_TEST_ROOT
+export JEETA_BRIDGE_SCRIPT="$scripts/tests/recovery-binary-bridge.py"
 fixtures="$scripts/tests/fixtures/recovery"
 mkdir -p "$work"/{source,socket,files,release,status,logical,base,wal,hooks}
 cp -R "$scripts/../migrations" "$work/release/"
 printf 'synthetic-release\n' > "$work/release/REVISION"
 printf 'synthetic-file\n' > "$work/files/evidence"
-printf 'synthetic-master-key\n' > "$work/key"
-printf 'synthetic-master-key\n' > "$work/expected-key"
+od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$work/key"
 cp "$fixtures/integrity.sh" "$work/hooks/integrity"
 cat > "$work/hooks/canary" <<'HOOK'
 #!/usr/bin/env bash
-# T071 replaces this synthetic key-equality check with real sealed-canary decryption.
 set -euo pipefail
-cmp -s "$JEETA_MASTER_KEY_FILE" "$JEETA_TEST_ROOT/expected-key"
+operation=${1:-verify}
+[[ "$operation" != verify ]] || operation=recovery-verify
+case "$operation" in recovery-verify|recovery-canary-up|recovery-canary-down) ;; *) exit 1;; esac
+if [[ -n ${JEETA_HARNESS_BINARY:-} ]]; then
+  python3 "$JEETA_BRIDGE_SCRIPT" --invoke "$JEETA_HARNESS_BINARY" "$operation" "$PGHOST" "$JEETA_MASTER_KEY_FILE"
+else
+  # The host binary cannot execute inside the Debian container. Exchange only
+  # fixed operations and disposable paths, never key contents or SQL output.
+  printf '%s\n%s\n%s\n' "$operation" "$PGHOST" "$JEETA_MASTER_KEY_FILE" > "$JEETA_TEST_ROOT/binary-request.tmp"
+  mv "$JEETA_TEST_ROOT/binary-request.tmp" "$JEETA_TEST_ROOT/binary-request"
+  for ((i=0;i<1200;i++)); do
+    if [[ -f "$JEETA_TEST_ROOT/binary-response" ]]; then
+      rc=$(cat "$JEETA_TEST_ROOT/binary-response"); rm "$JEETA_TEST_ROOT/binary-response"; exit "$rc"
+    fi
+    sleep .05
+  done
+  exit 1
+fi
 HOOK
 cat > "$work/hooks/control" <<'HOOK'
 #!/usr/bin/env bash
@@ -77,17 +102,23 @@ pg_ctl -D "$work/source" -l "$work/source.log" -w start >> "$work/setup.log" 2>&
 export PGHOST="$work/socket" PGUSER="$(id -un)" PGDATABASE=jeeta
 createdb --template=template0 --encoding=UTF8 --locale=C.utf8 jeeta
 sql() { psql -XAt --set=ON_ERROR_STOP=1 -c "$1"; }
-sql 'CREATE TABLE _sqlx_migrations(version bigint PRIMARY KEY,success boolean NOT NULL)' >> "$work/setup.log"
+sql "CREATE TABLE _sqlx_migrations(version bigint PRIMARY KEY,description text NOT NULL,installed_on timestamptz NOT NULL DEFAULT now(),success boolean NOT NULL,checksum bytea NOT NULL,execution_time bigint NOT NULL)" >> "$work/setup.log"
 for migration in "$work/release/migrations/"*.up.sql; do
   psql -X --set=ON_ERROR_STOP=1 -f "$migration" >> "$work/setup.log" 2>&1
   ver=${migration##*/}; ver=${ver%%_*}
-  sql "INSERT INTO _sqlx_migrations VALUES ($((10#$ver)),true)" >> "$work/setup.log"
+  checksum=$(sha384sum "$migration" | cut -d' ' -f1)
+  sql "INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES ($((10#$ver)),'fixture',true,decode('$checksum','hex'),0)" >> "$work/setup.log"
 done
 # The synthetic up/down pair is checked up -> down -> down -> up.
 for direction in up down down up; do
   psql -X --set=ON_ERROR_STOP=1 -f "$fixtures/synthetic.$direction.sql" >> "$work/setup.log" 2>&1
 done
-sql "CREATE ROLE recovery_app NOSUPERUSER NOBYPASSRLS NOLOGIN" >> "$work/setup.log"
+sql "CREATE ROLE recovery_app NOSUPERUSER NOBYPASSRLS LOGIN" >> "$work/setup.log"
+sql 'GRANT USAGE ON SCHEMA public TO recovery_app; GRANT SELECT ON ALL TABLES IN SCHEMA public TO recovery_app; GRANT INSERT,DELETE ON capabilities TO recovery_app' >> "$work/setup.log"
+export JEETA_MASTER_KEY_FILE="$work/key"
+for operation in recovery-canary-up recovery-canary-down recovery-canary-down recovery-canary-up; do
+  "$work/hooks/canary" "$operation" >> "$work/setup.log" 2>&1 || fail 'real canary provisioning'
+done
 digest=$(sha256sum "$work/files/evidence" | cut -d' ' -f1)
 sql "INSERT INTO recovery_fixture.files VALUES ('00000000-0000-0000-0000-000000000001','evidence','$digest')" >> "$work/setup.log"
 printf '[jeeta_backup]\nhost=%s/socket\nuser=%s\ndbname=jeeta\n' "$work" "$PGUSER" > "$work/service"
@@ -223,7 +254,7 @@ restore_refuses_production_or_nonempty_target() {
 }
 restored_unknown_send_is_not_retried() {
   config unknown; restore_ok "$logical"
-  # This probes synthetic persisted uncertainty, not the Rust scheduler (T071).
+  # This probes synthetic persisted uncertainty, not the Rust scheduler (T072).
   sql "UPDATE recovery_fixture.outbox SET state='queued',attempts=2 WHERE id=1" >/dev/null
   "$scripts/backup.sh" "$work/bad-unknown" > "$work/bad-backup.log" 2>&1
   sql "UPDATE recovery_fixture.outbox SET state='unknown',attempts=1 WHERE id=1" >/dev/null

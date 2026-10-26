@@ -135,6 +135,7 @@ fn probe_with_files(
         signals: Arc::new(OpsSignals::default()),
         files_dir: Some(dir),
         recovery_dir: None,
+        wal_probe_state: std::sync::atomic::AtomicU8::new(0),
         started_at: FIXED_NOW,
         boot_complete: AtomicBool::new(false),
     })
@@ -761,4 +762,43 @@ async fn hung_file_probe_times_out_in_readiness_and_health() {
         .unwrap();
     assert_eq!(out.files, HealthState::Degraded);
     assert!(!out.ready());
+}
+
+#[tokio::test]
+async fn wal_probe_disabled_is_unknown_and_failure_is_degraded_without_advancing_marker() {
+    let db = TestDb::new().await;
+    let dir = Temp::new();
+    let mut p = probe(db.pool.clone(), dir.0.clone());
+    Arc::get_mut(&mut p).unwrap().recovery_dir = Some(dir.0.clone());
+    let marker = br#"{"archived_at":"2020-01-01T00:00:00Z"}"#;
+    std::fs::write(dir.0.join("wal-status.json"), marker).unwrap();
+    assert!(p.start_wal_probe(None).is_none());
+    assert_eq!(
+        p.snapshot().await.unwrap().backup.wal_state,
+        HealthState::Unknown
+    );
+    let task = p.start_wal_probe(Some(dir.0.clone())).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while p.wal_probe_state.load(std::sync::atomic::Ordering::Acquire) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        p.snapshot().await.unwrap().backup.wal_state,
+        HealthState::Degraded
+    );
+    assert_eq!(
+        std::fs::read(dir.0.join("wal-status.json")).unwrap(),
+        marker
+    );
+    task.abort();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap_err()
+            .is_cancelled()
+    );
 }

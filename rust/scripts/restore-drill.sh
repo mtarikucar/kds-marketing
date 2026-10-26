@@ -122,7 +122,7 @@ cmp -s "$target/database.settings" "$recovery/database.settings" || fail 'restor
 db_versions dbname=jeeta > "$target/database.versions" 2>>"$target/postgres.log"
 cmp -s "$target/database.versions" "$recovery/schema.versions" || fail 'restored schema mismatch'
 hook "$JEETA_INTEGRITY_HOOK" verify
-# T071 supplies real binary decryption equality. Output is ALWAYS suppressed.
+# T072 supplies real binary schema/RLS/decryption verification. Output is ALWAYS suppressed.
 hook "$JEETA_SEALED_CANARY_CHECK_HOOK" verify
 # Compare actual restored files, including missing/extra files.
 inventory "$target/files" data | cmp -s <(inventory "$file_source" data) - || fail 'restored files changed'

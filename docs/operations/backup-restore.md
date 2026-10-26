@@ -184,9 +184,10 @@ the protected config variables. They must exit nonzero on **any** failed invaria
   post-target marker does not, using independently recorded expectations.
 - `JEETA_SEALED_CANARY_CHECK_HOOK verify`: decrypt and compare a known sealed canary
   using the matching binary and recovered key, without printing either value.
-  **T071 supplies the real Rust check.** This shell task's fixture checks only
-  synthetic key equality; it does not claim real credential decryption or test
-  the Rust scheduler. An absent/failing hook always fails the drill.
+  T072 supplies `jeeta recovery-verify`: exact successful sqlx versions/checksums,
+  ordinary-role FORCE RLS, then AES-GCM decryption and constant-time equality.
+  It never migrates, constructs provider clients, binds HTTP or starts jobs.
+  An absent/failing hook always fails the drill.
 
 ## Physical PITR path
 
@@ -251,14 +252,25 @@ repository fixtures.
 `$JEETA_RECOVERY_STATUS_DIR/backup-status.json` is atomically published using a
 same-directory temporary file and rename **after verified completion**, as
 `{"completed_at":"<RFC3339 UTC>"}` (well below the reader's 4 KiB limit).
-A failed run preserves the prior marker. Set the status directory's group to `jeeta` with group traversal/read access.
+A failed run preserves the prior marker. Create the shared status directory as root with a sticky bit: `install -d -o root -g jeeta -m 1770 /var/lib/jeeta/recovery-status`. Provision its parent `/var/lib/jeeta` as `root:jeeta` 0750 (the separate `files` child remains application-owned); point `JEETA_RECOVERY_STATUS_DIR` there.
 Each new status inode is explicitly assigned `JEETA_STATUS_GROUP` (default `jeeta`)
 and mode 0640 before publication; directory ACLs alone cannot make a 0600 temporary
 file readable. Recovery-set files remain 0600. The application group receives no
-write permission to the full-backup marker.
-The shell scripts never write `wal-status.json`. The **T071 binary probe**, every
-60 seconds, will publish `{"archived_at":"<RFC3339 UTC>"}` only after confirming
-archiver state and the destination. Until wired, WAL health is unknown, not healthy.
+write permission to the root-owned full-backup marker. The sticky directory permits
+the application to create/replace its own WAL marker, but prevents it from unlinking
+or replacing the backup marker. Do not chown this directory or the backup marker
+to the application. Run the backup service as root.
+The shell scripts never write `wal-status.json`. The T072 binary probe runs every
+60 seconds when `JEETA_WAL_ARCHIVE_DIR` and `JEETA_RECOVERY_STATUS_DIR` are set.
+It reads `pg_stat_archiver` and confirms a nonempty regular last-archived segment
+in that absolute archive directory. A later/equal failure, missing segment,
+invalid/future timestamp or query/write failure never advances the artifact.
+Atomic JSON publication contains `archived_at` (PostgreSQL success time) and
+`observed_at` (probe time), both RFC3339. `ops.health` immediately reports a failed
+probe as degraded; disabled/unobserved is unknown even if an old marker exists.
+The probe has a five-second timeout and is aborted on shutdown, within the existing
+grace. Use local operator-owned storage; the application needs read access to the
+archive and group write/traverse access to the root-owned sticky status directory.
 
 Run `bash /opt/jeeta/current/scripts/tests/backup-restore.sh` in the source test
 layout to execute the real scripts. It detects host PostgreSQL tools and uses a
@@ -267,5 +279,45 @@ private network namespace, or falls back to the local `postgres:16` image with
 by traps; it never uses pre-existing containers/volumes. All application migrations
 are applied. Additional synthetic probes and seeds live under
 `scripts/tests/fixtures/recovery`; their scoped up/down pair is round-trip tested.
-T071 adds the Rust tests and CI job; the shell test name
-`ci_runs_real_restore_scripts` proves executable paths, not that a CI job exists.
+T072 adds `cargo test --locked -p jt_pg --test m4_restore` (SQL-only logical copies,
+ordinary-role RLS, payment/entitlement/ledger preservation, restored unknown sends,
+canary/schema and injected WAL state) and the `restore-drill` CI job. CI installs
+matching PGDG PostgreSQL 16 server/client tools and requires the host-tools path.
+Only fixed PASS lines are uploaded, never dumps, keys or private diagnostics.
+
+
+## Provision and verify the sealed canary
+
+Use the normal ordinary application role and an existing operator-selected
+workspace. With protected environment variables `JEETA_DATABASE_URL`,
+`JEETA_RECOVERY_WORKSPACE_ID` and `JEETA_SECRET_KEY` (64 hex characters), run
+`jeeta recovery-canary-up` once before taking a recovery set. Alternatively supply
+the key through `JEETA_MASTER_KEY_FILE`, a private regular file (0600, at most
+128 bytes); this takes precedence over the environment key. These commands do not
+load `.env` implicitly. Never pass a URL or key on argv.
+
+The up operation reserves capability ID `3a58ab69-2e72-46b4-8a45-2e0c6b05512e`,
+kind `recovery_canary`, reach `agent`, status `retired`. It refuses any existing
+row instead of overwriting credentials. It seals the fixed domain-separated value
+`jeeta-recovery-canary-v1` with the production workspace-derived AES-GCM key.
+`jeeta recovery-canary-down` is the idempotent rollback, scoped to that workspace,
+reserved ID, kind and retired status. Up/down/down/up is exercised in the drill.
+Retain the canary for as long as the installation takes backups.
+
+The protected canary hook exports `JEETA_DATABASE_URL` for the restored database's
+**ordinary** role, using `JEETA_DRILL_SOCKET_DIR` for its private Unix socket and
+that role's protected credentials, then executes `jeeta recovery-verify`.
+Grant SELECT on restored public tables to that role in the integrity hook;
+never use restoration superuser credentials for verification. The command emits
+only `recovery: passed`, `database_failed`, `schema_failed`, `rls_failed` or
+`canary_failed` categories and exits nonzero on refusal. The shell suppresses hook
+output. File checksums and DB/file-reference checks remain the integrity hook's
+responsibility; a successful key check alone cannot validate files.
+
+The local Docker harness runs this host-built binary through a narrow file bridge
+against the container's mounted Unix socket. A libseccomp filter kills every
+non-Unix socket attempt; the database and restore scripts use `--network none`.
+The host-tools path also uses a private network namespace, with the same binary
+filter. Python 3 and libseccomp are harness prerequisites. The synthetic fixture's
+file-reference and outbox assertions remain explicitly synthetic; real scheduler
+uncertainty is covered by `m4_restore` on a separately copied PostgreSQL database.

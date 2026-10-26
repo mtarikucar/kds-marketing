@@ -2861,3 +2861,35 @@ navigation, state changes, secret lifetime, provider failures and callback addre
 `api/billing.test.ts` checks exact wrapper routes and payloads. Ownership-transition
 setup changes the membership through the repository after issuing a challenge because
 pending workspaces correctly prohibit team mutations; redemption uses the real route.
+
+## M4 Task 9 — daily backup, WAL and isolated recovery
+
+T067 supplies `scripts/backup.sh`, `scripts/restore-drill.sh`, the backup service/timer
+and reversible synthetic drill fixtures. T072 supplies `jeeta recovery-verify`,
+explicit reversible `recovery-canary-up`/`recovery-canary-down` provisioning, the
+60-second WAL probe, Rust restore tests and the `restore-drill` CI job.
+
+`recovery-verify` uses protected environment/key-file configuration and the ordinary
+DB role. It requires exactly the embedded successful sqlx versions/checksums, FORCE
+RLS on tenant tables and a matching sealed canary, without migrating or serving.
+`serve` rejects unknown/dirty/changed applied migrations before migration or binding.
+See [the recovery runbook](../docs/operations/backup-restore.md) for canary custody,
+Unix-socket hooks, logical/PITR differences, isolation and recovery commands.
+
+Run `make restore-drill` for the real-binary logical/PITR shell harness and
+`cargo test --locked -p jt_pg --test m4_restore` for SQL-only restore contracts
+(`JEETA_TEST_DATABASE_URL` required). The harness builds one debug binary and uses
+PG16 host tools in a private network namespace, or a uniquely named disposable
+`postgres:16` container plus the host verifier over a mounted Unix socket.
+Python 3/libseccomp enforce Unix-only sockets for that verifier. CI requires host
+tools and uploads fixed PASS categories only.
+
+The owner checks daily backup completion, `ops.health` and off-machine custody,
+and records **both** logical restore and PITR drills monthly (RPO 24 h, RTO 1 h),
+including recovery of the original master key and file evidence. The shell writes
+`backup-status.json` with `completed_at` only after verified success. With optional
+absolute `JEETA_WAL_ARCHIVE_DIR` plus `JEETA_RECOVERY_STATUS_DIR`, the server writes
+`wal-status.json` atomically only after PostgreSQL archiver success and segment
+presence; `archived_at` is the PostgreSQL timestamp, `observed_at` the probe time.
+Failures retain the old marker and degrade WAL health; disabled is unknown.
+Both artifacts are bounded JSON with RFC3339 times, never credentials or URLs.

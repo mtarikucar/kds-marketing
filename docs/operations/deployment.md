@@ -78,9 +78,9 @@ Create the `jeeta` system user and group without interactive login. Provision:
 | `/opt/jeeta/current` | Root-managed symlink to one complete release |
 | `/etc/jeeta` | `root:root` 0700 |
 | `/etc/jeeta/jeeta.env` | `root:root` **0600**, including `JEETA_SECRET_KEY`; systemd reads it before switching to `jeeta` |
-| `/var/lib/jeeta` | `jeeta:jeeta` 0700; service working directory |
+| `/var/lib/jeeta` | `root:jeeta` 0750; service working directory; root ownership protects the status-directory entry |
 | `/var/lib/jeeta/files` | `jeeta:jeeta` 0700; persistent FileStore, included in backups |
-| `/var/lib/jeeta/recovery-status` | Planned Tasks 5/9 status directory; provision with narrowly scoped writer access and service read access when those tasks land |
+| `/var/lib/jeeta/recovery-status` | `root:jeeta` 1770 (sticky); root publishes backup marker 0640, service publishes its WAL marker; see backup/restore runbook |
 | `/var/backups/jeeta/{logical,base,wal}` | Separate protected mounted storage, managed by the recovery account; outside the app's writable tree |
 
 Use the [environment template](../../rust/deploy/jeeta.env.example) as an inventory,
@@ -215,7 +215,7 @@ After config validation, [serve.rs](../../rust/bin/jeeta/src/serve.rs) orders bo
 
 1. Reject a binary compiled with test-loopback egress enabled.
 2. Connect to PostgreSQL; reject a superuser/BYPASSRLS application role.
-3. Apply pending sqlx **up** migrations. Concurrent migrators serialize via sqlx
+3. Refuse unknown/dirty migration versions or changed applied checksums, then apply pending sqlx **up** migrations. Concurrent migrators serialize via sqlx
    locking. A failure aborts before listening or starting jobs.
 4. Construct adapters, FileStore and egress; rebuild allowed tenant hosts.
 5. Bootstrap the operator if configured, or perform the explicit sole-operator
@@ -223,8 +223,9 @@ After config validation, [serve.rs](../../rust/bin/jeeta/src/serve.rs) orders bo
 6. Bind HTTP, then start jobs when enabled.
 
 There is no automatic down migration or destructive fallback. The boot process
-is not an old-binary/new-schema compatibility check; perform that check before
-starting either serve or stdio.
+rejects a newer schema before serve binds or starts jobs. For isolated recovery,
+`jeeta recovery-verify` requires the exact embedded applied set without migrating.
+Stdio does not migrate; perform recovery verification before starting it.
 
 For first setup, set `JEETA_PLATFORM_BOOTSTRAP_EMAIL` and
 `JEETA_PLATFORM_BOOTSTRAP_PASSWORD` together in the protected environment. Use a

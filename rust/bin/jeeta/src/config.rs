@@ -27,6 +27,7 @@ pub const PRICE_MINOR: &str = "JEETA_PRICE_MINOR";
 pub const PRICE_CURRENCY: &str = "JEETA_PRICE_CURRENCY";
 pub const BANK_INSTRUCTIONS: &str = "JEETA_BANK_INSTRUCTIONS";
 pub const METRICS_TOKEN: &str = "JEETA_METRICS_TOKEN";
+pub const WAL_ARCHIVE_DIR: &str = "JEETA_WAL_ARCHIVE_DIR";
 pub const RECOVERY_STATUS_DIR: &str = "JEETA_RECOVERY_STATUS_DIR";
 pub const DATABASE_URL: &str = "JEETA_DATABASE_URL";
 /// The HTTP listen address, `ip:port` (default [`DEFAULT_BIND`]).
@@ -91,6 +92,7 @@ const VARS: &[&str] = &[
     BANK_INSTRUCTIONS,
     METRICS_TOKEN,
     RECOVERY_STATUS_DIR,
+    WAL_ARCHIVE_DIR,
     DATABASE_URL,
     BIND,
     PANEL_DIR,
@@ -262,6 +264,7 @@ pub enum LogFormat {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub metrics_token: Option<String>,
+    pub wal_archive_dir: Option<PathBuf>,
     pub recovery_status_dir: Option<PathBuf>,
     pub billing: jt_app::usecases::billing::BillingConfig,
     pub database_url: String,
@@ -477,7 +480,17 @@ impl Config {
                 "must be an absolute directory",
             ));
         }
+        let wal_archive_dir = get(WAL_ARCHIVE_DIR).map(PathBuf::from);
+        if wal_archive_dir.as_ref().is_some_and(|p| !p.is_absolute())
+            || (wal_archive_dir.is_some() && recovery_status_dir.is_none())
+        {
+            return Err(ConfigError::new(
+                WAL_ARCHIVE_DIR,
+                "requires an absolute archive directory and JEETA_RECOVERY_STATUS_DIR",
+            ));
+        }
         Ok(Config {
+            wal_archive_dir,
             metrics_token: get(METRICS_TOKEN).map(str::to_owned),
             recovery_status_dir,
             billing: jt_app::usecases::billing::BillingConfig {

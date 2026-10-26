@@ -20,7 +20,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -34,10 +34,40 @@ pub struct RuntimeOps {
     pub files: Arc<dyn jt_app::ports::files::FileStore>,
     pub files_dir: Option<PathBuf>,
     pub recovery_dir: Option<PathBuf>,
+    /// 0 disabled/unobserved, 1 confirmed, 2 failed.
+    pub wal_probe_state: AtomicU8,
     pub started_at: OffsetDateTime,
     pub boot_complete: AtomicBool,
 }
 impl RuntimeOps {
+    /// Fixed 60-second cadence, independently of provider jobs. Aborted on server shutdown.
+    pub fn start_wal_probe(
+        self: &Arc<Self>,
+        archive: Option<PathBuf>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        let archive = archive?;
+        let status = self.recovery_dir.clone()?;
+        let ops = self.clone();
+        Some(tokio::spawn(async move {
+            let mut ticks = tokio::time::interval(Duration::from_secs(60));
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticks.tick().await;
+                let result = tokio::time::timeout(Duration::from_secs(5), async {
+                    let state = jt_pg::wal::observe(&ops.pool).await.map_err(|_| ())?;
+                    jt_pg::wal::publish(&state, &archive, &status, OffsetDateTime::now_utc())
+                        .await
+                        .map_err(|_| ())
+                })
+                .await;
+                ops.wal_probe_state.store(
+                    if matches!(result, Ok(Ok(()))) { 1 } else { 2 },
+                    Ordering::Release,
+                );
+            }
+        }))
+    }
+
     pub async fn ready(&self) -> bool {
         if !self.boot_complete.load(Ordering::Acquire) {
             return false;
@@ -117,7 +147,11 @@ impl OpsSnapshot for RuntimeOps {
                 last_backup_at: backup.0,
                 last_wal_archive_at: wal.0,
                 backup_state: backup.1,
-                wal_state: wal.1,
+                wal_state: match self.wal_probe_state.load(Ordering::Acquire) {
+                    1 => wal.1,
+                    2 => HealthState::Degraded,
+                    _ => HealthState::Unknown,
+                },
             };
         }
         let s = self.signals.read();
