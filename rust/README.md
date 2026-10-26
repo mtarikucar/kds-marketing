@@ -2902,11 +2902,26 @@ One package contains the production `jeeta`, matching `panel/`, reversible
 From a clean committed revision in `rust/`:
 
 ```sh
-cargo build --release --locked -p jeeta
-pnpm --dir panel install --frozen-lockfile
-pnpm --dir panel build
+python3 -m unittest discover -s scripts -p 'test_package_release.py'
 python3 scripts/package-release.py /absolute/new/jeeta-release
 ```
+
+The packager runs `cargo build --release --locked -p jeeta` (with JSON artifact
+metadata), `pnpm --dir panel install --frozen-lockfile` and `pnpm --dir panel build`
+itself. It refuses a changed/dirty source revision, missing production artifact
+evidence or `jt_outbound/test-loopback`; pre-existing binaries/panel files are
+never accepted as build provenance. It also refuses untracked/ignored Rust or
+panel source inputs (including Vite dotenv files), except the expected build/cache
+directories; use a clean packaging checkout. Ambient `VITE_*` and Rust cfg flags
+are excluded from the controlled build. Cargo uses the default `target/` directory.
+
+Before builds and copying, it rejects symlinks in input roots, ancestors and trees,
+including the binary, panel, migrations, scripts, deploy and operation documents.
+After building, it validates the generated panel inventory: only `index.html` and
+explicit browser asset types (JS/CSS, images, fonts, WASM) are allowed. Dotfiles,
+`.env*`, PEM/key files, JSON/text/configuration files and source maps are refused,
+including files copied from ignored `panel/public/` inputs. The Python regression
+suite runs in CI's existing release job.
 
 The manifest records the source SHA, binary SHA-256, a sorted `panel.sha256` and
 its SHA-256, ordered migration versions/up-down SHA-384 checksums, highest schema

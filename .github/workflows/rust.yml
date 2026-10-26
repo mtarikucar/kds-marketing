@@ -178,10 +178,10 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: rust/panel/pnpm-lock.yaml
-      - run: cargo build --release --locked -p jeeta
-      - run: pnpm --dir panel install --frozen-lockfile
-      - run: pnpm --dir panel build
-      - name: Assemble candidate and checksums
+      - name: Verify packaging boundaries
+        run: python3 -m unittest discover -s scripts -p 'test_package_release.py'
+      # The packager owns the controlled production/panel builds and checks Cargo features.
+      - name: Build and assemble verified candidate
         run: |
           set -euo pipefail
           python3 scripts/package-release.py "$RUNNER_TEMP/jeeta-release"

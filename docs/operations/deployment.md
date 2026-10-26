@@ -17,23 +17,37 @@ Build a reviewed source revision from a clean packaging checkout with the
 repository's pinned toolchain and lockfiles. From `rust/`:
 
 ```sh
-cargo build --release --locked -p jeeta
-pnpm --dir panel install --frozen-lockfile
-pnpm --dir panel build
+python3 -m unittest discover -s scripts -p 'test_package_release.py'
+python3 scripts/package-release.py /absolute/new/jeeta-release
 ```
 
 Use the package-scoped production build. Whole-workspace test feature unification
 can enable `jt_outbound/test-loopback`; such a binary must not be deployed.
-The release build and panel build must pass for the actual packaged candidate.
-CI builds them in the `release-artifact` job and supplies that same binary and
-panel to the `rust-test` deployment contracts, outside Cargo feature unification.
+The packager itself runs `cargo build --release --locked -p jeeta` with JSON
+artifact metadata, `pnpm --dir panel install --frozen-lockfile`, and
+`pnpm --dir panel build`. It requires the source revision to remain clean and
+unchanged throughout, and refuses missing Cargo evidence or a linked
+`jt_outbound` artifact with `test-loopback` enabled. It requires Cargo's default
+`target/` directory. Extra untracked/ignored Rust or panel inputs, including Vite
+dotenv files, are refused outside the expected build/cache directories. Ambient
+`VITE_*` values and Rust cfg flags are excluded from the controlled build. Existing
+build outputs alone are never accepted as provenance.
+CI invokes this same entry point in `release-artifact` and supplies that binary
+and panel to `rust-test`, outside workspace feature unification.
 
 Package `rust/target/release/jeeta`, the **contents** of `rust/panel/dist/`,
 `rust/migrations/`, `rust/scripts/`, `rust/deploy/` and operation documents from
 the same revision. From a clean committed checkout, assemble the candidate with
 `python3 scripts/package-release.py /absolute/new/jeeta-release` from `rust/`.
-The script takes source files from `git archive HEAD` (no untracked or ignored
-source files), requires the built binary/panel, and records the toolchain.
+The script takes source files from `git archive <recorded-revision>` (no untracked
+or ignored source files) and records the toolchain. It rejects symlinks in the
+binary path and all panel/migration/script/deploy/document inputs, including
+roots and ancestors, before builds and copying. The **generated** panel inventory
+must contain only `index.html` and allowlisted JS/CSS, image, font or WASM assets.
+Dotfiles (including `.env*`), PEM/key files, JSON/text/configuration files, source
+maps and unknown asset types abort packaging. This includes ignored files that
+Vite copies from `panel/public/`; a clean Git status is insufficient evidence for
+those generated inputs. CI runs the Python regression suite before packaging.
 CI uploads a tar archive to preserve executable permissions. Extract that archive
 before validation. Install the complete release before moving `current`:
 
