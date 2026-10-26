@@ -277,11 +277,23 @@ set +a
   --input /root/v1-leads.jsonl
 ```
 
-Dry run performs the same decisions in a rolled-back transaction, so it leaves
-**no durable rows, including no ledger entry**. Import commits chunks of 100;
-a successful import or rollback appends one `import.v1_leads` counts-only ledger
+Dry run evaluates chunks of 100 leads and explicitly rolls back each transaction,
+releasing the workspace inbox lock between chunks. Projected lead IDs and identity
+keys stay in memory so duplicates across chunks have the same counts as import
+against unchanged data. It leaves **no rows, including no ledger entry**. Import
+commits chunks of 100; a successful import or rollback appends one `import.v1_leads` counts-only ledger
 entry by System `v1_import`. If interrupted after a chunk, retry the same file;
-committed leads are skipped. Keep the original export until verification ends.
+committed leads are skipped. Import markers are loaded once per run and rechecked
+by primary key rather than scanning all people for every lead. A separate operator
+session lock rejects overlapping import, dry-run or rollback commands for the same
+workspace (`already_running`); retry after the active command ends. It reserves
+one database connection, and chunk processing requires another. Ordinary inbox
+work can proceed between chunks. Erasure and active
+identity checks include shared-intake phone keys as well as TR-canonical keys;
+new imported TR identities still use `+90` E.164. The shared normalizer currently
+mis-handles ten-digit TR national numbers (for example, `5321234567` becomes
+`+5321234567`); this importer checks that historical alias without changing shared
+intake behavior. Keep the original export until verification ends.
 In the panel, select the destination workspace and verify people, companies,
 normalized identities, stage counts, closed Won/Lost journeys, imported notes,
 future follow-up tasks and channel withdrawals/suppressions. Confirm another

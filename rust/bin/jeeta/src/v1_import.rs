@@ -112,7 +112,10 @@ pub fn run(args: &[OsString]) -> ExitCode {
                     time::OffsetDateTime::now_utc(),
                 )
                 .await
-                .map_err(|_| "import_failed")
+                .map_err(|error| match error.message.as_str() {
+                    "v1 import already_running" => "already_running",
+                    _ => "import_failed",
+                })
             }
             .await;
             pool.close().await;

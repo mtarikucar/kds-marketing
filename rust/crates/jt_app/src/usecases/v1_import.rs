@@ -8,7 +8,7 @@ use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
@@ -91,6 +91,12 @@ pub fn entity_id(ws: WorkspaceId, lead: &str, kind: &str) -> Uuid {
     Uuid::new_v5(&lead_namespace, kind.as_bytes())
 }
 
+struct IdentityKeys {
+    channel: IdentityChannel,
+    canonical: String,
+    aliases: Vec<String>,
+}
+
 impl Lead {
     pub fn validate(&self) -> Result<(), AppError> {
         if self.id.trim().is_empty() || self.id.len() > 256 || !self.custom_fields.is_object() {
@@ -108,9 +114,18 @@ impl Lead {
         }
         Ok(())
     }
-    /// Use the shared normalizer, supplying TR for ten-digit local phone input.
+    /// Canonical values for new imports; matching also checks shared-intake aliases.
     pub fn identities(&self) -> (Vec<(IdentityChannel, String)>, u64) {
-        let mut result = Vec::new();
+        let (keys, invalid) = self.identity_keys();
+        (
+            keys.into_iter()
+                .map(|key| (key.channel, key.canonical))
+                .collect(),
+            invalid,
+        )
+    }
+    fn identity_keys(&self) -> (Vec<IdentityKeys>, u64) {
+        let mut result: Vec<IdentityKeys> = Vec::new();
         let mut invalid = 0;
         for (channel, raw) in [
             (IdentityChannel::Phone, &self.phone),
@@ -129,13 +144,38 @@ impl Lead {
             } else {
                 raw.clone()
             };
-            match normalise(channel, &local) {
-                Ok(value) => {
-                    if !result.contains(&(channel, value.clone())) {
-                        result.push((channel, value));
-                    }
-                }
-                Err(_) => invalid += 1,
+            let Ok(canonical) = normalise(channel, &local) else {
+                invalid += 1;
+                continue;
+            };
+            let mut aliases = vec![canonical.clone()];
+            if let Ok(shared) = normalise(channel, raw) {
+                aliases.push(shared);
+            }
+            // Existing intake omits TR for ten-digit national numbers. Check that historical
+            // key even when the export spells the same number with 0 or +90, but never store it.
+            if channel == IdentityChannel::Phone
+                && canonical.len() == 13
+                && canonical.starts_with("+90")
+                && let Ok(national) = normalise(channel, &canonical[3..])
+            {
+                aliases.push(national);
+            }
+            if let Some(existing) = result
+                .iter_mut()
+                .find(|key| key.channel == channel && key.canonical == canonical)
+            {
+                existing.aliases.extend(aliases);
+                existing.aliases.sort();
+                existing.aliases.dedup();
+            } else {
+                aliases.sort();
+                aliases.dedup();
+                result.push(IdentityKeys {
+                    channel,
+                    canonical,
+                    aliases,
+                });
             }
         }
         (result, invalid)
@@ -191,40 +231,87 @@ impl Lead {
     }
 }
 
+fn marker_candidates(
+    ws: WorkspaceId,
+    lead: &str,
+    markers: &HashMap<String, PersonId>,
+) -> Vec<PersonId> {
+    let mut ids = vec![entity_id(ws, lead, "person").into()];
+    if let Some(person) = markers.get(lead) {
+        ids.push(*person);
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// Projected writes survive rolled-back dry-run chunks only in memory.
+#[derive(Default)]
+struct Preview {
+    leads: HashSet<String>,
+    new_people: HashSet<PersonId>,
+    identities: HashMap<(IdentityChannel, String), PersonId>,
+}
+
 async fn intake(
     r: &mut dyn ImportRepos,
     ws: WorkspaceId,
     lead: &Lead,
     now: OffsetDateTime,
     report: &mut Report,
+    markers: &mut HashMap<String, PersonId>,
+    preview: Option<&mut Preview>,
 ) -> Result<(), AppError> {
     report.total += 1;
-    if r.imported_lead(&lead.id).await?.is_some() {
+    if preview.as_ref().is_some_and(|p| p.leads.contains(&lead.id)) {
         report.already_present += 1;
         return Ok(());
     }
-    let (keys, invalid) = lead.identities();
+    if r.imported_lead(&lead.id, &marker_candidates(ws, &lead.id, markers))
+        .await?
+        .is_some()
+    {
+        report.already_present += 1;
+        return Ok(());
+    }
+    let (keys, invalid) = lead.identity_keys();
     report.identities_invalid += invalid;
-    for (channel, value) in &keys {
-        if let Err(error) = super::inbox::erasure::check_identity(r, *channel, value).await {
-            if error.details["reason"] == "erased_identity" {
-                report.erased_skipped += 1;
-                return Ok(());
+    for key in &keys {
+        for alias in &key.aliases {
+            if let Err(error) = super::inbox::erasure::check_identity(r, key.channel, alias).await {
+                if error.details["reason"] == "erased_identity" {
+                    report.erased_skipped += 1;
+                    return Ok(());
+                }
+                return Err(error);
             }
-            return Err(error);
         }
     }
     let mut owners = Vec::new();
     let mut person = None;
-    for (channel, value) in &keys {
-        let owner = r.identity_owner(*channel, value).await?;
-        if let Some(id) = owner
-            && person.is_none()
-            && r.untouched(id).await?
-        {
-            person = Some(id);
+    for key in &keys {
+        let mut matches = BTreeSet::new();
+        for alias in &key.aliases {
+            if let Some(id) = r.identity_owner(key.channel, alias).await? {
+                matches.insert(id);
+            }
+            if let Some(id) = preview
+                .as_ref()
+                .and_then(|p| p.identities.get(&(key.channel, alias.clone())))
+            {
+                matches.insert(*id);
+            }
         }
-        owners.push(owner);
+        // Multiple alias owners are ambiguous: never attach to or steal either identity.
+        if matches.len() == 1 && person.is_none() {
+            let id = *matches.first().expect("one owner");
+            if preview.as_ref().is_some_and(|p| p.new_people.contains(&id))
+                || r.untouched(id).await?
+            {
+                person = Some(id);
+            }
+        }
+        owners.push(matches);
     }
     let created = timestamp(&lead.created_at)?;
     let updated = timestamp(&lead.updated_at)?;
@@ -232,6 +319,36 @@ async fn intake(
     // A deterministic collision must never overwrite a non-imported or edited person.
     if person.is_none() && r.people().get(person_id).await?.is_some() {
         return Err(AppError::conflict("v1 import person_conflict"));
+    }
+    if person.is_some() {
+        report.duplicates_merged += 1;
+    }
+    report.identities_conflicting += owners
+        .iter()
+        .filter(|owners| !owners.is_empty() && (owners.len() != 1 || !owners.contains(&person_id)))
+        .count() as u64;
+    if let Some(preview) = preview {
+        if person.is_none() {
+            preview.new_people.insert(person_id);
+        }
+        for (key, owners) in keys.into_iter().zip(owners) {
+            if owners.is_empty() {
+                preview
+                    .identities
+                    .insert((key.channel, key.canonical), person_id);
+            }
+        }
+        preview.leads.insert(lead.id.clone());
+        let status = map_status(&lead.status)?;
+        if !matches!(status, JourneyStatus::Won | JourneyStatus::Lost)
+            && let Some(due) = &lead.next_follow_up
+            && timestamp(due)? > now
+        {
+            report.tasks += 1;
+        }
+        report.opt_outs += lead.withdrawals().len() as u64;
+        report.imported += 1;
+        return Ok(());
     }
     if person.is_none() {
         r.people()
@@ -251,14 +368,9 @@ async fn intake(
                 updated_at: updated,
             })
             .await?;
-    } else {
-        report.duplicates_merged += 1;
     }
-    for (index, ((channel, value), owner)) in keys.into_iter().zip(owners).enumerate() {
-        if let Some(owner) = owner {
-            if owner != person_id {
-                report.identities_conflicting += 1;
-            }
+    for (index, (key, owners)) in keys.into_iter().zip(owners).enumerate() {
+        if !owners.is_empty() {
             continue;
         }
         r.identities()
@@ -266,9 +378,9 @@ async fn intake(
                 id: entity_id(ws, &lead.id, &format!("identity:{index}")).into(),
                 workspace_id: ws,
                 person_id,
-                channel,
-                value_display: value.clone(),
-                value_normalized: value,
+                channel: key.channel,
+                value_display: key.canonical.clone(),
+                value_normalized: key.canonical,
                 active: true,
                 first_seen_at: created,
             })
@@ -363,6 +475,7 @@ async fn intake(
             .await?;
     }
     r.checkpoint(person_id, &lead.id, json!({"kind":"import","system":"v1", "v1_lead_id":lead.id, "v1_source":lead.source, "v1_status":lead.status})).await?;
+    markers.insert(lead.id.clone(), person_id);
     report.imported += 1;
     Ok(())
 }
@@ -370,8 +483,8 @@ fn invalid_input() -> AppError {
     invalid()
 }
 
-/// Prevalidate the entire file before any commit; imports commit in bounded chunks. Dry runs
-/// execute the same decisions in a single rolled-back transaction, including cross-chunk duplicates.
+/// Prevalidate before any commit. Every mode uses 100-row transactions; dry runs roll each
+/// chunk back and retain projected identities and lead IDs in memory for duplicate accounting.
 pub async fn run(
     store: &dyn ImportStore,
     ws: WorkspaceId,
@@ -382,22 +495,25 @@ pub async fn run(
     for lead in leads {
         lead.validate()?;
     }
+    let guard = store.lock_run(ws).await?;
     let mut report = Report::default();
-    let chunk_size = if mode == Mode::DryRun {
-        leads.len().max(1)
-    } else {
-        100
-    };
+    let mut preview = (mode == Mode::DryRun).then(Preview::default);
     let mut visited = BTreeSet::new();
-    for chunk in leads.chunks(chunk_size) {
+    let mut markers = HashMap::new();
+    for (index, chunk) in leads.chunks(100).enumerate() {
         let mut r = store.begin(ws).await?;
         r.workspace().get().await?;
         r.people().lock_workspace().await?;
         r.people().set_write_time(now).await?;
+        if index == 0 {
+            markers = r.imported_leads().await?;
+        }
         for lead in chunk {
             if mode == Mode::Rollback {
                 report.total += 1;
-                if let Some(person) = r.imported_lead(&lead.id).await?
+                if let Some(person) = r
+                    .imported_lead(&lead.id, &marker_candidates(ws, &lead.id, &markers))
+                    .await?
                     && visited.insert(person)
                 {
                     if r.rollback_import(person).await? {
@@ -407,10 +523,21 @@ pub async fn run(
                     }
                 }
             } else {
-                intake(&mut *r, ws, lead, now, &mut report).await?;
+                intake(
+                    &mut *r,
+                    ws,
+                    lead,
+                    now,
+                    &mut report,
+                    &mut markers,
+                    preview.as_mut(),
+                )
+                .await?;
             }
         }
-        if mode != Mode::DryRun {
+        if mode == Mode::DryRun {
+            r.rollback().await?;
+        } else {
             r.commit().await?;
         }
     }
@@ -430,5 +557,6 @@ pub async fn run(
             .await?;
         r.commit().await?;
     }
+    guard.release().await?;
     Ok(report)
 }

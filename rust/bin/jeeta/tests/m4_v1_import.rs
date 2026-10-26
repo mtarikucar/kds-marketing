@@ -98,6 +98,14 @@ async fn binary_checks_schema_and_emits_counts_only() {
             db.connect_options().to_url_lossy().as_str(),
         )
         .env("JEETA_SECRET_KEY", "11".repeat(32));
+    let guard = jt_app::ports::v1_import::ImportStore::lock_run(
+        &jt_pg::v1_import::PgImportStore(db.pool.clone()),
+        ws,
+    )
+    .await
+    .unwrap();
+    output(&mut command, false, "already_running");
+    guard.release().await.unwrap();
     output(&mut command, true, "\"imported\":1");
     output(&mut command, true, "\"already_present\":1");
     sqlx::query("update _sqlx_migrations set checksum='' where version=1")

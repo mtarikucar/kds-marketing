@@ -554,3 +554,416 @@ async fn erased_identity_tombstone_prevents_reintroducing_the_entire_lead() {
         assert_eq!(count(&db, ws, table).await, 0);
     }
 }
+
+async fn normal_phone_person(
+    db: &TestDb,
+    ws: jt_tenancy::WorkspaceId,
+    raw: &str,
+    erase: bool,
+) -> PersonId {
+    use jt_app::usecases::inbox::{erasure, people};
+    struct UniqueIds;
+    impl jt_app::ports::IdGen for UniqueIds {
+        fn uuid(&self) -> uuid::Uuid {
+            uuid::Uuid::now_v7()
+        }
+    }
+    let mut deps = jt_testkit::fakes::deps(std::sync::Arc::new(PgUnitOfWork::new(db.pool.clone())));
+    deps.ids = std::sync::Arc::new(UniqueIds);
+    let ctx = jt_app::ctx::Ctx {
+        workspace_id: ws,
+        actor: jt_ledger::Actor::System {
+            component: "test".into(),
+        },
+        permissions: [
+            jt_tenancy::Permission::InboxWork,
+            jt_tenancy::Permission::InboxManage,
+        ]
+        .into(),
+        role_key: None,
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    let person = people::create(
+        &deps,
+        &ctx,
+        people::CreateInput {
+            display_name: "synthetic normal intake".into(),
+            source: jt_inbox::Source::Form,
+            identities: vec![people::IdentityInput {
+                channel: jt_inbox::IdentityChannel::Phone,
+                value: raw.into(),
+                capability_id: None,
+            }],
+        },
+    )
+    .await
+    .unwrap()
+    .person
+    .id;
+    if erase {
+        erasure::erase(&deps, &ctx, person, erasure::EraseInput { confirm: true })
+            .await
+            .unwrap();
+    }
+    person
+}
+
+#[tokio::test]
+async fn normal_intake_national_phone_erasure_blocks_all_import_spellings() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("legacy phone erasure").await;
+    normal_phone_person(&db, ws, "5321234567", true).await;
+    assert_eq!(
+        jt_inbox::normalise(jt_inbox::IdentityChannel::Phone, "5321234567").unwrap(),
+        "+5321234567"
+    );
+    for raw in [
+        "5321234567",
+        "(532) 123 45 67",
+        "05321234567",
+        "+905321234567",
+    ] {
+        let mut row = lead(raw);
+        row.phone = Some(raw.into());
+        row.whatsapp = None;
+        row.email = None;
+        let report = v1_import::run(
+            &PgImportStore(db.pool.clone()),
+            ws,
+            &[row],
+            Mode::Import,
+            FIXED_NOW,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (report.imported, report.erased_skipped),
+            (0, 1),
+            "national phone tombstone was bypassed"
+        );
+    }
+    assert_eq!(count(&db, ws, "people").await, 1); // the erased runtime tombstone only
+    assert_eq!(count(&db, ws, "notes").await, 0);
+}
+
+#[tokio::test]
+async fn normal_intake_national_phone_owner_is_never_duplicated_or_stolen() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("legacy phone ownership").await;
+    let existing = normal_phone_person(&db, ws, "5321234567", false).await;
+    let mut row = lead("conflicting national phone");
+    row.phone = Some("05321234567".into());
+    row.whatsapp = Some("5321234567".into());
+    row.email = None;
+    let report = v1_import::run(
+        &PgImportStore(db.pool.clone()),
+        ws,
+        &[row],
+        Mode::Import,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (report.identities_conflicting, report.duplicates_merged),
+        (1, 0)
+    );
+    assert_eq!(count(&db, ws, "identities").await, 1);
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let mut r = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        r.identities().list(existing).await.unwrap()[0].value_normalized,
+        "+5321234567"
+    );
+}
+
+struct ObservedImportStore {
+    inner: PgImportStore,
+    begins: std::sync::atomic::AtomicUsize,
+}
+impl ObservedImportStore {
+    fn new(db: &TestDb) -> Self {
+        Self {
+            inner: PgImportStore(db.pool.clone()),
+            begins: 0.into(),
+        }
+    }
+    fn begins(&self) -> usize {
+        self.begins.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+#[async_trait::async_trait]
+impl jt_app::ports::v1_import::ImportStore for ObservedImportStore {
+    async fn lock_run(
+        &self,
+        ws: jt_tenancy::WorkspaceId,
+    ) -> Result<Box<dyn jt_app::ports::v1_import::ImportRunGuard>, jt_app::error::AppError> {
+        self.inner.lock_run(ws).await
+    }
+    async fn begin(
+        &self,
+        ws: jt_tenancy::WorkspaceId,
+    ) -> Result<Box<dyn jt_app::ports::v1_import::ImportRepos>, jt_app::error::AppError> {
+        // A separate session must be able to acquire the inbox lock between chunks.
+        let mut tx = TenantTx::begin(&self.inner.0, ws).await.unwrap();
+        sqlx::query("set local lock_timeout='2s'")
+            .execute(tx.conn())
+            .await
+            .unwrap();
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended('inbox:' || $1::text,0))")
+            .bind(ws.as_uuid())
+            .execute(tx.conn())
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+        self.begins
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.begin(ws).await
+    }
+}
+
+#[tokio::test]
+async fn dry_run_releases_the_inbox_lock_every_hundred_leads_and_keeps_duplicate_counts() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("bounded rehearsal").await;
+    let store = ObservedImportStore::new(&db);
+    let mut leads = (0..201)
+        .map(|i| lead(&format!("preview-{i}")))
+        .collect::<Vec<_>>();
+    leads.push(leads[0].clone());
+    let dry = v1_import::run(&store, ws, &leads, Mode::DryRun, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            dry.imported,
+            dry.duplicates_merged,
+            dry.already_present,
+            dry.tasks,
+            dry.opt_outs
+        ),
+        (201, 200, 1, 201, 603)
+    );
+    assert!(
+        (3..=4).contains(&store.begins()),
+        "dry run must open bounded transactions, got {}",
+        store.begins()
+    );
+    assert_eq!(count(&db, ws, "people").await, 0);
+    assert_eq!(count(&db, ws, "ledger_entries").await, 0);
+    let real = v1_import::run(
+        &PgImportStore(db.pool.clone()),
+        ws,
+        &leads,
+        Mode::Import,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(dry).unwrap(),
+        serde_json::to_value(real).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn three_thousand_marker_lookups_are_bounded_and_chunked() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("marker scaling").await;
+    let leads = (0..3000)
+        .map(|i| lead(&format!("scale-{i}")))
+        .collect::<Vec<_>>();
+    let rows=(0..1500).map(|i| json!({"id":entity_id(ws,&format!("scale-{}",2*i),"person"),"workspace_id":ws,
+        "display_name":"synthetic","company":"","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z",
+        "first_touch":{"source":"import","kind":"import","system":"v1","v1_leads":[{"v1_lead_id":format!("scale-{}",2*i)},{"v1_lead_id":format!("scale-{}",2*i+1)}]}})).collect::<Vec<_>>();
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("insert into people select * from jsonb_populate_recordset(null::people,$1)")
+        .bind(json!(rows))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    // A test-only RLS probe counts rows actually examined, even in rolled-back transactions.
+    // This catches quadratic scans independently of hardware speed or a generous deadline.
+    sqlx::raw_sql("create sequence v1_marker_reads; create function v1_marker_read() returns boolean language plpgsql volatile as $$ begin perform nextval('v1_marker_reads'); return true; end $$; create policy v1_read_probe on people as restrictive for select using (v1_marker_read());")
+        .execute(&db.pool).await.unwrap();
+    let store = ObservedImportStore::new(&db);
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(180),
+        v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW),
+    )
+    .await
+    .expect("3000 synthetic leads must finish within 180 seconds")
+    .unwrap();
+    assert_eq!((report.imported, report.already_present), (0, 3000));
+    assert!(
+        (31..=32).contains(&store.begins()),
+        "import did not use 100-row chunks"
+    );
+    let reads: i64 = sqlx::query_scalar("select last_value from v1_marker_reads")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(
+        reads < 30_000,
+        "idempotency scanned {reads} people; expected a single load plus indexed probes"
+    );
+}
+
+#[tokio::test]
+async fn three_thousand_fresh_leads_preview_in_bounded_transactions_without_writes() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("fresh preview scaling").await;
+    let leads = (0..3000)
+        .map(|i| {
+            let mut row = lead(&format!("fresh-{i}"));
+            row.phone = None;
+            row.whatsapp = None;
+            row.email = Some(format!("synthetic-{i}@example.test"));
+            row
+        })
+        .collect::<Vec<_>>();
+    let store = ObservedImportStore::new(&db);
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(180),
+        v1_import::run(&store, ws, &leads, Mode::DryRun, FIXED_NOW),
+    )
+    .await
+    .expect("3000 fresh synthetic leads must preview within 180 seconds")
+    .unwrap();
+    assert_eq!(
+        (
+            report.imported,
+            report.duplicates_merged,
+            report.tasks,
+            report.opt_outs
+        ),
+        (3000, 0, 3000, 9000)
+    );
+    assert_eq!(store.begins(), 30);
+    for table in [
+        "people",
+        "identities",
+        "journeys",
+        "notes",
+        "tasks",
+        "consents",
+        "suppressions",
+        "ledger_entries",
+    ] {
+        assert_eq!(count(&db, ws, table).await, 0, "preview persisted {table}");
+    }
+}
+
+#[tokio::test]
+async fn preview_remembers_new_keys_on_existing_imports_and_matches_mixed_outcomes() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("mixed preview").await;
+    let store = PgImportStore(db.pool.clone());
+    v1_import::run(&store, ws, &[lead("existing")], Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    normal_phone_person(&db, ws, "5551112233", false).await;
+    normal_phone_person(&db, ws, "5554445566", true).await;
+    let mut leads = (0..201)
+        .map(|i| {
+            let mut row = lead(&format!("mixed-{i}"));
+            row.phone = None;
+            row.whatsapp = None;
+            row.email = None;
+            row.status = ["NEW", "WON", "LOST"][i % 3].into();
+            row
+        })
+        .collect::<Vec<_>>();
+    leads[0].phone = Some("5321234567".into()); // matches the existing import
+    leads[0].email = Some("new-alias@example.test".into());
+    leads[100].email = Some("new-alias@example.test".into()); // projected identity across chunks
+    leads[101].phone = Some("5551112233".into()); // active runtime owner
+    leads[102].phone = Some("05554445566".into()); // historical erasure alias
+    leads[103].phone = Some("invalid".into());
+    leads.push(leads[100].clone());
+    let dry = v1_import::run(&store, ws, &leads, Mode::DryRun, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            dry.duplicates_merged,
+            dry.identities_conflicting,
+            dry.erased_skipped,
+            dry.identities_invalid,
+            dry.already_present
+        ),
+        (2, 1, 1, 1, 1)
+    );
+    let real = v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(dry).unwrap(),
+        serde_json::to_value(real).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn competing_operator_runs_are_refused_without_holding_the_inbox_lock() {
+    use jt_app::ports::v1_import::{ImportRepos, ImportStore};
+    use std::sync::Arc;
+    struct PausedStore {
+        inner: PgImportStore,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl ImportStore for PausedStore {
+        async fn lock_run(
+            &self,
+            ws: jt_tenancy::WorkspaceId,
+        ) -> Result<Box<dyn jt_app::ports::v1_import::ImportRunGuard>, jt_app::error::AppError>
+        {
+            self.inner.lock_run(ws).await
+        }
+        async fn begin(
+            &self,
+            ws: jt_tenancy::WorkspaceId,
+        ) -> Result<Box<dyn ImportRepos>, jt_app::error::AppError> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            self.inner.begin(ws).await
+        }
+    }
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("serialized operator runs").await;
+    let store = Arc::new(PausedStore {
+        inner: PgImportStore(db.pool.clone()),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let first = {
+        let store = store.clone();
+        tokio::spawn(async move {
+            v1_import::run(&*store, ws, &[lead("first")], Mode::DryRun, FIXED_NOW).await
+        })
+    };
+    store.entered.notified().await;
+    // The long-lived run guard must not block normal inbox work.
+    normal_phone_person(&db, ws, "5551112233", false).await;
+    let inner = PgImportStore(db.pool.clone());
+    let rows = [lead("second")];
+    let blocked = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        v1_import::run(&inner, ws, &rows, Mode::DryRun, FIXED_NOW),
+    )
+    .await
+    .unwrap();
+    store.release.notify_one();
+    first.await.unwrap().unwrap();
+    assert_eq!(blocked.unwrap_err().message, "v1 import already_running");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        v1_import::run(&inner, ws, &rows, Mode::DryRun, FIXED_NOW),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+}
