@@ -84,6 +84,7 @@ it('walks from payment notification through operator confirmation to activation'
   answers['GET /api/billing']={...billing,payment};
   await user.click(screen.getByRole('button',{name:'Havale bildirimini gönder'}));
   expect(await screen.findByText('İşletmen onayı bekleniyor')).toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent(/Havale bildiriminiz alındı: \S*1\.250,00/);
   expect(screen.queryByLabelText('Etkinleştirme kodunu gir')).not.toBeInTheDocument();
   answers['GET /api/billing']={...billing,payment:{...payment,confirmed:true},entitlement};
   await act(()=>client.invalidateQueries({queryKey:['billing']}));

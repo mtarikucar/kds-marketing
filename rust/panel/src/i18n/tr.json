@@ -1509,6 +1509,7 @@
     "amountHint": "Havale ettiğiniz tutarı yazın; ücret {{price}}. Örnek: 14.900 ya da 14900,00.",
     "paidAt": "Ödeme zamanı",
     "report": "Havale bildirimini gönder",
+    "reported": "Havale bildiriminiz alındı: {{amount}}, {{paidAt}}. İşletmen banka kaydıyla karşılaştırıp onayladığında size bir etkinleştirme kodu iletilecek; kodu bu sayfada gireceksiniz. Bilgi hatalıysa formu düzeltip yeniden gönderebilirsiniz.",
     "code": "Etkinleştirme kodunu gir",
     "activate": "Çalışma alanını etkinleştir",
     "codeHelp": "Kodu mevcut sahiplerden herhangi biri kullanabilir. Kod 72 saat geçerlidir; 5 hatalı denemeden sonra kilitlenir. Süresi dolan, kaybolan veya kilitlenen kod için işletmenden yeni kod isteyin. Yeni kod eskisini geçersiz kılar.",

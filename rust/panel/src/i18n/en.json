@@ -1509,6 +1509,7 @@
     "amountHint": "Enter the amount you transferred; the fee is {{price}}. Example: 14,900 or 14900.00.",
     "paidAt": "Payment time",
     "report": "Send bank transfer notification",
+    "reported": "Your transfer notification was received: {{amount}}, {{paidAt}}. Once the operator matches it with the bank record you will receive an activation code to enter on this page. If anything is wrong, correct the form and send it again.",
     "code": "Enter the activation code",
     "activate": "Activate workspace",
     "codeHelp": "Any current owner can redeem the code. It expires after 72 hours and locks after 5 failed attempts. Ask the operator to reissue an expired, lost or locked code. Reissue invalidates the previous code.",

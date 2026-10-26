@@ -9,7 +9,7 @@ import { QueryState } from '@/components/QueryState';
 import { MoneyInput } from '@/components/forms';
 import { Button, Callout, Card, CardContent, Field, Input, PageHeader } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
-import { formatMoney } from '@/lib/format';
+import { formatDateTime, formatMoney } from '@/lib/format';
 import { billingStage, useBilling } from './billing/queries';
 
 /** `date` as a `datetime-local` value (`2026-10-26T15:04`) in the browser's own timezone. */
@@ -100,6 +100,7 @@ function BillingForm() {
         <div><dt>{t('billing.bank')}</dt><dd className="whitespace-pre-wrap">{data.bank_instructions}</dd></div>
       </dl>
       <Field label={t('billing.reference')}>{ids=><Input id={ids.id} readOnly value={data.payment_reference}/>}</Field>
+      {data.payment && !data.payment.confirmed && <Callout tone="success">{t('billing.reported',{amount:formatMoney(data.payment.amount_minor,data.payment.currency,i18n.language),paidAt:formatDateTime(data.payment.paid_at,i18n.language)})}</Callout>}
       {data.payment?.confirmed && <p>{t('onboarding.paymentConfirmed')}</p>}
       {data.entitlement && <p>{t(data.entitlement.revoked_at?'billing.revoked':data.entitlement.source==='grandfathered'?'billing.grandfathered':'billing.paidEntitlement')}</p>}
       {!owner && <Callout tone="info">{t('billing.ownerOnly')}</Callout>}
