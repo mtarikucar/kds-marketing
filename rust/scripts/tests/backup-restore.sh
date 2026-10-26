@@ -8,6 +8,7 @@ fail() { printf 'FAIL %s\n' "$*" >&2; exit 1; }
 # Prefer host PostgreSQL tools when available. A separate network namespace is
 # mandatory on both paths; no connections to pre-existing services are possible.
 if [[ ${JEETA_HARNESS_INNER:-} != yes ]]; then
+  python3 "$scripts/tests/test_recovery_binary_bridge.py"
   (cd "$scripts/.." && cargo build --locked -p jeeta)
   binary="$scripts/../target/debug/jeeta"
   scratch=$(mktemp -d /tmp/jeeta-drill-XXXXXXXX)

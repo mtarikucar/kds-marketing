@@ -4,6 +4,10 @@ use std::{
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -33,6 +37,24 @@ pub async fn publish(
     status: &Path,
     now: OffsetDateTime,
 ) -> std::io::Result<()> {
+    publish_inner(
+        state,
+        archive,
+        status,
+        now,
+        #[cfg(test)]
+        || {},
+    )
+    .await
+}
+
+async fn publish_inner(
+    state: &ArchiverState,
+    archive: &Path,
+    status: &Path,
+    now: OffsetDateTime,
+    #[cfg(test)] before_commit: impl FnOnce() + Send + 'static,
+) -> std::io::Result<()> {
     let invalid = || std::io::Error::other("wal probe failed");
     let segment = state.last_archived_wal.as_deref().ok_or_else(invalid)?;
     let at = state.last_archived_time.ok_or_else(invalid)?;
@@ -52,20 +74,35 @@ pub async fn publish(
         &serde_json::json!({"archived_at": at.format(&Rfc3339).map_err(|_| invalid())?, "observed_at": now.format(&Rfc3339).map_err(|_| invalid())?}),
     )?;
     let status = status.to_owned();
-    // The blocking worker owns its cleanup guard. Dropping this future also drops
-    // any eventual worker result; no detached operation can publish a marker.
-    let prepared = tokio::task::spawn_blocking(move || {
+    // Drop never performs I/O or waits for the blocking worker. Aborting the
+    // probe (or its existing outer timeout) revokes work not yet committed.
+    let cancellation = CancelOnDrop(Arc::new(AtomicBool::new(false)));
+    let cancelled = cancellation.0.clone();
+    tokio::task::spawn_blocking(move || {
         let metadata = std::fs::symlink_metadata(archive_segment)?;
         if !metadata.is_file() || metadata.len() == 0 {
             return Err(std::io::Error::other("wal probe failed"));
         }
-        Prepared::write(&status, &bytes)
+        let prepared = Prepared::write(&status, &bytes)?;
+        #[cfg(test)]
+        before_commit();
+        if cancelled.load(Ordering::Acquire) {
+            return Err(std::io::Error::other("wal probe cancelled"));
+        }
+        // Keep rename AND cleanup on this worker. A cancellation check prevents
+        // queued/stalled preparation from publishing after abort. As with any
+        // filesystem syscall, an already-entered rename cannot be revoked.
+        prepared.commit()
     })
     .await
-    .map_err(|_| invalid())??;
-    // No await at the commit point: cancellation/timeout cannot report failure
-    // while a detached rename subsequently publishes success. Local storage only.
-    prepared.commit()
+    .map_err(|_| invalid())?
+}
+
+struct CancelOnDrop(Arc<AtomicBool>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 
 struct Prepared {
@@ -104,6 +141,85 @@ impl Drop for Prepared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn stalled_commit(abort: bool) -> (bool, Vec<u8>) {
+        let dir = std::env::temp_dir().join(format!("jeeta-wal-stall-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("wal-status.json"), b"old").unwrap();
+        let segment = "000000010000000000000001";
+        std::fs::write(dir.join(segment), b"segment").unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let status = dir.clone();
+        let task = tokio::spawn(async move {
+            let now = OffsetDateTime::now_utc();
+            let state = ArchiverState {
+                last_archived_wal: Some(segment.into()),
+                last_archived_time: Some(now),
+                last_failed_time: None,
+            };
+            tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                publish_inner(&state, &status, &status, now, move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }),
+            )
+            .await
+        });
+        let abort_handle = task.abort_handle();
+        // An OS thread releases a stalled filesystem even when the current-thread
+        // runtime is blocked by the regression. No hanging tests or busy polling.
+        let controller = std::thread::spawn(move || {
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            if abort {
+                abort_handle.abort();
+            }
+            let prompt = finished_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .is_ok();
+            release_tx.send(()).unwrap();
+            prompt
+        });
+        let result = task.await;
+        let _ = finished_tx.send(());
+        let prompt = controller.join().unwrap();
+        // Drain blocking work before inspecting its eventual filesystem effects.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while std::fs::read_dir(&dir).unwrap().count() != 2 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let marker = std::fs::read(dir.join("wal-status.json")).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        if prompt {
+            if abort {
+                assert!(result.unwrap_err().is_cancelled());
+            } else {
+                assert!(result.unwrap().is_err(), "probe must time out");
+            }
+        }
+        (prompt, marker)
+    }
+
+    #[tokio::test]
+    async fn abort_during_stalled_commit_returns_promptly_without_late_publication() {
+        let (prompt, marker) = stalled_commit(true).await;
+        assert!(prompt, "filesystem commit blocked task abort and shutdown");
+        assert_eq!(marker, b"old", "cancelled commit published after abort");
+    }
+
+    #[tokio::test]
+    async fn timeout_during_stalled_commit_does_not_publish_later() {
+        let (prompt, marker) = stalled_commit(false).await;
+        assert!(prompt, "filesystem commit blocked the probe timeout");
+        assert_eq!(marker, b"old", "timed-out commit published later");
+    }
 
     #[tokio::test]
     async fn cancelled_preparation_cleans_up_without_publishing() {
