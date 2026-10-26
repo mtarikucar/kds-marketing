@@ -22,6 +22,7 @@ pub mod roles;
 pub mod strategy;
 pub mod studio;
 pub mod team;
+pub mod v1_import;
 pub mod webhook;
 pub mod work;
 pub mod workspace;

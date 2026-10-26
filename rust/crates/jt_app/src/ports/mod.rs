@@ -1807,3 +1807,6 @@ mod tests {
 }
 
 pub mod ops;
+
+/// Operator-only legacy import extensions, separate from serving ports.
+pub mod v1_import;

@@ -1,4 +1,5 @@
-//! Pure journey creation and reduction. Only `begin_journey` and `reduce` produce persistable proofs.
+//! Pure journey creation and reduction. Normal creation, operator import and reduction produce
+//! persistable proofs through `begin_journey`, `import_journey` and `reduce`.
 
 use std::collections::BTreeSet;
 
@@ -127,7 +128,7 @@ pub struct Journey {
     pub reduce_input: ReduceInput,
 }
 
-/// An unforgeable initial journey, produced only by [`begin_journey`].
+/// An unforgeable initial journey, produced by [`begin_journey`] or [`import_journey`].
 ///
 /// Application code cannot construct a literal or call the crate-private constructor:
 /// ```compile_fail
@@ -553,4 +554,76 @@ fn advance(patch: &mut JourneyPatch, target: JourneyStatus) {
     {
         patch.status = target;
     }
+}
+
+/// Historical fields accepted only by the operator import constructor.
+pub struct ImportedJourney {
+    /// Deterministic journey identity.
+    pub id: JourneyId,
+    /// Destination tenant.
+    pub workspace_id: WorkspaceId,
+    /// Matched imported person.
+    pub person_id: PersonId,
+    /// Legacy lead identifier.
+    pub lead_id: String,
+    /// Legacy source, preserved as provenance.
+    pub source: String,
+    /// One of the nine v1 stages.
+    pub status: String,
+    /// Historical loss explanation.
+    pub lost_reason: String,
+    /// Original acquisition timestamp.
+    pub created_at: OffsetDateTime,
+    /// Original last update, used as terminal closure time.
+    pub updated_at: OffsetDateTime,
+}
+
+/// Map the closed v1 stage vocabulary; unknown stages fail closed.
+pub fn v1_journey_status(raw: &str) -> Option<JourneyStatus> {
+    Some(match raw {
+        "NEW" => JourneyStatus::New,
+        "CONTACTED" => JourneyStatus::Contacted,
+        "NOT_REACHABLE" => JourneyStatus::Unreachable,
+        "DEMO_SCHEDULED" => JourneyStatus::Appointment,
+        "MEETING_DONE" => JourneyStatus::Met,
+        "OFFER_SENT" => JourneyStatus::Quoted,
+        "WAITING" => JourneyStatus::Pending,
+        "WON" => JourneyStatus::Won,
+        "LOST" => JourneyStatus::Lost,
+        _ => return None,
+    })
+}
+
+/// Construct an import-only historical creation proof. No reducer events, commissions,
+/// provider actions or fabricated sale amounts are produced by importing a terminal stage.
+pub fn import_journey(input: ImportedJourney) -> Option<InitialJourney> {
+    let status = v1_journey_status(&input.status)?;
+    if input.updated_at < input.created_at {
+        return None;
+    }
+    let mut initial = begin_journey(
+        input.id,
+        input.workspace_id,
+        input.person_id,
+        Source::V1Import {
+            kind: "import".into(),
+            system: "v1".into(),
+            v1_lead_id: input.lead_id,
+            v1_source: input.source,
+            v1_status: input.status,
+        },
+        input.created_at,
+    );
+    initial.journey.status = status;
+    initial.journey.updated_at = input.updated_at;
+    if matches!(status, JourneyStatus::Won | JourneyStatus::Lost) {
+        initial.journey.closed_at = Some(input.updated_at);
+    }
+    if status == JourneyStatus::Lost {
+        initial.journey.lost_reason = Some(LostReason {
+            reason_key: "import".into(),
+            reason_label: input.lost_reason,
+        });
+    }
+    Some(initial)
 }

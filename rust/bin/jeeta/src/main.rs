@@ -15,6 +15,7 @@ mod recovery;
 mod scheduler;
 mod serve;
 mod stdio;
+mod v1_import;
 
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -29,6 +30,8 @@ Commands:
   serve       Run the HTTP server: the panel, its API, the MCP endpoint at /mcp and the
               providers' webhooks at /hooks
   mcp-stdio   Serve MCP over stdin/stdout as the API key in JEETA_STDIO_API_KEY
+  import-v1-leads --workspace <uuid> --input <file.jsonl> [--dry-run | --rollback]
+                        Import only allowlisted v1 leads, without serving
   recovery-verify       Verify restored schema, RLS and sealed canary without serving
   recovery-canary-up    Provision a retired canary in JEETA_RECOVERY_WORKSPACE_ID
   recovery-canary-down  Remove that reserved canary (idempotent rollback)
@@ -70,6 +73,9 @@ fn parse(args: &[OsString]) -> Option<Command> {
 fn main() -> ExitCode {
     let _ = crate::ops::process_started_at();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "import-v1-leads") {
+        return v1_import::run(&args[1..]);
+    }
     let Some(command) = parse(&args) else {
         match args.first() {
             None => eprintln!("jeeta: no command given\n"),

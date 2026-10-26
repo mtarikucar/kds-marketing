@@ -3030,3 +3030,15 @@ records the remaining owner-only live payment/provider smoke, new provider-app
 approval, deployment, actual recovery-set logical/PITR validation, secret custody,
 and switch/rollback decisions. Unresolved provider approval or a failed restore
 keeps M4 acceptance open. Automated verification does not tag, publish or deploy.
+
+
+### Operator-only v1 lead import
+
+The 2026-10-26 owner ruling permits **allowlisted leads only** from v1.
+`jeeta import-v1-leads --workspace <uuid> --input /root/v1-leads.jsonl --dry-run`
+previews without durable writes; omit `--dry-run` to import or replace it with
+`--rollback` to remove unchanged imported aggregates. Existing identities are
+never stolen; touched records survive rollback. Use the protected serve database
+and secret-key environment, an ordinary RLS role and an exactly matching schema.
+This command runs no migrations, HTTP, jobs or providers. See the
+[export, verification and rollback procedure](../docs/operations/v1-cutover.md#leads-only-owner-amendment-2026-10-26).

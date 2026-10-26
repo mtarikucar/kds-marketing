@@ -2,7 +2,7 @@
 
 The baseline is a **fresh v2 database**, with new workspaces, memberships, keys
 and reconnected capabilities. Ek A carries forward knowledge and designs, not
-customer records. This procedure implements M4 Task 10 and rulings Q7/Q8/C1 in
+customer records, except for the **leads-only owner amendment of 2026-10-26** below. This procedure implements M4 Task 10 and rulings Q7/Q8/C1 in
 the [M4 plan](../superpowers/plans/2026-10-23-rust-m4-urunlestirme.md), under
 [design §14–16 and Ek A](../superpowers/specs/2026-10-22-jeeta-rust-yeniden-yazim-design.md).
 Q7 resolves the older §14 choice: create **new reviewed provider apps**; do not
@@ -35,7 +35,7 @@ M1–M3 sources. This documentation task does not rerun Rust or panel suites.
 | Remove — §3/§16 | Multiple brands per workspace, nested groups, simultaneous journeys for one person and three extra languages; panel languages remain Turkish/English. |
 | Remove — §3/§16 | Ad campaign/creative creation, product catalog/PDF quotes, customer-payment connector and public booking page. Existing ad budget operations are not campaign creation. |
 | Defer | Additional `Connector` adapters; object-store `FileStore` adapter; product payment provider; service split; webchat widget; master-key rotation. None is introduced by cutover. |
-| Start fresh — C1 | New workspaces, memberships, keys and reconnected capabilities. **No imported people, conversations/mail, payments, publications, queues, learning history, ledger, sessions, invitations or v1 sealed credentials.** New installation keys and secret custody are independent. |
+| Start fresh — C1 | New workspaces, memberships, keys and reconnected capabilities. **Only allowlisted v1 leads may become people. No conversations/mail, payments, publications, queues, learning history, ledger, sessions, invitations or v1 sealed credentials are imported.** New installation keys and secret custody are independent. |
 
 Operational behavior and connector configuration are described in the
 [Rust README](../../rust/README.md). First-run guidance is **M4 Task 7 — pending**;
@@ -193,3 +193,115 @@ success prints one `PASS <name>` line per case:
 | `rollback_preserves_new_payment_and_messages` | Preserve while v2 runs, decide before preservation, use snapshot made stale by a late message |
 | `new_data_requires_recorded_rollback_decision` | Missing/wrong-owner decision, discard/merge instruction |
 | `fresh_start_imports_no_v1_secrets_or_history` | Import any excluded category, preflight with contaminated v2 storage |
+
+
+## Leads-only owner amendment (2026-10-26)
+
+Ruling: v1 is retained for its data; **only leads** may move from one v1 workspace
+into one Rust workspace. This replaces Q8/C1's “imports nothing” rule only for leads.
+The export allowlist is exactly `id`, `businessName`, `contactPerson`, `phone`,
+`whatsapp`, `email`, `address`, `city`, `region`, `businessType`, `tableCount`,
+`branchCount`, `currentSystem`, `source`, `status`, `lostReason`, `notes`,
+`nextFollowUp`, `priority`, `customFields`, `emailOptOut`, `smsOptOut`, `waOptOut`,
+`emailBouncedAt`, `createdAt`, `updatedAt`. Deleted and merged v1 leads are excluded.
+No tokens, AI scores, İYS caches, assigned users, converted tenants, product
+snapshots, messages, conversations, payments or historical events cross over.
+
+Ruling: `contactPerson` becomes the display name and `businessName` the company;
+creation time and v1 attribution are preserved. Phone and distinct WhatsApp numbers
+share the domain's phone identity namespace (calls/SMS/WhatsApp); ten-digit local
+numbers use TR, and the existing normalizer produces E.164 keys. Email uses the
+existing trimmed, lowercase normalizer. Invalid identities are skipped and counted.
+Stages map NEW→New, CONTACTED→Contacted, NOT_REACHABLE→Unreachable,
+DEMO_SCHEDULED→Appointment, MEETING_DONE→Met, OFFER_SENT→Quoted, WAITING→Pending,
+WON→Won, LOST→Lost. Won/Lost are closed at v1 `updatedAt`, without synthetic sale
+events, commissions, quotes or appointments. Loss text is marked as imported.
+No owner is assigned. v1 notes and nonempty auxiliary fields form one system note
+per lead; empty notes are omitted. Only open journeys with a future `nextFollowUp`
+get a `v1 takip` task. Prisma timestamps without a zone are interpreted as UTC.
+
+Ruling: true `emailOptOut`, `smsOptOut`, `waOptOut` each create a **withdrawn**
+consent with source **import**, effective at v1 `updatedAt`, plus a **manual**
+suppression for email/SMS/WhatsApp respectively. `emailBouncedAt` adds an email
+**bounce** suppression. False defaults never create explicit or implied consent.
+These local withdrawals participate in the existing later consent-sync workflow;
+the importer itself starts no jobs and makes no provider calls.
+
+Ruling: UUIDv5 IDs use the destination workspace, v1 lead ID and entity kind.
+Re-import skips recorded leads. Shared normalized identities coalesce onto an
+unchanged imported person; the first person's name and company win. Duplicate
+open leads reuse the existing open journey, preserving each original source/status
+in provenance and keeping per-lead notes/tasks. Closed leads retain closed journeys.
+Any normalized identity matching an erasure tombstone skips the entire lead
+(`erased_skipped`), so old exports cannot recreate erased personal data.
+Keys belonging to non-imported or touched people are skipped and counted; keys
+bridging two imported people are never stolen. Reuse the identical protected export
+for retries and rollback. Rollback treats each coalesced person as one aggregate:
+it removes that person and only its import-created children when their stored
+fingerprint still matches, with no conversations, merges, events, quotes,
+appointments or other activity. Changed records are kept and counted for manual
+review. A subsequent rollback is a no-op for removed aggregates.
+
+Run these commands using a matching binary/schema. Run the export **on the v1
+host** with a read-only database account; database passwords belong in protected
+service/environment files, never command arguments. Synthetic IDs below must be
+replaced with the two intended workspace IDs. The export remains outside the repo.
+
+```sh
+umask 077
+psql -X -q -d service=jeeta_v1_readonly \
+  -v v1_workspace_id=00000000-0000-0000-0000-000000000001 \
+  -f /opt/jeeta/rust/scripts/v1-export-leads.sql > /root/v1-leads.jsonl
+chmod 600 /root/v1-leads.jsonl
+```
+
+Securely transfer that file to `/root/v1-leads.jsonl` on the Rust host if needed.
+Load `JEETA_DATABASE_URL` and `JEETA_SECRET_KEY` from the same protected environment
+used by serve. The database role must be ordinary and subject to FORCE RLS.
+The command checks exact migration versions/checksums before writes; it never
+runs migrations, binds HTTP or starts provider clients. It refuses symlinks,
+non-regular files, unknown fields, invalid statuses/timestamps, files over 256 MiB,
+lines over 1 MiB and more than one million leads. Fix/re-export input without
+printing its contents to logs. Report and error output contain only counts or
+fixed categories.
+
+```sh
+set -a
+. /etc/jeeta/jeeta.env
+set +a
+/opt/jeeta/jeeta import-v1-leads \
+  --workspace 00000000-0000-0000-0000-000000000002 \
+  --input /root/v1-leads.jsonl --dry-run
+/opt/jeeta/jeeta import-v1-leads \
+  --workspace 00000000-0000-0000-0000-000000000002 \
+  --input /root/v1-leads.jsonl
+```
+
+Dry run performs the same decisions in a rolled-back transaction, so it leaves
+**no durable rows, including no ledger entry**. Import commits chunks of 100;
+a successful import or rollback appends one `import.v1_leads` counts-only ledger
+entry by System `v1_import`. If interrupted after a chunk, retry the same file;
+committed leads are skipped. Keep the original export until verification ends.
+In the panel, select the destination workspace and verify people, companies,
+normalized identities, stage counts, closed Won/Lost journeys, imported notes,
+future follow-up tasks and channel withdrawals/suppressions. Confirm another
+workspace has no imported rows. Retain only counts in the operational record.
+
+If needed, roll back before operators or scheduled consent-sync jobs change the leads:
+
+```sh
+/opt/jeeta/jeeta import-v1-leads \
+  --workspace 00000000-0000-0000-0000-000000000002 \
+  --input /root/v1-leads.jsonl --rollback
+```
+
+Inspect the `rolled_back` and `kept` counts. Touched aggregates remain intact;
+never delete them manually as part of this import rollback. After acceptance or
+rollback review, shred both transferred and original export copies:
+
+```sh
+shred --remove /root/v1-leads.jsonl
+```
+
+Use the storage operator's deletion procedure for snapshots or copy-on-write
+storage as well; keep exports out of backups and the repository.

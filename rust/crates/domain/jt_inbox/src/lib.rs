@@ -43,9 +43,9 @@ pub use ids::{
     PersonId, TaskId,
 };
 pub use journey::{
-    InitialJourney, Journey, JourneyEffect, JourneyEvent, JourneyEventKind, JourneyPatch,
-    JourneyStatus, LostReason, ReduceError, ReduceInput, ReducePolicy, Transition, begin_journey,
-    reduce,
+    ImportedJourney, InitialJourney, Journey, JourneyEffect, JourneyEvent, JourneyEventKind,
+    JourneyPatch, JourneyStatus, LostReason, ReduceError, ReduceInput, ReducePolicy, Transition,
+    begin_journey, import_journey, reduce, v1_journey_status,
 };
 pub use merge::{MergeConflict, MergeDecision, PersonView, decide_merge};
 pub use message::{Author, Direction, Message, MsgStatus};

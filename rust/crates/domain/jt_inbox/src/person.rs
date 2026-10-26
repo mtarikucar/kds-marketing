@@ -21,6 +21,20 @@ pub enum Source {
     Form,
     /// A returning customer starting a later journey.
     Repeat,
+    /// Provenance preserved by the operator-only v1 lead import.
+    #[serde(untagged)]
+    V1Import {
+        /// Fixed import discriminator.
+        kind: String,
+        /// Fixed legacy system discriminator.
+        system: String,
+        /// Legacy lead identifier.
+        v1_lead_id: String,
+        /// Legacy acquisition source.
+        v1_source: String,
+        /// Original legacy funnel stage.
+        v1_status: String,
+    },
 }
 
 /// A person's original acquisition attribution; merging preserves the keeper's first touch.

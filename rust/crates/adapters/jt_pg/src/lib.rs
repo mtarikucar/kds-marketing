@@ -28,3 +28,5 @@ pub use role::{current_role, role_bypasses_rls};
 pub use strategy_gate::PgStrategyGate;
 pub use tx::{PlatformTx, TenantTx, UserTx};
 pub use uow::{PgPlatformRepos, PgTenantRepos, PgUnitOfWork, PgUserRepos};
+
+pub mod v1_import;

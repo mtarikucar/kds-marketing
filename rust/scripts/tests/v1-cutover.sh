@@ -92,8 +92,20 @@ fresh_start() {
   put v2/identity 'new-workspace|new-membership|new-key|reconnected-capability'
 }
 import_v1() {
-  # No field is allowlisted by this dispatch; a separate amended brief is needed.
-  return 1
+  # Owner amendment: only a projected lead record may cross the boundary.
+  [[ "$1" == leads ]] || return 1
+  python3 - "$2" "$state/v2/data/leads" <<'PYIMPORT'
+import json, sys
+allowed = set("id businessName contactPerson phone whatsapp email address city region businessType tableCount branchCount currentSystem source status lostReason notes nextFollowUp priority customFields emailOptOut smsOptOut waOptOut emailBouncedAt createdAt updatedAt".split())
+try:
+    row = json.loads(sys.argv[1])
+    if not isinstance(row, dict) or set(row) != allowed:
+        raise ValueError("not the lead allowlist")
+except (ValueError, TypeError):
+    sys.exit(1)
+with open(sys.argv[2], "w") as target:
+    target.write(json.dumps(row))
+PYIMPORT
 }
 preflight() {
   phase_is initial || return 1
@@ -449,6 +461,20 @@ fresh_start_imports_no_v1_secrets_or_history() {
     cp "$state/v1/data/$kind" "$state/v2/data/$kind"
     refused preflight
     : > "$state/v2/data/$kind"
+  done
+  local fixture
+  fixture=$(cat "$(dirname "${BASH_SOURCE[0]}")/fixtures/v1-import/lead.jsonl")
+  # Removing the denylist check or broadening the allowlist must fail this test.
+  refused import_v1 leads '{"accessToken":"synthetic"}'
+  local forbidden poisoned
+  for forbidden in accessToken iysEmailStatus productSnapshot assignedToId messages conversations payments history; do
+    poisoned=$(python3 -c 'import json,sys; r=json.loads(sys.argv[1]); r[sys.argv[2]]="synthetic"; print(json.dumps(r))' "$fixture" "$forbidden")
+    refused import_v1 leads "$poisoned"
+  done
+  import_v1 leads "$fixture"
+  [[ -s "$state/v2/data/leads" ]] || fail 'allowlisted lead was not imported'
+  for kind in "${history_kinds[@]}"; do
+    [[ ! -s "$state/v2/data/$kind" ]] || fail "lead import copied $kind"
   done
   live
   equal "$(get v2/identity)" 'new-workspace|new-membership|new-key|reconnected-capability'

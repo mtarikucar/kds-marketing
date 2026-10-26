@@ -71,7 +71,7 @@ serde = { version = "1", features = ["derive"] }
 # default parser may be off by one unit in the last place), so MCP outputs, which go through
 # JSON text, carry the same numbers as the panel's.
 serde_json = { version = "1", features = ["float_roundtrip"] }
-uuid = { version = "1", features = ["v7", "serde"] }
+uuid = { version = "1", features = ["v7", "v5", "serde"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 thiserror = "2"
 anyhow = "1"
