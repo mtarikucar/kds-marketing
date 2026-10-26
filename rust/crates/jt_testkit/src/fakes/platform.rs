@@ -147,6 +147,18 @@ impl PlatformRepos for MemPlatform {
         self.tx.lock_studio().await;
         self.call(|t| t.tx.code_insert(ws, row))
     }
+    async fn activation_code_digest_exists(
+        &mut self,
+        ws: WorkspaceId,
+        digest: &[u8],
+    ) -> Result<bool, AppError> {
+        self.tx.lock_studio().await;
+        Ok(self
+            .state()
+            .activation_codes
+            .iter()
+            .any(|c| c.workspace_id == ws && c.digest == digest))
+    }
     async fn activation_code_lock_current_by_workspace(
         &mut self,
         ws: WorkspaceId,

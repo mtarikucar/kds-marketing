@@ -978,7 +978,8 @@ kupon ve deneme süresi yoktur. Fiyat, para birimi ve banka açıklaması zorunl
 `team.manage` ile panel/MCP ikizi vardır, kod istemez, ödemeyi doğrulamaz ve alanı açmaz.
 `billing.status` salt okunur talimat, sabit alan referansı ve ödeme/hak geçmişini panelde gösterir.
 Durum muafiyetleri tam satır adlarıdır: `billing.status` her durumda; `billing.report_payment`
-etkin veya ödeme bekleyen alanda, askıdayken değil. Başka `billing.*` adlarına muafiyet verilmez.
+ve `billing.activate` etkin veya ödeme bekleyen alanda, askıdayken değil. Kod kullanımı ayrıca
+kilit altında alanın ödeme beklemesini şart koşar. Başka `billing.*` adlarına muafiyet verilmez.
 
 **Onay kodu (K11).** Yalnız `billing.activate {code}` işletmenin verdiği kodu kullanır ve yalnız
 panelde bulunur. Ajan kod almaz, iletmez veya kullanmaz. Ödeme onayı işletmene aittir; kanıt

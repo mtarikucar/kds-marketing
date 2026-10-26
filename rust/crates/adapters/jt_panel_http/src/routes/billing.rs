@@ -22,3 +22,23 @@ pub async fn report_payment(
         billing::report_payment(&state.deps, &ctx, input).await?,
     ))
 }
+
+pub async fn activate(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    input: Result<ApiJson<billing::ActivateInput>, ApiError>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    // Parsing diagnostics can contain submitted secrets. Every invalid body spends a guess
+    // against a usable challenge and receives the same sanitized validation error.
+    let input = input
+        .map(|ApiJson(input)| input)
+        .unwrap_or(billing::ActivateInput {
+            code: String::new(),
+        });
+    let result = billing::activate(&state.deps, &ctx, input)
+        .await
+        .map(Json)
+        .map_err(ApiError::from);
+    ([(axum::http::header::CACHE_CONTROL, "no-store")], result).into_response()
+}

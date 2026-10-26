@@ -196,3 +196,17 @@ fn destructive_confirmation_tools_are_explicitly_listed() {
         ])
     );
 }
+
+#[test]
+fn activation_is_panel_only_without_mcp_schema_or_handler() {
+    let row = jt_app::catalog::find("billing.activate").unwrap();
+    assert!(row.panel_only);
+    assert_eq!(row.panel_route, Some(("POST", "/api/billing/activate")));
+    assert!(row.mcp_tool.is_none());
+    assert!(by_mcp_tool("jeeta.billing.activate").is_none());
+    assert!(
+        !jt_mcp::registry().iter().any(
+            |tool| tool.name == "jeeta.billing.activate" || tool.use_case == "billing.activate"
+        )
+    );
+}

@@ -386,6 +386,20 @@ impl PlatformRepos for PgPlatformRepos {
         crate::repos::same_workspace(ws, row.workspace_id)?;
         crate::repos::billing::code_insert(self.tx.conn(), row).await
     }
+    async fn activation_code_digest_exists(
+        &mut self,
+        ws: WorkspaceId,
+        digest: &[u8],
+    ) -> Result<bool, AppError> {
+        sqlx::query_scalar(
+            "select exists(select 1 from activation_codes where workspace_id=$1 and digest=$2)",
+        )
+        .bind(ws.as_uuid())
+        .bind(digest)
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| crate::repos::map_sqlx(e, "check activation history"))
+    }
     async fn activation_code_lock_current_by_workspace(
         &mut self,
         ws: WorkspaceId,

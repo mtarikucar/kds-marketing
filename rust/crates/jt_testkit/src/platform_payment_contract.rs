@@ -4,13 +4,13 @@ use crate::{
     fakes::{FIXED_NOW, deps},
 };
 use jt_app::{
-    ctx::PlatformCtx,
+    ctx::{Ctx, PlatformCtx},
     error::ErrorCode,
     ports::{LedgerFilter, UnitOfWork, billing::*},
     usecases::{Deps, platform, platform_payments},
 };
 use jt_ledger::Actor;
-use jt_tenancy::WorkspaceStatus;
+use jt_tenancy::{MembershipId, RoleDef, RoleId, SystemRole, WorkspaceStatus};
 use std::sync::Arc;
 use time::Duration;
 
@@ -23,6 +23,19 @@ pub struct World {
 impl World {
     pub async fn new(uow: Arc<dyn UnitOfWork>) -> Self {
         let f = fixture(uow.as_ref()).await;
+        let mut r = uow.user().await.unwrap();
+        let roles = [SystemRole::Owner, SystemRole::Manager, SystemRole::Rep].map(|role| RoleDef {
+            id: RoleId::new_v7(),
+            key: role.key().into(),
+            name: role.key().into(),
+            permissions: role.permissions(),
+            is_system: true,
+        });
+        r.roles_create_system(f.ws, &roles).await.unwrap();
+        r.memberships_insert_active(MembershipId::new_v7(), f.ws, f.user, roles[0].id, FIXED_NOW)
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
         let deps = Deps {
             ids: Arc::new(jt_app::std_impls::UuidV7Gen),
             tokens: Arc::new(jt_app::std_impls::RandTokenGen),
@@ -60,37 +73,26 @@ impl World {
             .map(|r| r.entry)
             .collect()
     }
-    pub async fn activate(&self, id: EntitlementId) {
-        // Redemption is Task 4. Seed its atomic storage effects to exercise operator transitions.
-        let mut r = self.deps.uow.tenant(self.f.ws).await.unwrap();
-        r.workspace().lock().await.unwrap();
-        let code = r
-            .activation_codes()
-            .lock_current_by_workspace()
-            .await
-            .unwrap();
-        if let Some(code) = code {
-            r.activation_codes()
-                .consume(code.id, FIXED_NOW, self.f.user)
-                .await
-                .unwrap();
+    pub fn owner(&self) -> Ctx {
+        Ctx {
+            workspace_id: self.f.ws,
+            actor: Actor::Human {
+                user_id: self.f.user,
+            },
+            permissions: SystemRole::Owner.permissions(),
+            role_key: Some("owner".into()),
+            now: FIXED_NOW,
+            agent_connection_id: None,
         }
-        r.billing()
-            .activate_entitlement(id, FIXED_NOW, self.f.user)
-            .await
-            .unwrap();
-        r.workspace()
-            .set_status(
-                self.f.ws,
-                WorkspaceStatus::Active,
-                "billing.activate",
-                &Actor::Human {
-                    user_id: self.f.user,
-                },
-            )
-            .await
-            .unwrap();
-        r.commit().await.unwrap();
+    }
+    pub async fn activate(&self, code: &str) {
+        jt_app::usecases::billing::activate(
+            &self.deps,
+            &self.owner(),
+            jt_app::usecases::billing::ActivateInput { code: code.into() },
+        )
+        .await
+        .unwrap();
     }
 }
 
@@ -169,7 +171,7 @@ pub async fn confirmation_retry_after_suspend_does_not_reactivate(uow: Arc<dyn U
     let out = platform_payments::confirm(&w.deps, &w.ctx, w.f.ws, w.payment.id)
         .await
         .unwrap();
-    w.activate(out.entitlement.id).await;
+    w.activate(&out.activation.unwrap().code).await;
     platform::suspend(&w.deps, &w.ctx, w.f.ws, "  operator hold  ")
         .await
         .unwrap();
@@ -210,7 +212,7 @@ pub async fn reconfirm_same_payment_preserves_history(uow: Arc<dyn UnitOfWork>) 
     let a = platform_payments::confirm(&w.deps, &w.ctx, w.f.ws, w.payment.id)
         .await
         .unwrap();
-    w.activate(a.entitlement.id).await;
+    w.activate(&a.activation.unwrap().code).await;
     platform_payments::revoke_activation(&w.deps, &w.ctx, w.f.ws, " refund out of band ")
         .await
         .unwrap();
@@ -234,7 +236,7 @@ pub async fn reconfirm_same_payment_preserves_history(uow: Arc<dyn UnitOfWork>) 
         .unwrap();
     assert_eq!(b.entitlement, c.entitlement);
     assert!(c.activation.is_none());
-    assert_eq!(w.entries().await.len(), 5);
+    assert_eq!(w.entries().await.len(), 6);
 }
 
 pub async fn revoke_pending_challenge_invalidates_code(uow: Arc<dyn UnitOfWork>) {
@@ -303,12 +305,12 @@ pub async fn reason_required_and_repeated_transition_is_noop(uow: Arc<dyn UnitOf
     let a = platform_payments::confirm(&w.deps, &w.ctx, w.f.ws, w.payment.id)
         .await
         .unwrap();
-    w.activate(a.entitlement.id).await;
+    w.activate(&a.activation.unwrap().code).await;
     platform::suspend(&w.deps, &w.ctx, w.f.ws, "  hold  ")
         .await
         .unwrap();
     let before = w.entries().await;
-    assert_eq!(before.len(), 3);
+    assert_eq!(before.len(), 4);
     assert_eq!(before[0].payload["reason"], "hold");
     platform::suspend(&w.deps, &w.ctx, w.f.ws, "another reason")
         .await
@@ -316,14 +318,14 @@ pub async fn reason_required_and_repeated_transition_is_noop(uow: Arc<dyn UnitOf
     assert_eq!(w.entries().await, before);
     platform::resume(&w.deps, &w.ctx, w.f.ws).await.unwrap();
     platform::resume(&w.deps, &w.ctx, w.f.ws).await.unwrap();
-    assert_eq!(w.entries().await.len(), 4);
+    assert_eq!(w.entries().await.len(), 5);
     platform_payments::revoke_activation(&w.deps, &w.ctx, w.f.ws, &"ü".repeat(500))
         .await
         .unwrap();
     platform_payments::revoke_activation(&w.deps, &w.ctx, w.f.ws, "again")
         .await
         .unwrap();
-    assert_eq!(w.entries().await.len(), 6);
+    assert_eq!(w.entries().await.len(), 7);
 }
 
 pub async fn resume_preserves_paid_and_grandfathered_entitlement(uow: Arc<dyn UnitOfWork>) {
@@ -333,7 +335,7 @@ pub async fn resume_preserves_paid_and_grandfathered_entitlement(uow: Arc<dyn Un
             let a = platform_payments::confirm(&w.deps, &w.ctx, w.f.ws, w.payment.id)
                 .await
                 .unwrap();
-            w.activate(a.entitlement.id).await;
+            w.activate(&a.activation.unwrap().code).await;
         } else {
             let mut r = w.deps.uow.platform().await.unwrap();
             r.entitlement_insert(WorkspaceEntitlement {
@@ -449,6 +451,29 @@ pub async fn reissue_invalidates_old_code_and_resets_attempts(uow: Arc<dyn UnitO
     let audit = serde_json::to_string(&entries).unwrap();
     assert!(!audit.contains(&old.code));
     assert!(!audit.contains(&new.code));
+    let owner = Ctx {
+        now: ctx.now,
+        ..w.owner()
+    };
+    assert_eq!(
+        jt_app::usecases::billing::activate(
+            &w.deps,
+            &owner,
+            jt_app::usecases::billing::ActivateInput { code: old.code }
+        )
+        .await
+        .unwrap_err()
+        .code,
+        ErrorCode::Validation
+    );
+    let out = jt_app::usecases::billing::activate(
+        &w.deps,
+        &owner,
+        jt_app::usecases::billing::ActivateInput { code: new.code },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.workspace_status, WorkspaceStatus::Active);
 }
 
 pub async fn confirmation_failure_rolls_back_every_effect(uow: Arc<dyn UnitOfWork>) {

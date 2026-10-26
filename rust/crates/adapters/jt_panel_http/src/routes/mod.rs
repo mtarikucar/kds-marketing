@@ -123,6 +123,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/switch-workspace"),
     ("GET", "/api/billing"),
+    ("POST", "/api/billing/activate"),
     ("POST", "/api/billing/payments"),
     ("GET", "/api/workspace"),
     ("GET", "/api/team"),
@@ -639,6 +640,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             auth::switch_workspace,
         ),
         api_route("GET", "/billing", "billing.status", billing::status),
+        api_route(
+            "POST",
+            "/billing/activate",
+            "billing.activate",
+            billing::activate,
+        ),
         api_route(
             "POST",
             "/billing/payments",

@@ -103,3 +103,15 @@ pub struct BillingStatusOut {
     pub bank_instructions: String,
     pub payment_reference: String,
 }
+
+/// Secret-bearing panel input; never include the submitted code in diagnostics.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivateInput {
+    pub code: String,
+}
+impl std::fmt::Debug for ActivateInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActivateInput").finish_non_exhaustive()
+    }
+}

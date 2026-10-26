@@ -255,6 +255,7 @@ impl RoleRepo for MemTenant {
         id: RoleId,
         permissions: BTreeSet<Permission>,
     ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             if this.state().role_in(this.ws, id).is_none() {
                 return Err(AppError::not_found("no such role"));
@@ -387,6 +388,11 @@ impl MembershipRepo for MemTenant {
             .cloned())
     }
 
+    async fn lock_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError> {
+        self.tx.lock_studio().await;
+        self.find_by_user(user_id).await
+    }
+
     async fn insert_invite(&mut self, row: MembershipRow) -> Result<(), AppError> {
         self.call(|this| {
             same_workspace(this.ws, row.workspace_id)?;
@@ -407,6 +413,7 @@ impl MembershipRepo for MemTenant {
     }
 
     async fn set_role(&mut self, id: MembershipId, role_id: RoleId) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             role_in_workspace(this.state(), this.ws, role_id)?;
             if this.state().membership_in(this.ws, id).is_none() {
@@ -422,6 +429,7 @@ impl MembershipRepo for MemTenant {
     }
 
     async fn remove(&mut self, id: MembershipId) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             if this.state().membership_in(this.ws, id).is_none() {
                 return Err(AppError::not_found("no such membership"));
@@ -436,6 +444,7 @@ impl MembershipRepo for MemTenant {
     }
 
     async fn count_active_owners(&mut self) -> Result<i64, AppError> {
+        self.tx.lock_studio().await;
         Ok(self.state().active_owners(self.ws).len() as i64)
     }
 }

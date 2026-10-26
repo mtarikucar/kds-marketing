@@ -32,6 +32,7 @@ const EXEMPT_PREFIXES: &[&str] = &[
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
 const EXEMPT_IDS: &[&str] = &[
     "billing.status",
+    "billing.activate",
     "billing.report_payment",
     "ledger.list",
     "inbox.pending",
@@ -73,7 +74,8 @@ fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_wh
     let expected = |id: &str| {
         if id == "billing.status" || STATUS_EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p)) {
             StatusExemption::Always
-        } else if id == "billing.report_payment"
+        } else if id == "billing.activate"
+            || id == "billing.report_payment"
             || PENDING_PAYMENT_EXEMPT_PREFIXES
                 .iter()
                 .any(|p| id.starts_with(p))

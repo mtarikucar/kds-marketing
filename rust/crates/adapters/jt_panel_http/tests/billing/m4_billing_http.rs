@@ -251,3 +251,112 @@ async fn concurrent_reports_create_one_payment_and_one_event() {
         .unwrap();
     assert_eq!(entries.len(), 1);
 }
+
+#[tokio::test]
+async fn activation_requires_human_session_and_mutation_header() {
+    let p = Panel::new().await;
+    let (cookie, _) = p
+        .register_pending("activate@billing.test", "Activate")
+        .await;
+    let response = p
+        .send(
+            Method::POST,
+            "/api/billing/activate",
+            Some(&cookie),
+            Some(json!({"code":"BAD"})),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let error = body_json(response).await;
+    assert!(!error.to_string().contains("BAD"));
+}
+
+#[tokio::test]
+async fn panel_activation_consumes_once_and_never_caches_or_echoes_codes() {
+    use jt_app::usecases::{auth::LoginInput, platform};
+    use jt_testkit::{
+        flows::{OPERATOR_EMAIL, OPERATOR_PASSWORD},
+        panel::request,
+    };
+    let p = Panel::new().await;
+    let (cookie, me) = p.register_pending("redeem@billing.test", "Redeem").await;
+    let ws = workspace_of(&me);
+    let status = body_json(p.get("/api/billing", &cookie).await).await;
+    let payment=body_json(p.send(Method::POST,"/api/billing/payments",Some(&cookie),Some(json!({"reference":status["payment_reference"],"amount_minor":123,"paid_at":"2026-01-01T00:00:00Z","request_key":"redeem"}))).await).await;
+    platform::bootstrap(&p.deps, OPERATOR_EMAIL, OPERATOR_PASSWORD)
+        .await
+        .unwrap();
+    let session = platform::login(
+        &p.deps,
+        LoginInput {
+            email: OPERATOR_EMAIL.into(),
+            password: OPERATOR_PASSWORD.into(),
+        },
+    )
+    .await
+    .unwrap();
+    let ctx = platform::resolve(&p.deps, &session.token).await.unwrap();
+    let code = jt_app::usecases::platform_payments::confirm(
+        &p.deps,
+        &ctx,
+        ws,
+        serde_json::from_value(payment["id"].clone()).unwrap(),
+    )
+    .await
+    .unwrap()
+    .activation
+    .unwrap()
+    .code;
+    let path = "/api/billing/activate";
+    let missing_header = p
+        .call(request(
+            Method::POST,
+            path,
+            Some(&cookie),
+            false,
+            Some(json!({"code":code})),
+        ))
+        .await;
+    assert_eq!(missing_header.status(), StatusCode::FORBIDDEN);
+    let no_session = p
+        .send(Method::POST, path, None, Some(json!({"code":code})))
+        .await;
+    assert_eq!(no_session.status(), StatusCode::UNAUTHORIZED);
+    // Unknown field names can contain secrets; never forward serde's diagnostics.
+    let invalid = p
+        .send(
+            Method::POST,
+            path,
+            Some(&cookie),
+            Some(json!({"code":code,code.clone():"secret"})),
+        )
+        .await;
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid.headers()["cache-control"], "no-store");
+    assert!(!body_json(invalid).await.to_string().contains(&code));
+    let response = p
+        .send(
+            Method::POST,
+            path,
+            Some(&cookie),
+            Some(json!({"code":code})),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let out = body_json(response).await;
+    assert_eq!(out["workspace_status"], "active");
+    assert!(!out.to_string().contains(&code));
+    let replay = p
+        .send(
+            Method::POST,
+            path,
+            Some(&cookie),
+            Some(json!({"code":code})),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(replay.headers()["cache-control"], "no-store");
+    assert_eq!(body_json(p.get("/api/billing", &cookie).await).await, out);
+}

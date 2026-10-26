@@ -36,7 +36,7 @@ async fn member(repos: &mut dyn TenantRepos, ctx: &Ctx, owner: bool) -> Result<U
     Ok(user)
 }
 
-async fn payment_out(
+pub(super) async fn payment_out(
     repos: &mut dyn TenantRepos,
     row: PaymentNotification,
 ) -> Result<PaymentOut, AppError> {

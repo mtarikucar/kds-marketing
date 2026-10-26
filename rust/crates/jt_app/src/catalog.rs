@@ -99,14 +99,15 @@ pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."
 pub const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
 
 /// The status exemption of use case `id`. The exact `billing.status` row is Always and
-/// `billing.report_payment` is PendingPayment; other billing names have no exemption.
+/// `billing.report_payment` and `billing.activate` are PendingPayment; no other billing name is exempt.
 /// For other rows: [`StatusExemption::Always`] for one of
 /// [`STATUS_EXEMPT_PREFIXES`], [`StatusExemption::PendingPayment`] for one of
 /// [`PENDING_PAYMENT_EXEMPT_PREFIXES`], else [`StatusExemption::Never`].
 pub const fn status_exemption(id: &str) -> StatusExemption {
     if equals(id, "billing.status") || starts_with_any(id, STATUS_EXEMPT_PREFIXES) {
         StatusExemption::Always
-    } else if equals(id, "billing.report_payment")
+    } else if equals(id, "billing.activate")
+        || equals(id, "billing.report_payment")
         || starts_with_any(id, PENDING_PAYMENT_EXEMPT_PREFIXES)
     {
         StatusExemption::PendingPayment
@@ -274,6 +275,7 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("auth.logout", Exempt, ("POST", "/api/auth/logout"), Write),
     panel_only("auth.me", Exempt, ("GET", "/api/auth/me"), Read),
     panel_only("billing.status", Exempt, ("GET", "/api/billing"), Read),
+    panel_only("billing.activate", Exempt, ("POST", "/api/billing/activate"), Write),
     twin("billing.report_payment", Exempt, "jeeta.billing.report_payment", ("POST", "/api/billing/payments"), Write),
     twin("workspace.info", Exempt, "jeeta.workspace.info", ("GET", "/api/workspace"), Read),
     panel_only("workspace.switch", Exempt, ("POST", "/api/auth/switch-workspace"), Write),

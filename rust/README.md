@@ -2607,7 +2607,7 @@ unit test `billing_config_rejects_missing_or_invalid_values` verifies required c
 
 ## M4 Task 3 — operator confirmation and explicit workspace transitions
 
-Current implemented boundary: **141 catalog rows**, **125 MCP tools**, **67 tables**,
+At the Task 3 boundary: **141 catalog rows**, **125 MCP tools**, **67 tables**,
 **12 migration pairs**, **21 scheduled jobs**. No new migrations, jobs or MCP tools.
 The six rows below are **panel-only**, strategy-exempt and available regardless of workspace
 status, with a separate authenticated operator session and the existing mutation request header.
@@ -2659,3 +2659,40 @@ targets include `platform/m4_platform_payments.rs`, `platform/m4_payment_races.r
 SQL-failure rollback after code/status writes, exact audit counts/actors, cross-workspace refusal,
 operator/tenant session separation, request-header enforcement, no-store and legacy-route removal.
 The complete catalog/HTTP/MCP parity tests retain the exact 125-tool count.
+
+## M4 Task 4 — workspace-locked panel activation
+
+Current implemented boundary: **142 catalog rows**, **125 MCP tools**, **67 tables**,
+**12 migration pairs (0001–0012)**, **21 scheduled jobs**. No new migration, job or MCP tool.
+
+| Use case | Panel route | Permission / status |
+|---|---|---|
+| `billing.activate` | `POST /api/billing/activate` | Human session, `team.manage`, active current owner membership; pending payment only |
+
+The row is panel-only, strategy-exempt and has an exact PendingPayment status exemption.
+There is no MCP activation handler, tool or schema. The existing mutation request header is
+required. `{ "code": "…" }` is the only input; successful and validation responses use
+`Cache-Control: no-store`. Invalid request bodies receive sanitized errors and count as guesses.
+
+Redemption acquires the same workspace lock as confirmation, reissue, suspension and revocation
+before reading the challenge. It then locks the caller's membership and current role and checks
+both again inside the transaction. Any current owner may redeem; a stale former-owner context
+cannot. Ownership changes do not invalidate a challenge. The workspace/grant/action-bound HMAC
+is verified in constant time. Issuance checks all challenge digests in the workspace, including
+invalidated and consumed history, and regenerates any collision under the workspace lock.
+
+Each incorrect or malformed code commits one failed attempt before returning `VALIDATION`.
+Five attempts lock the challenge even for a correct code; only operator reissue resets it.
+The 72-hour expiry is exclusive (`expires_at <= now` is refused). Absent, consumed or invalidated
+challenges cannot change payment or status. A successful redemption atomically consumes the
+challenge, records the redeemer and activation time on the paid grant, changes the workspace to
+active, and appends `billing.activated` with IDs and redeemer only. Lost responses recover through
+billing status; replay cannot undo suspension or revocation. No payment action approves strategy,
+verifies capabilities or connects an agent; existing `confirm: true` actions remain intact.
+
+Fast verification: `cargo test --locked --workspace --test billing --test platform --test gate_rule --test twin_rule --test catalog`.
+`billing/m4_payment_codes.rs` and `billing/m4_payment_code_storage.rs` run shared fake/Pg contracts
+for guesses, expiry, ownership and role locks, binding/replay, historical digests, rollback and the
+full activate/suspend/resume/revoke/reconfirm lifecycle. Platform contracts exercise both lock
+orders with a held real transaction; PostgreSQL also injects a final-audit SQL failure. HTTP and
+MCP tests verify session/header requirements, code secrecy, no-store and the exact 125-tool set.

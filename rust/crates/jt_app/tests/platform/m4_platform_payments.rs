@@ -91,3 +91,10 @@ async fn first_confirmation_and_reissue_require_pending_and_matching_grant() {
     let uow = jt_testkit::fakes::InMemoryUow::new();
     jt_testkit::platform_payment_contract::first_confirmation_and_reissue_require_pending_and_matching_grant(std::sync::Arc::new(uow)).await;
 }
+
+#[tokio::test]
+async fn activation_suspend_revoke_serialize() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::activation_contract::activation_suspend_revoke_serialize(std::sync::Arc::new(uow))
+        .await;
+}

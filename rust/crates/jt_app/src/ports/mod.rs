@@ -551,6 +551,9 @@ pub trait MembershipRepo: Send + Sync {
     async fn find(&mut self, id: MembershipId) -> Result<Option<MembershipRow>, AppError>;
     /// The user's membership here that is not `Removed`.
     async fn find_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError>;
+    /// Lock the current membership and its role until transaction end, then return the membership.
+    /// Role changes/removal must serialize with this authorization read.
+    async fn lock_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError>;
     /// Stores an `Invited` membership with its invite fields set. A `row.workspace_id` other than
     /// the bundle's is `INTERNAL`; a role that is not this workspace's (or does not exist) is
     /// `NOT_FOUND`.
@@ -1618,6 +1621,12 @@ pub trait PlatformRepos: Send + Sync {
         ws: WorkspaceId,
         row: billing::ActivationCodeRow,
     ) -> Result<(), AppError>;
+    /// Caller holds the workspace lock; includes consumed and invalidated history.
+    async fn activation_code_digest_exists(
+        &mut self,
+        ws: WorkspaceId,
+        digest: &[u8],
+    ) -> Result<bool, AppError>;
     async fn activation_code_lock_current_by_workspace(
         &mut self,
         ws: WorkspaceId,

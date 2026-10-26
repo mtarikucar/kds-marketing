@@ -155,7 +155,15 @@ async fn ledger_failure_rolls_back_confirmation_reissue_and_revoke() {
     assert_eq!(current.id, old.id);
     assert!(current.invalidated_at.is_none());
     drop(r);
-    w.activate(first.entitlement.id).await;
+    sqlx::query("alter table ledger_entries disable trigger reject_billing_audit")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    w.activate(&old.code).await;
+    sqlx::query("alter table ledger_entries enable trigger reject_billing_audit")
+        .execute(&db.pool)
+        .await
+        .unwrap();
     assert!(
         ops::revoke_activation(&w.deps, &w.ctx, w.f.ws, "refund")
             .await
@@ -183,5 +191,13 @@ async fn ledger_failure_rolls_back_confirmation_reissue_and_revoke() {
     let counts:(i64,i64,i64)=sqlx::query_as("select (select count(*) from workspace_entitlements where workspace_id=$1), (select count(*) from activation_codes where workspace_id=$1), (select count(*) from payment_notifications where workspace_id=$1)").bind(w.f.ws.0).fetch_one(tx.conn()).await.unwrap();
     assert_eq!(counts, (1, 1, 1));
     drop(tx);
-    assert_eq!(w.entries().await.len(), 2);
+    assert_eq!(w.entries().await.len(), 3);
+}
+
+#[tokio::test]
+async fn activation_suspend_revoke_serialize() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::activation_contract::activation_suspend_revoke_serialize(std::sync::Arc::new(uow))
+        .await;
 }

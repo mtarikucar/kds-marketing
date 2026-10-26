@@ -20,14 +20,26 @@ pub struct ActivationCodeDeliveryOut {
     pub code: String,
 }
 
-/// Workspace key plus explicit workspace/grant/action binding. Task 4 uses the same digest
-/// when checking a challenge, with a constant-time comparison.
+/// Workspace key plus explicit workspace/grant/action binding. Redemption verifies the same
+/// MAC in constant time.
 pub fn activation_digest(
     deps: &Deps,
     ws: WorkspaceId,
     grant: EntitlementId,
     code: &str,
 ) -> Result<Vec<u8>, AppError> {
+    Ok(activation_mac(deps, ws, grant, code)?
+        .finalize()
+        .into_bytes()
+        .to_vec())
+}
+
+fn activation_mac(
+    deps: &Deps,
+    ws: WorkspaceId,
+    grant: EntitlementId,
+    code: &str,
+) -> Result<Hmac<Sha256>, AppError> {
     let key = deps.seal.hmac_key(ws, "billing.activate")?;
     let mut mac = Hmac::<Sha256>::new_from_slice(key.as_ref())
         .map_err(|_| AppError::internal("activation key unavailable"))?;
@@ -35,7 +47,7 @@ pub fn activation_digest(
     mac.update(grant.as_uuid().as_bytes());
     mac.update(b"billing.activate\0");
     mac.update(code.as_bytes());
-    Ok(mac.finalize().into_bytes().to_vec())
+    Ok(mac)
 }
 
 fn generate(deps: &Deps) -> String {
@@ -65,11 +77,10 @@ pub(crate) async fn issue(
     ws: WorkspaceId,
     grant: EntitlementId,
 ) -> Result<ActivationCodeDeliveryOut, AppError> {
-    let previous = repos.activation_code_lock_current_by_workspace(ws).await?;
     let (code, digest) = loop {
         let code = generate(deps);
         let digest = activation_digest(deps, ws, grant, &code)?;
-        if previous.as_ref().is_none_or(|old| old.digest != digest) {
+        if !repos.activation_code_digest_exists(ws, &digest).await? {
             break (code, digest);
         }
     };
@@ -102,4 +113,134 @@ pub(crate) async fn issue(
         expires_at,
         code,
     })
+}
+
+/// Redeem the workspace's current challenge from a human owner session.
+pub async fn activate(
+    deps: &Deps,
+    ctx: &crate::ctx::Ctx,
+    input: super::ActivateInput,
+) -> Result<super::BillingStatusOut, AppError> {
+    use crate::usecases::{invalid, ledger_entry};
+    use jt_ledger::Actor;
+    use jt_tenancy::{MembershipStatus, Permission, WorkspaceStatus};
+    use serde_json::json;
+
+    let Actor::Human { user_id } = ctx.actor else {
+        return Err(AppError::forbidden("human session required"));
+    };
+    if ctx.agent_connection_id.is_some() {
+        return Err(AppError::forbidden("human session required"));
+    }
+    ctx.require(Permission::TeamManage)?;
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let workspace = repos.workspace().lock().await?;
+    let membership = repos
+        .memberships()
+        .lock_by_user(user_id)
+        .await?
+        .filter(|m| m.status == MembershipStatus::Active)
+        .ok_or_else(|| AppError::forbidden("active owner membership required"))?;
+    repos
+        .roles()
+        .find(membership.role_id)
+        .await?
+        .filter(|r| r.key == "owner" && r.permissions.contains(&Permission::TeamManage))
+        .ok_or_else(|| AppError::forbidden("current owner role required"))?;
+    let refused = || invalid("code", "activation code is invalid or unavailable");
+    if workspace.status != WorkspaceStatus::PendingPayment {
+        return Err(refused());
+    }
+    let challenge = repos
+        .activation_codes()
+        .lock_current_by_workspace()
+        .await?
+        .filter(|c| {
+            c.workspace_id == ctx.workspace_id
+                && c.invalidated_at.is_none()
+                && c.consumed_at.is_none()
+                && c.expires_at > ctx.now
+                && c.attempts < 5
+        })
+        .ok_or_else(refused)?;
+    let grant = repos
+        .billing()
+        .entitlement()
+        .await?
+        .filter(|g| {
+            g.id == challenge.entitlement_id
+                && g.workspace_id == ctx.workspace_id
+                && g.source == EntitlementSource::Paid
+                && g.payment_id.is_some()
+                && g.revoked_at.is_none()
+                && g.activated_at.is_none()
+        })
+        .ok_or_else(refused)?;
+    let valid = activation_mac(deps, ctx.workspace_id, grant.id, &input.code)?
+        .verify_slice(&challenge.digest)
+        .is_ok();
+    if challenge.action != "billing.activate"
+        || input.code.len() != 8
+        || !input
+            .code
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        || !valid
+    {
+        repos
+            .activation_codes()
+            .record_failed_attempt(challenge.id)
+            .await?;
+        repos.commit().await?;
+        return Err(refused());
+    }
+    repos
+        .activation_codes()
+        .consume(challenge.id, ctx.now, user_id)
+        .await?;
+    repos
+        .billing()
+        .activate_entitlement(grant.id, ctx.now, user_id)
+        .await?;
+    repos
+        .workspace()
+        .set_status(
+            ctx.workspace_id,
+            WorkspaceStatus::Active,
+            "billing.activate",
+            &ctx.actor,
+        )
+        .await?;
+    repos
+        .ledger()
+        .append(ledger_entry(
+            ctx,
+            "billing.activated",
+            "entitlement",
+            grant.id,
+            json!({"entitlement_id": grant.id, "payment_id": grant.payment_id,
+            "activation_code_id": challenge.id, "redeemed_by": user_id}),
+        )?)
+        .await?;
+    let payment_reference = repos.billing().reference_get_or_create().await?;
+    let entitlement = repos
+        .billing()
+        .latest_entitlement()
+        .await?
+        .map(super::EntitlementOut::from);
+    let payment = match repos.billing().latest_payment().await? {
+        Some(row) => Some(super::payments::payment_out(&mut *repos, row).await?),
+        None => None,
+    };
+    let out = super::BillingStatusOut {
+        workspace_status: WorkspaceStatus::Active,
+        entitlement,
+        payment,
+        payment_reference,
+        price_minor: deps.billing.price_minor,
+        price_currency: deps.billing.price_currency.clone(),
+        bank_instructions: deps.billing.bank_instructions.clone(),
+    };
+    repos.commit().await?;
+    Ok(out)
 }

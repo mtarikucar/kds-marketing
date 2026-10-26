@@ -181,6 +181,7 @@ fn catalog_is_the_release_table() {
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
         ("auth.me", None, Some(("GET", "/api/auth/me")), true, Risk::Read),
         ("billing.status", None, Some(("GET", "/api/billing")), true, Risk::Read),
+        ("billing.activate", None, Some(("POST", "/api/billing/activate")), true, Risk::Write),
         ("billing.report_payment", Some("jeeta.billing.report_payment"), Some(("POST", "/api/billing/payments")), false, Risk::Write),
         ("workspace.info", Some("jeeta.workspace.info"), Some(("GET", "/api/workspace")), false, Risk::Read),
         ("workspace.switch", None, Some(("POST", "/api/auth/switch-workspace")), true, Risk::Write),
@@ -255,7 +256,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 141);
+    assert_eq!(CATALOG.len(), 142);
     for uc in CATALOG {
         assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
@@ -289,6 +290,7 @@ fn catalog_is_the_release_table() {
     assert_eq!(
         exempt(StatusExemption::PendingPayment),
         [
+            "billing.activate",
             "billing.report_payment",
             "strategy.get",
             "strategy.start_consultation",
