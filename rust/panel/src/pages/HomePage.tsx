@@ -383,6 +383,7 @@ export function HomePage() {
   return (
     <>
       <PageHeader title={t('home.title')} description={t('home.description')} />
+      <div className="flex gap-4"><Link className="text-primary underline" to="/onboarding">{t('onboarding.title')}</Link><Link className="text-primary underline" to="/billing">{t('billing.title')}</Link></div>
       <QueryState query={workspace}>
         {workspace.data && (
           <Card>

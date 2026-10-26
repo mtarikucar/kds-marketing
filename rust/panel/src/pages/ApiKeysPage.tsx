@@ -1,4 +1,5 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Plus } from 'lucide-react';
@@ -48,28 +49,35 @@ function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
   const [scopes, setScopes] = useState<Permission[]>([]);
   const [created, setCreated] = useState<KeyOut | null>(null);
 
-  const create = useMutation({
-    mutationFn: createKey,
-    gcTime: 0,
-    onSuccess: async (key) => {
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<unknown>(null);
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  async function create() {
+    if (creating) return;
+    setCreating(true); setCreateError(null);
+    try {
+      const key = await createKey({ name: name.trim(), scopes });
+      if (!mounted.current) return;
       setCreated(key);
       await queryClient.invalidateQueries({ queryKey: KEYS_KEY });
-    },
-  });
+    } catch (error) { if (mounted.current) setCreateError(error); }
+    finally { if (mounted.current) setCreating(false); }
+  }
 
   const close = (next: boolean) => {
     if (!next) {
       setName('');
       setScopes([]);
       setCreated(null);
-      create.reset();
+      setCreateError(null);
     }
     onOpenChange(next);
   };
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    create.mutate({ name: name.trim(), scopes });
+    void create();
   };
 
   return (
@@ -91,7 +99,7 @@ function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
           </div>
         ) : (
           <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
-            <ErrorCallout error={create.error} />
+            <ErrorCallout error={createError} />
             <Field label={t('fields.name')} required>
               {(ids) => (
                 <Input id={ids.id} required autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
@@ -107,7 +115,7 @@ function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
               <Button type="button" variant="outline" onClick={() => close(false)}>
                 {t('common.cancel')}
               </Button>
-              <Button type="submit" loading={create.isPending}>
+              <Button type="submit" loading={creating}>
                 {t('apiKeys.dialog.submit')}
               </Button>
             </DialogFooter>
@@ -214,6 +222,7 @@ export function ApiKeysPage() {
           ) : null
         }
       />
+      <Link className="text-primary underline" to="/onboarding">{t('onboarding.title')}</Link>
       <QueryState query={keys}>
         <DataTable
           columns={columns}
@@ -221,7 +230,7 @@ export function ApiKeysPage() {
           emptyState={<EmptyState title={t('apiKeys.empty')} description={t('apiKeys.emptyBody')} />}
         />
       </QueryState>
-      {canManage && <CreateKeyDialog open={creating} onOpenChange={setCreating} />}
+      {canManage && creating && <CreateKeyDialog key={session.data?.current_workspace} open onOpenChange={setCreating} />}
       <ConfirmDialog
         open={revoking !== null}
         onOpenChange={(open) => !open && setRevoking(null)}

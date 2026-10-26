@@ -2822,3 +2822,42 @@ The binary test exercises absent/zero/one flags through real startup and checks
 Argon2 replacement plus session revocation. Browser tests assert Turkish labels,
 confirmation retry, code cache absence/navigation lifetime, reason forms, operator
 navigation and sanitized health field selection.
+
+## M4 Task 7 — tenant first-run journey and provider setup
+
+`/billing` and `/onboarding` derive progress from the existing workspace, billing,
+work/strategy, team, API-key and capability APIs. Home, connection and key pages link
+back to the journey. No completion flag, table, seed, catalog row or MCP tool was
+added: the Task 6 boundary remains **144 catalog rows / 125 tools**.
+
+A pending owner can prepare strategy and report bank-transfer evidence. The billing
+page displays configured price/currency/bank instructions and the workspace reference
+read-only. Operator confirmation leaves access pending until a current owner redeems
+the delivered code. Guidance explains the 72-hour expiry, five-attempt lockout and
+operator reissue. Suspension keeps entitlement visible; revoked grants lead back to
+payment. Workspace activation, payment confirmation, strategy approval, connector
+verification and recent agent contact remain separate indicators. The agent step
+explains that the tenant's own scheduler must run.
+
+Billing queries use `gcTime: 0`, abortable reads and explicit removal on page exit.
+Evidence submissions and activation input/results stay outside mutation caches;
+late responses cannot repopulate an exited page. Activation codes never enter URLs,
+storage or logs. API-key plaintext is component-local, copied only on an explicit
+click, and lost on dialog close/navigation; creation responses are not cached.
+
+Provider guidance derives `${JEETA_PUBLIC_BASE_URL}/oauth/callback/{meta|instagram|x}`
+from the existing hooks API's configured public base, preserving any path prefix.
+It displays actual webhook addresses, reconnection requirements and access expiry.
+The missing-app `CONFLICT` reason is shown as “Sağlayıcı uygulaması yapılandırılmadı”;
+other conflicts retain their normal error handling. Hook data is page-scoped too.
+Existing connector forms continue to own credential entry. Turkish/English keys
+remain in parity.
+
+`cargo test --locked --workspace --test onboarding` runs the real-router/PostgreSQL
+journey tests, including pending/confirmed refusals, independent activation gates,
+current-owner redemption, suspend/reload/resume and narrow-scope refusals. Browser
+coverage in `BillingPage`, `OnboardingPage`, `ApiKeysPage` and `ConnectPage` exercises
+navigation, state changes, secret lifetime, provider failures and callback addresses;
+`api/billing.test.ts` checks exact wrapper routes and payloads. Ownership-transition
+setup changes the membership through the repository after issuing a challenge because
+pending workspaces correctly prohibit team mutations; redemption uses the real route.

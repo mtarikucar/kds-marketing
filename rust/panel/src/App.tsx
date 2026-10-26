@@ -1,3 +1,5 @@
+import { BillingPage } from '@/pages/BillingPage';
+import { OnboardingPage } from '@/pages/OnboardingPage';
 import { StudioPage } from './pages/StudioPage';
 import { Navigate, type RouteObject } from 'react-router-dom';
 import { AppRoot } from '@/layout/AppRoot';
@@ -68,6 +70,8 @@ export const routes: RouteObject[] = [
         element: <Shell />,
         children: [
           { index: true, element: <HomePage /> },
+          { path: 'billing', element: <BillingPage /> },
+          { path: 'onboarding', element: <OnboardingPage /> },
           { path: 'inbox', element: <InboxPage /> },
           { path: 'inbox/:conversationId', element: <InboxPage /> },
           { path: 'inbox/merges', element: <InboxMerges /> },
