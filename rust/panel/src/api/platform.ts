@@ -18,3 +18,19 @@ export function suspendWorkspace(workspaceId: string, reason: string): Promise<W
 export function resumeWorkspace(workspaceId: string): Promise<WorkspaceAdminOut> {
   return request('POST', `/api/platform/workspaces/${seg(workspaceId)}/resume`);
 }
+
+export function listPayments(): Promise<import('./types').PlatformPayment[]> {
+  return request('GET', '/api/platform/payments');
+}
+export function confirmPayment(workspace: string, payment: string): Promise<import('./types').PlatformConfirmation> {
+  return request('POST', `/api/platform/workspaces/${seg(workspace)}/payments/${seg(payment)}/confirm`);
+}
+export function reissueCode(workspace: string, payment: string): Promise<import('./types').PlatformConfirmation> {
+  return request('POST', `/api/platform/workspaces/${seg(workspace)}/payments/${seg(payment)}/reissue`);
+}
+export function revokeActivation(workspace: string, reason: string): Promise<WorkspaceAdminOut> {
+  return request('POST', `/api/platform/workspaces/${seg(workspace)}/revoke-activation`, {body:{reason}});
+}
+export function resetOperatorPassword(operator: string, password: string): Promise<void> {
+  return request('POST', `/api/platform/operators/${seg(operator)}/reset-password`, {body:{password}});
+}

@@ -12,8 +12,8 @@ use jt_app::ports::{
 };
 use jt_capability::{Capability, StoredStatus};
 use jt_ledger::LedgerEntry;
-use jt_tenancy::UserId;
 use jt_tenancy::{Email, MembershipStatus, WorkspaceId, WorkspaceStatus};
+use jt_tenancy::{OperatorId, UserId};
 use time::OffsetDateTime;
 
 use super::state::{MemBundle, MemState, MemTx, exists, unique};
@@ -37,11 +37,29 @@ impl MemBundle for MemPlatform {
 
 #[async_trait]
 impl OperatorRepo for MemPlatform {
+    async fn lock_all(&mut self) -> Result<Vec<OperatorRow>, AppError> {
+        self.tx.lock_studio().await;
+        Ok(self.state().operators.clone())
+    }
+    async fn set_password(&mut self, id: OperatorId, password_hash: &str) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        if !self.state().operators.iter().any(|o| o.id == id) {
+            return Err(AppError::not_found("operator"));
+        }
+        let hash = password_hash.to_owned();
+        self.tx.write(move |s| {
+            if let Some(o) = s.operators.iter_mut().find(|o| o.id == id) {
+                o.password_hash = hash.clone();
+            }
+        });
+        Ok(())
+    }
     async fn count(&mut self) -> Result<i64, AppError> {
         Ok(self.state().operators.len() as i64)
     }
 
     async fn insert(&mut self, row: OperatorRow) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             unique(
                 !this
@@ -57,6 +75,7 @@ impl OperatorRepo for MemPlatform {
     }
 
     async fn find_by_email(&mut self, email: &Email) -> Result<Option<OperatorRow>, AppError> {
+        self.tx.lock_studio().await;
         Ok(self
             .state()
             .operators
@@ -68,6 +87,12 @@ impl OperatorRepo for MemPlatform {
 
 #[async_trait]
 impl PlatformSessionRepo for MemPlatform {
+    async fn revoke_all(&mut self, operator: OperatorId) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.tx
+            .write(move |s| s.platform_sessions.retain(|x| x.operator_id != operator));
+        Ok(())
+    }
     async fn insert(&mut self, row: PlatformSessionRow) -> Result<(), AppError> {
         self.call(|this| {
             let state = this.state();

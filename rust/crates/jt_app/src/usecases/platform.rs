@@ -125,6 +125,61 @@ pub async fn bootstrap(deps: &Deps, email: &str, password: &str) -> Result<bool,
     Ok(true)
 }
 
+/// Resets another authenticated operator's password and atomically revokes all target sessions.
+pub async fn reset_password(
+    deps: &Deps,
+    pctx: &PlatformCtx,
+    target: OperatorId,
+    password: &str,
+) -> Result<(), AppError> {
+    if pctx.operator_id == target {
+        return Err(AppError::forbidden(
+            "another operator must reset this password",
+        ));
+    }
+    validate_password(password)?;
+    let hash = deps.hasher.hash(password).await?;
+    let mut repos = deps.uow.platform().await?;
+    let rows = repos.operators().lock_all().await?;
+    if !rows.iter().any(|o| o.id == pctx.operator_id) {
+        return Err(invalid_session());
+    }
+    repos.operators().set_password(target, &hash).await?;
+    repos.platform_sessions().revoke_all(target).await?;
+    repos.commit().await?;
+    tracing::info!(target_operator=%target, actor=%pctx.operator_id, outcome="success", "operator password reset");
+    Ok(())
+}
+
+/// Startup-only sole-operator recovery. The caller must explicitly enable reset mode.
+pub async fn bootstrap_reset(deps: &Deps, email: &str, password: &str) -> Result<(), AppError> {
+    let email = Email::parse(email).map_err(|_| invalid("email", "invalid operator email"))?;
+    validate_password(password)?;
+    let hash = deps.hasher.hash(password).await?;
+    let mut repos = deps.uow.platform().await?;
+    let rows = repos.operators().lock_all().await?;
+    if rows.len() != 1 || rows[0].email != email {
+        return Err(AppError::conflict(
+            "recovery requires exactly one matching operator",
+        ));
+    }
+    let target = rows[0].id;
+    repos.operators().set_password(target, &hash).await?;
+    repos.platform_sessions().revoke_all(target).await?;
+    repos.commit().await?;
+    tracing::info!(target_operator=%target, actor="startup", outcome="success", "operator password reset");
+    Ok(())
+}
+fn validate_password(password: &str) -> Result<(), AppError> {
+    if password.chars().count() < MIN_OPERATOR_PASSWORD_CHARS {
+        return Err(invalid(
+            "password",
+            "password must be at least 12 characters",
+        ));
+    }
+    Ok(())
+}
+
 /// Opens an operator session for this email and password.
 ///
 /// An unknown email, a wrong password and a malformed email are all `UNAUTHENTICATED` with the
@@ -135,11 +190,10 @@ pub async fn login(deps: &Deps, input: LoginInput) -> Result<PlatformSessionOut,
     let Ok(email) = Email::parse(&input.email) else {
         return Err(invalid_credentials());
     };
-    // The operator is read in a transaction of its own, closed before the slow verification.
-    let operator = {
-        let mut repos = deps.uow.platform().await?;
-        repos.operators().find_by_email(&email).await?
-    };
+    // Keep the row lock through verification and session insertion: reset must revoke this
+    // session or login must verify the replacement hash.
+    let mut repos = deps.uow.platform().await?;
+    let operator = repos.operators().find_by_email(&email).await?;
     let Some(operator) = operator else {
         // The hash is discarded: it only spends the time a verification would.
         let _ = deps.hasher.hash(&input.password).await;
@@ -156,7 +210,6 @@ pub async fn login(deps: &Deps, input: LoginInput) -> Result<PlatformSessionOut,
     let now = deps.clock.now();
     let token = deps.tokens.token(PLATFORM_TOKEN_BYTES);
     let expires_at = now + PLATFORM_SESSION_LIFETIME;
-    let mut repos = deps.uow.platform().await?;
     repos
         .platform_sessions()
         .insert(PlatformSessionRow {

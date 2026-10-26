@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { useTranslation } from 'react-i18next';
-import { listWorkspaces, resumeWorkspace, suspendWorkspace } from '@/api/platform';
+import { listWorkspaces, resumeWorkspace, suspendWorkspace, revokeActivation } from '@/api/platform';
 import type { WorkspaceAdminOut } from '@/api/types';
 import { QueryState } from '@/components/QueryState';
 import { WorkspaceStatusBadge } from '@/components/StatusBadges';
@@ -19,9 +19,10 @@ export function WorkspacesPage() {
   const workspaces = useQuery({ queryKey: PLATFORM_WORKSPACES_KEY, queryFn: listWorkspaces });
 
   const [suspending, setSuspending] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
   const [reason, setReason] = useState('');
   const change = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason?: string }) => reason === undefined ? resumeWorkspace(id) : suspendWorkspace(id, reason),
+    mutationFn: ({ id, reason, revoke }: { id: string; reason?: string; revoke?: boolean }) => revoke ? revokeActivation(id, reason!) : reason === undefined ? resumeWorkspace(id) : suspendWorkspace(id, reason),
     onSuccess: (updated) => {
       setSuspending(null);
       setReason('');
@@ -99,10 +100,11 @@ export function WorkspacesPage() {
                 variant="ghost"
                 size="sm"
                 disabled={w.status !== 'active' || busy}
-                onClick={() => { setReason(''); setSuspending(w.id); }}
+                onClick={() => { setRevoking(false); setReason(''); setSuspending(w.id); }}
               >
                 {t('platform.workspaces.suspend')}
               </Button>
+              <Button variant="outline" size="sm" disabled={busy} onClick={()=>{setRevoking(true);setReason('');setSuspending(w.id);}}>{t('platform.payments.revoke')}</Button>
             </div>
           );
         },
@@ -124,13 +126,13 @@ export function WorkspacesPage() {
       <Dialog open={suspending !== null} onOpenChange={(open) => { if (!open) setSuspending(null); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('platform.workspaces.suspend')}</DialogTitle>
-            <DialogDescription>{t('platform.workspaces.reasonHelp')}</DialogDescription>
+            <DialogTitle>{t(revoking ? 'platform.payments.revoke' : 'platform.workspaces.suspend')}</DialogTitle>
+            <DialogDescription>{t(revoking ? 'platform.payments.reasonHelp' : 'platform.workspaces.reasonHelp')}</DialogDescription>
           </DialogHeader>
           <label htmlFor="suspend-reason">{t('platform.workspaces.reason')}</label>
           <Textarea id="suspend-reason" value={reason} maxLength={500} onChange={(event) => setReason(event.target.value)} />
           <DialogFooter>
-            <Button disabled={isPending || !reason.trim()} onClick={() => { if (suspending) mutate({ id: suspending, reason: reason.trim() }); }}>
+            <Button disabled={isPending || !reason.trim()} onClick={() => { if (suspending) mutate({ id: suspending, reason: reason.trim(), revoke: revoking }); }}>
               {t('platform.workspaces.confirm')}
             </Button>
           </DialogFooter>

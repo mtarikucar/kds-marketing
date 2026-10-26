@@ -87,3 +87,20 @@ pub async fn resume(
         platform::resume(&state.deps, &pctx, workspace_id).await?,
     ))
 }
+
+/// New password for a different operator. Never implements Debug.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetPasswordBody {
+    pub password: String,
+}
+/// Reset requires the separate operator cookie and the mutation request header.
+pub async fn reset_password(
+    State(state): State<AppState>,
+    PlatformAuthed(pctx): PlatformAuthed,
+    ApiPath(operator_id): ApiPath<jt_tenancy::OperatorId>,
+    ApiJson(body): ApiJson<ResetPasswordBody>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    platform::reset_password(&state.deps, &pctx, operator_id, &body.password).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}

@@ -2762,3 +2762,54 @@ canaries with separate ledger assertions):
 ```sh
 cargo test --locked --workspace --test ops --test m4_observability --test catalog --test gate_rule --test twin_rule
 ```
+
+
+## M4 Task 6 — platform console and operator recovery
+
+Boundary: **144 catalog rows, 125 MCP tools**; no migrations or new tools.
+`platform.operators.reset_password` is the sole added row:
+`POST /api/platform/operators/{operator_id}/reset-password` with `{password}`,
+panel-only / Exempt / Always / Write. It requires a different authenticated
+operator and the panel mutation header. Tenant cookies and bearer/API keys do
+not authorize it; operator cookies cannot authorize tenant routes.
+
+`OperatorRepo::{set_password,lock_all}` and `PlatformSessionRepo::revoke_all`
+provide atomic reset and session revocation in Pg and the transactional fake.
+Operator lookup for login locks its row through password verification and session
+insertion. Reset hashes before beginning its transaction. Pg locks the operator
+table against concurrent inserts when checking the sole-operator predicate,
+then locks rows; reset updates the hash and deletes all target sessions in one
+commit. Another operator's sessions remain valid. Passwords require at least
+12 Unicode characters; neither password nor hash enters reset logs.
+
+`JEETA_PLATFORM_BOOTSTRAP_RESET=1` selects startup recovery instead of bootstrap
+and requires both bootstrap variables. Exactly one matching-email operator must
+exist; zero/multiple/mismatch abort boot. Absent flag or `0` retains ordinary
+bootstrap's existing-operator no-op. Other flag values and short passwords are
+configuration errors. Remove all three variables after recovery. Recovery may
+commit even if a later boot stage fails. See
+[operator access](../docs/operations/operator-access.md) and
+[deployment](../docs/operations/deployment.md).
+
+The operator-only navigation links workspaces, payment reports and sanitized
+health. Payment confirmation/reissue responses display the one-time code and
+expiry in page-local state, never query/mutation caches, localStorage or telemetry;
+navigation discards it. Confirmation retries retain the returned current workspace
+status. Suspend/revoke require reasons; resume reads “Yeniden aç”. Health renders
+explicit sanitized fields and hosts the other-operator reset form.
+
+**Review decision needed:** the existing payment list only returns an open
+entitlement. It cannot distinguish never-confirmed payments from revoked grants
+after reload. The console accurately says “Onay bekliyor veya geri alındı” when
+no open grant exists. A payment-scoped historical-entitlement repository query
+(and list projection) needs approval under the task's unmentioned-signature rule;
+no existing entitlement lookup semantics were changed.
+
+Fast verification includes `platform/m4_platform_access.rs` in app/Pg aggregates,
+`platform/m4_platform_access_http.rs`, `m4_operator_reset` and exact catalog/twin
+rules. Shared contracts test both lock orders on fake and real PostgreSQL,
+password replacement, target-only revocation and invalid recovery cardinality.
+The binary test exercises absent/zero/one flags through real startup and checks
+Argon2 replacement plus session revocation. Browser tests assert Turkish labels,
+confirmation retry, code cache absence/navigation lifetime, reason forms, operator
+navigation and sanitized health field selection.

@@ -253,11 +253,12 @@ fn catalog_is_the_release_table() {
         ("platform.billing.reissue", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue")), true, Risk::Write),
         ("platform.billing.revoke_activation", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/revoke-activation")), true, Risk::Write),
         ("platform.workspaces.suspend", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/suspend")), true, Risk::Write),
+        ("platform.operators.reset_password", None, Some(("POST", "/api/platform/operators/{operator_id}/reset-password")), true, Risk::Write),
         ("ops.health", None, Some(("GET", "/api/platform/health")), true, Risk::Read),
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 143);
+    assert_eq!(CATALOG.len(), 144);
     for uc in CATALOG {
         assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
@@ -285,6 +286,7 @@ fn catalog_is_the_release_table() {
             "platform.billing.reissue",
             "platform.billing.revoke_activation",
             "platform.workspaces.suspend",
+            "platform.operators.reset_password",
             "ops.health",
             "platform.workspaces.resume",
         ]

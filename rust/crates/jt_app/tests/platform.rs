@@ -357,3 +357,6 @@ async fn suspend_and_resume_ledger_actor_and_reason() {
 
 #[path = "platform/m4_platform_payments.rs"]
 mod m4_platform_payments;
+
+#[path = "platform/m4_platform_access.rs"]
+mod m4_platform_access;

@@ -367,6 +367,7 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("platform.billing.reissue", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue"), Write),
     panel_only("platform.billing.revoke_activation", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/revoke-activation"), Write),
     panel_only("platform.workspaces.suspend", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/suspend"), Write),
+    panel_only("platform.operators.reset_password", Exempt, ("POST", "/api/platform/operators/{operator_id}/reset-password"), Write),
     panel_only("ops.health", Exempt, ("GET", "/api/platform/health"), Read),
     panel_only("platform.workspaces.resume", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/resume"), Write),
 ];

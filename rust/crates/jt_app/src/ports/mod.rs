@@ -1456,14 +1456,19 @@ pub trait OutboundJobRepo: Send + Sync {
 /// Platform operators.
 #[async_trait]
 pub trait OperatorRepo: Send + Sync {
+    /// Locks all operator rows until commit, serializing recovery and operator insertion.
+    async fn lock_all(&mut self) -> Result<Vec<OperatorRow>, AppError>;
+    async fn set_password(&mut self, id: OperatorId, password_hash: &str) -> Result<(), AppError>;
     async fn count(&mut self) -> Result<i64, AppError>;
     async fn insert(&mut self, row: OperatorRow) -> Result<(), AppError>;
+    /// Locks the matching operator until commit, including password verification and login insert.
     async fn find_by_email(&mut self, email: &Email) -> Result<Option<OperatorRow>, AppError>;
 }
 
 /// Platform operator sessions.
 #[async_trait]
 pub trait PlatformSessionRepo: Send + Sync {
+    async fn revoke_all(&mut self, operator: OperatorId) -> Result<(), AppError>;
     async fn insert(&mut self, row: PlatformSessionRow) -> Result<(), AppError>;
     /// The session with this token hash, expired ones included; the caller checks.
     async fn find_by_token_hash(

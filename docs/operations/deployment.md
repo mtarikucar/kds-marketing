@@ -218,8 +218,8 @@ After config validation, [serve.rs](../../rust/bin/jeeta/src/serve.rs) orders bo
 3. Apply pending sqlx **up** migrations. Concurrent migrators serialize via sqlx
    locking. A failure aborts before listening or starting jobs.
 4. Construct adapters, FileStore and egress; rebuild allowed tenant hosts.
-5. Bootstrap the operator if configured. Task 6 adds the recovery-reset branch
-   at this point; it is not implemented in this revision.
+5. Bootstrap the operator if configured, or perform the explicit sole-operator
+   reset when `JEETA_PLATFORM_BOOTSTRAP_RESET=1`. Recovery commits before binding.
 6. Bind HTTP, then start jobs when enabled.
 
 There is no automatic down migration or destructive fallback. The boot process
@@ -235,7 +235,7 @@ Existing operators prevent ordinary bootstrap from replacing their passwords.
 Confirm login again after removal. Operator identity is separate from tenant
 membership and does not grant access to tenant message bodies or credentials.
 
-Q4 recovery procedure, **available only after Task 6 is integrated and tested**:
+Q4 recovery procedure (details in [operator-access.md](operator-access.md)):
 
 1. Prefer another authenticated operator's password-reset action when available.
 2. For sole-operator recovery, stop the service and verify it is stopped. In the
@@ -248,11 +248,14 @@ Q4 recovery procedure, **available only after Task 6 is integrated and tested**:
    Confirm the new login succeeds and old sessions/password fail. Keep passwords
    and hashes out of the operational record.
 
-The current binary does not parse the reset flag: setting it now is not a
-password reset. Wait for the tested Task 6 implementation before using this path.
-`JEETA_METRICS_TOKEN` and `JEETA_RECOVERY_STATUS_DIR` are also pending; the latter
-will identify the absolute directory containing `backup-status.json` and
-`wal-status.json`, with access coordinated between Tasks 5/9.
+Only `1` enables reset; `0` or an absent flag uses ordinary bootstrap. Other
+values are refused. Missing credentials and passwords shorter than 12 characters
+are refused before connecting. Login serializes with reset so in-flight old-password
+logins cannot leave a surviving session. A later boot failure does not undo an
+already committed recovery.
+`JEETA_METRICS_TOKEN` is required for serve. `JEETA_RECOVERY_STATUS_DIR` optionally
+names the absolute directory containing `backup-status.json` and `wal-status.json`;
+missing artifacts yield unknown freshness (see README Task 5).
 
 ## Shutdown and stdio clients
 

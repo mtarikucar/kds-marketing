@@ -193,6 +193,10 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/events"),
     ("GET", "/api/work/pending"),
     ("PUT", "/api/work/checkin-interval"),
+    (
+        "POST",
+        "/api/platform/operators/{operator_id}/reset-password",
+    ),
     ("GET", "/api/platform/health"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
@@ -934,6 +938,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/work/checkin-interval",
             "work.set_checkin_interval",
             work::set_checkin_interval,
+        ),
+        api_route(
+            "POST",
+            "/platform/operators/{operator_id}/reset-password",
+            "platform.operators.reset_password",
+            platform::reset_password,
         ),
         api_route("GET", "/platform/health", "ops.health", ops::health),
         api_route("POST", "/platform/login", "platform.login", platform::login),

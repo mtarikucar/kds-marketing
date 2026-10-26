@@ -12,7 +12,7 @@ describe('explicit workspace transitions', () => {
     renderAt('/platform/workspaces');
     await screen.findByText('Acme');
     expect(screen.queryByRole('button', { name: 'Etkinleştir' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Devam ettir' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Yeniden aç' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Askıya al' })).toBeDisabled();
   });
   it('requires a reason and submits the explicit suspend endpoint', async () => {

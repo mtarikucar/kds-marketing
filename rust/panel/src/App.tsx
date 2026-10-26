@@ -23,6 +23,8 @@ import { RolesPage } from '@/pages/RolesPage';
 import { StrategyPage } from '@/pages/StrategyPage';
 import { TeamPage } from '@/pages/TeamPage';
 import { PlatformLoginPage } from '@/pages/platform/PlatformLoginPage';
+import { PaymentsPage } from '@/pages/platform/PaymentsPage';
+import { HealthPage } from '@/pages/platform/HealthPage';
 import { WorkspacesPage } from '@/pages/platform/WorkspacesPage';
 
 /** React Router v7 behaviour, opted into now (also silences the v6 deprecation warnings). */
@@ -57,6 +59,8 @@ export const routes: RouteObject[] = [
         children: [
           { index: true, element: <Navigate to="/platform/workspaces" replace /> },
           { path: 'workspaces', element: <WorkspacesPage /> },
+          { path: 'payments', element: <PaymentsPage /> },
+          { path: 'health', element: <HealthPage /> },
         ],
       },
       {

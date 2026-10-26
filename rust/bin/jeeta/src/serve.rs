@@ -71,7 +71,13 @@ pub async fn run(config: Config) -> Result<()> {
     let (deps, _egress, runtime_ops) = boot(pool.clone(), &config).await?;
     log_providers(&config);
     if let Some(bootstrap) = &config.bootstrap {
-        bootstrap_operator(&deps, bootstrap).await?;
+        if config.bootstrap_reset {
+            platform::bootstrap_reset(&deps, &bootstrap.email, &bootstrap.password)
+                .await
+                .context("cannot reset the sole platform operator")?;
+        } else {
+            bootstrap_operator(&deps, bootstrap).await?;
+        }
     }
     let gate = strategy_gate(pool.clone());
 

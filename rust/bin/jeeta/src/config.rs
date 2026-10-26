@@ -40,6 +40,8 @@ pub const COOKIE_SECURE: &str = "JEETA_COOKIE_SECURE";
 pub const SECRET_KEY: &str = "JEETA_SECRET_KEY";
 /// Public `host[:port]` values the MCP endpoint accepts in `Host`, comma-separated.
 pub const ALLOWED_HOSTS: &str = "JEETA_ALLOWED_HOSTS";
+/// Explicit sole-operator recovery; requires both bootstrap credentials.
+pub const BOOTSTRAP_RESET: &str = "JEETA_PLATFORM_BOOTSTRAP_RESET";
 /// The first platform operator's email; set together with [`BOOTSTRAP_PASSWORD`].
 pub const BOOTSTRAP_EMAIL: &str = "JEETA_PLATFORM_BOOTSTRAP_EMAIL";
 /// The first platform operator's password; set together with [`BOOTSTRAP_EMAIL`].
@@ -96,6 +98,7 @@ const VARS: &[&str] = &[
     COOKIE_SECURE,
     SECRET_KEY,
     ALLOWED_HOSTS,
+    BOOTSTRAP_RESET,
     BOOTSTRAP_EMAIL,
     BOOTSTRAP_PASSWORD,
     STDIO_API_KEY,
@@ -271,6 +274,7 @@ pub struct Config {
     /// Public `host[:port]` values for the MCP endpoint, on top of the loopback names.
     pub allowed_hosts: Vec<String>,
     pub bootstrap: Option<Bootstrap>,
+    pub bootstrap_reset: bool,
     pub stdio_api_key: Option<String>,
     pub log_filter: String,
     pub log_format: LogFormat,
@@ -395,6 +399,11 @@ impl Config {
             ));
         }
 
+        let bootstrap_reset = match get(BOOTSTRAP_RESET).map(str::trim) {
+            None | Some("0") => false,
+            Some("1") => true,
+            _ => return Err(ConfigError::new(BOOTSTRAP_RESET, "must be 0 or 1")),
+        };
         let bootstrap = match (get(BOOTSTRAP_EMAIL), get(BOOTSTRAP_PASSWORD)) {
             (None, None) => None,
             (Some(email), Some(password)) => Some(Bootstrap {
@@ -415,6 +424,20 @@ impl Config {
             }
         };
 
+        if bootstrap_reset && bootstrap.is_none() {
+            return Err(ConfigError::new(
+                BOOTSTRAP_RESET,
+                "requires both bootstrap email and password",
+            ));
+        }
+        if let Some(b) = &bootstrap
+            && b.password.chars().count() < 12
+        {
+            return Err(ConfigError::new(
+                BOOTSTRAP_PASSWORD,
+                "must contain at least 12 characters",
+            ));
+        }
         let stdio_api_key = get(STDIO_API_KEY).map(|key| key.trim().to_owned());
 
         let log_filter = get(LOG).map_or(DEFAULT_LOG, str::trim).to_owned();
@@ -470,6 +493,7 @@ impl Config {
             secret_key,
             allowed_hosts,
             bootstrap,
+            bootstrap_reset,
             stdio_api_key,
             log_filter,
             log_format,
