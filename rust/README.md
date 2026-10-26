@@ -203,7 +203,8 @@ yalnızca açılışta oluşturulur:
 ## Kayıt
 
 Panelde `http://127.0.0.1:8080/register`. Kayıt, kullanıcıyı ve onun sahibi olduğu yeni bir çalışma alanını
-açar; alan `pending_payment` durumunda başlar ve operatör konsolundan (`/platform/workspaces`) etkinleştirilir.
+açar; alan `pending_payment` durumunda başlar. Operatör ödeme kanıtını doğrular ve tek kullanımlık
+etkinleştirme kodunu sahibine iletir; kodun panelde kullanılması M4 Task 4 kapsamındadır.
 
 **Etkinleşmeden önce alan kilitlidir.** Çalışma alanı durumu denetimi stratejiden bağımsızdır: `auth.*`,
 `workspace.*` ve `platform.*` her durumda çalışır; `strategy.*` ve `work.*` alan `active` ya da
@@ -2563,7 +2564,7 @@ The named `m4_billing_storage` and `m4_billing_contracts` targets also run in th
 
 ## M4 Task 2 — tenant payment status and bank-transfer evidence
 
-Current implemented boundary: **136 catalog rows**, **125 MCP tools**, **67 tables**,
+At the Task 2 boundary: **136 catalog rows**, **125 MCP tools**, **67 tables**,
 **12 migration pairs**, **21 scheduled jobs**. Task 2 adds no migrations or provider calls.
 Operator confirmation and panel code redemption remain Tasks 3–4; this change does not
 claim those flows are implemented.
@@ -2602,3 +2603,59 @@ capability verification or connection status. Concurrent retries produce one pay
 real MCP transport tests (the `billing/m4_billing_*` modules), including cross-surface retries,
 owner/scopes, rollback, restart, history and exact billing schemas/status exceptions. Binary
 unit test `billing_config_rejects_missing_or_invalid_values` verifies required configuration.
+
+
+## M4 Task 3 — operator confirmation and explicit workspace transitions
+
+Current implemented boundary: **141 catalog rows**, **125 MCP tools**, **67 tables**,
+**12 migration pairs**, **21 scheduled jobs**. No new migrations, jobs or MCP tools.
+The six rows below are **panel-only**, strategy-exempt and available regardless of workspace
+status, with a separate authenticated operator session and the existing mutation request header.
+There are no `jeeta.platform.*` or `jeeta.ops.*` tools.
+
+| Use case | HTTP | Risk |
+|---|---|---|
+| `platform.payments.list` | `GET /api/platform/payments` | Read |
+| `platform.billing.confirm` | `POST /api/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm` | Write |
+| `platform.billing.reissue` | `POST /api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue` | Write |
+| `platform.billing.revoke_activation` | `POST /api/platform/workspaces/{workspace_id}/revoke-activation` | Write |
+| `platform.workspaces.suspend` | `POST /api/platform/workspaces/{workspace_id}/suspend` | Write |
+| `platform.workspaces.resume` | `POST /api/platform/workspaces/{workspace_id}/resume` | Write |
+
+The operator list decrypts only payment references and exposes amount, currency, paid/report times
+and the matching open entitlement. The operator must compare all evidence with the bank transfer
+before confirmation; a tenant's reported amount does not settle a payment automatically.
+Confirmation creates an **unactivated** paid entitlement and an eight-character `[A-Z0-9]` code,
+valid for 72 hours with five failed guesses allowed. It never activates or resumes the workspace.
+The code is generated uniformly from secure random tokens and stored only as an HMAC-SHA256 digest,
+bound to workspace, entitlement and `billing.activate`. Evidence and code responses use
+`Cache-Control: no-store`; their DTOs do not implement Debug. Plaintext delivery is once only,
+for operator out-of-band handoff. Lost responses require explicit reissue.
+
+Retrying confirmation of the same payment with an open grant returns its current state and
+`activation: null`, without writes/audit, even after activation or suspension. A different payment
+conflicts. Reissue requires a pending workspace and matching unactivated paid grant; it invalidates
+the old challenge, resets attempts and starts a fresh 72-hour lifetime without changing the grant.
+After revocation, the same payment can create a new grant/code; closed history and evidence remain.
+
+Suspend accepts active → suspended and retains the grant. Resume accepts suspended → active only
+with an activated open paid or grandfathered grant. Repeating the resulting status is a no-op;
+pending workspaces cannot use either operation to activate. Revoke closes any open grant,
+invalidates its challenge and returns active/suspended/pending workspaces to pending payment;
+already pending without a grant is a no-op. Suspend and revoke require `{ "reason": "…" }`,
+trimmed and 1–500 characters. Refunds remain outside the application.
+
+Each write locks and rereads the workspace and commits all effects once. Billing audit actions are
+`billing.confirmed`, `billing.code_reissued`, `billing.activation_revoked`; status transitions append
+`platform.workspace_status` with from/to/reason and operator actor. No reference or code enters
+billing audit payloads. The old `platform.workspaces.set_status` row, use case, panel client helper
+and `PATCH /api/platform/workspaces/{workspace_id}/status` route are removed (404).
+The existing workspace page offers reasoned suspension and entitlement-preserving resumption.
+Owner code redemption is Task 4; the dedicated operator payment console is Task 6.
+
+Fast verification: `cargo test --locked --workspace --test billing --test platform`. The `platform`
+targets include `platform/m4_platform_payments.rs`, `platform/m4_payment_races.rs` and
+`platform/m4_platform_payments_http.rs`: shared fake/Pg behavior, real concurrent confirmations,
+SQL-failure rollback after code/status writes, exact audit counts/actors, cross-workspace refusal,
+operator/tenant session separation, request-header enforcement, no-store and legacy-route removal.
+The complete catalog/HTTP/MCP parity tests retain the exact 125-tool count.

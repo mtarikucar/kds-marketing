@@ -455,7 +455,10 @@
         "status": "Status",
         "created": "Created"
       },
-      "activate": "Activate",
+      "confirm": "Confirm",
+      "resume": "Resume",
+      "reason": "Reason",
+      "reasonHelp": "Enter the reason for suspension (up to 500 characters).",
       "suspend": "Suspend",
       "changed": "Status updated.",
       "empty": "No workspaces yet."

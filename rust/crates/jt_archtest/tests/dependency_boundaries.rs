@@ -96,6 +96,7 @@ const APP_ALLOW: &[&str] = &[
     "argon2",
     "rand",
     "sha2",
+    "hmac",
     "base64",
     "tracing",
     "tokio",

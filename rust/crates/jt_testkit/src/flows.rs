@@ -10,9 +10,8 @@ pub const OPERATOR_EMAIL: &str = "ops@jeeta.test";
 /// Its password.
 pub const OPERATOR_PASSWORD: &str = "operator passphrase";
 
-/// Activates workspace `ws` as the platform operator does after payment: creates the operator
-/// [`OPERATOR_EMAIL`] unless an operator exists, signs in as it and sets the status through
-/// `platform::set_status`, which ledgers the change.
+/// Seeds an activated grandfathered entitlement for unrelated domain tests.
+/// The operator session setup is retained for existing fixture contracts.
 ///
 /// Panics when a step fails, e.g. when another operator was bootstrapped first.
 pub async fn activate_workspace(deps: &Deps, ws: WorkspaceId) {
@@ -31,9 +30,41 @@ pub async fn activate_workspace(deps: &Deps, ws: WorkspaceId) {
     let pctx = platform::resolve(deps, &session.token)
         .await
         .expect("the operator session resolves");
-    platform::set_status(deps, &pctx, ws, WorkspaceStatus::Active)
+    seed_activated_workspace(
+        deps,
+        ws,
+        &jt_ledger::Actor::System {
+            component: format!("platform_operator:{}", pctx.operator_id),
+        },
+    )
+    .await;
+}
+
+/// Storage-only fixture for tests whose subject is not payment redemption.
+pub async fn seed_activated_workspace(deps: &Deps, ws: WorkspaceId, actor: &jt_ledger::Actor) {
+    use jt_app::ports::billing::{EntitlementId, EntitlementSource, WorkspaceEntitlement};
+    let mut r = deps.uow.platform().await.unwrap();
+    r.workspace_lock(ws).await.unwrap();
+    if r.entitlement_get(ws).await.unwrap().is_none() {
+        r.entitlement_insert(WorkspaceEntitlement {
+            id: EntitlementId(deps.ids.uuid()),
+            workspace_id: ws,
+            source: EntitlementSource::Grandfathered,
+            payment_id: None,
+            confirmed_by: None,
+            confirmed_at: deps.clock.now(),
+            activated_at: Some(deps.clock.now()),
+            redeemed_by: None,
+            revoked_at: None,
+            reason: None,
+        })
         .await
-        .expect("the operator activates the workspace");
+        .unwrap();
+    }
+    r.workspace_set_status(ws, WorkspaceStatus::Active, "fixture activation", actor)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
 }
 
 /// Give SMS fixtures an explicit price and a finite strategy cap. Existing prices stay intact.

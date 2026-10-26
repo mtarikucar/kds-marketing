@@ -1,26 +1,30 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { useTranslation } from 'react-i18next';
-import { listWorkspaces, setWorkspaceStatus } from '@/api/platform';
-import type { WorkspaceAdminOut, WorkspaceStatus } from '@/api/types';
+import { listWorkspaces, resumeWorkspace, suspendWorkspace } from '@/api/platform';
+import type { WorkspaceAdminOut } from '@/api/types';
 import { QueryState } from '@/components/QueryState';
 import { WorkspaceStatusBadge } from '@/components/StatusBadges';
-import { Button, DataTable, EmptyState, PageHeader, toast } from '@/components/ui';
+import { Button, DataTable, Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, Textarea, EmptyState, PageHeader, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime, formatNumber } from '@/lib/format';
 
 export const PLATFORM_WORKSPACES_KEY = ['platform', 'workspaces'] as const;
 
-/** Every workspace, with the operator's two switches: activate and suspend. */
+/** Entitlement-preserving suspension and resumption; payment activation is a separate flow. */
 export function WorkspacesPage() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const workspaces = useQuery({ queryKey: PLATFORM_WORKSPACES_KEY, queryFn: listWorkspaces });
 
+  const [suspending, setSuspending] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
   const change = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: WorkspaceStatus }) => setWorkspaceStatus(id, status),
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) => reason === undefined ? resumeWorkspace(id) : suspendWorkspace(id, reason),
     onSuccess: (updated) => {
+      setSuspending(null);
+      setReason('');
       queryClient.setQueryData<WorkspaceAdminOut[]>(PLATFORM_WORKSPACES_KEY, (list) =>
         list?.map((w) => (w.id === updated.id ? updated : w)),
       );
@@ -86,16 +90,16 @@ export function WorkspacesPage() {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={w.status === 'active' || busy}
-                onClick={() => mutate({ id: w.id, status: 'active' })}
+                disabled={w.status !== 'suspended' || busy}
+                onClick={() => mutate({ id: w.id })}
               >
-                {t('platform.workspaces.activate')}
+                {t('platform.workspaces.resume')}
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                disabled={w.status === 'suspended' || busy}
-                onClick={() => mutate({ id: w.id, status: 'suspended' })}
+                disabled={w.status !== 'active' || busy}
+                onClick={() => { setReason(''); setSuspending(w.id); }}
               >
                 {t('platform.workspaces.suspend')}
               </Button>
@@ -117,6 +121,21 @@ export function WorkspacesPage() {
           emptyState={<EmptyState title={t('platform.workspaces.empty')} />}
         />
       </QueryState>
+      <Dialog open={suspending !== null} onOpenChange={(open) => { if (!open) setSuspending(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('platform.workspaces.suspend')}</DialogTitle>
+            <DialogDescription>{t('platform.workspaces.reasonHelp')}</DialogDescription>
+          </DialogHeader>
+          <label htmlFor="suspend-reason">{t('platform.workspaces.reason')}</label>
+          <Textarea id="suspend-reason" value={reason} maxLength={500} onChange={(event) => setReason(event.target.value)} />
+          <DialogFooter>
+            <Button disabled={isPending || !reason.trim()} onClick={() => { if (suspending) mutate({ id: suspending, reason: reason.trim() }); }}>
+              {t('platform.workspaces.confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

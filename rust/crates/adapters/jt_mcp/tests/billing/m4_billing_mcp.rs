@@ -121,6 +121,10 @@ async fn http_mcp_payment_effect_parity_without_code() {
         .to_owned();
     // These keys were issued while active. Returning to pending never issues unpaid keys.
     let mut r = p.deps.uow.platform().await.unwrap();
+    let grant = r.entitlement_get(ws).await.unwrap().unwrap();
+    r.entitlement_revoke(ws, grant.id, p.deps.clock.now(), "test revocation")
+        .await
+        .unwrap();
     r.workspace_set_status(
         ws,
         jt_tenancy::WorkspaceStatus::PendingPayment,

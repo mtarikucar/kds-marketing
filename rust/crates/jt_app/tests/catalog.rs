@@ -247,10 +247,15 @@ fn catalog_is_the_release_table() {
         ("work.set_checkin_interval", Some("jeeta.work.set_checkin_interval"), Some(("PUT", "/api/work/checkin-interval")), false, Risk::Write),
         ("platform.login", None, Some(("POST", "/api/platform/login")), true, Risk::Write),
         ("platform.workspaces.list", None, Some(("GET", "/api/platform/workspaces")), true, Risk::Read),
-        ("platform.workspaces.set_status", None, Some(("PATCH", "/api/platform/workspaces/{workspace_id}/status")), true, Risk::Write),
+        ("platform.payments.list", None, Some(("GET", "/api/platform/payments")), true, Risk::Read),
+        ("platform.billing.confirm", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm")), true, Risk::Write),
+        ("platform.billing.reissue", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue")), true, Risk::Write),
+        ("platform.billing.revoke_activation", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/revoke-activation")), true, Risk::Write),
+        ("platform.workspaces.suspend", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/suspend")), true, Risk::Write),
+        ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 136);
+    assert_eq!(CATALOG.len(), 141);
     for uc in CATALOG {
         assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
@@ -273,7 +278,12 @@ fn catalog_is_the_release_table() {
             "workspace.switch",
             "platform.login",
             "platform.workspaces.list",
-            "platform.workspaces.set_status",
+            "platform.payments.list",
+            "platform.billing.confirm",
+            "platform.billing.reissue",
+            "platform.billing.revoke_activation",
+            "platform.workspaces.suspend",
+            "platform.workspaces.resume",
         ]
     );
     assert_eq!(

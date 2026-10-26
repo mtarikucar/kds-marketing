@@ -357,7 +357,12 @@ pub static CATALOG: &[UseCase] = &[
     twin("work.set_checkin_interval", Exempt, "jeeta.work.set_checkin_interval", ("PUT", "/api/work/checkin-interval"), Write),
     panel_only("platform.login", Exempt, ("POST", "/api/platform/login"), Write),
     panel_only("platform.workspaces.list", Exempt, ("GET", "/api/platform/workspaces"), Read),
-    panel_only("platform.workspaces.set_status", Exempt, ("PATCH", "/api/platform/workspaces/{workspace_id}/status"), Write),
+    panel_only("platform.payments.list", Exempt, ("GET", "/api/platform/payments"), Read),
+    panel_only("platform.billing.confirm", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm"), Write),
+    panel_only("platform.billing.reissue", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue"), Write),
+    panel_only("platform.billing.revoke_activation", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/revoke-activation"), Write),
+    panel_only("platform.workspaces.suspend", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/suspend"), Write),
+    panel_only("platform.workspaces.resume", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/resume"), Write),
 ];
 
 /// The use case with this id.

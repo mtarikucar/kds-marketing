@@ -20,3 +20,5 @@ pub mod studio_contract;
 pub mod studio_attribution_contract;
 
 pub mod billing_contract;
+
+pub mod platform_payment_contract;

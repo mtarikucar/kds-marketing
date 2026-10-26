@@ -20,6 +20,7 @@ pub mod inbox;
 pub mod ledger;
 pub mod oauth_callback;
 pub mod platform;
+pub mod platform_payments;
 pub mod roles;
 pub mod strategy;
 pub mod studio;
@@ -192,7 +193,21 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/work/checkin-interval"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
-    ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
+    ("GET", "/api/platform/payments"),
+    (
+        "POST",
+        "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm",
+    ),
+    (
+        "POST",
+        "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue",
+    ),
+    (
+        "POST",
+        "/api/platform/workspaces/{workspace_id}/revoke-activation",
+    ),
+    ("POST", "/api/platform/workspaces/{workspace_id}/suspend"),
+    ("POST", "/api/platform/workspaces/{workspace_id}/resume"),
     ("GET", "/healthz"),
 ];
 
@@ -919,10 +934,40 @@ pub fn api_routes() -> Vec<ApiRoute> {
             platform::list_workspaces,
         ),
         api_route(
-            "PATCH",
-            "/platform/workspaces/{workspace_id}/status",
-            "platform.workspaces.set_status",
-            platform::set_status,
+            "GET",
+            "/platform/payments",
+            "platform.payments.list",
+            platform_payments::list,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm",
+            "platform.billing.confirm",
+            platform_payments::confirm,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue",
+            "platform.billing.reissue",
+            platform_payments::reissue,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/revoke-activation",
+            "platform.billing.revoke_activation",
+            platform_payments::revoke_activation,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/suspend",
+            "platform.workspaces.suspend",
+            platform::suspend,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/resume",
+            "platform.workspaces.resume",
+            platform::resume,
         ),
     ]
 }

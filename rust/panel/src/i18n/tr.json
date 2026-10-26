@@ -455,7 +455,10 @@
         "status": "Durum",
         "created": "Oluşturulma"
       },
-      "activate": "Etkinleştir",
+      "confirm": "Onayla",
+      "resume": "Devam ettir",
+      "reason": "Gerekçe",
+      "reasonHelp": "Askıya alma gerekçesini yazın (en fazla 500 karakter).",
       "suspend": "Askıya al",
       "changed": "Durum güncellendi.",
       "empty": "Henüz çalışma alanı yok."

@@ -3,3 +3,6 @@ mod payments;
 pub mod schema;
 pub use payments::{report_payment, status};
 pub use schema::{BillingConfig, BillingStatusOut, EntitlementOut, PaymentOut, ReportPaymentInput};
+
+pub mod codes;
+pub use codes::ActivationCodeDeliveryOut;

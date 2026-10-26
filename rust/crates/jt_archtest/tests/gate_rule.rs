@@ -177,7 +177,7 @@ fn is_dotted_lowercase(id: &str) -> bool {
 
 #[test]
 fn catalog_ids_are_dotted_lowercase() {
-    assert!(is_dotted_lowercase("platform.workspaces.set_status"));
+    assert!(is_dotted_lowercase("platform.workspaces.suspend"));
     assert!(!is_dotted_lowercase("team"));
     assert!(!is_dotted_lowercase("Team.list"));
     assert!(!is_dotted_lowercase("team..list"));

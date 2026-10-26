@@ -205,35 +205,75 @@ pub async fn list_workspaces(
     Ok(out)
 }
 
-/// Moves workspace `ws` to `status` and returns it as the console shows it.
-///
-/// An unknown workspace is `NOT_FOUND`. Setting the status it already has is a successful no-op
-/// that writes nothing. Otherwise one platform transaction stores the status and appends
-/// `platform.workspace_status` (from/to/reason/by, subject the workspace) to that
-/// workspace's ledger by `Actor::System { component: "platform_operator:<operator id>" }`.
-/// The repository supplies transaction time; M4 Task 3 replaces this legacy console operation
-/// with explicit suspend/resume/revoke operations.
-pub async fn set_status(
+/// Active → suspended; never closes or creates an entitlement.
+pub async fn suspend(
+    deps: &Deps,
+    pctx: &PlatformCtx,
+    ws: WorkspaceId,
+    reason_text: &str,
+) -> Result<WorkspaceAdminOut, AppError> {
+    let reason = reason(reason_text)?;
+    transition(deps, pctx, ws, WorkspaceStatus::Suspended, reason).await
+}
+
+/// Suspended → active only with an activated, unrevoked entitlement.
+pub async fn resume(
+    deps: &Deps,
+    pctx: &PlatformCtx,
+    ws: WorkspaceId,
+) -> Result<WorkspaceAdminOut, AppError> {
+    transition(
+        deps,
+        pctx,
+        ws,
+        WorkspaceStatus::Active,
+        "platform.workspace_resume",
+    )
+    .await
+}
+
+async fn transition(
     deps: &Deps,
     pctx: &PlatformCtx,
     ws: WorkspaceId,
     status: WorkspaceStatus,
+    reason: &str,
 ) -> Result<WorkspaceAdminOut, AppError> {
     let mut repos = deps.uow.platform().await?;
-    let row = repos.workspace_lock(ws).await?;
+    let mut row = repos.workspace_lock(ws).await?;
+    let grant = repos.entitlement_get(ws).await?;
+    if row.status == status {
+        return admin_view(&mut *repos, row).await;
+    }
+    if row.status == WorkspaceStatus::PendingPayment {
+        return Err(AppError::conflict(
+            "pending workspace requires payment activation",
+        ));
+    }
+    if status == WorkspaceStatus::Active && grant.is_none_or(|g| g.activated_at.is_none()) {
+        return Err(AppError::conflict("activated open entitlement required"));
+    }
     repos
-        .workspace_set_status(
-            ws,
-            status,
-            "operator status transition",
-            &Actor::System {
-                component: format!("platform_operator:{}", pctx.operator_id),
-            },
-        )
+        .workspace_set_status(ws, status, reason, &actor(pctx))
         .await?;
-    let out = admin_view(repos.as_mut(), WorkspaceRow { status, ..row }).await?;
+    row.status = status;
+    let out = admin_view(&mut *repos, row).await?;
     repos.commit().await?;
     Ok(out)
+}
+
+pub(crate) fn actor(pctx: &PlatformCtx) -> Actor {
+    Actor::System {
+        component: format!("platform_operator:{}", pctx.operator_id),
+    }
+}
+
+pub(crate) fn reason(reason: &str) -> Result<&str, AppError> {
+    let reason = reason.trim();
+    if reason.is_empty() || reason.chars().count() > 500 {
+        return Err(invalid("reason", "reason must contain 1 to 500 characters"));
+    }
+    Ok(reason)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -245,7 +285,7 @@ async fn operator_exists(repos: &mut dyn PlatformRepos) -> Result<bool, AppError
 }
 
 /// `row` with its owner's email and member count, read through `repos`.
-async fn admin_view(
+pub(crate) async fn admin_view(
     repos: &mut dyn PlatformRepos,
     row: WorkspaceRow,
 ) -> Result<WorkspaceAdminOut, AppError> {

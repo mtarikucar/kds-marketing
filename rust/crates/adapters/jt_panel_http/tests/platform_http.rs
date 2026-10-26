@@ -1,5 +1,5 @@
 //! The platform console's routes end to end through Postgres: operator login and its
-//! `jt_platform` cookie, the workspace list, activating a workspace, and the separation between
+//! `jt_platform` cookie, explicit suspension/resumption, and the separation between
 //! operator and tenant sessions.
 
 use axum::http::{Method, StatusCode, header};
@@ -30,8 +30,8 @@ trait Console {
     async fn register_tenant(&self, email: &str, workspace_name: &str) -> (String, WorkspaceId);
     /// Logs the operator in; returns the full `Set-Cookie` value and the response body.
     async fn operator_login(&self) -> (String, Value);
-    /// `PATCH /api/platform/workspaces/{ws}/status` as `cookie`.
-    async fn set_status(&self, ws: &str, cookie: &str, body: Value) -> Response;
+    /// `POST /api/platform/workspaces/{ws}/suspend` as `cookie`.
+    async fn suspend(&self, ws: &str, cookie: &str, body: Value) -> Response;
 }
 
 impl Console for Panel {
@@ -54,15 +54,15 @@ impl Console for Panel {
         (cookie, body_json(resp).await)
     }
 
-    async fn set_status(&self, ws: &str, cookie: &str, body: Value) -> Response {
-        let path = format!("/api/platform/workspaces/{ws}/status");
-        self.send(Method::PATCH, &path, Some(cookie), Some(body))
+    async fn suspend(&self, ws: &str, cookie: &str, body: Value) -> Response {
+        let path = format!("/api/platform/workspaces/{ws}/suspend");
+        self.send(Method::POST, &path, Some(cookie), Some(body))
             .await
     }
 }
 
 #[tokio::test]
-async fn operator_lists_workspaces_and_activates_one() {
+async fn operator_lists_workspaces_and_suspends_one() {
     let p = panel().await;
     let (tenant, ws) = p
         .register_tenant("Owner@Alpha.example", "Alpha Ajans")
@@ -96,27 +96,43 @@ async fn operator_lists_workspaces_and_activates_one() {
     assert!(alpha["slug"].as_str().unwrap().starts_with("alpha-ajans-"));
     assert!(alpha["created_at"].is_string());
 
-    // Activation answers with the changed workspace.
-    let activated = ok_json(
-        p.set_status(&ws.to_string(), &operator, json!({ "status": "active" }))
-            .await,
+    jt_testkit::flows::activate_workspace(&p.deps, ws).await;
+    // Explicit suspension answers with the changed workspace.
+    let suspended = ok_json(
+        p.suspend(
+            &ws.to_string(),
+            &operator,
+            json!({ "reason": "operator hold" }),
+        )
+        .await,
     )
     .await;
-    assert_eq!(activated["id"], json!(ws));
-    assert_eq!(activated["status"], "active");
-    assert_eq!(activated["owner_email"], "owner@alpha.example");
-    assert_eq!(activated["member_count"], 1);
+    assert_eq!(suspended["id"], json!(ws));
+    assert_eq!(suspended["status"], "suspended");
+    assert_eq!(suspended["owner_email"], "owner@alpha.example");
+    assert_eq!(suspended["member_count"], 1);
 
-    // The tenant sees the workspace active, and its ledger records who changed it.
+    // The tenant sees suspension. Resume before reading the status-gated ledger.
     let info = ok_json(p.get("/api/workspace", &tenant).await).await;
-    assert_eq!(info["status"], "active");
+    assert_eq!(info["status"], "suspended");
+    let resumed = ok_json(
+        p.send(
+            Method::POST,
+            &format!("/api/platform/workspaces/{ws}/resume"),
+            Some(&operator),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(resumed["status"], "active");
     let entries = ok_json(p.get("/api/ledger?action_prefix=platform.", &tenant).await).await;
-    assert_eq!(entries.as_array().unwrap().len(), 1, "{entries}");
-    let entry = &entries[0]["entry"];
+    assert_eq!(entries.as_array().unwrap().len(), 3, "{entries}");
+    let entry = &entries[1]["entry"];
     assert_eq!(entry["action"], "platform.workspace_status");
     assert_eq!(
         entry["payload"],
-        json!({ "from": "pending_payment", "to": "active", "reason":"operator status transition", "by":entry["actor"] })
+        json!({ "from": "active", "to": "suspended", "reason":"operator hold", "by":entry["actor"] })
     );
     assert_eq!(entry["actor"]["kind"], "system", "{entry}");
     assert!(
@@ -127,26 +143,30 @@ async fn operator_lists_workspaces_and_activates_one() {
         "{entry}"
     );
 
-    // Bad input is structured: an unknown status, a malformed id, an unknown workspace.
+    // Bad input is structured: a blank reason, a malformed id, an unknown workspace.
     expect_error(
-        p.set_status(&ws.to_string(), &operator, json!({ "status": "deleted" }))
+        p.suspend(&ws.to_string(), &operator, json!({ "reason": " " }))
             .await,
         StatusCode::UNPROCESSABLE_ENTITY,
         "VALIDATION",
     )
     .await;
     expect_error(
-        p.set_status("not-a-uuid", &operator, json!({ "status": "active" }))
-            .await,
+        p.suspend(
+            "not-a-uuid",
+            &operator,
+            json!({ "reason": "operator hold" }),
+        )
+        .await,
         StatusCode::UNPROCESSABLE_ENTITY,
         "VALIDATION",
     )
     .await;
     expect_error(
-        p.set_status(
+        p.suspend(
             &WorkspaceId::new_v7().to_string(),
             &operator,
-            json!({ "status": "active" }),
+            json!({ "reason": "operator hold" }),
         )
         .await,
         StatusCode::NOT_FOUND,
@@ -192,7 +212,7 @@ async fn tenant_session_cannot_call_platform_routes_401() {
         )
         .await;
         expect_error(
-            p.set_status(&ws, cookie, json!({ "status": "active" }))
+            p.suspend(&ws, cookie, json!({ "reason": "operator hold" }))
                 .await,
             StatusCode::UNAUTHORIZED,
             "UNAUTHENTICATED",
@@ -237,14 +257,14 @@ async fn platform_login_requires_header_403() {
     // A signed-in operator still needs the header to change a workspace.
     let (set, _) = p.operator_login().await;
     let operator = cookie_pair(&set);
-    let path = format!("/api/platform/workspaces/{ws}/status");
+    let path = format!("/api/platform/workspaces/{ws}/suspend");
     let resp = p
         .call(request(
-            Method::PATCH,
+            Method::POST,
             &path,
             Some(&operator),
             false,
-            Some(json!({ "status": "active" })),
+            Some(json!({ "reason": "operator hold" })),
         ))
         .await;
     expect_error(resp, StatusCode::FORBIDDEN, "FORBIDDEN").await;

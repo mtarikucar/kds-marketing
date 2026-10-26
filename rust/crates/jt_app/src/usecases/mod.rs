@@ -17,6 +17,7 @@ pub mod inbox;
 pub mod jobs;
 pub mod ledger;
 pub mod platform;
+pub mod platform_payments;
 pub mod roles;
 pub mod strategy;
 pub mod studio;
