@@ -45,6 +45,9 @@ release_versions() {
   for f in "$1"/migrations/*.up.sql; do v=${f##*/}; v=${v%%_*}; printf '%d\n' "$((10#$v))"; done | sort -n
 }
 db_versions() { psql -XAt --set=ON_ERROR_STOP=1 "$1" -c 'SELECT version FROM _sqlx_migrations WHERE success ORDER BY version'; }
+db_settings() {
+  psql -XAt --set=ON_ERROR_STOP=1 "$1" -c "SELECT pg_encoding_to_char(encoding), datlocprovider, datcollate, datctype, coalesce(daticulocale,''), coalesce(datcollversion,''), coalesce(pg_database_collation_actual_version(oid),'') FROM pg_database WHERE datname=current_database()"
+}
 read_manifest() {
   local line key value
   declare -gA manifest=()
@@ -77,7 +80,11 @@ safe_tree "$JEETA_FILES_DIR"
 mkdir -p "$1" "$JEETA_RECOVERY_STATUS_DIR"
 root=$(realpath "$1")
 [[ "$root/" != "$(realpath "$JEETA_FILES_DIR")/"* ]] || fail 'backup root overlaps files'
-exec 9>"$root/.backup.lock"; flock -n 9 || fail 'backup already running'
+lock_dir=${JEETA_LOCK_DIR:-/run/jeeta-recovery}
+mkdir -p "$lock_dir"
+[[ ! -L "$lock_dir/$JEETA_SOURCE_ID.lock" ]] || fail 'unsafe lock file'
+exec 9>"$lock_dir/$JEETA_SOURCE_ID.lock"; flock -n 9 || fail 'backup already running for this installation'
+set_verified=0
 set_dir=
 on_exit() {
   local rc=$?
@@ -85,7 +92,7 @@ on_exit() {
     # Includes late failures after an attempted reopen (e.g. atomic rename fails).
     hook "$JEETA_CONTROL_HOOK" block || true
     hook "$JEETA_CONTROL_HOOK" stop || true
-    if [[ -n "$set_dir" ]]; then printf 'backup_failed\n' > "$set_dir/FAILED"; fi
+    if [[ -n "$set_dir" ]] && (( ! set_verified )); then printf 'backup_failed\n' > "$set_dir/FAILED"; fi
     printf 'backup_failed\n' > "$root/FAILED"
     printf 'recovery: backup failed; ingress remains blocked; inspect privately\n' >&2
   fi
@@ -97,6 +104,7 @@ hook "$JEETA_CONTROL_HOOK" stop
 hook "$JEETA_CONTROL_HOOK" assert_quiesced
 create_set() {
   local kind=$1 dest=$2 started completed
+  set_verified=0
   mkdir -p "$dest"
   set_dir=$(mktemp -d "$dest/$(date -u +%Y%m%dT%H%M%SZ)-$kind-XXXXXX")
   started=$(date -u +%FT%TZ)
@@ -108,6 +116,7 @@ create_set() {
     pg_basebackup --dbname=service=jeeta_backup --pgdata="$set_dir/base" --format=plain --wal-method=stream --checkpoint=fast >"$set_dir/command.log" 2>&1
     pg_verifybackup "$set_dir/base" >>"$set_dir/command.log" 2>&1
   fi
+  db_settings service=jeeta_backup > "$set_dir/database.settings" 2>>"$set_dir/command.log"
   cp -a "$JEETA_FILES_DIR" "$set_dir/files"
   safe_tree "$set_dir/files"
   release_inventory "$JEETA_RELEASE_DIR" > "$set_dir/migrations.sha256"
@@ -123,6 +132,7 @@ create_set() {
   inventory "$set_dir" > "$set_dir/SHA256SUMS"
   verify_set "$set_dir"
   printf 'verified\n' > "$set_dir/COMPLETE"
+  set_verified=1
   printf '%s\n' "$set_dir"
 }
 create_set logical "$root"
@@ -150,6 +160,9 @@ for old in "${old_sets[@]}"; do
 done
 status_tmp=$(mktemp "$JEETA_RECOVERY_STATUS_DIR/.backup-status.XXXXXX")
 printf '{"completed_at":"%s"}\n' "$(date -u +%FT%TZ)" > "$status_tmp"
+# The new inode needs explicit reader access; a directory ACL cannot widen 0600.
+chgrp "${JEETA_STATUS_GROUP:-jeeta}" "$status_tmp"
+chmod 640 "$status_tmp"
 hook "$JEETA_CONTROL_HOOK" start
 hook "$JEETA_CONTROL_HOOK" unblock
 mv -f "$status_tmp" "$JEETA_RECOVERY_STATUS_DIR/backup-status.json"

@@ -24,9 +24,13 @@ A release at `/opt/jeeta/current` must include `REVISION` (one revision identifi
 `scripts/restore-drill.sh`. A recovery set records format/kind, source installation
 ID, revision, key ID, start/completion UTC timestamps, latest schema version, exact
 applied migration versions, release migration SHA-256 hashes, file metadata and a
-full file checksum inventory. The database's successful `_sqlx_migrations` version
+full file checksum inventory, database encoding, locale provider, collation and
+ctype settings, and stored/actual collation versions. The database's successful `_sqlx_migrations` version
 set must exactly match that release. `COMPLETE` is written only after verification;
-`FAILED` forbids restore. Checksums detect corruption, not malicious replacement:
+a set-level `FAILED` forbids restore. A root-level `FAILED` records an operational
+failure (such as restart or status publication) without invalidating an already
+verified `COMPLETE` set. Its database/files remain recoverable and count toward
+retention; the overall run still fails and leaves the previous success status. Checksums detect corruption, not malicious replacement:
 protect the recovery storage and hooks against writes by tenants and app processes.
 `panel/dist` is replaceable release content, not FileStore evidence.
 
@@ -44,6 +48,8 @@ JEETA_SOURCE_ID=primary-installation
 JEETA_MASTER_KEY_ID=owner-key-v1
 JEETA_RECOVERY_STATUS_DIR=/var/lib/jeeta/recovery-status
 JEETA_BASE_ROOT=/var/backups/jeeta/base
+JEETA_STATUS_GROUP=jeeta
+JEETA_LOCK_DIR=/run/jeeta-recovery
 JEETA_CONTROL_HOOK=/etc/jeeta/recovery-control
 PGSERVICEFILE=/etc/jeeta/pg_service.conf
 PGPASSFILE=/etc/jeeta/pgpass
@@ -79,7 +85,10 @@ no-op in production. A backup failure leaves ingress blocked and the app stopped
 the failure, and rerun or deliberately recover service under the owner's control.
 No trap automatically resumes traffic after an error.
 
-The script locks the backup root, blocks ingress and stops the app, then runs
+The script takes an installation-wide lock under `/run/jeeta-recovery`, keyed by
+`JEETA_SOURCE_ID` independently of the destination. All invocations for one source
+must share that source ID and lock directory; `JEETA_LOCK_DIR` is overridden only
+for disposable tests or a consistently configured installation. It blocks ingress and stops the app, then runs
 `pg_dump --format=custom --dbname=service=jeeta_backup` and snapshots
 `JEETA_FILES_DIR` in the same write-free interval. It verifies the dump catalog,
 release schema, file inventory and database archive checksums before restarting
@@ -152,9 +161,12 @@ JEETA_SEALED_CANARY_CHECK_HOOK=/work/protected-sealed-canary-check
 Invoke `/opt/jeeta/current/scripts/restore-drill.sh <recovery-set> <target-config>`
 as the unprivileged PostgreSQL cluster owner. No secrets are positional. Only
 protected config and key **paths** appear above. The logical path initializes a
-cluster, calls the integrity hook's `prepare` operation to provision matching
+UTF-8 bootstrap cluster, creates the database with the source encoding, locale
+provider and exact locale settings using template0, then calls the integrity hook's `prepare` operation to provision matching
 roles, restores with `pg_restore --exit-on-error --no-owner`, then verifies actual
-DB migration versions. The privileged restore identity must never become the
+DB migration versions and exact encoding/locale/collation versions. The target
+must have compatible libc/ICU locale data installed; unavailable or changed locales
+fail the drill rather than silently changing text semantics. The privileged restore identity must never become the
 application's role. Ownership/grants and FORCE RLS must be tested using ordinary
 NOSUPERUSER NOBYPASSRLS roles.
 
@@ -203,7 +215,9 @@ containing both sides of the target before starting. Use the exact PostgreSQL
 major version and compatible runtime/extension installation.
 
 The physical path runs `pg_verifybackup`, copies the physical base, replaces all
-source PostgreSQL configuration (including auto config and archive hooks), adds
+source PostgreSQL configuration (including auto config and archive hooks), derives
+only the required numeric connection/worker/WAL-sender/prepared-transaction/lock
+capacity settings from `pg_controldata`, adds
 `recovery.signal` and a fixed `restore_command`, and sets `recovery_target_name` and
 `recovery_target_action=promote`. It waits for recovery to finish, validates the
 restored schema and invariants, and requires `verify_pitr` to prove the selected
@@ -237,8 +251,11 @@ repository fixtures.
 `$JEETA_RECOVERY_STATUS_DIR/backup-status.json` is atomically published using a
 same-directory temporary file and rename **after verified completion**, as
 `{"completed_at":"<RFC3339 UTC>"}` (well below the reader's 4 KiB limit).
-A failed run preserves the prior marker. Give the application read access to the
-status directory through an operator-controlled group/ACL; it must not write it.
+A failed run preserves the prior marker. Set the status directory's group to `jeeta` with group traversal/read access.
+Each new status inode is explicitly assigned `JEETA_STATUS_GROUP` (default `jeeta`)
+and mode 0640 before publication; directory ACLs alone cannot make a 0600 temporary
+file readable. Recovery-set files remain 0600. The application group receives no
+write permission to the full-backup marker.
 The shell scripts never write `wal-status.json`. The **T071 binary probe**, every
 60 seconds, will publish `{"archived_at":"<RFC3339 UTC>"}` only after confirming
 archiver state and the destination. Until wired, WAL health is unknown, not healthy.

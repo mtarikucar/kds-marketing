@@ -57,21 +57,25 @@ case "$1" in
 esac
 HOOK
 chmod 700 "$work/hooks/"*
-initdb -D "$work/source" -A trust --no-locale > "$work/setup.log" 2>&1
+initdb -D "$work/source" -A trust --no-locale --encoding=UTF8 > "$work/setup.log" 2>&1
 cat >> "$work/source/postgresql.conf" <<CONF
 listen_addresses = ''
 unix_socket_directories = '$work/socket'
 wal_level = replica
 archive_mode = on
 archive_command = 'test ! -f $work/wal/%f && cp %p $work/wal/%f'
-max_wal_senders = 4
+max_wal_senders = 12
+max_connections = 150
+max_worker_processes = 12
+max_prepared_transactions = 8
+max_locks_per_transaction = 100
 CONF
 source_running=1
 cleanup_inner() { local rc=$?; if ((rc)); then tail -25 "$work/setup.log" >&2; fi; if ((source_running)); then pg_ctl -D "$work/source" -m immediate -w stop >> "$work/setup.log" 2>&1 || true; fi; }
 trap cleanup_inner EXIT
 pg_ctl -D "$work/source" -l "$work/source.log" -w start >> "$work/setup.log" 2>&1
 export PGHOST="$work/socket" PGUSER="$(id -un)" PGDATABASE=jeeta
-createdb jeeta
+createdb --template=template0 --encoding=UTF8 --locale=C.utf8 jeeta
 sql() { psql -XAt --set=ON_ERROR_STOP=1 -c "$1"; }
 sql 'CREATE TABLE _sqlx_migrations(version bigint PRIMARY KEY,success boolean NOT NULL)' >> "$work/setup.log"
 for migration in "$work/release/migrations/"*.up.sql; do
@@ -91,6 +95,7 @@ printf '[jeeta_backup]\nhost=%s/socket\nuser=%s\ndbname=jeeta\n' "$work" "$PGUSE
 export PGSERVICEFILE="$work/service" PGPASSFILE="$work/passfile"
 export JEETA_RELEASE_DIR="$work/release" JEETA_FILES_DIR="$work/files" JEETA_SOURCE_ID=source
 export JEETA_MASTER_KEY_ID=synthetic-key-v1 JEETA_RECOVERY_STATUS_DIR="$work/status" JEETA_CONTROL_HOOK="$work/hooks/control"
+export JEETA_LOCK_DIR="$work/locks" JEETA_STATUS_GROUP="$(id -gn)"
 export JEETA_PHYSICAL_SCHEDULE=always JEETA_BASE_ROOT="$work/base"
 "$scripts/backup.sh" "$work/logical" > "$work/backup.log" 2>&1 || { cat "$work/backup.log"; cat "$work"/logical/*/command.log; fail 'backup'; }
 logical=$(find "$work/logical" -mindepth 1 -maxdepth 1 -type d | head -1)
@@ -224,6 +229,46 @@ restored_unknown_send_is_not_retried() {
   sql "UPDATE recovery_fixture.outbox SET state='unknown',attempts=1 WHERE id=1" >/dev/null
   config retried-unknown; refused "$(find "$work/bad-unknown" -mindepth 1 -maxdepth 1 -type d | head -1)"
 }
+review_regressions() {
+  local problems=0 before copy day old
+  mkdir -p "$JEETA_LOCK_DIR"
+  exec 8>"$JEETA_LOCK_DIR/$JEETA_SOURCE_ID.lock"; flock -n 8
+  cp "$work/control.log" "$work/control-before-lock"
+  if "$scripts/backup.sh" "$work/second-destination" > "$work/lock.log" 2>&1; then
+    printf 'FAIL installation_lock_does_not_cover_other_destination\n'; problems=$((problems+1))
+  fi
+  cmp -s "$work/control.log" "$work/control-before-lock" || { printf 'FAIL locked_backup_touched_control\n'; problems=$((problems+1)); }
+  exec 8>&-
+  if [[ $(stat -c %a "$work/status/backup-status.json") != 640 || $(stat -c %G "$work/status/backup-status.json") != "$JEETA_STATUS_GROUP" ]]; then
+    printf 'FAIL published_status_not_group_readable\n'; problems=$((problems+1))
+  fi
+  config review-locale
+  if ! "$scripts/restore-drill.sh" "$logical" "$conf" > "$work/review-locale.log" 2>&1; then
+    printf 'FAIL source_database_locale_not_preserved\n'; problems=$((problems+1))
+  fi
+  config review-capacity
+  if ! "$scripts/restore-drill.sh" "$physical" "$conf" > "$work/review-capacity.log" 2>&1; then
+    printf 'FAIL physical_source_capacity_not_preserved\n'; problems=$((problems+1))
+  fi
+  # Seed 30 valid historical days, then make publication fail after retention.
+  mkdir -p "$work/late-retention"
+  for ((old=1;old<=30;old++)); do
+    day=$(date -u -d "$old days ago" +%Y%m%d)
+    copy="$work/late-retention/${day}T000000Z-logical-history"
+    cp -a "$logical" "$copy"
+    sed -i "s/^started_at=.*/started_at=$(date -u -d "$old days ago" +%FT%TZ)/" "$copy/manifest"
+    (source "$scripts/backup.sh" --library; inventory "$copy" > "$copy/SHA256SUMS")
+  done
+  touch "$work/inject-status-failure"
+  if JEETA_PHYSICAL_SCHEDULE=never "$scripts/backup.sh" "$work/late-retention" > "$work/late-retention.log" 2>&1; then fail 'late publication failure accepted'; fi
+  chmod 700 "$work/status"; rm "$work/inject-status-failure"
+  before=0
+  for copy in "$work/late-retention/"*-logical-*; do
+    if [[ -f "$copy/COMPLETE" && ! -f "$copy/FAILED" ]]; then before=$((before+1)); fi
+  done
+  if ((before<30)); then printf 'FAIL late_failure_reduced_recoverable_retention\n'; problems=$((problems+1)); fi
+  ((problems==0)) || fail 'post-commit security regressions'
+}
 retention_preserves_valid_daily_history() {
   # Real backup publishes into a populated root; tiny copies of a real logical set
   # model history. Invalid/foreign sets must not consume this source's quota.
@@ -250,12 +295,18 @@ retention_preserves_valid_daily_history() {
 }
 ci_runs_real_restore_scripts() {
   retention_preserves_valid_daily_history
+  review_regressions
   [[ -s "$logical/database.dump" && -s "$physical/base/backup_manifest" ]] || fail 'real backups absent'
   [[ -s "$work/target-logical/report" && -s "$work/target-physical/report" ]] || fail 'real restore reports absent'
   # Removing an archive must make the actual script reject the set.
   cp -a "$logical" "$work/no-database"; rm "$work/no-database/database.dump"
   config no-database; refused "$work/no-database"
 }
+if [[ ${JEETA_TEST_FILTER:-} == review ]]; then
+  review_regressions
+  printf 'PASS post_commit_security_regressions\n'
+  exit 0
+fi
 if [[ ${JEETA_TEST_FILTER:-} == retention ]]; then
   retention_preserves_valid_daily_history
   printf 'PASS retention_preserves_valid_daily_history\n'

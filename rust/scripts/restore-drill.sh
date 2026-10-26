@@ -22,6 +22,10 @@ target=$(realpath -m "$JEETA_TARGET_DIR")
 [[ "$(cat "$JEETA_RELEASE_DIR/REVISION")" == "${manifest[source_revision]}" ]] || fail 'release revision mismatch'
 release_inventory "$JEETA_RELEASE_DIR" | cmp -s "$recovery/migrations.sha256" - || fail 'migration checksums mismatch'
 release_versions "$JEETA_RELEASE_DIR" | cmp -s "$recovery/schema.versions" - || fail 'schema versions mismatch'
+[[ -s "$recovery/database.settings" && $(wc -l < "$recovery/database.settings") == 1 ]] || fail 'database settings missing'
+IFS='|' read -r db_encoding db_provider db_collate db_ctype db_icu db_collation_version db_actual_version < "$recovery/database.settings"
+[[ "$db_encoding" =~ ^[A-Z0-9_]+$ && -n "$db_collate" && -n "$db_ctype" ]] || fail 'invalid database settings'
+case "$db_provider" in c) locale_provider=libc;; i) locale_provider=icu;; *) fail 'unsupported locale provider';; esac
 private_file "$JEETA_MASTER_KEY_FILE"
 [[ "$JEETA_MASTER_KEY_ID" == "${manifest[master_key_id]}" && -s "$JEETA_MASTER_KEY_FILE" ]] || fail 'matching master key required'
 private_file "$JEETA_INTEGRITY_HOOK"; private_file "$JEETA_SEALED_CANARY_CHECK_HOOK"
@@ -52,7 +56,7 @@ trap 'exit 1' HUP INT TERM
 wal_target=none
 recovered_at=${manifest[started_at]}
 if [[ ${manifest[kind]} == logical ]]; then
-  initdb -D "$target/db" -A trust --no-locale >"$target/postgres.log" 2>&1
+  initdb -D "$target/db" -A trust --no-locale --encoding=UTF8 >"$target/postgres.log" 2>&1
 else
   required JEETA_WAL_DIR JEETA_WAL_TARGET_NAME JEETA_WAL_TARGET_TIME
   [[ "$JEETA_WAL_TARGET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'invalid WAL target'
@@ -79,6 +83,15 @@ ssl = off
 shared_preload_libraries = ''
 CONF
 if [[ ${manifest[kind]} == physical ]]; then
+  # These five control-data values are recovery minimums. Never copy arbitrary
+  # source configuration/includes or executable settings into the target.
+  LC_ALL=C pg_controldata "$recovery/base" > "$target/control.txt"
+  for mapping in max_connections:max_connections max_worker_processes:max_worker_processes max_wal_senders:max_wal_senders max_prepared_xacts:max_prepared_transactions max_locks_per_xact:max_locks_per_transaction; do
+    field=${mapping%%:*}; setting=${mapping#*:}
+    value=$(awk -F: -v field="$field setting" '$1 == field { gsub(/[[:space:]]/, "", $2); print $2 }' "$target/control.txt")
+    [[ "$value" =~ ^[0-9]+$ ]] || fail 'invalid recovery capacity control data'
+    printf '%s = %s\n' "$setting" "$value" >> "$target/db/postgresql.conf"
+  done
   cat >> "$target/db/postgresql.conf" <<CONF
 restore_command = 'cp $JEETA_WAL_DIR/%f %p'
 recovery_target_name = '$JEETA_WAL_TARGET_NAME'
@@ -88,7 +101,9 @@ fi
 running=1
 pg_ctl -D "$target/db" -l "$target/postgres.log" -w -t 60 start >>"$target/postgres.log" 2>&1
 if [[ ${manifest[kind]} == logical ]]; then
-  createdb jeeta >>"$target/postgres.log" 2>&1
+  locale_args=(--template=template0 --encoding="$db_encoding" --locale-provider="$locale_provider" --lc-collate="$db_collate" --lc-ctype="$db_ctype")
+  if [[ "$db_provider" == i ]]; then locale_args+=(--icu-locale="$db_icu"); fi
+  createdb "${locale_args[@]}" jeeta >>"$target/postgres.log" 2>&1
   # Required roles are provisioned by this release-specific hook before restore.
   hook "$JEETA_INTEGRITY_HOOK" prepare
   pg_restore --exit-on-error --no-owner --dbname=jeeta "$recovery/database.dump" >>"$target/postgres.log" 2>&1
@@ -102,6 +117,8 @@ else
   [[ -n "$recovered_at" ]] || fail 'missing replay timestamp'
   (( $(date -u -d "$JEETA_WAL_TARGET_TIME" +%s) >= $(date -u -d "$recovered_at" +%s) )) || fail 'replay exceeded declared target time'
 fi
+db_settings dbname=jeeta > "$target/database.settings" 2>>"$target/postgres.log"
+cmp -s "$target/database.settings" "$recovery/database.settings" || fail 'restored encoding/locale/collation version mismatch'
 db_versions dbname=jeeta > "$target/database.versions" 2>>"$target/postgres.log"
 cmp -s "$target/database.versions" "$recovery/schema.versions" || fail 'restored schema mismatch'
 hook "$JEETA_INTEGRITY_HOOK" verify

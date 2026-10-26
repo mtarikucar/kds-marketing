@@ -6,6 +6,7 @@ case "$1" in
   prepare)
     sql "CREATE ROLE recovery_app NOSUPERUSER NOBYPASSRLS NOLOGIN" ;;
   verify)
+    [[ $(sql "SELECT pg_encoding_to_char(encoding) || ':' || datcollate || ':' || datctype FROM pg_database WHERE datname=current_database()") == UTF8:C.utf8:C.utf8 ]]
     sql 'GRANT USAGE ON SCHEMA public TO recovery_app; GRANT SELECT ON ALL TABLES IN SCHEMA public TO recovery_app'
     [[ $(sql "SELECT count(*) FROM pg_roles WHERE rolname='recovery_app' AND NOT rolsuper AND NOT rolbypassrls") == 1 ]]
     [[ $(sql "SELECT count(*) FROM pg_class WHERE relname IN ('workspaces','payment_notifications','workspace_entitlements','ledger_entries') AND relrowsecurity AND relforcerowsecurity") == 4 ]]
