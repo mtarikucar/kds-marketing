@@ -120,6 +120,44 @@ async fn terminal(w: &World, kind: &str, payload: serde_json::Value) {
 }
 
 #[tokio::test]
+async fn national_phone_person_matches_inbound_whatsapp_identity() {
+    let w = world().await;
+    let created = jt_app::usecases::inbox::people::create(
+        &w.deps,
+        &w.owner_ctx,
+        serde_json::from_value(json!({
+            "display_name": "National phone",
+            "source": "form",
+            "identities": [{"channel": "phone", "value": "5321234567"}]
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let identity_id = w.uow.snapshot().inbox.identities[0].id;
+    let c = cap(&w, "whatsapp_cloud").await;
+    let mut draft = meta("whatsapp_messages").remove(0);
+    draft.payload["message"]["from"] = json!("905321234567");
+    put(&w, Some(c), Provider::Meta, draft, 0).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot().inbox;
+    assert_eq!(s.people.len(), 1);
+    assert_eq!(s.people[0].id, created.person.id);
+    assert_eq!(s.identities.len(), 1);
+    assert_eq!(s.identities[0].id, identity_id);
+    assert_eq!(s.identities[0].value_normalized, "+905321234567");
+    assert_eq!(s.conversations.len(), 1);
+    assert_eq!(s.conversations[0].person_id, created.person.id);
+    assert_eq!(s.messages.len(), 1);
+    assert_eq!(s.messages[0].conversation_id, s.conversations[0].id);
+    assert_eq!(s.message_senders.get(&s.messages[0].id), Some(&identity_id));
+    assert_eq!(
+        s.conversation_send_states[&s.conversations[0].id].last_inbound_identity_id,
+        Some(identity_id)
+    );
+}
+
+#[tokio::test]
 async fn adapter_payloads_decode_without_invented_json() {
     let w = world().await;
     for (kind, file) in [

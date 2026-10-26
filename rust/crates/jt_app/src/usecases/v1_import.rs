@@ -114,7 +114,7 @@ impl Lead {
         }
         Ok(())
     }
-    /// Canonical values for new imports; matching also checks shared-intake aliases.
+    /// Canonical values for new imports; matching also checks legacy shared-intake aliases.
     pub fn identities(&self) -> (Vec<(IdentityChannel, String)>, u64) {
         let (keys, invalid) = self.identity_keys();
         (
@@ -152,14 +152,13 @@ impl Lead {
             if let Ok(shared) = normalise(channel, raw) {
                 aliases.push(shared);
             }
-            // Existing intake omits TR for ten-digit national numbers. Check that historical
-            // key even when the export spells the same number with 0 or +90, but never store it.
+            // Legacy intake omitted TR for ten-digit national numbers. Check that historical
+            // key explicitly: the current normaliser now adds TR. Never store this alias.
             if channel == IdentityChannel::Phone
                 && canonical.len() == 13
                 && canonical.starts_with("+90")
-                && let Ok(national) = normalise(channel, &canonical[3..])
             {
-                aliases.push(national);
+                aliases.push(format!("+{}", &canonical[3..]));
             }
             if let Some(existing) = result
                 .iter_mut()

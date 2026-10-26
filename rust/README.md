@@ -1265,6 +1265,7 @@ Belirsiz gönderim `unknown` olur ve otomatik yeniden gönderilmez. Aynı çalı
 `SendIntent` şimdilik uygulamanın `usecases::inbox::replies` modülündedir.
 
 `people.create`: `{display_name, identities:[{channel,value,capability_id?}], source}`.
+Başında `+` olmayan 10 haneli telefonlar Türkiye ulusal numarası sayılır: `532 123 45 67` → `+905321234567`; `0532…`, `90532…` ve `+90532…` aynı kimlikle eşleşir.
 Telefonlar SMS/WhatsApp/arama arasında ortak, opak kimlikler kabiliyetin dış hesap kimliğiyle
 kapsamlıdır. Çakışan kimlikler kişi verisini taşımaz; `identity_split` hatası iki kişi kimliğini ve
 kalıcı birleştirme önerisini verir. İlk temas değişmez; kişi, ilk yolculuk ve kimlikleri tek işlemde

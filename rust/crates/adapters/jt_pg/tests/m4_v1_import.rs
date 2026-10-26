@@ -611,13 +611,22 @@ async fn normal_phone_person(
 
 #[tokio::test]
 async fn normal_intake_national_phone_erasure_blocks_all_import_spellings() {
-    let db = TestDb::new().await;
-    let (ws, _) = db.seed_workspace("legacy phone erasure").await;
-    normal_phone_person(&db, ws, "5321234567", true).await;
     assert_eq!(
         jt_inbox::normalise(jt_inbox::IdentityChannel::Phone, "5321234567").unwrap(),
-        "+5321234567"
+        "+905321234567"
     );
+    assert_national_phone_erasure_blocks_import("5321234567").await;
+}
+
+#[tokio::test]
+async fn legacy_national_phone_alias_erasure_blocks_all_import_spellings() {
+    assert_national_phone_erasure_blocks_import("+5321234567").await;
+}
+
+async fn assert_national_phone_erasure_blocks_import(stored_phone: &str) {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("national phone erasure").await;
+    normal_phone_person(&db, ws, stored_phone, true).await;
     for raw in [
         "5321234567",
         "(532) 123 45 67",
@@ -649,9 +658,18 @@ async fn normal_intake_national_phone_erasure_blocks_all_import_spellings() {
 
 #[tokio::test]
 async fn normal_intake_national_phone_owner_is_never_duplicated_or_stolen() {
+    assert_national_phone_owner_is_preserved("5321234567", "+905321234567").await;
+}
+
+#[tokio::test]
+async fn legacy_national_phone_alias_owner_is_never_duplicated_or_stolen() {
+    assert_national_phone_owner_is_preserved("+5321234567", "+5321234567").await;
+}
+
+async fn assert_national_phone_owner_is_preserved(stored_phone: &str, expected: &str) {
     let db = TestDb::new().await;
     let (ws, _) = db.seed_workspace("legacy phone ownership").await;
-    let existing = normal_phone_person(&db, ws, "5321234567", false).await;
+    let existing = normal_phone_person(&db, ws, stored_phone, false).await;
     let mut row = lead("conflicting national phone");
     row.phone = Some("05321234567".into());
     row.whatsapp = Some("5321234567".into());
@@ -674,7 +692,7 @@ async fn normal_intake_national_phone_owner_is_never_duplicated_or_stolen() {
     let mut r = uow.tenant(ws).await.unwrap();
     assert_eq!(
         r.identities().list(existing).await.unwrap()[0].value_normalized,
-        "+5321234567"
+        expected
     );
 }
 
