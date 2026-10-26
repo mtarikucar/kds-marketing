@@ -2956,3 +2956,77 @@ and recovery status/WAL variables are implemented; see the
 [deployment runbook](../docs/operations/deployment.md) and
 [backup/restore runbook](../docs/operations/backup-restore.md) for custody, units,
 proxy limits, upgrade/rollback and the required monthly isolated restore drill.
+
+## M4 — final automated acceptance boundary
+
+The ratified boundary is **144 catalog rows, 125 MCP tools, 67 tables,
+12 reversible migration pairs (0001–0012), and 21 scheduled jobs**. Relative to
+M3's 134 rows/124 tools, M4 adds eleven named rows and removes
+`platform.workspaces.set_status`; only `jeeta.billing.report_payment` is a new
+MCP tool. Activation, operator administration and health remain panel-only.
+`/healthz`, `/readyz` and `/metrics` are infrastructure, without catalog rows.
+Payment evidence, operator confirmation, current-owner redemption, workspace
+status, strategy approval, capability verification and agent contact remain
+independent facts. There is no payment provider, credit or subscription system.
+
+From `rust/`, with `JEETA_TEST_DATABASE_URL` pointing at a disposable test server:
+
+```sh
+# Exact M3 snapshot + ratified M4 names, actual HTTP bindings, MCP schemas/effects.
+cargo test --locked --workspace --test m4_productisation --test twin_rule --test gate_rule
+# Aggregate real-Pg HTTP/MCP lifecycle, existing M2/M3 recording-provider scenarios,
+# retention, ordinary-role RLS, billing/onboarding/platform, T5 logs and T9 restores.
+make smoke-productisation
+# Individual M4 storage, migrations, race/authorization, and binary contracts.
+cargo test --locked --workspace --test m4_billing_storage --test m4_billing_contracts --test billing_repos --test migrations --test billing --test platform --test onboarding --test ops --test m4_operator_reset --test m4_observability --test jobs --test rls --test m4_restore
+# T8: first build the production candidate independently of workspace dev features.
+cargo build --release --locked -p jeeta
+pnpm --dir panel build
+cargo test --locked --workspace --test m4_deployment
+# T9/T10 real isolated logical/PITR drill and synthetic cutover rehearsal.
+bash scripts/tests/backup-restore.sh
+bash scripts/tests/v1-cutover.sh
+```
+
+`full_productisation_smoke` runs registration, pending strategy preparation,
+evidence/report retry, operator handoff, current-owner panel activation, adapter
+restart, team/key/capability operations and authenticated MCP with explicit
+refusals. It exercises suspend/resume/revoke/re-confirm on the same payment and
+single-use codes. It reuses `smoke_inbox` and `smoke_studio` unchanged scenario
+bodies for M2/M3's recorded webhook/reply/publication/measurement sequence; those
+scenarios use transactional fakes. The existing paid attribution smoke also runs
+on Pg. The script runs T9's `m4_restore` actual-Pg contracts, rather than treating
+a health marker as proof of restoration. The shell logical/PITR harness remains
+a separate required final check. No CI scenario sends real provider/payment traffic.
+
+The Pg job tests compare retained message, publication, attempt, piece, slot and
+ledger row images before/after cleanup. Temporary raw bodies and probes test the
+30-day cutoff at minus/exact/plus one microsecond, repeated cleanup, and active,
+pending and suspended tenants. Production domain data is never seeded by these tests.
+
+Final release-candidate verification (once after the fast checks are green):
+
+```sh
+set -o pipefail
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+cargo test --locked -p jt_outbound --test production_build
+cargo deny --locked check
+pnpm --dir panel test
+pnpm --dir panel typecheck
+pnpm --dir panel build
+bash scripts/tests/backup-restore.sh
+bash scripts/tests/v1-cutover.sh
+```
+
+T8 evidence comes from the deployment/package contracts and package-scoped release
+build (`51f91b12`, `87979a1b`, packaging hardening `8c697fd1`); T9 from the backup scripts and real verifier/drill
+(`f9cdf206`, `fc3c17fd`, `56228ee0`, `ad729fad`); T10 from the synthetic cutover
+rehearsal (`4cfc3feb`). These identify implementation provenance, not live approval.
+The [Turkish owner acceptance checklist](../docs/operations/m4-acceptance.md)
+records the remaining owner-only live payment/provider smoke, new provider-app
+approval, deployment, actual recovery-set logical/PITR validation, secret custody,
+and switch/rollback decisions. Unresolved provider approval or a failed restore
+keeps M4 acceptance open. Automated verification does not tag, publish or deploy.

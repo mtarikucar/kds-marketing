@@ -18,6 +18,11 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn scripted_whatsapp_consumer_reply_and_events_ack() {
+    run_acceptance().await;
+}
+
+/// Shared unchanged M2/M3 acceptance flow for the M4 aggregate.
+pub async fn run_acceptance() {
     let mut w = support::world().await;
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
     w.approve_strategy().await;

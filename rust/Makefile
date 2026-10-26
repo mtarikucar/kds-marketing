@@ -64,3 +64,8 @@ smoke-studio:
 # Disposable PG16 cluster, real binary, no provider traffic; see the recovery runbook.
 restore-drill:
 	bash scripts/tests/backup-restore.sh
+
+.PHONY: smoke-productisation
+# Offline M4 lifecycle, architecture, retention, RLS, redaction and restore contracts.
+smoke-productisation:
+	./scripts/smoke-productisation.sh

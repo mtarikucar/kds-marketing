@@ -81,6 +81,8 @@ jobs:
         env:
           JEETA_RELEASE_BINARY: ${{ runner.temp }}/jeeta-release/jeeta
           JEETA_RELEASE_PANEL_DIR: ${{ runner.temp }}/jeeta-release/panel
+      - name: Synthetic productisation smoke (no external provider traffic)
+        run: make smoke-productisation
       # A whole-workspace run unifies the dev-only `test-loopback` feature into jt_outbound, so the
       # production-build egress test is compiled separately, without dev features.
       - run: cargo test --locked -p jt_outbound --test production_build

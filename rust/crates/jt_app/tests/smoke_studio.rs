@@ -16,6 +16,11 @@ use time::Duration;
 
 #[tokio::test]
 async fn strategy_plan_content_publish_measure_learn_and_project() {
+    run_acceptance().await;
+}
+
+/// Shared unchanged M2/M3 acceptance flow for the M4 aggregate.
+pub async fn run_acceptance() {
     let (mut w, x) = scenarios::publishing_world().await;
     w.d.channels = Arc::new(jt_app::usecases::capabilities::UowChannelCatalog::new(
         Arc::new(w.uow.clone()),
