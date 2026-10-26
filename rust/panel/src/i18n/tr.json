@@ -65,7 +65,7 @@
   },
   "status": {
     "workspace": {
-      "pending_payment": "Ödeme bekleniyor",
+      "pending_payment": "Etkinleştirme bekliyor",
       "active": "Etkin",
       "suspended": "Askıda"
     },

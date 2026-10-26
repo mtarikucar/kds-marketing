@@ -65,7 +65,7 @@
   },
   "status": {
     "workspace": {
-      "pending_payment": "Awaiting payment",
+      "pending_payment": "Awaiting activation",
       "active": "Active",
       "suspended": "Suspended"
     },
