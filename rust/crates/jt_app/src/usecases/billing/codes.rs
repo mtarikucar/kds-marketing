@@ -148,6 +148,9 @@ pub async fn activate(
         .filter(|r| r.key == "owner" && r.permissions.contains(&Permission::TeamManage))
         .ok_or_else(|| AppError::forbidden("current owner role required"))?;
     let refused = || invalid("code", "activation code is invalid or unavailable");
+    // Expiry is judged at the moment the locks are held, not when the request started: a slow
+    // request body or a lock wait must not stretch a challenge past its 72 hours.
+    let now = deps.clock.now();
     if workspace.status != WorkspaceStatus::PendingPayment {
         return Err(refused());
     }
@@ -159,7 +162,7 @@ pub async fn activate(
             c.workspace_id == ctx.workspace_id
                 && c.invalidated_at.is_none()
                 && c.consumed_at.is_none()
-                && c.expires_at > ctx.now
+                && c.expires_at > now
                 && c.attempts < 5
         })
         .ok_or_else(refused)?;
@@ -196,11 +199,11 @@ pub async fn activate(
     }
     repos
         .activation_codes()
-        .consume(challenge.id, ctx.now, user_id)
+        .consume(challenge.id, now, user_id)
         .await?;
     repos
         .billing()
-        .activate_entitlement(grant.id, ctx.now, user_id)
+        .activate_entitlement(grant.id, now, user_id)
         .await?;
     repos
         .workspace()
@@ -211,17 +214,16 @@ pub async fn activate(
             &ctx.actor,
         )
         .await?;
-    repos
-        .ledger()
-        .append(ledger_entry(
-            ctx,
-            "billing.activated",
-            "entitlement",
-            grant.id,
-            json!({"entitlement_id": grant.id, "payment_id": grant.payment_id,
-            "activation_code_id": challenge.id, "redeemed_by": user_id}),
-        )?)
-        .await?;
+    let mut entry = ledger_entry(
+        ctx,
+        "billing.activated",
+        "entitlement",
+        grant.id,
+        json!({"entitlement_id": grant.id, "payment_id": grant.payment_id,
+        "activation_code_id": challenge.id, "redeemed_by": user_id}),
+    )?;
+    entry.at = now;
+    repos.ledger().append(entry).await?;
     let payment_reference = repos.billing().reference_get_or_create().await?;
     let entitlement = repos
         .billing()

@@ -96,3 +96,12 @@ async fn absent_and_invalidated_challenges_change_nothing() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn stale_request_time_cannot_redeem_after_expiry() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::activation_contract::stale_request_time_cannot_redeem_after_expiry(
+        std::sync::Arc::new(uow),
+    )
+    .await;
+}

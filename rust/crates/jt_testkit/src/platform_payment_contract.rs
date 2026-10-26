@@ -455,9 +455,14 @@ pub async fn reissue_invalidates_old_code_and_resets_attempts(uow: Arc<dyn UnitO
         now: ctx.now,
         ..w.owner()
     };
+    // The server clock reads the same later instant the reissue happened at.
+    let later = Deps {
+        clock: Arc::new(crate::fakes::FixedClock(ctx.now)),
+        ..w.deps.clone()
+    };
     assert_eq!(
         jt_app::usecases::billing::activate(
-            &w.deps,
+            &later,
             &owner,
             jt_app::usecases::billing::ActivateInput { code: old.code }
         )
@@ -467,7 +472,7 @@ pub async fn reissue_invalidates_old_code_and_resets_attempts(uow: Arc<dyn UnitO
         ErrorCode::Validation
     );
     let out = jt_app::usecases::billing::activate(
-        &w.deps,
+        &later,
         &owner,
         jt_app::usecases::billing::ActivateInput { code: new.code },
     )

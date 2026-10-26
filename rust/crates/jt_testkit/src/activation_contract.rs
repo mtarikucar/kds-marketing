@@ -24,8 +24,22 @@ pub async fn confirmed(uow: Arc<dyn UnitOfWork>) -> (World, String) {
         .unwrap();
     (w, out.activation.unwrap().code)
 }
+/// Redeems with the server clock reading the request's own time, as a prompt request would.
 pub async fn redeem(w: &World, ctx: &Ctx, code: &str) -> Result<BillingStatusOut, AppError> {
-    billing::activate(&w.deps, ctx, ActivateInput { code: code.into() }).await
+    redeem_at(w, ctx, ctx.now, code).await
+}
+/// Redeems with a server clock that differs from the time the request was authenticated.
+pub async fn redeem_at(
+    w: &World,
+    ctx: &Ctx,
+    clock: time::OffsetDateTime,
+    code: &str,
+) -> Result<BillingStatusOut, AppError> {
+    let deps = jt_app::usecases::Deps {
+        clock: Arc::new(crate::fakes::FixedClock(clock)),
+        ..w.deps.clone()
+    };
+    billing::activate(&deps, ctx, ActivateInput { code: code.into() }).await
 }
 pub async fn challenge(w: &World) -> ActivationCodeRow {
     let mut r = w.deps.uow.tenant(w.f.ws).await.unwrap();
@@ -106,6 +120,35 @@ pub async fn activation_expiry_at_72_hours(uow: Arc<dyn UnitOfWork>) {
             assert_eq!(w.entries().await.len(), 1);
         }
     }
+}
+
+/// A request authenticated before expiry but holding the locks after it is refused unchanged.
+pub async fn stale_request_time_cannot_redeem_after_expiry(uow: Arc<dyn UnitOfWork>) {
+    let (w, code) = confirmed(uow).await;
+    let ctx = Ctx {
+        now: FIXED_NOW + Duration::hours(71),
+        ..w.owner()
+    };
+    let before = challenge(&w).await;
+    let result = redeem_at(&w, &ctx, FIXED_NOW + Duration::hours(72), &code).await;
+    assert_eq!(result.unwrap_err().code, ErrorCode::Validation);
+    assert_eq!(challenge(&w).await, before);
+    assert_eq!(w.entries().await.len(), 1);
+    // Activation time and audit time come from the clock read under the lock.
+    let at = FIXED_NOW + Duration::hours(10);
+    let (w, code) = confirmed(w.deps.uow.clone()).await;
+    let ctx = Ctx {
+        now: FIXED_NOW + Duration::hours(9),
+        ..w.owner()
+    };
+    let out = redeem_at(&w, &ctx, at, &code).await.unwrap();
+    assert_eq!(out.entitlement.unwrap().activated_at, Some(at));
+    let entries = w.entries().await;
+    let activated = entries
+        .iter()
+        .find(|e| e.action.as_str() == "billing.activated")
+        .unwrap();
+    assert_eq!(activated.at, at);
 }
 
 pub async fn activation_binding_and_replay(uow: Arc<dyn UnitOfWork>) {
