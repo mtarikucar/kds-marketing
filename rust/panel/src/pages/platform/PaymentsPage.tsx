@@ -13,13 +13,21 @@ export const PLATFORM_PAYMENTS_KEY = ['platform','payments'] as const;
 
 export function PaymentsPage() {
   const {t,i18n}=useTranslation(); const client=useQueryClient();
-  const payments=useQuery({queryKey:PLATFORM_PAYMENTS_KEY,queryFn:listPayments});
+  // Decrypted references are page-scoped; never persist this query.
+  const payments=useQuery({queryKey:PLATFORM_PAYMENTS_KEY,queryFn:({signal})=>listPayments(signal),gcTime:0});
   // Only component memory holds delivery. No mutation cache, query cache, storage or telemetry.
   const [delivery,setDelivery]=useState<(ActivationDelivery & {payment: string}) | null>(null);
   const [statuses,setStatuses]=useState<Record<string,WorkspaceStatus>>({});
   const [busy,setBusy]=useState(false); const [revoking,setRevoking]=useState<PlatformPayment|null>(null); const [reason,setReason]=useState('');
   const mounted=useRef(false);
-  useEffect(()=>{mounted.current=true; return ()=>{mounted.current=false;};},[]);
+  useEffect(()=>{
+    mounted.current=true;
+    return ()=>{
+      mounted.current=false;
+      // Removal also cancels the query: a late response cannot restore its evidence.
+      client.removeQueries({queryKey:PLATFORM_PAYMENTS_KEY,exact:true});
+    };
+  },[client]);
   async function issue(row: PlatformPayment,reissue: boolean) {
     setDelivery(null); setBusy(true);
     try {
