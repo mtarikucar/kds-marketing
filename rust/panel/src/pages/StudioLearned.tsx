@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import * as api from '@/api/studio';
 import { listCapabilities } from '@/api/capabilities';
 import type { LaneKind } from '@/api/types';
+import { formatMoney, minorDigits, parseMinor } from '@/lib/format';
 import {
   Region,
   Field,
@@ -15,7 +16,8 @@ import {
 } from './StudioShared';
 
 function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const [budgetError, setBudgetError] = useState(false);
   const key = useStudioKey();
   const [cap, setCap] = useState('');
   const [arm, setArm] = useState('');
@@ -38,11 +40,12 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
       request_key: crypto.randomUUID(),
     }),
   );
-  const move = useStudioMutation((f: FormData) =>
+  // The daily budget is typed in major units of its currency (`1.500` / `1500,50`).
+  const move = useStudioMutation((input: { binding: string; minor: number; currency: string }) =>
     api.budgetMove({
-      binding_id: String(f.get('binding')),
-      daily_budget_minor: Number(f.get('amount')),
-      currency: String(f.get('currency')),
+      binding_id: input.binding,
+      daily_budget_minor: input.minor,
+      currency: input.currency,
       request_key: crypto.randomUUID(),
     }),
   );
@@ -121,7 +124,12 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
             className="mt-3 space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
-              move.mutate(new FormData(e.currentTarget));
+              const f = new FormData(e.currentTarget);
+              const currency = String(f.get('currency'));
+              const minor = parseMinor(String(f.get('amount')), minorDigits(currency), i18n.language);
+              setBudgetError(minor === null || minor <= 0);
+              if (minor === null || minor <= 0) return;
+              move.mutate({ binding: String(f.get('binding')), minor, currency });
             }}
           >
             <Field label="binding">
@@ -138,12 +146,12 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
               <input
                 className={inputClass}
                 name="amount"
-                type="number"
-                min={1}
-                step={1}
-                max={Number.MAX_SAFE_INTEGER}
+                inputMode="decimal"
+                autoComplete="off"
+                aria-invalid={budgetError || undefined}
                 required
               />
+              {budgetError && <p role="alert" className="text-xs text-destructive">{t('studio.invalidBudget')}</p>}
             </Field>
             <Field label="currency">
               <input
@@ -181,7 +189,7 @@ export function StudioLearned({
   onLane: (l: LaneKind | undefined) => void;
   manage: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [hypothesis, setHypothesis] = useState(query.hypothesis_id ?? '');
   const h = query.hypothesis_id || hypothesis || data?.hypotheses[0]?.id || '';
   const trend = useStudioMutation((f: FormData) =>
@@ -272,8 +280,10 @@ export function StudioLearned({
       {data?.learned.spend_vs_cap.map((c, i) => (
         <p key={i} className="text-sm">
           {t('studio.spend')} ({t(`studio.${c.lane}`)}):{' '}
-          {c.observed_minor ?? t('studio.notMeasured')} / {c.cap_minor} {c.currency}{' '}
-          <span className="text-xs">({t('studio.minorUnits')})</span>
+          {c.observed_minor === null
+            ? t('studio.notMeasured')
+            : formatMoney(c.observed_minor, c.currency, i18n.language)}{' '}
+          / {formatMoney(c.cap_minor, c.currency, i18n.language)}
         </p>
       ))}
       {data && (

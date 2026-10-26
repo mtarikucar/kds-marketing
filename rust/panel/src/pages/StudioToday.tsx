@@ -13,6 +13,7 @@ import {
   useStudioMutation,
 } from './StudioShared';
 import type { LaneKind } from '@/api/types';
+import { formatMoney } from '@/lib/format';
 
 function SlotEditor({ id, close }: { id: string; close: () => void }) {
   const { t } = useTranslation();
@@ -155,7 +156,7 @@ export function StudioToday({
   manage: boolean;
   overdue: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [lane, setLane] = useState<LaneKind>('organic');
   const [required, setRequired] = useState<boolean>();
   const approve = useStudioMutation(
@@ -244,7 +245,7 @@ export function StudioToday({
       {data?.today.budget_moves.map((m) => (
         <div key={m.id} className="space-y-2 border-b border-border pb-3">
           <p className="text-sm">
-            {t('studio.dailyBudget')}: {m.daily_budget_minor} {m.currency} ·{' '}
+            {t('studio.dailyBudget')}: {formatMoney(m.daily_budget_minor, m.currency, i18n.language)} ·{' '}
             {t(m.state === 'unknown' ? 'studio.budgetUnknown' : `studio.${m.state}`)}
           </p>
           {data.today.blockers

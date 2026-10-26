@@ -13,8 +13,14 @@ it('reports evidence with configured instructions and a read-only reference', as
   expect(await screen.findByText('Ödeme bekleniyor')).toBeInTheDocument();
   expect(await screen.findByText(billing.bank_instructions)).toBeInTheDocument();
   expect(screen.getByDisplayValue(billing.payment_reference)).toHaveAttribute('readonly');
-  expect(screen.getByText(/TRY/)).toBeInTheDocument();
-  await user.type(screen.getByLabelText('Ödenen tutar (kuruş)'), '125000');
+  expect(screen.getAllByText(/TRY/).length).toBeGreaterThan(0);
+  // Prefilled with the configured price in lira, typed the Turkish way.
+  const amount = screen.getByLabelText('Ödenen tutar (TRY)');
+  await waitFor(() => expect(amount).toHaveValue('1250'));
+  expect(screen.getByText(/ücret \S*1\.250,00/)).toBeInTheDocument();
+  await user.clear(amount);
+  await user.type(amount, '1.250');
+  await user.clear(screen.getByLabelText('Ödeme zamanı'));
   await user.type(screen.getByLabelText('Ödeme zamanı'), '2026-10-24T09:00');
   await user.click(screen.getByRole('button', {name:'Havale bildirimini gönder'}));
   await waitFor(() => expect(calls.some(c => c.path === '/api/billing/payments')).toBe(true));
@@ -74,8 +80,7 @@ it('walks from payment notification through operator confirmation to activation'
   mockFetch(answers);
   const {client}=renderAt('/billing');
   await screen.findByDisplayValue(billing.payment_reference);
-  await user.type(screen.getByLabelText('Ödenen tutar (kuruş)'),'125000');
-  await user.type(screen.getByLabelText('Ödeme zamanı'),'2026-10-24T09:00');
+  // Price and time are prefilled; the owner only confirms.
   answers['GET /api/billing']={...billing,payment};
   await user.click(screen.getByRole('button',{name:'Havale bildirimini gönder'}));
   expect(await screen.findByText('İşletmen onayı bekleniyor')).toBeInTheDocument();
@@ -89,4 +94,33 @@ it('walks from payment notification through operator confirmation to activation'
   expect(await screen.findByText('Çalışma alanı açık')).toBeInTheDocument();
   expect(screen.queryByLabelText('Etkinleştirme kodunu gir')).not.toBeInTheDocument();
   expect(JSON.stringify(client.getMutationCache().getAll())).not.toContain('ABCD1234');
+});
+
+it('explains an unreadable amount instead of silently refusing to submit', async () => {
+  const user = userEvent.setup();
+  const calls = mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/billing': billing, 'POST /api/billing/payments': payment });
+  renderAt('/billing');
+  const amount = await screen.findByLabelText('Ödenen tutar (TRY)');
+  await user.clear(amount);
+  await user.type(amount, '14.90.0');
+  await user.click(screen.getByRole('button', {name:'Havale bildirimini gönder'}));
+  expect(await screen.findByText(/Tutar okunamadı/)).toBeInTheDocument();
+  await user.clear(amount);
+  await user.click(screen.getByRole('button', {name:'Havale bildirimini gönder'}));
+  expect(await screen.findByText(/Tutar okunamadı/)).toBeInTheDocument();
+  expect(calls.some(c => c.path === '/api/billing/payments')).toBe(false);
+});
+
+it('submits the prefilled price and current time without any typing', async () => {
+  const user = userEvent.setup();
+  const calls = mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/billing': billing, 'POST /api/billing/payments': payment });
+  renderAt('/billing');
+  await screen.findByLabelText('Ödenen tutar (TRY)');
+  await user.click(screen.getByRole('button', {name:'Havale bildirimini gönder'}));
+  await waitFor(() => expect(calls.some(c => c.path === '/api/billing/payments')).toBe(true));
+  const post = calls.find(c => c.path === '/api/billing/payments')!;
+  expect(post.body).toMatchObject({amount_minor: billing.price_minor});
+  const sent = new Date((post.body as {paid_at:string}).paid_at).getTime();
+  expect(sent).toBeLessThanOrEqual(Date.now());
+  expect(Date.now() - sent).toBeLessThan(5 * 60_000);
 });

@@ -8,7 +8,9 @@ import { useSession } from '@/auth/useSession';
 import { can, isOwnerOrManager } from '@/lib/roles';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
+import { MoneyInput } from '@/components/forms';
 import { Badge, Button, Disclosure, Input, Textarea } from '@/components/ui';
+import { formatMoney } from '@/lib/format';
 import { InboxQuotes, InboxAppointments } from './InboxOffers';
 import { InboxMergeBanner } from './InboxMerges';
 import {
@@ -30,7 +32,7 @@ function eventName(kind: InboxEvent['kind']) {
 }
 
 function EventDetails({ event }: { event: InboxEvent }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const kind = event.kind;
   if (typeof kind === 'string') return null;
   if ('lost' in kind) return <p>{event.reason_label ?? kind.lost.reason_key}</p>;
@@ -39,7 +41,7 @@ function EventDetails({ event }: { event: InboxEvent }) {
   if ('won' in kind)
     return (
       <p>
-        {kind.won.product} · {kind.won.amount_minor / 100} {kind.won.currency}
+        {kind.won.product} · {formatMoney(kind.won.amount_minor, kind.won.currency, i18n.language)}
       </p>
     );
   if ('snoozed' in kind) return <InboxTime at={kind.snoozed.until} />;
@@ -53,7 +55,7 @@ function EventForm({ journeyId }: { journeyId: string }) {
   const [kind, setKind] = useState<Exclude<ReportEvent['kind'], 'reopened'>>('call_made');
   const [connected, setConnected] = useState(false);
   const [product, setProduct] = useState('');
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState<number | null>(null);
   const [currency, setCurrency] = useState('TRY');
   const [reason, setReason] = useState('');
   const [until, setUntil] = useState('');
@@ -72,9 +74,8 @@ function EventForm({ journeyId }: { journeyId: string }) {
   const valid =
     kind === 'won'
       ? !!product.trim() &&
-        amount !== '' &&
-        Number.isSafeInteger(Number(amount)) &&
-        Number(amount) >= 0 &&
+        amount !== null &&
+        amount >= 0 &&
         /^[A-Z]{3}$/.test(currency)
       : kind === 'lost'
         ? !!reasons.data?.some((row) => row.key === reason && row.active)
@@ -88,7 +89,7 @@ function EventForm({ journeyId }: { journeyId: string }) {
         save.mutate({ kind, payload: { connected } });
         break;
       case 'won':
-        save.mutate({ kind, payload: { product: product.trim(), amount_minor: Number(amount), currency } });
+        save.mutate({ kind, payload: { product: product.trim(), amount_minor: amount!, currency } });
         break;
       case 'lost':
         save.mutate({ kind, payload: { reason_key: reason } });
@@ -151,14 +152,7 @@ function EventForm({ journeyId }: { journeyId: string }) {
           </label>
           <label className="text-sm">
             {t('inbox.amount')}
-            <Input
-              required
-              type="number"
-              min="0"
-              step="1"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
+            <MoneyInput required currency={currency} minor={amount} onChange={setAmount} />
           </label>
           <label className="text-sm">
             {t('inbox.currency')}

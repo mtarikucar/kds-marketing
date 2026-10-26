@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import * as api from '@/api/inbox';
 import type { InboxAppointment, SendChannel, SendIntent } from '@/api/types';
 import { formatMoney } from '@/lib/format';
+import { MoneyInput } from '@/components/forms';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
 import { Button, Input, Textarea } from '@/components/ui';
@@ -15,7 +16,7 @@ export function InboxQuotes({ journeyId, terminal }: { journeyId: string; termin
   const key = useInboxKey();
   const rows = useQuery({ queryKey: [...key, 'quotes', journeyId], queryFn: () => api.listQuotes(journeyId) });
   const accept = useInboxMutation(api.acceptQuote);
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState<number | null>(null);
   const [currency, setCurrency] = useState('TRY');
   const [until, setUntil] = useState('');
   const [file, setFile] = useState('');
@@ -25,14 +26,14 @@ export function InboxQuotes({ journeyId, terminal }: { journeyId: string; termin
   const [delivery, setDelivery] = useState<string>();
   const attempt = useRef<{ body: string; key: string }>();
   const send = useInboxMutation(async () => {
-    const input = { amount_minor: Number(amount), currency, valid_until: new Date(until).toISOString(), file_ref: file.trim() || null, channel, text: text.trim(), intent };
+    const input = { amount_minor: amount!, currency, valid_until: new Date(until).toISOString(), file_ref: file.trim() || null, channel, text: text.trim(), intent };
     const body = JSON.stringify(input);
     if (attempt.current?.body !== body) attempt.current = { body, key: crypto.randomUUID() };
     const out = await api.sendQuote(journeyId, { ...input, request_key: attempt.current.key });
     setDelivery(out.delivery.state);
     setText('');
   });
-  const valid = !terminal && amount !== '' && Number.isSafeInteger(Number(amount)) && Number(amount) >= 0 && /^[A-Z]{3}$/.test(currency) && new Date(until).getTime() > Date.now() && !!text.trim();
+  const valid = !terminal && amount !== null && amount >= 0 && /^[A-Z]{3}$/.test(currency) && new Date(until).getTime() > Date.now() && !!text.trim();
   return <section className="flex flex-col gap-3 border-t pt-4">
     <h3 className="font-medium">{t('inbox.offers.quotes')}</h3>
     <QueryState query={rows}><ul className="space-y-3 text-sm">{rows.data?.map(row => <li key={row.id}>
@@ -42,7 +43,7 @@ export function InboxQuotes({ journeyId, terminal }: { journeyId: string; termin
     </li>)}</ul></QueryState>
     <ErrorCallout error={accept.error} />
     {!terminal && <form aria-label={t('inbox.offers.send')} className="flex flex-col gap-3" onSubmit={e => { e.preventDefault(); if (valid) send.mutate(); }}>
-      <label className="text-sm">{t('inbox.amount')}<Input type="number" min="0" step="1" required value={amount} onChange={e => setAmount(e.target.value)} /></label>
+      <label className="text-sm">{t('inbox.amount')}<MoneyInput required currency={currency} minor={amount} onChange={setAmount} /></label>
       <label className="text-sm">{t('inbox.currency')}<Input required pattern="[A-Z]{3}" maxLength={3} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></label>
       <label className="text-sm">{t('inbox.offers.validUntil')}<Input type="datetime-local" required value={until} onChange={e => setUntil(e.target.value)} /></label>
       <label className="text-sm">{t('inbox.offers.file')}<Input value={file} onChange={e => setFile(e.target.value)} /></label>

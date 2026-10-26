@@ -76,7 +76,7 @@ describe('Inbox', () => {
     }
     await user.selectOptions(select, 'won');
     await user.type(within(form).getByLabelText('Ürün'), 'Danışmanlık');
-    await user.type(within(form).getByLabelText('Tutar (kuruş / alt birim)'), '12500');
+    await user.type(within(form).getByLabelText('Tutar'), '125');
     await send('won', { product: 'Danışmanlık', amount_minor: 12500, currency: 'TRY' });
     await user.selectOptions(select, 'lost');
     await user.selectOptions(within(form).getByLabelText('Kayıp nedeni'), 'fiyat');
