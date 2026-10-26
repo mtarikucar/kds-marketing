@@ -95,6 +95,13 @@ fn deps_with(db: &TestDb, connectors: Arc<dyn ConnectorRegistry>) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
         connectors,
+        ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
+        ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+        billing: jt_app::usecases::billing::BillingConfig {
+            price_minor: 123,
+            price_currency: "TRY".into(),
+            bank_instructions: "Synthetic bank instructions".into(),
+        },
         job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
     }
 }
@@ -2028,9 +2035,16 @@ async fn inbox_pending_and_context_have_http_mcp_parity_without_strategy() {
     assert_eq!(human["ours"][0]["id"], json!(id));
     for status in ["pending_payment", "suspended"] {
         let mut r = deps.uow.platform().await.unwrap();
-        r.workspace_set_status(ws, serde_json::from_value(json!(status)).unwrap())
-            .await
-            .unwrap();
+        r.workspace_set_status(
+            ws,
+            serde_json::from_value(json!(status)).unwrap(),
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
         r.commit().await.unwrap();
         for (path, tool, input) in [
             (

@@ -345,10 +345,10 @@ async fn tick(deps: &Arc<Deps>, schedule: &Schedule, run: &Run) {
             );
             return;
         }
-        Err(e) => {
+        Err(_e) => {
+            deps.ops_signals.job(schedule.name, deps.clock.now(), 1);
             tracing::warn!(
                 job = schedule.name,
-                error = %e,
                 "skipped: the job's lock could not be asked for"
             );
             return;
@@ -358,18 +358,22 @@ async fn tick(deps: &Arc<Deps>, schedule: &Schedule, run: &Run) {
     let abort = AbortOnDrop(task.abort_handle());
     match task.await {
         // The job logged its own summary.
-        Ok(_) => {}
-        Err(e) if e.is_panic() => tracing::error!(
-            job = schedule.name,
-            "the run panicked; the next tick runs the job again"
-        ),
+        Ok(report) => deps
+            .ops_signals
+            .job(schedule.name, deps.clock.now(), report.failed),
+        Err(e) if e.is_panic() => {
+            deps.ops_signals.job(schedule.name, deps.clock.now(), 1);
+            tracing::error!(
+                job = schedule.name,
+                "the run panicked; the next tick runs the job again"
+            );
+        }
         Err(_) => {}
     }
     drop(abort);
-    if let Err(e) = guard.release().await {
+    if let Err(_e) = guard.release().await {
         tracing::warn!(
             job = schedule.name,
-            error = %e,
             "the job's lock could not be given back cleanly; its session is closed instead"
         );
     }
@@ -398,6 +402,12 @@ mod tests {
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect();
         vars.retain(|_, v| !v.is_empty());
+        vars.insert("JEETA_PRICE_MINOR".into(), "123".into());
+        vars.insert("JEETA_PRICE_CURRENCY".into(), "TRY".into());
+        vars.insert(
+            "JEETA_BANK_INSTRUCTIONS".into(),
+            "Synthetic bank instructions".into(),
+        );
         Config::from_map(&vars).unwrap()
     }
 

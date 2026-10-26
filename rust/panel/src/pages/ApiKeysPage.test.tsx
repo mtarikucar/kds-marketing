@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import * as clipboard from '@/lib/clipboard';
+import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { keys, me } from '@/test/fixtures';
@@ -63,4 +64,30 @@ describe('ApiKeysPage create dialog', () => {
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
+});
+
+it('key_is_shown_once_and_not_logged', async()=>{
+  const user=userEvent.setup();
+  const log=vi.spyOn(console,'log');
+  const copy=vi.spyOn(clipboard,'copyText').mockResolvedValue(true);
+  const secret='jt_once_only_secret';
+  mockFetch({'GET /api/auth/me':me,'GET /api/api-keys':keys,'POST /api/api-keys':{id:'new-key',name:'Bot',prefix:'jt_once',plaintext:secret,scopes:['workspace.read'],created_at:'2026-10-24T10:00:00Z'}});
+  const {client,router}=renderAt('/api-keys');
+  await user.click(await screen.findByRole('button',{name:tr.apiKeys.create}));
+  const dialog=await screen.findByRole('dialog');
+  await user.type(within(dialog).getByRole('textbox',{name:new RegExp(`^${tr.fields.name}`)}),'Bot');
+  await user.click(within(dialog).getByRole('button',{name:tr.apiKeys.dialog.submit}));
+  expect(await screen.findByDisplayValue(secret)).toBeInTheDocument();
+  expect(copy).not.toHaveBeenCalled();
+  expect(JSON.stringify(client.getMutationCache().getAll().map(m=>m.state))).not.toContain(secret);
+  await user.click(within(dialog).getByRole('button',{name:tr.common.copy}));
+  expect(copy).toHaveBeenCalledWith(secret);
+  await act(()=>router.navigate('/onboarding'));
+  await act(()=>router.navigate('/api-keys'));
+  expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument();
+  expect(JSON.stringify(client.getQueryCache().getAll())).not.toContain(secret);
+  expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+  expect(JSON.stringify(localStorage)).not.toContain(secret);
+  expect(JSON.stringify(sessionStorage)).not.toContain(secret);
+  expect(router.state.location.search).not.toContain(secret);
 });

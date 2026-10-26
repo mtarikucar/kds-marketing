@@ -98,13 +98,21 @@ pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."
 /// ([`StatusExemption::PendingPayment`]), but not while it is `suspended`.
 pub const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
 
-/// The status exemption of use case `id`, from its prefix: [`StatusExemption::Always`] for one of
+/// The status exemption of use case `id`. The exact `billing.status` row is Always and
+/// `billing.report_payment` and `billing.activate` are PendingPayment; no other billing name is exempt.
+/// For other rows: [`StatusExemption::Always`] for one of
 /// [`STATUS_EXEMPT_PREFIXES`], [`StatusExemption::PendingPayment`] for one of
 /// [`PENDING_PAYMENT_EXEMPT_PREFIXES`], else [`StatusExemption::Never`].
 pub const fn status_exemption(id: &str) -> StatusExemption {
-    if starts_with_any(id, STATUS_EXEMPT_PREFIXES) {
+    if equals(id, "ops.health")
+        || equals(id, "billing.status")
+        || starts_with_any(id, STATUS_EXEMPT_PREFIXES)
+    {
         StatusExemption::Always
-    } else if starts_with_any(id, PENDING_PAYMENT_EXEMPT_PREFIXES) {
+    } else if equals(id, "billing.activate")
+        || equals(id, "billing.report_payment")
+        || starts_with_any(id, PENDING_PAYMENT_EXEMPT_PREFIXES)
+    {
         StatusExemption::PendingPayment
     } else {
         StatusExemption::Never
@@ -112,6 +120,10 @@ pub const fn status_exemption(id: &str) -> StatusExemption {
 }
 
 /// Whether `id` starts with one of `prefixes`, usable in a constant.
+const fn equals(a: &str, b: &str) -> bool {
+    a.len() == b.len() && starts_with(a, b)
+}
+
 const fn starts_with_any(id: &str, prefixes: &[&str]) -> bool {
     let mut i = 0;
     while i < prefixes.len() {
@@ -265,6 +277,9 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),
     panel_only("auth.logout", Exempt, ("POST", "/api/auth/logout"), Write),
     panel_only("auth.me", Exempt, ("GET", "/api/auth/me"), Read),
+    panel_only("billing.status", Exempt, ("GET", "/api/billing"), Read),
+    panel_only("billing.activate", Exempt, ("POST", "/api/billing/activate"), Write),
+    twin("billing.report_payment", Exempt, "jeeta.billing.report_payment", ("POST", "/api/billing/payments"), Write),
     twin("workspace.info", Exempt, "jeeta.workspace.info", ("GET", "/api/workspace"), Read),
     panel_only("workspace.switch", Exempt, ("POST", "/api/auth/switch-workspace"), Write),
     twin("team.list", Exempt, "jeeta.team.list", ("GET", "/api/team"), Read),
@@ -347,7 +362,14 @@ pub static CATALOG: &[UseCase] = &[
     twin("work.set_checkin_interval", Exempt, "jeeta.work.set_checkin_interval", ("PUT", "/api/work/checkin-interval"), Write),
     panel_only("platform.login", Exempt, ("POST", "/api/platform/login"), Write),
     panel_only("platform.workspaces.list", Exempt, ("GET", "/api/platform/workspaces"), Read),
-    panel_only("platform.workspaces.set_status", Exempt, ("PATCH", "/api/platform/workspaces/{workspace_id}/status"), Write),
+    panel_only("platform.payments.list", Exempt, ("GET", "/api/platform/payments"), Read),
+    panel_only("platform.billing.confirm", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm"), Write),
+    panel_only("platform.billing.reissue", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue"), Write),
+    panel_only("platform.billing.revoke_activation", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/revoke-activation"), Write),
+    panel_only("platform.workspaces.suspend", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/suspend"), Write),
+    panel_only("platform.operators.reset_password", Exempt, ("POST", "/api/platform/operators/{operator_id}/reset-password"), Write),
+    panel_only("ops.health", Exempt, ("GET", "/api/platform/health"), Read),
+    panel_only("platform.workspaces.resume", Exempt, ("POST", "/api/platform/workspaces/{workspace_id}/resume"), Write),
 ];
 
 /// The use case with this id.

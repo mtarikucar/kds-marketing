@@ -52,7 +52,7 @@ async fn owner_lists_ledger_newest_first_with_filters() {
     assert_eq!(all[1]["entry"]["actor"]["kind"], "system");
     assert_eq!(
         all[1]["entry"]["payload"],
-        json!({ "from": "pending_payment", "to": "active" })
+        json!({ "from": "pending_payment", "to": "active", "reason":"fixture activation", "by":all[1]["entry"]["actor"] })
     );
     assert_eq!(all[0]["entry"]["actor"]["kind"], "human");
     assert_eq!(

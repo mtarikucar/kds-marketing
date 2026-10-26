@@ -35,7 +35,7 @@ pub async fn run(config: Config) -> Result<()> {
     )?;
     let pool = serve::connect(&config).await?;
     serve::check_database_role(&pool, config.allow_superuser).await?;
-    let (deps, _egress) = serve::boot(pool.clone(), &config).await?;
+    let (deps, _egress, _ops) = serve::boot(pool.clone(), &config).await?;
     serve::log_providers(&config);
     let principal = match api_keys::authenticate(&deps, key).await {
         Ok(principal) => principal,

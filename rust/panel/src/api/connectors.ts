@@ -99,6 +99,6 @@ export function reconnectConnector(id: string): Promise<StartOut> {
  * `GET /api/connectors/hooks`: the webhook addresses to register at the providers. The NetGSM ones
  * carry the workspace's hook tokens; the server answers only `capabilities.manage`.
  */
-export function connectorHooks(): Promise<HooksOut> {
-  return request('GET', '/api/connectors/hooks');
+export function connectorHooks(signal?: AbortSignal): Promise<HooksOut> {
+  return request('GET', '/api/connectors/hooks', { signal });
 }

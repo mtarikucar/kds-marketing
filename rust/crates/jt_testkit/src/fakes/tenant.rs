@@ -51,6 +51,14 @@ impl MemBundle for MemTenant {
 
 #[async_trait]
 impl TenantRepos for MemTenant {
+    fn billing(&mut self) -> &mut dyn jt_app::ports::billing::BillingRepo {
+        self
+    }
+
+    fn activation_codes(&mut self) -> &mut dyn jt_app::ports::billing::ActivationCodeRepo {
+        self
+    }
+
     fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
         self
     }
@@ -247,6 +255,7 @@ impl RoleRepo for MemTenant {
         id: RoleId,
         permissions: BTreeSet<Permission>,
     ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             if this.state().role_in(this.ws, id).is_none() {
                 return Err(AppError::not_found("no such role"));
@@ -379,6 +388,11 @@ impl MembershipRepo for MemTenant {
             .cloned())
     }
 
+    async fn lock_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError> {
+        self.tx.lock_studio().await;
+        self.find_by_user(user_id).await
+    }
+
     async fn insert_invite(&mut self, row: MembershipRow) -> Result<(), AppError> {
         self.call(|this| {
             same_workspace(this.ws, row.workspace_id)?;
@@ -399,6 +413,7 @@ impl MembershipRepo for MemTenant {
     }
 
     async fn set_role(&mut self, id: MembershipId, role_id: RoleId) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             role_in_workspace(this.state(), this.ws, role_id)?;
             if this.state().membership_in(this.ws, id).is_none() {
@@ -414,6 +429,7 @@ impl MembershipRepo for MemTenant {
     }
 
     async fn remove(&mut self, id: MembershipId) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
         self.call(|this| {
             if this.state().membership_in(this.ws, id).is_none() {
                 return Err(AppError::not_found("no such membership"));
@@ -428,6 +444,7 @@ impl MembershipRepo for MemTenant {
     }
 
     async fn count_active_owners(&mut self) -> Result<i64, AppError> {
+        self.tx.lock_studio().await;
         Ok(self.state().active_owners(self.ws).len() as i64)
     }
 }
@@ -690,6 +707,24 @@ impl LedgerRepo for MemTenant {
 
 #[async_trait]
 impl WorkspaceRepo for MemTenant {
+    async fn lock(&mut self) -> Result<WorkspaceRow, AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| t.tx.billing_workspace(t.ws))
+    }
+    async fn set_status(
+        &mut self,
+        ws: WorkspaceId,
+        status: jt_tenancy::WorkspaceStatus,
+        reason: &str,
+        by: &Actor,
+    ) -> Result<(), AppError> {
+        self.tx.lock_studio().await;
+        self.call(|t| {
+            same_workspace(t.ws, ws)?;
+            t.tx.billing_status(ws, status, reason, by)
+        })
+    }
+
     async fn get(&mut self) -> Result<WorkspaceRow, AppError> {
         self.call(|this| {
             this.state()

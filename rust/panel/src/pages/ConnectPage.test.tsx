@@ -5,7 +5,7 @@ import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
 import { browser } from '@/lib/browser';
 import { PAGE_ID, PENDING_ID, SMS_LINE_ID, capabilities, lostPage, me, repMe, smsLine } from '@/test/fixtures';
-import { mockFetch, renderAt } from '@/test/render';
+import { mockFetch, renderAt, withStatus } from '@/test/render';
 
 const started = {
   authorize_url: 'https://oauth.test/meta/authorize?state=signed-state',
@@ -248,3 +248,37 @@ describe('ConnectPage', () => {
     expect(document.body.innerHTML).not.toContain('private-iys-password');
     await waitFor(()=>expect(JSON.stringify(client.getMutationCache().getAll().map((m)=>m.state.variables))).not.toContain('private-iys-password'));
   });
+
+it('provider_missing_app_is_not_connection_success', async()=>{
+  const user=userEvent.setup();
+  const assign=vi.spyOn(browser,'assign').mockImplementation(()=>{});
+  mockFetch({'GET /api/auth/me':me,'POST /api/connectors/oauth/start':withStatus(409,{code:'CONFLICT',message:'platform app missing',details:{reason:'provider_app_not_configured'}})});
+  renderAt('/connect?kind=x');
+  await user.click(await screen.findByRole('button',{name:i18n.t('connect.oauth.submit',{provider:'X'})}));
+  expect(await screen.findByText('Sağlayıcı uygulaması yapılandırılmadı')).toBeInTheDocument();
+  expect(assign).not.toHaveBeenCalled();
+  expect(screen.queryByText(tr.connect.result.verified)).not.toBeInTheDocument();
+});
+
+it('reconnect_and_expiry_are_visible',async()=>{
+  mockFetch({'GET /api/auth/me':me,[`GET /api/capabilities/${PAGE_ID}`]:{...lostPage,capability:{...lostPage.capability,connector_public:{reconnect_required:true,access:{expires_at:'2026-10-24T12:00:00Z'}}}},
+    'GET /api/connectors/hooks':{meta:{url:'https://public.jeeta.test/jeeta/hooks/meta',verify_token_hint:'operator'},netgsm:[]}});
+  renderAt(`/connect?capability=${PAGE_ID}`);
+  expect(await screen.findByText('Yeniden bağlantı gerekli')).toBeInTheDocument();
+  expect(screen.getByText('2026-10-24T12:00:00Z')).toBeInTheDocument();
+  expect(await screen.findByDisplayValue('https://public.jeeta.test/jeeta/oauth/callback/meta')).toBeInTheDocument();
+  expect(screen.getByDisplayValue('https://public.jeeta.test/jeeta/hooks/meta')).toBeInTheDocument();
+});
+
+it('shows access metadata on the freshly connected result as well as on revisit',async()=>{
+  const user=userEvent.setup();
+  mockFetch({'GET /api/auth/me':me,'POST /api/connectors/credentials':{...smsLine,capability:{...smsLine.capability,connector_public:{reconnect_required:true,access:{expires_at:'2026-10-24T12:00:00Z'}}}}});
+  renderAt('/connect?kind=sms_line');
+  await user.type(await screen.findByLabelText(tr.connect.credentials.name),'SMS');
+  await user.type(screen.getByLabelText(tr.connect.credentials.usercode),'8508001234');
+  await user.type(screen.getByLabelText(tr.connect.credentials.password),'synthetic');
+  await user.type(screen.getByLabelText(tr.connect.credentials.msgheader),'ALFA');
+  await user.click(screen.getByRole('button',{name:tr.connect.credentials.submit}));
+  expect(await screen.findByText('Yeniden bağlantı gerekli')).toBeInTheDocument();
+  expect(screen.getByText('2026-10-24T12:00:00Z')).toBeInTheDocument();
+});

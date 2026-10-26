@@ -128,6 +128,10 @@ fn tenant_tables_are_read_from_the_migrations() {
         "inbound_events",
         "oauth_pending",
         "probe_runs",
+        "payment_notifications",
+        "workspace_entitlements",
+        "workspace_billing",
+        "activation_codes",
     ] {
         assert!(
             tables.iter().any(|x| x == t),
@@ -140,6 +144,7 @@ fn tenant_tables_are_read_from_the_migrations() {
         "sessions",
         "platform_operators",
         "platform_sessions",
+        "m4_grandfathered_manifest",
     ] {
         assert!(!tables.iter().any(|x| x == t), "{t} is not a tenant table");
     }

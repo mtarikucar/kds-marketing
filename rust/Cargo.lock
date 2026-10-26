@@ -1318,12 +1318,15 @@ name = "jeeta"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "dotenvy",
  "hex",
  "jt_app",
+ "jt_capability",
  "jt_connector",
  "jt_files",
+ "jt_ledger",
  "jt_mail",
  "jt_mcp",
  "jt_meta",
@@ -1332,11 +1335,16 @@ dependencies = [
  "jt_panel_http",
  "jt_pg",
  "jt_seal",
+ "jt_strategy",
+ "jt_tenancy",
  "jt_testkit",
  "jt_webhook",
  "jt_x",
+ "libc",
  "serde_json",
+ "sha2 0.11.1",
  "sqlx",
+ "subtle",
  "time",
  "tokio",
  "tower",
@@ -1364,6 +1372,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "chrono-tz",
+ "hmac 0.13.0",
  "jt_capability",
  "jt_connector",
  "jt_inbox",
@@ -1400,6 +1409,7 @@ dependencies = [
  "jt_inbox",
  "jt_ledger",
  "jt_mcp",
+ "jt_meta",
  "jt_panel_http",
  "jt_pg",
  "jt_strategy",
@@ -1407,6 +1417,7 @@ dependencies = [
  "jt_tenancy",
  "jt_testkit",
  "proc-macro2",
+ "serde",
  "serde_json",
  "syn 2.0.119",
  "time",
@@ -1617,6 +1628,7 @@ dependencies = [
  "jt_app",
  "jt_capability",
  "jt_connector",
+ "jt_ledger",
  "jt_mcp",
  "jt_pg",
  "jt_strategy",
@@ -1624,6 +1636,7 @@ dependencies = [
  "jt_testkit",
  "serde",
  "serde_json",
+ "sqlx",
  "time",
  "tokio",
  "tower",
@@ -1643,14 +1656,17 @@ dependencies = [
  "jt_connector",
  "jt_inbox",
  "jt_ledger",
+ "jt_seal",
  "jt_strategy",
  "jt_studio",
  "jt_tenancy",
  "jt_testkit",
+ "rand 0.10.3",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "sqlx",
+ "subtle",
  "time",
  "tokio",
  "tracing",
@@ -2785,6 +2801,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3580,6 +3602,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

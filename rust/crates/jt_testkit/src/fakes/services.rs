@@ -350,6 +350,13 @@ pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
         connectors: Arc::new(ScriptedRegistry::new()),
+        ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
+        ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+        billing: jt_app::usecases::billing::BillingConfig {
+            price_minor: 123,
+            price_currency: "TRY".into(),
+            bank_instructions: "Synthetic bank instructions".into(),
+        },
         job_lock: Arc::new(FakeJobLock::new()),
     }
 }
@@ -385,5 +392,15 @@ mod tests {
                 ]
             )]
         );
+    }
+}
+
+/// A deterministic, metadata-only runtime snapshot for operator transport tests.
+#[derive(Clone)]
+pub struct FakeOpsSnapshot(pub jt_app::ports::ops::OpsHealthOut);
+#[async_trait]
+impl jt_app::ports::ops::OpsSnapshot for FakeOpsSnapshot {
+    async fn snapshot(&self) -> Result<jt_app::ports::ops::OpsHealthOut, AppError> {
+        Ok(self.0.clone())
     }
 }

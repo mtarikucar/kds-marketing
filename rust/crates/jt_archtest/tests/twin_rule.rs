@@ -110,12 +110,13 @@ fn mcp_registry_matches_catalog() {
 /// capability +1; `jeeta.budget.items_update` and `jeeta.budget.items_retire`, budget +2), the 7
 /// `connector` tools (six from Task 8 and `jeeta.connector.hooks` from Task 9; the eighth
 /// connection use case, completing an OAuth flow, is the panel's callback only) and the 3
-/// `events` tools: 60. Inbox adds 46 and Studio operations add 18, giving 124.
+/// `events` tools: 60. Inbox adds 46 and Studio operations add 18, giving 124; billing evidence adds one (125).
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("agent", 1),
     ("workspace", 1),
+    ("billing", 1),
     ("team", 4),
     ("roles", 4),
     ("api_keys", 3),
@@ -132,11 +133,11 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
 ];
 
 #[test]
-fn the_registry_holds_124_tools() {
+fn the_registry_holds_125_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 124);
+    assert_eq!(specs.len(), 125);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 124);
+    assert_eq!(total, 125);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -145,7 +146,7 @@ fn the_registry_holds_124_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 124);
+    assert_eq!(catalog, 125);
 }
 
 /// An MCP-only use case has no human caller: only an agent's check-in is one.
@@ -193,5 +194,40 @@ fn destructive_confirmation_tools_are_explicitly_listed() {
             "jeeta.inbox.merges_undo",
             "jeeta.inbox.people_erase",
         ])
+    );
+}
+
+#[test]
+fn activation_is_panel_only_without_mcp_schema_or_handler() {
+    let row = jt_app::catalog::find("billing.activate").unwrap();
+    assert!(row.panel_only);
+    assert_eq!(row.panel_route, Some(("POST", "/api/billing/activate")));
+    assert!(row.mcp_tool.is_none());
+    assert!(by_mcp_tool("jeeta.billing.activate").is_none());
+    assert!(
+        !jt_mcp::registry().iter().any(
+            |tool| tool.name == "jeeta.billing.activate" || tool.use_case == "billing.activate"
+        )
+    );
+}
+
+#[test]
+fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows() {
+    let row = jt_app::catalog::find("ops.health").unwrap();
+    assert!(row.panel_only && row.mcp_tool.is_none());
+    assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
+    assert_eq!(CATALOG.len(), 144);
+    for path in ["/readyz", "/metrics"] {
+        assert!(
+            CATALOG
+                .iter()
+                .all(|r| r.panel_route.is_none_or(|(_, p)| p != path))
+        );
+        assert!(jt_panel_http::static_files::is_reserved(path));
+    }
+    assert!(
+        jt_mcp::registry()
+            .iter()
+            .all(|r| !r.name.starts_with("jeeta.ops."))
     );
 }

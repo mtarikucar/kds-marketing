@@ -1,3 +1,5 @@
+import { isApiError } from '@/api/client';
+import { ProviderSetup } from './ProviderSetup';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, LogIn } from 'lucide-react';
@@ -146,7 +148,7 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
         {capability !== null && capability.external_id === null && (
           <Callout tone="info">{t('connect.oauth.firstBindsNote')}</Callout>
         )}
-        <ErrorCallout error={start.error} />
+        {isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_app_not_configured' ? <Callout tone="warning">{t('providerSetup.missing')}</Callout> : <ErrorCallout error={start.error} />}
         {redirecting ? (
           <p className="text-sm text-muted-foreground">{t('capabilities.connector.redirecting')}</p>
         ) : (
@@ -162,6 +164,18 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
       </CardContent>
     </Card>
   );
+}
+
+/** Public access metadata is useful both immediately after a probe and on a later visit. */
+function ConnectorAccess({ capability }: { capability: Capability }) {
+  const { t } = useTranslation();
+  const access = capability.connector_public.access as { expires_at?: unknown } | undefined;
+  return <>
+    {capability.connector_public.reconnect_required === true &&
+      <Callout tone="warning">{t('providerSetup.reconnect')}</Callout>}
+    {typeof access?.expires_at === 'string' &&
+      <p>{t('providerSetup.expires')}: <time dateTime={access.expires_at}>{access.expires_at}</time></p>}
+  </>;
 }
 
 /** The probe's outcome as the capability carries it after its credentials were entered. */
@@ -187,6 +201,7 @@ function Result({ out, onAnother }: { out: CapabilityOut; onAnother: () => void 
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {callout}
+        <ConnectorAccess capability={out.capability} />
         {out.capability.kind_key === 'sms_line' && <IysForm capability={out.capability} />}
         <div className="flex flex-wrap gap-2">
           <Button asChild>
@@ -502,6 +517,7 @@ export function ConnectPage() {
               {t('connect.forCapability', { name: capability.name })}{' '}
               <span className="text-muted-foreground">({kindLabel(t, capability.kind_key)})</span>
             </p>
+            <ConnectorAccess capability={capability} />
             <ConnectKind kind={capability.kind_key} capability={capability} onDone={setDone} />
           </div>
         )}
@@ -523,7 +539,9 @@ export function ConnectPage() {
   return (
     <>
       <PageHeader title={t('connect.title')} description={t('connect.description')} />
+      <Link className="text-primary underline" to="/onboarding">{t('onboarding.title')}</Link>
       {body}
+      {canManage && <ProviderSetup />}
     </>
   );
 }

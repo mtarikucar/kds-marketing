@@ -23,6 +23,12 @@ use jt_app::ports::connectors::{InstagramApp, MetaApp, PlatformAppConfig, Url, X
 use tracing_subscriber::EnvFilter;
 
 /// The application's PostgreSQL URL (required).
+pub const PRICE_MINOR: &str = "JEETA_PRICE_MINOR";
+pub const PRICE_CURRENCY: &str = "JEETA_PRICE_CURRENCY";
+pub const BANK_INSTRUCTIONS: &str = "JEETA_BANK_INSTRUCTIONS";
+pub const METRICS_TOKEN: &str = "JEETA_METRICS_TOKEN";
+pub const WAL_ARCHIVE_DIR: &str = "JEETA_WAL_ARCHIVE_DIR";
+pub const RECOVERY_STATUS_DIR: &str = "JEETA_RECOVERY_STATUS_DIR";
 pub const DATABASE_URL: &str = "JEETA_DATABASE_URL";
 /// The HTTP listen address, `ip:port` (default [`DEFAULT_BIND`]).
 pub const BIND: &str = "JEETA_BIND";
@@ -35,6 +41,8 @@ pub const COOKIE_SECURE: &str = "JEETA_COOKIE_SECURE";
 pub const SECRET_KEY: &str = "JEETA_SECRET_KEY";
 /// Public `host[:port]` values the MCP endpoint accepts in `Host`, comma-separated.
 pub const ALLOWED_HOSTS: &str = "JEETA_ALLOWED_HOSTS";
+/// Explicit sole-operator recovery; requires both bootstrap credentials.
+pub const BOOTSTRAP_RESET: &str = "JEETA_PLATFORM_BOOTSTRAP_RESET";
 /// The first platform operator's email; set together with [`BOOTSTRAP_PASSWORD`].
 pub const BOOTSTRAP_EMAIL: &str = "JEETA_PLATFORM_BOOTSTRAP_EMAIL";
 /// The first platform operator's password; set together with [`BOOTSTRAP_EMAIL`].
@@ -79,6 +87,12 @@ pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
 
 /// Every variable the binary reads.
 const VARS: &[&str] = &[
+    PRICE_MINOR,
+    PRICE_CURRENCY,
+    BANK_INSTRUCTIONS,
+    METRICS_TOKEN,
+    RECOVERY_STATUS_DIR,
+    WAL_ARCHIVE_DIR,
     DATABASE_URL,
     BIND,
     PANEL_DIR,
@@ -86,6 +100,7 @@ const VARS: &[&str] = &[
     COOKIE_SECURE,
     SECRET_KEY,
     ALLOWED_HOSTS,
+    BOOTSTRAP_RESET,
     BOOTSTRAP_EMAIL,
     BOOTSTRAP_PASSWORD,
     STDIO_API_KEY,
@@ -248,6 +263,10 @@ pub enum LogFormat {
 /// The validated configuration. `Debug` masks the database URL and every secret.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Config {
+    pub metrics_token: Option<String>,
+    pub wal_archive_dir: Option<PathBuf>,
+    pub recovery_status_dir: Option<PathBuf>,
+    pub billing: jt_app::usecases::billing::BillingConfig,
     pub database_url: String,
     pub bind: SocketAddr,
     pub panel_dir: Option<PathBuf>,
@@ -258,6 +277,7 @@ pub struct Config {
     /// Public `host[:port]` values for the MCP endpoint, on top of the loopback names.
     pub allowed_hosts: Vec<String>,
     pub bootstrap: Option<Bootstrap>,
+    pub bootstrap_reset: bool,
     pub stdio_api_key: Option<String>,
     pub log_filter: String,
     pub log_format: LogFormat,
@@ -284,7 +304,7 @@ impl fmt::Debug for Config {
             .field("allowed_hosts", &self.allowed_hosts)
             .field("bootstrap", &self.bootstrap)
             .field("stdio_api_key", &self.stdio_api_key.as_ref().map(|_| "***"))
-            .field("log_filter", &self.log_filter)
+            .field("log_filter", &"configured")
             .field("log_format", &self.log_format)
             .field("allow_superuser", &self.allow_superuser)
             .field("allow_test_loopback", &self.allow_test_loopback)
@@ -295,6 +315,21 @@ impl fmt::Debug for Config {
 }
 
 impl Config {
+    pub fn require_metrics_token(&self) -> Result<(), ConfigError> {
+        if self
+            .metrics_token
+            .as_ref()
+            .is_none_or(|s| s.trim().is_empty())
+        {
+            Err(ConfigError::new(
+                METRICS_TOKEN,
+                "must be nonempty for serve",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     /// The configuration from the process environment (see [`load_dotenv`] for the env file).
     pub fn from_env() -> Result<Config, ConfigError> {
         let mut vars = HashMap::new();
@@ -367,6 +402,11 @@ impl Config {
             ));
         }
 
+        let bootstrap_reset = match get(BOOTSTRAP_RESET).map(str::trim) {
+            None | Some("0") => false,
+            Some("1") => true,
+            _ => return Err(ConfigError::new(BOOTSTRAP_RESET, "must be 0 or 1")),
+        };
         let bootstrap = match (get(BOOTSTRAP_EMAIL), get(BOOTSTRAP_PASSWORD)) {
             (None, None) => None,
             (Some(email), Some(password)) => Some(Bootstrap {
@@ -387,11 +427,25 @@ impl Config {
             }
         };
 
+        if bootstrap_reset && bootstrap.is_none() {
+            return Err(ConfigError::new(
+                BOOTSTRAP_RESET,
+                "requires both bootstrap email and password",
+            ));
+        }
+        if let Some(b) = &bootstrap
+            && b.password.chars().count() < 12
+        {
+            return Err(ConfigError::new(
+                BOOTSTRAP_PASSWORD,
+                "must contain at least 12 characters",
+            ));
+        }
         let stdio_api_key = get(STDIO_API_KEY).map(|key| key.trim().to_owned());
 
         let log_filter = get(LOG).map_or(DEFAULT_LOG, str::trim).to_owned();
         EnvFilter::try_new(&log_filter)
-            .map_err(|e| ConfigError::new(LOG, format!("is not a valid tracing filter: {e}")))?;
+            .map_err(|_| ConfigError::new(LOG, "is not a valid tracing filter"))?;
 
         let log_format = match get(LOG_FORMAT).map(str::trim) {
             None => LogFormat::Compact,
@@ -402,7 +456,48 @@ impl Config {
 
         let apps = parse_apps(&get)?;
 
+        let price_minor = get(PRICE_MINOR)
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|v| *v > 0)
+            .ok_or_else(|| ConfigError::new(PRICE_MINOR, "must be a positive integer"))?;
+        let price_currency = get(PRICE_CURRENCY)
+            .filter(|s| s.len() == 3 && s.bytes().all(|b| b.is_ascii_uppercase()))
+            .ok_or_else(|| {
+                ConfigError::new(PRICE_CURRENCY, "must be three uppercase ASCII letters")
+            })?
+            .to_owned();
+        let bank_instructions = get(BANK_INSTRUCTIONS)
+            .filter(|s| s.len() <= 4096)
+            .ok_or_else(|| ConfigError::new(BANK_INSTRUCTIONS, "must contain 1 to 4096 bytes"))?
+            .to_owned();
+        let recovery_status_dir = get(RECOVERY_STATUS_DIR).map(PathBuf::from);
+        if recovery_status_dir
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
+        {
+            return Err(ConfigError::new(
+                RECOVERY_STATUS_DIR,
+                "must be an absolute directory",
+            ));
+        }
+        let wal_archive_dir = get(WAL_ARCHIVE_DIR).map(PathBuf::from);
+        if wal_archive_dir.as_ref().is_some_and(|p| !p.is_absolute())
+            || (wal_archive_dir.is_some() && recovery_status_dir.is_none())
+        {
+            return Err(ConfigError::new(
+                WAL_ARCHIVE_DIR,
+                "requires an absolute archive directory and JEETA_RECOVERY_STATUS_DIR",
+            ));
+        }
         Ok(Config {
+            wal_archive_dir,
+            metrics_token: get(METRICS_TOKEN).map(str::to_owned),
+            recovery_status_dir,
+            billing: jt_app::usecases::billing::BillingConfig {
+                price_minor,
+                price_currency,
+                bank_instructions,
+            },
             database_url,
             bind,
             panel_dir,
@@ -411,6 +506,7 @@ impl Config {
             secret_key,
             allowed_hosts,
             bootstrap,
+            bootstrap_reset,
             stdio_api_key,
             log_filter,
             log_format,
@@ -626,7 +722,7 @@ fn parse_allowed_hosts(raw: Option<&str>) -> Result<Vec<String>, ConfigError> {
             } else {
                 Err(ConfigError::new(
                     ALLOWED_HOSTS,
-                    format!("`{entry}` is not a host or host:port (no scheme, path or user)"),
+                    "must contain hosts or host:port values (no scheme, path or user)",
                 ))
             }
         })
@@ -647,7 +743,7 @@ pub fn load_dotenv() -> Result<Option<&'static str>, String> {
             Err(dotenvy::Error::LineParse(_, at)) => Err(format!(
                 "{path}: a line cannot be parsed (at character {at}); its text is not shown"
             )),
-            Err(e) => Err(format!("{path}: {e}")),
+            Err(_) => Err(format!("{path}: cannot read environment file")),
         };
     }
     Ok(None)
@@ -671,6 +767,9 @@ mod tests {
         let mut all = vars(&[
             (DATABASE_URL, "postgres://jeeta:pw@localhost:5432/jeeta"),
             (SECRET_KEY, KEY),
+            (PRICE_MINOR, "123"),
+            (PRICE_CURRENCY, "TRY"),
+            (BANK_INSTRUCTIONS, "Synthetic bank instructions"),
         ]);
         all.extend(vars(extra));
         all
@@ -678,6 +777,39 @@ mod tests {
 
     fn error(vars: &HashMap<String, String>) -> ConfigError {
         Config::from_map(vars).expect_err("the configuration must be refused")
+    }
+
+    #[test]
+    fn billing_config_rejects_missing_or_invalid_values() {
+        for var in [PRICE_MINOR, PRICE_CURRENCY, BANK_INSTRUCTIONS] {
+            let mut values = with(&[]);
+            values.remove(var);
+            assert_eq!(error(&values).var, var);
+        }
+        for (var, value) in [
+            (PRICE_MINOR, "0"),
+            (PRICE_MINOR, "-1"),
+            (PRICE_MINOR, "1.2"),
+            (PRICE_MINOR, "9223372036854775808"),
+            (PRICE_CURRENCY, "try"),
+            (PRICE_CURRENCY, "TR"),
+            (PRICE_CURRENCY, "TÜR"),
+            (BANK_INSTRUCTIONS, " "),
+        ] {
+            assert_eq!(error(&with(&[(var, value)])).var, var);
+        }
+        assert_eq!(
+            error(&with(&[(BANK_INSTRUCTIONS, &"x".repeat(4097))])).var,
+            BANK_INSTRUCTIONS
+        );
+        assert_eq!(
+            Config::from_map(&with(&[(BANK_INSTRUCTIONS, &"x".repeat(4096))]))
+                .unwrap()
+                .billing
+                .bank_instructions
+                .len(),
+            4096
+        );
     }
 
     #[test]

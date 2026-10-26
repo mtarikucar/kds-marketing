@@ -12,6 +12,8 @@
 //! Contracts every adapter keeps:
 //! - Every timestamp the application can see is passed in, taken from the `Clock` port; a
 //!   database default such as `now()` is only a fallback and never the source of such a value.
+//!   Exception: the status mutation contract has no time input; its audit uses transaction time
+//!   (the fixed transaction time in the fake), never a caller-supplied audit payload.
 //! - A row or entry whose `workspace_id` differs from the tenant bundle's workspace is refused
 //!   with `INTERNAL` (it is a programming error) and nothing is written.
 //! - Mutations documented as such return `NOT_FOUND` when the id does not exist in scope.
@@ -19,6 +21,7 @@
 //! The provider adapters and the platform's provider apps have their own module,
 //! [`connectors`].
 
+pub mod billing;
 pub mod compliance;
 pub mod connectors;
 pub mod files;
@@ -34,7 +37,7 @@ use jt_capability::{
     CapabilityGroupId, CapabilityId, KindGroup, StoredStatus,
 };
 use jt_connector::{EventKind, InboundEvent, InboundEventId, ProbeResult, Provider};
-use jt_ledger::LedgerEntry;
+use jt_ledger::{Actor, LedgerEntry};
 use jt_strategy::{
     ConsultationEntry, ConsultationEntryId, ConsultationKind, Hypothesis, HypothesisId,
     HypothesisState, Sections, StrategyVersion, StrategyVersionId, VersionStatus,
@@ -548,6 +551,9 @@ pub trait MembershipRepo: Send + Sync {
     async fn find(&mut self, id: MembershipId) -> Result<Option<MembershipRow>, AppError>;
     /// The user's membership here that is not `Removed`.
     async fn find_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError>;
+    /// Lock the current membership and its role until transaction end, then return the membership.
+    /// Role changes/removal must serialize with this authorization read.
+    async fn lock_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError>;
     /// Stores an `Invited` membership with its invite fields set. A `row.workspace_id` other than
     /// the bundle's is `INTERNAL`; a role that is not this workspace's (or does not exist) is
     /// `NOT_FOUND`.
@@ -647,6 +653,16 @@ pub trait LedgerRepo: Send + Sync {
 /// The workspace's own row.
 #[async_trait]
 pub trait WorkspaceRepo: Send + Sync {
+    /// Serializes billing/status writers; held until transaction commit/drop.
+    async fn lock(&mut self) -> Result<WorkspaceRow, AppError>;
+    /// Writes status and its reason/actor audit atomically; refuses another workspace.
+    async fn set_status(
+        &mut self,
+        ws: WorkspaceId,
+        status: WorkspaceStatus,
+        reason: &str,
+        by: &Actor,
+    ) -> Result<(), AppError>;
     async fn get(&mut self) -> Result<WorkspaceRow, AppError>;
 }
 
@@ -1440,14 +1456,19 @@ pub trait OutboundJobRepo: Send + Sync {
 /// Platform operators.
 #[async_trait]
 pub trait OperatorRepo: Send + Sync {
+    /// Locks all operator rows until commit, serializing recovery and operator insertion.
+    async fn lock_all(&mut self) -> Result<Vec<OperatorRow>, AppError>;
+    async fn set_password(&mut self, id: OperatorId, password_hash: &str) -> Result<(), AppError>;
     async fn count(&mut self) -> Result<i64, AppError>;
     async fn insert(&mut self, row: OperatorRow) -> Result<(), AppError>;
+    /// Locks the matching operator until commit, including password verification and login insert.
     async fn find_by_email(&mut self, email: &Email) -> Result<Option<OperatorRow>, AppError>;
 }
 
 /// Platform operator sessions.
 #[async_trait]
 pub trait PlatformSessionRepo: Send + Sync {
+    async fn revoke_all(&mut self, operator: OperatorId) -> Result<(), AppError>;
     async fn insert(&mut self, row: PlatformSessionRow) -> Result<(), AppError>;
     /// The session with this token hash, expired ones included; the caller checks.
     async fn find_by_token_hash(
@@ -1467,6 +1488,8 @@ pub trait PlatformSessionRepo: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait TenantRepos: Send + Sync {
+    fn billing(&mut self) -> &mut dyn billing::BillingRepo;
+    fn activation_codes(&mut self) -> &mut dyn billing::ActivationCodeRepo;
     fn studio(&mut self) -> &mut dyn crate::ports::studio::StudioRepo;
     fn studio_budget(&mut self) -> &mut dyn crate::ports::studio::StudioBudgetRepo;
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
@@ -1576,6 +1599,68 @@ pub trait UserRepos: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait PlatformRepos: Send + Sync {
+    async fn connector_health_counts(&mut self)
+    -> Result<Vec<ops::ConnectorHealthCount>, AppError>;
+    async fn workspace_lock(&mut self, ws: WorkspaceId) -> Result<WorkspaceRow, AppError>;
+    async fn payment_get(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::PaymentId,
+    ) -> Result<Option<billing::PaymentNotification>, AppError>;
+    async fn payments_list(&mut self) -> Result<Vec<billing::PaymentNotification>, AppError>;
+    /// Latest entitlement for each (workspace, payment), including revoked grants. One bulk
+    /// read, ordered by confirmed_at then ID descending within each pair; excludes grants
+    /// without a payment. Does not change the open-grant semantics of entitlement_get.
+    async fn payment_entitlements_latest(
+        &mut self,
+    ) -> Result<Vec<billing::WorkspaceEntitlement>, AppError>;
+    async fn entitlement_get(
+        &mut self,
+        ws: WorkspaceId,
+    ) -> Result<Option<billing::WorkspaceEntitlement>, AppError>;
+    async fn entitlement_insert(
+        &mut self,
+        row: billing::WorkspaceEntitlement,
+    ) -> Result<(), AppError>;
+    async fn entitlement_revoke(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::EntitlementId,
+        at: OffsetDateTime,
+        reason: &str,
+    ) -> Result<(), AppError>;
+    async fn activation_code_insert(
+        &mut self,
+        ws: WorkspaceId,
+        row: billing::ActivationCodeRow,
+    ) -> Result<(), AppError>;
+    /// Caller holds the workspace lock; includes consumed and invalidated history.
+    async fn activation_code_digest_exists(
+        &mut self,
+        ws: WorkspaceId,
+        digest: &[u8],
+    ) -> Result<bool, AppError>;
+    async fn activation_code_lock_current_by_workspace(
+        &mut self,
+        ws: WorkspaceId,
+    ) -> Result<Option<billing::ActivationCodeRow>, AppError>;
+    async fn activation_code_record_failed_attempt(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::ActivationCodeId,
+    ) -> Result<(), AppError>;
+    async fn activation_code_invalidate_current(
+        &mut self,
+        ws: WorkspaceId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    async fn activation_code_consume(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::ActivationCodeId,
+        at: OffsetDateTime,
+        by: UserId,
+    ) -> Result<(), AppError>;
     fn operators(&mut self) -> &mut dyn OperatorRepo;
     fn platform_sessions(&mut self) -> &mut dyn PlatformSessionRepo;
     async fn workspaces_list(&mut self) -> Result<Vec<WorkspaceRow>, AppError>;
@@ -1585,6 +1670,8 @@ pub trait PlatformRepos: Send + Sync {
         &mut self,
         ws: WorkspaceId,
         status: WorkspaceStatus,
+        reason: &str,
+        by: &Actor,
     ) -> Result<(), AppError>;
     /// The email of the workspace's oldest active owner.
     async fn workspace_owner_email(&mut self, ws: WorkspaceId) -> Result<Option<Email>, AppError>;
@@ -1718,3 +1805,8 @@ mod tests {
         assert_eq!(run.error_kind, None);
     }
 }
+
+pub mod ops;
+
+/// Operator-only legacy import extensions, separate from serving ports.
+pub mod v1_import;

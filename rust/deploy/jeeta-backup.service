@@ -1,0 +1,32 @@
+[Unit]
+Description=Verified Jeeta database and file backup
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/jeeta/recovery.env
+ExecStart=/opt/jeeta/current/scripts/backup.sh /var/backups/jeeta/logical
+UMask=0077
+TimeoutStartSec=1h
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN
+ReadOnlyPaths=/etc/jeeta /opt/jeeta /var/lib/jeeta/files
+ReadWritePaths=/var/backups/jeeta /var/lib/jeeta/recovery-status /run/jeeta-recovery
+# Root uses the system bus to stop/start jeeta.service. The root-owned ingress
+# hook controls the proxy via its local control socket, not firewall privileges.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

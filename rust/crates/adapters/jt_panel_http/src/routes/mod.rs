@@ -10,6 +10,7 @@
 pub mod agents;
 pub mod api_keys;
 pub mod auth;
+pub mod billing;
 pub mod budget;
 pub mod capabilities;
 pub mod connector;
@@ -18,7 +19,9 @@ pub mod groups;
 pub mod inbox;
 pub mod ledger;
 pub mod oauth_callback;
+pub mod ops;
 pub mod platform;
+pub mod platform_payments;
 pub mod roles;
 pub mod strategy;
 pub mod studio;
@@ -120,6 +123,9 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/auth/logout"),
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/switch-workspace"),
+    ("GET", "/api/billing"),
+    ("POST", "/api/billing/activate"),
+    ("POST", "/api/billing/payments"),
     ("GET", "/api/workspace"),
     ("GET", "/api/team"),
     ("POST", "/api/team/invites"),
@@ -187,9 +193,28 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/events"),
     ("GET", "/api/work/pending"),
     ("PUT", "/api/work/checkin-interval"),
+    (
+        "POST",
+        "/api/platform/operators/{operator_id}/reset-password",
+    ),
+    ("GET", "/api/platform/health"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
-    ("PATCH", "/api/platform/workspaces/{workspace_id}/status"),
+    ("GET", "/api/platform/payments"),
+    (
+        "POST",
+        "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm",
+    ),
+    (
+        "POST",
+        "/api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue",
+    ),
+    (
+        "POST",
+        "/api/platform/workspaces/{workspace_id}/revoke-activation",
+    ),
+    ("POST", "/api/platform/workspaces/{workspace_id}/suspend"),
+    ("POST", "/api/platform/workspaces/{workspace_id}/resume"),
     ("GET", "/healthz"),
 ];
 
@@ -620,6 +645,19 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "workspace.switch",
             auth::switch_workspace,
         ),
+        api_route("GET", "/billing", "billing.status", billing::status),
+        api_route(
+            "POST",
+            "/billing/activate",
+            "billing.activate",
+            billing::activate,
+        ),
+        api_route(
+            "POST",
+            "/billing/payments",
+            "billing.report_payment",
+            billing::report_payment,
+        ),
         api_route("GET", "/workspace", "workspace.info", workspace::info),
         api_route("GET", "/team", "team.list", team::list),
         api_route("POST", "/team/invites", "team.invite", team::invite),
@@ -901,6 +939,13 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "work.set_checkin_interval",
             work::set_checkin_interval,
         ),
+        api_route(
+            "POST",
+            "/platform/operators/{operator_id}/reset-password",
+            "platform.operators.reset_password",
+            platform::reset_password,
+        ),
+        api_route("GET", "/platform/health", "ops.health", ops::health),
         api_route("POST", "/platform/login", "platform.login", platform::login),
         api_route(
             "GET",
@@ -909,10 +954,40 @@ pub fn api_routes() -> Vec<ApiRoute> {
             platform::list_workspaces,
         ),
         api_route(
-            "PATCH",
-            "/platform/workspaces/{workspace_id}/status",
-            "platform.workspaces.set_status",
-            platform::set_status,
+            "GET",
+            "/platform/payments",
+            "platform.payments.list",
+            platform_payments::list,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm",
+            "platform.billing.confirm",
+            platform_payments::confirm,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue",
+            "platform.billing.reissue",
+            platform_payments::reissue,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/revoke-activation",
+            "platform.billing.revoke_activation",
+            platform_payments::revoke_activation,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/suspend",
+            "platform.workspaces.suspend",
+            platform::suspend,
+        ),
+        api_route(
+            "POST",
+            "/platform/workspaces/{workspace_id}/resume",
+            "platform.workspaces.resume",
+            platform::resume,
         ),
     ]
 }
@@ -1011,6 +1086,13 @@ mod tests {
                 hosts: Arc::new(RecordingTenantHosts::new()),
                 apps: Arc::new(FakeAppConfig::default()),
                 connectors: Arc::new(ScriptedRegistry::new()),
+                ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
+                ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+                billing: jt_app::usecases::billing::BillingConfig {
+                    price_minor: 123,
+                    price_currency: "TRY".into(),
+                    bank_instructions: "Synthetic bank instructions".into(),
+                },
                 job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
             },
             gate: Arc::new(NoStrategyYet),

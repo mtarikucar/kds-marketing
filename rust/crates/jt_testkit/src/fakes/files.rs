@@ -15,10 +15,25 @@ use std::{collections::HashMap, sync::Mutex};
 use time::OffsetDateTime;
 #[derive(Default)]
 pub struct MemoryFiles {
+    pub probe_hangs: std::sync::atomic::AtomicBool,
+    pub probe_write_fails: std::sync::atomic::AtomicBool,
     pub files: Mutex<HashMap<(WorkspaceId, FileId), MediaUpload>>,
 }
 #[async_trait]
 impl FileStore for MemoryFiles {
+    async fn probe(&self) -> Result<(), AppError> {
+        if self.probe_hangs.load(std::sync::atomic::Ordering::Acquire) {
+            std::future::pending::<()>().await;
+        }
+        if self
+            .probe_write_fails
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            Err(AppError::internal("file probe payload write failed"))
+        } else {
+            Ok(())
+        }
+    }
     async fn put(
         &self,
         ws: WorkspaceId,

@@ -10,16 +10,16 @@
 
 mod config;
 mod connectors;
+mod ops;
+mod recovery;
 mod scheduler;
 mod serve;
 mod stdio;
+mod v1_import;
 
 use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::time::Duration;
-
-use tracing_subscriber::EnvFilter;
 
 use crate::config::{Config, LogFormat};
 
@@ -30,6 +30,11 @@ Commands:
   serve       Run the HTTP server: the panel, its API, the MCP endpoint at /mcp and the
               providers' webhooks at /hooks
   mcp-stdio   Serve MCP over stdin/stdout as the API key in JEETA_STDIO_API_KEY
+  import-v1-leads --workspace <uuid> --input <file.jsonl> [--dry-run | --rollback]
+                        Import only allowlisted v1 leads, without serving
+  recovery-verify       Verify restored schema, RLS and sealed canary without serving
+  recovery-canary-up    Provision a retired canary in JEETA_RECOVERY_WORKSPACE_ID
+  recovery-canary-down  Remove that reserved canary (idempotent rollback)
   --help      Show this help
 
 Configuration comes from JEETA_* environment variables; rust/.env (or ./.env) is loaded first
@@ -44,6 +49,9 @@ enum Command {
     Serve,
     McpStdio,
     Help,
+    RecoveryVerify,
+    RecoveryCanaryUp,
+    RecoveryCanaryDown,
 }
 
 /// The command named by the arguments after the program name; `None` for anything else.
@@ -52,6 +60,9 @@ fn parse(args: &[OsString]) -> Option<Command> {
         return None;
     };
     match arg.to_str()? {
+        "recovery-verify" => Some(Command::RecoveryVerify),
+        "recovery-canary-up" => Some(Command::RecoveryCanaryUp),
+        "recovery-canary-down" => Some(Command::RecoveryCanaryDown),
         "serve" => Some(Command::Serve),
         "mcp-stdio" => Some(Command::McpStdio),
         "--help" | "-h" | "help" => Some(Command::Help),
@@ -60,7 +71,11 @@ fn parse(args: &[OsString]) -> Option<Command> {
 }
 
 fn main() -> ExitCode {
+    let _ = crate::ops::process_started_at();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "import-v1-leads") {
+        return v1_import::run(&args[1..]);
+    }
     let Some(command) = parse(&args) else {
         match args.first() {
             None => eprintln!("jeeta: no command given\n"),
@@ -74,13 +89,16 @@ fn main() -> ExitCode {
             print!("{USAGE}");
             ExitCode::SUCCESS
         }
-        Command::Serve => start(serve::run),
-        Command::McpStdio => start(stdio::run),
+        Command::RecoveryVerify => recovery::run("recovery-verify"),
+        Command::RecoveryCanaryUp => recovery::run("recovery-canary-up"),
+        Command::RecoveryCanaryDown => recovery::run("recovery-canary-down"),
+        Command::Serve => start(serve::run, true),
+        Command::McpStdio => start(stdio::run, false),
     }
 }
 
 /// Loads the configuration, starts logging and runs `command` on a Tokio runtime.
-fn start<F, Fut>(command: F) -> ExitCode
+fn start<F, Fut>(command: F, serving: bool) -> ExitCode
 where
     F: FnOnce(Config) -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
@@ -94,6 +112,9 @@ where
         Ok(config) => config,
         Err(e) => return fail(None, &format!("configuration: {e}")),
     };
+    if serving && let Err(e) = config.require_metrics_token() {
+        return fail(None, &format!("configuration: {e}"));
+    }
     let format = config.log_format;
     init_tracing(&config);
     if let Some(file) = env_file {
@@ -111,25 +132,19 @@ where
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => fail(Some(format), &format!("{e:#}")),
+        Err(_) => fail(
+            Some(format),
+            "startup failed (database, migrations or runtime dependency)",
+        ),
     }
 }
 
 /// Logs to stderr (stdout is the MCP stream in `mcp-stdio`), compact or as JSON.
 fn init_tracing(config: &Config) {
-    // The filter was validated with the configuration.
-    let filter = EnvFilter::try_new(&config.log_filter)
-        .unwrap_or_else(|_| EnvFilter::new(config::DEFAULT_LOG));
-    let builder = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr);
-    match config.log_format {
-        LogFormat::Json => builder.json().with_ansi(false).init(),
-        LogFormat::Compact => builder
-            .compact()
-            .with_ansi(std::io::stderr().is_terminal())
-            .init(),
-    }
+    crate::ops::install_tracing(
+        &config.log_filter,
+        matches!(config.log_format, LogFormat::Json),
+    );
 }
 
 /// Reports a fatal error once and returns exit code 1: as a JSON log event when logs are JSON,
@@ -137,6 +152,9 @@ fn init_tracing(config: &Config) {
 fn fail(format: Option<LogFormat>, message: &str) -> ExitCode {
     match format {
         Some(LogFormat::Json) => tracing::error!(error = message, "jeeta stopped"),
+        None if std::env::var(config::LOG_FORMAT).is_ok_and(|s| s.eq_ignore_ascii_case("json")) => {
+            eprintln!("{}", serde_json::json!({"level":"ERROR","message":message}))
+        }
         _ => eprintln!("jeeta: {message}"),
     }
     ExitCode::FAILURE

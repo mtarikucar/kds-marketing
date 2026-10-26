@@ -339,15 +339,15 @@ hesapları bilmek ister.
 
 **Kapıdan muaf olanlar** (B1 testi bu listeyi sabitler): kayıt ve giriş, çalışma alanı ayarları,
 ekip ve davet, API anahtarı çıkarma, ödeme, acil fren, günlük okuma, strateji ve kabiliyet araçları.
-Bunların da panel ve araç ikizi vardır (B8); yalnız kayıt, giriş ve ödeme panele özgüdür.
+Bunların da panel ve araç ikizi vardır (B8); yalnız kayıt, giriş, ödeme durumu ve kodla etkinleştirme panele özgüdür; havale kanıtının MCP ikizi vardır (§9).
 
 **(M0 uygulamasında kesinleşti)** Panele özgü kullanım durumlarının gerçek listesi: kayıt, giriş,
 çıkış, oturumun kendi bilgisi (`auth.me`; ajandaki karşılığı `agents.whoami` ikizidir), çalışma alanı
 değiştirme, davet kabulü, platform işlemleri (işletmen girişi, çalışma alanlarını listeleme ve
-durumlarını değiştirme) ve ödeme. Bir ajan bir insanın oturumunu ya da davet jetonunu hiç taşımaz.
+durumlarını değiştirme), ödeme durumu ve kodla etkinleştirme (§9). Bir ajan bir insanın oturumunu ya da davet jetonunu hiç taşımaz.
 Geri kalan her kullanım durumunun panel ve MCP ikizi vardır.
 
-**(M0 uygulamasında kesinleşti) Çalışma alanı durumu.** Durum denetimi strateji muafiyetinden
+**(M0 uygulamasında kesinleşti; M4 ödeme istisnaları §9) Çalışma alanı durumu.** Durum denetimi strateji muafiyetinden
 bağımsız ikinci bir denetimdir: çalışma alanı `pending_payment` ya da `suspended` iken `auth.*`,
 `workspace.*` ve `platform.*` dışındaki her kullanım durumu, stratejiden muaf olsa bile, panelden de
 MCP'den de `WORKSPACE_INACTIVE` döner. Bu yüzden ödeme bekleyen bir alan, işletmen onu
@@ -969,15 +969,23 @@ iki şerit fren yarışını ve eşzamanlı tavan tüketimini çalıştırır.
 
 ## 9. Para modeli
 
-Tek seferlik ödeme; ödendiğinde çalışma alanı kalıcı olarak açılır (K4). Kredi, paket, abonelik, ek
-paket, bayi faturalama, kupon, deneme süresi yoktur. Ödemenin alınma yolu açık bir karardır; benim
-varsayılanım banka havalesi: kiracı "ödedim" bildirimini dekont referansıyla verir, platform
-işletmeni panelden onaylar ve çalışma alanı açılır. Ödeme sağlayıcı bağlayıcısı istenirse §6'nın
-bağlayıcı kalıbıyla sonradan eklenir.
+Tek seferlik ödeme (K4): banka havalesi kanıtı, platform işletmeninin ödeme onayı ve sahibin
+panelde kod kullanması ayrı adımlardır. Kredi, paket, abonelik, ek paket, bayi faturalama,
+kupon ve deneme süresi yoktur. Fiyat, para birimi ve banka açıklaması zorunlu yapılandırmadır:
+`JEETA_PRICE_MINOR`, `JEETA_PRICE_CURRENCY`, `JEETA_BANK_INSTRUCTIONS`; iş değeri varsayılanı yoktur.
 
-**Onay kodu (K11).** Ödemeyle ilgili eylemler sohbetten yapılırken tek kullanımlık kod gerekir:
-sistem kodu sahibin e-postasına ya da panele gönderir, insan kodu ajana söyler, ajan kodla
-tamamlar. Bu kod başka hiçbir eylemde yoktur.
+**M4 Q2 değişikliği (§5/K11).** `billing.report_payment` yalnız kanıt bildirir; sahip rolü ve
+`team.manage` ile panel/MCP ikizi vardır, kod istemez, ödemeyi doğrulamaz ve alanı açmaz.
+`billing.status` salt okunur talimat, sabit alan referansı ve ödeme/hak geçmişini panelde gösterir.
+Durum muafiyetleri tam satır adlarıdır: `billing.status` her durumda; `billing.report_payment`
+ve `billing.activate` etkin veya ödeme bekleyen alanda, askıdayken değil. Kod kullanımı ayrıca
+kilit altında alanın ödeme beklemesini şart koşar. Başka `billing.*` adlarına muafiyet verilmez.
+
+**Onay kodu (K11).** Yalnız `billing.activate {code}` işletmenin verdiği kodu kullanır ve yalnız
+panelde bulunur. Ajan kod almaz, iletmez veya kullanmaz. Ödeme onayı işletmene aittir; kanıt
+bildirimi, kalıcı hak ve çalışma alanının işletim durumu ayrı gerçeklerdir. Ödeme stratejiyi
+onaylamaz, kabiliyeti doğrulamaz ve ajan bağlantısı kurmaz. Diğer yıkıcı işlemlerin mevcut
+`confirm: true` sözleşmeleri korunur.
 
 ## 10. Çok kiracılık ve veri
 

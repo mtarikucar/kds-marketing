@@ -75,6 +75,13 @@ async fn register_login_resolve_and_switch_through_postgres() {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
         connectors: Arc::new(ScriptedRegistry::new()),
+        ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
+        ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+        billing: jt_app::usecases::billing::BillingConfig {
+            price_minor: 123,
+            price_currency: "TRY".into(),
+            bank_instructions: "Synthetic bank instructions".into(),
+        },
         job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
     };
 
@@ -242,6 +249,13 @@ fn scripted(uow: Arc<dyn UnitOfWork>) -> Deps {
         hosts: Arc::new(RecordingTenantHosts::new()),
         apps: Arc::new(FakeAppConfig::default()),
         connectors: Arc::new(ScriptedRegistry::new()),
+        ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
+        ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+        billing: jt_app::usecases::billing::BillingConfig {
+            price_minor: 123,
+            price_currency: "TRY".into(),
+            bank_instructions: "Synthetic bank instructions".into(),
+        },
         job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
     }
 }

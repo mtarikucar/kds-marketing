@@ -59,3 +59,13 @@ smoke-inbox:
 # In-process M3 acceptance with scripted connectors; no database or provider credentials.
 smoke-studio:
 	./scripts/smoke-studio.sh
+
+.PHONY: restore-drill
+# Disposable PG16 cluster, real binary, no provider traffic; see the recovery runbook.
+restore-drill:
+	bash scripts/tests/backup-restore.sh
+
+.PHONY: smoke-productisation
+# Offline M4 lifecycle, architecture, retention, RLS, redaction and restore contracts.
+smoke-productisation:
+	./scripts/smoke-productisation.sh

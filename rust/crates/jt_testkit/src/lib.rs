@@ -18,3 +18,13 @@ pub mod compliance_contract;
 pub mod studio_contract;
 
 pub mod studio_attribution_contract;
+
+pub mod billing_contract;
+
+pub mod platform_payment_contract;
+
+pub mod activation_contract;
+
+mod activation_control;
+
+pub mod platform_access_contract;

@@ -52,6 +52,8 @@ pub(crate) async fn receive(
         Ok(drafts) => drafts,
         Err(_) => {
             UNPARSEABLE_NETGSM.fetch_add(1, Ordering::Relaxed);
+            deps.ops_signals
+                .webhook(jt_app::ports::ops::WebhookOutcome::Unresolved);
             tracing::warn!(
                 provider = "netgsm",
                 purpose = purpose.key(),
@@ -61,6 +63,13 @@ pub(crate) async fn receive(
         }
     };
     if drafts.is_empty() {
+        deps.ops_signals
+            .webhook(jt_app::ports::ops::WebhookOutcome::Unresolved);
+        tracing::warn!(
+            provider = "netgsm",
+            reason = "no_routable_events",
+            "authenticated callback accepted, nothing stored"
+        );
         return StatusCode::ACCEPTED;
     }
     match webhook::receive_netgsm(deps, ws, purpose, drafts, &raw).await {

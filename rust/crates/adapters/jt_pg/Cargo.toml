@@ -19,15 +19,18 @@ sqlx.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+subtle.workspace = true
 hex.workspace = true
+rand.workspace = true
 uuid.workspace = true
 time.workspace = true
 tracing.workspace = true
 # A job lock's guard gives its advisory lock back from `drop` by spawning the unlock onto the
 # runtime (`job_lock.rs`).
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "fs", "io-util"] }
 
 [dev-dependencies]
+jt_seal.workspace = true
 jt_testkit.workspace = true
 # `time`: the job-lock test waits for a dropped guard's background unlock; `net` and `io-util`:
 # the cancellation test runs a TCP proxy that holds back the database's answers.

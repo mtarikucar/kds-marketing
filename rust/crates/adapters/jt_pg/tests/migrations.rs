@@ -29,11 +29,11 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
-/// Tables after `0009_studio`, including all 14 Studio tables.
-const TABLES_AFTER_ALL: i64 = 62;
+/// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest.
+const TABLES_AFTER_ALL: i64 = 67;
 
-/// The migrations there are: `0001_foundation` to `0009_studio`.
-const MIGRATIONS: i64 = 9;
+/// Migrations `0001_foundation` through `0012_m4_grandfathered_backfill`.
+const MIGRATIONS: i64 = 12;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -171,6 +171,14 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
 
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
+    for name in [
+        "0012_m4_grandfathered_backfill",
+        "0011_m4_activation_codes",
+        "0010_m4_billing",
+    ] {
+        run(read(&format!("{name}.down.sql"))).await;
+        run(read(&format!("{name}.down.sql"))).await;
+    }
     run(read("0009_studio.down.sql")).await;
     run(read("0008_inbox_compliance.down.sql")).await;
     run(read("0008_inbox_compliance.down.sql")).await;
@@ -244,6 +252,13 @@ async fn every_migration_has_a_down_file() {
         .filter(|name| name.ends_with(".sql"))
         .collect();
 
+    let mut versions: Vec<i64> = names
+        .iter()
+        .filter(|n| n.ends_with(".up.sql"))
+        .map(|n| n.split('_').next().unwrap().parse().unwrap())
+        .collect();
+    versions.sort();
+    assert_eq!(versions, (1..=12).collect::<Vec<_>>());
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,
@@ -428,7 +443,7 @@ async fn migration_round_trip_23_36_23_36() {
     .execute(&db.pool)
     .await
     .unwrap();
-    assert_eq!(table_count(&db.pool).await, 36);
+    assert_eq!(table_count(&db.pool).await, 41);
     assert!(index_exists(&db.pool, "messages_external_lookup").await);
     assert!(index_exists(&db.pool, "messages_echo_candidates").await);
     assert!(index_exists(&db.pool, "outbox_message_lookup").await);
@@ -449,7 +464,7 @@ async fn migration_round_trip_23_36_23_36() {
     let up = std::fs::read_to_string(dir.join("0006_inbox.up.sql")).unwrap();
     for _ in 0..2 {
         sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
-        assert_eq!(table_count(&db.pool).await, 23);
+        assert_eq!(table_count(&db.pool).await, 28);
         assert!(!index_exists(&db.pool, "messages_external_lookup").await);
         assert!(!index_exists(&db.pool, "messages_echo_candidates").await);
         assert!(!index_exists(&db.pool, "outbox_message_lookup").await);
@@ -473,7 +488,7 @@ async fn migration_round_trip_23_36_23_36() {
     }
     for _ in 0..2 {
         sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
-        assert_eq!(table_count(&db.pool).await, 36);
+        assert_eq!(table_count(&db.pool).await, 41);
         assert!(index_exists(&db.pool, "messages_external_lookup").await);
         assert!(index_exists(&db.pool, "messages_echo_candidates").await);
         assert!(index_exists(&db.pool, "outbox_message_lookup").await);
@@ -546,10 +561,10 @@ async fn compliance_round_trip_preserving_people() {
     tx.commit().await.unwrap();
     let up = include_str!("../../../../migrations/0008_inbox_compliance.up.sql");
     let down = include_str!("../../../../migrations/0008_inbox_compliance.down.sql");
-    assert_eq!(table_count(&db.pool).await, 48);
+    assert_eq!(table_count(&db.pool).await, 53);
     for sql in [down, down] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
-        assert_eq!(table_count(&db.pool).await, 36);
+        assert_eq!(table_count(&db.pool).await, 41);
         assert!(!sqlx::query_scalar::<_,bool>("select exists(select 1 from information_schema.columns where table_name='capabilities' and column_name='iys_sealed')").fetch_one(&db.pool).await.unwrap());
         assert!(!function_exists(&db.pool, "inbox_erasure_matches").await);
         assert!(!function_exists(&db.pool, "journey_attribution_immutable").await);
@@ -557,7 +572,7 @@ async fn compliance_round_trip_preserving_people() {
     }
     for sql in [up, up] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
-        assert_eq!(table_count(&db.pool).await, 48);
+        assert_eq!(table_count(&db.pool).await, 53);
         let slot:(String,String)=sqlx::query_as("select data_type,is_nullable from information_schema.columns where table_name='capabilities' and column_name='iys_sealed'").fetch_one(&db.pool).await.unwrap();
         assert_eq!(slot, ("bytea".into(), "YES".into()));
         assert!(index_exists(&db.pool, "journey_attribution_ad_idx").await);
@@ -586,7 +601,7 @@ async fn studio_migration_up_down_up() {
     for sql in [up, down, down, up, up] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
-    assert_eq!(table_count(&db.pool).await, 62);
+    assert_eq!(table_count(&db.pool).await, 67);
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     let saved: (String,f32,serde_json::Value) = sqlx::query_as("select title,prior_confidence,cadence from strategy_hypotheses where workspace_id = $1 and hypothesis_id = $2").bind(ws.as_uuid()).bind(h).fetch_one(tx.conn()).await.unwrap();
     assert_eq!(saved, ("keep".into(), 0.7, serde_json::json!({})));

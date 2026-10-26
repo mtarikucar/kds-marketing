@@ -2,7 +2,7 @@
 //!
 //! A failed tool call is a tool result with `is_error: true` that carries the structured error
 //! both as its structured content and as its text content. An `INTERNAL` error is logged with
-//! its message and details and answered with [`INTERNAL_MESSAGE`] and empty details, so nothing
+//! its code only and answered with [`INTERNAL_MESSAGE`] and empty details, so nothing
 //! internal leaks.
 
 use axum::Json;
@@ -12,14 +12,14 @@ use jt_app::error::{AppError, ErrorCode};
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-/// The only message an `INTERNAL` error carries to the caller; the real one is logged.
+/// The only message an `INTERNAL` error carries to the caller; only its code is logged.
 pub const INTERNAL_MESSAGE: &str = "internal error";
 
 /// `err` as the caller may see it: unchanged, except an `INTERNAL` error, which is logged and
 /// replaced with a bare [`INTERNAL_MESSAGE`].
 pub fn public(err: AppError) -> AppError {
     if err.code == ErrorCode::Internal {
-        tracing::error!(details = %err.details, "internal error: {}", err.message);
+        tracing::error!(code = err.code.as_str(), "internal error");
         AppError::internal(INTERNAL_MESSAGE)
     } else {
         err

@@ -19,6 +19,9 @@ pub struct StoredFile {
 }
 #[async_trait]
 pub trait FileStore: Send + Sync {
+    /// Verify active storage with a nonempty write, sync, readback and cleanup outside tenants.
+    /// Callers must bound the probe with a timeout.
+    async fn probe(&self) -> Result<(), AppError>;
     async fn put(
         &self,
         ws: WorkspaceId,
@@ -38,6 +41,9 @@ pub trait FileStore: Send + Sync {
 pub struct UnavailableFileStore;
 #[async_trait]
 impl FileStore for UnavailableFileStore {
+    async fn probe(&self) -> Result<(), AppError> {
+        Err(AppError::internal("file storage is not configured"))
+    }
     async fn put(
         &self,
         _ws: WorkspaceId,

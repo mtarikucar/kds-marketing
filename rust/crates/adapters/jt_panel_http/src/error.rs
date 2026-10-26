@@ -12,7 +12,7 @@ use jt_app::error::{AppError, ErrorCode};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
-/// The only message an `INTERNAL` error carries over the wire; the real one is logged.
+/// The only message an `INTERNAL` error carries over the wire; only its code is logged.
 pub const INTERNAL_MESSAGE: &str = "internal error";
 
 /// An [`AppError`] on its way to the client.
@@ -42,12 +42,12 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
 }
 
 impl IntoResponse for ApiError {
-    /// The structured error as JSON. An `INTERNAL` error is logged with its message and details
+    /// The structured error as JSON. An `INTERNAL` error is logged with its code only
     /// and answered with [`INTERNAL_MESSAGE`] and empty details, so nothing internal leaks.
     fn into_response(self) -> Response {
         let ApiError(err) = self;
         let body = if err.code == ErrorCode::Internal {
-            tracing::error!(details = %err.details, "internal error: {}", err.message);
+            tracing::error!(code = err.code.as_str(), "internal error");
             AppError::internal(INTERNAL_MESSAGE)
         } else {
             err

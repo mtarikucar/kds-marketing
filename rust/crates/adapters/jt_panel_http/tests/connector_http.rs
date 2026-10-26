@@ -595,7 +595,14 @@ async fn callback_in_a_suspended_workspace_is_refused() {
     // refused before the provider is asked.
     let mut platform = p.uow.platform().await.unwrap();
     platform
-        .workspace_set_status(workspace_of(&me), WorkspaceStatus::Suspended)
+        .workspace_set_status(
+            workspace_of(&me),
+            WorkspaceStatus::Suspended,
+            "test status transition",
+            &jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+        )
         .await
         .unwrap();
     platform.commit().await.unwrap();

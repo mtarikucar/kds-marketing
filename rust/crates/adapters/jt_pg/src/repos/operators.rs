@@ -53,6 +53,28 @@ impl From<PlatformSessionRecord> for PlatformSessionRow {
 
 #[async_trait]
 impl OperatorRepo for PgPlatformRepos {
+    async fn lock_all(&mut self) -> Result<Vec<OperatorRow>, AppError> {
+        // Prevent a concurrent insert from changing the sole-operator predicate.
+        sqlx::query("lock table platform_operators in share row exclusive mode")
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "lock operators"))?;
+        let rows: Vec<OperatorRecord> = sqlx::query_as("select id,email,password_hash,created_at from platform_operators order by id for update")
+            .fetch_all(self.tx.conn()).await.map_err(|e| map_sqlx(e,"lock operators"))?;
+        rows.into_iter().map(OperatorRecord::into_row).collect()
+    }
+    async fn set_password(&mut self, id: OperatorId, password_hash: &str) -> Result<(), AppError> {
+        let done = sqlx::query("update platform_operators set password_hash=$2 where id=$1")
+            .bind(id.as_uuid())
+            .bind(password_hash)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "set operator password"))?;
+        if done.rows_affected() == 0 {
+            return Err(AppError::not_found("operator"));
+        }
+        Ok(())
+    }
     async fn count(&mut self) -> Result<i64, AppError> {
         sqlx::query_scalar("select count(*) from platform_operators")
             .fetch_one(self.tx.conn())
@@ -81,7 +103,7 @@ impl OperatorRepo for PgPlatformRepos {
     async fn find_by_email(&mut self, email: &Email) -> Result<Option<OperatorRow>, AppError> {
         let record: Option<OperatorRecord> = sqlx::query_as(
             "select id, email, password_hash, created_at from platform_operators \
-             where lower(email) = lower($1)",
+             where lower(email) = lower($1) for update",
         )
         .bind(email.as_str())
         .fetch_optional(self.tx.conn())
@@ -93,6 +115,14 @@ impl OperatorRepo for PgPlatformRepos {
 
 #[async_trait]
 impl PlatformSessionRepo for PgPlatformRepos {
+    async fn revoke_all(&mut self, operator: OperatorId) -> Result<(), AppError> {
+        sqlx::query("delete from platform_sessions where operator_id=$1")
+            .bind(operator.as_uuid())
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "revoke operator sessions"))?;
+        Ok(())
+    }
     async fn insert(&mut self, row: PlatformSessionRow) -> Result<(), AppError> {
         let done = sqlx::query(
             "insert into platform_sessions (id, operator_id, token_hash, created_at, expires_at) \

@@ -310,6 +310,26 @@ impl MembershipRepo for PgTenantRepos {
         record.map(MembershipRecord::into_row).transpose()
     }
 
+    async fn lock_by_user(&mut self, user_id: UserId) -> Result<Option<MembershipRow>, AppError> {
+        let ws = self.workspace_id();
+        // Lock membership first, then the role selected by the refreshed membership. This
+        // avoids authorizing against a role from a stale join snapshot after a concurrent demotion.
+        let record: Option<MembershipRecord> = sqlx::query_as(
+            "select id, workspace_id, user_id, role_id, status, invited_email, invite_token_hash, invite_expires_at, invited_by, created_at from memberships where workspace_id=$1 and user_id=$2 and status <> 'removed' for update",
+        ).bind(ws.as_uuid()).bind(user_id.as_uuid()).fetch_optional(self.tx.conn()).await
+            .map_err(|e| map_sqlx(e, "lock membership"))?;
+        let row = record.map(MembershipRecord::into_row).transpose()?;
+        if let Some(row) = &row {
+            sqlx::query("select id from roles where workspace_id=$1 and id=$2 for update")
+                .bind(ws.as_uuid())
+                .bind(row.role_id.as_uuid())
+                .fetch_optional(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "lock membership role"))?;
+        }
+        Ok(row)
+    }
+
     async fn insert_invite(&mut self, row: MembershipRow) -> Result<(), AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, row.workspace_id)?;

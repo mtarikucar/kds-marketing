@@ -17,8 +17,11 @@ use jt_tenancy::WorkspaceId;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Write},
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    io::{Read, Seek, Write},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    },
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -57,6 +60,7 @@ fn root(path: &Path) -> Result<File, AppError> {
 #[derive(Clone)]
 pub struct DiskFiles {
     root: Arc<File>,
+    root_path: PathBuf,
     base: Url,
     key: [u8; 32],
     clock: Arc<dyn Clock>,
@@ -84,10 +88,49 @@ impl DiskFiles {
             .map_err(|_| storage())?;
         Ok(Self {
             root: Arc::new(root(path)?),
+            root_path: path.to_owned(),
             base,
             key,
             clock,
         })
+    }
+    fn check_root_identity(&self) -> Result<(), AppError> {
+        let active = io(self.root.metadata())?;
+        let configured = io(root(&self.root_path)?.metadata())?;
+        if active.dev() != configured.dev() || active.ino() != configured.ino() {
+            return Err(storage());
+        }
+        Ok(())
+    }
+    fn probe_inner(&self) -> Result<(), AppError> {
+        self.check_root_identity()?;
+        // Reserved non-tenant namespace. Exclusive creation means cleanup can remove only
+        // this invocation's file; concurrent probes never share a name.
+        let path = anchored(&self.root).join(format!(".readiness-{}", uuid::Uuid::new_v4()));
+        let mut file = io(OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path))?;
+        let result = (|| {
+            let payload = [0xa5; 4096];
+            io(file.write_all(&payload))?;
+            io(file.sync_all())?;
+            io(file.rewind())?;
+            let mut readback = [0; 4096];
+            io(file.read_exact(&mut readback))?;
+            if readback != payload {
+                return Err(storage());
+            }
+            self.check_root_identity()
+        })();
+        drop(file);
+        // Try cleanup even on write/sync/read failure; all errors stay in a fixed category.
+        let removed = io(std::fs::remove_file(&path));
+        let synced = io(self.root.sync_all());
+        result.and(removed).and(synced)
     }
     fn repair_temps(&self, parent: &File) -> Result<(), AppError> {
         for entry in io(std::fs::read_dir(anchored(parent)))? {
@@ -341,6 +384,12 @@ async fn retrieve(
 
 #[async_trait]
 impl FileStore for DiskFiles {
+    async fn probe(&self) -> Result<(), AppError> {
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || this.probe_inner())
+            .await
+            .map_err(|_| storage())?
+    }
     async fn put(
         &self,
         ws: WorkspaceId,

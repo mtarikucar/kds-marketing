@@ -1152,3 +1152,27 @@ export interface InboxAppointment extends Omit<AppointmentInput, 'intent'> {
   id: string;
   state: 'booked' | 'held' | 'cancelled';
 }
+
+/** Operator-only payment evidence and one-time delivery responses. */
+export interface PlatformEntitlement {
+  id: string; source: 'paid' | 'grandfathered'; payment_id: string | null;
+  confirmed_at: string; activated_at: string | null; revoked_at: string | null;
+}
+export interface PlatformPayment {
+  workspace_id: string; payment_id: string; reference: string; amount_minor: number;
+  currency: string; paid_at: string; reported_at: string; entitlement: PlatformEntitlement | null;
+}
+export interface ActivationDelivery { code: string; expires_at: string }
+export interface PlatformConfirmation {
+  workspace: WorkspaceAdminOut; entitlement: PlatformEntitlement; activation: ActivationDelivery | null;
+}
+export type HealthState = 'ok' | 'degraded' | 'unknown';
+export interface OpsHealthOut {
+  observed_at: string; process_started_at: string; history: string; boot_complete: boolean;
+  database: HealthState; files: HealthState; disk: HealthState; disk_available_bytes: number | null;
+  database_pool_size: number; database_pool_idle: number; connectors_state: HealthState;
+  jobs: { name: string; last_success_at: string | null; failed_total: number }[];
+  connectors: { workspace_id: string; kind_key: string; reconnect_required: number; expires_before: string | null }[];
+  webhooks: { accepted: number; unrouted: number; unresolved: number };
+  backup: { last_backup_at: string | null; last_wal_archive_at: string | null; backup_state: HealthState; wal_state: HealthState };
+}

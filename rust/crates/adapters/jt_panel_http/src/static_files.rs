@@ -28,7 +28,7 @@ pub const ASSET_CACHE: &str = "public, max-age=31536000, immutable";
 /// Where the content-hashed files live.
 pub const ASSETS_PREFIX: &str = "/assets/";
 /// Path prefixes that belong to the server, not the panel.
-const RESERVED: &[&str] = &["/api", "/mcp", "/healthz"];
+const RESERVED: &[&str] = &["/api", "/mcp", "/healthz", "/readyz", "/metrics"];
 
 /// The file services over one panel directory.
 #[derive(Clone, Debug)]

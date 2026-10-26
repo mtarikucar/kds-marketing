@@ -44,6 +44,7 @@ jobs:
   # a superuser; jt_testkit::TestDb only uses it to create and drop each test's own ordinary
   # (non-superuser, non-BYPASSRLS) role and database, so row-level security binds the tests.
   rust-test:
+    needs: release-artifact
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -70,7 +71,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+      # Download the package-scoped candidate; never build it with workspace test features.
+      - uses: actions/download-artifact@v4
+        with:
+          name: jeeta-release-${{ github.sha }}
+          path: release-candidate
+      - run: tar -xf ../release-candidate/jeeta-release.tar -C "$RUNNER_TEMP"
       - run: cargo test --locked --workspace
+        env:
+          JEETA_RELEASE_BINARY: ${{ runner.temp }}/jeeta-release/jeeta
+          JEETA_RELEASE_PANEL_DIR: ${{ runner.temp }}/jeeta-release/panel
+      - name: Synthetic productisation smoke (no external provider traffic)
+        run: make smoke-productisation
       # A whole-workspace run unifies the dev-only `test-loopback` feature into jt_outbound, so the
       # production-build egress test is compiled separately, without dev features.
       - run: cargo test --locked -p jt_outbound --test production_build
@@ -94,3 +106,92 @@ jobs:
       - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm build
+
+  restore-drill:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      # Official PGDG repository; pin the major for both server and client.
+      - name: Install PostgreSQL 16 host tools
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-16 postgresql-client-16 libseccomp2 python3
+          echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
+      - name: Rust restore contracts with disposable PostgreSQL
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "$RUNNER_TEMP/restore-contracts-XXXXXXXX")
+          trap 'pg_ctl -D "$work/db" -m immediate -w stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+          mkdir "$work/socket"
+          initdb -D "$work/db" -A trust --no-locale >/dev/null
+          pg_ctl -D "$work/db" -o "-c listen_addresses='' -k $work/socket" -l "$work/postgres.log" -w start >/dev/null
+          export JEETA_TEST_DATABASE_URL="postgresql://$(id -un)@localhost/postgres?host=$work/socket"
+          cargo test --locked -p jt_pg --test m4_restore
+      - name: Host-tools logical and PITR drill with no egress
+        env:
+          JEETA_REQUIRE_HOST_TOOLS: yes
+        run: |
+          set -euo pipefail
+          umask 077
+          private_log=$(mktemp "$RUNNER_TEMP/restore-drill-XXXXXXXX")
+          trap 'rm -f "$private_log"' EXIT
+          if ! bash scripts/tests/backup-restore.sh > "$private_log" 2>&1; then
+            echo 'restore-drill failed; no private diagnostics uploaded'
+            exit 1
+          fi
+          grep '^PASS [a-z_]*$' "$private_log" > restore-drill-report.txt
+          test "$(wc -l < restore-drill-report.txt)" -eq 9
+          cat restore-drill-report.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: restore-drill-report
+          path: rust/restore-drill-report.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  # Build and assemble only. No registry publication, deployment, or secret inputs.
+  release-artifact:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: release-production
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: rust/panel/pnpm-lock.yaml
+      - name: Verify packaging boundaries
+        run: python3 -m unittest discover -s scripts -p 'test_package_release.py'
+      # The packager owns the controlled production/panel builds and checks Cargo features.
+      - name: Build and assemble verified candidate
+        run: |
+          set -euo pipefail
+          python3 scripts/package-release.py "$RUNNER_TEMP/jeeta-release"
+          tar -cf "$RUNNER_TEMP/jeeta-release.tar" -C "$RUNNER_TEMP" jeeta-release
+      # Tar preserves the executable bits that upload-artifact alone does not preserve.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-release-${{ github.sha }}
+          path: ${{ runner.temp }}/jeeta-release.tar
+          if-no-files-found: error
+          retention-days: 14

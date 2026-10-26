@@ -17,10 +17,12 @@ pub mod inbox;
 pub mod jobs;
 pub mod ledger;
 pub mod platform;
+pub mod platform_payments;
 pub mod roles;
 pub mod strategy;
 pub mod studio;
 pub mod team;
+pub mod v1_import;
 pub mod webhook;
 pub mod work;
 pub mod workspace;
@@ -48,6 +50,9 @@ use crate::ports::{
 /// adapter.
 #[derive(Clone)]
 pub struct Deps {
+    pub ops: Arc<dyn crate::ports::ops::OpsSnapshot>,
+    pub ops_signals: Arc<crate::ports::ops::OpsSignals>,
+    pub billing: billing::BillingConfig,
     pub file_maintenance: Arc<dyn crate::ports::files::FileMaintenance>,
     pub media_fetch: Arc<dyn crate::ports::files::MediaFetcher>,
     pub files: Arc<dyn crate::ports::files::FileStore>,
@@ -250,3 +255,7 @@ mod tests {
         assert_eq!(hash_token("").len(), 64);
     }
 }
+
+pub mod billing;
+
+pub mod ops;

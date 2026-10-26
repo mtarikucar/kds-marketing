@@ -11,7 +11,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use jt_app::usecases::auth::LoginInput;
 use jt_app::usecases::platform::{self, WorkspaceAdminOut};
-use jt_tenancy::{WorkspaceId, WorkspaceStatus};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -26,11 +26,11 @@ pub struct PlatformLoginBody {
     pub password: String,
 }
 
-/// `PATCH /api/platform/workspaces/{workspace_id}/status`.
+/// Required human audit context for suspend and revoke.
 #[derive(Deserialize)]
-pub struct SetStatusBody {
-    /// `pending_payment`, `active` or `suspended`.
-    pub status: WorkspaceStatus,
+#[serde(deny_unknown_fields)]
+pub struct ReasonBody {
+    pub reason: String,
 }
 
 /// The answer to an operator login: when the session ends. The token is in the cookie.
@@ -65,13 +65,42 @@ pub async fn list_workspaces(
     Ok(Json(platform::list_workspaces(&state.deps, &pctx).await?))
 }
 
-/// `200` with the workspace in its new status.
-pub async fn set_status(
+/// Suspend an active workspace, retaining its entitlement.
+pub async fn suspend(
     State(state): State<AppState>,
     PlatformAuthed(pctx): PlatformAuthed,
     ApiPath(workspace_id): ApiPath<WorkspaceId>,
-    ApiJson(body): ApiJson<SetStatusBody>,
+    ApiJson(body): ApiJson<ReasonBody>,
 ) -> Result<Json<WorkspaceAdminOut>, ApiError> {
-    let out = platform::set_status(&state.deps, &pctx, workspace_id, body.status).await?;
-    Ok(Json(out))
+    Ok(Json(
+        platform::suspend(&state.deps, &pctx, workspace_id, &body.reason).await?,
+    ))
+}
+
+/// Resume only a suspended workspace with an activated open grant.
+pub async fn resume(
+    State(state): State<AppState>,
+    PlatformAuthed(pctx): PlatformAuthed,
+    ApiPath(workspace_id): ApiPath<WorkspaceId>,
+) -> Result<Json<WorkspaceAdminOut>, ApiError> {
+    Ok(Json(
+        platform::resume(&state.deps, &pctx, workspace_id).await?,
+    ))
+}
+
+/// New password for a different operator. Never implements Debug.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetPasswordBody {
+    pub password: String,
+}
+/// Reset requires the separate operator cookie and the mutation request header.
+pub async fn reset_password(
+    State(state): State<AppState>,
+    PlatformAuthed(pctx): PlatformAuthed,
+    ApiPath(operator_id): ApiPath<jt_tenancy::OperatorId>,
+    ApiJson(body): ApiJson<ResetPasswordBody>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    platform::reset_password(&state.deps, &pctx, operator_id, &body.password).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }

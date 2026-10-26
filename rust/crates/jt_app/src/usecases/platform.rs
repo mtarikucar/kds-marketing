@@ -15,14 +15,13 @@
 use std::cmp::Reverse;
 use std::fmt;
 
-use jt_ledger::{Actor, LedgerEntry, Subject};
+use jt_ledger::Actor;
 use jt_tenancy::{Email, OperatorId, WorkspaceId, WorkspaceStatus};
 use serde::Serialize;
-use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
 use super::auth::LoginInput;
-use super::{Deps, action, hash_token, invalid};
+use super::{Deps, hash_token, invalid};
 use crate::ctx::PlatformCtx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{OperatorRow, PlatformRepos, PlatformSessionRow, WorkspaceRow};
@@ -34,8 +33,6 @@ pub const MIN_OPERATOR_PASSWORD_CHARS: usize = 12;
 /// Random bytes in an operator session token.
 pub const PLATFORM_TOKEN_BYTES: usize = 32;
 
-/// The ledger action written into a workspace whose status an operator changes.
-const STATUS_ACTION: &str = "platform.workspace_status";
 /// The single answer to every failed operator login, so it never reveals whether an email
 /// belongs to an operator.
 const INVALID_CREDENTIALS: &str = "invalid credentials";
@@ -128,6 +125,61 @@ pub async fn bootstrap(deps: &Deps, email: &str, password: &str) -> Result<bool,
     Ok(true)
 }
 
+/// Resets another authenticated operator's password and atomically revokes all target sessions.
+pub async fn reset_password(
+    deps: &Deps,
+    pctx: &PlatformCtx,
+    target: OperatorId,
+    password: &str,
+) -> Result<(), AppError> {
+    if pctx.operator_id == target {
+        return Err(AppError::forbidden(
+            "another operator must reset this password",
+        ));
+    }
+    validate_password(password)?;
+    let hash = deps.hasher.hash(password).await?;
+    let mut repos = deps.uow.platform().await?;
+    let rows = repos.operators().lock_all().await?;
+    if !rows.iter().any(|o| o.id == pctx.operator_id) {
+        return Err(invalid_session());
+    }
+    repos.operators().set_password(target, &hash).await?;
+    repos.platform_sessions().revoke_all(target).await?;
+    repos.commit().await?;
+    tracing::info!(target_operator=%target, actor=%pctx.operator_id, outcome="success", "operator password reset");
+    Ok(())
+}
+
+/// Startup-only sole-operator recovery. The caller must explicitly enable reset mode.
+pub async fn bootstrap_reset(deps: &Deps, email: &str, password: &str) -> Result<(), AppError> {
+    let email = Email::parse(email).map_err(|_| invalid("email", "invalid operator email"))?;
+    validate_password(password)?;
+    let hash = deps.hasher.hash(password).await?;
+    let mut repos = deps.uow.platform().await?;
+    let rows = repos.operators().lock_all().await?;
+    if rows.len() != 1 || rows[0].email != email {
+        return Err(AppError::conflict(
+            "recovery requires exactly one matching operator",
+        ));
+    }
+    let target = rows[0].id;
+    repos.operators().set_password(target, &hash).await?;
+    repos.platform_sessions().revoke_all(target).await?;
+    repos.commit().await?;
+    tracing::info!(target_operator=%target, actor="startup", outcome="success", "operator password reset");
+    Ok(())
+}
+fn validate_password(password: &str) -> Result<(), AppError> {
+    if password.chars().count() < MIN_OPERATOR_PASSWORD_CHARS {
+        return Err(invalid(
+            "password",
+            "password must be at least 12 characters",
+        ));
+    }
+    Ok(())
+}
+
 /// Opens an operator session for this email and password.
 ///
 /// An unknown email, a wrong password and a malformed email are all `UNAUTHENTICATED` with the
@@ -138,11 +190,10 @@ pub async fn login(deps: &Deps, input: LoginInput) -> Result<PlatformSessionOut,
     let Ok(email) = Email::parse(&input.email) else {
         return Err(invalid_credentials());
     };
-    // The operator is read in a transaction of its own, closed before the slow verification.
-    let operator = {
-        let mut repos = deps.uow.platform().await?;
-        repos.operators().find_by_email(&email).await?
-    };
+    // Keep the row lock through verification and session insertion: reset must revoke this
+    // session or login must verify the replacement hash.
+    let mut repos = deps.uow.platform().await?;
+    let operator = repos.operators().find_by_email(&email).await?;
     let Some(operator) = operator else {
         // The hash is discarded: it only spends the time a verification would.
         let _ = deps.hasher.hash(&input.password).await;
@@ -159,7 +210,6 @@ pub async fn login(deps: &Deps, input: LoginInput) -> Result<PlatformSessionOut,
     let now = deps.clock.now();
     let token = deps.tokens.token(PLATFORM_TOKEN_BYTES);
     let expires_at = now + PLATFORM_SESSION_LIFETIME;
-    let mut repos = deps.uow.platform().await?;
     repos
         .platform_sessions()
         .insert(PlatformSessionRow {
@@ -208,46 +258,75 @@ pub async fn list_workspaces(
     Ok(out)
 }
 
-/// Moves workspace `ws` to `status` and returns it as the console shows it.
-///
-/// An unknown workspace is `NOT_FOUND`. Setting the status it already has is a successful no-op
-/// that writes nothing. Otherwise one platform transaction stores the status and appends
-/// `platform.workspace_status` (payload `{"from", "to"}`, subject the workspace) to that
-/// workspace's own ledger, by `Actor::System { component: "platform_operator:<operator id>" }`
-/// at the context's time.
-pub async fn set_status(
+/// Active → suspended; never closes or creates an entitlement.
+pub async fn suspend(
+    deps: &Deps,
+    pctx: &PlatformCtx,
+    ws: WorkspaceId,
+    reason_text: &str,
+) -> Result<WorkspaceAdminOut, AppError> {
+    let reason = reason(reason_text)?;
+    transition(deps, pctx, ws, WorkspaceStatus::Suspended, reason).await
+}
+
+/// Suspended → active only with an activated, unrevoked entitlement.
+pub async fn resume(
+    deps: &Deps,
+    pctx: &PlatformCtx,
+    ws: WorkspaceId,
+) -> Result<WorkspaceAdminOut, AppError> {
+    transition(
+        deps,
+        pctx,
+        ws,
+        WorkspaceStatus::Active,
+        "platform.workspace_resume",
+    )
+    .await
+}
+
+async fn transition(
     deps: &Deps,
     pctx: &PlatformCtx,
     ws: WorkspaceId,
     status: WorkspaceStatus,
+    reason: &str,
 ) -> Result<WorkspaceAdminOut, AppError> {
     let mut repos = deps.uow.platform().await?;
-    let row = repos
-        .workspace_get(ws)
-        .await?
-        .ok_or_else(|| AppError::not_found("no such workspace"))?;
+    let mut row = repos.workspace_lock(ws).await?;
+    let grant = repos.entitlement_get(ws).await?;
     if row.status == status {
-        return admin_view(repos.as_mut(), row).await;
+        return admin_view(&mut *repos, row).await;
     }
-    let from = row.status;
-    repos.workspace_set_status(ws, status).await?;
-    let mut entry = LedgerEntry::new(
-        ws,
-        Actor::System {
-            component: format!("platform_operator:{}", pctx.operator_id),
-        },
-        action(STATUS_ACTION)?,
-        json!({ "from": from.key(), "to": status.key() }),
-        pctx.now,
-    );
-    entry.subject = Some(Subject {
-        kind: "workspace".to_owned(),
-        id: ws.to_string(),
-    });
-    repos.ledger_append(entry).await?;
-    let out = admin_view(repos.as_mut(), WorkspaceRow { status, ..row }).await?;
+    if row.status == WorkspaceStatus::PendingPayment {
+        return Err(AppError::conflict(
+            "pending workspace requires payment activation",
+        ));
+    }
+    if status == WorkspaceStatus::Active && grant.is_none_or(|g| g.activated_at.is_none()) {
+        return Err(AppError::conflict("activated open entitlement required"));
+    }
+    repos
+        .workspace_set_status(ws, status, reason, &actor(pctx))
+        .await?;
+    row.status = status;
+    let out = admin_view(&mut *repos, row).await?;
     repos.commit().await?;
     Ok(out)
+}
+
+pub(crate) fn actor(pctx: &PlatformCtx) -> Actor {
+    Actor::System {
+        component: format!("platform_operator:{}", pctx.operator_id),
+    }
+}
+
+pub(crate) fn reason(reason: &str) -> Result<&str, AppError> {
+    let reason = reason.trim();
+    if reason.is_empty() || reason.chars().count() > 500 {
+        return Err(invalid("reason", "reason must contain 1 to 500 characters"));
+    }
+    Ok(reason)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -259,7 +338,7 @@ async fn operator_exists(repos: &mut dyn PlatformRepos) -> Result<bool, AppError
 }
 
 /// `row` with its owner's email and member count, read through `repos`.
-async fn admin_view(
+pub(crate) async fn admin_view(
     repos: &mut dyn PlatformRepos,
     row: WorkspaceRow,
 ) -> Result<WorkspaceAdminOut, AppError> {

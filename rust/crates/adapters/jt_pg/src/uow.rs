@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::billing;
 use jt_app::ports::inbox::*;
 use jt_app::ports::{
     AgentConnectionRepo, ApiKeyRepo, ApiKeyRow, BudgetRepo, CapabilityGroupRepo, CapabilityRepo,
@@ -94,6 +95,14 @@ impl PgTenantRepos {
 
 #[async_trait]
 impl TenantRepos for PgTenantRepos {
+    fn billing(&mut self) -> &mut dyn jt_app::ports::billing::BillingRepo {
+        self
+    }
+
+    fn activation_codes(&mut self) -> &mut dyn jt_app::ports::billing::ActivationCodeRepo {
+        self
+    }
+
     fn studio(&mut self) -> &mut dyn jt_app::ports::studio::StudioRepo {
         self
     }
@@ -335,6 +344,138 @@ pub struct PgPlatformRepos {
 
 #[async_trait]
 impl PlatformRepos for PgPlatformRepos {
+    async fn connector_health_counts(
+        &mut self,
+    ) -> Result<Vec<jt_app::ports::ops::ConnectorHealthCount>, AppError> {
+        use jt_app::ports::ops::ConnectorHealthCount;
+        use sqlx::Row;
+        let mut out = std::collections::BTreeMap::new();
+        // archtest: platform-wide
+        let rows = sqlx::query("select workspace_id, kind_key, coalesce(connector_public->'reconnect_required' = 'true'::jsonb, false) as reconnect, connector_public->'access'->>'expires_at' as expiry from capabilities where connector_sealed is not null and status <> 'retired'")
+            .fetch_all(self.tx.conn()).await.map_err(|e| map_sqlx(e, "connector health counts"))?;
+        for r in rows {
+            let ws = WorkspaceId(
+                r.try_get("workspace_id")
+                    .map_err(|e| map_sqlx(e, "health workspace"))?,
+            );
+            let kind: String = r
+                .try_get("kind_key")
+                .map_err(|e| map_sqlx(e, "health kind"))?;
+            let row = out
+                .entry((ws, kind.clone()))
+                .or_insert(ConnectorHealthCount {
+                    workspace_id: ws,
+                    kind_key: kind,
+                    reconnect_required: 0,
+                    expires_before: None,
+                });
+            row.reconnect_required += u64::from(
+                r.try_get::<bool, _>("reconnect")
+                    .map_err(|e| map_sqlx(e, "health count"))?,
+            );
+            let expiry: Option<String> = r
+                .try_get("expiry")
+                .map_err(|e| map_sqlx(e, "health expiry"))?;
+            if let Some(at) = expiry.and_then(|v| {
+                OffsetDateTime::parse(&v, &time::format_description::well_known::Rfc3339).ok()
+            }) {
+                row.expires_before = Some(row.expires_before.map_or(at, |old| old.min(at)));
+            }
+        }
+        Ok(out.into_values().collect())
+    }
+
+    async fn workspace_lock(&mut self, ws: WorkspaceId) -> Result<WorkspaceRow, AppError> {
+        workspaces::lock(self.tx.conn(), ws).await
+    }
+    async fn payment_get(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::PaymentId,
+    ) -> Result<Option<billing::PaymentNotification>, AppError> {
+        crate::repos::billing::payment_get(self.tx.conn(), ws, id).await
+    }
+    async fn payments_list(&mut self) -> Result<Vec<billing::PaymentNotification>, AppError> {
+        crate::repos::billing::payments_list(&mut self.tx).await
+    }
+    async fn payment_entitlements_latest(
+        &mut self,
+    ) -> Result<Vec<billing::WorkspaceEntitlement>, AppError> {
+        crate::repos::billing::payment_entitlements_latest(&mut self.tx).await
+    }
+    async fn entitlement_get(
+        &mut self,
+        ws: WorkspaceId,
+    ) -> Result<Option<billing::WorkspaceEntitlement>, AppError> {
+        crate::repos::billing::entitlement_get(self.tx.conn(), ws).await
+    }
+    async fn entitlement_insert(
+        &mut self,
+        row: billing::WorkspaceEntitlement,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::entitlement_insert(self.tx.conn(), row).await
+    }
+    async fn entitlement_revoke(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::EntitlementId,
+        at: OffsetDateTime,
+        reason: &str,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::entitlement_revoke(self.tx.conn(), ws, id, at, reason).await
+    }
+    async fn activation_code_insert(
+        &mut self,
+        ws: WorkspaceId,
+        row: billing::ActivationCodeRow,
+    ) -> Result<(), AppError> {
+        crate::repos::same_workspace(ws, row.workspace_id)?;
+        crate::repos::billing::code_insert(self.tx.conn(), row).await
+    }
+    async fn activation_code_digest_exists(
+        &mut self,
+        ws: WorkspaceId,
+        digest: &[u8],
+    ) -> Result<bool, AppError> {
+        sqlx::query_scalar(
+            "select exists(select 1 from activation_codes where workspace_id=$1 and digest=$2)",
+        )
+        .bind(ws.as_uuid())
+        .bind(digest)
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| crate::repos::map_sqlx(e, "check activation history"))
+    }
+    async fn activation_code_lock_current_by_workspace(
+        &mut self,
+        ws: WorkspaceId,
+    ) -> Result<Option<billing::ActivationCodeRow>, AppError> {
+        crate::repos::billing::code_current(self.tx.conn(), ws).await
+    }
+    async fn activation_code_record_failed_attempt(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::ActivationCodeId,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::code_fail(self.tx.conn(), ws, id).await
+    }
+    async fn activation_code_invalidate_current(
+        &mut self,
+        ws: WorkspaceId,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::code_invalidate(self.tx.conn(), ws, at).await
+    }
+    async fn activation_code_consume(
+        &mut self,
+        ws: WorkspaceId,
+        id: billing::ActivationCodeId,
+        at: OffsetDateTime,
+        by: UserId,
+    ) -> Result<(), AppError> {
+        crate::repos::billing::code_consume(self.tx.conn(), ws, id, at, by).await
+    }
+
     fn operators(&mut self) -> &mut dyn OperatorRepo {
         self
     }
@@ -355,8 +496,10 @@ impl PlatformRepos for PgPlatformRepos {
         &mut self,
         ws: WorkspaceId,
         status: WorkspaceStatus,
+        reason: &str,
+        by: &jt_ledger::Actor,
     ) -> Result<(), AppError> {
-        workspaces::set_status(&mut self.tx, ws, status).await
+        workspaces::set_status(self.tx.conn(), ws, status, reason, by).await
     }
 
     async fn workspace_owner_email(&mut self, ws: WorkspaceId) -> Result<Option<Email>, AppError> {

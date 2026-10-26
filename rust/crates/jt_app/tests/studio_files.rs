@@ -136,6 +136,9 @@ struct CrashAfterDelete {
 }
 #[async_trait::async_trait]
 impl FileStore for CrashAfterDelete {
+    async fn probe(&self) -> Result<(), jt_app::error::AppError> {
+        self.inner.probe().await
+    }
     async fn put(
         &self,
         w: jt_tenancy::WorkspaceId,
@@ -208,6 +211,9 @@ struct PausedPut {
 }
 #[async_trait::async_trait]
 impl FileStore for PausedPut {
+    async fn probe(&self) -> Result<(), jt_app::error::AppError> {
+        self.inner.probe().await
+    }
     async fn put(
         &self,
         w: jt_tenancy::WorkspaceId,

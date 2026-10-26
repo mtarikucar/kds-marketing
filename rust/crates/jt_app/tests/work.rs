@@ -967,9 +967,16 @@ async fn work_pending_is_derived_and_preserves_status_gating() {
             .any(|i| matches!(i.kind, WorkKind::ReplyDue { .. }))
     );
     let mut p = w.uow.platform().await.unwrap();
-    p.workspace_set_status(w.ws, WorkspaceStatus::PendingPayment)
-        .await
-        .unwrap();
+    p.workspace_set_status(
+        w.ws,
+        WorkspaceStatus::PendingPayment,
+        "test status transition",
+        &jt_ledger::Actor::System {
+            component: "test".into(),
+        },
+    )
+    .await
+    .unwrap();
     p.commit().await.unwrap();
     let held = work::pending(&w.deps, &w.owner_ctx).await.unwrap();
     assert!(!held.items.iter().any(|i| matches!(

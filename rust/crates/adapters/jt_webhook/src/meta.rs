@@ -96,6 +96,8 @@ pub(crate) async fn receive(
         Ok(parsed) => parsed,
         Err(e) => {
             UNPARSEABLE_META.fetch_add(1, Ordering::Relaxed);
+            deps.ops_signals
+                .webhook(jt_app::ports::ops::WebhookOutcome::Unresolved);
             tracing::warn!(
                 provider = "meta",
                 reason = parse_reason(&e),
@@ -104,6 +106,28 @@ pub(crate) async fn receive(
             return received();
         }
     };
+    if parsed.is_empty() {
+        // A valid entry list can still lose every item to missing routing IDs or unknown
+        // event shapes. Count the request once, regardless of how many entries it held.
+        let has_entries = serde_json::from_slice::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|body| {
+                body.get("entry")
+                    .and_then(|v| v.as_array())
+                    .map(|v| !v.is_empty())
+            })
+            .unwrap_or(false);
+        if has_entries {
+            deps.ops_signals
+                .webhook(jt_app::ports::ops::WebhookOutcome::Unresolved);
+            tracing::warn!(
+                provider = "meta",
+                reason = "no_routable_events",
+                "signed webhook acknowledged, nothing stored"
+            );
+        }
+        return received();
+    }
     let hints: Vec<&'static str> = parsed.iter().map(|p| p.kind_hint).collect();
     let origins: Vec<Origin> = parsed.iter().map(|p| p.origin).collect();
     // Each workspace keeps only the part of the body its own events came from.

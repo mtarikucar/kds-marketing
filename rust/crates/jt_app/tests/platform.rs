@@ -296,80 +296,67 @@ async fn list_workspaces_newest_first_with_owner_and_member_count() {
 }
 
 #[tokio::test]
-async fn set_status_activates_and_ledgers() {
+async fn suspend_and_resume_ledger_actor_and_reason() {
     let w = World::new(&["aaaa", "t1", "p1"]);
     let ws = w.register(T0, "owner@alpha.example", "Alpha").await;
     let pctx = w.operator().await;
     let actor = Actor::System {
         component: format!("platform_operator:{}", pctx.operator_id),
     };
-
-    let out = platform::set_status(&w.deps, &pctx, ws, WorkspaceStatus::Active)
+    jt_testkit::flows::seed_activated_workspace(&w.deps, ws, &actor).await;
+    let out = platform::suspend(&w.deps, &pctx, ws, "  operator hold  ")
         .await
         .unwrap();
     assert_eq!(out.id, ws);
-    assert_eq!(out.status, WorkspaceStatus::Active);
+    assert_eq!(out.status, WorkspaceStatus::Suspended);
+    assert_eq!(
+        w.uow.snapshot().workspaces[0].status,
+        WorkspaceStatus::Suspended
+    );
     assert_eq!(
         out.owner_email,
         Some(Email::parse("owner@alpha.example").unwrap())
     );
     assert_eq!(out.member_count, 1);
-    let stored = w.uow.snapshot();
-    assert_eq!(stored.workspaces[0].status, WorkspaceStatus::Active);
-
-    // The ledger of the workspace itself records the change, by the operator as a system actor.
     let entries = w.entries(ws, "platform.workspace_status").await;
-    assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
-    assert_eq!(entry.workspace_id, ws);
-    assert_eq!(entry.actor, actor);
-    assert_eq!(entry.at, pctx.now);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].workspace_id, ws);
+    assert_eq!(entries[0].actor, actor);
+    assert_eq!(entries[0].at, pctx.now);
     assert_eq!(
-        entry.payload,
-        json!({ "from": "pending_payment", "to": "active" })
+        entries[0].payload,
+        json!({"from":"active","to":"suspended","reason":"operator hold","by":actor})
     );
-    let subject = entry.subject.as_ref().unwrap();
+    let subject = entries[0].subject.as_ref().unwrap();
     assert_eq!(
-        (subject.kind.as_str(), subject.id.clone()),
-        ("workspace", ws.to_string())
+        (subject.kind.as_str(), subject.id.as_str()),
+        ("workspace", ws.to_string().as_str())
     );
-
-    // The tenant sees the workspace active.
     let principal = auth::resolve_session(&w.deps, "t1").await.unwrap();
     assert_eq!(
         principal.memberships[0].workspace_status,
-        WorkspaceStatus::Active
+        WorkspaceStatus::Suspended
     );
-
-    // Setting the same status again changes nothing and writes no entry.
-    let same = platform::set_status(&w.deps, &pctx, ws, WorkspaceStatus::Active)
-        .await
-        .unwrap();
-    assert_eq!(same, out);
-    assert_eq!(w.entries(ws, "platform.workspace_status").await.len(), 1);
-
-    // Suspending is another change, with its own entry.
-    let suspended = platform::set_status(&w.deps, &pctx, ws, WorkspaceStatus::Suspended)
-        .await
-        .unwrap();
-    assert_eq!(suspended.status, WorkspaceStatus::Suspended);
+    assert_eq!(
+        platform::suspend(&w.deps, &pctx, ws, "hold").await.unwrap(),
+        out
+    );
+    assert_eq!(w.entries(ws, "platform.workspace_status").await.len(), 2);
+    let resumed = platform::resume(&w.deps, &pctx, ws).await.unwrap();
+    assert_eq!(resumed.status, WorkspaceStatus::Active);
     let entries = w.entries(ws, "platform.workspace_status").await;
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 3);
     assert_eq!(
         entries[0].payload,
-        json!({ "from": "active", "to": "suspended" })
+        json!({"from":"suspended","to":"active","reason":"platform.workspace_resume","by":actor})
     );
-    assert_eq!(entries[0].actor, actor);
-
-    // An unknown workspace is not found, and nothing is written.
-    let before = w.uow.snapshot().ledger.len();
-    let missing = err(platform::set_status(
-        &w.deps,
-        &pctx,
-        WorkspaceId::new_v7(),
-        WorkspaceStatus::Active,
-    )
-    .await);
+    let missing = err(platform::resume(&w.deps, &pctx, WorkspaceId::new_v7()).await);
     assert_eq!(missing.code, ErrorCode::NotFound);
-    assert_eq!(w.uow.snapshot().ledger.len(), before);
+    assert_eq!(w.entries(ws, "platform.workspace_status").await.len(), 3);
 }
+
+#[path = "platform/m4_platform_payments.rs"]
+mod m4_platform_payments;
+
+#[path = "platform/m4_platform_access.rs"]
+mod m4_platform_access;

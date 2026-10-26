@@ -79,8 +79,9 @@ pub enum IdentityError {
 
 /// Normalise a contact identity without I/O.
 ///
-/// Phones discard non-ASCII-digits, preserving a leading `+`. Turkish local `0XXXXXXXXXX`
-/// becomes `+90XXXXXXXXXX`; other numbers gain a `+` and must contain 8–15 digits.
+/// Phones discard non-ASCII-digits, preserving a leading `+`. Without a leading `+`,
+/// Turkish national `XXXXXXXXXX` and local `0XXXXXXXXXX` become `+90XXXXXXXXXX`.
+/// Other numbers gain a `+`; the resulting number must contain 8–15 digits.
 /// Emails are trimmed, lower-cased, and require exactly one `@` with nonempty sides and no
 /// whitespace or control characters. Opaque ids are only trimmed and checked for emptiness.
 /// The application layer must apply [`scope_opaque`] to opaque ids before storage, matching,
@@ -90,8 +91,12 @@ pub fn normalise(channel: IdentityChannel, raw: &str) -> Result<String, Identity
     match channel {
         IdentityChannel::Phone => {
             let mut digits: String = raw.chars().filter(char::is_ascii_digit).collect();
-            if !raw.starts_with('+') && digits.len() == 11 && digits.starts_with('0') {
-                digits = format!("90{}", &digits[1..]);
+            if !raw.starts_with('+') {
+                if digits.len() == 10 {
+                    digits = format!("90{digits}");
+                } else if digits.len() == 11 && digits.starts_with('0') {
+                    digits = format!("90{}", &digits[1..]);
+                }
             }
             if !(8..=15).contains(&digits.len()) {
                 return Err(IdentityError::Invalid);

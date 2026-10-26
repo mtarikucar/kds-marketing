@@ -862,3 +862,6 @@ async fn iys_provisioning_takes_inbox_lock_before_capability_lock() {
     );
     assert_eq!(report.failed, 0);
 }
+
+#[path = "jobs/m4_retention.rs"]
+mod m4_retention;

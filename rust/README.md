@@ -45,6 +45,9 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
    # .env içinde en azından:
    #   JEETA_DATABASE_URL=postgres://jeeta:yerel-bir-parola@localhost:5432/jeeta
    #   JEETA_SECRET_KEY=<openssl rand -hex 32 çıktısı>
+   #   JEETA_PRICE_MINOR=<işletmenin belirlediği pozitif küçük birim tutarı>
+   #   JEETA_PRICE_CURRENCY=<üç büyük ASCII harfi>
+   #   JEETA_BANK_INSTRUCTIONS=<havale bilgileri>
    #   JEETA_COOKIE_SECURE=false        (yalnızca http://localhost için)
    #   JEETA_PANEL_DIR=panel/dist
    ```
@@ -93,6 +96,9 @@ döndürür. Sekiz göç vardır:
 | `0007_inbox_policy` | Alan politikalarına `inbox_policy` sütunu ekler; mevcut durum etiketlerini korur, yeni tablo eklemez. |
 | `0008_inbox_compliance` | İzinler, engellemeler, teklifler, randevular, komisyonlar, silme kayıtları ve kimlik özetleri, gönderim işleri, posta imleçleri, varsayılan/kullanıcı komisyon oranları ve değişmez yolculuk atfı: 12 yeni alan tablosu, toplam 48. FORCE RLS, bileşik alan anahtarları ve yinelenebilir up/down. |
 | `0009_studio` | Growth Studio tenant persistence: 14 tables, total 62; durable claims, replay receipts, learning, spend reservations and reversible owner/manager grant backfill. Includes hypothesis cadence/prior and nullable unit price. |
+| `0010_m4_billing` | Payment evidence, permanent entitlement history, stable workspace reference and a platform-only backfill manifest; 66 tables. Schema rollback refuses live rows. |
+| `0011_m4_activation_codes` | Workspace-locked keyed activation challenges, attempt cap and replay history; 67 tables. No plaintext or recipient binding. |
+| `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -135,6 +141,9 @@ hiçbir günlük satırında görünmez.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
+| `JEETA_PRICE_MINOR` | — (zorunlu) | Tek seferlik fiyat, pozitif tamsayı küçük para birimi |
+| `JEETA_PRICE_CURRENCY` | — (zorunlu) | Üç büyük ASCII harfi |
+| `JEETA_BANK_INSTRUCTIONS` | — (zorunlu) | Salt okunur havale açıklaması, boş olamaz, en çok 4096 bayt |
 | `JEETA_DATABASE_URL` | — (zorunlu) | Uygulamanın PostgreSQL adresi, `postgres://kullanıcı:parola@sunucu:port/veritabanı` |
 | `JEETA_SECRET_KEY` | — (zorunlu) | Tam 64 onaltılık karakter (32 bayt): `openssl rand -hex 32`. Açılışta doğrulanır. Sır kutusunun (`jt_seal`) ana anahtarıdır: bağlayıcı sırları, her çalışma alanı için bundan türetilen ayrı bir anahtarla mühürlenir (bkz. [Sırların mühürlenmesi](#sırların-mühürlenmesi)). Değiştirilirse önceden mühürlenmiş sırlar açılamaz |
 | `JEETA_BIND` | `127.0.0.1:8080` | Dinlenen `ip:port` |
@@ -194,7 +203,8 @@ yalnızca açılışta oluşturulur:
 ## Kayıt
 
 Panelde `http://127.0.0.1:8080/register`. Kayıt, kullanıcıyı ve onun sahibi olduğu yeni bir çalışma alanını
-açar; alan `pending_payment` durumunda başlar ve operatör konsolundan (`/platform/workspaces`) etkinleştirilir.
+açar; alan `pending_payment` durumunda başlar. Operatör ödeme kanıtını doğrular ve tek kullanımlık
+etkinleştirme kodunu sahibine iletir; kodun panelde kullanılması M4 Task 4 kapsamındadır.
 
 **Etkinleşmeden önce alan kilitlidir.** Çalışma alanı durumu denetimi stratejiden bağımsızdır: `auth.*`,
 `workspace.*` ve `platform.*` her durumda çalışır; `strategy.*` ve `work.*` alan `active` ya da
@@ -254,7 +264,7 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
    curl -si -X POST localhost:8080/mcp -H "Authorization: Bearer $KEY" \
      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (124 araç)
+   # 200, Mcp-Session-Id: …; ardından aynı başlıkla notifications/initialized ve tools/list (125 araç)
    ```
 
    Geçersiz bir anahtar `401 {"code":"UNAUTHENTICATED","message":"invalid api key","details":{}}` alır.
@@ -271,7 +281,7 @@ Sunucuya başka bir adla ulaşılıyorsa (genel bir alan adı, ters vekil (rever
 
 ## MCP araçları
 
-Sunucu 124 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
+Sunucu 125 araç tanımlar; `tools/list` her ajana yalnızca anahtarının etkin izinlerinin yettiğini
 gösterir (ör. `team.manage` taşımayan bir anahtar ekibi değiştiren araçları görmez). Her açıklama
 risk etiketiyle biter (`[risk: READ]`, `WRITE`, `SPEND`, `DESTRUCTIVE`); geri dönüşü olmayan üç araç,
 `jeeta.strategy.archive` (strateji kapısını kapatır), `jeeta.capability.retire` (kabiliyeti kesin olarak
@@ -294,6 +304,7 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | Alan | Araç | Ne yapar | Risk |
 |---|---|---|---|
 | ajan | `jeeta.agent.whoami` | Anahtarın kimin adına çalıştığı: ajan bağlantısı, anahtarı çıkaran üye, alan, rol ve etkin izinler | READ |
+| ödeme | `jeeta.billing.report_payment` | Sahip yetkisi ve `team.manage` kapsamında havale kanıtı kaydeder; ödeme doğrulamaz, alanı açmaz, kod almaz | WRITE |
 | alan | `jeeta.workspace.info` | Çalışma alanının kimliği, adı, kısa adı ve durumu | READ |
 | ekip | `jeeta.team.list` | Üyeler ve açık davetler | READ |
 | | `jeeta.team.invite` | Bir e-postayı bir rolle davet eder; tek seferlik davet jetonunu döndürür | WRITE |
@@ -1254,6 +1265,7 @@ Belirsiz gönderim `unknown` olur ve otomatik yeniden gönderilmez. Aynı çalı
 `SendIntent` şimdilik uygulamanın `usecases::inbox::replies` modülündedir.
 
 `people.create`: `{display_name, identities:[{channel,value,capability_id?}], source}`.
+Başında `+` olmayan 10 haneli telefonlar Türkiye ulusal numarası sayılır: `532 123 45 67` → `+905321234567`; `0532…`, `90532…` ve `+90532…` aynı kimlikle eşleşir.
 Telefonlar SMS/WhatsApp/arama arasında ortak, opak kimlikler kabiliyetin dış hesap kimliğiyle
 kapsamlıdır. Çakışan kimlikler kişi verisini taşımaz; `identity_split` hatası iki kişi kimliğini ve
 kalıcı birleştirme önerisini verir. İlk temas değişmez; kişi, ilk yolculuk ve kimlikleri tek işlemde
@@ -2404,7 +2416,7 @@ its immutable repository contract. No provider-live verification is claimed.
 
 ## M3 Task 10 — Five-region Growth Studio
 
-The current release has **124 MCP tools / 18 Studio operations**, **62 tables**,
+At the M3 Task 10 boundary the release had **124 MCP tools / 18 Studio operations**, **62 tables**,
 migration **0009_studio**, and **21 scheduled jobs**. This task adds no tables or jobs.
 
 | Shared row / MCP tool | HTTP | Strategy gate / permission |
@@ -2497,3 +2509,540 @@ checks. `twin_parity`, `studio_http`, `studio_mcp`, `studio_paid`, `studio_brake
 contracts; the smoke does not replace those PostgreSQL tests. These fixtures prove
 application behavior, not live Meta/X approval, provider availability, actual billing
 or the provider's eventual spend. The broader release checks remain `make check panel-test panel-build`.
+
+
+## M4 Task 1 — durable billing storage
+
+The implemented storage boundary is **67 tables**, **12 migration pairs** (latest
+`0012_m4_grandfathered_backfill`), **124 MCP tools** and **21 scheduled jobs**.
+This task adds repository contracts; payment reporting, operator confirmation and panel
+redemption surfaces belong to M4 Tasks 2–4. The existing M3 release tables above are historical.
+There is no payment provider, subscription, credit balance or automatic entitlement expiry.
+Price, currency and bank instructions remain deployment inputs for the subsequent billing
+operations, not business constants derived from test fixtures.
+
+`payment_notifications` stores immutable evidence through insert-only repository methods:
+reporter, request key, amount in minor units, currency, payment/report timestamps and a sealed
+bank reference. The same request key is unique within a workspace. Secret-bearing payment and
+challenge rows have masked Debug and do not implement serialization. `workspace_billing`
+creates a stable `JEETA-<8 uppercase workspace UUID hex digits>-<6 random decimal digits>`
+reference once under the workspace lock, retrying unique-reference collisions.
+
+A paid entitlement requires a payment from the same workspace and a confirming platform
+operator. Confirmation stores an unactivated grant; activation records time and the redeeming
+user. Grandfathered grants have no payment or operator. Only one nonrevoked grant may exist per
+workspace; revocation retains the row and its reason, and a later grant may reuse the same
+payment. `activation_codes` stores only a keyed 32-byte digest and challenge metadata. Challenges
+are restricted to `billing.activate`, have no designated recipient, retain consumed rows for
+replay refusal, and cap failed attempts at five. Current-owner authorization and code generation
+are implemented by the later redemption use case.
+
+Billing writers lock the workspace before grants/challenges, retaining the lock until the
+caller commits or drops its bundle. PostgreSQL uses `FOR NO KEY UPDATE`, compatible with
+unrelated ledger foreign-key locks; the fake serializes writes and refreshes its snapshot.
+Tenant status mutation rejects another workspace. Both status mutation ports require a reason
+and actor and atomically append `platform.workspace_status` with `from`, `to`, `reason`, `by`.
+A repeated status is a no-op. This specified port has no timestamp parameter, so its audit uses
+transaction time (fixed transaction time in the fake); other billing timestamps come from callers.
+Registration still creates pending workspaces and `workspace.info` remains read-only. Task 3
+replaces the legacy console status operation with the ruled payment/status state machine.
+
+All four billing tables have ENABLE/FORCE RLS and tenant composite foreign keys. Platform access
+uses the existing explicit platform transaction, with no superuser/BYPASSRLS role. The separate
+backfill manifest is platform-only. Backfill IDs are deterministic per workspace and the manifest
+retains the entire original row plus its workspace ledger watermark. Repeated up skips existing
+grants. Data down removes only untouched owned rows without later ledger history, other grants
+or challenge references; edited/revoked/runtime-associated rows and their manifest entries stay.
+It never changes workspace status. Schema downs preflight and lock their tables, then refuse
+atomically if live rows remain. Roll back live installations through a preserved backup, not by
+dropping durable payment history. Migrations 0001–0009 are unchanged.
+
+Verification: `cargo test --locked --workspace --test billing_repos --test migrations` runs
+shared fake/Pg contracts, ordinary-role RLS and composite FK checks, challenge replay/attempt
+checks, concurrent grants/reference creation, and up/down/up/repeated-down/live-row preservation.
+The named `m4_billing_storage` and `m4_billing_contracts` targets also run in the workspace suite.
+
+
+## M4 Task 2 — tenant payment status and bank-transfer evidence
+
+At the Task 2 boundary: **136 catalog rows**, **125 MCP tools**, **67 tables**,
+**12 migration pairs**, **21 scheduled jobs**. Task 2 adds no migrations or provider calls.
+Operator confirmation and panel code redemption remain Tasks 3–4; this change does not
+claim those flows are implemented.
+
+| Use case | Panel route | MCP tool | Permission / status |
+|---|---|---|---|
+| `billing.status` | `GET /api/billing` | None (panel only) | Active membership + `workspace.read`; every workspace status |
+| `billing.report_payment` | `POST /api/billing/payments` | `jeeta.billing.report_payment` | Current owner + `team.manage`, including effective key scopes; active or pending, never suspended |
+
+Both are strategy-exempt. These are exact status exceptions; team, keys and capabilities
+remain unavailable while pending. Fresh registrations report through their panel session;
+existing authorized keys can report after a workspace returns to pending. No unpaid key
+issuance or alternate agent authentication is introduced.
+
+The required deployment variables `JEETA_PRICE_MINOR`, `JEETA_PRICE_CURRENCY` and
+`JEETA_BANK_INSTRUCTIONS` apply to both `serve` and `mcp-stdio`. No price, currency or bank
+instructions default is supplied. Status returns those read-only instructions and the stable
+workspace payment reference, the latest payment, and the latest grant including revoked history.
+`confirmed` means a paid grant has existed for that payment, even after revocation; it does not
+mean active access. Codes, sealed evidence and operator identity are absent from these DTOs.
+
+Report JSON contains exactly `reference`, `amount_minor`, `paid_at` and `request_key`.
+Reference matching ignores whitespace and ASCII letter case. Amount must be positive;
+amounts different from the configured price are retained for operator review. `paid_at` is a
+nonfuture RFC 3339 timestamp with at most microsecond precision (PostgreSQL's precision).
+The nonblank request key is at most 128 bytes. Workspace and reporter come from authentication.
+Unknown fields, including codes and caller-supplied workspace/currency, are rejected.
+
+Reports seal the normalized reference and append an ID-only `billing.payment_reported` event
+in the same workspace-locked transaction. The same request key with identical normalized
+reference, amount and payment time returns the stored payment and currency; changed evidence
+is `CONFLICT`. Payment reporting never changes workspace status, entitlement, strategy,
+capability verification or connection status. Concurrent retries produce one payment/event.
+
+`cargo test --locked --workspace --test billing` covers the Task 2 app, PostgreSQL HTTP and
+real MCP transport tests (the `billing/m4_billing_*` modules), including cross-surface retries,
+owner/scopes, rollback, restart, history and exact billing schemas/status exceptions. Binary
+unit test `billing_config_rejects_missing_or_invalid_values` verifies required configuration.
+
+
+## M4 Task 3 — operator confirmation and explicit workspace transitions
+
+At the Task 3 boundary: **141 catalog rows**, **125 MCP tools**, **67 tables**,
+**12 migration pairs**, **21 scheduled jobs**. No new migrations, jobs or MCP tools.
+The six rows below are **panel-only**, strategy-exempt and available regardless of workspace
+status, with a separate authenticated operator session and the existing mutation request header.
+There are no `jeeta.platform.*` or `jeeta.ops.*` tools.
+
+| Use case | HTTP | Risk |
+|---|---|---|
+| `platform.payments.list` | `GET /api/platform/payments` | Read |
+| `platform.billing.confirm` | `POST /api/platform/workspaces/{workspace_id}/payments/{payment_id}/confirm` | Write |
+| `platform.billing.reissue` | `POST /api/platform/workspaces/{workspace_id}/payments/{payment_id}/reissue` | Write |
+| `platform.billing.revoke_activation` | `POST /api/platform/workspaces/{workspace_id}/revoke-activation` | Write |
+| `platform.workspaces.suspend` | `POST /api/platform/workspaces/{workspace_id}/suspend` | Write |
+| `platform.workspaces.resume` | `POST /api/platform/workspaces/{workspace_id}/resume` | Write |
+
+The operator list decrypts only payment references and exposes amount, currency, paid/report times
+and the matching open entitlement. The operator must compare all evidence with the bank transfer
+before confirmation; a tenant's reported amount does not settle a payment automatically.
+Confirmation creates an **unactivated** paid entitlement and an eight-character `[A-Z0-9]` code,
+valid for 72 hours with five failed guesses allowed. It never activates or resumes the workspace.
+The code is generated uniformly from secure random tokens and stored only as an HMAC-SHA256 digest,
+bound to workspace, entitlement and `billing.activate`. Evidence and code responses use
+`Cache-Control: no-store`; their DTOs do not implement Debug. Plaintext delivery is once only,
+for operator out-of-band handoff. Lost responses require explicit reissue.
+
+Retrying confirmation of the same payment with an open grant returns its current state and
+`activation: null`, without writes/audit, even after activation or suspension. A different payment
+conflicts. Reissue requires a pending workspace and matching unactivated paid grant; it invalidates
+the old challenge, resets attempts and starts a fresh 72-hour lifetime without changing the grant.
+After revocation, the same payment can create a new grant/code; closed history and evidence remain.
+
+Suspend accepts active → suspended and retains the grant. Resume accepts suspended → active only
+with an activated open paid or grandfathered grant. Repeating the resulting status is a no-op;
+pending workspaces cannot use either operation to activate. Revoke closes any open grant,
+invalidates its challenge and returns active/suspended/pending workspaces to pending payment;
+already pending without a grant is a no-op. Suspend and revoke require `{ "reason": "…" }`,
+trimmed and 1–500 characters. Refunds remain outside the application.
+
+Each write locks and rereads the workspace and commits all effects once. Billing audit actions are
+`billing.confirmed`, `billing.code_reissued`, `billing.activation_revoked`; status transitions append
+`platform.workspace_status` with from/to/reason and operator actor. No reference or code enters
+billing audit payloads. The old `platform.workspaces.set_status` row, use case, panel client helper
+and `PATCH /api/platform/workspaces/{workspace_id}/status` route are removed (404).
+The existing workspace page offers reasoned suspension and entitlement-preserving resumption.
+Owner code redemption is Task 4; the dedicated operator payment console is Task 6.
+
+Fast verification: `cargo test --locked --workspace --test billing --test platform`. The `platform`
+targets include `platform/m4_platform_payments.rs`, `platform/m4_payment_races.rs` and
+`platform/m4_platform_payments_http.rs`: shared fake/Pg behavior, real concurrent confirmations,
+SQL-failure rollback after code/status writes, exact audit counts/actors, cross-workspace refusal,
+operator/tenant session separation, request-header enforcement, no-store and legacy-route removal.
+The complete catalog/HTTP/MCP parity tests retain the exact 125-tool count.
+
+## M4 Task 4 — workspace-locked panel activation
+
+Current implemented boundary: **142 catalog rows**, **125 MCP tools**, **67 tables**,
+**12 migration pairs (0001–0012)**, **21 scheduled jobs**. No new migration, job or MCP tool.
+
+| Use case | Panel route | Permission / status |
+|---|---|---|
+| `billing.activate` | `POST /api/billing/activate` | Human session, `team.manage`, active current owner membership; pending payment only |
+
+The row is panel-only, strategy-exempt and has an exact PendingPayment status exemption.
+There is no MCP activation handler, tool or schema. The existing mutation request header is
+required. `{ "code": "…" }` is the only input; successful and validation responses use
+`Cache-Control: no-store`. Invalid request bodies receive sanitized errors and count as guesses.
+
+Redemption acquires the same workspace lock as confirmation, reissue, suspension and revocation
+before reading the challenge. It then locks the caller's membership and current role and checks
+both again inside the transaction. Any current owner may redeem; a stale former-owner context
+cannot. Ownership changes do not invalidate a challenge. The workspace/grant/action-bound HMAC
+is verified in constant time. Issuance checks all challenge digests in the workspace, including
+invalidated and consumed history, and regenerates any collision under the workspace lock.
+
+Each incorrect or malformed code commits one failed attempt before returning `VALIDATION`.
+Five attempts lock the challenge even for a correct code; only operator reissue resets it.
+The 72-hour expiry is exclusive (`expires_at <= now` is refused). Absent, consumed or invalidated
+challenges cannot change payment or status. A successful redemption atomically consumes the
+challenge, records the redeemer and activation time on the paid grant, changes the workspace to
+active, and appends `billing.activated` with IDs and redeemer only. Lost responses recover through
+billing status; replay cannot undo suspension or revocation. No payment action approves strategy,
+verifies capabilities or connects an agent; existing `confirm: true` actions remain intact.
+
+Fast verification: `cargo test --locked --workspace --test billing --test platform --test gate_rule --test twin_rule --test catalog`.
+`billing/m4_payment_codes.rs` and `billing/m4_payment_code_storage.rs` run shared fake/Pg contracts
+for guesses, expiry, ownership and role locks, binding/replay, historical digests, rollback and the
+full activate/suspend/resume/revoke/reconfirm lifecycle. Platform contracts exercise both lock
+orders with a held real transaction; PostgreSQL also injects a final-audit SQL failure. HTTP and
+MCP tests verify session/header requirements, code secrecy, no-store and the exact 125-tool set.
+
+## M4 Task 5 — readiness and redacted operational health
+
+Boundary: **143 catalog rows, 125 MCP tools, 67 tables, 12 migration pairs,
+21 scheduled jobs**. The only added catalog row is `ops.health` →
+`GET /api/platform/health`: panel-only, Exempt / Always / Read. It requires an
+operator `jt_platform` session; tenant sessions and API keys cannot open it.
+`GET /healthz` remains liveness (`200 {"ok":true}`). `GET /readyz` returns only
+`{"ok":true|false}` with 200/503, checking completed boot/migrations, database
+connectivity and local FileStore read/write availability. The file probe writes a nonempty
+4 KiB payload, fsyncs, reads and compares it, then removes its reserved non-tenant file
+through the active store's directory handle. A changed directory identity is degraded,
+including a rename followed by recreation at the configured path. Readiness and health
+bound the store probe to two seconds; results are not cached. Connector reports,
+recovery markers and disk capacity do not gate readiness. Neither `/readyz` nor
+`/metrics` has a catalog row or MCP tool; both paths are reserved from SPA fallback.
+
+`JEETA_METRICS_TOKEN` is required and nonblank for **serve** (not mcp-stdio).
+`GET /metrics` requires `Authorization: Bearer <token>`; cookies do not substitute
+for the token. Authentication compares SHA-256 digests in constant time. Responses
+use `text/plain; version=0.0.4`, stay within 256 KiB, and never truncate a metric.
+HTTP counters use registered route templates (unknown paths collapse to `other`),
+connector counts aggregate across tenants by fixed provider kind, and job and
+webhook outcome labels are fixed sets. Workspace IDs appear only in authenticated
+operator JSON, never metric labels. Pool reachability/occupancy, available disk
+bytes, job outcomes, reconnect counts and accepted/unrouted/unresolved webhook
+counters are process-local. Unresolved includes signed bodies the parser cannot
+interpret and NetGSM intake without an unambiguous capability. A signed, unrouted
+Meta webhook still returns 200 and increments `unrouted`; it stores no event.
+
+Health exposes RFC3339 observation and process-start times, explicit
+`history: "unknown_before_process_start"`, job last-success times (null until a
+success) and failure totals. Counters reset on restart; there is no persistent
+counter history or new table. Missing probes remain `unknown`, never healthy.
+Connector projection reads only workspace ID, kind and reconnect/expiry metadata;
+it never selects sealed credentials, full public JSON, messages or payment evidence.
+A failed connector projection has its own state and does not change DB reachability.
+
+`JEETA_RECOVERY_STATUS_DIR` is optional; when set it must be an absolute directory,
+protected from tenant writes and readable by the service. Task 9 writes these
+**verified-success artifacts** atomically; this task only reads them (maximum 4 KiB
+per file). Minimal schemas, with RFC3339 timestamps:
+
+```json
+// backup-status.json: publish only after a completed and verified full backup
+{"completed_at":"2026-10-26T01:00:00Z"}
+// wal-status.json: publish only after confirmed WAL archive success
+{"archived_at":"2026-10-26T01:05:00Z"}
+```
+
+Never publish a current timestamp merely because a timer ran. Missing, malformed or
+oversized files are `unknown`; future timestamps and backup age >24 hours or WAL
+age >15 minutes are `degraded`. Available disk <10% is `degraded`. Capacity uses
+`/usr/bin/df -Pk -- <files-directory>` without a shell (GNU coreutils, included in
+the Linux deployment); inability to observe capacity is `unknown`. No new crate
+or unsafe FFI is introduced for this probe.
+
+Production uses `JEETA_LOG_FORMAT=json` to stderr/journald. Internal errors log
+fixed error categories, never arbitrary error chains, input bodies or URLs.
+`rmcp` is capped at warnings even when a more-specific filter requests info/trace.
+Domain audit entries remain separate from operational logs; journald retention
+remains 30 days / 1 GiB as configured by deployment.
+
+Fast verification (includes all ten named acceptance tests, metadata Pg/fake parity,
+operator session isolation, exact catalog/gate/twin assertions and subprocess stderr
+canaries with separate ledger assertions):
+
+```sh
+cargo test --locked --workspace --test ops --test m4_observability --test catalog --test gate_rule --test twin_rule
+```
+
+
+## M4 Task 6 — platform console and operator recovery
+
+Boundary: **144 catalog rows, 125 MCP tools**; no migrations or new tools.
+`platform.operators.reset_password` is the sole added row:
+`POST /api/platform/operators/{operator_id}/reset-password` with `{password}`,
+panel-only / Exempt / Always / Write. It requires a different authenticated
+operator and the panel mutation header. Tenant cookies and bearer/API keys do
+not authorize it; operator cookies cannot authorize tenant routes.
+
+`OperatorRepo::{set_password,lock_all}` and `PlatformSessionRepo::revoke_all`
+provide atomic reset and session revocation in Pg and the transactional fake.
+Operator lookup for login locks its row through password verification and session
+insertion. Reset hashes before beginning its transaction. Pg locks the operator
+table against concurrent inserts when checking the sole-operator predicate,
+then locks rows; reset updates the hash and deletes all target sessions in one
+commit. Another operator's sessions remain valid. Passwords require at least
+12 Unicode characters; neither password nor hash enters reset logs.
+
+`JEETA_PLATFORM_BOOTSTRAP_RESET=1` selects startup recovery instead of bootstrap
+and requires both bootstrap variables. Exactly one matching-email operator must
+exist; zero/multiple/mismatch abort boot. Absent flag or `0` retains ordinary
+bootstrap's existing-operator no-op. Other flag values and short passwords are
+configuration errors. Remove all three variables after recovery. Recovery may
+commit even if a later boot stage fails. See
+[operator access](../docs/operations/operator-access.md) and
+[deployment](../docs/operations/deployment.md).
+
+The operator-only navigation links workspaces, payment reports and sanitized
+health. Payment confirmation/reissue responses display the one-time code and
+expiry in page-local state, never query/mutation caches, localStorage or telemetry;
+navigation discards it. Confirmation retries retain the returned current workspace
+status. Suspend/revoke require reasons; resume reads “Yeniden aç”. Health renders
+explicit sanitized fields and hosts the other-operator reset form.
+
+The operator payment list uses `PlatformRepos::payment_entitlements_latest` to
+read the latest grant per `(workspace_id, payment_id)`, including revoked grants.
+PostgreSQL uses one bulk `DISTINCT ON` query; the fake and wrappers share the same
+ordering (`confirmed_at DESC, id DESC`). Together with the payment evidence read,
+listing uses two fixed queries rather than one entitlement lookup per payment.
+`entitlement_get` retains its open-grant semantics for confirm, reissue and resume.
+The console distinguishes “Geri alındı” from “Onay bekliyor” after reload, and
+re-confirming a payment displays its new open grant. A shared fake/Pg contract
+covers confirm → activate → revoke → list → re-confirm, multiple workspaces and
+separate payments within one workspace; a browser test verifies the Turkish
+states and reissue availability.
+
+Fast verification includes `platform/m4_platform_access.rs` in app/Pg aggregates,
+`platform/m4_platform_access_http.rs`, `m4_operator_reset` and exact catalog/twin
+rules. Shared contracts test both lock orders on fake and real PostgreSQL,
+password replacement, target-only revocation and invalid recovery cardinality.
+The binary test exercises absent/zero/one flags through real startup and checks
+Argon2 replacement plus session revocation. Browser tests assert Turkish labels,
+confirmation retry, code cache absence/navigation lifetime, reason forms, operator
+navigation and sanitized health field selection.
+
+## M4 Task 7 — tenant first-run journey and provider setup
+
+`/billing` and `/onboarding` derive progress from the existing workspace, billing,
+work/strategy, team, API-key and capability APIs. Home, connection and key pages link
+back to the journey. No completion flag, table, seed, catalog row or MCP tool was
+added: the Task 6 boundary remains **144 catalog rows / 125 tools**.
+
+A pending owner can prepare strategy and report bank-transfer evidence. The billing
+page displays configured price/currency/bank instructions and the workspace reference
+read-only. Operator confirmation leaves access pending until a current owner redeems
+the delivered code. Guidance explains the 72-hour expiry, five-attempt lockout and
+operator reissue. Suspension keeps entitlement visible; revoked grants lead back to
+payment. Workspace activation, payment confirmation, strategy approval, connector
+verification and recent agent contact remain separate indicators. The agent step
+explains that the tenant's own scheduler must run.
+
+Billing queries use `gcTime: 0`, abortable reads and explicit removal on page exit.
+Evidence submissions and activation input/results stay outside mutation caches;
+late responses cannot repopulate an exited page. Activation codes never enter URLs,
+storage or logs. API-key plaintext is component-local, copied only on an explicit
+click, and lost on dialog close/navigation; creation responses are not cached.
+
+Provider guidance derives `${JEETA_PUBLIC_BASE_URL}/oauth/callback/{meta|instagram|x}`
+from the existing hooks API's configured public base, preserving any path prefix.
+It displays actual webhook addresses, reconnection requirements and access expiry.
+The missing-app `CONFLICT` reason is shown as “Sağlayıcı uygulaması yapılandırılmadı”;
+other conflicts retain their normal error handling. Hook data is page-scoped too.
+Existing connector forms continue to own credential entry. Turkish/English keys
+remain in parity.
+
+`cargo test --locked --workspace --test onboarding` runs the real-router/PostgreSQL
+journey tests, including pending/confirmed refusals, independent activation gates,
+current-owner redemption, suspend/reload/resume and narrow-scope refusals. Browser
+coverage in `BillingPage`, `OnboardingPage`, `ApiKeysPage` and `ConnectPage` exercises
+navigation, state changes, secret lifetime, provider failures and callback addresses;
+`api/billing.test.ts` checks exact wrapper routes and payloads. Ownership-transition
+setup changes the membership through the repository after issuing a challenge because
+pending workspaces correctly prohibit team mutations; redemption uses the real route.
+
+## M4 Task 9 — daily backup, WAL and isolated recovery
+
+T067 supplies `scripts/backup.sh`, `scripts/restore-drill.sh`, the backup service/timer
+and reversible synthetic drill fixtures. T072 supplies `jeeta recovery-verify`,
+explicit reversible `recovery-canary-up`/`recovery-canary-down` provisioning, the
+60-second WAL probe, Rust restore tests and the `restore-drill` CI job.
+
+`recovery-verify` uses protected environment/key-file configuration and the ordinary
+DB role. It requires exactly the embedded successful sqlx versions/checksums, FORCE
+RLS on tenant tables and a matching sealed canary, without migrating or serving.
+`serve` rejects unknown/dirty/changed applied migrations before migration or binding.
+See [the recovery runbook](../docs/operations/backup-restore.md) for canary custody,
+Unix-socket hooks, logical/PITR differences, isolation and recovery commands.
+
+Run `make restore-drill` for the real-binary logical/PITR shell harness and
+`cargo test --locked -p jt_pg --test m4_restore` for SQL-only restore contracts
+(`JEETA_TEST_DATABASE_URL` required). The harness builds one debug binary and uses
+PG16 host tools in a private network namespace, or a uniquely named disposable
+`postgres:16` container plus the host verifier over a mounted Unix socket.
+Python 3/libseccomp enforce Unix-only sockets for that verifier. CI requires host
+tools and uploads fixed PASS categories only.
+
+The owner checks daily backup completion, `ops.health` and off-machine custody,
+and records **both** logical restore and PITR drills monthly (RPO 24 h, RTO 1 h),
+including recovery of the original master key and file evidence. The shell writes
+`backup-status.json` with `completed_at` only after verified success. With optional
+absolute `JEETA_WAL_ARCHIVE_DIR` plus `JEETA_RECOVERY_STATUS_DIR`, the server writes
+`wal-status.json` atomically only after PostgreSQL archiver success and segment
+presence; `archived_at` is the PostgreSQL timestamp, `observed_at` the probe time.
+Failures retain the old marker and degrade WAL health; disabled is unknown.
+Both artifacts are bounded JSON with RFC3339 times, never credentials or URLs.
+
+
+## M4 Task 8 — reproducible deployment and boot/shutdown
+
+One package contains the production `jeeta`, matching `panel/`, reversible
+`migrations/`, `scripts/`, `deploy/`, operation documents and `manifest.json`.
+From a clean committed revision in `rust/`:
+
+```sh
+python3 -m unittest discover -s scripts -p 'test_package_release.py'
+python3 scripts/package-release.py /absolute/new/jeeta-release
+```
+
+The packager runs `cargo build --release --locked -p jeeta` (with JSON artifact
+metadata), `pnpm --dir panel install --frozen-lockfile` and `pnpm --dir panel build`
+itself. It refuses a changed/dirty source revision, missing production artifact
+evidence or `jt_outbound/test-loopback`; pre-existing binaries/panel files are
+never accepted as build provenance. It also refuses untracked/ignored Rust or
+panel source inputs (including Vite dotenv files), except the expected build/cache
+directories; use a clean packaging checkout. Ambient `VITE_*` and Rust cfg flags
+are excluded from the controlled build. Cargo uses the default `target/` directory.
+
+Before builds and copying, it rejects symlinks in input roots, ancestors and trees,
+including the binary, panel, migrations, scripts, deploy and operation documents.
+After building, it validates the generated panel inventory: only `index.html` and
+explicit browser asset types (JS/CSS, images, fonts, WASM) are allowed. Dotfiles,
+`.env*`, PEM/key files, JSON/text/configuration files and source maps are refused,
+including files copied from ignored `panel/public/` inputs. The Python regression
+suite runs in CI's existing release job.
+
+The manifest records the source SHA, binary SHA-256, a sorted `panel.sha256` and
+its SHA-256, ordered migration versions/up-down SHA-384 checksums, highest schema
+version and toolchain versions. Source files come only from the committed tree.
+This is a repeatable packaging recipe; it does not promise identical bytes
+across build hosts. CI's `release-artifact` job archives the package without
+publishing/deploying. `rust-test` tests that exact candidate, preserving executable
+permissions by extracting its tar archive.
+
+Build the package-scoped release candidate **before** running workspace tests:
+workspace dev features enable test-only loopback paths in the debug binary.
+`bin/jeeta/tests/m4_deployment.rs` drives real children against disposable
+`JEETA_TEST_DATABASE_URL` databases. It requires `target/release/jeeta` and the built
+`panel/dist`, or explicit `JEETA_RELEASE_BINARY` / `JEETA_RELEASE_PANEL_DIR` paths
+for an extracted package. It covers all eight named Task 8 contracts, production
+egress refusal and panel/API/MCP smoke checks. It does not recursively build Cargo.
+
+After configuration validation, serve rejects test-loopback builds, connects,
+rejects unsafe database roles, checks the existing schema and applies pending up
+migrations under sqlx locking. Adapters/egress and optional operator bootstrap/reset
+finish before HTTP binds and jobs start. Failures abort startup with redacted
+runtime diagnostics. `mcp-stdio` never migrates or runs jobs; it requires a compatible
+schema and authenticates its key at startup. Restart affected stdio clients after
+key revocation or issuer demotion. `JEETA_JOBS_ENABLED=false` starts no scheduled
+provider work; configured WAL health probing remains enabled.
+
+SIGTERM/SIGINT stops scheduling and drains HTTP for at most 10 seconds, followed
+by up to 30 seconds for remaining job runs. The supplied systemd unit allows 60
+seconds. Use an existing absolute private FileStore at `/var/lib/jeeta/files` and
+include it with the original master key in recovery sets. Metrics, operator reset
+and recovery status/WAL variables are implemented; see the
+[deployment runbook](../docs/operations/deployment.md) and
+[backup/restore runbook](../docs/operations/backup-restore.md) for custody, units,
+proxy limits, upgrade/rollback and the required monthly isolated restore drill.
+
+## M4 — final automated acceptance boundary
+
+The ratified boundary is **144 catalog rows, 125 MCP tools, 67 tables,
+12 reversible migration pairs (0001–0012), and 21 scheduled jobs**. Relative to
+M3's 134 rows/124 tools, M4 adds eleven named rows and removes
+`platform.workspaces.set_status`; only `jeeta.billing.report_payment` is a new
+MCP tool. Activation, operator administration and health remain panel-only.
+`/healthz`, `/readyz` and `/metrics` are infrastructure, without catalog rows.
+Payment evidence, operator confirmation, current-owner redemption, workspace
+status, strategy approval, capability verification and agent contact remain
+independent facts. There is no payment provider, credit or subscription system.
+
+From `rust/`, with `JEETA_TEST_DATABASE_URL` pointing at a disposable test server:
+
+```sh
+# Exact M3 snapshot + ratified M4 names, actual HTTP bindings, MCP schemas/effects.
+cargo test --locked --workspace --test m4_productisation --test twin_rule --test gate_rule
+# Aggregate real-Pg HTTP/MCP lifecycle, existing M2/M3 recording-provider scenarios,
+# retention, ordinary-role RLS, billing/onboarding/platform, T5 logs and T9 restores.
+make smoke-productisation
+# Individual M4 storage, migrations, race/authorization, and binary contracts.
+cargo test --locked --workspace --test m4_billing_storage --test m4_billing_contracts --test billing_repos --test migrations --test billing --test platform --test onboarding --test ops --test m4_operator_reset --test m4_observability --test jobs --test rls --test m4_restore
+# T8: first build the production candidate independently of workspace dev features.
+cargo build --release --locked -p jeeta
+pnpm --dir panel build
+cargo test --locked --workspace --test m4_deployment
+# T9/T10 real isolated logical/PITR drill and synthetic cutover rehearsal.
+bash scripts/tests/backup-restore.sh
+bash scripts/tests/v1-cutover.sh
+```
+
+`full_productisation_smoke` runs registration, pending strategy preparation,
+evidence/report retry, operator handoff, current-owner panel activation, adapter
+restart, team/key/capability operations and authenticated MCP with explicit
+refusals. It exercises suspend/resume/revoke/re-confirm on the same payment and
+single-use codes. It reuses `smoke_inbox` and `smoke_studio` unchanged scenario
+bodies for M2/M3's recorded webhook/reply/publication/measurement sequence; those
+scenarios use transactional fakes. The existing paid attribution smoke also runs
+on Pg. The script runs T9's `m4_restore` actual-Pg contracts, rather than treating
+a health marker as proof of restoration. The shell logical/PITR harness remains
+a separate required final check. No CI scenario sends real provider/payment traffic.
+
+The Pg job tests compare retained message, publication, attempt, piece, slot and
+ledger row images before/after cleanup. Temporary raw bodies and probes test the
+30-day cutoff at minus/exact/plus one microsecond, repeated cleanup, and active,
+pending and suspended tenants. Production domain data is never seeded by these tests.
+
+Final release-candidate verification (once after the fast checks are green):
+
+```sh
+set -o pipefail
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+cargo test --locked -p jt_outbound --test production_build
+cargo deny --locked check
+pnpm --dir panel test
+pnpm --dir panel typecheck
+pnpm --dir panel build
+bash scripts/tests/backup-restore.sh
+bash scripts/tests/v1-cutover.sh
+```
+
+T8 evidence comes from the deployment/package contracts and package-scoped release
+build (`51f91b12`, `87979a1b`, packaging hardening `8c697fd1`); T9 from the backup scripts and real verifier/drill
+(`f9cdf206`, `fc3c17fd`, `56228ee0`, `ad729fad`); T10 from the synthetic cutover
+rehearsal (`4cfc3feb`). These identify implementation provenance, not live approval.
+The [Turkish owner acceptance checklist](../docs/operations/m4-acceptance.md)
+records the remaining owner-only live payment/provider smoke, new provider-app
+approval, deployment, actual recovery-set logical/PITR validation, secret custody,
+and switch/rollback decisions. Unresolved provider approval or a failed restore
+keeps M4 acceptance open. Automated verification does not tag, publish or deploy.
+
+
+### Operator-only v1 lead import
+
+The 2026-10-26 owner ruling permits **allowlisted leads only** from v1.
+`jeeta import-v1-leads --workspace <uuid> --input /root/v1-leads.jsonl --dry-run`
+rehearses every repository write (including the ledger) in rolled-back 100-lead
+transactions, with cross-chunk duplicate and parent context held in memory.
+Normalized emails over 254 characters and phones over 15 digits are skipped and
+counted as invalid in both modes. Omit `--dry-run` to import or replace it with
+`--rollback` to remove unchanged imported aggregates. Existing identities are
+never stolen; touched records survive rollback. Use the protected serve database
+and secret-key environment, an ordinary RLS role and an exactly matching schema.
+This command runs no migrations, HTTP, jobs or providers. See the
+[export, verification and rollback procedure](../docs/operations/v1-cutover.md#leads-only-owner-amendment-2026-10-26).
