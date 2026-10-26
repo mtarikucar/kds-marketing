@@ -30,7 +30,7 @@ The release build and panel build must pass for the actual packaged candidate;
 this documentation task does not execute either build.
 
 Package `rust/target/release/jeeta`, the **contents** of `rust/panel/dist/`,
-`rust/migrations/`, repository `scripts/`, `deploy/` and operation documents from
+`rust/migrations/`, `rust/scripts/`, `rust/deploy/` and operation documents from
 the same revision. Include Task 9's scripts once implemented; their absence
 blocks recovery readiness. Install the complete release before moving `current`:
 
@@ -83,7 +83,7 @@ Create the `jeeta` system user and group without interactive login. Provision:
 | `/var/lib/jeeta/recovery-status` | Planned Tasks 5/9 status directory; provision with narrowly scoped writer access and service read access when those tasks land |
 | `/var/backups/jeeta/{logical,base,wal}` | Separate protected mounted storage, managed by the recovery account; outside the app's writable tree |
 
-Use the [environment template](../../deploy/jeeta.env.example) as an inventory,
+Use the [environment template](../../rust/deploy/jeeta.env.example) as an inventory,
 then fill required values privately. Blank values are placeholders. A copied
 blank template will fail startup. It is a systemd `EnvironmentFile`, with no
 `export`, command substitution or shell variable expansion. Quote literal values
@@ -178,7 +178,7 @@ request timeout. Preserve connector-specific timeouts and egress policy.
 ## Service and journal installation
 
 After provisioning the directories and protected environment, install the
-[unit](../../deploy/jeeta.service) and [journal drop-in](../../deploy/journald-jeeta.conf)
+[unit](../../rust/deploy/jeeta.service) and [journal drop-in](../../rust/deploy/journald-jeeta.conf)
 on the target host as root:
 
 ```sh
