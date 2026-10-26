@@ -210,3 +210,24 @@ fn activation_is_panel_only_without_mcp_schema_or_handler() {
         )
     );
 }
+
+#[test]
+fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows() {
+    let row = jt_app::catalog::find("ops.health").unwrap();
+    assert!(row.panel_only && row.mcp_tool.is_none());
+    assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
+    assert_eq!(CATALOG.len(), 143);
+    for path in ["/readyz", "/metrics"] {
+        assert!(
+            CATALOG
+                .iter()
+                .all(|r| r.panel_route.is_none_or(|(_, p)| p != path))
+        );
+        assert!(jt_panel_http::static_files::is_reserved(path));
+    }
+    assert!(
+        jt_mcp::registry()
+            .iter()
+            .all(|r| !r.name.starts_with("jeeta.ops."))
+    );
+}

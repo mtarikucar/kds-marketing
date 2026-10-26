@@ -49,6 +49,8 @@ use crate::ports::{
 /// adapter.
 #[derive(Clone)]
 pub struct Deps {
+    pub ops: Arc<dyn crate::ports::ops::OpsSnapshot>,
+    pub ops_signals: Arc<crate::ports::ops::OpsSignals>,
     pub billing: billing::BillingConfig,
     pub file_maintenance: Arc<dyn crate::ports::files::FileMaintenance>,
     pub media_fetch: Arc<dyn crate::ports::files::MediaFetcher>,
@@ -254,3 +256,5 @@ mod tests {
 }
 
 pub mod billing;
+
+pub mod ops;

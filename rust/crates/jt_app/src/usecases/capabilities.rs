@@ -340,12 +340,11 @@ async fn declare_with_hosts(
     repos.commit().await?;
 
     for host in &hosts {
-        if let Err(e) = deps.hosts.allow(ctx.workspace_id, host) {
+        if let Err(_e) = deps.hosts.allow(ctx.workspace_id, host) {
             tracing::warn!(
                 workspace_id = %ctx.workspace_id,
                 capability_id = %capability.id,
                 host,
-                error = %e,
                 "a declared capability's host could not be allowed"
             );
         }
@@ -758,12 +757,11 @@ async fn retire_with_hosts(
     repos.commit().await?;
 
     for host in &revoked {
-        if let Err(e) = deps.hosts.revoke(ctx.workspace_id, host) {
+        if let Err(_e) = deps.hosts.revoke(ctx.workspace_id, host) {
             tracing::warn!(
                 workspace_id = %ctx.workspace_id,
                 capability_id = %id,
                 host,
-                error = %e,
                 "a retired capability's host could not be revoked"
             );
         }

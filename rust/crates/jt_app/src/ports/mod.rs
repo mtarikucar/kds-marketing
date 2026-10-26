@@ -1594,6 +1594,8 @@ pub trait UserRepos: Send + Sync {
 /// the module docs).
 #[async_trait]
 pub trait PlatformRepos: Send + Sync {
+    async fn connector_health_counts(&mut self)
+    -> Result<Vec<ops::ConnectorHealthCount>, AppError>;
     async fn workspace_lock(&mut self, ws: WorkspaceId) -> Result<WorkspaceRow, AppError>;
     async fn payment_get(
         &mut self,
@@ -1792,3 +1794,5 @@ mod tests {
         assert_eq!(run.error_kind, None);
     }
 }
+
+pub mod ops;

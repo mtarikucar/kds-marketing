@@ -17,13 +17,11 @@ use std::future::IntoFuture;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use axum::Router;
-use axum::extract::{MatchedPath, Request};
-use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::middleware;
 use jt_app::error::ErrorCode;
 use jt_app::gate::StrategyGate;
 use jt_app::ports::connectors::PlatformAppConfig;
@@ -55,10 +53,12 @@ pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 const JOB_LOCK_CONNECTIONS: u32 = Job::ALL.len() as u32;
 
 /// The operator console's login route, which the access log does not name.
-const PLATFORM_LOGIN: &str = "/api/platform/login";
+#[cfg(test)]
+use crate::ops::loggable_route;
 
 /// Runs the server until a shutdown signal; any error before it listens stops the start.
 pub async fn run(config: Config) -> Result<()> {
+    config.require_metrics_token()?;
     check_test_loopback(
         jt_outbound::TEST_LOOPBACK_ENABLED,
         config.allow_test_loopback,
@@ -68,14 +68,14 @@ pub async fn run(config: Config) -> Result<()> {
     let (applied, total) = migrate(&pool).await?;
     tracing::info!(applied, total, "migrations are up to date");
 
-    let (deps, _egress) = boot(pool.clone(), &config).await?;
+    let (deps, _egress, runtime_ops) = boot(pool.clone(), &config).await?;
     log_providers(&config);
     if let Some(bootstrap) = &config.bootstrap {
         bootstrap_operator(&deps, bootstrap).await?;
     }
     let gate = strategy_gate(pool.clone());
 
-    let app = app(deps.clone(), gate, &config);
+    let app = app_with_probes(deps.clone(), gate, &config, Some(runtime_ops));
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("cannot listen on {} ({})", config.bind, config::BIND))?;
@@ -194,8 +194,21 @@ async fn applied_migrations(pool: &PgPool) -> Result<usize> {
 /// retired capability's hosts stay out; it logs what it rebuilt). Every command runs it before it
 /// serves anything, so no request or job reaches out before the tier is whole. Returns the ports
 /// and the egress client they share.
-pub(crate) async fn boot(pool: PgPool, config: &Config) -> Result<(Deps, Arc<Egress>)> {
-    let (mut deps, egress) = ports(pool, config);
+pub(crate) async fn boot(
+    pool: PgPool,
+    config: &Config,
+) -> Result<(Deps, Arc<Egress>, Arc<crate::ops::RuntimeOps>)> {
+    let (mut deps, egress) = ports(pool.clone(), config);
+    let ops = Arc::new(crate::ops::RuntimeOps {
+        pool,
+        uow: deps.uow.clone(),
+        signals: deps.ops_signals.clone(),
+        files_dir: config.files_dir.clone(),
+        recovery_dir: config.recovery_status_dir.clone(),
+        started_at: crate::ops::process_started_at(),
+        boot_complete: std::sync::atomic::AtomicBool::new(false),
+    });
+    deps.ops = ops.clone();
     let dir = config
         .files_dir
         .as_deref()
@@ -211,7 +224,8 @@ pub(crate) async fn boot(pool: PgPool, config: &Config) -> Result<(Deps, Arc<Egr
     rebuild_tenant_hosts(&egress, deps.uow.as_ref())
         .await
         .context("cannot rebuild the egress tenant tier from the capability records")?;
-    Ok((deps, egress))
+    ops.booted();
+    Ok((deps, egress, ops))
 }
 
 /// The production ports over `pool`, sealing secrets under the configured secret key. One
@@ -244,6 +258,8 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
     let job_lock = Arc::new(PgJobLock::with_own_pool(&pool, JOB_LOCK_CONNECTIONS));
     let uow = Arc::new(PgUnitOfWork::new(pool));
     let deps = Deps {
+        ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
+        ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
         billing: config.billing.clone(),
         uow: uow.clone(),
         clock: Arc::new(SystemClock),
@@ -315,7 +331,16 @@ async fn bootstrap_operator(deps: &Deps, bootstrap: &Bootstrap) -> Result<()> {
 /// endpoint's, both behind the one strategy `gate`, and the webhook gate's (`/hooks/*`, which
 /// providers call: outside the panel's session and request-header checks, which live inside the
 /// panel's own router), with the security headers on every response and a one-line access log.
+#[cfg(test)]
 pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> Router {
+    app_with_probes(deps, gate, config, None)
+}
+fn app_with_probes(
+    deps: Deps,
+    gate: Arc<dyn StrategyGate>,
+    config: &Config,
+    readiness: Option<Arc<crate::ops::RuntimeOps>>,
+) -> Router {
     let panel = AppState {
         deps: deps.clone(),
         gate: Arc::clone(&gate),
@@ -330,15 +355,26 @@ pub(crate) fn app(deps: Deps, gate: Arc<dyn StrategyGate>, config: &Config) -> R
         deps.clock.clone(),
         *config.secret_key.bytes(),
     );
+    let process = crate::ops::router(
+        deps.ops.clone(),
+        deps.ops_signals.clone(),
+        config.metrics_token.as_deref().unwrap_or(""),
+        readiness,
+    );
+    let signals = deps.ops_signals.clone();
     let mcp = McpState::new(deps, gate).with_allowed_hosts(mcp_hosts(&config.allowed_hosts));
     jt_panel_http::router(panel)
         .merge(jt_mcp::http_service(mcp))
         .merge(jt_webhook::router(hooks))
         .merge(files)
+        .merge(process)
         // The panel's router sets them on its own responses already (idempotently); this
         // covers the MCP endpoint and the webhook gate too.
         .layer(middleware::from_fn(jt_panel_http::security_headers))
-        .layer(middleware::from_fn(access_log))
+        .layer(middleware::from_fn_with_state(
+            signals,
+            crate::ops::access_log,
+        ))
 }
 
 /// The `Host` values the MCP endpoint accepts: the loopback names, plus the configured public
@@ -349,40 +385,6 @@ fn mcp_hosts(public: &[String]) -> Vec<String> {
         .map(|host| (*host).to_owned())
         .chain(public.iter().cloned())
         .collect()
-}
-
-/// One line per request: method, route template, status and duration. Never the raw path or
-/// query, so no token in a URL reaches the log.
-async fn access_log(req: Request, next: Next) -> Response {
-    let method = req.method().clone();
-    let route = loggable_route(
-        req.extensions()
-            .get::<MatchedPath>()
-            .map(MatchedPath::as_str),
-    )
-    .to_owned();
-    let started = Instant::now();
-    let resp = next.run(req).await;
-    tracing::info!(
-        target: "jeeta::access",
-        %method,
-        route,
-        status = resp.status().as_u16(),
-        ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        "request"
-    );
-    resp
-}
-
-/// What the access log shows as a request's route: its template (`/api/team/{membership_id}`),
-/// never the path; `-` when no route matched (panel pages and files, `/invite/<token>` among
-/// them); `<redacted>` for the operator console's login.
-fn loggable_route(template: Option<&str>) -> &str {
-    match template {
-        None => "-",
-        Some(PLATFORM_LOGIN) => "<redacted>",
-        Some(template) => template,
-    }
 }
 
 /// How the panel directory looks, for the start log.
@@ -524,6 +526,8 @@ mod tests {
             hosts: Arc::new(RecordingTenantHosts::new()),
             apps: Arc::new(FakeAppConfig::default()),
             connectors: Arc::new(ScriptedRegistry::new()),
+            ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
+            ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
             billing: jt_app::usecases::billing::BillingConfig {
                 price_minor: 123,
                 price_currency: "TRY".into(),
@@ -536,6 +540,7 @@ mod tests {
     fn test_config(extra: &[(&str, &str)]) -> Config {
         let mut vars: HashMap<String, String> = [
             (config::DATABASE_URL, "postgres://localhost/unused"),
+            (config::METRICS_TOKEN, "synthetic-metrics-token"),
             (config::SECRET_KEY, &"ab".repeat(32)[..]),
             (config::COOKIE_SECURE, "false"),
         ]
@@ -969,7 +974,7 @@ mod tests {
             (config::FILES_DIR, "/tmp"),
             (config::PUBLIC_BASE_URL, "https://files.example.com"),
         ]);
-        let (mut deps, _) = boot(db.pool.clone(), &config).await.unwrap();
+        let (mut deps, _, _) = boot(db.pool.clone(), &config).await.unwrap();
         deps.hasher = Arc::new(PlainHasher);
         let app = app(deps.clone(), strategy_gate(db.pool.clone()), &config);
 
@@ -1028,7 +1033,7 @@ mod tests {
         assert_eq!(body["capability"]["status"], "retired");
 
         // The restart: a new process, whose tier starts empty, boots on the same database.
-        let (_, egress) = boot(db.pool.clone(), &config).await.unwrap();
+        let (_, egress, _) = boot(db.pool.clone(), &config).await.unwrap();
         let reaches = |url: &str| {
             egress.permits(
                 jt_outbound::EgressScope::Tenant(ws),

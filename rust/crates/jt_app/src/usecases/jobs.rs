@@ -285,7 +285,6 @@ pub async fn run_refresh_tokens(deps: &Deps, now: OffsetDateTime) -> JobReport {
                         capability_id = %capability.id,
                         kind_key = %capability.kind_key,
                         error_kind = error.kind(),
-                        reason = error.reason().unwrap_or(""),
                         first = flipped,
                         "the provider refused the login: the capability must be reconnected"
                     );
@@ -386,7 +385,6 @@ async fn save_fresh(
             workspace_id = %ctx.workspace_id,
             capability_id = %id,
             code = e.code.as_str(),
-            error = %e,
             "a renewed credential could not be saved; trying once more"
         );
         saved = write_fresh(deps, ctx, id, read, &sealed, &access).await;
@@ -411,7 +409,6 @@ async fn save_fresh(
                 workspace_id = %ctx.workspace_id,
                 capability_id = %id,
                 code = e.code.as_str(),
-                error = %e,
                 "a renewed credential could not be saved: the provider may already have retired \
                  the old one, so the capability may have to be reconnected"
             );
@@ -588,7 +585,6 @@ pub async fn run_probe_all(deps: &Deps, now: OffsetDateTime) -> JobReport {
                     job = job.name(),
                     workspace_id = ws.map(|w| w.to_string()).as_deref().unwrap_or("-"),
                     capability_id = id.map(|c| c.to_string()).as_deref().unwrap_or("-"),
-                    error = %e,
                     "a probe panicked"
                 );
             }
@@ -820,7 +816,6 @@ async fn netgsm_workspaces(
             tracing::warn!(
                 job = job.name(),
                 code = e.code.as_str(),
-                error = %e,
                 "the workspaces could not be listed"
             );
             Vec::new()
@@ -938,7 +933,6 @@ fn step_failed(job: Job, ws: WorkspaceId, capability: Option<CapabilityId>, fail
             workspace_id = %ws,
             capability_id = capability.as_deref().unwrap_or("-"),
             code = e.code.as_str(),
-            error = %e,
             "a job step failed"
         ),
         Failure::Provider(e) => tracing::warn!(
@@ -946,7 +940,6 @@ fn step_failed(job: Job, ws: WorkspaceId, capability: Option<CapabilityId>, fail
             workspace_id = %ws,
             capability_id = capability.as_deref().unwrap_or("-"),
             error_kind = e.kind(),
-            reason = e.reason().unwrap_or(""),
             "a job step failed at the provider"
         ),
     }
@@ -993,7 +986,6 @@ async fn workspaces(
             tracing::warn!(
                 job = job.name(),
                 code = e.code.as_str(),
-                error = %e,
                 "the workspaces could not be listed"
             );
             Vec::new()

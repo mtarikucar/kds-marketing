@@ -19,6 +19,7 @@ pub mod groups;
 pub mod inbox;
 pub mod ledger;
 pub mod oauth_callback;
+pub mod ops;
 pub mod platform;
 pub mod platform_payments;
 pub mod roles;
@@ -192,6 +193,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/events"),
     ("GET", "/api/work/pending"),
     ("PUT", "/api/work/checkin-interval"),
+    ("GET", "/api/platform/health"),
     ("POST", "/api/platform/login"),
     ("GET", "/api/platform/workspaces"),
     ("GET", "/api/platform/payments"),
@@ -933,6 +935,7 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "work.set_checkin_interval",
             work::set_checkin_interval,
         ),
+        api_route("GET", "/platform/health", "ops.health", ops::health),
         api_route("POST", "/platform/login", "platform.login", platform::login),
         api_route(
             "GET",
@@ -1073,6 +1076,8 @@ mod tests {
                 hosts: Arc::new(RecordingTenantHosts::new()),
                 apps: Arc::new(FakeAppConfig::default()),
                 connectors: Arc::new(ScriptedRegistry::new()),
+                ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
+                ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
                 billing: jt_app::usecases::billing::BillingConfig {
                     price_minor: 123,
                     price_currency: "TRY".into(),

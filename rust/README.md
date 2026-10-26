@@ -2696,3 +2696,69 @@ for guesses, expiry, ownership and role locks, binding/replay, historical digest
 full activate/suspend/resume/revoke/reconfirm lifecycle. Platform contracts exercise both lock
 orders with a held real transaction; PostgreSQL also injects a final-audit SQL failure. HTTP and
 MCP tests verify session/header requirements, code secrecy, no-store and the exact 125-tool set.
+
+## M4 Task 5 — readiness and redacted operational health
+
+Boundary: **143 catalog rows, 125 MCP tools, 67 tables, 12 migration pairs,
+21 scheduled jobs**. The only added catalog row is `ops.health` →
+`GET /api/platform/health`: panel-only, Exempt / Always / Read. It requires an
+operator `jt_platform` session; tenant sessions and API keys cannot open it.
+`GET /healthz` remains liveness (`200 {"ok":true}`). `GET /readyz` returns only
+`{"ok":true|false}` with 200/503, checking completed boot/migrations, database
+connectivity and local FileStore read/write availability. Connector reports,
+recovery markers and disk capacity do not gate readiness. Neither `/readyz` nor
+`/metrics` has a catalog row or MCP tool; both paths are reserved from SPA fallback.
+
+`JEETA_METRICS_TOKEN` is required and nonblank for **serve** (not mcp-stdio).
+`GET /metrics` requires `Authorization: Bearer <token>`; cookies do not substitute
+for the token. Authentication compares SHA-256 digests in constant time. Responses
+use `text/plain; version=0.0.4`, stay within 256 KiB, and never truncate a metric.
+HTTP counters use registered route templates (unknown paths collapse to `other`),
+connector counts aggregate across tenants by fixed provider kind, and job and
+webhook outcome labels are fixed sets. Workspace IDs appear only in authenticated
+operator JSON, never metric labels. Pool reachability/occupancy, available disk
+bytes, job outcomes, reconnect counts and accepted/unrouted/unresolved webhook
+counters are process-local. Unresolved includes signed bodies the parser cannot
+interpret and NetGSM intake without an unambiguous capability. A signed, unrouted
+Meta webhook still returns 200 and increments `unrouted`; it stores no event.
+
+Health exposes RFC3339 observation and process-start times, explicit
+`history: "unknown_before_process_start"`, job last-success times (null until a
+success) and failure totals. Counters reset on restart; there is no persistent
+counter history or new table. Missing probes remain `unknown`, never healthy.
+Connector projection reads only workspace ID, kind and reconnect/expiry metadata;
+it never selects sealed credentials, full public JSON, messages or payment evidence.
+A failed connector projection has its own state and does not change DB reachability.
+
+`JEETA_RECOVERY_STATUS_DIR` is optional; when set it must be an absolute directory,
+protected from tenant writes and readable by the service. Task 9 writes these
+**verified-success artifacts** atomically; this task only reads them (maximum 4 KiB
+per file). Minimal schemas, with RFC3339 timestamps:
+
+```json
+// backup-status.json: publish only after a completed and verified full backup
+{"completed_at":"2026-10-26T01:00:00Z"}
+// wal-status.json: publish only after confirmed WAL archive success
+{"archived_at":"2026-10-26T01:05:00Z"}
+```
+
+Never publish a current timestamp merely because a timer ran. Missing, malformed or
+oversized files are `unknown`; future timestamps and backup age >24 hours or WAL
+age >15 minutes are `degraded`. Available disk <10% is `degraded`. Capacity uses
+`/usr/bin/df -Pk -- <files-directory>` without a shell (GNU coreutils, included in
+the Linux deployment); inability to observe capacity is `unknown`. No new crate
+or unsafe FFI is introduced for this probe.
+
+Production uses `JEETA_LOG_FORMAT=json` to stderr/journald. Internal errors log
+fixed error categories, never arbitrary error chains, input bodies or URLs.
+`rmcp` is capped at warnings even when a more-specific filter requests info/trace.
+Domain audit entries remain separate from operational logs; journald retention
+remains 30 days / 1 GiB as configured by deployment.
+
+Fast verification (includes all ten named acceptance tests, metadata Pg/fake parity,
+operator session isolation, exact catalog/gate/twin assertions and subprocess stderr
+canaries with separate ledger assertions):
+
+```sh
+cargo test --locked --workspace --test ops --test m4_observability --test catalog --test gate_rule --test twin_rule
+```

@@ -175,6 +175,13 @@ pub async fn receive_for_accounts(
         store_all(deps, repos.as_mut(), at, items, Some(&scoped), &mut out).await?;
         repos.commit().await?;
     }
+    for delivery in &out {
+        use crate::ports::ops::WebhookOutcome;
+        deps.ops_signals.webhook(match delivery {
+            Delivery::Unrouted | Delivery::Inactive => WebhookOutcome::Unrouted,
+            _ => WebhookOutcome::Accepted,
+        });
+    }
     Ok(out)
 }
 
@@ -255,6 +262,14 @@ pub async fn receive_netgsm(
     let whole = || Some(raw.to_vec());
     store_all(deps, repos.as_mut(), at, items, Some(&whole), &mut out).await?;
     repos.commit().await?;
+    for _ in &out {
+        deps.ops_signals
+            .webhook(crate::ports::ops::WebhookOutcome::Accepted);
+        if capability.is_none() {
+            deps.ops_signals
+                .webhook(crate::ports::ops::WebhookOutcome::Unresolved);
+        }
+    }
     Ok(out)
 }
 
@@ -330,7 +345,6 @@ pub async fn purge_raw(deps: &Deps, cutoff: OffsetDateTime) -> Result<RawPurge, 
                 tracing::warn!(
                     workspace_id = %workspace.id,
                     code = e.code.as_str(),
-                    error = %e,
                     "the raw bodies of a workspace could not be purged; the others are"
                 );
             }

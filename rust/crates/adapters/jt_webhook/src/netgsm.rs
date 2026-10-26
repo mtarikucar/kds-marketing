@@ -52,6 +52,8 @@ pub(crate) async fn receive(
         Ok(drafts) => drafts,
         Err(_) => {
             UNPARSEABLE_NETGSM.fetch_add(1, Ordering::Relaxed);
+            deps.ops_signals
+                .webhook(jt_app::ports::ops::WebhookOutcome::Unresolved);
             tracing::warn!(
                 provider = "netgsm",
                 purpose = purpose.key(),

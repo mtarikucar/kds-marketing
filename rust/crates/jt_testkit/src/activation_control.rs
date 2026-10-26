@@ -242,6 +242,12 @@ impl LedgerRepo for Tenant {
 
 #[async_trait]
 impl PlatformRepos for Platform {
+    async fn connector_health_counts(
+        &mut self,
+    ) -> Result<Vec<jt_app::ports::ops::ConnectorHealthCount>, AppError> {
+        self.inner.connector_health_counts().await
+    }
+
     async fn workspace_lock(&mut self, ws: WorkspaceId) -> Result<WorkspaceRow, AppError> {
         let row = self.inner.workspace_lock(ws).await?;
         if let Some(hold) = &self.hold {

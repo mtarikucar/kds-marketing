@@ -344,6 +344,47 @@ pub struct PgPlatformRepos {
 
 #[async_trait]
 impl PlatformRepos for PgPlatformRepos {
+    async fn connector_health_counts(
+        &mut self,
+    ) -> Result<Vec<jt_app::ports::ops::ConnectorHealthCount>, AppError> {
+        use jt_app::ports::ops::ConnectorHealthCount;
+        use sqlx::Row;
+        let mut out = std::collections::BTreeMap::new();
+        // archtest: platform-wide
+        let rows = sqlx::query("select workspace_id, kind_key, coalesce(connector_public->'reconnect_required' = 'true'::jsonb, false) as reconnect, connector_public->'access'->>'expires_at' as expiry from capabilities where connector_sealed is not null and status <> 'retired'")
+            .fetch_all(self.tx.conn()).await.map_err(|e| map_sqlx(e, "connector health counts"))?;
+        for r in rows {
+            let ws = WorkspaceId(
+                r.try_get("workspace_id")
+                    .map_err(|e| map_sqlx(e, "health workspace"))?,
+            );
+            let kind: String = r
+                .try_get("kind_key")
+                .map_err(|e| map_sqlx(e, "health kind"))?;
+            let row = out
+                .entry((ws, kind.clone()))
+                .or_insert(ConnectorHealthCount {
+                    workspace_id: ws,
+                    kind_key: kind,
+                    reconnect_required: 0,
+                    expires_before: None,
+                });
+            row.reconnect_required += u64::from(
+                r.try_get::<bool, _>("reconnect")
+                    .map_err(|e| map_sqlx(e, "health count"))?,
+            );
+            let expiry: Option<String> = r
+                .try_get("expiry")
+                .map_err(|e| map_sqlx(e, "health expiry"))?;
+            if let Some(at) = expiry.and_then(|v| {
+                OffsetDateTime::parse(&v, &time::format_description::well_known::Rfc3339).ok()
+            }) {
+                row.expires_before = Some(row.expires_before.map_or(at, |old| old.min(at)));
+            }
+        }
+        Ok(out.into_values().collect())
+    }
+
     async fn workspace_lock(&mut self, ws: WorkspaceId) -> Result<WorkspaceRow, AppError> {
         workspaces::lock(self.tx.conn(), ws).await
     }

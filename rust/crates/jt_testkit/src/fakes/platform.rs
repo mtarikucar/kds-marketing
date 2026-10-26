@@ -103,6 +103,37 @@ impl PlatformSessionRepo for MemPlatform {
 
 #[async_trait]
 impl PlatformRepos for MemPlatform {
+    async fn connector_health_counts(
+        &mut self,
+    ) -> Result<Vec<jt_app::ports::ops::ConnectorHealthCount>, AppError> {
+        let mut out = std::collections::BTreeMap::new();
+        for stored in &self.state().capabilities {
+            let c = &stored.capability;
+            if stored.sealed.is_none() || c.status == StoredStatus::Retired {
+                continue;
+            }
+            let row = out.entry((c.workspace_id, c.kind_key.clone())).or_insert(
+                jt_app::ports::ops::ConnectorHealthCount {
+                    workspace_id: c.workspace_id,
+                    kind_key: c.kind_key.clone(),
+                    reconnect_required: 0,
+                    expires_before: None,
+                },
+            );
+            row.reconnect_required +=
+                u64::from(c.connector_public["reconnect_required"].as_bool() == Some(true));
+            if let Some(at) = c.connector_public["access"]["expires_at"]
+                .as_str()
+                .and_then(|v| {
+                    OffsetDateTime::parse(v, &time::format_description::well_known::Rfc3339).ok()
+                })
+            {
+                row.expires_before = Some(row.expires_before.map_or(at, |old| old.min(at)));
+            }
+        }
+        Ok(out.into_values().collect())
+    }
+
     async fn workspace_lock(&mut self, ws: WorkspaceId) -> Result<WorkspaceRow, AppError> {
         self.tx.lock_studio().await;
         self.call(|t| t.tx.billing_workspace(ws))

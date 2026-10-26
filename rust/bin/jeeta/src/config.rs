@@ -26,6 +26,8 @@ use tracing_subscriber::EnvFilter;
 pub const PRICE_MINOR: &str = "JEETA_PRICE_MINOR";
 pub const PRICE_CURRENCY: &str = "JEETA_PRICE_CURRENCY";
 pub const BANK_INSTRUCTIONS: &str = "JEETA_BANK_INSTRUCTIONS";
+pub const METRICS_TOKEN: &str = "JEETA_METRICS_TOKEN";
+pub const RECOVERY_STATUS_DIR: &str = "JEETA_RECOVERY_STATUS_DIR";
 pub const DATABASE_URL: &str = "JEETA_DATABASE_URL";
 /// The HTTP listen address, `ip:port` (default [`DEFAULT_BIND`]).
 pub const BIND: &str = "JEETA_BIND";
@@ -85,6 +87,8 @@ const VARS: &[&str] = &[
     PRICE_MINOR,
     PRICE_CURRENCY,
     BANK_INSTRUCTIONS,
+    METRICS_TOKEN,
+    RECOVERY_STATUS_DIR,
     DATABASE_URL,
     BIND,
     PANEL_DIR,
@@ -254,6 +258,8 @@ pub enum LogFormat {
 /// The validated configuration. `Debug` masks the database URL and every secret.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Config {
+    pub metrics_token: Option<String>,
+    pub recovery_status_dir: Option<PathBuf>,
     pub billing: jt_app::usecases::billing::BillingConfig,
     pub database_url: String,
     pub bind: SocketAddr,
@@ -291,7 +297,7 @@ impl fmt::Debug for Config {
             .field("allowed_hosts", &self.allowed_hosts)
             .field("bootstrap", &self.bootstrap)
             .field("stdio_api_key", &self.stdio_api_key.as_ref().map(|_| "***"))
-            .field("log_filter", &self.log_filter)
+            .field("log_filter", &"configured")
             .field("log_format", &self.log_format)
             .field("allow_superuser", &self.allow_superuser)
             .field("allow_test_loopback", &self.allow_test_loopback)
@@ -302,6 +308,21 @@ impl fmt::Debug for Config {
 }
 
 impl Config {
+    pub fn require_metrics_token(&self) -> Result<(), ConfigError> {
+        if self
+            .metrics_token
+            .as_ref()
+            .is_none_or(|s| s.trim().is_empty())
+        {
+            Err(ConfigError::new(
+                METRICS_TOKEN,
+                "must be nonempty for serve",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     /// The configuration from the process environment (see [`load_dotenv`] for the env file).
     pub fn from_env() -> Result<Config, ConfigError> {
         let mut vars = HashMap::new();
@@ -398,7 +419,7 @@ impl Config {
 
         let log_filter = get(LOG).map_or(DEFAULT_LOG, str::trim).to_owned();
         EnvFilter::try_new(&log_filter)
-            .map_err(|e| ConfigError::new(LOG, format!("is not a valid tracing filter: {e}")))?;
+            .map_err(|_| ConfigError::new(LOG, "is not a valid tracing filter"))?;
 
         let log_format = match get(LOG_FORMAT).map(str::trim) {
             None => LogFormat::Compact,
@@ -423,7 +444,19 @@ impl Config {
             .filter(|s| s.len() <= 4096)
             .ok_or_else(|| ConfigError::new(BANK_INSTRUCTIONS, "must contain 1 to 4096 bytes"))?
             .to_owned();
+        let recovery_status_dir = get(RECOVERY_STATUS_DIR).map(PathBuf::from);
+        if recovery_status_dir
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
+        {
+            return Err(ConfigError::new(
+                RECOVERY_STATUS_DIR,
+                "must be an absolute directory",
+            ));
+        }
         Ok(Config {
+            metrics_token: get(METRICS_TOKEN).map(str::to_owned),
+            recovery_status_dir,
             billing: jt_app::usecases::billing::BillingConfig {
                 price_minor,
                 price_currency,
@@ -652,7 +685,7 @@ fn parse_allowed_hosts(raw: Option<&str>) -> Result<Vec<String>, ConfigError> {
             } else {
                 Err(ConfigError::new(
                     ALLOWED_HOSTS,
-                    format!("`{entry}` is not a host or host:port (no scheme, path or user)"),
+                    "must contain hosts or host:port values (no scheme, path or user)",
                 ))
             }
         })
@@ -673,7 +706,7 @@ pub fn load_dotenv() -> Result<Option<&'static str>, String> {
             Err(dotenvy::Error::LineParse(_, at)) => Err(format!(
                 "{path}: a line cannot be parsed (at character {at}); its text is not shown"
             )),
-            Err(e) => Err(format!("{path}: {e}")),
+            Err(_) => Err(format!("{path}: cannot read environment file")),
         };
     }
     Ok(None)

@@ -96,6 +96,8 @@ pub(crate) async fn receive(
         Ok(parsed) => parsed,
         Err(e) => {
             UNPARSEABLE_META.fetch_add(1, Ordering::Relaxed);
+            deps.ops_signals
+                .webhook(jt_app::ports::ops::WebhookOutcome::Unresolved);
             tracing::warn!(
                 provider = "meta",
                 reason = parse_reason(&e),

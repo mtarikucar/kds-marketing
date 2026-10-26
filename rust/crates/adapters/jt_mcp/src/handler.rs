@@ -181,8 +181,7 @@ impl McpHandler {
         };
         if let Err(err) = agents::record_tool_call(&self.state.deps, &ctx, call).await {
             // The call itself has happened; its answer stands.
-            let tool = echo(&name);
-            tracing::error!(%tool, error = %err, "could not ledger a tool call");
+            tracing::error!(code = err.code.as_str(), "could not ledger a tool call");
         }
         match outcome {
             Ok(output) => CallToolResult::structured(output),

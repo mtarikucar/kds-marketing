@@ -734,11 +734,10 @@ async fn confirm_assets_with_hosts(
     allow_hosts(deps, ctx, &hosts);
     let mut out = Vec::with_capacity(touched.len());
     for id in touched {
-        if let Err(e) = probe_locked(deps, ctx, id, true).await {
+        if let Err(_e) = probe_locked(deps, ctx, id, true).await {
             tracing::warn!(
                 workspace_id = %ws,
                 capability_id = %id,
-                error = %e,
                 "a connected capability could not be probed"
             );
         }
@@ -2383,11 +2382,10 @@ fn adapter_hosts(deps: &Deps, connector: &dyn Connector) -> Result<Vec<String>, 
 fn allow_hosts(deps: &Deps, ctx: &Ctx, hosts: &[String]) {
     let distinct: BTreeSet<&String> = hosts.iter().collect();
     for host in distinct {
-        if let Err(e) = deps.hosts.allow(ctx.workspace_id, host) {
+        if let Err(_e) = deps.hosts.allow(ctx.workspace_id, host) {
             tracing::warn!(
                 workspace_id = %ctx.workspace_id,
                 host,
-                error = %e,
                 "a connector's host could not be allowed"
             );
         }

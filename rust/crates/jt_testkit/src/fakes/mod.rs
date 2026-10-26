@@ -63,8 +63,9 @@ pub use providers::{
     TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL,
 };
 pub use services::{
-    DEPS_TOKENS, FIXED_NOW, FakeJobLock, FixedChannelCatalog, FixedClock, FixedTokenGen, HostCall,
-    PLAIN_PREFIX, PlainHasher, PlainSecretBox, RecordingTenantHosts, SeqIdGen, deps,
+    DEPS_TOKENS, FIXED_NOW, FakeJobLock, FakeOpsSnapshot, FixedChannelCatalog, FixedClock,
+    FixedTokenGen, HostCall, PLAIN_PREFIX, PlainHasher, PlainSecretBox, RecordingTenantHosts,
+    SeqIdGen, deps,
 };
 pub use state::{
     InMemoryUow, MemState, StoredBudgetLink, StoredCapability, StoredCapabilityGroup,
