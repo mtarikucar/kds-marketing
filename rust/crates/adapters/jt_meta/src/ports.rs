@@ -113,6 +113,15 @@ impl MessagingSender for MetaConnector {
     ) -> Result<SendReceipt, ConnectorError> {
         messaging::send_text(self, cred, public, recipient_id, text).await
     }
+
+    async fn sender_name(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        sender_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        messaging::sender_name(self, cred, public, sender_id).await
+    }
 }
 
 #[async_trait]

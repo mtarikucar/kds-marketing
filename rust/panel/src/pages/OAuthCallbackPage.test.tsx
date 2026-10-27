@@ -121,6 +121,47 @@ describe('OAuthCallbackPage', () => {
     );
   });
 
+  it('offers a Page and its Messenger, which share an id, as one choice', async () => {
+    const user = userEvent.setup();
+    const page = pendingAssets.assets[0];
+    const calls = mockFetch({
+      'GET /api/auth/me': me,
+      [`GET ${CALLBACK}`]: {
+        ...pendingAssets,
+        assets: [page, { ...page, kind_key: 'messenger', public: { page_id: 'page-1' } }, pendingAssets.assets[1]],
+      },
+      [`POST /api/connectors/oauth/${PENDING_ID}/confirm`]: [],
+      'GET /api/capabilities': capabilities,
+      'GET /api/capability-groups': groups,
+      'GET /api/budget/items': budgetItems,
+      'GET /api/connectors/health': [],
+    });
+    renderAt('/oauth/callback/meta?state=s&code=c');
+    const pageChoice = await screen.findByRole('checkbox', { name: /Kahve Evi/ });
+    // Two accounts, two choices: the Page's row names both kinds it connects.
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+    expect(
+      screen.getByText(i18n.t('oauthCallback.together', { kinds: 'Facebook sayfası + Messenger' })),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Messenger')).toBeInTheDocument();
+    await user.click(pageChoice);
+    expect(pageChoice).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /kahveevi/ })).not.toBeChecked();
+    await user.click(screen.getByRole('button', { name: tr.oauthCallback.confirm }));
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ selected: ['page-1'] }));
+  });
+
+  it('chooses the one account found, even when it carries several kinds', async () => {
+    const page = pendingAssets.assets[0];
+    mockFetch({
+      'GET /api/auth/me': me,
+      [`GET ${CALLBACK}`]: { ...pendingAssets, assets: [page, { ...page, kind_key: 'messenger' }] },
+    });
+    renderAt('/oauth/callback/meta?state=s&code=c');
+    expect(await screen.findByRole('checkbox', { name: /Kahve Evi/ })).toBeChecked();
+    expect(screen.getByRole('button', { name: tr.oauthCallback.confirm })).toBeEnabled();
+  });
+
   it('says that the first account chosen becomes the capability the flow was started for', async () => {
     rememberFlow({ pending_id: PENDING_ID, capability_id: PAGE_ID, expires_at: '2099-01-01T00:00:00Z' });
     mockFetch({ 'GET /api/auth/me': me, [`GET ${CALLBACK}`]: pendingAssets });

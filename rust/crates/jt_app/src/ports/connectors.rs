@@ -591,6 +591,18 @@ pub trait MessagingSender: Send + Sync {
         recipient_id: &str,
         text: &str,
     ) -> Result<SendReceipt, ConnectorError>;
+    /// The name the provider shows for `sender_id`, the provider's id of a person who wrote to
+    /// the capability (`public` as [`Connector::probe`] gets it); `None` when it tells none.
+    /// Best-effort: the inbox only asks for a person it has no name for, and goes on without one.
+    async fn sender_name(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        sender_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        let _ = (cred, public, sender_id);
+        Ok(None)
+    }
 }
 
 /// Sends typed mail within `ws`, preserving the caller's Message-ID, thread headers and attachments.

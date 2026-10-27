@@ -7,6 +7,7 @@ import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
 import { Button, Card, CardContent, EmptyState, Field, Input, PageHeader } from '@/components/ui';
 import { formatDateTime } from '@/lib/format';
+import { personName } from '@/lib/people';
 
 /** People per page; the server pages with limit/offset in (created_at, id) order. */
 export const PEOPLE_PAGE = 50;
@@ -58,7 +59,7 @@ export function PeoplePage() {
                         className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3 hover:bg-surface-muted"
                       >
                         <span>
-                          <span className="font-medium text-foreground">{person.display_name}</span>
+                          <span className="font-medium text-foreground">{personName(t, person)}</span>
                           {person.company && <span className="text-muted-foreground"> · {person.company}</span>}
                         </span>
                         <span className="text-caption text-muted-foreground">

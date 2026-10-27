@@ -284,3 +284,27 @@ it('shows access metadata on the freshly connected result as well as on revisit'
   expect(await screen.findByText('Yeniden bağlantı gerekli')).toBeInTheDocument();
   expect(screen.getByText('2026-10-24T12:00:00Z')).toBeInTheDocument();
 });
+
+it('keeps the browser and password managers from filling any provider credential', async () => {
+  mockFetch({ 'GET /api/auth/me': me });
+  for (const [kind, heading] of [
+    ['sms_line', tr.connect.credentials.usercode],
+    ['netgsm_pbx', tr.connect.credentials.username],
+    ['mailbox', tr.connect.mail.username],
+  ] as const) {
+    const { unmount } = renderAt(`/connect?kind=${kind}`);
+    await screen.findByLabelText(heading);
+    const fields = [...document.querySelectorAll<HTMLInputElement>('form input:not([type=hidden])')].filter(
+      (input) => input.type === 'text' || input.type === 'password',
+    );
+    expect(fields.some((input) => input.type === 'password')).toBe(true);
+    for (const input of fields) {
+      // A saved panel password must never land in a provider's password, nor the e-mail in its user.
+      expect(input).toHaveAttribute('autocomplete', input.type === 'password' ? 'new-password' : 'off');
+      for (const ignore of ['data-1p-ignore', 'data-lpignore', 'data-bwignore']) {
+        expect(input).toHaveAttribute(ignore, 'true');
+      }
+    }
+    unmount();
+  }
+});

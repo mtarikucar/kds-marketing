@@ -20,6 +20,7 @@ import {
   selectClass,
   useInboxKey,
   useInboxMutation,
+  useMemberName,
 } from './InboxShared';
 
 function eventName(kind: InboxEvent['kind']) {
@@ -230,6 +231,7 @@ export function InboxJourneyPanel({
     enabled: can(session.data, 'workspace.read'),
   });
   const members = team.data?.filter((member) => member.status === 'active' && member.user_id) ?? [];
+  const memberName = useMemberName();
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
   const [assignee, setAssignee] = useState('');
@@ -289,7 +291,7 @@ export function InboxJourneyPanel({
                   >
                     <option value="">{t('inbox.unassigned')}</option>
                     {journey.owner && !members.some((member) => member.user_id === journey.owner) && (
-                      <option value={journey.owner}>{journey.owner}</option>
+                      <option value={journey.owner}>{memberName(journey.owner)}</option>
                     )}
                     {members.map((member) => (
                       <option key={member.user_id} value={member.user_id!}>
@@ -300,9 +302,7 @@ export function InboxJourneyPanel({
                 </label>
               ) : (
                 <p className="text-sm">
-                  {members.find((member) => member.user_id === journey.owner)?.display_name ||
-                    journey.owner ||
-                    t('inbox.unassigned')}
+                  {journey.owner ? memberName(journey.owner) : t('inbox.unassigned')}
                 </p>
               )}
               <ErrorCallout error={assign.error} />
@@ -339,9 +339,7 @@ export function InboxJourneyPanel({
                   <InboxTime at={task.due_at} />
                   <p>
                     {t(`inbox.taskStatus.${task.status}`)} ·{' '}
-                    {members.find((member) => member.user_id === task.assignee)?.display_name ||
-                      task.assignee ||
-                      t('inbox.unassigned')}
+                    {task.assignee ? memberName(task.assignee) : t('inbox.unassigned')}
                   </p>
                   {task.status === 'open' && (
                     <Button

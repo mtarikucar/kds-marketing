@@ -1830,6 +1830,76 @@ async fn whatsapp_send_body() {
     );
 }
 
+#[tokio::test]
+async fn sender_name_reads_the_profile_by_kind() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/2000000000000001",
+        ok(json!({ "name": " Ada Messenger ", "id": "2000000000000001" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/3000000000000001",
+        ok(json!({ "username": "ada.ig", "id": "3000000000000001" })),
+    );
+    m.on(
+        "GET",
+        "/ig/3000000000000002",
+        ok(json!({ "name": "Ada IG", "username": "ada.ig" })),
+    );
+    let name = |cred: Credential, kind: &'static str, sender: &'static str| {
+        let meta = &r.meta;
+        async move {
+            meta.sender_name(&cred, &public(kind, Some(PAGE)), sender)
+                .await
+        }
+    };
+    assert_eq!(
+        name(page_cred(), "messenger", "2000000000000001")
+            .await
+            .unwrap(),
+        Some("Ada Messenger".into())
+    );
+    let asked = m.request("GET", "/fb/v19.0/2000000000000001");
+    assert_eq!(asked.param("fields"), Some("name"));
+    assert_graph_auth(&asked, PAGE_TOKEN);
+    // Instagram through the Page: the username stands in for a missing name.
+    assert_eq!(
+        name(page_cred(), "instagram_dm", "3000000000000001")
+            .await
+            .unwrap(),
+        Some("ada.ig".into())
+    );
+    assert_eq!(
+        m.request("GET", "/fb/v19.0/3000000000000001")
+            .param("fields"),
+        Some("name,username")
+    );
+    // An Instagram Login token reads graph.instagram.com.
+    assert_eq!(
+        name(ig_login_cred(), "instagram_dm", "3000000000000002")
+            .await
+            .unwrap(),
+        Some("Ada IG".into())
+    );
+    // WhatsApp and other kinds: no name, no call; a bad sender id is refused before a call.
+    m.clear();
+    assert_eq!(
+        name(wa_cred(None), "whatsapp_cloud", "905551111111")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(name(page_cred(), "meta_ads", "1").await.unwrap(), None);
+    assert_eq!(
+        kind_of(name(page_cred(), "messenger", "../me").await),
+        "permanent"
+    );
+    assert!(m.recorded().is_empty());
+}
+
 // ---------------------------------------------------------------------------------------------
 // Lead-gen and ads
 // ---------------------------------------------------------------------------------------------

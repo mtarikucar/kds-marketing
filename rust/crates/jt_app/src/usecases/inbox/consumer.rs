@@ -4,7 +4,11 @@ use crate::{
     ctx::Ctx,
     error::AppError,
     ports::{CapabilityFilter, TenantRepos, inbox::ConsumptionOutcome},
-    usecases::{Deps, jobs::JobReport},
+    usecases::{
+        Deps,
+        connector::{adapter_public, open_credential},
+        jobs::JobReport,
+    },
 };
 use jt_capability::{Capability, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, Provider};
@@ -17,6 +21,8 @@ use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 pub const CONSUMER: &str = "inbox@2";
 // Stable across inbox consumer versions: activity must not reopen a conversation twice.
 const PBX_ACTIVITY: &str = "inbox.pbx_activity";
+/// The longest sender name kept from a provider, in characters.
+const MAX_SENDER_NAME: usize = 200;
 
 /// Sweep with a cursor even after failures; the next sweep starts over to retry rollbacks.
 pub async fn consume_workspace(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> JobReport {
@@ -73,6 +79,7 @@ pub async fn consume_event(
     now: OffsetDateTime,
 ) -> Result<&'static str, AppError> {
     let lead = super::leadgen::fetch(deps, event).await?;
+    let name = sender_name(deps, event).await;
     let mut r = deps.uow.tenant(event.workspace_id).await?;
     r.people().lock_workspace().await?;
     if !matches!(
@@ -99,7 +106,16 @@ pub async fn consume_event(
         now,
         agent_connection_id: None,
     };
-    let outcome = match route(deps, &ctx, r.as_mut(), event, lead.as_ref()).await {
+    let outcome = match route(
+        deps,
+        &ctx,
+        r.as_mut(),
+        event,
+        lead.as_ref(),
+        name.as_deref(),
+    )
+    .await
+    {
         Err(e) if claim_after_intake && e.details["reason"] == "identity_split" => {
             // match_or_create detects a split before mutating any person or identity.
             // Only its idempotent review suggestion and ledger entry have been written.
@@ -131,6 +147,7 @@ async fn route(
     r: &mut dyn TenantRepos,
     event: &InboundEvent,
     lead: Option<&super::leadgen::Fetched>,
+    sender_name: Option<&str>,
 ) -> Result<&'static str, AppError> {
     let mut erased = event.payload["erased_identity"] == true;
     if let Some(person) = event.payload["person_id"]
@@ -209,7 +226,7 @@ async fn route(
                     | (Provider::Mail, Channel::Email)
             ) =>
         {
-            message(deps, ctx, r, event, &cap, channel).await
+            message(deps, ctx, r, event, &cap, channel, sender_name).await
         }
         EventKind::MessageEcho
             if event.provider == Provider::Meta
@@ -231,6 +248,65 @@ async fn route(
         }
         _ => Ok("deferred"),
     }
+}
+/// Lock-free and best-effort, like the lead-gen read: the name Meta shows for the sender of a
+/// direct message whose identity no person holds yet (a known sender keeps the name it has).
+/// Never asked for an erased sender or in a workspace that does not receive; every failure
+/// reads as no name, so ingest never waits on the provider.
+async fn sender_name(deps: &Deps, event: &InboundEvent) -> Option<String> {
+    if event.provider != Provider::Meta
+        || event.kind != EventKind::Message
+        || event.payload["erased_identity"] == true
+    {
+        return None;
+    }
+    let sender = text(&event.payload["messaging"]["sender"], "id")?;
+    let (cap, credential) = {
+        let mut r = deps.uow.tenant(event.workspace_id).await.ok()?;
+        if !matches!(
+            r.workspace().get().await.ok()?.status,
+            WorkspaceStatus::Active | WorkspaceStatus::PendingPayment
+        ) {
+            return None;
+        }
+        let cap = r.capabilities().find(event.capability_id?).await.ok()??;
+        let channel = match cap.kind_key.as_str() {
+            "messenger" | "facebook_page" => Channel::Messenger,
+            "instagram_dm" | "instagram" => Channel::InstagramDm,
+            _ => return None,
+        };
+        if cap.status == StoredStatus::Retired {
+            return None;
+        }
+        let key = sender_key(&cap, channel, sender).ok()?;
+        super::erasure::check_identity(r.as_mut(), channel.identity_channel(), &key)
+            .await
+            .ok()?;
+        if r.people()
+            .find_by_identity(channel.identity_channel(), &key)
+            .await
+            .ok()?
+            .is_some()
+        {
+            return None;
+        }
+        let sealed = r.capabilities().read_sealed(cap.id).await.ok()??;
+        let credential = open_credential(deps, event.workspace_id, &sealed).ok()?;
+        (cap, credential)
+    };
+    let name = deps
+        .connectors
+        .messaging(Provider::Meta)?
+        .sender_name(&credential, &adapter_public(&cap), sender)
+        .await
+        .ok()??;
+    let name: String = name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_SENDER_NAME)
+        .collect();
+    Some(name.trim().to_owned()).filter(|name| !name.is_empty())
 }
 fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key)
@@ -427,12 +503,18 @@ async fn message(
     event: &InboundEvent,
     cap: &Capability,
     channel: Channel,
+    sender_name: Option<&str>,
 ) -> Result<&'static str, AppError> {
     let key = format!("inbound:{}", event.id);
     if r.journeys().event_by_key(&key).await?.is_some() {
         return Ok("duplicate");
     }
-    let content = decode(event, channel, false)?;
+    let mut content = decode(event, channel, false)?;
+    if content.name.is_empty()
+        && let Some(name) = sender_name
+    {
+        content.name = name.to_owned();
+    }
     super::erasure::check_identity(
         r,
         channel.identity_channel(),

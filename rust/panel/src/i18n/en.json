@@ -1036,6 +1036,7 @@
     "externalId": "Id: {{id}}",
     "scopes": "Permissions: {{scopes}}",
     "expires": "Access ends: {{at}}",
+    "together": "One account; connected together: {{kinds}}",
     "none": "This account reaches nothing that can be connected.",
     "confirm": "Connect the selected",
     "connected": "Accounts connected: {{count}}.",
@@ -1184,6 +1185,8 @@
     "noJourney": "No journey to show.",
     "agentExecutor": "Executor: Agent",
     "humanExecutor": "Executor: {{user}}",
+    "you": "You",
+    "teamMember": "Team member",
     "unassignedExecutor": "Executor: Unassigned human",
     "takeOver": "Take over",
     "handBack": "Hand back to agent",
@@ -1603,6 +1606,18 @@
     "added": "Added {{at}}",
     "range": "{{first}}–{{last}}",
     "previous": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "unnamed": "Unnamed person",
+    "unnamedOn": "{{channel}} contact",
+    "erased": "Erased person",
+    "channels": {
+      "whats_app": "WhatsApp",
+      "instagram_dm": "Instagram",
+      "messenger": "Messenger",
+      "sms": "SMS",
+      "email": "Email",
+      "webchat": "Web chat",
+      "phone": "Phone"
+    }
   }
 }

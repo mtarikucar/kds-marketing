@@ -1036,6 +1036,7 @@
     "externalId": "Kimlik: {{id}}",
     "scopes": "İzinler: {{scopes}}",
     "expires": "Erişimin bitişi: {{at}}",
+    "together": "Aynı hesap; birlikte bağlanır: {{kinds}}",
     "none": "Bu hesabın bağlanabilecek bir varlığı bulunamadı.",
     "confirm": "Seçilenleri bağla",
     "connected": "Bağlanan hesap sayısı: {{count}}.",
@@ -1184,6 +1185,8 @@
     "noJourney": "Gösterilecek yolculuk yok.",
     "agentExecutor": "Yürütücü: Ajan",
     "humanExecutor": "Yürütücü: {{user}}",
+    "you": "Siz",
+    "teamMember": "Ekip üyesi",
     "unassignedExecutor": "Yürütücü: Atanmamış insan",
     "takeOver": "Devral",
     "handBack": "Ajana bırak",
@@ -1603,6 +1606,18 @@
     "added": "Eklenme: {{at}}",
     "range": "{{first}}–{{last}} arası",
     "previous": "Önceki",
-    "next": "Sonraki"
+    "next": "Sonraki",
+    "unnamed": "Adsız kişi",
+    "unnamedOn": "{{channel}} kişisi",
+    "erased": "Silinmiş kişi",
+    "channels": {
+      "whats_app": "WhatsApp",
+      "instagram_dm": "Instagram",
+      "messenger": "Messenger",
+      "sms": "SMS",
+      "email": "E-posta",
+      "webchat": "Web sohbeti",
+      "phone": "Telefon"
+    }
   }
 }

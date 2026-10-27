@@ -292,6 +292,10 @@ pub struct ScriptedConnector {
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
     account_metrics: Script<Result<AccountMetrics, ConnectorError>>,
     send_text: Script<Result<SendReceipt, ConnectorError>>,
+    /// Sender-name lookups answer from here, `Ok(None)` when nothing is queued; they are kept
+    /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::sender_name_calls`]).
+    sender_name: Script<Result<Option<String>, ConnectorError>>,
+    sender_name_calls: Mutex<Vec<String>>,
     set_status: Script<Result<(), ConnectorError>>,
     account_context: Script<Result<AdAccountContext, ConnectorError>>,
     adset_insights: Script<Result<Vec<AdSetInsights>, ConnectorError>>,
@@ -342,6 +346,8 @@ impl ScriptedConnector {
             post_metrics: Script::default(),
             account_metrics: Script::default(),
             send_text: Script::default(),
+            sender_name: Script::default(),
+            sender_name_calls: Mutex::default(),
             set_status: Script::default(),
             account_context: Script::default(),
             adset_insights: Script::default(),
@@ -461,6 +467,15 @@ impl ScriptedConnector {
 
     pub fn push_leadgen(&self, result: Result<LeadGenRecord, ConnectorError>) {
         self.leadgen.push(result);
+    }
+
+    pub fn push_sender_name(&self, result: Result<Option<String>, ConnectorError>) {
+        self.sender_name.push(result);
+    }
+
+    /// The sender ids whose names were asked for, in order.
+    pub fn sender_name_calls(&self) -> Vec<String> {
+        lock(&self.sender_name_calls).clone()
     }
 
     pub fn push_click_to_call(&self, result: Result<SendReceipt, ConnectorError>) {
@@ -659,6 +674,16 @@ impl MessagingSender for ScriptedConnector {
         });
         self.after_send().await;
         self.next(&self.send_text, "send_text result")
+    }
+
+    async fn sender_name(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        sender_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        lock(&self.sender_name_calls).push(sender_id.to_owned());
+        self.sender_name.try_next().unwrap_or(Ok(None))
     }
 }
 

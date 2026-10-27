@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import * as api from '@/api/inbox';
 import type { InboxMerge } from '@/api/types';
 import { useSession } from '@/auth/useSession';
+import { personName } from '@/lib/people';
 import { can } from '@/lib/roles';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
@@ -47,8 +48,8 @@ function MergeCard({ row }: { row: InboxMerge }) {
     },
   );
   const busy = apply.isPending || refuse.isPending || undo.isPending;
-  const sourceName = source.data?.person.display_name || row.source_id;
-  const targetName = target.data?.person.display_name || row.target_id;
+  const sourceName = personName(t, source.data?.person, source.data?.identities);
+  const targetName = personName(t, target.data?.person, target.data?.identities);
   return (
     <article
       id={`merge-${row.id}`}

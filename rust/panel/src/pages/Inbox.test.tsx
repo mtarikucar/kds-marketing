@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
-import { inboxAnswers, inboxMe, conversation, context, journey, merge } from '@/test/inbox';
+import { USER_ID, WS_ID } from '@/test/fixtures';
+import { inboxAnswers, inboxMe, conversation, context, journey, merge, person } from '@/test/inbox';
 
 async function openConversation(answers = inboxAnswers) {
   const calls = mockFetch(answers);
@@ -287,7 +288,7 @@ it('Inbox search opens person conversations', async () => {
   expect(await screen.findByRole('heading', { name: 'Deniz Örnek' })).toBeVisible();
   expect(
     screen
-      .getAllByRole('link', { name: /Deniz Örnek.*whatsapp_cloud/ })
+      .getAllByRole('link', { name: /Deniz Örnek.*WhatsApp/ })
       .some((link) => link.getAttribute('href') === '/inbox/conv-1'),
   ).toBe(true);
 });
@@ -328,13 +329,58 @@ it('Inbox timeline preserves event actors and historical lost-reason labels', as
       reason_label: 'Eski fiyat etiketi',
       at: '2026-10-23T10:02:00Z',
     },
+    { id: 'event-4', source: { human: USER_ID }, kind: 'reopened', reason_label: null, at: '2026-10-23T10:03:00Z' },
+    { id: 'event-5', source: { human: 'user-9' }, kind: 'reopened', reason_label: null, at: '2026-10-23T10:04:00Z' },
   ];
   await openConversation({
     ...inboxAnswers,
+    'GET /api/team': [
+      ...(inboxAnswers['GET /api/team'] as object[]),
+      {
+        membership_id: 'member-2',
+        user_id: 'user-2',
+        email: 'cem@alpha.example',
+        display_name: null,
+        role_key: 'rep',
+        role_name: 'Rep',
+        status: 'removed',
+        created_at: '2026-10-23T10:00:00Z',
+      },
+    ],
     'GET /api/inbox/journeys/journey-1': { journey, events, tasks: [], notes: [] },
   });
   expect(await screen.findByText('Eski fiyat etiketi')).toBeVisible();
   expect(screen.getByText('Sistem')).toBeVisible();
   expect(screen.getByText('Ajan', { exact: true })).toBeVisible();
-  expect(screen.getByText('İnsan · user-2')).toBeVisible();
+  // A human is named, never shown as an id: a member (even a former one), you, or "team member".
+  expect(await screen.findByText('İnsan · cem@alpha.example')).toBeVisible();
+  expect(screen.getByText('İnsan · Siz')).toBeVisible();
+  expect(screen.getByText('İnsan · Ekip üyesi')).toBeVisible();
+  expect(document.body.textContent).not.toContain('user-2');
+});
+
+it('Inbox names an unnamed contact by its channel and the end of its id, never by a uuid', async () => {
+  const unnamed = { ...person, display_name: '', first_touch: { ...person.first_touch, source: { channel: 'messenger' } } };
+  const messenger = { ...conversation, kind_key: 'messenger' };
+  const identity = {
+    id: 'identity-1',
+    workspace_id: WS_ID,
+    person_id: person.id,
+    channel: 'messenger',
+    value_normalized: '1175657112297652:27325092857145601',
+    value_display: '27325092857145601',
+    active: true,
+    first_seen_at: '2026-10-23T10:00:00Z',
+  };
+  await openConversation({
+    ...inboxAnswers,
+    'GET /api/inbox/conversations': { items: [messenger], next_cursor: null },
+    'GET /api/inbox/conversations/conv-1': messenger,
+    'GET /api/inbox/conversations/conv-1/context': { ...context, person: unnamed },
+    'GET /api/inbox/people/person-1': { person: unnamed, identities: [identity], open_journey: journey, conversations: [messenger] },
+  });
+  const thread = await screen.findByRole('heading', { level: 2, name: 'Messenger kişisi · …5601' });
+  expect(thread).toBeVisible();
+  expect(await screen.findByRole('link', { name: /Messenger kişisi · …5601/ })).toBeVisible();
+  expect(document.body.textContent).not.toContain(person.id);
 });

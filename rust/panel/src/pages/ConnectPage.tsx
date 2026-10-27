@@ -81,7 +81,11 @@ function KindPicker({ value, onChange }: { value: string | null; onChange: (kind
   );
 }
 
-/** One text field of a form, labelled; a secret is a password field, never autofilled. */
+/**
+ * One text field of a form, labelled; a secret is a password field. These are a provider's
+ * credentials, never the panel's sign-in: neither the browser nor a password manager may fill
+ * them, or a saved panel e-mail and password would quietly become the provider's.
+ */
 function TextField({
   label,
   hint,
@@ -103,6 +107,10 @@ function TextField({
           aria-describedby={ids.describedBy}
           type={secret ? 'password' : 'text'}
           autoComplete={secret ? 'new-password' : 'off'}
+          data-1p-ignore="true"
+          data-lpignore="true"
+          data-bwignore="true"
+          data-form-type="other"
           spellCheck={false}
           value={value}
           onChange={(e) => onChange(e.target.value)}
