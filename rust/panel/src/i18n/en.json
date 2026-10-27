@@ -898,6 +898,21 @@
       "memberAdded": "Member added.",
       "memberRemoved": "Member removed."
     },
+    "pbx": {
+      "title": "PBX call policy",
+      "saved": "PBX policy saved.",
+      "recording": "Record calls at the PBX",
+      "recordingHint": "Turn on only with the KVKK recording announcement in place: recording must start after the caller has heard it.",
+      "mode": "How calls are placed",
+      "modes": {
+        "originate": "From the extension",
+        "linkup": "From the rep's phone"
+      },
+      "modeHints": {
+        "originate": "The rep's extension rings first; once answered, the customer is called.",
+        "linkup": "The rep's own phone number rings first; once answered, the customer is called."
+      }
+    },
     "connector": {
       "label": "Connection",
       "actionsLabel": "Connection actions",

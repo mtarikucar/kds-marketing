@@ -20,6 +20,10 @@ const ADDED: [&str; 11] = [
     "platform.operators.reset_password",
 ];
 
+/// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan).
+const POST_M4_ADDED: [(&str, &str); 1] =
+    [("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy")];
+
 fn baseline(key: &str) -> BTreeSet<String> {
     let baseline: Value = serde_json::from_str(include_str!("fixtures/m3_surface.json")).unwrap();
     baseline[key]
@@ -124,7 +128,10 @@ fn catalog_and_handlers_match_ratified_m4_surface_set() {
     for id in ADDED {
         assert!(expected.insert(id.into()));
     }
-    assert_eq!(CATALOG.len(), 144);
+    for (id, _) in POST_M4_ADDED {
+        assert!(expected.insert(id.into()));
+    }
+    assert_eq!(CATALOG.len(), 144 + POST_M4_ADDED.len());
     assert_eq!(
         CATALOG
             .iter()
@@ -135,8 +142,11 @@ fn catalog_and_handlers_match_ratified_m4_surface_set() {
     let mut tools = baseline("tools");
     assert_eq!(tools.len(), 124);
     assert!(tools.insert("jeeta.billing.report_payment".into()));
+    for (_, tool) in POST_M4_ADDED {
+        assert!(tools.insert(tool.into()));
+    }
     let registry = jt_mcp::registry();
-    assert_eq!(registry.len(), 125);
+    assert_eq!(registry.len(), 125 + POST_M4_ADDED.len());
     assert_eq!(
         registry
             .iter()

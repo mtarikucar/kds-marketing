@@ -652,7 +652,7 @@ async fn callback_in_a_suspended_workspace_is_refused() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 8);
+    assert_eq!(checked, 9);
 }
 
 #[tokio::test]

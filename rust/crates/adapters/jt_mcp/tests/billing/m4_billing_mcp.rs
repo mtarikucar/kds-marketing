@@ -334,7 +334,7 @@ async fn code_never_returned_to_agent() {
     let listing = json!({"jsonrpc":"2.0","id":900,"method":"tools/list","params":{}});
     let listed = sse_message(send(&p.app, mcp(&key, Some(&session), &listing)).await, 900).await;
     let tools = listed["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 125);
+    assert_eq!(tools.len(), 126);
     assert!(!listed.to_string().contains("jeeta.billing.activate"));
     assert!(!listed.to_string().contains(&delivered.code));
     let call = json!({"jsonrpc":"2.0","id":901,"method":"tools/call","params":{"name":"jeeta.billing.activate","arguments":{"code":delivered.code}}});

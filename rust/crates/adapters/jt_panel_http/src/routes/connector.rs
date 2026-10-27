@@ -17,7 +17,8 @@ use axum::extract::State;
 use jt_app::ports::OAuthPendingId;
 use jt_app::usecases::capabilities::CapabilityOut;
 use jt_app::usecases::connector::{
-    self, ConfirmAssets, ConnectorHealth, HooksOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
+    self, ConfirmAssets, ConnectorHealth, HooksOut, PbxPolicyInput, PbxPolicyOut, ProbeOut,
+    SetCredentials, StartOAuth, StartOut,
 };
 use jt_capability::CapabilityId;
 use serde::Deserialize;
@@ -73,6 +74,20 @@ pub async fn set_credentials(
 ) -> Result<Json<CapabilityOut>, ApiError> {
     Ok(Json(
         connector::set_credentials(&state.deps, &ctx, body).await?,
+    ))
+}
+
+/// `200` with the PBX capability's call policy after the change. The body is
+/// [`PbxPolicyInput`]: `{call_mode?: "originate" | "linkup", recording_allowed?: bool}`, at least
+/// one; another kind of capability is `409`.
+pub async fn set_pbx_policy(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<CapabilityId>,
+    ApiJson(body): ApiJson<PbxPolicyInput>,
+) -> Result<Json<PbxPolicyOut>, ApiError> {
+    Ok(Json(
+        connector::set_pbx_policy(&state.deps, &ctx, id, body).await?,
     ))
 }
 

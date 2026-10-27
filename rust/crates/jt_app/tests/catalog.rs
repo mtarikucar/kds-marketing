@@ -240,6 +240,7 @@ fn catalog_is_the_release_table() {
         ("connector.health", Some("jeeta.connector.health"), Some(("GET", "/api/connectors/health")), false, Risk::Read),
         ("connector.reconnect", Some("jeeta.connector.reconnect"), Some(("POST", "/api/connectors/{capability_id}/reconnect")), false, Risk::Write),
         ("connector.hooks", Some("jeeta.connector.hooks"), Some(("GET", "/api/connectors/hooks")), false, Risk::Read),
+        ("connector.set_pbx_policy", Some("jeeta.connector.set_pbx_policy"), Some(("PUT", "/api/connectors/{capability_id}/pbx-policy")), false, Risk::Write),
         ("events.pending", Some("jeeta.events.pending"), Some(("GET", "/api/events/pending")), false, Risk::Read),
         ("events.ack", Some("jeeta.events.ack"), Some(("POST", "/api/events/ack")), false, Risk::Write),
         ("events.list", Some("jeeta.events.list"), Some(("GET", "/api/events")), false, Risk::Read),
@@ -258,7 +259,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 144);
+    assert_eq!(CATALOG.len(), 145);
     for uc in CATALOG {
         assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

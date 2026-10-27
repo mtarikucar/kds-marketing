@@ -874,6 +874,22 @@ export interface HooksOut {
   netgsm: NetgsmHook[];
 }
 
+/** `jt_app::usecases::connector::PbxCallMode`. */
+export type PbxCallMode = 'originate' | 'linkup';
+
+/** `jt_app::usecases::connector::PbxPolicyInput`: at least one field. */
+export interface PbxPolicyInput {
+  call_mode?: PbxCallMode;
+  recording_allowed?: boolean;
+}
+
+/** `jt_app::usecases::connector::PbxPolicyOut`. */
+export interface PbxPolicyOut {
+  capability_id: Uuid;
+  call_mode: PbxCallMode;
+  recording_allowed: boolean;
+}
+
 /** `jt_app::usecases::connector::ConnectorHealth`. */
 export interface ConnectorHealth {
   capability_id: Uuid;

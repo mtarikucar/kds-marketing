@@ -1,7 +1,8 @@
 //! `jeeta.connector.start_oauth`, `jeeta.connector.confirm_assets`,
 //! `jeeta.connector.set_credentials`, `jeeta.connector.probe`, `jeeta.connector.health`,
-//! `jeeta.connector.reconnect` and `jeeta.connector.hooks`: connecting the workspace's accounts
-//! through their providers, and the webhook addresses to register at them.
+//! `jeeta.connector.reconnect`, `jeeta.connector.hooks` and `jeeta.connector.set_pbx_policy`:
+//! connecting the workspace's accounts through their providers, the webhook addresses to register
+//! at them, and the PBX's call policy.
 //!
 //! **An agent cannot complete an OAuth flow.** It starts one (or a reconnection) and gets the
 //! provider's authorize URL, which it hands to the owner: the owner signs in at the provider in
@@ -20,7 +21,9 @@
 use jt_app::ctx::Ctx;
 use jt_app::error::AppError;
 use jt_app::usecases::Deps;
-use jt_app::usecases::connector::{self, ConfirmAssets, SetCredentials, StartOAuth, StartOut};
+use jt_app::usecases::connector::{
+    self, ConfirmAssets, PbxCallMode, PbxPolicyInput, SetCredentials, StartOAuth, StartOut,
+};
 use jt_capability::CapabilityId;
 use jt_tenancy::Permission;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -107,9 +110,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "connector.health",
             description: "Read the health of every connector capability that is not retired: \
-                          its status, its last probe (when, ok, error_kind), when its token \
-                          expires and whether it must be reconnected. Returns {connectors: \
-                          [...]}. [risk: READ]",
+                          its status, its last probe (when, ok, error_kind, and for a failure its \
+                          reason line `kind: provider: reason`), when its token expires and \
+                          whether it must be reconnected. Returns {connectors: [...]}. \
+                          [risk: READ]",
             permission: Permission::WorkspaceRead,
             schema: schema_for::<NoArgs>,
             run: health,
@@ -142,7 +146,39 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             schema: schema_for::<NoArgs>,
             run: hooks,
         },
+        ToolDef {
+            use_case: "connector.set_pbx_policy",
+            description: "Set the call policy of the NetGSM PBX capability (kind netgsm_pbx): \
+                          call_mode originate (ring the rep's extension, then the customer) or \
+                          linkup (ring the rep's own phone number first), and recording_allowed \
+                          (whether calls are recorded at the PBX; enable it only when the owner \
+                          has the KVKK recording announcement in place). A field left out keeps \
+                          its value; give at least one. Another kind is CONFLICT. Returns \
+                          {capability_id, call_mode, recording_allowed}. [risk: WRITE]",
+            permission: Permission::CapabilitiesManage,
+            schema: schema_for::<PbxPolicyArgs>,
+            run: set_pbx_policy,
+        },
     ]
+}
+
+/// The arguments of `jeeta.connector.set_pbx_policy`: the capability and a [`PbxPolicyInput`].
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PbxPolicyArgs {
+    /// The netgsm_pbx capability.
+    capability_id: Uuid,
+    /// originate or linkup.
+    #[serde(default)]
+    #[schemars(schema_with = "call_mode_schema")]
+    call_mode: Option<PbxCallMode>,
+    /// Whether calls are recorded at the PBX.
+    #[serde(default)]
+    recording_allowed: Option<bool>,
+}
+
+fn call_mode_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({ "type": "string", "enum": ["originate", "linkup"] })
 }
 
 /// The schema of `jeeta.connector.start_oauth`: the kind of capability to connect. The arguments
@@ -336,5 +372,20 @@ fn hooks<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         let NoArgs {} = args(raw)?;
         to_json(&connector::hooks(deps, ctx).await?)
+    })
+}
+
+fn set_pbx_policy<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let PbxPolicyArgs {
+            capability_id,
+            call_mode,
+            recording_allowed,
+        } = args(raw)?;
+        let input = PbxPolicyInput {
+            call_mode,
+            recording_allowed,
+        };
+        to_json(&connector::set_pbx_policy(deps, ctx, CapabilityId(capability_id), input).await?)
     })
 }

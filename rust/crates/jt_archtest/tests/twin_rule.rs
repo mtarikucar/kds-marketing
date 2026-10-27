@@ -110,7 +110,8 @@ fn mcp_registry_matches_catalog() {
 /// capability +1; `jeeta.budget.items_update` and `jeeta.budget.items_retire`, budget +2), the 7
 /// `connector` tools (six from Task 8 and `jeeta.connector.hooks` from Task 9; the eighth
 /// connection use case, completing an OAuth flow, is the panel's callback only) and the 3
-/// `events` tools: 60. Inbox adds 46 and Studio operations add 18, giving 124; billing evidence adds one (125).
+/// `events` tools: 60. Inbox adds 46 and Studio operations add 18, giving 124; billing evidence adds one (125);
+/// the PBX call policy (`jeeta.connector.set_pbx_policy`, connector +1) gives 126.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -126,18 +127,18 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("capability", 16),
     ("budget", 6),
     ("work", 3),
-    ("connector", 7),
+    ("connector", 8),
     ("events", 3),
     ("inbox", 46),
     ("studio", 18),
 ];
 
 #[test]
-fn the_registry_holds_125_tools() {
+fn the_registry_holds_126_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 125);
+    assert_eq!(specs.len(), 126);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 125);
+    assert_eq!(total, 126);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -146,7 +147,7 @@ fn the_registry_holds_125_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 125);
+    assert_eq!(catalog, 126);
 }
 
 /// An MCP-only use case has no human caller: only an agent's check-in is one.
@@ -216,7 +217,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 144);
+    assert_eq!(CATALOG.len(), 145);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG
