@@ -5,7 +5,10 @@ import { useTranslation } from 'react-i18next';
 import { useSession } from '@/auth/useSession';
 import { isApiError } from '@/api/client';
 import type tr from '@/i18n/tr.json';
-export type StudioKey = keyof typeof tr.studio;
+/** A Studio label: a `studio.*` key whose value is a sentence (not a nested group). */
+export type StudioKey = {
+  [K in keyof typeof tr.studio]: (typeof tr.studio)[K] extends string ? K : never;
+}[keyof typeof tr.studio];
 export const inputClass =
   'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 export const buttonClass =

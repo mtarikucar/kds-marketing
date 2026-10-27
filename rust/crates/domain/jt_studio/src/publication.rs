@@ -27,6 +27,7 @@ pub struct Publication {
     pub executed_version_id: StrategyVersionId,
     pub external_id: String,
     pub url: Option<Url>,
+    #[serde(with = "crate::time_compat")]
     pub published_at: OffsetDateTime,
     pub actor: Actor,
     pub attempt_id: PublishAttemptId,
@@ -110,8 +111,9 @@ pub struct PublishAttempt {
     executed_version_id: StrategyVersionId,
     control_revision: u64,
     actor: Actor,
+    #[serde(with = "crate::time_compat")]
     claimed_at: OffsetDateTime,
-    #[serde(default)]
+    #[serde(default, with = "crate::time_compat::option")]
     observed_at: Option<OffsetDateTime>,
     state: PublishState,
     outcome: Option<PublishOutcome>,

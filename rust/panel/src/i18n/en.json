@@ -1550,6 +1550,15 @@
     "minorUnits": "minor units",
     "publishFailed": "Not published: {{reason}}",
     "publishUncertain": "Publication is uncertain; do not resend ({{reason}}).",
+    "budgetState": {
+      "queued": "Queued",
+      "sending": "Sending",
+      "succeeded": "Applied",
+      "failed": "Not applied",
+      "unknown": "Budget outcome unknown",
+      "refused": "Refused",
+      "cancelled": "Cancelled"
+    },
     "preview": "Draft awaiting approval",
     "publishTo": "Publishes to",
     "scheduledFor": "Scheduled for",

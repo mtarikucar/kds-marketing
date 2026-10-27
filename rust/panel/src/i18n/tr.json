@@ -1550,6 +1550,15 @@
     "minorUnits": "alt birim",
     "publishFailed": "Yayınlanamadı: {{reason}}",
     "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}}).",
+    "budgetState": {
+      "queued": "Sırada",
+      "sending": "Gönderiliyor",
+      "succeeded": "Uygulandı",
+      "failed": "Uygulanamadı",
+      "unknown": "Bütçe sonucu belirsiz",
+      "refused": "Reddedildi",
+      "cancelled": "İptal edildi"
+    },
     "preview": "Onaya sunulan taslak",
     "publishTo": "Yayınlanacağı yer",
     "scheduledFor": "Yayın zamanı",

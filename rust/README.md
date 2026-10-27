@@ -99,6 +99,7 @@ döndürür. Sekiz göç vardır:
 | `0010_m4_billing` | Payment evidence, permanent entitlement history, stable workspace reference and a platform-only backfill manifest; 66 tables. Schema rollback refuses live rows. |
 | `0011_m4_activation_codes` | Workspace-locked keyed activation challenges, attempt cap and replay history; 67 tables. No plaintext or recipient binding. |
 | `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
+| `0013_probe_reason` | `probe_runs.reason` (the failure line, at most 300 characters) and `unknown` as a legal `error_kind`; down restores the old check only while no `unknown` run is stored. No new table. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -1900,6 +1901,13 @@ budget moves and controls. Its dependencies are pure domain types, serialization
 UUID/time/error types and the URL parser; it performs no I/O. Existing application
 port paths re-export the shared records, including connector `MediaUpload` and
 `PublishReceipt`, without changing repository or provider method signatures.
+
+Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
+dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes
+through `jt_studio::time_compat`: written as RFC 3339 text (a date as `YYYY-MM-DD`), so MCP
+outputs and panel answers carry text; read as that text or as `time`'s compact tuple, which rows
+and ledger payloads stored before it keep. See the deployment release note for the 24-hour
+request-key replay effect.
 The T0 application `PublishOutcome` still transports `AppError`; persistence must
 map it to the domain's closed redacted outcome codes, never store diagnostic text.
 

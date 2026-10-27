@@ -12,8 +12,11 @@ pub struct StoredFile {
     pub mime: String,
     pub filename: String,
     pub sha256: String,
+    #[serde(with = "jt_studio::time_compat")]
     pub created_at: OffsetDateTime,
+    #[serde(default, with = "jt_studio::time_compat::option")]
     pub cleanup_due_at: Option<OffsetDateTime>,
+    #[serde(default, with = "jt_studio::time_compat::option")]
     pub deleted_at: Option<OffsetDateTime>,
     pub size_bytes: u64,
 }

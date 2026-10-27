@@ -35,8 +35,20 @@ export interface Move {
   revision: number;
   daily_budget_minor: number;
   currency: string;
-  state: 'queued' | 'sending' | 'applied' | 'rejected' | 'unknown';
+  /** `jt_studio::BudgetMoveState`. */
+  state: BudgetMoveState;
 }
+/** `jt_studio::BudgetMoveState`, every variant. */
+export const BUDGET_MOVE_STATES = [
+  'queued',
+  'sending',
+  'succeeded',
+  'failed',
+  'unknown',
+  'refused',
+  'cancelled',
+] as const;
+export type BudgetMoveState = (typeof BUDGET_MOVE_STATES)[number];
 export interface Binding {
   id: string;
   chain: Chain;
@@ -194,7 +206,11 @@ export const fileUpload = (body: {
   request_key: string;
   content: { kind: 'bytes_base64'; data: string };
 }) => request<{ id: string }>('POST', '/api/studio/files', { body });
-/** time's existing domain serde uses [year,ordinal,hour,minute,second,nanos,offsetH,offsetM,offsetS]. */
+/**
+ * A Studio timestamp. The server writes RFC 3339 text (`jt_studio::time_compat`); ledger payloads
+ * written before that keep `time`'s compact tuple
+ * `[year, ordinal, hour, minute, second, nanos, offsetH, offsetM, offsetS]`, so both are read.
+ */
 export function instant(value: Instant): Date {
   if (typeof value === 'string') return new Date(value);
   const [year, day, hour, minute, second, nanos, oh, om, os] = value;
