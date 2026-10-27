@@ -1529,7 +1529,14 @@
     "entryHypothesis": "Hypothesis for entry",
     "minorUnits": "minor units",
     "publishFailed": "Not published: {{reason}}",
-    "publishUncertain": "Publication is uncertain; do not resend ({{reason}})."
+    "publishUncertain": "Publication is uncertain; do not resend ({{reason}}).",
+    "preview": "Draft awaiting approval",
+    "publishTo": "Publishes to",
+    "scheduledFor": "Scheduled for",
+    "noDraft": "The agent has not submitted a draft yet.",
+    "media": "Media in the draft",
+    "mediaImage": "Image {{n}}: {{name}}",
+    "uploadedFile": "Uploaded file"
   },
   "billing": {
     "title": "Payment and activation",

@@ -1529,7 +1529,14 @@
     "entryHypothesis": "Değerlendirilen hipotez",
     "minorUnits": "alt birim",
     "publishFailed": "Yayınlanamadı: {{reason}}",
-    "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}})."
+    "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}}).",
+    "preview": "Onaya sunulan taslak",
+    "publishTo": "Yayınlanacağı yer",
+    "scheduledFor": "Yayın zamanı",
+    "noDraft": "Ajan henüz bir taslak teslim etmedi.",
+    "media": "Taslaktaki medya",
+    "mediaImage": "Görsel {{n}}: {{name}}",
+    "uploadedFile": "Yüklenmiş dosya"
   },
   "billing": {
     "title": "Ödeme ve etkinleştirme",
