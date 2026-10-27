@@ -163,7 +163,7 @@ async fn a_failed_send_shows_the_provider_reason_and_the_ledger_keeps_only_its_k
     assert_eq!(shown["items"][0]["status"], "failed");
     // The append-only ledger keeps the stable kind, never the provider's prose.
     let results = w.entries("inbox.reply.result");
-    assert_eq!(results.last().unwrap().entry.payload["reason"], "permanent");
+    assert_eq!(results.last().unwrap().payload["reason"], "permanent");
 }
 
 #[tokio::test]
