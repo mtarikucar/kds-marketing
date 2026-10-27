@@ -1427,7 +1427,9 @@ A conversation's executor defaults to Agent and is separate from the journey own
 handover increments its generation; Human(None) is the unassigned queue. Human replies do not
 change the executor and do not require holding it. Agent replies refuse human-held conversations.
 `context` and `journeys.get` return all nine effective `status_labels`: fixed Turkish defaults
-with workspace policy overrides. Keys remain fixed; the panel renders the returned label.
+with workspace policy overrides. Keys remain fixed. They also return `status_label_overrides`,
+only the workspace's own labels: the panel renders an override when one exists and otherwise its
+own translation of the stage, so the English panel does not show the Turkish defaults.
 
 Reply uses a durable outbox: commit queued intent after the first fence, recheck under locks
 immediately before sending and persist the fence snapshot, release all locks for provider I/O,

@@ -2016,6 +2016,10 @@ async fn inbox_pending_and_context_have_http_mcp_parity_without_strategy() {
     assert_eq!(human["status_labels"].as_object().unwrap().len(), 9);
     assert_eq!(human["status_labels"]["new"], "Özel başlangıç");
     assert_eq!(human["status_labels"]["won"], "Kazanıldı");
+    assert_eq!(
+        human["status_label_overrides"],
+        json!({"new":"Özel başlangıç"})
+    );
     assert!(human["strategy_guidance"].is_null());
     assert_eq!(human["person"]["id"], person["person"]["id"]);
     let mut r = deps.uow.tenant(ws).await.unwrap();

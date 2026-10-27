@@ -1014,7 +1014,10 @@ export interface InboxNote {
 }
 export interface InboxJourneyOut {
   appointments: InboxAppointment[];
+  /** All nine stages: the fixed Turkish defaults extended by the workspace's overrides. */
   status_labels: Record<JourneyStatus, string>;
+  /** Only the labels the workspace set itself; the panel shows its own language for the rest. */
+  status_label_overrides: Partial<Record<JourneyStatus, string>>;
   journey: InboxJourney;
   events: InboxEvent[];
   tasks: InboxTask[];
@@ -1022,6 +1025,7 @@ export interface InboxJourneyOut {
 }
 export interface InboxContext {
   status_labels: Record<JourneyStatus, string>;
+  status_label_overrides: Partial<Record<JourneyStatus, string>>;
   person: InboxPerson;
   journey: InboxJourney | null;
   events: InboxEvent[];
