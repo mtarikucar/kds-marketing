@@ -2137,7 +2137,7 @@ async fn pbx_policy_is_written_into_connector_public_and_read_by_adapter() {
             ConnectorCall::Probe { public, .. } => Some(public),
             _ => None,
         })
-        .last()
+        .next_back()
         .expect("a probe");
     assert_eq!(probed["call_mode"], "linkup");
     assert_eq!(probed["recording_allowed"], true);
