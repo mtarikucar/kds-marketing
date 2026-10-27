@@ -1375,3 +1375,104 @@ pub async fn call_events_are_scoped_bounded_ordered_and_uncapped(uow: Arc<dyn Un
             .is_empty()
     );
 }
+
+pub async fn mail_subject_is_the_newest_received_mail_of_the_capability(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let (mailbox, other) = (f.capability().await, f.capability().await);
+    let later = FIXED_NOW + Duration::seconds(1);
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    for (n, (capability, kind, message_id, subject, at)) in [
+        (
+            mailbox,
+            EventKind::Message,
+            "<a@example.com>",
+            json!("Old"),
+            FIXED_NOW,
+        ),
+        (
+            mailbox,
+            EventKind::Message,
+            "<a@example.com>",
+            json!("Help"),
+            later,
+        ),
+        (
+            mailbox,
+            EventKind::Status,
+            "<b@example.com>",
+            json!("Sent copy"),
+            FIXED_NOW,
+        ),
+        (
+            other,
+            EventKind::Message,
+            "<c@example.com>",
+            json!("Elsewhere"),
+            FIXED_NOW,
+        ),
+        (
+            mailbox,
+            EventKind::Message,
+            "<d@example.com>",
+            serde_json::Value::Null,
+            FIXED_NOW,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let event = InboundEvent {
+            id: InboundEventId::new_v7(),
+            workspace_id: f.ws,
+            capability_id: Some(capability),
+            provider: Provider::Mail,
+            kind,
+            external_id: format!("imap:account:INBOX:1:{n}"),
+            payload: json!({"from":"ada@example.com", "message_id":message_id, "subject":subject}),
+            received_at: at,
+            processed_at: None,
+        };
+        r.inbound_events().insert_if_new(event, None).await.unwrap();
+    }
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let events = r.inbound_events();
+    assert_eq!(
+        events
+            .mail_subject(mailbox, "<a@example.com>")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("Help")
+    );
+    // A sent copy is not received mail, another capability's mail is not this one's, and a
+    // mail without a subject or an unknown Message-ID has none.
+    for id in [
+        "<b@example.com>",
+        "<c@example.com>",
+        "<d@example.com>",
+        "<z@example.com>",
+    ] {
+        assert_eq!(
+            events.mail_subject(mailbox, id).await.unwrap(),
+            None,
+            "{id}"
+        );
+    }
+    assert_eq!(
+        events
+            .mail_subject(other, "<c@example.com>")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("Elsewhere")
+    );
+    let mut o = uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        o.inbound_events()
+            .mail_subject(mailbox, "<a@example.com>")
+            .await
+            .unwrap(),
+        None
+    );
+}

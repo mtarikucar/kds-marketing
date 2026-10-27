@@ -73,6 +73,23 @@ impl InboundEventRepo for PgTenantRepos {
         records.into_iter().map(EventRecord::into_event).collect()
     }
 
+    async fn mail_subject(
+        &mut self,
+        capability: CapabilityId,
+        message_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        let subject: Option<Option<String>> = sqlx::query_scalar(
+            "select payload->>'subject' from inbound_events where workspace_id=$1              and capability_id=$2 and provider='mail' and kind='message'              and payload->>'message_id'=$3 order by received_at desc, id desc limit 1",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(capability.as_uuid())
+        .bind(message_id)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read a mail subject"))?;
+        Ok(subject.flatten())
+    }
+
     async fn list_for_consumer(
         &mut self,
         consumer: &str,

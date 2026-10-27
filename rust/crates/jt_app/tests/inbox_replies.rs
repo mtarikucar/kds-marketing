@@ -1162,6 +1162,65 @@ async fn late_receipt_after_closure_and_reopen_preserves_newer_attempts() {
 }
 
 #[tokio::test]
+async fn mail_reply_without_subject_answers_the_original_subject() {
+    use jt_connector::{EventKind, InboundEvent, InboundEventId};
+    let (w, id, c) = setup_channel("mailbox").await;
+    let capability = w.uow.snapshot().inbox.conversations[0].capability_id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.messages()
+        .insert_if_new(Message {
+            id: MessageId::new_v7(),
+            workspace_id: w.ws,
+            conversation_id: id,
+            direction: Direction::Inbound,
+            author: Author::Customer,
+            body: "Help please".into(),
+            external_id: Some("<original@example.com>".into()),
+            status: MsgStatus::Received,
+            cost_minor: None,
+            at: w.owner_ctx.now,
+        })
+        .await
+        .unwrap();
+    r.inbound_events()
+        .insert_if_new(
+            InboundEvent {
+                id: InboundEventId::new_v7(),
+                workspace_id: w.ws,
+                capability_id: Some(capability),
+                provider: Provider::Mail,
+                external_id: "imap:account:INBOX:1:7".into(),
+                kind: EventKind::Message,
+                payload: json!({"from":"ada@example.com", "subject":"Help\r\n needed", "text":"Help please", "message_id":"<original@example.com>"}),
+                received_at: w.owner_ctx.now,
+                processed_at: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    c.push_mail(accepted());
+    replies::reply(&w.deps, &w.owner_ctx, id, input(Some("mail-subject")))
+        .await
+        .unwrap();
+    match &c.calls()[0] {
+        jt_testkit::fakes::ConnectorCall::SendMail { message, .. } => {
+            assert_eq!(message.subject, "Re: Help needed");
+            assert_eq!(
+                message.in_reply_to.as_deref(),
+                Some("<original@example.com>")
+            );
+            assert_eq!(
+                message.references,
+                vec!["<original@example.com>".to_owned()]
+            );
+        }
+        other => panic!("mail expected: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn sent_evidence_applies_success_effect_once() {
     use jt_connector::{ConnectorError, EventKind, InboundEvent, InboundEventId};
     let (w, id, c) = setup_channel("mailbox").await;

@@ -52,6 +52,34 @@ fn output(row: &OutboxRow) -> ReplyOut {
         state: row.state.clone(),
     }
 }
+/// The subject of a reply to mail whose subject is `original`: "Re: " and the original, its line
+/// breaks and other control characters turned into single spaces, without a second reply prefix
+/// ("Re:", "RE:", "Ynt:", "Aw:"), at most a header line (998 bytes); "Re:" when nothing is known.
+fn reply_subject(original: Option<&str>) -> String {
+    let flat: String = original
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return "Re:".into();
+    }
+    let lower = flat.to_lowercase();
+    let mut subject = if ["re:", "ynt:", "aw:"].iter().any(|p| lower.starts_with(p)) {
+        flat
+    } else {
+        format!("Re: {flat}")
+    };
+    if subject.len() > 998 {
+        let mut end = 998;
+        while !subject.is_char_boundary(end) {
+            end -= 1;
+        }
+        subject.truncate(end);
+    }
+    subject
+}
 fn refused(reason: impl Into<String>) -> AppError {
     let reason = reason.into();
     AppError {
@@ -317,8 +345,6 @@ pub(super) async fn enqueue_in(
             }
             Ok(())
         };
-        let subject = input.subject.unwrap_or_else(|| "Re:".into());
-        header(&subject)?;
         let in_reply_to = match input.in_reply_to {
             Some(id) => Some(id),
             None => r
@@ -331,6 +357,17 @@ pub(super) async fn enqueue_in(
                 .and_then(|m| m.external_id)
                 .filter(|id| id.starts_with('<') && id.ends_with('>')),
         };
+        let subject = match input.subject {
+            Some(subject) => subject,
+            None => {
+                let original = match &in_reply_to {
+                    Some(id) => r.inbound_events().mail_subject(cap.id, id).await?,
+                    None => None,
+                };
+                reply_subject(original.as_deref())
+            }
+        };
+        header(&subject)?;
         let mut references = input.references;
         if let Some(id) = &in_reply_to {
             header(id)?;
@@ -1214,4 +1251,24 @@ pub async fn recover_sending(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<bool, A
     save_result(r.as_mut(), ctx, &row).await?;
     r.commit().await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reply_subject_answers_the_original_once() {
+        assert_eq!(reply_subject(Some("Help\r\n  needed")), "Re: Help needed");
+        assert_eq!(reply_subject(Some("RE: Fiyat")), "RE: Fiyat");
+        assert_eq!(reply_subject(Some("Ynt: Teklif")), "Ynt: Teklif");
+        assert_eq!(reply_subject(Some("  \t ")), "Re:");
+        assert_eq!(reply_subject(None), "Re:");
+        let long = reply_subject(Some(&"ş".repeat(600)));
+        assert!(
+            long.len() <= 998 && long.starts_with("Re: ş"),
+            "{}",
+            long.len()
+        );
+    }
 }

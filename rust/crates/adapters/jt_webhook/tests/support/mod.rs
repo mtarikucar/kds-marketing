@@ -429,6 +429,17 @@ impl InboundEventRepo for FailingTenant {
         self.0.inbound_events().call_events(unique_id, until).await
     }
 
+    async fn mail_subject(
+        &mut self,
+        capability: CapabilityId,
+        message_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        self.0
+            .inbound_events()
+            .mail_subject(capability, message_id)
+            .await
+    }
+
     async fn list_for_consumer(
         &mut self,
         consumer: &str,

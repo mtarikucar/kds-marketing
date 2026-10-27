@@ -197,3 +197,12 @@ async fn call_correlation_has_an_indexed_receipt_time_bound() {
         "{plan}"
     );
 }
+
+#[tokio::test]
+async fn mail_subject_is_the_newest_received_mail_of_the_capability() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::inbox_contract::mail_subject_is_the_newest_received_mail_of_the_capability(
+        std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone())),
+    )
+    .await;
+}

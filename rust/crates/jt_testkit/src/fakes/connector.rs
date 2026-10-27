@@ -55,6 +55,27 @@ impl InboundEventRepo for MemTenant {
         Ok(rows)
     }
 
+    async fn mail_subject(
+        &mut self,
+        capability: CapabilityId,
+        message_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        Ok(self
+            .state()
+            .inbound_events
+            .iter()
+            .map(|s| &s.event)
+            .filter(|e| {
+                e.workspace_id == self.ws
+                    && e.capability_id == Some(capability)
+                    && e.provider == Provider::Mail
+                    && e.kind == EventKind::Message
+                    && e.payload["message_id"].as_str() == Some(message_id)
+            })
+            .max_by_key(|e| (e.received_at, e.id))
+            .and_then(|e| e.payload["subject"].as_str().map(str::to_owned)))
+    }
+
     async fn list_for_consumer(
         &mut self,
         consumer: &str,

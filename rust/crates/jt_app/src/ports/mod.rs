@@ -1178,6 +1178,15 @@ pub trait InboundEventRepo: Send + Sync {
         until: OffsetDateTime,
     ) -> Result<Vec<InboundEvent>, AppError>;
 
+    /// The subject (`payload.subject`) of the newest mail `capability` received with the
+    /// Message-ID `message_id`; `None` when no such mail is held or it has no subject. Erasure
+    /// masks the subject with the rest of the payload.
+    async fn mail_subject(
+        &mut self,
+        capability: CapabilityId,
+        message_id: &str,
+    ) -> Result<Option<String>, AppError>;
+
     /// Consumer-specific traversal, oldest (received_at,id) first; filters claims BEFORE limit,
     /// ignoring processed_at. Restart without a cursor each sweep so rolled-back events retry.
     /// Includes inbox@2 Meta LeadGen rows previously marked deferred, matching try_claim.

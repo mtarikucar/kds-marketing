@@ -1327,3 +1327,11 @@ async fn iys_hook_and_bounce_use_adapter_fixtures() {
             .any(|s| s.reason == SuppressionReason::Unsubscribe)
     );
 }
+
+#[tokio::test]
+async fn mail_subject_is_the_newest_received_mail_of_the_capability() {
+    jt_testkit::inbox_contract::mail_subject_is_the_newest_received_mail_of_the_capability(
+        std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new()),
+    )
+    .await;
+}
