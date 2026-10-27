@@ -1,0 +1,103 @@
+# TikTok and LinkedIn connectors (Rust) — design
+
+> Date: 2026-10-27 · Status: design · Sibling of `2026-10-27-agent-voice-calls-design.md`; tasks in `docs/superpowers/plans/2026-10-27-cleanup-and-voice-plan.md` (S-series).
+> Template: `jt_x` (one asset per login, PKCE-less here) and `jt_meta` (several assets per login, for LinkedIn organisations). Paths relative to `rust/`.
+
+## 0. Scope and verdicts
+
+| Surface | TikTok | LinkedIn |
+|---|---|---|
+| OAuth connect | Login Kit, `Provider::Tiktok`, kind `tiktok` (exists in `KINDS`, `jt_capability/src/kind.rs:161`) | `Provider::Linkedin`; kinds `linkedin_member` (**new**, personal feed) and `linkedin_page` (exists, `kind.rs:160`, organisations) |
+| Organic publishing (Studio Organic lane) | Content Posting API, direct post: video (FILE_UPLOAD) and photo (PULL_FROM_URL) | `POST /rest/posts`: text, link, images, one video; author = member or organization URN |
+| Account read / insights | `/v2/user/info/` (stats scope), `/v2/video/query/` metrics | organisation: share statistics, follower count; **member posts: no metrics API** (measurement reports `unsupported`) |
+| DM | **No public API** (Business Messaging is allow-listed, unverified contract; v1 adapter says so itself) → out of scope, no kind | **No DM API** → out of scope |
+| Comments | No public comment API for Login Kit apps → out of scope | Organisation comments via `/rest/socialActions/{urn}/comments` (CMA) → later, after CMA approval; not in this scope |
+| Ads | `tiktok_ads` stays `UNSUPPORTED` (separate Marketing API app, non-expiring token, allow-listed) — phase S4 later | `linkedin_ads` stays unsupported — phase S4 later |
+| Webhooks | Optional later (`post.publish.*`, `authorization.removed`, HMAC `t.body` with client secret); polling suffices first | none |
+
+Both follow the connector architecture exactly: capability kinds, `connector.start_oauth` / `complete_oauth` / `confirm_assets`, sealed `Credential::OAuth`, probes with `facts.account_id`, Studio `Publisher`, egress allowlist, hourly refresh job, failure lines (`usecases/failure.rs`), MCP catalog (no new rows: the generic connector tools serve them), panel connect cards.
+
+## 1. Shared changes (both providers)
+
+| Area | Change | Evidence |
+|---|---|---|
+| `jt_connector/src/provider.rs` | `Provider::{Tiktok, Linkedin}` (keys `tiktok`, `linkedin`), `ALL`, `TIKTOK_KINDS = ["tiktok"]`, `LINKEDIN_KINDS = ["linkedin_member","linkedin_page"]`; remove from `UNSUPPORTED_CONNECTOR_KINDS` (:48-49); update pinned tests `tests/rules.rs:97,139-157` | agent map §1 |
+| `jt_capability/src/kind.rs` | add `k(KindGroup::SocialAccount, "linkedin_member")` after `linkedin_page`; panel `KINDS` (`panel/src/api/types.ts:459-510`) + i18n `capabilities.kinds.linkedin_member` | no DB CHECK on `kind_key` (`0003_capabilities.up.sql:24`) |
+| `jt_app/src/ports/connectors.rs` | `TiktokApp{client_key, client_secret}`, `LinkedinApp{client_id, client_secret}` (masked Debug); `PlatformAppConfig::{tiktok_app, linkedin_app}`; `OAuthCallback::{Tiktok, Linkedin}` (`all/key/parse/provider/of_flow`); `OAuthApp::{Tiktok, Linkedin}` | :79-105, :120-200 |
+| `bin/jeeta/src/config.rs` | `JEETA_TIKTOK_CLIENT_KEY`/`_SECRET`, `JEETA_LINKEDIN_CLIENT_ID`/`_SECRET` (both-or-neither pairs), `VARS`, `parse_apps`, `configured()`, `any_app` → public base URL required; `.env.example`, `deploy/jeeta.env.example`, README setup table rows with the callback URIs | :81-123, :523-603 |
+| `jt_app/src/usecases/connector.rs` | `oauth_app` match arms (:1162); PKCE condition (:1071) unchanged (neither needs PKCE); `reconnectable` (:1334) add both; `manual_provider` (:1591) refuse hand-entered credentials for both; `built_credential` untouched | |
+| `jt_outbound/src/fixed_hosts.rs` | `host("tiktok","open.tiktokapis.com")`, `host("tiktok","open-upload.tiktokapis.com")`, `host("linkedin","api.linkedin.com")`, `host("linkedin","www.linkedin.com")`; update the pinned test (:71-93) | upload hosts verified at implementation time against the `upload_url` TikTok returns and LinkedIn's `uploadUrl` host; if they differ, allow the observed host and record it in the crate docs |
+| Migration `0015_social_providers` | `oauth_pending.provider` CHECK → add `tiktok`,`linkedin`; `oauth_pending.app` CHECK → add both; `inbound_events.provider` untouched until webhooks exist; down restores the previous CHECK only when no such rows exist (pattern `0008:118-120`) | `0005_connectors.up.sql:105,107` |
+| `jt_mcp/src/tools/connector.rs` | `oauth_kind_schema` (:200-206) lists all four OAuth providers; description texts name them | |
+| Studio gates | `chain.rs:84-99` scopes: `("tiktok", write) → ["video.publish"]`, `("tiktok", false) → ["video.list","user.info.stats"]`, `("linkedin_member", write) → ["w_member_social"]`, `("linkedin_member", false) → []` (no read API; measurement is `unsupported`), `("linkedin_page", write) → ["w_organization_social"]`, `("linkedin_page", false) → ["r_organization_social"]`; `supported_kinds` (:195), `ads.rs:145`, `pieces.rs:279`, `planner.rs:132`, `views.rs:119` | |
+| Media delivery | replace the `for_x: bool` flag (`studio/publish.rs:64`, `files.rs:339`) with `MediaDelivery::{Bytes, SignedUrl}` per kind: `x`, `linkedin_*`, `tiktok` video → `Bytes`; `tiktok` photo, `instagram`, `facebook_page` → `SignedUrl` | |
+| `jobs.rs:309` | `due_for_refresh`: TikTok always due (24 h access token, rotating refresh token), like X; LinkedIn uses the 7-day window and, with no refresh token, `refresh` returns `Ok(None)` and expiry flips `reconnect_required` through the existing `access_expired` path | |
+| `jt_archtest` | `CONNECTOR_ADAPTERS` (+`jt_tiktok`, `jt_linkedin`), reqwest/sqlx list (:118-140) | |
+| `bin/jeeta/src/connectors.rs` | fields, construction, registry arms (`connector`, `oauth`, `publisher`, `insights`), expected-operations matrix test (:178-251) | |
+| `jt_testkit/src/fakes/providers.rs` | `ScriptedRegistry`/`ScriptedOAuth` for both; `PUBLISHING` list | :921, :1044, :1059 |
+| Panel | `types.ts` `Provider`/`PROVIDERS`; `lib/connectors.ts` `PROVIDER_KINDS`, `PROVIDER_NAMES`, `connectsByOAuth`; `OAuthCallbackPage.tsx:40` `CALLBACKS`; `ProviderSetup.tsx:29`; `lib/delivery.ts:5`; i18n `connect.providers.{tiktok,linkedin}`, `connect.description`; tests | |
+| Failure lines | adapters build `ConnectorError` through the redacting constructors; `failure_reason(Some(Provider::Tiktok), e)` yields e.g. `permission: tiktok: HTTP 403 scope_not_authorized: video.publish` and `permanent: linkedin: HTTP 426 Requested version 20240601 is not active` | `usecases/failure.rs:23-37` |
+
+## 2. TikTok — `crates/adapters/jt_tiktok`
+
+**OAuth (Login Kit).** Authorize `https://www.tiktok.com/v2/auth/authorize/` (browser host, not egress) with `client_key`, `redirect_uri={public base}/oauth/callback/tiktok`, `response_type=code`, `state`, `scope=user.info.basic,video.publish,video.list,user.info.stats` (comma-separated; `video.list`/`user.info.stats` requested from the start — the app review lists them together; `video.upload` not requested: inbox-upload mode is not used). No PKCE for the web flow. Token `POST https://open.tiktokapis.com/v2/oauth/token/` form `client_key, client_secret, code, grant_type=authorization_code, redirect_uri` → `access_token, expires_in (86400), refresh_token, refresh_expires_in (31536000), open_id, scope`; refresh with `grant_type=refresh_token` (rotates). `Credential::OAuth{access_token, refresh_token, expires_at, scopes}`.
+
+**Assets/probe.** `GET /v2/user/info/?fields=open_id,union_id,display_name,username,avatar_url` → one `Asset{kind_key:"tiktok", external_id: open_id, name: display_name}`; probe facts `{account_id: open_id, username, display_name}` (`facts.account_id` contract, `ports/connectors.rs:519-532`). Error mapping (from v1 `network-insights.ts:1171-1208`): HTTP 401 or `error.code ∈ {access_token_invalid, access_token_expired, token_revoked}` → `Auth`; `scope_not_authorized|scope_permission_missed` → `Permission`; `rate_limit_exceeded`/429 → `Throttle`; 5xx → `Transient`; success requires HTTP 2xx **and** `error.code == "ok"`.
+
+**Publishing (Studio Organic).** Before every post: `POST /v2/post/publish/creator_info/query/` → `privacy_level_options`, `comment_disabled`, `duet_disabled`, `stitch_disabled`, `max_video_post_duration_sec`. Privacy: the piece's `privacy` (default `PUBLIC_TO_EVERYONE`) must be in the options, else refuse `permission: tiktok: privacy level PUBLIC_TO_EVERYONE not available (app not audited or private account)` — **unaudited apps get `SELF_ONLY` only**, so Studio pieces will fail loudly until the audit passes, never silently post privately unless the piece asks for `SELF_ONLY`.
+- Video: `POST /v2/post/publish/video/init/` `{post_info:{title ≤ 2200, privacy_level, disable_comment, disable_duet, disable_stitch, video_cover_timestamp_ms?}, source_info:{source:"FILE_UPLOAD", video_size, chunk_size, total_chunk_count}}` → `{publish_id, upload_url}`; PUT chunks to `upload_url` with `Content-Range: bytes a-b/total` (chunk 5–64 MB, last ≤ 128 MB, ≤ 1000 chunks, ≤ 4 GB; v1 planner `tiktok-upload.util.ts:4-87` is the reference), accept 200/201/206. Bytes come from `FileStore::read` (`MediaDelivery::Bytes`), so **no domain verification is needed for video**.
+- Photo: `POST /v2/post/publish/content/init/` `{media_type:"PHOTO", post_mode:"DIRECT_POST", post_info:{title ≤ 90, description ≤ 4000, privacy_level, disable_comment}, source_info:{source:"PULL_FROM_URL", photo_cover_index, photo_images ≤ 35}}` — URLs must be on a **verified domain** (TikTok portal → URL properties); they are `FileStore::provider_url` signed URLs, so the FileStore's public host must be verified. Until verified, photo pieces fail `permanent: tiktok: url_ownership_unverified` (TikTok's own error).
+- Receipt: `PublishReceipt{external_id: publish_id, url: None}` and `PublishOutcome::Unknown` until status resolves: `POST /v2/post/publish/status/fetch/ {publish_id}` → `PUBLISH_COMPLETE` (+ `publicaly_available_post_id[0]` → permalink `https://www.tiktok.com/@{username}/video/{id}`), `FAILED{fail_reason}` → `Failed` with the reason as the failure line, `PROCESSING_UPLOAD|PROCESSING_DOWNLOAD|SEND_TO_USER_INBOX` → still unknown. The existing `StudioPublishRecover` job (minute) is extended with a provider hook `Publisher::resolve(cred, public, receipt) -> Option<PublishOutcome>` (default `None`), polled up to 30 min, then `Failed(timeout)`. Limits: one video per post; title/description caps; `is_aigc`/branded-content toggles not set (default false) — add later if the strategy needs disclosure.
+- Rate: TikTok ~ 6 `init` per minute per user; the adapter maps 429 and `spam_risk_too_many_posts` to `Throttle{retry_after}`.
+
+**Insights.** `post_metrics`: `POST /v2/video/query/?fields=id,like_count,comment_count,share_count,view_count` `{filters:{video_ids:[id]}}` (needs `video.list`); `account_metrics`: `GET /v2/user/info/?fields=follower_count,likes_count,video_count` (needs `user.info.stats`). Both map `scope_not_authorized` → `Permission`, so a connection made before the scopes were approved reads as a scope gap in Studio, not as a crash.
+
+**Hosts/scope.** `SCOPE = EgressScope::Connector("tiktok")`; `TIKTOK_HOSTS = ["open.tiktokapis.com","open-upload.tiktokapis.com"]`; the authorize host is browser-only (like `XBases.authorize`).
+
+**Files.** `lib.rs` (crate docs: OAuth table, call table, error mapping, limits), `client.rs` (`call()` via `Egress::prepare`, bearer, JSON/form/`Body::Chunk`), `credential.rs`, `oauth.rs`, `account.rs` (`me`, `list_assets`, `probe`, `facts`), `publish.rs` (`creator_info`, `init_video`, `upload_chunks`, `init_photo`, `status`), `insights.rs`, `ports.rs` (`Connector`, `OAuthProvider`, `Publisher`, `InsightsReader`); tests `tests/support/mod.rs` (axum loopback mock, `/api` and `/upload` prefixes, `TestApps`, `assert_no_secret`), `tests/tiktok.rs`, `tests/studio_publish.rs`, fixtures `tests/fixtures/tiktok/*.json` (token, token_refresh, user_info, creator_info_{public,self_only}, video_init, status_{processing,complete,failed}, photo_init, error_{scope,auth,rate}).
+
+**Owner checklist (TikTok for Developers).**
+- [ ] Create/confirm the app; add products **Login Kit** and **Content Posting API**; (optional later) **Display API** for insights scopes.
+- [ ] Redirect URI exactly `https://yeni.jeetagrowth.com/oauth/callback/tiktok` (and the production host when it moves); the SPA page reads `code`/`state` and calls `GET /api/connectors/oauth/callback/tiktok`.
+- [ ] Scopes to request in the app review: `user.info.basic`, `video.publish`, `video.list`, `user.info.stats`.
+- [ ] **App audit / Content Posting review**: demo video showing login → post creation → the post on TikTok, privacy-settings UI (TikTok requires the user to see/pick privacy, comment/duet/stitch toggles — the Studio piece editor must expose them), the app's terms/privacy URLs (`/terms`, `/privacy`, `/data-deletion` pages served by the panel — v1 had them, `ops/PUBLIC-ROUTES.md:169-175`), a test account. Until approval: `SELF_ONLY` only, only accounts added as **testers** in the portal.
+- [ ] **URL property verification** of the FileStore public host (for photo PULL_FROM_URL) — TikTok portal → URL properties → DNS TXT or file; the host must serve the signed media URLs.
+- [ ] Set `JEETA_TIKTOK_CLIENT_KEY` / `JEETA_TIKTOK_CLIENT_SECRET` on the server; the start log must list `tiktok`.
+- [ ] Decide which TikTok account is the tester/developer account for unaudited posting.
+
+## 3. LinkedIn — `crates/adapters/jt_linkedin`
+
+**OAuth.** Authorize `https://www.linkedin.com/oauth/v2/authorization` (browser) `response_type=code, client_id, redirect_uri={public base}/oauth/callback/linkedin, state, scope` (space-separated). Two flavours, chosen by the kind the flow starts with (`OAuthCallback::of_flow`):
+- `linkedin_member`: `openid profile w_member_social`
+- `linkedin_page`: `openid profile w_member_social r_organization_social w_organization_social rw_organization_admin` — only offered once the CMA product is approved for the app; before that, LinkedIn rejects the whole authorize request (v1 learned this, `social-oauth.config.ts:225-239`), so the server refuses `start_oauth` for `linkedin_page` with `CONFLICT provider_product_not_enabled` while `JEETA_LINKEDIN_ORG_SCOPES` is unset (env flag, operator-set after approval).
+Token `POST https://www.linkedin.com/oauth/v2/accessToken` form `grant_type=authorization_code, code, redirect_uri, client_id, client_secret` → `access_token, expires_in (5184000 = 60 d), scope`, `refresh_token` only for apps with programmatic refresh (MDP) — store when present; `refresh` posts `grant_type=refresh_token` when a refresh token exists, else `Ok(None)` and the capability expires into `reconnect_required` ~ day 60 (the `ReconnectConnector` work item tells the agent/owner to reconnect; LinkedIn's own practice).
+
+**Assets/probe.** `GET https://api.linkedin.com/v2/userinfo` (OIDC) → `sub`, `name`, `picture` → asset `linkedin_member{external_id: sub, name}`. With org scopes: `GET /rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&projection=(elements*(organization~(localizedName)))` with `LinkedIn-Version` + `X-Restli-Protocol-Version: 2.0.0` → one `linkedin_page{external_id: org id, name}` per organisation (Meta pattern). Probe = `userinfo` (member) or `GET /rest/organizations/{id}` (page); facts `{account_id: sub|org id, name}`. Errors: 401 → `Auth`; 403 → `Permission`; 426 ("Requested version … is not active") → `Permanent` naming the version; 429 → `Throttle`; 5xx → `Transient`.
+
+**Publishing (Studio Organic).** `POST https://api.linkedin.com/rest/posts` headers `Authorization: Bearer`, `LinkedIn-Version: {JEETA_LINKEDIN_API_VERSION, default pinned at implementation, format YYYYMM}`, `X-Restli-Protocol-Version: 2.0.0`; body `{author: "urn:li:person:{sub}" | "urn:li:organization:{id}", commentary ≤ 3000, visibility: "PUBLIC", distribution:{feedDistribution:"MAIN_FEED", targetEntities:[], thirdPartyDistributionChannels:[]}, lifecycleState:"PUBLISHED", isReshareDisabledByAuthor:false, content?}`; post id from the `x-restli-id` response header; permalink `https://www.linkedin.com/feed/update/{urn}`. Content:
+- Link piece → `content.article{source, title?, description?}`.
+- Images (≤ 20): `POST /rest/images?action=initializeUpload {initializeUploadRequest:{owner}}` → `{value:{uploadUrl, image}}`; `PUT uploadUrl` bytes with `Content-Type` only; `content.media{id}` or `content.multiImage{images:[{id}]}`.
+- One video: `POST /rest/videos?action=initializeUpload {initializeUploadRequest:{owner, fileSizeBytes, uploadCaptions:false, uploadThumbnail:false}}` → `{value:{video, uploadInstructions:[{uploadUrl, firstByte, lastByte}]}}`; PUT each part, collect ETags; `POST /rest/videos?action=finalizeUpload {finalizeUploadRequest:{video, uploadToken:"", uploadedPartIds:[etags]}}`; `content.media{id: video urn}`. A video wins over images; bytes via `FileStore::read` (`MediaDelivery::Bytes`).
+- Receipt `PublishReceipt{external_id: post urn, url: permalink}`; `PublishOutcome::Succeeded` immediately (LinkedIn is synchronous). Member write limit: 150 posts/day/member → `Throttle` on 429.
+
+**Insights.** `linkedin_page`: `GET /rest/organizationalEntityShareStatistics?q=organizationalEntity&organizationalEntity=urn:li:organization:{id}&shares=List({post urn})` → `totalShareStatistics{likeCount, commentCount, shareCount, clickCount, impressionCount, uniqueImpressionsCount}`; account: `GET /rest/networkSizes/{org urn}?edgeType=CompanyFollowedByMember` → `firstDegreeSize`. `linkedin_member`: `post_metrics`/`account_metrics` return `ConnectorError::permanent("LinkedIn exposes no member post metrics")` once per measurement; Studio measurement records it as `unsupported` (verify `measure.rs` keeps the slot's publication and stops retrying a `Permanent` failure; add the test).
+
+**Hosts/scope.** `SCOPE = EgressScope::Connector("linkedin")`; `LINKEDIN_HOSTS = ["api.linkedin.com","www.linkedin.com"]` (token + upload URLs); the authorize URL is browser-only.
+
+**Files.** Same layout as `jt_tiktok`; `oauth.rs` carries the two scope sets; `ports.rs` implements `Connector`, `OAuthProvider`, `Publisher`, `InsightsReader`; fixtures `tests/fixtures/linkedin/*.json` (token, userinfo, organization_acls, post_created (header `x-restli-id`), image_init, video_init, video_finalize, error_426, error_403).
+
+**Owner checklist (LinkedIn Developers).**
+- [ ] App attached to a Company Page (Beyza Uçar legal entity, as created 2026-07-10); products: **Sign In with LinkedIn using OpenID Connect** and **Share on LinkedIn** (instant) → `linkedin_member` works as soon as the client id/secret are set.
+- [ ] Redirect URL exactly `https://yeni.jeetagrowth.com/oauth/callback/linkedin` (verbatim match) in Auth → OAuth 2.0 settings.
+- [ ] **Community Management API** access form (submitted 2026-07-10 on the single-product app; watch admin@jeetagrowth.com for Microsoft vetting) → on approval set `JEETA_LINKEDIN_ORG_SCOPES=1` (or configure the CMA app's id/secret if LinkedIn granted it on a separate app: then two apps = two `LinkedinApp`s selected by kind — implement as `linkedin_app(kind)`), which enables `linkedin_page` connections.
+- [ ] (Later, S4) Advertising API / Marketing Developer Platform for `linkedin_ads`; refresh tokens become available with MDP.
+- [ ] Set `JEETA_LINKEDIN_CLIENT_ID` / `JEETA_LINKEDIN_CLIENT_SECRET` (and `JEETA_LINKEDIN_API_VERSION` if the pinned default is retired — a 426 failure line names it).
+- [ ] Data-deletion / privacy pages reachable from the app settings.
+
+## 4. What cannot work
+
+- TikTok public posting before the audit (`SELF_ONLY` only, tester accounts only); photo posts before the media host is verified.
+- TikTok DMs and comments through Login Kit; LinkedIn DMs at all.
+- LinkedIn member-post metrics; LinkedIn programmatic refresh without MDP (reconnect every 60 days is the honest contract — the `ReconnectConnector` work item carries it).
+- `linkedin_page` before CMA approval (the authorize request is refused by LinkedIn when unapproved scopes are requested).
+- Agent-side anything for ads on either platform until the separate ads apps are reviewed (S4).

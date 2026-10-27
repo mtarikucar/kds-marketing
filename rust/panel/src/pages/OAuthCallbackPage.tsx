@@ -35,9 +35,9 @@ interface Answer {
 
 /**
  * The callback addresses a flow comes back to, one per provider app (`connector::OAuthCallback`):
- * `meta` (Facebook Login), `instagram` (Instagram Login) and `x`.
+ * `meta` (Facebook Login), `instagram` (Instagram Login), `x`, `tiktok` and `linkedin`.
  */
-const CALLBACKS = ['meta', 'instagram', 'x'] as const;
+const CALLBACKS = ['meta', 'instagram', 'x', 'tiktok', 'linkedin'] as const;
 
 function isCallback(segment: string): boolean {
   return (CALLBACKS as readonly string[]).includes(segment);

@@ -21,10 +21,10 @@ use async_trait::async_trait;
 use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
     Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus,
-    InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, MailMessage,
-    MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp, OAuthApp, OAuthProvider,
-    PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt,
-    SmsSender, Telephony, Url, XApp,
+    InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, LinkedinApp,
+    MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp, OAuthApp,
+    OAuthProvider, PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest,
+    PublishResolution, Publisher, SendReceipt, SmsSender, Telephony, TiktokApp, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -41,13 +41,15 @@ use super::state::lock;
 pub const TEST_PUBLIC_BASE_URL: &str = "https://panel.test";
 
 /// A platform app configuration a test sets field by field. The default has no app at all and
-/// the public address [`TEST_PUBLIC_BASE_URL`]; [`FakeAppConfig::with_all_apps`] has all three.
+/// the public address [`TEST_PUBLIC_BASE_URL`]; [`FakeAppConfig::with_all_apps`] has them all.
 /// `public_base_url: None` stands for a server whose public address is not configured.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FakeAppConfig {
     pub meta: Option<MetaApp>,
     pub instagram: Option<InstagramApp>,
     pub x: Option<XApp>,
+    pub tiktok: Option<TiktokApp>,
+    pub linkedin: Option<LinkedinApp>,
     pub public_base_url: Option<Url>,
 }
 
@@ -57,6 +59,8 @@ impl Default for FakeAppConfig {
             meta: None,
             instagram: None,
             x: None,
+            tiktok: None,
+            linkedin: None,
             public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
         }
     }
@@ -65,7 +69,9 @@ impl Default for FakeAppConfig {
 impl FakeAppConfig {
     /// Every app configured, with test values (`meta-app-id`/`meta-app-secret`, verify token
     /// `meta-verify-token`; `instagram-app-id`/`instagram-app-secret`;
-    /// `x-client-id`/`x-client-secret`) and no optional Meta settings.
+    /// `x-client-id`/`x-client-secret`; `tiktok-client-key`/`tiktok-client-secret`;
+    /// `linkedin-client-id`/`linkedin-client-secret`, without the organization scopes) and no
+    /// optional Meta or LinkedIn settings.
     pub fn with_all_apps() -> Self {
         FakeAppConfig {
             meta: Some(MetaApp {
@@ -84,6 +90,16 @@ impl FakeAppConfig {
                 client_id: "x-client-id".into(),
                 client_secret: "x-client-secret".into(),
             }),
+            tiktok: Some(TiktokApp {
+                client_key: "tiktok-client-key".into(),
+                client_secret: "tiktok-client-secret".into(),
+            }),
+            linkedin: Some(LinkedinApp {
+                client_id: "linkedin-client-id".into(),
+                client_secret: "linkedin-client-secret".into(),
+                organization_scopes: false,
+                api_version: None,
+            }),
             ..FakeAppConfig::default()
         }
     }
@@ -100,6 +116,14 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn x_app(&self) -> Option<XApp> {
         self.x.clone()
+    }
+
+    fn tiktok_app(&self) -> Option<TiktokApp> {
+        self.tiktok.clone()
+    }
+
+    fn linkedin_app(&self) -> Option<LinkedinApp> {
+        self.linkedin.clone()
     }
 
     fn public_base_url(&self) -> Option<Url> {
@@ -294,6 +318,11 @@ pub struct ScriptedConnector {
     send_hooks: Script<SendHook>,
     ad_read_hooks: Script<SendHook>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
+    /// Publication statuses answer from here, `Ok(None)` (the trait's default: the receipt is the
+    /// post) when nothing is queued; the receipts asked about are kept apart from
+    /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::resolve_calls`]).
+    resolve: Script<Result<Option<PublishResolution>, ConnectorError>>,
+    resolve_calls: Mutex<Vec<PublishReceipt>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
     account_metrics: Script<Result<AccountMetrics, ConnectorError>>,
     send_text: Script<Result<SendReceipt, ConnectorError>>,
@@ -349,6 +378,8 @@ impl ScriptedConnector {
             send_hooks: Script::default(),
             ad_read_hooks: Script::default(),
             publish: Script::default(),
+            resolve: Script::default(),
+            resolve_calls: Mutex::default(),
             post_metrics: Script::default(),
             account_metrics: Script::default(),
             send_text: Script::default(),
@@ -426,6 +457,16 @@ impl ScriptedConnector {
 
     pub fn push_publish(&self, result: Result<PublishReceipt, ConnectorError>) {
         self.publish.push(result);
+    }
+
+    /// Queues what the next [`Publisher::resolve`] answers.
+    pub fn push_resolve(&self, result: Result<Option<PublishResolution>, ConnectorError>) {
+        self.resolve.push(result);
+    }
+
+    /// The receipts [`Publisher::resolve`] was asked about, in order.
+    pub fn resolve_calls(&self) -> Vec<PublishReceipt> {
+        lock(&self.resolve_calls).clone()
     }
 
     pub fn push_post_metrics(&self, result: Result<PostMetrics, ConnectorError>) {
@@ -636,6 +677,16 @@ impl Publisher for ScriptedConnector {
         });
         self.after_send().await;
         self.next(&self.publish, "publish result")
+    }
+
+    async fn resolve(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<Option<PublishResolution>, ConnectorError> {
+        lock(&self.resolve_calls).push(receipt.clone());
+        self.resolve.try_next().unwrap_or(Ok(None))
     }
 }
 
@@ -1027,6 +1078,11 @@ impl OAuthProvider for ScriptedOAuth {
                     .append_pair("code_challenge", challenge)
                     .append_pair("code_challenge_method", "S256");
             }
+            // A LinkedIn flow that asks for the organization scopes says so, so the use cases'
+            // tests can tell the two flavours apart.
+            if matches!(app, OAuthApp::Linkedin(linkedin) if linkedin.organization_scopes) {
+                query.append_pair("organization_scopes", "true");
+            }
         }
         Ok(url)
     }
@@ -1065,8 +1121,14 @@ impl OAuthProvider for ScriptedOAuth {
 // 7); the binary's real registry (`bin/jeeta/src/connectors.rs`) is tested against this fake, so
 // this fake never offers more than production does.
 
-/// The providers whose adapters publish posts and read their counters (Meta, X).
-const PUBLISHING: &[Provider] = &[Provider::Meta, Provider::X];
+/// The providers whose adapters publish posts and read their counters (Meta, X, TikTok,
+/// LinkedIn).
+const PUBLISHING: &[Provider] = &[
+    Provider::Meta,
+    Provider::X,
+    Provider::Tiktok,
+    Provider::Linkedin,
+];
 /// The providers whose adapters send direct messages, write ad budgets and fetch lead-gen
 /// submissions (Meta).
 const META_ONLY: &[Provider] = &[Provider::Meta];
@@ -1078,8 +1140,8 @@ const NETGSM_ONLY: &[Provider] = &[Provider::Netgsm];
 /// `jt_app::std_impls::EmptyConnectorRegistry`); [`with_connector`](Self::with_connector) and
 /// [`with_oauth`](Self::with_oauth) register adapters by their provider. A registered
 /// [`ScriptedConnector`] is handed out for its provider's operations where the real adapter offers
-/// them: SMS, calls, consent and delivery reports for NetGSM; publishing and counters for Meta and
-/// X; messaging, ad budgets and lead-gen for Meta. Clones share the adapters.
+/// them: SMS, calls, consent and delivery reports for NetGSM; publishing and counters for Meta,
+/// X, TikTok and LinkedIn; messaging, ad budgets and lead-gen for Meta. Clones share the adapters.
 #[derive(Clone, Default)]
 pub struct ScriptedRegistry {
     connectors: BTreeMap<Provider, Arc<ScriptedConnector>>,

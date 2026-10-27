@@ -1,0 +1,19 @@
+{
+  "value": {
+    "uploadUrlsExpireAt": 1793000000000,
+    "video": "urn:li:video:C5505AQtestvideo1",
+    "uploadInstructions": [
+      {
+        "uploadUrl": "MOCK_WWW/dms-uploads/C5505AQtestvideo1/uploadedVideo/0?sau=upload-SECRET-video-part-0&pn=0&sync=0&v=beta",
+        "firstByte": 0,
+        "lastByte": 59999
+      },
+      {
+        "uploadUrl": "MOCK_WWW/dms-uploads/C5505AQtestvideo1/uploadedVideo/1?sau=upload-SECRET-video-part-1&pn=1&sync=0&v=beta",
+        "firstByte": 60000,
+        "lastByte": 99999
+      }
+    ],
+    "uploadToken": ""
+  }
+}

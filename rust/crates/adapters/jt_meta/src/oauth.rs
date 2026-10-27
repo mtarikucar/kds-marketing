@@ -119,6 +119,9 @@ pub(crate) fn authorize_url(
             Ok(url)
         }
         OAuthApp::X(_) => Err(ConnectorError::permanent("an X app cannot sign in to Meta")),
+        OAuthApp::Tiktok(_) | OAuthApp::Linkedin(_) => Err(ConnectorError::permanent(
+            "only a Meta or Instagram app signs in to Meta",
+        )),
     }
 }
 
@@ -138,6 +141,9 @@ pub(crate) async fn exchange(
             instagram_exchange(connector, instagram, redirect, code).await
         }
         OAuthApp::X(_) => Err(ConnectorError::permanent("an X app cannot sign in to Meta")),
+        OAuthApp::Tiktok(_) | OAuthApp::Linkedin(_) => Err(ConnectorError::permanent(
+            "only a Meta or Instagram app signs in to Meta",
+        )),
     }
 }
 

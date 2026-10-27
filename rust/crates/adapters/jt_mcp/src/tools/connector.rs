@@ -51,15 +51,17 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "connector.start_oauth",
             description: "Start connecting an account through its provider's sign-in (OAuth): \
                           kind_key is a Meta kind (instagram, facebook_page, whatsapp_cloud, \
-                          instagram_dm, messenger, meta_ads) or x (review_facebook cannot be \
-                          connected yet: no sign-in finds Facebook comments); NetGSM kinds \
-                          (sms_line, netgsm_pbx) take credentials instead \
-                          (jeeta.connector.set_credentials). Returns {authorize_url, pending_id, \
-                          expires_at, handoff}: hand the authorize_url to the owner, who signs in \
-                          in their own browser within ten minutes; the panel completes the flow \
-                          and the owner chooses the accounts. You cannot complete it. Needs the \
-                          platform's provider app to be configured (else CONFLICT). \
-                          [risk: WRITE]",
+                          instagram_dm, messenger, meta_ads), x, tiktok, linkedin_member (a \
+                          LinkedIn member's own feed) or linkedin_page (an organization page; \
+                          CONFLICT provider_product_not_enabled until the platform's LinkedIn app \
+                          is approved for organizations) (review_facebook cannot be connected \
+                          yet: no sign-in finds Facebook comments); NetGSM kinds (sms_line, \
+                          netgsm_pbx) take credentials instead (jeeta.connector.set_credentials). \
+                          Returns {authorize_url, pending_id, expires_at, handoff}: hand the \
+                          authorize_url to the owner, who signs in in their own browser within \
+                          ten minutes; the panel completes the flow and the owner chooses the \
+                          accounts. You cannot complete it. Needs the platform's provider app to \
+                          be configured (else CONFLICT). [risk: WRITE]",
             permission: Permission::CapabilitiesManage,
             schema: schema_for::<StartArgs>,
             run: start_oauth,
@@ -88,7 +90,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           password, msgheader}), the NetGSM PBX (netgsm_pbx, {kind: netgsm_pbx, \
                           username, password, trunk?, pbxnum?}) or a pasted Meta token ({kind: \
                           meta_token, access_token}; a Page or WhatsApp token needs external_id). \
-                          IYS attaches to an existing SMS line only (capability_id required), using credential {kind: netgsm_iys, usercode, password, brand_code}; its usercode must match the SMS line and it never replaces SMS credentials. A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). X connects through OAuth only. The credentials are sealed and probed \
+                          IYS attaches to an existing SMS line only (capability_id required), using credential {kind: netgsm_iys, usercode, password, brand_code}; its usercode must match the SMS line and it never replaces SMS credentials. A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). X, TikTok and LinkedIn connect through OAuth only. The credentials are sealed and probed \
                           at once; they are never shown again, and the ledger notes that you \
                           entered them. A verified capability keeps its credentials until a \
                           probe fails (CONFLICT). Returns the capability. [risk: WRITE]",
@@ -120,8 +122,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "connector.reconnect",
-            description: "Start a sign-in bound to a Meta or X capability: one whose login \
-                          expired or was refused, or a declared one never connected yet. Returns \
+            description: "Start a sign-in bound to a Meta, X, TikTok or LinkedIn capability: \
+                          one whose login expired or was refused (a LinkedIn login lasts 60 \
+                          days), or a declared one never connected yet. Returns \
                           {authorize_url, pending_id, expires_at, handoff} as \
                           jeeta.connector.start_oauth does; hand the authorize_url to the owner. \
                           Confirming the flow renews the capability's credentials, or gives the \
@@ -232,12 +235,17 @@ struct CapabilityArgs {
     capability_id: Uuid,
 }
 
-/// The JSON Schema of a kind OAuth connects: every kind Meta or X serves.
+/// The JSON Schema of a kind OAuth connects: every kind Meta, X, TikTok or LinkedIn serves.
 fn oauth_kind_schema(_: &mut SchemaGenerator) -> Schema {
-    let kinds: Vec<&str> = [jt_connector::Provider::Meta, jt_connector::Provider::X]
-        .iter()
-        .flat_map(|p| p.kinds().iter().copied())
-        .collect();
+    let kinds: Vec<&str> = [
+        jt_connector::Provider::Meta,
+        jt_connector::Provider::X,
+        jt_connector::Provider::Tiktok,
+        jt_connector::Provider::Linkedin,
+    ]
+    .iter()
+    .flat_map(|p| p.kinds().iter().copied())
+    .collect();
     json_schema!({ "type": "string", "enum": kinds })
 }
 

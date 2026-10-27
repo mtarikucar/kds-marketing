@@ -898,6 +898,94 @@ async fn oauth_pending_state_hash_is_unique_and_purgeable() {
     );
 }
 
+/// `0014_social_providers`: TikTok and LinkedIn flows are stored under their own provider and
+/// app; its down keeps the widened checks while such a flow remains, and narrows them once none
+/// does.
+#[tokio::test]
+async fn tiktok_and_linkedin_flows_are_stored_and_survive_a_rollback() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, owner) = db.seed_workspace("a").await;
+    let tiktok = OAuthPendingRow {
+        provider: Provider::Tiktok,
+        kind_key: "tiktok".into(),
+        app: OAuthCallback::Tiktok,
+        pkce_verifier_sealed: None,
+        ..pending(a, owner, "hash-tiktok", T0 + Duration::minutes(30))
+    };
+    let linkedin = OAuthPendingRow {
+        provider: Provider::Linkedin,
+        kind_key: "linkedin_page".into(),
+        app: OAuthCallback::Linkedin,
+        pkce_verifier_sealed: None,
+        ..pending(a, owner, "hash-linkedin", T0 + Duration::minutes(30))
+    };
+    let mut t = uow.tenant(a).await.unwrap();
+    t.oauth_pending().insert(tiktok.clone()).await.unwrap();
+    t.oauth_pending().insert(linkedin.clone()).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(a).await.unwrap();
+    for row in [&tiktok, &linkedin] {
+        assert_eq!(
+            t.oauth_pending()
+                .find_by_state_hash(&row.state_hash)
+                .await
+                .unwrap()
+                .as_ref(),
+            Some(row)
+        );
+    }
+    drop(t);
+
+    let down = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../migrations/0014_social_providers.down.sql"),
+    )
+    .unwrap();
+    let constraint = |name: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "select pg_get_constraintdef(oid) from pg_constraint where conname = $1",
+            )
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // With flows of the new providers pending, the down keeps the widened checks.
+    sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
+    assert!(
+        constraint("oauth_pending_provider_check")
+            .await
+            .contains("tiktok")
+    );
+    assert!(
+        constraint("oauth_pending_app_check")
+            .await
+            .contains("linkedin")
+    );
+    // Once none remains, it narrows them back.
+    let mut p = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("delete from oauth_pending where provider in ('tiktok', 'linkedin')")
+        .execute(p.conn())
+        .await
+        .unwrap();
+    p.commit().await.unwrap();
+    sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
+    assert!(
+        !constraint("oauth_pending_provider_check")
+            .await
+            .contains("tiktok")
+    );
+    assert!(
+        !constraint("oauth_pending_app_check")
+            .await
+            .contains("linkedin")
+    );
+}
+
 #[tokio::test]
 async fn oauth_pending_lock_waits_and_a_reconnection_names_its_own_capability() {
     let db = TestDb::new().await;

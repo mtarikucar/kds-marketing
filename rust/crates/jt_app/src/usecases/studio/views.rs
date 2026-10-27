@@ -116,7 +116,7 @@ pub async fn overview(d: &Deps, ctx: &Ctx, q: StudioQuery) -> Result<StudioOverv
                 && chain::capability_access(c, ctx.now, false).is_ok()
         });
     let organic = caps.iter().any(|c| {
-        matches!(c.kind_key.as_str(), "x" | "instagram" | "facebook_page")
+        super::chain::ORGANIC_KINDS.contains(&c.kind_key.as_str())
             && selected(c)
             && chain::capability_access(c, ctx.now, false).is_ok()
             && jt_connector::provider_for_kind(&c.kind_key)

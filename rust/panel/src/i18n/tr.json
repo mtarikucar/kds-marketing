@@ -732,6 +732,7 @@
       "facebook_page": "Facebook sayfası",
       "x": "X",
       "linkedin_page": "LinkedIn sayfası",
+      "linkedin_member": "LinkedIn kişisel hesap",
       "tiktok": "TikTok",
       "pinterest": "Pinterest",
       "youtube": "YouTube",
@@ -995,14 +996,16 @@
       "tls": "TLS modu"
     },
     "title": "Hesap bağla",
-    "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta ve X için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
+    "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta, X, TikTok ve LinkedIn için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
     "open": "Hesap bağla",
     "kindsLabel": "Bağlanacak hesap türü",
     "chooseKind": "Önce bağlanacak hesap türünü seçin.",
     "providers": {
+      "linkedin": "LinkedIn",
       "mail": "E-posta",
       "meta": "Meta",
       "netgsm": "NetGSM",
+      "tiktok": "TikTok",
       "x": "X"
     },
     "forCapability": "{{name}} için",
@@ -1625,11 +1628,12 @@
     "agentNeeded": "Ajanın güncel bağlantısı yok. İşlerin ilerlemesi için kendi ajan zamanlayıcınız çalışmalıdır.",
     "agents": "Ajanları görüntüle",
     "suspendedChecks": "Çalışma alanı askıdayken bu adım denetlenmez.",
-    "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X ve e-posta hesaplarınızı bağlayabilirsiniz."
+    "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X, TikTok, LinkedIn ve e-posta hesaplarınızı bağlayabilirsiniz."
   },
   "providerSetup": {
     "title": "Sağlayıcı uygulaması kurulumu",
     "missing": "Sağlayıcı uygulaması yapılandırılmadı",
+    "productNotEnabled": "Bu, platform uygulamasının henüz onay almadığı bir sağlayıcı ürünü gerektiriyor (LinkedIn sayfaları için Community Management API). Sağlayıcı onaylayınca işletmen açar.",
     "help": "Bu dönüş adreslerini sağlayıcı uygulamasına kaydedin. Uygulama bilgilerini ve webhook doğrulamasını işletmen yapılandırır.",
     "callback": "{{provider}} dönüş adresi",
     "reconnect": "Yeniden bağlantı gerekli",

@@ -26,7 +26,7 @@ function ProviderSetupBody() {
   return <div className="space-y-4">
     <p>{t('providerSetup.help')}</p>
     <QueryState query={hooks}>{hooks.data && <>
-      {base && base!==url && ['meta','instagram','x'].map(provider=><CopyField key={provider} label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/>)}
+      {base && base!==url && ['meta','instagram','x','tiktok','linkedin'].map(provider=><CopyField key={provider} label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/>)}
       {hooks.data.meta && <CopyField label={t('capabilities.hooks.metaUrl')} value={hooks.data.meta.url}/>}
       {hooks.data.netgsm.map(hook=><CopyField key={hook.purpose} label={t(`capabilities.hooks.purposes.${hook.purpose}`)} value={hook.url}/>)}
     </>}</QueryState>

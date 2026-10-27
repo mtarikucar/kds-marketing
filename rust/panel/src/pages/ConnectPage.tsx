@@ -214,7 +214,13 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
         {capability !== null && capability.external_id === null && (
           <Callout tone="info">{t('connect.oauth.firstBindsNote')}</Callout>
         )}
-        {isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_app_not_configured' ? <Callout tone="warning">{t('providerSetup.missing')}</Callout> : <ErrorCallout error={start.error} />}
+        {isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_app_not_configured' ? (
+          <Callout tone="warning">{t('providerSetup.missing')}</Callout>
+        ) : isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_product_not_enabled' ? (
+          <Callout tone="warning">{t('providerSetup.productNotEnabled')}</Callout>
+        ) : (
+          <ErrorCallout error={start.error} />
+        )}
         {redirecting ? (
           <p className="text-sm text-muted-foreground">{t('capabilities.connector.redirecting')}</p>
         ) : (
@@ -531,7 +537,7 @@ function TokenForm({
   );
 }
 
-/** How `kind` connects: by signing in (Meta, X; Meta also by a pasted token), or by credentials (NetGSM). */
+/** How `kind` connects: by signing in (Meta, X, TikTok, LinkedIn; Meta also by a pasted token), or by credentials (NetGSM). */
 function ConnectKind({
   kind,
   capability,

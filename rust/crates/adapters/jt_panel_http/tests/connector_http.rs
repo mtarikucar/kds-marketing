@@ -559,7 +559,7 @@ async fn callback_without_session_is_unauthenticated() {
 
     // A segment that names no OAuth app (a provider without OAuth among them), and a query
     // naming anything but the state and the code, are refused before the use case runs.
-    for segment in ["tiktok", "netgsm", "Meta"] {
+    for segment in ["pinterest", "netgsm", "Meta"] {
         expect_error(
             p.get(&callback(segment, &state, "code-1"), &owner).await,
             StatusCode::UNPROCESSABLE_ENTITY,

@@ -227,12 +227,16 @@ impl Job {
 /// connector capability (not retired, sealed credentials, a provider adapter here) whose token
 /// expires within [`REFRESH_WITHIN`] of `now` by its public facts
 /// (`connector_public.access.expires_at`; no sealed credential is opened to choose), and every
-/// `x` capability whatever its expiry (X rotates its refresh token at each use).
+/// `x` and `tiktok` capability whatever its expiry (X rotates its refresh token at each use;
+/// TikTok's adapter renews a day-long access token when it nears its end).
 ///
 /// A capability waiting for its owner to reconnect (`connector_public.reconnect_required`) is
-/// left alone, unless it is X's: an X access token lives two hours, so a probe made after it
-/// lapsed (the server was down, the platform's client secret was wrong for a while) flags the
-/// capability although its refresh token still holds; renewing is what brings it back.
+/// left alone, unless it is X's or TikTok's: their access tokens live two hours and a day, so a
+/// probe made after one lapsed (the server was down, the platform's client secret was wrong for a
+/// while) flags the capability although its refresh token still holds; renewing is what brings
+/// it back. A LinkedIn credential has a refresh token only when LinkedIn grants the app
+/// programmatic refresh; without one the adapter has nothing to renew, and the capability lapses
+/// into a reconnection when its 60 days are up.
 ///
 /// **Compare and swap.** The sealed credential is read in a transaction of its own, the provider
 /// is asked with no transaction open, and the answer is written in a second transaction that
@@ -309,8 +313,12 @@ pub async fn run_refresh_tokens(deps: &Deps, now: OffsetDateTime) -> JobReport {
 
 /// Whether `capability`'s token is due for renewal at `now` (see [`run_refresh_tokens`]).
 fn due_for_refresh(capability: &Capability, now: OffsetDateTime) -> bool {
-    // X: every run, flagged or not (its refresh token outlives a lapsed access token).
-    if provider_for_kind(&capability.kind_key) == Some(Provider::X) {
+    // X and TikTok: every run, flagged or not (a refresh token outlives a lapsed access token:
+    // X's live two hours, TikTok's a day; the TikTok adapter renews only near expiry).
+    if matches!(
+        provider_for_kind(&capability.kind_key),
+        Some(Provider::X | Provider::Tiktok)
+    ) {
         return true;
     }
     if reconnect_required(capability) {

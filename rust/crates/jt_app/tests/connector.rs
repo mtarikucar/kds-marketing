@@ -44,6 +44,8 @@ use zeroize::Zeroizing;
 const META_HOSTS: &[&str] = &["graph.facebook.com", "rupload.facebook.com"];
 const NETGSM_HOSTS: &[&str] = &["api.netgsm.com.tr", "crmsntrl.netgsm.com.tr:9111"];
 const X_HOSTS: &[&str] = &["api.x.com"];
+const TIKTOK_HOSTS: &[&str] = &["open.tiktokapis.com", "open-upload.tiktokapis.com"];
+const LINKEDIN_HOSTS: &[&str] = &["api.linkedin.com", "www.linkedin.com"];
 
 /// Every secret the flows below hand to the system; none may come back out.
 const SECRETS: &[&str] = &[
@@ -75,6 +77,8 @@ struct Rig {
     meta_oauth: Arc<ScriptedOAuth>,
     netgsm: Arc<ScriptedConnector>,
     x_oauth: Arc<ScriptedOAuth>,
+    tiktok_oauth: Arc<ScriptedOAuth>,
+    linkedin_oauth: Arc<ScriptedOAuth>,
 }
 
 async fn rig() -> Rig {
@@ -83,14 +87,22 @@ async fn rig() -> Rig {
     let meta = Arc::new(ScriptedConnector::new(Provider::Meta).with_hosts(META_HOSTS));
     let netgsm = Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(NETGSM_HOSTS));
     let x = Arc::new(ScriptedConnector::new(Provider::X).with_hosts(X_HOSTS));
+    let tiktok = Arc::new(ScriptedConnector::new(Provider::Tiktok).with_hosts(TIKTOK_HOSTS));
+    let linkedin = Arc::new(ScriptedConnector::new(Provider::Linkedin).with_hosts(LINKEDIN_HOSTS));
     let meta_oauth = Arc::new(ScriptedOAuth::new(Provider::Meta));
     let x_oauth = Arc::new(ScriptedOAuth::new(Provider::X));
+    let tiktok_oauth = Arc::new(ScriptedOAuth::new(Provider::Tiktok));
+    let linkedin_oauth = Arc::new(ScriptedOAuth::new(Provider::Linkedin));
     let registry = ScriptedRegistry::new()
         .with_connector(meta.clone())
         .with_connector(netgsm.clone())
         .with_connector(x)
+        .with_connector(tiktok)
+        .with_connector(linkedin)
         .with_oauth(meta_oauth.clone())
-        .with_oauth(x_oauth.clone());
+        .with_oauth(x_oauth.clone())
+        .with_oauth(tiktok_oauth.clone())
+        .with_oauth(linkedin_oauth.clone());
     w.deps.apps = Arc::new(FakeAppConfig::with_all_apps());
     w.deps.connectors = Arc::new(registry);
     Rig {
@@ -99,6 +111,8 @@ async fn rig() -> Rig {
         meta_oauth,
         netgsm,
         x_oauth,
+        tiktok_oauth,
+        linkedin_oauth,
     }
 }
 
@@ -302,12 +316,24 @@ async fn start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier() {
     // Without the provider's app, nothing can start: CONFLICT, nothing written.
     let mut bare = r.w.deps.clone();
     bare.apps = Arc::new(FakeAppConfig::default());
-    for kind in ["facebook_page", "instagram", "x"] {
+    for kind in [
+        "facebook_page",
+        "instagram",
+        "x",
+        "tiktok",
+        "linkedin_member",
+        "linkedin_page",
+    ] {
         let e = err(connector::start_oauth(&bare, o, start(kind)).await);
         assert_eq!(e.code, ErrorCode::Conflict, "{kind}");
         assert_eq!(e.message, "provider app not configured", "{kind}");
         // The reason and the provider are named, so the panel shows its own copy.
-        let provider = if kind == "x" { "x" } else { "meta" };
+        let provider = match kind {
+            "x" => "x",
+            "tiktok" => "tiktok",
+            "linkedin_member" | "linkedin_page" => "linkedin",
+            _ => "meta",
+        };
         assert_eq!(
             e.details,
             json!({ "reason": "provider_app_not_configured", "provider": provider }),
@@ -477,6 +503,18 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
             "x-client-id",
             "https://panel.test/oauth/callback/x",
         ),
+        (
+            "tiktok",
+            OAuthCallback::Tiktok,
+            "tiktok-client-key",
+            "https://panel.test/oauth/callback/tiktok",
+        ),
+        (
+            "linkedin_member",
+            OAuthCallback::Linkedin,
+            "linkedin-client-id",
+            "https://panel.test/oauth/callback/linkedin",
+        ),
     ] {
         let out = r.start(kind).await;
         assert_eq!(redirect_of(&out), expected, "{kind}: authorize");
@@ -485,10 +523,11 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
             Some(client_id),
             "{kind}"
         );
-        let oauth = if kind == "x" {
-            &r.x_oauth
-        } else {
-            &r.meta_oauth
+        let oauth = match kind {
+            "x" => &r.x_oauth,
+            "tiktok" => &r.tiktok_oauth,
+            "linkedin_member" => &r.linkedin_oauth,
+            _ => &r.meta_oauth,
         };
         oauth.push_exchange(Ok(user_token("EAAB-user-1")));
         oauth.push_assets(Ok(Vec::new()));
@@ -522,9 +561,91 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
             ("meta", Provider::Meta),
             ("instagram", Provider::Meta),
             ("x", Provider::X),
+            ("tiktok", Provider::Tiktok),
+            ("linkedin", Provider::Linkedin),
         ]
     );
     assert_eq!(OAuthCallback::of_flow(Provider::Netgsm, "sms_line"), None);
+    // Both LinkedIn kinds come back to the one LinkedIn callback.
+    for kind in ["linkedin_member", "linkedin_page"] {
+        assert_eq!(
+            OAuthCallback::of_flow(Provider::Linkedin, kind),
+            Some(OAuthCallback::Linkedin)
+        );
+    }
+}
+
+/// TikTok and LinkedIn web flows take no PKCE: no challenge rides the authorize URL and no
+/// verifier is sealed with the flow, which is kept under its own provider and app.
+#[tokio::test]
+async fn tiktok_and_linkedin_start_oauth_build_redirect() {
+    let r = rig().await;
+    for (kind, provider, app) in [
+        ("tiktok", Provider::Tiktok, OAuthCallback::Tiktok),
+        (
+            "linkedin_member",
+            Provider::Linkedin,
+            OAuthCallback::Linkedin,
+        ),
+    ] {
+        let out = r.start(kind).await;
+        assert_eq!(query(&out, "code_challenge"), None, "{kind}");
+        assert_eq!(query(&out, "organization_scopes"), None, "{kind}");
+        let row = r
+            .pending_rows()
+            .into_iter()
+            .find(|p| p.state_hash == hash_token(&state_of(&out)))
+            .expect("a pending flow");
+        assert_eq!((row.provider, row.app), (provider, app), "{kind}");
+        assert_eq!(row.kind_key, kind);
+        assert!(row.pkce_verifier_sealed.is_none(), "{kind}");
+    }
+    let started = r.w.ledger("connector.oauth_started");
+    assert_eq!(started.len(), 2);
+    assert_eq!(started[0].payload["provider"], "tiktok");
+    assert_eq!(started[1].payload["provider"], "linkedin");
+}
+
+/// A LinkedIn page needs the organization scopes, which LinkedIn grants only once it approved
+/// the Community Management API for the platform's app: until the operator enables them, a
+/// `linkedin_page` flow is `CONFLICT` "provider product not enabled", and nothing is written nor
+/// asked of LinkedIn. Once enabled, every LinkedIn flow asks for them (the member's feed too:
+/// LinkedIn invalidates earlier tokens when the scopes asked for change).
+#[tokio::test]
+async fn linkedin_page_refused_without_org_scopes() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let e = err(connector::start_oauth(&r.w.deps, o, start("linkedin_page")).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(e.message, "provider product not enabled");
+    assert_eq!(
+        e.details,
+        json!({ "reason": "provider_product_not_enabled", "provider": "linkedin" })
+    );
+    assert!(r.pending_rows().is_empty());
+    assert!(r.linkedin_oauth.calls().is_empty());
+    assert!(r.w.ledger("connector.").is_empty());
+    // The member's own feed connects meanwhile, without the organization scopes.
+    let member = r.start("linkedin_member").await;
+    assert_eq!(query(&member, "organization_scopes"), None);
+
+    let mut enabled = FakeAppConfig::with_all_apps();
+    enabled.linkedin.as_mut().unwrap().organization_scopes = true;
+    let mut deps = r.w.deps.clone();
+    deps.apps = Arc::new(enabled);
+    for kind in ["linkedin_page", "linkedin_member"] {
+        let out = connector::start_oauth(&deps, o, start(kind)).await.unwrap();
+        assert_eq!(
+            query(&out, "organization_scopes").as_deref(),
+            Some("true"),
+            "{kind}"
+        );
+        assert_eq!(
+            redirect_of(&out),
+            "https://panel.test/oauth/callback/linkedin",
+            "{kind}"
+        );
+    }
 }
 
 /// Without a configured public base URL there is no redirect URI and no webhook address: starting
@@ -1591,6 +1712,13 @@ async fn set_credentials_refuses_oauth_only_kinds() {
     )
     .await);
     assert_invalid(&e, "kind_key");
+    // Nor do TikTok and LinkedIn: hand-entered credentials are refused for every OAuth-only kind.
+    for kind in ["tiktok", "linkedin_member", "linkedin_page"] {
+        let e =
+            err(connector::set_credentials(&r.w.deps, o, creating(kind, "Hesap", token())).await);
+        assert_invalid(&e, "kind_key");
+        assert_eq!(e.message, "this kind connects through OAuth", "{kind}");
+    }
     // Mail has its own credential shape; a pasted Meta token cannot configure it.
     let e = err(connector::set_credentials(&r.w.deps, o, creating("mailbox", "H", token())).await);
     assert_invalid(&e, "credential.kind");

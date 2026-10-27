@@ -73,6 +73,70 @@ async fn failed_read_retries_without_learning() {
     assert_eq!(w.uow.snapshot().studio.measurements.len(), 1);
     assert!((w.uow.snapshot().studio.arms[0].alpha - 1.2).abs() < 1e-12);
 }
+/// A provider's permanent refusal of a post's counters (LinkedIn has no member post metrics; a
+/// TikTok post with no public id) is recorded once per window and never asked again: no retry
+/// storm, no learning, and the publication stays.
+#[tokio::test]
+async fn permanent_unsupported_metrics_stop_retrying() {
+    let (mut w, c) = published().await;
+    w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(1)));
+    c.push_post_metrics(Err(jt_connector::ConnectorError::permanent(
+        "LinkedIn exposes no member post metrics",
+    )));
+    measure_due(&w.d, w.f.ws).await.unwrap();
+    let s = w.uow.snapshot();
+    assert_eq!(s.studio.publications.len(), 1);
+    assert!(s.studio.learning.is_empty());
+    let failed = &s.studio.measurements[0];
+    assert_eq!(failed.status, jt_studio::MeasurementStatus::Failed);
+    assert_eq!(
+        serde_json::to_value(failed).unwrap()["failure"]["category"],
+        "permanent"
+    );
+    // Long after its retry time, the window is not read again (nothing is queued: a read would
+    // panic the scripted adapter).
+    w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(2)));
+    assert_eq!(measure_due(&w.d, w.f.ws).await.unwrap(), 0);
+    let reads = |c: &ScriptedConnector| {
+        c.calls()
+            .iter()
+            .filter(|call| matches!(call, jt_testkit::fakes::ConnectorCall::PostMetrics { .. }))
+            .count()
+    };
+    assert_eq!(reads(&c), 1);
+    // The next window is asked once, and refused once too.
+    w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(3)));
+    c.push_post_metrics(Err(jt_connector::ConnectorError::permanent(
+        "LinkedIn exposes no member post metrics",
+    )));
+    measure_due(&w.d, w.f.ws).await.unwrap();
+    w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(5)));
+    assert_eq!(measure_due(&w.d, w.f.ws).await.unwrap(), 0);
+    assert_eq!(reads(&c), 2);
+    assert!(w.uow.snapshot().studio.learning.is_empty());
+}
+/// TikTok's and LinkedIn's counter names feed the reward like the others: views as impressions,
+/// likes, comments and shares as engagements.
+#[tokio::test]
+async fn tiktok_and_linkedin_counter_names_are_read() {
+    let (mut w, c) = published().await;
+    w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(1)));
+    c.push_post_metrics(Ok(PostMetrics {
+        metrics: [
+            ("view_count".into(), 100),
+            ("like_count".into(), 10),
+            ("comment_count".into(), 5),
+            ("share_count".into(), 5),
+        ]
+        .into(),
+    }));
+    assert_eq!(measure_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    let m = &s.studio.measurements[0];
+    assert_eq!(m.status, jt_studio::MeasurementStatus::Complete);
+    assert_eq!(m.raw_metrics["impressions"], Some(100));
+    assert_eq!(m.raw_metrics["engagements"], Some(20));
+}
 #[tokio::test]
 async fn late_24h_read_cannot_replace_7d_reward() {
     let (mut w, c) = published().await;

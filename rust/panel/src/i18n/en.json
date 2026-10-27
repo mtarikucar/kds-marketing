@@ -732,6 +732,7 @@
       "facebook_page": "Facebook page",
       "x": "X",
       "linkedin_page": "LinkedIn page",
+      "linkedin_member": "LinkedIn profile",
       "tiktok": "TikTok",
       "pinterest": "Pinterest",
       "youtube": "YouTube",
@@ -995,14 +996,16 @@
       "tls": "TLS mode"
     },
     "title": "Connect an account",
-    "description": "Connect your provider accounts to the workspace. For Meta and X you sign in at the provider; for NetGSM you enter your credentials.",
+    "description": "Connect your provider accounts to the workspace. For Meta, X, TikTok and LinkedIn you sign in at the provider; for NetGSM you enter your credentials.",
     "open": "Connect an account",
     "kindsLabel": "Kind of account to connect",
     "chooseKind": "Choose the kind of account to connect first.",
     "providers": {
+      "linkedin": "LinkedIn",
       "mail": "Email",
       "meta": "Meta",
       "netgsm": "NetGSM",
+      "tiktok": "TikTok",
       "x": "X"
     },
     "forCapability": "For {{name}}",
@@ -1625,11 +1628,12 @@
     "agentNeeded": "No recent agent connection. Your own agent scheduler must run for work to proceed.",
     "agents": "View agents",
     "suspendedChecks": "This step is not checked while the workspace is suspended.",
-    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X and email accounts."
+    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X, TikTok, LinkedIn and email accounts."
   },
   "providerSetup": {
     "title": "Provider application setup",
     "missing": "Provider application is not configured",
+    "productNotEnabled": "This needs a provider product the platform's application has not been approved for yet (LinkedIn pages: the Community Management API). The operator enables it once the provider approves.",
     "help": "Register these callback addresses in the provider application. The operator configures app credentials and webhook verification.",
     "callback": "{{provider}} callback address",
     "reconnect": "Reconnection required",

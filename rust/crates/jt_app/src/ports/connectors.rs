@@ -91,6 +91,54 @@ impl fmt::Debug for XApp {
     }
 }
 
+/// The platform's TikTok app (Login Kit and the Content Posting API). TikTok names its client id
+/// the client key. `Debug` masks the client secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TiktokApp {
+    pub client_key: String,
+    pub client_secret: String,
+}
+
+impl fmt::Debug for TiktokApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TiktokApp")
+            .field("client_key", &self.client_key)
+            .field("client_secret", &Masked)
+            .finish()
+    }
+}
+
+/// The platform's LinkedIn app (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn
+/// and, once LinkedIn approves it, the Community Management API). `Debug` masks the client
+/// secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LinkedinApp {
+    pub client_id: String,
+    pub client_secret: String,
+    /// Whether flows may ask for the organization scopes (`r_organization_social`,
+    /// `w_organization_social`, `rw_organization_admin`): set by the operator once LinkedIn has
+    /// approved the Community Management API for the app (`JEETA_LINKEDIN_ORG_SCOPES`), since
+    /// LinkedIn refuses a whole authorize request that names a scope the app was not granted.
+    /// Every LinkedIn flow then asks for them (LinkedIn invalidates a member's earlier tokens
+    /// when a flow asks for another set of scopes); without them, `linkedin_page` flows are
+    /// refused.
+    pub organization_scopes: bool,
+    /// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (`JEETA_LINKEDIN_API_VERSION`);
+    /// `None` lets the adapter use its pinned default.
+    pub api_version: Option<String>,
+}
+
+impl fmt::Debug for LinkedinApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkedinApp")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &Masked)
+            .field("organization_scopes", &self.organization_scopes)
+            .field("api_version", &self.api_version)
+            .finish()
+    }
+}
+
 /// The platform's provider apps and its public address, read-only. The binary implements it from
 /// the environment; an app that is not configured is `None`, and the kinds it serves cannot be
 /// connected by OAuth.
@@ -98,6 +146,14 @@ pub trait PlatformAppConfig: Send + Sync {
     fn meta_app(&self) -> Option<MetaApp>;
     fn instagram_app(&self) -> Option<InstagramApp>;
     fn x_app(&self) -> Option<XApp>;
+    /// The TikTok app; `None` (the default) while it is not configured.
+    fn tiktok_app(&self) -> Option<TiktokApp> {
+        None
+    }
+    /// The LinkedIn app; `None` (the default) while it is not configured.
+    fn linkedin_app(&self) -> Option<LinkedinApp> {
+        None
+    }
     /// Where the panel is reached from outside, for OAuth redirect URIs and webhook URLs; `None`
     /// while it is not configured, and then no flow starts and no webhook URL is shown (the
     /// binary requires it whenever a provider app is configured).
@@ -115,12 +171,16 @@ pub trait PlatformAppConfig: Send + Sync {
 /// | `meta` | the Meta app (Facebook Login) | every Meta kind but `instagram` | every Meta capability the Meta app issued, `instagram` ones included (through their Page) |
 /// | `instagram` | the Instagram app (Instagram Login) | `instagram` | an `instagram` capability the Instagram app issued |
 /// | `x` | the X app | `x` | `x` |
+/// | `tiktok` | the TikTok app | `tiktok` | `tiktok` |
+/// | `linkedin` | the LinkedIn app | `linkedin_member`, `linkedin_page` (the latter only with the organization scopes) | the same |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthCallback {
     Meta,
     Instagram,
     X,
+    Tiktok,
+    Linkedin,
 }
 
 impl OAuthCallback {
@@ -130,15 +190,20 @@ impl OAuthCallback {
             OAuthCallback::Meta,
             OAuthCallback::Instagram,
             OAuthCallback::X,
+            OAuthCallback::Tiktok,
+            OAuthCallback::Linkedin,
         ]
     }
 
-    /// The redirect URI's last segment, also what is stored: `meta`, `instagram` or `x`.
+    /// The redirect URI's last segment, also what is stored: `meta`, `instagram`, `x`, `tiktok`
+    /// or `linkedin`.
     pub fn key(self) -> &'static str {
         match self {
             OAuthCallback::Meta => "meta",
             OAuthCallback::Instagram => "instagram",
             OAuthCallback::X => "x",
+            OAuthCallback::Tiktok => "tiktok",
+            OAuthCallback::Linkedin => "linkedin",
         }
     }
 
@@ -155,6 +220,8 @@ impl OAuthCallback {
         match self {
             OAuthCallback::Meta | OAuthCallback::Instagram => Provider::Meta,
             OAuthCallback::X => Provider::X,
+            OAuthCallback::Tiktok => Provider::Tiktok,
+            OAuthCallback::Linkedin => Provider::Linkedin,
         }
     }
 
@@ -165,27 +232,36 @@ impl OAuthCallback {
             Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
             Provider::Meta => Some(OAuthCallback::Meta),
             Provider::X => Some(OAuthCallback::X),
+            Provider::Tiktok => Some(OAuthCallback::Tiktok),
+            Provider::Linkedin => Some(OAuthCallback::Linkedin),
             Provider::Netgsm | Provider::Mail => None,
         }
     }
 }
 
 /// The app an OAuth flow runs under. Meta serves two login flows: Facebook Login with the Meta
-/// app, and Instagram Login with the Instagram app; the variant tells the adapter which.
+/// app, and Instagram Login with the Instagram app; the variant tells the adapter which. A
+/// LinkedIn flow's app says whether the flow asks for the organization scopes
+/// ([`LinkedinApp::organization_scopes`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OAuthApp {
     Meta(MetaApp),
     Instagram(InstagramApp),
     X(XApp),
+    Tiktok(TiktokApp),
+    Linkedin(LinkedinApp),
 }
 
 impl OAuthApp {
-    /// The public client id: the Meta or Instagram app id, or the X client id.
+    /// The public client id: the Meta or Instagram app id, the X or LinkedIn client id, or the
+    /// TikTok client key.
     pub fn client_id(&self) -> &str {
         match self {
             OAuthApp::Meta(app) => &app.app_id,
             OAuthApp::Instagram(app) => &app.app_id,
             OAuthApp::X(app) => &app.client_id,
+            OAuthApp::Tiktok(app) => &app.client_key,
+            OAuthApp::Linkedin(app) => &app.client_id,
         }
     }
 
@@ -195,6 +271,8 @@ impl OAuthApp {
             OAuthApp::Meta(app) => &app.app_secret,
             OAuthApp::Instagram(app) => &app.app_secret,
             OAuthApp::X(app) => &app.client_secret,
+            OAuthApp::Tiktok(app) => &app.client_secret,
+            OAuthApp::Linkedin(app) => &app.client_secret,
         }
     }
 }
@@ -288,6 +366,11 @@ impl MailboxCursor {
 ///
 /// `media` is never serialised: a request written out carries no bytes, and one read back has
 /// none (`media` empty), so the bytes are supplied again where they are needed.
+///
+/// `privacy` is who may see the post, by the provider's own name (TikTok's `privacy_level`:
+/// `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR` or `SELF_ONLY`); `None`
+/// lets the adapter post publicly. An adapter that cannot honour it refuses the post rather than
+/// posting to another audience; one without such a setting ignores it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub text: String,
@@ -296,6 +379,9 @@ pub struct PublishRequest {
     /// The files to upload, in the order they are attached. Never serialised.
     #[serde(skip)]
     pub media: Vec<MediaUpload>,
+    /// Who may see the post (see above); `None`: public.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
 }
 
 // Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
@@ -570,6 +656,19 @@ pub trait SmsSender: Send + Sync {
     ) -> Result<SendReceipt, ConnectorError>;
 }
 
+/// Where a post stands at the provider once [`Publisher::publish`] returned its receipt, for a
+/// provider that publishes in the background (TikTok processes a video after accepting it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublishResolution {
+    /// The post is live: its own receipt, whose id may differ from the one `publish` returned
+    /// (TikTok's publish id becomes the post's id).
+    Published(PublishReceipt),
+    /// Not settled yet: ask again later.
+    Pending,
+    /// The provider gave up on it, for this reason.
+    Failed(ConnectorError),
+}
+
 /// Publishes posts.
 #[async_trait]
 pub trait Publisher: Send + Sync {
@@ -579,6 +678,18 @@ pub trait Publisher: Send + Sync {
         public: &Value,
         request: &PublishRequest,
     ) -> Result<PublishReceipt, ConnectorError>;
+    /// Where the post `receipt` names stands at the provider (`public` as [`Connector::probe`]
+    /// gets it). `None`, the default, for a provider whose `publish` answers only once the post is
+    /// live: its receipt is the post. A read: it never publishes anything.
+    async fn resolve(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<Option<PublishResolution>, ConnectorError> {
+        let _ = (cred, public, receipt);
+        Ok(None)
+    }
 }
 
 /// Reads the counters of posts and accounts.
@@ -849,21 +960,42 @@ mod tests {
             client_id: "x-id".into(),
             client_secret: "x-secret-value".into(),
         };
+        let tiktok = TiktokApp {
+            client_key: "tt-key".into(),
+            client_secret: "tt-secret-value".into(),
+        };
+        let linkedin = LinkedinApp {
+            client_id: "li-id".into(),
+            client_secret: "li-secret-value".into(),
+            organization_scopes: true,
+            api_version: Some("202610".into()),
+        };
         let printed = format!(
-            "{meta:?} {instagram:?} {x:?} {:?}",
-            OAuthApp::Meta(meta.clone())
+            "{meta:?} {instagram:?} {x:?} {tiktok:?} {linkedin:?} {:?} {:?} {:?}",
+            OAuthApp::Meta(meta.clone()),
+            OAuthApp::Tiktok(tiktok.clone()),
+            OAuthApp::Linkedin(linkedin.clone())
         );
         for secret in [
             "meta-secret-value",
             "verify-token-value",
             "ig-secret-value",
             "x-secret-value",
+            "tt-secret-value",
+            "li-secret-value",
         ] {
             assert!(!printed.contains(secret), "{printed}");
         }
-        for public in ["meta-id", "cfg-1", "v19.0", "ig-id", "x-id"] {
+        for public in [
+            "meta-id", "cfg-1", "v19.0", "ig-id", "x-id", "tt-key", "li-id", "202610",
+        ] {
             assert!(printed.contains(public), "{printed}");
         }
+        assert_eq!(OAuthApp::Tiktok(tiktok).client_id(), "tt-key");
+        assert_eq!(
+            OAuthApp::Linkedin(linkedin).client_secret(),
+            "li-secret-value"
+        );
         assert_eq!(OAuthApp::X(x).client_id(), "x-id");
         assert_eq!(
             OAuthApp::Instagram(instagram).client_secret(),
@@ -909,6 +1041,7 @@ mod tests {
                 mime: "image/png".into(),
                 filename: "a.png".into(),
             }],
+            privacy: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(

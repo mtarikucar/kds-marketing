@@ -335,12 +335,36 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     r.commit().await?;
     Ok(count)
 }
-/// Build provider transport at dispatch time, reloading durable bytes for X.
+/// How a capability's provider takes a medium: its bytes, uploaded by the adapter, or a URL the
+/// provider fetches itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaDelivery {
+    /// The bytes, read from the file store (or fetched once from a hosted URL): the provider
+    /// takes uploads (X, LinkedIn, a TikTok video).
+    Bytes,
+    /// A URL: a signed file-store URL, or the hosted URL as is (Instagram, Facebook Pages, a
+    /// TikTok photo, which TikTok pulls from a verified domain).
+    SignedUrl,
+}
+
+impl MediaDelivery {
+    /// How a capability of kind `kind_key` takes a medium of type `mime`.
+    pub fn of(kind_key: &str, mime: &str) -> MediaDelivery {
+        match kind_key {
+            "x" | "linkedin_member" | "linkedin_page" => MediaDelivery::Bytes,
+            "tiktok" if mime.trim().eq_ignore_ascii_case("video/mp4") => MediaDelivery::Bytes,
+            _ => MediaDelivery::SignedUrl,
+        }
+    }
+}
+
+/// Build provider transport at dispatch time for a capability of kind `kind_key`: each medium as
+/// [`MediaDelivery::of`] says, durable bytes reloaded from the file store.
 pub async fn resolve_media(
     d: &Deps,
     ws: WorkspaceId,
     media: &[MediaAsset],
-    for_x: bool,
+    kind_key: &str,
 ) -> Result<(Vec<Url>, Vec<MediaUpload>), AppError> {
     let mut urls = vec![];
     let mut bytes = vec![];
@@ -357,7 +381,7 @@ pub async fn resolve_media(
                     return Err(AppError::not_found("file"));
                 }
                 drop(r);
-                if for_x {
+                if MediaDelivery::of(kind_key, &f.mime) == MediaDelivery::Bytes {
                     let u = d.files.read(ws, *id).await?;
                     validate_upload(&u)?;
                     bytes.push(u)
@@ -379,7 +403,7 @@ pub async fn resolve_media(
                 if u.bytes.len() as u64 != *size_bytes {
                     return Err(invalid());
                 }
-                if for_x {
+                if MediaDelivery::of(kind_key, mime) == MediaDelivery::Bytes {
                     bytes.push(u)
                 } else {
                     urls.push(url.clone())

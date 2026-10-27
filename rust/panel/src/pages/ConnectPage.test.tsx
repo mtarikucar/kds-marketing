@@ -296,6 +296,43 @@ describe('ConnectPage', () => {
     await waitFor(()=>expect(JSON.stringify(client.getMutationCache().getAll().map((m)=>m.state.variables))).not.toContain('private-iys-password'));
   });
 
+it('offers TikTok and LinkedIn kinds as sign-ins at their providers', async () => {
+  const user = userEvent.setup();
+  const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+  const calls = mockFetch({ 'GET /api/auth/me': me, 'POST /api/connectors/oauth/start': started });
+  renderAt('/connect');
+  await screen.findByRole('heading', { level: 1, name: tr.connect.title });
+  const linkedin = within(providerSection(tr.connect.providers.linkedin));
+  expect(linkedin.getByRole('button', { name: tr.capabilities.kinds.linkedin_page })).toBeInTheDocument();
+  await user.click(linkedin.getByRole('button', { name: tr.capabilities.kinds.linkedin_member }));
+  // No credentials are asked for, and no pasted token is offered.
+  expect(screen.queryByLabelText(tr.connect.credentials.password)).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: new RegExp(tr.connect.advanced) })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'LinkedIn' }) }));
+  await waitFor(() => expect(assign).toHaveBeenCalledWith(started.authorize_url));
+  expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ kind_key: 'linkedin_member' });
+
+  await user.click(within(providerSection(tr.connect.providers.tiktok)).getByRole('button', { name: tr.capabilities.kinds.tiktok }));
+  expect(screen.getByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'TikTok' }) })).toBeInTheDocument();
+});
+
+it('says a LinkedIn page needs the provider product before it can connect', async () => {
+  const user = userEvent.setup();
+  const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+  mockFetch({
+    'GET /api/auth/me': me,
+    'POST /api/connectors/oauth/start': withStatus(409, {
+      code: 'CONFLICT',
+      message: 'provider product not enabled',
+      details: { reason: 'provider_product_not_enabled', provider: 'linkedin' },
+    }),
+  });
+  renderAt('/connect?kind=linkedin_page');
+  await user.click(await screen.findByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'LinkedIn' }) }));
+  expect(await screen.findByText(tr.providerSetup.productNotEnabled)).toBeInTheDocument();
+  expect(assign).not.toHaveBeenCalled();
+});
+
 it('provider_missing_app_is_not_connection_success', async()=>{
   const user=userEvent.setup();
   const assign=vi.spyOn(browser,'assign').mockImplementation(()=>{});

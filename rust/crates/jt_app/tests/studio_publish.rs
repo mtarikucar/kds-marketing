@@ -333,6 +333,7 @@ async fn full_request_uses_account_adaptation_and_stored_bytes() {
                     text: "adapted".into(),
                     media: vec![MediaAsset::Bytes { upload: u.clone() }],
                     link: Some("https://example.com/link".parse().unwrap()),
+                    privacy: Some("SELF_ONLY".into()),
                 },
             )]),
         },
@@ -352,6 +353,134 @@ async fn full_request_uses_account_adaptation_and_stored_bytes() {
     );
     assert_eq!(request.media, vec![u]);
     assert!(request.media_urls.is_empty());
+    // Who may see it rides along, as the adaptation asked.
+    assert_eq!(request.privacy.as_deref(), Some("SELF_ONLY"));
+}
+#[test]
+fn media_delivery_per_kind() {
+    use jt_app::usecases::studio::files::MediaDelivery::{self, Bytes, SignedUrl};
+    for (kind, mime, expected) in [
+        ("x", "image/png", Bytes),
+        ("x", "video/mp4", Bytes),
+        ("linkedin_member", "image/jpeg", Bytes),
+        ("linkedin_page", "video/mp4", Bytes),
+        // TikTok uploads a video's bytes, and pulls photos from their URLs.
+        ("tiktok", "video/mp4", Bytes),
+        ("tiktok", " Video/MP4 ", Bytes),
+        ("tiktok", "image/jpeg", SignedUrl),
+        ("instagram", "image/jpeg", SignedUrl),
+        ("instagram", "video/mp4", SignedUrl),
+        ("facebook_page", "image/png", SignedUrl),
+    ] {
+        assert_eq!(MediaDelivery::of(kind, mime), expected, "{kind} {mime}");
+    }
+}
+/// A post of a provider that publishes in the background (TikTok): the receipt `publish`
+/// returns is observed, not yet a publication; the recovery job asks where it stands until it
+/// is published, and the publication carries the post's own receipt.
+#[tokio::test]
+async fn background_publication_settles_through_resolve() {
+    use jt_app::ports::connectors::PublishResolution;
+    let (mut w, c) = world().await;
+    let sent = PublishReceipt {
+        external_id: "v_pub_1".into(),
+        url: None,
+    };
+    c.push_publish(Ok(sent.clone()));
+    c.push_resolve(Ok(Some(PublishResolution::Pending)));
+    assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    assert_eq!(s.studio.attempts[0].state(), PublishState::Unknown);
+    assert!(s.studio.publications.is_empty());
+    assert_ne!(s.studio.slots[0].state, SlotState::Published);
+
+    // Still processing a minute later: left for the next run.
+    w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::minutes(1)));
+    c.push_resolve(Ok(Some(PublishResolution::Pending)));
+    assert_eq!(recover_publications(&w.d, w.f.ws).await.unwrap(), 0);
+    assert!(w.uow.snapshot().studio.publications.is_empty());
+
+    let post = PublishReceipt {
+        external_id: "7300000000000000001".into(),
+        url: Some(
+            "https://www.tiktok.com/@jeeta_test/video/7300000000000000001"
+                .parse()
+                .unwrap(),
+        ),
+    };
+    c.push_resolve(Ok(Some(PublishResolution::Published(post.clone()))));
+    assert_eq!(recover_publications(&w.d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    assert_eq!(s.studio.attempts[0].state(), PublishState::Succeeded);
+    assert_eq!(s.studio.publications.len(), 1);
+    assert_eq!(s.studio.publications[0].external_id, post.external_id);
+    assert_eq!(s.studio.publications[0].url, post.url);
+    assert_eq!(s.studio.slots[0].state, SlotState::Published);
+    // Every status read named the receipt publish returned; nothing was sent twice.
+    assert_eq!(c.resolve_calls(), vec![sent.clone(), sent.clone(), sent]);
+    assert_eq!(sends(&c), 1);
+    assert_eq!(recover_publications(&w.d, w.f.ws).await.unwrap(), 0);
+}
+/// The provider gave up on a post processing in the background: the attempt fails with the
+/// provider's failure line, and the owner reads it in the ledger.
+#[tokio::test]
+async fn background_publication_fails_with_its_reason() {
+    use jt_app::ports::connectors::PublishResolution;
+    let (mut w, c) = world().await;
+    c.push_publish(Ok(PublishReceipt {
+        external_id: "v_pub_2".into(),
+        url: None,
+    }));
+    c.push_resolve(Ok(Some(PublishResolution::Pending)));
+    publish_due(&w.d, w.f.ws).await.unwrap();
+    w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::minutes(2)));
+    c.push_resolve(Ok(Some(PublishResolution::Failed(
+        ConnectorError::permanent("publish failed: duration_check_failed"),
+    ))));
+    assert_eq!(recover_publications(&w.d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    let line = "permanent: x: publish failed: duration_check_failed";
+    assert_eq!(s.studio.attempts[0].state(), PublishState::Failed);
+    assert_eq!(s.studio.attempts[0].failure_reason(), Some(line));
+    assert!(s.studio.publications.is_empty());
+    let failure = s
+        .ledger
+        .iter()
+        .find(|row| row.entry.action.as_str() == "studio.publish.failure")
+        .expect("failure entry");
+    assert_eq!(failure.entry.payload["provider_reason"], line);
+    assert_eq!(sends(&c), 1);
+}
+/// A post that never settles is failed once the resolve window is over, never re-sent.
+#[tokio::test]
+async fn background_publication_times_out_after_the_window() {
+    use jt_app::ports::connectors::PublishResolution;
+    let (mut w, c) = world().await;
+    c.push_publish(Ok(PublishReceipt {
+        external_id: "v_pub_3".into(),
+        url: None,
+    }));
+    c.push_resolve(Ok(Some(PublishResolution::Pending)));
+    publish_due(&w.d, w.f.ws).await.unwrap();
+    // A status read that fails inside the window waits for the next run, too.
+    w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::minutes(10)));
+    c.push_resolve(Err(ConnectorError::transient("offline")));
+    assert_eq!(recover_publications(&w.d, w.f.ws).await.unwrap(), 0);
+    assert_eq!(
+        w.uow.snapshot().studio.attempts[0].state(),
+        PublishState::Unknown
+    );
+    w.d.clock = Arc::new(FixedClock(
+        FIXED_NOW + RESOLVE_WINDOW + Duration::minutes(1),
+    ));
+    c.push_resolve(Ok(Some(PublishResolution::Pending)));
+    assert_eq!(recover_publications(&w.d, w.f.ws).await.unwrap(), 1);
+    let s = w.uow.snapshot();
+    assert_eq!(s.studio.attempts[0].state(), PublishState::Failed);
+    let reason = s.studio.attempts[0].failure_reason().unwrap();
+    assert!(reason.starts_with("transient: x: "), "{reason}");
+    assert!(reason.contains("timed out"), "{reason}");
+    assert_eq!(sends(&c), 1);
 }
 #[tokio::test]
 async fn held_consent_and_future_slot_do_not_create_attempts() {
