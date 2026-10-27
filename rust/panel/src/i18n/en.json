@@ -1016,7 +1016,11 @@
       "externalId": "Account id",
       "externalIdHint": "The provider's id of the page or the WhatsApp phone number.",
       "externalIdOptional": "Account id (optional)",
-      "submit": "Save the token and probe"
+      "submit": "Save the token and probe",
+      "title": "Connect with an access token"
+    },
+    "secret": {
+      "show": "Show {{field}}"
     },
     "result": {
       "verified": "The connection was probed and verified.",

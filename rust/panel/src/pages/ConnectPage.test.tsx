@@ -5,7 +5,7 @@ import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
 import { browser } from '@/lib/browser';
 import { PAGE_ID, PENDING_ID, SMS_LINE_ID, capabilities, lostPage, me, repMe, smsLine } from '@/test/fixtures';
-import { mockFetch, renderAt, withStatus } from '@/test/render';
+import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
 
 const started = {
   authorize_url: 'https://oauth.test/meta/authorize?state=signed-state',
@@ -66,7 +66,8 @@ describe('ConnectPage', () => {
     await screen.findByRole('heading', { level: 1, name: tr.connect.title });
     await user.click(within(providerSection(tr.connect.providers.netgsm)).getByRole('button', { name: 'SMS hattı' }));
     const password = screen.getByLabelText(tr.connect.credentials.password);
-    expect(password).toHaveAttribute('type', 'password');
+    expect(password).toHaveAttribute('type', 'text');
+    expect(password).toHaveClass('secret-masked');
     await user.type(screen.getByLabelText(tr.connect.credentials.name), 'Kampanya hattı');
     await user.type(screen.getByLabelText(tr.connect.credentials.usercode), '8508001234');
     await user.type(password, 'gizli-parola-1');
@@ -193,7 +194,8 @@ describe('ConnectPage', () => {
     expect(screen.queryByLabelText(tr.connect.token.accessToken)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: new RegExp(tr.connect.advanced) }));
     const token = screen.getByLabelText(tr.connect.token.accessToken);
-    expect(token).toHaveAttribute('type', 'password');
+    expect(token).toHaveAttribute('type', 'text');
+    expect(token).toHaveClass('secret-masked');
     await user.type(screen.getByLabelText(tr.connect.credentials.name), 'Atölye sayfası');
     await user.type(token, 'EAAB-yapistirilan');
     // A page token needs its page id.
@@ -230,7 +232,8 @@ describe('ConnectPage', () => {
       [tr.connect.mail.imap_host, 'imap.example.com'], [tr.connect.mail.username, 'support@example.com'],
       [tr.connect.mail.password, 'private-mail-password'], [tr.connect.mail.from_address, 'support@example.com'],
     ]) await user.type(screen.getByLabelText(label), value);
-    expect(screen.getByLabelText(tr.connect.mail.password)).toHaveAttribute('type', 'password');
+    expect(screen.getByLabelText(tr.connect.mail.password)).toHaveAttribute('type', 'text');
+    expect(screen.getByLabelText(tr.connect.mail.password)).toHaveClass('secret-masked');
     await user.selectOptions(screen.getByLabelText(tr.connect.mail.tls), 'start_tls');
     await user.click(screen.getByRole('button', { name: tr.connect.credentials.submit }));
     expect(await screen.findByText(tr.connect.result.verified)).toBeInTheDocument();
@@ -252,7 +255,8 @@ describe('ConnectPage', () => {
     await user.type(code, '8508001234');
     await user.type(screen.getByLabelText('İYS parolası'), 'private-iys-password');
     await user.type(screen.getByLabelText('İYS marka kodu'), 'brand-42');
-    expect(screen.getByLabelText('İYS parolası')).toHaveAttribute('type', 'password');
+    expect(screen.getByLabelText('İYS parolası')).toHaveAttribute('type', 'text');
+    expect(screen.getByLabelText('İYS parolası')).toHaveClass('secret-masked');
     await user.click(screen.getByRole('button', { name: 'İYS bağlantısını kaydet' }));
     expect(await screen.findByText('İYS bağlantısı kaydedildi.')).toBeInTheDocument();
     expect(calls.filter((c)=>c.method==='POST').map((c)=>c.body)).toEqual([{capability_id:SMS_LINE_ID,credential:{kind:'netgsm_iys',usercode:'8508001234',password:'private-iys-password',brand_code:'brand-42'}}]);
@@ -305,17 +309,109 @@ it('keeps the browser and password managers from filling any provider credential
   ] as const) {
     const { unmount } = renderAt(`/connect?kind=${kind}`);
     await screen.findByLabelText(heading);
-    const fields = [...document.querySelectorAll<HTMLInputElement>('form input:not([type=hidden])')].filter(
-      (input) => input.type === 'text' || input.type === 'password',
-    );
-    expect(fields.some((input) => input.type === 'password')).toBe(true);
+    const fields = [...document.querySelectorAll<HTMLInputElement>('[role=form] input')];
+    const secrets = fields.filter((input) => input.classList.contains('secret-masked'));
+    expect(secrets.length).toBeGreaterThan(0);
     for (const input of fields) {
       // A saved panel password must never land in a provider's password, nor the e-mail in its user.
-      expect(input).toHaveAttribute('autocomplete', input.type === 'password' ? 'new-password' : 'off');
+      expect(input).toHaveAttribute('type', 'text');
+      expect(input).toHaveAttribute('autocomplete', secrets.includes(input) ? 'new-password' : 'off');
+      expect(input).not.toHaveAttribute('name');
+      expect(input).toHaveAttribute('data-form-type', 'other');
       for (const ignore of ['data-1p-ignore', 'data-lpignore', 'data-bwignore']) {
         expect(input).toHaveAttribute(ignore, 'true');
       }
     }
     unmount();
   }
+});
+
+it('secret_inputs_are_not_type_password', async () => {
+  const user = userEvent.setup();
+  mockFetch({ 'GET /api/auth/me': me, [`GET /api/capabilities/${SMS_LINE_ID}`]: smsLine });
+  /** A secret field of a credentials form, inside its named `form` region, and no sign-in shape. */
+  const expectNoSignInShape = (secret: HTMLElement, formName: string) => {
+    expect(secret).toHaveAttribute('type', 'text');
+    expect(secret).toHaveClass('secret-masked');
+    expect(screen.getByRole('form', { name: formName })).toContainElement(secret);
+    expect(document.querySelector('input[type=password]')).toBeNull();
+    // Not a <form> either: a form with a user field before a password one reads as a sign-in.
+    expect(document.querySelector('form')).toBeNull();
+  };
+  for (const [path, label, formName] of [
+    ['/connect?kind=sms_line', tr.connect.credentials.password, tr.connect.credentials.title],
+    ['/connect?kind=netgsm_pbx', tr.connect.credentials.password, tr.connect.credentials.title],
+    ['/connect?kind=mailbox', tr.connect.mail.password, tr.connect.mail.title],
+  ] as const) {
+    const { unmount } = renderAt(path);
+    expectNoSignInShape(await screen.findByLabelText(label), formName);
+    unmount();
+  }
+  const meta = renderAt('/connect?kind=facebook_page');
+  await user.click(await screen.findByRole('button', { name: new RegExp(tr.connect.advanced) }));
+  expectNoSignInShape(screen.getByLabelText(tr.connect.token.accessToken), tr.connect.token.title);
+  meta.unmount();
+  renderAt(`/connect?capability=${SMS_LINE_ID}`);
+  await user.click(await screen.findByRole('button', { name: /İYS bağlantısı \(isteğe bağlı\)/ }));
+  expectNoSignInShape(screen.getByLabelText(tr.connect.iys.password), tr.connect.iys.title);
+});
+
+it('secret_input_is_readonly_until_focus', async () => {
+  const user = userEvent.setup();
+  mockFetch({ 'GET /api/auth/me': me });
+  renderAt('/connect?kind=sms_line');
+  const password = await screen.findByLabelText(tr.connect.credentials.password);
+  // Nothing can fill it on load: it takes input only once the owner is in it.
+  expect(password).toHaveAttribute('readonly');
+  await user.click(screen.getByLabelText(tr.connect.credentials.usercode));
+  await user.tab();
+  expect(password).toHaveFocus();
+  expect(password).not.toHaveAttribute('readonly');
+  await user.keyboard('gizli-parola-5');
+  expect(password).toHaveValue('gizli-parola-5');
+  await user.tab();
+  expect(password).toHaveAttribute('readonly');
+  expect(password).toHaveValue('gizli-parola-5');
+});
+
+it('secret_toggle_shows_and_hides_the_value', async () => {
+  const user = userEvent.setup();
+  mockFetch({ 'GET /api/auth/me': me });
+  renderAt('/connect?kind=sms_line');
+  const password = await screen.findByLabelText(tr.connect.credentials.password);
+  const toggle = screen.getByRole('button', {
+    name: i18n.t('connect.secret.show', { field: tr.connect.credentials.password }),
+  });
+  expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await user.click(toggle);
+  expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  expect(password).not.toHaveClass('secret-masked');
+  expect(password).toHaveAttribute('type', 'text');
+  await user.click(toggle);
+  expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  expect(password).toHaveClass('secret-masked');
+});
+
+it('enter_submits_netgsm_form', async () => {
+  const user = userEvent.setup();
+  const calls = mockFetch({
+    'GET /api/auth/me': me,
+    'POST /api/connectors/credentials': delayed(50, smsLine),
+  });
+  renderAt('/connect?kind=sms_line');
+  await user.type(await screen.findByLabelText(tr.connect.credentials.name), 'Kampanya hattı');
+  // An incomplete form is not sent by Enter, as its button is disabled.
+  await user.type(screen.getByLabelText(tr.connect.credentials.usercode), '8508001234{Enter}');
+  expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+  await user.type(screen.getByLabelText(tr.connect.credentials.password), 'gizli-parola-6');
+  // A second Enter while the first submission is in flight sends nothing more.
+  await user.type(screen.getByLabelText(tr.connect.credentials.msgheader), 'ALFA{Enter}{Enter}');
+  expect(await screen.findByText(tr.connect.result.verified)).toBeInTheDocument();
+  const posts = calls.filter((c) => c.method === 'POST');
+  expect(posts).toHaveLength(1);
+  expect(posts[0].body).toEqual({
+    kind_key: 'sms_line',
+    name: 'Kampanya hattı',
+    credential: { kind: 'netgsm_sms', usercode: '8508001234', password: 'gizli-parola-6', msgheader: 'ALFA' },
+  });
 });

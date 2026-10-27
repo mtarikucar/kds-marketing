@@ -1016,7 +1016,11 @@
       "externalId": "Hesap kimliği",
       "externalIdHint": "Sayfanın ya da WhatsApp telefon numarasının sağlayıcıdaki kimliği.",
       "externalIdOptional": "Hesap kimliği (isteğe bağlı)",
-      "submit": "Jetonu kaydet ve yokla"
+      "submit": "Jetonu kaydet ve yokla",
+      "title": "Erişim jetonuyla bağla"
+    },
+    "secret": {
+      "show": "{{field}} değerini göster"
     },
     "result": {
       "verified": "Bağlantı yoklandı ve doğrulandı.",
