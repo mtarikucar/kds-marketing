@@ -526,7 +526,11 @@ async fn effective_scopes_shrink_when_issuer_is_demoted() {
         .unwrap();
     assert_eq!(
         principal.permissions,
-        BTreeSet::from([Permission::WorkspaceRead, Permission::InboxWork])
+        BTreeSet::from([
+            Permission::WorkspaceRead,
+            Permission::InboxWork,
+            Permission::CallsWork,
+        ])
     );
     assert_eq!(principal.issuer_role_key, "rep");
     assert_eq!(t.w.key_row(key.id).scopes, all_permissions());
