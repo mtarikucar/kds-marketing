@@ -234,9 +234,10 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
         can_remove_member(&lead(), false, &SystemRole::Manager.permissions()),
         exceeds
     );
-    // Rep now holds InboxWork too: a lead without it cannot change or remove that member.
+    // Rep now holds InboxWork and CallsWork too: a lead without them cannot change or remove that
+    // member.
     let missing_work = Err(TenancyError::ExceedsOwnAuthority {
-        missing: BTreeSet::from([Permission::InboxWork]),
+        missing: BTreeSet::from([Permission::InboxWork, Permission::CallsWork]),
     });
     assert_eq!(
         can_grant_role(&lead(), &change(SystemRole::Rep, SystemRole::Rep)),
@@ -248,6 +249,7 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
     );
     let mut inbox_lead = lead();
     inbox_lead.permissions.insert(Permission::InboxWork);
+    inbox_lead.permissions.insert(Permission::CallsWork);
     assert_eq!(
         can_grant_role(&inbox_lead, &change(SystemRole::Rep, SystemRole::Rep)),
         Ok(())
@@ -305,7 +307,11 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             &change(SystemRole::Manager, SystemRole::Rep)
         ),
         Err(TenancyError::ExceedsOwnAuthority {
-            missing: BTreeSet::from([Permission::WorkspaceRead, Permission::InboxWork]),
+            missing: BTreeSet::from([
+                Permission::WorkspaceRead,
+                Permission::InboxWork,
+                Permission::CallsWork,
+            ]),
         })
     );
 }
@@ -365,7 +371,7 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
     assert_eq!(
         can_grant_role(&lead, &grant(SystemRole::Rep, false)),
         Err(TenancyError::ExceedsOwnAuthority {
-            missing: BTreeSet::from([Permission::InboxWork])
+            missing: BTreeSet::from([Permission::InboxWork, Permission::CallsWork])
         })
     );
     assert_eq!(
