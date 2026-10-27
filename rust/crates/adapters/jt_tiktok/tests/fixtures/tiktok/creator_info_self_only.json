@@ -1,0 +1,13 @@
+{
+  "data": {
+    "creator_avatar_url": "https://p16-sign-va.tiktokcdn.test/avatar.jpeg",
+    "creator_username": "jeeta_test",
+    "creator_nickname": "Jeeta Test",
+    "privacy_level_options": ["SELF_ONLY"],
+    "comment_disabled": true,
+    "duet_disabled": false,
+    "stitch_disabled": true,
+    "max_video_post_duration_sec": 300
+  },
+  "error": { "code": "ok", "message": "", "log_id": "20261027000000TEST0006" }
+}

@@ -1,0 +1,11 @@
+{
+  "data": {
+    "user": {
+      "follower_count": 1200,
+      "following_count": 45,
+      "likes_count": 8700,
+      "video_count": 31
+    }
+  },
+  "error": { "code": "ok", "message": "", "log_id": "20261027000000TEST0004" }
+}
