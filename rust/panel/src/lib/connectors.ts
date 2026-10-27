@@ -9,6 +9,8 @@ export const PROVIDER_KINDS: Record<Provider, readonly KindKey[]> = {
   netgsm: ['sms_line', 'netgsm_pbx'],
   x: ['x'],
   mail: ['mailbox'],
+  tiktok: ['tiktok'],
+  linkedin: ['linkedin_member', 'linkedin_page'],
 };
 
 /**
@@ -29,7 +31,14 @@ export function connectableKinds(provider: Provider): readonly KindKey[] {
 }
 
 /** A provider's name as shown (brand names, the same in every language). */
-export const PROVIDER_NAMES: Record<Provider, string> = { meta: 'Meta', netgsm: 'NetGSM', x: 'X', mail: 'Email' };
+export const PROVIDER_NAMES: Record<Provider, string> = {
+  meta: 'Meta',
+  netgsm: 'NetGSM',
+  x: 'X',
+  mail: 'Email',
+  tiktok: 'TikTok',
+  linkedin: 'LinkedIn',
+};
 
 /** The provider that serves `kind`, or `null` for a kind none serves yet. */
 export function providerOf(kind: string): Provider | null {
@@ -39,10 +48,10 @@ export function providerOf(kind: string): Provider | null {
   return null;
 }
 
-/** Meta and X kinds connect by signing in at the provider (OAuth). */
+/** Meta, X, TikTok and LinkedIn kinds connect by signing in at the provider (OAuth). */
 export function connectsByOAuth(kind: string): boolean {
   const provider = providerOf(kind);
-  return provider === 'meta' || provider === 'x';
+  return provider === 'meta' || provider === 'x' || provider === 'tiktok' || provider === 'linkedin';
 }
 
 /** The credentials a NetGSM kind takes by hand, or `null` for any other kind. */

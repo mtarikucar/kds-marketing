@@ -644,6 +644,7 @@ async fn no_appsecret_proof_on_instagram_graph() {
                 media_urls: vec![Url::parse("https://cdn.test/a.jpg").unwrap()],
                 link: None,
                 media: vec![],
+                privacy: None,
             },
         )
         .await
@@ -1191,6 +1192,7 @@ fn post(text: &str, media: &[&str], link: Option<&str>) -> PublishRequest {
         media_urls: media.iter().map(|m| Url::parse(m).unwrap()).collect(),
         link: link.map(|l| Url::parse(l).unwrap()),
         media: vec![],
+        privacy: None,
     }
 }
 

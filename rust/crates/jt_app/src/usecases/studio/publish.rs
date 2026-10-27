@@ -4,7 +4,7 @@ use crate::{
     error::AppError,
     ports::{
         TenantRepos,
-        connectors::{PublishReceipt, PublishRequest},
+        connectors::{PublishReceipt, PublishRequest, PublishResolution, Publisher},
         studio::{ApprovalTarget, PublishOutcome, SlotQuery},
     },
     usecases::{
@@ -14,11 +14,16 @@ use crate::{
     },
 };
 use jt_capability::Capability;
-use jt_connector::{ConnectorError, Credential, provider_for_kind};
+use jt_connector::{ConnectorError, Credential, Provider, provider_for_kind};
 use jt_studio::{Piece, PublishAttempt, PublishState, SlotState};
 use jt_tenancy::WorkspaceId;
-use serde_json::json;
+use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
+
+/// How long a post a provider publishes in the background ([`Publisher::resolve`], TikTok) may
+/// stay unsettled after it was sent: the recovery job asks again every run until then, and then
+/// records it as failed.
+pub const RESOLVE_WINDOW: Duration = Duration::minutes(30);
 
 fn query(until: OffsetDateTime) -> SlotQuery {
     SlotQuery {
@@ -280,49 +285,22 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             Ok(receipt) => {
                 // The small receipt checkpoint survives interruption before final bookkeeping.
                 finish(d, ws, &attempt, PublishOutcome::Observed(receipt.clone())).await?;
-                finish(d, ws, &attempt, PublishOutcome::Succeeded(receipt)).await?;
-            }
-            Err(e) => {
-                let reason = failure::failure_reason(Some(provider), &e);
-                tracing::warn!(
-                    workspace_id = %ws,
-                    capability_id = %attempt.capability_id().0,
-                    error_kind = e.kind(),
-                    http_status = ?failure::http_status(&reason),
-                    provider_code = ?failure::provider_code(&reason),
-                    "a Studio piece could not be published"
-                );
-                let error = AppError::validation(
-                    "publication failed",
-                    json!({"provider_error":e.kind(),"provider_reason":reason}),
-                );
-                let outcome = if matches!(e, ConnectorError::Unknown { .. }) {
-                    PublishOutcome::Unknown(error)
-                } else {
-                    PublishOutcome::Failed(error)
-                };
-                let mut r = d.uow.tenant(ws).await?;
-                r.studio()
-                    .finish_publication(attempt.id(), outcome, d.clock.now())
-                    .await?;
-                let retry_after_s = match &e {
-                    ConnectorError::Throttle { retry_after } => {
-                        retry_after.map(|v| v.whole_seconds())
+                let settled = publisher.resolve(&cred, &public, &receipt).await;
+                match settled {
+                    // The provider published synchronously: the receipt is the post.
+                    Ok(None) => finish(d, ws, &attempt, PublishOutcome::Succeeded(receipt)).await?,
+                    Ok(Some(PublishResolution::Published(post))) => {
+                        finish(d, ws, &attempt, PublishOutcome::Succeeded(post)).await?
                     }
-                    _ => None,
-                };
-                let mut entry = jt_ledger::LedgerEntry::new(
-                    ws,
-                    attempt.actor().clone(),
-                    jt_ledger::Action::new("studio.publish.failure")
-                        .map_err(|_| AppError::internal("action"))?,
-                    json!({"attempt_id":attempt.id(),"slot_id":attempt.slot_id(),"born_version_id":attempt.piece().chain.born_version_id,"executed_version_id":attempt.executed_version_id(),"arm_id":attempt.piece().chain.arm_id,"provider_error":e.kind(),"provider_reason":reason,"retry_after_s":retry_after_s}),
-                    d.clock.now(),
-                );
-                entry.strategy_version_id = Some(attempt.executed_version_id().0);
-                r.ledger().append(entry).await?;
-                r.commit().await?;
+                    Ok(Some(PublishResolution::Failed(e))) => {
+                        fail(d, ws, &attempt, provider, &e).await?
+                    }
+                    // Still processing, or the status could not be read: the recovery job asks
+                    // again (`recover_publications`).
+                    Ok(Some(PublishResolution::Pending)) | Err(_) => {}
+                }
             }
+            Err(e) => fail(d, ws, &attempt, provider, &e).await?,
         }
         count += 1;
     }
@@ -332,6 +310,93 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
         return Err(e);
     }
     Ok(count)
+}
+/// Records that the provider refused or gave up on `attempt` with `e`: the attempt fails
+/// (`Unknown` when the outcome is unknown) with its failure line, and `studio.publish.failure` is
+/// written.
+async fn fail(
+    d: &Deps,
+    ws: WorkspaceId,
+    attempt: &PublishAttempt,
+    provider: Provider,
+    e: &ConnectorError,
+) -> Result<(), AppError> {
+    let reason = failure::failure_reason(Some(provider), e);
+    tracing::warn!(
+        workspace_id = %ws,
+        capability_id = %attempt.capability_id().0,
+        error_kind = e.kind(),
+        http_status = ?failure::http_status(&reason),
+        provider_code = ?failure::provider_code(&reason),
+        "a Studio piece could not be published"
+    );
+    let error = AppError::validation(
+        "publication failed",
+        json!({"provider_error":e.kind(),"provider_reason":reason}),
+    );
+    let outcome = if matches!(e, ConnectorError::Unknown { .. }) {
+        PublishOutcome::Unknown(error)
+    } else {
+        PublishOutcome::Failed(error)
+    };
+    let mut r = d.uow.tenant(ws).await?;
+    r.studio()
+        .finish_publication(attempt.id(), outcome, d.clock.now())
+        .await?;
+    let retry_after_s = match e {
+        ConnectorError::Throttle { retry_after } => retry_after.map(|v| v.whole_seconds()),
+        _ => None,
+    };
+    let mut entry = jt_ledger::LedgerEntry::new(
+        ws,
+        attempt.actor().clone(),
+        jt_ledger::Action::new("studio.publish.failure")
+            .map_err(|_| AppError::internal("action"))?,
+        json!({"attempt_id":attempt.id(),"slot_id":attempt.slot_id(),"born_version_id":attempt.piece().chain.born_version_id,"executed_version_id":attempt.executed_version_id(),"arm_id":attempt.piece().chain.arm_id,"provider_error":e.kind(),"provider_reason":reason,"retry_after_s":retry_after_s}),
+        d.clock.now(),
+    );
+    entry.strategy_version_id = Some(attempt.executed_version_id().0);
+    r.ledger().append(entry).await?;
+    r.commit().await
+}
+/// Where an observed post of a provider that publishes in the background stands (see
+/// [`recover_publications`]): `true` when the attempt was settled (succeeded or failed), `false`
+/// when it is left for a later run; `None` when the provider publishes synchronously, and the
+/// receipt is to be verified by reading the post back.
+async fn settle_observed(
+    d: &Deps,
+    ws: WorkspaceId,
+    a: &PublishAttempt,
+    (provider, publisher): (Provider, &dyn Publisher),
+    (cred, public): (&Credential, &Value),
+    receipt: &PublishReceipt,
+) -> Result<Option<bool>, AppError> {
+    let settled = publisher.resolve(cred, public, receipt).await;
+    let pending = match settled {
+        Ok(None) => return Ok(None),
+        Ok(Some(PublishResolution::Published(post))) => {
+            finish(d, ws, a, PublishOutcome::Succeeded(post)).await?;
+            return Ok(Some(true));
+        }
+        Ok(Some(PublishResolution::Failed(e))) => {
+            fail(d, ws, a, provider, &e).await?;
+            return Ok(Some(true));
+        }
+        Ok(Some(PublishResolution::Pending)) => None,
+        Err(e) => Some(e),
+    };
+    if d.clock.now() - a.claimed_at() < RESOLVE_WINDOW {
+        return Ok(Some(false));
+    }
+    // Past the window: what the last read said, or that it never settled.
+    let e = pending.unwrap_or_else(|| {
+        ConnectorError::transient(format!(
+            "the post was still processing {} minutes after it was sent: timed out",
+            RESOLVE_WINDOW.whole_minutes()
+        ))
+    });
+    fail(d, ws, a, provider, &e).await?;
+    Ok(Some(true))
 }
 async fn finish(
     d: &Deps,
@@ -346,7 +411,11 @@ async fn finish(
     r.commit().await
 }
 /// Recovery only reads providers. Abandoned Sending becomes Unknown after two minutes;
-/// an exact captured receipt can be verified even after strategy retirement, never guessed.
+/// an exact captured receipt can be verified even after strategy retirement, never guessed. A
+/// provider that publishes in the background ([`Publisher::resolve`]) is asked where the post
+/// stands: published (succeeded, with the post's own receipt), given up (failed, with its failure
+/// line), or still processing (asked again next run, for at most [`RESOLVE_WINDOW`] after it was
+/// sent, then failed); any other provider's receipt is verified by reading the post back.
 pub async fn recover_publications(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     let attempts = {
         let mut r = d.uow.tenant(ws).await?;
@@ -400,6 +469,29 @@ pub async fn recover_publications(d: &Deps, ws: WorkspaceId) -> Result<u32, AppE
                 }
             };
             let Some((c, cred)) = prepared else { continue };
+            let provider = provider_for_kind(&c.kind_key);
+            if let Some((provider, publisher)) =
+                provider.and_then(|p| d.connectors.publisher(p).map(|publisher| (p, publisher)))
+            {
+                let public = adapter_public(&c);
+                match settle_observed(
+                    d,
+                    ws,
+                    &a,
+                    (provider, publisher.as_ref()),
+                    (&cred, &public),
+                    receipt,
+                )
+                .await?
+                {
+                    Some(true) => {
+                        count += 1;
+                        continue;
+                    }
+                    Some(false) => continue,
+                    None => {}
+                }
+            }
             let Some(reader) =
                 provider_for_kind(&c.kind_key).and_then(|p| d.connectors.insights(p))
             else {

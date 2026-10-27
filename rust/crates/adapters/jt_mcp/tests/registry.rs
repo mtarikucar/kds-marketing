@@ -447,6 +447,43 @@ fn requires_nothing(schema: &Value) -> bool {
 }
 
 /// The `required` property names of an object schema.
+#[test]
+fn start_oauth_offers_every_kind_an_oauth_provider_serves() {
+    let specs = registry();
+    let start = specs
+        .iter()
+        .find(|s| s.name == "jeeta.connector.start_oauth")
+        .unwrap();
+    let schema = start.input_schema.clone().to_value();
+    let kinds: BTreeSet<&str> = schema["properties"]["kind_key"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k.as_str().unwrap())
+        .collect();
+    let expected: BTreeSet<&str> = [
+        jt_connector::Provider::Meta,
+        jt_connector::Provider::X,
+        jt_connector::Provider::Tiktok,
+        jt_connector::Provider::Linkedin,
+    ]
+    .iter()
+    .flat_map(|p| p.kinds().iter().copied())
+    .collect();
+    assert_eq!(kinds, expected);
+    for kind in [
+        "tiktok",
+        "linkedin_member",
+        "linkedin_page",
+        "x",
+        "instagram",
+    ] {
+        assert!(kinds.contains(kind), "{kind}");
+        assert!(start.description.contains(kind), "{kind}");
+    }
+    assert!(!kinds.contains("sms_line") && !kinds.contains("mailbox"));
+}
+
 fn required(schema: &Value) -> BTreeSet<&str> {
     schema["required"]
         .as_array()

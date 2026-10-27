@@ -114,7 +114,9 @@ pub(crate) fn capability_access(
         // adapter answers that it has no counters (measurement records the refusal once).
         ("linkedin_member", false) => &[],
         ("linkedin_page", true) => &["w_organization_social"],
-        ("linkedin_page", false) => &["r_organization_social"],
+        // Share statistics and follower counts need the admin scope (the page ACL behind
+        // them), not `r_organization_social`.
+        ("linkedin_page", false) => &["rw_organization_admin"],
         _ => return Err(refuse("unsupported_studio_capability")),
     };
     if !required.is_empty() && !required.iter().any(|s| scopes.contains(s)) {

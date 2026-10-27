@@ -230,6 +230,20 @@ describe('OAuthCallbackPage', () => {
     expect(calls.some((c) => c.path === CALLBACK)).toBe(false);
   });
 
+  it('completes TikTok and LinkedIn flows at their own callbacks, sending only the state and code', async () => {
+    for (const provider of ['tiktok', 'linkedin']) {
+      const path = `/api/connectors/oauth/callback/${provider}`;
+      const calls = mockFetch({ 'GET /api/auth/me': me, [`GET ${path}`]: pendingAssets });
+      // TikTok adds the granted scopes to its redirect; the panel passes on the state and code only.
+      const view = renderAt(`/oauth/callback/${provider}?state=s&code=c&scopes=video.publish`);
+      expect(await screen.findByRole('checkbox', { name: /Kahve Evi/ })).toBeInTheDocument();
+      const completion = calls.filter((c) => c.path === path);
+      expect(completion).toHaveLength(1);
+      expect([...new URLSearchParams(completion[0].search).entries()]).toEqual([['state', 's'], ['code', 'c']]);
+      view.unmount();
+    }
+  });
+
   it('refuses a callback address the panel does not know, without asking the API', async () => {
     const calls = mockFetch({ 'GET /api/auth/me': me });
     renderAt('/oauth/callback/netgsm?state=s&code=c');

@@ -119,9 +119,9 @@ pub struct LinkedinApp {
     /// `w_organization_social`, `rw_organization_admin`): set by the operator once LinkedIn has
     /// approved the Community Management API for the app (`JEETA_LINKEDIN_ORG_SCOPES`), since
     /// LinkedIn refuses a whole authorize request that names a scope the app was not granted.
-    /// As the platform's configuration it says what the app may ask for; as the app of one flow
-    /// ([`OAuthApp::Linkedin`]) whether that flow asks for them (only a `linkedin_page` flow
-    /// does).
+    /// Every LinkedIn flow then asks for them (LinkedIn invalidates a member's earlier tokens
+    /// when a flow asks for another set of scopes); without them, `linkedin_page` flows are
+    /// refused.
     pub organization_scopes: bool,
     /// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (`JEETA_LINKEDIN_API_VERSION`);
     /// `None` lets the adapter use its pinned default.

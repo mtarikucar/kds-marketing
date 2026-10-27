@@ -172,9 +172,11 @@ pub async fn measure_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             let previous = rows
                 .iter()
                 .find(|m| m.publication_id == Some(p.id) && m.window == window);
+            // A provider's permanent refusal (LinkedIn has no member post metrics; a post with
+            // no public id; a deleted post) is final for the window: never asked again.
             if previous
                 .and_then(|m| m.failure.as_ref())
-                .is_some_and(|f| f.retry_at > now)
+                .is_some_and(|f| f.retry_at > now || f.category == PERMANENT)
             {
                 continue;
             }
@@ -245,6 +247,8 @@ async fn measure_publication(
         && let Some(n) = raw
             .get("impression_count")
             .or_else(|| raw.get("post_impressions"))
+            // TikTok counts a video's views.
+            .or_else(|| raw.get("view_count"))
             .copied()
     {
         raw.insert("impressions".into(), n);
@@ -267,6 +271,10 @@ async fn measure_publication(
             "reply_count",
             "retweet_count",
             "quote_count",
+            // TikTok's and LinkedIn's (organization share statistics) names.
+            "comment_count",
+            "share_count",
+            "click_count",
             "saved",
             "post_reactions_like_total",
             "post_clicks",
@@ -324,6 +332,8 @@ fn target_failure(e: &AppError) -> bool {
             | ErrorCode::UpstreamUnavailable
     )
 }
+/// The failure category of a provider's permanent refusal ([`provider_failure`]).
+const PERMANENT: &str = "permanent";
 fn provider_failure(e: jt_connector::ConnectorError) -> AppError {
     super::chain::refuse(e.kind())
 }

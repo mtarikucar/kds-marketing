@@ -2,7 +2,7 @@ import type { TFunction } from 'i18next';
 import type { InboxMessage } from '@/api/types';
 
 /** Providers a failure line names (`jt_connector::Provider::key`). */
-const PROVIDERS = ['meta', 'netgsm', 'x', 'mail'];
+const PROVIDERS = ['meta', 'netgsm', 'x', 'mail', 'tiktok', 'linkedin'];
 
 /** Provider error codes (Meta Graph `(#code)`) explained in the owner's words. */
 const CODES = {

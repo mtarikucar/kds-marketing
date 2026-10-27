@@ -131,6 +131,8 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_meta",
         "jt_netgsm",
         "jt_x",
+        "jt_tiktok",
+        "jt_linkedin",
         "jt_webhook",
         "jt_testkit",
         "jeeta",
@@ -292,7 +294,14 @@ const MAIL_ADAPTER_EXTRA_ALLOW: &[&str] = &[
 ];
 
 /// The provider adapter crates.
-const CONNECTOR_ADAPTERS: &[&str] = &["jt_meta", "jt_netgsm", "jt_x", "jt_mail"];
+const CONNECTOR_ADAPTERS: &[&str] = &[
+    "jt_meta",
+    "jt_netgsm",
+    "jt_x",
+    "jt_tiktok",
+    "jt_linkedin",
+    "jt_mail",
+];
 
 #[test]
 fn connector_adapters_reach_out_only_through_the_egress_client() {

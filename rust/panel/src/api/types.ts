@@ -461,6 +461,7 @@ export const KINDS = [
   { group: 'social_account', key: 'facebook_page' },
   { group: 'social_account', key: 'x' },
   { group: 'social_account', key: 'linkedin_page' },
+  { group: 'social_account', key: 'linkedin_member' },
   { group: 'social_account', key: 'tiktok' },
   { group: 'social_account', key: 'pinterest' },
   { group: 'social_account', key: 'youtube' },
@@ -792,8 +793,8 @@ export const MAX_CHECKIN_INTERVAL_MINUTES = 10_080;
 // ---------------------------------------------------------------------------------------------
 
 /** `jt_connector::Provider`. */
-export type Provider = 'meta' | 'netgsm' | 'x' | 'mail';
-export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail'];
+export type Provider = 'meta' | 'netgsm' | 'x' | 'mail' | 'tiktok' | 'linkedin';
+export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail', 'tiktok', 'linkedin'];
 
 /** `jt_app::usecases::connector::StartOut`: where to send the browser, until when. */
 export interface StartOut {

@@ -32,8 +32,8 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest.
 const TABLES_AFTER_ALL: i64 = 67;
 
-/// Migrations `0001_foundation` through `0012_m4_grandfathered_backfill`.
-const MIGRATIONS: i64 = 12;
+/// Migrations `0001_foundation` through `0013_social_providers`.
+const MIGRATIONS: i64 = 13;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -172,6 +172,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0013_social_providers",
         "0012_m4_grandfathered_backfill",
         "0011_m4_activation_codes",
         "0010_m4_billing",
@@ -258,7 +259,7 @@ async fn every_migration_has_a_down_file() {
         .map(|n| n.split('_').next().unwrap().parse().unwrap())
         .collect();
     versions.sort();
-    assert_eq!(versions, (1..=12).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=13).collect::<Vec<_>>());
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,

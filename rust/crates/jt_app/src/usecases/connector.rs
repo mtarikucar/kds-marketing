@@ -540,8 +540,8 @@ pub async fn complete_oauth(
 
     // The public base URL first, as when the flow started; then the app and its adapter.
     let redirect = callback_url(deps.apps.as_ref(), callback)?;
-    let app = oauth_app(deps.apps.as_ref(), flow.app, &flow.kind_key)
-        .ok_or_else(|| app_not_configured(flow.provider))?;
+    let app =
+        oauth_app(deps.apps.as_ref(), flow.app).ok_or_else(|| app_not_configured(flow.provider))?;
     let oauth = deps
         .connectors
         .oauth(flow.provider)
@@ -1060,8 +1060,8 @@ async fn begin_oauth(
     .ok_or_else(|| app_not_configured(provider))?;
     // The public base URL first: without it no flow can start, whichever apps are configured.
     let redirect = callback_url(deps.apps.as_ref(), callback)?;
-    let app = oauth_app(deps.apps.as_ref(), callback, kind_key)
-        .ok_or_else(|| app_not_configured(provider))?;
+    let app =
+        oauth_app(deps.apps.as_ref(), callback).ok_or_else(|| app_not_configured(provider))?;
     if kind_key == LINKEDIN_PAGE
         && matches!(&app, OAuthApp::Linkedin(linkedin) if !linkedin.organization_scopes)
     {
@@ -1175,19 +1175,20 @@ fn connector_kind(kind_key: &str) -> Result<&'static CapabilityKind, AppError> {
     Ok(kind)
 }
 
-/// The configured app a flow of `kind_key` signed in with `app` runs under, if it is configured.
-/// A LinkedIn flow asks for the organization scopes only for a `linkedin_page`, and only when the
-/// platform's LinkedIn app may.
-fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback, kind_key: &str) -> Option<OAuthApp> {
+/// The configured app a flow signed in with `app` runs under, if it is configured. Every LinkedIn
+/// flow asks for the same scopes, the organization scopes included once the platform's app may
+/// ([`LinkedinApp::organization_scopes`]): LinkedIn invalidates a member's earlier tokens when a
+/// flow asks for another set of scopes, so a page connected after the member's own feed would
+/// otherwise cut the feed's capability off.
+///
+/// [`LinkedinApp::organization_scopes`]: crate::ports::connectors::LinkedinApp::organization_scopes
+fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback) -> Option<OAuthApp> {
     match app {
         OAuthCallback::Meta => apps.meta_app().map(OAuthApp::Meta),
         OAuthCallback::Instagram => apps.instagram_app().map(OAuthApp::Instagram),
         OAuthCallback::X => apps.x_app().map(OAuthApp::X),
         OAuthCallback::Tiktok => apps.tiktok_app().map(OAuthApp::Tiktok),
-        OAuthCallback::Linkedin => apps.linkedin_app().map(|mut linkedin| {
-            linkedin.organization_scopes &= kind_key == LINKEDIN_PAGE;
-            OAuthApp::Linkedin(linkedin)
-        }),
+        OAuthCallback::Linkedin => apps.linkedin_app().map(OAuthApp::Linkedin),
     }
 }
 

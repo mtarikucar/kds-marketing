@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use axum::http::uri::Authority;
-use jt_app::ports::connectors::{InstagramApp, MetaApp, PlatformAppConfig, Url, XApp};
+use jt_app::ports::connectors::{
+    InstagramApp, LinkedinApp, MetaApp, PlatformAppConfig, TiktokApp, Url, XApp,
+};
 use tracing_subscriber::EnvFilter;
 
 /// The application's PostgreSQL URL (required).
@@ -81,6 +83,22 @@ pub const INSTAGRAM_APP_SECRET: &str = "JEETA_INSTAGRAM_APP_SECRET";
 pub const X_CLIENT_ID: &str = "JEETA_X_CLIENT_ID";
 /// The X app's client secret; set together with [`X_CLIENT_ID`].
 pub const X_CLIENT_SECRET: &str = "JEETA_X_CLIENT_SECRET";
+/// The platform's TikTok app (Login Kit, Content Posting API) client key.
+pub const TIKTOK_CLIENT_KEY: &str = "JEETA_TIKTOK_CLIENT_KEY";
+/// The TikTok app's client secret; set together with [`TIKTOK_CLIENT_KEY`].
+pub const TIKTOK_CLIENT_SECRET: &str = "JEETA_TIKTOK_CLIENT_SECRET";
+/// The platform's LinkedIn app (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn)
+/// client id.
+pub const LINKEDIN_CLIENT_ID: &str = "JEETA_LINKEDIN_CLIENT_ID";
+/// The LinkedIn app's client secret; set together with [`LINKEDIN_CLIENT_ID`].
+pub const LINKEDIN_CLIENT_SECRET: &str = "JEETA_LINKEDIN_CLIENT_SECRET";
+/// Whether LinkedIn flows ask for the organization scopes (`1`/`true`; default off): set once
+/// LinkedIn approved the Community Management API for the app, which enables `linkedin_page`
+/// connections. Requires the LinkedIn app.
+pub const LINKEDIN_ORG_SCOPES: &str = "JEETA_LINKEDIN_ORG_SCOPES";
+/// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (default
+/// [`jt_linkedin::DEFAULT_API_VERSION`]). Requires the LinkedIn app.
+pub const LINKEDIN_API_VERSION: &str = "JEETA_LINKEDIN_API_VERSION";
 /// Where the panel is reached from outside (`https://host[:port]`), for OAuth redirect URIs and
 /// webhook URLs; required whenever a provider app is configured.
 pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
@@ -119,6 +137,12 @@ const VARS: &[&str] = &[
     INSTAGRAM_APP_SECRET,
     X_CLIENT_ID,
     X_CLIENT_SECRET,
+    TIKTOK_CLIENT_KEY,
+    TIKTOK_CLIENT_SECRET,
+    LINKEDIN_CLIENT_ID,
+    LINKEDIN_CLIENT_SECRET,
+    LINKEDIN_ORG_SCOPES,
+    LINKEDIN_API_VERSION,
     PUBLIC_BASE_URL,
 ];
 
@@ -201,16 +225,21 @@ pub struct EnvPlatformApps {
     meta: Option<MetaApp>,
     instagram: Option<InstagramApp>,
     x: Option<XApp>,
+    tiktok: Option<TiktokApp>,
+    linkedin: Option<LinkedinApp>,
     public_base_url: Option<Url>,
 }
 
 impl EnvPlatformApps {
-    /// The keys of the configured apps, for the start log: `meta`, `instagram`, `x`.
+    /// The keys of the configured apps, for the start log: `meta`, `instagram`, `x`, `tiktok`,
+    /// `linkedin`.
     pub fn configured(&self) -> Vec<&'static str> {
         [
             ("meta", self.meta.is_some()),
             ("instagram", self.instagram.is_some()),
             ("x", self.x.is_some()),
+            ("tiktok", self.tiktok.is_some()),
+            ("linkedin", self.linkedin.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, on)| on.then_some(name))
@@ -224,6 +253,8 @@ impl fmt::Debug for EnvPlatformApps {
             .field("meta", &self.meta)
             .field("instagram", &self.instagram)
             .field("x", &self.x)
+            .field("tiktok", &self.tiktok)
+            .field("linkedin", &self.linkedin)
             .field(
                 "public_base_url",
                 &self.public_base_url.as_ref().map(Url::as_str),
@@ -243,6 +274,14 @@ impl PlatformAppConfig for EnvPlatformApps {
 
     fn x_app(&self) -> Option<XApp> {
         self.x.clone()
+    }
+
+    fn tiktok_app(&self) -> Option<TiktokApp> {
+        self.tiktok.clone()
+    }
+
+    fn linkedin_app(&self) -> Option<LinkedinApp> {
+        self.linkedin.clone()
     }
 
     fn public_base_url(&self) -> Option<Url> {
@@ -578,11 +617,55 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         client_id,
         client_secret,
     });
+    let tiktok =
+        pair(&get, TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET)?.map(|(client_key, client_secret)| {
+            TiktokApp {
+                client_key,
+                client_secret,
+            }
+        });
+    let linkedin = match pair(&get, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET)? {
+        Some((client_id, client_secret)) => {
+            let api_version = value(LINKEDIN_API_VERSION)
+                .unwrap_or_else(|| jt_linkedin::DEFAULT_API_VERSION.to_owned());
+            if !is_linkedin_version(&api_version) {
+                return Err(ConfigError::new(
+                    LINKEDIN_API_VERSION,
+                    "must be a LinkedIn API version, YYYYMM such as 202610",
+                ));
+            }
+            Some(LinkedinApp {
+                client_id,
+                client_secret,
+                organization_scopes: parse_flag(LINKEDIN_ORG_SCOPES, get(LINKEDIN_ORG_SCOPES))?,
+                api_version: Some(api_version),
+            })
+        }
+        None => {
+            // The LinkedIn app's settings mean nothing without it: half a configuration.
+            for setting in [LINKEDIN_ORG_SCOPES, LINKEDIN_API_VERSION] {
+                if get(setting).is_some() {
+                    return Err(ConfigError::new(
+                        LINKEDIN_CLIENT_ID,
+                        format!(
+                            "must be set (with {LINKEDIN_CLIENT_SECRET}) because {setting} is: \
+                             the LinkedIn app is configured as a whole or not at all"
+                        ),
+                    ));
+                }
+            }
+            None
+        }
+    };
 
     let public_base_url = get(PUBLIC_BASE_URL)
         .map(|raw| parse_public_base_url(raw.trim()))
         .transpose()?;
-    let any_app = meta.is_some() || instagram.is_some() || x.is_some();
+    let any_app = meta.is_some()
+        || instagram.is_some()
+        || x.is_some()
+        || tiktok.is_some()
+        || linkedin.is_some();
     if any_app && public_base_url.is_none() {
         return Err(ConfigError::new(
             PUBLIC_BASE_URL,
@@ -594,8 +677,18 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         meta,
         instagram,
         x,
+        tiktok,
+        linkedin,
         public_base_url,
     })
+}
+
+/// Whether `version` is a LinkedIn API version: six digits, `YYYYMM`, with a month from 01 to 12
+/// (`202610`), as the LinkedIn adapter sends it in `LinkedIn-Version`.
+fn is_linkedin_version(version: &str) -> bool {
+    version.len() == 6
+        && version.bytes().all(|b| b.is_ascii_digit())
+        && matches!(version[4..].parse::<u8>(), Ok(1..=12))
 }
 
 /// An app's id and secret: both or neither. One without the other is an error naming the one
@@ -998,6 +1091,10 @@ mod tests {
         (INSTAGRAM_APP_SECRET, "IG-SECRET-SENTINEL"),
         (X_CLIENT_ID, "x-id-1"),
         (X_CLIENT_SECRET, "X-SECRET-SENTINEL"),
+        (TIKTOK_CLIENT_KEY, "tt-key-1"),
+        (TIKTOK_CLIENT_SECRET, "TT-SECRET-SENTINEL"),
+        (LINKEDIN_CLIENT_ID, "li-id-1"),
+        (LINKEDIN_CLIENT_SECRET, "LI-SECRET-SENTINEL"),
         (PUBLIC_BASE_URL, "https://jeeta.example"),
     ];
 
@@ -1007,6 +1104,8 @@ mod tests {
         "VERIFY-TOKEN-SENTINEL",
         "IG-SECRET-SENTINEL",
         "X-SECRET-SENTINEL",
+        "TT-SECRET-SENTINEL",
+        "LI-SECRET-SENTINEL",
     ];
 
     #[test]
@@ -1018,7 +1117,29 @@ mod tests {
 
         // Every app, configured as a whole.
         let all = Config::from_map(&with(ALL_APPS)).unwrap();
-        assert_eq!(all.apps.configured(), ["meta", "instagram", "x"]);
+        assert_eq!(
+            all.apps.configured(),
+            ["meta", "instagram", "x", "tiktok", "linkedin"]
+        );
+        let tiktok = all.apps.tiktok_app().unwrap();
+        assert_eq!(
+            (tiktok.client_key.as_str(), tiktok.client_secret.as_str()),
+            ("tt-key-1", "TT-SECRET-SENTINEL")
+        );
+        let linkedin = all.apps.linkedin_app().unwrap();
+        assert_eq!(
+            (linkedin.client_id.as_str(), linkedin.client_secret.as_str()),
+            ("li-id-1", "LI-SECRET-SENTINEL")
+        );
+        assert!(
+            !linkedin.organization_scopes,
+            "off until the operator enables them"
+        );
+        assert_eq!(
+            linkedin.api_version.as_deref(),
+            Some(jt_linkedin::DEFAULT_API_VERSION),
+            "the adapter's default when unset"
+        );
         let meta = all.apps.meta_app().unwrap();
         assert_eq!(meta.app_id, "meta-id-1");
         assert_eq!(meta.app_secret, "META-SECRET-SENTINEL");
@@ -1071,6 +1192,13 @@ mod tests {
             ((INSTAGRAM_APP_SECRET, "HALF-SENTINEL"), INSTAGRAM_APP_ID),
             ((X_CLIENT_ID, "x-id-1"), X_CLIENT_SECRET),
             ((X_CLIENT_SECRET, "HALF-SENTINEL"), X_CLIENT_ID),
+            ((TIKTOK_CLIENT_KEY, "tt-key-1"), TIKTOK_CLIENT_SECRET),
+            ((TIKTOK_CLIENT_SECRET, "HALF-SENTINEL"), TIKTOK_CLIENT_KEY),
+            ((LINKEDIN_CLIENT_ID, "li-id-1"), LINKEDIN_CLIENT_SECRET),
+            (
+                (LINKEDIN_CLIENT_SECRET, "HALF-SENTINEL"),
+                LINKEDIN_CLIENT_ID,
+            ),
         ] {
             let err = error(&with(&[given, base, (META_VERIFY_TOKEN, "")]));
             assert_eq!(err.var, missing, "{given:?}");
@@ -1097,6 +1225,31 @@ mod tests {
             assert!(err.to_string().contains(setting), "{err}");
             assert!(!err.to_string().contains("HALF-SENTINEL"), "{err}");
         }
+        // The LinkedIn app's settings: the organization scopes (a flag) and the API version.
+        let mut tuned = with(ALL_APPS);
+        tuned.insert(LINKEDIN_ORG_SCOPES.to_owned(), "1".to_owned());
+        tuned.insert(LINKEDIN_API_VERSION.to_owned(), " 202609 ".to_owned());
+        let linkedin = Config::from_map(&tuned)
+            .unwrap()
+            .apps
+            .linkedin_app()
+            .unwrap();
+        assert!(linkedin.organization_scopes);
+        assert_eq!(linkedin.api_version.as_deref(), Some("202609"));
+        for bad in ["2026-10", "20261", "202613", "202600", "latest"] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(LINKEDIN_API_VERSION.to_owned(), bad.to_owned());
+            assert_eq!(error(&vars).var, LINKEDIN_API_VERSION, "{bad}");
+        }
+        let mut vars = with(ALL_APPS);
+        vars.insert(LINKEDIN_ORG_SCOPES.to_owned(), "yes".to_owned());
+        assert_eq!(error(&vars).var, LINKEDIN_ORG_SCOPES);
+        // A LinkedIn setting without the LinkedIn app is half a configuration too.
+        for setting in [LINKEDIN_ORG_SCOPES, LINKEDIN_API_VERSION] {
+            let err = error(&with(&[(setting, "1"), base]));
+            assert_eq!(err.var, LINKEDIN_CLIENT_ID, "{setting}");
+            assert!(err.to_string().contains(setting), "{err}");
+        }
         // A Graph version is v and two numbers.
         for bad in ["19.0", "v19", "v19.0.1", "latest", "v1x.0"] {
             let mut vars = with(ALL_APPS);
@@ -1112,6 +1265,12 @@ mod tests {
             (INSTAGRAM_APP_SECRET, ""),
             (X_CLIENT_ID, ""),
             (X_CLIENT_SECRET, ""),
+            (TIKTOK_CLIENT_KEY, ""),
+            (TIKTOK_CLIENT_SECRET, ""),
+            (LINKEDIN_CLIENT_ID, ""),
+            (LINKEDIN_CLIENT_SECRET, ""),
+            (LINKEDIN_ORG_SCOPES, ""),
+            (LINKEDIN_API_VERSION, ""),
             (PUBLIC_BASE_URL, ""),
         ]))
         .unwrap();
@@ -1129,6 +1288,8 @@ mod tests {
             ][..],
             &[(INSTAGRAM_APP_ID, "i"), (INSTAGRAM_APP_SECRET, "s")][..],
             &[(X_CLIENT_ID, "x"), (X_CLIENT_SECRET, "s")][..],
+            &[(TIKTOK_CLIENT_KEY, "t"), (TIKTOK_CLIENT_SECRET, "s")][..],
+            &[(LINKEDIN_CLIENT_ID, "l"), (LINKEDIN_CLIENT_SECRET, "s")][..],
         ] {
             let err = error(&with(app));
             assert_eq!(err.var, PUBLIC_BASE_URL, "{app:?}");
@@ -1233,6 +1394,12 @@ mod tests {
             INSTAGRAM_APP_SECRET,
             X_CLIENT_ID,
             X_CLIENT_SECRET,
+            TIKTOK_CLIENT_KEY,
+            TIKTOK_CLIENT_SECRET,
+            LINKEDIN_CLIENT_ID,
+            LINKEDIN_CLIENT_SECRET,
+            LINKEDIN_ORG_SCOPES,
+            LINKEDIN_API_VERSION,
             PUBLIC_BASE_URL,
         ] {
             assert_eq!(listed[var], "", "{var} is a placeholder in .env.example");

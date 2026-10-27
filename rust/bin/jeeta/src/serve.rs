@@ -871,11 +871,23 @@ mod tests {
         assert!(deps.connectors.oauth(jt_connector::Provider::X).is_some());
         assert!(
             deps.connectors
+                .oauth(jt_connector::Provider::Tiktok)
+                .is_some()
+        );
+        assert!(
+            deps.connectors
+                .oauth(jt_connector::Provider::Linkedin)
+                .is_some()
+        );
+        assert!(
+            deps.connectors
                 .sms(jt_connector::Provider::Netgsm)
                 .is_some()
         );
         assert_eq!(deps.apps.meta_app(), None);
         assert_eq!(deps.apps.x_app(), None);
+        assert_eq!(deps.apps.tiktok_app(), None);
+        assert_eq!(deps.apps.linkedin_app(), None);
         assert_eq!(deps.apps.public_base_url(), None);
         let (status, _, body) = call(
             &app,
@@ -908,6 +920,10 @@ mod tests {
             (config::INSTAGRAM_APP_SECRET, "ig-secret-1"),
             (config::X_CLIENT_ID, "x-id-1"),
             (config::X_CLIENT_SECRET, "x-secret-1"),
+            (config::TIKTOK_CLIENT_KEY, "tt-key-1"),
+            (config::TIKTOK_CLIENT_SECRET, "tt-secret-1"),
+            (config::LINKEDIN_CLIENT_ID, "li-id-1"),
+            (config::LINKEDIN_CLIENT_SECRET, "li-secret-1"),
             (config::PUBLIC_BASE_URL, "https://jeeta.example"),
         ]);
         let (mut deps, _) = ports(db.pool.clone(), &config);
@@ -932,10 +948,13 @@ mod tests {
         let cookie = cookie.unwrap();
         let session = cookie.split(';').next().unwrap();
 
-        for (kind, client_id, callback) in [
-            ("facebook_page", "meta-id-1", "meta"),
-            ("instagram", "ig-id-1", "instagram"),
-            ("x", "x-id-1", "x"),
+        for (kind, id_param, client_id, callback) in [
+            ("facebook_page", "client_id", "meta-id-1", "meta"),
+            ("instagram", "client_id", "ig-id-1", "instagram"),
+            ("x", "client_id", "x-id-1", "x"),
+            // TikTok names its client id the client key.
+            ("tiktok", "client_key", "tt-key-1", "tiktok"),
+            ("linkedin_member", "client_id", "li-id-1", "linkedin"),
         ] {
             let (status, _, body) = call(
                 &app,
@@ -953,13 +972,20 @@ mod tests {
                     .find(|(k, _)| k == name)
                     .map(|(_, v)| v.into_owned())
             };
-            assert_eq!(param("client_id").as_deref(), Some(client_id), "{kind}");
+            assert_eq!(param(id_param).as_deref(), Some(client_id), "{kind}");
             assert_eq!(
                 param("redirect_uri"),
                 Some(format!("https://jeeta.example/oauth/callback/{callback}")),
                 "{kind}"
             );
-            for secret in ["meta-secret-1", "ig-secret-1", "x-secret-1", "verify-1"] {
+            for secret in [
+                "meta-secret-1",
+                "ig-secret-1",
+                "x-secret-1",
+                "tt-secret-1",
+                "li-secret-1",
+                "verify-1",
+            ] {
                 assert!(!body.to_string().contains(secret), "{kind}: {body}");
             }
         }
