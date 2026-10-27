@@ -18,7 +18,7 @@ fn email_rejects_garbage() {
 }
 
 #[test]
-fn owner_and_manager_have_all_permissions_rep_reads_and_works_inbox() {
+fn owner_and_manager_have_all_permissions_rep_reads_works_inbox_and_calls() {
     assert_eq!(
         SystemRole::Owner.permissions().len(),
         Permission::all().len()
@@ -29,9 +29,13 @@ fn owner_and_manager_have_all_permissions_rep_reads_and_works_inbox() {
     );
     assert_eq!(
         SystemRole::Rep.permissions(),
-        [Permission::WorkspaceRead, Permission::InboxWork]
-            .into_iter()
-            .collect()
+        [
+            Permission::WorkspaceRead,
+            Permission::InboxWork,
+            Permission::CallsWork
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -71,6 +75,8 @@ fn capabilities_and_budget_permissions_belong_to_owner_and_manager_only() {
             "inbox.manage",
             "studio.work",
             "studio.manage",
+            "calls.work",
+            "calls.manage",
         ]
     );
 }
@@ -215,6 +221,8 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             Permission::InboxManage,
             Permission::StudioWork,
             Permission::StudioManage,
+            Permission::CallsWork,
+            Permission::CallsManage,
         ]),
     });
     // A custom lead may neither demote nor remove a manager.
@@ -342,6 +350,8 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
             Permission::InboxManage,
             Permission::StudioWork,
             Permission::StudioManage,
+            Permission::CallsWork,
+            Permission::CallsManage,
         ]),
     });
     assert_eq!(

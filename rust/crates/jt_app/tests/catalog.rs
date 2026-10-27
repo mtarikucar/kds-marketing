@@ -241,6 +241,12 @@ fn catalog_is_the_release_table() {
         ("connector.reconnect", Some("jeeta.connector.reconnect"), Some(("POST", "/api/connectors/{capability_id}/reconnect")), false, Risk::Write),
         ("connector.hooks", Some("jeeta.connector.hooks"), Some(("GET", "/api/connectors/hooks")), false, Risk::Read),
         ("connector.set_pbx_policy", Some("jeeta.connector.set_pbx_policy"), Some(("PUT", "/api/connectors/{capability_id}/pbx-policy")), false, Risk::Write),
+        ("calls.policy_get", Some("jeeta.calls.policy_get"), Some(("GET", "/api/calls/policy")), false, Risk::Read),
+        ("calls.policy_set", Some("jeeta.calls.policy_set"), Some(("PUT", "/api/calls/policy")), false, Risk::Write),
+        ("calls.place", Some("jeeta.calls.place"), Some(("POST", "/api/calls")), false, Risk::Spend),
+        ("calls.get", Some("jeeta.calls.get"), Some(("GET", "/api/calls/{call_id}")), false, Risk::Read),
+        ("calls.list", Some("jeeta.calls.list"), Some(("GET", "/api/calls")), false, Risk::Read),
+        ("calls.end", Some("jeeta.calls.end"), Some(("POST", "/api/calls/{call_id}/end")), false, Risk::Write),
         ("events.pending", Some("jeeta.events.pending"), Some(("GET", "/api/events/pending")), false, Risk::Read),
         ("events.ack", Some("jeeta.events.ack"), Some(("POST", "/api/events/ack")), false, Risk::Write),
         ("events.list", Some("jeeta.events.list"), Some(("GET", "/api/events")), false, Risk::Read),
@@ -259,9 +265,9 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 145);
+    assert_eq!(CATALOG.len(), 151);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG

@@ -79,6 +79,9 @@ impl TenantRepos for Tenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.inner.studio_control()
     }
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self.inner.calls()
+    }
     fn consents(&mut self) -> &mut dyn ConsentRepo {
         self.inner.consents()
     }

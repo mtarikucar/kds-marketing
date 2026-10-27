@@ -211,3 +211,15 @@ Migration names (renumber to the merge order; the names are the contract): `0013
 - D6 Agent calls dial freely within gates, or need human approval per call for the first month (spec §13.6).
 - D7 LinkedIn: ship `linkedin_member` now and `linkedin_page` behind the org-scope flag (recommended), or wait for CMA.
 - D8 TikTok tester/developer account for unaudited posting.
+
+### Owner answers (2026-10-27, relayed by the coordinator)
+
+- D1: yes: run the free one-hour software-extension test (ext 101) on the existing Contabo host; the sidecar runs on that same VM. SIP Trunk is **not** approved in advance: if NetGSM refuses the extension test, stop and report.
+- D2: **no**: keep the current Studio default (no human approval). C3 and migration `0016_studio_approval_default` are dropped.
+- D3: the disclosure sentence is mandatory in every agent-mode opening; only a human can turn it off.
+- D4: self-hosted Vosk + Piper.
+- D5: accepted: the existing-relationship rule (Won journey, appointment/quote within 180 days, or an open appointment) is the non-commercial exception; everything else needs explicit ARAMA consent.
+- D6: `calls.place` does not require human approval by default (the agent dials freely within the gates).
+- D7: wait for CMA; LinkedIn stays unconfigured.
+- D8: the owner opens a dedicated TikTok test account.
+- Migration numbers as merged: `0013_probe_reason`, `0014_social_providers` (PR #366), `0015_voice_calls`.

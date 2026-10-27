@@ -21,8 +21,15 @@ const ADDED: [&str; 11] = [
 ];
 
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan).
-const POST_M4_ADDED: [(&str, &str); 1] =
-    [("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy")];
+const POST_M4_ADDED: [(&str, &str); 7] = [
+    ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
+    ("calls.policy_get", "jeeta.calls.policy_get"),
+    ("calls.policy_set", "jeeta.calls.policy_set"),
+    ("calls.place", "jeeta.calls.place"),
+    ("calls.get", "jeeta.calls.get"),
+    ("calls.list", "jeeta.calls.list"),
+    ("calls.end", "jeeta.calls.end"),
+];
 
 fn baseline(key: &str) -> BTreeSet<String> {
     let baseline: Value = serde_json::from_str(include_str!("fixtures/m3_surface.json")).unwrap();

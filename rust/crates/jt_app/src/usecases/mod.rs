@@ -9,6 +9,7 @@ pub mod agents;
 pub mod api_keys;
 pub mod auth;
 pub mod budget;
+pub mod calls;
 pub mod capabilities;
 pub mod connector;
 pub mod events;
