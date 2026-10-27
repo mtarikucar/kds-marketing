@@ -103,7 +103,8 @@ async fn studio_exact_catalog_and_gate_set() {
             all_tables.insert(name.to_owned());
         }
     }
-    assert_eq!(all_tables.len(), 67);
+    // 67 through M4, and the four call tables of 0015_voice_calls.
+    assert_eq!(all_tables.len(), 71);
 
     // All fourteen Studio tables are tenant-scoped.
     assert_eq!(

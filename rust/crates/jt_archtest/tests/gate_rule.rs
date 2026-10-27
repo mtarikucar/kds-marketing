@@ -41,6 +41,7 @@ const EXEMPT_IDS: &[&str] = &[
     "studio.brake",
     "studio.ledger",
     "studio.ledger_export",
+    "calls.policy_get",
 ];
 
 fn may_be_exempt(id: &str) -> bool {
