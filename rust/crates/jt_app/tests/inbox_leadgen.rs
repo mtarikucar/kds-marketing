@@ -510,3 +510,11 @@ async fn deferred_leadgen_claim_is_narrow_and_transactional() {
     ))
     .await;
 }
+
+#[tokio::test]
+async fn deferred_events_retry_with_backoff_then_abandon() {
+    jt_testkit::compliance_contract::deferred_events_retry_with_backoff_then_abandon(Arc::new(
+        jt_testkit::fakes::InMemoryUow::new(),
+    ))
+    .await;
+}

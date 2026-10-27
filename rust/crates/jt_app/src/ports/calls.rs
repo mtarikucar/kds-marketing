@@ -42,6 +42,9 @@ pub trait CallRepo: Send + Sync {
     async fn lock(&mut self, id: CallId) -> Result<Option<CallSession>, AppError>;
     /// The session the PBX correlates by `crm_id`, locked until the bundle ends.
     async fn lock_by_crm_id(&mut self, crm_id: &str) -> Result<Option<CallSession>, AppError>;
+    /// The session holding the PBX's call id `unique_id` (learned from its call events), locked
+    /// until the bundle ends.
+    async fn lock_by_pbx_id(&mut self, unique_id: &str) -> Result<Option<CallSession>, AppError>;
     /// Writes the session as it now stands. An unknown id is `NOT_FOUND`.
     async fn update(&mut self, session: CallSession, at: OffsetDateTime) -> Result<(), AppError>;
     async fn list(&mut self, filter: CallFilter) -> Result<Vec<CallSession>, AppError>;

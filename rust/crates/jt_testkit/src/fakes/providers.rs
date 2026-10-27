@@ -251,6 +251,11 @@ pub enum ConnectorCall {
         credential: Credential,
         call_id: String,
     },
+    CallRecords {
+        credential: Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    },
     ConsentAdd {
         credential: Credential,
         rows: Vec<ConsentRow>,
@@ -306,6 +311,7 @@ pub struct ScriptedConnector {
     leadgen: Script<Result<LeadGenRecord, ConnectorError>>,
     click_to_call: Script<Result<SendReceipt, ConnectorError>>,
     hangup: Script<Result<(), ConnectorError>>,
+    call_records: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
     consent_add: Script<Result<SendReceipt, ConnectorError>>,
     report: Script<Result<Vec<DeliveryStatus>, ConnectorError>>,
     inbox: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
@@ -358,6 +364,7 @@ impl ScriptedConnector {
             leadgen: Script::default(),
             click_to_call: Script::default(),
             hangup: Script::default(),
+            call_records: Script::default(),
             consent_add: Script::default(),
             report: Script::default(),
             inbox: Script::default(),
@@ -480,6 +487,10 @@ impl ScriptedConnector {
 
     pub fn push_click_to_call(&self, result: Result<SendReceipt, ConnectorError>) {
         self.click_to_call.push(result);
+    }
+
+    pub fn push_call_records(&self, result: Result<Vec<InboundEventDraft>, ConnectorError>) {
+        self.call_records.push(result);
     }
 
     pub fn push_hangup(&self, result: Result<(), ConnectorError>) {
@@ -839,6 +850,20 @@ impl Telephony for ScriptedConnector {
             call_id: call_id.to_owned(),
         });
         self.next(&self.hangup, "hangup result")
+    }
+
+    async fn call_records(
+        &self,
+        cred: &Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError> {
+        self.record(ConnectorCall::CallRecords {
+            credential: cred.clone(),
+            from,
+            to,
+        });
+        self.next(&self.call_records, "call_records result")
     }
 }
 

@@ -127,6 +127,19 @@ impl CallRepo for PgTenantRepos {
         row.map(decode).transpose()
     }
 
+    async fn lock_by_pbx_id(&mut self, unique_id: &str) -> Result<Option<CallSession>, AppError> {
+        let row: Option<Value> = sqlx::query_scalar(
+            "select data from call_sessions where workspace_id = $1 and pbx_unique_id = $2 \
+             order by started_at desc limit 1 for update",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(unique_id)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock call session by pbx id"))?;
+        row.map(decode).transpose()
+    }
+
     async fn update(&mut self, session: CallSession, at: OffsetDateTime) -> Result<(), AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, session.workspace_id)?;

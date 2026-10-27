@@ -19,10 +19,11 @@ pub(super) fn deferred_leadgen(
     event: &InboundEvent,
     outcome: Option<&ConsumptionOutcome>,
 ) -> bool {
-    consumer == "inbox@2"
-        && event.provider == Provider::Meta
-        && event.kind == EventKind::LeadGen
-        && outcome.is_some_and(|o| o.outcome == "deferred")
+    outcome.is_some_and(|o| o.outcome == "retry_due")
+        || (consumer == "inbox@2"
+            && event.provider == Provider::Meta
+            && event.kind == EventKind::LeadGen
+            && outcome.is_some_and(|o| o.outcome == "deferred"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +32,9 @@ pub struct StoredConsumption {
     pub consumer: String,
     pub event_id: InboundEventId,
     pub outcome: Option<ConsumptionOutcome>,
+    /// How often it was deferred, and when it is due again (migration 0015).
+    pub attempts: u32,
+    pub retry_at: Option<OffsetDateTime>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredRequestKey {
@@ -1423,6 +1427,8 @@ impl ConsumptionRepo for MemTenant {
                 consumer: consumer.into(),
                 event_id: id,
                 outcome: None,
+                attempts: 0,
+                retry_at: None,
             };
             t.tx.write(move |s| s.inbox.consumption.push(row.clone()));
             Ok(true)
@@ -1452,11 +1458,83 @@ impl ConsumptionRepo for MemTenant {
                         r.workspace_id == ws && r.consumer == consumer && r.event_id == id
                     })
                 {
+                    if outcome.outcome == "deferred" {
+                        r.attempts += 1;
+                        r.retry_at = Some(jt_app::ports::inbox::deferral_due(
+                            outcome.consumed_at,
+                            r.attempts,
+                        ));
+                    } else {
+                        r.retry_at = None;
+                    }
                     r.outcome = Some(outcome.clone());
                 }
             });
             Ok(())
         })
+    }
+    async fn release_due_deferrals(
+        &mut self,
+        consumer: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<InboundEventId>, AppError> {
+        let ws = self.ws;
+        let cutoff = now - jt_app::ports::inbox::DEFERRAL_GIVE_UP;
+        let received: std::collections::BTreeMap<InboundEventId, OffsetDateTime> = self
+            .state()
+            .inbound_events
+            .iter()
+            .filter(|r| r.event.workspace_id == ws)
+            .map(|r| (r.event.id, r.event.received_at))
+            .collect();
+        let deferred = |r: &StoredConsumption| {
+            r.workspace_id == ws
+                && r.consumer == consumer
+                && r.outcome.as_ref().is_some_and(|o| o.outcome == "deferred")
+        };
+        let abandoned: Vec<InboundEventId> = self
+            .state()
+            .inbox
+            .consumption
+            .iter()
+            .filter(|r| deferred(r) && received.get(&r.event_id).is_some_and(|at| *at < cutoff))
+            .map(|r| r.event_id)
+            .collect();
+        let due: Vec<InboundEventId> = self
+            .state()
+            .inbox
+            .consumption
+            .iter()
+            .filter(|r| {
+                deferred(r)
+                    && !abandoned.contains(&r.event_id)
+                    && r.retry_at.is_none_or(|t| t <= now)
+            })
+            .map(|r| r.event_id)
+            .collect();
+        let consumer = consumer.to_owned();
+        let (gone, ready) = (abandoned.clone(), due);
+        self.tx.write(move |s| {
+            for r in s
+                .inbox
+                .consumption
+                .iter_mut()
+                .filter(|r| r.workspace_id == ws && r.consumer == consumer)
+            {
+                let set = |r: &mut StoredConsumption, outcome: &str| {
+                    if let Some(o) = r.outcome.as_mut() {
+                        o.outcome = outcome.into();
+                    }
+                };
+                if gone.contains(&r.event_id) {
+                    set(r, "abandoned");
+                    r.retry_at = None;
+                } else if ready.contains(&r.event_id) {
+                    set(r, "retry_due");
+                }
+            }
+        });
+        Ok(abandoned)
     }
 }
 #[async_trait]

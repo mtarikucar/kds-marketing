@@ -163,7 +163,14 @@ async fn sessions_turns_and_policy_round_trip_scoped_by_workspace() {
     let mut ended = call.clone();
     ended.state = CallState::Ended;
     ended.ended_at = Some(T0 + time::Duration::minutes(2));
+    assert_eq!(t.calls().lock_by_pbx_id("pbx-1").await.unwrap(), None);
+    ended.pbx_unique_id = Some("pbx-1".into());
     t.calls().update(ended.clone(), T0).await.unwrap();
+    // The PBX's call id, learned from a call event, finds the session again.
+    assert_eq!(
+        t.calls().lock_by_pbx_id("pbx-1").await.unwrap(),
+        Some(ended.clone())
+    );
     assert_eq!(
         t.calls()
             .list(CallFilter {

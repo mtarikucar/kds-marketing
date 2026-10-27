@@ -274,6 +274,7 @@ fn every_job_has_a_lock_named_after_it() {
             "probe_all",
             "netgsm_dlr_poll",
             "netgsm_inbox_poll",
+            "netgsm_cdr_poll",
             "mail_inbox_poll",
             "iys_sync",
             "purge_raw_bodies",
@@ -1858,4 +1859,67 @@ async fn tenant_host_refresh_covers_receiving_workspaces_and_live_connector_host
                 .collect()
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// netgsm_cdr_poll
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cdr_poll_dedups_against_push() {
+    let r = rig().await;
+    let creds = Credential::NetgsmPbx {
+        username: "8508850000".into(),
+        password: "netgsm-pass".into(),
+        trunk: None,
+        pbxnum: None,
+    };
+    let pbx = r
+        .connected(
+            "netgsm_pbx",
+            "8508850000",
+            StoredStatus::Verified,
+            &creds,
+            json!({}),
+        )
+        .await;
+    let record = jt_app::ports::connectors::InboundEventDraft {
+        external_id: "netgsm-call:1700000000.401:cdr".into(),
+        kind: EventKind::CallEvent,
+        payload: json!({ "scenario": "cdr", "unique_id": "1700000000.401", "duration_sec": 30 }),
+        occurred_at: None,
+    };
+    // The PBX pushed the record first.
+    webhook::receive_netgsm(
+        &r.w.deps,
+        r.ws(),
+        NetgsmPurpose::Events,
+        vec![record.clone()],
+        b"[]",
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.events().len(), 1);
+    // The hourly poll reads the last two hours and finds the same record: a duplicate.
+    r.netgsm.push_call_records(Ok(vec![record]));
+    let out = jobs::run_netgsm_cdr_poll(&r.w.deps, NOW).await;
+    assert_eq!(out, report(1, 0, 1, 0));
+    assert_eq!(
+        r.netgsm.calls(),
+        [ConnectorCall::CallRecords {
+            credential: creds,
+            from: NOW - Duration::hours(2),
+            to: NOW,
+        }]
+    );
+    let events = r.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].capability_id, Some(pbx));
+    // A provider refusal (the server's IP not on the account's list) is a failed step.
+    r.netgsm
+        .push_call_records(Err(ConnectorError::permission("IP not allowed")));
+    assert_eq!(
+        jobs::run_netgsm_cdr_poll(&r.w.deps, NOW).await,
+        report(1, 0, 0, 1)
+    );
 }

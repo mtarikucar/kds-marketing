@@ -761,6 +761,14 @@ pub trait Telephony: Send + Sync {
     /// (NetGSM: the `unique_id`). That is not always the receipt's correlation id: a NetGSM
     /// receipt carries the `crm_id`, which the call events carry beside the `unique_id`.
     async fn hangup(&self, cred: &Credential, call_id: &str) -> Result<(), ConnectorError>;
+    /// The PBX's call records between `from` and `to`, as call events whose `external_id` is
+    /// the one its webhook gives the same record, so a poll never duplicates a push.
+    async fn call_records(
+        &self,
+        cred: &Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
 }
 
 /// Records consent changes in the consent registry (İYS).

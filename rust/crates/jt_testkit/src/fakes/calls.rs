@@ -99,6 +99,18 @@ impl CallRepo for MemTenant {
             .cloned())
     }
 
+    async fn lock_by_pbx_id(&mut self, unique_id: &str) -> Result<Option<CallSession>, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .calls
+            .sessions
+            .iter()
+            .filter(|s| s.workspace_id == ws && s.pbx_unique_id.as_deref() == Some(unique_id))
+            .max_by_key(|s| s.started_at)
+            .cloned())
+    }
+
     async fn update(&mut self, session: CallSession, _at: OffsetDateTime) -> Result<(), AppError> {
         self.call(|this| {
             let ws = this.ws;

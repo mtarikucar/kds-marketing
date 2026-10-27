@@ -50,7 +50,7 @@ use super::connector::{
 use super::webhook::{self, Delivery};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
-use crate::ports::connectors::{Connector, DeliveryReports, DeliveryStatus};
+use crate::ports::connectors::{Connector, DeliveryReports, DeliveryStatus, Telephony};
 use crate::ports::{CapabilityFilter, MAX_PENDING_JOBS, PROBE_RUN_RETENTION, TenantRepos};
 
 /// A token is renewed once it expires within this time (or has expired).
@@ -110,6 +110,7 @@ pub enum Job {
     ProbeAll,
     NetgsmDlrPoll,
     NetgsmInboxPoll,
+    NetgsmCdrPoll,
     MailInboxPoll,
     IysSync,
     PurgeRawBodies,
@@ -130,12 +131,13 @@ pub enum Job {
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 21] = [
+    pub const ALL: [Job; 22] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
         Job::NetgsmInboxPoll,
+        Job::NetgsmCdrPoll,
         Job::MailInboxPoll,
         Job::IysSync,
         Job::PurgeRawBodies,
@@ -163,6 +165,7 @@ impl Job {
             Job::ProbeAll => "probe_all",
             Job::NetgsmDlrPoll => "netgsm_dlr_poll",
             Job::NetgsmInboxPoll => "netgsm_inbox_poll",
+            Job::NetgsmCdrPoll => "netgsm_cdr_poll",
             Job::MailInboxPoll => "mail_inbox_poll",
             Job::IysSync => "iys_sync",
             Job::PurgeRawBodies => "purge_raw_bodies",
@@ -195,6 +198,7 @@ impl Job {
             Job::ProbeAll => run_probe_all(deps, now).await,
             Job::NetgsmDlrPoll => run_netgsm_dlr_poll(deps, now).await,
             Job::NetgsmInboxPoll => run_netgsm_inbox_poll(deps, now).await,
+            Job::NetgsmCdrPoll => run_netgsm_cdr_poll(deps, now).await,
             Job::MailInboxPoll => run_mail_inbox_poll(deps, now).await,
             Job::IysSync => run_iys_sync(deps, now).await,
             Job::PurgeRawBodies => run_purge_raw_bodies(deps, now).await,
@@ -616,7 +620,7 @@ pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport
     let Some(reports) = deps.connectors.delivery_reports(Provider::Netgsm) else {
         return finish(job, report);
     };
-    for ws in netgsm_workspaces(deps, job, ACTIVE, &mut report).await {
+    for ws in netgsm_workspaces(deps, job, ACTIVE, SMS_LINE, &mut report).await {
         let lines = match live_connector_capabilities(deps, ws).await {
             Ok(capabilities) => verified_lines(&capabilities),
             Err(e) => {
@@ -723,7 +727,7 @@ pub async fn run_netgsm_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobRepor
     let Some(reports) = deps.connectors.delivery_reports(Provider::Netgsm) else {
         return finish(job, report);
     };
-    for ws in netgsm_workspaces(deps, job, RECEIVING, &mut report).await {
+    for ws in netgsm_workspaces(deps, job, RECEIVING, SMS_LINE, &mut report).await {
         let lines = match live_connector_capabilities(deps, ws).await {
             Ok(capabilities) => verified_lines(&capabilities),
             Err(e) => {
@@ -784,12 +788,14 @@ async fn poll_inbox(
     Ok(out)
 }
 
-/// The workspaces in one of `statuses` holding a verified SMS line with sealed credentials, read
-/// in one platform-wide transaction; none (and one failure counted) when they cannot be read.
+/// The workspaces in one of `statuses` holding a verified capability of `kind` (an SMS line, the
+/// PBX) with sealed credentials, read in one platform-wide transaction; none (and one failure
+/// counted) when they cannot be read.
 async fn netgsm_workspaces(
     deps: &Deps,
     job: Job,
     statuses: &[WorkspaceStatus],
+    kind: &str,
     report: &mut JobReport,
 ) -> Vec<WorkspaceId> {
     let listed = async {
@@ -801,7 +807,7 @@ async fn netgsm_workspaces(
             .filter(|w| statuses.contains(&w.status))
             .map(|w| w.id)
             .collect();
-        let with_line = platform.workspaces_with_verified(&[SMS_LINE]).await?;
+        let with_line = platform.workspaces_with_verified(&[kind]).await?;
         Ok::<_, AppError>(
             with_line
                 .into_iter()
@@ -821,6 +827,91 @@ async fn netgsm_workspaces(
             Vec::new()
         }
     }
+}
+
+/// How far back the PBX's call records are read on each poll.
+pub const CDR_WINDOW: Duration = Duration::hours(2);
+
+/// Reads, in every receiving workspace with a verified `netgsm_pbx`, the PBX's call records of
+/// the [`CDR_WINDOW`] ending at `now` (`Telephony::call_records`, outside any transaction) and
+/// stores each as a `cdr` call event of that capability. A record the PBX also pushed has the
+/// same external id (`netgsm-call:<id>:cdr`) and is skipped as a duplicate; the inbox consumer
+/// then fills the call's session in (duration, recording, cost). The poll needs the server's IP
+/// on the NetGSM account's allowed list; a refusal is counted as a failed step.
+pub async fn run_netgsm_cdr_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::NetgsmCdrPoll;
+    let mut report = JobReport::default();
+    let Some(telephony) = deps.connectors.telephony(Provider::Netgsm) else {
+        return finish(job, report);
+    };
+    for ws in netgsm_workspaces(deps, job, RECEIVING, PBX, &mut report).await {
+        let pbxes: Vec<CapabilityId> = match live_connector_capabilities(deps, ws).await {
+            Ok(capabilities) => capabilities
+                .iter()
+                .filter(|c| c.kind_key == PBX && c.status == StoredStatus::Verified)
+                .map(|c| c.id)
+                .collect(),
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for pbx in pbxes {
+            report.touched += 1;
+            match poll_call_records(deps, telephony.as_ref(), ws, pbx, now).await {
+                Ok(deliveries) => {
+                    for delivery in deliveries {
+                        match delivery {
+                            Delivery::Stored(_) => report.changed += 1,
+                            Delivery::Duplicate | Delivery::Unrouted | Delivery::Inactive => {
+                                report.skipped += 1
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(pbx), &e);
+                }
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// The kind of the PBX capability.
+const PBX: &str = "netgsm_pbx";
+
+/// Reads PBX `pbx`'s call records for the window ending at `now` and stores them.
+async fn poll_call_records(
+    deps: &Deps,
+    telephony: &dyn Telephony,
+    ws: WorkspaceId,
+    pbx: CapabilityId,
+    now: OffsetDateTime,
+) -> Result<Vec<Delivery>, Failure> {
+    let Some(credential) = read_credential(deps, ws, pbx).await? else {
+        return Ok(Vec::new());
+    };
+    let drafts = telephony
+        .call_records(&credential, now - CDR_WINDOW, now)
+        .await;
+    drop(credential);
+    let drafts = drafts.map_err(Failure::Provider)?;
+    let mut repos = deps.uow.tenant(ws).await?;
+    let out = webhook::store_polled(
+        deps,
+        repos.as_mut(),
+        ws,
+        Provider::Netgsm,
+        Some(pbx),
+        drafts,
+        now,
+    )
+    .await?;
+    repos.commit().await?;
+    Ok(out)
 }
 
 /// The verified SMS lines among `capabilities` (all live, with credentials), in their order.

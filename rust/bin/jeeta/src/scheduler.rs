@@ -52,6 +52,7 @@ pub struct Intervals {
     pub probe_all: Duration,
     pub netgsm_dlr_poll: Duration,
     pub netgsm_inbox_poll: Duration,
+    pub netgsm_cdr_poll: Duration,
     pub mail_inbox_poll: Duration,
     pub iys_sync: Duration,
     pub purge_raw_bodies: Duration,
@@ -87,6 +88,7 @@ impl Default for Intervals {
             probe_all: 15 * MINUTE,
             netgsm_dlr_poll: MINUTE,
             netgsm_inbox_poll: HOUR,
+            netgsm_cdr_poll: HOUR,
             mail_inbox_poll: 2 * MINUTE,
             iys_sync: HOUR,
             purge_raw_bodies: DAY,
@@ -117,6 +119,7 @@ impl Intervals {
             Job::ProbeAll => self.probe_all,
             Job::NetgsmDlrPoll => self.netgsm_dlr_poll,
             Job::NetgsmInboxPoll => self.netgsm_inbox_poll,
+            Job::NetgsmCdrPoll => self.netgsm_cdr_poll,
             Job::MailInboxPoll => self.mail_inbox_poll,
             Job::IysSync => self.iys_sync,
             Job::PurgeRawBodies => self.purge_raw_bodies,
@@ -426,6 +429,7 @@ mod tests {
             probe_all: every,
             netgsm_dlr_poll: every,
             netgsm_inbox_poll: every,
+            netgsm_cdr_poll: every,
             mail_inbox_poll: every,
             iys_sync: every,
             purge_raw_bodies: every,
@@ -523,6 +527,7 @@ mod tests {
         assert_eq!(i.of(Job::ProbeAll), Duration::from_secs(15 * 60));
         assert_eq!(i.of(Job::NetgsmDlrPoll), MINUTE);
         assert_eq!(i.of(Job::NetgsmInboxPoll), HOUR);
+        assert_eq!(i.of(Job::NetgsmCdrPoll), HOUR);
         assert_eq!(i.of(Job::MailInboxPoll), 2 * MINUTE);
         assert_eq!(i.of(Job::IysSync), HOUR);
         assert_eq!(i.of(Job::PurgeRawBodies), DAY);
