@@ -36,6 +36,15 @@ pub struct MeasurementPermit {
     pub chain: Chain,
     pub capability: Capability,
 }
+/// The kinds the organic lane publishes to.
+pub(crate) const ORGANIC_KINDS: &[&str] = &[
+    "x",
+    "instagram",
+    "facebook_page",
+    "tiktok",
+    "linkedin_member",
+    "linkedin_page",
+];
 pub(crate) fn same_account(kind: &str, left: &str, right: &str) -> bool {
     jt_capability::canonical_external_id(kind, left)
         == jt_capability::canonical_external_id(kind, right)
@@ -96,9 +105,19 @@ pub(crate) fn capability_access(
         ],
         ("facebook_page", true) => &["pages_manage_posts"],
         ("facebook_page", false) => &["read_insights", "pages_read_engagement"],
+        ("tiktok", true) => &["video.publish"],
+        // Counters need `video.list` (posts) or `user.info.stats` (the account); a publication's
+        // status (TikTok publishes in the background) is read with `video.publish`.
+        ("tiktok", false) => &["video.list", "user.info.stats", "video.publish"],
+        ("linkedin_member", true) => &["w_member_social"],
+        // LinkedIn has no read API for a member's posts: reading asks for no scope, and the
+        // adapter answers that it has no counters (measurement records the refusal once).
+        ("linkedin_member", false) => &[],
+        ("linkedin_page", true) => &["w_organization_social"],
+        ("linkedin_page", false) => &["r_organization_social"],
         _ => return Err(refuse("unsupported_studio_capability")),
     };
-    if !required.iter().any(|s| scopes.contains(s)) {
+    if !required.is_empty() && !required.iter().any(|s| scopes.contains(s)) {
         return Err(refuse("credential_scope_missing"));
     }
     Ok(())
@@ -192,7 +211,7 @@ pub async fn authorize_execution_at(
             supported_kinds: if lane == LaneKind::Paid {
                 &["meta_ads"]
             } else {
-                &["x", "instagram", "facebook_page"]
+                ORGANIC_KINDS
             },
             lane,
         },

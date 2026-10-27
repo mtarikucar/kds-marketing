@@ -225,10 +225,10 @@ async fn hosted_url_remains_direct_and_x_fetch_is_bounded() {
         mime: "image/png".into(),
         size_bytes: 13,
     }];
-    let (urls, bytes) = resolve_media(&d, ws, &media, false).await.unwrap();
+    let (urls, bytes) = resolve_media(&d, ws, &media, "instagram").await.unwrap();
     assert_eq!(urls, vec![url]);
     assert!(bytes.is_empty());
-    let (urls, bytes) = resolve_media(&d, ws, &media, true).await.unwrap();
+    let (urls, bytes) = resolve_media(&d, ws, &media, "x").await.unwrap();
     assert!(urls.is_empty());
     assert_eq!(bytes[0].bytes, b"\x89PNG\r\n\x1a\nasset");
     let bad = [jt_studio::MediaAsset::HostedUrl {
@@ -236,7 +236,7 @@ async fn hosted_url_remains_direct_and_x_fetch_is_bounded() {
         mime: "image/png".into(),
         size_bytes: 25_000_001,
     }];
-    assert!(resolve_media(&d, ws, &bad, true).await.is_err());
+    assert!(resolve_media(&d, ws, &bad, "x").await.is_err());
     task.abort();
 }
 #[tokio::test]

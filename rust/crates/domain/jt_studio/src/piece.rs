@@ -66,12 +66,24 @@ pub(crate) fn validate_public_url(url: &Url) -> Result<(), StudioError> {
     // DNS, egress, MIME sniffing and bounded fetching belong to T5, not a pure URL parser.
     Ok(())
 }
+/// Who may see a post, by TikTok's names (`privacy_level`): the values a channel adaptation's
+/// `privacy` takes. A provider without such a setting ignores it.
+pub const PRIVACY_LEVELS: &[&str] = &[
+    "PUBLIC_TO_EVERYONE",
+    "MUTUAL_FOLLOW_FRIENDS",
+    "FOLLOWER_OF_CREATOR",
+    "SELF_ONLY",
+];
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelContent {
     pub text: String,
     pub media: Vec<MediaAsset>,
     pub link: Option<Url>,
+    /// Who may see the post (one of [`PRIVACY_LEVELS`]); `None`: public. Absent from stored
+    /// pieces written before it existed, and never written when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Piece {
@@ -101,6 +113,13 @@ impl Piece {
             }
             if let Some(url) = &content.link {
                 validate_public_url(url)?;
+            }
+            if content
+                .privacy
+                .as_deref()
+                .is_some_and(|p| !PRIVACY_LEVELS.contains(&p))
+            {
+                return Err(StudioError::InvalidEvidence("privacy"));
             }
         }
         Ok(())

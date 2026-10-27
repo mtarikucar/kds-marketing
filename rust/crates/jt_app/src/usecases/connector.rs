@@ -161,6 +161,12 @@ const OLD_ACCOUNT_FACTS: &[&str] = &["health", "facts", "asset", "account"];
 
 const NO_SUCH_FLOW: &str = "no such pending connection";
 const APP_NOT_CONFIGURED: &str = "provider app not configured";
+const PRODUCT_NOT_ENABLED: &str = "provider product not enabled";
+
+/// The LinkedIn kind whose flows need the organization scopes ([`LinkedinApp::organization_scopes`]).
+///
+/// [`LinkedinApp::organization_scopes`]: crate::ports::connectors::LinkedinApp::organization_scopes
+const LINKEDIN_PAGE: &str = "linkedin_page";
 const PUBLIC_URL_NOT_CONFIGURED: &str = "public base url not configured";
 const NO_ADAPTER: &str = "provider adapter not available";
 
@@ -168,7 +174,8 @@ const NO_ADAPTER: &str = "provider adapter not available";
 // Inputs and outputs
 // ---------------------------------------------------------------------------------------------
 
-/// What starting an OAuth flow takes: the kind of capability to connect (a Meta kind or `x`).
+/// What starting an OAuth flow takes: the kind of capability to connect (a Meta kind, `x`,
+/// `tiktok`, `linkedin_member` or `linkedin_page`).
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartOAuth {
@@ -422,13 +429,18 @@ pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 /// base URL must be configured, else `CONFLICT` "public base url not configured"
 /// (`details.reason = "public_base_url_not_configured"`), whichever apps are configured; the
 /// provider's app must be configured (`instagram` signs in with the Instagram app, the other Meta
-/// kinds with the Meta app, `x` with the X app), else `CONFLICT` "provider app not configured"
-/// (`details.reason = "provider_app_not_configured"`, `details.provider`); and its adapter
-/// present, else `CONFLICT`. The state is signed for the workspace
+/// kinds with the Meta app, `x` with the X app, `tiktok` with the TikTok app, the LinkedIn kinds
+/// with the LinkedIn app), else `CONFLICT` "provider app not configured"
+/// (`details.reason = "provider_app_not_configured"`, `details.provider`); a `linkedin_page`
+/// flow needs the LinkedIn app's organization scopes (`JEETA_LINKEDIN_ORG_SCOPES`, set once
+/// LinkedIn approved the Community Management API), else `CONFLICT` "provider product not
+/// enabled" (`details.reason = "provider_product_not_enabled"`, `details.provider`); and its
+/// adapter present, else `CONFLICT`. The state is signed for the workspace
 /// and holds the provider, the
 /// kind, the time and a nonce; for X a PKCE pair is made and its verifier sealed with the flow.
 /// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the key of the
-/// flow's app ([`OAuthCallback`]: `meta`, `instagram` or `x`), and the code exchange sends the
+/// flow's app ([`OAuthCallback`]: `meta`, `instagram`, `x`, `tiktok` or `linkedin`), and the
+/// code exchange sends the
 /// same one. `expires_at` is when the state stops being accepted ([`STATE_TTL`]).
 ///
 /// Writes `connector.oauth_started` about the flow (`subject.kind = "oauth_pending"`, payload
@@ -528,8 +540,8 @@ pub async fn complete_oauth(
 
     // The public base URL first, as when the flow started; then the app and its adapter.
     let redirect = callback_url(deps.apps.as_ref(), callback)?;
-    let app =
-        oauth_app(deps.apps.as_ref(), flow.app).ok_or_else(|| app_not_configured(flow.provider))?;
+    let app = oauth_app(deps.apps.as_ref(), flow.app, &flow.kind_key)
+        .ok_or_else(|| app_not_configured(flow.provider))?;
     let oauth = deps
         .connectors
         .oauth(flow.provider)
@@ -1048,8 +1060,13 @@ async fn begin_oauth(
     .ok_or_else(|| app_not_configured(provider))?;
     // The public base URL first: without it no flow can start, whichever apps are configured.
     let redirect = callback_url(deps.apps.as_ref(), callback)?;
-    let app =
-        oauth_app(deps.apps.as_ref(), callback).ok_or_else(|| app_not_configured(provider))?;
+    let app = oauth_app(deps.apps.as_ref(), callback, kind_key)
+        .ok_or_else(|| app_not_configured(provider))?;
+    if kind_key == LINKEDIN_PAGE
+        && matches!(&app, OAuthApp::Linkedin(linkedin) if !linkedin.organization_scopes)
+    {
+        return Err(product_not_enabled(provider));
+    }
     let bound = bound.map(|capability| capability.id);
     let oauth = deps
         .connectors
@@ -1158,12 +1175,19 @@ fn connector_kind(kind_key: &str) -> Result<&'static CapabilityKind, AppError> {
     Ok(kind)
 }
 
-/// The configured app a flow signed in with `app` runs under, if it is configured.
-fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback) -> Option<OAuthApp> {
+/// The configured app a flow of `kind_key` signed in with `app` runs under, if it is configured.
+/// A LinkedIn flow asks for the organization scopes only for a `linkedin_page`, and only when the
+/// platform's LinkedIn app may.
+fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback, kind_key: &str) -> Option<OAuthApp> {
     match app {
         OAuthCallback::Meta => apps.meta_app().map(OAuthApp::Meta),
         OAuthCallback::Instagram => apps.instagram_app().map(OAuthApp::Instagram),
         OAuthCallback::X => apps.x_app().map(OAuthApp::X),
+        OAuthCallback::Tiktok => apps.tiktok_app().map(OAuthApp::Tiktok),
+        OAuthCallback::Linkedin => apps.linkedin_app().map(|mut linkedin| {
+            linkedin.organization_scopes &= kind_key == LINKEDIN_PAGE;
+            OAuthApp::Linkedin(linkedin)
+        }),
     }
 }
 
@@ -1277,6 +1301,17 @@ fn app_not_configured(provider: Provider) -> AppError {
     }
 }
 
+/// `CONFLICT` "provider product not enabled" for a flow of `provider` that needs a product the
+/// platform's app has not been granted (LinkedIn's Community Management API for a
+/// `linkedin_page`), naming the reason (`provider_product_not_enabled`) and the provider.
+fn product_not_enabled(provider: Provider) -> AppError {
+    AppError {
+        code: ErrorCode::Conflict,
+        message: PRODUCT_NOT_ENABLED.into(),
+        details: json!({ "reason": "provider_product_not_enabled", "provider": provider.key() }),
+    }
+}
+
 /// `FORBIDDEN` for every refused OAuth state, with the same message whatever the reason.
 fn refused_state() -> AppError {
     AppError::forbidden("the OAuth state is not valid for this workspace, or was already used")
@@ -1331,7 +1366,7 @@ fn reconnectable(capability: &Capability) -> Result<(), AppError> {
             ));
         }
         None => return Err(AppError::conflict("no provider connects this kind yet")),
-        Some(Provider::Meta | Provider::X) => {}
+        Some(Provider::Meta | Provider::X | Provider::Tiktok | Provider::Linkedin) => {}
     }
     // A declared capability is connected for the first time through a flow bound to it; any
     // other must name the account it reconnects.
@@ -1588,7 +1623,9 @@ fn fitted_name(name: &str, external_id: &str) -> String {
 /// The provider whose credentials `kind` takes by hand, else `VALIDATION` naming `kind_key`.
 fn manual_provider(kind: &CapabilityKind) -> Result<Provider, AppError> {
     match provider_for_kind(kind.key) {
-        Some(Provider::X) => Err(invalid("kind_key", "this kind connects through OAuth")),
+        Some(Provider::X | Provider::Tiktok | Provider::Linkedin) => {
+            Err(invalid("kind_key", "this kind connects through OAuth"))
+        }
         Some(provider) => Ok(provider),
         None => Err(invalid("kind_key", "no provider connects this kind yet")),
     }

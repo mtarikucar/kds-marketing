@@ -53,7 +53,7 @@ pub fn input(action: &str) -> Value {
             vec!["request_key", "filename", "mime", "content"],
         ),
         "piece_submit" => (
-            json!({"slot_id":{"type":"string","format":"uuid"},"expected_revision":revision,"request_key":{"type":"string","minLength":1,"maxLength":200},"text":{"type":"string"},"media":{"type":"array","items":media()},"adaptations":{"type":"object","additionalProperties":object(json!({"text":{"type":"string"},"media":{"type":"array","items":media()},"link":{"type":["string","null"],"format":"uri"}}),&["text","media"])}}),
+            json!({"slot_id":{"type":"string","format":"uuid"},"expected_revision":revision,"request_key":{"type":"string","minLength":1,"maxLength":200},"text":{"type":"string"},"media":{"type":"array","items":media()},"adaptations":{"type":"object","additionalProperties":object(json!({"text":{"type":"string"},"media":{"type":"array","items":media()},"link":{"type":["string","null"],"format":"uri"},"privacy":privacy()}),&["text","media"])}}),
             vec![
                 "slot_id",
                 "expected_revision",
@@ -117,6 +117,16 @@ pub fn panel_input(action: &str) -> Value {
 
 fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type":"object","additionalProperties":false,"properties":properties,"required":required})
+}
+/// Who may see a post on the adapted account (TikTok's `privacy_level` names); absent or null:
+/// public.
+fn privacy() -> Value {
+    let mut levels: Vec<Value> = jt_studio::PRIVACY_LEVELS
+        .iter()
+        .map(|level| json!(level))
+        .collect();
+    levels.push(Value::Null);
+    json!({ "enum": levels })
 }
 fn mime() -> Value {
     json!({"type":"string","enum":["image/jpeg","image/png","image/webp","image/gif","video/mp4"]})

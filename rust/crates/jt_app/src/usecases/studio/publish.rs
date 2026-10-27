@@ -57,16 +57,17 @@ async fn request(
     p.validate_persisted()
         .map_err(|_| AppError::validation("invalid piece", json!({"reason":"invalid_piece"})))?;
     let adaptation = c.external_id.as_ref().and_then(|id| p.adaptations.get(id));
-    let (text, media, link) = match adaptation {
-        Some(a) => (a.text.clone(), &a.media, a.link.clone()),
-        None => (p.text.clone(), &p.media, None),
+    let (text, media, link, privacy) = match adaptation {
+        Some(a) => (a.text.clone(), &a.media, a.link.clone(), a.privacy.clone()),
+        None => (p.text.clone(), &p.media, None, None),
     };
-    let (media_urls, media) = super::files::resolve_media(d, ws, media, c.kind_key == "x").await?;
+    let (media_urls, media) = super::files::resolve_media(d, ws, media, &c.kind_key).await?;
     let out = PublishRequest {
         text,
         link,
         media_urls,
         media,
+        privacy,
     };
     Ok(out)
 }

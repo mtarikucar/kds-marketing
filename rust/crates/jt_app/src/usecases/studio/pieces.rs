@@ -40,6 +40,10 @@ pub struct ChannelInput {
     pub text: String,
     pub media: Vec<MediaInput>,
     pub link: Option<Url>,
+    /// Who may see the post on this account (`jt_studio::PRIVACY_LEVELS`; TikTok's names), else
+    /// public.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -130,6 +134,7 @@ impl TryFrom<WirePieceInput> for PieceInput {
                         .map(TryInto::try_into)
                         .collect::<Result<_, _>>()?,
                     link: v.link,
+                    privacy: v.privacy,
                 },
             );
         }
@@ -165,6 +170,7 @@ impl From<PieceInput> for WirePieceInput {
                             text: v.text,
                             media: v.media.into_iter().map(Into::into).collect(),
                             link: v.link,
+                            privacy: v.privacy,
                         },
                     )
                 })
@@ -276,7 +282,7 @@ async fn validate(
             arm: &arm,
             target: &c,
             target_group_ids: &groups,
-            supported_kinds: &["x", "instagram", "facebook_page"],
+            supported_kinds: super::chain::ORGANIC_KINDS,
             lane: jt_strategy::LaneKind::Organic,
         },
     )
@@ -327,6 +333,7 @@ async fn submit(
                 text: a.text.clone(),
                 media: normalize(d, ctx, a.media.clone(), stored).await?,
                 link: a.link.clone(),
+                privacy: a.privacy.clone(),
             },
         );
     }

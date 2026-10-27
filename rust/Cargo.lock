@@ -1508,6 +1508,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_linkedin"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "jt_app",
+ "jt_connector",
+ "jt_outbound",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "jt_mail"
 version = "0.1.0"
 dependencies = [
@@ -1756,6 +1772,22 @@ dependencies = [
  "tower",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "jt_tiktok"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "jt_app",
+ "jt_connector",
+ "jt_outbound",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

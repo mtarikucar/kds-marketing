@@ -129,7 +129,7 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
         };
         let lane = if c.kind_key == "meta_ads" && d.connectors.ads(provider).is_some() {
             LaneKind::Paid
-        } else if matches!(c.kind_key.as_str(), "x" | "instagram" | "facebook_page")
+        } else if super::chain::ORGANIC_KINDS.contains(&c.kind_key.as_str())
             && d.connectors.publisher(provider).is_some()
         {
             LaneKind::Organic

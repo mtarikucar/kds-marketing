@@ -333,6 +333,7 @@ async fn full_request_uses_account_adaptation_and_stored_bytes() {
                     text: "adapted".into(),
                     media: vec![MediaAsset::Bytes { upload: u.clone() }],
                     link: Some("https://example.com/link".parse().unwrap()),
+                    privacy: None,
                 },
             )]),
         },

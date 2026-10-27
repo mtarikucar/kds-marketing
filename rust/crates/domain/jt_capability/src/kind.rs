@@ -158,6 +158,8 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::SocialAccount, "facebook_page"),
     k(KindGroup::SocialAccount, "x"),
     k(KindGroup::SocialAccount, "linkedin_page"),
+    // A LinkedIn member's own feed (personal posts), beside the organization pages.
+    k(KindGroup::SocialAccount, "linkedin_member"),
     k(KindGroup::SocialAccount, "tiktok"),
     k(KindGroup::SocialAccount, "pinterest"),
     k(KindGroup::SocialAccount, "youtube"),

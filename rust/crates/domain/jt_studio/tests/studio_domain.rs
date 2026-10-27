@@ -560,10 +560,33 @@ fn serde_round_trips_and_bytes_are_not_persistable() {
             text: "Per account".into(),
             media: vec![],
             link: None,
+            privacy: None,
         },
     );
     round_trip(&piece);
     piece.validate_persisted().unwrap();
+    // A stored adaptation written before `privacy` existed reads back without one, and one
+    // without it is written without the key.
+    let stored = serde_json::to_value(&piece).unwrap();
+    assert!(
+        stored["adaptations"][f.target.id.to_string()]
+            .get("privacy")
+            .is_none()
+    );
+    let mut private = piece.clone();
+    private
+        .adaptations
+        .get_mut(&f.target.id.to_string())
+        .unwrap()
+        .privacy = Some("SELF_ONLY".into());
+    round_trip(&private);
+    private.validate_persisted().unwrap();
+    private
+        .adaptations
+        .get_mut(&f.target.id.to_string())
+        .unwrap()
+        .privacy = Some("self_only".into());
+    assert!(private.validate_persisted().is_err());
     round_trip(&f.publication(&f.slot(), &piece));
     let upload = MediaUpload {
         bytes: b"secret bytes".to_vec(),
