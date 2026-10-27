@@ -6,6 +6,7 @@ import { ConnectorHealthBadge, ConnectorHealthReason } from '@/components/Connec
 import { CapabilityStatusBadge } from '@/components/StatusBadges';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
+import { PbxPolicyPanel } from '@/pages/capabilities/PbxPolicyPanel';
 import { connectsByOAuth, isConnectable, providerOf } from '@/lib/connectors';
 import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/format';
 
@@ -195,6 +196,7 @@ export function CapabilityCard({
             )}
           </div>
         )}
+        {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
         {mutable && (
           <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
             {c.reach !== 'connector' && (

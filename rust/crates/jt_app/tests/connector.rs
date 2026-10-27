@@ -19,7 +19,8 @@ use jt_app::usecases::auth::{self, LoginInput, Principal};
 use jt_app::usecases::capabilities::{self, CapabilityOut, DeclareInput, UpdateCapability};
 use jt_app::usecases::connector::{
     self, CompleteOAuth, ConfirmAssets, ConnectorHealth, CredentialInput, OAUTH_STATE_PURPOSE,
-    OAuthCallback, PendingAssetsOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
+    OAuthCallback, PbxCallMode, PbxPolicyInput, PbxPolicyOut, PendingAssetsOut, ProbeOut,
+    SetCredentials, StartOAuth, StartOut,
 };
 use jt_app::usecases::hash_token;
 use jt_app::usecases::work::{self, WorkKind};
@@ -2181,6 +2182,168 @@ async fn set_credentials_failure_keeps_reason_in_health() {
         Some("auth: netgsm: HTTP 401 Kullanici dogrulanamadi")
     );
     assert_no_secret("health", &serde_json::to_string(&health).unwrap());
+}
+
+#[tokio::test]
+async fn pbx_policy_is_written_into_connector_public_and_read_by_adapter() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    r.netgsm.push_probe(ok_probe("santral-kullanici"));
+    let pbx = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating(
+            "netgsm_pbx",
+            "Santral",
+            CredentialInput::NetgsmPbx {
+                username: "santral-kullanici".into(),
+                password: "pbx-pass-1".into(),
+                trunk: Some("8508401234".into()),
+                pbxnum: None,
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(pbx.status, StoredStatus::Verified);
+    let before = r.capability(pbx.id).connector_public;
+
+    // Recording on: merged in, nothing else in the public fields changes.
+    let out = connector::set_pbx_policy(
+        &r.w.deps,
+        o,
+        pbx.id,
+        PbxPolicyInput {
+            recording_allowed: Some(true),
+            ..PbxPolicyInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out,
+        PbxPolicyOut {
+            capability_id: pbx.id,
+            call_mode: PbxCallMode::Originate,
+            recording_allowed: true,
+        }
+    );
+    let public = r.capability(pbx.id).connector_public;
+    assert_eq!(public["recording_allowed"], true);
+    for (key, value) in before.as_object().unwrap() {
+        assert_eq!(&public[key], value, "{key}");
+    }
+    assert_eq!(
+        r.w.entries("connector.pbx_policy_set")[0].payload,
+        json!({ "call_mode": "originate", "recording_allowed": true })
+    );
+
+    // Linkup next: the recording flag stays. The adapter is handed both (here, on a probe).
+    let out = connector::set_pbx_policy(
+        &r.w.deps,
+        o,
+        pbx.id,
+        PbxPolicyInput {
+            call_mode: Some(PbxCallMode::Linkup),
+            ..PbxPolicyInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (out.call_mode, out.recording_allowed),
+        (PbxCallMode::Linkup, true)
+    );
+    r.netgsm.push_probe(ok_probe("santral-kullanici"));
+    r.probe(pbx.id).await;
+    let probed = r
+        .netgsm
+        .calls()
+        .into_iter()
+        .rev()
+        .find_map(|c| match c {
+            ConnectorCall::Probe { public, .. } => Some(public),
+            _ => None,
+        })
+        .expect("a probe");
+    assert_eq!(probed["call_mode"], "linkup");
+    assert_eq!(probed["recording_allowed"], true);
+    assert_eq!(probed["kind_key"], "netgsm_pbx");
+    assert_eq!(
+        connector::pbx_policy_of(&r.capability(pbx.id)),
+        PbxPolicyOut {
+            capability_id: pbx.id,
+            call_mode: PbxCallMode::Linkup,
+            recording_allowed: true,
+        }
+    );
+
+    // Off again; an edit naming nothing is refused; so is another kind, and a declaration that
+    // tries to write the reserved keys itself.
+    connector::set_pbx_policy(
+        &r.w.deps,
+        o,
+        pbx.id,
+        PbxPolicyInput {
+            recording_allowed: Some(false),
+            ..PbxPolicyInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        r.capability(pbx.id).connector_public["recording_allowed"],
+        false
+    );
+    assert_eq!(
+        code(connector::set_pbx_policy(&r.w.deps, o, pbx.id, PbxPolicyInput::default()).await),
+        ErrorCode::Validation
+    );
+    let phone = r.w.declare("phone", "Telefon").await.capability;
+    assert_eq!(
+        code(
+            connector::set_pbx_policy(
+                &r.w.deps,
+                o,
+                phone.id,
+                PbxPolicyInput {
+                    recording_allowed: Some(true),
+                    ..PbxPolicyInput::default()
+                },
+            )
+            .await
+        ),
+        ErrorCode::Conflict
+    );
+    for key in ["recording_allowed", "call_mode"] {
+        let declared = capabilities::declare(
+            &r.w.deps,
+            o,
+            DeclareInput {
+                connector_public: json!({ key: true }),
+                ..declaring("netgsm_pbx", "İkinci santral")
+            },
+        )
+        .await;
+        assert_eq!(code(declared), ErrorCode::Validation, "{key}");
+    }
+    // It needs capabilities.manage.
+    let reader = r.w.agent(&["workspace.read"]).await;
+    assert_forbidden(
+        &err(connector::set_pbx_policy(
+            &r.w.deps,
+            &reader,
+            pbx.id,
+            PbxPolicyInput {
+                recording_allowed: Some(true),
+                ..PbxPolicyInput::default()
+            },
+        )
+        .await),
+        "capabilities.manage",
+    );
+    assert_eq!(r.w.entries("connector.pbx_policy_set").len(), 3);
 }
 
 // ---------------------------------------------------------------------------------------------

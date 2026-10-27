@@ -36,6 +36,8 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     ("jt_connector", CONNECTOR_EXTRA_ALLOW),
     ("jt_inbox", INBOX_EXTRA_ALLOW),
     ("jt_studio", &["jt_strategy", "jt_capability", "url"]),
+    // Calls fence on inbox consent and journeys, and name the capability they use.
+    ("jt_calls", &["jt_capability", "jt_inbox"]),
 ];
 
 #[test]
@@ -61,7 +63,7 @@ fn domain_capability_and_crypto_dependencies_match_explicit_sets() {
             .filter(|c| direct_deps(c).contains(*krate))
             .collect();
         let expected = if *krate == "jt_capability" {
-            BTreeSet::from(["jt_connector", "jt_inbox", "jt_studio"])
+            BTreeSet::from(["jt_connector", "jt_inbox", "jt_studio", "jt_calls"])
         } else if *krate == "sha2" {
             BTreeSet::from(["jt_connector", "jt_inbox"])
         } else {
@@ -85,6 +87,7 @@ const APP_ALLOW: &[&str] = &[
     "jt_connector",
     "jt_inbox",
     "jt_studio",
+    "jt_calls",
     "serde",
     "serde_json",
     "uuid",
@@ -124,6 +127,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_connector",
         "jt_inbox",
         "jt_studio",
+        "jt_calls",
         "jt_app",
         "jt_panel_http",
         "jt_mcp",

@@ -260,7 +260,9 @@ pub fn validate_external_id(external_id: &str) -> Result<(), CapabilityError> {
 /// The top-level keys of `connector_public` that the system's connectors write: the provider
 /// (`provider`), the sealed credential's public facts (`access`), an OAuth asset's facts
 /// (`asset`), the account a probe proved (`account`), the last probe (`health`, `facts`) and the
-/// reconnection flag (`reconnect_required`), and the IYS brand binding (`iys`). Nobody declares or edits them
+/// reconnection flag (`reconnect_required`), the IYS brand binding (`iys`), and a PBX's call
+/// policy (`call_mode`, `recording_allowed`: written only by `connector.set_pbx_policy`, so that
+/// recording calls is one logged decision). Nobody declares or edits them
 /// ([`check_reserved_public_keys`]): public fields claiming a health, an expiry or a reconnection
 /// would read as what no probe found.
 ///
@@ -270,11 +272,13 @@ pub const RESERVED_PUBLIC_KEYS: &[&str] = &[
     "access",
     "account",
     "asset",
+    "call_mode",
     "facts",
     "health",
     "iys",
     "provider",
     "reconnect_required",
+    "recording_allowed",
 ];
 
 /// `Ok` unless a top-level key of `connector_public` is one of [`RESERVED_PUBLIC_KEYS`] (by its

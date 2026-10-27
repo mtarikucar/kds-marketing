@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 pub struct ApprovalReceipt {
     pub revision: u64,
     pub by: UserId,
+    #[serde(with = "crate::time_compat")]
     pub at: OffsetDateTime,
 }
 impl ApprovalReceipt {

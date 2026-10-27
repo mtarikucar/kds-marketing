@@ -107,7 +107,7 @@ use super::capabilities::{
     locked, not_retired, version_in_force,
 };
 use super::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH, netgsm_hook_token};
-use super::{Deps, acting_user, hash_token, invalid};
+use super::{Deps, acting_user, hash_token, invalid, nothing_to_change};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 pub use crate::ports::connectors::OAuthCallback;
@@ -1029,6 +1029,102 @@ pub async fn hooks(deps: &Deps, ctx: &Ctx) -> Result<HooksOut, AppError> {
         });
     }
     Ok(HooksOut { meta, netgsm })
+}
+
+/// The `connector_public` key of the PBX's call mode (the NetGSM adapter reads it).
+pub const PBX_CALL_MODE: &str = "call_mode";
+/// The `connector_public` key of whether PBX calls may be recorded (the NetGSM adapter reads it,
+/// and passes the recording flags only when it is the boolean `true`).
+pub const PBX_RECORDING_ALLOWED: &str = "recording_allowed";
+
+/// How the PBX places a click-to-call: `originate` rings the rep's extension, then the customer;
+/// `linkup` rings the rep's own phone number, then the customer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PbxCallMode {
+    #[default]
+    Originate,
+    Linkup,
+}
+
+/// `connector.set_pbx_policy`: what to change; a field left out keeps its stored value. At least
+/// one is given.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PbxPolicyInput {
+    #[serde(default)]
+    pub call_mode: Option<PbxCallMode>,
+    #[serde(default)]
+    pub recording_allowed: Option<bool>,
+}
+
+/// A `netgsm_pbx` capability's call policy as its adapter reads it: an absent or unreadable
+/// `call_mode` is `originate`, and recording is allowed only when stored as the boolean `true`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct PbxPolicyOut {
+    pub capability_id: CapabilityId,
+    pub call_mode: PbxCallMode,
+    pub recording_allowed: bool,
+}
+
+/// The call policy `capability` carries (see [`PbxPolicyOut`]).
+pub fn pbx_policy_of(capability: &Capability) -> PbxPolicyOut {
+    let public = &capability.connector_public;
+    PbxPolicyOut {
+        capability_id: capability.id,
+        call_mode: serde_json::from_value(public[PBX_CALL_MODE].clone()).unwrap_or_default(),
+        recording_allowed: public[PBX_RECORDING_ALLOWED] == Value::Bool(true),
+    }
+}
+
+/// Sets the call policy of the `netgsm_pbx` capability `id`: merged into its `connector_public`
+/// (`call_mode`, `recording_allowed`) under the capability's lock, the other public fields kept.
+/// These two keys are reserved: no declaration and no connection step writes them, so whether
+/// calls are recorded is decided here alone, and logged (`connector.pbx_policy_set`, payload the
+/// policy after the change). Another kind is `CONFLICT`; a retired capability is `CONFLICT`; an
+/// edit naming nothing is `VALIDATION`. Needs `capabilities.manage`.
+pub async fn set_pbx_policy(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    input: PbxPolicyInput,
+) -> Result<PbxPolicyOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    if input.call_mode.is_none() && input.recording_allowed.is_none() {
+        return Err(nothing_to_change(&[PBX_CALL_MODE, PBX_RECORDING_ALLOWED]));
+    }
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut capability = locked(repos.as_mut(), id).await?;
+    not_retired(&capability)?;
+    if capability.kind_key != "netgsm_pbx" {
+        return Err(AppError::conflict(
+            "only a netgsm_pbx capability has a PBX call policy",
+        ));
+    }
+    let mut public = object(&capability.connector_public);
+    if let Some(mode) = input.call_mode {
+        public.insert(PBX_CALL_MODE.to_owned(), json!(mode));
+    }
+    if let Some(allowed) = input.recording_allowed {
+        public.insert(PBX_RECORDING_ALLOWED.to_owned(), json!(allowed));
+    }
+    capability.connector_public = Value::Object(public);
+    capability.updated_at = ctx.now;
+    let out = pbx_policy_of(&capability);
+    repos.capabilities().update(capability).await?;
+    let in_force = version_in_force(repos.as_mut()).await?;
+    append(
+        repos.as_mut(),
+        ctx,
+        "connector.pbx_policy_set",
+        "capability",
+        id,
+        in_force,
+        json!({ "call_mode": out.call_mode, "recording_allowed": out.recording_allowed }),
+    )
+    .await?;
+    repos.commit().await?;
+    Ok(out)
 }
 
 /// Whether `capability` must be reconnected: `connector_public.reconnect_required` is `true`.

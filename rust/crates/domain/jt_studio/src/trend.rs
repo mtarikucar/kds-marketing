@@ -16,6 +16,7 @@ pub struct TrendSignal {
     pub channel: String,
     pub summary: String,
     pub source_url: Option<Url>,
+    #[serde(with = "crate::time_compat")]
     pub observed_at: OffsetDateTime,
     pub actor: Actor,
 }

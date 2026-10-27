@@ -391,3 +391,52 @@ describe('CapabilitiesPage', () => {
     expect(screen.queryByLabelText(tr.connect.credentials.password)).not.toBeInTheDocument();
     expect(screen.queryByRole('button',{name:tr.connect.credentials.submit})).not.toBeInTheDocument();
   });
+
+it('pbx_policy_toggle: saves recording and call mode on the PBX card', async () => {
+    const user = userEvent.setup();
+    const pbx = {
+      ...smsLine,
+      capability: {
+        ...smsLine.capability,
+        id: '0193a000-0000-7000-8000-0000000000b1',
+        kind_key: 'netgsm_pbx',
+        name: 'Santral',
+        connector_public: { ...smsLine.capability.connector_public, provider: 'netgsm' },
+      },
+    };
+    const calls = mockFetch({
+      ...routes,
+      'GET /api/capabilities': [...capabilities, pbx],
+      [`PUT /api/connectors/${pbx.capability.id}/pbx-policy`]: {
+        capability_id: pbx.capability.id,
+        call_mode: 'originate',
+        recording_allowed: true,
+      },
+    });
+    renderAt('/capabilities');
+    const card = await cardOf('Santral');
+    const panel = within(card).getByRole('group', { name: tr.capabilities.pbx.title });
+    const recording = within(panel).getByRole('switch', { name: tr.capabilities.pbx.recording });
+    // Off until the owner turns it on; originate is the default mode.
+    expect(recording).toHaveAttribute('aria-checked', 'false');
+    expect(within(panel).getByRole('radio', { name: tr.capabilities.pbx.modes.originate })).toBeChecked();
+    await user.click(recording);
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === 'PUT')).toEqual([
+        expect.objectContaining({
+          path: `/api/connectors/${pbx.capability.id}/pbx-policy`,
+          body: { recording_allowed: true },
+        }),
+      ]),
+    );
+    await user.click(within(panel).getByRole('radio', { name: tr.capabilities.pbx.modes.linkup }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([
+        { recording_allowed: true },
+        { call_mode: 'linkup' },
+      ]),
+    );
+    // Another kind has no such panel.
+    const other = await cardOf('Atölye Instagram');
+    expect(within(other).queryByRole('group', { name: tr.capabilities.pbx.title })).toBeNull();
+  });

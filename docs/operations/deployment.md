@@ -329,6 +329,17 @@ demotion**. Do not promise immediate revocation within an existing process.
 For the v1 transition, additionally follow [v1 cutover](v1-cutover.md); restarting
 an older sender without fencing the new sender can duplicate external writes.
 
+### Release note: Studio timestamps become RFC 3339 text
+
+From the release carrying `jt_studio::time_compat`, every Studio timestamp is written, and
+returned by MCP and the panel, as RFC 3339 text instead of `time`'s 9-element tuple. Stored rows
+and older ledger payloads keep their tuples and keep decoding (the reader accepts both); nothing
+is rewritten by a migration. One visible effect for at most 24 hours after the deploy: a Studio
+request key created before it and replayed after it digests a differently encoded payload and is
+answered `409 CONFLICT` "request key payload mismatch" (`studio_request_keys` keep 24 hours).
+Agents treat that as "do not retry blindly"; a fresh request key succeeds. Do not roll back to a
+release without `time_compat` once new rows are written: it cannot read the text timestamps.
+
 ## Backup and restore prerequisites
 
 The full procedure is in [backup-restore.md](backup-restore.md). Before

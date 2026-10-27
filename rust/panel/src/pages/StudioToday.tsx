@@ -424,7 +424,7 @@ export function StudioToday({
         <div key={m.id} className="space-y-2 border-b border-border pb-3">
           <p className="text-sm">
             {t('studio.dailyBudget')}: {formatMoney(m.daily_budget_minor, m.currency, i18n.language)} ·{' '}
-            {t(m.state === 'unknown' ? 'studio.budgetUnknown' : `studio.${m.state}`)}
+            {t(`studio.budgetState.${m.state}`)}
           </p>
           {data.today.blockers
             .filter((b) => 'budget_move' in b.target && b.target.budget_move === m.id)

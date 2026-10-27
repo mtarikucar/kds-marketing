@@ -20,6 +20,7 @@ pub struct Slot {
     pub id: SlotId,
     pub chain: Chain,
     pub capability_id: CapabilityId,
+    #[serde(with = "crate::time_compat")]
     pub scheduled_at: OffsetDateTime,
     pub state: SlotState,
     pub revision: u64,

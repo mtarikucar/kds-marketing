@@ -123,6 +123,10 @@
     "studio": {
       "work": "Stüdyoda çalış",
       "manage": "Stüdyoyu yönet"
+    },
+    "calls": {
+      "work": "Arama yapma ve görüşme kaydını görme",
+      "manage": "Arama politikasını yönetme"
     }
   },
   "roleNames": {
@@ -899,6 +903,21 @@
       "memberAdded": "Üye eklendi.",
       "memberRemoved": "Üye çıkarıldı."
     },
+    "pbx": {
+      "title": "Santral çağrı politikası",
+      "saved": "Santral politikası kaydedildi.",
+      "recording": "Görüşmeleri santralde kaydet",
+      "recordingHint": "Yalnızca KVKK kayıt duyurusu yerindeyse açın: kayıt, arayan duyuruyu duyduktan sonra başlamalıdır.",
+      "mode": "Arama yöntemi",
+      "modes": {
+        "originate": "Dahiliden ara",
+        "linkup": "Temsilcinin telefonundan ara"
+      },
+      "modeHints": {
+        "originate": "Önce temsilcinin dahilisi çalar; açınca müşteri aranır.",
+        "linkup": "Önce temsilcinin kendi telefon numarası çalar; açınca müşteri aranır."
+      }
+    },
     "connector": {
       "label": "Bağlantı",
       "actionsLabel": "Bağlantı işlemleri",
@@ -1538,6 +1557,15 @@
     "minorUnits": "alt birim",
     "publishFailed": "Yayınlanamadı: {{reason}}",
     "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}}).",
+    "budgetState": {
+      "queued": "Sırada",
+      "sending": "Gönderiliyor",
+      "succeeded": "Uygulandı",
+      "failed": "Uygulanamadı",
+      "unknown": "Bütçe sonucu belirsiz",
+      "refused": "Reddedildi",
+      "cancelled": "İptal edildi"
+    },
     "preview": "Onaya sunulan taslak",
     "publishTo": "Yayınlanacağı yer",
     "scheduledFor": "Yayın zamanı",

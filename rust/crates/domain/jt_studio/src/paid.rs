@@ -16,7 +16,11 @@ pub struct AdSetBinding {
     pub capability_id: CapabilityId,
     pub account_id: String,
     /// Verification generation frozen at binding; legacy bindings fail closed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::time_compat::option"
+    )]
     pub verified_at: Option<OffsetDateTime>,
     /// Successful connector probes carry a unique run id in their evidence references.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,7 +71,11 @@ pub struct BudgetMove {
     pub id: BudgetMoveId,
     pub chain: Chain,
     pub binding_id: AdSetBindingId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::time_compat::option"
+    )]
     pub binding_verified_at: Option<OffsetDateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding_verification_evidence: Option<jt_capability::Evidence>,
@@ -144,13 +152,14 @@ pub struct ReserveSpend {
     pub daily_budget_minor: Option<i64>,
     pub currency: String,
     pub evidence_key: String,
+    #[serde(with = "crate::time_compat")]
     pub at: OffsetDateTime,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpendReservation {
-    #[serde(default)]
+    #[serde(default, with = "crate::time_compat::window_option")]
     pub lane_window: Option<(OffsetDateTime, OffsetDateTime)>,
-    #[serde(default)]
+    #[serde(default, with = "crate::time_compat::window_map")]
     pub item_windows: std::collections::BTreeMap<BudgetItemId, (OffsetDateTime, OffsetDateTime)>,
     pub id: ReservationId,
     pub request: ReserveSpend,
@@ -198,6 +207,7 @@ pub struct BindingControl {
     pub observed: Option<AdStatus>,
     pub paused_by_brake: bool,
     pub outcome: Option<BindingStatusOutcome>,
+    #[serde(with = "crate::time_compat")]
     pub at: OffsetDateTime,
 }
 impl BindingControl {

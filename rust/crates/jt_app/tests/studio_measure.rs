@@ -640,8 +640,13 @@ async fn deferred_measurement_backs_off() {
             .unwrap();
         let failure = serde_json::to_value(m).unwrap()["failure"].clone();
         assert_eq!(failure["attempts"], attempt);
+        // Studio timestamps are RFC 3339 text on the wire (`jt_studio::time_compat`).
         assert_eq!(
-            serde_json::from_value::<time::OffsetDateTime>(failure["retry_at"].clone()).unwrap(),
+            time::OffsetDateTime::parse(
+                failure["retry_at"].as_str().unwrap(),
+                &time::format_description::well_known::Rfc3339
+            )
+            .unwrap(),
             at + Duration::hours(hours)
         );
         w.d.clock = Arc::new(FixedClock(at + Duration::minutes(59)));

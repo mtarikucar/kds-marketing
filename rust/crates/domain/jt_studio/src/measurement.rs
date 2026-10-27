@@ -31,6 +31,7 @@ pub enum MeasurementStatus {
 pub struct MeasurementFailure {
     pub category: String,
     pub attempts: u32,
+    #[serde(with = "crate::time_compat")]
     pub retry_at: OffsetDateTime,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,16 +45,18 @@ pub struct Measurement {
     pub window: MeasurementWindow,
     #[serde(default)]
     pub evidence_revision: u64,
-    #[serde(default)]
+    #[serde(default, with = "crate::time_compat::option")]
     pub scheduled_at: Option<OffsetDateTime>,
     #[serde(default)]
     pub account_timezone: Option<String>,
     #[serde(default)]
     pub minor_unit_exponent: Option<u8>,
+    #[serde(with = "crate::time_compat")]
     pub measured_at: OffsetDateTime,
     pub source: String,
     pub raw_metrics: BTreeMap<String, Option<i64>>,
     pub metric_scope: String,
+    #[serde(default, with = "crate::time_compat::date_option")]
     pub date: Option<Date>,
     pub currency: Option<String>,
     pub status: MeasurementStatus,

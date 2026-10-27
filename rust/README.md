@@ -99,6 +99,8 @@ döndürür. Sekiz göç vardır:
 | `0010_m4_billing` | Payment evidence, permanent entitlement history, stable workspace reference and a platform-only backfill manifest; 66 tables. Schema rollback refuses live rows. |
 | `0011_m4_activation_codes` | Workspace-locked keyed activation challenges, attempt cap and replay history; 67 tables. No plaintext or recipient binding. |
 | `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
+| `0013_probe_reason` | `probe_runs.reason` (the failure line, at most 300 characters) and `unknown` as a legal `error_kind`; down restores the old check only while no `unknown` run is stored. No new table. |
+| `0015_voice_calls` | Voice V0: `call_sessions`, `call_turns`, `call_commands`, `call_duty` (forced RLS, composite keys; 71 tables), `workspace_policies.calls`, `calls.work` for the system owner/manager/rep and `calls.manage` for owner/manager, and the retry columns of `event_consumption` (`attempts`, `retry_at`). Down refuses while a call is not ended. (`0014` is the social providers' migration of the TikTok/LinkedIn branch.) |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -364,6 +366,7 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | | `jeeta.connector.health` | Bütün bağlayıcıların sağlığı: durum, son yoklama, jetonun bitişi, yeniden bağlama gereği | READ |
 | | `jeeta.connector.reconnect` | Girişi düşen ya da hiç bağlanmamış (`declared`) Meta ya da X kabiliyeti için ona bağlı bir giriş başlatır (`handoff` ile); onayda ilk seçilen varlık o kabiliyet olur | WRITE |
 | | `jeeta.connector.hooks` | Sağlayıcılara girilecek webhook adresleri: alanın her amaç için NetGSM adresi (alanın anahtarıyla) ve platformun Meta adresi (doğrulama anahtarı asla) | READ |
+| | `jeeta.connector.set_pbx_policy` | NetGSM santralinin çağrı politikası: `call_mode` (`originate` ya da `linkup`) ve `recording_allowed` (görüşmeler santralde kaydedilsin mi); verilmeyen alan değişmez | WRITE |
 | olaylar | `jeeta.events.pending` | İşlenmemiş gelen olaylar, en eskisi başta, sayfa sayfa (`next` ile ileri) | READ |
 | | `jeeta.events.ack` | İşlenen olayları işaretler (1–200 kimlik, hepsi ya da hiçbiri); `{acked}` | WRITE |
 | | `jeeta.events.list` | Bütün gelen olaylar, en yenisi başta; işlenenler dahil, sağlayıcı ve tür süzgeçleri | READ |
@@ -890,6 +893,7 @@ yazma izni yoktur; `workspace.read` olayları yalnız okur.
 | Yoklama (gövdesiz; yanıt `{result, status}`) | `POST /api/connectors/{capability_id}/probe` | `jeeta.connector.probe` | `workspace.read` |
 | Sağlık (yanıt liste, araçta `{connectors}`) | `GET /api/connectors/health` | `jeeta.connector.health` | `workspace.read` |
 | Kabiliyete bağlı giriş: yeniden bağlama ya da `declared` bir kabiliyetin ilk bağlanması (gövdesiz; yanıt başlatma gibi) | `POST /api/connectors/{capability_id}/reconnect` | `jeeta.connector.reconnect` | `capabilities.manage` |
+| Santralin çağrı politikası (gövde `{call_mode?, recording_allowed?}`, en az biri; yalnız `netgsm_pbx`, başka tür `409`; yanıt `{capability_id, call_mode, recording_allowed}`; günlük `connector.pbx_policy_set`). Bu iki `connector_public` anahtarı ayrılmıştır: bildirim ve bağlantı adımı yazamaz, kaydın açılması tek ve günlüklü bir karardır | `PUT /api/connectors/{capability_id}/pbx-policy` | `jeeta.connector.set_pbx_policy` | `capabilities.manage` |
 
 Kimlik bilgisi biçimleri (`credential.kind`): `netgsm_sms` (`usercode`, `password`, `msgheader`;
 `sms_line` için), `netgsm_pbx` (`username`, `password`, isteğe bağlı `trunk`, `pbxnum`; `netgsm_pbx` için)
@@ -1906,6 +1910,32 @@ budget moves and controls. Its dependencies are pure domain types, serialization
 UUID/time/error types and the URL parser; it performs no I/O. Existing application
 port paths re-export the shared records, including connector `MediaUpload` and
 `PublishReceipt`, without changing repository or provider method signatures.
+
+### Calls (voice V0)
+
+`crates/domain/jt_calls` holds the call session and its state machine, the plan and the policy,
+the fence and the timers (spec `docs/superpowers/specs/2026-10-27-agent-voice-calls-design.md`).
+V0 places a rep's call through the NetGSM PBX (`Telephony::click_to_call`: the rep's extension
+rings, then the person) and keeps the call log; agent-driven calls wait for the voice bridge (V1)
+and are refused `bridge_offline`. Every placed call passes the fence twice, the second time in
+the transaction right before the PBX is asked; numbers are masked in every output and ledger
+payload (`calls.get` shows a person holding `calls.manage` the number).
+
+| Use case | Panel | MCP | Risk | Permission |
+|---|---|---|---|---|
+| `calls.policy_get` | `GET /api/calls/policy` | `jeeta.calls.policy_get` | READ | `calls.work` |
+| `calls.policy_set` | `PUT /api/calls/policy` | `jeeta.calls.policy_set` | WRITE | `calls.manage` (only a person turns the disclosure off) |
+| `calls.place` | `POST /api/calls` | `jeeta.calls.place` | SPEND | `calls.work`; refusals are `409` with `details.reason` and one `calls.refused` |
+| `calls.get` | `GET /api/calls/{call_id}` | `jeeta.calls.get` | READ | `calls.work` |
+| `calls.list` | `GET /api/calls` | `jeeta.calls.list` | READ | `calls.work` |
+| `calls.end` | `POST /api/calls/{call_id}/end` | `jeeta.calls.end` | WRITE | `calls.work`; journey `CallMade`, note, task, spend once |
+
+Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
+dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes
+through `jt_studio::time_compat`: written as RFC 3339 text (a date as `YYYY-MM-DD`), so MCP
+outputs and panel answers carry text; read as that text or as `time`'s compact tuple, which rows
+and ledger payloads stored before it keep. See the deployment release note for the 24-hour
+request-key replay effect.
 The T0 application `PublishOutcome` still transports `AppError`; persistence must
 map it to the domain's closed redacted outcome codes, never store diagnostic text.
 

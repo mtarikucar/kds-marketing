@@ -11,6 +11,7 @@ mod piece;
 mod planning;
 mod publication;
 mod slot;
+pub mod time_compat;
 mod trend;
 
 pub use chain::*;

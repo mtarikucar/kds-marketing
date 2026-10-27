@@ -38,6 +38,12 @@ pub enum Permission {
     StudioWork,
     #[serde(rename = "studio.manage")]
     StudioManage,
+    /// Place, follow and end phone calls, and read the call log and policy.
+    #[serde(rename = "calls.work")]
+    CallsWork,
+    /// Set the call policy and see a call's number.
+    #[serde(rename = "calls.manage")]
+    CallsManage,
 }
 
 const ALL_PERMISSIONS: &[Permission] = &[
@@ -51,6 +57,8 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::InboxManage,
     Permission::StudioWork,
     Permission::StudioManage,
+    Permission::CallsWork,
+    Permission::CallsManage,
 ];
 
 impl Permission {
@@ -59,6 +67,8 @@ impl Permission {
         match self {
             Permission::StudioWork => "studio.work",
             Permission::StudioManage => "studio.manage",
+            Permission::CallsWork => "calls.work",
+            Permission::CallsManage => "calls.manage",
             Permission::WorkspaceRead => "workspace.read",
             Permission::TeamManage => "team.manage",
             Permission::ApiKeysManage => "api_keys.manage",
@@ -89,7 +99,7 @@ pub enum SystemRole {
     Owner,
     /// Full control, but not counted as an owner.
     Manager,
-    /// Workspace reader and inbox worker.
+    /// Workspace reader, inbox worker and caller.
     Rep,
 }
 
@@ -107,7 +117,11 @@ impl SystemRole {
     pub fn permissions(&self) -> BTreeSet<Permission> {
         match self {
             SystemRole::Owner | SystemRole::Manager => Permission::all().iter().copied().collect(),
-            SystemRole::Rep => BTreeSet::from([Permission::WorkspaceRead, Permission::InboxWork]),
+            SystemRole::Rep => BTreeSet::from([
+                Permission::WorkspaceRead,
+                Permission::InboxWork,
+                Permission::CallsWork,
+            ]),
         }
     }
 }

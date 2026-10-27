@@ -336,6 +336,22 @@ pub async fn record_spend(
     reference: Option<String>,
 ) -> Result<BudgetSpendOut, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let out = spend_in(deps, ctx, repos.as_mut(), item, amount, reference).await?;
+    repos.commit().await?;
+    Ok(out)
+}
+
+/// [`record_spend`] inside the caller's bundle, which commits it (a call's spend is recorded in
+/// the transaction that ends the call). The caller has checked the permission.
+pub(crate) async fn spend_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    repos: &mut dyn TenantRepos,
+    item: BudgetItemId,
+    amount: i64,
+    reference: Option<String>,
+) -> Result<BudgetSpendOut, AppError> {
     let source = match &ctx.actor {
         Actor::Agent { .. } => SpendSource::Agent,
         Actor::Human { .. } => SpendSource::Human,
@@ -356,13 +372,12 @@ pub async fn record_spend(
         ctx.now,
     )
     .map_err(capability_error)?;
-    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let budget_item = locked_item(repos.as_mut(), item).await?;
+    let budget_item = locked_item(repos, item).await?;
     item_not_retired(&budget_item)?;
     repos.budget().append_spend(spend.clone()).await?;
-    let spent = spent_in_period(repos.as_mut(), &budget_item, ctx.now).await?;
+    let spent = spent_in_period(repos, &budget_item, ctx.now).await?;
     let remaining = remaining(budget_item.cap, spent);
-    let in_force = version_in_force(repos.as_mut()).await?;
+    let in_force = version_in_force(repos).await?;
     let source_key = match &spend.source {
         SpendSource::Connector(_) => "connector",
         SpendSource::Agent => "agent",
@@ -373,7 +388,7 @@ pub async fn record_spend(
         payload["reference"] = json!(reference);
     }
     append(
-        repos.as_mut(),
+        repos,
         ctx,
         "budget.spend.record",
         "budget_spend",
@@ -384,7 +399,7 @@ pub async fn record_spend(
     .await?;
     if remaining < 0 {
         append(
-            repos.as_mut(),
+            repos,
             ctx,
             "budget.over_cap",
             "budget_item",
@@ -394,7 +409,6 @@ pub async fn record_spend(
         )
         .await?;
     }
-    repos.commit().await?;
     Ok(BudgetSpendOut { spend, remaining })
 }
 
@@ -482,6 +496,24 @@ fn unit_kind(unit: &Unit) -> &'static str {
         Unit::Count(_) => "a count",
         Unit::Minutes => "minutes",
     }
+}
+
+/// Budget item `id` and what it has left in the period holding `now`, when it is the
+/// workspace's and not retired.
+pub(crate) async fn left_in_period(
+    repos: &mut dyn TenantRepos,
+    id: BudgetItemId,
+    now: OffsetDateTime,
+) -> Result<Option<(BudgetItem, i64)>, AppError> {
+    let Some(item) = repos.budget().find_item(id).await? else {
+        return Ok(None);
+    };
+    if item.retired_at.is_some() {
+        return Ok(None);
+    }
+    let spent = spent_in_period(repos, &item, now).await?;
+    let left = remaining(item.cap, spent);
+    Ok(Some((item, left)))
 }
 
 /// What was spent from `item` in the window of its period that holds `now`.

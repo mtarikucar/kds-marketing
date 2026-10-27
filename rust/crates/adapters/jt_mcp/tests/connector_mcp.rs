@@ -240,6 +240,7 @@ async fn agent_gets_an_authorize_url_but_cannot_complete() {
             "jeeta.connector.health",
             "jeeta.connector.reconnect",
             "jeeta.connector.hooks",
+            "jeeta.connector.set_pbx_policy",
         ]
     );
 
@@ -520,4 +521,92 @@ async fn agent_provisions_iys_on_existing_sms_line() {
     let error=w.refused(&key,&session,"jeeta.connector.set_credentials",json!({"capability_id":sms["capability"]["id"],"credential":{"kind":"netgsm_iys","usercode":"wrong","password":"iys-private","brand_code":"brand-42"}}),"VALIDATION").await;
     assert_eq!(error["details"]["reason"], "iys_usercode_mismatch");
     assert!(!error.to_string().contains("iys-private"));
+}
+
+#[tokio::test]
+async fn set_pbx_policy_tool() {
+    let w = World::new().await;
+    let key = w.key(&[]).await;
+    let session = w.session(&key).await;
+    w.netgsm
+        .push_probe(ProbeResult::success(12, json!({"account_id":"santral"})));
+    let pbx = w
+        .ok(
+            &key,
+            &session,
+            "jeeta.connector.set_credentials",
+            json!({"kind_key":"netgsm_pbx","name":"Santral","credential":{"kind":"netgsm_pbx","username":"santral","password":"pbx-secret","trunk":"8508401234"}}),
+        )
+        .await;
+    let id = pbx["capability"]["id"].clone();
+    let out = w
+        .ok(
+            &key,
+            &session,
+            "jeeta.connector.set_pbx_policy",
+            json!({"capability_id": id, "recording_allowed": true}),
+        )
+        .await;
+    assert_eq!(
+        out,
+        json!({"capability_id": id, "call_mode": "originate", "recording_allowed": true})
+    );
+    let out = w
+        .ok(
+            &key,
+            &session,
+            "jeeta.connector.set_pbx_policy",
+            json!({"capability_id": id, "call_mode": "linkup"}),
+        )
+        .await;
+    assert_eq!(out["call_mode"], "linkup");
+    assert_eq!(out["recording_allowed"], true);
+    // Strict arguments: an unknown mode or field is refused, and so is an edit naming nothing.
+    for arguments in [
+        json!({"capability_id": id, "call_mode": "teleport"}),
+        json!({"capability_id": id, "recording_allowed": true, "extra": 1}),
+        json!({"capability_id": id}),
+    ] {
+        w.refused(
+            &key,
+            &session,
+            "jeeta.connector.set_pbx_policy",
+            arguments,
+            "VALIDATION",
+        )
+        .await;
+    }
+    // A key without capabilities.manage does not see the tool work.
+    let reader = w.key(&["workspace.read"]).await;
+    let reader_session = w.session(&reader).await;
+    let result = w
+        .tool(
+            &reader,
+            &reader_session,
+            "jeeta.connector.set_pbx_policy",
+            json!({"capability_id": id, "recording_allowed": false}),
+        )
+        .await;
+    assert!(
+        result["isError"] == json!(true) || result.is_null(),
+        "{result}"
+    );
+    let tools = w.rpc(&key, &session, "tools/list", json!({})).await;
+    let tool = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "jeeta.connector.set_pbx_policy")
+        .expect("listed")
+        .clone();
+    assert!(
+        tool["description"]
+            .as_str()
+            .unwrap()
+            .ends_with("[risk: WRITE]")
+    );
+    assert_eq!(
+        tool["inputSchema"]["properties"]["call_mode"]["enum"],
+        json!(["originate", "linkup"])
+    );
 }

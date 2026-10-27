@@ -1427,11 +1427,13 @@ fn reserved_public_keys_are_the_ones_connectors_write() {
             "access",
             "account",
             "asset",
+            "call_mode",
             "facts",
             "health",
             "iys",
             "provider",
-            "reconnect_required"
+            "reconnect_required",
+            "recording_allowed"
         ]
     );
     assert_eq!(check_reserved_public_keys(&json!({})), Ok(()));

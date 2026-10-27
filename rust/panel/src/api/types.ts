@@ -22,7 +22,9 @@ export type Permission =
   | 'inbox.work'
   | 'inbox.manage'
   | 'studio.work'
-  | 'studio.manage';
+  | 'studio.manage'
+  | 'calls.work'
+  | 'calls.manage';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -34,6 +36,8 @@ export const PERMISSIONS: readonly Permission[] = [
   'inbox.manage',
   'studio.work',
   'studio.manage',
+  'calls.work',
+  'calls.manage',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */
@@ -873,6 +877,22 @@ export interface NetgsmHook {
 export interface HooksOut {
   meta: MetaHook | null;
   netgsm: NetgsmHook[];
+}
+
+/** `jt_app::usecases::connector::PbxCallMode`. */
+export type PbxCallMode = 'originate' | 'linkup';
+
+/** `jt_app::usecases::connector::PbxPolicyInput`: at least one field. */
+export interface PbxPolicyInput {
+  call_mode?: PbxCallMode;
+  recording_allowed?: boolean;
+}
+
+/** `jt_app::usecases::connector::PbxPolicyOut`. */
+export interface PbxPolicyOut {
+  capability_id: Uuid;
+  call_mode: PbxCallMode;
+  recording_allowed: boolean;
 }
 
 /** `jt_app::usecases::connector::ConnectorHealth`. */

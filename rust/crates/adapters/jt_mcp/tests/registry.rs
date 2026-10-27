@@ -131,6 +131,13 @@ const TOOLS: &[&str] = &[
     "jeeta.connector.health",
     "jeeta.connector.reconnect",
     "jeeta.connector.hooks",
+    "jeeta.connector.set_pbx_policy",
+    "jeeta.calls.policy_get",
+    "jeeta.calls.policy_set",
+    "jeeta.calls.place",
+    "jeeta.calls.get",
+    "jeeta.calls.list",
+    "jeeta.calls.end",
     "jeeta.events.pending",
     "jeeta.events.ack",
     "jeeta.events.list",
@@ -141,7 +148,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 125);
+    assert_eq!(TOOLS.len(), 132);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -579,6 +586,11 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
                 "jeeta.connector.hooks",
                 Permission::CapabilitiesManage,
                 Risk::Read
+            ),
+            (
+                "jeeta.connector.set_pbx_policy",
+                Permission::CapabilitiesManage,
+                Risk::Write
             ),
         ]
     );
