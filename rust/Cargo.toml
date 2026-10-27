@@ -8,6 +8,7 @@ members = [
     "crates/domain/jt_connector",
     "crates/domain/jt_inbox",
     "crates/domain/jt_studio",
+    "crates/domain/jt_calls",
     "crates/jt_app",
     "crates/adapters/jt_files",
     "crates/adapters/jt_pg",
@@ -40,6 +41,7 @@ jt_capability = { path = "crates/domain/jt_capability" }
 jt_connector = { path = "crates/domain/jt_connector" }
 jt_inbox = { path = "crates/domain/jt_inbox" }
 jt_studio = { path = "crates/domain/jt_studio" }
+jt_calls = { path = "crates/domain/jt_calls" }
 jt_app = { path = "crates/jt_app" }
 jt_files = { path = "crates/adapters/jt_files" }
 jt_pg = { path = "crates/adapters/jt_pg" }

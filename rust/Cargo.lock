@@ -1426,6 +1426,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_calls"
+version = "0.1.0"
+dependencies = [
+ "jt_capability",
+ "jt_inbox",
+ "jt_ledger",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "jt_capability"
 version = "0.1.0"
 dependencies = [
