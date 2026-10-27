@@ -1160,7 +1160,7 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
     let e = err(team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "manager").await);
     assert_exceeds(&e, &missing);
     let e = err(team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "auditor").await);
-    assert_exceeds(&e, &["ledger.read", "inbox.work"]);
+    assert_exceeds(&e, &["ledger.read", "inbox.work", "calls.work"]);
 
     // roles.create and roles.update with permissions the lead lacks.
     let e = err(roles::create(
