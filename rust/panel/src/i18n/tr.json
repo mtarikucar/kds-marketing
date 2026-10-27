@@ -920,8 +920,9 @@
         "throttle": "sağlayıcı şu an yoğun: birkaç dakika sonra yeniden deneyin",
         "transient": "sağlayıcıya ulaşılamadı: sunucu adını ve bağlantıyı kontrol edip yeniden deneyin",
         "permanent": "sağlayıcı bilgileri kabul etmedi: kullanıcı kodu, parola, mesaj başlığı ve sunucu adlarını kontrol edin",
-        "unknown": "bilinmeyen bir sorun"
+        "unknown": "sağlayıcının yanıtından işin olup olmadığı anlaşılmadı: biraz sonra yeniden yoklayın"
       },
+      "reasonLine": "Sağlayıcının yanıtı: {{reason}}",
       "probeDialog": {
         "title": "Yoklama: {{name}}",
         "description": "Sistem sağlayıcıya kimlik bilgileriyle küçük bir deneme çağrısı yaptı.",
@@ -1019,7 +1020,11 @@
       "externalId": "Hesap kimliği",
       "externalIdHint": "Sayfanın ya da WhatsApp telefon numarasının sağlayıcıdaki kimliği.",
       "externalIdOptional": "Hesap kimliği (isteğe bağlı)",
-      "submit": "Jetonu kaydet ve yokla"
+      "submit": "Jetonu kaydet ve yokla",
+      "title": "Erişim jetonuyla bağla"
+    },
+    "secret": {
+      "show": "{{field}} değerini göster"
     },
     "result": {
       "verified": "Bağlantı yoklandı ve doğrulandı.",
@@ -1532,7 +1537,14 @@
     "entryHypothesis": "Değerlendirilen hipotez",
     "minorUnits": "alt birim",
     "publishFailed": "Yayınlanamadı: {{reason}}",
-    "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}})."
+    "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}}).",
+    "preview": "Onaya sunulan taslak",
+    "publishTo": "Yayınlanacağı yer",
+    "scheduledFor": "Yayın zamanı",
+    "noDraft": "Ajan henüz bir taslak teslim etmedi.",
+    "media": "Taslaktaki medya",
+    "mediaImage": "Görsel {{n}}: {{name}}",
+    "uploadedFile": "Yüklenmiş dosya"
   },
   "billing": {
     "title": "Ödeme ve etkinleştirme",

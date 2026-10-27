@@ -34,6 +34,7 @@ pub struct StrategyGuidance {
 #[derive(Debug, Serialize)]
 pub struct ContextOut {
     pub status_labels: std::collections::BTreeMap<String, String>,
+    pub status_label_overrides: std::collections::BTreeMap<String, String>,
     pub person: Person,
     pub journey: Option<Journey>,
     pub events: Vec<JourneyEvent>,
@@ -230,8 +231,10 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
     } else {
         None
     };
+    let labels = super::dictionaries::status_labels(r.as_mut()).await?;
     Ok(ContextOut {
-        status_labels: super::dictionaries::effective_status_labels(r.as_mut()).await?,
+        status_labels: labels.effective,
+        status_label_overrides: labels.overrides,
         person,
         journey,
         events,

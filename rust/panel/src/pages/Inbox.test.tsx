@@ -4,6 +4,20 @@ import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { USER_ID, WS_ID } from '@/test/fixtures';
 import { inboxAnswers, inboxMe, conversation, context, journey, merge, person } from '@/test/inbox';
+import i18n from '@/i18n/config';
+
+/** What the server sends as `status_labels`: the fixed Turkish defaults, all nine stages. */
+const turkishDefaults = {
+  new: 'Yeni',
+  contacted: 'İletişim kuruldu',
+  unreachable: 'Ulaşılamadı',
+  appointment: 'Randevu',
+  met: 'Görüşüldü',
+  quoted: 'Teklif verildi',
+  pending: 'Beklemede',
+  won: 'Kazanıldı',
+  lost: 'Kaybedildi',
+};
 
 async function openConversation(answers = inboxAnswers) {
   const calls = mockFetch(answers);
@@ -13,7 +27,7 @@ async function openConversation(answers = inboxAnswers) {
 }
 
 describe('Inbox', () => {
-  it('renders the workspace status label returned by journeys.get', async () => {
+  it('renders the workspace status label override returned by journeys.get', async () => {
     await openConversation({
       ...inboxAnswers,
       'GET /api/inbox/journeys/journey-1': {
@@ -21,11 +35,50 @@ describe('Inbox', () => {
         events: [],
         tasks: [],
         notes: [],
-        status_labels: { contacted: 'İlk temas bekleniyor' },
+        status_labels: { ...turkishDefaults, contacted: 'İlk temas bekleniyor' },
+        status_label_overrides: { contacted: 'İlk temas bekleniyor' },
       },
     });
     const panel = await screen.findByRole('complementary', { name: 'Yolculuk' });
     expect(within(panel).getByText('İlk temas bekleniyor')).toBeInTheDocument();
+  });
+
+  it('shows the English stage name in the English panel, not the Turkish server default', async () => {
+    await i18n.changeLanguage('en');
+    mockFetch({
+      ...inboxAnswers,
+      'GET /api/inbox/journeys/journey-1': {
+        journey,
+        events: [],
+        tasks: [],
+        notes: [],
+        status_labels: turkishDefaults,
+        status_label_overrides: {},
+      },
+    });
+    renderAt('/inbox/conv-1');
+    const panel = await screen.findByRole('complementary', { name: 'Journey' });
+    expect(await within(panel).findByText('Contacted')).toBeInTheDocument();
+    expect(within(panel).queryByText('İletişim kuruldu')).not.toBeInTheDocument();
+  });
+
+  it("keeps the workspace's own stage label in the English panel", async () => {
+    await i18n.changeLanguage('en');
+    mockFetch({
+      ...inboxAnswers,
+      'GET /api/inbox/journeys/journey-1': {
+        journey,
+        events: [],
+        tasks: [],
+        notes: [],
+        status_labels: { ...turkishDefaults, contacted: 'Waiting for first reply' },
+        status_label_overrides: { contacted: 'Waiting for first reply' },
+      },
+    });
+    renderAt('/inbox/conv-1');
+    const panel = await screen.findByRole('complementary', { name: 'Journey' });
+    expect(await within(panel).findByText('Waiting for first reply')).toBeInTheDocument();
+    expect(within(panel).queryByText('Contacted')).not.toBeInTheDocument();
   });
 
   it("explains why a reply was not sent, in the owner's words", async () => {

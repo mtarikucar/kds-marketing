@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import * as api from '@/api/studio';
+import { listCapabilities } from '@/api/capabilities';
+import type { CapabilityOut } from '@/api/types';
 import {
   Region,
   Field,
@@ -13,6 +15,7 @@ import {
   useStudioMutation,
 } from './StudioShared';
 import type { LaneKind } from '@/api/types';
+import { kindLabel } from '@/lib/capabilities';
 import { failureText } from '@/lib/delivery';
 import { formatMoney } from '@/lib/format';
 
@@ -29,9 +32,129 @@ function PublishFailure({ attempts }: { attempts: api.PublishAttempt[] }) {
   );
 }
 
+/** The last path segment of a hosted media URL, which is what the owner recognises it by. */
+function fileName(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const last = parsed.pathname.split('/').filter(Boolean).pop();
+    return last ? decodeURIComponent(last) : parsed.host;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * One media item of a drafted piece: a thumbnail for a hosted image, the file name for any other
+ * hosted file. A stored upload is only an id here (no endpoint returns its name or bytes), so it
+ * shows as an uploaded file.
+ */
+function MediaItem({ media, index }: { media: api.Media; index: number }) {
+  const { t } = useTranslation();
+  if (media.kind === 'hosted_url' && media.mime.startsWith('image/')) {
+    return (
+      <img
+        src={media.url}
+        alt={t('studio.mediaImage', { n: index, name: fileName(media.url) })}
+        referrerPolicy="no-referrer"
+        loading="lazy"
+        className="h-20 w-20 rounded-md border border-border object-cover"
+      />
+    );
+  }
+  return (
+    <span className="inline-flex max-w-full items-center break-all rounded-md border border-border px-2 py-1 text-xs">
+      {media.kind === 'hosted_url' ? fileName(media.url) : t('studio.uploadedFile')}
+    </span>
+  );
+}
+
+/**
+ * What approving this slot would publish: where and when, the drafted text and its media. It
+ * reads the same cached slot detail the editor does.
+ */
+function PiecePreview({
+  slot,
+  arms,
+  accounts,
+}: {
+  slot: api.Slot;
+  arms: api.Arm[];
+  accounts: CapabilityOut[] | undefined;
+}) {
+  const { t, i18n } = useTranslation();
+  const key = useStudioKey();
+  const detail = useQuery({
+    queryKey: [...key, 'slot', slot.id],
+    queryFn: () => api.slotGet(slot.id),
+  });
+  const channel = arms.find((a) => a.id === slot.chain.arm_id)?.key.channel;
+  const account = accounts?.find((c) => c.capability.id === slot.capability_id)?.capability;
+  const target = account
+    ? `${account.name} · ${kindLabel(t, account.kind_key)}`
+    : channel
+      ? kindLabel(t, channel)
+      : '—';
+  const when = api.instant(slot.scheduled_at);
+  const piece = detail.data?.piece;
+  return (
+    <div
+      role="group"
+      aria-label={t('studio.preview')}
+      className="space-y-2 rounded-md border border-border bg-surface-muted p-3 text-sm"
+    >
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+        <dt className="text-muted-foreground">{t('studio.publishTo')}</dt>
+        <dd className="break-words">{target}</dd>
+        <dt className="text-muted-foreground">{t('studio.scheduledFor')}</dt>
+        <dd>
+          <time dateTime={when.toISOString()}>
+            {when.toLocaleString(i18n.language, {
+              timeZone: 'Europe/Istanbul',
+              day: 'numeric',
+              month: 'short',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+          </time>
+        </dd>
+      </dl>
+      {detail.isPending && <p className="text-xs text-muted-foreground">{t('studio.loading')}</p>}
+      {detail.data &&
+        (piece?.text.trim() ? (
+          <p className="whitespace-pre-wrap break-words">{piece.text}</p>
+        ) : (
+          !piece?.media.length && <p className="text-muted-foreground">{t('studio.noDraft')}</p>
+        ))}
+      {piece && piece.media.length > 0 && (
+        <ul aria-label={t('studio.media')} className="flex flex-wrap gap-2">
+          {piece.media.map((m, i) => (
+            <li key={i}>
+              <MediaItem media={m} index={i + 1} />
+            </li>
+          ))}
+        </ul>
+      )}
+      <StudioError error={detail.error} />
+    </div>
+  );
+}
+
 function SlotEditor({ id, close }: { id: string; close: () => void }) {
   const { t } = useTranslation();
   const key = useStudioKey();
+  const headingId = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
+  // Whatever opened the editor gets focus back when it is closed.
+  const opener = useRef<Element | null>(null);
+  useEffect(() => {
+    if (!opener.current) opener.current = document.activeElement;
+    heading.current?.focus();
+  }, []);
+  const done = () => {
+    const back = opener.current;
+    close();
+    if (back instanceof HTMLElement && back.isConnected) back.focus();
+  };
   const detail = useQuery({ queryKey: [...key, 'slot', id], queryFn: () => api.slotGet(id) });
   const [file, setFile] = useState<File>();
   const [media, setMedia] = useState<api.Media[]>([]);
@@ -67,10 +190,18 @@ function SlotEditor({ id, close }: { id: string; close: () => void }) {
   );
   const data = detail.data;
   return (
-    <div className="space-y-3 rounded-md border border-primary p-3" data-testid="slot-detail">
+    <div
+      role="group"
+      aria-labelledby={headingId}
+      id={`slot-editor-${id}`}
+      className="space-y-3 rounded-md border border-primary p-3"
+      data-testid="slot-detail"
+    >
       <div className="flex items-center justify-between gap-2">
-        <h3 className="font-medium">{data?.hypothesis.title ?? t('studio.detail')}</h3>
-        <button className={buttonClass} onClick={close}>
+        <h3 ref={heading} id={headingId} tabIndex={-1} className="font-medium focus:outline-none">
+          {data?.hypothesis.title ?? t('studio.detail')}
+        </h3>
+        <button className={buttonClass} onClick={done}>
           {t('studio.close')}
         </button>
       </div>
@@ -172,7 +303,36 @@ export function StudioToday({
   overdue: boolean;
 }) {
   const { t, i18n } = useTranslation();
+  const key = useStudioKey();
   const [lane, setLane] = useState<LaneKind>('organic');
+  const awaiting = (id: string) =>
+    data?.today.approvals.some((a) => 'slot' in a && a.slot === id) ?? false;
+  const hasSlotApprovals = data?.today.slots.some(({ slot }) => awaiting(slot.id)) ?? false;
+  // Names the account an approval publishes to; without it the preview names the channel.
+  const accounts = useQuery({
+    queryKey: [...key, 'accounts'],
+    queryFn: () => listCapabilities(),
+    enabled: hasSlotApprovals,
+  });
+  const arms = data?.learned.arms.map((a) => a.arm) ?? [];
+  const others =
+    data?.slots.filter(
+      (s) =>
+        !data.today.slots.some((p) => p.slot.id === s.id) &&
+        (s.state === 'retired' ||
+          data.today.blockers.some((b) => 'slot' in b.target && b.target.slot === s.id)),
+    ) ?? [];
+  // A slot listed here gets its editor in place; one picked elsewhere (the plan) gets it below.
+  const inline =
+    selectedSlot !== null &&
+    (data?.today.slots.some(({ slot }) => slot.id === selectedSlot) ||
+      others.some((s) => s.id === selectedSlot));
+  const editor = (id: string) => <SlotEditor key={id} id={id} close={() => onSelect(null)} />;
+  const editorToggle = (id: string) => ({
+    'aria-expanded': selectedSlot === id,
+    'aria-controls': selectedSlot === id ? `slot-editor-${id}` : undefined,
+    onClick: () => onSelect(selectedSlot === id ? null : id),
+  });
   const [required, setRequired] = useState<boolean>();
   const approve = useStudioMutation(
     ({ target, revision }: { target: api.Target; revision: number }) =>
@@ -205,14 +365,21 @@ export function StudioToday({
       </div>
       <ul className="space-y-3">
         {data?.today.slots.map(({ slot, overdue }) => (
-          <li key={slot.id} className="space-y-2 border-b border-border pb-3">
+          <li
+            key={slot.id}
+            className="space-y-2 border-b border-border pb-3"
+            data-testid={`today-${slot.id}`}
+          >
             <div className="flex flex-wrap justify-between gap-2">
-              <button className={`${buttonClass} text-start`} onClick={() => onSelect(slot.id)}>
+              <button className={`${buttonClass} text-start`} {...editorToggle(slot.id)}>
                 {data.hypotheses.find((h) => h.id === slot.chain.hypothesis_id)?.title ??
                   t('studio.detail')}
               </button>
               <span className="text-sm">{t(`studio.${slot.state}`)}</span>
             </div>
+            {awaiting(slot.id) && (
+              <PiecePreview slot={slot} arms={arms} accounts={accounts.data} />
+            )}
             {overdue && slot.state === 'planned' && (
               <p className="text-xs">{t('studio.agentWaiting')}</p>
             )}
@@ -221,7 +388,7 @@ export function StudioToday({
               .map((b, i) => (
                 <Reason key={i} reason={b.reason} />
               ))}
-            {manage && data.today.approvals.some((a) => 'slot' in a && a.slot === slot.id) && (
+            {manage && awaiting(slot.id) && (
               <button
                 className={buttonClass}
                 disabled={approve.isPending}
@@ -232,22 +399,17 @@ export function StudioToday({
                 {t('studio.approve')}
               </button>
             )}
+            {selectedSlot === slot.id && editor(slot.id)}
           </li>
         ))}
       </ul>
       {!data?.today.slots.length && (
         <p className="text-sm text-muted-foreground">{t('studio.emptyToday')}</p>
       )}
-      {data?.slots
-        .filter(
-          (s) =>
-            !data.today.slots.some((p) => p.slot.id === s.id) &&
-            (s.state === 'retired' ||
-              data.today.blockers.some((b) => 'slot' in b.target && b.target.slot === s.id)),
-        )
-        .map((s) => (
+      {data &&
+        others.map((s) => (
           <div key={s.id} className="space-y-2">
-            <button className={buttonClass} onClick={() => onSelect(s.id)}>
+            <button className={buttonClass} {...editorToggle(s.id)}>
               {t(`studio.${s.state}`)}
             </button>
             {data.today.blockers
@@ -255,6 +417,7 @@ export function StudioToday({
               .map((b, i) => (
                 <Reason key={i} reason={b.reason} />
               ))}
+            {selectedSlot === s.id && editor(s.id)}
           </div>
         ))}
       {data?.today.budget_moves.map((m) => (
@@ -288,9 +451,7 @@ export function StudioToday({
           {a.residual_provider_exposure && <p className="text-sm">{t('studio.exposure')}</p>}
         </div>
       ))}
-      {selectedSlot && (
-        <SlotEditor key={selectedSlot} id={selectedSlot} close={() => onSelect(null)} />
-      )}
+      {selectedSlot && !inline && editor(selectedSlot)}
       {manage && data && (
         <details>
           <summary className="cursor-pointer text-sm font-medium">{t('studio.policy')}</summary>

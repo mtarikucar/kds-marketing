@@ -842,7 +842,7 @@ export interface ProbeResultPublic {
   latency_ms: number;
   /** `jt_connector::ConnectorError` kind of a failure. */
   error_kind: string | null;
-  /** Redacted by the server; for logs and agents, not shown. */
+  /** The provider's reason, redacted by the server; shown under the kind's sentence. */
   error_reason: string | null;
   facts: unknown;
 }
@@ -886,6 +886,8 @@ export interface ConnectorHealth {
   last_probe_at: Rfc3339 | null;
   ok: boolean | null;
   error_kind: string | null;
+  /** The last failed probe's line, `kind: provider: reason` (≤ 300 chars, redacted); `null` after a success. */
+  reason: string | null;
   token_expires_at: Rfc3339 | null;
   reconnect_required: boolean;
 }
@@ -1015,7 +1017,10 @@ export interface InboxNote {
 }
 export interface InboxJourneyOut {
   appointments: InboxAppointment[];
+  /** All nine stages: the fixed Turkish defaults extended by the workspace's overrides. */
   status_labels: Record<JourneyStatus, string>;
+  /** Only the labels the workspace set itself; the panel shows its own language for the rest. */
+  status_label_overrides: Partial<Record<JourneyStatus, string>>;
   journey: InboxJourney;
   events: InboxEvent[];
   tasks: InboxTask[];
@@ -1023,6 +1028,7 @@ export interface InboxJourneyOut {
 }
 export interface InboxContext {
   status_labels: Record<JourneyStatus, string>;
+  status_label_overrides: Partial<Record<JourneyStatus, string>>;
   person: InboxPerson;
   journey: InboxJourney | null;
   events: InboxEvent[];

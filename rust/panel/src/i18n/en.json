@@ -920,8 +920,9 @@
         "throttle": "the provider is busy: try again in a few minutes",
         "transient": "could not reach the provider: check the server name and connection, then retry",
         "permanent": "the provider rejected the details: check the user code, password, sender header and server names",
-        "unknown": "an unknown problem"
+        "unknown": "the provider's answer did not say whether it worked: probe again in a moment"
       },
+      "reasonLine": "The provider said: {{reason}}",
       "probeDialog": {
         "title": "Probe: {{name}}",
         "description": "The system made a small trial call to the provider with the credentials.",
@@ -1019,7 +1020,11 @@
       "externalId": "Account id",
       "externalIdHint": "The provider's id of the page or the WhatsApp phone number.",
       "externalIdOptional": "Account id (optional)",
-      "submit": "Save the token and probe"
+      "submit": "Save the token and probe",
+      "title": "Connect with an access token"
+    },
+    "secret": {
+      "show": "Show {{field}}"
     },
     "result": {
       "verified": "The connection was probed and verified.",
@@ -1532,7 +1537,14 @@
     "entryHypothesis": "Hypothesis for entry",
     "minorUnits": "minor units",
     "publishFailed": "Not published: {{reason}}",
-    "publishUncertain": "Publication is uncertain; do not resend ({{reason}})."
+    "publishUncertain": "Publication is uncertain; do not resend ({{reason}}).",
+    "preview": "Draft awaiting approval",
+    "publishTo": "Publishes to",
+    "scheduledFor": "Scheduled for",
+    "noDraft": "The agent has not submitted a draft yet.",
+    "media": "Media in the draft",
+    "mediaImage": "Image {{n}}: {{name}}",
+    "uploadedFile": "Uploaded file"
   },
   "billing": {
     "title": "Payment and activation",

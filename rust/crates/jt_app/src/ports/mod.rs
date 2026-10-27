@@ -1340,9 +1340,10 @@ define_id!(
 );
 
 /// One probe of a connector capability: when, whether it succeeded, why not (the
-/// [`jt_connector::ConnectorError::kind`] key, `None` when it succeeded or the adapter did not
-/// say), how long it took, and the non-secret facts it returned. Build it from the probe's result
-/// with [`ProbeRun::from_result`], so the error kind is always one the schema accepts.
+/// [`jt_connector::ConnectorError::kind`] key and the bounded failure line, both `None` when it
+/// succeeded or the adapter did not say), how long it took, and the non-secret facts it returned.
+/// Build it from the probe's result with [`ProbeRun::from_result`], so the error kind is always
+/// one the schema accepts and the reason fits its column.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ProbeRun {
     pub id: ProbeRunId,
@@ -1352,6 +1353,9 @@ pub struct ProbeRun {
     pub at: OffsetDateTime,
     pub ok: bool,
     pub error_kind: Option<String>,
+    /// The failure line (`kind: provider: reason`, [`crate::usecases::failure::failure_reason`]):
+    /// at most 300 characters, single-line, redacted by the error's constructor.
+    pub reason: Option<String>,
     /// Stored as a 32-bit signed integer: a latency beyond `i32::MAX` milliseconds (24 days) is
     /// stored, and read back, as `i32::MAX`.
     pub latency_ms: u32,
@@ -1360,20 +1364,21 @@ pub struct ProbeRun {
 
 impl ProbeRun {
     /// The run that records `result`: `ok` decides (as in [`jt_connector::status_after_probe`]),
-    /// the error kind is the [`jt_connector::ConnectorError::kind`] of a failure's error (`None`
-    /// for a success, and for a failure the adapter did not explain), and the facts are the
-    /// result's.
+    /// the error kind is the [`jt_connector::ConnectorError::kind`] of a failure's error and the
+    /// reason its failure line naming `provider` (both `None` for a success, and for a failure
+    /// the adapter did not explain), and the facts are the result's.
     pub fn from_result(
         id: ProbeRunId,
         workspace_id: WorkspaceId,
         capability_id: CapabilityId,
         at: OffsetDateTime,
+        provider: Option<Provider>,
         result: &ProbeResult,
     ) -> ProbeRun {
-        let error_kind = if result.ok {
+        let error = if result.ok {
             None
         } else {
-            result.error.as_ref().map(|e| e.kind().to_owned())
+            result.error.as_ref()
         };
         ProbeRun {
             id,
@@ -1381,7 +1386,8 @@ impl ProbeRun {
             capability_id,
             at,
             ok: result.ok,
-            error_kind,
+            error_kind: error.map(|e| e.kind().to_owned()),
+            reason: error.map(|e| crate::usecases::failure::failure_reason(provider, e)),
             latency_ms: result.latency_ms,
             facts: result.facts.clone(),
         }
@@ -1401,8 +1407,8 @@ pub const PROBE_RUN_RETENTION: time::Duration = time::Duration::days(30);
 pub trait ProbeRunRepo: Send + Sync {
     /// Appends the run and returns its id. A `run.workspace_id` other than the bundle's is
     /// `INTERNAL`; a capability that is not the workspace's is `NOT_FOUND`; a taken id is
-    /// `CONFLICT`; an `error_kind` that is not a `ConnectorError` kind key breaks a check
-    /// constraint and is `INTERNAL`.
+    /// `CONFLICT`; an `error_kind` that is not a `ConnectorError` kind key, or a `reason` over
+    /// 300 characters, breaks a check constraint and is `INTERNAL`.
     async fn append(&mut self, run: ProbeRun) -> Result<ProbeRunId, AppError>;
     /// The capability's newest run (`at`, then id), if any.
     async fn latest(&mut self, capability_id: CapabilityId) -> Result<Option<ProbeRun>, AppError>;
@@ -1758,6 +1764,7 @@ mod tests {
             ws,
             cap,
             at,
+            Some(Provider::Meta),
             &ProbeResult::success(12, json!({ "n": 1 })),
         );
         assert_eq!(
@@ -1769,6 +1776,7 @@ mod tests {
                 at,
                 ok: true,
                 error_kind: None,
+                reason: None,
                 latency_ms: 12,
                 facts: json!({ "n": 1 }),
             }
@@ -1778,10 +1786,12 @@ mod tests {
             ws,
             cap,
             at,
+            Some(Provider::Meta),
             &ProbeResult::failure(30, ConnectorError::auth("expired")),
         );
         assert!(!failed.ok);
         assert_eq!(failed.error_kind.as_deref(), Some("auth"));
+        assert_eq!(failed.reason.as_deref(), Some("auth: meta: expired"));
         assert_eq!(failed.latency_ms, 30);
         assert_eq!(failed.facts, json!({}));
         let throttled = ProbeRun::from_result(
@@ -1789,9 +1799,25 @@ mod tests {
             ws,
             cap,
             at,
+            None,
             &ProbeResult::failure(5, ConnectorError::throttle(None)),
         );
         assert_eq!(throttled.error_kind.as_deref(), Some("throttle"));
+        assert_eq!(throttled.reason.as_deref(), Some("throttle"));
+        // `unknown` is a kind the schema accepts (migration 0013), with its reason.
+        let unknown = ProbeRun::from_result(
+            id,
+            ws,
+            cap,
+            at,
+            Some(Provider::Netgsm),
+            &ProbeResult::failure(5, ConnectorError::unknown("timed out after sending")),
+        );
+        assert_eq!(unknown.error_kind.as_deref(), Some("unknown"));
+        assert_eq!(
+            unknown.reason.as_deref(),
+            Some("unknown: netgsm: timed out after sending")
+        );
         // A failure the adapter did not explain has no kind; `ok` decides when the two disagree.
         let unexplained = ProbeResult {
             ok: false,
@@ -1799,19 +1825,17 @@ mod tests {
             error: None,
             facts: json!({}),
         };
-        assert_eq!(
-            ProbeRun::from_result(id, ws, cap, at, &unexplained).error_kind,
-            None
-        );
+        let run = ProbeRun::from_result(id, ws, cap, at, None, &unexplained);
+        assert_eq!((run.error_kind, run.reason), (None, None));
         let contradictory = ProbeResult {
             ok: true,
             latency_ms: 1,
             error: Some(ConnectorError::transient("late")),
             facts: json!({}),
         };
-        let run = ProbeRun::from_result(id, ws, cap, at, &contradictory);
+        let run = ProbeRun::from_result(id, ws, cap, at, None, &contradictory);
         assert!(run.ok);
-        assert_eq!(run.error_kind, None);
+        assert_eq!((run.error_kind, run.reason), (None, None));
     }
 }
 

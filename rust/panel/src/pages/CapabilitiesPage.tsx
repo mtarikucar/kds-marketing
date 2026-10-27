@@ -100,7 +100,14 @@ function ProbeDialog({ probed, onClose }: { probed: { name: string; out: ProbeOu
             {result.ok ? (
               <Callout tone="success">{t('capabilities.connector.probeDialog.ok')}</Callout>
             ) : (
-              <Callout tone="danger">{t('capabilities.connector.probeDialog.failed', { reason })}</Callout>
+              <Callout tone="danger">
+                <p>{t('capabilities.connector.probeDialog.failed', { reason })}</p>
+                {result.error_reason && (
+                  <p className="mt-1 break-words text-caption" data-probe-reason="">
+                    {t('capabilities.connector.reasonLine', { reason: result.error_reason })}
+                  </p>
+                )}
+              </Callout>
             )}
             <dl className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-0.5">

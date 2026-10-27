@@ -738,10 +738,12 @@ olmalıdır; değilse `permission` ("account mismatch") sayılır. Yoklamanın s
 Doğrulanmış bir kabiliyet, son başarılı yoklamasından politikanın `verify_max_age_days` süresi (varsayılan
 30 gün) geçince `stale` okunur; zamanlayıcının `probe_all` işi etkin alanlarda her canlı bağlayıcıyı
 saatte bir yokladığı için sağlıklı bir bağlantı tazeliğini korur (ödeme bekleyen bir alanın bağlantıları
-yoklanmaz, jetonları yine yenilenir). Her yoklama `probe_runs` kaydına yazılır (yalnız sonuç sınıfı ve
-genel bilgiler, 30 gün tutulur); günlüğe (`connector.probe`) yalnız durum değiştiğinde yazılır. Sağlık
-(`connector.health`) her bağlayıcı kabiliyetinin şimdiki durumunu, son yoklamasını, jetonun bitişini ve
-yeniden bağlama gereğini mühür açmadan okur. Yeniden bağlama (`connector.reconnect`) Meta ve X için
+yoklanmaz, jetonları yine yenilenir). Her yoklama `probe_runs` kaydına yazılır (sonuç sınıfı, başarısızlık
+satırı `kind: provider: reason` (en çok 300 karakter, sağlayıcı hatasının kurucusunda maskelenmiş) ve genel
+bilgiler, 30 gün tutulur; `unknown` da geçerli bir sınıftır, migration 0013); günlüğe (`connector.probe`)
+yalnız durum değiştiğinde yazılır. Sağlık (`connector.health`) her bağlayıcı kabiliyetinin şimdiki
+durumunu, son yoklamasını (başarısızsa `reason` satırıyla), jetonun bitişini ve yeniden bağlama gereğini
+mühür açmadan okur; panel bu satırı hata türünün cümlesinin altında gösterir. Yeniden bağlama (`connector.reconnect`) Meta ve X için
 kabiliyete bağlı yeni bir OAuth akışı başlatır; NetGSM kabiliyeti yeni kimlik bilgisi alır.
 
 **Hangi uygulamayla yeniden bağlanır.** Bir OAuth akışının verdiği kimlik bilgisi, akışın oturum açtığı
@@ -1435,7 +1437,9 @@ A conversation's executor defaults to Agent and is separate from the journey own
 handover increments its generation; Human(None) is the unassigned queue. Human replies do not
 change the executor and do not require holding it. Agent replies refuse human-held conversations.
 `context` and `journeys.get` return all nine effective `status_labels`: fixed Turkish defaults
-with workspace policy overrides. Keys remain fixed; the panel renders the returned label.
+with workspace policy overrides. Keys remain fixed. They also return `status_label_overrides`,
+only the workspace's own labels: the panel renders an override when one exists and otherwise its
+own translation of the stage, so the English panel does not show the Turkish defaults.
 
 Reply uses a durable outbox: commit queued intent after the first fence, recheck under locks
 immediately before sending and persist the fence snapshot, release all locks for provider I/O,

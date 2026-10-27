@@ -104,6 +104,7 @@ fn probe_run(c: &Capability, at: OffsetDateTime, ok: bool) -> ProbeRun {
         at,
         ok,
         error_kind: (!ok).then(|| "auth".to_owned()),
+        reason: None,
         latency_ms: 120,
         facts: if ok {
             json!({ "name": "Kahve Dükkanı" })
@@ -897,7 +898,7 @@ async fn oauth_pending_state_hash_is_unique_and_purgeable() {
     );
 }
 
-/// `0013_social_providers`: TikTok and LinkedIn flows are stored under their own provider and
+/// `0014_social_providers`: TikTok and LinkedIn flows are stored under their own provider and
 /// app; its down keeps the widened checks while such a flow remains, and narrows them once none
 /// does.
 #[tokio::test]
@@ -938,7 +939,7 @@ async fn tiktok_and_linkedin_flows_are_stored_and_survive_a_rollback() {
 
     let down = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../migrations/0013_social_providers.down.sql"),
+            .join("../../../migrations/0014_social_providers.down.sql"),
     )
     .unwrap();
     let constraint = |name: &'static str| {
