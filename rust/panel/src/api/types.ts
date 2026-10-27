@@ -936,6 +936,8 @@ export interface InboxMessage {
     | { refused: { reason: string } };
   cost_minor: number | null;
   at: Rfc3339;
+  /** For a failed or uncertain outbound message, the recorded `kind: provider reason`. */
+  failure_reason?: string | null;
 }
 export type JourneyStatus =
   | 'new'

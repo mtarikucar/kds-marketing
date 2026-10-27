@@ -91,7 +91,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.slot_get",
-            description: "Read slot content, hypothesis, brand rules, learning and evidence. [risk: READ]",
+            description: "Read slot content, hypothesis, brand rules, learning and evidence. A failed or uncertain publish attempt carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: x: HTTP 402 CreditsDepleted: ...\"); the outcome itself keeps only the closed category. [risk: READ]",
             permission: Permission::StudioWork,
             schema: || Schema::try_from(schema::input("slot_get")).expect("studio schema"),
             run: slot_get,

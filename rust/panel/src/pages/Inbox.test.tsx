@@ -28,6 +28,29 @@ describe('Inbox', () => {
     expect(within(panel).getByText('İlk temas bekleniyor')).toBeInTheDocument();
   });
 
+  it("explains why a reply was not sent, in the owner's words", async () => {
+    const failed = {
+      id: 'message-2',
+      conversation_id: 'conv-1',
+      workspace_id: WS_ID,
+      direction: 'outbound',
+      author: { human: USER_ID },
+      body: 'Merhaba!',
+      status: 'failed',
+      external_id: null,
+      cost_minor: null,
+      at: '2026-10-23T10:05:00Z',
+      failure_reason: 'permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list',
+    };
+    const listed = inboxAnswers['GET /api/inbox/conversations/conv-1/messages'] as { items: unknown[] };
+    await openConversation({
+      ...inboxAnswers,
+      'GET /api/inbox/conversations/conv-1/messages': { items: [...listed.items, failed], next_cursor: null },
+    });
+    const messages = await screen.findByRole('list', { name: 'Mesajlar' });
+    expect(within(messages).getByText(/^Gönderilemedi: alıcı, Meta test numarasının izinli alıcıları/)).toBeInTheDocument();
+  });
+
   it('human_holder_does_not_disable_panel_reply', async () => {
     const calls = await openConversation();
     const user = userEvent.setup();

@@ -48,7 +48,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "connector.start_oauth",
             description: "Start connecting an account through its provider's sign-in (OAuth): \
                           kind_key is a Meta kind (instagram, facebook_page, whatsapp_cloud, \
-                          instagram_dm, messenger, meta_ads, review_facebook) or x; NetGSM kinds \
+                          instagram_dm, messenger, meta_ads) or x (review_facebook cannot be \
+                          connected yet: no sign-in finds Facebook comments); NetGSM kinds \
                           (sms_line, netgsm_pbx) take credentials instead \
                           (jeeta.connector.set_credentials). Returns {authorize_url, pending_id, \
                           expires_at, handoff}: hand the authorize_url to the owner, who signs in \

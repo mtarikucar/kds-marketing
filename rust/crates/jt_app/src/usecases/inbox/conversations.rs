@@ -6,7 +6,7 @@ use crate::{
     ports::inbox::ConversationQueue,
     usecases::{Deps, invalid},
 };
-use jt_inbox::{ConvState, Conversation, ConversationId, Executor, Message};
+use jt_inbox::{ConvState, Conversation, ConversationId, Direction, Executor, Message, MsgStatus};
 use jt_ledger::Actor;
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,15 @@ pub struct MessagesInput {
 pub struct Page<T> {
     pub items: Vec<T>,
     pub next_cursor: Option<String>,
+}
+/// A message as the inbox lists it: the stored message and, for an outbound one that failed or
+/// whose outcome is unknown, the failure line its send recorded (`kind: provider: reason`,
+/// [`crate::usecases::failure`]), else `null`.
+#[derive(Debug, Serialize)]
+pub struct MessageView {
+    #[serde(flatten)]
+    pub message: Message,
+    pub failure_reason: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,7 +106,7 @@ pub async fn messages(
     ctx: &Ctx,
     id: ConversationId,
     input: MessagesInput,
-) -> Result<Page<Message>, AppError> {
+) -> Result<Page<MessageView>, AppError> {
     ctx.require(Permission::InboxWork)?;
     let after = cursor(input.cursor.as_deref())?.map(|(t, id)| (t, id.into()));
     let limit = limit(input.limit);
@@ -114,6 +123,25 @@ pub async fn messages(
     } else {
         None
     };
+    let failed: Vec<_> = items
+        .iter()
+        .filter(|m| {
+            m.direction == Direction::Outbound
+                && matches!(m.status, MsgStatus::Failed | MsgStatus::Unknown)
+        })
+        .map(|m| m.id)
+        .collect();
+    let reasons = r.outbox().failure_reasons(&failed).await?;
+    let items = items
+        .into_iter()
+        .map(|message| MessageView {
+            failure_reason: reasons
+                .iter()
+                .find(|(id, _)| *id == message.id)
+                .map(|(_, reason)| reason.clone()),
+            message,
+        })
+        .collect();
     Ok(Page { items, next_cursor })
 }
 async fn mutate(

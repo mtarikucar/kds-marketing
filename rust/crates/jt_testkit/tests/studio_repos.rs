@@ -91,6 +91,12 @@ async fn outcome_categories_survive_redaction() {
 }
 
 #[tokio::test]
+async fn failure_reason_is_kept_beside_the_category() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::failure_reason_is_kept_beside_the_category(&uow).await;
+}
+
+#[tokio::test]
 async fn completion_time_differs_from_claim_time() {
     let uow = jt_testkit::fakes::InMemoryUow::new();
     jt_testkit::studio_contract::completion_time_differs_from_claim_time(&uow).await;

@@ -478,6 +478,12 @@ pub trait OutboxRepo: Send + Sync {
     ) -> Result<Vec<OutboxRow>, AppError>;
     /// Update only processing state; identity, intent and relationships stay immutable.
     async fn update(&mut self, row: OutboxRow) -> Result<(), AppError>;
+    /// The recorded `last_error` of the failed or uncertain outbound intents of `messages`
+    /// (state `failed` or `unknown`), one per message that has one, in no particular order.
+    async fn failure_reasons(
+        &mut self,
+        messages: &[MessageId],
+    ) -> Result<Vec<(MessageId, String)>, AppError>;
 }
 
 impl MergeSnapshot {

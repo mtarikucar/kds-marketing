@@ -1635,4 +1635,21 @@ impl OutboxRepo for MemTenant {
             Ok(())
         })
     }
+    async fn failure_reasons(
+        &mut self,
+        messages: &[MessageId],
+    ) -> Result<Vec<(MessageId, String)>, AppError> {
+        Ok(self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && messages.contains(&r.message_id)
+                    && matches!(r.state.as_str(), "failed" | "unknown")
+            })
+            .filter_map(|r| r.last_error.clone().map(|e| (r.message_id, e)))
+            .collect())
+    }
 }

@@ -296,6 +296,29 @@ it('panel_actions_match_every_studio_tool', async () => {
   ).toBe(true);
 });
 
+it("slot_detail_explains_a_failed_publication_in_the_owner's_words", async () => {
+  const detail = answers['GET /api/studio/slots/s1'] as Record<string, unknown>;
+  mockFetch({
+    ...answers,
+    'GET /api/studio/slots/s1': {
+      ...detail,
+      attempts: [{ state: 'failed', failure_reason: 'permanent: x: HTTP 402 CreditsDepleted: no credits' }],
+    },
+  });
+  renderAt('/studio');
+  const user = userEvent.setup();
+  const plan = await screen.findByRole('region', { name: 'Plan' });
+  await user.click(
+    await within(plan)
+      .findByTestId('slot-s1')
+      .then((e) => within(e).getByRole('button')),
+  );
+  const editor = await screen.findByTestId('slot-detail');
+  expect(await within(editor).findByRole('status')).toHaveTextContent(
+    'Yayınlanamadı: X API kredisi yok; X developer console',
+  );
+});
+
 it('slot_detail_submits_and_cancels_the_current_revision', async () => {
   const calls = mockFetch({
     ...answers,

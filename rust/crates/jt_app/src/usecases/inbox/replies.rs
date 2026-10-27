@@ -12,7 +12,7 @@ use crate::{
     usecases::{
         Deps,
         connector::{adapter_public, open_credential},
-        required,
+        failure, required,
     },
 };
 use jt_capability::{Capability, EffectiveStatus, effective_status};
@@ -1093,7 +1093,16 @@ pub(super) async fn record_result_in(
             )
         }
         Err(e) => {
-            row.last_error = Some(e.kind().into());
+            let reason = failure::failure_reason(provider_for_kind(&c.kind_key), &e);
+            tracing::warn!(
+                workspace_id = %ctx.workspace_id,
+                capability_id = %row.capability_id.0,
+                error_kind = e.kind(),
+                http_status = ?failure::http_status(&reason),
+                provider_code = ?failure::provider_code(&reason),
+                "an outbound message could not be sent"
+            );
+            row.last_error = Some(reason);
             if matches!(e, ConnectorError::Unknown { .. }) {
                 row.state = "unknown".into();
                 (MsgStatus::Unknown, None, None)
@@ -1168,7 +1177,9 @@ pub(super) async fn save_result(
         "inbox.reply.result",
         "outbox",
         row.id,
-        json!({"message_id":row.message_id,"state":row.state,"reason":row.last_error}),
+        // The failure line stays on the outbox entry, which erasure clears; the append-only
+        // ledger keeps only its kind.
+        json!({"message_id":row.message_id,"state":row.state,"reason":row.last_error.as_deref().map(failure::failure_kind)}),
     )
     .await
 }

@@ -172,6 +172,28 @@ async fn auth_permission_permanent_throttle_transient_are_distinct() {
     }
 }
 #[tokio::test]
+async fn a_failed_publication_keeps_the_provider_reason_for_the_owner() {
+    let (w, c) = world().await;
+    c.push_publish(Err(ConnectorError::permanent(
+        "HTTP 402 CreditsDepleted: Your enrolled account does not have any credits",
+    )));
+    publish_due(&w.d, w.f.ws).await.unwrap();
+    let s = w.uow.snapshot();
+    let line =
+        "permanent: x: HTTP 402 CreditsDepleted: Your enrolled account does not have any credits";
+    assert_eq!(s.studio.attempts[0].state(), PublishState::Failed);
+    assert_eq!(s.studio.attempts[0].failure_reason(), Some(line));
+    // The evidence keeps the closed category only; the ledger names the reason for the owner.
+    let value = serde_json::to_value(s.studio.attempts[0].outcome()).unwrap();
+    assert_eq!(value["evidence"], "permanent");
+    let failure = s
+        .ledger
+        .iter()
+        .find(|row| row.entry.action.as_str() == "studio.publish.failure")
+        .expect("failure entry");
+    assert_eq!(failure.entry.payload["provider_reason"], line);
+}
+#[tokio::test]
 async fn no_id_unknown_stays_unknown_with_work_item() {
     let (w, c) = world().await;
     c.push_publish(Err(ConnectorError::unknown("lost")));

@@ -1,7 +1,7 @@
 mod support;
 use jt_app::{
     ports::{UnitOfWork, connectors::SendReceipt},
-    usecases::inbox::{people, replies},
+    usecases::inbox::{conversations, people, replies},
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{Credential, Provider};
@@ -127,6 +127,65 @@ async fn successful_send_atomically_records_replied() {
         }
         _ => panic!("messaging sender expected"),
     }
+}
+
+#[tokio::test]
+async fn a_failed_send_shows_the_provider_reason_and_the_ledger_keeps_only_its_kind() {
+    let (w, id, c) = setup().await;
+    c.push_send_text(Err(jt_connector::ConnectorError::permanent(
+        "HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list",
+    )));
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "failed");
+    let reason = "permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list";
+    assert_eq!(
+        w.uow.snapshot().inbox.outbox[0].last_error.as_deref(),
+        Some(reason)
+    );
+    let page = conversations::messages(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        conversations::MessagesInput {
+            cursor: None,
+            limit: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].message.status, MsgStatus::Failed);
+    assert_eq!(page.items[0].failure_reason.as_deref(), Some(reason));
+    let shown = serde_json::to_value(&page).unwrap();
+    assert_eq!(shown["items"][0]["failure_reason"], reason);
+    assert_eq!(shown["items"][0]["status"], "failed");
+    // The append-only ledger keeps the stable kind, never the provider's prose.
+    let results = w.entries("inbox.reply.result");
+    assert_eq!(results.last().unwrap().entry.payload["reason"], "permanent");
+}
+
+#[tokio::test]
+async fn a_failure_reason_is_bounded_and_single_line() {
+    let (w, id, c) = setup().await;
+    c.push_send_text(Err(jt_connector::ConnectorError::transient(format!(
+        "line one\nline two {}",
+        "x".repeat(400)
+    ))));
+    replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    let stored = w.uow.snapshot().inbox.outbox[0].last_error.clone().unwrap();
+    assert!(
+        stored.starts_with("transient: meta: line one line two"),
+        "{stored}"
+    );
+    assert_eq!(
+        stored.chars().count(),
+        jt_app::usecases::failure::MAX_FAILURE_CHARS
+    );
+    assert!(!stored.chars().any(char::is_control));
 }
 
 async fn queued(w: &World, id: ConversationId) -> uuid::Uuid {

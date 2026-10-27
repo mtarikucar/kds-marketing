@@ -12,6 +12,7 @@ pub mod budget;
 pub mod capabilities;
 pub mod connector;
 pub mod events;
+pub mod failure;
 pub mod groups;
 pub mod inbox;
 pub mod jobs;

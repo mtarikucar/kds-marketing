@@ -3675,6 +3675,7 @@ async fn mailbox_rebind_revokes_hosts_and_resets_cursor() {
                 ]
                 .into_iter()
                 .collect(),
+                read_history: false,
             },
         )
         .await

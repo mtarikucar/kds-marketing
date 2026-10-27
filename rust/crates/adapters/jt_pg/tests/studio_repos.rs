@@ -311,6 +311,13 @@ async fn outcome_categories_survive_redaction() {
 }
 
 #[tokio::test]
+async fn failure_reason_is_kept_beside_the_category() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::failure_reason_is_kept_beside_the_category(&uow).await;
+}
+
+#[tokio::test]
 async fn completion_time_differs_from_claim_time() {
     let db = jt_testkit::TestDb::new().await;
     let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());

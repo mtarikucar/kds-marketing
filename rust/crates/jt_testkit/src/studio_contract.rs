@@ -986,6 +986,56 @@ pub async fn outcome_categories_survive_redaction(uow: &dyn UnitOfWork) {
     }
 }
 
+/// A failed attempt keeps the provider's failure line for the owner beside its closed category;
+/// the line is never part of the outcome evidence, and a replay without one keeps it.
+pub async fn failure_reason_is_kept_beside_the_category(uow: &dyn UnitOfWork) {
+    use jt_app::error::AppError;
+    let f = ready(uow).await;
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let a = tx
+        .studio()
+        .claim_publication(FIXED_NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    let line = "permanent: x: HTTP 402 CreditsDepleted: no credits";
+    let error = AppError::validation(
+        "publication failed",
+        serde_json::json!({"provider_error":"permanent","provider_reason":line}),
+    );
+    tx.studio()
+        .finish_publication(a.id(), PublishOutcome::Failed(error), FIXED_NOW)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let (attempts, _) = tx.studio().slot_evidence(f.slot.id).await.unwrap();
+    assert_eq!(attempts[0].failure_reason(), Some(line));
+    let evidence = serde_json::to_value(attempts[0].outcome()).unwrap();
+    assert_eq!(evidence["evidence"], "permanent");
+    assert!(!evidence.to_string().contains("CreditsDepleted"));
+    assert_eq!(
+        serde_json::to_value(&attempts[0]).unwrap()["failure_reason"],
+        line
+    );
+    // A replay of the same category without a line keeps the one recorded.
+    tx.studio()
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Failed(AppError::validation(
+                "publication failed",
+                serde_json::json!({"provider_error":"permanent"}),
+            )),
+            FIXED_NOW,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let (attempts, _) = tx.studio().slot_evidence(f.slot.id).await.unwrap();
+    assert_eq!(attempts[0].failure_reason(), Some(line));
+}
+
 pub async fn completion_time_differs_from_claim_time(uow: &dyn UnitOfWork) -> WorkspaceId {
     let f = ready(uow).await;
     let mut tx = uow.tenant(f.ws).await.unwrap();

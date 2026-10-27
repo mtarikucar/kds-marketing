@@ -86,8 +86,12 @@ impl PgTenantRepos {
             .studio_record("studio_publish_attempts", id.0)
             .await?
             .ok_or_else(|| AppError::not_found("publish attempt"))?;
+        let reason = outcome.failure_reason();
         let outcome = outcome.into_redacted();
-        let next = old.finish_at(&outcome, observed_at).map_err(invalid)?;
+        let next = old
+            .finish_at(&outcome, observed_at)
+            .map_err(invalid)?
+            .with_failure_reason(reason);
         if old == next {
             return Ok(());
         }

@@ -1233,6 +1233,32 @@ async fn email_matches_normalized_identity() {
 }
 
 #[tokio::test]
+async fn an_email_sender_is_named_by_their_from_display_name() {
+    let w = world().await;
+    let c = cap(&w, "mailbox").await;
+    let raw = b"From: =?UTF-8?B?QXnFn2UgWcSxbG1heg==?= <ayse@example.com>\r\nTo: support@example.com\r\nMessage-ID: <named@example.com>\r\nSubject: Merhaba\r\n\r\nFiyat alabilir miyim?";
+    let draft = jt_mail::parse_message("account", "INBOX", 42, 1, raw, false).unwrap();
+    put(&w, Some(c), Provider::Mail, draft, 0).await;
+    // A second address with no display name stays unnamed rather than borrowing anything.
+    put(&w, Some(c), Provider::Mail, InboundEventDraft {
+        external_id: "imap:account:INBOX:42:2".into(),
+        kind: EventKind::Message,
+        payload: json!({"from":"anon@example.com","name":null,"text":"Hello","message_id":"<anon@example.com>"}),
+        occurred_at: None,
+    }, 1).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    let mut names: Vec<_> = s
+        .inbox
+        .people
+        .iter()
+        .map(|p| p.display_name.clone())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec![String::new(), "Ayşe Yılmaz".to_owned()]);
+}
+
+#[tokio::test]
 async fn iys_hook_and_bounce_use_adapter_fixtures() {
     let mut w = world().await;
     w.owner_ctx.now += Duration::days(2);

@@ -7,6 +7,7 @@ import { QueryState } from '@/components/QueryState';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { Badge, Button, Callout, Disclosure, Input, Textarea } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
+import { deliveryText } from '@/lib/delivery';
 import { personName } from '@/lib/people';
 import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
@@ -177,10 +178,8 @@ export function InboxConversation({ id }: { id: string }) {
                         <p className="my-2 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">
                           {message.body}
                         </p>
-                        <p className="text-xs text-muted-foreground">
-                          {typeof message.status === 'string'
-                            ? t(`inbox.delivery.${message.status}`)
-                            : t('inbox.delivery.refused', { reason: message.status.refused.reason })}
+                        <p className={`text-xs ${message.failure_reason ? 'text-danger' : 'text-muted-foreground'}`}>
+                          {deliveryText(t, message)}
                         </p>
                       </li>
                     ))}

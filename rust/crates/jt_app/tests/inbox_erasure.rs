@@ -190,6 +190,7 @@ async fn imap_uidvalidity_reset_after_erasure_stores_nothing_personal() {
             )]
             .into_iter()
             .collect(),
+            read_history: false,
         };
         mail.push_mailbox_poll(Ok((vec![InboundEventDraft {
             external_id: format!("imap:support@example.com:INBOX:{validity}:1"), kind: EventKind::Message,

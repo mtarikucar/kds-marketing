@@ -100,8 +100,14 @@ export interface SlotDetail {
   hypothesis: Hypothesis;
   brand_rules: { identity: { voice: string }; prohibitions: string[] };
   learned: Arm;
-  attempts: unknown[];
+  attempts: PublishAttempt[];
   measurements: unknown[];
+}
+/** A publish attempt as `slot_get` shows it; only what the panel reads is typed. */
+export interface PublishAttempt {
+  state: 'queued' | 'sending' | 'succeeded' | 'failed' | 'unknown' | 'refused';
+  /** For a failed, uncertain or refused attempt, the recorded `kind: provider: reason`. */
+  failure_reason?: string | null;
 }
 export interface ExportOut {
   filename: string;

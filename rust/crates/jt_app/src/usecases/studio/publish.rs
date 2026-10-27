@@ -10,6 +10,7 @@ use crate::{
     usecases::{
         Deps,
         connector::{adapter_public, open_credential},
+        failure,
     },
 };
 use jt_capability::Capability;
@@ -217,9 +218,15 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             }
             if let Err(e) = &req {
                 let permanent = e.code != crate::error::ErrorCode::UpstreamUnavailable;
+                let kind = if permanent { "permanent" } else { "transient" };
+                // The code and stable reason only: the message may quote a media URL.
+                let reason = match e.details["reason"].as_str() {
+                    Some(why) => format!("{kind}: media: {} {why}", e.code.as_str()),
+                    None => format!("{kind}: media: {}", e.code.as_str()),
+                };
                 let error = AppError::validation(
                     "media preparation failed",
-                    json!({"provider_error": if permanent { "permanent" } else { "transient" }}),
+                    json!({"provider_error": kind, "provider_reason": reason}),
                 );
                 r.studio()
                     .finish_publication(a.id(), PublishOutcome::Failed(error), d.clock.now())
@@ -275,8 +282,19 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                 finish(d, ws, &attempt, PublishOutcome::Succeeded(receipt)).await?;
             }
             Err(e) => {
-                let error =
-                    AppError::validation("publication failed", json!({"provider_error":e.kind()}));
+                let reason = failure::failure_reason(Some(provider), &e);
+                tracing::warn!(
+                    workspace_id = %ws,
+                    capability_id = %attempt.capability_id().0,
+                    error_kind = e.kind(),
+                    http_status = ?failure::http_status(&reason),
+                    provider_code = ?failure::provider_code(&reason),
+                    "a Studio piece could not be published"
+                );
+                let error = AppError::validation(
+                    "publication failed",
+                    json!({"provider_error":e.kind(),"provider_reason":reason}),
+                );
                 let outcome = if matches!(e, ConnectorError::Unknown { .. }) {
                     PublishOutcome::Unknown(error)
                 } else {
@@ -297,7 +315,7 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                     attempt.actor().clone(),
                     jt_ledger::Action::new("studio.publish.failure")
                         .map_err(|_| AppError::internal("action"))?,
-                    json!({"attempt_id":attempt.id(),"slot_id":attempt.slot_id(),"born_version_id":attempt.piece().chain.born_version_id,"executed_version_id":attempt.executed_version_id(),"arm_id":attempt.piece().chain.arm_id,"provider_error":e.kind(),"retry_after_s":retry_after_s}),
+                    json!({"attempt_id":attempt.id(),"slot_id":attempt.slot_id(),"born_version_id":attempt.piece().chain.born_version_id,"executed_version_id":attempt.executed_version_id(),"arm_id":attempt.piece().chain.arm_id,"provider_error":e.kind(),"provider_reason":reason,"retry_after_s":retry_after_s}),
                     d.clock.now(),
                 );
                 entry.strategy_version_id = Some(attempt.executed_version_id().0);

@@ -254,9 +254,28 @@ pub struct MailboxPosition {
 
 /// Independent positions for mailbox names (INBOX and Sent). The caller persists the returned
 /// cursor atomically with the inbound drafts, so a failed transaction can safely poll again.
+///
+/// A mailbox the cursor holds no position for (a newly connected mailbox, a Sent folder found
+/// later) or whose UIDVALIDITY changed (renumbering every message) starts at its current end: the
+/// poll records its position and ingests only mail that arrives afterwards, never the history
+/// already in it, which would otherwise land in the reply-owed queue as if it were new.
+/// `read_history` reads such a mailbox from its first message instead; it is a call-time option
+/// (an explicit import, the adapter tests) that is never persisted, so no connected mailbox sets it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailboxCursor {
     pub mailboxes: BTreeMap<String, MailboxPosition>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_history: bool,
+}
+
+impl MailboxCursor {
+    /// An empty cursor that reads every mailbox from its first message.
+    pub fn reading_history() -> MailboxCursor {
+        MailboxCursor {
+            read_history: true,
+            ..MailboxCursor::default()
+        }
+    }
 }
 
 /// A post to publish: its text, the media to attach and an optional link.

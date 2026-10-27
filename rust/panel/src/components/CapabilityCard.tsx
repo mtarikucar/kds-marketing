@@ -6,7 +6,7 @@ import { ConnectorHealthBadge } from '@/components/ConnectorHealthBadge';
 import { CapabilityStatusBadge } from '@/components/StatusBadges';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
-import { connectsByOAuth, providerOf } from '@/lib/connectors';
+import { connectsByOAuth, isConnectable, providerOf } from '@/lib/connectors';
 import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/format';
 
 export type CapabilityAction = 'verify' | 'edit' | 'policy' | 'unreachable' | 'link' | 'retire';
@@ -24,9 +24,10 @@ export function connectorActions(item: CapabilityOut, canManage: boolean, canPro
   const c = item.capability;
   if (c.reach !== 'connector' || c.status === 'retired' || providerOf(c.kind_key) === null) return [];
   const actions: ConnectorAction[] = [];
-  if (canManage && c.status === 'declared') actions.push('connect');
+  const connectable = isConnectable(c.kind_key);
+  if (canManage && connectable && c.status === 'declared') actions.push('connect');
   const renewable = connectsByOAuth(c.kind_key) ? c.external_id !== null : c.status !== 'verified';
-  if (canManage && c.status !== 'declared' && renewable) actions.push('reconnect');
+  if (canManage && connectable && c.status !== 'declared' && renewable) actions.push('reconnect');
   if (canManage && c.kind_key === 'sms_line' && c.has_sealed_config) actions.push('iys');
   if (canProbe && c.has_sealed_config) actions.push('probe');
   return actions;

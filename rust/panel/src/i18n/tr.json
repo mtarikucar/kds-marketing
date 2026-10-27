@@ -1250,7 +1250,9 @@
       "delivered": "Teslim edildi",
       "failed": "Gönderilemedi",
       "unknown": "Teslim durumu belirsiz; tekrar göndermeyin.",
-      "refused": "Gönderim reddedildi: {{reason}}"
+      "refused": "Gönderim reddedildi: {{reason}}",
+      "failedBecause": "Gönderilemedi: {{reason}}",
+      "unknownBecause": "Teslim durumu belirsiz; tekrar göndermeyin ({{reason}})."
     },
     "status": {
       "new": "Yeni",
@@ -1525,7 +1527,9 @@
     "success": "Kaydedildi.",
     "loading": "Yükleniyor…",
     "entryHypothesis": "Değerlendirilen hipotez",
-    "minorUnits": "alt birim"
+    "minorUnits": "alt birim",
+    "publishFailed": "Yayınlanamadı: {{reason}}",
+    "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}})."
   },
   "billing": {
     "title": "Ödeme ve etkinleştirme",
@@ -1619,5 +1623,15 @@
       "webchat": "Web sohbeti",
       "phone": "Telefon"
     }
+  },
+  "failure": {
+    "recipientNotAllowed": "alıcı, Meta test numarasının izinli alıcıları arasında değil. Numarayı Meta'da WhatsApp → API Setup'ta alıcı olarak ekleyin ya da gerçek bir WhatsApp numarası bağlayın.",
+    "windowClosed": "müşterinin son mesajının üzerinden 24 saatten fazla geçti; artık yalnızca onaylı bir şablonla yazılabilir.",
+    "reconnect": "hesabın oturumu sona erdi ya da reddedildi; hesabı Hesap bağla sayfasından yeniden bağlayın.",
+    "permission": "hesabın bu işlem için izni yok; bağlantıda istenen izinleri verin ya da hesabı yeniden bağlayın.",
+    "throttled": "sağlayıcı gönderimleri yavaşlatmamızı istedi; biraz sonra tekrar deneyin.",
+    "configuration": "hesabın gönderim ayarları okunamadı; hesabı kontrol edip yeniden bağlayın.",
+    "xCredits": "X API kredisi yok; X developer console'dan (console.x.com) kredi yükleyin.",
+    "xDuplicate": "X aynı metni ikinci kez yayınlamıyor; metni değiştirip yeniden deneyin."
   }
 }

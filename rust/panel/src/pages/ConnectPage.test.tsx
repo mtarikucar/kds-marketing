@@ -35,6 +35,17 @@ describe('ConnectPage', () => {
     expect(start?.body).toEqual({ kind_key: 'facebook_page' });
   });
 
+  it('does not offer Facebook comments, which no sign-in can connect yet', async () => {
+    mockFetch({ 'GET /api/auth/me': me });
+    renderAt('/connect?kind=review_facebook');
+    expect(await screen.findByRole('heading', { level: 1, name: tr.connect.title })).toBeInTheDocument();
+    const meta = within(providerSection(tr.connect.providers.meta));
+    expect(meta.getByRole('button', { name: 'Messenger' })).toBeInTheDocument();
+    expect(meta.queryByRole('button', { name: tr.capabilities.kinds.review_facebook })).not.toBeInTheDocument();
+    // Asked for by link, it is not preselected either: no sign-in button appears.
+    expect(screen.queryByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'Meta' }) })).not.toBeInTheDocument();
+  });
+
   it('never sends the browser anywhere but an https provider page', async () => {
     const user = userEvent.setup();
     const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});

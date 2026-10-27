@@ -28,9 +28,10 @@ import {
 import { browser, providerUrl } from '@/lib/browser';
 import { kindLabel } from '@/lib/capabilities';
 import {
-  PROVIDER_KINDS,
   PROVIDER_NAMES,
+  connectableKinds,
   connectsByOAuth,
+  isConnectable,
   isErrorKind,
   netgsmCredentialKind,
   providerOf,
@@ -54,7 +55,7 @@ function KindPicker({ value, onChange }: { value: string | null; onChange: (kind
         >
           <h2 className="text-sm font-semibold text-foreground">{t(`connect.providers.${provider}`)}</h2>
           <div className="flex flex-wrap gap-2">
-            {PROVIDER_KINDS[provider].map((kind) => {
+            {connectableKinds(provider).map((kind) => {
               const active = kind === value;
               return (
                 <button
@@ -493,7 +494,7 @@ export function ConnectPage() {
   const [params] = useSearchParams();
   const capabilityId = params.get('capability');
   const requested = params.get('kind');
-  const [chosen, setChosen] = useState<string | null>(requested && providerOf(requested) ? requested : null);
+  const [chosen, setChosen] = useState<string | null>(requested && isConnectable(requested) ? requested : null);
   const [done, setDone] = useState<CapabilityOut | null>(null);
   const existing = useQuery({
     queryKey: [...CAPABILITIES_KEY, 'one', capabilityId],

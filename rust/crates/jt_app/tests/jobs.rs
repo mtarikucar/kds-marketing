@@ -1748,6 +1748,7 @@ async fn poll_crash_keeps_cursor_and_events_consistent() {
         )]
         .into_iter()
         .collect(),
+        read_history: false,
     };
     let job = *Job::ALL
         .iter()

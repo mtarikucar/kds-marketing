@@ -11,6 +11,23 @@ export const PROVIDER_KINDS: Record<Provider, readonly KindKey[]> = {
   mail: ['mailbox'],
 };
 
+/**
+ * Kinds a provider serves that cannot be connected yet: no sign-in finds an asset of them and
+ * nothing ingests their events (Facebook comments have no comment ingestion), so the connect page
+ * does not offer them and a declared one has no connect action.
+ */
+export const NOT_CONNECTABLE: readonly KindKey[] = ['review_facebook'];
+
+/** Whether `kind` can be connected here: a provider serves it and it is not [`NOT_CONNECTABLE`]. */
+export function isConnectable(kind: string): boolean {
+  return providerOf(kind) !== null && !(NOT_CONNECTABLE as readonly string[]).includes(kind);
+}
+
+/** The kinds the connect page offers for `provider`, in its order. */
+export function connectableKinds(provider: Provider): readonly KindKey[] {
+  return PROVIDER_KINDS[provider].filter(isConnectable);
+}
+
 /** A provider's name as shown (brand names, the same in every language). */
 export const PROVIDER_NAMES: Record<Provider, string> = { meta: 'Meta', netgsm: 'NetGSM', x: 'X', mail: 'Email' };
 

@@ -282,6 +282,7 @@ pub async fn mail_cursor_and_drafts_atomic(uow: Arc<dyn UnitOfWork>) {
             ),
         ]
         .into(),
+        read_history: false,
     };
     let event = InboundEvent {
         id: InboundEventId::new_v7(),
@@ -336,6 +337,7 @@ pub async fn mail_cursor_and_drafts_atomic(uow: Arc<dyn UnitOfWork>) {
             },
         )]
         .into(),
+        read_history: false,
     };
     t.mail_cursors().store(cap, reset).await.unwrap();
     let read = t.mail_cursors().get(cap).await.unwrap();

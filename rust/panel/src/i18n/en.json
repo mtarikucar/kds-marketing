@@ -1250,7 +1250,9 @@
       "delivered": "Delivered",
       "failed": "Failed",
       "unknown": "Delivery uncertain; do not resend.",
-      "refused": "Send refused: {{reason}}"
+      "refused": "Send refused: {{reason}}",
+      "failedBecause": "Not sent: {{reason}}",
+      "unknownBecause": "Delivery is uncertain; do not resend ({{reason}})."
     },
     "status": {
       "new": "New",
@@ -1525,7 +1527,9 @@
     "success": "Saved.",
     "loading": "Loading…",
     "entryHypothesis": "Hypothesis for entry",
-    "minorUnits": "minor units"
+    "minorUnits": "minor units",
+    "publishFailed": "Not published: {{reason}}",
+    "publishUncertain": "Publication is uncertain; do not resend ({{reason}})."
   },
   "billing": {
     "title": "Payment and activation",
@@ -1619,5 +1623,15 @@
       "webchat": "Web chat",
       "phone": "Phone"
     }
+  },
+  "failure": {
+    "recipientNotAllowed": "the recipient is not on the Meta test number's allowed list. Add the number as a recipient in Meta under WhatsApp → API Setup, or connect a real WhatsApp number.",
+    "windowClosed": "more than 24 hours have passed since the customer's last message; only an approved template can be sent now.",
+    "reconnect": "the account's sign-in expired or was refused; reconnect it on the Connect page.",
+    "permission": "the account lacks the permission for this; grant the requested permissions or reconnect it.",
+    "throttled": "the provider asked us to slow down; try again a little later.",
+    "configuration": "the account's sending settings could not be read; check and reconnect it.",
+    "xCredits": "the X API has no credits; add credits in the X developer console (console.x.com).",
+    "xDuplicate": "X does not publish the same text twice; change the text and try again."
   }
 }

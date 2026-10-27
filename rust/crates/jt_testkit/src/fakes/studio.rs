@@ -771,8 +771,12 @@ impl StudioRepo for MemTenant {
             .find(|a| a.piece().chain.workspace_id == self.ws && a.id() == id)
             .cloned()
             .ok_or_else(|| AppError::not_found("attempt"))?;
+        let reason = o.failure_reason();
         let outcome = o.into_redacted();
-        let a = old.finish_at(&outcome, observed_at).map_err(invalid)?;
+        let a = old
+            .finish_at(&outcome, observed_at)
+            .map_err(invalid)?
+            .with_failure_reason(reason);
         if a == old {
             return Ok(());
         }

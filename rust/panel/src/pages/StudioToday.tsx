@@ -13,7 +13,21 @@ import {
   useStudioMutation,
 } from './StudioShared';
 import type { LaneKind } from '@/api/types';
+import { failureText } from '@/lib/delivery';
 import { formatMoney } from '@/lib/format';
+
+/** Why the latest attempt to publish this slot failed, in the owner's words, when it did. */
+function PublishFailure({ attempts }: { attempts: api.PublishAttempt[] }) {
+  const { t } = useTranslation();
+  const last = attempts[attempts.length - 1];
+  if (!last?.failure_reason || !['failed', 'unknown', 'refused'].includes(last.state)) return null;
+  const key = last.state === 'unknown' ? 'studio.publishUncertain' : 'studio.publishFailed';
+  return (
+    <p className="text-xs text-danger" role="status">
+      {t(key, { reason: failureText(t, last.failure_reason) })}
+    </p>
+  );
+}
 
 function SlotEditor({ id, close }: { id: string; close: () => void }) {
   const { t } = useTranslation();
@@ -74,6 +88,7 @@ function SlotEditor({ id, close }: { id: string; close: () => void }) {
           <p className="text-xs">
             {t(`studio.${data.slot.state}`)} · {t('studio.evidence')}: {data.measurements.length}
           </p>
+          <PublishFailure attempts={data.attempts} />
           {['planned', 'ready'].includes(data.slot.state) && (
             <>
               <form

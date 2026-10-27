@@ -29,6 +29,18 @@ pub enum PublishOutcome {
 }
 
 impl PublishOutcome {
+    /// The provider's failure line a failed or uncertain outcome carries
+    /// (`details.provider_reason`, built by `usecases::failure`), kept on the attempt for the owner
+    /// beside the closed category, never as evidence.
+    pub fn failure_reason(&self) -> Option<String> {
+        match self {
+            Self::Failed(e) | Self::Unknown(e) | Self::Refused(e) => e.details["provider_reason"]
+                .as_str()
+                .filter(|r| !r.trim().is_empty())
+                .map(str::to_owned),
+            Self::Observed(_) | Self::Succeeded(_) => None,
+        }
+    }
     /// Retain only closed categories and public receipt fields, never diagnostic text.
     pub fn into_redacted(self) -> jt_studio::PublishOutcome {
         use jt_studio::PublishOutcome as O;

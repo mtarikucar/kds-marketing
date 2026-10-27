@@ -1573,6 +1573,7 @@ async fn mailbox_cursor_and_scripted_poller_contract() {
         ]
         .into_iter()
         .collect(),
+        read_history: false,
     };
     assert!(MailboxCursor::default().mailboxes.is_empty());
     let encoded = serde_json::to_value(&cursor).unwrap();

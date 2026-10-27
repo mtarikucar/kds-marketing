@@ -150,7 +150,7 @@ async fn pagination_filters_before_limit_and_handles_equal_timestamps() {
         )
         .await
         .unwrap();
-        seen.extend(page.items.into_iter().map(|m| m.id));
+        seen.extend(page.items.into_iter().map(|m| m.message.id));
         cursor = page.next_cursor;
         if cursor.is_none() {
             break;

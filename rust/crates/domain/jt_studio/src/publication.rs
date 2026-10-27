@@ -115,7 +115,14 @@ pub struct PublishAttempt {
     observed_at: Option<OffsetDateTime>,
     state: PublishState,
     outcome: Option<PublishOutcome>,
+    /// Why a failed or uncertain attempt failed, as the provider said it (bounded, secret-free):
+    /// display text for the owner, never evidence; learning and attribution read only the closed
+    /// categories of `outcome`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<String>,
 }
+/// The longest failure reason an attempt keeps.
+pub const MAX_FAILURE_REASON: usize = 300;
 impl PublishAttempt {
     pub fn claim(
         id: PublishAttemptId,
@@ -145,9 +152,33 @@ impl PublishAttempt {
             observed_at: None,
             state: PublishState::Sending,
             outcome: None,
+            failure_reason: None,
         };
         attempt.validate()?;
         Ok(attempt)
+    }
+    /// Keep the provider's failure line on a failed, uncertain or refused attempt, without
+    /// control characters and cut to [`MAX_FAILURE_REASON`]; `None` keeps the one it has. Any
+    /// other attempt keeps none.
+    pub fn with_failure_reason(mut self, reason: Option<String>) -> Self {
+        if !matches!(
+            self.state,
+            PublishState::Failed | PublishState::Unknown | PublishState::Refused
+        ) {
+            self.failure_reason = None;
+        } else if let Some(reason) = reason {
+            self.failure_reason = Some(
+                reason
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(MAX_FAILURE_REASON)
+                    .collect(),
+            );
+        }
+        self
+    }
+    pub fn failure_reason(&self) -> Option<&str> {
+        self.failure_reason.as_deref()
     }
     /// Freeze the connector account before persisting this new Sending attempt.
     pub fn with_account(mut self, account_id: Option<String>) -> Self {

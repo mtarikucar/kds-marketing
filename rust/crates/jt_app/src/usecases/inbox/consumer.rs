@@ -300,13 +300,18 @@ async fn sender_name(deps: &Deps, event: &InboundEvent) -> Option<String> {
         .sender_name(&credential, &adapter_public(&cap), sender)
         .await
         .ok()??;
+    Some(clean_name(&name)).filter(|name| !name.is_empty())
+}
+/// A sender's name as a person's display name: trimmed, without control characters, at most
+/// [`MAX_SENDER_NAME`] characters.
+fn clean_name(name: &str) -> String {
     let name: String = name
         .trim()
         .chars()
         .filter(|c| !c.is_control())
         .take(MAX_SENDER_NAME)
         .collect();
-    Some(name.trim().to_owned()).filter(|name| !name.is_empty())
+    name.trim().to_owned()
 }
 fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key)
@@ -357,7 +362,7 @@ fn decode(event: &InboundEvent, channel: Channel, echo: bool) -> Result<Content,
             text(p, "from"),
             text(p, "text"),
             text(p, "message_id").or(Some(event.external_id.as_str())),
-            None,
+            text(p, "name"),
         ),
         (Provider::Netgsm, Channel::Sms) => (
             text(p, "from"),
@@ -371,7 +376,7 @@ fn decode(event: &InboundEvent, channel: Channel, echo: bool) -> Result<Content,
         sender: sender.ok_or_else(malformed)?.into(),
         body: body.unwrap_or_default().into(),
         external_id: id.ok_or_else(malformed)?.into(),
-        name: name.unwrap_or_default().into(),
+        name: name.map(clean_name).unwrap_or_default(),
     })
 }
 async fn contact(
