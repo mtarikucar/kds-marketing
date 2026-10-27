@@ -34,7 +34,8 @@
 //!   token renewal keeps: for an OAuth flow's, the app that flow signed in with; a pasted Meta
 //!   token names `meta`; hand-entered NetGSM credentials name no app;
 //! - `asset`: the provider's public facts of an asset connected through OAuth;
-//! - `health`: the last probe, `{ok, at, latency_ms, error_kind}`, and `on_connected_error` while
+//! - `health`: the last probe, `{ok, at, latency_ms, error_kind, reason}` (`reason` the failure
+//!   line of [`crate::usecases::failure::failure_reason`]), and `on_connected_error` while
 //!   the adapter's connection step last failed (see below); `facts`: what the last successful
 //!   probe reported;
 //! - `reconnect_required`: `true` once a probe found the login no longer accepted (`Auth`),
@@ -374,6 +375,10 @@ pub struct ConnectorHealth {
     pub last_probe_at: Option<OffsetDateTime>,
     pub ok: Option<bool>,
     pub error_kind: Option<String>,
+    /// Why the last probe failed: its failure line (`kind: provider: reason`, at most 300
+    /// characters, redacted), `None` after a success or for a probe recorded before reasons
+    /// were kept.
+    pub reason: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub token_expires_at: Option<OffsetDateTime>,
     pub reconnect_required: bool,
@@ -945,6 +950,7 @@ pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppE
             last_probe_at: at(&last["at"]),
             ok: last["ok"].as_bool(),
             error_kind: last["error_kind"].as_str().map(str::to_owned),
+            reason: last["reason"].as_str().map(str::to_owned),
             token_expires_at,
             reconnect_required: reconnect_required(&c),
             kind_key: c.kind_key,
@@ -2135,16 +2141,16 @@ async fn apply_probe(
     result.facts = screened(&result.facts);
     let result = bound_to_account(repos, &mut capability, result).await?;
     let run_id = ProbeRunId(deps.ids.uuid());
-    repos
-        .probe_runs()
-        .append(ProbeRun::from_result(
-            run_id,
-            ctx.workspace_id,
-            capability.id,
-            ctx.now,
-            &result,
-        ))
-        .await?;
+    let run = ProbeRun::from_result(
+        run_id,
+        ctx.workspace_id,
+        capability.id,
+        ctx.now,
+        provider_for_kind(&capability.kind_key),
+        &result,
+    );
+    let reason = run.reason.clone();
+    repos.probe_runs().append(run).await?;
     let previous = capability.status;
     let status = status_after_probe(previous, &result);
     let error = if result.ok {
@@ -2160,6 +2166,7 @@ async fn apply_probe(
         "at": rfc3339(ctx.now)?,
         "latency_ms": result.latency_ms,
         "error_kind": error_kind,
+        "reason": reason,
     });
     // The connection step's failure outlives the probes until the step runs again.
     if let Some(failure) = public.get("health").and_then(|h| h.get(ON_CONNECTED_ERROR)) {

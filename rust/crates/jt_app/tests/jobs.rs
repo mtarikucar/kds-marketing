@@ -132,7 +132,7 @@ fn with_access(credential: &Credential, mut public: Value) -> Value {
 
 /// The last probe, `at`, as a probe writes it into `connector_public.health`.
 fn probed_at(at: OffsetDateTime) -> Value {
-    json!({ "ok": true, "at": rfc3339(at), "latency_ms": 12, "error_kind": null })
+    json!({ "ok": true, "at": rfc3339(at), "latency_ms": 12, "error_kind": null, "reason": null })
 }
 
 impl Rig {
@@ -1350,6 +1350,7 @@ async fn purges_remove_only_what_is_past_its_time() {
                 at: NOW - Duration::days(days),
                 ok: true,
                 error_kind: None,
+                reason: None,
                 latency_ms: 10,
                 facts: json!({}),
             })
@@ -1456,6 +1457,7 @@ async fn purges_go_on_past_a_failing_workspace_and_cover_every_status() {
                 at: NOW - Duration::days(31),
                 ok: true,
                 error_kind: None,
+                reason: None,
                 latency_ms: 10,
                 facts: json!({}),
             })

@@ -65,7 +65,7 @@ export type HealthView =
   | { kind: 'reconnect' }
   | { kind: 'expired' }
   | { kind: 'expiresSoon'; at: string }
-  | { kind: 'failed'; at: string; errorKind: string | null }
+  | { kind: 'failed'; at: string; errorKind: string | null; reason: string | null }
   | { kind: 'ok'; at: string }
   | { kind: 'never' };
 
@@ -77,14 +77,14 @@ export function healthView(health: ConnectorHealth, now: Date = new Date()): Hea
     if (left <= TOKEN_WARNING_DAYS * 86_400_000) return { kind: 'expiresSoon', at: health.token_expires_at };
   }
   if (health.last_probe_at && health.ok === false) {
-    return { kind: 'failed', at: health.last_probe_at, errorKind: health.error_kind };
+    return { kind: 'failed', at: health.last_probe_at, errorKind: health.error_kind, reason: health.reason ?? null };
   }
   if (health.last_probe_at && health.ok) return { kind: 'ok', at: health.last_probe_at };
   return { kind: 'never' };
 }
 
-/** The `jt_connector::ConnectorError` kinds the panel names. */
-export const ERROR_KINDS = ['auth', 'permission', 'throttle', 'transient', 'permanent'] as const;
+/** The `jt_connector::ConnectorError` kinds the panel names (`unknown`: the outcome is not known). */
+export const ERROR_KINDS = ['auth', 'permission', 'throttle', 'transient', 'unknown', 'permanent'] as const;
 export type ErrorKind = (typeof ERROR_KINDS)[number];
 
 export function isErrorKind(value: unknown): value is ErrorKind {

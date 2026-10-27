@@ -2,7 +2,7 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import type { BudgetItemOut, CapabilityOut, ConnectorHealth, GroupOut, Policy } from '@/api/types';
 import { Chip } from '@/components/Chip';
-import { ConnectorHealthBadge } from '@/components/ConnectorHealthBadge';
+import { ConnectorHealthBadge, ConnectorHealthReason } from '@/components/ConnectorHealthBadge';
 import { CapabilityStatusBadge } from '@/components/StatusBadges';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
@@ -177,6 +177,7 @@ export function CapabilityCard({
               <span className="text-caption text-muted-foreground">{t('capabilities.connector.label')}</span>
               {health && <ConnectorHealthBadge health={health} />}
             </div>
+            {health && <ConnectorHealthReason health={health} />}
             {connecting.length > 0 && onConnector && (
               <div role="group" aria-label={t('capabilities.connector.actionsLabel')} className="flex flex-wrap gap-2">
                 {connecting.map((action) => (

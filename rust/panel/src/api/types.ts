@@ -841,7 +841,7 @@ export interface ProbeResultPublic {
   latency_ms: number;
   /** `jt_connector::ConnectorError` kind of a failure. */
   error_kind: string | null;
-  /** Redacted by the server; for logs and agents, not shown. */
+  /** The provider's reason, redacted by the server; shown under the kind's sentence. */
   error_reason: string | null;
   facts: unknown;
 }
@@ -885,6 +885,8 @@ export interface ConnectorHealth {
   last_probe_at: Rfc3339 | null;
   ok: boolean | null;
   error_kind: string | null;
+  /** The last failed probe's line, `kind: provider: reason` (≤ 300 chars, redacted); `null` after a success. */
+  reason: string | null;
   token_expires_at: Rfc3339 | null;
   reconnect_required: boolean;
 }

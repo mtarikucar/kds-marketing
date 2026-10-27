@@ -36,7 +36,9 @@ export function ConnectorHealthBadge({ health }: { health: ConnectorHealth }) {
         ? t(`capabilities.connector.errorKinds.${view.errorKind}`)
         : t('capabilities.connector.errorKinds.unknown');
       text = t('capabilities.connector.health.failed', { reason, when: when(view.at) });
-      title = formatDateTime(view.at, i18n.language);
+      title = view.reason
+        ? `${formatDateTime(view.at, i18n.language)} · ${view.reason}`
+        : formatDateTime(view.at, i18n.language);
       break;
     }
     case 'ok':
@@ -53,5 +55,17 @@ export function ConnectorHealthBadge({ health }: { health: ConnectorHealth }) {
     <Badge tone={tone} size="sm" title={title} data-connector-health={view.kind}>
       {text}
     </Badge>
+  );
+}
+
+/** What the provider said when the last probe failed, as one line under the health badge. */
+export function ConnectorHealthReason({ health }: { health: ConnectorHealth }) {
+  const { t } = useTranslation();
+  const view = healthView(health);
+  if (view.kind !== 'failed' || !view.reason) return null;
+  return (
+    <p className="break-words text-caption text-muted-foreground" data-connector-reason="">
+      {t('capabilities.connector.reasonLine', { reason: view.reason })}
+    </p>
   );
 }

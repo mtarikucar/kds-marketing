@@ -26,9 +26,19 @@ use super::state::{
 };
 use super::tenant::MemTenant;
 
-/// The `error_kind` values the check constraint of `probe_runs` accepts (migration 0005): the
-/// `jt_connector::ConnectorError::kind` keys.
-const ERROR_KINDS: [&str; 5] = ["auth", "permission", "throttle", "transient", "permanent"];
+/// The `error_kind` values the check constraint of `probe_runs` accepts (migrations 0005 and
+/// 0013): the `jt_connector::ConnectorError::kind` keys.
+const ERROR_KINDS: [&str; 6] = [
+    "auth",
+    "permission",
+    "throttle",
+    "transient",
+    "unknown",
+    "permanent",
+];
+
+/// The longest `probe_runs.reason` its check constraint accepts (migration 0013).
+const MAX_REASON_CHARS: usize = 300;
 
 #[async_trait]
 impl InboundEventRepo for MemTenant {
@@ -382,6 +392,15 @@ impl ProbeRunRepo for MemTenant {
             {
                 return Err(AppError::internal(
                     "probe_runs.error_kind breaks its check constraint",
+                ));
+            }
+            if run
+                .reason
+                .as_ref()
+                .is_some_and(|r| r.chars().count() > MAX_REASON_CHARS)
+            {
+                return Err(AppError::internal(
+                    "probe_runs.reason breaks its check constraint",
                 ));
             }
             unique(

@@ -247,7 +247,9 @@ function ConnectorAccess({ capability }: { capability: Capability }) {
 /** The probe's outcome as the capability carries it after its credentials were entered. */
 function Result({ out, onAnother }: { out: CapabilityOut; onAnother: () => void }) {
   const { t } = useTranslation();
-  const health = out.capability.connector_public.health as { ok?: unknown; error_kind?: unknown } | undefined;
+  const health = out.capability.connector_public.health as
+    | { ok?: unknown; error_kind?: unknown; reason?: unknown }
+    | undefined;
   let callout: ReactNode;
   if (out.effective_status === 'verified') {
     callout = <Callout tone="success">{t('connect.result.verified')}</Callout>;
@@ -255,7 +257,16 @@ function Result({ out, onAnother }: { out: CapabilityOut; onAnother: () => void 
     const reason = isErrorKind(health.error_kind)
       ? t(`capabilities.connector.errorKinds.${health.error_kind}`)
       : t('capabilities.connector.errorKinds.unknown');
-    callout = <Callout tone="warning">{t('connect.result.failed', { reason })}</Callout>;
+    callout = (
+      <Callout tone="warning">
+        <p>{t('connect.result.failed', { reason })}</p>
+        {typeof health.reason === 'string' && health.reason && (
+          <p className="mt-1 break-words text-caption" data-probe-reason="">
+            {t('capabilities.connector.reasonLine', { reason: health.reason })}
+          </p>
+        )}
+      </Callout>
+    );
   } else {
     callout = <Callout tone="info">{t('connect.result.pending')}</Callout>;
   }

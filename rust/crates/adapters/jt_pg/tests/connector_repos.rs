@@ -104,6 +104,7 @@ fn probe_run(c: &Capability, at: OffsetDateTime, ok: bool) -> ProbeRun {
         at,
         ok,
         error_kind: (!ok).then(|| "auth".to_owned()),
+        reason: None,
         latency_ms: 120,
         facts: if ok {
             json!({ "name": "Kahve Dükkanı" })

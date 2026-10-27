@@ -131,6 +131,7 @@ fn probe_run(c: &Capability, at: OffsetDateTime, ok: bool) -> ProbeRun {
         at,
         ok,
         error_kind: (!ok).then(|| "transient".to_owned()),
+        reason: None,
         latency_ms: 80,
         facts: json!({}),
     }

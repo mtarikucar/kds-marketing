@@ -1679,6 +1679,7 @@ async fn probe_auth_failure_marks_unreachable_and_pending_lists_reconnect() {
             "at": later.format(&Rfc3339).unwrap(),
             "latency_ms": 55,
             "error_kind": "auth",
+            "reason": "auth: meta: token expired",
         })
     );
     // The last verification stands as it was; the credential is kept for the record.
@@ -1687,6 +1688,7 @@ async fn probe_auth_failure_marks_unreachable_and_pending_lists_reconnect() {
     let runs = r.w.uow.snapshot().probe_runs;
     assert_eq!(runs.len(), 2);
     assert_eq!(runs[1].error_kind.as_deref(), Some("auth"));
+    assert_eq!(runs[1].reason.as_deref(), Some("auth: meta: token expired"));
     assert_eq!(
         r.w.entries("connector.probe").last().unwrap().payload,
         json!({ "ok": false, "error_kind": "auth" })
@@ -1918,6 +1920,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 last_probe_at: Some(FIXED_NOW),
                 ok: Some(true),
                 error_kind: None,
+                reason: None,
                 token_expires_at: Some(expires),
                 reconnect_required: false,
             },
@@ -1930,6 +1933,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 last_probe_at: Some(FIXED_NOW),
                 ok: Some(false),
                 error_kind: Some("auth".into()),
+                reason: Some("auth: meta: revoked".into()),
                 token_expires_at: None,
                 reconnect_required: true,
             },
@@ -1942,6 +1946,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 last_probe_at: None,
                 ok: None,
                 error_kind: None,
+                reason: None,
                 token_expires_at: None,
                 reconnect_required: false,
             },
@@ -1958,6 +1963,96 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
         &err(connector::health(&r.w.deps, &blind).await),
         "workspace.read",
     );
+}
+
+#[tokio::test]
+async fn probe_failure_reason_is_persisted_and_served_by_health() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    let health_of = |health: Vec<ConnectorHealth>| {
+        health
+            .into_iter()
+            .find(|h| h.capability_id == page.id)
+            .expect("the page's health")
+    };
+
+    // A provider refusal: the failure line names kind, provider and the redacted reason, and is
+    // kept in the probe log and the capability's health alike.
+    r.meta.push_probe(ProbeResult::failure(
+        20,
+        ConnectorError::permanent(
+            r#"HTTP 400 OAuthException (#100): page removed {"access_token":"EAAB-page-1"}"#,
+        ),
+    ));
+    let out = r.probe(page.id).await;
+    assert_eq!(out.result.error_kind.as_deref(), Some("permanent"));
+    let line = r.capability(page.id).connector_public["health"]["reason"]
+        .as_str()
+        .expect("a reason in health")
+        .to_owned();
+    assert!(
+        line.starts_with("permanent: meta: HTTP 400 OAuthException (#100): page removed"),
+        "{line}"
+    );
+    assert_no_secret("health reason", &line);
+    let runs = r.w.uow.snapshot().probe_runs;
+    assert_eq!(runs.last().unwrap().reason.as_deref(), Some(line.as_str()));
+    let health = health_of(connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap());
+    assert_eq!(health.error_kind.as_deref(), Some("permanent"));
+    assert_eq!(health.reason.as_deref(), Some(line.as_str()));
+    let wire = serde_json::to_value(&health).unwrap();
+    assert_eq!(wire["reason"], line.as_str());
+
+    // An adapter answering `Unknown` is stored, not refused by the log's check constraint.
+    r.meta.push_probe(ProbeResult::failure(
+        30,
+        ConnectorError::unknown("timed out"),
+    ));
+    let out = r.probe(page.id).await;
+    assert_eq!(out.result.error_kind.as_deref(), Some("unknown"));
+    let runs = r.w.uow.snapshot().probe_runs;
+    assert_eq!(runs.last().unwrap().error_kind.as_deref(), Some("unknown"));
+    let health = health_of(connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap());
+    assert_eq!(health.reason.as_deref(), Some("unknown: meta: timed out"));
+
+    // A success clears the reason.
+    r.meta.push_probe(ok_probe("page-1"));
+    r.probe(page.id).await;
+    let health = health_of(connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap());
+    assert_eq!((health.ok, health.reason), (Some(true), None));
+    assert_eq!(r.w.uow.snapshot().probe_runs.last().unwrap().reason, None);
+}
+
+#[tokio::test]
+async fn set_credentials_failure_keeps_reason_in_health() {
+    let r = rig().await;
+    r.netgsm.push_probe(ProbeResult::failure(
+        15,
+        ConnectorError::auth("HTTP 401 Kullanici dogrulanamadi"),
+    ));
+    let line = connector::set_credentials(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        creating("sms_line", "SMS hattı", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap();
+    let id = line.capability.id;
+    assert_eq!(
+        r.capability(id).connector_public["health"]["reason"],
+        "auth: netgsm: HTTP 401 Kullanici dogrulanamadi"
+    );
+    let health = connector::health(&r.w.deps, &r.w.owner_ctx)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|h| h.capability_id == id)
+        .unwrap();
+    assert_eq!(
+        health.reason.as_deref(),
+        Some("auth: netgsm: HTTP 401 Kullanici dogrulanamadi")
+    );
+    assert_no_secret("health", &serde_json::to_string(&health).unwrap());
 }
 
 // ---------------------------------------------------------------------------------------------

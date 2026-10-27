@@ -117,6 +117,38 @@ describe('ConnectPage', () => {
     ).toBeInTheDocument();
   });
 
+  it('shows_probe_reason_line: the provider line under the kind sentence', async () => {
+    const user = userEvent.setup();
+    const line = 'auth: netgsm: HTTP 401 Kullanici dogrulanamadi';
+    const failed = {
+      ...smsLine,
+      capability: {
+        ...smsLine.capability,
+        status: 'unreachable' as const,
+        connector_public: {
+          ...smsLine.capability.connector_public,
+          health: { ok: false, at: '2026-10-22T08:00:00Z', latency_ms: 30, error_kind: 'auth', reason: line },
+          reconnect_required: true,
+        },
+      },
+      effective_status: 'unreachable' as const,
+    };
+    mockFetch({ 'GET /api/auth/me': me, 'POST /api/connectors/credentials': failed });
+    renderAt('/connect?kind=netgsm_pbx');
+    await user.type(await screen.findByLabelText(tr.connect.credentials.name), 'Santral');
+    await user.type(screen.getByLabelText(tr.connect.credentials.username), 'santral-kullanici');
+    await user.type(screen.getByLabelText(tr.connect.credentials.password), 'gizli-parola-2');
+    await user.click(screen.getByRole('button', { name: tr.connect.credentials.submit }));
+    expect(
+      await screen.findByText(
+        i18n.t('connect.result.failed', { reason: tr.capabilities.connector.errorKinds.auth }),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(i18n.t('capabilities.connector.reasonLine', { reason: line })),
+    ).toBeInTheDocument();
+  });
+
   it('enters credentials for an existing line by its id', async () => {
     const user = userEvent.setup();
     const declared = {
