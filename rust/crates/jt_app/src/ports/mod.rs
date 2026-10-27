@@ -22,6 +22,7 @@
 //! [`connectors`].
 
 pub mod billing;
+pub mod calls;
 pub mod compliance;
 pub mod connectors;
 pub mod files;
@@ -1508,6 +1509,7 @@ pub trait TenantRepos: Send + Sync {
     fn studio(&mut self) -> &mut dyn crate::ports::studio::StudioRepo;
     fn studio_budget(&mut self) -> &mut dyn crate::ports::studio::StudioBudgetRepo;
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
+    fn calls(&mut self) -> &mut dyn crate::ports::calls::CallRepo;
 
     fn consents(&mut self) -> &mut dyn ConsentRepo;
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;

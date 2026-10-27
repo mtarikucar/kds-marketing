@@ -123,6 +123,10 @@
     "studio": {
       "work": "Work in the studio",
       "manage": "Manage the studio"
+    },
+    "calls": {
+      "work": "Place calls and read the call log",
+      "manage": "Manage the call policy"
     }
   },
   "roleNames": {

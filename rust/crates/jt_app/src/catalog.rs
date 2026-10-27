@@ -352,6 +352,14 @@ pub static CATALOG: &[UseCase] = &[
     // A PBX's call policy (call mode, whether calls are recorded): reserved public keys only this
     // writes, with a ledger entry.
     twin("connector.set_pbx_policy", Exempt, "jeeta.connector.set_pbx_policy", ("PUT", "/api/connectors/{capability_id}/pbx-policy"), Write),
+    // Phone calls (voice V0): gated by the strategy, except reading the policy. Placing a call
+    // spends the PBX tariff.
+    twin("calls.policy_get", Exempt, "jeeta.calls.policy_get", ("GET", "/api/calls/policy"), Read),
+    twin("calls.policy_set", GateMode::Gated, "jeeta.calls.policy_set", ("PUT", "/api/calls/policy"), Write),
+    twin("calls.place", GateMode::Gated, "jeeta.calls.place", ("POST", "/api/calls"), Spend),
+    twin("calls.get", GateMode::Gated, "jeeta.calls.get", ("GET", "/api/calls/{call_id}"), Read),
+    twin("calls.list", GateMode::Gated, "jeeta.calls.list", ("GET", "/api/calls"), Read),
+    twin("calls.end", GateMode::Gated, "jeeta.calls.end", ("POST", "/api/calls/{call_id}/end"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

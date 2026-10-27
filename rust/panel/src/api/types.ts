@@ -22,7 +22,9 @@ export type Permission =
   | 'inbox.work'
   | 'inbox.manage'
   | 'studio.work'
-  | 'studio.manage';
+  | 'studio.manage'
+  | 'calls.work'
+  | 'calls.manage';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -34,6 +36,8 @@ export const PERMISSIONS: readonly Permission[] = [
   'inbox.manage',
   'studio.work',
   'studio.manage',
+  'calls.work',
+  'calls.manage',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */

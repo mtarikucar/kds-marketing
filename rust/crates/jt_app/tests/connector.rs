@@ -2133,11 +2133,11 @@ async fn pbx_policy_is_written_into_connector_public_and_read_by_adapter() {
         .netgsm
         .calls()
         .into_iter()
-        .filter_map(|c| match c {
+        .rev()
+        .find_map(|c| match c {
             ConnectorCall::Probe { public, .. } => Some(public),
             _ => None,
         })
-        .next_back()
         .expect("a probe");
     assert_eq!(probed["call_mode"], "linkup");
     assert_eq!(probed["recording_allowed"], true);

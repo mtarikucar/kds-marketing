@@ -123,6 +123,10 @@
     "studio": {
       "work": "Stüdyoda çalış",
       "manage": "Stüdyoyu yönet"
+    },
+    "calls": {
+      "work": "Arama yapma ve görüşme kaydını görme",
+      "manage": "Arama politikasını yönetme"
     }
   },
   "roleNames": {

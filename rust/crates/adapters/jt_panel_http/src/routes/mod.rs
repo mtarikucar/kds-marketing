@@ -12,6 +12,7 @@ pub mod api_keys;
 pub mod auth;
 pub mod billing;
 pub mod budget;
+pub mod calls;
 pub mod capabilities;
 pub mod connector;
 pub mod events;
@@ -189,6 +190,12 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/connectors/{capability_id}/reconnect"),
     ("GET", "/api/connectors/hooks"),
     ("PUT", "/api/connectors/{capability_id}/pbx-policy"),
+    ("GET", "/api/calls/policy"),
+    ("PUT", "/api/calls/policy"),
+    ("POST", "/api/calls"),
+    ("GET", "/api/calls/{call_id}"),
+    ("GET", "/api/calls"),
+    ("POST", "/api/calls/{call_id}/end"),
     ("GET", "/api/events/pending"),
     ("POST", "/api/events/ack"),
     ("GET", "/api/events"),
@@ -936,6 +943,22 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "connector.set_pbx_policy",
             connector::set_pbx_policy,
         ),
+        api_route(
+            "GET",
+            "/calls/policy",
+            "calls.policy_get",
+            calls::policy_get,
+        ),
+        api_route(
+            "PUT",
+            "/calls/policy",
+            "calls.policy_set",
+            calls::policy_set,
+        ),
+        api_route("POST", "/calls", "calls.place", calls::place),
+        api_route("GET", "/calls/{call_id}", "calls.get", calls::get),
+        api_route("GET", "/calls", "calls.list", calls::list),
+        api_route("POST", "/calls/{call_id}/end", "calls.end", calls::end),
         api_route("GET", "/events/pending", "events.pending", events::pending),
         api_route("POST", "/events/ack", "events.ack", events::ack),
         api_route("GET", "/events", "events.list", events::list),

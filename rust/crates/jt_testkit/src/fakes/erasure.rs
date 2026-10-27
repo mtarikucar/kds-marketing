@@ -198,6 +198,27 @@ pub(super) fn scrub(s: &mut MemState, ws: WorkspaceId, person: PersonId) {
                         || r.response["quote"]["journey_id"] == json!(j)
                 }))
     });
+    // Calls keep their times, states and turn numbers; the number, the summary, the recording
+    // reference and every turn's words go (as `jt_pg` scrubs them).
+    let calls: Vec<_> = s
+        .calls
+        .sessions
+        .iter()
+        .filter(|c| c.workspace_id == ws && c.person_id == Some(person))
+        .map(|c| c.id)
+        .collect();
+    for c in &mut s.calls.sessions {
+        if calls.contains(&c.id) {
+            c.counterpart_e164.clear();
+            c.summary = None;
+            c.recording = jt_calls::RecordingState::Off;
+        }
+    }
+    for (w, call, turn) in &mut s.calls.turns {
+        if *w == ws && calls.contains(call) {
+            turn.text.clear();
+        }
+    }
     for p in &mut s.inbox.people {
         if p.workspace_id == ws && (p.id == person || p.merged_into == Some(person)) {
             p.display_name = "silinmiş kişi".into();

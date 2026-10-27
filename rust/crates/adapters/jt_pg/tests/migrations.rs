@@ -29,11 +29,16 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
-/// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest.
-const TABLES_AFTER_ALL: i64 = 67;
+/// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
+/// call tables of `0015_voice_calls`.
+const TABLES_AFTER_ALL: i64 = 71;
 
-/// Migrations `0001_foundation` through `0013_probe_reason`.
-const MIGRATIONS: i64 = 13;
+/// Migrations `0001_foundation` through `0013_probe_reason`, and `0015_voice_calls` (0014 is the
+/// social providers' migration of PR #366, merged separately).
+const MIGRATIONS: i64 = 14;
+
+/// The versions present, in order.
+const VERSIONS: [i64; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -172,6 +177,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0015_voice_calls",
         "0013_probe_reason",
         "0012_m4_grandfathered_backfill",
         "0011_m4_activation_codes",
@@ -259,7 +265,7 @@ async fn every_migration_has_a_down_file() {
         .map(|n| n.split('_').next().unwrap().parse().unwrap())
         .collect();
     versions.sort();
-    assert_eq!(versions, (1..=13).collect::<Vec<_>>());
+    assert_eq!(versions, VERSIONS);
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,
@@ -434,6 +440,13 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
+    // Newest first: the call tables reference the inbox tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0015_voice_calls.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!("../../../../migrations/0009_studio.down.sql"))
         .execute(&db.pool)
         .await
@@ -550,6 +563,12 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0015_voice_calls.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!("../../../../migrations/0009_studio.down.sql"))
         .execute(&db.pool)
         .await
@@ -602,7 +621,7 @@ async fn studio_migration_up_down_up() {
     for sql in [up, down, down, up, up] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
-    assert_eq!(table_count(&db.pool).await, 67);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     let saved: (String,f32,serde_json::Value) = sqlx::query_as("select title,prior_confidence,cadence from strategy_hypotheses where workspace_id = $1 and hypothesis_id = $2").bind(ws.as_uuid()).bind(h).fetch_one(tx.conn()).await.unwrap();
     assert_eq!(saved, ("keep".into(), 0.7, serde_json::json!({})));

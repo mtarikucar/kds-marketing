@@ -430,7 +430,7 @@ async fn conversation(
         })
         .await
 }
-pub(super) async fn journey(
+pub(crate) async fn journey(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
@@ -461,6 +461,25 @@ async fn apply(
     key: String,
     kind: JourneyEventKind,
 ) -> Result<(), AppError> {
+    apply_from(deps, ctx, r, journey, key, kind, EventSource::System).await
+}
+
+/// Applies journey event `kind` keyed `key` to `journey` as `source` reported it, with its
+/// effects and the `inbox.event.reported` ledger entry (a call's outcome comes through here).
+pub(crate) async fn apply_from(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    journey: Journey,
+    key: String,
+    kind: JourneyEventKind,
+    source: EventSource,
+) -> Result<(), AppError> {
+    let origin = if matches!(source, EventSource::System) {
+        "inbound"
+    } else {
+        "call"
+    };
     let j = r
         .journeys()
         .lock(journey.id)
@@ -470,7 +489,7 @@ async fn apply(
         id: JourneyEventId::from(deps.ids.uuid()),
         workspace_id: ctx.workspace_id,
         journey_id: j.id,
-        source: EventSource::System,
+        source,
         idempotency_key: key,
         kind,
         reason_label: None,
@@ -497,7 +516,7 @@ async fn apply(
         "inbox.event.reported",
         "journey",
         j.id,
-        json!({"source":"inbound"}),
+        json!({ "source": origin }),
     )
     .await
 }

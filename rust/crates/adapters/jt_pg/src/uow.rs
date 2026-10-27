@@ -115,6 +115,10 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
     }
