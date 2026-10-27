@@ -79,7 +79,7 @@ pub fn input(action: &str) -> Value {
         ),
         "notes.add" => object(json!({"text":{"type":"string","minLength":1}}), &["text"]),
         "people.search" => object(
-            json!({"q":{"type":"string","default":""},"limit":{"type":["integer","null"],"minimum":1,"maximum":500,"default":50}}),
+            json!({"q":{"type":"string","default":""},"limit":{"type":["integer","null"],"minimum":1,"maximum":500,"default":50},"offset":{"type":["integer","null"],"minimum":0,"default":0}}),
             &[],
         ),
         "people.create" => object(

@@ -76,7 +76,7 @@ async fn two_concurrent_first_messages_one_person_journey() {
     assert_eq!(a.failed + b.failed, 0);
     assert_eq!(a.changed + b.changed, 2);
     let mut r = uow.tenant(ws).await.unwrap();
-    let people = r.people().search("", 100).await.unwrap();
+    let people = r.people().search("", 100, 0).await.unwrap();
     assert_eq!(people.len(), 1);
     let p = &people[0];
     assert_eq!(r.identities().list(p.id).await.unwrap().len(), 1);
@@ -144,7 +144,7 @@ async fn claim_effect_completion_rollback_and_retry() {
         1
     );
     let mut r = uow.tenant(ws).await.unwrap();
-    assert_eq!(r.people().search("", 100).await.unwrap().len(), 1);
+    assert_eq!(r.people().search("", 100, 0).await.unwrap().len(), 1);
     assert!(
         r.inbound_events()
             .list_for_consumer("inbox@2", None, 100)

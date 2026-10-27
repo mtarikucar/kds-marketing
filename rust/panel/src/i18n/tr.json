@@ -50,7 +50,8 @@
     "capabilities": "Kabiliyetler",
     "budget": "Bütçe",
     "inbox": "Gelen kutusu",
-    "studio": "Büyüme stüdyosu"
+    "studio": "Büyüme stüdyosu",
+    "people": "Kişiler"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -913,11 +914,11 @@
         "expired": "Erişim jetonunun süresi doldu"
       },
       "errorKinds": {
-        "auth": "giriş reddedildi",
-        "permission": "izin yok",
-        "throttle": "sağlayıcı yoğun",
-        "transient": "geçici bir sorun",
-        "permanent": "kalıcı bir sorun",
+        "auth": "giriş reddedildi: kullanıcı adını/kodunu ve parolayı kontrol edin",
+        "permission": "hesabın bu işlem için izni yok: sağlayıcıda izinleri kontrol edin",
+        "throttle": "sağlayıcı şu an yoğun: birkaç dakika sonra yeniden deneyin",
+        "transient": "sağlayıcıya ulaşılamadı: sunucu adını ve bağlantıyı kontrol edip yeniden deneyin",
+        "permanent": "sağlayıcı bilgileri kabul etmedi: kullanıcı kodu, parola, mesaj başlığı ve sunucu adlarını kontrol edin",
         "unknown": "bilinmeyen bir sorun"
       },
       "probeDialog": {
@@ -1591,5 +1592,17 @@
     "strategyLink": "Stratejiye git",
     "inactiveBody": "Bu bölüm, çalışma alanı etkinleşince açılır.",
     "inactiveLink": "Ödeme ve etkinleştirme"
+  },
+  "people": {
+    "title": "Kişiler",
+    "description": "Çalışma alanındaki herkes; henüz konuşması olmayan içe aktarılmış ya da elle eklenmiş kişiler dahil.",
+    "search": "Ada ya da şirkete göre ara",
+    "empty": "Henüz kişi yok.",
+    "noMatch": "Eşleşen kişi yok.",
+    "emptyBody": "Gelen mesajlar, formlar ve içe aktarılan lead'ler burada listelenir.",
+    "added": "Eklenme: {{at}}",
+    "range": "{{first}}–{{last}} arası",
+    "previous": "Önceki",
+    "next": "Sonraki"
   }
 }

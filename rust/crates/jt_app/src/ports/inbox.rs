@@ -56,8 +56,14 @@ pub trait PersonRepo: Send + Sync {
         channel: IdentityChannel,
         normalized: &str,
     ) -> Result<Option<Person>, AppError>;
-    /// Literal, case-insensitive substring of name/company, ordered by (created_at,id).
-    async fn search(&mut self, query: &str, limit: u32) -> Result<Vec<Person>, AppError>;
+    /// Literal, case-insensitive substring of name/company, ordered by (created_at,id); `offset`
+    /// rows are skipped first, so an empty query pages through every person.
+    async fn search(
+        &mut self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Person>, AppError>;
     /// `None` clears the merge marker during an authorized undo.
     async fn mark_merged(
         &mut self,

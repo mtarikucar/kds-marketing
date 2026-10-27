@@ -13,6 +13,7 @@ import { BudgetPage } from '@/pages/BudgetPage';
 import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { ConnectPage } from '@/pages/ConnectPage';
 import { InboxPage } from '@/pages/InboxPage';
+import { PeoplePage } from '@/pages/PeoplePage';
 import { InboxMerges } from '@/pages/InboxMerges';
 import { InboxCommissions } from '@/pages/InboxCommissions';
 import { HomePage } from '@/pages/HomePage';
@@ -76,6 +77,7 @@ export const routes: RouteObject[] = [
           { path: 'inbox/:conversationId', element: <InboxPage /> },
           { path: 'inbox/merges', element: <InboxMerges /> },
           { path: 'inbox/commissions', element: <InboxCommissions /> },
+          { path: 'people', element: <PeoplePage /> },
           { path: 'strategy', element: <StrategyPage /> },
           { path: 'capabilities', element: <CapabilitiesPage /> },
           { path: 'connect', element: <ConnectPage /> },

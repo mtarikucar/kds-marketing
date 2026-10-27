@@ -399,7 +399,26 @@ pub async fn people_identities_and_tombstones(uow: Arc<dyn UnitOfWork>) {
             .unwrap(),
         Some(a.clone())
     );
-    assert_eq!(t.people().search("%", 10).await.unwrap(), vec![a.clone()]);
+    assert_eq!(
+        t.people().search("%", 10, 0).await.unwrap(),
+        vec![a.clone()]
+    );
+    // An empty query pages through every person in (created_at, id) order.
+    let everyone = t.people().search("", 10, 0).await.unwrap();
+    assert!(!everyone.is_empty());
+    for (i, person) in everyone.iter().enumerate() {
+        assert_eq!(
+            t.people().search("", 1, i as u32).await.unwrap(),
+            vec![person.clone()]
+        );
+    }
+    assert!(
+        t.people()
+            .search("", 10, everyone.len() as u32)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     t.commit().await.unwrap();
     let mut t = f.uow.tenant(f.ws).await.unwrap();
     let mut dup = identity.clone();

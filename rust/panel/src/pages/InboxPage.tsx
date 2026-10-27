@@ -168,7 +168,6 @@ export function InboxPage() {
               <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>
               {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into && <>
                 <Disclosure key={selectedPerson.data.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={selectedPerson.data.person.id} /></Disclosure>
-                <InboxErasure key={`erase:${selectedPerson.data.person.id}`} personId={selectedPerson.data.person.id} />
               </>}
               {personId && (
                 <QueryState query={selectedPerson}>
@@ -178,6 +177,8 @@ export function InboxPage() {
                   {selectedPerson.data?.conversations.length === 0 && <p>{t('inbox.noConversations')}</p>}
                 </QueryState>
               )}
+              {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into &&
+                <InboxErasure key={`erase:${selectedPerson.data.person.id}`} personId={selectedPerson.data.person.id} />}
               {taskId && (
                 <QueryState query={tasks}>
                   {tasks.data && !task && <p>{t('inbox.taskNotFound')}</p>}

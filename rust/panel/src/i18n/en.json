@@ -50,7 +50,8 @@
     "capabilities": "Capabilities",
     "budget": "Budget",
     "inbox": "Inbox",
-    "studio": "Growth studio"
+    "studio": "Growth studio",
+    "people": "People"
   },
   "shell": {
     "workspace": "Workspace",
@@ -913,11 +914,11 @@
         "expired": "The access token has expired"
       },
       "errorKinds": {
-        "auth": "login refused",
-        "permission": "no permission",
-        "throttle": "provider busy",
-        "transient": "a temporary problem",
-        "permanent": "a permanent problem",
+        "auth": "sign-in refused: check the user name or code and the password",
+        "permission": "the account lacks permission: check its permissions at the provider",
+        "throttle": "the provider is busy: try again in a few minutes",
+        "transient": "could not reach the provider: check the server name and connection, then retry",
+        "permanent": "the provider rejected the details: check the user code, password, sender header and server names",
         "unknown": "an unknown problem"
       },
       "probeDialog": {
@@ -1591,5 +1592,17 @@
     "strategyLink": "Go to strategy",
     "inactiveBody": "This opens once the workspace is active.",
     "inactiveLink": "Payment and activation"
+  },
+  "people": {
+    "title": "People",
+    "description": "Everyone in the workspace, including imported or hand-added people who have no conversation yet.",
+    "search": "Search by name or company",
+    "empty": "No people yet.",
+    "noMatch": "No matching people.",
+    "emptyBody": "Inbound messages, forms and imported leads are listed here.",
+    "added": "Added {{at}}",
+    "range": "{{first}}–{{last}}",
+    "previous": "Previous",
+    "next": "Next"
   }
 }

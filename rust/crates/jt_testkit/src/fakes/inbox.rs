@@ -237,7 +237,12 @@ impl PersonRepo for MemTenant {
             })
             .cloned())
     }
-    async fn search(&mut self, query: &str, limit: u32) -> Result<Vec<Person>, AppError> {
+    async fn search(
+        &mut self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Person>, AppError> {
         let query = query.to_lowercase();
         let mut rows: Vec<_> = self
             .state()
@@ -254,8 +259,11 @@ impl PersonRepo for MemTenant {
             .cloned()
             .collect();
         rows.sort_by_key(|r| (r.created_at, r.id));
-        rows.truncate(limit.clamp(1, MAX_INBOX_PAGE) as usize);
-        Ok(rows)
+        Ok(rows
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit.clamp(1, MAX_INBOX_PAGE) as usize)
+            .collect())
     }
     async fn mark_merged(
         &mut self,
