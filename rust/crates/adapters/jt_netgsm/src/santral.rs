@@ -34,7 +34,7 @@
 
 use jt_app::ports::connectors::{InboundEventDraft, SendReceipt};
 use jt_connector::{ConnectorError, Credential, EventKind};
-use jt_outbound::Method;
+use jt_outbound::{Method, StatusCode};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -191,16 +191,28 @@ fn looks_like_crm_id(id: &str) -> bool {
 }
 
 /// The queue statistics of the PBX account behind `pbx`: the probe's cheap authenticated call.
+/// Netsantral checks the credentials before the request: refused ones answer HTTP 401
+/// "Kullanici dogrulanamadi". An account without a call queue answers `queuestats` HTTP 400
+/// after accepting them (seen live), so that answer still proves the credentials.
 pub(crate) async fn queuestats(
     connector: &NetgsmConnector,
     pbx: &PbxCred<'_>,
 ) -> Result<(), ConnectorError> {
-    let query = [
-        ("username", pbx.username.to_owned()),
-        ("password", pbx.password.to_owned()),
-    ];
-    pbx_call(connector, pbx, "queuestats", &query, Retry::Reads).await?;
-    Ok(())
+    let query = [("username", pbx.username), ("password", pbx.password)];
+    let url = connector.pbx_url(&[pbx.username, "queuestats"], &query);
+    let answer = connector
+        .call(
+            Method::GET,
+            url,
+            Auth::InRequest,
+            &Body::Empty,
+            Retry::Reads,
+        )
+        .await?;
+    if answer.status == StatusCode::BAD_REQUEST && !unverified_user(&answer.text) {
+        return Ok(());
+    }
+    santral_outcome(&answer, "queuestats", pbx.password)
 }
 
 /// Sends `verb` with `query` to the PBX of `pbx` and reads its answer (see the module docs).
@@ -219,6 +231,11 @@ async fn pbx_call(
     santral_outcome(&answer, verb, pbx.password)
 }
 
+/// Whether provider text names missing or wrong parameters ("Eksik yada yanlis parametre").
+fn parameter_error(text: &str) -> bool {
+    text.to_lowercase().contains("parametre")
+}
+
 /// Whether provider text says the user could not be verified ("Kullanici dogrulanamadi").
 fn unverified_user(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -228,10 +245,17 @@ fn unverified_user(text: &str) -> bool {
 /// The error a failed Netsantral object `object` maps to: its code by the table, an unverified
 /// user `Auth`, anything else `Permanent` quoting its message (scrubbed of `secret`).
 fn santral_failure(object: &Value, what: &str, secret: &str, answer: &Answer) -> ConnectorError {
+    let message = pick(object, &["message", "error", "status"]).unwrap_or_default();
     if let Some(code) = pick(object, &["code"]).filter(|c| !is_success(c)) {
+        // Netsantral also answers code 30 for a request it cannot read ("Eksik yada yanlis
+        // parametre"), where the SMS API's 30 refuses the credentials.
+        if code == "30" && parameter_error(&message) {
+            return ConnectorError::permanent(format!(
+                "Netsantral code 30: missing or wrong parameters in {what}"
+            ));
+        }
         return code_error(&code, answer.retry_after);
     }
-    let message = pick(object, &["message", "error", "status"]).unwrap_or_default();
     if unverified_user(&message) {
         return ConnectorError::auth(AUTH_HINT);
     }

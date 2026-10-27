@@ -921,6 +921,30 @@ async fn probe_pbx_names_the_username() {
         .set("GET", &pbx("queuestats"), rest("santral_unverified"));
     let probe = r.netgsm.probe(&pbx_cred(), &public("netgsm_pbx")).await;
     assert_eq!(probe.error.map(|e| e.kind()), Some("auth"));
+    // So is Netsantral's live refusal: HTTP 401 before the request is read.
+    r.mock.set(
+        "GET",
+        &pbx("queuestats"),
+        status(
+            401,
+            json!({ "status": "Error", "message": "Kullanici dogrulanamadi" }),
+        ),
+    );
+    let probe = r.netgsm.probe(&pbx_cred(), &public("netgsm_pbx")).await;
+    assert_eq!(probe.error.map(|e| e.kind()), Some("auth"));
+    // An account without a call queue: the credentials pass, then the request is refused
+    // (HTTP 400, code 30 "Eksik yada yanlis parametre"), which still verifies them.
+    r.mock.set(
+        "GET",
+        &pbx("queuestats"),
+        status(
+            400,
+            json!({ "code": "30", "status": "Error", "message": "Eksik yada yanlis parametre" }),
+        ),
+    );
+    let probe = r.netgsm.probe(&pbx_cred(), &public("netgsm_pbx")).await;
+    assert!(probe.ok, "{probe:?}");
+    assert_eq!(probe.facts["account_id"], PBX_USER);
 }
 
 #[tokio::test]
@@ -1097,6 +1121,12 @@ async fn netsantral_errors_map_by_the_table() {
         (rest("santral_error"), "permanent"),
         (rest("santral_unverified"), "auth"),
         (ok(json!({ "code": "30", "status": "Error" })), "auth"),
+        (
+            ok(
+                json!({ "code": "30", "status": "Error", "message": "Eksik yada yanlis parametre" }),
+            ),
+            "permanent",
+        ),
         (ok(json!({ "code": "80", "status": "Error" })), "throttle"),
         (raw(200, "40 trunk yetkisiz"), "permission"),
         (raw(200, ""), "permanent"),
