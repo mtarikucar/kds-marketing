@@ -48,7 +48,8 @@ export function InboxConversation({ id }: { id: string }) {
   const request = useRef<{ text: string; subject?: string; key: string }>();
   const send = useInboxMutation(
     async () => {
-      const emailSubject = conversation.data?.kind_key === 'mailbox' ? subject.trim() || 'Re:' : undefined;
+      // An empty subject lets the server answer the original one ("Re: <subject>").
+      const emailSubject = conversation.data?.kind_key === 'mailbox' ? subject.trim() || undefined : undefined;
       if (!request.current || request.current.text !== text.trim() || request.current.subject !== emailSubject)
         request.current = { text: text.trim(), subject: emailSubject, key: crypto.randomUUID() };
       return api.reply(id, request.current.text, request.current.key, request.current.subject);

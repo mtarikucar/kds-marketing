@@ -67,6 +67,23 @@ describe('Inbox', () => {
     );
   });
 
+  it('leaves an empty mail subject to the server, which answers the original one', async () => {
+    const calls = await openConversation({
+      ...inboxAnswers,
+      'GET /api/inbox/conversations/conv-1': { ...conversation, kind_key: 'mailbox' },
+    });
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: 'Yanıtınız' }), 'Teşekkürler.');
+    await user.click(screen.getByRole('button', { name: 'Yanıt gönder' }));
+    await waitFor(() => expect(calls.find((c) => c.path.endsWith('/reply'))?.body).not.toHaveProperty('subject'));
+    await user.type(screen.getByRole('textbox', { name: 'E-posta konusu' }), 'Teklifiniz');
+    await user.type(screen.getByRole('textbox', { name: 'Yanıtınız' }), 'Ekte.');
+    await user.click(screen.getByRole('button', { name: 'Yanıt gönder' }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path.endsWith('/reply')).slice(-1)[0]?.body).toMatchObject({ subject: 'Teklifiniz' }),
+    );
+  });
+
   it('event_forms_match_tool_schema', async () => {
     const calls = await openConversation();
     const user = userEvent.setup();
