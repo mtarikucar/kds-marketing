@@ -1,0 +1,8 @@
+{
+  "access_token": "li-access-test-1",
+  "expires_in": 5184000,
+  "refresh_token": "li-refresh-test-1",
+  "refresh_token_expires_in": 31536000,
+  "scope": "openid profile w_member_social r_organization_social w_organization_social rw_organization_admin",
+  "token_type": "Bearer"
+}

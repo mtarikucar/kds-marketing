@@ -1,0 +1,22 @@
+{
+  "paging": {
+    "count": 10,
+    "start": 0,
+    "links": []
+  },
+  "elements": [
+    {
+      "organizationalEntity": "urn:li:organization:90000001",
+      "share": "urn:li:share:7100000000000000001",
+      "totalShareStatistics": {
+        "clickCount": 78,
+        "commentCount": 24,
+        "engagement": 0.022886324947985624,
+        "impressionCount": 5287,
+        "likeCount": 14,
+        "shareCount": 5,
+        "uniqueImpressionsCount": 3100
+      }
+    }
+  ]
+}
