@@ -12,12 +12,13 @@ use jt_app::ports::connectors::{
 };
 use jt_app::usecases::auth::{self, RegisterInput};
 use jt_app::usecases::capabilities::{self, DeclareInput};
-use jt_app::usecases::connector::{self, CompleteOAuth, OAuthCallback, StartOAuth};
+use jt_app::usecases::connector::{self, CompleteOAuth, ConfirmAssets, OAuthCallback, StartOAuth};
+use jt_capability::Capability;
 use jt_connector::{Credential, Provider};
-use jt_meta::MetaConnector;
+use jt_meta::{MetaConnector, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS};
 use jt_testkit::fakes::{FIXED_NOW, InMemoryUow, deps};
 use jt_testkit::flows::activate_workspace;
-use serde_json::json;
+use serde_json::{Value, json};
 use support::*;
 use url::Url;
 
@@ -228,6 +229,157 @@ async fn meta_error_text_echoing_the_token_never_reaches_use_case_outputs() {
         }
     }
     assert!(mock.violations().is_empty(), "invalid Graph authentication");
+}
+
+/// Connects page `1234567890` through Facebook Login, the real adapter answered by the mock with
+/// a grant of `scopes` (`/me/permissions`), and returns the mock and the capabilities the owner's
+/// choice of the page connected (its `facebook_page` and its `messenger`).
+async fn connect_page_granting(scopes: &[&str]) -> (Mock, Vec<Capability>) {
+    let mock = Mock::start().await;
+    let exchange = "/fb/v19.0/oauth/access_token";
+    mock.on(
+        "GET",
+        exchange,
+        ok(graph_fixture(&mock, "oauth_short_token")),
+    );
+    mock.on(
+        "GET",
+        exchange,
+        ok(graph_fixture(&mock, "oauth_long_token")),
+    );
+    let granted: Vec<Value> = scopes
+        .iter()
+        .map(|s| json!({ "permission": s, "status": "granted" }))
+        .collect();
+    mock.on(
+        "GET",
+        "/fb/v19.0/me/permissions",
+        ok(json!({ "data": granted })),
+    );
+    mock.on(
+        "GET",
+        "/fb/v19.0/me/accounts",
+        ok(json!({ "data": [
+            { "id": "1234567890", "name": "Test Kahve", "access_token": "EAAB-page-1234567890" }
+        ]})),
+    );
+    mock.on(
+        "POST",
+        "/fb/v19.0/1234567890/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    mock.on(
+        "GET",
+        "/fb/v19.0/me",
+        ok(json!({ "id": "1234567890", "name": "Test Kahve" })),
+    );
+    let apps = Arc::new(TestApps::default());
+    let meta = Arc::new(MetaConnector::new(
+        egress(&mock),
+        bases(&mock),
+        apps.clone(),
+    ));
+    let mut deps = deps(Arc::new(InMemoryUow::new()));
+    deps.apps = apps;
+    deps.connectors = Arc::new(MetaRegistry(meta));
+    let session = auth::register(
+        &deps,
+        RegisterInput {
+            email: "owner@grant.test".into(),
+            password: "correct horse battery".into(),
+            display_name: "Owner".into(),
+            workspace_name: "Grant test".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let ws = session.me.current_workspace.unwrap();
+    activate_workspace(&deps, ws).await;
+    let principal = auth::resolve_session(&deps, &session.token).await.unwrap();
+    let ctx = auth::ctx_for(&principal, ws, FIXED_NOW).unwrap();
+    let flow = connector::start_oauth(
+        &deps,
+        &ctx,
+        StartOAuth {
+            kind_key: "facebook_page".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let state = Url::parse(&flow.authorize_url)
+        .unwrap()
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let pending = connector::complete_oauth(
+        &deps,
+        CompleteOAuth {
+            callback: OAuthCallback::Meta,
+            state,
+            code: "synthetic-authorization-code".into(),
+            principal: &principal,
+        },
+    )
+    .await
+    .unwrap();
+    let connected = connector::confirm_assets(
+        &deps,
+        &ctx,
+        ConfirmAssets {
+            pending_id: pending.pending_id,
+            selected: vec!["1234567890".into()],
+        },
+    )
+    .await
+    .unwrap();
+    let connected = connected.into_iter().map(|c| c.capability).collect();
+    (mock, connected)
+}
+
+/// The scopes a Facebook Login grant held reach the connection step of the Page token it yields:
+/// the page is subscribed to its messages whatever the grant, and to its lead-gen submissions
+/// only when the grant holds `leads_retrieval` (Meta refuses the whole subscription otherwise).
+#[tokio::test]
+async fn a_page_connected_through_facebook_login_subscribes_leadgen_only_with_its_permission() {
+    let with_leadgen = format!("{PAGE_MESSAGING_FIELDS},{PAGE_LEADGEN_FIELD}");
+    for (scopes, leadgen, fields) in [
+        (
+            &["pages_messaging", "pages_manage_metadata"][..],
+            false,
+            PAGE_MESSAGING_FIELDS,
+        ),
+        (
+            &[
+                "pages_messaging",
+                "pages_manage_metadata",
+                "leads_retrieval",
+            ][..],
+            true,
+            with_leadgen.as_str(),
+        ),
+    ] {
+        let (mock, connected) = connect_page_granting(scopes).await;
+        let kinds: Vec<&str> = connected.iter().map(|c| c.kind_key.as_str()).collect();
+        assert_eq!(kinds, ["facebook_page", "messenger"], "{scopes:?}");
+        let calls = mock.requests("POST", "/fb/v19.0/1234567890/subscribed_apps");
+        assert_eq!(calls.len(), 2, "one per capability: {scopes:?}");
+        for call in &calls {
+            assert_eq!(call.param("subscribed_fields"), Some(fields), "{scopes:?}");
+            assert_graph_auth(call, "EAAB-page-1234567890");
+        }
+        for c in &connected {
+            let public = &c.connector_public;
+            assert_eq!(public["subscribed"], true, "{public}");
+            assert_eq!(public["leadgen"], leadgen, "{public}");
+            assert!(
+                public["health"].get("on_connected_error").is_none(),
+                "{public}"
+            );
+        }
+        assert!(mock.violations().is_empty(), "invalid Graph authentication");
+    }
 }
 
 #[tokio::test]
