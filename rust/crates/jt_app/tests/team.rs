@@ -1191,9 +1191,9 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
         invite_input("carol@example.com", "rep"),
     )
     .await);
-    assert_exceeds(&e, &["inbox.work"]);
+    assert_exceeds(&e, &["inbox.work", "calls.work"]);
     let e = err(team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "team_lead").await);
-    assert_exceeds(&e, &["inbox.work"]);
+    assert_exceeds(&e, &["inbox.work", "calls.work"]);
     assert_eq!(t.w.membership(bob.membership_id).role_id, t.role_id("rep"));
     assert!(t.w.entries("team.set_role").is_empty());
 
@@ -1369,10 +1369,10 @@ async fn manager_can_change_a_rep() {
     // The unchanged custom lead lacks InboxWork, so cannot change or remove a Rep.
     for role_key in ["team_lead", "rep"] {
         let e = err(team::set_role(&t.w.deps, &lead.ctx, rep.membership_id, role_key).await);
-        assert_exceeds(&e, &["inbox.work"]);
+        assert_exceeds(&e, &["inbox.work", "calls.work"]);
     }
     let e = err(team::remove(&t.w.deps, &lead.ctx, rep.membership_id).await);
-    assert_exceeds(&e, &["inbox.work"]);
+    assert_exceeds(&e, &["inbox.work", "calls.work"]);
     assert_eq!(t.w.membership(rep.membership_id).role_id, t.role_id("rep"));
     team::remove(&t.w.deps, &manager.ctx, rep.membership_id)
         .await
