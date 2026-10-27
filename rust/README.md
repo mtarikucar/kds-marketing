@@ -707,7 +707,9 @@ OAuth yönlendirme adresleri ve Meta için webhook geri çağırma adresi ile do
   ancak Meta'nın incelemesinden (Advanced Access) ve iş doğrulamasından sonra çalışır; inceleme sürecinde
   uygulama yalnız rolü olan hesaplarla (yönetici, geliştirici, test kullanıcısı) denenebilir. İnceleme ve
   iş doğrulaması **sahibin işidir** (tasarım §14); Jeeta'nın kodu bunu beklemez, eksik bir izin yoklamada
-  `permission` olarak görünür.
+  `permission` olarak görünür. `leads_retrieval` verilmemişse (ya da Meta `leadgen` alanını reddederse)
+  bağlanan Sayfa yalnız mesajlaşma alanlarına abone edilir (`connector_public.leadgen = false`): mesajlar
+  gelir, lead formu gönderimleri gelmez.
 - **Webhook yalnız Meta uygulamasıyla açılır.** `/hooks/meta` Meta uygulaması (ve doğrulama anahtarı)
   yapılandırılmadıkça kapalıdır; Instagram Login webhook'ları Instagram uygulamasının sırrıyla da
   imzalanabildiği için kapı iki sırrı da dener, ama yalnız Instagram uygulaması yapılandırılmış bir

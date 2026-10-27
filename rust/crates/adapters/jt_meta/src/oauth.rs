@@ -40,9 +40,19 @@ pub const INSTAGRAM_SCOPES: &[&str] = &[
     "instagram_business_content_publish",
 ];
 
-/// The webhook fields a Facebook Page is subscribed to when it is connected.
-pub const PAGE_SUBSCRIBED_FIELDS: &str =
-    "messages,message_echoes,messaging_postbacks,message_reactions,leadgen";
+/// The webhook fields a Facebook Page is always subscribed to when it is connected: its messages,
+/// the echoes of its own replies, postbacks and reactions (Instagram messages arrive through the
+/// linked page's subscription).
+pub const PAGE_MESSAGING_FIELDS: &str =
+    "messages,message_echoes,messaging_postbacks,message_reactions";
+
+/// The webhook field of a Page's lead-gen submissions, subscribed besides
+/// [`PAGE_MESSAGING_FIELDS`] only when the grant holds `leads_retrieval`: Meta refuses the whole
+/// subscription when one of its fields lacks its permission.
+pub const PAGE_LEADGEN_FIELD: &str = "leadgen";
+
+/// The permission Meta requires of a [`PAGE_LEADGEN_FIELD`] subscription.
+pub(crate) const LEADS_RETRIEVAL: &str = "leads_retrieval";
 
 /// How close to its expiry a long-lived token is renewed.
 const REFRESH_WINDOW: Duration = Duration::days(7);
