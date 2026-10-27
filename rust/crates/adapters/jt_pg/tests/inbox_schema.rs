@@ -9,6 +9,8 @@ const UP: &str = include_str!("../../../../migrations/0006_inbox.up.sql");
 const DOWN: &str = include_str!("../../../../migrations/0006_inbox.down.sql");
 const COMPLIANCE_UP: &str = include_str!("../../../../migrations/0008_inbox_compliance.up.sql");
 const COMPLIANCE_DOWN: &str = include_str!("../../../../migrations/0008_inbox_compliance.down.sql");
+/// The call tables of `0015_voice_calls` reference `journeys`, so they go before the inbox's own.
+const CALLS_DOWN: &str = include_str!("../../../../migrations/0015_voice_calls.down.sql");
 const TABLES: &[&str] = &[
     "people",
     "identities",
@@ -187,6 +189,7 @@ async fn inbox_force_rls_and_composite_foreign_keys() {
 #[tokio::test]
 async fn schema_down_drops_lost_reasons() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(COMPLIANCE_DOWN)
         .execute(&db.pool)
         .await
@@ -221,6 +224,7 @@ async fn schema_down_drops_lost_reasons() {
     assert_eq!(row, ("Edited".into(), false));
     tx.commit().await.unwrap();
     for _ in 0..2 {
+        sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
         sqlx::raw_sql(COMPLIANCE_DOWN)
             .execute(&db.pool)
             .await
@@ -238,6 +242,7 @@ async fn schema_down_drops_lost_reasons() {
 async fn role_backfill_is_idempotent_reversible_and_preserves_custom_grants() {
     let db = TestDb::new().await;
     let (ws, _) = db.seed_workspace("roles").await;
+    sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(COMPLIANCE_DOWN)
         .execute(&db.pool)
         .await
@@ -270,6 +275,7 @@ async fn role_backfill_is_idempotent_reversible_and_preserves_custom_grants() {
     }
     tx.commit().await.unwrap();
     for _ in 0..2 {
+        sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
         sqlx::raw_sql(COMPLIANCE_DOWN)
             .execute(&db.pool)
             .await
@@ -300,6 +306,7 @@ async fn call_lookup_index_round_trip_is_idempotent() {
             .unwrap()
     );
     for _ in 0..2 {
+        sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
         sqlx::raw_sql(COMPLIANCE_DOWN)
             .execute(&db.pool)
             .await
