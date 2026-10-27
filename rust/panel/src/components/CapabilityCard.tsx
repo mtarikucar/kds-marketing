@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import type { BudgetItemOut, CapabilityOut, ConnectorHealth, GroupOut, Policy } from '@/api/types';
 import { Chip } from '@/components/Chip';
 import { ConnectorHealthBadge, ConnectorHealthReason } from '@/components/ConnectorHealthBadge';
@@ -78,6 +79,7 @@ export function CapabilityCard({
   canProbe = false,
   onConnector,
   connectorBusy = false,
+  canCall = false,
 }: {
   item: CapabilityOut;
   budgetItems: readonly BudgetItemOut[];
@@ -91,6 +93,8 @@ export function CapabilityCard({
   canProbe?: boolean;
   onConnector?: (action: ConnectorAction, item: CapabilityOut) => void;
   connectorBusy?: boolean;
+  /** Whoever views it may place calls (`calls.work`): a verified PBX links to the call log. */
+  canCall?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const c = item.capability;
@@ -197,6 +201,13 @@ export function CapabilityCard({
           </div>
         )}
         {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
+        {canCall && c.kind_key === 'netgsm_pbx' && c.status === 'verified' && (
+          <div>
+            <Button asChild size="sm" variant="outline">
+              <Link to="/calls">{t('calls.place.open')}</Link>
+            </Button>
+          </div>
+        )}
         {mutable && (
           <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
             {c.reach !== 'connector' && (

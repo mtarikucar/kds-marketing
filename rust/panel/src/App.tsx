@@ -10,6 +10,8 @@ import { AcceptInvitePage } from '@/pages/AcceptInvitePage';
 import { AgentsPage } from '@/pages/AgentsPage';
 import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { BudgetPage } from '@/pages/BudgetPage';
+import { CallDetail } from '@/pages/CallDetail';
+import { CallsPage } from '@/pages/CallsPage';
 import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { ConnectPage } from '@/pages/ConnectPage';
 import { InboxPage } from '@/pages/InboxPage';
@@ -78,6 +80,8 @@ export const routes: RouteObject[] = [
           { path: 'inbox/merges', element: <InboxMerges /> },
           { path: 'inbox/commissions', element: <InboxCommissions /> },
           { path: 'people', element: <PeoplePage /> },
+          { path: 'calls', element: <CallsPage /> },
+          { path: 'calls/:callId', element: <CallDetail /> },
           { path: 'strategy', element: <StrategyPage /> },
           { path: 'capabilities', element: <CapabilitiesPage /> },
           { path: 'connect', element: <ConnectPage /> },

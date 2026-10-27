@@ -51,7 +51,8 @@
     "budget": "Bütçe",
     "inbox": "Gelen kutusu",
     "studio": "Büyüme stüdyosu",
-    "people": "Kişiler"
+    "people": "Kişiler",
+    "calls": "Aramalar"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -1673,5 +1674,142 @@
     "configuration": "hesabın gönderim ayarları okunamadı; hesabı kontrol edip yeniden bağlayın.",
     "xCredits": "X API kredisi yok; X developer console'dan (console.x.com) kredi yükleyin.",
     "xDuplicate": "X aynı metni ikinci kez yayınlamıyor; metni değiştirip yeniden deneyin."
+  },
+  "calls": {
+    "title": "Aramalar",
+    "description": "Temsilcilerin santralden yaptığı aramalar ve sonuçları. Numaralar maskelenir.",
+    "empty": "Henüz arama yok",
+    "emptyBody": "Bir temsilci aradığında görüşme burada listelenir.",
+    "noPermission": "Aramaları görmek için arama izni gerekiyor.",
+    "columns": {
+      "started": "Başlangıç",
+      "direction": "Yön",
+      "number": "Numara",
+      "purpose": "Amaç",
+      "state": "Durum",
+      "duration": "Süre",
+      "outcome": "Sonuç",
+      "who": "Kim"
+    },
+    "directions": {
+      "inbound": "Gelen",
+      "outbound": "Giden"
+    },
+    "purposes": {
+      "service": "Hizmet",
+      "commercial": "Ticari",
+      "callback": "Geri arama"
+    },
+    "purposeHints": {
+      "service": "Mevcut müşteri: kazanılmış yolculuk, son 180 günde randevu ya da teklif, ya da açık randevu.",
+      "commercial": "Satış ya da tanıtım: İYS'de telefonla arama izni gerekir.",
+      "callback": "Son 7 günde arayan birine dönüş."
+    },
+    "states": {
+      "planned": "Planlandı",
+      "dialing": "Aranıyor",
+      "ringing": "Çalıyor",
+      "live": "Görüşmede",
+      "holding": "Beklemede",
+      "ending": "Kapanıyor",
+      "ended": "Bitti"
+    },
+    "outcomes": {
+      "connected": "Görüşüldü",
+      "no_answer": "Cevap yok",
+      "voicemail": "Sesli mesaj",
+      "refused_by_customer": "Müşteri reddetti",
+      "appointment": "Randevu alındı",
+      "callback_requested": "Geri arama istedi",
+      "other": "Diğer"
+    },
+    "causes": {
+      "caller_hangup": "Karşı taraf kapattı",
+      "agent_ended": "Sonlandırıldı",
+      "agent_timeout": "Ajan yanıt vermedi",
+      "max_duration": "Azami süre doldu",
+      "no_answer": "Cevap yok",
+      "busy": "Meşgul",
+      "failed": "Başarısız",
+      "transferred": "Aktarıldı",
+      "bridge_offline": "Hat bağlı değil",
+      "refused": "Reddedildi",
+      "caller_silent": "Karşı taraf sessiz kaldı"
+    },
+    "modes": {
+      "human": "Temsilci (dahili {{ext}})",
+      "agent": "Ajan"
+    },
+    "refusals": {
+      "workspace_inactive": "çalışma alanı etkin değil",
+      "strategy_required": "onaylı bir strateji gerekiyor",
+      "bridge_offline": "santral bağlı ve doğrulanmış değil",
+      "bridge_busy": "bu dahili şu an başka bir görüşmede",
+      "person_erased": "kişi silinmiş",
+      "person_merged": "kişi başka bir kişiyle birleştirilmiş",
+      "no_phone_identity": "kişinin telefon numarası yok",
+      "suppressed": "kişi telefonla aranmayı engellemiş",
+      "journey_lost": "kişinin yolculuğu kaybedildi olarak kapalı",
+      "consent_missing": "ticari arama için İYS arama izni yok",
+      "no_relationship": "hizmet araması için mevcut bir müşteri ilişkisi yok",
+      "no_recent_inbound": "geri arama için son 7 günde gelen bir arama yok",
+      "outside_work_hours": "santralin çalışma saatleri dışında",
+      "daily_ops_cap": "günlük arama sınırına ulaşıldı",
+      "budget_exhausted": "bütçede bir dakikalık pay kalmadı",
+      "disclosure_missing": "açılış cümlesi asistan bildirimini içermiyor"
+    },
+    "place": {
+      "open": "Arama yap",
+      "title": "Arama yap",
+      "description": "Önce sizin dahiliniz çalar; açınca kişi aranır.",
+      "target": "Kişi ya da telefon",
+      "targetHint": "Kişinin kimliği ya da kişilerden birinin telefon numarası.",
+      "extension": "Dahiliniz",
+      "extensionHint": "Santraldeki dahili numaranız, ör. 101.",
+      "purpose": "Aramanın amacı",
+      "submit": "Ara",
+      "placed": "Arama başlatıldı: dahiliniz çalıyor.",
+      "refused": "Arama yapılamadı: {{reason}}."
+    },
+    "detail": {
+      "title": "Görüşme",
+      "turns": "Görüşme akışı",
+      "noTurns": "Bu görüşmede kayıtlı bir akış yok.",
+      "event": "Hat: {{name}}",
+      "latency": "{{s}} sn",
+      "speakers": {
+        "counterpart": "Karşı taraf",
+        "agent": "Ajan",
+        "script": "Senaryo",
+        "line": "Hat"
+      },
+      "endCause": "Bitiş nedeni",
+      "summary": "Özet",
+      "outcome": "Sonuç",
+      "endTitle": "Görüşmeyi kapat",
+      "end": "Sonucu kaydet",
+      "ended": "Görüşme kapatıldı."
+    },
+    "policy": {
+      "title": "Arama politikası",
+      "saved": "Arama politikası kaydedildi.",
+      "holdingHint": "Her satır bir bekleme cümlesi (en çok 5).",
+      "fields": {
+        "greeting_inbound": "Gelen arama karşılama cümlesi",
+        "voicemail_text": "Sesli mesaj cümlesi",
+        "recording_announcement": "Kayıt duyurusu (KVKK)",
+        "disclosure_sentence": "Asistan bildirimi cümlesi",
+        "disclose_assistant": "Ajanın her açılışta asistan olduğunu söylemesi zorunlu",
+        "holding_default": "Varsayılan bekleme cümleleri",
+        "max_duration_s": "Azami görüşme süresi (sn)",
+        "slow_agent_s": "İlk bekleme cümlesine kadar (sn)",
+        "holding_again_s": "İkinci bekleme cümlesine kadar (sn)",
+        "fallback_after_s": "Yedek cümleye kadar (sn)",
+        "caller_silence_s": "Karşı taraf sessizliği bildirimi (sn)",
+        "caller_silence_close_s": "Karşı taraf sessizliğinde kapanış (sn)",
+        "estimated_minor_per_minute": "Dakika başı tahmini ücret (kuruş)",
+        "handoff_extension": "Aktarma dahilisi"
+      }
+    }
   }
 }

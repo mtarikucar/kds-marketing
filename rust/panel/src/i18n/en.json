@@ -51,7 +51,8 @@
     "budget": "Budget",
     "inbox": "Inbox",
     "studio": "Growth studio",
-    "people": "People"
+    "people": "People",
+    "calls": "Calls"
   },
   "shell": {
     "workspace": "Workspace",
@@ -1673,5 +1674,142 @@
     "configuration": "the account's sending settings could not be read; check and reconnect it.",
     "xCredits": "the X API has no credits; add credits in the X developer console (console.x.com).",
     "xDuplicate": "X does not publish the same text twice; change the text and try again."
+  },
+  "calls": {
+    "title": "Calls",
+    "description": "Calls reps place through the PBX, and how they went. Numbers are masked.",
+    "empty": "No calls yet",
+    "emptyBody": "When a rep calls, the call is listed here.",
+    "noPermission": "Seeing calls needs the calls permission.",
+    "columns": {
+      "started": "Started",
+      "direction": "Direction",
+      "number": "Number",
+      "purpose": "Purpose",
+      "state": "State",
+      "duration": "Duration",
+      "outcome": "Outcome",
+      "who": "Who"
+    },
+    "directions": {
+      "inbound": "Inbound",
+      "outbound": "Outbound"
+    },
+    "purposes": {
+      "service": "Service",
+      "commercial": "Commercial",
+      "callback": "Callback"
+    },
+    "purposeHints": {
+      "service": "An existing customer: a won journey, an appointment or quote in the last 180 days, or an open appointment.",
+      "commercial": "Sales or promotion: needs İYS consent for phone calls.",
+      "callback": "Calling back someone who called in the last 7 days."
+    },
+    "states": {
+      "planned": "Planned",
+      "dialing": "Dialing",
+      "ringing": "Ringing",
+      "live": "In call",
+      "holding": "Holding",
+      "ending": "Ending",
+      "ended": "Ended"
+    },
+    "outcomes": {
+      "connected": "Talked",
+      "no_answer": "No answer",
+      "voicemail": "Voicemail",
+      "refused_by_customer": "Customer refused",
+      "appointment": "Appointment booked",
+      "callback_requested": "Asked for a callback",
+      "other": "Other"
+    },
+    "causes": {
+      "caller_hangup": "The other side hung up",
+      "agent_ended": "Ended",
+      "agent_timeout": "The agent did not answer",
+      "max_duration": "Maximum duration reached",
+      "no_answer": "No answer",
+      "busy": "Busy",
+      "failed": "Failed",
+      "transferred": "Transferred",
+      "bridge_offline": "The line is not connected",
+      "refused": "Refused",
+      "caller_silent": "The other side stayed silent"
+    },
+    "modes": {
+      "human": "Rep (extension {{ext}})",
+      "agent": "Agent"
+    },
+    "refusals": {
+      "workspace_inactive": "the workspace is not active",
+      "strategy_required": "an approved strategy is required",
+      "bridge_offline": "the PBX is not connected and verified",
+      "bridge_busy": "this extension is in another call",
+      "person_erased": "the person was erased",
+      "person_merged": "the person was merged into another",
+      "no_phone_identity": "the person has no phone number",
+      "suppressed": "the person blocked phone contact",
+      "journey_lost": "the person's journey is lost",
+      "consent_missing": "a commercial call needs İYS phone consent",
+      "no_relationship": "a service call needs an existing relationship",
+      "no_recent_inbound": "a callback needs an inbound call in the last 7 days",
+      "outside_work_hours": "outside the PBX's working hours",
+      "daily_ops_cap": "the daily call limit is reached",
+      "budget_exhausted": "the budget has no minute left",
+      "disclosure_missing": "the opening lacks the assistant disclosure"
+    },
+    "place": {
+      "open": "Place a call",
+      "title": "Place a call",
+      "description": "Your extension rings first; once you answer, the person is called.",
+      "target": "Person or phone",
+      "targetHint": "The person's id, or a phone number one of your people holds.",
+      "extension": "Your extension",
+      "extensionHint": "Your extension at the PBX, e.g. 101.",
+      "purpose": "Purpose of the call",
+      "submit": "Call",
+      "placed": "Call started: your extension is ringing.",
+      "refused": "The call could not be placed: {{reason}}."
+    },
+    "detail": {
+      "title": "Call",
+      "turns": "Call flow",
+      "noTurns": "Nothing was recorded on this call's flow.",
+      "event": "Line: {{name}}",
+      "latency": "{{s}} s",
+      "speakers": {
+        "counterpart": "Other side",
+        "agent": "Agent",
+        "script": "Script",
+        "line": "Line"
+      },
+      "endCause": "End cause",
+      "summary": "Summary",
+      "outcome": "Outcome",
+      "endTitle": "Close the call",
+      "end": "Record the outcome",
+      "ended": "The call was closed."
+    },
+    "policy": {
+      "title": "Call policy",
+      "saved": "Call policy saved.",
+      "holdingHint": "One holding phrase per line (at most 5).",
+      "fields": {
+        "greeting_inbound": "Inbound greeting",
+        "voicemail_text": "Voicemail sentence",
+        "recording_announcement": "Recording announcement (KVKK)",
+        "disclosure_sentence": "Assistant disclosure sentence",
+        "disclose_assistant": "The agent must disclose it is an assistant in every opening",
+        "holding_default": "Default holding phrases",
+        "max_duration_s": "Maximum call duration (s)",
+        "slow_agent_s": "Until the first holding phrase (s)",
+        "holding_again_s": "Until the second holding phrase (s)",
+        "fallback_after_s": "Until a fallback line (s)",
+        "caller_silence_s": "Other side's silence reported after (s)",
+        "caller_silence_close_s": "Other side's silence closes after (s)",
+        "estimated_minor_per_minute": "Estimated tariff per minute (minor units)",
+        "handoff_extension": "Transfer extension"
+      }
+    }
   }
 }

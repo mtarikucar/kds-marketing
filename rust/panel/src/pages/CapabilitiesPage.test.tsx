@@ -440,3 +440,35 @@ it('pbx_policy_toggle: saves recording and call mode on the PBX card', async () 
     const other = await cardOf('Atölye Instagram');
     expect(within(other).queryByRole('group', { name: tr.capabilities.pbx.title })).toBeNull();
   });
+
+it('offers a verified PBX\'s "Place a call" only to whoever holds calls.work', async () => {
+  const pbx = {
+    ...smsLine,
+    capability: {
+      ...smsLine.capability,
+      id: '0193a000-0000-7000-8000-0000000000b2',
+      kind_key: 'netgsm_pbx',
+      name: 'Santral',
+      connector_public: { ...smsLine.capability.connector_public, provider: 'netgsm' },
+    },
+  };
+  const caller = {
+    ...repMe,
+    memberships: [
+      { ...repMe.memberships[0], permissions: [...repMe.memberships[0].permissions, 'calls.work' as const] },
+    ],
+  };
+  mockFetch({ ...routes, 'GET /api/auth/me': caller, 'GET /api/capabilities': [...capabilities, smsLine, pbx] });
+  const { unmount } = renderAt('/capabilities');
+  const card = await cardOf('Santral');
+  expect(within(card).getByRole('link', { name: tr.calls.place.open })).toHaveAttribute('href', '/calls');
+  // The SMS line is no PBX.
+  const line = await cardOf('Kampanya hattı');
+  expect(within(line).queryByRole('link', { name: tr.calls.place.open })).toBeNull();
+  unmount();
+
+  mockFetch({ ...routes, 'GET /api/auth/me': repMe, 'GET /api/capabilities': [...capabilities, pbx] });
+  renderAt('/capabilities');
+  const without = await cardOf('Santral');
+  expect(within(without).queryByRole('link', { name: tr.calls.place.open })).toBeNull();
+});

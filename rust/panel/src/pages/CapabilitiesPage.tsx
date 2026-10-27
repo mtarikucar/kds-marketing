@@ -142,6 +142,7 @@ export function CapabilitiesPage() {
   const navigate = useNavigate();
   const canManage = can(session.data, 'capabilities.manage');
   const canProbe = can(session.data, 'workspace.read');
+  const canCall = can(session.data, 'calls.work');
   const [filter, setFilter] = useState<Filter>('all');
   const [probed, setProbed] = useState<{ name: string; out: ProbeOut } | null>(null);
   const [declaring, setDeclaring] = useState(false);
@@ -258,6 +259,7 @@ export function CapabilitiesPage() {
                 canProbe={canProbe}
                 onConnector={onConnector}
                 connectorBusy={probe.isPending || reconnect.isPending}
+                canCall={canCall}
               />
             ))}
           </div>
