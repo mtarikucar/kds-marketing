@@ -206,9 +206,17 @@ function AgentCard({ agent }: { agent: AgentState }) {
         <CardTitle>{t('home.agent.title')}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
-        {agent.overdue ? (
+        {!agent.last_seen_at ? (
+          // Never connected is a setup step, not an incident.
+          <Callout tone="info" title={t('home.agent.neverTitle')}>
+            <p>{t('home.agent.never')}</p>
+            <Link className="mt-1 inline-block text-primary underline" to="/api-keys">
+              {t('home.agent.connectLink')}
+            </Link>
+          </Callout>
+        ) : agent.overdue ? (
           <Callout tone="danger" title={t('home.agent.overdueTitle')}>
-            <p>{agent.last_seen_at ? t('home.agent.overdueBody') : t('home.agent.never')}</p>
+            <p>{t('home.agent.overdueBody')}</p>
             <p className="mt-1">{t('home.agent.schedulerNote')}</p>
           </Callout>
         ) : (

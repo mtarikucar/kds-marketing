@@ -272,14 +272,14 @@
       "hypotheses": "Hipotez sayısı: {{count}}."
     },
     "inactive": {
-      "pending_payment": "Ödeme alındığında çalışma alanınız etkinleşecek.",
+      "pending_payment": "Ödeme onaylanıp etkinleştirme kodu girildiğinde çalışma alanınız açılır.",
       "active": "Çalışma alanınız etkin.",
       "suspended": "Çalışma alanınız askıya alındı. Ayrıntı için bizimle iletişime geçin."
     },
     "agent": {
       "title": "Ajan",
       "lastSeen": "Son görülme",
-      "never": "Henüz hiçbir ajan bağlanmadı.",
+      "never": "Claude gibi bir ajanı bağlamak için bir API anahtarı oluşturun; bağlantı adımları anahtar sayfasında.",
       "interval": "Beklenen yoklama aralığı",
       "editInterval": "Aralığı değiştir",
       "intervalLabel": "Aralık (dakika)",
@@ -287,10 +287,12 @@
       "intervalSaved": "Yoklama aralığı güncellendi.",
       "overdueTitle": "Ajan gecikti",
       "overdueBody": "Ajan beklenen aralık içinde yoklama yapmadı; bekleyen işler bekliyor.",
-      "schedulerNote": "Ajan zamanlayıcısı kiracının sorumluluğudur: Jeeta ajanı uyandırmaz, ajanı düzenli aralıklarla çalıştıracak zamanlamayı siz kurarsınız.",
+      "schedulerNote": "Jeeta ajanı kendisi uyandırmaz: ajanın düzenli aralıklarla çalışmasını siz (ya da ajanın kendi zamanlayıcısı) sağlarsınız.",
       "onTime": "Ajan zamanında yoklama yapıyor.",
       "hours": "{{count}} sa",
-      "minutes": "{{count}} dk"
+      "minutes": "{{count}} dk",
+      "neverTitle": "Henüz ajan bağlanmadı",
+      "connectLink": "Ajanı bağla"
     },
     "pending": {
       "title": "Bekleyen işler",
@@ -395,7 +397,16 @@
       "scopesHint": "Hiçbirini seçmezseniz anahtar sizin tüm izinlerinizi taşır.",
       "submit": "Anahtar oluştur",
       "plaintextTitle": "Yeni anahtarınız",
-      "plaintextWarning": "Bu anahtar yalnızca şimdi gösterilir. Kopyalayıp güvenli bir yerde saklayın; kapatınca bir daha göremezsiniz."
+      "plaintextWarning": "Bu anahtar yalnızca şimdi gösterilir. Kopyalayıp güvenli bir yerde saklayın; kapatınca bir daha göremezsiniz.",
+      "plaintextDescription": "Anahtarı şimdi kopyalayın; aşağıda ajanı bağlama adımları var."
+    },
+    "connect": {
+      "title": "Ajanı bağlama",
+      "url": "MCP adresi",
+      "claudeCode": "Claude Code'da bu komutu çalıştırın:",
+      "command": "Claude Code komutu",
+      "needKey": "Bağlanmak için bir anahtar oluşturun; oluşturunca hazır komut gösterilir.",
+      "otherClients": "Başka MCP istemcileri: bu adres, “streamable HTTP” taşıması ve “Authorization: Bearer <anahtar>” başlığıyla bağlanır. claude.ai bağlayıcıları (OAuth) henüz desteklenmiyor."
     }
   },
   "agents": {
@@ -475,7 +486,7 @@
       "activated": "Etkinleştirildi",
       "revoked": "Geri alındı",
       "pending": "Onay bekliyor",
-      "confirm": "Havale doğrulandı",
+      "confirm": "Havaleyi onayla",
       "code": "Etkinleştirme kodu",
       "reissue": "Kodu yeniden oluştur",
       "revoke": "Etkinleştirmeyi geri al",
@@ -668,7 +679,27 @@
       "noSection": "Bölüm yok",
       "text": "Metin",
       "recorded": "Kayıt eklendi."
-    }
+    },
+    "gaps": {
+      "product": "Kimlik bölümünde ürünü yazın.",
+      "segment": "Kitle bölümüne en az bir segment ekleyin.",
+      "segmentKey": "Kitle: {{n}}. segmentin anahtarı geçersiz ya da başka bir segmentle aynı.",
+      "channel": "Kanallar bölümüne en az bir kanal ekleyin.",
+      "channelUnavailable": "Kanallar: {{n}}. kanal için bağlı hesap yok. Hesabı bağlayın ya da “Herhangi bir kanal” seçin.",
+      "budget": "Bütçe çerçevesini kontrol edin: her şerit için tür, tavan ve para birimi gerekli; ücretli kanallar açıksa ücretli bir şerit de gerekli.",
+      "cadence": "Sıklık: kanal dağılımı yalnızca stratejinin kanallarını içermeli, her kanal bir kez yazılmalı ve paylar toplamı 100 olmalı.",
+      "hypothesis": "En az bir etkin hipotez ekleyin.",
+      "hypothesisField": "{{n}}. hipotez: {{field}} gerekli.",
+      "hypothesisFields": {
+        "title": "başlık",
+        "angle": "açı",
+        "metric": "ölçüt"
+      },
+      "hypothesisSegment": "{{n}}. hipotez: seçilen segment kitlede yok.",
+      "hypothesisChannel": "{{n}}. hipotez: bu kanal için bağlı hesap yok.",
+      "hypothesisDuplicate": "{{n}}. hipotez listede birden fazla kez geçiyor."
+    },
+    "channelHint": "Bağlı hesabı olmayan bir kanalla strateji onaylanamaz. Hesaplar henüz bağlı değilse “Herhangi bir kanal” seçin."
   },
   "capabilities": {
     "title": "Kabiliyetler",
@@ -1544,7 +1575,8 @@
     "agentRecent": "Ajan yakın zamanda bağlandı",
     "agentNeeded": "Ajanın güncel bağlantısı yok. İşlerin ilerlemesi için kendi ajan zamanlayıcınız çalışmalıdır.",
     "agents": "Ajanları görüntüle",
-    "suspendedChecks": "Çalışma alanı askıdayken bu adım denetlenmez."
+    "suspendedChecks": "Çalışma alanı askıdayken bu adım denetlenmez.",
+    "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X ve e-posta hesaplarınızı bağlayabilirsiniz."
   },
   "providerSetup": {
     "title": "Sağlayıcı uygulaması kurulumu",
@@ -1553,5 +1585,11 @@
     "callback": "{{provider}} dönüş adresi",
     "reconnect": "Yeniden bağlantı gerekli",
     "expires": "Erişim bitiş zamanı"
+  },
+  "gates": {
+    "strategyBody": "Bu bölüm, onaylı bir strateji olunca açılır. Stratejiyi ajanınızla ya da strateji sayfasından hazırlayıp onaylayın.",
+    "strategyLink": "Stratejiye git",
+    "inactiveBody": "Bu bölüm, çalışma alanı etkinleşince açılır.",
+    "inactiveLink": "Ödeme ve etkinleştirme"
   }
 }

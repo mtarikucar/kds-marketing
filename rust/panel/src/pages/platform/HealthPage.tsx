@@ -7,6 +7,14 @@ import { QueryState } from '@/components/QueryState';
 import { Button, Input, PageHeader, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
+/** Free disk space as a person reads it (`133 GB`), never a raw byte count. */
+function formatBytes(bytes: number, language: string): string {
+  const units = ['byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const;
+  let value = bytes; let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return new Intl.NumberFormat(language === 'tr' ? 'tr-TR' : 'en-GB', { style: 'unit', unit: units[unit], unitDisplay: 'short', maximumFractionDigits: 1 }).format(value);
+}
+
 export function HealthPage() {
   const {t,i18n}=useTranslation();const health=useQuery({queryKey:['platform','health'],queryFn:getHealth});
   const [operator,setOperator]=useState('');const [password,setPassword]=useState('');const [busy,setBusy]=useState(false);
@@ -23,7 +31,7 @@ export function HealthPage() {
       <dl className="grid gap-4 rounded-lg border border-border bg-surface p-5 sm:grid-cols-3">
         {(['database','files','disk','connectors_state'] as const).map(k=><div key={k}><dt>{t(`platform.health.${k}`)}</dt><dd>{t(`platform.health.${h[k]}`)}</dd></div>)}
         <div><dt>{t('platform.health.boot')}</dt><dd>{t(h.boot_complete?'platform.health.ok':'platform.health.degraded')}</dd></div>
-        <div><dt>{t('platform.health.diskBytes')}</dt><dd>{h.disk_available_bytes??t('platform.health.unknown')}</dd></div>
+        <div><dt>{t('platform.health.diskBytes')}</dt><dd>{h.disk_available_bytes==null?t('platform.health.unknown'):formatBytes(h.disk_available_bytes,i18n.language)}</dd></div>
         <div><dt>{t('platform.health.pool')}</dt><dd>{h.database_pool_idle} / {h.database_pool_size}</dd></div>
         <div><dt>{t('platform.health.observed')}</dt><dd>{date(h.observed_at)}</dd></div>
         <div><dt>{t('platform.health.started')}</dt><dd>{date(h.process_started_at)}</dd></div>

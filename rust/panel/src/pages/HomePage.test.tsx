@@ -34,6 +34,19 @@ describe('HomePage', () => {
     expect(screen.getByRole('button', { name: tr.home.strategy.start })).toBeInTheDocument();
   });
 
+  it('treats a never-connected agent as a setup step, with the way to connect one', async () => {
+    mockFetch({
+      'GET /api/auth/me': me,
+      'GET /api/workspace': workspace,
+      'GET /api/work/pending': { ...pendingOverdue, agent: { last_seen_at: null, interval_minutes: 1440, overdue: true } },
+    });
+    renderAt('/');
+    const note = await screen.findByText(tr.home.agent.neverTitle);
+    expect(note.closest('[role="alert"]')).toBeNull();
+    expect(screen.queryByText(tr.home.agent.overdueTitle)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: tr.home.agent.connectLink })).toHaveAttribute('href', '/api-keys');
+  });
+
   it('warns in red when the agent is overdue, and lists each pending item in its own words', async () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': pendingOverdue });
     renderAt('/');
@@ -189,7 +202,9 @@ describe('HomePage', () => {
     renderAt('/');
     expect(await screen.findByText(tr.home.strategy.draftTitle)).toBeInTheDocument();
     expect(screen.getByText(i18n.t('home.strategy.draftBody', { count: 1 }))).toBeInTheDocument();
-    expect(screen.getByText('the product is required')).toBeInTheDocument();
+    // The panel's own sentence, never the server's English message.
+    expect(screen.getByText(tr.strategy.gaps.product)).toBeInTheDocument();
+    expect(screen.queryByText('the product is required')).not.toBeInTheDocument();
     expect(screen.queryByText(tr.home.agent.overdueTitle)).not.toBeInTheDocument();
     expect(screen.getByText(tr.home.agent.onTime)).toBeInTheDocument();
   });

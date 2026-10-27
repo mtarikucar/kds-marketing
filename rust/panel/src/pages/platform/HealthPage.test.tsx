@@ -6,7 +6,7 @@ const health={ observed_at:'2026-10-24T09:00:00Z', process_started_at:'2026-10-2
 it('console_contains_no_tenant_body_drilldown',async()=>{
   const calls=mockFetch({'GET /api/platform/workspaces':[], 'GET /api/platform/health':health});renderAt('/platform/health');
   expect(await screen.findByRole('heading',{name:'Sistem sağlığı'})).toBeInTheDocument();
-  await screen.findByText('1234');
+  await screen.findByText(/^1,2\s?kB$/);
   expect(document.body.textContent).not.toContain('CANARY');
   expect(screen.getByRole('link',{name:'Ödeme bildirimleri'})).toHaveAttribute('href','/platform/payments');
   for(const link of screen.getAllByRole('link')) expect(link.getAttribute('href')).toMatch(/^\/platform/);
@@ -16,7 +16,7 @@ it('operator reset accepts a target ID and clears the password',async()=>{
   const target='019a1111-1111-7111-8111-111111111111';
   const calls=mockFetch({'GET /api/platform/workspaces':[], 'GET /api/platform/health':health,[`POST /api/platform/operators/${target}/reset-password`]:null});
   const user=userEvent.setup();renderAt('/platform/health');
-  await screen.findByText('1234');
+  await screen.findByText(/^1,2\s?kB$/);
   await user.type(screen.getByLabelText('Operatör kimliği'),target);
   await user.type(screen.getByLabelText('Yeni parola'),'synthetic password');
   await user.click(screen.getByRole('button',{name:'Parolayı sıfırla'}));

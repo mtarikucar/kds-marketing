@@ -272,14 +272,14 @@
       "hypotheses": "Hypotheses: {{count}}."
     },
     "inactive": {
-      "pending_payment": "Your workspace becomes active once payment is received.",
+      "pending_payment": "Your workspace opens once the payment is confirmed and the activation code is entered.",
       "active": "Your workspace is active.",
       "suspended": "Your workspace is suspended. Contact us for details."
     },
     "agent": {
       "title": "Agent",
       "lastSeen": "Last seen",
-      "never": "No agent has connected yet.",
+      "never": "Create an API key to connect an agent such as Claude; the steps are on the keys page.",
       "interval": "Expected check-in interval",
       "editInterval": "Change the interval",
       "intervalLabel": "Interval (minutes)",
@@ -287,10 +287,12 @@
       "intervalSaved": "Check-in interval updated.",
       "overdueTitle": "The agent is overdue",
       "overdueBody": "The agent has not checked in within the expected interval; pending work is waiting.",
-      "schedulerNote": "The agent's scheduler is the tenant's responsibility: Jeeta never wakes the agent; you set up the schedule that runs it at regular intervals.",
+      "schedulerNote": "Jeeta does not wake the agent: you (or the agent's own scheduler) run it at regular intervals.",
       "onTime": "The agent is checking in on time.",
       "hours": "{{count}} h",
-      "minutes": "{{count}} min"
+      "minutes": "{{count}} min",
+      "neverTitle": "No agent connected yet",
+      "connectLink": "Connect an agent"
     },
     "pending": {
       "title": "Pending work",
@@ -395,7 +397,16 @@
       "scopesHint": "If you choose none, the key carries all of your permissions.",
       "submit": "Create key",
       "plaintextTitle": "Your new key",
-      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again."
+      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again.",
+      "plaintextDescription": "Copy the key now; the steps to connect an agent are below."
+    },
+    "connect": {
+      "title": "Connect an agent",
+      "url": "MCP address",
+      "claudeCode": "In Claude Code, run this command:",
+      "command": "Claude Code command",
+      "needKey": "Create a key to connect; the ready-made command appears when you do.",
+      "otherClients": "Other MCP clients connect with this address, the streamable HTTP transport and an “Authorization: Bearer <key>” header. claude.ai connectors (OAuth) are not supported yet."
     }
   },
   "agents": {
@@ -475,7 +486,7 @@
       "activated": "Activated",
       "revoked": "Revoked",
       "pending": "Awaiting confirmation",
-      "confirm": "Transfer confirmed",
+      "confirm": "Confirm transfer",
       "code": "Activation code",
       "reissue": "Reissue code",
       "revoke": "Revoke activation",
@@ -668,7 +679,27 @@
       "noSection": "No section",
       "text": "Text",
       "recorded": "Entry recorded."
-    }
+    },
+    "gaps": {
+      "product": "Name the product in the Identity section.",
+      "segment": "Add at least one segment to the Audience section.",
+      "segmentKey": "Audience: segment {{n}} has an invalid or duplicate key.",
+      "channel": "Add at least one channel to the Channels section.",
+      "channelUnavailable": "Channels: channel {{n}} has no connected account. Connect it or choose “Any channel”.",
+      "budget": "Check the budget frame: every lane needs a kind, cap and currency; paid channels need a paid lane.",
+      "cadence": "Cadence: the channel mix may only use the strategy's channels, each once, with shares summing to 100.",
+      "hypothesis": "Add at least one active hypothesis.",
+      "hypothesisField": "Hypothesis {{n}}: the {{field}} is required.",
+      "hypothesisFields": {
+        "title": "title",
+        "angle": "angle",
+        "metric": "metric"
+      },
+      "hypothesisSegment": "Hypothesis {{n}}: its segment is not in the audience.",
+      "hypothesisChannel": "Hypothesis {{n}}: its channel has no connected account.",
+      "hypothesisDuplicate": "Hypothesis {{n}} is listed more than once."
+    },
+    "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected."
   },
   "capabilities": {
     "title": "Capabilities",
@@ -1544,7 +1575,8 @@
     "agentRecent": "Agent connected recently",
     "agentNeeded": "No recent agent connection. Your own agent scheduler must run for work to proceed.",
     "agents": "View agents",
-    "suspendedChecks": "This step is not checked while the workspace is suspended."
+    "suspendedChecks": "This step is not checked while the workspace is suspended.",
+    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X and email accounts."
   },
   "providerSetup": {
     "title": "Provider application setup",
@@ -1553,5 +1585,11 @@
     "callback": "{{provider}} callback address",
     "reconnect": "Reconnection required",
     "expires": "Access expires at"
+  },
+  "gates": {
+    "strategyBody": "This opens once a strategy is approved. Prepare and approve it with your agent or on the strategy page.",
+    "strategyLink": "Go to strategy",
+    "inactiveBody": "This opens once the workspace is active.",
+    "inactiveLink": "Payment and activation"
   }
 }

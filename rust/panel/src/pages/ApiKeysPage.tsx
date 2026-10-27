@@ -17,6 +17,8 @@ import {
   Button,
   Callout,
   ConfirmDialog,
+  Card,
+  CardContent,
   DataTable,
   Dialog,
   DialogContent,
@@ -85,7 +87,7 @@ function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
       <DialogContent dismissible={created == null}>
         <DialogHeader>
           <DialogTitle>{created ? t('apiKeys.dialog.plaintextTitle') : t('apiKeys.dialog.title')}</DialogTitle>
-          <DialogDescription>{t('apiKeys.dialog.description')}</DialogDescription>
+          <DialogDescription>{created ? t('apiKeys.dialog.plaintextDescription') : t('apiKeys.dialog.description')}</DialogDescription>
         </DialogHeader>
         {created ? (
           <div className="flex flex-col gap-4">
@@ -93,6 +95,7 @@ function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
               {t('apiKeys.dialog.plaintextWarning')}
             </Callout>
             <CopyField label={t('apiKeys.dialog.plaintextTitle')} value={created.plaintext} />
+            <ConnectAgent plaintext={created.plaintext} />
             <DialogFooter>
               <Button onClick={() => close(false)}>{t('common.close')}</Button>
             </DialogFooter>
@@ -123,6 +126,38 @@ function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** This deployment's MCP endpoint: the panel, its API and /mcp share one origin. */
+function mcpUrl(): string {
+  return `${window.location.origin}/mcp`;
+}
+
+/**
+ * How an agent reaches this workspace: the endpoint, and with a fresh key the ready-to-paste
+ * Claude Code command. The plaintext appears only while its one-time dialog is open.
+ */
+export function ConnectAgent({ plaintext }: { plaintext?: string }) {
+  const { t } = useTranslation();
+  const url = mcpUrl();
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <p className="font-medium text-foreground">{t('apiKeys.connect.title')}</p>
+      <CopyField label={t('apiKeys.connect.url')} value={url} />
+      {plaintext ? (
+        <>
+          <p className="text-muted-foreground">{t('apiKeys.connect.claudeCode')}</p>
+          <CopyField
+            label={t('apiKeys.connect.command')}
+            value={`claude mcp add --transport http jeeta ${url} --header "Authorization: Bearer ${plaintext}"`}
+          />
+        </>
+      ) : (
+        <p className="text-muted-foreground">{t('apiKeys.connect.needKey')}</p>
+      )}
+      <p className="text-caption text-muted-foreground">{t('apiKeys.connect.otherClients')}</p>
+    </div>
   );
 }
 
@@ -230,6 +265,11 @@ export function ApiKeysPage() {
           emptyState={<EmptyState title={t('apiKeys.empty')} description={t('apiKeys.emptyBody')} />}
         />
       </QueryState>
+      <Card>
+        <CardContent className="pt-6">
+          <ConnectAgent />
+        </CardContent>
+      </Card>
       {canManage && creating && <CreateKeyDialog key={session.data?.current_workspace} open onOpenChange={setCreating} />}
       <ConfirmDialog
         open={revoking !== null}

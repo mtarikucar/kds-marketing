@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
@@ -266,6 +266,8 @@ it('reconnect_and_expiry_are_visible',async()=>{
   renderAt(`/connect?capability=${PAGE_ID}`);
   expect(await screen.findByText('Yeniden bağlantı gerekli')).toBeInTheDocument();
   expect(screen.getByText('2026-10-24T12:00:00Z')).toBeInTheDocument();
+  // Provider-app setup is operator material, folded away until opened.
+  fireEvent.click(await screen.findByRole('button',{name:new RegExp(tr.providerSetup.title)}));
   expect(await screen.findByDisplayValue('https://public.jeeta.test/jeeta/oauth/callback/meta')).toBeInTheDocument();
   expect(screen.getByDisplayValue('https://public.jeeta.test/jeeta/hooks/meta')).toBeInTheDocument();
 });
