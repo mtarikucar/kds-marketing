@@ -486,7 +486,9 @@ async fn background_publication_times_out_after_the_window() {
 async fn held_consent_and_future_slot_do_not_create_attempts() {
     let (w, c) = world().await;
     w.policy(true, 0).await;
-    assert!(publish_due(&w.d, w.f.ws).await.is_err());
+    // Waiting for its approval is not a failure.
+    assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 0);
+    assert_eq!(sends(&c), 0);
     assert!(w.uow.snapshot().studio.attempts.is_empty());
     w.approve().await;
     c.push_publish(Ok(receipt()));

@@ -16,13 +16,16 @@ use jt_app::{
         },
         studio::*,
     },
-    usecases::studio::{
-        control::{ApprovalInput, approve},
-        measure::measure_due,
-        pieces::{PieceInput, piece_submit},
-        publish::publish_due,
-        tiktok::{MetricsSource, TiktokPostInput, tiktok_metrics, tiktok_post, tiktok_posting},
-        work,
+    usecases::{
+        jobs::Job,
+        studio::{
+            control::{ApprovalInput, approve},
+            measure::measure_due,
+            pieces::{PieceInput, piece_submit},
+            publish::publish_due,
+            tiktok::{MetricsSource, TiktokPostInput, tiktok_metrics, tiktok_post, tiktok_posting},
+            work,
+        },
     },
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
@@ -283,11 +286,7 @@ fn publishes(c: &ScriptedConnector) -> Vec<jt_app::ports::connectors::PublishReq
 async fn a_tiktok_piece_is_never_published_without_its_posting_screen() {
     let t = tiktok_world(vec![mp4(30)]).await;
     // Neither the lane nor the capability asks for approval (the default policy).
-    let e = publish_due(&t.w.d, t.w.f.ws).await.unwrap_err();
-    assert_eq!(
-        e.details["reason"],
-        "the TikTok posting screen is required for this revision"
-    );
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 0);
     assert!(publishes(&t.tt).is_empty());
     assert!(t.w.uow.snapshot().studio.attempts.is_empty());
     // It waits for a human, and says where they post it.
@@ -336,7 +335,7 @@ async fn a_tiktok_piece_is_never_published_without_its_posting_screen() {
         .await
         .unwrap();
     r.commit().await.unwrap();
-    assert!(publish_due(&t.w.d, t.w.f.ws).await.is_err());
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 0);
     assert!(publishes(&t.tt).is_empty());
     assert!(
         work::pending(&t.w.d, &t.w.ctx)
@@ -345,6 +344,75 @@ async fn a_tiktok_piece_is_never_published_without_its_posting_screen() {
             .approvals
             .contains(&ApprovalTarget::Slot(t.slot.id))
     );
+}
+
+/// A due slot waiting for a human to pass its posting screen is not a failure: the publishing
+/// job, run every minute, publishes nothing and reports nothing failed while it waits
+/// (`studio.pending` names what it waits for).
+#[tokio::test]
+async fn a_slot_waiting_for_its_posting_screen_does_not_fail_the_publishing_job() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 0);
+    let report = Job::StudioPublish.run(&t.w.d, FIXED_NOW).await;
+    assert_eq!((report.changed, report.failed), (0, 0));
+    assert!(publishes(&t.tt).is_empty());
+    assert!(t.w.uow.snapshot().studio.attempts.is_empty());
+}
+
+/// Any other refusal still fails the run: the slot's own (checked before its approval), and
+/// another due slot's beside one waiting for its screen.
+#[tokio::test]
+async fn a_refusal_other_than_waiting_for_a_human_still_fails_the_run() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    grant(&t, &["user.info.basic"]).await;
+    let e = publish_due(&t.w.d, t.w.f.ws).await.unwrap_err();
+    assert_eq!(e.details["reason"], "credential_scope_missing");
+    assert_eq!(Job::StudioPublish.run(&t.w.d, FIXED_NOW).await.failed, 1);
+
+    let t = tiktok_world(vec![mp4(30)]).await;
+    // A due X slot whose account was disconnected, beside the TikTok slot waiting for its screen.
+    let x = Slot {
+        id: SlotId::new_v7(),
+        scheduled_at: FIXED_NOW - Duration::minutes(1),
+        state: SlotState::Planned,
+        revision: 0,
+        ..t.w.f.slot.clone()
+    };
+    let mut r = t.w.uow.tenant(t.w.f.ws).await.unwrap();
+    r.studio()
+        .insert_slots("x/organic", vec![x.clone()])
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    piece_submit(
+        &t.w.d,
+        &t.w.ctx,
+        PieceInput {
+            slot_id: x.id,
+            expected_revision: 0,
+            request_key: "x-piece".into(),
+            text: "Bugünün menüsü".into(),
+            media: vec![],
+            adaptations: BTreeMap::new(),
+        },
+    )
+    .await
+    .unwrap();
+    let mut r = t.w.uow.tenant(t.w.f.ws).await.unwrap();
+    let mut cap = r
+        .capabilities()
+        .find(x.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    cap.connector_public["reconnect_required"] = json!(true);
+    r.capabilities().update(cap).await.unwrap();
+    r.commit().await.unwrap();
+    let e = publish_due(&t.w.d, t.w.f.ws).await.unwrap_err();
+    assert_eq!(e.details["reason"], "capability_unavailable");
+    assert_eq!(Job::StudioPublish.run(&t.w.d, FIXED_NOW).await.failed, 1);
+    assert!(publishes(&t.tt).is_empty());
+    assert!(t.w.uow.snapshot().studio.attempts.is_empty());
 }
 
 #[tokio::test]
