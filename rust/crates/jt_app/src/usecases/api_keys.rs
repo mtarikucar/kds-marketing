@@ -44,7 +44,7 @@ pub const NAME_MAX: usize = 64;
 pub const LAST_USED_RESOLUTION: Duration = Duration::seconds(60);
 
 /// The single answer to every bearer key that cannot be used, so it never tells why.
-const INVALID_KEY: &str = "invalid api key";
+pub const INVALID_KEY: &str = "invalid api key";
 const NO_SUCH_KEY: &str = "no such API key";
 
 // ---------------------------------------------------------------------------------------------
@@ -245,6 +245,19 @@ pub async fn revoke(deps: &Deps, ctx: &Ctx, key_id: ApiKeyId) -> Result<(), AppE
         )?)
         .await?;
     repos.commit().await
+}
+
+/// The token of an `Authorization` header's value `Bearer <token>` (the scheme in any case), if it
+/// names a non-empty one: how the MCP endpoint and the voice bridge's routes read their key.
+pub fn bearer_of(authorization: &str) -> Option<&str> {
+    let (scheme, token) = authorization.trim().split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    match token.trim() {
+        "" => None,
+        token => Some(token),
+    }
 }
 
 /// The principal behind a bearer key, at the clock's time.

@@ -30,11 +30,11 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
-/// call tables of `0015_voice_calls`.
-const TABLES_AFTER_ALL: i64 = 71;
+/// call tables of `0015_voice_calls` and the bridge's event notes of `0016_voice_bridge`.
+const TABLES_AFTER_ALL: i64 = 72;
 
-/// Migrations `0001_foundation` through `0015_voice_calls`.
-const MIGRATIONS: i64 = 15;
+/// Migrations `0001_foundation` through `0016_voice_bridge`.
+const MIGRATIONS: i64 = 16;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -173,6 +173,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0016_voice_bridge",
         "0015_voice_calls",
         "0014_social_providers",
         "0013_probe_reason",
@@ -439,6 +440,12 @@ async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
     // Newest first: the call tables reference the inbox tables.
     sqlx::raw_sql(include_str!(
+        "../../../../migrations/0016_voice_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../../migrations/0015_voice_calls.down.sql"
     ))
     .execute(&db.pool)
@@ -560,6 +567,12 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0016_voice_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0015_voice_calls.down.sql"
     ))

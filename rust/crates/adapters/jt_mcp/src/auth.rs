@@ -25,7 +25,7 @@ use crate::McpState;
 use crate::errors::http_error;
 
 /// The answer to every bearer that cannot be used, so it never tells why.
-pub const INVALID_KEY: &str = "invalid api key";
+pub const INVALID_KEY: &str = api_keys::INVALID_KEY;
 
 /// The header naming an MCP session.
 pub const SESSION_HEADER: &str = "mcp-session-id";
@@ -80,17 +80,10 @@ fn session_id(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// The token of an `Authorization: Bearer <token>` header (scheme in any case), if there is a
-/// non-empty one.
+/// non-empty one (`api_keys::bearer_of`, which the voice bridge's routes read their key with too).
 pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.trim().split_once(' ')?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    match token.trim() {
-        "" => None,
-        token => Some(token),
-    }
+    api_keys::bearer_of(value)
 }
 
 #[cfg(test)]

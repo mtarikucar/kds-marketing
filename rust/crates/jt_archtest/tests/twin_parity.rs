@@ -291,6 +291,7 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
             "studio.manage",
             "calls.work",
             "calls.manage",
+            "calls.bridge",
         ])
     );
 

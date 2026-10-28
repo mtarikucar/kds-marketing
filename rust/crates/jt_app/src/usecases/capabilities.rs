@@ -505,7 +505,9 @@ async fn update_with_hosts(
 /// The evidence is checked (`validate_evidence`; gaps are `VALIDATION` with `details.gaps`) and
 /// stored as given, never checked against the world. An unknown id is `NOT_FOUND`; a capability
 /// reached through a connector is `CONFLICT` "connector capabilities are verified by their
-/// probe"; a retired one `CONFLICT` "capability is retired"; then an agent verifying what
+/// probe", a voice bridge `CONFLICT` "a voice bridge is verified by its heartbeat" (its own
+/// registration, `calls.bridge.register`); a retired one `CONFLICT` "capability is retired"; then
+/// an agent verifying what
 /// another connection declared without `capabilities.manage` is `FORBIDDEN` naming it. Writes
 /// `capability.verify` (payload `evidence_refs`: how many references the evidence has; never
 /// its text).
@@ -532,6 +534,11 @@ pub async fn verify(
     if capability.reach == Reach::Connector {
         return Err(AppError::conflict(
             "connector capabilities are verified by their probe",
+        ));
+    }
+    if capability.kind().is_some_and(|k| k.heartbeat().is_some()) {
+        return Err(AppError::conflict(
+            "a voice bridge is verified by its heartbeat",
         ));
     }
     not_retired(&capability)?;

@@ -42,6 +42,10 @@ const EXEMPT_IDS: &[&str] = &[
     "studio.ledger",
     "studio.ledger_export",
     "calls.policy_get",
+    // The voice bridge's line is set up before any strategy.
+    "calls.bridge.register",
+    "calls.bridge.commands",
+    "calls.bridge.events",
 ];
 
 fn may_be_exempt(id: &str) -> bool {

@@ -6,7 +6,10 @@
 //! "agent"`) needs the voice bridge of phase V1 and is refused `bridge_offline` until then.
 //!
 //! Phone numbers never leave unmasked (`jt_calls::mask_e164`): not in outputs, not in ledger
-//! payloads; only `calls.get` shows a human holding `calls.manage` the number itself.
+//! payloads; only `calls.get` shows a human holding `calls.manage` the number itself, and the
+//! voice bridge ([`bridge`]) is handed the number it dials.
+
+pub mod bridge;
 
 use jt_calls::{
     CallDirection, CallId, CallMode, CallOutcome, CallPlan, CallPolicy, CallPurpose, CallSession,
@@ -491,6 +494,11 @@ async fn budget_left(
 // Place
 // ---------------------------------------------------------------------------------------------
 
+/// Whether `ext` is a PBX extension: 1 to 16 digits.
+fn extension_is_valid(ext: &str) -> bool {
+    !ext.is_empty() && ext.len() <= MAX_EXTENSION_DIGITS && ext.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn extension(input: &PlaceInput) -> Result<String, AppError> {
     let ext = input
         .rep_extension
@@ -502,10 +510,7 @@ fn extension(input: &PlaceInput) -> Result<String, AppError> {
                 "a rep's call names the rep's PBX extension",
             )
         })?;
-    if ext.is_empty()
-        || ext.len() > MAX_EXTENSION_DIGITS
-        || !ext.bytes().all(|b| b.is_ascii_digit())
-    {
+    if !extension_is_valid(ext) {
         return Err(invalid("rep_extension", "an extension is 1 to 16 digits"));
     }
     Ok(ext.to_owned())

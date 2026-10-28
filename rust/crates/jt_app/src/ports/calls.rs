@@ -1,6 +1,6 @@
-//! Call sessions, their turn log and the workspace's call policy (spec §9), stored per tenant.
-//! The call records themselves live in `jt_calls` and are re-exported here, as the Studio
-//! records are from `ports::studio`.
+//! Call sessions, their turn log, the commands queued for the voice bridge and the workspace's
+//! call policy (spec §9), stored per tenant. The call records themselves live in `jt_calls` and
+//! are re-exported here, as the Studio records are from `ports::studio`.
 pub use jt_calls::*;
 
 use async_trait::async_trait;
@@ -27,9 +27,21 @@ pub struct CallFilter {
     pub limit: u32,
 }
 
+/// A command queued for the voice bridge, as a poll hands it out: the call it is for, the bridge's
+/// own id of that call when it has one, and what to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedCommand {
+    pub id: CallCommandId,
+    pub call_id: CallId,
+    pub bridge_call_id: Option<String>,
+    pub command: Command,
+}
+
 /// The workspace's calls. A session is stored whole (the domain's encoding) beside the columns
 /// its reads filter on; a turn is appended once and never changed (the person-erasure flow
-/// empties its text).
+/// empties its text). The voice bridge's commands are queued per call and leased to the bridge;
+/// the events it reported are noted by their `(bridge_call_id, bridge_seq)` so each is applied
+/// once.
 #[async_trait]
 pub trait CallRepo: Send + Sync {
     /// Stores a new session. A `session.workspace_id` other than the bundle's is `INTERNAL`; a
@@ -45,6 +57,11 @@ pub trait CallRepo: Send + Sync {
     /// The session holding the PBX's call id `unique_id` (learned from its call events), locked
     /// until the bundle ends.
     async fn lock_by_pbx_id(&mut self, unique_id: &str) -> Result<Option<CallSession>, AppError>;
+    /// The session the voice bridge knows as `bridge_call_id`, locked until the bundle ends.
+    async fn lock_by_bridge_id(
+        &mut self,
+        bridge_call_id: &str,
+    ) -> Result<Option<CallSession>, AppError>;
     /// Writes the session as it now stands. An unknown id is `NOT_FOUND`.
     async fn update(&mut self, session: CallSession, at: OffsetDateTime) -> Result<(), AppError>;
     async fn list(&mut self, filter: CallFilter) -> Result<Vec<CallSession>, AppError>;
@@ -80,6 +97,44 @@ pub trait CallRepo: Send + Sync {
         after_seq: Option<u32>,
         limit: u32,
     ) -> Result<Vec<Turn>, AppError>;
+    /// Queues `commands` for the voice bridge of call `call`, in their order, created at `at`. An
+    /// unknown call is `NOT_FOUND`; a taken command id `CONFLICT`.
+    async fn enqueue_commands(
+        &mut self,
+        call: CallId,
+        commands: Vec<(CallCommandId, Command)>,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
+    /// Leases to the voice bridge `capability` at most `limit` (clamped to `1..=MAX_CALL_PAGE`)
+    /// of the commands of its calls that are not acknowledged and were never taken, or were last
+    /// taken before `stale_before`: oldest first (by creation, then id), each marked taken at
+    /// `now`. A command another bundle is leasing at that moment is passed over.
+    async fn take_commands(
+        &mut self,
+        capability: CapabilityId,
+        now: OffsetDateTime,
+        stale_before: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<QueuedCommand>, AppError>;
+    /// Marks command `id`, of one of the voice bridge `capability`'s calls, acknowledged at `at`;
+    /// `false` when there is no such command or it was acknowledged already.
+    async fn ack_command(
+        &mut self,
+        capability: CapabilityId,
+        id: CallCommandId,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError>;
+    /// Notes that the voice bridge `capability` reported event `bridge_seq` (of `kind`) of its call
+    /// `bridge_call_id`, received at `at`; `false` when that event was noted before, so it was
+    /// applied already.
+    async fn note_bridge_event(
+        &mut self,
+        capability: CapabilityId,
+        bridge_call_id: &str,
+        bridge_seq: u32,
+        kind: &str,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError>;
     /// The workspace's call policy; the defaults while none is stored. Serializes policy
     /// read/modify/write transactions like `WorkspacePolicyRepo::get`.
     async fn policy(&mut self) -> Result<CallPolicy, AppError>;

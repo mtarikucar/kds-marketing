@@ -4,7 +4,8 @@
 //! [`router`] serves:
 //! - `/api/*`: the JSON API of [`ROUTES`]. Users sign in with the `jt_session` cookie
 //!   ([`session`]); the platform console's `/api/platform/*` routes take the operator's separate
-//!   `jt_platform` cookie ([`platform_session`]). Every mutating request must carry
+//!   `jt_platform` cookie ([`platform_session`]), and the voice bridge's `/api/voice/bridge/*`
+//!   routes its bearer API key, never a cookie ([`bearer`]). Every mutating request must carry
 //!   `X-Requested-With: jeeta-panel` ([`csrf`]), checked before authentication and body
 //!   parsing. Each route is then wrapped in the gate of its catalog use case ([`gate`]), which
 //!   runs before the handler whatever the handler extracts. Errors, including bad bodies,
@@ -17,6 +18,7 @@
 //! Every response carries the security headers of [`headers`] (`nosniff`, `no-referrer`,
 //! `frame-ancestors 'none'`).
 
+pub mod bearer;
 pub mod csrf;
 pub mod error;
 pub mod gate;

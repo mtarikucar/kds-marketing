@@ -365,6 +365,12 @@ pub static CATALOG: &[UseCase] = &[
     twin("calls.get", GateMode::Gated, "jeeta.calls.get", ("GET", "/api/calls/{call_id}"), Read),
     twin("calls.list", GateMode::Gated, "jeeta.calls.list", ("GET", "/api/calls"), Read),
     twin("calls.end", GateMode::Gated, "jeeta.calls.end", ("POST", "/api/calls/{call_id}/end"), Write),
+    // The voice bridge's own surface (voice V1): served under /api/voice/bridge/* to the bridge's
+    // API key alone (`calls.bridge`, nothing else), never to a panel session and never as an MCP
+    // tool; exempt from the strategy gate, since the line is set up before any strategy.
+    panel_only("calls.bridge.register", Exempt, ("POST", "/api/voice/bridge/register"), Write),
+    panel_only("calls.bridge.commands", Exempt, ("GET", "/api/voice/bridge/commands"), Read),
+    panel_only("calls.bridge.events", Exempt, ("POST", "/api/voice/bridge/events"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

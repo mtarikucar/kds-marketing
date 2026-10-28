@@ -17,7 +17,7 @@ use jt_testkit::panel::{
 };
 use serde_json::{Value, json};
 
-const ALL_PERMISSIONS: [&str; 12] = [
+const ALL_PERMISSIONS: [&str; 13] = [
     "workspace.read",
     "team.manage",
     "api_keys.manage",
@@ -30,6 +30,7 @@ const ALL_PERMISSIONS: [&str; 12] = [
     "studio.manage",
     "calls.work",
     "calls.manage",
+    "calls.bridge",
 ];
 
 fn register_body(email: &str, workspace_name: &str) -> Value {

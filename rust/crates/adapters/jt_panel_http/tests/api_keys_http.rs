@@ -217,6 +217,7 @@ async fn create_refuses_bad_input_with_structured_errors() {
             "studio.manage",
             "calls.work",
             "calls.manage",
+            "calls.bridge",
         ])
     );
 }
