@@ -1,0 +1,19 @@
+[package]
+name = "jt_device_protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+jt_devices.workspace = true
+serde.workspace = true
+uuid.workspace = true
+time.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

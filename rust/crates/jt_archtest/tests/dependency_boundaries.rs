@@ -40,6 +40,8 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     ("jt_calls", &["jt_capability", "jt_inbox"]),
     // Device commands are a platform-neutral vocabulary: nothing beyond the shared allowlist.
     ("jt_devices", &[]),
+    // The wire between the server and a device bridge speaks the device vocabulary.
+    ("jt_device_protocol", &["jt_devices"]),
 ];
 
 #[test]
@@ -69,6 +71,27 @@ fn devices_depend_on_no_workspace_crate() {
         deps.contains("serde"),
         "jt_devices lost its serde dependency"
     );
+}
+
+/// The device wire protocol is compiled into the bridge program, which also builds on a machine
+/// without the server, so it names `jt_devices` and plain serialisation, id, time and error
+/// crates, and no other workspace crate: not even the two foundational domain crates the shared
+/// allowlist would let through. `serde_json` is a dev-dependency only, so it is not listed.
+#[test]
+fn device_protocol_depends_only_on_devices_and_plain_crates() {
+    let deps = direct_deps("jt_device_protocol");
+    for d in &deps {
+        assert!(
+            ["jt_devices", "serde", "time", "uuid", "thiserror"].contains(&d.as_str()),
+            "jt_device_protocol depends on {d}, which is neither jt_devices nor a plain serialisation, id, time or error crate"
+        );
+    }
+    for needed in ["jt_devices", "serde", "time", "uuid"] {
+        assert!(
+            deps.contains(needed),
+            "jt_device_protocol lost its {needed} dependency"
+        );
+    }
 }
 
 /// Exact dependency sets: connector, inbox and studio use capability types; only connector
@@ -194,6 +217,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_studio",
         "jt_calls",
         "jt_devices",
+        "jt_device_protocol",
         "jt_app",
         "jt_panel_http",
         "jt_mcp",
