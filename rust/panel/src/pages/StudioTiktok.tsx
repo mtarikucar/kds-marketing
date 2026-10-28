@@ -257,14 +257,21 @@ function when(slot: api.Slot, language: string): string {
 
 /**
  * The status line of the slot's latest publish attempt, and the post's link once it is live; a
- * draft's in its own words (sent to the creator's TikTok drafts, never a post here).
+ * draft's in its own words (sent to the creator's TikTok drafts, never a post here). Before any
+ * attempt, a slot whose time has passed (`due`) no longer waits for it: the publisher's next run
+ * (`studio_publish`, every minute by default) picks it up.
  */
 function statusOf(
   t: TFunction,
   attempts: api.PublishAttempt[],
   draft = false,
-): { text: string; url: string | null; active: boolean } {
+  due = false,
+): { text: string; url: string | null; active: boolean; failed?: true } {
   const last = attempts[attempts.length - 1];
+  if (!last && due) {
+    const text = draft ? t('studio.tiktok.draftStatus.due') : t('studio.tiktok.status.due');
+    return { text, url: null, active: true };
+  }
   if (!last) return { text: t('studio.tiktok.status.waiting'), url: null, active: false };
   const evidence = typeof last.outcome?.evidence === 'object' ? last.outcome.evidence : null;
   if (last.state === 'succeeded') {
@@ -283,13 +290,14 @@ function statusOf(
     return { text, url: null, active: true };
   }
   const reason = last.failure_reason ? failureText(t, last.failure_reason) : t('studio.failed');
-  return { text: t('studio.tiktok.status.failed', { reason }), url: null, active: false };
+  return { text: t('studio.tiktok.status.failed', { reason }), url: null, active: false, failed: true };
 }
 
 /**
  * A TikTok slot posted from its screen: when it goes out, that TikTok takes minutes to process
  * it (or, for a draft, that its inbox notification finishes it), and its status, read again
- * while TikTok is still working on it.
+ * while it is being sent and TikTok is still working on it. A failed post says why, not that
+ * it is processed.
  */
 export function TiktokPostStatus({ slot }: { slot: api.Slot }) {
   const { t, i18n } = useTranslation();
@@ -300,22 +308,28 @@ export function TiktokPostStatus({ slot }: { slot: api.Slot }) {
     queryFn: () => api.tiktokMetrics(slot.id),
   });
   const draft = sent.data?.draft ?? false;
+  // Read at each render and each refetch: the time passes while the screen is open.
+  const due = () => api.instant(slot.scheduled_at).getTime() <= Date.now();
   const detail = useQuery({
     queryKey: [...key, 'slot', slot.id],
     queryFn: () => api.slotGet(slot.id),
     refetchInterval: (query) =>
-      query.state.data && statusOf(t, query.state.data.attempts).active ? 15_000 : false,
+      query.state.data && statusOf(t, query.state.data.attempts, draft, due()).active
+        ? 15_000
+        : false,
   });
-  const status = detail.data ? statusOf(t, detail.data.attempts, draft) : null;
+  const status = detail.data ? statusOf(t, detail.data.attempts, draft, due()) : null;
   const time = when(slot, i18n.language);
   return (
     <div className="space-y-1 rounded-md border border-border bg-surface-muted p-3 text-sm">
       {!detail.data?.attempts.length && (
         <p>{draft ? t('studio.tiktok.approvedDraft', { time }) : t('studio.tiktok.approved', { time })}</p>
       )}
-      <p className="text-muted-foreground">
-        {draft ? t('studio.tiktok.draftSent') : t('studio.tiktok.processing')}
-      </p>
+      {!status?.failed && (
+        <p className="text-muted-foreground">
+          {draft ? t('studio.tiktok.draftSent') : t('studio.tiktok.processing')}
+        </p>
+      )}
       {status && (
         <p role="status" className="font-medium">
           {status.text}

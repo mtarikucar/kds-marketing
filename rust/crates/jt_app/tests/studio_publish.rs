@@ -1,7 +1,11 @@
 #[path = "support/studio.rs"]
 mod support;
 use jt_app::{
-    ports::{UnitOfWork, connectors::PublishReceipt, studio::PublishOutcome},
+    ports::{
+        UnitOfWork,
+        connectors::PublishReceipt,
+        studio::{ApprovalTarget, PublishOutcome},
+    },
     usecases::studio::{publish::*, work},
 };
 use jt_connector::{ConnectorError, Provider};
@@ -206,6 +210,69 @@ async fn no_id_unknown_stays_unknown_with_work_item() {
             .iter()
             .any(|b| b.next_action.as_deref() == Some("review_publication_duplicate_risk"))
     );
+}
+#[tokio::test]
+async fn a_retired_slot_carries_no_publish_failure_blocker() {
+    let (w, c) = world().await;
+    let slot = ApprovalTarget::Slot(w.f.slot.id);
+    c.push_publish(Err(ConnectorError::auth("expired")));
+    publish_due(&w.d, w.f.ws).await.unwrap();
+    let p = work::pending(&w.d, &w.ctx).await.unwrap();
+    assert!(
+        p.blockers
+            .iter()
+            .any(|b| b.target == slot && b.reason == "publish_auth")
+    );
+    work::slot_cancel(
+        &w.d,
+        &w.ctx,
+        work::CancelSlotInput {
+            slot_id: w.f.slot.id,
+            expected_revision: 1,
+            reason: "Plan değişti".into(),
+        },
+    )
+    .await
+    .unwrap();
+    // Cancelled, it is never sent: its failure is history in its detail, not work.
+    let p = work::pending(&w.d, &w.ctx).await.unwrap();
+    assert!(p.blockers.iter().all(|b| b.target != slot));
+    let out = work::slot_get(&w.d, &w.ctx, w.f.slot.id).await.unwrap();
+    assert_eq!(out.slot.state, SlotState::Retired);
+    assert_eq!(out.attempts.len(), 1);
+}
+#[tokio::test]
+async fn a_slot_already_sent_is_not_offered_for_approval_again() {
+    let (w, c) = world().await;
+    let slot = ApprovalTarget::Slot(w.f.slot.id);
+    c.push_publish(Err(ConnectorError::permanent("HTTP 402 CreditsDepleted")));
+    publish_due(&w.d, w.f.ws).await.unwrap();
+    w.policy(true, 0).await;
+    // The content supplied again is a new revision, but no revision of a sent slot is sent.
+    let mut piece = w.f.piece.clone();
+    piece.id = jt_studio::PieceId::new_v7();
+    piece.revision = 2;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio()
+        .save_piece(w.f.slot.id, 1, piece, "again")
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let p = work::pending(&w.d, &w.ctx).await.unwrap();
+    assert!(!p.approvals.contains(&slot));
+    assert!(
+        p.blockers
+            .iter()
+            .all(|b| b.target != slot || b.reason != "human_approval_required")
+    );
+    // What stops it stays in view: its failure.
+    assert!(
+        p.blockers
+            .iter()
+            .any(|b| b.target == slot && b.reason == "publish_permanent")
+    );
+    assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 0);
+    assert_eq!(sends(&c), 1);
 }
 #[tokio::test]
 async fn provider_io_holds_no_tenant_row_locks() {
@@ -693,6 +760,13 @@ async fn broken_media_does_not_starve_healthy_slots() {
                     .unwrap()
                     .state,
                 SlotState::Ready
+            );
+            // Retired by its broken media, it is never sent: no failure stays in Today.
+            let p = work::pending(&w.d, &w.ctx).await.unwrap();
+            assert!(
+                p.blockers
+                    .iter()
+                    .all(|b| b.target != ApprovalTarget::Slot(w.f.slot.id))
             );
         }
         assert!(

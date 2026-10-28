@@ -1558,6 +1558,7 @@
     "minorUnits": "minor units",
     "publishFailed": "Not published: {{reason}}",
     "publishUncertain": "Publication is uncertain; do not resend ({{reason}}).",
+    "notResent": "Jeeta does not send this post again. Cancel it to clear it from Today.",
     "budgetState": {
       "queued": "Queued",
       "sending": "Sending",
@@ -1621,6 +1622,7 @@
       "approved": "Posted from this screen: it is sent to TikTok at {{time}}, or right away once that time has passed.",
       "status": {
         "waiting": "Post status: waiting for its scheduled time",
+        "due": "Post status: its scheduled time has passed; it is being sent to TikTok…",
         "sending": "Post status: sending to TikTok…",
         "processing": "Post status: TikTok is processing the post…",
         "published": "Post status: published on TikTok",
@@ -1671,6 +1673,7 @@
       "draftSent": "Sent: once TikTok has processed it, a notification in your TikTok inbox lets you finish editing and post it.",
       "approvedDraft": "Approved on this screen: it is sent to your TikTok drafts at {{time}}, or right away once that time has passed.",
       "draftStatus": {
+        "due": "Post status: its scheduled time has passed; it is being sent to your TikTok drafts…",
         "sending": "Post status: sending to your TikTok drafts…",
         "processing": "Post status: TikTok is processing the draft…",
         "sent": "Post status: sent to your TikTok drafts"

@@ -1558,6 +1558,7 @@
     "minorUnits": "alt birim",
     "publishFailed": "Yayınlanamadı: {{reason}}",
     "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}}).",
+    "notResent": "Jeeta bu paylaşımı yeniden göndermez. Bugün'den kaldırmak için iptal edin.",
     "budgetState": {
       "queued": "Sırada",
       "sending": "Gönderiliyor",
@@ -1621,6 +1622,7 @@
       "approved": "Bu ekrandan paylaşıldı: {{time}} saatinde, o saat geçtiyse hemen TikTok'a gönderilir.",
       "status": {
         "waiting": "Paylaşım durumu: planlanan saati bekliyor",
+        "due": "Paylaşım durumu: planlanan saat geçti; TikTok'a gönderiliyor…",
         "sending": "Paylaşım durumu: TikTok'a gönderiliyor…",
         "processing": "Paylaşım durumu: TikTok paylaşımı işliyor…",
         "published": "Paylaşım durumu: TikTok'ta yayınlandı",
@@ -1671,6 +1673,7 @@
       "draftSent": "Gönderildi: TikTok işledikten sonra TikTok gelen kutunuzdaki bir bildirimle düzenlemeyi bitirip paylaşabilirsiniz.",
       "approvedDraft": "Bu ekrandan onaylandı: {{time}} saatinde, o saat geçtiyse hemen TikTok taslaklarınıza gönderilir.",
       "draftStatus": {
+        "due": "Paylaşım durumu: planlanan saat geçti; TikTok taslaklarınıza gönderiliyor…",
         "sending": "Paylaşım durumu: TikTok taslaklarınıza gönderiliyor…",
         "processing": "Paylaşım durumu: TikTok taslağı işliyor…",
         "sent": "Paylaşım durumu: TikTok taslaklarınıza gönderildi"
