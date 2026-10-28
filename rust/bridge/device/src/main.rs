@@ -2,7 +2,11 @@
 //!
 //! `CONFIG` is the configuration file; by default `jeeta-device-bridge.toml` next to the program.
 //! The log goes to the console; `JEETA_DEVICE_BRIDGE_LOG` sets its filter (default `info`, e.g.
-//! `debug`). Ctrl+C stops the bridge.
+//! `debug`). A panic is logged by where it happened, never by its message.
+//!
+//! The bridge stops on Ctrl+C, and also on Ctrl+Break, the console window being closed and the
+//! user logging off or the system shutting down (Windows), or on `SIGTERM` (Unix). It exits with
+//! a failure status when one of its tasks ended on its own.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -10,7 +14,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jeeta_device_bridge::config::FILE_NAME;
-use jeeta_device_bridge::{AttachedPhone, Config, DriverError, PhoneRegistry, Timing, run};
+use jeeta_device_bridge::{
+    AttachedPhone, Config, DriverError, PhoneRegistry, Timing, install_panic_hook, run,
+};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -42,6 +48,86 @@ fn config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(FILE_NAME))
 }
 
+/// Completes when a signal not to wait for has none.
+async fn never() {
+    std::future::pending::<()>().await;
+}
+
+/// Completes on the first signal to stop.
+#[cfg(windows)]
+async fn stop_signal() {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_shutdown};
+    let c = async {
+        match ctrl_c() {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => never().await,
+        }
+    };
+    let pause = async {
+        match ctrl_break() {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => never().await,
+        }
+    };
+    let close = async {
+        match ctrl_close() {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => never().await,
+        }
+    };
+    let shutdown = async {
+        match ctrl_shutdown() {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => never().await,
+        }
+    };
+    tokio::select! {
+        () = c => info!("Ctrl+C: the bridge stops"),
+        () = pause => info!("Ctrl+Break: the bridge stops"),
+        () = close => info!("the console is closing: the bridge stops"),
+        () = shutdown => info!("the system is shutting down: the bridge stops"),
+    }
+}
+
+/// Completes on the first signal to stop.
+#[cfg(unix)]
+async fn stop_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let interrupt = async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            never().await;
+        }
+    };
+    let terminate = async {
+        match signal(SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => never().await,
+        }
+    };
+    tokio::select! {
+        () = interrupt => info!("interrupted: the bridge stops"),
+        () = terminate => info!("SIGTERM: the bridge stops"),
+    }
+}
+
+/// Completes on Ctrl+C.
+#[cfg(not(any(windows, unix)))]
+async fn stop_signal() {
+    if tokio::signal::ctrl_c().await.is_err() {
+        never().await;
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let filter = EnvFilter::try_from_env(LOG_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
@@ -52,6 +138,7 @@ async fn main() -> ExitCode {
     if tracing::subscriber::set_global_default(subscriber).is_err() {
         eprintln!("jeeta-device-bridge: the log could not be set up");
     }
+    install_panic_hook();
 
     let path = config_path();
     let config = match Config::load(&path) {
@@ -63,21 +150,22 @@ async fn main() -> ExitCode {
     };
     info!(
         version = env!("CARGO_PKG_VERSION"),
-        bridge_id = %config.bridge_id,
-        server = %config.base_url,
-        adb = %config.adb.display(),
+        bridge_id = %config.bridge_id(),
+        server = %config.base_url(),
+        adb = %config.adb().display(),
         "jeeta-device-bridge starting"
     );
-    let stop = async {
-        // Without a Ctrl+C handler, run until the process is ended.
-        if tokio::signal::ctrl_c().await.is_err() {
-            std::future::pending::<()>().await;
-        }
-    };
-    match run(&config, Arc::new(NoPhonesYet), Timing::default(), stop).await {
+    match run(
+        &config,
+        Arc::new(NoPhonesYet),
+        Timing::default(),
+        stop_signal(),
+    )
+    .await
+    {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            error!(%error, "the bridge could not start");
+            error!(%error, "the bridge stopped on a failure");
             ExitCode::FAILURE
         }
     }

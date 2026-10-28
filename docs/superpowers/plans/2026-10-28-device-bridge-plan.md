@@ -521,38 +521,67 @@ command by its id with `FailReason::UnsupportedByBridge` (the message is the fai
 log `dropped` at `warn` level when it is not zero (a count only: no body, no command). An `Err` is a failed poll, like
 a transport error: log it (the field name only), back off and poll again — it must not read as an idle poll.
 
-Every `POST` (register, results, files) carries `X-Requested-With: jeeta-panel` (Contracts); the fake Jeeta refuses
-a `POST` without it with a `403`, as `jt_panel_http` does.
-Results: a post is retried with backoff on a transport error or a 5xx (and 408/429) only. **A 422 is final**: the
-loop never sends the same batch again as it is; it splits it in halves (the first half first) to isolate the bad
-result, and a single result that still gets 422 is dropped with a `warn` log of its command id and the field name
-(the 422 body's `details.field`) only. A 413 is split the same way. Any other 4xx drops the batch (`error` log).
-At shutdown the results not yet posted get 5 s (`Timing::shutdown_grace`); a command still running is cut off. Before batching, each result is checked with `ResultsIn::validate` and its
-serialized size; one the server would have to refuse is replaced by a `bridge_error` failure of its command. A batch
-holds at most `MAX_RESULTS`, at most `MAX_RESULTS_BODY_BYTES` serialized, and a command once.
-Register: a `RefusedPhone` is logged at `warn` with its serial and reason (when the refusal is new); a phone refused
-with `PHONE_RETIRED` is not listed again until the bridge restarts. Only the configured `serials`, each once, at most
-`MAX_PHONES`. The loop polls only while a phone is registered, and at least `Timing::idle_poll_floor` (1 s) apart
-when a poll brings nothing new, so a server that answers at once (`max_wait_s = 0`) is never polled in a busy loop.
-Each command runs in a task of its own: a driver panic fails that command as `bridge_error` (logged at `error` with the
-serial and command id, never the panic's message) and the phone's worker goes on. A worker found stopped all the same
-(its `send` fails) is logged at `error` (serial, command id), the command is failed as `bridge_error`, and the worker is
-started again. `push_file`/`pull_file` are bounded by `Timing::transfer_timeout` (30 min), every other command by
-`Timing::command_timeout` (120 s). A non-string `key` in the file is refused by name only (a type error would quote
-it). `main.rs` installs the tracing subscriber without bridging the `log` records of the HTTP client.
+As built (after the spec and quality reviews):
+- **Requests.** Every `POST` (register, results, files) carries `X-Requested-With: jeeta-panel` (Contracts). The
+  server's answers are decoded strictly, as the Contracts say (after register, each side sends only what protocol 1
+  defines): an answer that does not decode is logged by the field the decoder names only (`unknown field`,
+  `missing field`) and tried again after a growing pause.
+- **Register.** Every `heartbeat_s`, with only the configured `serials`, each once, at most `MAX_PHONES`. The
+  registry's `attached()` and each `report()` run in tasks of their own within `Timing::report_timeout` (10 s). A
+  listing that fails, panics or times out is replaced by the last good one; a phone whose report does is listed with
+  its last good report for up to `STALE_REPORT_HEARTBEATS` (3) registers, then left out. A report's `serial` is the
+  registry's and its `platform` is `PhoneDriver::platform()`. A `RefusedPhone` for a phone this bridge listed is
+  logged at `warn` (serial and reason, control characters blanked, when the refusal is new); one with
+  `PHONE_RETIRED` is not listed again until the bridge restarts.
+- **Poll.** Only while a phone is registered, and at least `Timing::idle_poll_floor` (1 s) apart when a poll brings
+  nothing new, so a server that answers at once (`max_wait_s = 0`) is never polled in a busy loop.
+- **Run.** One worker per phone. A command that waited in its phone's queue longer than `Timing::stale_after`
+  (`DEFAULT_EXPIRES_IN`, on the monotonic clock from its arrival) is failed as `timeout` unrun. Each command runs in a
+  task of its own, bounded by `Timing::command_timeout` (120 s), or `Timing::transfer_timeout` (30 min) for
+  `push_file`/`pull_file`. A command that times out is cut off: its task is aborted (the driver's future dropped) and
+  awaited, `STOP_WAIT` (5 s) and then without a bound once that is logged, so two commands never run on one phone;
+  then the worker awaits `PhoneDriver::recover()` (bounded by `RECOVER_TIMEOUT`, 30 s) before the next command. A
+  driver panic fails its command as `bridge_error` (logged at `error` with serial and command id, never the panic's
+  message), the phone recovers and the worker goes on. A worker found stopped all the same (its `send` fails) is
+  logged at `error`, the command is failed as `bridge_error` and the worker started again; the commands lost with it
+  are never answered and only expire.
+- **Post.** Batches of at most `MAX_RESULTS`, at most `MAX_RESULTS_BODY_BYTES` serialized, a command once; each
+  result first checked with `ResultsIn::validate` and its size, one the server would refuse replaced by a
+  `bridge_error` failure. A transport error, 5xx, 408 or 429 is retried with backoff, at most
+  `Timing::post_attempts` (`MAX_POST_ATTEMPTS`, 10: about four minutes with the default pauses) times in a row; then
+  the batch is split as on a 422, and a lone result that keeps failing is dropped with a `warn` of its command id.
+  **A 422 is final**: the batch is never sent again as it is but split in halves (the first half first) until the
+  refused result stands alone, which is dropped with a `warn` of its command id and the 422's `details.field`. A 413
+  is split the same way; any other 4xx drops the batch (`error` log).
+- **Stop.** `run` waits for the shutdown future and its three tasks together: a task that ends on its own is logged
+  at `error`, the bridge stops and `run` answers `RunError::TaskEnded` (the program exits non-zero). Stopping, polling
+  ends, a running command is cut off (and its phone recovers) and failed as `bridge_error`, queued commands stay
+  unanswered (the server hands them out again), and the results made get `Timing::shutdown_grace` (5 s, shared with
+  the cutting off) to be posted; a post in backoff is tried again at once. `main` stops on Ctrl+C, and on Ctrl+Break,
+  console close and shutdown on Windows, `SIGTERM` on Unix.
+- **Files.** A download goes to `https` only (plain `http` to this computer), follows up to 5 redirects, never from
+  `https` down to `http`, takes at most `MAX_DOWNLOAD_BYTES` (256 MiB, checked against the announced length and as it
+  arrives) and removes its file when it fails or is dropped part way. `FileTransfer::upload(bytes, ContentType)` and
+  `upload_file(&Path, ContentType)`, which streams (reqwest's `stream` feature); `ContentType` is `Png` or
+  `OctetStream`, the two the files route takes.
+- **Logging.** `main` installs the subscriber without bridging the HTTP client's `log` records, and a panic hook
+  (`install_panic_hook`) that logs where a panic happened, never its message.
 
-As built: a lib target beside the bin (`src/lib.rs`, so `tests/loop.rs` reaches the loop) and `src/driver/mod.rs`
-with the seams D2-T2 fills: `PhoneDriver` and `DriverError` as below, `FileTransfer` (`upload(bytes, content_type) ->
-Uuid`, `download(dest) -> u64`: one per command, holding that command's signed `download_url`, so a driver never sees
-it; the download sends no key) and `PhoneRegistry::attached() -> Vec<AttachedPhone { serial, driver }>`, listed
-before every register. Extra deps: `serde_json`, `uuid`, `async-trait`. Config also takes an optional `bridge_id`
-(default `COMPUTERNAME`/`HOSTNAME`); `base_url` is https (plain http only to this computer); the env key wins over the
-file's; an unknown setting is refused; no error repeats the key. `run(&Config, Arc<dyn PhoneRegistry>, Timing,
-shutdown)`: `Timing` holds the intervals (tests shorten them), a per-command timeout fails a command as `timeout`.
-`main.rs` wires a registry that reports no phones (`TODO(D2-T2)`). The archtest rule
+Seams D2-T2 fills (`src/driver/mod.rs`): `PhoneDriver` (below, with `recover`), `DriverError`, `FileTransfer` (one
+per command, holding that command's signed `download_url`, so a driver never sees it; the download sends no key) and
+`PhoneRegistry::attached() -> Vec<AttachedPhone { serial, driver }>`, which returns the same `Arc` for the same phone
+on every call while it stays attached. A lib target beside the bin (`src/lib.rs`, so the tests reach the loop). Extra
+deps: `serde_json`, `uuid`, `async-trait`. `Config` (private fields, getters; made only by `Config::parse`) also takes
+an optional `bridge_id` (default `COMPUTERNAME`/`HOSTNAME`); `base_url` is https (plain http only to this computer);
+the env key wins over the file's; an unknown setting is refused; no error repeats the key, a non-string `key`
+included. `run(&Config, Arc<dyn PhoneRegistry>, Timing, shutdown) -> Result<(), RunError>`; `Timing` holds the
+intervals (tests shorten them). `main.rs` wires a registry that reports no phones (`TODO(D2-T2)`). The archtest rule
 (`device_bridge_depends_on_no_server_crate`) checks every dependency kind; `no_crate_but_outbound_names_reqwest` and
-`deny.toml` name the bridge as the one other package with its own HTTP client.
-- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`, `posts_carry_the_requested_with_header`, `idle_polls_are_spaced_even_when_the_server_does_not_wait`, `a_driver_panic_fails_its_command_and_the_phone_keeps_working`, `only_the_configured_serials_are_listed`, `each_serial_is_listed_once_and_at_most_max_phones`, `a_failed_requests_url_is_never_logged` (fails if `without_url()` is removed); unit tests `a_command_for_a_stopped_worker_is_failed_and_the_worker_started_again`, `a_key_that_is_not_a_string_is_not_quoted`.
+`deny.toml` name the bridge as the one other package with its own HTTP client. The fake Jeeta refuses what D1-T5's
+server refuses: a `POST` without the request header (403), a body that breaks a limit (422 with `details.field`; a
+register's phone that fails `PhoneReport::validate` listed as refused), a results body over its limit (413), a file
+of another type (415).
+- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`, `posts_carry_the_requested_with_header`, `idle_polls_are_spaced_even_when_the_server_does_not_wait`, `a_driver_panic_fails_its_command_and_the_phone_keeps_working`, `only_the_configured_serials_are_listed`, `each_serial_is_listed_once_and_at_most_max_phones`, `a_failed_requests_url_is_never_logged` (fails if `without_url()` is removed), `a_failed_listing_keeps_the_last_phones`, `a_failed_report_reuses_the_last_one_for_a_few_heartbeats`, `a_register_answer_with_an_unknown_field_is_logged_by_field_and_retried`, `a_hung_command_times_out_and_the_next_runs`, `push_file_is_bounded_by_the_transfer_timeout`, `a_command_that_waited_past_its_expiry_is_failed_unrun`, `results_made_before_shutdown_are_posted`, `a_batch_over_the_body_limit_is_split`, `a_batch_refused_with_another_4xx_is_dropped`, `a_batch_the_server_keeps_failing_is_split_and_a_lone_result_dropped`; `tests/panic_hook.rs::a_panic_is_logged_by_where_it_happened_never_by_its_message`; unit tests `a_command_for_a_stopped_worker_is_failed_and_the_worker_started_again`, `the_first_task_to_end_is_named`, `a_key_that_is_not_a_string_is_not_quoted`, `a_download_goes_to_https_or_to_this_computer`, `a_plain_http_download_elsewhere_is_refused_before_any_request`, `a_download_over_the_cap_is_refused_and_leaves_no_file`, `a_download_cancelled_part_way_leaves_no_file`, `a_decoding_error_is_kept_by_its_field_only`.
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit**.
 
 ### Task D2-T2: `AndroidAdbDriver`
@@ -564,11 +593,18 @@ shutdown)`: `Timing` holds the intervals (tests shorten them), a per-command tim
 
 ```rust
 #[async_trait]
-pub trait PhoneDriver: Send + Sync {
+pub trait PhoneDriver: Send + Sync {                    // as built in D2-T1 (src/driver/mod.rs)
     fn platform(&self) -> Platform;
     async fn report(&self) -> Result<PhoneReport, DriverError>;
     async fn execute(&self, cmd: &DeviceCommand, files: &dyn FileTransfer) -> Result<CommandResult, DriverError>;
+    async fn recover(&self) {}                          // after a cut-off command or a panic; see below
 }
+pub trait FileTransfer: Send + Sync {
+    async fn upload(&self, bytes: Vec<u8>, content_type: ContentType) -> Result<Uuid, DriverError>;
+    async fn upload_file(&self, path: &Path, content_type: ContentType) -> Result<Uuid, DriverError>; // streams
+    async fn download(&self, dest: &Path) -> Result<u64, DriverError>;
+}
+pub enum ContentType { Png, OctetStream }
 pub trait AdbRunner: Send + Sync { async fn run(&self, serial: &str, args: &[&str]) -> Result<AdbOutput, AdbError>; } // argv only
 pub struct DriverError { pub reason: FailReason, pub detail: String }
 ```
@@ -601,22 +637,33 @@ Specifics:
 - `text`: ASCII → `input text` with spaces as `%s` and shell metacharacters escaped for the device shell; non-ASCII → if ADBKeyBoard present: `ime set com.android.adbkeyboard/.AdbIME`, `am broadcast -a ADB_INPUT_B64 --es msg <base64>`, restore the previous IME; else `UnicodeUnsupported`.
 - feature detection: `pm list packages com.android.adbkeyboard` → `text.unicode`; all kinds of §4.1 reported for Android.
 - `shell`: `adb -s S shell <argv…>` as separate args, each argument quoted for the device shell; capture exit code (`adb shell` ≥ API 24 propagates it), stdout/stderr capped at 64 KiB each. After quoting, the driver checks the final command-line length against a limit it names as a constant (the quoting can make a command that validated longer) and refuses an over-long one before any `adb` call with `bridge_error` and a clear `detail` (the length and the limit). The ASCII `text` path does the same check after its escaping.
-- `screenshot`: `exec-out screencap -p` bytes → upload via `FileTransfer` → `File{file_id}`.
+- `screenshot`: `exec-out screencap -p` bytes → `FileTransfer::upload(bytes, ContentType::Png)` → `File{file_id}`.
 - `push_file`: `FileTransfer::download(temp)` (the transfer holds the signed address; the driver never sees it) →
-  `adb push`; `pull_file`: `adb pull` to temp → `FileTransfer::upload`.
+  `adb push`; `pull_file`: `adb pull` to temp → `FileTransfer::upload_file(temp, ContentType::OctetStream)`, which
+  streams the file instead of holding it in memory.
 
 What the loop (D2-T1) asks of the driver:
 - **`execute` is cancel-safe.** The loop cancels a command by dropping its future: at `Timing::command_timeout`
-  (120 s; `Timing::transfer_timeout` for `push_file`/`pull_file`) and at shutdown. Whatever the driver must undo is
-  undone by a guard on drop, not only on the normal path: above all the IME set for Unicode text, which a guard
-  restores when the command ends or is cancelled. Test `unicode_text_restores_ime_when_cancelled`. Temp files are
-  removed the same way.
-- **Every `adb` child is spawned with `kill_on_drop(true)`** (`tokio::process::Command`), so a cancelled command
-  leaves no `adb` running.
+  (120 s; `Timing::transfer_timeout` for `push_file`/`pull_file`) and at shutdown. Every `adb` child is spawned with
+  `kill_on_drop(true)` (`tokio::process::Command`), so a cancelled command leaves no `adb` running; every temp file is
+  held in a guard that removes it on drop.
+- **What `Drop` cannot do goes in `recover()`.** `Drop` cannot `.await`, so the IME a Unicode `text` command set is
+  not restored by a guard. Decision (D2-T1 review): the cooperative cleanup path is `async fn recover(&self)` on
+  `PhoneDriver`, not a cancellation token passed into `execute`. The worker awaits it after a command was cut off
+  (timeout, shutdown) or its driver panicked, once that command's future is gone and before the phone's next command,
+  bounded by `RECOVER_TIMEOUT` (30 s). The Android driver records "an IME to restore" when it sets ADBKeyBoard and
+  clears it when it restores it on the normal path; `recover()` restores what is recorded and is cheap when nothing
+  is. Test `recover_restores_the_ime_after_a_cut_unicode_text`.
+- **`report()` never waits behind `execute`.** It runs at every heartbeat, possibly during a 30-minute `push_file` on
+  the same phone, so it takes no lock a command holds. The first `adb devices` starts the adb server and can outlast
+  `Timing::report_timeout` (10 s): the loop then stands in the last good listing (none on the very first) and the last
+  good report, so a slow `adb` does not take a phone offline. Test `report_does_not_wait_behind_execute`.
+- **The registry keeps its drivers.** `PhoneRegistry::attached()` returns the same `Arc` for the same serial while
+  the phone stays attached (an iOS driver will hold a WebDriverAgent session and its port forward).
 - **A transfer has its own bound.** `adb push`/`adb pull` of a large file is bounded by a driver constant (e.g.
   `ADB_TRANSFER_TIMEOUT`) within `Timing::transfer_timeout`, not by the 120 s of other commands; every other `adb`
   call by a shorter constant of its own.
-- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_waits_for_ime_binding`, `unicode_text_ime_never_binds_is_a_failure_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `observe_reports_rotated_screen`, `miui_theme_stack_trace_is_not_a_failure`, `inject_events_refusal_with_exit_0_is_a_failure`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`, `unicode_text_restores_ime_when_cancelled`.
+- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_waits_for_ime_binding`, `unicode_text_ime_never_binds_is_a_failure_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `observe_reports_rotated_screen`, `miui_theme_stack_trace_is_not_a_failure`, `inject_events_refusal_with_exit_0_is_a_failure`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`, `recover_restores_the_ime_after_a_cut_unicode_text`, `report_does_not_wait_behind_execute`, `registry_returns_the_same_driver_for_the_same_serial`.
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit** `feat(device-bridge): the Android driver`.
 
 ### Task D2-T3: Windows build in CI

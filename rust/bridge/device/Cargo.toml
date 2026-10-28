@@ -13,8 +13,9 @@ jt_device_protocol.workspace = true
 jt_devices.workspace = true
 tokio = { workspace = true, features = ["time", "fs", "io-util"] }
 # The bridge's own HTTP client to Jeeta (rustls). The server's provider traffic goes through
-# `jt_outbound`; this program is not the server and talks to Jeeta alone.
-reqwest.workspace = true
+# `jt_outbound`; this program is not the server and talks to Jeeta alone. `stream`: a pulled file
+# is uploaded from disk without holding it in memory.
+reqwest = { workspace = true, features = ["stream"] }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

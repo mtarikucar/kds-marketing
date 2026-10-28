@@ -45,19 +45,43 @@ struct File {
     bridge_id: Option<String>,
 }
 
-/// The bridge's configuration, checked.
+/// The bridge's configuration, checked. Made only by [`Config::parse`] (or [`Config::load`]),
+/// so no value skips its checks.
 #[derive(Clone, Debug)]
 pub struct Config {
+    base_url: Url,
+    key: BridgeKey,
+    adb: PathBuf,
+    serials: Option<Vec<String>>,
+    bridge_id: String,
+}
+
+impl Config {
     /// The Jeeta server, ending in `/`: the bridge's routes are under `api/devices/bridge/`.
     /// `https`, or plain `http` to this computer only.
-    pub base_url: Url,
-    pub key: BridgeKey,
+    pub fn base_url(&self) -> &Url {
+        &self.base_url
+    }
+
+    /// The bridge key.
+    pub fn key(&self) -> &BridgeKey {
+        &self.key
+    }
+
     /// The `adb` program the Android driver runs.
-    pub adb: PathBuf,
+    pub fn adb(&self) -> &Path {
+        &self.adb
+    }
+
     /// When set, only these phones are reported.
-    pub serials: Option<Vec<String>>,
+    pub fn serials(&self) -> Option<&[String]> {
+        self.serials.as_deref()
+    }
+
     /// This bridge's name in Jeeta.
-    pub bridge_id: String,
+    pub fn bridge_id(&self) -> &str {
+        &self.bridge_id
+    }
 }
 
 /// The bridge's API key. Its `Debug` shows `***`, and nothing else prints it.
@@ -196,15 +220,10 @@ impl Config {
 /// join under it.
 fn base_url(text: &str) -> Result<Url, ConfigError> {
     let mut url = Url::parse(text.trim()).map_err(|_| invalid("base_url", "is not a URL"))?;
-    let Some(host) = url.host_str() else {
+    if url.host_str().is_none() {
         return Err(invalid("base_url", "has no host"));
-    };
-    let loopback = host.eq_ignore_ascii_case("localhost")
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback());
+    }
+    let loopback = is_loopback(&url);
     match url.scheme() {
         "https" => {}
         "http" if loopback => {}
@@ -230,6 +249,20 @@ fn base_url(text: &str) -> Result<Url, ConfigError> {
         url.set_path(&path);
     }
     Ok(url)
+}
+
+/// Whether `url` names this computer (`localhost`, or a loopback address): the one place plain
+/// `http` is allowed, for the server and for a download alike.
+pub(crate) fn is_loopback(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The key: set, and printable ASCII without spaces (it goes into a header as it is).
