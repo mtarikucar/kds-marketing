@@ -1639,7 +1639,9 @@
         "tiktok_video_too_long": "Bu video, bu hesabın paylaşabileceğinden uzun.",
         "tiktok_title_too_long": "Açıklama TikTok için fazla uzun.",
         "tiktok_media_unsupported": "Bu paylaşımda TikTok'un alabileceği medya yok: bir MP4 video ya da 1-35 fotoğraf.",
-        "tiktok_creator_info_unavailable": "TikTok hesabı okunamadı. Bağlantısını kontrol edin."
+        "tiktok_creator_info_unavailable": "TikTok hesabı okunamadı. Bağlantısını kontrol edin.",
+        "tiktok_reconnect_for_drafts": "Taslakları açmak için TikTok'u yeniden bağlayın.",
+        "tiktok_draft_settings": "Taslak yalnızca TikTok'un aldığını taşır: video yalnızca dosyayı, fotoğraflar açıklamalarını."
       },
       "accountCounters": "TikTok hesabının sayaçları",
       "counter": {
@@ -1658,7 +1660,23 @@
       "postCounters": "Paylaşımın TikTok sayaçları",
       "liveCounters": "TikTok'tan canlı okundu",
       "measuredCounters": "Son ölçümden ({{time}})",
-      "noCounters": "TikTok bu paylaşım için henüz sayaç vermiyor; yalnızca paylaşanın görebildiği bir paylaşımın sayacı olmaz."
+      "noCounters": "TikTok bu paylaşım için henüz sayaç vermiyor; yalnızca paylaşanın görebildiği bir paylaşımın sayacı olmaz.",
+      "mode": "Nasıl gönderilsin",
+      "modeDirect": "Doğrudan paylaş",
+      "modeDraft": "TikTok'a taslak olarak gönder (TikTok uygulamasında tamamla)",
+      "reconnectForDrafts": "Taslakları açmak için TikTok'u yeniden bağlayın.",
+      "draftHelp": "TikTok, TikTok gelen kutunuza bir bildirim gönderir: düzenlemeyi bitirip paylaşmak için onu açın. Paylaşımı kimlerin görebileceği, yorum, Düet, Birleştirme ve ticari içerik bildirimi orada seçilir.",
+      "draftNoCaption": "Video taslağı açıklama almaz: açıklamayı paylaşımı tamamlarken TikTok'ta yazarsınız.",
+      "sendDraft": "TikTok taslaklarına gönder",
+      "draftSent": "Gönderildi: TikTok işledikten sonra TikTok gelen kutunuzdaki bir bildirimle düzenlemeyi bitirip paylaşabilirsiniz.",
+      "approvedDraft": "Bu ekrandan onaylandı: {{time}} saatinde, o saat geçtiyse hemen TikTok taslaklarınıza gönderilir.",
+      "draftStatus": {
+        "sending": "Paylaşım durumu: TikTok taslaklarınıza gönderiliyor…",
+        "processing": "Paylaşım durumu: TikTok taslağı işliyor…",
+        "sent": "Paylaşım durumu: TikTok taslaklarınıza gönderildi"
+      },
+      "sentToDrafts": "TikTok taslaklarınıza gönderildi: düzenlemeyi bitirip paylaşmak için TikTok gelen kutunuzdaki bildirimi açın. Taslağın sayacı olmaz.",
+      "noCover": "Önizleme yok"
     }
   },
   "billing": {

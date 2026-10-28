@@ -112,6 +112,7 @@ const screenAnswer = (overrides: Record<string, unknown> = {}) => ({
   approval: null,
   account_metrics: { follower_count: 1200, following_count: 45, likes_count: 8700, video_count: 31 },
   recent_posts: recentPosts,
+  drafts_available: true,
   ...overrides,
 });
 const detail = (attempts: unknown[] = []) => ({
@@ -215,6 +216,7 @@ describe('TikTok posting screen', () => {
       expect(calls.find((c) => c.method === 'POST' && c.path === '/api/studio/slots/s1/tiktok')?.body).toEqual({
         expected_revision: 3,
         post: {
+          mode: 'direct_post',
           title: 'Yeni menü #lezzet',
           privacy_level: 'MUTUAL_FOLLOW_FRIENDS',
           allow_comment: true,
@@ -410,6 +412,22 @@ describe('TikTok posting screen', () => {
     expect(items[1]).toHaveTextContent('İzlenme: 9.400');
   });
 
+  it('a_cover_that_does_not_load_gives_way_to_a_placeholder', async () => {
+    mockFetch(answers());
+    renderAt('/studio');
+    const form = await postingScreen();
+    const videos = await within(form).findByRole('list', { name: 'Son videolar' });
+    const first = videos.children[0] as HTMLElement;
+    const cover = first.querySelector('img');
+    expect(cover).not.toBeNull();
+    // A cover the browser cannot load (TikTok's photo covers, for one) leaves no broken image.
+    fireEvent.error(cover!);
+    expect(first.querySelector('img')).toBeNull();
+    expect(within(first).getByText('Önizleme yok')).toBeInTheDocument();
+    // An item without a cover shows the same placeholder.
+    expect(within(videos.children[1] as HTMLElement).getByText('Önizleme yok')).toBeInTheDocument();
+  });
+
   it('works_without_the_counters_when_tiktok_did_not_give_them', async () => {
     mockFetch(
       answers(true, {
@@ -516,6 +534,164 @@ describe('TikTok posting screen', () => {
     expect(
       await within(editor).findByText(
         "TikTok bu paylaşım için henüz sayaç vermiyor; yalnızca paylaşanın görebildiği bir paylaşımın sayacı olmaz.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('posts_directly_unless_the_draft_is_chosen', async () => {
+    mockFetch(answers());
+    renderAt('/studio');
+    const form = await postingScreen();
+    const how = await within(form).findByRole('radiogroup', { name: 'Nasıl gönderilsin' });
+    expect(within(how).getByRole('radio', { name: 'Doğrudan paylaş' })).toBeChecked();
+    expect(
+      within(how).getByRole('radio', { name: "TikTok'a taslak olarak gönder (TikTok uygulamasında tamamla)" }),
+    ).not.toBeChecked();
+  });
+
+  it('a_video_draft_sends_the_file_alone_and_says_where_to_finish_it', async () => {
+    const calls = mockFetch(answers(true, { 'POST /api/studio/slots/s1/tiktok': { revision: 3 } }));
+    renderAt('/studio');
+    const user = userEvent.setup();
+    const form = await postingScreen();
+    await user.click(
+      await within(form).findByRole('radio', {
+        name: "TikTok'a taslak olarak gönder (TikTok uygulamasında tamamla)",
+      }),
+    );
+    // The Direct Post's settings are chosen in TikTok for a draft; a video draft takes no caption.
+    expect(within(form).queryByLabelText('Bu paylaşımı kimler görebilir')).not.toBeInTheDocument();
+    expect(within(form).queryByRole('checkbox', { name: 'Yorum' })).not.toBeInTheDocument();
+    expect(within(form).queryByRole('switch', { name: 'Ticari içeriği belirt' })).not.toBeInTheDocument();
+    expect(within(form).queryByLabelText('Açıklama')).not.toBeInTheDocument();
+    expect(
+      within(form).getByText(
+        "Video taslağı açıklama almaz: açıklamayı paylaşımı tamamlarken TikTok'ta yazarsınız.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(form).getByText(/TikTok gelen kutunuza bir bildirim gönderir/)).toBeInTheDocument();
+    // Still the preview and TikTok's declaration; nothing sent until the button is pressed.
+    expect(within(form).getByLabelText('Paylaşılacak video')).toBeInTheDocument();
+    expect(within(form).getByRole('link', { name: 'Müzik Kullanım Onayı' })).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+    await user.click(within(form).getByRole('button', { name: 'TikTok taslaklarına gönder' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'POST' && c.path === '/api/studio/slots/s1/tiktok')?.body).toEqual({
+        expected_revision: 3,
+        post: {
+          mode: 'draft',
+          title: '',
+          privacy_level: '',
+          allow_comment: false,
+          allow_duet: false,
+          allow_stitch: false,
+          disclose_commercial: false,
+          your_brand: false,
+          branded_content: false,
+        },
+      }),
+    );
+    expect(await screen.findByText(/TikTok gelen kutunuzdaki bir bildirimle/)).toBeInTheDocument();
+  });
+
+  it('a_photo_draft_keeps_its_caption', async () => {
+    const calls = mockFetch(
+      answers(true, {
+        'GET /api/studio/slots/s1/tiktok': screenAnswer({
+          media: { kind: 'photos' },
+          max_title_units: 4000,
+          previews: [{ url: 'https://files.example.com/files/p1', mime: 'image/png' }],
+        }),
+        'POST /api/studio/slots/s1/tiktok': { revision: 3 },
+      }),
+    );
+    renderAt('/studio');
+    const user = userEvent.setup();
+    const form = await postingScreen();
+    await user.click(
+      await within(form).findByRole('radio', {
+        name: "TikTok'a taslak olarak gönder (TikTok uygulamasında tamamla)",
+      }),
+    );
+    expect(within(form).getByLabelText('Açıklama')).toHaveValue('Bugünün menüsü #yemek');
+    await user.click(within(form).getByRole('button', { name: 'TikTok taslaklarına gönder' }));
+    await waitFor(() =>
+      expect(
+        (calls.find((c) => c.method === 'POST')?.body as { post: { mode: string; title: string } }).post,
+      ).toMatchObject({ mode: 'draft', title: 'Bugünün menüsü #yemek', privacy_level: '' }),
+    );
+  });
+
+  it('drafts_need_tiktok_reconnected_when_the_grant_lacks_them', async () => {
+    mockFetch(
+      answers(true, { 'GET /api/studio/slots/s1/tiktok': screenAnswer({ drafts_available: false }) }),
+    );
+    renderAt('/studio');
+    const form = await postingScreen();
+    expect(
+      await within(form).findByRole('radio', {
+        name: "TikTok'a taslak olarak gönder (TikTok uygulamasında tamamla)",
+      }),
+    ).toBeDisabled();
+    expect(within(form).getByText('Taslakları açmak için TikTok\'u yeniden bağlayın.')).toBeInTheDocument();
+    expect(within(form).getByRole('link', { name: 'Bağlantıyı kontrol et' })).toHaveAttribute('href', '/capabilities');
+    // Direct posts stay as they were.
+    expect(within(form).getByRole('radio', { name: 'Doğrudan paylaş' })).toBeChecked();
+  });
+
+  it('a_draft_on_its_way_says_it_goes_to_the_tiktok_drafts', async () => {
+    mockFetch(
+      answers(false, {
+        'GET /api/studio/slots/s1': detail([
+          { state: 'unknown', outcome: { status: 'observed', evidence: { external_id: 'v_inbox_file~1', url: null } } },
+        ]),
+        'GET /api/studio/slots/s1/tiktok/metrics': {
+          post: null,
+          metrics: null,
+          source: null,
+          read_at: null,
+          draft: true,
+        },
+      }),
+    );
+    renderAt('/studio');
+    const card = await screen.findByTestId('today-s1');
+    expect(await within(card).findByText('Paylaşım durumu: TikTok taslağı işliyor…')).toBeInTheDocument();
+    expect(within(card).getByText(/TikTok gelen kutunuzdaki bir bildirimle/)).toBeInTheDocument();
+  });
+
+  it('a_sent_draft_says_where_it_is_in_the_slot_detail', async () => {
+    // In the plan's seven days, whenever the test runs.
+    const published = { ...slot, scheduled_at: new Date().toISOString(), state: 'published', revision: 4 };
+    mockFetch(
+      answers(false, {
+        'GET /api/studio/overview': {
+          ...overview(false),
+          slots: [published],
+          today: { ...overview(false).today, slots: [] },
+        },
+        'GET /api/studio/slots/s1': { ...detail(), slot: published },
+        'GET /api/studio/slots/s1/tiktok/metrics': {
+          post: { external_id: 'v_inbox_file~v2-1.7300000000000000010', url: null },
+          metrics: null,
+          source: null,
+          read_at: null,
+          draft: true,
+        },
+      }),
+    );
+    renderAt('/studio');
+    const user = userEvent.setup();
+    const plan = await screen.findByRole('region', { name: 'Plan' });
+    await user.click(
+      await within(plan)
+        .findByTestId('slot-s1')
+        .then((e) => within(e).getByRole('button')),
+    );
+    const editor = await screen.findByTestId('slot-detail');
+    expect(
+      await within(editor).findByText(
+        'TikTok taslaklarınıza gönderildi: düzenlemeyi bitirip paylaşmak için TikTok gelen kutunuzdaki bildirimi açın. Taslağın sayacı olmaz.',
       ),
     ).toBeInTheDocument();
   });
