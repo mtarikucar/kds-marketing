@@ -41,7 +41,7 @@ pub struct ChannelInput {
     pub media: Vec<MediaInput>,
     pub link: Option<Url>,
     /// Who may see the post on this account (`jt_studio::PRIVACY_LEVELS`; TikTok's names), else
-    /// public.
+    /// public. A TikTok post takes the privacy a human chose on its posting screen instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub privacy: Option<String>,
 }

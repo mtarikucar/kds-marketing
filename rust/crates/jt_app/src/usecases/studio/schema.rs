@@ -119,7 +119,8 @@ fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type":"object","additionalProperties":false,"properties":properties,"required":required})
 }
 /// Who may see a post on the adapted account (TikTok's `privacy_level` names); absent or null:
-/// public.
+/// public. Not used for TikTok itself, whose posting screen leaves it to a human, with no default
+/// (`jt_studio::requires_posting_screen`).
 fn privacy() -> Value {
     let mut levels: Vec<Value> = jt_studio::PRIVACY_LEVELS
         .iter()
