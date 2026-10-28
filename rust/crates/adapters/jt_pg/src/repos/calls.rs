@@ -4,7 +4,7 @@
 //! columns its reads filter on, which every write keeps in step. A turn keeps its text in its own
 //! column (the person-erasure flow empties it) and its kind and measurements in `data`. A command
 //! keeps the domain's encoding in `payload` and is handed out in its queue order (`seq`).
-//! [`workspaces_with_live_agent_calls`] is the one platform-wide read.
+//! `workspaces_with_live_agent_calls` is the one platform-wide read.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;

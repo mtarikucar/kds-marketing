@@ -93,9 +93,8 @@ impl Pending {
 }
 
 /// Runs what is due on agent call `id` at `ctx.now` (see the module docs), in a transaction of
-/// its own that locks the session; settles the call when this ends it
-/// ([`super::settle`]). `false` when nothing was due (or the call is no agent's call on the
-/// line).
+/// its own that locks the session; settles the call when this ends it (`calls::settle`).
+/// `false` when nothing was due (or the call is no agent's call on the line).
 pub async fn tick(deps: &Deps, ctx: &Ctx, id: CallId) -> Result<bool, AppError> {
     let now = ctx.now;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
