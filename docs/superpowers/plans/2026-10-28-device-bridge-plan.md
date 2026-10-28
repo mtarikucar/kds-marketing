@@ -517,6 +517,19 @@ Mapping per spec §4.1. Real-device findings on the owner's Redmi 10C (Android 1
   `java.lang.SecurityException: Injecting input events requires … INJECT_EVENTS` and exits **0**: detect
   `Exception occurred` / `SecurityException` in the output and fail with `adb_error` and a detail naming the
   setting. Test `inject_events_refusal_with_exit_0_is_a_failure`.
+- ADBKeyBoard (`com.android.adbkeyboard/.AdbIME`, 2.0) works on it, but a broadcast sent right after `ime set` is
+  silently lost: the IME must first bind to the focused field. After `ime set`, poll `dumpsys input_method` until
+  `mCurMethodId` names AdbIME and a `mServedInputConnection` is present (a bounded wait the driver names as a
+  constant; past it → `adb_error`, IME restored). `am broadcast` answers `result=0` whether or not the text
+  arrived, so the result code proves nothing. Tests `unicode_text_waits_for_ime_binding`,
+  `unicode_text_ime_never_binds_is_a_failure_and_restores_ime`.
+- Auto-rotate is on: the phone was seen at `ROTATION_270` (1650x720). Screen size and rotation are read on every
+  observation, never cached from `report`. Test `observe_reports_rotated_screen`.
+- Installing an APK is not a bridge command, and the device's own settings decide it: `adb install` answers
+  `INSTALL_FAILED_USER_RESTRICTED` (MIUI "Install via USB" off), and the shell user can't start the package
+  installer (`needs … REQUEST_INSTALL_PACKAGES`). The operations doc (D3-T2) gives the manual path: push to
+  `/sdcard/Download`, open the system Files app, tap the APK. On MIUI the post-install scan screen carries an
+  advert with a large "Install" button for another app, so don't tap it.
 
 Specifics:
 - `observe`: `uiautomator dump /sdcard/jeeta_ui.xml` then `cat`; output containing `ERROR: could not get idle state` (exit 0) → wait 700 ms, retry once, else `ScreenBusy`; a file without `<node` → `ScreenBusy`; decode named and numeric character references; distill to `Element`s (skip invisible/zero-size; tap point = bounds centre); cap 300 → `truncated`; foreground app from `dumpsys window` (`mCurrentFocus`); screen from `wm size` + rotation.
@@ -526,7 +539,7 @@ Specifics:
 - `shell`: `adb -s S shell <argv…>` as separate args, each argument quoted for the device shell; capture exit code (`adb shell` ≥ API 24 propagates it), stdout/stderr capped at 64 KiB each. After quoting, the driver checks the final command-line length against a limit it names as a constant (the quoting can make a command that validated longer) and refuses an over-long one before any `adb` call with `bridge_error` and a clear `detail` (the length and the limit). The ASCII `text` path does the same check after its escaping.
 - `screenshot`: `exec-out screencap -p` bytes → upload via `FileTransfer` → `File{file_id}`.
 - `push_file`: download `download_url` to a temp file → `adb push`; `pull_file`: `adb pull` to temp → upload.
-- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`.
+- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_waits_for_ime_binding`, `unicode_text_ime_never_binds_is_a_failure_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `observe_reports_rotated_screen`, `miui_theme_stack_trace_is_not_a_failure`, `inject_events_refusal_with_exit_0_is_a_failure`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`.
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit** `feat(device-bridge): the Android driver`.
 
 ### Task D2-T3: Windows build in CI
