@@ -172,7 +172,10 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                     if e.code == crate::error::ErrorCode::Internal {
                         return Err(e);
                     }
-                    refusal = Some(e);
+                    // A slot waiting for a human is not a failed run: `studio.pending` names it.
+                    if !chain::awaits_human(&e) {
+                        refusal = Some(e);
+                    }
                     continue;
                 }
                 let c = r
