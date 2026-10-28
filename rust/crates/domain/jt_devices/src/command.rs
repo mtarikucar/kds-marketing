@@ -14,9 +14,8 @@ pub const MAX_SHELL_ARGS: usize = 64;
 /// The most characters in one `shell` argument.
 pub const MAX_ARG_CHARS: usize = 4096;
 
-/// One command for a device. On the wire it is an object tagged by `kind`; an unknown kind is
-/// refused, and so is an unknown field on every command that has fields (`screenshot` has none,
-/// and serde ignores whatever else comes with it).
+/// One command for a device. On the wire it is an object tagged by `kind`; an unknown kind or an
+/// unknown field is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DeviceCommand {
@@ -59,8 +58,9 @@ pub enum DeviceCommand {
     PushFile { file_id: Uuid, dest: String },
     /// Copy the file at `path` on the device into Jeeta.
     PullFile { path: String },
-    /// Capture the screen as an image.
-    Screenshot,
+    /// Capture the screen as an image. An empty struct variant rather than a unit one: serde
+    /// ignores unknown fields on a unit variant of a tagged enum, and this one must refuse them.
+    Screenshot {},
 }
 
 /// How `tap_on` finds its element: exactly one of the element's text, id or content description.
@@ -132,7 +132,7 @@ impl DeviceCommand {
             Self::Shell { .. } => "shell",
             Self::PushFile { .. } => "push_file",
             Self::PullFile { .. } => "pull_file",
-            Self::Screenshot => "screenshot",
+            Self::Screenshot {} => "screenshot",
         }
     }
 
@@ -140,7 +140,9 @@ impl DeviceCommand {
     /// is not decided here.
     pub fn validate(&self) -> Result<(), CommandError> {
         match self {
-            Self::Observe { .. } | Self::Tap { .. } | Self::Key { .. } | Self::Screenshot => Ok(()),
+            Self::Observe { .. } | Self::Tap { .. } | Self::Key { .. } | Self::Screenshot {} => {
+                Ok(())
+            }
             Self::TapOn { target, .. } => not_blank("target", target.value()),
             Self::LongPress { ms, .. } => {
                 if *ms == 0 || *ms > MAX_LONG_PRESS_MS {

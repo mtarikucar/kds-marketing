@@ -108,7 +108,7 @@ fn every_kind() -> Vec<(DeviceCommand, serde_json::Value)> {
             },
             json!({"kind": "pull_file", "path": "/sdcard/DCIM/a.jpg"}),
         ),
-        (DeviceCommand::Screenshot, json!({"kind": "screenshot"})),
+        (DeviceCommand::Screenshot {}, json!({"kind": "screenshot"})),
     ]
 }
 
@@ -199,6 +199,25 @@ fn unknown_kind_and_unknown_field_refused() {
             "{wire} was accepted"
         );
     }
+}
+
+#[test]
+fn screenshot_refuses_extra_fields() {
+    // `screenshot` takes no arguments: whatever comes with it is a mistake, not something to drop.
+    let extra = json!({"kind": "screenshot", "region": [0, 0, 1, 1]});
+    assert!(serde_json::from_value::<DeviceCommand>(extra).is_err());
+    // The bare form is the only one, in both directions.
+    let bare = json!({"kind": "screenshot"});
+    assert_eq!(
+        serde_json::from_value::<DeviceCommand>(bare.clone()).unwrap(),
+        DeviceCommand::Screenshot {}
+    );
+    assert_eq!(
+        serde_json::to_value(DeviceCommand::Screenshot {}).unwrap(),
+        bare
+    );
+    // `observe` has a field, so its unknown fields were refused all along: pinned here too.
+    assert!(serde_json::from_value::<DeviceCommand>(json!({"kind": "observe", "foo": 1})).is_err());
 }
 
 fn invalid(command: &DeviceCommand) -> &'static str {
@@ -454,7 +473,7 @@ fn supports_needs_kind_and_unicode_feature() {
     };
     assert!(!supports(&features(&["tap", "text"]), &shell));
     assert!(supports(&features(&["tap", "shell"]), &shell));
-    assert!(!supports(&[], &DeviceCommand::Screenshot));
+    assert!(!supports(&[], &DeviceCommand::Screenshot {}));
 
     // Every kind is matched by its own name and by nothing else.
     for (command, _) in every_kind() {
