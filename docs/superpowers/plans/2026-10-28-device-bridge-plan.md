@@ -431,7 +431,7 @@ Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permissio
   nothing is declared or merged for it — never a `409`: one phone's faults never refuse the register, so the other
   phones on that bridge stay online; answer `RegisterOut::new(registered, refused)`. Shape every later body to the
   protocol the bridge sent.
-- `commands(CommandsQuery)`: `clamped()`; lease for this bridge's phones (≤ `limit` ≤ 20), wait on the kernel signal
+- `commands(CommandsQuery)`: `clamped()`. "This bridge's phones" means exactly the phones in its LATEST register; a phone the bridge leaves out (e.g. one whose worker is stuck) gets no new leases from the next poll on. Lease for those phones (≤ `limit` ≤ 20), wait on the kernel signal
   up to `wait_s` ≤ 25; **re-check `jt_devices::supports` at lease time** against the phone's CURRENT features (a
   bridge that re-registered without a feature must not be handed a command that needs it; fail such a command
   `unsupported_by_bridge` instead of leasing it); for `PushFile` attach a 10-minute signed `download_url`
@@ -485,7 +485,7 @@ are set up before a strategy, like the bridge; `Write` for act):
   **full** command; signal the bridge; wait up to `wait_s` for a final status; return `{command_id, status,
   result?, reason?}`.
 - `observe` = `act(Observe{screenshot})` with the observation (and a signed screenshot URL) in the answer.
-- [ ] **Tests first (`jt_app/tests/devices_agent.rs`):** `act_queues_and_returns_result_when_bridge_answers`, `act_returns_queued_when_wait_ends`, `act_refuses_unsupported_kind`, `act_refuses_unicode_without_feature`, `act_on_offline_phone_refuses_device_offline`, `ledger_carries_full_command`, `tracing_never_carries_args` (capture `tracing` output with a test subscriber; assert typed text / shell args absent), `rep_cannot_act`, `command_get_waits`; `jt_mcp/tests/devices_mcp.rs::tools_listed_with_schemas`.
+- [ ] **Tests first (`jt_app/tests/devices_agent.rs`):** `act_queues_and_returns_result_when_bridge_answers`, `act_returns_queued_when_wait_ends`, `act_refuses_unsupported_kind`, `act_refuses_unicode_without_feature`, `act_on_offline_phone_refuses_device_offline`, `act_on_phone_missing_from_latest_register_refuses_device_offline` (a stale phone is not "live"), `ledger_carries_full_command`, `tracing_never_carries_args` (capture `tracing` output with a test subscriber; assert typed text / shell args absent), `rep_cannot_act`, `command_get_waits`; `jt_mcp/tests/devices_mcp.rs::tools_listed_with_schemas`.
 - [ ] CI red → implement → green; **commit** `feat(devices): agents act on phones`.
 
 ### Task D1-T7: jobs
@@ -712,6 +712,9 @@ Card: platform, model, OS, status with heartbeat age, bridge version, features (
 
 - [ ] Emulator `jeeta_test` (`emulator.exe -avd jeeta_test -no-window -gpu swiftshader_indirect -port 5554`) + bridge against **staging** with a `devices.bridge` key; via MCP on staging: `devices.list` → `observe` → `tap_on` → `text` (ASCII) → `shell ["getprop","ro.product.model"]` → `screenshot` → `pull_file`; each appears in the ledger with its args.
 - [ ] Real Android phone over USB on the owner's PC: same sequence; Unicode text with ADBKeyBoard installed (owner approves the APK download).
+- [ ] Manual Windows stop checks on the owner's PC. These cover what CI can't test, because `unsafe_code = "forbid"` rules out `GenerateConsoleCtrlEvent`:
+  - Ctrl+C during a long command: the "Ctrl+C: the bridge stops" line, exit code 0, and the cut-off `bridge_error` result in the ledger.
+  - Closing the console window during a command: the result is posted within `HURRIED_GRACE` (2 s).
 - [ ] Record results in `docs/operations/device-bridge.md` ("verified on").
 
 ---
