@@ -22,7 +22,7 @@
 //!
 //! | Step | Call |
 //! |---|---|
-//! | authorize | `https://www.tiktok.com/v2/auth/authorize/?client_key&response_type=code&scope&redirect_uri&state`, the scopes [`TIKTOK_SCOPES`] joined by commas |
+//! | authorize | `https://www.tiktok.com/v2/auth/authorize/?client_key&response_type=code&scope&redirect_uri&state&disable_auto_auth=1`, the scopes [`TIKTOK_SCOPES`] joined by commas; the authorization page always shown |
 //! | exchange | `POST {api}/v2/oauth/token/`, form `client_key, client_secret, code, grant_type=authorization_code, redirect_uri` |
 //! | refresh | `POST {api}/v2/oauth/token/`, form `client_key, client_secret, grant_type=refresh_token, refresh_token` |
 //!

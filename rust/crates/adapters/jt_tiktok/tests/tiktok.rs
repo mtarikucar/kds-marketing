@@ -193,6 +193,8 @@ async fn authorize_url_uses_client_key_and_comma_scopes() {
             ),
             ("redirect_uri", redirect().as_str()),
             ("state", "state-1"),
+            // The consent page is shown every time, a reconnect included.
+            ("disable_auto_auth", "1"),
         ])
     );
     assert_eq!(
