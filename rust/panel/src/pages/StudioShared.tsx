@@ -107,17 +107,19 @@ export function Reason({ reason }: { reason: string }) {
   const key: StudioKey =
     reason === 'human_approval_required'
       ? 'waitingApproval'
-      : reason === 'publish_unknown'
-        ? 'unknown'
-        : /brake/.test(reason)
-          ? 'braked'
-          : /budget_cap|BUDGET_CAP/.test(reason)
-            ? 'cap'
-            : /auth|permission|expired|reconnect|capability|connector/.test(reason)
-              ? 'connectorUnavailable'
-              : /retir/.test(reason)
-                ? 'retirement'
-                : 'failed';
+      : reason === 'publish_processing'
+        ? 'processing'
+        : reason === 'publish_unknown'
+          ? 'unknown'
+          : /brake/.test(reason)
+            ? 'braked'
+            : /budget_cap|BUDGET_CAP/.test(reason)
+              ? 'cap'
+              : /auth|permission|expired|reconnect|capability|connector/.test(reason)
+                ? 'connectorUnavailable'
+                : /retir/.test(reason)
+                  ? 'retirement'
+                  : 'failed';
   return (
     <div className="space-y-1 text-sm text-muted-foreground">
       <p className="font-medium">{t(`studio.${key}`)}</p>

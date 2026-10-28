@@ -120,6 +120,59 @@ export interface PublishAttempt {
   state: 'queued' | 'sending' | 'succeeded' | 'failed' | 'unknown' | 'refused';
   /** For a failed, uncertain or refused attempt, the recorded `kind: provider: reason`. */
   failure_reason?: string | null;
+  /**
+   * `jt_studio::PublishOutcome`: an observed receipt (the provider is still processing the post)
+   * or a success carries the post's id and, once known, its URL.
+   */
+  outcome?: {
+    status: 'observed' | 'succeeded' | 'failed' | 'unknown' | 'refused';
+    evidence?: { external_id: string; url: string | null } | string;
+  } | null;
+}
+/** TikTok's privacy levels, by its own names (`privacy_level`). */
+export const TIKTOK_PRIVACY_LEVELS = [
+  'PUBLIC_TO_EVERYONE',
+  'MUTUAL_FOLLOW_FRIENDS',
+  'FOLLOWER_OF_CREATOR',
+  'SELF_ONLY',
+] as const;
+export type TiktokPrivacyLevel = (typeof TIKTOK_PRIVACY_LEVELS)[number];
+/** What TikTok's `creator_info` says about the account a post goes to, read fresh. */
+export interface TiktokCreator {
+  nickname: string | null;
+  username: string | null;
+  avatar_url: string | null;
+  privacy_level_options: string[];
+  comment_disabled: boolean;
+  duet_disabled: boolean;
+  stitch_disabled: boolean;
+  max_video_post_duration_sec: number | null;
+  /** TikTok's code when the account may not post at this moment. */
+  cannot_post: string | null;
+}
+/** What a human chose on the TikTok posting screen (`jt_studio::TiktokPost`). */
+export interface TiktokPost {
+  title: string;
+  privacy_level: string;
+  allow_comment: boolean;
+  allow_duet: boolean;
+  allow_stitch: boolean;
+  disclose_commercial: boolean;
+  your_brand: boolean;
+  branded_content: boolean;
+}
+/** The TikTok posting screen of a slot (`studio.tiktok_posting`). */
+export interface TiktokPosting {
+  slot: Slot;
+  creator: TiktokCreator;
+  /** The drafted caption, to edit. */
+  title: string;
+  media: { kind: 'video'; duration_ms: number | null } | { kind: 'photos' };
+  /** The longest caption, in UTF-16 units (a JS string's length). */
+  max_title_units: number;
+  previews: { url: string; mime: string }[];
+  /** The approval carrying the screen's choice, once one was made for this revision. */
+  approval: { revision: number; tiktok?: TiktokPost | null } | null;
 }
 export interface ExportOut {
   filename: string;
@@ -200,6 +253,12 @@ export const pieceSubmit = (
     adaptations: Record<string, unknown>;
   },
 ) => request<SlotDetail>('POST', `/api/studio/slots/${seg(id)}/piece`, { body });
+/** The TikTok posting screen: the account read fresh, the draft and its previews. */
+export const tiktokPosting = (id: string) =>
+  request<TiktokPosting>('GET', `/api/studio/slots/${seg(id)}/tiktok`);
+/** The TikTok posting screen's publish button: the human's choice, for this revision. */
+export const tiktokPost = (id: string, expected_revision: number, post: TiktokPost) =>
+  request('POST', `/api/studio/slots/${seg(id)}/tiktok`, { body: { expected_revision, post } });
 export const fileUpload = (body: {
   filename: string;
   mime: string;
