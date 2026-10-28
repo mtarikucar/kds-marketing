@@ -8,6 +8,7 @@ import { CapabilityStatusBadge } from '@/components/StatusBadges';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
 import { PbxPolicyPanel } from '@/pages/capabilities/PbxPolicyPanel';
+import { VoiceBridgePanel } from '@/pages/capabilities/VoiceBridgePanel';
 import { connectsByOAuth, isConnectable, providerOf } from '@/lib/connectors';
 import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/format';
 
@@ -65,7 +66,8 @@ export function policySummary(t: TFunction, language: string, policy: Policy): s
 /**
  * One capability: name, kind, how it is reached, its effective status, last verification, policy,
  * the budget items it spends from and the groups it is in. Actions show only for someone who may
- * take them, and never on a retired capability; a connector is verified by its probe, not here.
+ * take them, and never on a retired capability; a connector is verified by its probe, a voice
+ * bridge by its own registration, neither here.
  */
 export function CapabilityCard({
   item,
@@ -100,6 +102,7 @@ export function CapabilityCard({
   const c = item.capability;
   const retired = c.status === 'retired';
   const mutable = canManage && !retired;
+  const bridge = c.kind_key === 'voice_bridge';
   const connection = c.reach === 'connector' && !retired && providerOf(c.kind_key) !== null;
   const connecting = onConnector ? connectorActions(item, canManage, canProbe) : [];
   const budgetName = (id: string) => budgetItems.find((b) => b.item.id === id)?.item.name ?? id;
@@ -201,6 +204,7 @@ export function CapabilityCard({
           </div>
         )}
         {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
+        {bridge && !retired && <VoiceBridgePanel capability={c} />}
         {canCall && c.kind_key === 'netgsm_pbx' && c.status === 'verified' && (
           <div>
             <Button asChild size="sm" variant="outline">
@@ -210,7 +214,7 @@ export function CapabilityCard({
         )}
         {mutable && (
           <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
-            {c.reach !== 'connector' && (
+            {c.reach !== 'connector' && !bridge && (
               <Button size="sm" onClick={() => onAction('verify', item)}>
                 {t('capabilities.actions.verify')}
               </Button>
