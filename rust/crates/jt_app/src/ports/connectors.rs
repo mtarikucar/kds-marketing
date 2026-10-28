@@ -395,7 +395,7 @@ pub struct PublishRequest {
 // Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
 pub use jt_studio::{
     MediaUpload, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost, TiktokPostFlags,
-    TiktokPostRefusal,
+    TiktokPostMode, TiktokPostRefusal,
 };
 
 /// One post's counters, by the provider's metric name (e.g. `"impressions"`, `"likes"`).

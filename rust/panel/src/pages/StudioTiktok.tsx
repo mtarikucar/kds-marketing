@@ -1,5 +1,7 @@
 import { useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { ImageOff } from 'lucide-react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import * as api from '@/api/studio';
@@ -18,7 +20,9 @@ import { StudioError, buttonClass, inputClass, useStudioKey, useStudioMutation }
 // above the button, a preview with nothing laid over it, and nothing sent before the button is
 // pressed. Once posted, the screen says processing takes minutes and shows the post's status.
 // Under the account's name: its counters and its latest public videos, when TikTok gave them;
-// a published post's own counters read in the slot's detail.
+// a published post's own counters read in the slot's detail. The human may instead send the post
+// to their TikTok drafts (the Content Posting API's upload): TikTok then notifies them in its
+// inbox to finish editing and post it there, so the Direct Post's settings are left to TikTok.
 
 const MUSIC_USAGE = 'https://www.tiktok.com/legal/page/global/music-usage-confirmation/en';
 const BRANDED_CONTENT_POLICY = 'https://www.tiktok.com/legal/page/global/bc-policy/en';
@@ -54,6 +58,33 @@ function Counters({
   );
 }
 
+/**
+ * A listed post's cover, loaded by the browser straight from TikTok; a neutral placeholder when
+ * there is none or it does not load (the list names no post kind, so the placeholder is generic).
+ */
+function Cover({ url }: { url: string | null }) {
+  const { t } = useTranslation();
+  const [failed, setFailed] = useState(false);
+  if (url && !failed) {
+    return (
+      <img
+        src={url}
+        alt=""
+        referrerPolicy="no-referrer"
+        loading="lazy"
+        onError={() => setFailed(true)}
+        className="h-16 w-12 shrink-0 rounded object-cover"
+      />
+    );
+  }
+  return (
+    <span className="flex h-16 w-12 shrink-0 flex-col items-center justify-center gap-1 rounded bg-surface-muted text-center text-[10px] leading-tight text-muted-foreground">
+      <ImageOff aria-hidden="true" className="h-4 w-4" />
+      {t('studio.tiktok.noCover')}
+    </span>
+  );
+}
+
 /** The account's latest public videos, each linking to its TikTok page. */
 function RecentVideos({ posts }: { posts: api.RecentPost[] }) {
   const { t, i18n } = useTranslation();
@@ -68,15 +99,7 @@ function RecentVideos({ posts }: { posts: api.RecentPost[] }) {
           const title = post.title ?? t('studio.tiktok.untitled');
           return (
             <li key={post.id} className="flex min-w-0 gap-2 rounded-md border border-border p-2">
-              {post.cover_image_url && (
-                <img
-                  src={post.cover_image_url}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  loading="lazy"
-                  className="h-16 w-12 shrink-0 rounded object-cover"
-                />
-              )}
+              <Cover url={post.cover_image_url} />
               <div className="min-w-0 space-y-1">
                 {post.share_url ? (
                   <a
@@ -137,6 +160,9 @@ export function TiktokPostCounters({ slotId }: { slotId: string }) {
   });
   const data = counters.data;
   if (!data?.post) return null;
+  if (data.draft) {
+    return <p className="text-xs text-muted-foreground">{t('studio.tiktok.sentToDrafts')}</p>;
+  }
   if (!data.metrics) {
     return <p className="text-xs text-muted-foreground">{t('studio.tiktok.noCounters')}</p>;
   }
@@ -177,6 +203,8 @@ function refusalOf(error: unknown): Refusal | null {
     'tiktok_title_too_long',
     'tiktok_media_unsupported',
     'tiktok_creator_info_unavailable',
+    'tiktok_reconnect_for_drafts',
+    'tiktok_draft_settings',
   ];
   return known.find((k) => k === reason) ?? null;
 }
@@ -227,22 +255,32 @@ function when(slot: api.Slot, language: string): string {
   });
 }
 
-/** The status line of the slot's latest publish attempt, and the post's link once it is live. */
+/**
+ * The status line of the slot's latest publish attempt, and the post's link once it is live; a
+ * draft's in its own words (sent to the creator's TikTok drafts, never a post here).
+ */
 function statusOf(
   t: TFunction,
   attempts: api.PublishAttempt[],
+  draft = false,
 ): { text: string; url: string | null; active: boolean } {
   const last = attempts[attempts.length - 1];
   if (!last) return { text: t('studio.tiktok.status.waiting'), url: null, active: false };
   const evidence = typeof last.outcome?.evidence === 'object' ? last.outcome.evidence : null;
   if (last.state === 'succeeded') {
-    return { text: t('studio.tiktok.status.published'), url: evidence?.url ?? null, active: false };
+    return draft
+      ? { text: t('studio.tiktok.draftStatus.sent'), url: null, active: false }
+      : { text: t('studio.tiktok.status.published'), url: evidence?.url ?? null, active: false };
   }
   if (last.state === 'queued' || last.state === 'sending') {
-    return { text: t('studio.tiktok.status.sending'), url: null, active: true };
+    const text = draft ? t('studio.tiktok.draftStatus.sending') : t('studio.tiktok.status.sending');
+    return { text, url: null, active: true };
   }
   if (last.state === 'unknown' && last.outcome?.status === 'observed') {
-    return { text: t('studio.tiktok.status.processing'), url: null, active: true };
+    const text = draft
+      ? t('studio.tiktok.draftStatus.processing')
+      : t('studio.tiktok.status.processing');
+    return { text, url: null, active: true };
   }
   const reason = last.failure_reason ? failureText(t, last.failure_reason) : t('studio.failed');
   return { text: t('studio.tiktok.status.failed', { reason }), url: null, active: false };
@@ -250,24 +288,34 @@ function statusOf(
 
 /**
  * A TikTok slot posted from its screen: when it goes out, that TikTok takes minutes to process
- * it, and its status, read again while TikTok is still working on it.
+ * it (or, for a draft, that its inbox notification finishes it), and its status, read again
+ * while TikTok is still working on it.
  */
 export function TiktokPostStatus({ slot }: { slot: api.Slot }) {
   const { t, i18n } = useTranslation();
   const key = useStudioKey();
+  // Whether the choice was a draft: no TikTok call before the slot is sent.
+  const sent = useQuery({
+    queryKey: [...key, 'tiktok', 'metrics', slot.id],
+    queryFn: () => api.tiktokMetrics(slot.id),
+  });
+  const draft = sent.data?.draft ?? false;
   const detail = useQuery({
     queryKey: [...key, 'slot', slot.id],
     queryFn: () => api.slotGet(slot.id),
     refetchInterval: (query) =>
       query.state.data && statusOf(t, query.state.data.attempts).active ? 15_000 : false,
   });
-  const status = detail.data ? statusOf(t, detail.data.attempts) : null;
+  const status = detail.data ? statusOf(t, detail.data.attempts, draft) : null;
+  const time = when(slot, i18n.language);
   return (
     <div className="space-y-1 rounded-md border border-border bg-surface-muted p-3 text-sm">
       {!detail.data?.attempts.length && (
-        <p>{t('studio.tiktok.approved', { time: when(slot, i18n.language) })}</p>
+        <p>{draft ? t('studio.tiktok.approvedDraft', { time }) : t('studio.tiktok.approved', { time })}</p>
       )}
-      <p className="text-muted-foreground">{t('studio.tiktok.processing')}</p>
+      <p className="text-muted-foreground">
+        {draft ? t('studio.tiktok.draftSent') : t('studio.tiktok.processing')}
+      </p>
       {status && (
         <p role="status" className="font-medium">
           {status.text}
@@ -304,21 +352,38 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
   const [yourBrand, setYourBrand] = useState(false);
   const [brandedContent, setBrandedContent] = useState(false);
   const [length, setLength] = useState<number>();
+  const [mode, setMode] = useState<api.TiktokPostMode>('direct_post');
   const data = posting.data;
   const caption = title ?? data?.title ?? '';
   // What is sent is what the screen shows: an interaction greyed out (by a fresher read of the
   // account, or on photos) is off.
   const shown = data?.media.kind === 'video';
-  const choice: api.TiktokPost = {
-    title: caption,
-    privacy_level: privacy,
-    allow_comment: allowComment && !data?.creator.comment_disabled,
-    allow_duet: allowDuet && shown && !data?.creator.duet_disabled,
-    allow_stitch: allowStitch && shown && !data?.creator.stitch_disabled,
-    disclose_commercial: disclose,
-    your_brand: disclose && yourBrand,
-    branded_content: disclose && brandedContent,
-  };
+  // A draft takes only what TikTok takes for it: a video nothing but the file, photos their
+  // caption; the rest is chosen in TikTok.
+  const draft = mode === 'draft' && Boolean(data?.drafts_available);
+  const choice: api.TiktokPost = draft
+    ? {
+        mode: 'draft',
+        title: shown ? '' : caption,
+        privacy_level: '',
+        allow_comment: false,
+        allow_duet: false,
+        allow_stitch: false,
+        disclose_commercial: false,
+        your_brand: false,
+        branded_content: false,
+      }
+    : {
+        mode: 'direct_post',
+        title: caption,
+        privacy_level: privacy,
+        allow_comment: allowComment && !data?.creator.comment_disabled,
+        allow_duet: allowDuet && shown && !data?.creator.duet_disabled,
+        allow_stitch: allowStitch && shown && !data?.creator.stitch_disabled,
+        disclose_commercial: disclose,
+        your_brand: disclose && yourBrand,
+        branded_content: disclose && brandedContent,
+      };
   const post = useStudioMutation(() => api.tiktokPost(slot.id, slot.revision, choice));
   const screenName = t('studio.tiktok.screen');
   if (posting.isPending) {
@@ -340,17 +405,19 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
   if (post.isSuccess) {
     return (
       <div className="space-y-1 rounded-md border border-border bg-surface-muted p-3 text-sm">
-        <p role="status">{t('studio.tiktok.processing')}</p>
+        <p role="status">{draft ? t('studio.tiktok.draftSent') : t('studio.tiktok.processing')}</p>
       </div>
     );
   }
   const video = data.media.kind === 'video';
   const max = creator.max_video_post_duration_sec;
   const tooLong = video && max !== null && length !== undefined && length > max;
-  const unspecified = disclose && !yourBrand && !brandedContent;
+  const unspecified = !draft && disclose && !yourBrand && !brandedContent;
   const privateBranded = brandedContent && privacy === 'SELF_ONLY';
-  const ready =
-    privacy !== '' && !unspecified && !privateBranded && !tooLong && caption.length <= data.max_title_units;
+  const fits = caption.length <= data.max_title_units;
+  const ready = draft
+    ? !tooLong && (video || fits)
+    : privacy !== '' && !unspecified && !privateBranded && !tooLong && fits;
   const interaction = (
     name: 'comment' | 'duet' | 'stitch',
     checked: boolean,
@@ -387,6 +454,38 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
       <h3 className="font-medium">{screenName}</h3>
       <Creator creator={creator} />
       <AccountView posting={data} />
+      <div role="radiogroup" aria-labelledby={`${ids}-mode`} className="space-y-1">
+        <p id={`${ids}-mode`}>{t('studio.tiktok.mode')}</p>
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            name={`${ids}-mode`}
+            checked={!draft}
+            onChange={() => setMode('direct_post')}
+          />
+          <span>{t('studio.tiktok.modeDirect')}</span>
+        </label>
+        <label className={`flex items-center gap-2 ${data.drafts_available ? '' : 'opacity-60'}`}>
+          <input
+            type="radio"
+            name={`${ids}-mode`}
+            checked={draft}
+            disabled={!data.drafts_available}
+            aria-describedby={data.drafts_available ? undefined : `${ids}-reconnect`}
+            onChange={() => setMode('draft')}
+          />
+          <span>{t('studio.tiktok.modeDraft')}</span>
+        </label>
+        {!data.drafts_available && (
+          <p id={`${ids}-reconnect`} className="text-xs">
+            {t('studio.tiktok.reconnectForDrafts')}{' '}
+            <Link to="/capabilities" className="underline">
+              {t('studio.reconnect')}
+            </Link>
+          </p>
+        )}
+        {draft && <p className="text-xs text-muted-foreground">{t('studio.tiktok.draftHelp')}</p>}
+      </div>
       <div role="group" aria-label={t('studio.tiktok.preview')} className="flex flex-wrap gap-2">
         {data.previews.map((m, i) =>
           m.mime.startsWith('video/') ? (
@@ -418,120 +517,128 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
           {t('studio.tiktok.tooLong', { length, max })}
         </p>
       )}
-      <div className="flex flex-col gap-1">
-        <label htmlFor={`${ids}-caption`}>{t('studio.tiktok.caption')}</label>
-        <textarea
-          id={`${ids}-caption`}
-          className={inputClass}
-          rows={4}
-          value={caption}
-          maxLength={data.max_title_units}
-          aria-describedby={`${ids}-caption-help`}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <span id={`${ids}-caption-help`} className="text-xs text-muted-foreground">
-          {t('studio.tiktok.captionHelp')}{' '}
-          {t('studio.tiktok.captionCount', { count: caption.length, max: data.max_title_units })}
-        </span>
-      </div>
-      <label className="flex flex-col gap-1">
-        <span>{t('studio.tiktok.privacy')}</span>
-        <select
-          className={inputClass}
-          value={privacy}
-          required
-          onChange={(e) => setPrivacy(e.target.value)}
-        >
-          <option value="" disabled>
-            {t('studio.tiktok.privacyPlaceholder')}
-          </option>
-          {creator.privacy_level_options.map((level) => {
-            const blocked = level === 'SELF_ONLY' && brandedContent;
-            return (
-              <option
-                key={level}
-                value={level}
-                disabled={blocked}
-                title={blocked ? t('studio.tiktok.brandedNotPrivate') : undefined}
-              >
-                {privacyLabel(t, level)}
-              </option>
-            );
-          })}
-        </select>
-      </label>
-      <fieldset className="space-y-1">
-        <legend>{t('studio.tiktok.interactions')}</legend>
-        {interaction('comment', allowComment, setAllowComment, creator.comment_disabled)}
-        {video && interaction('duet', allowDuet, setAllowDuet, creator.duet_disabled)}
-        {video && interaction('stitch', allowStitch, setAllowStitch, creator.stitch_disabled)}
-      </fieldset>
-      <fieldset className="space-y-2">
-        <label className="flex items-center gap-2" title={t('studio.tiktok.discloseHelp')}>
-          <input
-            type="checkbox"
-            role="switch"
-            checked={disclose}
-            onChange={(e) => {
-              setDisclose(e.target.checked);
-              if (!e.target.checked) {
-                setYourBrand(false);
-                setBrandedContent(false);
-              }
-            }}
+      {draft && video ? (
+        <p className="text-xs text-muted-foreground">{t('studio.tiktok.draftNoCaption')}</p>
+      ) : (
+        <div className="flex flex-col gap-1">
+          <label htmlFor={`${ids}-caption`}>{t('studio.tiktok.caption')}</label>
+          <textarea
+            id={`${ids}-caption`}
+            className={inputClass}
+            rows={4}
+            value={caption}
+            maxLength={data.max_title_units}
+            aria-describedby={`${ids}-caption-help`}
+            onChange={(e) => setTitle(e.target.value)}
           />
-          <span>{t('studio.tiktok.disclose')}</span>
-        </label>
-        <p className="text-xs text-muted-foreground">{t('studio.tiktok.discloseHelp')}</p>
-        {disclose && (
-          <div className="space-y-2 ps-6">
-            <label className="flex items-start gap-2">
-              <input
-                type="checkbox"
-                checked={yourBrand}
-                onChange={(e) => setYourBrand(e.target.checked)}
-              />
-              <span>
-                <span className="block">{t('studio.tiktok.yourBrand')}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {t('studio.tiktok.yourBrandHelp')}
-                </span>
-              </span>
-            </label>
-            <label
-              className={`flex items-start gap-2 ${privacy === 'SELF_ONLY' ? 'opacity-60' : ''}`}
+          <span id={`${ids}-caption-help`} className="text-xs text-muted-foreground">
+            {t('studio.tiktok.captionHelp')}{' '}
+            {t('studio.tiktok.captionCount', { count: caption.length, max: data.max_title_units })}
+          </span>
+        </div>
+      )}
+      {!draft && (
+        <>
+          <label className="flex flex-col gap-1">
+            <span>{t('studio.tiktok.privacy')}</span>
+            <select
+              className={inputClass}
+              value={privacy}
+              required
+              onChange={(e) => setPrivacy(e.target.value)}
             >
+              <option value="" disabled>
+                {t('studio.tiktok.privacyPlaceholder')}
+              </option>
+              {creator.privacy_level_options.map((level) => {
+                const blocked = level === 'SELF_ONLY' && brandedContent;
+                return (
+                  <option
+                    key={level}
+                    value={level}
+                    disabled={blocked}
+                    title={blocked ? t('studio.tiktok.brandedNotPrivate') : undefined}
+                  >
+                    {privacyLabel(t, level)}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+          <fieldset className="space-y-1">
+            <legend>{t('studio.tiktok.interactions')}</legend>
+            {interaction('comment', allowComment, setAllowComment, creator.comment_disabled)}
+            {video && interaction('duet', allowDuet, setAllowDuet, creator.duet_disabled)}
+            {video && interaction('stitch', allowStitch, setAllowStitch, creator.stitch_disabled)}
+          </fieldset>
+          <fieldset className="space-y-2">
+            <label className="flex items-center gap-2" title={t('studio.tiktok.discloseHelp')}>
               <input
                 type="checkbox"
-                checked={brandedContent}
-                disabled={privacy === 'SELF_ONLY'}
-                aria-describedby={privacy === 'SELF_ONLY' ? `${ids}-branded-private` : undefined}
-                onChange={(e) => setBrandedContent(e.target.checked)}
+                role="switch"
+                checked={disclose}
+                onChange={(e) => {
+                  setDisclose(e.target.checked);
+                  if (!e.target.checked) {
+                    setYourBrand(false);
+                    setBrandedContent(false);
+                  }
+                }}
               />
-              <span>
-                <span className="block">{t('studio.tiktok.brandedContent')}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {t('studio.tiktok.brandedContentHelp')}
-                </span>
-              </span>
+              <span>{t('studio.tiktok.disclose')}</span>
             </label>
-            {privacy === 'SELF_ONLY' && (
-              <p id={`${ids}-branded-private`} className="text-xs">
-                {t('studio.tiktok.brandedNotPrivate')}
-              </p>
+            <p className="text-xs text-muted-foreground">{t('studio.tiktok.discloseHelp')}</p>
+            {disclose && (
+              <div className="space-y-2 ps-6">
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={yourBrand}
+                    onChange={(e) => setYourBrand(e.target.checked)}
+                  />
+                  <span>
+                    <span className="block">{t('studio.tiktok.yourBrand')}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {t('studio.tiktok.yourBrandHelp')}
+                    </span>
+                  </span>
+                </label>
+                <label
+                  className={`flex items-start gap-2 ${privacy === 'SELF_ONLY' ? 'opacity-60' : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={brandedContent}
+                    disabled={privacy === 'SELF_ONLY'}
+                    aria-describedby={privacy === 'SELF_ONLY' ? `${ids}-branded-private` : undefined}
+                    onChange={(e) => setBrandedContent(e.target.checked)}
+                  />
+                  <span>
+                    <span className="block">{t('studio.tiktok.brandedContent')}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {t('studio.tiktok.brandedContentHelp')}
+                    </span>
+                  </span>
+                </label>
+                {privacy === 'SELF_ONLY' && (
+                  <p id={`${ids}-branded-private`} className="text-xs">
+                    {t('studio.tiktok.brandedNotPrivate')}
+                  </p>
+                )}
+                {(brandedContent || yourBrand) && (
+                  <p className="text-xs font-medium">
+                    {t(brandedContent ? 'studio.tiktok.paidLabel' : 'studio.tiktok.promotionalLabel')}
+                  </p>
+                )}
+              </div>
             )}
-            {(brandedContent || yourBrand) && (
-              <p className="text-xs font-medium">
-                {t(brandedContent ? 'studio.tiktok.paidLabel' : 'studio.tiktok.promotionalLabel')}
-              </p>
-            )}
-          </div>
-        )}
-      </fieldset>
+          </fieldset>
+        </>
+      )}
       <p className="text-xs">
         <Trans
           i18nKey={
-            brandedContent && disclose
+            !draft && brandedContent && disclose
               ? 'studio.tiktok.declarationBranded'
               : 'studio.tiktok.declarationMusic'
           }
@@ -553,7 +660,11 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
       </p>
       <span className="inline-block" title={unspecified ? t('studio.tiktok.commercialRequired') : undefined}>
         <button className={buttonClass} disabled={!ready || post.isPending}>
-          {post.isPending ? t('studio.tiktok.posting') : t('studio.tiktok.post')}
+          {post.isPending
+            ? t('studio.tiktok.posting')
+            : draft
+              ? t('studio.tiktok.sendDraft')
+              : t('studio.tiktok.post')}
         </button>
       </span>
       {unspecified && <p className="text-xs text-danger">{t('studio.tiktok.commercialRequired')}</p>}

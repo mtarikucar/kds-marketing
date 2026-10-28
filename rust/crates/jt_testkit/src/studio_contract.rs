@@ -793,6 +793,7 @@ pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
     // same revision (the screen passed again) replaces it whole.
     let posted = ApprovalReceipt {
         tiktok: Some(jt_studio::TiktokPost {
+            mode: jt_studio::TiktokPostMode::DirectPost,
             title: "Bugünün menüsü #yemek".into(),
             privacy_level: "MUTUAL_FOLLOW_FRIENDS".into(),
             allow_comment: true,

@@ -86,10 +86,7 @@ pub(crate) fn capability_access(
             return Err(refuse("access_expired"));
         }
     }
-    let scopes: Vec<_> = access["scopes"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
+    let scopes = granted_scopes(c);
     let required: &[&str] = match (c.kind_key.as_str(), write) {
         ("x", true) => &["tweet.write"],
         ("x", false) => &["tweet.read"],
@@ -105,10 +102,18 @@ pub(crate) fn capability_access(
         ],
         ("facebook_page", true) => &["pages_manage_posts"],
         ("facebook_page", false) => &["read_insights", "pages_read_engagement"],
-        ("tiktok", true) => &["video.publish"],
+        // A direct post needs `video.publish`, a draft `video.upload` (each checked on the
+        // posting screen, `tiktok::tiktok_post`).
+        ("tiktok", true) => &["video.publish", "video.upload"],
         // Counters need `video.list` (posts) or `user.info.stats` (the account); a publication's
-        // status (TikTok publishes in the background) is read with `video.publish`.
-        ("tiktok", false) => &["video.list", "user.info.stats", "video.publish"],
+        // status (TikTok publishes in the background) is read with `video.publish` or
+        // `video.upload`.
+        ("tiktok", false) => &[
+            "video.list",
+            "user.info.stats",
+            "video.publish",
+            "video.upload",
+        ],
         ("linkedin_member", true) => &["w_member_social"],
         // LinkedIn has no read API for a member's posts: reading asks for no scope, and the
         // adapter answers that it has no counters (measurement records the refusal once).
@@ -123,6 +128,14 @@ pub(crate) fn capability_access(
         return Err(refuse("credential_scope_missing"));
     }
     Ok(())
+}
+/// The scopes the capability's credential was granted, as the connector use cases recorded them
+/// from the sealed credential (`connector_public.access.scopes`).
+pub(crate) fn granted_scopes(c: &Capability) -> Vec<&str> {
+    c.connector_public["access"]["scopes"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default()
 }
 pub(crate) fn hours(c: &Capability, now: OffsetDateTime) -> Result<(), AppError> {
     if let Some(h) = &c.policy.active_hours {

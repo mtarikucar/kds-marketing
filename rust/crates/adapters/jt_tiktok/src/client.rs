@@ -50,6 +50,9 @@ const THROTTLE_CODES: &[&str] = &[
     "rate_limit_exceeded",
     "spam_risk_too_many_posts",
     "reached_active_user_cap",
+    // The daily cap on drafts waiting for the creator in their inbox
+    // (<https://developers.tiktok.com/doc/content-posting-api-reference-upload-video>).
+    "spam_risk_too_many_pending_share",
 ];
 
 /// `error.code`s of a token that is no longer accepted: `Auth`. TikTok's table names

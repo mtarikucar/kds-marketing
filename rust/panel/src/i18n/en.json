@@ -1639,7 +1639,9 @@
         "tiktok_video_too_long": "This video is longer than this account can post.",
         "tiktok_title_too_long": "The caption is too long for TikTok.",
         "tiktok_media_unsupported": "This post has no media TikTok can take: one MP4 video or 1 to 35 photos.",
-        "tiktok_creator_info_unavailable": "The TikTok account could not be read. Check its connection."
+        "tiktok_creator_info_unavailable": "The TikTok account could not be read. Check its connection.",
+        "tiktok_reconnect_for_drafts": "Reconnect TikTok to enable drafts.",
+        "tiktok_draft_settings": "A draft carries only what TikTok takes for it: a video nothing but the file, photos their caption."
       },
       "accountCounters": "TikTok account counters",
       "counter": {
@@ -1658,7 +1660,23 @@
       "postCounters": "The post's TikTok counters",
       "liveCounters": "Read live from TikTok",
       "measuredCounters": "From the latest measurement ({{time}})",
-      "noCounters": "TikTok gives no counters for this post yet; a post only its creator can see has none."
+      "noCounters": "TikTok gives no counters for this post yet; a post only its creator can see has none.",
+      "mode": "How to send it",
+      "modeDirect": "Post directly",
+      "modeDraft": "Send to TikTok as a draft (finish in the TikTok app)",
+      "reconnectForDrafts": "Reconnect TikTok to enable drafts.",
+      "draftHelp": "TikTok will send a notification to your TikTok inbox: open it to finish editing and post. Who can view the post, comments, Duet, Stitch and the commercial content disclosure are chosen there.",
+      "draftNoCaption": "A video draft takes no caption: you write it in TikTok when you finish the post.",
+      "sendDraft": "Send to TikTok drafts",
+      "draftSent": "Sent: once TikTok has processed it, a notification in your TikTok inbox lets you finish editing and post it.",
+      "approvedDraft": "Approved on this screen: it is sent to your TikTok drafts at {{time}}, or right away once that time has passed.",
+      "draftStatus": {
+        "sending": "Post status: sending to your TikTok drafts…",
+        "processing": "Post status: TikTok is processing the draft…",
+        "sent": "Post status: sent to your TikTok drafts"
+      },
+      "sentToDrafts": "Sent to your TikTok drafts: open the notification in your TikTok inbox to finish editing and post it. A draft has no counters.",
+      "noCover": "No preview"
     }
   },
   "billing": {

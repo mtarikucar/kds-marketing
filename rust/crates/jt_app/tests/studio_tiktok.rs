@@ -11,8 +11,8 @@ use jt_app::{
     ports::{
         UnitOfWork,
         connectors::{
-            AccountMetrics, MediaUpload, PostMetrics, PublishReceipt, RecentPost, TiktokCreator,
-            TiktokMedia, TiktokPost,
+            AccountMetrics, MediaUpload, PostMetrics, PublishReceipt, PublishResolution,
+            RecentPost, TiktokCreator, TiktokMedia, TiktokPost, TiktokPostMode,
         },
         studio::*,
     },
@@ -186,6 +186,7 @@ fn creator() -> TiktokCreator {
 
 fn choice(privacy: &str) -> TiktokPost {
     TiktokPost {
+        mode: TiktokPostMode::DirectPost,
         title: "Bugünün menüsü #yemek".into(),
         privacy_level: privacy.into(),
         allow_comment: false,
@@ -227,6 +228,38 @@ fn video(id: &str, views: i64) -> RecentPost {
         metrics: [("view_count".to_owned(), views)].into(),
     }
 }
+
+/// Sent to the creator's TikTok drafts: nothing chosen here but a photo's caption.
+fn draft(title: &str) -> TiktokPost {
+    TiktokPost {
+        mode: TiktokPostMode::Draft,
+        title: title.into(),
+        ..choice("")
+    }
+}
+
+/// The TikTok account's grant set to `scopes` (a connection made before drafts existed lacks
+/// `video.upload`).
+async fn grant(t: &Tiktok, scopes: &[&str]) {
+    let mut r = t.w.uow.tenant(t.w.f.ws).await.unwrap();
+    let mut c = r
+        .capabilities()
+        .find(t.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    c.connector_public["access"]["scopes"] = json!(scopes);
+    r.capabilities().update(c).await.unwrap();
+    r.commit().await.unwrap();
+}
+
+const ALL_SCOPES: &[&str] = &[
+    "user.info.basic",
+    "video.publish",
+    "video.upload",
+    "video.list",
+    "user.info.stats",
+];
 
 fn input(t: &Tiktok, post: TiktokPost) -> TiktokPostInput {
     TiktokPostInput {
@@ -403,6 +436,7 @@ async fn the_choice_made_on_the_screen_is_what_goes_to_tiktok() {
     assert_eq!(
         entry.entry.payload["tiktok"],
         json!({
+            "mode": "direct_post",
             "privacy_level": "MUTUAL_FOLLOW_FRIENDS",
             "allow_comment": true,
             "allow_duet": false,
@@ -779,4 +813,154 @@ async fn a_posts_counters_are_a_studio_read_of_a_tiktok_slot() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::Forbidden);
     assert!(t.tt.calls().is_empty());
+}
+
+#[tokio::test]
+async fn drafts_need_a_connection_granted_video_upload() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    // Connected before drafts existed: direct posts only, and the screen says so.
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    let screen = tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert!(!screen.drafts_available);
+    let e = tiktok_post(&t.w.d, &t.w.ctx, input(&t, draft("")))
+        .await
+        .unwrap_err();
+    assert_eq!(e.details["reason"], "tiktok_reconnect_for_drafts");
+    // Refused before anything was read from TikTok.
+    assert_eq!(t.tt.creator_info_calls().len(), 1);
+    assert!(t.w.uow.snapshot().studio.approvals.is_empty());
+
+    // Reconnected with `video.upload`: drafts are offered.
+    grant(&t, ALL_SCOPES).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    assert!(
+        tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id)
+            .await
+            .unwrap()
+            .drafts_available
+    );
+    // A grant of drafts alone cannot post directly.
+    grant(&t, &["user.info.basic", "video.upload"]).await;
+    let e = tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("PUBLIC_TO_EVERYONE")))
+        .await
+        .unwrap_err();
+    assert_eq!(e.details["reason"], "credential_scope_missing");
+}
+
+#[tokio::test]
+async fn a_draft_names_nothing_tiktok_does_not_take_for_it() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    grant(&t, ALL_SCOPES).await;
+    for post in [
+        TiktokPost {
+            privacy_level: "SELF_ONLY".into(),
+            ..draft("")
+        },
+        TiktokPost {
+            allow_comment: true,
+            ..draft("")
+        },
+        // A video draft takes no caption: it is written in TikTok.
+        draft("Bugünün menüsü"),
+    ] {
+        t.tt.push_creator_info(Ok(Some(creator())));
+        let e = tiktok_post(&t.w.d, &t.w.ctx, input(&t, post))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.code, e.details["reason"].as_str()),
+            (ErrorCode::Validation, Some("tiktok_draft_settings"))
+        );
+    }
+    assert!(t.w.uow.snapshot().studio.approvals.is_empty());
+}
+
+#[tokio::test]
+async fn a_draft_goes_to_the_creators_tiktok_drafts_as_chosen() {
+    let mut t = tiktok_world(vec![mp4(30)]).await;
+    grant(&t, ALL_SCOPES).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    let out = tiktok_post(&t.w.d, &t.w.ctx, input(&t, draft("")))
+        .await
+        .unwrap();
+    assert_eq!(out.approval.tiktok, Some(draft("")));
+    let s = t.w.uow.snapshot();
+    let entry = s
+        .ledger
+        .iter()
+        .find(|row| row.entry.action.as_str() == "studio.tiktok_post")
+        .unwrap();
+    assert_eq!(entry.entry.payload["tiktok"]["mode"], "draft");
+    // Before it goes out, the slot's counters say it is a draft.
+    let before = tiktok_metrics(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert!(before.draft);
+    assert_eq!(before.post, None);
+
+    let sent = PublishReceipt {
+        external_id: "v_inbox_file~v2-1.7300000000000000010".into(),
+        url: None,
+    };
+    t.tt.push_publish(Ok(sent.clone()));
+    // TikTok processes it first, then notifies the creator in its inbox.
+    t.tt.push_resolve(Ok(Some(PublishResolution::Pending)));
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+    let request = &publishes(&t.tt)[0];
+    assert_eq!(request.tiktok, Some(draft("")));
+    // Nothing but the file: no caption, no link, no privacy.
+    assert_eq!(request.text, "");
+    assert_eq!(request.link, None);
+    assert_eq!(request.privacy, None);
+    assert_eq!(request.media, vec![mp4(30)]);
+
+    t.w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::minutes(1)));
+    t.tt.push_resolve(Ok(Some(PublishResolution::Published(sent.clone()))));
+    assert_eq!(
+        jt_app::usecases::studio::publish::recover_publications(&t.w.d, t.w.f.ws)
+            .await
+            .unwrap(),
+        1
+    );
+    let s = t.w.uow.snapshot();
+    assert_eq!(s.studio.publications[0].external_id, sent.external_id);
+    assert_eq!(
+        s.studio
+            .slots
+            .iter()
+            .find(|x| x.id == t.slot.id)
+            .unwrap()
+            .state,
+        SlotState::Published
+    );
+    // Sent to the creator's drafts: no counters to read, and none asked of TikTok.
+    let after = tiktok_metrics(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert!(after.draft);
+    assert_eq!(after.post, Some(sent));
+    assert_eq!((after.metrics, after.source), (None, None));
+    assert!(
+        !t.tt
+            .calls()
+            .iter()
+            .any(|c| matches!(c, ConnectorCall::PostMetrics { .. }))
+    );
+}
+
+#[tokio::test]
+async fn a_photo_draft_carries_its_caption() {
+    let t = tiktok_world(vec![photo(1)]).await;
+    grant(&t, ALL_SCOPES).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, draft("Yeni menü #lezzet")))
+        .await
+        .unwrap();
+    t.tt.push_publish(Ok(PublishReceipt {
+        external_id: "p_inbox_url~v2-1.7".into(),
+        url: None,
+    }));
+    publish_due(&t.w.d, t.w.f.ws).await.unwrap();
+    let request = &publishes(&t.tt)[0];
+    assert_eq!(request.text, "Yeni menü #lezzet");
+    assert_eq!(request.privacy, None);
+    assert_eq!(request.media_urls.len(), 1);
 }

@@ -25,7 +25,8 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use jt_app::ports::connectors::{
-    InstagramApp, MediaUpload, MetaApp, PlatformAppConfig, TiktokApp, TiktokPost, XApp,
+    InstagramApp, MediaUpload, MetaApp, PlatformAppConfig, TiktokApp, TiktokPost, TiktokPostMode,
+    XApp,
 };
 use jt_connector::Credential;
 use jt_outbound::{Egress, FIXED_HOSTS};
@@ -60,6 +61,7 @@ pub const TOKEN: &str = "/api/v2/oauth/token/";
 pub const USER_INFO: &str = "/api/v2/user/info/";
 pub const CREATOR_INFO: &str = "/api/v2/post/publish/creator_info/query/";
 pub const VIDEO_INIT: &str = "/api/v2/post/publish/video/init/";
+pub const INBOX_VIDEO_INIT: &str = "/api/v2/post/publish/inbox/video/init/";
 pub const CONTENT_INIT: &str = "/api/v2/post/publish/content/init/";
 pub const STATUS: &str = "/api/v2/post/publish/status/fetch/";
 pub const VIDEO_QUERY: &str = "/api/v2/video/query/";
@@ -433,11 +435,28 @@ pub fn complete() -> Reply {
 /// content.
 pub fn choice(privacy: &str) -> TiktokPost {
     TiktokPost {
+        mode: TiktokPostMode::DirectPost,
         title: "Merhaba".into(),
         privacy_level: privacy.into(),
         allow_comment: true,
         allow_duet: false,
         allow_stitch: true,
+        disclose_commercial: false,
+        your_brand: false,
+        branded_content: false,
+    }
+}
+
+/// What a human chose to send to their TikTok drafts: nothing but the caption (`title`), which
+/// only photos carry.
+pub fn draft(title: &str) -> TiktokPost {
+    TiktokPost {
+        mode: TiktokPostMode::Draft,
+        title: title.into(),
+        privacy_level: String::new(),
+        allow_comment: false,
+        allow_duet: false,
+        allow_stitch: false,
         disclose_commercial: false,
         your_brand: false,
         branded_content: false,

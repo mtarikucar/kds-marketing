@@ -6,6 +6,15 @@
 //! choice ([`crate::ApprovalReceipt::tiktok`]), even in a lane that needs no human approval: a
 //! TikTok-only exception to the default no-approval lane policy, required by TikTok.
 //!
+//! The human chooses there how it goes out: posted directly (the Direct Post), or sent to their
+//! TikTok drafts to finish editing and post in TikTok (the Content Posting API's upload,
+//! <https://developers.tiktok.com/doc/content-posting-api-reference-upload-video>; for photos,
+//! `post_mode` `MEDIA_UPLOAD`, <https://developers.tiktok.com/doc/content-posting-api-reference-photo-post>).
+//! A draft carries only what those references take for it: a video nothing but the file (the
+//! video upload's init has no `post_info`), photos their caption (`title` and `description`;
+//! the privacy, the comment switch and the commercial toggles are the Direct Post's). The rest
+//! is chosen in TikTok.
+//!
 //! Pure rules: the application reads the account fresh before showing the screen and before
 //! accepting a choice, and the adapter checks the choice again before it sends anything.
 use crate::MediaUpload;
@@ -71,11 +80,27 @@ impl TiktokMedia {
     }
 }
 
+/// How a TikTok post goes out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TiktokPostMode {
+    /// Posted on the account directly, with the screen's settings (the Direct Post).
+    #[default]
+    DirectPost,
+    /// Sent to the creator's TikTok drafts: TikTok notifies them in its inbox, and they finish
+    /// editing and post it in TikTok (the upload).
+    Draft,
+}
+
 /// What a human chose on the posting screen. Nothing is preset: the privacy has no default, the
 /// interactions and the commercial content disclosure start off.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TiktokPost {
+    /// Posted directly or sent as a draft; a choice recorded before drafts existed was a direct
+    /// post. A draft leaves the privacy unchosen and every switch below off.
+    #[serde(default)]
+    pub mode: TiktokPostMode,
     /// The caption as the human left it: a video's title, photos' description. It replaces the
     /// drafted text and link.
     pub title: String,
@@ -135,6 +160,10 @@ pub enum TiktokPostRefusal {
     VideoTooLong,
     #[error("tiktok_title_too_long")]
     TitleTooLong,
+    /// A draft naming what TikTok does not take for it: a privacy, an interaction, the
+    /// commercial disclosure, or a video's caption.
+    #[error("tiktok_draft_settings")]
+    DraftSettings,
 }
 
 impl TiktokPostRefusal {
@@ -145,6 +174,11 @@ impl TiktokPostRefusal {
 }
 
 impl TiktokPost {
+    /// Whether the post is sent to the creator's TikTok drafts.
+    pub fn is_draft(&self) -> bool {
+        self.mode == TiktokPostMode::Draft
+    }
+
     /// Whether this choice may be accepted on the posting screen for `creator`'s account and
     /// `media`: [`TiktokPost::check_postable`], and no interaction the screen greys out (one the
     /// creator turned off, Duet or Stitch on photos) allowed.
@@ -154,6 +188,9 @@ impl TiktokPost {
         media: &TiktokMedia,
     ) -> Result<(), TiktokPostRefusal> {
         self.check_postable(creator, media)?;
+        if self.is_draft() {
+            return Ok(());
+        }
         if (self.allow_comment && creator.comment_disabled)
             || (self.allow_duet && creator.duet_disabled)
             || (self.allow_stitch && creator.stitch_disabled)
@@ -170,7 +207,9 @@ impl TiktokPost {
     /// post, the privacy is one it is offered, branded content is not private, a disclosed
     /// commercial post names whom it promotes, a video is no longer than the account may post
     /// (when its length could be read) and the caption fits. An interaction the creator turned
-    /// off since is not a refusal: it is sent off ([`TiktokPost::flags`]).
+    /// off since is not a refusal: it is sent off ([`TiktokPost::flags`]). A draft: the account
+    /// may post, it names nothing but what TikTok takes for it (see the module docs), the video
+    /// is no longer than the account may post and the caption fits.
     pub fn check_postable(
         &self,
         creator: &TiktokCreator,
@@ -178,6 +217,21 @@ impl TiktokPost {
     ) -> Result<(), TiktokPostRefusal> {
         if creator.cannot_post.is_some() {
             return Err(TiktokPostRefusal::CannotPostNow);
+        }
+        if self.is_draft() {
+            let settings = !self.privacy_level.trim().is_empty()
+                || self.allow_comment
+                || self.allow_duet
+                || self.allow_stitch
+                || self.disclose_commercial
+                || self.your_brand
+                || self.branded_content;
+            let video_caption =
+                matches!(media, TiktokMedia::Video { .. }) && !self.title.trim().is_empty();
+            if settings || video_caption {
+                return Err(TiktokPostRefusal::DraftSettings);
+            }
+            return check_media(&self.title, creator, media);
         }
         if self.privacy_level.trim().is_empty() {
             return Err(TiktokPostRefusal::PrivacyNotChosen);
@@ -194,20 +248,7 @@ impl TiktokPost {
         if self.branded_content && self.privacy_level == "SELF_ONLY" {
             return Err(TiktokPostRefusal::BrandedContentPrivate);
         }
-        if let (
-            TiktokMedia::Video {
-                duration_ms: Some(length),
-            },
-            Some(max),
-        ) = (media, creator.max_video_post_duration_sec)
-            && *length > u64::from(max) * 1000
-        {
-            return Err(TiktokPostRefusal::VideoTooLong);
-        }
-        if self.title.encode_utf16().count() > media.max_title_units() {
-            return Err(TiktokPostRefusal::TitleTooLong);
-        }
-        Ok(())
+        check_media(&self.title, creator, media)
     }
 
     /// The switches this choice sends to `creator`'s account: an interaction is on only when the
@@ -222,6 +263,29 @@ impl TiktokPost {
             brand_organic_toggle: self.disclose_commercial && self.your_brand,
         }
     }
+}
+
+/// A video no longer than `creator`'s account may post (when its length could be read), and a
+/// caption `title` that fits `media`.
+fn check_media(
+    title: &str,
+    creator: &TiktokCreator,
+    media: &TiktokMedia,
+) -> Result<(), TiktokPostRefusal> {
+    if let (
+        TiktokMedia::Video {
+            duration_ms: Some(length),
+        },
+        Some(max),
+    ) = (media, creator.max_video_post_duration_sec)
+        && *length > u64::from(max) * 1000
+    {
+        return Err(TiktokPostRefusal::VideoTooLong);
+    }
+    if title.encode_utf16().count() > media.max_title_units() {
+        return Err(TiktokPostRefusal::TitleTooLong);
+    }
+    Ok(())
 }
 
 impl MediaUpload {

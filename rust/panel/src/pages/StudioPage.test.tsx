@@ -292,6 +292,7 @@ it('panel_actions_match_every_studio_tool', async () => {
   });
   await api.tiktokPosting('s1');
   const post = {
+    mode: 'direct_post' as const,
     title: 'Merhaba',
     privacy_level: 'SELF_ONLY',
     allow_comment: false,

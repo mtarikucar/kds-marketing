@@ -150,8 +150,11 @@ export interface TiktokCreator {
   /** TikTok's code when the account may not post at this moment. */
   cannot_post: string | null;
 }
+/** How a TikTok post goes out: posted directly, or sent to the creator's TikTok drafts. */
+export type TiktokPostMode = 'direct_post' | 'draft';
 /** What a human chose on the TikTok posting screen (`jt_studio::TiktokPost`). */
 export interface TiktokPost {
+  mode: TiktokPostMode;
   title: string;
   privacy_level: string;
   allow_comment: boolean;
@@ -177,6 +180,8 @@ export interface TiktokPosting {
   account_metrics: Record<string, number> | null;
   /** The account's latest public videos, newest first; `null` when TikTok did not list them. */
   recent_posts: RecentPost[] | null;
+  /** Whether drafts can be sent (the connection was granted `video.upload`). */
+  drafts_available: boolean;
 }
 /** One of an account's recent public posts (`jt_app::ports::connectors::RecentPost`). */
 export interface RecentPost {
@@ -193,6 +198,8 @@ export interface TiktokMetrics {
   metrics: Record<string, number> | null;
   source: 'live' | 'measurement' | null;
   read_at: string | null;
+  /** The post was chosen to go to the creator's TikTok drafts: it has no counters. */
+  draft: boolean;
 }
 export interface ExportOut {
   filename: string;
