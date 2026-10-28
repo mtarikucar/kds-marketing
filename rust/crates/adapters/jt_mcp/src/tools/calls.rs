@@ -1,12 +1,14 @@
 //! `jeeta.calls.*`: the workspace's phone calls (spec `2026-10-27-agent-voice-calls-design.md`
-//! §7, phase V0). An agent reads and sets the call policy, places a rep's call (the rep's PBX
-//! extension rings first, then the person), reads the call log and records how a call went.
-//! Agent-driven calls need the voice bridge of phase V1: until then `mode: "agent"` is refused
-//! `bridge_offline`. Phone numbers are masked in every output of these tools.
+//! §7). An agent reads and sets the call policy, places a rep's call (the rep's PBX extension
+//! rings first, then the person) or a call it talks on itself through the workspace's voice
+//! bridge (`listen`, `say`, `transfer`, turn by turn), reads the call log and records how a call
+//! went. Phone numbers are masked in every output of these tools.
 
 use jt_app::ctx::Ctx;
 use jt_app::ports::calls::CallId;
 use jt_app::usecases::Deps;
+use jt_app::usecases::calls::listen::{self, ListenQuery};
+use jt_app::usecases::calls::say::{self, SayInput, TransferInput};
 use jt_app::usecases::calls::{self, EndInput, ListQuery, PlaceInput, PolicyInput};
 use jt_tenancy::Permission;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -51,19 +53,66 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           180 days, or an open appointment) or callback (needs an inbound call \
                           in the last 7 days). mode human rings the rep's PBX extension \
                           (rep_extension) first, then the person, through the workspace's \
-                          verified NetGSM PBX; mode agent needs the voice bridge, which is not \
-                          available yet (CONFLICT bridge_offline). Every gate is checked again \
-                          right before dialing: a refusal is CONFLICT with details.reason one \
-                          of workspace_inactive, strategy_required, bridge_offline, bridge_busy, \
-                          person_erased, person_merged, no_phone_identity, suppressed, \
-                          journey_lost, consent_missing, no_relationship, no_recent_inbound, \
-                          outside_work_hours, daily_ops_cap, budget_exhausted, \
-                          disclosure_missing. Returns {call, turns}; the number is masked. \
-                          After the call, record its outcome with jeeta.calls.end. \
-                          [risk: SPEND]",
+                          verified NetGSM PBX. mode agent: you talk to the person yourself \
+                          through the workspace's voice bridge, with a plan written before you \
+                          dial: opening (must contain the policy's disclosure_sentence), goal \
+                          (never played), holding (1 to 5 phrases played while you think), \
+                          fallback (0 to 3 lines played when you stay silent), closing (played \
+                          before the call is hung up), max_duration_s (1 to 900), language tr; \
+                          every sentence at most 600 characters. One live agent call per \
+                          connection. Then loop jeeta.calls.listen and jeeta.calls.say. Every \
+                          gate is checked again right before dialing: a refusal is CONFLICT \
+                          with details.reason one of workspace_inactive, strategy_required, \
+                          bridge_offline, bridge_busy, person_erased, person_merged, \
+                          no_phone_identity, suppressed, journey_lost, consent_missing, \
+                          no_relationship, no_recent_inbound, outside_work_hours, \
+                          daily_ops_cap, budget_exhausted, disclosure_missing. Returns {call, \
+                          turns}; the number is masked. After the call, record its outcome \
+                          with jeeta.calls.end. [risk: SPEND]",
             permission: Permission::CallsWork,
             schema: place_schema,
             run: place,
+        },
+        ToolDef {
+            use_case: "calls.listen",
+            description: "Wait for what happens on your call: answers as soon as there are \
+                          turns after after_seq (the person's words, a sentence played, a \
+                          holding phrase, caller_silence, the hangup), or the call ended; \
+                          otherwise after wait_s seconds (at most 25) with timed_out true, and \
+                          you listen again with the same after_seq. Returns {call_id, state, \
+                          events: [{seq, at, kind, text, meta}], timed_out}; pass the last \
+                          event's seq as after_seq next time. After the person speaks, reply \
+                          with jeeta.calls.say within 10 seconds: after 4 s the caller hears a \
+                          holding phrase, after 20 s a fallback line from your plan, and the \
+                          call ends by script once the fallback lines are spent. [risk: READ]",
+            permission: Permission::CallsWork,
+            schema: listen_schema,
+            run: listen,
+        },
+        ToolDef {
+            use_case: "calls.say",
+            description: "Say a sentence (text, at most 600 characters) to the person on your \
+                          live call; the voice bridge speaks it as you wrote it. expect_reply \
+                          (default true): false when you will speak again before the person \
+                          answers. allow_barge_in (default true): the person may cut it by \
+                          speaking (the turn then records interrupted_at_char). Reply within \
+                          10 seconds of the person's words: after 4 s the caller hears a \
+                          holding phrase, after 20 s a fallback line from your plan, and the \
+                          call ends by script. CONFLICT not_live once the call ended. Returns \
+                          {call_id, seq, state}. [risk: WRITE]",
+            permission: Permission::CallsWork,
+            schema: say_schema,
+            run: say,
+        },
+        ToolDef {
+            use_case: "calls.transfer",
+            description: "Hand the person on your live call over to a rep: to_extension (the \
+                          rep's PBX extension; the policy's handoff_extension when left out). \
+                          Your part of the call ends at once (transferred); the line goes on \
+                          with the rep. Returns {call, turns}. [risk: WRITE]",
+            permission: Permission::CallsWork,
+            schema: transfer_schema,
+            run: transfer,
         },
         ToolDef {
             use_case: "calls.get",
@@ -90,9 +139,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           refused_by_customer, appointment, callback_requested or other; an \
                           optional summary (at most 2000 characters, kept as a journey note) \
                           and follow_up_task {title, due_at}. A call still on the line is \
-                          ended. The person's journey gets the call; with a known duration and \
-                          a tariff the spend is recorded on the PBX's budget item. Ending twice \
-                          changes nothing. Returns {call, turns}. [risk: WRITE]",
+                          ended (your call hears its plan's closing first). The person's \
+                          journey gets the call; with a known duration and a tariff the spend \
+                          is recorded on the line's budget item. Ending twice changes nothing. \
+                          Returns {call, turns}. [risk: WRITE]",
             permission: Permission::CallsWork,
             schema: end_schema,
             run: end,
@@ -177,10 +227,64 @@ fn place_schema() -> Schema {
             "purpose": { "type": "string", "enum": ["service", "commercial", "callback"] },
             "mode": { "type": "string", "enum": ["human", "agent"] },
             "rep_extension": { "type": "string", "pattern": "^[0-9]{1,16}$" },
-            "capability_id": { "type": "string", "format": "uuid", "description": "The netgsm_pbx capability; the only live one when left out." },
-            "plan": { "type": "object", "description": "An agent-driven call's script (phase V1)." },
+            "capability_id": { "type": "string", "format": "uuid", "description": "The netgsm_pbx (mode human) or voice_bridge (mode agent) capability; the only live one when left out." },
+            "plan": {
+                "type": "object",
+                "description": "Mode agent only: the call's script, every sentence played as written.",
+                "properties": {
+                    "opening": text("Played when the person answers; must contain the policy's disclosure_sentence."),
+                    "goal": text("What the call is for; never played."),
+                    "holding": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "maxLength": 600 } },
+                    "fallback": { "type": "array", "maxItems": 3, "items": { "type": "string", "maxLength": 600 } },
+                    "closing": text("Played before the call is hung up."),
+                    "max_duration_s": { "type": "integer", "minimum": 1, "maximum": 900 },
+                    "language": { "type": "string", "enum": ["tr"] },
+                    "disclose_assistant": { "type": "boolean" },
+                },
+                "required": ["opening", "goal", "holding", "closing", "max_duration_s"],
+                "additionalProperties": false,
+            },
         },
         "required": ["purpose", "mode"],
+        "additionalProperties": false,
+    })
+}
+
+fn listen_schema() -> Schema {
+    json_schema!({
+        "type": "object",
+        "properties": {
+            "call_id": { "type": "string", "format": "uuid" },
+            "after_seq": { "type": "integer", "minimum": 0, "description": "The last event's seq you saw; every turn when left out." },
+            "wait_s": { "type": "integer", "minimum": 0, "maximum": 25, "description": "How long to wait for a turn (25 when left out)." },
+        },
+        "required": ["call_id"],
+        "additionalProperties": false,
+    })
+}
+
+fn say_schema() -> Schema {
+    json_schema!({
+        "type": "object",
+        "properties": {
+            "call_id": { "type": "string", "format": "uuid" },
+            "text": { "type": "string", "minLength": 1, "maxLength": 600 },
+            "expect_reply": { "type": "boolean" },
+            "allow_barge_in": { "type": "boolean" },
+        },
+        "required": ["call_id", "text"],
+        "additionalProperties": false,
+    })
+}
+
+fn transfer_schema() -> Schema {
+    json_schema!({
+        "type": "object",
+        "properties": {
+            "call_id": { "type": "string", "format": "uuid" },
+            "to_extension": { "type": "string", "pattern": "^[0-9]{1,16}$" },
+        },
+        "required": ["call_id"],
         "additionalProperties": false,
     })
 }
@@ -249,6 +353,30 @@ fn list<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         let query: ListQuery = args(raw)?;
         listed("calls", &calls::list(deps, ctx, query).await?)
+    })
+}
+
+fn listen<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let (id, rest) = split_call(raw)?;
+        let query: ListenQuery = args(rest)?;
+        to_json(&listen::listen(deps, ctx, id, query).await?)
+    })
+}
+
+fn say<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let (id, rest) = split_call(raw)?;
+        let input: SayInput = args(rest)?;
+        to_json(&say::say(deps, ctx, id, input).await?)
+    })
+}
+
+fn transfer<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let (id, rest) = split_call(raw)?;
+        let input: TransferInput = args(rest)?;
+        to_json(&say::transfer(deps, ctx, id, input).await?)
     })
 }
 

@@ -4,6 +4,7 @@
 //! columns its reads filter on, which every write keeps in step. A turn keeps its text in its own
 //! column (the person-erasure flow empties it) and its kind and measurements in `data`. A command
 //! keeps the domain's encoding in `payload` and is handed out in its queue order (`seq`).
+//! [`workspaces_with_live_agent_calls`] is the one platform-wide read.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -13,11 +14,13 @@ use jt_app::ports::calls::{
 };
 use jt_capability::CapabilityId;
 use jt_inbox::PersonId;
+use jt_tenancy::WorkspaceId;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::{map_sqlx, same_workspace};
+use crate::tx::PlatformTx;
 use crate::uow::PgTenantRepos;
 
 /// The longest turn text the table keeps.
@@ -275,6 +278,18 @@ impl CallRepo for PgTenantRepos {
         .map_err(|e| map_sqlx(e, "read inbound calls"))
     }
 
+    async fn live(&mut self) -> Result<Vec<CallSession>, AppError> {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from call_sessions where workspace_id = $1              and state not in ('planned', 'ended') order by started_at, id limit $2",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(i64::from(MAX_CALL_PAGE))
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list live call sessions"))?;
+        rows.into_iter().map(decode).collect()
+    }
+
     async fn append_turns(&mut self, call: CallId, turns: Vec<Turn>) -> Result<(), AppError> {
         let ws = self.workspace_id();
         let known: bool = sqlx::query_scalar(
@@ -316,6 +331,25 @@ impl CallRepo for PgTenantRepos {
             }
         }
         Ok(())
+    }
+
+    async fn mark_interrupted(
+        &mut self,
+        call: CallId,
+        seq: u32,
+        at_char: u32,
+    ) -> Result<bool, AppError> {
+        let done = sqlx::query(
+            "update call_turns set data = jsonb_set(data, '{meta}',              coalesce(data -> 'meta', '{}'::jsonb) || jsonb_build_object('interrupted_at_char', $4::bigint))              where workspace_id = $1 and call_id = $2 and seq = $3",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(call.as_uuid())
+        .bind(i32::try_from(seq).unwrap_or(i32::MAX))
+        .bind(i64::from(at_char))
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "mark call turn interrupted"))?;
+        Ok(done.rows_affected() == 1)
     }
 
     async fn turns(
@@ -452,6 +486,17 @@ impl CallRepo for PgTenantRepos {
         Ok(done.rows_affected() == 1)
     }
 
+    async fn purge_commands(&mut self, before: OffsetDateTime) -> Result<u64, AppError> {
+        let done =
+            sqlx::query("delete from call_commands where workspace_id = $1 and created_at < $2")
+                .bind(self.workspace_id().as_uuid())
+                .bind(before)
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "purge call commands"))?;
+        Ok(done.rows_affected())
+    }
+
     async fn note_bridge_event(
         &mut self,
         capability: CapabilityId,
@@ -513,4 +558,19 @@ impl CallRepo for PgTenantRepos {
         .map_err(|e| map_sqlx(e, "store call policy"))?;
         Ok(())
     }
+}
+
+/// The workspaces with an agent-driven call on the line, in id order (see
+/// `PlatformRepos::workspaces_with_live_agent_calls`).
+pub(crate) async fn workspaces_with_live_agent_calls(
+    tx: &mut PlatformTx<'_>,
+) -> Result<Vec<WorkspaceId>, AppError> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        // archtest: platform-wide
+        "select distinct s.workspace_id from call_sessions s where s.mode = 'agent'          and s.state not in ('planned', 'ended') order by s.workspace_id",
+    )
+    .fetch_all(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "list workspaces with a live agent call"))?;
+    Ok(ids.into_iter().map(WorkspaceId).collect())
 }

@@ -251,6 +251,21 @@ impl CallRepo for MemTenant {
         }))
     }
 
+    async fn live(&mut self) -> Result<Vec<CallSession>, AppError> {
+        let ws = self.ws;
+        let mut rows: Vec<CallSession> = self
+            .state()
+            .calls
+            .sessions
+            .iter()
+            .filter(|s| s.workspace_id == ws && s.state.is_live())
+            .cloned()
+            .collect();
+        rows.sort_by_key(|s| (s.started_at, s.id));
+        rows.truncate(MAX_CALL_PAGE as usize);
+        Ok(rows)
+    }
+
     async fn append_turns(&mut self, call: CallId, turns: Vec<Turn>) -> Result<(), AppError> {
         self.call(|this| {
             let ws = this.ws;
@@ -285,6 +300,31 @@ impl CallRepo for MemTenant {
             });
             Ok(())
         })
+    }
+
+    async fn mark_interrupted(
+        &mut self,
+        call: CallId,
+        seq: u32,
+        at_char: u32,
+    ) -> Result<bool, AppError> {
+        let ws = self.ws;
+        let known = self
+            .state()
+            .calls
+            .turns
+            .iter()
+            .any(|(w, c, t)| *w == ws && *c == call && t.seq == seq);
+        if known {
+            self.tx.write(move |s| {
+                for (w, c, t) in s.calls.turns.iter_mut() {
+                    if *w == ws && *c == call && t.seq == seq {
+                        t.meta.interrupted_at_char = Some(at_char);
+                    }
+                }
+            });
+        }
+        Ok(known)
     }
 
     async fn turns(
@@ -415,6 +455,25 @@ impl CallRepo for MemTenant {
             });
         }
         Ok(open)
+    }
+
+    async fn purge_commands(&mut self, before: OffsetDateTime) -> Result<u64, AppError> {
+        let ws = self.ws;
+        let n = self
+            .state()
+            .calls
+            .commands
+            .iter()
+            .filter(|c| c.workspace_id == ws && c.created_at < before)
+            .count();
+        if n > 0 {
+            self.tx.write(move |s| {
+                s.calls
+                    .commands
+                    .retain(|c| c.workspace_id != ws || c.created_at >= before);
+            });
+        }
+        Ok(n as u64)
     }
 
     async fn note_bridge_event(

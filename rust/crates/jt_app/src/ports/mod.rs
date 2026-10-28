@@ -1732,6 +1732,10 @@ pub trait PlatformRepos: Send + Sync {
         &mut self,
         kind_keys: &[&str],
     ) -> Result<Vec<WorkspaceId>, AppError>;
+    /// The workspaces, in id order, with an agent-driven call on the line (a session of mode
+    /// `agent` dialing to ending): those whose call timers have anything to do. Lets the
+    /// once-a-second timer job skip every other workspace without opening a transaction in it.
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError>;
     /// Appends a ledger entry to `entry.workspace_id` on behalf of the platform.
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;

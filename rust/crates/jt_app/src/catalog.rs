@@ -357,14 +357,19 @@ pub static CATALOG: &[UseCase] = &[
     // A PBX's call policy (call mode, whether calls are recorded): reserved public keys only this
     // writes, with a ledger entry.
     twin("connector.set_pbx_policy", Exempt, "jeeta.connector.set_pbx_policy", ("PUT", "/api/connectors/{capability_id}/pbx-policy"), Write),
-    // Phone calls (voice V0): gated by the strategy, except reading the policy. Placing a call
-    // spends the PBX tariff.
+    // Phone calls (voice V0, V1): gated by the strategy, except reading the policy. Placing a
+    // call spends the line's tariff; an agent's call is then driven turn by turn (listen, say,
+    // transfer).
     twin("calls.policy_get", Exempt, "jeeta.calls.policy_get", ("GET", "/api/calls/policy"), Read),
     twin("calls.policy_set", GateMode::Gated, "jeeta.calls.policy_set", ("PUT", "/api/calls/policy"), Write),
     twin("calls.place", GateMode::Gated, "jeeta.calls.place", ("POST", "/api/calls"), Spend),
     twin("calls.get", GateMode::Gated, "jeeta.calls.get", ("GET", "/api/calls/{call_id}"), Read),
     twin("calls.list", GateMode::Gated, "jeeta.calls.list", ("GET", "/api/calls"), Read),
     twin("calls.end", GateMode::Gated, "jeeta.calls.end", ("POST", "/api/calls/{call_id}/end"), Write),
+    // A long-poll of at most 25 seconds: `?after_seq&wait_s`.
+    twin("calls.listen", GateMode::Gated, "jeeta.calls.listen", ("GET", "/api/calls/{call_id}/events"), Read),
+    twin("calls.say", GateMode::Gated, "jeeta.calls.say", ("POST", "/api/calls/{call_id}/say"), Write),
+    twin("calls.transfer", GateMode::Gated, "jeeta.calls.transfer", ("POST", "/api/calls/{call_id}/transfer"), Write),
     // The voice bridge's own surface (voice V1): served under /api/voice/bridge/* to the bridge's
     // API key alone (`calls.bridge`, nothing else), never to a panel session and never as an MCP
     // tool; exempt from the strategy gate, since the line is set up before any strategy.

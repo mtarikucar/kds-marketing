@@ -200,6 +200,9 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/calls/{call_id}"),
     ("GET", "/api/calls"),
     ("POST", "/api/calls/{call_id}/end"),
+    ("GET", "/api/calls/{call_id}/events"),
+    ("POST", "/api/calls/{call_id}/say"),
+    ("POST", "/api/calls/{call_id}/transfer"),
     ("POST", "/api/voice/bridge/register"),
     ("GET", "/api/voice/bridge/commands"),
     ("POST", "/api/voice/bridge/events"),
@@ -985,6 +988,19 @@ pub fn api_routes() -> Vec<ApiRoute> {
         api_route("GET", "/calls", "calls.list", calls::list),
         api_route("POST", "/calls/{call_id}/end", "calls.end", calls::end),
         api_route(
+            "GET",
+            "/calls/{call_id}/events",
+            "calls.listen",
+            calls::listen,
+        ),
+        api_route("POST", "/calls/{call_id}/say", "calls.say", calls::say),
+        api_route(
+            "POST",
+            "/calls/{call_id}/transfer",
+            "calls.transfer",
+            calls::transfer,
+        ),
+        api_route(
             "POST",
             "/voice/bridge/register",
             "calls.bridge.register",
@@ -1161,6 +1177,7 @@ mod tests {
                 connectors: Arc::new(ScriptedRegistry::new()),
                 ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
                 ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+                call_signals: std::sync::Arc::new(jt_app::std_impls::LocalCallSignals::default()),
                 billing: jt_app::usecases::billing::BillingConfig {
                     price_minor: 123,
                     price_currency: "TRY".into(),

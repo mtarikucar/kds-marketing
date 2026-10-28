@@ -397,6 +397,9 @@ impl PlatformRepos for Platform {
     ) -> Result<Vec<WorkspaceId>, AppError> {
         self.inner.workspaces_with_verified(kind_keys).await
     }
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        self.inner.workspaces_with_live_agent_calls().await
+    }
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
         self.inner.ledger_append(entry).await
     }
