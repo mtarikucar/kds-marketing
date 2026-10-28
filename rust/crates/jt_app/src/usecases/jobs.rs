@@ -1039,6 +1039,7 @@ fn step_failed(job: Job, ws: WorkspaceId, capability: Option<CapabilityId>, fail
             workspace_id = %ws,
             capability_id = capability.as_deref().unwrap_or("-"),
             error_kind = e.kind(),
+            reason = %super::failure::failure_reason(None, e),
             "a job step failed at the provider"
         ),
     }
