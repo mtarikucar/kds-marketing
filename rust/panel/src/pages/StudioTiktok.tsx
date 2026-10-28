@@ -176,12 +176,15 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
   const [length, setLength] = useState<number>();
   const data = posting.data;
   const caption = title ?? data?.title ?? '';
+  // What is sent is what the screen shows: an interaction greyed out (by a fresher read of the
+  // account, or on photos) is off.
+  const shown = data?.media.kind === 'video';
   const choice: api.TiktokPost = {
     title: caption,
     privacy_level: privacy,
-    allow_comment: allowComment,
-    allow_duet: allowDuet,
-    allow_stitch: allowStitch,
+    allow_comment: allowComment && !data?.creator.comment_disabled,
+    allow_duet: allowDuet && shown && !data?.creator.duet_disabled,
+    allow_stitch: allowStitch && shown && !data?.creator.stitch_disabled,
     disclose_commercial: disclose,
     your_brand: disclose && yourBrand,
     branded_content: disclose && brandedContent,
