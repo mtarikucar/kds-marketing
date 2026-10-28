@@ -10,10 +10,11 @@
 //! **Transport.** The adapter holds no HTTP client: every call is built with
 //! [`jt_outbound::Egress::prepare`] and sent under `EgressScope::Connector("tiktok")`, so it can
 //! reach only the `tiktok` hosts of the fixed tier ([`TIKTOK_HOSTS`]): the Open API and its token
-//! endpoint (`open.tiktokapis.com`, [`TiktokBases::api`]) and the video upload
-//! (`open-upload.tiktokapis.com`, the host of the `upload_url` a video's init answers with, used as
-//! is; an upload URL on any other host is refused by the egress client, `Permanent`, and nothing
-//! is posted). The authorize dialog (`www.tiktok.com`, [`TiktokBases::authorize`]) is only a URL
+//! endpoint (`open.tiktokapis.com`, [`TiktokBases::api`]) and the video upload (the host of the
+//! `upload_url` a video's init answers with, used as is: `open-upload.tiktokapis.com`, or the
+//! regional `open-upload-sg.tiktokapis.com`, which TikTok answered with for a Turkish account; an
+//! upload URL on any other host is refused by the egress client, `Permanent`, and nothing is
+//! posted). The authorize dialog (`www.tiktok.com`, [`TiktokBases::authorize`]) is only a URL
 //! for the owner's browser and is never fetched. Tests point the bases at an in-process mock.
 //!
 //! **OAuth** (Login Kit for the web, <https://developers.tiktok.com/doc/login-kit-web>, and
@@ -185,7 +186,11 @@ use url::Url;
 
 /// The hosts the adapter reaches, exactly the `tiktok` entries of `jt_outbound::FIXED_HOSTS`: the
 /// Open API (with its token endpoint) and the video upload.
-pub const TIKTOK_HOSTS: &[&str] = &["open.tiktokapis.com", "open-upload.tiktokapis.com"];
+pub const TIKTOK_HOSTS: &[&str] = &[
+    "open.tiktokapis.com",
+    "open-upload.tiktokapis.com",
+    "open-upload-sg.tiktokapis.com",
+];
 
 /// The scopes the authorize URL asks for (<https://developers.tiktok.com/doc/tiktok-api-scopes>):
 /// the account's basic profile, posting directly, reading its videos (their counters) and its
