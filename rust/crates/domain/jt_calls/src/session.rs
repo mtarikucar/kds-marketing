@@ -1,8 +1,9 @@
 //! A call session, its turn log entries and its state machine (spec §5, §10): [`reduce`] applies
 //! what the voice bridge (or the PBX's call events) reported, [`say`] what the agent asked to be
-//! said, and [`end`] the scripted ending. Each returns the [`Step`]: the commands for the bridge
-//! and the turns to append. No text is composed here: a command carries the plan's, the policy's
-//! or the agent's own sentence.
+//! said, [`transfer`] a hand-over to a rep, and [`end`] the scripted ending ([`close`] when the
+//! line cannot be waited for). Each returns the [`Step`]: the commands for the bridge and the
+//! turns to append. No text is composed here: a command carries the plan's, the policy's or the
+//! agent's own sentence.
 
 use jt_capability::CapabilityId;
 use jt_inbox::{JourneyId, PersonId};
@@ -347,10 +348,11 @@ pub struct CallMetrics {
 }
 
 /// What the timers read (see [`crate::next_timer`]): since when the agent owes a reply (the
-/// caller's last final utterance, or the last fallback line), how many holding phrases this wait
-/// already played, since when the caller is waited for (the agent's last sentence finished), and
-/// whether the caller's silence was already reported. Also the next turn number and the turn of
-/// the recording announcement.
+/// caller's last final utterance, the last fallback line, or the end of an agent's sentence that
+/// expected no reply), how many holding phrases this wait already played, since when the caller
+/// is waited for (the agent's last sentence finished), and whether the caller's silence was
+/// already reported. Also the next turn number, the turn of the recording announcement, the turn
+/// of the agent's sentence after which the agent speaks again, and since when the closing plays.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TurnClock {
@@ -362,6 +364,11 @@ pub struct TurnClock {
     pub silence_noted: bool,
     pub next_seq: u32,
     pub announcement_seq: Option<u32>,
+    /// The agent's sentence (`say` with `expect_reply: false`) once played, the agent owes the
+    /// next one.
+    pub agent_continues_after: Option<u32>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub closing_since: Option<OffsetDateTime>,
 }
 
 /// One call, inbound or outbound, agent-driven or a rep's.
@@ -756,6 +763,7 @@ pub fn reduce(
             session.clock.holding_in_turn = 0;
             session.clock.awaiting_caller_since = None;
             session.clock.silence_noted = false;
+            session.clock.agent_continues_after = None;
             if session.state == CallState::Holding {
                 session.state = CallState::Live;
             }
@@ -766,6 +774,7 @@ pub fn reduce(
             session.clock.owed_since = Some(now);
             session.clock.holding_in_turn = 0;
             session.clock.awaiting_caller_since = None;
+            session.clock.agent_continues_after = None;
         }
         BridgeEvent::Said {
             seq,
@@ -786,7 +795,12 @@ pub fn reduce(
                 step.commands.push(Command::Record { start: true });
                 session.recording = RecordingState::Recording { file_ref: None };
             }
-            if session.clock.owed_since.is_none() {
+            if session.clock.agent_continues_after == Some(*seq) {
+                // The agent said it would go on: its next sentence is owed from here.
+                session.clock.agent_continues_after = None;
+                session.clock.owed_since = Some(now);
+                session.clock.holding_in_turn = 0;
+            } else if session.clock.owed_since.is_none() {
                 session.clock.awaiting_caller_since = Some(now);
                 session.clock.silence_noted = false;
             }
@@ -834,10 +848,13 @@ pub fn reduce(
 
 /// The agent's sentence `text`, played now: refused unless the call is agent-driven and live (or
 /// holding), and the sentence 1 to 600 characters. The turn records the agent's reply latency.
+/// With `expect_reply` the caller is waited for once it has been played; without, the agent owes
+/// its next sentence from then on (the holding and fallback timers count again).
 pub fn say(
     session: &mut CallSession,
     text: &str,
     allow_barge_in: bool,
+    expect_reply: bool,
     now: OffsetDateTime,
 ) -> Result<Step, CallError> {
     if !session.is_agent() {
@@ -868,6 +885,7 @@ pub fn say(
     session.clock.owed_since = None;
     session.clock.holding_in_turn = 0;
     session.clock.awaiting_caller_since = None;
+    session.clock.agent_continues_after = (!expect_reply).then_some(turn.seq);
     session.state = CallState::Live;
     Ok(Step {
         commands: vec![Command::Say {
@@ -878,6 +896,46 @@ pub fn say(
         turns: vec![turn],
         interrupted: None,
     })
+}
+
+/// Hands the caller over to PBX extension `to`: refused unless the call is agent-driven and live
+/// (or holding). The bridge is asked to transfer the line, and the agent's part ends at once
+/// (`transferred`), with no closing: the line goes on without the agent.
+pub fn transfer(
+    session: &mut CallSession,
+    to: &str,
+    now: OffsetDateTime,
+) -> Result<Step, CallError> {
+    if !session.is_agent() {
+        return Err(CallError::NotAgentCall);
+    }
+    if !matches!(session.state, CallState::Live | CallState::Holding) {
+        return Err(CallError::NotLive);
+    }
+    let turn = session.turn(
+        now,
+        TurnKind::Event {
+            name: "transferred".into(),
+        },
+        "",
+        TurnMeta::default(),
+    );
+    session.finish(EndCause::Transferred, now);
+    Ok(Step {
+        commands: vec![Command::Transfer { to: to.to_owned() }],
+        turns: vec![turn],
+        interrupted: None,
+    })
+}
+
+/// Ends the session at `now` without waiting for the line: the bridge stopped reporting, or never
+/// reported the end of a closing, or the caller recorded the call's outcome while its closing
+/// plays. A cause a scripted ending already set is kept; nothing is sent to the bridge. An ended
+/// session is left as it is.
+pub fn close(session: &mut CallSession, cause: EndCause, now: OffsetDateTime) {
+    if session.state != CallState::Ended {
+        session.finish(cause, now);
+    }
 }
 
 /// Ends the call with `cause`: an answered agent-driven call hears its plan's closing and is hung
@@ -921,6 +979,7 @@ pub fn end(session: &mut CallSession, cause: EndCause, now: OffsetDateTime) -> S
             session.end_cause = Some(cause);
             session.clock.owed_since = None;
             session.clock.awaiting_caller_since = None;
+            session.clock.closing_since = Some(now);
         }
         None => {
             if session.is_agent() {
