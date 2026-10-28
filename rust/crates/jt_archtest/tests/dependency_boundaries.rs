@@ -103,6 +103,48 @@ fn device_protocol_depends_only_on_devices_and_plain_crates() {
     }
 }
 
+/// The device bridge (`bridge/device`) is a program of its own, on the computer a phone is
+/// plugged into: it reaches the server over HTTP only, and it builds and tests on Windows, where
+/// `jt_pg` does not build. So no section of its manifest, tests included, names a workspace crate
+/// but the device vocabulary and its wire protocol: not `jt_pg`, not `jt_app`, no adapter.
+#[test]
+fn device_bridge_depends_on_no_server_crate() {
+    const BRIDGE: &str = "jeeta-device-bridge";
+    let metadata = metadata();
+    let bridge = metadata["packages"]
+        .as_array()
+        .expect("`cargo metadata` has no `packages` array")
+        .iter()
+        .find(|p| p["name"] == BRIDGE)
+        .expect("jeeta-device-bridge is a workspace package");
+    let workspace = workspace_packages();
+    // Every kind: normal, dev and build dependencies.
+    let named: BTreeSet<&str> = bridge["dependencies"]
+        .as_array()
+        .expect("package has no `dependencies` array")
+        .iter()
+        .map(|d| d["name"].as_str().expect("dependency has no `name`"))
+        .collect();
+    for d in &named {
+        assert!(
+            !workspace.contains(*d) || ["jt_devices", "jt_device_protocol"].contains(d),
+            "{BRIDGE} depends on {d}: the bridge names no server crate"
+        );
+        assert_ne!(*d, "sqlx", "{BRIDGE} depends on sqlx");
+    }
+    for server in ["jt_pg", "jt_app", "jt_outbound", "jt_panel_http"] {
+        assert!(!named.contains(server), "{BRIDGE} depends on {server}");
+    }
+    // Not vacuous: it speaks the protocol, over its own HTTP client.
+    let deps = direct_deps(BRIDGE);
+    for needed in ["jt_device_protocol", "jt_devices", "reqwest"] {
+        assert!(
+            deps.contains(needed),
+            "{BRIDGE} lost its {needed} dependency"
+        );
+    }
+}
+
 /// Exact dependency sets: connector, inbox and studio use capability types; only connector
 /// and inbox hash bytes, while the other crypto crates remain connector-only (non-vacuous).
 #[test]
@@ -299,8 +341,16 @@ fn rust_files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// `[dev-dependencies]`, whose MCP test client is rmcp's HTTP client transport (its feature is
 /// named after reqwest; dev-dependencies never enter the binary, and `cargo deny` bans reqwest
 /// outside `jt_outbound` in the normal graph).
+///
+/// And one program that is not the server: the device bridge (`jeeta-device-bridge`, spec
+/// `2026-10-28-device-bridge-design.md` §2), which runs on the computer a phone is plugged into
+/// and calls Jeeta's bridge routes and the signed download addresses Jeeta hands it. The server's
+/// egress rules (provider hosts, connector scopes) are not its rules; it has its own HTTP client,
+/// as `deny.toml` allows.
 #[test]
 fn no_crate_but_outbound_names_reqwest() {
+    /// The packages with an HTTP client of their own.
+    const OWN_CLIENT: &[&str] = &["jt_outbound", "jeeta-device-bridge"];
     let metadata = metadata();
     let packages = metadata["packages"]
         .as_array()
@@ -308,7 +358,7 @@ fn no_crate_but_outbound_names_reqwest() {
     let mut checked = 0;
     for package in packages {
         let name = package["name"].as_str().expect("a package name");
-        if name == "jt_outbound" || name == "jt_archtest" {
+        if OWN_CLIENT.contains(&name) || name == "jt_archtest" {
             continue;
         }
         assert!(
@@ -349,11 +399,13 @@ fn no_crate_but_outbound_names_reqwest() {
         }
         checked += 1;
     }
-    // Every crate but the two: not vacuous.
-    assert_eq!(checked, workspace_packages().len() - 2);
+    // Every crate but the three: not vacuous.
+    assert_eq!(checked, workspace_packages().len() - 3);
     assert!(checked >= 15, "only {checked} packages checked");
-    // And jt_outbound does use it: the rule is about where, not whether.
-    assert!(direct_deps("jt_outbound").contains("reqwest"));
+    // And the two do use it: the rule is about where, not whether.
+    for name in OWN_CLIENT {
+        assert!(direct_deps(name).contains("reqwest"), "{name}");
+    }
 }
 
 // A provider adapter: the application core (its ports) and the domain crates it speaks, the

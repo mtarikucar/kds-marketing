@@ -28,6 +28,7 @@ members = [
     "crates/jt_testkit",
     "crates/jt_archtest",
     "bin/jeeta",
+    "bridge/device",
 ]
 
 [workspace.package]

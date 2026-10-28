@@ -49,7 +49,7 @@ into it. D0 waits for voice V1-T2 (agent call session) to merge, since it reshap
 | `rust/crates/adapters/jt_panel_http/src/routes/device_bridge.rs` + `routes/devices.rs` | new | routes |
 | `rust/crates/adapters/jt_mcp/src/tools/devices.rs` | new | MCP tools |
 | `rust/crates/jt_app/src/usecases/jobs.rs` | changed | `DeviceBridgeHealth` (or kernel's shared health job), `DeviceCommandExpiry`, `DeviceFilePurge` |
-| `rust/bridge/device/{Cargo.toml,src/{main,config,client,loop}.rs,src/driver/{mod,android/{mod,adb,observe,commands}}.rs}` | new | the PC-side program |
+| `rust/bridge/device/{Cargo.toml,src/{lib,main,config,client,run_loop}.rs,src/driver/{mod,android/{mod,adb,observe,commands}}.rs}` | new | the PC-side program |
 | `rust/bridge/device/tests/{fixtures/*.xml,android_driver.rs,loop.rs}` | new | driver + loop tests |
 | `rust/panel/src/pages/capabilities/PhoneCard.tsx` (+ test), `src/api/devices.ts`, i18n | new/changed | panel |
 | `docs/operations/device-bridge.md` | new | install, pairing, ADBKeyBoard, troubleshooting |
@@ -489,7 +489,29 @@ of the last 1 000). Read each poll body with `CommandsOut::decode_lenient`: run 
 command by its id with `FailReason::UnsupportedByBridge` (the message is the failure `detail`, never a log line), and
 log `dropped` at `warn` level when it is not zero (a count only: no body, no command). An `Err` is a failed poll, like
 a transport error: log it (the field name only), back off and poll again — it must not read as an idle poll.
-- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing).
+
+Results: a post is retried with backoff on a transport error or a 5xx (and 408/429) only. **A 422 is final**: the
+loop never sends the same batch again as it is; it splits it in halves (the first half first) to isolate the bad
+result, and a single result that still gets 422 is dropped with a `warn` log of its command id and the field name
+(the 422 body's `details.field`) only. Before batching, each result is checked with `ResultsIn::validate` and its
+serialized size; one the server would have to refuse is replaced by a `bridge_error` failure of its command. A batch
+holds at most `MAX_RESULTS`, at most `MAX_RESULTS_BODY_BYTES` serialized, and a command once.
+Register: a `RefusedPhone` is logged at `warn` with its serial and reason (when the refusal is new); a phone refused
+with `PHONE_RETIRED` is not listed again until the bridge restarts. Only the configured `serials`, each once, at most
+`MAX_PHONES`. The loop polls only while a phone is registered.
+
+As built: a lib target beside the bin (`src/lib.rs`, so `tests/loop.rs` reaches the loop) and `src/driver/mod.rs`
+with the seams D2-T2 fills: `PhoneDriver` and `DriverError` as below, `FileTransfer` (`upload(bytes, content_type) ->
+Uuid`, `download(dest) -> u64`: one per command, holding that command's signed `download_url`, so a driver never sees
+it; the download sends no key) and `PhoneRegistry::attached() -> Vec<AttachedPhone { serial, driver }>`, listed
+before every register. Extra deps: `serde_json`, `uuid`, `async-trait`. Config also takes an optional `bridge_id`
+(default `COMPUTERNAME`/`HOSTNAME`); `base_url` is https (plain http only to this computer); the env key wins over the
+file's; an unknown setting is refused; no error repeats the key. `run(&Config, Arc<dyn PhoneRegistry>, Timing,
+shutdown)`: `Timing` holds the intervals (tests shorten them), a per-command timeout fails a command as `timeout`.
+`main.rs` wires a registry that reports no phones (`TODO(D2-T2)`). The archtest rule
+(`device_bridge_depends_on_no_server_crate`) checks every dependency kind; `no_crate_but_outbound_names_reqwest` and
+`deny.toml` name the bridge as the one other package with its own HTTP client.
+- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`.
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit**.
 
 ### Task D2-T2: `AndroidAdbDriver`

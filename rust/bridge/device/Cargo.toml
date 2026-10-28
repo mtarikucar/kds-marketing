@@ -1,0 +1,33 @@
+[package]
+name = "jeeta-device-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The PC-side program that connects the phones plugged into a computer to Jeeta (spec
+# `2026-10-28-device-bridge-design.md` §6). It builds and tests on Windows, the owner's PC, so it
+# names no server crate: only the device vocabulary and its wire protocol (archtest).
+[dependencies]
+jt_device_protocol.workspace = true
+jt_devices.workspace = true
+tokio = { workspace = true, features = ["time", "fs", "io-util"] }
+# The bridge's own HTTP client to Jeeta (rustls). The server's provider traffic goes through
+# `jt_outbound`; this program is not the server and talks to Jeeta alone.
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# `PhoneDriver`, `PhoneRegistry` and `FileTransfer` are used as trait objects.
+async-trait.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The fake Jeeta of `tests/loop.rs`.
+axum.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+[lints]
+workspace = true
