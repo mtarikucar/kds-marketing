@@ -77,8 +77,21 @@ fn capabilities_and_budget_permissions_belong_to_owner_and_manager_only() {
             "studio.manage",
             "calls.work",
             "calls.manage",
+            "calls.bridge",
         ]
     );
+}
+
+#[test]
+fn calls_bridge_is_owner_and_manager_only() {
+    // A voice bridge's key is issued with `calls.bridge` alone; only who holds it may issue it.
+    let p = Permission::CallsBridge;
+    assert_eq!(p.key(), "calls.bridge");
+    assert_eq!(Permission::parse("calls.bridge"), Some(p));
+    assert_eq!(serde_json::to_value(p).unwrap(), "calls.bridge");
+    assert!(SystemRole::Owner.permissions().contains(&p));
+    assert!(SystemRole::Manager.permissions().contains(&p));
+    assert!(!SystemRole::Rep.permissions().contains(&p));
 }
 
 #[test]
@@ -223,6 +236,7 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             Permission::StudioManage,
             Permission::CallsWork,
             Permission::CallsManage,
+            Permission::CallsBridge,
         ]),
     });
     // A custom lead may neither demote nor remove a manager.
@@ -358,6 +372,7 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
             Permission::StudioManage,
             Permission::CallsWork,
             Permission::CallsManage,
+            Permission::CallsBridge,
         ]),
     });
     assert_eq!(

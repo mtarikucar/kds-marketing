@@ -36,7 +36,7 @@ const EXPECTED_KINDS: &[(KindGroup, &[&str])] = &[
             "webchat",
         ],
     ),
-    (KindGroup::Telephony, &["netgsm_pbx"]),
+    (KindGroup::Telephony, &["netgsm_pbx", "voice_bridge"]),
     (
         KindGroup::Community,
         &["discord", "reddit", "review_google", "review_facebook"],
@@ -119,7 +119,7 @@ fn every_kind_key_is_unique_and_parses() {
         .collect();
     let actual: Vec<(KindGroup, &str)> = KINDS.iter().map(|k| (k.group, k.key)).collect();
     assert_eq!(actual, expected);
-    assert_eq!(KINDS.len(), 50);
+    assert_eq!(KINDS.len(), 51);
 
     let keys: BTreeSet<&str> = KINDS.iter().map(|k| k.key).collect();
     assert_eq!(keys.len(), KINDS.len(), "kind keys must be unique");
@@ -207,13 +207,15 @@ fn default_reach_per_group() {
             }
         };
         assert_eq!(g.default_reach(), expected, "{}", g.key());
-        for k in kinds_in_group(*g) {
+        // The voice bridge is the one kind reached otherwise than its group: like a device.
+        for k in kinds_in_group(*g).filter(|k| k.key != "voice_bridge") {
             assert_eq!(k.default_reach(), expected, "{}", k.key);
         }
     }
+    assert_eq!(kind("voice_bridge").default_reach(), Reach::Device);
     let count = |r: Reach| KINDS.iter().filter(|k| k.default_reach() == r).count();
     assert_eq!(count(Reach::Connector), 26);
-    assert_eq!(count(Reach::Device), 9);
+    assert_eq!(count(Reach::Device), 10);
     assert_eq!(count(Reach::Agent), 15);
 
     // A new capability takes its kind's reach, starts declared and unverified.
@@ -564,6 +566,7 @@ fn budget_link_rules() {
         "whatsapp_cloud",
         "mailbox",
         "netgsm_pbx",
+        "voice_bridge",
         "review_google",
         "google_calendar",
         "phone",
@@ -578,7 +581,7 @@ fn budget_link_rules() {
 
     // Across the whole list: how many kinds each budget kind can feed.
     let feeds = |b: BudgetKind| -> usize { KINDS.iter().filter(|k| can_link_budget(k, b)).count() };
-    assert_eq!(feeds(Cash), 46, "every kind but the agent connections");
+    assert_eq!(feeds(Cash), 47, "every kind but the agent connections");
     assert_eq!(feeds(AdBudget), 4);
     assert_eq!(feeds(SmsBudget), 1);
     assert_eq!(feeds(AgentQuota), 4);
@@ -1427,6 +1430,7 @@ fn reserved_public_keys_are_the_ones_connectors_write() {
             "access",
             "account",
             "asset",
+            "bridge",
             "call_mode",
             "facts",
             "health",
@@ -1501,4 +1505,63 @@ fn a_meta_ad_account_is_held_by_its_number() {
         "act_1234"
     );
     assert_eq!(META_AD_ACCOUNT_PREFIX, "act_");
+}
+
+#[test]
+fn a_voice_bridge_is_verified_by_its_heartbeat() {
+    // Only the voice bridge reports a heartbeat: stale a minute after it, unreachable ten
+    // minutes after it.
+    let beat = kind("voice_bridge")
+        .heartbeat()
+        .expect("the voice bridge has a heartbeat");
+    assert_eq!(beat.stale_after, Duration::seconds(60));
+    assert_eq!(beat.unreachable_after, Duration::minutes(10));
+    for k in KINDS.iter().filter(|k| k.key != "voice_bridge") {
+        assert_eq!(k.heartbeat(), None, "{}", k.key);
+    }
+    let c = declared("voice_bridge");
+    assert_eq!(c.reach, Reach::Device);
+    assert_eq!(c.status, StoredStatus::Declared);
+
+    let beat_at = |at: Option<OffsetDateTime>, max_age_days: u16| {
+        let mut c = declared("voice_bridge");
+        c.status = StoredStatus::Verified;
+        c.last_verified_at = at;
+        c.policy.verify_max_age_days = max_age_days;
+        effective_status(&c, NOW)
+    };
+    // Its last heartbeat, not its policy, says how long a verification holds: a minute is still
+    // fresh, a second more is stale, whatever `verify_max_age_days` (0 included) says.
+    for days in [DEFAULT_VERIFY_MAX_AGE_DAYS, 0] {
+        assert_eq!(beat_at(Some(NOW), days), EffectiveStatus::Verified);
+        assert_eq!(
+            beat_at(Some(NOW - Duration::seconds(60)), days),
+            EffectiveStatus::Verified
+        );
+        assert_eq!(
+            beat_at(Some(NOW - Duration::seconds(61)), days),
+            EffectiveStatus::Stale
+        );
+        assert_eq!(
+            beat_at(Some(NOW - Duration::days(1)), days),
+            EffectiveStatus::Stale
+        );
+        // A heartbeat ahead of `now` (clock skew) is fresh; none at all is not.
+        assert_eq!(
+            beat_at(Some(NOW + Duration::seconds(5)), days),
+            EffectiveStatus::Verified
+        );
+        assert_eq!(beat_at(None, days), EffectiveStatus::Stale);
+    }
+    // Every other stored status reads as stored.
+    let mut c = declared("voice_bridge");
+    c.last_verified_at = Some(NOW);
+    for (stored, effective) in [
+        (StoredStatus::Declared, EffectiveStatus::Declared),
+        (StoredStatus::Unreachable, EffectiveStatus::Unreachable),
+        (StoredStatus::Retired, EffectiveStatus::Retired),
+    ] {
+        c.status = stored;
+        assert_eq!(effective_status(&c, NOW), effective);
+    }
 }

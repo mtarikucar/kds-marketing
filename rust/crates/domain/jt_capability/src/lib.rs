@@ -39,8 +39,8 @@ pub use group::{CapabilityGroup, CapabilityGroupId};
 /// The key names that must never appear in public fields: the ledger's redaction list.
 pub use jt_ledger::REDACTED_KEYS;
 pub use kind::{
-    CapabilityKind, KINDS, KindGroup, META_AD_ACCOUNT_PREFIX, Reach, canonical_external_id,
-    kinds_in_group,
+    CapabilityKind, Heartbeat, KINDS, KindGroup, META_AD_ACCOUNT_PREFIX, Reach,
+    canonical_external_id, kinds_in_group,
 };
 pub use policy::{DEFAULT_VERIFY_MAX_AGE_DAYS, Hours, MAX_TZ_CHARS, Policy, validate_policy};
 pub use status::{EffectiveStatus, StoredStatus, effective_status};

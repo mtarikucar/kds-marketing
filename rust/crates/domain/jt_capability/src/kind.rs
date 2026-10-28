@@ -1,6 +1,7 @@
 //! The closed list of capability kinds (spec §6.2), their groups and how each is reached.
 
 use serde::{Deserialize, Serialize};
+use time::Duration;
 
 /// How the system reaches a capability (spec §6.1 "ulaşım yolu").
 ///
@@ -146,6 +147,19 @@ pub fn canonical_external_id(kind_key: &str, id: &str) -> String {
 /// The key of the third-party kind that stands for any other tool; it needs a `key_detail`.
 const OTHER_THIRD_PARTY: &str = "other";
 
+/// The key of the voice bridge: the sidecar that is the workspace's phone line for agent calls.
+const VOICE_BRIDGE: &str = "voice_bridge";
+
+/// How a kind proves it is alive by reporting itself on a schedule, instead of by a probe or the
+/// agent's evidence: its verification goes stale once the last report is older than
+/// `stale_after`, and its capability is marked unreachable once it is older than
+/// `unreachable_after` (a scheduled job does that).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Heartbeat {
+    pub stale_after: Duration,
+    pub unreachable_after: Duration,
+}
+
 const fn k(group: KindGroup, key: &'static str) -> CapabilityKind {
     CapabilityKind { group, key }
 }
@@ -171,6 +185,9 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::Messaging, "mailbox"),
     k(KindGroup::Messaging, "webchat"),
     k(KindGroup::Telephony, "netgsm_pbx"),
+    // The voice bridge (spec 2026-10-27-agent-voice-calls-design.md §6): reached like a device,
+    // verified by its own heartbeat ([`CapabilityKind::heartbeat`]).
+    k(KindGroup::Telephony, VOICE_BRIDGE),
     k(KindGroup::Community, "discord"),
     k(KindGroup::Community, "reddit"),
     k(KindGroup::Community, "review_google"),
@@ -215,9 +232,25 @@ impl CapabilityKind {
         KINDS.iter().find(|k| k.key == key)
     }
 
-    /// How a capability of this kind is reached: its group's [`KindGroup::default_reach`].
+    /// How a capability of this kind is reached: its group's [`KindGroup::default_reach`], except
+    /// that a kind with a [`Heartbeat`] (the voice bridge) is reached like a device: no connector
+    /// adapter holds its credentials, and only its own reports verify it.
     pub fn default_reach(&self) -> Reach {
-        self.group.default_reach()
+        if self.heartbeat().is_some() {
+            Reach::Device
+        } else {
+            self.group.default_reach()
+        }
+    }
+
+    /// How a capability of this kind reports itself, when it does: only the voice bridge, which
+    /// registers every 15 seconds, goes stale a minute after its last report and unreachable ten
+    /// minutes after it.
+    pub fn heartbeat(&self) -> Option<Heartbeat> {
+        (self.key == VOICE_BRIDGE).then_some(Heartbeat {
+            stale_after: Duration::seconds(60),
+            unreachable_after: Duration::minutes(10),
+        })
     }
 
     /// Whether a capability of this kind needs a `key_detail` naming the tool: only the

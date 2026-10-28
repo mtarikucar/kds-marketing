@@ -44,6 +44,11 @@ pub enum Permission {
     /// Set the call policy and see a call's number.
     #[serde(rename = "calls.manage")]
     CallsManage,
+    /// Be the workspace's voice bridge: register its line, take the commands queued for it and
+    /// report what happened on its calls. The bridge's API key carries it and nothing else; the
+    /// owner and the manager hold it only so that they can issue that key.
+    #[serde(rename = "calls.bridge")]
+    CallsBridge,
 }
 
 const ALL_PERMISSIONS: &[Permission] = &[
@@ -59,6 +64,7 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::StudioManage,
     Permission::CallsWork,
     Permission::CallsManage,
+    Permission::CallsBridge,
 ];
 
 impl Permission {
@@ -69,6 +75,7 @@ impl Permission {
             Permission::StudioManage => "studio.manage",
             Permission::CallsWork => "calls.work",
             Permission::CallsManage => "calls.manage",
+            Permission::CallsBridge => "calls.bridge",
             Permission::WorkspaceRead => "workspace.read",
             Permission::TeamManage => "team.manage",
             Permission::ApiKeysManage => "api_keys.manage",
