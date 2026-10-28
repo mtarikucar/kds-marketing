@@ -375,6 +375,9 @@ impl NetgsmConnector {
         let what = "the call records";
         let Some(json) = &answer.json else {
             if let Some(code) = answer.code().filter(|c| !is_success(c)) {
+                if let Some(answered) = report_code(&code, &answer) {
+                    return answered;
+                }
                 return Err(code_error(&code, answer.retry_after));
             }
             return Err(status_error(&answer).unwrap_or_else(|| unreadable(&answer, what)));
@@ -385,6 +388,11 @@ impl NetgsmConnector {
                 if let Some(Value::Array(items)) = object.get("data").or(object.get("values")) {
                     items.iter().collect()
                 } else if is_failure(json) || object.contains_key("error") {
+                    if let Some(code) = pick(json, &["code"]).filter(|c| !is_success(c))
+                        && let Some(answered) = report_code(&code, &answer)
+                    {
+                        return answered;
+                    }
                     return Err(santral_failure(json, what, pbx.password, &answer));
                 } else {
                     object.values().filter(|v| v.is_object()).collect()
@@ -401,6 +409,28 @@ impl NetgsmConnector {
             .filter_map(call_record)
             .collect())
     }
+}
+
+/// What the call records' own codes mean (the "Görüşme Detayı (CDR)" table of
+/// <https://www.netgsm.com.tr/netsantraldokuman/>): `40` is no call in the window, so no record;
+/// `50` a date not in `ddMMyyyyHHmm`, `60` a window longer than 24 hours, `100` and `101` NetGSM's
+/// limit of two queries a minute. `None` for another code, which the general table maps.
+fn report_code(
+    code: &str,
+    answer: &Answer,
+) -> Option<Result<Vec<InboundEventDraft>, ConnectorError>> {
+    let answered = match code {
+        "40" => Ok(Vec::new()),
+        "50" => Err(ConnectorError::permanent(
+            "Netsantral code 50: the call-record window's date format was refused",
+        )),
+        "60" => Err(ConnectorError::permanent(
+            "Netsantral code 60: the call-record window is longer than 24 hours",
+        )),
+        "100" | "101" => Err(ConnectorError::throttle(answer.retry_after)),
+        _ => return None,
+    };
+    Some(answered)
 }
 
 /// One call record as a `cdr` call event, its recording links without their query strings;
