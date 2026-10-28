@@ -7,9 +7,14 @@
 //! # Versions
 //!
 //! [`PROTOCOL_VERSION`] counts the shapes of the structs here. The bridge sends its protocol in
-//! [`RegisterIn`] and the server answers its own in [`RegisterOut`]. Every struct refuses unknown
-//! fields, on both sides, so each side sends only the fields and kinds that the LOWER of the two
-//! protocol versions defines.
+//! [`RegisterIn`] and the server answers its own in [`RegisterOut`].
+//!
+//! - Register is tolerant: [`RegisterIn`] and [`PhoneReport`] ignore unknown fields, because the
+//!   first register goes out before the bridge knows the server's protocol.
+//! - After it, each side sends only the fields and kinds that the LOWER of the two protocol
+//!   versions defines: every other struct refuses unknown fields, on both sides.
+//!
+//! Growing the vocabulary:
 //!
 //! - A new [`FailReason`] needs no bump: an older reader takes it as [`FailReason::Unknown`] (see
 //!   `jt_devices`).
@@ -55,6 +60,8 @@ pub const MAX_PHONES: usize = 16;
 pub const MAX_FEATURES: usize = 64;
 /// The most characters in one feature name.
 pub const MAX_FEATURE_CHARS: usize = 64;
+/// The most pixels along either side of a phone's screen.
+pub const MAX_SCREEN_PX: u32 = 20_000;
 
 /// A body that breaks a limit.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -70,16 +77,13 @@ fn invalid(field: &'static str, reason: &'static str) -> ProtocolError {
     ProtocolError::Invalid { field, reason }
 }
 
-/// A name or an id the server keeps: not blank, no NUL character, at most `max` characters.
-fn name(
+/// Text the server keeps: no NUL character, at most `max` characters.
+fn text(
     field: &'static str,
     value: &str,
     max: usize,
     too_long: &'static str,
 ) -> Result<(), ProtocolError> {
-    if value.trim().is_empty() {
-        return Err(invalid(field, "must not be blank"));
-    }
     if value.contains('\0') {
         return Err(invalid(field, "must not contain a NUL character"));
     }
@@ -89,9 +93,25 @@ fn name(
     Ok(())
 }
 
+/// [`text`] for a name or an id, which must also carry something.
+fn name(
+    field: &'static str,
+    value: &str,
+    max: usize,
+    too_long: &'static str,
+) -> Result<(), ProtocolError> {
+    if value.trim().is_empty() {
+        return Err(invalid(field, "must not be blank"));
+    }
+    text(field, value, max, too_long)
+}
+
 /// What a bridge sends to say it is alive and which phones it sees (every [`HEARTBEAT_S`]).
+///
+/// Unknown fields are ignored (so are those of [`PhoneReport`]): this is the first thing a bridge
+/// sends, before it knows the server's protocol, and a newer bridge's extra optional fields must
+/// not make an older server refuse it. Ignored fields are not written back.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RegisterIn {
     pub bridge_id: String,
     /// The bridge program's version.
@@ -134,6 +154,36 @@ impl RegisterIn {
             if !seen.insert((phone.platform.key(), phone.serial.as_str())) {
                 return Err(invalid("phones", "lists a phone more than once"));
             }
+            if let Some(model) = &phone.model {
+                text(
+                    "model",
+                    model,
+                    MAX_ID_CHARS,
+                    "is longer than 128 characters",
+                )?;
+            }
+            if let Some(os_version) = &phone.os_version {
+                text(
+                    "os_version",
+                    os_version,
+                    MAX_ID_CHARS,
+                    "is longer than 128 characters",
+                )?;
+            }
+            if let Some(screen) = &phone.screen {
+                if [screen.w, screen.h]
+                    .iter()
+                    .any(|side| !(1..=MAX_SCREEN_PX).contains(side))
+                {
+                    return Err(invalid("screen", "has a side outside 1 to 20000 pixels"));
+                }
+                if !matches!(screen.rotation, 0 | 90 | 180 | 270) {
+                    return Err(invalid(
+                        "screen",
+                        "has a rotation other than 0, 90, 180 or 270",
+                    ));
+                }
+            }
             if phone.features.len() > MAX_FEATURES {
                 return Err(invalid("features", "has more than 64 features"));
             }
@@ -150,9 +200,9 @@ impl RegisterIn {
     }
 }
 
-/// One phone a bridge sees. Whatever the bridge cannot tell is left out or `null`.
+/// One phone a bridge sees. Whatever the bridge cannot tell is left out or `null`. Unknown fields
+/// are ignored, as in [`RegisterIn`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PhoneReport {
     pub platform: Platform,
     /// The platform's own id of the phone; with the platform it names the phone.

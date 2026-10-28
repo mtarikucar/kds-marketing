@@ -2,9 +2,9 @@
 use jt_device_protocol::{
     CommandResult, CommandsOut, CommandsQuery, DeviceCommand, FailReason, FileOut, HEARTBEAT_S,
     LeasedCommand, MAX_COMMANDS, MAX_DETAIL_CHARS, MAX_FEATURE_CHARS, MAX_FEATURES, MAX_ID_CHARS,
-    MAX_OUTPUT_BYTES, MAX_PHONES, MAX_RESULTS, MAX_VERSION_CHARS, MAX_WAIT_S, Observation, Outcome,
-    PROTOCOL_VERSION, PhoneReport, Platform, ProtocolError, RegisterIn, RegisterOut,
-    RegisteredPhone, ResultIn, ResultsIn, ResultsOut, Screen,
+    MAX_OUTPUT_BYTES, MAX_PHONES, MAX_RESULTS, MAX_SCREEN_PX, MAX_VERSION_CHARS, MAX_WAIT_S,
+    Observation, Outcome, PROTOCOL_VERSION, PhoneReport, Platform, ProtocolError, RegisterIn,
+    RegisterOut, RegisteredPhone, ResultIn, ResultsIn, ResultsOut, Screen,
 };
 use jt_devices::Element;
 use serde::Serialize;
@@ -406,6 +406,7 @@ fn limits_are_the_documented_ones() {
     assert_eq!(MAX_PHONES, 16);
     assert_eq!(MAX_FEATURES, 64);
     assert_eq!(MAX_FEATURE_CHARS, 64);
+    assert_eq!(MAX_SCREEN_PX, 20_000);
 }
 
 #[test]
@@ -420,13 +421,7 @@ fn the_bridge_needs_one_import_path_for_the_shared_vocabulary() {
 
 #[test]
 fn unknown_fields_refused() {
-    refuses_unknown_field::<RegisterIn>(json!({
-        "bridge_id": "b", "version": "1", "protocol": 1, "phones": []
-    }));
-    refuses_unknown_field::<PhoneReport>(json!({
-        "platform": "android", "serial": "s", "model": null, "os_version": null,
-        "screen": null, "features": []
-    }));
+    // `RegisterIn` and `PhoneReport` are the exceptions: see `register_ignores_unknown_fields`.
     refuses_unknown_field::<RegisterOut>(json!({
         "phones": [], "heartbeat_s": 15, "max_wait_s": 25, "protocol": 1
     }));
@@ -466,6 +461,35 @@ fn unknown_fields_refused() {
     );
     // A required field cannot be left out either.
     assert!(serde_json::from_value::<CommandsQuery>(json!({"wait_s": 25})).is_err());
+}
+
+/// The first register goes out before the bridge knows the server's protocol, so a newer
+/// bridge's extra fields must not make an older server refuse it. Everything after it is strict.
+#[test]
+fn register_ignores_unknown_fields() {
+    let newer: RegisterIn = serde_json::from_value(json!({
+        "bridge_id": "pc-atolye", "version": "0.9.0", "protocol": 2,
+        "battery_saver": true,
+        "phones": [{
+            "platform": "android", "serial": "R58N1234ABC", "model": "Pixel 7",
+            "os_version": "14", "features": ["observe"],
+            "screen": {"w": 1080, "h": 2400, "rotation": 0, "density": 420},
+            "transport": "usb"
+        }]
+    }))
+    .unwrap();
+    assert_eq!(newer.protocol, 2);
+    assert_eq!(newer.phones.len(), 1);
+    assert_eq!(newer.phones[0].serial, "R58N1234ABC");
+    assert_eq!(newer.phones[0].screen, Some(screen()));
+    // What is ignored is not written back: this version sends only what it defines.
+    let wire = serde_json::to_value(&newer).unwrap();
+    assert!(wire.get("battery_saver").is_none());
+    assert!(wire["phones"][0].get("transport").is_none());
+    // Required fields are still required.
+    assert!(
+        serde_json::from_value::<RegisterIn>(json!({"bridge_id": "b", "version": "1"})).is_err()
+    );
 }
 
 #[test]
@@ -550,6 +574,68 @@ fn register_validation() {
     ios.platform = Platform::Ios;
     r.phones = vec![phone("same"), ios];
     assert_eq!(r.validate(), Ok(()));
+
+    // Model and OS version may be blank (a phone that says nothing), but no NUL and at most 128
+    // characters.
+    type Set = fn(&mut PhoneReport, String);
+    let setters: [(&str, Set); 2] = [
+        ("model", |p, v| p.model = Some(v)),
+        ("os_version", |p, v| p.os_version = Some(v)),
+    ];
+    for (field, set) in setters {
+        let mut r = register();
+        set(&mut r.phones[0], long(MAX_ID_CHARS));
+        assert_eq!(r.validate(), Ok(()), "{field}");
+        set(&mut r.phones[0], "ş".repeat(MAX_ID_CHARS));
+        assert_eq!(r.validate(), Ok(()), "{field}: characters, not bytes");
+        set(&mut r.phones[0], String::new());
+        assert_eq!(r.validate(), Ok(()), "{field}: blank is allowed");
+        set(&mut r.phones[0], long(MAX_ID_CHARS + 1));
+        assert_eq!(invalid(r.validate().unwrap_err()), field);
+        set(&mut r.phones[0], "Pixel\0".into());
+        assert_eq!(invalid(r.validate().unwrap_err()), field);
+    }
+    let mut r = register();
+    r.phones[0].model = None;
+    r.phones[0].os_version = None;
+    r.phones[0].screen = None;
+    assert_eq!(
+        r.validate(),
+        Ok(()),
+        "what the bridge cannot tell may be left out"
+    );
+
+    // Screen: both sides 1 ..= 20 000 pixels, rotation a quarter turn.
+    let with_screen = |w, h, rotation| {
+        let mut r = register();
+        r.phones[0].screen = Some(Screen { w, h, rotation });
+        r.validate()
+    };
+    assert_eq!(with_screen(1, 1, 0), Ok(()));
+    assert_eq!(with_screen(MAX_SCREEN_PX, MAX_SCREEN_PX, 270), Ok(()));
+    for rotation in [0, 90, 180, 270] {
+        assert_eq!(with_screen(1080, 2400, rotation), Ok(()));
+    }
+    for (w, h) in [
+        (0, 2400),
+        (1080, 0),
+        (MAX_SCREEN_PX + 1, 2400),
+        (1080, MAX_SCREEN_PX + 1),
+        (u32::MAX, u32::MAX),
+    ] {
+        assert_eq!(
+            invalid(with_screen(w, h, 0).unwrap_err()),
+            "screen",
+            "{w}x{h}"
+        );
+    }
+    for rotation in [1, 45, 91, 360, u16::MAX] {
+        assert_eq!(
+            invalid(with_screen(1080, 2400, rotation).unwrap_err()),
+            "screen",
+            "rotation {rotation}"
+        );
+    }
 
     // Features: each named, at most 64 characters, at most 64 of them.
     for bad in ["", "  "] {
