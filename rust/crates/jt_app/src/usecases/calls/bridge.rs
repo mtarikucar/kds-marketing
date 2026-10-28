@@ -232,7 +232,7 @@ fn bridge_facts(input: &RegisterInput) -> Result<Value, AppError> {
 /// The bridge's heartbeat (see the module docs): verifies the workspace's live `voice_bridge`
 /// capability of `input.extension` (whatever it read before, a person's `mark_unreachable`
 /// included), declaring it first when there is none (writing `capability.declare`, its name
-/// "Voice bridge <extension>"), and stores the facts the bridge reported. Writes
+/// `Voice bridge {extension}`), and stores the facts the bridge reported. Writes
 /// `calls.bridge.online` (`capability_id`, `extension`, `version`, `declared`) when the
 /// capability did not read verified until now. An extension whose only bridge was retired is not
 /// declared again: `CONFLICT` with `details.reason = "bridge_retired"`, until someone declares a
