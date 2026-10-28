@@ -148,6 +148,7 @@ async fn hosts_are_the_fixed_tiktok_entries() {
     assert_eq!(production.authorize.as_str(), "https://www.tiktok.com/");
     assert!(fixed.contains(&production.api.host_str().unwrap()));
     assert!(fixed.contains(&"open-upload.tiktokapis.com"));
+    assert!(fixed.contains(&"open-upload-sg.tiktokapis.com"));
     // The authorize dialog is only for browsers.
     assert!(!fixed.contains(&production.authorize.host_str().unwrap()));
 }

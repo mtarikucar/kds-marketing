@@ -27,8 +27,9 @@ const fn host(connector: &'static str, host: &'static str) -> AllowedHost {
 ///   click-to-call endpoint (`crmsntrl.netgsm.com.tr:9111`, plain http: see the module docs);
 /// - `x`: the X API under both its names (`api.twitter.com`, `api.x.com`);
 /// - `tiktok`: the Open API and its token endpoint (`open.tiktokapis.com`) and the video upload
-///   (`open-upload.tiktokapis.com`, the host of the `upload_url` the Content Posting API
-///   returns);
+///   (the host of the `upload_url` the Content Posting API returns: `open-upload.tiktokapis.com`,
+///   or the regional `open-upload-sg.tiktokapis.com`, which it answered with for a Turkish
+///   account);
 /// - `linkedin`: the REST API and OpenID userinfo (`api.linkedin.com`), and the OAuth token
 ///   endpoint and media uploads (`www.linkedin.com`, the host of the `uploadUrl` the Images and
 ///   Videos APIs return).
@@ -45,6 +46,7 @@ pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("x", "api.x.com"),
     host("tiktok", "open.tiktokapis.com"),
     host("tiktok", "open-upload.tiktokapis.com"),
+    host("tiktok", "open-upload-sg.tiktokapis.com"),
     host("linkedin", "api.linkedin.com"),
     host("linkedin", "www.linkedin.com"),
 ];
@@ -95,6 +97,7 @@ mod tests {
                 ("x", "api.x.com"),
                 ("tiktok", "open.tiktokapis.com"),
                 ("tiktok", "open-upload.tiktokapis.com"),
+                ("tiktok", "open-upload-sg.tiktokapis.com"),
                 ("linkedin", "api.linkedin.com"),
                 ("linkedin", "www.linkedin.com"),
             ]
@@ -124,6 +127,10 @@ mod tests {
             (
                 "tiktok",
                 "https://open-upload.tiktokapis.com/video/?upload_id=1",
+            ),
+            (
+                "tiktok",
+                "https://open-upload-sg.tiktokapis.com/upload/?upload_id=1",
             ),
             ("linkedin", "https://api.linkedin.com/rest/posts"),
             ("linkedin", "https://www.linkedin.com/oauth/v2/accessToken"),

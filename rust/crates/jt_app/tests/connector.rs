@@ -44,7 +44,11 @@ use zeroize::Zeroizing;
 const META_HOSTS: &[&str] = &["graph.facebook.com", "rupload.facebook.com"];
 const NETGSM_HOSTS: &[&str] = &["api.netgsm.com.tr", "crmsntrl.netgsm.com.tr:9111"];
 const X_HOSTS: &[&str] = &["api.x.com"];
-const TIKTOK_HOSTS: &[&str] = &["open.tiktokapis.com", "open-upload.tiktokapis.com"];
+const TIKTOK_HOSTS: &[&str] = &[
+    "open.tiktokapis.com",
+    "open-upload.tiktokapis.com",
+    "open-upload-sg.tiktokapis.com",
+];
 const LINKEDIN_HOSTS: &[&str] = &["api.linkedin.com", "www.linkedin.com"];
 
 /// Every secret the flows below hand to the system; none may come back out.
