@@ -26,7 +26,9 @@
 //! secret prints it as `***`.
 //!
 //! **Errors.** NetGSM answers a status code (`"code"` in a JSON body, or a bare code as the whole
-//! body); `00` is success. The mapping, first match wins:
+//! body); `00` is success. The call records read their own codes first (`40` no call in the
+//! window, so no record; `50` and `60` the window refused, `Permanent`; `100` and `101` the limit
+//! of two queries a minute, `Throttle`). The mapping, first match wins:
 //!
 //! | Answer | Error |
 //! |---|---|

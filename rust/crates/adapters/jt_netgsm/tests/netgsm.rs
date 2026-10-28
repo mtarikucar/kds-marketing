@@ -1203,6 +1203,53 @@ async fn call_records_send_the_credentials_in_the_body() {
     }
 }
 
+#[tokio::test]
+async fn call_records_with_no_record_in_the_window_are_none() {
+    let r = rig().await;
+    let window = (
+        datetime!(2026-10-23 06:00 UTC),
+        datetime!(2026-10-23 08:00 UTC),
+    );
+    // Netsantral's report answers code 40 when no call matches the query, as an object or as
+    // a bare code.
+    for reply in [
+        ok(json!({"code": "40", "message": "Kayit bulunamadi"})),
+        raw(200, "40"),
+    ] {
+        r.mock.set("POST", CDR, reply);
+        let drafts = r
+            .netgsm
+            .call_records(&pbx_cred(), window.0, window.1)
+            .await
+            .unwrap();
+        assert!(drafts.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn call_records_name_the_report_codes() {
+    let r = rig().await;
+    let window = (
+        datetime!(2026-10-23 06:00 UTC),
+        datetime!(2026-10-23 08:00 UTC),
+    );
+    for (code, kind, words) in [
+        ("50", "permanent", "date format"),
+        ("60", "permanent", "24 hours"),
+        ("100", "throttle", ""),
+        ("101", "throttle", ""),
+    ] {
+        r.mock.set("POST", CDR, ok(json!({"code": code})));
+        let e = r
+            .netgsm
+            .call_records(&pbx_cred(), window.0, window.1)
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind(), kind, "code {code}: {e}");
+        assert!(e.to_string().contains(words), "code {code}: {e}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // İYS
 // ---------------------------------------------------------------------------------------------
