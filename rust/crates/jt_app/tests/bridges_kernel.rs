@@ -1,10 +1,12 @@
 //! The bridge kernel (`usecases::bridges::kernel`): only a bridge's own key, holding its one
 //! permission alone, acts as the bridge; a heartbeat verifies a capability and merges what it
-//! reported; a silent capability reads stale, then is marked unreachable by the clock, and its
-//! next heartbeat brings it back; a long-poll wakes on its own signal and ends within its wait.
+//! reported, and never a retired one; a silent capability reads stale, then is marked
+//! unreachable by the clock, and its next heartbeat brings it back; a long-poll watches before it
+//! reads, wakes on its own signal and ends within its wait.
 //!
 //! The tests use a bridge spec of their own, not the voice bridge's: what the kernel does for it,
-//! it does for every bridge. Its capabilities are `voice_bridge`s, the one kind with a heartbeat.
+//! it does for every bridge. Its capabilities are `voice_bridge`s, a kind with a heartbeat; a
+//! `printer` stands for a kind without one.
 mod support;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -18,6 +20,7 @@ use jt_app::ports::bridges::{BridgeSignals, SignalKey};
 use jt_app::std_impls::LocalBridgeSignals;
 use jt_app::usecases::api_keys::{self, AgentPrincipal, CreateKey};
 use jt_app::usecases::bridges::kernel::{self, Beat, BridgeSpec, FALLBACK_TICK};
+use jt_app::usecases::capabilities;
 use jt_capability::{Capability, CapabilityId, EffectiveStatus, StoredStatus, effective_status};
 use jt_ledger::{Actor, Subject};
 use jt_tenancy::{Permission, WorkspaceId};
@@ -37,8 +40,10 @@ const SPEC: BridgeSpec = BridgeSpec {
     offline_action: "test.bridge.offline",
 };
 
-/// The kind of the capabilities the test bridge keeps alive: the one kind with a heartbeat.
+/// The kind of the capabilities the test bridge keeps alive: a kind with a heartbeat.
 const KIND: &str = "voice_bridge";
+/// A kind no bridge reports, so without a heartbeat.
+const NO_HEARTBEAT: &str = "printer";
 
 /// A key the owner issues with `scopes`, as the API resolves it.
 async fn key_with(w: &World, scopes: &[&str]) -> AgentPrincipal {
@@ -260,6 +265,35 @@ async fn heartbeat_verifies_and_merges_facts() {
 }
 
 #[tokio::test]
+async fn heartbeat_refuses_a_retired_capability() {
+    let (w, ctx) = rig().await;
+    let id = w.declare(KIND, "Köprü").await.capability.id;
+    beat(&w, &ctx, id, json!({ "bridge": { "version": "1" } }))
+        .await
+        .unwrap();
+    capabilities::retire(&w.deps, &w.owner_ctx, id, true)
+        .await
+        .unwrap();
+    let retired = stored(&w, id).await;
+    assert_eq!(retired.status, StoredStatus::Retired);
+
+    // A heartbeat after the retirement is refused, as every write to a retired capability: it
+    // stays retired, its last heartbeat and facts as they were, and nothing reads it online.
+    let later = FIXED_NOW + Duration::seconds(15);
+    let e = err(beat(
+        &w,
+        &at(&ctx, later),
+        id,
+        json!({ "bridge": { "version": "2" } }),
+    )
+    .await);
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert_eq!(e.message, "capability is retired");
+    assert_eq!(stored(&w, id).await, retired);
+    assert_eq!(w.entries(SPEC.online_action).len(), 1);
+}
+
+#[tokio::test]
 async fn stale_then_unreachable_by_clock() {
     let (w, ctx) = rig().await;
     let id = w.declare(KIND, "Köprü").await.capability.id;
@@ -311,7 +345,7 @@ async fn stale_then_unreachable_by_clock() {
     beat(&w, &ctx, second, json!({})).await.unwrap();
     assert_eq!(silent(&w, KIND, late).await, [second]);
     assert!(
-        !kernel::mark_unreachable(&w.deps, &job, &SPEC, "phone", second)
+        !kernel::mark_unreachable(&w.deps, &job, &SPEC, NO_HEARTBEAT, second)
             .await
             .unwrap()
     );
@@ -325,10 +359,10 @@ async fn stale_then_unreachable_by_clock() {
     assert_eq!(w.entries(SPEC.offline_action).len(), 1);
 
     // A kind without a heartbeat never goes silent, however old its verification.
-    let phone = w.declare("phone", "Telefon").await.capability.id;
-    beat(&w, &ctx, phone, json!({})).await.unwrap();
+    let printer = w.declare(NO_HEARTBEAT, "Yazıcı").await.capability.id;
+    beat(&w, &ctx, printer, json!({})).await.unwrap();
     assert!(
-        silent(&w, "phone", FIXED_NOW + Duration::days(400))
+        silent(&w, NO_HEARTBEAT, FIXED_NOW + Duration::days(400))
             .await
             .is_empty()
     );
@@ -432,6 +466,36 @@ async fn wait_for_wakes_on_signal() {
     assert_eq!(found, Some("found"));
     assert_eq!(reads.load(Ordering::SeqCst), 2);
     assert!(waited < FALLBACK_TICK, "{waited:?}");
+}
+
+#[tokio::test]
+async fn wait_for_watches_before_it_reads() {
+    let signals = LocalBridgeSignals::default();
+    let key = SignalKey {
+        workspace_id: WorkspaceId::new_v7(),
+        topic: "test",
+    };
+    // What is committed while the first read runs is signalled during it, before the wait: a
+    // watch begun only after the read would miss it and sleep a whole fallback tick.
+    let reads = AtomicU32::new(0);
+    let started = Instant::now();
+    let found = kernel::wait_for(&signals, key, StdDuration::from_secs(20), |_| {
+        let read = reads.fetch_add(1, Ordering::SeqCst);
+        let signals = &signals;
+        Box::pin(async move {
+            if read == 0 {
+                signals.notify(key);
+                return Ok::<_, AppError>(None);
+            }
+            Ok(Some(read))
+        })
+    })
+    .await
+    .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(found, Some(1));
+    assert_eq!(reads.load(Ordering::SeqCst), 2);
+    assert!(elapsed < FALLBACK_TICK / 2, "{elapsed:?}");
 }
 
 #[tokio::test]

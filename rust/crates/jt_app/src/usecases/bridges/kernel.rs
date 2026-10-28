@@ -37,7 +37,7 @@ use crate::ports::bridges::{BridgeSignals, SignalKey};
 use crate::ports::{CapabilityFilter, TenantRepos};
 use crate::usecases::Deps;
 use crate::usecases::api_keys::AgentPrincipal;
-use crate::usecases::capabilities::{append, locked, version_in_force};
+use crate::usecases::capabilities::{append, locked, not_retired, version_in_force};
 
 /// How often a waiting long-poll reads again when no signal woke it: what another server
 /// instance committed reaches it within this.
@@ -119,7 +119,8 @@ pub struct Beat {
 /// included) with `beat.facts` merged into its `connector_public`; `spec.online_action` is written
 /// (with `beat.online`, under the version in force `in_force`) when it did not read verified until
 /// now. The capability as stored. Only `spec`'s own context ([`require_bridge`]); an unknown
-/// capability is `NOT_FOUND`.
+/// capability is `NOT_FOUND`, a retired one `CONFLICT` "capability is retired", read under the
+/// lock, so a heartbeat never undoes a retirement that won the race to it.
 pub async fn heartbeat(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -130,6 +131,7 @@ pub async fn heartbeat(
     require_bridge(spec, ctx)?;
     let id = beat.capability_id;
     let mut capability = locked(r, id).await?;
+    not_retired(&capability)?;
     let before = effective_status(&capability, ctx.now);
     capability.status = StoredStatus::Verified;
     capability.last_verified_at = Some(ctx.now);

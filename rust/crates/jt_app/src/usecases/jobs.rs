@@ -948,7 +948,7 @@ fn verified_lines(capabilities: &[Capability]) -> Vec<CapabilityId> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// voice_bridge_health
+// Bridge health: voice_bridge_health
 // ---------------------------------------------------------------------------------------------
 
 /// Marks unreachable, in every workspace, each voice bridge that still reads verified although it

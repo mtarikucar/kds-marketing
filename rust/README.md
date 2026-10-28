@@ -1941,10 +1941,10 @@ closing never reported played is taken for done after 60 s). Every end of an age
 caller's hangup, the timers, a transfer) is settled once: the journey's `CallMade{connected}`,
 the spend at the policy's tariff on the bridge's budget item, `calls.ended`; `calls.end` then
 records the outcome (`calls.outcome_recorded`). The long-polls (`calls.listen`, the bridge's
-commands) are woken at once by an in-process signal (`BridgeSignals`, on the calls' key) and read
-again at least every second, so a second server instance only adds up to a second. The bridge's commands are
-purged after 7 days (`purge_call_commands`, daily); erasing a person removes their calls'
-commands and the bridge's event notes, and empties their calls' plans.
+commands) are woken at once by an in-process signal (`BridgeSignals`, on the calls' key) and
+read again at least every second, so a second server instance only adds up to a second. The
+bridge's commands are purged after 7 days (`purge_call_commands`, daily); erasing a person
+removes their calls' commands and the bridge's event notes, and empties their calls' plans.
 
 | Use case | Panel | MCP | Risk | Permission |
 |---|---|---|---|---|
