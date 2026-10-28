@@ -38,6 +38,8 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     ("jt_studio", &["jt_strategy", "jt_capability", "url"]),
     // Calls fence on inbox consent and journeys, and name the capability they use.
     ("jt_calls", &["jt_capability", "jt_inbox"]),
+    // Device commands are a platform-neutral vocabulary: nothing beyond the shared allowlist.
+    ("jt_devices", &[]),
 ];
 
 #[test]
@@ -50,6 +52,23 @@ fn domain_crates_depend_only_on_pure_crates() {
             );
         }
     }
+}
+
+/// The device vocabulary is shared with a separate bridge program, so it names no workspace crate
+/// at all, not even the two foundational domain crates the shared allowlist would let through.
+#[test]
+fn devices_depend_on_no_workspace_crate() {
+    let deps = direct_deps("jt_devices");
+    for d in &deps {
+        assert!(
+            ["serde", "serde_json", "uuid", "time", "thiserror"].contains(&d.as_str()),
+            "jt_devices depends on {d}, which is not a plain serialisation, id, time or error crate"
+        );
+    }
+    assert!(
+        deps.contains("serde"),
+        "jt_devices lost its serde dependency"
+    );
 }
 
 /// Exact dependency sets: connector, inbox and studio use capability types; only connector
@@ -174,6 +193,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_inbox",
         "jt_studio",
         "jt_calls",
+        "jt_devices",
         "jt_app",
         "jt_panel_http",
         "jt_mcp",
