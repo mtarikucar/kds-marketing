@@ -1,19 +1,31 @@
 //! Posts through the Content Posting API: the checks made before anything is sent, the creator's
-//! settings, a video's init and chunked upload, a photo post's init, the receipt, and the status
-//! a receipt resolves to (see the crate docs, "Posts" and "Status").
+//! settings (read before every post, and for the posting screen), a video's init and chunked
+//! upload, a photo post's init, the receipt, and the status a receipt resolves to (see the crate
+//! docs, "Posts", "The posting screen" and "Status").
 
-use jt_app::ports::connectors::{MediaUpload, PublishReceipt, PublishRequest, PublishResolution};
+use jt_app::ports::connectors::{
+    MediaUpload, PublishReceipt, PublishRequest, PublishResolution, TiktokCreator, TiktokMedia,
+    TiktokPost, TiktokPostFlags, TiktokPostRefusal,
+};
 use jt_connector::{ConnectorError, Credential};
 use jt_outbound::Method;
 use serde_json::{Map, Value, json};
 use url::Url;
 
-use crate::client::{Auth, Body, Chunk, Effect, Endpoint, missing, text, words};
+use crate::client::{Auth, Body, Chunk, Effect, Endpoint, error_code, missing, text, words};
 use crate::credential::{kind_of, token_of};
 use crate::{
-    CHUNK_BYTES, DEFAULT_PRIVACY, MAX_DESCRIPTION_UNITS, MAX_PHOTOS, MAX_TITLE_UNITS,
+    CANNOT_POST_CODES, CHUNK_BYTES, MAX_DESCRIPTION_UNITS, MAX_PHOTOS, MAX_TITLE_UNITS,
     MAX_VIDEO_BYTES, PRIVACY_LEVELS, TiktokConnector, VIDEO_MIME,
 };
+
+/// Why a post without the posting screen's choice is refused: TikTok's guidelines leave the
+/// privacy, the interactions and the commercial content disclosure to a human.
+pub(crate) const NO_CHOICE: &str = "a TikTok post needs what a human chose on its posting screen \
+     (privacy, interactions, commercial content)";
+
+/// The longest nickname taken, in characters.
+const MAX_NICKNAME_CHARS: usize = 200;
 
 /// Why a post with neither a video nor photos is refused: TikTok has no text-only posts.
 pub(crate) const NOTHING_TO_POST: &str =
@@ -43,44 +55,64 @@ const PENDING_STATUSES: &[&str] = &[
     "SEND_TO_USER_INBOX",
 ];
 
-/// What `creator_info` says about the account a post goes to
-/// (<https://developers.tiktok.com/doc/content-posting-api-reference-query-creator-info>).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Creator {
-    /// Who may see its posts (`privacy_level_options`).
-    pub(crate) privacy_options: Vec<String>,
-    /// Whether it turned comments, duets and stitches off.
-    pub(crate) comment_disabled: bool,
-    pub(crate) duet_disabled: bool,
-    pub(crate) stitch_disabled: bool,
-    /// Its username (`creator_username`).
-    pub(crate) username: Option<String>,
-}
-
-/// `POST {api}/v2/post/publish/creator_info/query/`: a read (it changes nothing), tried once more
-/// when no answer arrived.
+/// `POST {api}/v2/post/publish/creator_info/query/`, what TikTok says about the account a post
+/// goes to (<https://developers.tiktok.com/doc/content-posting-api-reference-query-creator-info>):
+/// a read (it changes nothing), tried once more when no answer arrived. An account that may not
+/// post at this moment is an error (see the crate docs, "Errors").
 pub(crate) async fn creator_info(
     connector: &TiktokConnector,
     token: &str,
-) -> Result<Creator, ConnectorError> {
+) -> Result<TiktokCreator, ConnectorError> {
+    read_creator(connector, token, &[]).await
+}
+
+/// The account as the posting screen shows it ([`creator_info`]): an account that may not post at
+/// this moment ([`CANNOT_POST_CODES`]) is not an error but says why in `cannot_post`.
+pub(crate) async fn posting_creator(
+    connector: &TiktokConnector,
+    cred: &Credential,
+    public: &Value,
+) -> Result<TiktokCreator, ConnectorError> {
+    kind_of(public)?;
+    let token = token_of(cred, "read the creator's posting settings")?;
+    read_creator(connector, token, CANNOT_POST_CODES).await
+}
+
+/// `creator_info`, its 2xx answers with a code of `taken` read as an account that may not post.
+async fn read_creator(
+    connector: &TiktokConnector,
+    token: &str,
+    taken: &[&str],
+) -> Result<TiktokCreator, ConnectorError> {
     let url = connector.api_url(&["v2", "post", "publish", "creator_info", "query", ""], &[]);
     let answer = connector
-        .call(
+        .call_taking(
             Method::POST,
             url,
             Auth::Bearer(token),
             &Body::EmptyJson,
             Endpoint::Api,
             Effect::Read,
+            taken,
         )
         .await?;
+    let cannot_post = error_code(&answer)
+        .filter(|code| *code != "ok")
+        .map(str::to_owned);
     let data = &answer["data"];
-    if !data.is_object() {
+    if !data.is_object() && cannot_post.is_none() {
         return Err(missing("creator info"));
     }
     let flag = |name: &str| data[name].as_bool().unwrap_or(false);
-    Ok(Creator {
-        privacy_options: data["privacy_level_options"]
+    Ok(TiktokCreator {
+        nickname: words(&data["creator_nickname"])
+            .map(|n| n.chars().take(MAX_NICKNAME_CHARS).collect()),
+        username: text(&data["creator_username"]),
+        // Shown as an image: an https URL only.
+        avatar_url: words(&data["creator_avatar_url"])
+            .and_then(|u| Url::parse(u).ok())
+            .filter(|u| u.scheme() == "https"),
+        privacy_level_options: data["privacy_level_options"]
             .as_array()
             .map(|options| {
                 options
@@ -93,7 +125,10 @@ pub(crate) async fn creator_info(
         comment_disabled: flag("comment_disabled"),
         duet_disabled: flag("duet_disabled"),
         stitch_disabled: flag("stitch_disabled"),
-        username: text(&data["creator_username"]),
+        max_video_post_duration_sec: data["max_video_post_duration_sec"]
+            .as_u64()
+            .and_then(|s| u32::try_from(s).ok()),
+        cannot_post,
     })
 }
 
@@ -225,21 +260,65 @@ fn plan(request: &PublishRequest) -> Result<Post<'_>, ConnectorError> {
     }
 }
 
-/// The privacy level of `request`: one of [`PRIVACY_LEVELS`] (compared ignoring case and
-/// surrounding space), [`DEFAULT_PRIVACY`] when it names none; `Permanent` for another name.
-fn privacy_of(request: &PublishRequest) -> Result<&'static str, ConnectorError> {
-    match request
-        .privacy
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-    {
-        None => Ok(DEFAULT_PRIVACY),
-        Some(asked) => PRIVACY_LEVELS
-            .iter()
-            .find(|level| level.eq_ignore_ascii_case(asked))
-            .copied()
-            .ok_or_else(|| ConnectorError::permanent("not a TikTok privacy level")),
+/// The posting screen's choice of `request`, its privacy one of [`PRIVACY_LEVELS`] as TikTok
+/// names them; `Permanent` without a choice ([`NO_CHOICE`]), without a privacy, or for another
+/// name. Nothing is defaulted.
+fn choice_of(request: &PublishRequest) -> Result<&TiktokPost, ConnectorError> {
+    let choice = request
+        .tiktok
+        .as_ref()
+        .ok_or_else(|| ConnectorError::permanent(NO_CHOICE))?;
+    if choice.privacy_level.trim().is_empty() {
+        return Err(ConnectorError::permanent(
+            "no privacy level was chosen on the posting screen",
+        ));
+    }
+    if !PRIVACY_LEVELS.contains(&choice.privacy_level.as_str()) {
+        return Err(ConnectorError::permanent("not a TikTok privacy level"));
+    }
+    Ok(choice)
+}
+
+/// Why `choice` cannot be sent to `creator`'s account now, as an error: a privacy the account is
+/// not offered is `Permission` (an app TikTok has not audited is offered `SELF_ONLY` only), an
+/// account that may not post `Throttle`, anything else `Permanent`.
+fn refusal(
+    e: TiktokPostRefusal,
+    choice: &TiktokPost,
+    creator: &TiktokCreator,
+    media: &TiktokMedia,
+) -> ConnectorError {
+    match e {
+        TiktokPostRefusal::PrivacyNotOffered => ConnectorError::permission(format!(
+            "privacy level {} not available (app not audited or private account)",
+            choice.privacy_level
+        )),
+        TiktokPostRefusal::CannotPostNow => ConnectorError::throttle(None),
+        TiktokPostRefusal::PrivacyNotChosen => {
+            ConnectorError::permanent("no privacy level was chosen on the posting screen")
+        }
+        TiktokPostRefusal::BrandedContentPrivate => {
+            ConnectorError::permanent("branded content cannot be private (SELF_ONLY)")
+        }
+        TiktokPostRefusal::CommercialUnspecified => ConnectorError::permanent(
+            "the commercial content disclosure names neither your brand nor branded content",
+        ),
+        TiktokPostRefusal::CommercialNotDisclosed => ConnectorError::permanent(
+            "your brand or branded content chosen without the commercial content disclosure",
+        ),
+        TiktokPostRefusal::VideoTooLong => {
+            let length = match media {
+                TiktokMedia::Video {
+                    duration_ms: Some(ms),
+                } => ms.div_ceil(1000),
+                _ => 0,
+            };
+            ConnectorError::permanent(format!(
+                "the video is {length} s long; this TikTok account posts videos of at most {} s",
+                creator.max_video_post_duration_sec.unwrap_or_default()
+            ))
+        }
+        other => ConnectorError::permanent(format!("the post was refused: {other}")),
     }
 }
 
@@ -302,27 +381,28 @@ pub(crate) async fn publish(
     kind_of(public)?;
     let token = token_of(cred, "publish")?;
     let post = plan(request)?;
-    let privacy = privacy_of(request)?;
+    let choice = choice_of(request)?;
     let creator = creator_info(connector, token).await?;
-    if !creator.privacy_options.iter().any(|o| o == privacy) {
-        return Err(ConnectorError::permission(format!(
-            "privacy level {privacy} not available (app not audited or private account)"
-        )));
-    }
+    let media = match &post {
+        Post::Video { media, .. } => TiktokMedia::Video {
+            duration_ms: media.video_duration_ms(),
+        },
+        Post::Photos { .. } => TiktokMedia::Photos,
+    };
+    choice
+        .check_postable(&creator, &media)
+        .map_err(|e| refusal(e, choice, &creator, &media))?;
+    let flags = choice.flags(&creator);
+    let privacy = choice.privacy_level.as_str();
     let external_id = match post {
         Post::Video {
             media,
             mime,
             title,
             plan,
-        } => {
-            post_video(
-                connector, token, &creator, privacy, media, &mime, title, plan,
-            )
-            .await?
-        }
+        } => post_video(connector, token, &flags, privacy, media, &mime, title, plan).await?,
         Post::Photos { urls, description } => {
-            post_photos(connector, token, &creator, privacy, urls, description).await?
+            post_photos(connector, token, &flags, privacy, urls, description).await?
         }
     };
     Ok(PublishReceipt {
@@ -331,16 +411,19 @@ pub(crate) async fn publish(
     })
 }
 
-/// The `post_info` both kinds of post share.
-fn post_info(creator: &Creator, privacy: &str) -> Map<String, Value> {
+/// The `post_info` both kinds of post share: the chosen privacy, and the switches of the choice.
+fn post_info(flags: &TiktokPostFlags, privacy: &str) -> Map<String, Value> {
     let mut info = Map::new();
     info.insert("privacy_level".to_owned(), json!(privacy));
+    info.insert("disable_comment".to_owned(), json!(flags.disable_comment));
     info.insert(
-        "disable_comment".to_owned(),
-        json!(creator.comment_disabled),
+        "brand_content_toggle".to_owned(),
+        json!(flags.brand_content_toggle),
     );
-    info.insert("brand_content_toggle".to_owned(), json!(false));
-    info.insert("brand_organic_toggle".to_owned(), json!(false));
+    info.insert(
+        "brand_organic_toggle".to_owned(),
+        json!(flags.brand_organic_toggle),
+    );
     info
 }
 
@@ -351,19 +434,19 @@ fn post_info(creator: &Creator, privacy: &str) -> Map<String, Value> {
 async fn post_video(
     connector: &TiktokConnector,
     token: &str,
-    creator: &Creator,
+    flags: &TiktokPostFlags,
     privacy: &str,
     media: &MediaUpload,
     mime: &str,
     title: Option<String>,
     plan: ChunkPlan,
 ) -> Result<String, ConnectorError> {
-    let mut info = post_info(creator, privacy);
+    let mut info = post_info(flags, privacy);
     if let Some(title) = title {
         info.insert("title".to_owned(), json!(title));
     }
-    info.insert("disable_duet".to_owned(), json!(creator.duet_disabled));
-    info.insert("disable_stitch".to_owned(), json!(creator.stitch_disabled));
+    info.insert("disable_duet".to_owned(), json!(flags.disable_duet));
+    info.insert("disable_stitch".to_owned(), json!(flags.disable_stitch));
     let body = json!({
         "post_info": info,
         "source_info": {
@@ -417,12 +500,12 @@ async fn post_video(
 async fn post_photos(
     connector: &TiktokConnector,
     token: &str,
-    creator: &Creator,
+    flags: &TiktokPostFlags,
     privacy: &str,
     urls: &[Url],
     description: Option<String>,
 ) -> Result<String, ConnectorError> {
-    let mut info = post_info(creator, privacy);
+    let mut info = post_info(flags, privacy);
     if let Some(description) = description {
         info.insert("description".to_owned(), json!(description));
     }
@@ -580,18 +663,41 @@ mod tests {
     }
 
     #[test]
-    fn privacy_names_are_tiktoks() {
+    fn privacy_is_chosen_never_defaulted_and_named_as_tiktok_does() {
         let with = |p: Option<&str>| PublishRequest {
-            privacy: p.map(str::to_owned),
+            // The request's own privacy does not count: the screen's choice does.
+            privacy: Some("PUBLIC_TO_EVERYONE".into()),
+            tiktok: p.map(|privacy| TiktokPost {
+                title: String::new(),
+                privacy_level: privacy.into(),
+                allow_comment: false,
+                allow_duet: false,
+                allow_stitch: false,
+                disclose_commercial: false,
+                your_brand: false,
+                branded_content: false,
+            }),
             ..PublishRequest::default()
         };
-        assert_eq!(privacy_of(&with(None)).unwrap(), "PUBLIC_TO_EVERYONE");
-        assert_eq!(privacy_of(&with(Some(" "))).unwrap(), "PUBLIC_TO_EVERYONE");
-        assert_eq!(privacy_of(&with(Some(" self_only "))).unwrap(), "SELF_ONLY");
         assert_eq!(
-            privacy_of(&with(Some("PRIVATE"))).unwrap_err().kind(),
-            "permanent"
+            choice_of(&with(None)).unwrap_err().reason(),
+            Some(NO_CHOICE)
         );
+        for blank in ["", " "] {
+            assert_eq!(
+                choice_of(&with(Some(blank))).unwrap_err().kind(),
+                "permanent"
+            );
+        }
+        for level in PRIVACY_LEVELS {
+            assert_eq!(choice_of(&with(Some(level))).unwrap().privacy_level, *level);
+        }
+        for other in ["PRIVATE", " self_only ", "public_to_everyone"] {
+            assert_eq!(
+                choice_of(&with(Some(other))).unwrap_err().reason(),
+                Some("not a TikTok privacy level")
+            );
+        }
     }
 
     #[test]

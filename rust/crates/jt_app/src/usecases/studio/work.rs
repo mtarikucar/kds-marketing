@@ -114,8 +114,16 @@ pub(crate) async fn pending_in(
                     | jt_studio::PublishOutcome::Unknown(e)
                     | jt_studio::PublishOutcome::Refused(e),
                 ) => Some(*e),
+                // The receipt is captured: the provider is still processing the post (TikTok
+                // publishes in the background), or its bookkeeping is being finished. It is
+                // asked about, never sent again: no duplicate to review.
                 Some(jt_studio::PublishOutcome::Observed(_)) => {
-                    Some(jt_studio::RedactedPublishError::Unknown)
+                    out.blockers.push(Blocker {
+                        target,
+                        reason: "publish_processing".into(),
+                        next_action: None,
+                    });
+                    None
                 }
                 _ => None,
             };
@@ -171,18 +179,25 @@ pub(crate) async fn pending_in(
                 reason: e.message,
             });
         }
-        let required = cap.policy.requires_human_approval
+        // A TikTok piece waits for a human on its posting screen whatever the policies say,
+        // and only an approval carrying the screen's choice releases it.
+        let screen = jt_studio::requires_posting_screen(&cap.kind_key);
+        let required = screen
+            || cap.policy.requires_human_approval
             || control
                 .lanes
                 .get(&arm.key.lane)
                 .is_some_and(|l| l.requires_human_approval);
         if s.state == SlotState::Ready
             && required
-            && r.studio().get_approval(target, s.revision).await?.is_none()
+            && r.studio()
+                .get_approval(target, s.revision)
+                .await?
+                .is_none_or(|a| screen && a.tiktok.is_none())
         {
             out.approvals.push(target);
             out.blockers.push(Blocker {
-                next_action: None,
+                next_action: screen.then(|| "tiktok_posting_screen".into()),
                 target,
                 reason: "human_approval_required".into(),
             });

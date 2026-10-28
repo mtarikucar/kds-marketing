@@ -18,6 +18,7 @@ import type { LaneKind } from '@/api/types';
 import { kindLabel } from '@/lib/capabilities';
 import { failureText } from '@/lib/delivery';
 import { formatMoney } from '@/lib/format';
+import { TiktokPostStatus, TiktokPostingScreen } from './StudioTiktok';
 
 /** Why the latest attempt to publish this slot failed, in the owner's words, when it did. */
 function PublishFailure({ attempts }: { attempts: api.PublishAttempt[] }) {
@@ -29,6 +30,19 @@ function PublishFailure({ attempts }: { attempts: api.PublishAttempt[] }) {
     <p className="text-xs text-danger" role="status">
       {t(key, { reason: failureText(t, last.failure_reason) })}
     </p>
+  );
+}
+
+/** The published post's page, once the latest attempt succeeded and the provider named one. */
+function PostLink({ attempts }: { attempts: api.PublishAttempt[] }) {
+  const { t } = useTranslation();
+  const last = attempts[attempts.length - 1];
+  const evidence = typeof last?.outcome?.evidence === 'object' ? last.outcome.evidence : null;
+  if (last?.state !== 'succeeded' || !evidence?.url) return null;
+  return (
+    <a className="text-xs underline" href={evidence.url} target="_blank" rel="noreferrer noopener">
+      {t('studio.postLink')}
+    </a>
   );
 }
 
@@ -220,6 +234,7 @@ function SlotEditor({ id, close }: { id: string; close: () => void }) {
             {t(`studio.${data.slot.state}`)} · {t('studio.evidence')}: {data.measurements.length}
           </p>
           <PublishFailure attempts={data.attempts} />
+          <PostLink attempts={data.attempts} />
           {['planned', 'ready'].includes(data.slot.state) && (
             <>
               <form
@@ -307,13 +322,25 @@ export function StudioToday({
   const [lane, setLane] = useState<LaneKind>('organic');
   const awaiting = (id: string) =>
     data?.today.approvals.some((a) => 'slot' in a && a.slot === id) ?? false;
-  const hasSlotApprovals = data?.today.slots.some(({ slot }) => awaiting(slot.id)) ?? false;
-  // Names the account an approval publishes to; without it the preview names the channel.
+  // Names the account an approval publishes to (without it the preview names the channel), and
+  // tells a TikTok slot, which a human posts from its own screen.
   const accounts = useQuery({
     queryKey: [...key, 'accounts'],
     queryFn: () => listCapabilities(),
-    enabled: hasSlotApprovals,
+    enabled: Boolean(data?.today.slots.length),
   });
+  const tiktok = (s: api.Slot) =>
+    Boolean(
+      accounts.data?.some(
+        (c) => c.capability.id === s.capability_id && c.capability.kind_key === 'tiktok',
+      ) ||
+        data?.today.blockers.some(
+          (b) =>
+            'slot' in b.target && b.target.slot === s.id && b.next_action === 'tiktok_posting_screen',
+        ),
+    );
+  // A TikTok piece awaiting its human is its posting screen, not a plain Approve button.
+  const screen = (s: api.Slot) => manage && awaiting(s.id) && tiktok(s);
   const arms = data?.learned.arms.map((a) => a.arm) ?? [];
   const others =
     data?.slots.filter(
@@ -377,8 +404,12 @@ export function StudioToday({
               </button>
               <span className="text-sm">{t(`studio.${slot.state}`)}</span>
             </div>
-            {awaiting(slot.id) && (
+            {awaiting(slot.id) && !screen(slot) && (
               <PiecePreview slot={slot} arms={arms} accounts={accounts.data} />
+            )}
+            {screen(slot) && <TiktokPostingScreen key={slot.revision} slot={slot} />}
+            {!awaiting(slot.id) && slot.state === 'ready' && tiktok(slot) && (
+              <TiktokPostStatus slot={slot} />
             )}
             {overdue && slot.state === 'planned' && (
               <p className="text-xs">{t('studio.agentWaiting')}</p>
@@ -388,7 +419,7 @@ export function StudioToday({
               .map((b, i) => (
                 <Reason key={i} reason={b.reason} />
               ))}
-            {manage && awaiting(slot.id) && (
+            {manage && awaiting(slot.id) && !screen(slot) && (
               <button
                 className={buttonClass}
                 disabled={approve.isPending}

@@ -130,6 +130,8 @@ fn catalog_is_the_release_table() {
         ("studio.brake", Some("jeeta.studio.brake"), Some(("POST", "/api/studio/brake")), false, Risk::Write),
         ("studio.policy_set", Some("jeeta.studio.policy_set"), Some(("PUT", "/api/studio/policy")), false, Risk::Write),
         ("studio.approve", Some("jeeta.studio.approve"), Some(("POST", "/api/studio/approvals")), false, Risk::Write),
+        ("studio.tiktok_posting", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Read),
+        ("studio.tiktok_post", None, Some(("POST", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Write),
         ("inbox.pending", Some("jeeta.inbox.pending"), Some(("GET", "/api/inbox/pending")), false, Risk::Read),
         ("inbox.context", Some("jeeta.inbox.context"), Some(("GET", "/api/inbox/conversations/{conversation_id}/context")), false, Risk::Read),
         ("inbox.conversations.list", Some("jeeta.inbox.conversations_list"), Some(("GET", "/api/inbox/conversations")), false, Risk::Read),
@@ -265,7 +267,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 151);
+    assert_eq!(CATALOG.len(), 153);
     for uc in CATALOG {
         assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

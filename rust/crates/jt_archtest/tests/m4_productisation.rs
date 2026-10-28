@@ -31,6 +31,10 @@ const POST_M4_ADDED: [(&str, &str); 7] = [
     ("calls.end", "jeeta.calls.end"),
 ];
 
+/// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
+/// passes (TikTok's Content Sharing Guidelines), so no MCP tool.
+const POST_M4_PANEL_ONLY: [&str; 2] = ["studio.tiktok_posting", "studio.tiktok_post"];
+
 fn baseline(key: &str) -> BTreeSet<String> {
     let baseline: Value = serde_json::from_str(include_str!("fixtures/m3_surface.json")).unwrap();
     baseline[key]
@@ -138,7 +142,15 @@ fn catalog_and_handlers_match_ratified_m4_surface_set() {
     for (id, _) in POST_M4_ADDED {
         assert!(expected.insert(id.into()));
     }
-    assert_eq!(CATALOG.len(), 144 + POST_M4_ADDED.len());
+    for id in POST_M4_PANEL_ONLY {
+        assert!(expected.insert(id.into()));
+        let row = jt_app::catalog::find(id).unwrap();
+        assert!(row.panel_only && row.mcp_tool.is_none(), "{id}");
+    }
+    assert_eq!(
+        CATALOG.len(),
+        144 + POST_M4_ADDED.len() + POST_M4_PANEL_ONLY.len()
+    );
     assert_eq!(
         CATALOG
             .iter()

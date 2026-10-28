@@ -11,6 +11,7 @@ pub mod trends;
 pub mod work;
 
 pub mod publish;
+pub mod tiktok;
 
 pub mod learning;
 pub mod measure;

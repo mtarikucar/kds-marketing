@@ -81,7 +81,9 @@ pub struct ChannelContent {
     pub media: Vec<MediaAsset>,
     pub link: Option<Url>,
     /// Who may see the post (one of [`PRIVACY_LEVELS`]); `None`: public. Absent from stored
-    /// pieces written before it existed, and never written when `None`.
+    /// pieces written before it existed, and never written when `None`. A TikTok post takes the
+    /// privacy a human chose on its posting screen instead ([`crate::requires_posting_screen`]):
+    /// TikTok allows no default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub privacy: Option<String>,
 }

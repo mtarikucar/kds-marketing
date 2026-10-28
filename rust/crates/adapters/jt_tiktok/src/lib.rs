@@ -4,8 +4,8 @@
 //! publishing status, and its public counters.
 //!
 //! [`TiktokConnector`] implements the connector ports of `jt_app` ([`Connector`],
-//! [`OAuthProvider`], [`Publisher`] with [`Publisher::resolve`], [`InsightsReader`]). Webhooks are
-//! not used: a post's status is polled.
+//! [`OAuthProvider`], [`Publisher`] with [`Publisher::resolve`] and [`Publisher::creator_info`],
+//! [`InsightsReader`]). Webhooks are not used: a post's status is polled.
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
 //! [`jt_outbound::Egress::prepare`] and sent under `EgressScope::Connector("tiktok")`, so it can
@@ -47,7 +47,7 @@
 //! |---|---|---|
 //! | the account ([`OAuthProvider::list_assets`]), the probe | `GET {api}/v2/user/info/?fields=open_id,display_name` | `user.info.basic` |
 //! | the account's username (best effort, for the asset, the probe and permalinks) | `POST {api}/v2/post/publish/creator_info/query/` → `creator_username` | `video.publish` |
-//! | before every post: who may see it, what the creator turned off | `POST {api}/v2/post/publish/creator_info/query/` | `video.publish` |
+//! | the posting screen ([`Publisher::creator_info`]), and before every post: who may see it, what the creator turned off, the longest video | `POST {api}/v2/post/publish/creator_info/query/` | `video.publish` |
 //! | a video | `POST {api}/v2/post/publish/video/init/` → `publish_id`, `upload_url`; then `PUT upload_url` per chunk | `video.publish` |
 //! | photos | `POST {api}/v2/post/publish/content/init/` → `publish_id` | `video.publish` |
 //! | a post's status ([`Publisher::resolve`]) | `POST {api}/v2/post/publish/status/fetch/ {publish_id}` | `video.publish` |
@@ -77,7 +77,7 @@
 //! | the token endpoint: HTTP 5xx, `server_error`, `temporarily_unavailable` | `Transient` |
 //! | `scope_not_authorized` (HTTP 401: the grant lacks the scope, so it is not the credential's death), `scope_permission_missed` | `Permission` |
 //! | `privacy_level_option_mismatch`, `unaudited_client_can_only_post_to_private_accounts`, `spam_risk_user_banned_from_posting` | `Permission` |
-//! | `rate_limit_exceeded`, `spam_risk_too_many_posts` (also with HTTP 200), `reached_active_user_cap`, HTTP 429 | `Throttle` (TikTok names no wait) |
+//! | `rate_limit_exceeded`, `spam_risk_too_many_posts` (also with HTTP 200), `reached_active_user_cap`, HTTP 429 | `Throttle` (TikTok names no wait); on the posting screen's read, an HTTP 2xx with one of [`CANNOT_POST_CODES`] is an account that may not post at this moment, not an error |
 //! | `access_token_invalid`; `access_token_expired`, `token_revoked` (v1's names, not in TikTok's current table); HTTP 401 | `Auth`: the owner must reconnect |
 //! | `internal_error`, HTTP 5xx; a read's transport failure or broken answer, a connect failure, a host resolving to no public address | `Transient` |
 //! | a call that may have posted (a photo's init, a video's last chunk) or spent a grant (the token calls) whose answer was lost, broke off, was oversized or unreadable on success, or lacked the publish id | `Unknown` (never retry blindly) |
@@ -103,14 +103,21 @@
 //!   description is the text and the link, at most [`MAX_DESCRIPTION_UNITS`] UTF-16 units (no
 //!   title is sent: the request has one text);
 //!
-//! text alone cannot be posted on TikTok, and a video with photos is not one post. The privacy is
-//! `request.privacy` (one of [`PRIVACY_LEVELS`], compared ignoring case) or
-//! [`DEFAULT_PRIVACY`]. Then `creator_info` is read, every time: a privacy level it does not offer
-//! is refused, `Permission` ("privacy level X not available (app not audited or private
-//! account)"), and nothing else is sent (an app TikTok has not audited is offered `SELF_ONLY`
-//! only, so it never posts privately unless asked to). `disable_comment`, `disable_duet` and
-//! `disable_stitch` are what the creator turned off; the branded-content toggles are sent `false`
-//! and `is_aigc` is not sent.
+//! text alone cannot be posted on TikTok, and a video with photos is not one post. Then the
+//! choice a human made on the posting screen (`request.tiktok`, see "The posting screen"): none
+//! is refused, `Permanent`, and so is a privacy left unchosen or not one of [`PRIVACY_LEVELS`]
+//! as TikTok names them; the adapter never picks a privacy itself (`request.privacy` is not
+//! read). Then `creator_info` is read, every time, and the choice checked against it
+//! (`TiktokPost::check_postable`): a privacy level it does not offer is refused, `Permission`
+//! ("privacy level X not available (app not audited or private account)": an app TikTok has not
+//! audited is offered `SELF_ONLY` only); branded content that is private, a commercial content
+//! disclosure naming neither your brand nor branded content (or one of them without the
+//! disclosure), and a video longer than `max_video_post_duration_sec` (its length read from its
+//! MP4 boxes, `MediaUpload::video_duration_ms`; one that cannot be read is left to TikTok,
+//! `duration_check_failed`) are `Permanent`; nothing else is sent. `disable_comment`,
+//! `disable_duet` and `disable_stitch` are off only for what the human allowed and the creator
+//! has not turned off since; `brand_organic_toggle` ("Your brand") and `brand_content_toggle`
+//! ("Branded content") are the disclosure's boxes; `is_aigc` is not sent.
 //!
 //! A video is sent as `FILE_UPLOAD` (<https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide>):
 //! below [`CHUNK_BYTES`] in one chunk (`chunk_size` = the whole size), else in chunks of
@@ -125,6 +132,17 @@
 //! (else `url_ownership_unverified`).
 //!
 //! The receipt is the `publish_id`, without a URL: TikTok publishes in the background.
+//!
+//! **The posting screen** ([`Publisher::creator_info`]). TikTok's Content Sharing Guidelines
+//! (<https://developers.tiktok.com/doc/content-sharing-guidelines>) ask that the account be read
+//! fresh when the screen is shown, that the human pick the privacy among its
+//! `privacy_level_options` (no default), allow comments, duets and stitches themselves (none by
+//! default, those the creator turned off greyed out), disclose commercial content, and consent
+//! before anything is sent. The screen reads `creator_info` through [`Publisher::creator_info`]:
+//! the nickname, username, avatar (https only), privacy options, what the creator turned off and
+//! the longest video, and, for an account that may not post at this moment (an HTTP 2xx with one
+//! of [`CANNOT_POST_CODES`]), the code in `cannot_post`; any other failure is the error. The
+//! screen and the choice it records live in `jt_app` (`usecases::studio::tiktok`).
 //!
 //! **Status** ([`Publisher::resolve`]). `PUBLISH_COMPLETE` is
 //! [`PublishResolution::Published`]: the receipt of the first `publicaly_available_post_id`
@@ -150,8 +168,7 @@
 //! without it in `public["kind_key"]` (`Permanent`, "kind_key missing") and calls nothing.
 //!
 //! **Not covered** (spec §4): direct messages and comments (no public API for Login Kit apps),
-//! ads (`tiktok_ads`), webhooks, and the video's duration against `max_video_post_duration_sec`
-//! (the adapter does not read MP4 files; TikTok refuses a video too long, `duration_check_failed`).
+//! ads (`tiktok_ads`) and webhooks.
 //!
 //! [`Connector`]: jt_app::ports::connectors::Connector
 //! [`Connector::refresh`]: jt_app::ports::connectors::Connector::refresh
@@ -161,6 +178,7 @@
 //! [`OAuthProvider::list_assets`]: jt_app::ports::connectors::OAuthProvider::list_assets
 //! [`Publisher`]: jt_app::ports::connectors::Publisher
 //! [`Publisher::resolve`]: jt_app::ports::connectors::Publisher::resolve
+//! [`Publisher::creator_info`]: jt_app::ports::connectors::Publisher::creator_info
 //! [`PublishResolution::Published`]: jt_app::ports::connectors::PublishResolution::Published
 //! [`PublishResolution::Failed`]: jt_app::ports::connectors::PublishResolution::Failed
 //! [`PublishResolution::Pending`]: jt_app::ports::connectors::PublishResolution::Pending
@@ -210,8 +228,15 @@ pub const PRIVACY_LEVELS: &[&str] = &[
     "SELF_ONLY",
 ];
 
-/// The privacy of a post whose request names none.
-pub const DEFAULT_PRIVACY: &str = "PUBLIC_TO_EVERYONE";
+/// The `error.code`s `creator_info` answers with HTTP 200 for an account that may not post at
+/// this moment (its daily post cap, a posting ban, the client's daily publishing users;
+/// <https://developers.tiktok.com/doc/content-posting-api-reference-query-creator-info>): the
+/// posting screen shows them and stops, rather than failing.
+pub const CANNOT_POST_CODES: &[&str] = &[
+    "spam_risk_too_many_posts",
+    "spam_risk_user_banned_from_posting",
+    "reached_active_user_cap",
+];
 
 /// How long before its expiry a credential is renewed. TikTok's access tokens live 24 hours and
 /// the refresh job runs hourly, so a token is renewed once, some 18 hours into its life.

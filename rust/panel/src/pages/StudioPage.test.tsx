@@ -227,6 +227,8 @@ it('panel_actions_match_every_studio_tool', async () => {
     ['POST', '/api/studio/budget-moves'],
     ['POST', '/api/studio/slots/s1/piece'],
     ['POST', '/api/studio/files'],
+    ['GET', '/api/studio/slots/s1/tiktok'],
+    ['POST', '/api/studio/slots/s1/tiktok'],
   ];
   const calls = mockFetch(Object.fromEntries(expected.map(([m, p]) => [`${m} ${p}`, {}])));
   await api.overview(q);
@@ -287,7 +289,20 @@ it('panel_actions_match_every_studio_tool', async () => {
     content: { kind: 'bytes_base64', data: 'eA==' },
     request_key: 'file',
   });
+  await api.tiktokPosting('s1');
+  const post = {
+    title: 'Merhaba',
+    privacy_level: 'SELF_ONLY',
+    allow_comment: false,
+    allow_duet: false,
+    allow_stitch: false,
+    disclose_commercial: false,
+    your_brand: false,
+    branded_content: false,
+  };
+  await api.tiktokPost('s1', 3, post);
   expect(calls.map((c) => [c.method, c.path])).toEqual(expected);
+  expect(calls.at(-1)?.body).toEqual({ expected_revision: 3, post });
   expect(calls[2].body).toEqual({ filter: q });
   expect(
     calls

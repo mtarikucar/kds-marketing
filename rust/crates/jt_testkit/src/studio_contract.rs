@@ -776,6 +776,7 @@ pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
         revision: 1,
         by: v.approved_by.unwrap(),
         at: FIXED_NOW,
+        tiktok: None,
     };
     r.studio()
         .approve_target(ApprovalTarget::Slot(f.slot.id), approval.clone())
@@ -788,6 +789,36 @@ pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
             .unwrap(),
         Some(approval.clone())
     );
+    // The TikTok posting screen's choice rides on the approval, and a later approval of the
+    // same revision (the screen passed again) replaces it whole.
+    let posted = ApprovalReceipt {
+        tiktok: Some(jt_studio::TiktokPost {
+            title: "Bugünün menüsü #yemek".into(),
+            privacy_level: "MUTUAL_FOLLOW_FRIENDS".into(),
+            allow_comment: true,
+            allow_duet: false,
+            allow_stitch: false,
+            disclose_commercial: true,
+            your_brand: false,
+            branded_content: true,
+        }),
+        ..approval.clone()
+    };
+    r.studio()
+        .approve_target(ApprovalTarget::Slot(f.slot.id), posted.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        r.studio()
+            .get_approval(ApprovalTarget::Slot(f.slot.id), 1)
+            .await
+            .unwrap(),
+        Some(posted)
+    );
+    r.studio()
+        .approve_target(ApprovalTarget::Slot(f.slot.id), approval.clone())
+        .await
+        .unwrap();
     r.commit().await.unwrap();
     let b = AdSetBinding {
         verified_at: None,
@@ -1285,6 +1316,7 @@ pub async fn binding_refresh_invalidates_old_intents(uow: &dyn UnitOfWork) {
                 revision: 1,
                 by: v.approved_by.unwrap(),
                 at: FIXED_NOW,
+                tiktok: None,
             },
         )
         .await

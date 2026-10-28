@@ -371,6 +371,11 @@ impl MailboxCursor {
 /// `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR` or `SELF_ONLY`); `None`
 /// lets the adapter post publicly. An adapter that cannot honour it refuses the post rather than
 /// posting to another audience; one without such a setting ignores it.
+///
+/// `tiktok` is what a human chose on the TikTok posting screen (`jt_studio::TiktokPost`): the
+/// caption (then `text`, with no `link`), the privacy (then also `privacy`), the interactions and
+/// the commercial content disclosure. The TikTok adapter posts nothing without it and never
+/// picks a privacy itself; every other adapter ignores it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub text: String,
@@ -382,10 +387,16 @@ pub struct PublishRequest {
     /// Who may see the post (see above); `None`: public.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub privacy: Option<String>,
+    /// The TikTok posting screen's choice (see above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiktok: Option<TiktokPost>,
 }
 
 // Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
-pub use jt_studio::{MediaUpload, PublishReceipt};
+pub use jt_studio::{
+    MediaUpload, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost, TiktokPostFlags,
+    TiktokPostRefusal,
+};
 
 /// One post's counters, by the provider's metric name (e.g. `"impressions"`, `"likes"`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -688,6 +699,19 @@ pub trait Publisher: Send + Sync {
         receipt: &PublishReceipt,
     ) -> Result<Option<PublishResolution>, ConnectorError> {
         let _ = (cred, public, receipt);
+        Ok(None)
+    }
+    /// What the provider says, right now, about the account a post goes to, for a provider whose
+    /// posts a human makes on its posting screen (TikTok's `creator_info`, read fresh each time
+    /// the screen is shown and before a choice is accepted; an account that may not post at this
+    /// moment says why in [`TiktokCreator::cannot_post`] rather than failing). `None`, the
+    /// default, for a provider without such a screen. A read: it never publishes anything.
+    async fn creator_info(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<TiktokCreator>, ConnectorError> {
+        let _ = (cred, public);
         Ok(None)
     }
 }
@@ -1042,6 +1066,7 @@ mod tests {
                 filename: "a.png".into(),
             }],
             privacy: None,
+            tiktok: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(

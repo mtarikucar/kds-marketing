@@ -390,6 +390,7 @@ fn approval_bound_to_piece_or_move_revision() {
         revision: 3,
         by: UserId::new_v7(),
         at: NOW,
+        tiktok: None,
     };
     for (lane, capability) in [(true, false), (false, true), (true, true)] {
         let mut rules = StudioPolicy {
@@ -638,6 +639,7 @@ fn paid_move_checks_binding_revision_currency_and_execution_fence() {
         revision: 1,
         by: UserId::new_v7(),
         at: NOW,
+        tiktok: None,
     });
     movement.check_approval(&rules).unwrap();
     movement.revision = 2;
