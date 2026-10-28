@@ -138,12 +138,14 @@ impl LifecycleEvent { pub const ALL: &[LifecycleEvent]; pub fn key(self) -> &'st
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("a {} command cannot be {}", .from.key(), .event.key())]   // wire names: "a done command cannot be canceled"
 pub struct LifecycleError { pub from: CommandStatus, pub event: LifecycleEvent }
-pub fn next_status(current: CommandStatus, event: LifecycleEvent) -> Result<CommandStatus, LifecycleError>;
+pub fn next_status(current: CommandStatus, event: LifecycleEvent, ever_leased: bool)
+    -> Result<CommandStatus, LifecycleError>;      // ever_leased = the row's leased_at is set
 // Rules of next_status:
 //   Queued  -> Leased | Failed | Expired | Canceled          (Queued -> Done is Err: a command finishes only after a lease)
 //   Leased  -> Leased (redelivery) | Done | Failed | Expired | Canceled
-//   Expired -> Done | Failed     \  a bridge's result is the truth even after the fact: it REPLACES the status;
-//   Canceled -> Done | Failed    /  such a command is never leased again
+//   Expired -> Done | Failed     \  ONLY if ever_leased. A bridge's result is the truth even after the fact: it
+//   Canceled -> Done | Failed    /  REPLACES the status; such a command is never leased again. A command that
+//                                   ended in the queue (never leased) refuses any result.
 //   Done, Failed: nothing (a recorded result is not replaced by another)
 
 // jt_devices::observation
@@ -320,13 +322,19 @@ idempotent `do $$ … $$` guards. `down` drops the table and removes only the th
 pub trait DeviceCommandRepo: Send {
     async fn enqueue(&mut self, row: NewDeviceCommand) -> Result<DeviceCommandRow, AppError>;
     async fn lease(&mut self, caps: &[CapabilityId], now: OffsetDateTime, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // queued, or leased and leased_at <= now-10s; not expired; seq order; sets leased, attempts+1
-    async fn finish(&mut self, id: Uuid, outcome: Finish, now: OffsetDateTime) -> Result<FinishOutcome, AppError>; // Applied | Duplicate (already final) | Unknown
+    async fn finish(&mut self, id: Uuid, outcome: Finish, now: OffsetDateTime) -> Result<FinishOutcome, AppError>;
+    // A bridge's result, through jt_devices::next_status(status, event, leased_at.is_some()):
+    //   Applied   - a leased command becomes done/failed; or a LATE result for an expired/canceled command that
+    //               was leased (leased_at not null) REPLACES that status
+    //   Duplicate - only a done/failed row (a result is already recorded)
+    //   Unknown   - no such command in this workspace, or a result for a command that was never leased
+    //               (leased_at null: queued, or expired/canceled in the queue): refused, nothing changes
     async fn expire_due(&mut self, now: OffsetDateTime) -> Result<u32, AppError>;
     async fn get(&mut self, id: Uuid) -> Result<Option<DeviceCommandRow>, AppError>;
     async fn list(&mut self, cap: CapabilityId, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>;
 }
 ```
-- [ ] **Contract tests first:** `lease_returns_oldest_first`, `lease_skips_fresh_lease_and_redelivers_after_10s`, `lease_never_returns_expired`, `finish_is_idempotent`, `finish_unknown_id`, `expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry`, `rows_are_workspace_scoped`.
+- [ ] **Contract tests first:** `lease_returns_oldest_first`, `lease_skips_fresh_lease_and_redelivers_after_10s`, `lease_never_returns_expired`, `finish_is_idempotent` (a second result for a done/failed row is `Duplicate`), `finish_unknown_id`, `finish_replaces_expired_after_lease`, `finish_refuses_result_for_never_leased`, `expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry`, `rows_are_workspace_scoped`.
 - [ ] Implement fake first (tests run on Windows via testkit), then Postgres (CI). **Commit**.
 
 ### Task D1-T5: bridge use cases + routes
@@ -346,10 +354,12 @@ Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permissio
 - `commands(CommandsQuery)`: lease for this bridge's phones (≤ `limit` ≤ 20), wait on the kernel signal up to
   `wait_s` ≤ 25; for `PushFile` attach a 10-minute signed `download_url` (`FileStore::provider_url`).
 - `results(ResultsIn ≤ 100)`: `finish` each; ledger `devices.command.finished {command_id, kind, status, reason,
-  duration_ms}`; signal the waiting agent; observation/shell/file results stored on the row.
+  duration_ms}`; signal the waiting agent; observation/shell/file results stored on the row. `ResultsOut` counts
+  `Applied` as `applied`, `Duplicate` as `duplicates`, and `Unknown` (no such command, or a result for a command
+  that was never leased) as `unknown`.
 - `files` (body ≤ the studio upload limit, `image/png` or `application/octet-stream`): store as a workspace file
   with 7-day expiry metadata, answer `FileOut`.
-- [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_refuses_retired_phone`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `push_file_gets_signed_download_url`, `files_upload_returns_id`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused}`; archtest: no MCP tool for `devices.bridge.*`.
+- [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_refuses_retired_phone`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused}`; archtest: no MCP tool for `devices.bridge.*`.
 - [ ] CI red → implement → green; **commit** `feat(devices): the device bridge's surface`.
 
 ### Task D1-T6: agent use cases + MCP tools + logging rule
@@ -376,7 +386,9 @@ are set up before a strategy, like the bridge; `Write` for act):
 ### Task D1-T7: jobs
 
 **Files:** `usecases/jobs.rs`: `Job::DeviceBridgeHealth` (1 min, kernel `mark_unreachable` for kind `phone`),
-`Job::DeviceCommandExpiry` (1 min, `expire_due`, ledger `devices.command.finished {status: expired}` per row),
+`Job::DeviceCommandExpiry` (1 min, `expire_due`, ledger `devices.command.finished {status: expired}` per row;
+a late result for a command that was leased then replaces `expired` (D1-T4 `finish`) and writes a SECOND
+`devices.command.finished` with the result's status: intended, the ledger keeps what happened in order),
 `Job::DeviceFilePurge` (hourly, deletes device files older than 7 days); job list pins.
 - [ ] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`.
 - [ ] CI red → green; **commit**.
@@ -422,10 +434,10 @@ Mapping per spec §4.1. Specifics:
 - `tap_on`: dump, match `text`/`id` (`resource-id`)/`desc` (`content-desc`) exact first then contains (unless `exact`), tap the best match's tap point; none → `ElementNotFound` with up to 20 visible labels in `detail`.
 - `text`: ASCII → `input text` with spaces as `%s` and shell metacharacters escaped for the device shell; non-ASCII → if ADBKeyBoard present: `ime set com.android.adbkeyboard/.AdbIME`, `am broadcast -a ADB_INPUT_B64 --es msg <base64>`, restore the previous IME; else `UnicodeUnsupported`.
 - feature detection: `pm list packages com.android.adbkeyboard` → `text.unicode`; all kinds of §4.1 reported for Android.
-- `shell`: `adb -s S shell <argv…>` as separate args; capture exit code (`adb shell` ≥ API 24 propagates it), stdout/stderr capped at 64 KiB each.
+- `shell`: `adb -s S shell <argv…>` as separate args, each argument quoted for the device shell; capture exit code (`adb shell` ≥ API 24 propagates it), stdout/stderr capped at 64 KiB each. After quoting, the driver checks the final command-line length against a limit it names as a constant (the quoting can make a command that validated longer) and refuses an over-long one before any `adb` call with `bridge_error` and a clear `detail` (the length and the limit). The ASCII `text` path does the same check after its escaping.
 - `screenshot`: `exec-out screencap -p` bytes → upload via `FileTransfer` → `File{file_id}`.
 - `push_file`: download `download_url` to a temp file → `adb push`; `pull_file`: `adb pull` to temp → upload.
-- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `shell_passes_argv_separately`, `every_call_names_the_serial`, `report_merges_getprop`.
+- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`.
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit** `feat(device-bridge): the Android driver`.
 
 ### Task D2-T3: Windows build in CI

@@ -570,68 +570,111 @@ fn lifecycle_transitions() {
     use CommandStatus::*;
     use LifecycleEvent as E;
 
-    // Every move there is. A command finishes only after a lease (`Queued` then `Done` is not a
-    // thing), but it can fail, expire or be canceled before one. A result that comes in after
-    // the command expired or was canceled is still the truth: it replaces that status.
+    // Every move there is, and whether it needs the command to have been leased at some point.
+    // A command finishes only after a lease (`Queued` then `Done` is not a thing), but it can
+    // fail, expire or be canceled before one. A result that comes in after the command expired
+    // or was canceled is still the truth, if a bridge could have produced it: it replaces that
+    // status.
     let allowed = [
-        (Queued, E::Leased, Leased),
-        (Queued, E::Failed, Failed),
-        (Queued, E::Expired, Expired),
-        (Queued, E::Canceled, Canceled),
-        (Leased, E::Leased, Leased),
-        (Leased, E::Done, Done),
-        (Leased, E::Failed, Failed),
-        (Leased, E::Expired, Expired),
-        (Leased, E::Canceled, Canceled),
-        (Expired, E::Done, Done),
-        (Expired, E::Failed, Failed),
-        (Canceled, E::Done, Done),
-        (Canceled, E::Failed, Failed),
+        (Queued, E::Leased, Leased, false),
+        (Queued, E::Failed, Failed, false),
+        (Queued, E::Expired, Expired, false),
+        (Queued, E::Canceled, Canceled, false),
+        (Leased, E::Leased, Leased, false),
+        (Leased, E::Done, Done, false),
+        (Leased, E::Failed, Failed, false),
+        (Leased, E::Expired, Expired, false),
+        (Leased, E::Canceled, Canceled, false),
+        (Expired, E::Done, Done, true),
+        (Expired, E::Failed, Failed, true),
+        (Canceled, E::Done, Done, true),
+        (Canceled, E::Failed, Failed, true),
     ];
     for from in CommandStatus::ALL {
         for event in LifecycleEvent::ALL {
-            let expected = allowed
-                .iter()
-                .find(|(f, e, _)| f == from && e == event)
-                .map(|(_, _, to)| *to);
-            assert_eq!(
-                next_status(*from, *event),
-                expected.ok_or(LifecycleError {
-                    from: *from,
-                    event: *event
-                }),
-                "{from:?} then {event:?}"
-            );
+            for ever_leased in [false, true] {
+                let expected = allowed
+                    .iter()
+                    .find(|(f, e, _, _)| f == from && e == event)
+                    .and_then(|(_, _, to, needs_lease)| {
+                        (ever_leased || !needs_lease).then_some(*to)
+                    });
+                assert_eq!(
+                    next_status(*from, *event, ever_leased),
+                    expected.ok_or(LifecycleError {
+                        from: *from,
+                        event: *event
+                    }),
+                    "{from:?} then {event:?}, ever leased: {ever_leased}"
+                );
+            }
         }
     }
 
     // The ones that matter, by name.
-    assert!(next_status(Queued, E::Done).is_err());
-    assert_eq!(next_status(Queued, E::Failed), Ok(Failed));
-    assert_eq!(next_status(Leased, E::Leased), Ok(Leased));
+    for ever_leased in [false, true] {
+        assert!(next_status(Queued, E::Done, ever_leased).is_err());
+        assert_eq!(next_status(Queued, E::Failed, ever_leased), Ok(Failed));
+        assert_eq!(next_status(Leased, E::Leased, ever_leased), Ok(Leased));
+        assert_eq!(next_status(Leased, E::Done, ever_leased), Ok(Done));
+    }
 }
 
 #[test]
 fn late_result_replaces_an_expired_or_canceled_status() {
     use CommandStatus::*;
     use LifecycleEvent as E;
+    // A command that was leased and then expired or was canceled: the bridge's result is the
+    // truth, and replaces the status.
     for from in [Expired, Canceled] {
-        assert_eq!(next_status(from, E::Done), Ok(Done));
-        assert_eq!(next_status(from, E::Failed), Ok(Failed));
+        assert_eq!(next_status(from, E::Done, true), Ok(Done));
+        assert_eq!(next_status(from, E::Failed, true), Ok(Failed));
         // Such a command is never leased again, nor ended another way.
-        assert!(next_status(from, E::Leased).is_err());
-        assert!(next_status(from, E::Expired).is_err());
-        assert!(next_status(from, E::Canceled).is_err());
+        assert!(next_status(from, E::Leased, true).is_err());
+        assert!(next_status(from, E::Expired, true).is_err());
+        assert!(next_status(from, E::Canceled, true).is_err());
     }
     // A result that was already recorded is not replaced by another.
     for from in [Done, Failed] {
         for event in LifecycleEvent::ALL {
-            assert!(
-                next_status(from, *event).is_err(),
-                "{from:?} then {event:?}"
-            );
+            for ever_leased in [false, true] {
+                assert!(
+                    next_status(from, *event, ever_leased).is_err(),
+                    "{from:?} then {event:?}"
+                );
+            }
         }
     }
+}
+
+#[test]
+fn never_leased_expired_command_refuses_a_result() {
+    use CommandStatus::*;
+    use LifecycleEvent as E;
+    // A command that expired in the queue, or was canceled there, has no bridge that ever held
+    // it: a result for it can only be a mistake, so it is refused whatever it says.
+    for end in [E::Expired, E::Canceled] {
+        let ended = next_status(Queued, end, false).unwrap();
+        assert!(ended == Expired || ended == Canceled);
+        for result in [E::Done, E::Failed] {
+            assert_eq!(
+                next_status(ended, result, false),
+                Err(LifecycleError {
+                    from: ended,
+                    event: result
+                }),
+                "{ended:?} then {result:?}"
+            );
+        }
+        // The same ends, reached after a lease, take the late result.
+        let leased = next_status(Queued, E::Leased, false).unwrap();
+        let ended_after_lease = next_status(leased, end, true).unwrap();
+        assert_eq!(ended_after_lease, ended);
+        assert_eq!(next_status(ended_after_lease, E::Done, true), Ok(Done));
+        assert_eq!(next_status(ended_after_lease, E::Failed, true), Ok(Failed));
+    }
+    // And a queued command cannot be done at all.
+    assert!(next_status(Queued, E::Done, false).is_err());
 }
 
 #[test]
@@ -646,11 +689,11 @@ fn is_final_means_no_more_leasing_or_waiting() {
 
 #[test]
 fn lifecycle_error_shows_wire_names() {
-    let shown = next_status(CommandStatus::Done, LifecycleEvent::Canceled)
+    let shown = next_status(CommandStatus::Done, LifecycleEvent::Canceled, true)
         .unwrap_err()
         .to_string();
     assert_eq!(shown, "a done command cannot be canceled");
-    let shown = next_status(CommandStatus::Queued, LifecycleEvent::Done)
+    let shown = next_status(CommandStatus::Queued, LifecycleEvent::Done, false)
         .unwrap_err()
         .to_string();
     assert_eq!(shown, "a queued command cannot be done");

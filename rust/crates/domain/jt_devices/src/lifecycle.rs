@@ -52,8 +52,9 @@ impl CommandStatus {
     }
 
     /// Whether the command is over: it is never leased again and nobody waits for it. A final
-    /// status is not always the last word: a result that arrives late still replaces an
-    /// `Expired` or `Canceled` one (see [`next_status`]).
+    /// status is not always the last word: a result that arrives late can still replace an
+    /// `Expired` or `Canceled` one, if the command was leased before it ended (see
+    /// [`next_status`]).
     pub fn is_final(self) -> bool {
         matches!(
             self,
@@ -160,25 +161,30 @@ pub struct LifecycleError {
     pub event: LifecycleEvent,
 }
 
-/// The status after `event`.
+/// The status after `event`. `ever_leased` is whether a bridge was ever handed the command (the
+/// row's lease time is set); it matters only for a late result.
 ///
 /// - A command is leased from `Queued`, and again from `Leased` (a redelivery).
 /// - It finishes (`Done`) only after a lease, but it can fail, expire or be canceled before one
 ///   (refused up front, or never picked up).
 /// - A bridge's result is the truth even after the fact: a `Done` or `Failed` result arriving for
-///   an `Expired` or `Canceled` command replaces that status. Such a command is never leased
-///   again.
+///   an `Expired` or `Canceled` command replaces that status, but only if the command was leased
+///   before it ended. A command that ended in the queue has no bridge that ever held it, so a
+///   result for it is refused. Such a command is never leased again.
 /// - Nothing else moves a command that is `Done`, `Failed`, `Expired` or `Canceled`.
 pub fn next_status(
     current: CommandStatus,
     event: LifecycleEvent,
+    ever_leased: bool,
 ) -> Result<CommandStatus, LifecycleError> {
     use CommandStatus as S;
     use LifecycleEvent as E;
     match (current, event) {
         (S::Queued | S::Leased, E::Leased) => Ok(S::Leased),
-        (S::Leased | S::Expired | S::Canceled, E::Done) => Ok(S::Done),
-        (S::Queued | S::Leased | S::Expired | S::Canceled, E::Failed) => Ok(S::Failed),
+        (S::Leased, E::Done) => Ok(S::Done),
+        (S::Expired | S::Canceled, E::Done) if ever_leased => Ok(S::Done),
+        (S::Queued | S::Leased, E::Failed) => Ok(S::Failed),
+        (S::Expired | S::Canceled, E::Failed) if ever_leased => Ok(S::Failed),
         (S::Queued | S::Leased, E::Expired) => Ok(S::Expired),
         (S::Queued | S::Leased, E::Canceled) => Ok(S::Canceled),
         _ => Err(LifecycleError {
