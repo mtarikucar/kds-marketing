@@ -54,6 +54,8 @@ use crate::ports::{
 pub struct Deps {
     pub ops: Arc<dyn crate::ports::ops::OpsSnapshot>,
     pub ops_signals: Arc<crate::ports::ops::OpsSignals>,
+    /// Wakes the long-polls of the calls (`calls.listen`, the voice bridge's commands).
+    pub call_signals: Arc<dyn crate::ports::calls::CallSignals>,
     pub billing: billing::BillingConfig,
     pub file_maintenance: Arc<dyn crate::ports::files::FileMaintenance>,
     pub media_fetch: Arc<dyn crate::ports::files::MediaFetcher>,

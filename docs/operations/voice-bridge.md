@@ -109,6 +109,32 @@ event); the bridge drops it rather than resending it. Events of a call Jeeta has
 session for are counted `unmatched` (inbound calls are handled from phase V2 on). An event's
 `at` is believed up to a minute before it arrives.
 
+### An agent's call, as the bridge sees it
+
+1. `dial{to_e164, plan}`: the number to call and the agent's plan (opening, holding phrases,
+   fallback lines, closing), which the bridge may synthesise ahead. The bridge reports `ringing`,
+   then `answered`, or `hangup{cause}` (`busy`, `no_answer`, …) or `error{failure_line}` when the
+   line does not come up.
+2. On the answer Jeeta queues `play{seq, clip: "opening", index, text}` (after
+   `play{clip: "announcement"}` when the call may be recorded). Every `play` and `say` carries the
+   text to speak and the turn number `seq`; the bridge reports `said{seq}` when it was played to
+   its end, or `said{seq, interrupted_at_char}` when the caller cut it by speaking (a `say` with
+   `allow_barge_in: false` asks to be played through). `record{start: true}` comes only after the
+   announcement was reported played to its end.
+3. The caller's words are reported as `utterance` events (only `is_final` ones are kept); key
+   presses as `dtmf`. The agent answers with `say{seq, text, allow_barge_in}`; while it thinks,
+   Jeeta queues `play{clip: "holding"}` and `play{clip: "fallback"}` lines from the plan.
+4. The call ends with `play{clip: "closing"}` then `hangup` (the agent ended it, the agent stayed
+   silent through every fallback line, the maximum duration, the caller stayed silent), with
+   `transfer{to}` (an extension) when the agent hands it to a rep, or by the caller: the bridge
+   reports `hangup{cause}` for every line that closes.
+
+Jeeta does not wait for ever on a bridge that stops reporting: a call still not answered 90
+seconds after it was placed is hung up (`no_answer`); a call whose bridge's heartbeat lapses (no
+registration for a minute) is closed (`bridge_offline`, its closing and hangup queued in case the
+bridge comes back); a closing whose hangup is not reported within 60 seconds is taken as done.
+Commands are kept 7 days after they were queued, then deleted.
+
 ## 4. Heartbeat and the panel
 
 - The capability reads **verified** while the last registration is at most 60 seconds old and

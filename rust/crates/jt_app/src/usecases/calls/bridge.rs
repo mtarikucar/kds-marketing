@@ -21,19 +21,24 @@
 //! **Commands.** A poll leases its bridge's oldest commands that are not acknowledged; one that
 //! is not acknowledged (an event `command_done{id}`) within [`REDELIVER_AFTER`] of being taken is
 //! handed out again, so no command is lost; the bridge acts on a command id once, however often it
-//! is handed it. While none is due the poll waits, looking again every [`POLL_TICK`].
+//! is handed it. While none is due the poll waits: a command queued in this server wakes it at
+//! once (`CallSignals`), and it looks again at least every [`super::FALLBACK_TICK`] (what another
+//! instance queued, a lease running out).
 //!
 //! **Events.** A batch is applied call by call, in each call's `bridge_seq` order, each event at
 //! most once by its `(bridge_call_id, bridge_seq)`: a retried batch changes nothing. An event is
-//! applied to its session with `jt_calls::reduce` (its turns appended, the commands it yields
-//! queued for the bridge). An event of a call that is not an agent's call through a voice bridge
-//! is counted `unmatched` and dropped.
+//! applied to its session with `jt_calls::reduce` (its turns appended, the caller's cut of a
+//! played sentence marked on that sentence's turn, the commands it yields queued for the bridge).
+//! A call's answer writes `calls.answered`; its end (the caller hung up, the line failed) settles
+//! it as every end of an agent's call is settled (`super::settle`: the journey's `CallMade`, the
+//! spend, `calls.ended`). An event of a call that is not an agent's call through a voice bridge is
+//! counted `unmatched` and dropped.
 //!
 //! No ledger entry carries a key, an event's words or a phone number.
 
 use std::collections::BTreeMap;
 
-use jt_calls::{BridgeEvent, CallCommandId, CallId, CallMode, Command};
+use jt_calls::{BridgeEvent, CallCommandId, CallId, CallMode, CallState};
 use jt_capability::{
     Capability, CapabilityId, EffectiveStatus, NewCapability, StoredStatus, effective_status,
 };
@@ -43,7 +48,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
 
-use super::extension_is_valid;
+use super::session::Pending;
+use super::{FALLBACK_TICK, extension_is_valid};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::calls::QueuedCommand;
@@ -57,11 +63,9 @@ pub const VOICE_BRIDGE_KIND: &str = "voice_bridge";
 /// How often the bridge registers, as its registration tells it.
 pub const HEARTBEAT_S: u32 = 15;
 /// The longest a poll for commands waits.
-pub const MAX_WAIT_S: u32 = 25;
+pub use super::MAX_WAIT_S;
 /// How long a command handed out stays the bridge's before it is handed out again.
 pub const REDELIVER_AFTER: Duration = Duration::seconds(10);
-/// How often a waiting poll looks for commands again.
-pub const POLL_TICK: std::time::Duration = std::time::Duration::from_millis(500);
 /// The most commands one poll hands out.
 pub const MAX_COMMANDS: u32 = 20;
 /// The most events one batch carries.
@@ -440,6 +444,8 @@ pub async fn commands(
     };
     let started = tokio::time::Instant::now();
     loop {
+        // Watching before reading: a command queued after the read still wakes the wait.
+        let watch = deps.call_signals.watch(ctx.workspace_id);
         let waited = started.elapsed();
         let now = ctx.now + Duration::try_from(waited).unwrap_or(Duration::ZERO);
         let taken = {
@@ -463,7 +469,8 @@ pub async fn commands(
                 timed_out: true,
             });
         }
-        tokio::time::sleep(POLL_TICK.min(wait - waited)).await;
+        // Woken, or the fallback tick: look again either way.
+        let _ = tokio::time::timeout(FALLBACK_TICK.min(wait - waited), watch).await;
     }
 }
 
@@ -543,7 +550,8 @@ fn kind_of(event: &BridgeEvent) -> &'static str {
 /// Applies a batch of the bridge's events (see the module docs). A batch over [`MAX_EVENTS`], or
 /// an event whose `bridge_call_id` is empty, longer than 128 characters or holds whitespace or a
 /// control character, is `VALIDATION` (naming `events` or `events[i].bridge_call_id`) and nothing
-/// is applied. Each call's events are applied in one transaction. Only the bridge's key.
+/// is applied. Each call's events are applied in one transaction, which wakes what listens on
+/// the workspace's calls once committed. Only the bridge's key.
 pub async fn events(deps: &Deps, ctx: &Ctx, input: EventsInput) -> Result<EventsOut, AppError> {
     authorize(ctx)?;
     if input.events.len() > MAX_EVENTS {
@@ -598,7 +606,12 @@ async fn apply_call(
         return Ok(());
     };
     let policy = r.calls().policy().await?;
-    let (mut turns, mut commands) = (Vec::new(), Vec::new());
+    let (was_answered, was_ended) = (
+        session.answered_at.is_some(),
+        session.state == CallState::Ended,
+    );
+    let mut pending = Pending::default();
+    let mut applied = 0;
     for e in events {
         let fresh = r
             .calls()
@@ -615,27 +628,35 @@ async fn apply_call(
             continue;
         }
         out.accepted += 1;
+        applied += 1;
         if let BridgeEvent::CommandDone { id } = &e.event {
             r.calls().ack_command(bridge.id, *id, ctx.now).await?;
         }
         let at = e.at.clamp(ctx.now - MAX_EVENT_AGE, ctx.now);
-        let step = jt_calls::reduce(&mut session, &e.event, at, &policy);
-        turns.extend(step.turns);
-        commands.extend(step.commands);
+        pending.add(jt_calls::reduce(&mut session, &e.event, at, &policy));
+    }
+    if applied == 0 {
+        return Ok(());
     }
     let id = session.id;
-    if !turns.is_empty() {
-        r.calls().append_turns(id, turns).await?;
+    pending.store(deps, r.as_mut(), id, ctx.now).await?;
+    if !was_answered && session.answered_at.is_some() {
+        super::ledger(
+            r.as_mut(),
+            ctx,
+            "calls.answered",
+            id,
+            json!({ "call_id": id }),
+        )
+        .await?;
     }
-    if !commands.is_empty() {
-        let queued: Vec<(CallCommandId, Command)> = commands
-            .into_iter()
-            .map(|c| (CallCommandId(deps.ids.uuid()), c))
-            .collect();
-        r.calls().enqueue_commands(id, queued, ctx.now).await?;
+    if !was_ended && session.state == CallState::Ended {
+        super::settle(deps, ctx, r.as_mut(), &mut session).await?;
     }
     r.calls().update(session, ctx.now).await?;
-    r.commit().await
+    r.commit().await?;
+    deps.call_signals.notify(ctx.workspace_id);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -438,10 +438,31 @@ async fn provider_failure_ends_the_call_with_its_line() {
 }
 
 #[tokio::test]
-async fn agent_mode_waits_for_the_bridge_and_reps_need_calls_work() {
+async fn agent_mode_needs_a_voice_bridge_and_reps_need_calls_work() {
     let r = rig().await;
+    // An agent's call brings its plan and no extension, and goes through a voice bridge: the
+    // workspace has none, so it is refused bridge_offline (the PBX does not carry agent calls).
     let mut input = commercial(&r);
     input.mode = calls::PlaceMode::Agent;
+    assert_invalid(
+        &err(calls::place(&r.w.deps, &r.w.owner_ctx, input.clone()).await),
+        "rep_extension",
+    );
+    input.rep_extension = None;
+    assert_invalid(
+        &err(calls::place(&r.w.deps, &r.w.owner_ctx, input.clone()).await),
+        "plan",
+    );
+    input.plan = Some(
+        serde_json::from_value(json!({
+            "opening": "Merhaba, ben Acme'nin dijital asistanıyım.",
+            "goal": "Teklifi hatırlatmak",
+            "holding": ["Bir saniye lütfen."],
+            "closing": "İyi günler.",
+            "max_duration_s": 120,
+        }))
+        .unwrap(),
+    );
     assert_eq!(
         reason(calls::place(&r.w.deps, &r.w.owner_ctx, input).await),
         "bridge_offline"

@@ -1,9 +1,10 @@
 //! The production implementations of the service ports: the system clock, UUIDv7 ids, random
-//! tokens and Argon2id password hashing, plus the stand-ins for a process without provider apps
-//! or adapters ([`NoPlatformApps`], [`EmptyConnectorRegistry`]). Tests use the deterministic fakes
-//! of `jt_testkit`.
+//! tokens, Argon2id password hashing and the calls' in-process signals ([`LocalCallSignals`]),
+//! plus the stand-ins for a process without provider apps or adapters ([`NoPlatformApps`],
+//! [`EmptyConnectorRegistry`]). Tests use the deterministic fakes of `jt_testkit`.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use argon2::Argon2;
 use argon2::password_hash::{Error as Argon2Error, PasswordHasher as _, PasswordVerifier as _};
@@ -11,12 +12,14 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use time::OffsetDateTime;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 use uuid::Uuid;
 
 use jt_connector::Provider;
+use jt_tenancy::WorkspaceId;
 
 use crate::error::AppError;
+use crate::ports::calls::{CallSignals, CallWatch};
 use crate::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
     InstagramApp, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, MetaApp,
@@ -149,6 +152,44 @@ impl PasswordHasher for Argon2Hasher {
             },
         )
         .await
+    }
+}
+
+/// [`CallSignals`] within this process: one `tokio::sync::watch` channel per workspace being
+/// watched, its value counting the signals. A watch subscribes before its poll reads, so it sees
+/// any signal sent after that; a channel nobody watches any more is dropped at the next signal.
+/// Process-local like `OpsSignals`: with several server instances a signal reaches only this
+/// one's polls, and the others find what was committed at their next read.
+#[derive(Debug, Default)]
+pub struct LocalCallSignals {
+    channels: Mutex<HashMap<WorkspaceId, watch::Sender<u64>>>,
+}
+
+impl CallSignals for LocalCallSignals {
+    fn watch(&self, ws: WorkspaceId) -> CallWatch {
+        let mut rx = {
+            let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+            channels
+                .entry(ws)
+                .or_insert_with(|| watch::channel(0).0)
+                .subscribe()
+        };
+        Box::pin(async move {
+            // The sender lives while this receiver does (it is dropped only once nobody
+            // watches), so this ends only with a signal.
+            let _ = rx.changed().await;
+        })
+    }
+
+    fn notify(&self, ws: WorkspaceId) {
+        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = channels.get(&ws) {
+            if tx.receiver_count() == 0 {
+                channels.remove(&ws);
+            } else {
+                tx.send_modify(|n| *n = n.wrapping_add(1));
+            }
+        }
     }
 }
 
@@ -362,6 +403,40 @@ mod tests {
             assert!(registry.consent(provider).is_none());
             assert!(registry.delivery_reports(provider).is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn call_signals_wake_the_watches_begun_before_them_only_in_their_workspace() {
+        use std::time::Duration as StdDuration;
+        let signals = LocalCallSignals::default();
+        let (ws, other) = (WorkspaceId::new_v7(), WorkspaceId::new_v7());
+        // A signal sent after the watch began, before it is awaited, is not lost.
+        let watch = signals.watch(ws);
+        signals.notify(ws);
+        tokio::time::timeout(StdDuration::from_secs(1), watch)
+            .await
+            .expect("woken");
+        // Another workspace's signal wakes nothing here; a signal sent before the watch began
+        // does not count.
+        signals.notify(ws);
+        let watch = signals.watch(ws);
+        signals.notify(other);
+        assert!(
+            tokio::time::timeout(StdDuration::from_millis(50), watch)
+                .await
+                .is_err()
+        );
+        // Several watches wake together; once none is left the workspace's channel is dropped.
+        let (a, b) = (signals.watch(ws), signals.watch(ws));
+        signals.notify(ws);
+        tokio::time::timeout(StdDuration::from_secs(1), async {
+            a.await;
+            b.await;
+        })
+        .await
+        .expect("both woken");
+        signals.notify(ws);
+        assert!(signals.channels.lock().unwrap().is_empty());
     }
 
     #[test]

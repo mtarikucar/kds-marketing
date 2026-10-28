@@ -70,6 +70,8 @@ pub struct Intervals {
     pub studio_measure: Duration,
     pub studio_reweight: Duration,
     pub voice_bridge_health: Duration,
+    pub call_timers: Duration,
+    pub purge_call_commands: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -80,8 +82,8 @@ const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
 impl Default for Intervals {
     /// Token renewal hourly, probes every 15 minutes, the delivery-report poll every minute, the
-    /// inbox poll hourly, the raw-body and probe-run purges daily, the OAuth-flow purge hourly;
-    /// first runs within 30 seconds of the start.
+    /// inbox poll hourly, the raw-body, probe-run and bridge-command purges daily, the OAuth-flow
+    /// purge hourly, the call timers every second; first runs within 30 seconds of the start.
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
@@ -107,6 +109,8 @@ impl Default for Intervals {
             studio_measure: HOUR * 6,
             studio_reweight: DAY * 7,
             voice_bridge_health: MINUTE,
+            call_timers: Duration::from_secs(1),
+            purge_call_commands: DAY,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -139,6 +143,8 @@ impl Intervals {
             Job::StudioMeasure => self.studio_measure,
             Job::StudioReweight => self.studio_reweight,
             Job::VoiceBridgeHealth => self.voice_bridge_health,
+            Job::CallTimers => self.call_timers,
+            Job::PurgeCallCommands => self.purge_call_commands,
         }
     }
 }
@@ -450,6 +456,8 @@ mod tests {
             studio_measure: every,
             studio_reweight: every,
             voice_bridge_health: every,
+            call_timers: every,
+            purge_call_commands: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -553,6 +561,9 @@ mod tests {
         assert_eq!(i.of(Job::StudioPublish), MINUTE);
         assert_eq!(i.of(Job::StudioPublishRecover), MINUTE);
         assert_eq!(i.of(Job::VoiceBridgeHealth), MINUTE);
+        assert_eq!(i.of(Job::CallTimers), Duration::from_secs(1));
+        assert_eq!(i.of(Job::PurgeCallCommands), DAY);
+        assert_eq!(Job::CallTimers.lock_name(), "jeeta.jobs.call_timers");
         assert_eq!(
             Job::VoiceBridgeHealth.lock_name(),
             "jeeta.jobs.voice_bridge_health"

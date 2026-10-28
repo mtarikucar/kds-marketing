@@ -23,7 +23,9 @@
 //! workspace is left alone. The NetGSM polls go only to the workspaces holding a verified SMS
 //! line, found with one platform-wide read before any of their transactions opens. The purges
 //! run for every workspace, and so does the voice bridges' health check: it only records that a
-//! bridge stopped reporting, whatever the workspace's status.
+//! bridge stopped reporting, whatever the workspace's status. The call timers run every second
+//! for the workspaces with an agent's call on the line (one platform-wide read), whatever their
+//! status: a call already on the line is always ended by script.
 //!
 //! **Who.** What a job writes to the ledger is written by `Actor::System` with the component
 //! `scheduler:<job name>`.
@@ -129,11 +131,13 @@ pub enum Job {
     StudioMeasure,
     StudioReweight,
     VoiceBridgeHealth,
+    CallTimers,
+    PurgeCallCommands,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 23] = [
+    pub const ALL: [Job; 25] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -157,6 +161,8 @@ impl Job {
         Job::StudioMeasure,
         Job::StudioReweight,
         Job::VoiceBridgeHealth,
+        Job::CallTimers,
+        Job::PurgeCallCommands,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -186,6 +192,8 @@ impl Job {
             Job::StudioMeasure => "studio_measure",
             Job::StudioReweight => "studio_reweight",
             Job::VoiceBridgeHealth => "voice_bridge_health",
+            Job::CallTimers => "call_timers",
+            Job::PurgeCallCommands => "purge_call_commands",
         }
     }
 
@@ -220,6 +228,8 @@ impl Job {
                 run_studio_publications(deps, *self).await
             }
             Job::VoiceBridgeHealth => run_voice_bridge_health(deps, now).await,
+            Job::CallTimers => run_call_timers(deps, now).await,
+            Job::PurgeCallCommands => run_purge_call_commands(deps, now).await,
         }
     }
 }
@@ -980,8 +990,81 @@ pub async fn run_voice_bridge_health(deps: &Deps, now: OffsetDateTime) -> JobRep
 }
 
 // ---------------------------------------------------------------------------------------------
+// call_timers
+// ---------------------------------------------------------------------------------------------
+
+/// Runs what is due at `now` on every agent call on the line (`calls::session::tick`: holding
+/// phrases, fallback lines, the scripted closing, the caller's silence, the maximum duration, a
+/// line that rang too long or whose bridge went silent), in every workspace with one, each call in
+/// a transaction of its own. Run every second. `touched` and `changed` count the calls something
+/// was due on (a call with nothing due is not counted, so a quiet second logs at `debug`).
+pub async fn run_call_timers(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::calls::session;
+    let job = Job::CallTimers;
+    let mut report = JobReport::default();
+    let listed = async {
+        let mut platform = deps.uow.platform().await?;
+        platform.workspaces_with_live_agent_calls().await
+    };
+    let workspaces = match listed.await {
+        Ok(ws) => ws,
+        Err(e) => {
+            report.failed += 1;
+            tracing::warn!(
+                job = job.name(),
+                code = e.code.as_str(),
+                "the workspaces with live calls could not be listed"
+            );
+            Vec::new()
+        }
+    };
+    for ws in workspaces {
+        let ctx = system_ctx(job, ws, now);
+        let calls = match session::live_agent_calls(deps, &ctx).await {
+            Ok(calls) => calls,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for id in calls {
+            match session::tick(deps, &ctx, id).await {
+                Ok(true) => {
+                    report.touched += 1;
+                    report.changed += 1;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    report.touched += 1;
+                    report.failed += 1;
+                    step_failed(job, ws, None, &Failure::App(e));
+                }
+            }
+        }
+    }
+    finish(job, report)
+}
+
+// ---------------------------------------------------------------------------------------------
 // Purges
 // ---------------------------------------------------------------------------------------------
+
+/// Deletes, in every workspace, the voice bridge's commands queued more than
+/// `calls::session::COMMAND_RETENTION` (7 days) before `now`, acknowledged or not; the calls and
+/// their turns stay. `touched` and `changed` count the commands deleted, `failed` the workspaces
+/// that could not be purged.
+pub async fn run_purge_call_commands(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::calls::session;
+    let job = Job::PurgeCallCommands;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let purged = session::purge_commands(deps, &ctx, now).await;
+        count_purged(job, ws, purged, &mut report);
+    }
+    finish(job, report)
+}
 
 /// Removes, in every workspace, the raw body of every inbound event received more than
 /// [`webhook::RAW_RETENTION`] (30 days) before `now` ([`webhook::purge_raw_in`]); the events

@@ -21,7 +21,9 @@ use jt_tenancy::{Email, MembershipId, RoleDef, RoleId, UserId, WorkspaceId, Work
 use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 
-use crate::repos::{api_keys, capabilities, ledger, map_sqlx, memberships, roles, workspaces};
+use crate::repos::{
+    api_keys, calls, capabilities, ledger, map_sqlx, memberships, roles, workspaces,
+};
 use crate::tx::{PlatformTx, TenantTx, UserTx};
 
 /// Opens repo bundles on a pool. Clones share the pool.
@@ -541,6 +543,10 @@ impl PlatformRepos for PgPlatformRepos {
         kind_keys: &[&str],
     ) -> Result<Vec<WorkspaceId>, AppError> {
         capabilities::workspaces_with_verified(&mut self.tx, kind_keys).await
+    }
+
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        calls::workspaces_with_live_agent_calls(&mut self.tx).await
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

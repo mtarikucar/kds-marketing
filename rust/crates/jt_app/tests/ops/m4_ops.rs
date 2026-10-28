@@ -1,8 +1,8 @@
 use jt_app::catalog::{CATALOG, GateMode, Risk, StatusExemption, find};
 #[test]
 fn ops_catalog_is_exactly_one_operator_row() {
-    assert_eq!(CATALOG.len(), 157);
-    assert_eq!(CATALOG.iter().filter(|r| r.mcp_tool.is_some()).count(), 132);
+    assert_eq!(CATALOG.len(), 160);
+    assert_eq!(CATALOG.iter().filter(|r| r.mcp_tool.is_some()).count(), 135);
     let row = find("ops.health").expect("operator health catalog row");
     assert!(row.panel_only);
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));

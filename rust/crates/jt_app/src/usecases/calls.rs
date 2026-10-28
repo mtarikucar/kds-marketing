@@ -1,31 +1,45 @@
-//! The workspace's phone calls (spec `2026-10-27-agent-voice-calls-design.md`, phase V0): a rep's
-//! click-to-call through the NetGSM PBX, the call log, and the call policy. Every placed call
-//! passes the fence of `jt_calls::fence_call` twice: once when the session is created and again,
-//! re-reading every fact, in the transaction right before the PBX is asked to dial (review focus
-//! 1); the provider call itself runs outside any transaction. An agent-driven call (`mode:
-//! "agent"`) needs the voice bridge of phase V1 and is refused `bridge_offline` until then.
+//! The workspace's phone calls (spec `2026-10-27-agent-voice-calls-design.md`): a rep's
+//! click-to-call through the NetGSM PBX (phase V0), an agent-driven call through the workspace's
+//! voice bridge (phase V1: [`bridge`] is the bridge's own surface, [`listen`] and [`say`] the
+//! agent's turns, [`session`] the timers and the scripted ending), the call log, and the call
+//! policy. Every placed call passes the fence of `jt_calls::fence_call` twice: once when the
+//! session is created and again, re-reading every fact, in the transaction that dials (review
+//! focus 1): for a rep's call the transaction right before the PBX is asked (the provider call
+//! itself runs outside any transaction), for an agent's call the one that queues the bridge's
+//! `dial`.
+//!
+//! **The agent's loop.** `calls.place{mode: "agent", plan}` → `calls.listen` → think →
+//! `calls.say` → `calls.listen` … → `calls.end` (or `calls.transfer`). The server never composes
+//! a sentence: every text the bridge plays is the plan's (opening, holding phrases, fallback
+//! lines, closing), the policy's (the recording announcement) or one the agent passed to
+//! `calls.say`. A slow agent hears holding phrases covering for it, a silent or disconnected one
+//! its fallback lines and then the closing: the call always ends by script
+//! (`jobs::run_call_timers`).
 //!
 //! Phone numbers never leave unmasked (`jt_calls::mask_e164`): not in outputs, not in ledger
 //! payloads; only `calls.get` shows a human holding `calls.manage` the number itself, and the
 //! voice bridge ([`bridge`]) is handed the number it dials.
 
 pub mod bridge;
+pub mod listen;
+pub mod say;
+pub mod session;
 
 use jt_calls::{
-    CallDirection, CallId, CallMode, CallOutcome, CallPlan, CallPolicy, CallPurpose, CallSession,
-    CallState, EndCause, FenceInput, MAX_SUMMARY_CHARS, RecordingState, RefusalReason,
-    RelationshipEvidence, Turn, TurnClock, fence_call, mask_e164,
+    CallCommandId, CallDirection, CallId, CallMode, CallOutcome, CallPlan, CallPolicy, CallPurpose,
+    CallSession, CallState, Command, EndCause, FenceInput, MAX_SUMMARY_CHARS, RecordingState,
+    RefusalReason, RelationshipEvidence, Turn, TurnClock, fence_call, mask_e164,
 };
 use jt_capability::{
     Capability, CapabilityId, EffectiveStatus, StoredStatus, Unit, effective_status,
 };
 use jt_connector::Provider;
 use jt_inbox::{
-    AppointmentState, EventSource, IdentityChannel, JourneyEventKind, JourneyId, JourneyStatus,
-    Note, NoteId, PersonId, Task, TaskId, TaskStatus,
+    AppointmentState, EventSource, IdentityChannel, Journey, JourneyEventKind, JourneyId,
+    JourneyStatus, Note, NoteId, PersonId, Task, TaskId, TaskStatus,
 };
 use jt_ledger::Actor;
-use jt_tenancy::{Permission, WorkspaceStatus};
+use jt_tenancy::{AgentConnectionId, Permission, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
@@ -38,6 +52,13 @@ use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::calls::{CallFilter, MAX_CALL_PAGE};
 use crate::ports::{CapabilityFilter, TenantRepos};
+use bridge::VOICE_BRIDGE_KIND;
+
+/// The longest a long-poll (`calls.listen`, the voice bridge's commands) waits, in seconds.
+pub const MAX_WAIT_S: u32 = 25;
+/// How often a waiting long-poll reads again when no signal woke it: what another server
+/// instance committed reaches it within this.
+pub const FALLBACK_TICK: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// The kind of capability a rep's call goes through.
 const PBX_KIND: &str = "netgsm_pbx";
@@ -63,7 +84,8 @@ pub enum PlaceMode {
 }
 
 /// `calls.place`: whom to call (a person, or a phone number one of them holds), why, and who
-/// talks. A rep's call names the rep's PBX extension; an agent's call brings its plan.
+/// talks. A rep's call names the rep's PBX extension; an agent's call brings its plan (and no
+/// extension).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlaceInput {
@@ -79,7 +101,8 @@ pub struct PlaceInput {
     pub rep_extension: Option<String>,
     #[serde(default)]
     pub plan: Option<CallPlan>,
-    /// The PBX capability; the workspace's only live one when left out.
+    /// The capability the call goes through: a `netgsm_pbx` for a rep's call, a `voice_bridge`
+    /// for an agent's; the workspace's only live one of the kind when left out.
     #[serde(default)]
     pub capability_id: Option<CapabilityId>,
 }
@@ -300,10 +323,20 @@ struct Facts {
     verdict: Result<(), RefusalReason>,
 }
 
-/// The workspace's PBX capability for the call: the one named (it must be a `netgsm_pbx`), or
-/// the only live one. `None` when there is none to use.
-async fn pbx(
+/// Who talks on the call the fence decides on: a rep at a PBX extension, or the agent through a
+/// voice bridge with its plan's opening (which must disclose the assistant when the policy asks).
+#[derive(Clone, Copy)]
+enum Line<'a> {
+    Rep { extension: &'a str },
+    Agent { opening: &'a str },
+}
+
+/// The workspace's capability of `kind` for the call: the one named (it must be of `kind`), or
+/// the only live one. `None` when there is none to use; for a voice bridge, several live ones and
+/// none named is `VALIDATION` naming `capability_id`.
+async fn line_capability(
     r: &mut dyn TenantRepos,
+    kind: &'static str,
     named: Option<CapabilityId>,
 ) -> Result<Option<Capability>, AppError> {
     if let Some(id) = named {
@@ -312,10 +345,14 @@ async fn pbx(
             .find(id)
             .await?
             .ok_or_else(|| AppError::not_found("no such capability"))?;
-        if c.kind_key != PBX_KIND {
+        if c.kind_key != kind {
             return Err(invalid(
                 "capability_id",
-                "a rep's call goes through a netgsm_pbx capability",
+                if kind == PBX_KIND {
+                    "a rep's call goes through a netgsm_pbx capability"
+                } else {
+                    "an agent's call goes through a voice_bridge capability"
+                },
             ));
         }
         return Ok(Some(c));
@@ -323,13 +360,19 @@ async fn pbx(
     let live: Vec<Capability> = r
         .capabilities()
         .list(CapabilityFilter {
-            kind: Some(PBX_KIND),
+            kind: Some(kind),
             ..CapabilityFilter::default()
         })
         .await?
         .into_iter()
         .filter(|c| c.status != StoredStatus::Retired)
         .collect();
+    if kind == VOICE_BRIDGE_KIND && live.len() > 1 {
+        return Err(invalid(
+            "capability_id",
+            "the workspace has several voice bridges: name capability_id",
+        ));
+    }
     Ok(match <[Capability; 1]>::try_from(live) {
         Ok([only]) => Some(only),
         Err(_) => None,
@@ -359,9 +402,41 @@ async fn person_of(
         .ok_or_else(|| AppError::not_found("no person holds this phone number"))
 }
 
-/// Gathers the fence's facts for a call to `person_id` (or `phone`) for `purpose` through the
-/// rep's `extension`, and decides. `own` is the session being dialed: it is not counted against
-/// the day's cap and does not make its own extension busy.
+/// The most calls a voice bridge carries at once by its registration (`max_calls`), one when it
+/// did not say.
+fn bridge_lines(bridge: &Capability) -> u64 {
+    bridge.connector_public["bridge"]["max_calls"]
+        .as_u64()
+        .unwrap_or(1)
+        .max(1)
+}
+
+/// Whether an agent's call through `bridge` finds the line busy: the bridge carries as many live
+/// agent calls as it has lines, or `connection` (the agent placing it) already has one on the
+/// line (spec §8.7: one live agent call per agent connection). `own` is the session being
+/// dialed, which counts for neither.
+async fn agent_line_busy(
+    r: &mut dyn TenantRepos,
+    bridge: &Capability,
+    connection: Option<AgentConnectionId>,
+    own: Option<CallId>,
+) -> Result<bool, AppError> {
+    let live: Vec<CallSession> = r
+        .calls()
+        .live()
+        .await?
+        .into_iter()
+        .filter(|s| s.mode == CallMode::Agent && Some(s.id) != own)
+        .collect();
+    let on_bridge = live.iter().filter(|s| s.capability_id == bridge.id).count();
+    let mine = connection.is_some_and(|c| live.iter().any(|s| s.agent_connection_id == Some(c)));
+    Ok(u64::try_from(on_bridge).unwrap_or(u64::MAX) >= bridge_lines(bridge) || mine)
+}
+
+/// Gathers the fence's facts for a call to `person_id` (or `phone`) for `purpose` on `line`
+/// through `capability` (a `netgsm_pbx` for a rep, a `voice_bridge` for the agent), and decides.
+/// `own` is the session being dialed: it is not counted against the day's cap and does not make
+/// its own line busy.
 #[allow(clippy::too_many_arguments)]
 async fn facts(
     r: &mut dyn TenantRepos,
@@ -371,11 +446,15 @@ async fn facts(
     phone: Option<&str>,
     journey_id: Option<JourneyId>,
     purpose: CallPurpose,
-    extension: &str,
+    line: Line<'_>,
     own: Option<CallId>,
 ) -> Result<Result<Facts, RefusalReason>, AppError> {
     let now = ctx.now;
-    let Some(capability) = pbx(r, capability).await? else {
+    let kind = match line {
+        Line::Rep { .. } => PBX_KIND,
+        Line::Agent { .. } => VOICE_BRIDGE_KIND,
+    };
+    let Some(capability) = line_capability(r, kind, capability).await? else {
         return Ok(Err(RefusalReason::BridgeOffline));
     };
     let person = person_of(r, person_id, phone).await?;
@@ -440,12 +519,19 @@ async fn facts(
         .count_started(capability.id, from, to, own)
         .await?;
     let (remaining, per_minute) = budget_left(r, &capability, &policy, now).await?;
+    let (busy, disclosure_present) = match line {
+        Line::Rep { extension } => (r.calls().extension_busy(extension, own).await?, true),
+        Line::Agent { opening } => (
+            agent_line_busy(r, &capability, ctx.agent_connection_id, own).await?,
+            policy.discloses(opening),
+        ),
+    };
     let verdict = fence_call(&FenceInput {
         purpose,
         workspace_active: r.workspace().get().await?.status == WorkspaceStatus::Active,
         strategy_approved: r.strategy().current_approved().await?.is_some(),
         bridge_online: effective_status(&capability, now) == EffectiveStatus::Verified,
-        bridge_busy: r.calls().extension_busy(extension, own).await?,
+        bridge_busy: busy,
         person_erased: person.erased_at.is_some(),
         person_merged: person.merged_into.is_some(),
         has_phone_identity: !e164.is_empty(),
@@ -458,7 +544,7 @@ async fn facts(
         daily_cap: capability.policy.daily_ops_cap,
         budget_remaining_minor: remaining,
         per_minute_minor: per_minute,
-        disclosure_present: true,
+        disclosure_present,
     });
     Ok(Ok(Facts {
         capability,
@@ -516,38 +602,90 @@ fn extension(input: &PlaceInput) -> Result<String, AppError> {
     Ok(ext.to_owned())
 }
 
-/// Places a call (see the module docs). A rep's call (`mode: "human"`) rings the rep's
-/// extension, then the person, through the workspace's verified `netgsm_pbx`. The fence runs
-/// when the session is created and again right before the PBX is asked; a refusal is `CONFLICT`
-/// with the stable reason in `details.reason`, and writes `calls.refused` once (payload: reason,
-/// purpose, mode, and the call when a session existed). A provider failure ends the session
-/// `failed` with the failure line and writes `calls.failed`; success keeps the PBX's correlation
-/// id (`crm_id`) and writes `calls.placed`. Needs `calls.work`; the catalog marks it SPEND.
+/// The `calls.refused` payload of a refusal for `reason` of a call for `purpose` on a line of
+/// `mode` (`human`, `agent`), naming the session when one existed.
+fn refused_payload(
+    reason: RefusalReason,
+    purpose: CallPurpose,
+    mode: &str,
+    call: Option<CallId>,
+) -> Value {
+    let mut payload = json!({
+        "reason": reason.key(),
+        "purpose": purpose,
+        "mode": mode,
+    });
+    if let Some(call) = call {
+        payload["call_id"] = json!(call);
+    }
+    payload
+}
+
+/// The first fence's verdict on a call not yet made: the facts when it may be made; otherwise
+/// `calls.refused` is written and committed, and the refusal returned.
+async fn first_fence(
+    mut r: Box<dyn TenantRepos>,
+    ctx: &Ctx,
+    gathered: Result<Facts, RefusalReason>,
+    refused: impl Fn(RefusalReason) -> Value,
+) -> Result<(Box<dyn TenantRepos>, Facts), AppError> {
+    let reason = match gathered {
+        Ok(facts) => match facts.verdict {
+            Ok(()) => return Ok((r, facts)),
+            Err(reason) => reason,
+        },
+        Err(reason) => reason,
+    };
+    ledger(
+        r.as_mut(),
+        ctx,
+        "calls.refused",
+        ctx.workspace_id,
+        refused(reason),
+    )
+    .await?;
+    r.commit().await?;
+    Err(refusal(reason))
+}
+
+/// Places a call (see the module docs).
+///
+/// A rep's call (`mode: "human"`) rings the rep's extension, then the person, through the
+/// workspace's verified `netgsm_pbx`. A provider failure ends the session `failed` with the
+/// failure line and writes `calls.failed`; success keeps the PBX's correlation id (`crm_id`).
+///
+/// An agent's call (`mode: "agent"`) brings its plan (`VALIDATION` naming the plan's field when a
+/// sentence, a count or the duration is out of bounds) and no extension, and goes through the
+/// workspace's voice bridge: verified (a heartbeat within the minute), with a free line (it
+/// carries fewer agent calls than its `max_calls`, and the agent placing it has none on the line:
+/// else `bridge_busy`), its opening containing the policy's disclosure sentence while the policy
+/// asks for one (`disclosure_missing`; the plan's `disclose_assistant` is forced on with it). The
+/// session's bridge call id is its own id; the transaction that passes the second fence queues
+/// the bridge's `dial` (the number and the plan, for the bridge to pre-synthesise). Recording is
+/// asked for only when the bridge's capability allows it (`recording_allowed`) and the policy has
+/// an announcement to play first.
+///
+/// The fence runs when the session is created and again, every fact read afresh, right before
+/// dialing; a refusal is `CONFLICT` with the stable reason in `details.reason`, and writes
+/// `calls.refused` once (payload: reason, purpose, mode, and the call when a session existed).
+/// A dialed call writes `calls.placed` (call, purpose, mode, capability). Needs `calls.work`; the
+/// catalog marks it SPEND.
 pub async fn place(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut, AppError> {
     ctx.require(Permission::CallsWork)?;
     if input.mode == PlaceMode::Agent {
-        // The voice bridge (phase V1) does not exist yet.
-        return Err(refusal(RefusalReason::BridgeOffline));
+        return place_agent(deps, ctx, input).await;
     }
     if input.plan.is_some() {
         return Err(invalid("plan", "a rep's call has no plan"));
     }
     let ext = extension(&input)?;
     let refused = |reason: RefusalReason, call: Option<CallId>| {
-        let mut payload = json!({
-            "reason": reason.key(),
-            "purpose": input.purpose,
-            "mode": "human",
-        });
-        if let Some(call) = call {
-            payload["call_id"] = json!(call);
-        }
-        payload
+        refused_payload(reason, input.purpose, "human", call)
     };
 
     // 1. The first fence, and the session.
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    let facts = match facts(
+    let gathered = facts(
         r.as_mut(),
         ctx,
         input.capability_id,
@@ -555,37 +693,11 @@ pub async fn place(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut,
         input.phone.as_deref(),
         input.journey_id,
         input.purpose,
-        &ext,
+        Line::Rep { extension: &ext },
         None,
     )
-    .await?
-    {
-        Ok(facts) => facts,
-        Err(reason) => {
-            ledger(
-                r.as_mut(),
-                ctx,
-                "calls.refused",
-                ctx.workspace_id,
-                refused(reason, None),
-            )
-            .await?;
-            r.commit().await?;
-            return Err(refusal(reason));
-        }
-    };
-    if let Err(reason) = facts.verdict {
-        ledger(
-            r.as_mut(),
-            ctx,
-            "calls.refused",
-            ctx.workspace_id,
-            refused(reason, None),
-        )
-        .await?;
-        r.commit().await?;
-        return Err(refusal(reason));
-    }
+    .await?;
+    let (mut r, facts) = first_fence(r, ctx, gathered, |reason| refused(reason, None)).await?;
     let id = CallId(deps.ids.uuid());
     let pbx_policy = pbx_policy_of(&facts.capability);
     let session = CallSession {
@@ -633,7 +745,7 @@ pub async fn place(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut,
         .lock(id)
         .await?
         .ok_or_else(|| AppError::internal("the call session vanished"))?;
-    let again = facts_for(r.as_mut(), ctx, &session, &ext).await?;
+    let again = facts_for(r.as_mut(), ctx, &session).await?;
     if let Err(reason) = again {
         jt_calls::end(&mut session, EndCause::Refused(reason), ctx.now);
         r.calls().update(session, ctx.now).await?;
@@ -718,14 +830,150 @@ pub async fn place(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut,
     })
 }
 
+/// Places an agent's call (see [`place`]).
+async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut, AppError> {
+    if input.rep_extension.is_some() {
+        return Err(invalid(
+            "rep_extension",
+            "an agent's call has no rep extension",
+        ));
+    }
+    let mut plan = input
+        .plan
+        .clone()
+        .ok_or_else(|| invalid("plan", "an agent's call brings its plan"))?;
+    plan.validate()
+        .map_err(|e| invalid(e.field(), &e.to_string()))?;
+    let refused = |reason: RefusalReason, call: Option<CallId>| {
+        refused_payload(reason, input.purpose, "agent", call)
+    };
+
+    // 1. The first fence, and the session.
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    let gathered = facts(
+        r.as_mut(),
+        ctx,
+        input.capability_id,
+        input.person_id,
+        input.phone.as_deref(),
+        input.journey_id,
+        input.purpose,
+        Line::Agent {
+            opening: &plan.opening,
+        },
+        None,
+    )
+    .await?;
+    let (mut r, facts) = first_fence(r, ctx, gathered, |reason| refused(reason, None)).await?;
+    let policy = r.calls().policy().await?;
+    plan.disclose_assistant |= policy.disclose_assistant;
+    let id = CallId(deps.ids.uuid());
+    let recording = if pbx_policy_of(&facts.capability).recording_allowed && policy.may_record() {
+        RecordingState::Pending
+    } else {
+        RecordingState::Off
+    };
+    let session = CallSession {
+        id,
+        workspace_id: ctx.workspace_id,
+        capability_id: facts.capability.id,
+        direction: CallDirection::Outbound,
+        purpose: input.purpose,
+        person_id: Some(facts.person_id),
+        journey_id: facts.journey_id,
+        mode: CallMode::Agent,
+        state: CallState::Dialing,
+        plan: Some(plan),
+        counterpart_e164: facts.e164.clone(),
+        bridge_call_id: Some(id.to_string()),
+        pbx_unique_id: None,
+        crm_id: None,
+        agent_connection_id: ctx.agent_connection_id,
+        placed_by: ctx.actor.clone(),
+        started_at: ctx.now,
+        answered_at: None,
+        ended_at: None,
+        end_cause: None,
+        outcome: None,
+        summary: None,
+        duration_s: None,
+        cost_minor: None,
+        recording,
+        metrics: Default::default(),
+        clock: TurnClock::default(),
+    };
+    r.calls().insert(session, ctx.now).await?;
+    r.commit().await?;
+
+    // 2. The fence again, every fact read afresh, in the transaction that dials.
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut session = r
+        .calls()
+        .lock(id)
+        .await?
+        .ok_or_else(|| AppError::internal("the call session vanished"))?;
+    if let Err(reason) = facts_for(r.as_mut(), ctx, &session).await? {
+        jt_calls::end(&mut session, EndCause::Refused(reason), ctx.now);
+        r.calls().update(session, ctx.now).await?;
+        ledger(
+            r.as_mut(),
+            ctx,
+            "calls.refused",
+            id,
+            refused(reason, Some(id)),
+        )
+        .await?;
+        r.commit().await?;
+        return Err(refusal(reason));
+    }
+    let plan = session
+        .plan
+        .clone()
+        .ok_or_else(|| AppError::internal("an agent's call lost its plan"))?;
+    let dial = Command::Dial {
+        to_e164: session.counterpart_e164.clone(),
+        plan,
+    };
+    r.calls()
+        .enqueue_commands(id, vec![(CallCommandId(deps.ids.uuid()), dial)], ctx.now)
+        .await?;
+    ledger(
+        r.as_mut(),
+        ctx,
+        "calls.placed",
+        id,
+        json!({
+            "call_id": id,
+            "purpose": session.purpose,
+            "mode": "agent",
+            "capability_id": session.capability_id,
+        }),
+    )
+    .await?;
+    r.commit().await?;
+    deps.call_signals.notify(ctx.workspace_id);
+    Ok(CallOut {
+        call: view(&session, reveals(ctx)),
+        turns: vec![],
+    })
+}
+
 /// The fence's verdict on `session`, every fact read again.
 async fn facts_for(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     session: &CallSession,
-    ext: &str,
 ) -> Result<Result<(), RefusalReason>, AppError> {
     let phone = (!session.counterpart_e164.is_empty()).then_some(session.counterpart_e164.as_str());
+    let line = match (&session.mode, &session.plan) {
+        (CallMode::Human { rep_extension }, _) => Line::Rep {
+            extension: rep_extension,
+        },
+        (CallMode::Agent, Some(plan)) => Line::Agent {
+            opening: &plan.opening,
+        },
+        (CallMode::Agent, None) => return Err(AppError::internal("an agent's call has no plan")),
+    };
     Ok(
         match facts(
             r,
@@ -735,7 +983,7 @@ async fn facts_for(
             phone,
             session.journey_id,
             session.purpose,
-            ext,
+            line,
             Some(session.id),
         )
         .await?
@@ -788,12 +1036,25 @@ pub async fn list(deps: &Deps, ctx: &Ctx, query: ListQuery) -> Result<Vec<Value>
 // End
 // ---------------------------------------------------------------------------------------------
 
+/// Who reported a call's journey event: the person, an agent, or the system (the voice bridge,
+/// the timers).
+fn event_source(ctx: &Ctx) -> EventSource {
+    match &ctx.actor {
+        Actor::Human { user_id } => EventSource::Human(*user_id),
+        Actor::Agent { .. } => EventSource::Agent,
+        Actor::System { .. } => EventSource::System,
+    }
+}
+
 /// Records how call `id` went (see [`EndInput`]): a call still on the line is ended
-/// (`agent_ended`); the journey gets `CallMade{connected}` (connected as the outcome says, else
-/// whether the call was answered) unless the PBX's hangup already wrote it or the journey is
-/// lost; the summary becomes a note and the follow-up a task on the journey; with a known
-/// duration and a tariff, the spend is recorded once on the capability's budget item. Ending a
-/// call twice changes nothing and answers the call. Writes `calls.ended`. Needs `calls.work`.
+/// (`agent_ended`; an agent's answered call hears its plan's closing, then the bridge hangs up);
+/// the journey gets `CallMade{connected}` (connected as the outcome says, else whether the call
+/// was answered) unless the call's end already wrote it or the journey is lost; the summary
+/// becomes a note and the follow-up a task on the journey; with a known duration and a tariff,
+/// the spend is recorded once on the capability's budget item. Ending a call twice changes
+/// nothing and answers the call. Writes `calls.ended` (cause, outcome, duration, turns), unless
+/// the call is an agent's that had already ended (its end wrote `calls.ended`), when it writes
+/// `calls.outcome_recorded` (the outcome). Needs `calls.work`.
 pub async fn end(deps: &Deps, ctx: &Ctx, id: CallId, input: EndInput) -> Result<CallOut, AppError> {
     ctx.require(Permission::CallsWork)?;
     let summary = input
@@ -832,50 +1093,52 @@ pub async fn end(deps: &Deps, ctx: &Ctx, id: CallId, input: EndInput) -> Result<
     if matches!(session.end_cause, Some(EndCause::Refused(_))) {
         return Err(AppError::conflict("a refused call was never placed"));
     }
+    // An agent's call that ended on its own (the line, the timers, a transfer) was settled then.
+    let settled = session.mode == CallMode::Agent && session.state == CallState::Ended;
+    let mut pending = session::Pending::default();
     if session.state != CallState::Ended {
-        jt_calls::end(&mut session, EndCause::AgentEnded, ctx.now);
-        if session.state == CallState::Ending {
-            session.state = CallState::Ended;
-            session.ended_at = Some(ctx.now);
-        }
+        pending.add(jt_calls::end(&mut session, EndCause::AgentEnded, ctx.now));
+        // The closing still plays; the call's record ends now.
+        jt_calls::close(&mut session, EndCause::AgentEnded, ctx.now);
     }
+    let queued = pending.store(deps, r.as_mut(), id, ctx.now).await?;
     session.outcome = Some(input.outcome);
     session.summary = summary.clone();
-    let source = match &ctx.actor {
-        Actor::Human { user_id } => EventSource::Human(*user_id),
-        Actor::Agent { .. } => EventSource::Agent,
-        Actor::System { .. } => EventSource::System,
-    };
-    if let Some(person_id) = session.person_id {
-        journey_effects(
-            deps,
-            ctx,
-            r.as_mut(),
-            &mut session,
-            person_id,
-            source,
-            summary,
-            &input,
-        )
-        .await?;
+    let source = event_source(ctx);
+    if session.person_id.is_some() {
+        journey_effects(deps, ctx, r.as_mut(), &mut session, source, summary, &input).await?;
     }
     charge(deps, ctx, r.as_mut(), &mut session).await?;
     r.calls().update(session.clone(), ctx.now).await?;
-    ledger(
-        r.as_mut(),
-        ctx,
-        "calls.ended",
-        id,
-        json!({
-            "call_id": id,
-            "cause": session.end_cause.as_ref().map(EndCause::key),
-            "outcome": input.outcome,
-            "duration_s": session.duration_s,
-            "turns": session.metrics.turns,
-        }),
-    )
-    .await?;
+    if settled {
+        ledger(
+            r.as_mut(),
+            ctx,
+            "calls.outcome_recorded",
+            id,
+            json!({ "call_id": id, "outcome": input.outcome }),
+        )
+        .await?;
+    } else {
+        ledger(
+            r.as_mut(),
+            ctx,
+            "calls.ended",
+            id,
+            json!({
+                "call_id": id,
+                "cause": session.end_cause.as_ref().map(EndCause::key),
+                "outcome": input.outcome,
+                "duration_s": session.duration_s,
+                "turns": session.metrics.turns,
+            }),
+        )
+        .await?;
+    }
     r.commit().await?;
+    if queued {
+        deps.call_signals.notify(ctx.workspace_id);
+    }
     let turns = {
         let mut r = deps.uow.tenant(ctx.workspace_id).await?;
         r.calls().turns(id, None, MAX_CALL_PAGE).await?
@@ -886,23 +1149,23 @@ pub async fn end(deps: &Deps, ctx: &Ctx, id: CallId, input: EndInput) -> Result<
     })
 }
 
-/// The journey event, note and task of an ended call (see [`end`]).
-#[allow(clippy::too_many_arguments)]
-async fn journey_effects(
+/// The journey a call's effects go to: the session's, else the person's open one (opened when
+/// there is none; a lost one is kept); `None` for a call without a person, or whose person is
+/// gone or erased. The session is pointed at it.
+async fn call_journey(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
     session: &mut CallSession,
-    person_id: PersonId,
-    source: EventSource,
-    summary: Option<String>,
-    input: &EndInput,
-) -> Result<(), AppError> {
+) -> Result<Option<Journey>, AppError> {
+    let Some(person_id) = session.person_id else {
+        return Ok(None);
+    };
     let Some(person) = r.people().get(person_id).await? else {
-        return Ok(());
+        return Ok(None);
     };
     if person.erased_at.is_some() {
-        return Ok(());
+        return Ok(None);
     }
     let journey = match session.journey_id {
         Some(id) => r.journeys().get(id).await?,
@@ -913,27 +1176,58 @@ async fn journey_effects(
         None => super::inbox::consumer::journey(deps, ctx, r, &person).await?,
     };
     session.journey_id = Some(journey.id);
+    Ok(Some(journey))
+}
+
+/// Writes `CallMade{connected}` for `session` on `journey` as `source` reported it, once per
+/// call (keyed by the PBX's call id when it has one, else by the session), and never on a lost
+/// journey.
+async fn call_made(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    session: &CallSession,
+    journey: &Journey,
+    connected: bool,
+    source: EventSource,
+) -> Result<(), AppError> {
     let key = session
         .pbx_unique_id
         .as_ref()
         .map_or_else(|| format!("calls:{}", session.id), |u| format!("call:{u}"));
-    let written = r.journeys().event_by_key(&key).await?.is_some();
-    if !written && journey.status != JourneyStatus::Lost {
-        let connected = input
-            .outcome
-            .reached()
-            .unwrap_or(session.answered_at.is_some());
-        super::inbox::consumer::apply_from(
-            deps,
-            ctx,
-            r,
-            journey.clone(),
-            key,
-            JourneyEventKind::CallMade { connected },
-            source,
-        )
-        .await?;
+    if journey.status == JourneyStatus::Lost || r.journeys().event_by_key(&key).await?.is_some() {
+        return Ok(());
     }
+    super::inbox::consumer::apply_from(
+        deps,
+        ctx,
+        r,
+        journey.clone(),
+        key,
+        JourneyEventKind::CallMade { connected },
+        source,
+    )
+    .await
+}
+
+/// The journey event, note and task of an ended call (see [`end`]).
+async fn journey_effects(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    session: &mut CallSession,
+    source: EventSource,
+    summary: Option<String>,
+    input: &EndInput,
+) -> Result<(), AppError> {
+    let Some(journey) = call_journey(deps, ctx, r, session).await? else {
+        return Ok(());
+    };
+    let connected = input
+        .outcome
+        .reached()
+        .unwrap_or(session.answered_at.is_some());
+    call_made(deps, ctx, r, session, &journey, connected, source).await?;
     if let Some(text) = summary {
         r.notes()
             .insert(Note {
@@ -963,6 +1257,52 @@ async fn journey_effects(
             .await?;
     }
     Ok(())
+}
+
+/// What an agent's call that has just ended leaves behind, whichever way it ended (the bridge's
+/// hangup or error, the timers' closing, a transfer; spec §7, §8.6, §12): the person's journey
+/// gets `CallMade{connected: answered}` (not for a call refused before dialing or failed at the
+/// bridge, nor on a lost journey or an erased person), the spend is recorded on the bridge's
+/// budget item, and `calls.ended` (cause, duration, turns) is written. `calls.end` records the
+/// outcome later without writing either again.
+pub(crate) async fn settle(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    session: &mut CallSession,
+) -> Result<(), AppError> {
+    if matches!(session.end_cause, Some(EndCause::Refused(_))) {
+        return Ok(());
+    }
+    if !matches!(session.end_cause, Some(EndCause::Failed(_)))
+        && let Some(journey) = call_journey(deps, ctx, r, session).await?
+    {
+        let connected = session.answered_at.is_some();
+        call_made(
+            deps,
+            ctx,
+            r,
+            session,
+            &journey,
+            connected,
+            event_source(ctx),
+        )
+        .await?;
+    }
+    charge(deps, ctx, r, session).await?;
+    ledger(
+        r,
+        ctx,
+        "calls.ended",
+        session.id,
+        json!({
+            "call_id": session.id,
+            "cause": session.end_cause.as_ref().map(EndCause::key),
+            "duration_s": session.duration_s,
+            "turns": session.metrics.turns,
+        }),
+    )
+    .await
 }
 
 /// What a call of `duration_s` costs on `item_unit`: started minutes times the tariff for a

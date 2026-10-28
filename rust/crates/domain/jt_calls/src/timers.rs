@@ -3,15 +3,25 @@
 //! and, once the fallback lines are spent, the closing (`agent_timeout`); while the caller is
 //! waited for, the agent is told at `caller_silence_s` and the call is closed at
 //! `caller_silence_close_s` (`caller_silent`); and the call never outlasts its maximum duration.
-//! A rep's call has no timers. [`next_timer`] says what is due; [`apply_timer`] does it.
+//! Nor does a line wait for ever: a call still not answered [`MAX_RING_S`] after it was placed is
+//! hung up (`no_answer`), and one whose closing was not reported played to its hangup within
+//! [`CLOSING_GRACE_S`] is ended all the same, its cause kept. A rep's call has no timers.
+//! [`next_timer`] says what is due; [`apply_timer`] does it.
 
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 
 use crate::policy::CallPolicy;
 use crate::session::{
-    CallMode, CallSession, CallState, Command, EndCause, PlayKind, Step, TurnKind, TurnMeta, end,
+    CallMode, CallSession, CallState, Command, EndCause, PlayKind, Step, TurnKind, TurnMeta, close,
+    end,
 };
+
+/// The longest an agent's call is left dialing or ringing, in seconds.
+pub const MAX_RING_S: u16 = 90;
+/// The longest a closing (at most 600 characters) is left playing before the line is taken for
+/// hung up, in seconds.
+pub const CLOSING_GRACE_S: u16 = 60;
 
 /// What is due on a call now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +33,9 @@ pub enum TimerAction {
     /// The caller has been silent since the agent spoke: logged so a waiting agent wakes up.
     CallerSilence,
     Close(EndCause),
+    /// The closing was queued long ago and its hangup never reported: the session ends without
+    /// waiting longer.
+    LineLost,
 }
 
 fn secs(s: u16) -> Duration {
@@ -31,10 +44,25 @@ fn secs(s: u16) -> Duration {
 
 /// What is due on `session` at `now` under `policy` (see the module docs).
 pub fn next_timer(session: &CallSession, now: OffsetDateTime, policy: &CallPolicy) -> TimerAction {
-    if session.mode != CallMode::Agent
-        || !matches!(session.state, CallState::Live | CallState::Holding)
-    {
+    if session.mode != CallMode::Agent {
         return TimerAction::None;
+    }
+    match session.state {
+        CallState::Dialing | CallState::Ringing if session.answered_at.is_none() => {
+            return if now - session.started_at >= secs(MAX_RING_S) {
+                TimerAction::Close(EndCause::NoAnswer)
+            } else {
+                TimerAction::None
+            };
+        }
+        CallState::Ending => {
+            return match session.clock.closing_since {
+                Some(since) if now - since >= secs(CLOSING_GRACE_S) => TimerAction::LineLost,
+                _ => TimerAction::None,
+            };
+        }
+        CallState::Live | CallState::Holding => {}
+        _ => return TimerAction::None,
     }
     let max = policy.max_duration(session.plan.as_ref().map(|p| p.max_duration_s));
     if let Some(answered) = session.answered_at
@@ -141,6 +169,7 @@ pub fn apply_timer(
             ));
         }
         TimerAction::Close(cause) => return end(session, cause.clone(), now),
+        TimerAction::LineLost => close(session, EndCause::BridgeOffline, now),
     }
     step
 }

@@ -384,6 +384,18 @@ impl PlatformRepos for MemPlatform {
         Ok(ids.into_iter().collect())
     }
 
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        let ids: BTreeSet<WorkspaceId> = self
+            .state()
+            .calls
+            .sessions
+            .iter()
+            .filter(|s| s.mode == jt_calls::CallMode::Agent && s.state.is_live())
+            .map(|s| s.workspace_id)
+            .collect();
+        Ok(ids.into_iter().collect())
+    }
+
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
         self.call(|this| this.tx.append_ledger(entry))
     }
