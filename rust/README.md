@@ -944,6 +944,8 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
 | `inbox_consume` | 10 saniye | Gelen olayları tek işlemde gelen kutusu kayıtlarına dönüştürür; active ve pending_payment alanlar. Ertelenen (`deferred`) bir olay, erteleme başına bir saat (en çok bir gün) sonra yeniden denenir; yedi günden eski olan bırakılır (`abandoned`, günlükte `inbox.event.abandoned`). Kaybedilmiş bir yolculuktaki arama yolculuğa işlenmez ama konuşmayı yeniden açar: `work.pending` bunu yeniden açma sorusu olarak gösterir. Bağlayıcısı olmadan saklanmış bir NetGSM olayı, türünün tek canlı kabiliyeti olunca ona bağlanır. Sesli mesaj ve otomatik arama raporları `inbox.netgsm_report` ile tüketilir | `jeeta.jobs.inbox_consume` |
 | `outbox_recover` | 1 dakika | 2 dakikadan eski `sending` → `unknown` (yeniden göndermez); 5 dakikadan eski `queued` kayıtlarını iki çitli gönderim adımına verir | `jeeta.jobs.outbox_recover` |
+| `call_timers` | 1 saniye | Hatta ajan araması olan alanlarda (tek bir platform okumasıyla bulunur) her aramanın zamanlayıcılarını işletir: yavaş ajana 4. ve 10. saniyede planın bekleme cümlesi, sessiz ajana her 20 saniyede planın sıradaki yedek cümlesi, yedekler bitince kapanış cümlesi ve kapatma (`agent_timeout`); en uzun süreyi aşan, arayanı sessiz kalan, 90 saniye cevapsız çalan ve köprüsü susmuş arama da senaryoyla biter. Sunucu hiçbir cümle yazmaz | `jeeta.jobs.call_timers` |
+| `purge_call_commands` | 1 gün | Ses köprüsü için 7 günden önce kuyruğa alınmış komutları (onaylanmış olsun olmasın) siler; aramalar ve konuşma kayıtları kalır | `jeeta.jobs.purge_call_commands` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -1915,15 +1917,34 @@ UUID/time/error types and the URL parser; it performs no I/O. Existing applicati
 port paths re-export the shared records, including connector `MediaUpload` and
 `PublishReceipt`, without changing repository or provider method signatures.
 
-### Calls (voice V0)
+### Calls (voice V0, V1)
 
 `crates/domain/jt_calls` holds the call session and its state machine, the plan and the policy,
 the fence and the timers (spec `docs/superpowers/specs/2026-10-27-agent-voice-calls-design.md`).
 V0 places a rep's call through the NetGSM PBX (`Telephony::click_to_call`: the rep's extension
-rings, then the person) and keeps the call log; agent-driven calls wait for the voice bridge (V1)
-and are refused `bridge_offline`. Every placed call passes the fence twice, the second time in
-the transaction right before the PBX is asked; numbers are masked in every output and ledger
-payload (`calls.get` shows a person holding `calls.manage` the number).
+rings, then the person) and keeps the call log. V1 lets the connected agent talk on the call
+itself through the workspace's voice bridge: `calls.place{mode: "agent", plan}`, then
+`calls.listen` → think → `calls.say` until `calls.end` (or `calls.transfer` to a rep). Every
+placed call passes the fence twice, the second time in the transaction that dials (right before
+the PBX is asked; for an agent's call, the one that queues the bridge's `dial`); numbers are
+masked in every output and ledger payload (`calls.get` shows a person holding `calls.manage` the
+number; the bridge is handed the number it dials).
+
+The server never composes a sentence: the bridge plays only the plan's opening, holding phrases,
+fallback lines and closing, the policy's recording announcement, and the agent's own `say`
+texts. The `call_timers` job (every second, only for workspaces with an agent's call on the
+line) covers a slow agent with a holding phrase after 4 s and 10 s, a silent one with the next
+fallback line every 20 s, and then plays the closing and hangs up (`agent_timeout`); it also
+ends a call at its maximum duration, a caller who stays silent (`caller_silent`), a line left
+ringing for 90 s (`no_answer`), and a call whose bridge stopped reporting (`bridge_offline`; a
+closing never reported played is taken for done after 60 s). Every end of an agent's call (the
+caller's hangup, the timers, a transfer) is settled once: the journey's `CallMade{connected}`,
+the spend at the policy's tariff on the bridge's budget item, `calls.ended`; `calls.end` then
+records the outcome (`calls.outcome_recorded`). The long-polls (`calls.listen`, the bridge's
+commands) are woken at once by an in-process signal (`CallSignals`) and read again at least
+every second, so a second server instance only adds up to a second. The bridge's commands are
+purged after 7 days (`purge_call_commands`, daily); erasing a person removes their calls'
+commands and the bridge's event notes, and empties their calls' plans.
 
 | Use case | Panel | MCP | Risk | Permission |
 |---|---|---|---|---|
@@ -1933,6 +1954,9 @@ payload (`calls.get` shows a person holding `calls.manage` the number).
 | `calls.get` | `GET /api/calls/{call_id}` | `jeeta.calls.get` | READ | `calls.work` |
 | `calls.list` | `GET /api/calls` | `jeeta.calls.list` | READ | `calls.work` |
 | `calls.end` | `POST /api/calls/{call_id}/end` | `jeeta.calls.end` | WRITE | `calls.work`; journey `CallMade`, note, task, spend once |
+| `calls.listen` | `GET /api/calls/{call_id}/events?after_seq&wait_s` | `jeeta.calls.listen` | READ | `calls.work`; long-poll of at most 25 s: `{call_id, state, events, timed_out}` |
+| `calls.say` | `POST /api/calls/{call_id}/say` | `jeeta.calls.say` | WRITE | `calls.work`; `{text ≤ 600, expect_reply, allow_barge_in}`; `409 not_live` off the line |
+| `calls.transfer` | `POST /api/calls/{call_id}/transfer` | `jeeta.calls.transfer` | WRITE | `calls.work`; to `to_extension` or the policy's `handoff_extension`; ends the agent's part |
 
 #### The voice bridge (voice V1)
 
