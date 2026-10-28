@@ -429,7 +429,17 @@ pub trait PhoneDriver: Send + Sync {
 pub trait AdbRunner: Send + Sync { async fn run(&self, serial: &str, args: &[&str]) -> Result<AdbOutput, AdbError>; } // argv only
 pub struct DriverError { pub reason: FailReason, pub detail: String }
 ```
-Mapping per spec §4.1. Specifics:
+Mapping per spec §4.1. Real-device findings on the owner's Redmi 10C (Android 13, MIUI 14, serial
+`18cf9fbb`), which the driver and its fixtures must cover:
+- MIUI's `uiautomator dump` writes a Java `FileNotFoundException …/theme_compatibility.xml` stack trace and
+  still dumps (`UI hierchary dumped to: …`): judge a dump by the file's `<node` content, never by stderr.
+  Test `miui_theme_stack_trace_is_not_a_failure`.
+- `input …` without Xiaomi's "USB debugging (Security settings)" prints
+  `java.lang.SecurityException: Injecting input events requires … INJECT_EVENTS` and exits **0**: detect
+  `Exception occurred` / `SecurityException` in the output and fail with `adb_error` and a detail naming the
+  setting. Test `inject_events_refusal_with_exit_0_is_a_failure`.
+
+Specifics:
 - `observe`: `uiautomator dump /sdcard/jeeta_ui.xml` then `cat`; output containing `ERROR: could not get idle state` (exit 0) → wait 700 ms, retry once, else `ScreenBusy`; a file without `<node` → `ScreenBusy`; decode named and numeric character references; distill to `Element`s (skip invisible/zero-size; tap point = bounds centre); cap 300 → `truncated`; foreground app from `dumpsys window` (`mCurrentFocus`); screen from `wm size` + rotation.
 - `tap_on`: dump, match `text`/`id` (`resource-id`)/`desc` (`content-desc`) exact first then contains (unless `exact`), tap the best match's tap point; none → `ElementNotFound` with up to 20 visible labels in `detail`.
 - `text`: ASCII → `input text` with spaces as `%s` and shell metacharacters escaped for the device shell; non-ASCII → if ADBKeyBoard present: `ime set com.android.adbkeyboard/.AdbIME`, `am broadcast -a ADB_INPUT_B64 --es msg <base64>`, restore the previous IME; else `UnicodeUnsupported`.
