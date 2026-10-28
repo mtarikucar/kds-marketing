@@ -13,13 +13,17 @@ use jt_device_protocol::{Element, ElementTarget, MAX_TEXT_CHARS, Screen};
 pub(crate) struct Dump {
     /// The rotation in degrees (0, 90, 180, 270).
     pub(crate) rotation: u16,
-    /// The elements in the dump's order, which is the screen's.
+    /// What an observation lists, in the dump's order, which is the screen's.
     pub(crate) elements: Vec<Element>,
+    /// What a `tap_on` looks through, in the same order: the listed elements and the nodes with
+    /// an id and nothing else, such as an icon without a label, which `tap_on {id}` must find.
+    pub(crate) nodes: Vec<Element>,
 }
 
-/// Distills a dump: every node with a size on screen that carries a text or a description, or
-/// can be pressed or typed into. Layout containers without either are left out; so are nodes
-/// of no size and nodes marked `visible-to-user="false"`. The tap point is the bounds' centre.
+/// Distills a dump. An observation lists every node with a size on screen that carries a text
+/// or a description, or can be pressed or typed into; layout containers without either are left
+/// out, but kept for matching when they have an id. Nodes of no size and nodes marked
+/// `visible-to-user="false"` are left out of both. The tap point is the bounds' centre.
 pub(crate) fn parse_dump(xml: &str) -> Dump {
     let rotation = tags(xml, "hierarchy")
         .next()
@@ -35,11 +39,24 @@ pub(crate) fn parse_dump(xml: &str) -> Dump {
             90 | 180 | 270 => value,
             _ => 0,
         });
-    let elements = tags(xml, "node").filter_map(element).collect();
-    Dump { rotation, elements }
+    let mut elements = Vec::new();
+    let mut nodes = Vec::new();
+    for (node, listed) in tags(xml, "node").filter_map(element) {
+        if listed {
+            elements.push(node.clone());
+        }
+        nodes.push(node);
+    }
+    Dump {
+        rotation,
+        elements,
+        nodes,
+    }
 }
 
-fn element(body: &str) -> Option<Element> {
+/// A node with a size on screen, and whether an observation lists it; `None` for a node of no
+/// size, one not visible, or a layout container with neither label nor id.
+fn element(body: &str) -> Option<(Element, bool)> {
     let attrs = attributes(body);
     let raw = |name: &str| {
         attrs
@@ -67,12 +84,14 @@ fn element(body: &str) -> Option<Element> {
         let name = class.rsplit('.').next().unwrap_or(class);
         name.ends_with("EditText") || name.ends_with("AutoCompleteTextView")
     });
-    if text.is_none() && desc.is_none() && !clickable && !flag("long-clickable") && !editable {
+    let listed =
+        text.is_some() || desc.is_some() || clickable || flag("long-clickable") || editable;
+    if !listed && id.is_none() {
         return None;
     }
     let [left, top, right, bottom] = bounds;
     let middle = |a: u32, b: u32| u32::try_from((u64::from(a) + u64::from(b)) / 2).unwrap_or(a);
-    Some(Element {
+    let element = Element {
         text,
         id,
         desc,
@@ -82,7 +101,8 @@ fn element(body: &str) -> Option<Element> {
         clickable,
         editable,
         focused: flag("focused"),
-    })
+    };
+    Some((element, listed))
 }
 
 /// `[left,top][right,bottom]`, each side kept on screen (at least 0); `None` without a size.
@@ -189,10 +209,13 @@ pub(crate) fn decode(raw: &str) -> String {
             out.push_str(&rest[..amp]);
         }
         let after = &rest[amp + 1..];
+        // The `;` is looked for in the next 17 bytes only, so a text full of `&` is read once.
+        // The longest reference is `#1114111`; a longer run of digits is still read, as no
+        // character.
         let reference = after
-            .find(';')
-            // The longest is `#1114111`; a longer run of digits is still read, as no character.
-            .filter(|end| *end <= 16)
+            .bytes()
+            .take(17)
+            .position(|byte| byte == b';')
             .and_then(|end| Some((end, reference(&after[..end])?)));
         let Some((end, unit)) = reference else {
             flush(&mut out, &mut pending);
@@ -362,15 +385,18 @@ pub(crate) fn find<'a>(
         .map(|(_, _, e)| e)
 }
 
-/// Up to `max` of the labels on screen (a text, else a description), each once and short.
-pub(crate) fn labels(elements: &[Element], max: usize) -> Vec<String> {
+/// Up to `max` of the labels on screen (a text, else a description), each once and at most
+/// `chars` characters long (a longer one cut, ending in `…`).
+pub(crate) fn labels(elements: &[Element], max: usize, chars: usize) -> Vec<String> {
     let mut seen: Vec<String> = Vec::new();
     for e in elements {
         let Some(label) = e.text.as_deref().or(e.desc.as_deref()) else {
             continue;
         };
-        let label: String = label.split_whitespace().collect::<Vec<_>>().join(" ");
-        let label: String = label.chars().take(30).collect();
+        let label = short(
+            &label.split_whitespace().collect::<Vec<_>>().join(" "),
+            chars,
+        );
         if !seen.contains(&label) {
             seen.push(label);
             if seen.len() == max {
@@ -379,6 +405,16 @@ pub(crate) fn labels(elements: &[Element], max: usize) -> Vec<String> {
         }
     }
     seen
+}
+
+/// `value` in at most `chars` characters: cut, ending in `…`, when it is longer.
+pub(crate) fn short(value: &str, chars: usize) -> String {
+    if value.chars().count() <= chars {
+        return value.to_owned();
+    }
+    let mut cut: String = value.chars().take(chars.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
 }
 
 #[cfg(test)]
@@ -417,6 +453,38 @@ mod tests {
         assert_eq!(decode("&#;&#x;&#12a; & ;"), "&#;&#x;&#12a; & ;");
         assert_eq!(decode("&#999999999999;"), "\u{FFFD}");
         assert_eq!(decode("tail &amp"), "tail &amp");
+    }
+
+    #[test]
+    fn a_text_full_of_ampersands_is_kept() {
+        let text = "& a ".repeat(50_000);
+        assert_eq!(decode(&text), text);
+    }
+
+    #[test]
+    fn a_node_with_an_id_only_is_matched_not_listed() {
+        let dump = parse_dump(
+            r#"<hierarchy rotation="0"><node resource-id="com.example:id/icon" class="android.widget.ImageView" clickable="false" bounds="[0,0][100,100]"/><node resource-id="" class="android.widget.FrameLayout" bounds="[0,0][100,100]"/><node text="Ok" resource-id="" clickable="true" bounds="[0,100][100,200]"/></hierarchy>"#,
+        );
+        assert_eq!(dump.elements.len(), 1);
+        assert_eq!(
+            dump.nodes.len(),
+            2,
+            "the container without an id is left out"
+        );
+        let target = ElementTarget::Id("icon".to_owned());
+        assert_eq!(
+            find(&dump.nodes, &target, true).map(|e| e.tap_point),
+            Some([50, 50])
+        );
+        assert_eq!(find(&dump.elements, &target, true), None);
+    }
+
+    #[test]
+    fn labels_are_short() {
+        assert_eq!(short("Gönder", 10), "Gönder");
+        assert_eq!(short("Diğer seçenekler", 10), "Diğer seç…");
+        assert_eq!(short("Diğer seçenekler", 10).chars().count(), 10);
     }
 
     #[test]

@@ -23,12 +23,12 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use jeeta_device_bridge::driver::android::{
     ADB_TIMEOUT, AdbError, AdbOutput, AdbRunner, AndroidAdbDriver, AndroidRegistry,
-    IDLE_RETRY_PAUSE, IME_BIND_TIMEOUT, MAX_DEVICE_LINE_BYTES,
+    IDLE_RETRY_PAUSE, IME_BIND_TIMEOUT, MAX_DEVICE_LINE_BYTES, MAX_PULL_BYTES, PUT_BACK_ATTEMPTS,
 };
 use jeeta_device_bridge::{ContentType, DriverError, FileTransfer, PhoneDriver, PhoneRegistry};
 use jt_device_protocol::{
-    CommandResult, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, Observation,
-    Platform, Screen, TEXT_UNICODE,
+    CommandResult, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, MAX_DETAIL_CHARS,
+    Observation, Platform, Screen, TEXT_UNICODE,
 };
 use uuid::Uuid;
 
@@ -36,10 +36,13 @@ const SERIAL: &str = "18cf9fbb";
 const ADB_IME: &str = "com.android.adbkeyboard/.AdbIME";
 /// The owner's phone's own keyboard, its input method when the tests begin.
 const PREFF: &str = "com.preff.kb.xm/com.preff.kb.LatinIME";
-/// The first input method `ime list -s` lists on the owner's phone.
-const FIRST_ENABLED: &str = "com.google.android.tts/com.google.android.apps.speech.tts.googletts.settings.asr.voiceime.VoiceInputMethodService";
-const DUMP_LINE: &str = "shell rm -f /sdcard/jeeta_ui.xml ; uiautomator dump /sdcard/jeeta_ui.xml";
-const CAT_LINE: &str = "exec-out cat /sdcard/jeeta_ui.xml";
+/// Gboard, also enabled on the owner's phone.
+const GBOARD: &str = "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME";
+const DUMP_LINE: &str =
+    "shell rm -f /data/local/tmp/jeeta_ui.xml ; uiautomator dump /data/local/tmp/jeeta_ui.xml";
+const CAT_LINE: &str = "exec-out cat /data/local/tmp/jeeta_ui.xml";
+const RM_LINE: &str = "shell rm -f /data/local/tmp/jeeta_ui.xml";
+const HISTORY_LINE: &str = "shell settings get secure input_methods_subtype_history";
 const FILE_ID: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0f11);
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake screen";
 const DOWNLOAD: &[u8] = b"the file the agent pushes";
@@ -88,7 +91,16 @@ struct State {
     /// After ADBKeyBoard is selected, `dumpsys input_method` says it is bound to no field this
     /// many times.
     unbound_polls: usize,
+    /// Meanwhile it shows the app's field served, but the app still bound to the keyboard
+    /// before, rather than nothing served.
+    in_between: bool,
     polls_since_selected: usize,
+    /// What `input_methods_subtype_history` holds.
+    history: String,
+    /// The next this many `ime set` of an input method other than ADBKeyBoard do not take.
+    failing_put_backs: usize,
+    /// What `screencap` writes before the image.
+    screencap_noise: Vec<u8>,
     /// What ADBKeyBoard was sent, decoded.
     typed: Vec<String>,
     /// `input` answers with the INJECT_EVENTS refusal, exit code 0.
@@ -97,6 +109,8 @@ struct State {
     hang: Vec<&'static str>,
     /// Fixed answers, by call.
     answers: Vec<(String, AdbOutput)>,
+    /// Fixed answers to the calls that begin so.
+    answers_starting: Vec<(&'static str, AdbOutput)>,
     /// `adb push`: the destination and the bytes of the local file.
     pushed: Vec<(String, Vec<u8>)>,
     devices: String,
@@ -127,11 +141,16 @@ impl FakeAdb {
                 enabled_imes: fixture("ime_list.txt").lines().map(str::to_owned).collect(),
                 adbkeyboard_installed: true,
                 unbound_polls: 0,
+                in_between: false,
                 polls_since_selected: 0,
+                history: fixture("input_methods_subtype_history.txt"),
+                failing_put_backs: 0,
+                screencap_noise: Vec::new(),
                 typed: Vec::new(),
                 inject_refused: false,
                 hang: Vec::new(),
                 answers: Vec::new(),
+                answers_starting: Vec::new(),
                 pushed: Vec::new(),
                 devices: fixture("devices_l.txt"),
             }),
@@ -166,6 +185,10 @@ impl FakeAdb {
         if let Some((_, out)) = state.answers.iter().find(|(l, _)| l == line) {
             return out.clone();
         }
+        let starting = state.answers_starting.iter();
+        if let Some((_, out)) = starting.clone().find(|(l, _)| line.starts_with(l)) {
+            return out.clone();
+        }
         match line {
             DUMP_LINE => {
                 let next = if state.dumps.len() > 1 {
@@ -185,9 +208,14 @@ impl FakeAdb {
             CAT_LINE => {
                 return match &state.file {
                     Some(xml) => ok(xml.clone()),
-                    None => ok("cat: /sdcard/jeeta_ui.xml: No such file or directory\n"),
+                    None => ok("cat: /data/local/tmp/jeeta_ui.xml: No such file or directory\n"),
                 };
             }
+            RM_LINE => {
+                state.file = None;
+                return ok("");
+            }
+            HISTORY_LINE => return ok(state.history.clone()),
             "shell wm size" if state.wm_size_works => return ok(state.wm_size.clone()),
             "shell wm size" => return AdbOutput::new(1, "", "wm: failure\n"),
             "shell dumpsys window | grep mCurrentFocus" => return ok(state.focus.clone()),
@@ -215,17 +243,30 @@ impl FakeAdb {
                 state.polls_since_selected += 1;
                 return ok(if state.polls_since_selected > state.unbound_polls {
                     fixture("input_method_bound.txt")
+                } else if state.in_between {
+                    fixture("input_method_in_between.txt")
                 } else {
                     fixture("input_method_adbime_unbound.txt")
                 });
             }
-            "exec-out screencap -p" => return ok(PNG),
+            "exec-out screencap -p" => {
+                let mut out = state.screencap_noise.clone();
+                out.extend_from_slice(PNG);
+                return ok(out);
+            }
             _ => {}
         }
         if let Some(ime) = line.strip_prefix("shell ime set ") {
-            state.current_ime = ime.to_owned();
+            if ime != ADB_IME && state.failing_put_backs > 0 {
+                state.failing_put_backs -= 1;
+            } else {
+                state.current_ime = ime.to_owned();
+            }
             state.polls_since_selected = 0;
             return ok(format!("Input method {ime} selected for user #0\n"));
+        }
+        if line.starts_with("shell stat -L -c '%F %s' ") {
+            return ok(format!("regular file {}\n", PULLED.len()));
         }
         if let Some(message) = line.strip_prefix("shell am broadcast -a ADB_INPUT_B64 --es msg ") {
             // Quoted for the phone's shell when it ends in `=`, which the shell then takes off.
@@ -253,7 +294,12 @@ impl FakeAdb {
 
 #[async_trait]
 impl AdbRunner for FakeAdb {
-    async fn run(&self, serial: &str, args: &[&str]) -> Result<AdbOutput, AdbError> {
+    async fn run(
+        &self,
+        serial: &str,
+        args: &[&str],
+        _max_output: usize,
+    ) -> Result<AdbOutput, AdbError> {
         let line = args.join(" ");
         self.calls.lock().unwrap().push((
             serial.to_owned(),
@@ -504,6 +550,28 @@ async fn idle_state_retried_then_screen_busy() {
 }
 
 #[tokio::test]
+async fn an_impossible_screen_size_is_a_failure() {
+    for size in ["Physical size: 0x0\n", "Physical size: 30000x2400\n"] {
+        let adb = Arc::new(FakeAdb::phone().with(|s| s.wm_size = size.to_owned()));
+        let error = failed(run(&driver(&adb), DeviceCommand::Observe { screenshot: false }).await);
+        assert_eq!(error.reason, FailReason::AdbError, "{size}");
+    }
+}
+
+#[tokio::test]
+async fn the_dump_file_is_removed_once_read() {
+    let adb = Arc::new(FakeAdb::phone());
+    observe(&driver(&adb)).await;
+    let lines = adb.lines();
+    let cat = lines.iter().position(|l| l == CAT_LINE).unwrap();
+    assert!(lines[cat + 1..].iter().any(|l| l == RM_LINE));
+    assert!(
+        adb.state().file.is_none(),
+        "the last screen is not left on the phone"
+    );
+}
+
+#[tokio::test]
 async fn observe_reports_rotated_screen() {
     // The owner's phone was seen at ROTATION_270: its 720x1650 screen read as 1650x720.
     let rotated = fixture("dump_home_miui.xml").replace("rotation=\"0\"", "rotation=\"3\"");
@@ -584,7 +652,8 @@ async fn tap_on_exact_beats_contains() {
         .unwrap();
     assert_eq!(tapped(&adb), "shell input tap 250 350");
     let lines = adb.lines();
-    assert_eq!(lines[lines.len() - 2], CAT_LINE, "the screen is read first");
+    assert_eq!(lines[lines.len() - 3], CAT_LINE, "the screen is read first");
+    assert_eq!(lines[lines.len() - 2], RM_LINE, "and its file removed");
 
     // No exact match: a part of the text, whatever its case.
     run(
@@ -639,6 +708,24 @@ async fn tap_on_exact_beats_contains() {
 }
 
 #[tokio::test]
+async fn tap_on_finds_a_node_by_its_id_alone() {
+    // An icon with an id and nothing else: not listed, but found by its id.
+    let screen = "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation=\"0\"><node index=\"0\" text=\"\" resource-id=\"com.example:id/camera_icon\" class=\"android.widget.ImageView\" package=\"com.example\" content-desc=\"\" clickable=\"false\" focused=\"false\" bounds=\"[100,200][300,400]\" /></hierarchy>";
+    let adb = Arc::new(
+        FakeAdb::phone().with(|s| s.dumps = VecDeque::from([Dump::Xml(screen.to_owned())])),
+    );
+    let phone = driver(&adb);
+    assert!(observe(&phone).await.elements.is_empty());
+    run(
+        &phone,
+        tap_on(ElementTarget::Id("camera_icon".to_owned()), true),
+    )
+    .await
+    .unwrap();
+    assert_eq!(adb.lines().last().unwrap(), "shell input tap 200 300");
+}
+
+#[tokio::test]
 async fn tap_on_missing_lists_labels() {
     let adb = Arc::new(FakeAdb::phone());
     let error = failed(
@@ -681,6 +768,12 @@ async fn tap_on_missing_lists_labels() {
     );
     assert!(error.detail.contains("B20"), "{}", error.detail);
     assert!(!error.detail.contains("B21"), "{}", error.detail);
+    // All of them fit a failure's detail.
+    assert!(
+        error.detail.chars().count() <= MAX_DETAIL_CHARS,
+        "{}",
+        error.detail
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -758,6 +851,33 @@ async fn unicode_text_waits_for_ime_binding() {
     assert!(broadcast > *polls.last().unwrap());
     assert_eq!(adb.state().typed, ["çay"]);
     assert_eq!(adb.state().current_ime, PREFF);
+}
+
+#[tokio::test(start_paused = true)]
+async fn unicode_text_waits_while_the_app_is_still_bound_to_its_keyboard() {
+    // Selected, and the field's connection served again, but the app's client still bound to
+    // the keyboard before: not yet ADBKeyBoard's field.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.in_between = true;
+        s.unbound_polls = 2;
+    }));
+    run(&driver(&adb), text("çay")).await.unwrap();
+    let lines = adb.lines();
+    let polls = lines
+        .iter()
+        .filter(|l| *l == "shell dumpsys input_method")
+        .count();
+    let broadcast = lines
+        .iter()
+        .position(|l| l.starts_with("shell am broadcast"))
+        .unwrap();
+    let last_poll = lines
+        .iter()
+        .rposition(|l| l == "shell dumpsys input_method")
+        .unwrap();
+    assert_eq!(polls, 3);
+    assert!(broadcast > last_poll);
+    assert_eq!(adb.state().typed, ["çay"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -1076,6 +1196,156 @@ async fn each_kind_runs_its_adb_command() {
 }
 
 #[tokio::test]
+async fn pull_file_of_a_folder_is_refused_before_the_copy() {
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.answers.push((
+            "shell stat -L -c '%F %s' /sdcard/DCIM".to_owned(),
+            ok("directory 3488\n"),
+        ));
+    }));
+    let error = failed(
+        run(
+            &driver(&adb),
+            DeviceCommand::PullFile {
+                path: "/sdcard/DCIM".to_owned(),
+            },
+        )
+        .await,
+    );
+    assert_eq!(error.reason, FailReason::BridgeError);
+    assert!(error.detail.contains("directory"), "{}", error.detail);
+    assert!(adb.lines().iter().all(|l| !l.starts_with("pull ")));
+}
+
+#[tokio::test]
+async fn pull_file_over_the_cap_is_refused_before_the_copy() {
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.answers.push((
+            "shell stat -L -c '%F %s' '/sdcard/Movies/a b.mp4'".to_owned(),
+            ok(format!("regular file {}\n", MAX_PULL_BYTES + 1)),
+        ));
+        // A path that is not there: stat says so.
+        s.answers.push((
+            "shell stat -L -c '%F %s' /sdcard/none".to_owned(),
+            AdbOutput::new(1, "", "stat: '/sdcard/none': No such file or directory\n"),
+        ));
+    }));
+    let phone = driver(&adb);
+    let pull = |path: &str| DeviceCommand::PullFile {
+        path: path.to_owned(),
+    };
+    let error = failed(run(&phone, pull("/sdcard/Movies/a b.mp4")).await);
+    assert_eq!(error.reason, FailReason::BridgeError);
+    assert!(
+        error.detail.contains(&MAX_PULL_BYTES.to_string()),
+        "{}",
+        error.detail
+    );
+    let error = failed(run(&phone, pull("/sdcard/none")).await);
+    assert_eq!(error.reason, FailReason::AdbError);
+    assert!(error.detail.contains("No such file"), "{}", error.detail);
+    assert!(adb.lines().iter().all(|l| !l.starts_with("pull ")));
+}
+
+#[tokio::test]
+async fn a_failed_push_or_pull_is_told_in_adbs_words() {
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.answers_starting.push((
+            "push ",
+            AdbOutput::new(
+                1,
+                "",
+                "adb: error: failed to copy 'C:\\Temp\\x' to '/system/x': remote couldn't create file: Read-only file system\n",
+            ),
+        ));
+        s.answers_starting.push((
+            "pull /sdcard/gone ",
+            AdbOutput::new(
+                1,
+                "",
+                "adb: error: failed to get feature set: device '18cf9fbb' not found\n",
+            ),
+        ));
+        s.answers_starting.push((
+            "pull /sdcard/locked ",
+            AdbOutput::new(
+                1,
+                "",
+                "adb: error: failed to copy '/sdcard/locked' to 'C:\\Temp\\y': remote open failed: Permission denied\n",
+            ),
+        ));
+    }));
+    let phone = driver(&adb);
+    let error = failed(
+        run(
+            &phone,
+            DeviceCommand::PushFile {
+                file_id: FILE_ID,
+                dest: "/system/x".to_owned(),
+            },
+        )
+        .await,
+    );
+    assert_eq!(error.reason, FailReason::AdbError);
+    assert!(
+        error.detail.contains("Read-only file system"),
+        "{}",
+        error.detail
+    );
+    let pull = |path: &str| DeviceCommand::PullFile {
+        path: path.to_owned(),
+    };
+    let error = failed(run(&phone, pull("/sdcard/gone")).await);
+    assert_eq!(error.reason, FailReason::DeviceOffline);
+    let error = failed(run(&phone, pull("/sdcard/locked")).await);
+    assert_eq!(error.reason, FailReason::AdbError);
+    assert!(
+        error.detail.contains("Permission denied"),
+        "{}",
+        error.detail
+    );
+}
+
+#[tokio::test]
+async fn a_screenshot_is_found_after_what_the_phone_printed_first() {
+    // `exec-out` hands over both of the program's streams: MIUI's trace can come first.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.screencap_noise = fixture("miui_theme_stack_trace.txt").into_bytes();
+    }));
+    let files = FakeFiles::default();
+    driver(&adb)
+        .execute(&DeviceCommand::Screenshot {}, &files)
+        .await
+        .unwrap();
+    assert_eq!(
+        *files.uploads.lock().unwrap(),
+        [(ContentType::Png, PNG.to_vec())]
+    );
+}
+
+#[tokio::test]
+async fn miuis_theme_trace_does_not_fail_launch_app() {
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.answers.push((
+            "shell monkey -p com.whatsapp -c android.intent.category.LAUNCHER 1".to_owned(),
+            AdbOutput::new(
+                0,
+                "  bash arg: -p\nEvents injected: 1\n## Network stats: elapsed time=40ms\n",
+                fixture("miui_theme_stack_trace.txt"),
+            ),
+        ));
+    }));
+    let launched = run(
+        &driver(&adb),
+        DeviceCommand::LaunchApp {
+            app_id: "com.whatsapp".to_owned(),
+        },
+    )
+    .await;
+    assert_eq!(launched.unwrap(), CommandResult::Done {});
+}
+
+#[tokio::test]
 async fn every_call_names_the_serial() {
     let adb = Arc::new(FakeAdb::phone());
     let phone = driver(&adb);
@@ -1210,14 +1480,45 @@ async fn recover_restores_the_ime_after_a_cut_unicode_text() {
 #[tokio::test]
 async fn recover_at_start_restores_a_left_adbkeyboard() {
     // A bridge killed mid-command left ADBKeyBoard as the phone's input method: the first
-    // recovery sets the first other enabled one.
+    // recovery sets the one the phone used before it, from its own history, rather than the
+    // voice input method `ime list -s` names first.
     let adb = Arc::new(FakeAdb::phone().with(|s| s.current_ime = ADB_IME.to_owned()));
     let phone = driver(&adb);
     phone.recover().await;
-    assert_eq!(adb.state().current_ime, FIRST_ENABLED);
+    assert_eq!(adb.state().current_ime, PREFF);
+    assert_eq!(
+        adb.lines(),
+        [
+            "shell settings get secure default_input_method".to_owned(),
+            "shell ime list -s".to_owned(),
+            HISTORY_LINE.to_owned(),
+            format!("shell ime set {PREFF}"),
+            "shell settings get secure default_input_method".to_owned(),
+        ]
+    );
     let calls = adb.lines().len();
     phone.recover().await;
     assert_eq!(adb.lines().len(), calls, "the phone is looked at once");
+
+    // Without a history: the first enabled keyboard that is not a voice input method.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.current_ime = ADB_IME.to_owned();
+        s.history = "null\n".to_owned();
+        s.enabled_imes.retain(|ime| ime != PREFF);
+    }));
+    driver(&adb).recover().await;
+    assert_eq!(adb.state().current_ime, GBOARD);
+
+    // Nothing but ADBKeyBoard and voice: the phone is left as it is.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.current_ime = ADB_IME.to_owned();
+        s.history = String::new();
+        s.enabled_imes
+            .retain(|ime| ime == ADB_IME || ime.contains("voice"));
+    }));
+    driver(&adb).recover().await;
+    assert_eq!(adb.state().current_ime, ADB_IME);
+    assert!(adb.lines().iter().all(|l| !l.starts_with("shell ime set")));
 
     // A phone on its own keyboard is left as it is.
     let adb = Arc::new(FakeAdb::phone());
@@ -1227,6 +1528,47 @@ async fn recover_at_start_restores_a_left_adbkeyboard() {
         ["shell settings get secure default_input_method"]
     );
     assert_eq!(adb.state().current_ime, PREFF);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_put_back_the_phone_does_not_show_is_tried_again() {
+    // The phone shows ADBKeyBoard still after the first two tries: the third puts it back.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.current_ime = ADB_IME.to_owned();
+        s.failing_put_backs = 2;
+    }));
+    let phone = driver(&adb);
+    phone.recover().await;
+    assert_eq!(adb.state().current_ime, PREFF);
+    assert_eq!(adb.count(&format!("shell ime set {PREFF}")), 3);
+
+    // Every try fails: the record stays, and the next recovery tries again.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.current_ime = ADB_IME.to_owned();
+        s.failing_put_backs = PUT_BACK_ATTEMPTS as usize;
+    }));
+    let phone = driver(&adb);
+    phone.recover().await;
+    assert_eq!(adb.state().current_ime, ADB_IME);
+    phone.recover().await;
+    assert_eq!(adb.state().current_ime, PREFF);
+    assert_eq!(
+        adb.count(&format!("shell ime set {PREFF}")),
+        PUT_BACK_ATTEMPTS as usize + 1
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_record_gives_way_to_the_input_method_the_phone_is_on() {
+    // A Unicode text whose put-back never took: PREFF stays recorded.
+    let adb = Arc::new(FakeAdb::phone().with(|s| s.failing_put_backs = PUT_BACK_ATTEMPTS as usize));
+    let phone = driver(&adb);
+    run(&phone, text("çay")).await.unwrap();
+    assert_eq!(adb.state().current_ime, ADB_IME);
+    // Then the owner picks Gboard on the phone, and a later Unicode text puts back that one.
+    adb.state().current_ime = GBOARD.to_owned();
+    run(&phone, text("çay")).await.unwrap();
+    assert_eq!(adb.state().current_ime, GBOARD);
 }
 
 #[tokio::test]
@@ -1275,8 +1617,19 @@ async fn registry_returns_the_same_driver_for_the_same_serial() {
     assert!(!Arc::ptr_eq(&first[0].driver, &first[1].driver));
     assert_eq!(first[0].driver.platform(), Platform::Android);
 
-    // A phone that left and came back is a new phone.
+    // A phone offline for a moment is the same phone, with what its driver recorded.
     let all = adb.state().devices.clone();
+    adb.state().devices = all.replace(
+        " device product:sdk_gphone64",
+        " offline product:sdk_gphone64",
+    );
+    let meanwhile = registry.attached().await.unwrap();
+    assert_eq!(meanwhile.len(), 1, "listed only when ready");
+    adb.state().devices = all.clone();
+    let again = registry.attached().await.unwrap();
+    assert!(Arc::ptr_eq(&first[1].driver, &again[1].driver));
+
+    // A phone that left and came back is a new phone.
     adb.state().devices = all.replace("emulator-5554", "emulator-5556");
     registry.attached().await.unwrap();
     adb.state().devices = all;

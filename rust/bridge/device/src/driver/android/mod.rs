@@ -10,15 +10,19 @@
 //!
 //! Seen on the owner's Redmi 10C (Android 13, MIUI 14):
 //! - A dump is judged by the file it wrote: MIUI's `uiautomator dump` prints a Java stack trace
-//!   about a theme file and dumps all the same. Only "could not get idle state", a moving screen
-//!   refused with exit code 0, is a refusal: retried once after [`IDLE_RETRY_PAUSE`], then
-//!   `screen_busy`, never an empty screen.
+//!   about a theme file (`theme_compatibility.xml`) and dumps all the same; that trace is never
+//!   read as a failure. Only "could not get idle state", a moving screen refused with exit code
+//!   0, is a refusal: retried once after [`IDLE_RETRY_PAUSE`], then `screen_busy`, never an
+//!   empty screen.
 //! - Without Xiaomi's "USB debugging (Security settings)", `input` refuses to inject with a
 //!   `SecurityException` and exit code 0: that output is an `adb_error` naming the setting.
 //! - ADBKeyBoard loses a broadcast sent before it has bound to the focused field, and
 //!   `am broadcast` answers `result=0` either way. After `ime set` the driver waits, at most
-//!   [`IME_BIND_TIMEOUT`], until `dumpsys input_method` shows it bound.
+//!   [`IME_BIND_TIMEOUT`], until `dumpsys input_method` shows it bound on both sides (see
+//!   `commands::bound_to_a_field`).
 //! - Auto-rotate turns the screen: its size and rotation are read on every observation.
+//! - The phone keeps the input methods it used, most recent first
+//!   (`input_methods_subtype_history`): the one to put back when nothing else says.
 //!
 //! # Cancellation
 //!
@@ -53,15 +57,24 @@ use tracing::{info, warn};
 
 pub use adb::{
     ADB_SHELL_TIMEOUT, ADB_TIMEOUT, ADB_TRANSFER_TIMEOUT, AdbError, AdbOutput, AdbRunner,
-    MAX_CAPTURE_BYTES, MAX_DEVICE_LINE_BYTES, SystemAdb,
+    MAX_CAPTURE_BYTES, MAX_DEVICE_LINE_BYTES, MAX_READ_BYTES, SHELL_CAPTURE_BYTES, SystemAdb,
 };
 
-use self::adb::DeviceLine;
+use self::adb::{DeviceLine, Limits};
 use crate::driver::{AttachedPhone, DriverError, FileTransfer, PhoneDriver, PhoneRegistry};
 use crate::run_loop::loggable;
 
-/// Where `uiautomator dump` writes the screen on the phone.
-pub const DUMP_PATH: &str = "/sdcard/jeeta_ui.xml";
+/// Where `uiautomator dump` writes the screen on the phone: the shell user's own folder, not
+/// the shared storage other apps read; the file is removed once read.
+pub const DUMP_PATH: &str = "/data/local/tmp/jeeta_ui.xml";
+/// The largest file `pull_file` copies: as large as a download the bridge takes
+/// (`client::MAX_DOWNLOAD_BYTES`). It is checked on the phone before the copy, which goes to
+/// this computer's temporary folder.
+pub const MAX_PULL_BYTES: u64 = crate::client::MAX_DOWNLOAD_BYTES;
+/// How many times the phone's input method is set back before that is left for later.
+pub const PUT_BACK_ATTEMPTS: u32 = 3;
+/// The pause between two of those tries.
+pub const PUT_BACK_PAUSE: Duration = Duration::from_millis(250);
 /// The pause before a dump refused for a moving screen is tried again, once.
 pub const IDLE_RETRY_PAUSE: Duration = Duration::from_millis(700);
 /// ADBKeyBoard's package: an input method that types the text it is sent by broadcast, which
@@ -75,6 +88,9 @@ pub const IME_BIND_TIMEOUT: Duration = Duration::from_secs(5);
 pub const IME_BIND_POLL: Duration = Duration::from_millis(200);
 /// How many of the screen's labels a `tap_on` that found nothing names.
 pub const MAX_LABELS: usize = 20;
+/// The most characters of each of them, so that they all fit a failure's detail
+/// (`MAX_DETAIL_CHARS`, 300) with the target.
+pub const LABEL_CHARS: usize = 10;
 
 /// One Android phone, reached through `adb` by its serial.
 pub struct AndroidAdbDriver {
@@ -114,13 +130,17 @@ impl AndroidAdbDriver {
         &self.serial
     }
 
-    /// One `adb` call within `bound`. `adb` that cannot run, cannot reach the phone or does not
+    /// One `adb` call within `limits`. `adb` that cannot run, cannot reach the phone or does not
     /// answer in time is a failure; anything else is the call's output, whatever its exit code.
-    async fn adb(&self, args: &[&str], bound: Duration) -> Result<AdbOutput, DriverError> {
-        match tokio::time::timeout(bound, self.adb.run(&self.serial, args)).await {
+    async fn adb(&self, args: &[&str], limits: Limits) -> Result<AdbOutput, DriverError> {
+        let call = self.adb.run(&self.serial, args, limits.output);
+        match tokio::time::timeout(limits.time, call).await {
             Err(_) => Err(DriverError::new(
                 FailReason::Timeout,
-                format!("the phone did not answer within {} s", bound.as_secs()),
+                format!(
+                    "the phone did not answer within {} s",
+                    limits.time.as_secs()
+                ),
             )),
             Ok(Err(error)) => Err(DriverError::new(FailReason::AdbError, error.to_string())),
             Ok(Ok(out)) => match unreachable(&out) {
@@ -130,17 +150,17 @@ impl AndroidAdbDriver {
         }
     }
 
-    /// `adb shell <line>` within `bound`; a line too long to send is refused before `adb` runs.
-    async fn shell(&self, line: &DeviceLine, bound: Duration) -> Result<AdbOutput, DriverError> {
+    /// `adb shell <line>` within `limits`; a line too long to send is refused before `adb` runs.
+    async fn shell(&self, line: &DeviceLine, limits: Limits) -> Result<AdbOutput, DriverError> {
         check(line)?;
         let args: Vec<&str> = std::iter::once("shell").chain(line.words()).collect();
-        self.adb(&args, bound).await
+        self.adb(&args, limits).await
     }
 
     /// A line whose program tells of a failure in what it prints: an exception or an error line
     /// (some exit with 0 all the same), or else a status other than 0.
     async fn act(&self, line: &DeviceLine) -> Result<AdbOutput, DriverError> {
-        let out = self.shell(line, ADB_TIMEOUT).await?;
+        let out = self.shell(line, Limits::ORDINARY).await?;
         match refusal(line.program(), &out) {
             Some(error) => Err(error),
             None => Ok(out),
@@ -188,17 +208,29 @@ impl AndroidAdbDriver {
         Ok(installed? && enabled?.iter().any(|ime| ime == ADB_KEYBOARD_IME))
     }
 
+    /// The input method to go back to when nothing is recorded: the one the phone used last
+    /// (`input_methods_subtype_history`) that is still enabled, else the first enabled one that
+    /// is not ADBKeyBoard and not a voice input method.
+    async fn ime_to_go_back_to(&self, enabled: &[String]) -> Option<String> {
+        let line = DeviceLine::new("settings")
+            .word("get")
+            .word("secure")
+            .word("input_methods_subtype_history");
+        let history = self.act(&line).await.ok();
+        choose_ime(
+            history.as_ref().map(|h| h.stdout_text()).as_deref(),
+            enabled,
+        )
+    }
+
     fn recorded_ime(&self) -> Option<String> {
         self.restore_ime.lock().unwrap().clone()
     }
 
-    /// Records `ime` to be put back, unless one is recorded already: that one is the phone's
-    /// own, from before an earlier command that could not put it back.
-    fn record_ime(&self, ime: Option<String>) {
-        let mut recorded = self.restore_ime.lock().unwrap();
-        if recorded.is_none() {
-            *recorded = ime;
-        }
+    /// Records `ime` to be put back. It is called while the phone is not on ADBKeyBoard, so an
+    /// earlier record is stale (the phone went back since) and is replaced.
+    fn set_record(&self, ime: Option<String>) {
+        *self.restore_ime.lock().unwrap() = ime;
     }
 
     fn clear_record(&self, ime: &str) {
@@ -209,27 +241,41 @@ impl AndroidAdbDriver {
     }
 
     /// Puts the recorded input method back, if one is recorded, and clears the record once the
-    /// phone shows it. One that could not be put back stays recorded for the next try: the
-    /// phone's next recovery or Unicode `text`.
+    /// phone shows it: up to [`PUT_BACK_ATTEMPTS`] tries, [`PUT_BACK_PAUSE`] apart. One that
+    /// could not be put back stays recorded for the next try: the phone's next recovery or
+    /// Unicode `text`.
     async fn put_ime_back(&self) {
         let Some(ime) = self.recorded_ime() else {
             return;
         };
-        let restored = async {
-            self.act(&DeviceLine::new("ime").word("set").arg(&ime))
-                .await?;
-            Ok::<_, DriverError>(self.current_ime().await?.as_deref() == Some(ime.as_str()))
+        let mut last = None;
+        for attempt in 1..=PUT_BACK_ATTEMPTS {
+            if attempt > 1 {
+                tokio::time::sleep(PUT_BACK_PAUSE).await;
+            }
+            let restored = async {
+                self.act(&DeviceLine::new("ime").word("set").arg(&ime))
+                    .await?;
+                Ok::<_, DriverError>(self.current_ime().await?.as_deref() == Some(ime.as_str()))
+            }
+            .await;
+            match restored {
+                Ok(true) => {
+                    self.clear_record(&ime);
+                    return;
+                }
+                Ok(false) => last = None,
+                Err(error) => last = Some(error.reason),
+            }
         }
-        .await;
-        match restored {
-            Ok(true) => self.clear_record(&ime),
-            Ok(false) => warn!(
+        match last {
+            None => warn!(
                 serial = %loggable(&self.serial),
                 "the phone's input method was not put back; it is tried again later"
             ),
-            Err(error) => warn!(
+            Some(reason) => warn!(
                 serial = %loggable(&self.serial),
-                reason = error.reason.key(),
+                reason = reason.key(),
                 "the phone's input method could not be put back; it is tried again later"
             ),
         }
@@ -239,8 +285,8 @@ impl AndroidAdbDriver {
         let getprop = DeviceLine::new("getprop");
         let size = DeviceLine::new("wm").word("size");
         let (props, size, unicode) = tokio::join!(
-            self.shell(&getprop, ADB_TIMEOUT),
-            self.shell(&size, ADB_TIMEOUT),
+            self.shell(&getprop, Limits::ORDINARY),
+            self.shell(&size, Limits::ORDINARY),
             self.unicode_ready(),
         );
         // A phone that does not tell its properties has no report: the loop stands in its last.
@@ -313,8 +359,9 @@ impl PhoneDriver for AndroidAdbDriver {
 
     /// Puts back the input method a cut-off Unicode `text` left on ADBKeyBoard. The first call
     /// also looks at the phone, which a bridge killed mid-command may have left on ADBKeyBoard,
-    /// and sets the first other enabled input method then. With nothing recorded after that
-    /// first look, it makes no call.
+    /// and then sets the input method the phone used before it (see
+    /// [`AndroidAdbDriver::ime_to_go_back_to`]), or leaves the phone as it is when it finds none.
+    /// With nothing recorded after that first look, it makes no call.
     async fn recover(&self) {
         let recorded = self.recorded_ime();
         if recorded.is_none() && self.looked.load(Ordering::SeqCst) {
@@ -340,76 +387,99 @@ impl PhoneDriver for AndroidAdbDriver {
             return;
         }
         if recorded.is_none() {
-            let other = self
-                .enabled_imes()
-                .await
-                .ok()
-                .and_then(|enabled| other_ime(&enabled));
-            let Some(other) = other else {
+            let back = match self.enabled_imes().await {
+                Ok(enabled) => self.ime_to_go_back_to(&enabled).await,
+                Err(_) => None,
+            };
+            let Some(back) = back else {
                 warn!(
                     serial = %loggable(&self.serial),
-                    "the phone is left on ADBKeyBoard: no other input method is enabled"
+                    "the phone is left on ADBKeyBoard: no input method to go back to was found"
                 );
                 return;
             };
-            self.record_ime(Some(other));
+            self.set_record(Some(back));
         }
         self.put_ime_back().await;
     }
 }
 
-/// The first enabled input method other than ADBKeyBoard.
-fn other_ime(enabled: &[String]) -> Option<String> {
-    enabled.iter().find(|ime| *ime != ADB_KEYBOARD_IME).cloned()
+/// The input method to go back to, of those `enabled`: the first in the phone's history (its
+/// `input_methods_subtype_history`, `id;subtype:id;subtype…`, most recent first) that is not
+/// ADBKeyBoard and is still enabled; else the first enabled one that is neither ADBKeyBoard nor
+/// a voice input method (its id names `voice` or `speech`); else none.
+fn choose_ime(history: Option<&str>, enabled: &[String]) -> Option<String> {
+    let usable = |id: &str| id != ADB_KEYBOARD_IME && enabled.iter().any(|e| e == id);
+    let used = history
+        .into_iter()
+        .flat_map(|history| history.trim().split(':'))
+        .map(|entry| entry.split_once(';').map_or(entry, |(id, _)| id).trim())
+        .find(|id| usable(id));
+    if let Some(id) = used {
+        return Some(id.to_owned());
+    }
+    enabled
+        .iter()
+        .find(|id| {
+            let lower = id.to_lowercase();
+            *id != ADB_KEYBOARD_IME && !lower.contains("voice") && !lower.contains("speech")
+        })
+        .cloned()
 }
 
-/// Refuses a line longer than [`MAX_DEVICE_LINE_BYTES`].
+/// Refuses a line longer than [`MAX_DEVICE_LINE_BYTES`] as it is sent.
 fn check(line: &DeviceLine) -> Result<(), DriverError> {
-    let bytes = line.bytes();
+    let bytes = line.sent_bytes();
     if bytes > MAX_DEVICE_LINE_BYTES {
         return Err(DriverError::new(
             FailReason::BridgeError,
             format!(
-                "the command line for the phone is {bytes} bytes once quoted for its shell, \
-                 over the {MAX_DEVICE_LINE_BYTES} bytes the bridge sends"
+                "the command line for the phone is {bytes} bytes once quoted, over the \
+                 {MAX_DEVICE_LINE_BYTES} bytes the bridge sends"
             ),
         ));
     }
     Ok(())
 }
 
-/// What `adb` itself prints when it cannot reach the phone (`adb.exe: device '…' not found`),
-/// as opposed to what a program on the phone printed.
+/// What `adb` itself prints when it cannot reach the phone, as opposed to what a program on the
+/// phone printed: a line of `adb`'s own (`adb.exe: `, `adb: `, `error: `) that says so anywhere
+/// in it (`adb.exe: device '…' not found`, `adb: error: failed to get feature set: device '…'
+/// not found`).
 fn unreachable(out: &AdbOutput) -> Option<DriverError> {
     if out.success() {
         return None;
     }
+    let gone = |message: &str| {
+        (message.contains("device '") && message.contains("' not found"))
+            || [
+                "device offline",
+                "device unauthorized",
+                "device still authorizing",
+                "no devices/emulators found",
+            ]
+            .iter()
+            .any(|state| message.contains(state))
+    };
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let line = stderr
+    let message = stderr
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty())?;
-    let message = ["adb.exe: ", "adb: ", "error: "]
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix))?;
-    let gone = (message.starts_with("device '") && message.ends_with("not found"))
-        || [
-            "device offline",
-            "device unauthorized",
-            "device still authorizing",
-            "no devices/emulators found",
-        ]
-        .iter()
-        .any(|state| message.starts_with(state));
-    gone.then(|| {
-        DriverError::new(
-            FailReason::DeviceOffline,
-            format!("adb cannot reach the phone: {}", clean(message)),
-        )
-    })
+        .filter_map(|line| {
+            ["adb.exe: ", "adb: ", "error: "]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix))
+        })
+        .find(|message| gone(message))?;
+    Some(DriverError::new(
+        FailReason::DeviceOffline,
+        format!("adb cannot reach the phone: {}", clean(message)),
+    ))
 }
 
-/// The failure a program on the phone reported in its output, if any.
+/// The failure a program on the phone reported in its output, if any. An injection refused
+/// (a `SecurityException` from `input`, or any failure that names `INJECT_EVENTS`) is told with
+/// the setting that allows it; any other failure is told by its line.
 fn refusal(program: &str, out: &AdbOutput) -> Option<DriverError> {
     let text = out.text();
     let failures: Vec<&str> = text
@@ -417,11 +487,9 @@ fn refusal(program: &str, out: &AdbOutput) -> Option<DriverError> {
         .map(str::trim)
         .filter(|line| tells_of_failure(line))
         .collect();
-    // `input` prints nothing when it works.
-    let injection = match program {
-        "input" => text.contains("SecurityException") || text.contains("Exception occurred"),
-        _ => failures.iter().any(|line| line.contains("INJECT_EVENTS")),
-    };
+    let injection = failures.iter().any(|line| {
+        line.contains("INJECT_EVENTS") || (program == "input" && line.contains("SecurityException"))
+    });
     if injection {
         return Some(DriverError::new(
             FailReason::AdbError,
@@ -453,8 +521,12 @@ fn refusal(program: &str, out: &AdbOutput) -> Option<DriverError> {
 /// Whether a line a program printed tells of its failure: an error line (`Error: …`, monkey's
 /// `** …`), or an exception (`Exception occurred while executing …`, a line that begins with
 /// the exception's class, `java.lang.SecurityException: …`). A line that only mentions one,
-/// such as `am start` repeating the address it opens, does not.
+/// such as `am start` repeating the address it opens, does not; nor does MIUI's stack trace
+/// about its theme file (`…/theme_compatibility.xml`), after which its Java tools go on.
 fn tells_of_failure(line: &str) -> bool {
+    if line.contains("theme_compatibility.xml") {
+        return false;
+    }
     let head = line.split(':').next().unwrap_or("");
     line.starts_with("Error")
         || line.starts_with("** ")
@@ -523,8 +595,8 @@ fn os_version(props: &HashMap<&str, &str>) -> Option<String> {
 ///
 /// Only phones `adb` calls ready (`device`) are listed, and only the configured serials. A phone
 /// that waits for its USB debugging prompt (`unauthorized`), or is attached but not ready, is
-/// logged when its state changes. The same phone keeps its driver (the same `Arc`) while it
-/// stays attached; one that left and came back gets a new one.
+/// logged when its state changes. The same phone keeps its driver (the same `Arc`) while
+/// `adb devices` lists it, ready or not; one that left the list and came back gets a new one.
 pub struct AndroidRegistry {
     adb: Arc<dyn AdbRunner>,
     serials: Option<Vec<String>>,
@@ -605,13 +677,15 @@ impl PhoneRegistry for AndroidRegistry {
         }
         let listed = devices(&out.stdout_text());
         self.note_not_ready(&listed);
+        let mut drivers = self.drivers.lock().unwrap();
+        // A phone listed in any state keeps its driver, and what it records: one offline for a
+        // moment is the same phone when it is back.
+        drivers.retain(|serial, _| listed.iter().any(|(listed, _)| listed == serial));
         let ready: Vec<String> = listed
             .into_iter()
             .filter(|(serial, state)| state == "device" && self.wanted(serial))
             .map(|(serial, _)| serial)
             .collect();
-        let mut drivers = self.drivers.lock().unwrap();
-        drivers.retain(|serial, _| ready.contains(serial));
         Ok(ready
             .into_iter()
             .map(|serial| {
@@ -676,12 +750,62 @@ mod tests {
             gone("adb: device unauthorized.\n"),
             Some(FailReason::DeviceOffline)
         );
+        // Said anywhere in a line of adb's own, after what it was doing.
+        assert_eq!(
+            gone("adb: error: failed to get feature set: device '18cf9fbb' not found\n"),
+            Some(FailReason::DeviceOffline)
+        );
+        assert_eq!(
+            gone("some warning\nadb.exe: error: connect failed: device offline\n"),
+            Some(FailReason::DeviceOffline)
+        );
         // A program on the phone that failed is not adb failing.
         assert_eq!(gone("ls: /x: No such file or directory\n"), None);
+        assert_eq!(gone("grep: device offline: No such file\n"), None);
         assert_eq!(
             unreachable(&AdbOutput::new(0, "", "adb: device offline")).map(|e| e.reason),
             None
         );
+    }
+
+    #[test]
+    fn the_input_method_to_go_back_to() {
+        let enabled: Vec<String> = include_str!("../../../tests/fixtures/ime_list.txt")
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let history = include_str!("../../../tests/fixtures/input_methods_subtype_history.txt");
+        // The owner's phone: ADBKeyBoard last, its own keyboard before it.
+        assert_eq!(
+            choose_ime(Some(history), &enabled).as_deref(),
+            Some("com.preff.kb.xm/com.preff.kb.LatinIME")
+        );
+        // One in the history that is no longer enabled is passed over.
+        let fewer: Vec<String> = enabled
+            .iter()
+            .filter(|ime| !ime.starts_with("com.preff"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            choose_ime(Some(history), &fewer).as_deref(),
+            Some("com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME")
+        );
+        // No history: the first enabled keyboard, not the voice input method listed first.
+        assert_eq!(
+            choose_ime(None, &enabled).as_deref(),
+            Some("com.preff.kb.xm/com.preff.kb.LatinIME")
+        );
+        assert_eq!(
+            choose_ime(Some("null\n"), &enabled),
+            choose_ime(None, &enabled)
+        );
+        // Nothing but ADBKeyBoard and voice: none.
+        let none: Vec<String> = enabled
+            .iter()
+            .filter(|ime| ime.contains("adbkeyboard") || ime.contains("voice"))
+            .cloned()
+            .collect();
+        assert_eq!(choose_ime(Some(history), &none), None);
     }
 
     #[test]
@@ -744,6 +868,38 @@ mod tests {
             )
             .map(|e| e.reason),
             Some(FailReason::AdbError)
+        );
+        // Another exception is told as it is, not as an injection refused.
+        let denied = refusal(
+            "am",
+            &AdbOutput::new(
+                0,
+                "Starting: Intent { act=android.intent.action.VIEW }\n",
+                "java.lang.SecurityException: Permission Denial: starting Intent\n",
+            ),
+        )
+        .unwrap();
+        assert!(
+            denied.detail.contains("Permission Denial"),
+            "{}",
+            denied.detail
+        );
+        assert!(!denied.detail.contains("USB debugging"));
+        let other = refusal(
+            "input",
+            &AdbOutput::new(
+                0,
+                "",
+                "Exception occurred while executing 'tap':\njava.lang.IllegalArgumentException: bad\n",
+            ),
+        )
+        .unwrap();
+        assert!(!other.detail.contains("USB debugging"), "{}", other.detail);
+        // MIUI's theme trace, which its Java tools print and go on after.
+        let miui = include_str!("../../../tests/fixtures/miui_theme_stack_trace.txt");
+        assert_eq!(
+            refusal("monkey", &AdbOutput::new(0, "Events injected: 1\n", miui)),
+            None
         );
     }
 

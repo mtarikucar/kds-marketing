@@ -14,6 +14,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use jt_device_protocol::MAX_OUTPUT_BYTES;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
@@ -25,16 +26,54 @@ pub const ADB_SHELL_TIMEOUT: Duration = Duration::from_secs(110);
 /// How long `adb push` or `adb pull` may take: within the loop's `Timing::transfer_timeout`
 /// (30 min).
 pub const ADB_TRANSFER_TIMEOUT: Duration = Duration::from_secs(25 * 60);
-/// The longest command line the driver sends to the phone's shell, in bytes. Quoting can make a
-/// command that passed `DeviceCommand::validate` several times longer (each `'` becomes four
-/// characters), and the whole `adb` command line, with the program's path and the computer's own
-/// quoting of it, has to fit the system's limit (32 767 characters on Windows). A longer line is
-/// refused before `adb` runs.
+/// The longest command line the driver sends to the phone's shell, in bytes, measured as it is
+/// sent. Quoting for the phone can make a command that passed `DeviceCommand::validate` several
+/// times longer (each `'` becomes four characters). On Windows the computer's own command line
+/// quotes it again (each `"`, and the backslashes before one, count twice; a word with a space
+/// gains two quotes), and that is counted too, so a line within this fits Windows' limit of
+/// 32 767 characters with room for `adb`'s path and `-s <serial> shell`. A longer line is refused
+/// before `adb` runs.
 pub const MAX_DEVICE_LINE_BYTES: usize = 24 * 1024;
-/// The most bytes of one output stream [`SystemAdb`] keeps; the rest is read and dropped, so a
-/// command that prints without end cannot fill this computer's memory. A screenshot fits many
-/// times over; a shell result keeps far less (`MAX_OUTPUT_BYTES`).
+/// The most bytes of one output stream kept from a call of the driver's own (a screen dump, a
+/// property list); the rest is read and dropped, so a call that prints without end cannot fill
+/// this computer's memory.
+pub const MAX_READ_BYTES: usize = 8 * 1024 * 1024;
+/// The same for a screenshot.
 pub const MAX_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
+/// The same for an agent's `shell` command: twice what its result keeps
+/// (`MAX_OUTPUT_BYTES`), so an output cut here is still longer than that once Windows' CR LF
+/// are undone, and the result says it was cut.
+pub const SHELL_CAPTURE_BYTES: usize = 2 * MAX_OUTPUT_BYTES + 2;
+
+/// What one call may take: time, and bytes of each output stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Limits {
+    pub(crate) time: Duration,
+    pub(crate) output: usize,
+}
+
+impl Limits {
+    /// A call of the driver's own: reading the screen, a tap, a property.
+    pub(crate) const ORDINARY: Limits = Limits {
+        time: ADB_TIMEOUT,
+        output: MAX_READ_BYTES,
+    };
+    /// An agent's `shell` command.
+    pub(crate) const AGENT_SHELL: Limits = Limits {
+        time: ADB_SHELL_TIMEOUT,
+        output: SHELL_CAPTURE_BYTES,
+    };
+    /// `adb push` and `adb pull`.
+    pub(crate) const TRANSFER: Limits = Limits {
+        time: ADB_TRANSFER_TIMEOUT,
+        output: MAX_READ_BYTES,
+    };
+    /// `screencap`.
+    pub(crate) const SCREENSHOT: Limits = Limits {
+        time: ADB_TIMEOUT,
+        output: MAX_CAPTURE_BYTES,
+    };
+}
 
 /// What one `adb` call left: its exit code (`None` when it ended without one) and its output.
 #[derive(Clone, PartialEq, Eq)]
@@ -114,8 +153,14 @@ impl std::error::Error for AdbError {}
 /// cuts a command off by dropping it): an implementation leaves no `adb` running when it is.
 #[async_trait]
 pub trait AdbRunner: Send + Sync {
-    /// `adb -s <serial> <args…>`, each argument handed to `adb` as it is.
-    async fn run(&self, serial: &str, args: &[&str]) -> Result<AdbOutput, AdbError>;
+    /// `adb -s <serial> <args…>`, each argument handed to `adb` as it is, keeping at most
+    /// `max_output` bytes of each output stream.
+    async fn run(
+        &self,
+        serial: &str,
+        args: &[&str],
+        max_output: usize,
+    ) -> Result<AdbOutput, AdbError>;
 
     /// `adb devices -l`: the one call that names no phone.
     async fn devices(&self) -> Result<AdbOutput, AdbError>;
@@ -124,7 +169,7 @@ pub trait AdbRunner: Send + Sync {
 /// The real `adb`, at the configured path.
 ///
 /// Each call is a child process started with `kill_on_drop(true)` and no input, so a dropped
-/// call leaves no `adb` behind. Unbounded itself: the driver bounds each call.
+/// call leaves no `adb` behind. Unbounded in time itself: the driver bounds each call.
 #[derive(Clone, Debug)]
 pub struct SystemAdb {
     program: PathBuf,
@@ -138,7 +183,7 @@ impl SystemAdb {
         }
     }
 
-    async fn exec(&self, args: &[&str]) -> Result<AdbOutput, AdbError> {
+    async fn exec(&self, args: &[&str], max_output: usize) -> Result<AdbOutput, AdbError> {
         let mut child = Command::new(&self.program)
             .args(args)
             .stdin(Stdio::null())
@@ -153,8 +198,8 @@ impl SystemAdb {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let (stdout, stderr, status) = tokio::try_join!(
-            read_capped(stdout, MAX_CAPTURE_BYTES),
-            read_capped(stderr, MAX_CAPTURE_BYTES),
+            read_capped(stdout, max_output),
+            read_capped(stderr, max_output),
             child.wait(),
         )
         .map_err(|error| AdbError::Io(error.kind()))?;
@@ -168,11 +213,16 @@ impl SystemAdb {
 
 #[async_trait]
 impl AdbRunner for SystemAdb {
-    async fn run(&self, serial: &str, args: &[&str]) -> Result<AdbOutput, AdbError> {
+    async fn run(
+        &self,
+        serial: &str,
+        args: &[&str],
+        max_output: usize,
+    ) -> Result<AdbOutput, AdbError> {
         let mut argv = Vec::with_capacity(args.len() + 2);
         argv.extend(["-s", serial]);
         argv.extend_from_slice(args);
-        let mut out = self.exec(&argv).await?;
+        let mut out = self.exec(&argv, max_output).await?;
         // `adb shell` on Windows writes what the phone printed in text mode, each LF as CR LF
         // (seen with adb 37.0.1 on Windows 11; `exec-out` is not changed): undone, so the
         // phone's bytes come back as they were.
@@ -184,7 +234,7 @@ impl AdbRunner for SystemAdb {
     }
 
     async fn devices(&self) -> Result<AdbOutput, AdbError> {
-        self.exec(&["devices", "-l"]).await
+        self.exec(&["devices", "-l"], MAX_READ_BYTES).await
     }
 }
 
@@ -209,8 +259,16 @@ async fn read_capped(
 }
 
 /// `bytes` with the CR dropped that text mode put before each LF. Text mode adds one CR to every
-/// LF, so this is exact: a CR LF the phone printed (written as CR CR LF) is CR LF again.
+/// LF, so this is exact: a CR LF the phone printed (written as CR CR LF) is CR LF again. An
+/// output with a LF that has no CR before it was not written so, and is left as it is.
 fn without_added_crs(bytes: Vec<u8>) -> Vec<u8> {
+    let translated = bytes
+        .iter()
+        .enumerate()
+        .all(|(i, &byte)| byte != b'\n' || (i > 0 && bytes[i - 1] == b'\r'));
+    if !translated {
+        return bytes;
+    }
     let mut out = Vec::with_capacity(bytes.len());
     for (i, &byte) in bytes.iter().enumerate() {
         if byte == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
@@ -270,10 +328,36 @@ impl DeviceLine {
         self.words.iter().map(String::as_str)
     }
 
-    /// The length of the line the phone's shell reads: the words and a space between each two.
-    pub(crate) fn bytes(&self) -> usize {
-        self.words.iter().map(String::len).sum::<usize>() + self.words.len().saturating_sub(1)
+    /// The length of the line as it is sent: the words and a space between each two, with the
+    /// quoting Windows' command line adds to each word on Windows ([`windows_quoting`]).
+    pub(crate) fn sent_bytes(&self) -> usize {
+        let word = |w: &String| w.len() + if cfg!(windows) { windows_quoting(w) } else { 0 };
+        self.words.iter().map(word).sum::<usize>() + self.words.len().saturating_sub(1)
     }
+}
+
+/// The bytes Windows' command line adds to `word` when a program is started with it (Rust's
+/// standard library quotes each argument for the Microsoft C runtime's rules): a `\` before
+/// each `"` and one more for each backslash just before it; and, for a word with a space or a
+/// tab (or none at all), the two quotes around it and the backslashes at its end once more.
+pub(crate) fn windows_quoting(word: &str) -> usize {
+    let quoted = word.is_empty() || word.contains([' ', '\t']);
+    let mut added = if quoted { 2 } else { 0 };
+    let mut backslashes = 0;
+    for byte in word.bytes() {
+        match byte {
+            b'\\' => backslashes += 1,
+            b'"' => {
+                added += backslashes + 1;
+                backslashes = 0;
+            }
+            _ => backslashes = 0,
+        }
+    }
+    if quoted {
+        added += backslashes;
+    }
+    added
 }
 
 /// `value` as one word for the phone's shell (a POSIX shell: `sh` on Android): as it is when
@@ -317,17 +401,75 @@ mod tests {
         assert_eq!(quote("a\nb"), "'a\nb'");
     }
 
+    /// Every value comes back from a POSIX `sh` as it was sent.
+    #[cfg(unix)]
+    #[test]
+    fn quoted_values_read_back_through_sh() {
+        let values = [
+            "plain",
+            "",
+            "a b",
+            "it's",
+            "''",
+            "$(echo no) `echo no` $HOME ${X:-y}",
+            r#"a"b\c\"#,
+            "tab\there",
+            "line\nbreak",
+            "çay 👋",
+            "-n",
+            "*",
+            "a=b",
+            "~",
+            "%s",
+            "!x",
+            "#c",
+            "a;b|c&d>e<f",
+        ];
+        let mut line = String::from(r"printf '%s\0'");
+        for value in values {
+            line.push(' ');
+            line.push_str(&quote(value));
+        }
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(line)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let read: Vec<&[u8]> = out.stdout.split(|byte| *byte == 0).collect();
+        // Each value ends with a NUL, so the last piece is empty.
+        assert_eq!(read.len(), values.len() + 1);
+        for (read, value) in read.iter().zip(values) {
+            assert_eq!(*read, value.as_bytes());
+        }
+    }
+
     #[test]
     fn a_line_counts_its_words_and_spaces() {
-        let line = DeviceLine::new("input").word("tap").number(10).arg("a b");
+        let line = DeviceLine::new("input").word("tap").number(10).arg("ab");
         assert_eq!(
             line.words().collect::<Vec<_>>(),
-            ["input", "tap", "10", "'a b'"]
+            ["input", "tap", "10", "ab"]
         );
-        assert_eq!(line.bytes(), "input tap 10 'a b'".len());
+        assert_eq!(line.sent_bytes(), "input tap 10 ab".len());
         assert_eq!(line.program(), "input");
         let argv = DeviceLine::from_argv(&["ls".to_owned(), String::new()]);
         assert_eq!(argv.words().collect::<Vec<_>>(), ["ls", "''"]);
+    }
+
+    #[test]
+    fn windows_quoting_is_counted_on_windows() {
+        assert_eq!(windows_quoting("plain"), 0);
+        assert_eq!(windows_quoting("a\"b"), 1);
+        assert_eq!(windows_quoting(r#"a\\"b"#), 3);
+        assert_eq!(windows_quoting("a b"), 2);
+        assert_eq!(windows_quoting(r"a b\\"), 4);
+        assert_eq!(windows_quoting(""), 2);
+        // 5 000 `"` in one word: quoted for the phone it stays near 5 000 bytes, and Windows
+        // writes each as `\"`.
+        let line = DeviceLine::from_argv(&["\"".repeat(5000)]);
+        let expected = if cfg!(windows) { 10_002 } else { 5002 };
+        assert_eq!(line.sent_bytes(), expected);
     }
 
     #[test]
@@ -336,6 +478,9 @@ mod tests {
         // The phone printed `a\r\nb\n`; Windows' adb wrote `a\r\r\nb\r\n`.
         assert_eq!(without_added_crs(b"a\r\r\nb\r\n".to_vec()), b"a\r\nb\n");
         assert_eq!(without_added_crs(b"a\rb\r".to_vec()), b"a\rb\r");
+        // A LF without its CR: not written in text mode, so kept.
+        assert_eq!(without_added_crs(b"a\r\nb\n".to_vec()), b"a\r\nb\n");
+        assert_eq!(without_added_crs(b"\n".to_vec()), b"\n");
     }
 
     #[test]
@@ -351,8 +496,17 @@ mod tests {
         let adb = SystemAdb::new(std::env::temp_dir().join("no-such-dir-jdb").join("adb"));
         assert_eq!(adb.devices().await, Err(AdbError::NotFound));
         assert_eq!(
-            adb.run("serial", &["shell", "true"]).await,
+            adb.run("serial", &["shell", "true"], MAX_READ_BYTES).await,
             Err(AdbError::NotFound)
         );
+    }
+
+    #[tokio::test]
+    async fn output_is_kept_up_to_its_cap() {
+        let bytes = vec![7u8; 200_000];
+        let kept = read_capped(Some(&bytes[..]), 1000).await.unwrap();
+        assert_eq!(kept, vec![7u8; 1000]);
+        let all = read_capped(Some(&bytes[..]), MAX_READ_BYTES).await.unwrap();
+        assert_eq!(all.len(), bytes.len());
     }
 }

@@ -696,7 +696,7 @@ What the loop (D2-T1) asks of the driver:
 ### Task D3-T1: phone card, pairing, command log
 
 **Files:** `rust/panel/src/api/devices.ts`, `rust/panel/src/pages/capabilities/PhoneCard.tsx` (+ `.test.tsx`), wiring in the Capabilities page's Devices tab, i18n `en.json`/`tr.json`.
-Card: platform, model, OS, status with heartbeat age, bridge version, features (Unicode yes/no with the ADBKeyBoard hint), last 20 commands (kind, status, time; expand to args/result), "Pair a bridge" (issues an API key with exactly `devices.bridge` via the existing API-key use case, shown once, with the three install steps).
+Card: platform, model, OS, status with heartbeat age, bridge version, features (Unicode yes/no with the hint "install **and enable** ADBKeyBoard": the bridge reports `text.unicode` only when it is both installed and enabled as an input method), last 20 commands (kind, status, time; expand to args/result), "Pair a bridge" (issues an API key with exactly `devices.bridge` via the existing API-key use case, shown once, with the three install steps).
 - [ ] **Tests first:** `renders_phone_facts_and_status`, `unicode_hint_when_feature_missing`, `pairing_shows_key_once`, `command_log_expands_args`.
 - [ ] `pnpm --dir rust/panel test`, typecheck, build; **commit**.
 
@@ -712,6 +712,10 @@ Card: platform, model, OS, status with heartbeat age, bridge version, features (
 
 - [ ] Emulator `jeeta_test` (`emulator.exe -avd jeeta_test -no-window -gpu swiftshader_indirect -port 5554`) + bridge against **staging** with a `devices.bridge` key; via MCP on staging: `devices.list` → `observe` → `tap_on` → `text` (ASCII) → `shell ["getprop","ro.product.model"]` → `screenshot` → `pull_file`; each appears in the ledger with its args.
 - [ ] Real Android phone over USB on the owner's PC: same sequence; Unicode text with ADBKeyBoard installed (owner approves the APK download).
+- [ ] Checks on the Redmi 10C (Android 13, MIUI 14) that D2-T2 could not make, since it ran read-only captures only:
+  - Recapture `dumpsys input_method` right after `ime set com.android.adbkeyboard/.AdbIME` with a text field focused, a few times in quick succession. Confirm that the driver's bind check (`commands::bound_to_a_field`: `mCurMethodId`, the manager's `mCurId=… mBoundToMethod=true`, the client's `mBindSequence=… mCurId=…`, a served connection) passes only once a broadcast types, and replace the hand-edited fixtures `input_method_{adbime_unbound,in_between,bound}.txt` with the captures (scrubbed).
+  - `launch_app` (`monkey -p … 1`): confirm that MIUI's `theme_compatibility.xml` stack trace, if `monkey` prints it, does not fail the command (the driver ignores that trace; seen so far from `uiautomator` only).
+  - `observe`: confirm `uiautomator dump /data/local/tmp/jeeta_ui.xml` writes there (the folder is the shell user's, mode 771, as read in D2-T2) and that the file is gone after the observation.
 - [ ] Manual Windows stop checks on the owner's PC. These cover what CI can't test, because `unsafe_code = "forbid"` rules out `GenerateConsoleCtrlEvent`:
   - Ctrl+C during a long command: the "Ctrl+C: the bridge stops" line, exit code 0, and the cut-off `bridge_error` result in the ledger.
   - Closing the console window during a command: the result is posted within `HURRIED_GRACE` (2 s).
