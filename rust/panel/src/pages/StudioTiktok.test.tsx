@@ -153,6 +153,21 @@ const answers = (awaiting = true, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+/** Answers for the slot passed on its screen (no attempt yet), scheduled `offset` ms from now. */
+const approvedIn = (offset: number, extra: Record<string, unknown> = {}) => {
+  const approved = { ...slot, scheduled_at: new Date(Date.now() + offset).toISOString() };
+  const base = overview(false);
+  return answers(false, {
+    'GET /api/studio/overview': {
+      ...base,
+      slots: [approved],
+      today: { ...base.today, slots: [{ slot: approved, overdue: offset < 0 }] },
+    },
+    'GET /api/studio/slots/s1': { ...detail(), slot: approved },
+    ...extra,
+  });
+};
+
 async function postingScreen() {
   const card = await screen.findByTestId('today-s1');
   return within(card).findByRole('form', { name: "TikTok'ta paylaş" });
@@ -383,6 +398,82 @@ describe('TikTok posting screen', () => {
       ),
     ).toBeInTheDocument();
     expect(within(card).queryByRole('form', { name: "TikTok'ta paylaş" })).not.toBeInTheDocument();
+  });
+
+  it('a_passed_post_waits_for_its_time_until_the_time_has_passed', async () => {
+    mockFetch(approvedIn(60 * 60_000));
+    renderAt('/studio');
+    const card = await screen.findByTestId('today-s1');
+    expect(await within(card).findByText('Paylaşım durumu: planlanan saati bekliyor')).toBeInTheDocument();
+  });
+
+  it('a_passed_post_whose_time_has_passed_is_being_sent_not_waiting', async () => {
+    mockFetch(approvedIn(-60 * 60_000));
+    renderAt('/studio');
+    const card = await screen.findByTestId('today-s1');
+    expect(
+      await within(card).findByText("Paylaşım durumu: planlanan saat geçti; TikTok'a gönderiliyor…"),
+    ).toBeInTheDocument();
+    expect(within(card).queryByText('Paylaşım durumu: planlanan saati bekliyor')).not.toBeInTheDocument();
+  });
+
+  it('a_passed_draft_whose_time_has_passed_is_being_sent_to_the_drafts', async () => {
+    mockFetch(
+      approvedIn(-60 * 60_000, {
+        'GET /api/studio/slots/s1/tiktok/metrics': {
+          post: null,
+          metrics: null,
+          source: null,
+          read_at: null,
+          draft: true,
+        },
+      }),
+    );
+    renderAt('/studio');
+    const card = await screen.findByTestId('today-s1');
+    expect(
+      await within(card).findByText(
+        'Paylaşım durumu: planlanan saat geçti; TikTok taslaklarınıza gönderiliyor…',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('a_failed_post_says_why_and_not_that_it_is_being_processed', async () => {
+    mockFetch(
+      answers(false, {
+        'GET /api/studio/overview': {
+          ...overview(false),
+          today: {
+            ...overview(false).today,
+            blockers: [
+              {
+                target: { slot: 's1' },
+                reason: 'publish_permanent',
+                next_action: 'review_publication_duplicate_risk',
+              },
+            ],
+          },
+        },
+        'GET /api/studio/slots/s1': detail([
+          {
+            state: 'failed',
+            failure_reason:
+              'permanent: tiktok: HTTP 403 unaudited_client_can_only_post_to_private_accounts',
+          },
+        ]),
+      }),
+    );
+    renderAt('/studio');
+    const card = await screen.findByTestId('today-s1');
+    expect(await within(card).findByText(/^Paylaşım durumu: yayınlanamadı/)).toBeInTheDocument();
+    expect(
+      within(card).queryByText(
+        'Yayınlandıktan sonra paylaşımın işlenip TikTok profilinde görünmesi birkaç dakika sürebilir.',
+      ),
+    ).not.toBeInTheDocument();
+    // Never sent again: Today says so and offers its way out.
+    expect(within(card).getByText(/Jeeta bu paylaşımı yeniden göndermez/)).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'İçeriği iptal et' })).toBeInTheDocument();
   });
 
   it('shows_the_accounts_counters_and_recent_videos_under_its_name', async () => {

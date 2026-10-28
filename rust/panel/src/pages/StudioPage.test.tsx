@@ -337,6 +337,62 @@ it("slot_detail_explains_a_failed_publication_in_the_owner's_words", async () =>
   );
 });
 
+/** Answers for s1 whose publication failed: it stays Ready, and is never sent again. */
+const failed = (extra: Record<string, unknown> = {}) => ({
+  ...answers,
+  'GET /api/studio/overview': {
+    ...overview,
+    today: {
+      ...overview.today,
+      approvals: [],
+      blockers: [
+        {
+          target: { slot: 's1' },
+          reason: 'publish_permanent',
+          next_action: 'review_publication_duplicate_risk',
+        },
+      ],
+    },
+  },
+  'GET /api/studio/slots/s1': {
+    ...(answers['GET /api/studio/slots/s1'] as Record<string, unknown>),
+    attempts: [{ state: 'failed', failure_reason: 'permanent: x: HTTP 402 CreditsDepleted: no credits' }],
+  },
+  ...extra,
+});
+
+it('a_failed_publication_is_not_sent_again_and_today_offers_to_cancel_it', async () => {
+  const calls = mockFetch(failed({ 'POST /api/studio/slots/s1/cancel': {} }));
+  renderAt('/studio');
+  const user = userEvent.setup();
+  const card = await screen.findByTestId('today-s1');
+  expect(
+    within(card).getByText("Jeeta bu paylaşımı yeniden göndermez. Bugün'den kaldırmak için iptal edin."),
+  ).toBeInTheDocument();
+  await user.type(within(card).getByLabelText('İptal nedeni'), 'Kredi bitti');
+  await user.click(within(card).getByRole('button', { name: 'İçeriği iptal et' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path.endsWith('/cancel'))?.body).toEqual({
+      expected_revision: 1,
+      reason: 'Kredi bitti',
+    }),
+  );
+});
+
+it('a_sent_slot_opens_on_why_it_failed_and_its_cancel_not_on_new_content', async () => {
+  mockFetch(failed());
+  renderAt('/studio');
+  const user = userEvent.setup();
+  const card = await screen.findByTestId('today-s1');
+  await user.click(within(card).getByRole('button', { name: 'Kısa hikâyeler' }));
+  const editor = await within(card).findByTestId('slot-detail');
+  expect(await within(editor).findByRole('status')).toHaveTextContent('Yayınlanamadı: X API kredisi yok');
+  // New content would be a revision no run sends; cancelling is the way out, offered once.
+  expect(within(editor).queryByLabelText('İçerik metni')).not.toBeInTheDocument();
+  expect(within(editor).getByLabelText('İptal nedeni')).toBeInTheDocument();
+  expect(within(card).getAllByLabelText('İptal nedeni')).toHaveLength(1);
+});
+
 it('slot_detail_submits_and_cancels_the_current_revision', async () => {
   const calls = mockFetch({
     ...answers,
