@@ -31,7 +31,8 @@ fn studio_routes_have_exact_catalog_twins() {
             ("PUT", "/api/studio/policy"),
             ("POST", "/api/studio/approvals"),
             ("GET", "/api/studio/slots/{slot_id}/tiktok"),
-            ("POST", "/api/studio/slots/{slot_id}/tiktok")
+            ("POST", "/api/studio/slots/{slot_id}/tiktok"),
+            ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics")
         ]
     );
     for route in routes {
@@ -44,7 +45,11 @@ fn studio_routes_have_exact_catalog_twins() {
         );
     }
     // The TikTok posting screen is the panel's alone: no agent tool reaches it.
-    for id in ["studio.tiktok_posting", "studio.tiktok_post"] {
+    for id in [
+        "studio.tiktok_posting",
+        "studio.tiktok_post",
+        "studio.tiktok_metrics",
+    ] {
         let row = jt_app::catalog::find(id).unwrap();
         assert!(row.panel_only && row.mcp_tool.is_none(), "{id}");
     }
@@ -57,12 +62,14 @@ async fn tiktok_posting_routes_are_served_behind_the_strategy_gate() {
     let (cookie, _) = panel.register("tiktok@studio.test", "TikTok").await;
     let slot = jt_app::ports::studio::SlotId::new_v7();
     let path = format!("/api/studio/slots/{slot}/tiktok");
-    expect_error(
-        panel.get(&path, &cookie).await,
-        StatusCode::CONFLICT,
-        "STRATEGY_REQUIRED",
-    )
-    .await;
+    for read in [path.clone(), format!("{path}/metrics")] {
+        expect_error(
+            panel.get(&read, &cookie).await,
+            StatusCode::CONFLICT,
+            "STRATEGY_REQUIRED",
+        )
+        .await;
+    }
     let post = json!({
         "title": "Merhaba",
         "privacy_level": "SELF_ONLY",

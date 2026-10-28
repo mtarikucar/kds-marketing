@@ -229,6 +229,8 @@ pub static CATALOG: &[UseCase] = &[
     // The TikTok posting screen: a human's alone (TikTok's Content Sharing Guidelines), so no agent tool.
     panel_only("studio.tiktok_posting", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok"), Read),
     panel_only("studio.tiktok_post", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/tiktok"), Write),
+    // A published TikTok post's counters, beside the screen in the slot's detail.
+    panel_only("studio.tiktok_metrics", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"), Read),
     twin("inbox.pending", GateMode::Exempt, "jeeta.inbox.pending", ("GET", "/api/inbox/pending"), Read),
     twin("inbox.context", GateMode::Exempt, "jeeta.inbox.context", ("GET", "/api/inbox/conversations/{conversation_id}/context"), Read),
     twin("inbox.conversations.list", GateMode::Gated, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),

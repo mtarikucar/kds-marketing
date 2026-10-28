@@ -32,8 +32,13 @@ const POST_M4_ADDED: [(&str, &str); 7] = [
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
-/// passes (TikTok's Content Sharing Guidelines), so no MCP tool.
-const POST_M4_PANEL_ONLY: [&str; 2] = ["studio.tiktok_posting", "studio.tiktok_post"];
+/// passes (TikTok's Content Sharing Guidelines), so no MCP tool, and its published post's
+/// counters.
+const POST_M4_PANEL_ONLY: [&str; 3] = [
+    "studio.tiktok_posting",
+    "studio.tiktok_post",
+    "studio.tiktok_metrics",
+];
 
 fn baseline(key: &str) -> BTreeSet<String> {
     let baseline: Value = serde_json::from_str(include_str!("fixtures/m3_surface.json")).unwrap();

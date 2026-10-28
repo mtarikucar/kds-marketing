@@ -128,7 +128,7 @@ pub async fn record(d: &Deps, m: Measurement) -> Result<bool, AppError> {
 fn invalid(e: StudioError) -> AppError {
     AppError::conflict(e.to_string())
 }
-async fn access(
+pub(crate) async fn access(
     d: &Deps,
     r: &mut dyn TenantRepos,
     target: HistoricalTarget,

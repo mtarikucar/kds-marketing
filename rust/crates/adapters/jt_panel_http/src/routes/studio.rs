@@ -47,6 +47,14 @@ pub async fn tiktok_posting(
 ) -> Result<Json<tiktok::TiktokPostingOut>, ApiError> {
     Ok(Json(tiktok::tiktok_posting(&s.deps, &ctx, id).await?))
 }
+pub async fn tiktok_metrics(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<SlotId>,
+    ApiQuery(_): ApiQuery<work::EmptyInput>,
+) -> Result<Json<tiktok::TiktokMetricsOut>, ApiError> {
+    Ok(Json(tiktok::tiktok_metrics(&s.deps, &ctx, id).await?))
+}
 pub async fn tiktok_post(
     State(s): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,

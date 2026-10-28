@@ -63,6 +63,7 @@ pub const VIDEO_INIT: &str = "/api/v2/post/publish/video/init/";
 pub const CONTENT_INIT: &str = "/api/v2/post/publish/content/init/";
 pub const STATUS: &str = "/api/v2/post/publish/status/fetch/";
 pub const VIDEO_QUERY: &str = "/api/v2/video/query/";
+pub const VIDEO_LIST: &str = "/api/v2/video/list/";
 pub const UPLOAD: &str = "/upload/video/";
 
 /// The credential of the tests: valid for 20 hours (not yet due for renewal), with a refresh

@@ -53,6 +53,7 @@
 //! | a post's status ([`Publisher::resolve`]) | `POST {api}/v2/post/publish/status/fetch/ {publish_id}` | `video.publish` |
 //! | a post's counters | `POST {api}/v2/video/query/?fields=id,like_count,comment_count,share_count,view_count {filters: {video_ids: [id]}}` | `video.list` |
 //! | the account's counters | `GET {api}/v2/user/info/?fields=follower_count,following_count,likes_count,video_count` | `user.info.stats` |
+//! | the account's recent public videos ([`InsightsReader::recent_posts`]) | `POST {api}/v2/video/list/?fields=id,title,video_description,cover_image_url,share_url,create_time,like_count,comment_count,share_count,view_count {max_count}` | `video.list` |
 //!
 //! The username is not read from `/v2/user/info/`: its `username` field needs `user.info.profile`,
 //! which the app does not ask for (<https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info>);
@@ -158,7 +159,11 @@
 //! **Counters.** Kept under TikTok's own names, whole numbers only: a post's `like_count`,
 //! `comment_count`, `share_count`, `view_count`; the account's `follower_count`,
 //! `following_count`, `likes_count`, `video_count`. A post is named by its video id (digits); a
-//! receipt that kept its publish id has none to read.
+//! receipt that kept its publish id has none to read. The recent videos are one page of the
+//! video list (TikTok lists public videos only, newest first, at most [`MAX_LISTED_VIDEOS`]):
+//! each its id, title (its description when it has none, cut to 150 characters), cover and
+//! page (https URLs only, for the browser: never fetched) and posting time, with the post's
+//! counters.
 //!
 //! **The probe** reads `GET /v2/user/info/` with the credential and names its `open_id` as
 //! `facts.account_id` (the credential's own identity, never `public["external_id"]`), with its
@@ -183,6 +188,7 @@
 //! [`PublishResolution::Failed`]: jt_app::ports::connectors::PublishResolution::Failed
 //! [`PublishResolution::Pending`]: jt_app::ports::connectors::PublishResolution::Pending
 //! [`InsightsReader`]: jt_app::ports::connectors::InsightsReader
+//! [`InsightsReader::recent_posts`]: jt_app::ports::connectors::InsightsReader::recent_posts
 //! [`ConnectorError`]: jt_connector::ConnectorError
 //! [`Credential::OAuth`]: jt_connector::Credential::OAuth
 
@@ -260,6 +266,9 @@ pub const MAX_DESCRIPTION_UNITS: usize = 4000;
 
 /// The most photos one post carries.
 pub const MAX_PHOTOS: usize = 35;
+
+/// The most videos one page of the video list holds (TikTok's `max_count` maximum).
+pub const MAX_LISTED_VIDEOS: u32 = 20;
 
 /// How many times a read is tried in all when no answer arrives (writes: once).
 pub const READ_ATTEMPTS: u32 = 2;

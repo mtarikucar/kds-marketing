@@ -219,7 +219,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 153);
+    assert_eq!(CATALOG.len(), 154);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG
