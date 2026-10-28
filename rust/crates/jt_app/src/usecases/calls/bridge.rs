@@ -2,7 +2,11 @@
 //! sidecar that is the workspace's phone line for agent calls registers itself every
 //! [`HEARTBEAT_S`] seconds ([`register`], its heartbeat), takes the commands queued for its calls
 //! ([`commands`], a long-poll of at most [`MAX_WAIT_S`] seconds) and reports what happened on them
-//! ([`events`]). The catalog serves these to the bridge only: no MCP tool, no panel session.
+//! ([`events`]). The catalog serves these to the bridge only: no MCP tool, no panel session. What
+//! it does as every bridge does (who may call as it, its heartbeat, its health, its long-poll) is
+//! the bridge kernel's ([`crate::usecases::bridges::kernel`]), with [`VOICE_BRIDGE`] as its spec;
+//! what is the voice bridge's own stays here: the facts it reports, its capability per extension,
+//! its command queue and its events.
 //!
 //! **Who.** The bridge calls with an API key issued with `calls.bridge` and nothing else
 //! ([`ctx_for_bridge`]); every use case here refuses any other caller, a person or an agent whose
@@ -22,8 +26,8 @@
 //! is not acknowledged (an event `command_done{id}`) within [`REDELIVER_AFTER`] of being taken is
 //! handed out again, so no command is lost; the bridge acts on a command id once, however often it
 //! is handed it. While none is due the poll waits: a command queued in this server wakes it at
-//! once (`CallSignals`), and it looks again at least every [`super::FALLBACK_TICK`] (what another
-//! instance queued, a lease running out).
+//! once (the calls' signals, `crate::ports::bridges::BridgeSignals`), and it looks again at least
+//! every [`kernel::FALLBACK_TICK`] (what another instance queued, a lease running out).
 //!
 //! **Events.** A batch is applied call by call, in each call's `bridge_seq` order, each event at
 //! most once by its `(bridge_call_id, bridge_seq)`: a retried batch changes nothing. An event is
@@ -42,26 +46,37 @@ use jt_calls::{BridgeEvent, CallCommandId, CallId, CallMode, CallState};
 use jt_capability::{
     Capability, CapabilityId, EffectiveStatus, NewCapability, StoredStatus, effective_status,
 };
-use jt_ledger::Actor;
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 
 use super::session::Pending;
-use super::{FALLBACK_TICK, extension_is_valid};
+use super::{extension_is_valid, signal_key};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::calls::QueuedCommand;
 use crate::ports::{CapabilityFilter, TenantRepos};
 use crate::usecases::api_keys::AgentPrincipal;
-use crate::usecases::capabilities::{append, locked, version_in_force};
+use crate::usecases::bridges::kernel::{self, Beat, BridgeSpec};
+use crate::usecases::capabilities::{append, version_in_force};
 use crate::usecases::{Deps, invalid};
 
 /// The kind of the bridge's capability.
 pub const VOICE_BRIDGE_KIND: &str = "voice_bridge";
+/// The voice bridge as the bridge kernel knows it: the system component `voice_bridge`, its key's
+/// one permission `calls.bridge`, a heartbeat every 15 seconds, and `calls.bridge.online` /
+/// `calls.bridge.offline` as its capability comes back and goes silent.
+pub const VOICE_BRIDGE: BridgeSpec = BridgeSpec {
+    component: "voice_bridge",
+    name: "voice bridge",
+    permission: Permission::CallsBridge,
+    heartbeat_s: 15,
+    online_action: "calls.bridge.online",
+    offline_action: "calls.bridge.offline",
+};
 /// How often the bridge registers, as its registration tells it.
-pub const HEARTBEAT_S: u32 = 15;
+pub const HEARTBEAT_S: u32 = VOICE_BRIDGE.heartbeat_s;
 /// The longest a poll for commands waits.
 pub use super::MAX_WAIT_S;
 /// How long a command handed out stays the bridge's before it is handed out again.
@@ -71,8 +86,6 @@ pub const MAX_COMMANDS: u32 = 20;
 /// The most events one batch carries.
 pub const MAX_EVENTS: usize = 100;
 
-/// The actor the bridge acts as.
-const COMPONENT: &str = "voice_bridge";
 /// How far before its arrival an event's own time is believed; an older one counts as this old.
 const MAX_EVENT_AGE: Duration = Duration::minutes(1);
 /// The longest id the bridge gives a call.
@@ -90,34 +103,15 @@ const MAX_FACT_CHARS: usize = 128;
 
 /// The context of a call the voice bridge makes at `now` with the key behind `p`: the system
 /// component `voice_bridge` in the key's workspace, with the key's effective scopes, no role and
-/// no agent connection.
+/// no agent connection ([`kernel::ctx_for`]).
 pub fn ctx_for_bridge(p: &AgentPrincipal, now: OffsetDateTime) -> Ctx {
-    Ctx {
-        workspace_id: p.workspace_id,
-        actor: Actor::System {
-            component: COMPONENT.to_owned(),
-        },
-        permissions: p.permissions.clone(),
-        role_key: None,
-        now,
-        agent_connection_id: None,
-    }
+    kernel::ctx_for(&VOICE_BRIDGE, p, now)
 }
 
 /// `Ok` for the bridge's own context: `calls.bridge` (else `FORBIDDEN` naming it), held alone by
 /// the bridge's component (else `FORBIDDEN` with `details.reason = "bridge_key_only"`).
 fn authorize(ctx: &Ctx) -> Result<(), AppError> {
-    ctx.require(Permission::CallsBridge)?;
-    let bridge = matches!(&ctx.actor, Actor::System { component } if component == COMPONENT);
-    if bridge && ctx.permissions.len() == 1 {
-        return Ok(());
-    }
-    Err(AppError {
-        code: ErrorCode::Forbidden,
-        message: "only the voice bridge's own key, holding calls.bridge alone, reaches the bridge"
-            .into(),
-        details: json!({ "reason": "bridge_key_only" }),
-    })
+    kernel::require_bridge(&VOICE_BRIDGE, ctx)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -272,35 +266,17 @@ pub async fn register(
             true,
         ),
     };
-    let mut capability = locked(r.as_mut(), id).await?;
-    let before = effective_status(&capability, ctx.now);
-    capability.status = StoredStatus::Verified;
-    capability.last_verified_at = Some(ctx.now);
-    capability.updated_at = ctx.now;
-    match capability.connector_public.as_object_mut() {
-        Some(public) => {
-            public.insert("bridge".into(), facts);
-        }
-        None => capability.connector_public = json!({ "bridge": facts }),
-    }
-    r.capabilities().update(capability.clone()).await?;
-    if before != EffectiveStatus::Verified {
-        append(
-            r.as_mut(),
-            ctx,
-            "calls.bridge.online",
-            "capability",
-            id,
-            in_force,
-            json!({
-                "capability_id": id,
-                "extension": input.extension,
-                "version": input.version,
-                "declared": declared,
-            }),
-        )
-        .await?;
-    }
+    let beat = Beat {
+        capability_id: id,
+        facts: Map::from_iter([("bridge".to_owned(), facts)]),
+        online: json!({
+            "capability_id": id,
+            "extension": input.extension,
+            "version": input.version,
+            "declared": declared,
+        }),
+    };
+    let capability = kernel::heartbeat(r.as_mut(), ctx, &VOICE_BRIDGE, in_force, beat).await?;
     r.commit().await?;
     Ok(RegisterOut {
         capability_id: id,
@@ -442,36 +418,35 @@ pub async fn commands(
         let mut r = deps.uow.tenant(ctx.workspace_id).await?;
         bridge_of(r.as_mut(), query.extension.as_deref()).await?
     };
-    let started = tokio::time::Instant::now();
-    loop {
-        // Watching before reading: a command queued after the read still wakes the wait.
-        let watch = deps.call_signals.watch(ctx.workspace_id);
-        let waited = started.elapsed();
-        let now = ctx.now + Duration::try_from(waited).unwrap_or(Duration::ZERO);
-        let taken = {
-            let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-            let taken = r
-                .calls()
-                .take_commands(capability, now, now - REDELIVER_AFTER, MAX_COMMANDS)
-                .await?;
-            r.commit().await?;
-            taken
-        };
-        if !taken.is_empty() {
-            return Ok(CommandsOut {
-                commands: taken.into_iter().map(BridgeCommand::from).collect(),
-                timed_out: false,
-            });
-        }
-        if waited >= wait {
-            return Ok(CommandsOut {
-                commands: Vec::new(),
-                timed_out: true,
-            });
-        }
-        // Woken, or the fallback tick: look again either way.
-        let _ = tokio::time::timeout(FALLBACK_TICK.min(wait - waited), watch).await;
-    }
+    // Each read leases as of when it is made: `ctx.now` plus the time waited so far.
+    let taken = kernel::wait_for(
+        deps.bridge_signals.as_ref(),
+        signal_key(ctx.workspace_id),
+        wait,
+        move |waited| {
+            Box::pin(async move {
+                let now = ctx.now + Duration::try_from(waited).unwrap_or(Duration::ZERO);
+                let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+                let taken = r
+                    .calls()
+                    .take_commands(capability, now, now - REDELIVER_AFTER, MAX_COMMANDS)
+                    .await?;
+                r.commit().await?;
+                Ok::<_, AppError>((!taken.is_empty()).then_some(taken))
+            })
+        },
+    )
+    .await?;
+    Ok(match taken {
+        Some(taken) => CommandsOut {
+            commands: taken.into_iter().map(BridgeCommand::from).collect(),
+            timed_out: false,
+        },
+        None => CommandsOut {
+            commands: Vec::new(),
+            timed_out: true,
+        },
+    })
 }
 
 /// The live bridge of `extension`, or the workspace's only live bridge (see [`commands`]).
@@ -655,70 +630,6 @@ async fn apply_call(
     }
     r.calls().update(session, ctx.now).await?;
     r.commit().await?;
-    deps.call_signals.notify(ctx.workspace_id);
+    deps.bridge_signals.notify(signal_key(ctx.workspace_id));
     Ok(())
-}
-
-// ---------------------------------------------------------------------------------------------
-// Health
-// ---------------------------------------------------------------------------------------------
-
-/// Whether bridge `c` still reads verified although its last heartbeat is older than its kind's
-/// `unreachable_after` (or it has none).
-fn is_silent(c: &Capability, now: OffsetDateTime) -> bool {
-    let Some(beat) = c.kind().and_then(|k| k.heartbeat()) else {
-        return false;
-    };
-    c.status == StoredStatus::Verified
-        && c.last_verified_at
-            .is_none_or(|at| now - at > beat.unreachable_after)
-}
-
-/// The workspace's bridges that went silent before `now` (see [`is_silent`]), for the
-/// `voice_bridge_health` job.
-pub(crate) async fn silent_bridges(
-    r: &mut dyn TenantRepos,
-    now: OffsetDateTime,
-) -> Result<Vec<CapabilityId>, AppError> {
-    Ok(live_bridges(r)
-        .await?
-        .into_iter()
-        .filter(|c| is_silent(c, now))
-        .map(|c| c.id)
-        .collect())
-}
-
-/// Marks bridge `id` unreachable at `ctx.now` while it is still silent, writing
-/// `calls.bridge.offline` (`capability_id`, `last_seen_at`: its last heartbeat); `false` when it
-/// registered (or changed otherwise) meanwhile.
-pub(crate) async fn mark_offline(
-    deps: &Deps,
-    ctx: &Ctx,
-    id: CapabilityId,
-) -> Result<bool, AppError> {
-    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    let capability = locked(r.as_mut(), id).await?;
-    if capability.kind_key != VOICE_BRIDGE_KIND || !is_silent(&capability, ctx.now) {
-        return Ok(false);
-    }
-    r.capabilities()
-        .set_status(id, StoredStatus::Unreachable, ctx.now)
-        .await?;
-    let in_force = version_in_force(r.as_mut()).await?;
-    let last_seen_at = capability.last_verified_at.and_then(|at| {
-        at.format(&time::format_description::well_known::Rfc3339)
-            .ok()
-    });
-    append(
-        r.as_mut(),
-        ctx,
-        "calls.bridge.offline",
-        "capability",
-        id,
-        in_force,
-        json!({ "capability_id": id, "last_seen_at": last_seen_at }),
-    )
-    .await?;
-    r.commit().await?;
-    Ok(true)
 }

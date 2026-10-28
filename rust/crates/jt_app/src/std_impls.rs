@@ -1,5 +1,5 @@
 //! The production implementations of the service ports: the system clock, UUIDv7 ids, random
-//! tokens, Argon2id password hashing and the calls' in-process signals ([`LocalCallSignals`]),
+//! tokens, Argon2id password hashing and the bridges' in-process signals ([`LocalBridgeSignals`]),
 //! plus the stand-ins for a process without provider apps or adapters ([`NoPlatformApps`],
 //! [`EmptyConnectorRegistry`]). Tests use the deterministic fakes of `jt_testkit`.
 
@@ -16,10 +16,9 @@ use tokio::sync::{Semaphore, watch};
 use uuid::Uuid;
 
 use jt_connector::Provider;
-use jt_tenancy::WorkspaceId;
 
 use crate::error::AppError;
-use crate::ports::calls::{CallSignals, CallWatch};
+use crate::ports::bridges::{BridgeSignals, BridgeWatch, SignalKey};
 use crate::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
     InstagramApp, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, MetaApp,
@@ -155,22 +154,22 @@ impl PasswordHasher for Argon2Hasher {
     }
 }
 
-/// [`CallSignals`] within this process: one `tokio::sync::watch` channel per workspace being
+/// [`BridgeSignals`] within this process: one `tokio::sync::watch` channel per key being
 /// watched, its value counting the signals. A watch subscribes before its poll reads, so it sees
 /// any signal sent after that; a channel nobody watches any more is dropped at the next signal.
 /// Process-local like `OpsSignals`: with several server instances a signal reaches only this
 /// one's polls, and the others find what was committed at their next read.
 #[derive(Debug, Default)]
-pub struct LocalCallSignals {
-    channels: Mutex<HashMap<WorkspaceId, watch::Sender<u64>>>,
+pub struct LocalBridgeSignals {
+    channels: Mutex<HashMap<SignalKey, watch::Sender<u64>>>,
 }
 
-impl CallSignals for LocalCallSignals {
-    fn watch(&self, ws: WorkspaceId) -> CallWatch {
+impl BridgeSignals for LocalBridgeSignals {
+    fn watch(&self, key: SignalKey) -> BridgeWatch {
         let mut rx = {
             let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
             channels
-                .entry(ws)
+                .entry(key)
                 .or_insert_with(|| watch::channel(0).0)
                 .subscribe()
         };
@@ -181,11 +180,11 @@ impl CallSignals for LocalCallSignals {
         })
     }
 
-    fn notify(&self, ws: WorkspaceId) {
+    fn notify(&self, key: SignalKey) {
         let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(tx) = channels.get(&ws) {
+        if let Some(tx) = channels.get(&key) {
             if tx.receiver_count() == 0 {
-                channels.remove(&ws);
+                channels.remove(&key);
             } else {
                 tx.send_modify(|n| *n = n.wrapping_add(1));
             }
@@ -279,6 +278,7 @@ impl ConnectorRegistry for EmptyConnectorRegistry {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use jt_tenancy::WorkspaceId;
     use time::Duration;
 
     use super::*;
@@ -406,36 +406,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn call_signals_wake_the_watches_begun_before_them_only_in_their_workspace() {
+    async fn bridge_signals_wake_the_watches_begun_before_them_only_on_their_key() {
         use std::time::Duration as StdDuration;
-        let signals = LocalCallSignals::default();
+        let signals = LocalBridgeSignals::default();
+        let key = |workspace_id, topic| SignalKey {
+            workspace_id,
+            topic,
+        };
         let (ws, other) = (WorkspaceId::new_v7(), WorkspaceId::new_v7());
+        let calls = key(ws, "calls");
         // A signal sent after the watch began, before it is awaited, is not lost.
-        let watch = signals.watch(ws);
-        signals.notify(ws);
+        let watch = signals.watch(calls);
+        signals.notify(calls);
         tokio::time::timeout(StdDuration::from_secs(1), watch)
             .await
             .expect("woken");
-        // Another workspace's signal wakes nothing here; a signal sent before the watch began
-        // does not count.
-        signals.notify(ws);
-        let watch = signals.watch(ws);
-        signals.notify(other);
+        // Another workspace's signal, or another topic's in the same workspace, wakes nothing
+        // here; a signal sent before the watch began does not count.
+        signals.notify(calls);
+        let watch = signals.watch(calls);
+        signals.notify(key(other, "calls"));
+        signals.notify(key(ws, "other"));
         assert!(
             tokio::time::timeout(StdDuration::from_millis(50), watch)
                 .await
                 .is_err()
         );
-        // Several watches wake together; once none is left the workspace's channel is dropped.
-        let (a, b) = (signals.watch(ws), signals.watch(ws));
-        signals.notify(ws);
+        // Several watches wake together; once none is left the key's channel is dropped.
+        let (a, b) = (signals.watch(calls), signals.watch(calls));
+        signals.notify(calls);
         tokio::time::timeout(StdDuration::from_secs(1), async {
             a.await;
             b.await;
         })
         .await
         .expect("both woken");
-        signals.notify(ws);
+        signals.notify(calls);
         assert!(signals.channels.lock().unwrap().is_empty());
     }
 

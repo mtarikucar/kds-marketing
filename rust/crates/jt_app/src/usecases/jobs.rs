@@ -46,6 +46,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use super::Deps;
+use super::bridges::kernel::{self, BridgeSpec};
 use super::capabilities::{append, locked, version_in_force};
 use super::connector::{
     RECONNECT_REQUIRED, object, open_credential, probe_locked, reconnect_required, seal_credential,
@@ -952,18 +953,32 @@ fn verified_lines(capabilities: &[Capability]) -> Vec<CapabilityId> {
 
 /// Marks unreachable, in every workspace, each voice bridge that still reads verified although it
 /// has not registered for its heartbeat's `unreachable_after` (ten minutes), writing
-/// `calls.bridge.offline` once per bridge (`calls::bridge`); its next registration verifies it
-/// again. A minute after its last heartbeat it already reads stale, without this job. `touched`
-/// counts the silent bridges found, `changed` those marked, `skipped` those that registered
-/// meanwhile.
+/// `calls.bridge.offline` once per bridge (the bridge kernel's
+/// [`kernel::mark_unreachable`], with `calls::bridge::VOICE_BRIDGE`); its next registration
+/// verifies it again. A minute after its last heartbeat it already reads stale, without this
+/// job. `touched` counts the silent bridges found, `changed` those marked, `skipped` those that
+/// registered meanwhile.
 pub async fn run_voice_bridge_health(deps: &Deps, now: OffsetDateTime) -> JobReport {
-    use super::calls::bridge;
+    use super::calls::bridge::{VOICE_BRIDGE, VOICE_BRIDGE_KIND};
     let job = Job::VoiceBridgeHealth;
+    run_bridge_health(deps, job, &VOICE_BRIDGE, VOICE_BRIDGE_KIND, now).await
+}
+
+/// Marks unreachable, in every workspace, each capability of kind `kind_key` that bridge `spec`
+/// keeps alive and that went silent ([`kernel::silent`]), each in a step of its own
+/// ([`kernel::mark_unreachable`]), as job `job`.
+async fn run_bridge_health(
+    deps: &Deps,
+    job: Job,
+    spec: &BridgeSpec,
+    kind_key: &'static str,
+    now: OffsetDateTime,
+) -> JobReport {
     let mut report = JobReport::default();
     for ws in workspaces(deps, job, EVERY, &mut report).await {
         let silent = async {
             let mut repos = deps.uow.tenant(ws).await?;
-            bridge::silent_bridges(repos.as_mut(), now).await
+            kernel::silent(repos.as_mut(), kind_key, now).await
         };
         let silent = match silent.await {
             Ok(silent) => silent,
@@ -976,7 +991,7 @@ pub async fn run_voice_bridge_health(deps: &Deps, now: OffsetDateTime) -> JobRep
         let ctx = system_ctx(job, ws, now);
         for id in silent {
             report.touched += 1;
-            match bridge::mark_offline(deps, &ctx, id).await {
+            match kernel::mark_unreachable(deps, &ctx, spec, kind_key, id).await {
                 Ok(true) => report.changed += 1,
                 Ok(false) => report.skipped += 1,
                 Err(e) => {

@@ -26,6 +26,7 @@ use jt_calls::{
 use jt_capability::{EffectiveStatus, effective_status};
 use time::OffsetDateTime;
 
+use super::signal_key;
 use crate::ctx::Ctx;
 use crate::error::AppError;
 use crate::ports::TenantRepos;
@@ -126,7 +127,7 @@ pub async fn tick(deps: &Deps, ctx: &Ctx, id: CallId) -> Result<bool, AppError> 
     }
     r.calls().update(session, now).await?;
     r.commit().await?;
-    deps.call_signals.notify(ctx.workspace_id);
+    deps.bridge_signals.notify(signal_key(ctx.workspace_id));
     Ok(true)
 }
 

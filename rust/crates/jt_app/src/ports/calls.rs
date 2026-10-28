@@ -1,40 +1,18 @@
 //! Call sessions, their turn log, the commands queued for the voice bridge and the workspace's
-//! call policy (spec §9), stored per tenant, and the signals that wake what long-polls them. The
-//! call records themselves live in `jt_calls` and are re-exported here, as the Studio records are
-//! from `ports::studio`.
+//! call policy (spec §9), stored per tenant; what long-polls them is woken by the bridges'
+//! signals ([`super::bridges`]). The call records themselves live in `jt_calls` and are
+//! re-exported here, as the Studio records are from `ports::studio`.
 pub use jt_calls::*;
-
-use std::future::Future;
-use std::pin::Pin;
 
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
 use jt_inbox::PersonId;
-use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
 
 use crate::error::AppError;
 
 /// The most sessions or turns one read returns.
 pub const MAX_CALL_PAGE: u32 = 200;
-
-/// What a long-poll awaits ([`CallSignals::watch`]): done once its workspace was signalled after
-/// the watch began.
-pub type CallWatch = Pin<Box<dyn Future<Output = ()> + Send>>;
-
-/// Wakes the long-polls of a workspace's calls (`calls.listen`, the voice bridge's commands) when
-/// something they wait for was committed: a turn appended, a command queued. A poll starts
-/// watching *before* it reads, so a signal sent between its read and its wait still wakes it.
-/// Signals are a hint, never the record: a poll reads the store again when woken, and also, at
-/// least every second, when nothing woke it (a signal sent by another server instance reaches
-/// none of this one's polls).
-pub trait CallSignals: Send + Sync {
-    /// A watch on workspace `ws`, done at the first [`CallSignals::notify`] of `ws` after this
-    /// call.
-    fn watch(&self, ws: WorkspaceId) -> CallWatch;
-    /// Wakes every watch on workspace `ws` begun before this call.
-    fn notify(&self, ws: WorkspaceId);
-}
 
 /// Which sessions [`CallRepo::list`] returns, newest first (`started_at`, then id).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

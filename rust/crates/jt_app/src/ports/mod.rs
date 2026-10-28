@@ -22,6 +22,7 @@
 //! [`connectors`].
 
 pub mod billing;
+pub mod bridges;
 pub mod calls;
 pub mod compliance;
 pub mod connectors;

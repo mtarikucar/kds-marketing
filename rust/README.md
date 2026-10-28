@@ -1941,8 +1941,8 @@ closing never reported played is taken for done after 60 s). Every end of an age
 caller's hangup, the timers, a transfer) is settled once: the journey's `CallMade{connected}`,
 the spend at the policy's tariff on the bridge's budget item, `calls.ended`; `calls.end` then
 records the outcome (`calls.outcome_recorded`). The long-polls (`calls.listen`, the bridge's
-commands) are woken at once by an in-process signal (`CallSignals`) and read again at least
-every second, so a second server instance only adds up to a second. The bridge's commands are
+commands) are woken at once by an in-process signal (`BridgeSignals`, on the calls' key) and read
+again at least every second, so a second server instance only adds up to a second. The bridge's commands are
 purged after 7 days (`purge_call_commands`, daily); erasing a person removes their calls'
 commands and the bridge's event notes, and empties their calls' plans.
 
@@ -1966,7 +1966,9 @@ to its bearer API key alone, a key issued with `calls.bridge` and nothing else (
 and every session cookie, is refused); no MCP tool reaches them. Its registration every 15
 seconds verifies its `voice_bridge` capability (reached like a device, verified only by this
 heartbeat): stale after 60 seconds, unreachable after 10 minutes (the `voice_bridge_health` job,
-every minute), listed as `voice_bridge_offline` pending work meanwhile.
+every minute), listed as `voice_bridge_offline` pending work meanwhile. The key check, the
+heartbeat, the health job's marking and the long-poll are the bridge kernel's
+(`jt_app::usecases::bridges::kernel`), which every bridge shares; the voice bridge is its first.
 
 | Use case | Panel | Risk | Notes |
 |---|---|---|---|
