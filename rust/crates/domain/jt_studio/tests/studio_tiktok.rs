@@ -26,6 +26,7 @@ fn creator() -> TiktokCreator {
 /// What the screen starts from: nothing chosen but the privacy (which has no default).
 fn post(privacy: &str) -> TiktokPost {
     TiktokPost {
+        mode: TiktokPostMode::DirectPost,
         title: "Bugünün menüsü #yemek".into(),
         privacy_level: privacy.into(),
         allow_comment: false,
@@ -318,6 +319,7 @@ fn refusals_read_as_stable_reasons() {
         ),
         (TiktokPostRefusal::VideoTooLong, "tiktok_video_too_long"),
         (TiktokPostRefusal::TitleTooLong, "tiktok_title_too_long"),
+        (TiktokPostRefusal::DraftSettings, "tiktok_draft_settings"),
     ] {
         assert_eq!(refusal.reason(), reason);
         assert_eq!(refusal.to_string(), reason);
@@ -336,6 +338,7 @@ fn a_choice_reads_back_strictly() {
     assert_eq!(
         json,
         serde_json::json!({
+            "mode": "direct_post",
             "title": "Bugünün menüsü #yemek",
             "privacy_level": "MUTUAL_FOLLOW_FRIENDS",
             "allow_comment": true,
@@ -350,9 +353,20 @@ fn a_choice_reads_back_strictly() {
         serde_json::from_value::<TiktokPost>(json.clone()).unwrap(),
         choice
     );
-    let mut extra = json;
+    let mut extra = json.clone();
     extra["auto_add_music"] = true.into();
     assert!(serde_json::from_value::<TiktokPost>(extra).is_err());
+    // A choice recorded before drafts existed was a direct post.
+    let mut before = json;
+    before.as_object_mut().unwrap().remove("mode");
+    assert_eq!(
+        serde_json::from_value::<TiktokPost>(before).unwrap().mode,
+        TiktokPostMode::DirectPost
+    );
+    assert_eq!(
+        serde_json::to_value(TiktokPostMode::Draft).unwrap(),
+        serde_json::json!("draft")
+    );
     assert_eq!(
         serde_json::to_value(TiktokMedia::Photos).unwrap(),
         serde_json::json!({ "kind": "photos" })
@@ -521,4 +535,90 @@ fn a_length_that_cannot_be_read_is_unknown() {
     ] {
         assert_eq!(upload.video_duration_ms(), None, "{upload:?}");
     }
+}
+
+/// A draft (the Content Posting API's upload, <https://developers.tiktok.com/doc/content-posting-api-reference-upload-video>)
+/// carries only what TikTok takes for it: nothing with a video, a caption with photos. Privacy,
+/// interactions and the commercial content disclosure are the Direct Post's.
+fn draft(title: &str) -> TiktokPost {
+    TiktokPost {
+        mode: TiktokPostMode::Draft,
+        title: title.into(),
+        ..post("")
+    }
+}
+
+#[test]
+fn a_draft_carries_only_what_tiktok_takes_for_it() {
+    // No privacy to choose, whatever the account offers.
+    let account = TiktokCreator {
+        privacy_level_options: vec![],
+        ..creator()
+    };
+    assert_eq!(draft("").check(&account, &video(30)), Ok(()));
+    assert_eq!(
+        draft("Bugünün menüsü #yemek").check(&account, &TiktokMedia::Photos),
+        Ok(())
+    );
+    // A video draft takes no caption: it is written in TikTok.
+    assert_eq!(
+        draft("Bugünün menüsü").check(&account, &video(30)),
+        Err(TiktokPostRefusal::DraftSettings)
+    );
+    for settings in [
+        TiktokPost {
+            privacy_level: "SELF_ONLY".into(),
+            ..draft("")
+        },
+        TiktokPost {
+            allow_comment: true,
+            ..draft("")
+        },
+        TiktokPost {
+            allow_duet: true,
+            ..draft("")
+        },
+        TiktokPost {
+            allow_stitch: true,
+            ..draft("")
+        },
+        TiktokPost {
+            disclose_commercial: true,
+            your_brand: true,
+            ..draft("")
+        },
+        TiktokPost {
+            branded_content: true,
+            ..draft("")
+        },
+    ] {
+        assert_eq!(
+            settings.check(&account, &video(30)),
+            Err(TiktokPostRefusal::DraftSettings),
+            "{settings:?}"
+        );
+        assert_eq!(
+            settings.check_postable(&account, &video(30)),
+            Err(TiktokPostRefusal::DraftSettings),
+            "{settings:?}"
+        );
+    }
+    // The account's own limits still hold.
+    let busy = TiktokCreator {
+        cannot_post: Some("spam_risk_user_banned_from_posting".into()),
+        ..creator()
+    };
+    assert_eq!(
+        draft("").check(&busy, &video(30)),
+        Err(TiktokPostRefusal::CannotPostNow)
+    );
+    assert_eq!(
+        draft("").check(&account, &video(601)),
+        Err(TiktokPostRefusal::VideoTooLong)
+    );
+    assert_eq!(
+        draft(&"a".repeat(MAX_TIKTOK_DESCRIPTION_UNITS + 1)).check(&account, &TiktokMedia::Photos),
+        Err(TiktokPostRefusal::TitleTooLong)
+    );
+    assert!(draft("").is_draft() && !post("SELF_ONLY").is_draft());
 }

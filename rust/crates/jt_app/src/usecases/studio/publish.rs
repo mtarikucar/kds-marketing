@@ -84,12 +84,13 @@ async fn request(
     let (text, media, link, privacy) = content(p, c);
     let (media_urls, media) = super::files::resolve_media(d, ws, media, &c.kind_key).await?;
     let out = match tiktok {
+        // A draft names no privacy: it is chosen in TikTok.
         Some(post) => PublishRequest {
             text: post.title.clone(),
             link: None,
             media_urls,
             media,
-            privacy: Some(post.privacy_level.clone()),
+            privacy: (!post.is_draft()).then(|| post.privacy_level.clone()),
             tiktok: Some(post.clone()),
         },
         None => PublishRequest {

@@ -5,7 +5,7 @@
 
 use jt_app::ports::connectors::{
     MediaUpload, PublishReceipt, PublishRequest, PublishResolution, TiktokCreator, TiktokMedia,
-    TiktokPost, TiktokPostFlags, TiktokPostRefusal,
+    TiktokPost, TiktokPostFlags, TiktokPostMode, TiktokPostRefusal,
 };
 use jt_connector::{ConnectorError, Credential};
 use jt_outbound::Method;
@@ -49,11 +49,10 @@ const PERMALINK_BASE: &str = "https://www.tiktok.com";
 
 /// The statuses of a post TikTok is still working on
 /// (<https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status>).
-const PENDING_STATUSES: &[&str] = &[
-    "PROCESSING_UPLOAD",
-    "PROCESSING_DOWNLOAD",
-    "SEND_TO_USER_INBOX",
-];
+const PENDING_STATUSES: &[&str] = &["PROCESSING_UPLOAD", "PROCESSING_DOWNLOAD"];
+
+/// Why a draft naming more than TikTok takes for it is refused.
+pub(crate) const DRAFT_SETTINGS: &str = "a draft carries only what TikTok takes for it: a video nothing but the file, photos their caption";
 
 /// `POST {api}/v2/post/publish/creator_info/query/`, what TikTok says about the account a post
 /// goes to (<https://developers.tiktok.com/doc/content-posting-api-reference-query-creator-info>):
@@ -260,14 +259,18 @@ fn plan(request: &PublishRequest) -> Result<Post<'_>, ConnectorError> {
     }
 }
 
-/// The posting screen's choice of `request`, its privacy one of [`PRIVACY_LEVELS`] as TikTok
-/// names them; `Permanent` without a choice ([`NO_CHOICE`]), without a privacy, or for another
-/// name. Nothing is defaulted.
+/// The posting screen's choice of `request`, a direct post's privacy one of [`PRIVACY_LEVELS`] as
+/// TikTok names them; `Permanent` without a choice ([`NO_CHOICE`]), or for a direct post without
+/// a privacy or with another name. Nothing is defaulted. A draft names no privacy (see
+/// [`refusal`]).
 fn choice_of(request: &PublishRequest) -> Result<&TiktokPost, ConnectorError> {
     let choice = request
         .tiktok
         .as_ref()
         .ok_or_else(|| ConnectorError::permanent(NO_CHOICE))?;
+    if choice.is_draft() {
+        return Ok(choice);
+    }
     if choice.privacy_level.trim().is_empty() {
         return Err(ConnectorError::permanent(
             "no privacy level was chosen on the posting screen",
@@ -318,6 +321,7 @@ fn refusal(
                 creator.max_video_post_duration_sec.unwrap_or_default()
             ))
         }
+        TiktokPostRefusal::DraftSettings => ConnectorError::permanent(DRAFT_SETTINGS),
         other => ConnectorError::permanent(format!("the post was refused: {other}")),
     }
 }
@@ -392,16 +396,32 @@ pub(crate) async fn publish(
     choice
         .check_postable(&creator, &media)
         .map_err(|e| refusal(e, choice, &creator, &media))?;
-    let flags = choice.flags(&creator);
-    let privacy = choice.privacy_level.as_str();
-    let external_id = match post {
-        Post::Video {
-            media,
-            mime,
-            title,
-            plan,
-        } => post_video(connector, token, &flags, privacy, media, &mime, title, plan).await?,
-        Post::Photos { urls, description } => {
+    let external_id = match (choice.mode, post) {
+        (
+            TiktokPostMode::Draft,
+            Post::Video {
+                media, mime, plan, ..
+            },
+        ) => draft_video(connector, token, media, &mime, plan).await?,
+        (TiktokPostMode::Draft, Post::Photos { urls, description }) => {
+            draft_photos(connector, token, urls, description).await?
+        }
+        (
+            TiktokPostMode::DirectPost,
+            Post::Video {
+                media,
+                mime,
+                title,
+                plan,
+            },
+        ) => {
+            let flags = choice.flags(&creator);
+            let privacy = choice.privacy_level.as_str();
+            post_video(connector, token, &flags, privacy, media, &mime, title, plan).await?
+        }
+        (TiktokPostMode::DirectPost, Post::Photos { urls, description }) => {
+            let flags = choice.flags(&creator);
+            let privacy = choice.privacy_level.as_str();
             post_photos(connector, token, &flags, privacy, urls, description).await?
         }
     };
@@ -449,14 +469,51 @@ async fn post_video(
     info.insert("disable_stitch".to_owned(), json!(flags.disable_stitch));
     let body = json!({
         "post_info": info,
-        "source_info": {
-            "source": "FILE_UPLOAD",
-            "video_size": plan.size,
-            "chunk_size": plan.chunk_size,
-            "total_chunk_count": plan.count,
-        },
+        "source_info": file_upload(plan),
     });
     let url = connector.api_url(&["v2", "post", "publish", "video", "init", ""], &[]);
+    upload_video(connector, token, url, body, media, mime, plan).await
+}
+
+/// A video's `FILE_UPLOAD` source: its size and how it is cut.
+fn file_upload(plan: ChunkPlan) -> Value {
+    json!({
+        "source": "FILE_UPLOAD",
+        "video_size": plan.size,
+        "chunk_size": plan.chunk_size,
+        "total_chunk_count": plan.count,
+    })
+}
+
+/// A video draft: `POST /v2/post/publish/inbox/video/init/` with the source alone, then each
+/// chunk to the upload URL, as a direct post's
+/// (<https://developers.tiktok.com/doc/content-posting-api-reference-upload-video>).
+async fn draft_video(
+    connector: &TiktokConnector,
+    token: &str,
+    media: &MediaUpload,
+    mime: &str,
+    plan: ChunkPlan,
+) -> Result<String, ConnectorError> {
+    let body = json!({ "source_info": file_upload(plan) });
+    let url = connector.api_url(
+        &["v2", "post", "publish", "inbox", "video", "init", ""],
+        &[],
+    );
+    upload_video(connector, token, url, body, media, mime, plan).await
+}
+
+/// A video's init at `url` with `body`, then its chunks to the upload URL it answers with; the
+/// publish id.
+async fn upload_video(
+    connector: &TiktokConnector,
+    token: &str,
+    url: Url,
+    body: Value,
+    media: &MediaUpload,
+    mime: &str,
+    plan: ChunkPlan,
+) -> Result<String, ConnectorError> {
     // Nothing is posted before the whole video is uploaded: a lost answer is not `Unknown`.
     let answer = connector
         .call(
@@ -509,10 +566,37 @@ async fn post_photos(
     if let Some(description) = description {
         info.insert("description".to_owned(), json!(description));
     }
+    init_photos(connector, token, "DIRECT_POST", info, urls).await
+}
+
+/// A photo draft: the photo init with `post_mode: MEDIA_UPLOAD` and, when there is one, the
+/// caption as `description`, the only post info a draft takes
+/// (<https://developers.tiktok.com/doc/content-posting-api-reference-photo-post>).
+async fn draft_photos(
+    connector: &TiktokConnector,
+    token: &str,
+    urls: &[Url],
+    description: Option<String>,
+) -> Result<String, ConnectorError> {
+    let mut info = Map::new();
+    if let Some(description) = description {
+        info.insert("description".to_owned(), json!(description));
+    }
+    init_photos(connector, token, "MEDIA_UPLOAD", info, urls).await
+}
+
+/// `POST /v2/post/publish/content/init/` for `urls` in `post_mode`, with `info`; the publish id.
+async fn init_photos(
+    connector: &TiktokConnector,
+    token: &str,
+    post_mode: &str,
+    info: Map<String, Value>,
+    urls: &[Url],
+) -> Result<String, ConnectorError> {
     let images: Vec<&str> = urls.iter().map(Url::as_str).collect();
     let body = json!({
         "media_type": "PHOTO",
-        "post_mode": "DIRECT_POST",
+        "post_mode": post_mode,
         "post_info": info,
         "source_info": {
             "source": "PULL_FROM_URL",
@@ -585,6 +669,11 @@ pub(crate) async fn resolve(
             };
             PublishResolution::Published(receipt)
         }
+        // A draft: the creator was notified in TikTok's inbox; the post is theirs to make there.
+        "SEND_TO_USER_INBOX" => PublishResolution::Published(PublishReceipt {
+            external_id: id.to_owned(),
+            url: None,
+        }),
         "FAILED" => {
             let why: String = words(&data["fail_reason"])
                 .unwrap_or("TikTok gave no reason")
@@ -668,6 +757,7 @@ mod tests {
             // The request's own privacy does not count: the screen's choice does.
             privacy: Some("PUBLIC_TO_EVERYONE".into()),
             tiktok: p.map(|privacy| TiktokPost {
+                mode: TiktokPostMode::DirectPost,
                 title: String::new(),
                 privacy_level: privacy.into(),
                 allow_comment: false,

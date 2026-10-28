@@ -50,7 +50,9 @@
 //! | the posting screen ([`Publisher::creator_info`]), and before every post: who may see it, what the creator turned off, the longest video | `POST {api}/v2/post/publish/creator_info/query/` | `video.publish` |
 //! | a video | `POST {api}/v2/post/publish/video/init/` → `publish_id`, `upload_url`; then `PUT upload_url` per chunk | `video.publish` |
 //! | photos | `POST {api}/v2/post/publish/content/init/` → `publish_id` | `video.publish` |
-//! | a post's status ([`Publisher::resolve`]) | `POST {api}/v2/post/publish/status/fetch/ {publish_id}` | `video.publish` |
+//! | a video draft | `POST {api}/v2/post/publish/inbox/video/init/` → `publish_id`, `upload_url`; then `PUT upload_url` per chunk | `video.upload` |
+//! | a photo draft | `POST {api}/v2/post/publish/content/init/ {post_mode: MEDIA_UPLOAD}` → `publish_id` | `video.upload` |
+//! | a post's status ([`Publisher::resolve`]) | `POST {api}/v2/post/publish/status/fetch/ {publish_id}` | `video.publish` or `video.upload` |
 //! | a post's counters | `POST {api}/v2/video/query/?fields=id,like_count,comment_count,share_count,view_count {filters: {video_ids: [id]}}` | `video.list` |
 //! | the account's counters | `GET {api}/v2/user/info/?fields=follower_count,following_count,likes_count,video_count` | `user.info.stats` |
 //! | the account's recent public videos ([`InsightsReader::recent_posts`]) | `POST {api}/v2/video/list/?fields=id,title,video_description,cover_image_url,share_url,create_time,like_count,comment_count,share_count,view_count {max_count}` | `video.list` |
@@ -78,7 +80,7 @@
 //! | the token endpoint: HTTP 5xx, `server_error`, `temporarily_unavailable` | `Transient` |
 //! | `scope_not_authorized` (HTTP 401: the grant lacks the scope, so it is not the credential's death), `scope_permission_missed` | `Permission` |
 //! | `privacy_level_option_mismatch`, `unaudited_client_can_only_post_to_private_accounts`, `spam_risk_user_banned_from_posting` | `Permission` |
-//! | `rate_limit_exceeded`, `spam_risk_too_many_posts` (also with HTTP 200), `reached_active_user_cap`, HTTP 429 | `Throttle` (TikTok names no wait); on the posting screen's read, an HTTP 2xx with one of [`CANNOT_POST_CODES`] is an account that may not post at this moment, not an error |
+//! | `rate_limit_exceeded`, `spam_risk_too_many_posts` (also with HTTP 200), `reached_active_user_cap`, `spam_risk_too_many_pending_share` (a draft's daily cap), HTTP 429 | `Throttle` (TikTok names no wait); on the posting screen's read, an HTTP 2xx with one of [`CANNOT_POST_CODES`] is an account that may not post at this moment, not an error |
 //! | `access_token_invalid`; `access_token_expired`, `token_revoked` (v1's names, not in TikTok's current table); HTTP 401 | `Auth`: the owner must reconnect |
 //! | `internal_error`, HTTP 5xx; a read's transport failure or broken answer, a connect failure, a host resolving to no public address | `Transient` |
 //! | a call that may have posted (a photo's init, a video's last chunk) or spent a grant (the token calls) whose answer was lost, broke off, was oversized or unreadable on success, or lacked the publish id | `Unknown` (never retry blindly) |
@@ -120,6 +122,18 @@
 //! has not turned off since; `brand_organic_toggle` ("Your brand") and `brand_content_toggle`
 //! ("Branded content") are the disclosure's boxes; `is_aigc` is not sent.
 //!
+//! A draft (`TiktokPostMode::Draft`, the upload:
+//! <https://developers.tiktok.com/doc/content-posting-api-reference-upload-video>) is sent to the
+//! creator's TikTok inbox, where they finish editing and post it in TikTok. Its choice names no
+//! privacy and no switch (and a video's no caption): `creator_info` is read and the choice
+//! checked as above for a draft (the account may post, the video's length, the caption), and a
+//! draft naming more is refused, `Permanent`. A video goes to
+//! `POST /v2/post/publish/inbox/video/init/` with its `source_info` alone (the init takes no
+//! `post_info`), then its chunks exactly as below; photos go to the photo init with `post_mode:
+//! MEDIA_UPLOAD` and, when there is one, the caption as `description` (the privacy, the comment
+//! switch and the commercial toggles are the Direct Post's,
+//! <https://developers.tiktok.com/doc/content-posting-api-reference-photo-post>).
+//!
 //! A video is sent as `FILE_UPLOAD` (<https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide>):
 //! below [`CHUNK_BYTES`] in one chunk (`chunk_size` = the whole size), else in chunks of
 //! [`CHUNK_BYTES`], `total_chunk_count` = the size divided by it rounded down, the last chunk
@@ -153,8 +167,12 @@
 //! a post nobody else may see (`SELF_ONLY`), and the receipt then keeps the publish id, without a
 //! URL. `FAILED` is [`PublishResolution::Failed`] with "publish failed: <fail_reason>",
 //! `Permanent` (`auth_removed`, the creator having removed the app's access: `Auth`).
-//! `PROCESSING_UPLOAD`, `PROCESSING_DOWNLOAD`, `SEND_TO_USER_INBOX` (and a status TikTok may add
-//! later) are [`PublishResolution::Pending`]. A failed status call is the error.
+//! `SEND_TO_USER_INBOX` (a draft: TikTok notified the creator in its inbox to finish the post in
+//! TikTok; <https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status>) is
+//! settled too: [`PublishResolution::Published`] with the receipt as sent (the publish id, no
+//! URL): any post is the creator's to make in TikTok, and there is none to count.
+//! `PROCESSING_UPLOAD`, `PROCESSING_DOWNLOAD` (and a status TikTok may add later) are
+//! [`PublishResolution::Pending`]. A failed status call is the error.
 //!
 //! **Counters.** Kept under TikTok's own names, whole numbers only: a post's `like_count`,
 //! `comment_count`, `share_count`, `view_count`; the account's `follower_count`,
@@ -217,11 +235,13 @@ pub const TIKTOK_HOSTS: &[&str] = &[
 ];
 
 /// The scopes the authorize URL asks for (<https://developers.tiktok.com/doc/tiktok-api-scopes>):
-/// the account's basic profile, posting directly, reading its videos (their counters) and its
-/// counters. `video.upload` (drafts to the inbox) is not asked for: posts go out directly.
+/// the account's basic profile, posting directly, sending drafts to the creator's inbox
+/// (`video.upload`), reading its videos (their counters) and its counters. A credential granted
+/// before drafts existed lacks `video.upload`: it still posts directly.
 pub const TIKTOK_SCOPES: &[&str] = &[
     "user.info.basic",
     "video.publish",
+    "video.upload",
     "video.list",
     "user.info.stats",
 ];

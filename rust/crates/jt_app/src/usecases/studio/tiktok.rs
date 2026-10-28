@@ -13,13 +13,18 @@
 //! (`publish::publish_due`), and its status then reads on the slot (`work::slot_get`). Both are
 //! panel-only: the screen is the panel's, and only an owner or manager in person passes it.
 //!
+//! The human chooses there how the post goes out: posted directly, or sent to their TikTok drafts
+//! (TikTok notifies them in its inbox, and they finish editing and post it in TikTok), which
+//! needs a credential granted `video.upload`: a connection made before drafts existed is
+//! offered direct posts only until it is reconnected.
+//!
 //! The screen also shows the account as it stands, read with it and best effort (a read TikTok
 //! refuses leaves it out; the screen still works): its counters (`user.info.stats`) and its
 //! latest public videos with their counters (`video.list`). Once a slot is published,
 //! [`tiktok_metrics`] reads its post's counters live, or, when TikTok cannot be asked, takes the
 //! latest measurement's.
 use super::{
-    chain::{HistoricalTarget, active, capability_access, refuse},
+    chain::{HistoricalTarget, active, capability_access, granted_scopes, refuse},
     control::{ApprovalOut, human_approver, hypothesis_live},
     files, measure,
     publish::content,
@@ -86,7 +91,16 @@ pub struct TiktokPostingOut {
     /// The account's latest public videos, newest first, at most [`RECENT_POSTS`], with their
     /// counters, read for this answer; `None` when TikTok did not list them.
     pub recent_posts: Option<Vec<RecentPost>>,
+    /// Whether a draft can be sent: the credential was granted `video.upload` (else TikTok must
+    /// be reconnected for drafts).
+    pub drafts_available: bool,
 }
+
+/// The scope a draft needs.
+const DRAFTS_SCOPE: &str = "video.upload";
+
+/// The scope a direct post needs.
+const DIRECT_POST_SCOPE: &str = "video.publish";
 
 /// Where a published post's counters came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -112,6 +126,9 @@ pub struct TiktokMetricsOut {
     /// When they were read: now, or the measurement's time.
     #[serde(with = "time::serde::rfc3339::option")]
     pub read_at: Option<OffsetDateTime>,
+    /// Whether the post was chosen to go to the creator's TikTok drafts: it has no counters, its
+    /// post (if they make one) being theirs to make in TikTok.
+    pub draft: bool,
 }
 
 /// How many of the account's latest videos the screen lists.
@@ -353,6 +370,7 @@ pub async fn tiktok_posting(
         approval,
         account_metrics,
         recent_posts,
+        drafts_available: granted_scopes(&s.capability).contains(&DRAFTS_SCOPE),
         slot: s.slot,
     })
 }
@@ -366,13 +384,7 @@ pub async fn tiktok_metrics(
     slot_id: SlotId,
 ) -> Result<TiktokMetricsOut, AppError> {
     ctx.require(Permission::StudioWork)?;
-    let none = TiktokMetricsOut {
-        post: None,
-        metrics: None,
-        source: None,
-        read_at: None,
-    };
-    let (publication, measured, access) = {
+    let (publication, measured, access, draft) = {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
         gated(r.as_mut(), ctx).await?;
         let slot = r
@@ -388,6 +400,27 @@ pub async fn tiktok_metrics(
         if !jt_studio::requires_posting_screen(&capability.kind_key) {
             return Err(refuse("not_a_tiktok_slot"));
         }
+        // The choice approved for the revision sent (the slot's own until it is sent).
+        let sent = r
+            .studio()
+            .slot_evidence(slot.id)
+            .await?
+            .0
+            .last()
+            .map_or(slot.revision, |a| a.piece().revision);
+        let draft = r
+            .studio()
+            .get_approval(ApprovalTarget::Slot(slot.id), sent)
+            .await?
+            .and_then(|a| a.tiktok)
+            .is_some_and(|post| post.is_draft());
+        let none = TiktokMetricsOut {
+            post: None,
+            metrics: None,
+            source: None,
+            read_at: None,
+            draft,
+        };
         let Some(publication) = r
             .studio()
             .list_publications()
@@ -412,12 +445,26 @@ pub async fn tiktok_metrics(
         let access = measure::access(d, r.as_mut(), HistoricalTarget::Publication(publication.id))
             .await
             .ok();
-        (publication, measured, access)
+        (publication, measured, access, draft)
+    };
+    let none = TiktokMetricsOut {
+        post: None,
+        metrics: None,
+        source: None,
+        read_at: None,
+        draft,
     };
     let post = PublishReceipt {
         external_id: publication.external_id.clone(),
         url: publication.url.clone(),
     };
+    // A draft has no post to count: TikTok has the file, the creator posts it.
+    if draft {
+        return Ok(TiktokMetricsOut {
+            post: Some(post),
+            ..none
+        });
+    }
     if let Some((capability, credential)) = access
         && let Some(reader) =
             provider_for_kind(&capability.kind_key).and_then(|p| d.connectors.insights(p))
@@ -432,6 +479,7 @@ pub async fn tiktok_metrics(
                     metrics: Some(live.metrics),
                     source: Some(MetricsSource::Live),
                     read_at: Some(d.clock.now()),
+                    draft,
                 });
             }
             Ok(_) => {}
@@ -459,6 +507,7 @@ pub async fn tiktok_metrics(
         source: (!metrics.is_empty()).then_some(MetricsSource::Measurement),
         read_at: (!metrics.is_empty()).then_some(m.measured_at),
         metrics: (!metrics.is_empty()).then_some(metrics),
+        draft,
     })
 }
 
@@ -471,6 +520,14 @@ pub async fn tiktok_post(
 ) -> Result<ApprovalOut, AppError> {
     let user_id = human_approver(ctx)?;
     let s = screen(d, ctx, input.slot_id, Some(input.expected_revision)).await?;
+    // Each way out needs its own grant: drafts one a connection made before them lacks.
+    if input.post.is_draft() {
+        if !granted_scopes(&s.capability).contains(&DRAFTS_SCOPE) {
+            return Err(refuse("tiktok_reconnect_for_drafts"));
+        }
+    } else if !granted_scopes(&s.capability).contains(&DIRECT_POST_SCOPE) {
+        return Err(refuse("credential_scope_missing"));
+    }
     let (_, media, _, _) = content(&s.piece, &s.capability);
     let mut kind = kind(&previews(d, ctx.workspace_id, media).await?)?;
     if let TiktokMedia::Video { duration_ms } = &mut kind {
@@ -537,6 +594,7 @@ pub async fn tiktok_post(
             "executed_version_id": frame.id,
             "takeover": true,
             "tiktok": {
+                "mode": post.mode,
                 "privacy_level": post.privacy_level,
                 "allow_comment": post.allow_comment,
                 "allow_duet": post.allow_duet,

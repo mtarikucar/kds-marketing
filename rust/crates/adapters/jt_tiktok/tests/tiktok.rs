@@ -189,7 +189,7 @@ async fn authorize_url_uses_client_key_and_comma_scopes() {
             ("response_type", "code"),
             (
                 "scope",
-                "user.info.basic,video.publish,video.list,user.info.stats"
+                "user.info.basic,video.publish,video.upload,video.list,user.info.stats"
             ),
             ("redirect_uri", redirect().as_str()),
             ("state", "state-1"),
@@ -200,6 +200,7 @@ async fn authorize_url_uses_client_key_and_comma_scopes() {
         [
             "user.info.basic",
             "video.publish",
+            "video.upload",
             "video.list",
             "user.info.stats"
         ]
@@ -207,7 +208,9 @@ async fn authorize_url_uses_client_key_and_comma_scopes() {
     // The commas stand as TikTok writes them.
     let query = url.query().unwrap();
     assert!(
-        query.contains("scope=user.info.basic,video.publish,video.list,user.info.stats&"),
+        query.contains(
+            "scope=user.info.basic,video.publish,video.upload,video.list,user.info.stats&"
+        ),
         "{query}"
     );
     assert!(!url.as_str().contains(CLIENT_SECRET), "{url}");
@@ -950,6 +953,162 @@ async fn the_posting_screen_reads_the_creator_fresh() {
 }
 
 #[tokio::test]
+async fn a_video_draft_is_uploaded_to_the_creators_inbox() {
+    let r = rig().await;
+    r.mock
+        .on("POST", CREATOR_INFO, answer("creator_info_public"));
+    let mut init = fixture("inbox_video_init");
+    init["data"]["upload_url"] = json!(r.mock.upload_url());
+    r.mock.on("POST", INBOX_VIDEO_INIT, ok(init));
+    r.mock.on("PUT", UPLOAD, complete());
+    let mut request = video_post("", 1_000);
+    request.tiktok = Some(draft(""));
+    request.privacy = None;
+    let receipt = r.tt.publish(&cred(), &public(), &request).await.unwrap();
+    assert_eq!(
+        receipt,
+        self::receipt("v_inbox_file~v2-1.7300000000000000010")
+    );
+    assert_eq!(
+        r.mock.lines(),
+        [
+            format!("POST {CREATOR_INFO}"),
+            format!("POST {INBOX_VIDEO_INIT}"),
+            format!("PUT {UPLOAD}"),
+        ]
+    );
+    // The upload's init takes the file alone: the caption and every setting are the creator's
+    // to choose in TikTok.
+    let call = r.mock.request("POST", INBOX_VIDEO_INIT);
+    assert_eq!(call.bearer(), Some(ACCESS_TOKEN));
+    assert_eq!(call.header("content-type"), Some(JSON_UTF8));
+    assert_eq!(
+        call.json(),
+        json!({
+            "source_info": {
+                "source": "FILE_UPLOAD",
+                "video_size": 1000,
+                "chunk_size": 1000,
+                "total_chunk_count": 1,
+            },
+        })
+    );
+    let put = r.mock.request("PUT", UPLOAD);
+    assert_eq!(put.header("content-range"), Some("bytes 0-999/1000"));
+    assert_eq!(put.bytes, clip(1_000).bytes);
+    assert!(r.mock.requests("POST", VIDEO_INIT).is_empty());
+}
+
+#[tokio::test]
+async fn a_photo_draft_goes_as_media_upload_with_its_caption() {
+    let r = rig().await;
+    r.mock
+        .on("POST", CREATOR_INFO, answer("creator_info_public"));
+    r.mock.on("POST", CONTENT_INIT, answer("photo_init"));
+    let mut request = photo_post("Bugünün menüsü", 2);
+    request.tiktok = Some(draft("Bugünün menüsü"));
+    let receipt = r.tt.publish(&cred(), &public(), &request).await.unwrap();
+    assert_eq!(receipt, self::receipt(PHOTO_PUBLISH_ID));
+    assert_eq!(
+        r.mock.request("POST", CONTENT_INIT).json(),
+        json!({
+            "media_type": "PHOTO",
+            "post_mode": "MEDIA_UPLOAD",
+            "post_info": { "description": "Bugünün menüsü" },
+            "source_info": {
+                "source": "PULL_FROM_URL",
+                "photo_cover_index": 0,
+                "photo_images": [
+                    "https://media.jeeta.test/p/0.jpg",
+                    "https://media.jeeta.test/p/1.jpg",
+                ],
+            },
+        })
+    );
+    // Without a caption, no post info at all.
+    r.mock.clear();
+    let mut request = photo_post("", 1);
+    request.tiktok = Some(draft(""));
+    r.tt.publish(&cred(), &public(), &request).await.unwrap();
+    assert!(
+        r.mock.request("POST", CONTENT_INIT).json()["post_info"]
+            .as_object()
+            .is_none_or(|info| info.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn a_draft_names_nothing_tiktok_does_not_take_for_it() {
+    let r = rig().await;
+    script_video(&r.mock);
+    let mut with_privacy = video_post("", 10);
+    with_privacy.tiktok = Some(TiktokPost {
+        privacy_level: "SELF_ONLY".into(),
+        ..draft("")
+    });
+    let mut with_caption = video_post("Merhaba", 10);
+    with_caption.tiktok = Some(draft("Merhaba"));
+    for request in [with_privacy, with_caption] {
+        let e =
+            r.tt.publish(&cred(), &public(), &request)
+                .await
+                .unwrap_err();
+        assert_eq!(
+            (e.kind(), e.reason()),
+            (
+                "permanent",
+                Some(
+                    "a draft carries only what TikTok takes for it: a video nothing but the \
+                     file, photos their caption"
+                )
+            )
+        );
+    }
+    // Only the creator's settings were read: nothing was uploaded.
+    assert_eq!(r.mock.lines(), vec![format!("POST {CREATOR_INFO}"); 2]);
+}
+
+#[tokio::test]
+async fn the_drafts_daily_cap_is_a_throttle() {
+    let r = rig().await;
+    r.mock
+        .on("POST", CREATOR_INFO, answer("creator_info_public"));
+    r.mock.on(
+        "POST",
+        INBOX_VIDEO_INIT,
+        answer_with(403, "error_pending_share"),
+    );
+    let mut request = video_post("", 10);
+    request.tiktok = Some(draft(""));
+    assert_eq!(
+        kind_of(r.tt.publish(&cred(), &public(), &request).await),
+        "throttle"
+    );
+    assert!(r.mock.requests("PUT", UPLOAD).is_empty());
+}
+
+#[tokio::test]
+async fn a_draft_sent_to_the_inbox_is_settled() {
+    let r = rig().await;
+    r.mock.on("POST", STATUS, answer("status_processing"));
+    r.mock.on("POST", STATUS, answer("status_inbox"));
+    let sent = receipt("v_inbox_file~v2-1.7300000000000000010");
+    assert_eq!(
+        r.tt.resolve(&cred(), &public(), &sent).await.unwrap(),
+        Some(PublishResolution::Pending)
+    );
+    // TikTok notified the creator in its inbox: the draft is theirs to finish in TikTok. The
+    // receipt keeps the publish id; there is no post, so no page.
+    assert_eq!(
+        r.tt.resolve(&cred(), &public(), &sent).await.unwrap(),
+        Some(PublishResolution::Published(sent.clone()))
+    );
+    for call in r.mock.requests("POST", STATUS) {
+        assert_eq!(call.json(), json!({ "publish_id": sent.external_id }));
+    }
+}
+
+#[tokio::test]
 async fn video_init_then_chunked_upload_content_range() {
     let r = rig().await;
     r.mock
@@ -1341,7 +1500,7 @@ async fn status_processing_is_pending_then_complete_resolves_permalink() {
     }
 
     // Every processing status, and one TikTok may add later, is pending.
-    for state in ["PROCESSING_DOWNLOAD", "SEND_TO_USER_INBOX", "SOMETHING_NEW"] {
+    for state in ["PROCESSING_DOWNLOAD", "SOMETHING_NEW"] {
         r.mock.set(
             "POST",
             STATUS,
