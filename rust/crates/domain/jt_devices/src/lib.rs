@@ -4,9 +4,25 @@
 //! database or clock I/O; the platform-specific work of carrying a command out belongs to the
 //! bridge program.
 //!
-//! Validation is about bounds only. There is deliberately no access policy here (no app
-//! allowlist, no URL-scheme filter, no shell filter): the owner wants full access, and whatever
-//! restricts it later is a separate layer.
+//! Validation is about bounds and well-formedness only. There is deliberately no access policy
+//! here (no app allowlist, no URL-scheme filter, no shell filter): the owner wants full access,
+//! and whatever restricts it later is a separate layer.
+//!
+//! # Growing the vocabulary
+//!
+//! Server and bridge are deployed separately, so a newer one talks to an older one:
+//!
+//! - A new command kind needs a feature name. A bridge reports what it runs, and the server
+//!   queues a command only for a bridge that lists its kind (see [`supports`]).
+//! - A new field on an existing kind needs a feature name too, and is declared
+//!   `#[serde(default, skip_serializing_if = ...)]`: a command that leaves it out serializes as
+//!   it always did, so an older bridge, which refuses unknown fields, never sees it.
+//! - A new [`FailReason`] needs nothing: an older reader takes it as [`FailReason::Unknown`].
+//!
+//! # Logging
+//!
+//! A command's payload is typed text, shell arguments and screen text. Log
+//! [`DeviceCommand::kind`] and counts, never the `{:?}` of a command or an observation.
 
 mod command;
 mod features;
@@ -14,8 +30,9 @@ mod lifecycle;
 mod observation;
 
 pub use command::{
-    CommandError, DeviceCommand, DeviceKey, ElementTarget, MAX_ARG_CHARS, MAX_LONG_PRESS_MS,
-    MAX_SHELL_ARGS, MAX_SWIPE_MS, MAX_TEXT_CHARS,
+    CommandError, DeviceCommand, DeviceKey, ElementTarget, MAX_APP_ID_CHARS, MAX_ARG_CHARS,
+    MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS, MAX_SWIPE_MS,
+    MAX_TEXT_CHARS, MAX_URL_CHARS,
 };
 pub use features::{Platform, TEXT_UNICODE, supports};
 pub use lifecycle::{

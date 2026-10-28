@@ -24,7 +24,36 @@ pub enum CommandStatus {
 }
 
 impl CommandStatus {
-    /// Whether no event can move the command any more.
+    /// Every status, in declaration order.
+    pub const ALL: &[CommandStatus] = &[
+        CommandStatus::Queued,
+        CommandStatus::Leased,
+        CommandStatus::Done,
+        CommandStatus::Failed,
+        CommandStatus::Expired,
+        CommandStatus::Canceled,
+    ];
+
+    /// The stored and wire name, e.g. `"leased"`.
+    pub fn key(self) -> &'static str {
+        match self {
+            CommandStatus::Queued => "queued",
+            CommandStatus::Leased => "leased",
+            CommandStatus::Done => "done",
+            CommandStatus::Failed => "failed",
+            CommandStatus::Expired => "expired",
+            CommandStatus::Canceled => "canceled",
+        }
+    }
+
+    /// The status named `key`.
+    pub fn from_key(key: &str) -> Option<CommandStatus> {
+        CommandStatus::ALL.iter().copied().find(|s| s.key() == key)
+    }
+
+    /// Whether the command is over: it is never leased again and nobody waits for it. A final
+    /// status is not always the last word: a result that arrives late still replaces an
+    /// `Expired` or `Canceled` one (see [`next_status`]).
     pub fn is_final(self) -> bool {
         matches!(
             self,
@@ -46,6 +75,48 @@ pub enum FailReason {
     ScreenBusy,
     Timeout,
     BridgeError,
+    /// A reason this version does not know: a newer bridge's new reason must not make an older
+    /// server reject a whole batch of results. Always the last variant.
+    #[serde(other)]
+    Unknown,
+}
+
+impl FailReason {
+    /// Every reason, in declaration order.
+    pub const ALL: &[FailReason] = &[
+        FailReason::DeviceOffline,
+        FailReason::ElementNotFound,
+        FailReason::UnicodeUnsupported,
+        FailReason::UnsupportedOnPlatform,
+        FailReason::UnsupportedByBridge,
+        FailReason::AdbError,
+        FailReason::ScreenBusy,
+        FailReason::Timeout,
+        FailReason::BridgeError,
+        FailReason::Unknown,
+    ];
+
+    /// The stored and wire name, e.g. `"adb_error"`.
+    pub fn key(self) -> &'static str {
+        match self {
+            FailReason::DeviceOffline => "device_offline",
+            FailReason::ElementNotFound => "element_not_found",
+            FailReason::UnicodeUnsupported => "unicode_unsupported",
+            FailReason::UnsupportedOnPlatform => "unsupported_on_platform",
+            FailReason::UnsupportedByBridge => "unsupported_by_bridge",
+            FailReason::AdbError => "adb_error",
+            FailReason::ScreenBusy => "screen_busy",
+            FailReason::Timeout => "timeout",
+            FailReason::BridgeError => "bridge_error",
+            FailReason::Unknown => "unknown",
+        }
+    }
+
+    /// The reason named `key`. A name no variant owns is `None`, not `Unknown`: only the wire is
+    /// forgiving.
+    pub fn from_key(key: &str) -> Option<FailReason> {
+        FailReason::ALL.iter().copied().find(|r| r.key() == key)
+    }
 }
 
 /// Something that happens to a command.
@@ -59,31 +130,60 @@ pub enum LifecycleEvent {
     Canceled,
 }
 
+impl LifecycleEvent {
+    /// Every event, in declaration order.
+    pub const ALL: &[LifecycleEvent] = &[
+        LifecycleEvent::Leased,
+        LifecycleEvent::Done,
+        LifecycleEvent::Failed,
+        LifecycleEvent::Expired,
+        LifecycleEvent::Canceled,
+    ];
+
+    /// The wire name, e.g. `"expired"`.
+    pub fn key(self) -> &'static str {
+        match self {
+            LifecycleEvent::Leased => "leased",
+            LifecycleEvent::Done => "done",
+            LifecycleEvent::Failed => "failed",
+            LifecycleEvent::Expired => "expired",
+            LifecycleEvent::Canceled => "canceled",
+        }
+    }
+}
+
 /// An event a command's status does not allow.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("a {from:?} command cannot be {event:?}")]
+#[error("a {} command cannot be {}", .from.key(), .event.key())]
 pub struct LifecycleError {
     pub from: CommandStatus,
     pub event: LifecycleEvent,
 }
 
-/// The status after `event`. A leased command can be leased again (a redelivery), a command can
-/// fail before it was ever leased (refused up front), and a final status accepts nothing.
+/// The status after `event`.
+///
+/// - A command is leased from `Queued`, and again from `Leased` (a redelivery).
+/// - It finishes (`Done`) only after a lease, but it can fail, expire or be canceled before one
+///   (refused up front, or never picked up).
+/// - A bridge's result is the truth even after the fact: a `Done` or `Failed` result arriving for
+///   an `Expired` or `Canceled` command replaces that status. Such a command is never leased
+///   again.
+/// - Nothing else moves a command that is `Done`, `Failed`, `Expired` or `Canceled`.
 pub fn next_status(
     current: CommandStatus,
     event: LifecycleEvent,
 ) -> Result<CommandStatus, LifecycleError> {
-    if current.is_final() {
-        return Err(LifecycleError {
+    use CommandStatus as S;
+    use LifecycleEvent as E;
+    match (current, event) {
+        (S::Queued | S::Leased, E::Leased) => Ok(S::Leased),
+        (S::Leased | S::Expired | S::Canceled, E::Done) => Ok(S::Done),
+        (S::Queued | S::Leased | S::Expired | S::Canceled, E::Failed) => Ok(S::Failed),
+        (S::Queued | S::Leased, E::Expired) => Ok(S::Expired),
+        (S::Queued | S::Leased, E::Canceled) => Ok(S::Canceled),
+        _ => Err(LifecycleError {
             from: current,
             event,
-        });
+        }),
     }
-    Ok(match event {
-        LifecycleEvent::Leased => CommandStatus::Leased,
-        LifecycleEvent::Done => CommandStatus::Done,
-        LifecycleEvent::Failed => CommandStatus::Failed,
-        LifecycleEvent::Expired => CommandStatus::Expired,
-        LifecycleEvent::Canceled => CommandStatus::Canceled,
-    })
 }

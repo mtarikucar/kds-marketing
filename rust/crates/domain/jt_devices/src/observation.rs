@@ -7,6 +7,8 @@ use uuid::Uuid;
 pub const MAX_ELEMENTS: usize = 300;
 
 /// A look at the screen.
+///
+/// The elements are the screen's text: log counts, never the `{:?}` of an observation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observation {
     pub screen: Screen,
@@ -17,6 +19,18 @@ pub struct Observation {
     pub truncated: bool,
     /// The screenshot taken with the observation, as a Jeeta file.
     pub screenshot_file_id: Option<Uuid>,
+}
+
+impl Observation {
+    /// Applies [`MAX_ELEMENTS`]: keeps the first elements and sets `truncated` when there were
+    /// more. A screen within the cap is left as it is, and a `truncated` a driver already set
+    /// stays set. Every driver ends its observation with this, so the rule is one.
+    pub fn cap_elements(&mut self) {
+        if self.elements.len() > MAX_ELEMENTS {
+            self.elements.truncate(MAX_ELEMENTS);
+            self.truncated = true;
+        }
+    }
 }
 
 /// The screen's size in pixels and its rotation in degrees.

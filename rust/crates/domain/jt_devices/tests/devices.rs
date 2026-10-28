@@ -1,9 +1,13 @@
 //! The device command vocabulary: wire shape, bounds, lifecycle and feature negotiation.
 use jt_devices::{
-    CommandError, CommandStatus, DeviceCommand, DeviceKey, ElementTarget, FailReason,
-    LifecycleError, LifecycleEvent, MAX_ARG_CHARS, MAX_LONG_PRESS_MS, MAX_SHELL_ARGS, MAX_SWIPE_MS,
-    MAX_TEXT_CHARS, Observation, Platform, TEXT_UNICODE, next_status, supports,
+    CommandError, CommandStatus, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason,
+    LifecycleError, LifecycleEvent, MAX_APP_ID_CHARS, MAX_ARG_CHARS, MAX_ELEMENTS,
+    MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS, MAX_SWIPE_MS,
+    MAX_TEXT_CHARS, MAX_URL_CHARS, Observation, Platform, Screen, TEXT_UNICODE, next_status,
+    supports,
 };
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -121,26 +125,17 @@ fn every_kind_round_trips_as_tagged_json() {
         assert_eq!(&back, command, "{wire}");
         assert_eq!(wire["kind"], command.kind(), "the tag is the kind");
     }
-    // All thirteen kinds are covered (`tap_on` appears once per target).
+    // All thirteen kinds are covered (`tap_on` appears once per target), and `KINDS` lists
+    // exactly them, once each.
     let kinds: std::collections::BTreeSet<_> = all.iter().map(|(c, _)| c.kind()).collect();
+    let listed: std::collections::BTreeSet<_> = DeviceCommand::KINDS.iter().copied().collect();
+    assert_eq!(kinds, listed);
     assert_eq!(
-        kinds,
-        std::collections::BTreeSet::from([
-            "observe",
-            "tap",
-            "tap_on",
-            "long_press",
-            "swipe",
-            "text",
-            "key",
-            "open_url",
-            "launch_app",
-            "shell",
-            "push_file",
-            "pull_file",
-            "screenshot",
-        ])
+        DeviceCommand::KINDS.len(),
+        listed.len(),
+        "a kind is listed twice"
     );
+    assert_eq!(listed.len(), 13);
 }
 
 #[test]
@@ -158,24 +153,131 @@ fn defaults_fill_the_optional_flags() {
     );
 }
 
-#[test]
-fn every_key_has_its_snake_case_name() {
-    for (key, name) in [
-        (DeviceKey::Back, "back"),
-        (DeviceKey::Home, "home"),
-        (DeviceKey::Enter, "enter"),
-        (DeviceKey::AppSwitch, "app_switch"),
-        (DeviceKey::Delete, "delete"),
-        (DeviceKey::VolumeUp, "volume_up"),
-        (DeviceKey::VolumeDown, "volume_down"),
-        (DeviceKey::Power, "power"),
-    ] {
-        assert_eq!(serde_json::to_value(key).unwrap(), json!(name));
-        assert_eq!(
-            serde_json::from_value::<DeviceKey>(json!(name)).unwrap(),
-            key
-        );
+/// An enum's `ALL`, `key` and `from_key` agree with each other, with the serde name and with the
+/// explicit table (which pins the wire names and lists every variant).
+fn check_names<T>(
+    table: &[(T, &str)],
+    all: &[T],
+    key: fn(T) -> &'static str,
+    from_key: fn(&str) -> Option<T>,
+) where
+    T: Copy + std::fmt::Debug + PartialEq + Serialize + DeserializeOwned,
+{
+    assert_eq!(
+        all,
+        table.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+        "ALL lists every variant, in order"
+    );
+    for (item, name) in table {
+        assert_eq!(serde_json::to_value(item).unwrap(), json!(name), "{item:?}");
+        assert_eq!(serde_json::from_value::<T>(json!(name)).unwrap(), *item);
+        assert_eq!(key(*item), *name);
+        assert_eq!(from_key(name), Some(*item));
     }
+    assert_eq!(from_key("no_such_name"), None);
+}
+
+#[test]
+fn keys_have_their_snake_case_names() {
+    check_names(
+        &[
+            (DeviceKey::Back, "back"),
+            (DeviceKey::Home, "home"),
+            (DeviceKey::Enter, "enter"),
+            (DeviceKey::AppSwitch, "app_switch"),
+            (DeviceKey::Delete, "delete"),
+            (DeviceKey::VolumeUp, "volume_up"),
+            (DeviceKey::VolumeDown, "volume_down"),
+            (DeviceKey::Power, "power"),
+        ],
+        DeviceKey::ALL,
+        DeviceKey::key,
+        DeviceKey::from_key,
+    );
+}
+
+#[test]
+fn statuses_have_their_snake_case_names() {
+    check_names(
+        &[
+            (CommandStatus::Queued, "queued"),
+            (CommandStatus::Leased, "leased"),
+            (CommandStatus::Done, "done"),
+            (CommandStatus::Failed, "failed"),
+            (CommandStatus::Expired, "expired"),
+            (CommandStatus::Canceled, "canceled"),
+        ],
+        CommandStatus::ALL,
+        CommandStatus::key,
+        CommandStatus::from_key,
+    );
+}
+
+#[test]
+fn reasons_have_their_snake_case_names() {
+    check_names(
+        &[
+            (FailReason::DeviceOffline, "device_offline"),
+            (FailReason::ElementNotFound, "element_not_found"),
+            (FailReason::UnicodeUnsupported, "unicode_unsupported"),
+            (FailReason::UnsupportedOnPlatform, "unsupported_on_platform"),
+            (FailReason::UnsupportedByBridge, "unsupported_by_bridge"),
+            (FailReason::AdbError, "adb_error"),
+            (FailReason::ScreenBusy, "screen_busy"),
+            (FailReason::Timeout, "timeout"),
+            (FailReason::BridgeError, "bridge_error"),
+            (FailReason::Unknown, "unknown"),
+        ],
+        FailReason::ALL,
+        FailReason::key,
+        FailReason::from_key,
+    );
+}
+
+#[test]
+fn platforms_have_their_snake_case_names() {
+    check_names(
+        &[(Platform::Android, "android"), (Platform::Ios, "ios")],
+        Platform::ALL,
+        Platform::key,
+        Platform::from_key,
+    );
+}
+
+#[test]
+fn events_have_their_snake_case_names() {
+    let table = [
+        (LifecycleEvent::Leased, "leased"),
+        (LifecycleEvent::Done, "done"),
+        (LifecycleEvent::Failed, "failed"),
+        (LifecycleEvent::Expired, "expired"),
+        (LifecycleEvent::Canceled, "canceled"),
+    ];
+    assert_eq!(
+        LifecycleEvent::ALL,
+        table.iter().map(|(e, _)| *e).collect::<Vec<_>>()
+    );
+    for (event, name) in table {
+        assert_eq!(serde_json::to_value(event).unwrap(), json!(name));
+        assert_eq!(event.key(), name);
+    }
+}
+
+#[test]
+fn a_reason_from_a_newer_bridge_is_unknown_not_an_error() {
+    // An older server must not reject a whole batch of results over a reason it has never heard of.
+    let reasons: Vec<FailReason> =
+        serde_json::from_value(json!(["timeout", "holographic_jam", "adb_error"])).unwrap();
+    assert_eq!(
+        reasons,
+        [
+            FailReason::Timeout,
+            FailReason::Unknown,
+            FailReason::AdbError
+        ]
+    );
+    // A stored name that no variant owns is not "unknown": only the wire is forgiving.
+    assert_eq!(FailReason::from_key("holographic_jam"), None);
 }
 
 #[test]
@@ -233,6 +335,38 @@ fn text(value: &str) -> DeviceCommand {
     }
 }
 
+fn shell(argv: Vec<String>) -> DeviceCommand {
+    DeviceCommand::Shell { argv }
+}
+
+fn open_url(url: &str) -> DeviceCommand {
+    DeviceCommand::OpenUrl { url: url.into() }
+}
+
+fn launch_app(app_id: &str) -> DeviceCommand {
+    DeviceCommand::LaunchApp {
+        app_id: app_id.into(),
+    }
+}
+
+fn push_file(dest: &str) -> DeviceCommand {
+    DeviceCommand::PushFile {
+        file_id: file_id(),
+        dest: dest.into(),
+    }
+}
+
+fn pull_file(path: &str) -> DeviceCommand {
+    DeviceCommand::PullFile { path: path.into() }
+}
+
+fn tap_on_text(target: &str) -> DeviceCommand {
+    DeviceCommand::TapOn {
+        target: ElementTarget::Text(target.into()),
+        exact: false,
+    }
+}
+
 #[test]
 fn bounds_are_checked() {
     // Text: not empty, at most 4000 characters (characters, not bytes).
@@ -266,10 +400,9 @@ fn bounds_are_checked() {
     assert_eq!(long_press(MAX_LONG_PRESS_MS).validate(), Ok(()));
 
     // Shell: at least one, at most 64 arguments, each at most 4096 characters.
-    let shell = |argv: Vec<String>| DeviceCommand::Shell { argv };
     assert_eq!(invalid(&shell(vec![])), "argv");
     assert_eq!(
-        invalid(&shell(vec!["echo".to_owned(); MAX_SHELL_ARGS + 1])),
+        invalid(&shell(vec!["a".to_owned(); MAX_SHELL_ARGS + 1])),
         "argv"
     );
     assert_eq!(invalid(&shell(vec!["a".repeat(MAX_ARG_CHARS + 1)])), "argv");
@@ -278,34 +411,17 @@ fn bounds_are_checked() {
         "argv"
     );
     assert_eq!(
-        shell(vec!["echo".to_owned(); MAX_SHELL_ARGS]).validate(),
+        shell(vec!["a".to_owned(); MAX_SHELL_ARGS]).validate(),
         Ok(())
     );
     assert_eq!(shell(vec!["a".repeat(MAX_ARG_CHARS)]).validate(), Ok(()));
 
     // Names and paths: not empty, not blank.
     for blank in ["", "  ", "\t\n"] {
-        assert_eq!(
-            invalid(&DeviceCommand::LaunchApp {
-                app_id: blank.into()
-            }),
-            "app_id"
-        );
-        assert_eq!(
-            invalid(&DeviceCommand::OpenUrl { url: blank.into() }),
-            "url"
-        );
-        assert_eq!(
-            invalid(&DeviceCommand::PushFile {
-                file_id: file_id(),
-                dest: blank.into()
-            }),
-            "dest"
-        );
-        assert_eq!(
-            invalid(&DeviceCommand::PullFile { path: blank.into() }),
-            "path"
-        );
+        assert_eq!(invalid(&launch_app(blank)), "app_id");
+        assert_eq!(invalid(&open_url(blank)), "url");
+        assert_eq!(invalid(&push_file(blank)), "dest");
+        assert_eq!(invalid(&pull_file(blank)), "path");
         for target in [
             ElementTarget::Text(blank.into()),
             ElementTarget::Id(blank.into()),
@@ -320,6 +436,89 @@ fn bounds_are_checked() {
             );
         }
     }
+}
+
+#[test]
+fn string_fields_have_their_own_length_bounds() {
+    // Each bound is in characters: the over-long string is one character too many, and the
+    // longest allowed one made of two-byte characters is still fine.
+    type Build = fn(&str) -> DeviceCommand;
+    let fields: [(Build, &str, usize); 5] = [
+        (open_url, "url", MAX_URL_CHARS),
+        (launch_app, "app_id", MAX_APP_ID_CHARS),
+        (push_file, "dest", MAX_PATH_CHARS),
+        (pull_file, "path", MAX_PATH_CHARS),
+        (tap_on_text, "target", MAX_TEXT_CHARS),
+    ];
+    for (build, field, max) in fields {
+        assert_eq!(build(&"a".repeat(max)).validate(), Ok(()), "{field}");
+        assert_eq!(build(&"ş".repeat(max)).validate(), Ok(()), "{field}");
+        assert_eq!(invalid(&build(&"a".repeat(max + 1))), field);
+        assert_eq!(invalid(&build(&"ş".repeat(max + 1))), field);
+    }
+    // The other two kinds of target are bounded the same way.
+    for target in [
+        ElementTarget::Id("a".repeat(MAX_TEXT_CHARS + 1)),
+        ElementTarget::Desc("a".repeat(MAX_TEXT_CHARS + 1)),
+    ] {
+        let command = DeviceCommand::TapOn {
+            target,
+            exact: true,
+        };
+        assert_eq!(invalid(&command), "target");
+    }
+    assert_eq!(
+        (MAX_URL_CHARS, MAX_APP_ID_CHARS, MAX_PATH_CHARS),
+        (8192, 256, 4096)
+    );
+}
+
+#[test]
+fn shell_arguments_are_bounded_together() {
+    // The separators count: a space between arguments, one per argument.
+    assert_eq!(MAX_SHELL_TOTAL_CHARS, 16_384);
+    // 4 arguments of 4095 characters and 4 separators are exactly the limit ...
+    let at_limit = vec!["a".repeat(MAX_ARG_CHARS - 1); 4];
+    assert_eq!(shell(at_limit).validate(), Ok(()));
+    // ... and one character more is over it, though every argument is within its own bound.
+    let mut over = vec!["a".repeat(MAX_ARG_CHARS - 1); 3];
+    over.push("a".repeat(MAX_ARG_CHARS));
+    assert_eq!(invalid(&shell(over)), "argv");
+    // 64 arguments of 255 characters reach the limit only with the separators counted: the
+    // characters alone are 16320, and one character more per argument is over it.
+    assert_eq!(shell(vec!["a".repeat(255); 64]).validate(), Ok(()));
+    assert_eq!(invalid(&shell(vec!["a".repeat(256); 64])), "argv");
+    // Characters, not bytes.
+    assert_eq!(shell(vec!["ş".repeat(255); 64]).validate(), Ok(()));
+}
+
+#[test]
+fn a_nul_character_is_refused_in_every_process_argument() {
+    // Well-formedness, not policy: a NUL ends a C string, so the device would see something other
+    // than what was asked.
+    let nul = "a\0b";
+    assert_eq!(invalid(&shell(vec![nul.into()])), "argv");
+    assert_eq!(invalid(&shell(vec!["ok".into(), nul.into()])), "argv");
+    assert_eq!(invalid(&open_url(nul)), "url");
+    assert_eq!(invalid(&launch_app(nul)), "app_id");
+    assert_eq!(invalid(&push_file(nul)), "dest");
+    assert_eq!(invalid(&pull_file(nul)), "path");
+    assert_eq!(invalid(&text(nul)), "value");
+    for target in [
+        ElementTarget::Text(nul.into()),
+        ElementTarget::Id(nul.into()),
+        ElementTarget::Desc(nul.into()),
+    ] {
+        let command = DeviceCommand::TapOn {
+            target,
+            exact: false,
+        };
+        assert_eq!(invalid(&command), "target");
+    }
+    // A string that is only a NUL is no better, and at the ends of a field it is the same.
+    assert_eq!(invalid(&open_url("\0")), "url");
+    assert_eq!(invalid(&text("abc\0")), "value");
+    assert_eq!(invalid(&text("\0abc")), "value");
 }
 
 #[test]
@@ -371,79 +570,90 @@ fn lifecycle_transitions() {
     use CommandStatus::*;
     use LifecycleEvent as E;
 
-    // From queued: leased, or straight to any end.
-    assert_eq!(next_status(Queued, E::Leased), Ok(Leased));
-    assert_eq!(next_status(Queued, E::Done), Ok(Done));
-    assert_eq!(next_status(Queued, E::Failed), Ok(Failed));
-    assert_eq!(next_status(Queued, E::Expired), Ok(Expired));
-    assert_eq!(next_status(Queued, E::Canceled), Ok(Canceled));
-
-    // From leased: leased again (redelivery), or any end.
-    assert_eq!(next_status(Leased, E::Leased), Ok(Leased));
-    assert_eq!(next_status(Leased, E::Done), Ok(Done));
-    assert_eq!(next_status(Leased, E::Failed), Ok(Failed));
-    assert_eq!(next_status(Leased, E::Expired), Ok(Expired));
-    assert_eq!(next_status(Leased, E::Canceled), Ok(Canceled));
-
-    // An end is final: nothing moves it, not even the same event again.
-    for from in [Done, Failed, Expired, Canceled] {
-        assert!(from.is_final());
-        for event in [E::Leased, E::Done, E::Failed, E::Expired, E::Canceled] {
+    // Every move there is. A command finishes only after a lease (`Queued` then `Done` is not a
+    // thing), but it can fail, expire or be canceled before one. A result that comes in after
+    // the command expired or was canceled is still the truth: it replaces that status.
+    let allowed = [
+        (Queued, E::Leased, Leased),
+        (Queued, E::Failed, Failed),
+        (Queued, E::Expired, Expired),
+        (Queued, E::Canceled, Canceled),
+        (Leased, E::Leased, Leased),
+        (Leased, E::Done, Done),
+        (Leased, E::Failed, Failed),
+        (Leased, E::Expired, Expired),
+        (Leased, E::Canceled, Canceled),
+        (Expired, E::Done, Done),
+        (Expired, E::Failed, Failed),
+        (Canceled, E::Done, Done),
+        (Canceled, E::Failed, Failed),
+    ];
+    for from in CommandStatus::ALL {
+        for event in LifecycleEvent::ALL {
+            let expected = allowed
+                .iter()
+                .find(|(f, e, _)| f == from && e == event)
+                .map(|(_, _, to)| *to);
             assert_eq!(
-                next_status(from, event),
-                Err(LifecycleError { from, event }),
+                next_status(*from, *event),
+                expected.ok_or(LifecycleError {
+                    from: *from,
+                    event: *event
+                }),
                 "{from:?} then {event:?}"
             );
         }
     }
-    assert!(!Queued.is_final());
-    assert!(!Leased.is_final());
 
-    let shown = next_status(Done, E::Canceled).unwrap_err().to_string();
-    assert!(
-        shown.contains("Done") && shown.contains("Canceled"),
-        "{shown}"
-    );
+    // The ones that matter, by name.
+    assert!(next_status(Queued, E::Done).is_err());
+    assert_eq!(next_status(Queued, E::Failed), Ok(Failed));
+    assert_eq!(next_status(Leased, E::Leased), Ok(Leased));
 }
 
 #[test]
-fn statuses_and_reasons_use_snake_case_names() {
-    for (status, name) in [
-        (CommandStatus::Queued, "queued"),
-        (CommandStatus::Leased, "leased"),
-        (CommandStatus::Done, "done"),
-        (CommandStatus::Failed, "failed"),
-        (CommandStatus::Expired, "expired"),
-        (CommandStatus::Canceled, "canceled"),
-    ] {
-        assert_eq!(serde_json::to_value(status).unwrap(), json!(name));
-        assert_eq!(
-            serde_json::from_value::<CommandStatus>(json!(name)).unwrap(),
-            status
-        );
+fn late_result_replaces_an_expired_or_canceled_status() {
+    use CommandStatus::*;
+    use LifecycleEvent as E;
+    for from in [Expired, Canceled] {
+        assert_eq!(next_status(from, E::Done), Ok(Done));
+        assert_eq!(next_status(from, E::Failed), Ok(Failed));
+        // Such a command is never leased again, nor ended another way.
+        assert!(next_status(from, E::Leased).is_err());
+        assert!(next_status(from, E::Expired).is_err());
+        assert!(next_status(from, E::Canceled).is_err());
     }
-    for (reason, name) in [
-        (FailReason::DeviceOffline, "device_offline"),
-        (FailReason::ElementNotFound, "element_not_found"),
-        (FailReason::UnicodeUnsupported, "unicode_unsupported"),
-        (FailReason::UnsupportedOnPlatform, "unsupported_on_platform"),
-        (FailReason::UnsupportedByBridge, "unsupported_by_bridge"),
-        (FailReason::AdbError, "adb_error"),
-        (FailReason::ScreenBusy, "screen_busy"),
-        (FailReason::Timeout, "timeout"),
-        (FailReason::BridgeError, "bridge_error"),
-    ] {
-        assert_eq!(serde_json::to_value(reason).unwrap(), json!(name));
-        assert_eq!(
-            serde_json::from_value::<FailReason>(json!(name)).unwrap(),
-            reason
-        );
+    // A result that was already recorded is not replaced by another.
+    for from in [Done, Failed] {
+        for event in LifecycleEvent::ALL {
+            assert!(
+                next_status(from, *event).is_err(),
+                "{from:?} then {event:?}"
+            );
+        }
     }
-    assert_eq!(
-        serde_json::to_value(Platform::Android).unwrap(),
-        json!("android")
-    );
-    assert_eq!(serde_json::to_value(Platform::Ios).unwrap(), json!("ios"));
+}
+
+#[test]
+fn is_final_means_no_more_leasing_or_waiting() {
+    use CommandStatus::*;
+    for status in [Done, Failed, Expired, Canceled] {
+        assert!(status.is_final(), "{status:?}");
+    }
+    assert!(!Queued.is_final());
+    assert!(!Leased.is_final());
+}
+
+#[test]
+fn lifecycle_error_shows_wire_names() {
+    let shown = next_status(CommandStatus::Done, LifecycleEvent::Canceled)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(shown, "a done command cannot be canceled");
+    let shown = next_status(CommandStatus::Queued, LifecycleEvent::Done)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(shown, "a queued command cannot be done");
 }
 
 #[test]
@@ -510,5 +720,71 @@ fn observation_round_trips_and_marks_truncation() {
     assert_eq!(observation.elements[0].tap_point, [980, 2280]);
     assert_eq!(observation.elements[0].desc, None);
     assert_eq!(serde_json::to_value(&observation).unwrap(), wire);
-    assert_eq!(jt_devices::MAX_ELEMENTS, 300);
+    assert_eq!(MAX_ELEMENTS, 300);
+}
+
+fn element(n: usize) -> Element {
+    Element {
+        text: Some(format!("e{n}")),
+        id: None,
+        desc: None,
+        class: None,
+        bounds: [0, 0, 1, 1],
+        tap_point: [0, 0],
+        clickable: false,
+        editable: false,
+        focused: false,
+    }
+}
+
+fn observation_of(count: usize) -> Observation {
+    Observation {
+        screen: Screen {
+            w: 1080,
+            h: 2400,
+            rotation: 0,
+        },
+        foreground_app: None,
+        elements: (0..count).map(element).collect(),
+        truncated: false,
+        screenshot_file_id: None,
+    }
+}
+
+#[test]
+fn cap_elements_cuts_a_long_screen_and_says_so() {
+    let mut long = observation_of(MAX_ELEMENTS + 50);
+    long.cap_elements();
+    assert_eq!(long.elements.len(), MAX_ELEMENTS);
+    assert!(long.truncated);
+    // The first elements are the ones kept, in order.
+    assert_eq!(long.elements[0], element(0));
+    assert_eq!(long.elements[MAX_ELEMENTS - 1], element(MAX_ELEMENTS - 1));
+
+    // One over the cap is already too many.
+    let mut one_over = observation_of(MAX_ELEMENTS + 1);
+    one_over.cap_elements();
+    assert_eq!(one_over.elements.len(), MAX_ELEMENTS);
+    assert!(one_over.truncated);
+}
+
+#[test]
+fn cap_elements_leaves_a_screen_within_the_cap_alone() {
+    let mut exact = observation_of(MAX_ELEMENTS);
+    let before = exact.clone();
+    exact.cap_elements();
+    assert_eq!(exact, before);
+    assert!(!exact.truncated);
+
+    // An observation a driver already marked as cut keeps its mark.
+    let mut cut = observation_of(3);
+    cut.truncated = true;
+    cut.cap_elements();
+    assert_eq!(cut.elements.len(), 3);
+    assert!(cut.truncated);
+
+    let mut empty = observation_of(0);
+    empty.cap_elements();
+    assert!(empty.elements.is_empty());
+    assert!(!empty.truncated);
 }
