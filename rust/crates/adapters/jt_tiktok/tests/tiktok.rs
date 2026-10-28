@@ -1461,6 +1461,107 @@ async fn status_failed_carries_fail_reason() {
 // ---------------------------------------------------------------------------------------------
 
 #[tokio::test]
+async fn recent_videos_read_the_video_list_newest_first() {
+    let r = rig().await;
+    r.mock.on("POST", VIDEO_LIST, answer("video_list"));
+    let posts =
+        r.tt.recent_posts(&cred(), &public(), 10)
+            .await
+            .unwrap()
+            .expect("TikTok lists recent videos");
+    let call = r.mock.request("POST", VIDEO_LIST);
+    assert_eq!(call.bearer(), Some(ACCESS_TOKEN));
+    assert_eq!(call.header("content-type"), Some(JSON_UTF8));
+    assert_eq!(
+        call.query,
+        owned(&[(
+            "fields",
+            "id,title,video_description,cover_image_url,share_url,create_time,like_count,\
+             comment_count,share_count,view_count"
+        )])
+    );
+    assert_eq!(call.json(), json!({ "max_count": 10 }));
+    // An entry without a video id is left out; the others keep TikTok's order (newest first).
+    assert_eq!(posts.len(), 2);
+    let first = &posts[0];
+    assert_eq!(first.id, "7300000000000000002");
+    assert_eq!(first.title.as_deref(), Some("Bugünün menüsü"));
+    assert_eq!(
+        first.cover_image_url.as_ref().map(Url::as_str),
+        Some("https://p16-sign.tiktokcdn.test/cover-2.image")
+    );
+    assert_eq!(
+        first.share_url.as_ref().map(Url::as_str),
+        Some("https://www.tiktok.com/@jeeta_test/video/7300000000000000002")
+    );
+    assert_eq!(
+        first.created_at,
+        Some(OffsetDateTime::from_unix_timestamp(1_761_638_400).unwrap())
+    );
+    assert_eq!(
+        first
+            .metrics
+            .iter()
+            .map(|(k, v)| (k.as_str(), *v))
+            .collect::<Vec<_>>(),
+        [
+            ("comment_count", 4),
+            ("like_count", 98),
+            ("share_count", 2),
+            ("view_count", 1520)
+        ]
+    );
+    // A numeric id is taken; an empty title falls back to the description; only an https
+    // cover is named, since the panel shows it as an image.
+    let second = &posts[1];
+    assert_eq!(second.id, "7300000000000000001");
+    assert_eq!(second.title.as_deref(), Some("Yeni şube açıldı"));
+    assert_eq!(second.cover_image_url, None);
+    assert_eq!(second.metrics["view_count"], 9400);
+
+    // At most 20 a page (TikTok's maximum), at least one.
+    for (asked, sent) in [(50, 20), (0, 1)] {
+        r.mock.clear();
+        r.tt.recent_posts(&cred(), &public(), asked).await.unwrap();
+        assert_eq!(
+            r.mock.request("POST", VIDEO_LIST).json(),
+            json!({ "max_count": sent })
+        );
+    }
+    // No public video yet: an empty list.
+    r.mock.set(
+        "POST",
+        VIDEO_LIST,
+        ok(json!({ "data": { "videos": [], "cursor": 0, "has_more": false }, "error": { "code": "ok" } })),
+    );
+    assert_eq!(
+        r.tt.recent_posts(&cred(), &public(), 10).await.unwrap(),
+        Some(vec![])
+    );
+    // A grant without `video.list`, a dead token, and another kind.
+    r.mock
+        .set("POST", VIDEO_LIST, answer_with(401, "error_scope"));
+    assert_eq!(
+        kind_of(r.tt.recent_posts(&cred(), &public(), 10).await),
+        "permission"
+    );
+    r.mock
+        .set("POST", VIDEO_LIST, answer_with(401, "error_auth"));
+    assert_eq!(
+        kind_of(r.tt.recent_posts(&cred(), &public(), 10).await),
+        "auth"
+    );
+    r.mock.clear();
+    let mut x = public();
+    x["kind_key"] = json!("x");
+    assert_eq!(
+        kind_of(r.tt.recent_posts(&cred(), &x, 10).await),
+        "permanent"
+    );
+    assert!(r.mock.recorded().is_empty());
+}
+
+#[tokio::test]
 async fn insights_read_video_query_and_user_stats() {
     let r = rig().await;
     r.mock.on("POST", VIDEO_QUERY, answer("video_query"));

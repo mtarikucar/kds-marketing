@@ -1640,7 +1640,25 @@
         "tiktok_title_too_long": "Açıklama TikTok için fazla uzun.",
         "tiktok_media_unsupported": "Bu paylaşımda TikTok'un alabileceği medya yok: bir MP4 video ya da 1-35 fotoğraf.",
         "tiktok_creator_info_unavailable": "TikTok hesabı okunamadı. Bağlantısını kontrol edin."
-      }
+      },
+      "accountCounters": "TikTok hesabının sayaçları",
+      "counter": {
+        "follower_count": "Takipçi",
+        "following_count": "Takip edilen",
+        "likes_count": "Beğeni",
+        "video_count": "Video",
+        "view_count": "İzlenme",
+        "like_count": "Beğeni",
+        "comment_count": "Yorum",
+        "share_count": "Paylaşım"
+      },
+      "recentVideos": "Son videolar",
+      "noRecentVideos": "Henüz herkese açık video yok.",
+      "untitled": "Başlıksız video",
+      "postCounters": "Paylaşımın TikTok sayaçları",
+      "liveCounters": "TikTok'tan canlı okundu",
+      "measuredCounters": "Son ölçümden ({{time}})",
+      "noCounters": "TikTok bu paylaşım için henüz sayaç vermiyor; yalnızca paylaşanın görebildiği bir paylaşımın sayacı olmaz."
     }
   },
   "billing": {

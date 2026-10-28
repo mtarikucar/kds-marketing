@@ -18,7 +18,7 @@ import type { LaneKind } from '@/api/types';
 import { kindLabel } from '@/lib/capabilities';
 import { failureText } from '@/lib/delivery';
 import { formatMoney } from '@/lib/format';
-import { TiktokPostStatus, TiktokPostingScreen } from './StudioTiktok';
+import { TiktokPostCounters, TiktokPostStatus, TiktokPostingScreen } from './StudioTiktok';
 
 /** Why the latest attempt to publish this slot failed, in the owner's words, when it did. */
 function PublishFailure({ attempts }: { attempts: api.PublishAttempt[] }) {
@@ -153,7 +153,16 @@ function PiecePreview({
   );
 }
 
-function SlotEditor({ id, close }: { id: string; close: () => void }) {
+function SlotEditor({
+  id,
+  close,
+  tiktok = false,
+}: {
+  id: string;
+  close: () => void;
+  /** A TikTok slot: once published, its post's counters show. */
+  tiktok?: boolean;
+}) {
   const { t } = useTranslation();
   const key = useStudioKey();
   const headingId = useId();
@@ -235,6 +244,9 @@ function SlotEditor({ id, close }: { id: string; close: () => void }) {
           </p>
           <PublishFailure attempts={data.attempts} />
           <PostLink attempts={data.attempts} />
+          {tiktok && ['published', 'measured'].includes(data.slot.state) && (
+            <TiktokPostCounters slotId={id} />
+          )}
           {['planned', 'ready'].includes(data.slot.state) && (
             <>
               <form
@@ -327,7 +339,7 @@ export function StudioToday({
   const accounts = useQuery({
     queryKey: [...key, 'accounts'],
     queryFn: () => listCapabilities(),
-    enabled: Boolean(data?.today.slots.length),
+    enabled: Boolean(data?.today.slots.length || data?.slots.length),
   });
   const tiktok = (s: api.Slot) =>
     Boolean(
@@ -354,7 +366,19 @@ export function StudioToday({
     selectedSlot !== null &&
     (data?.today.slots.some(({ slot }) => slot.id === selectedSlot) ||
       others.some((s) => s.id === selectedSlot));
-  const editor = (id: string) => <SlotEditor key={id} id={id} close={() => onSelect(null)} />;
+  const slotOf = (id: string) =>
+    data?.slots.find((s) => s.id === id) ?? data?.today.slots.find(({ slot }) => slot.id === id)?.slot;
+  const editor = (id: string) => {
+    const slot = slotOf(id);
+    return (
+      <SlotEditor
+        key={id}
+        id={id}
+        close={() => onSelect(null)}
+        tiktok={slot ? tiktok(slot) : false}
+      />
+    );
+  };
   const editorToggle = (id: string) => ({
     'aria-expanded': selectedSlot === id,
     'aria-controls': selectedSlot === id ? `slot-editor-${id}` : undefined,

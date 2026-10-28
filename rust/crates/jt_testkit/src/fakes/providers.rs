@@ -24,8 +24,8 @@ use jt_app::ports::connectors::{
     InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, LinkedinApp,
     MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp, OAuthApp,
     OAuthProvider, PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest,
-    PublishResolution, Publisher, SendReceipt, SmsSender, Telephony, TiktokApp, TiktokCreator, Url,
-    XApp,
+    PublishResolution, Publisher, RecentPost, SendReceipt, SmsSender, Telephony, TiktokApp,
+    TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -331,6 +331,11 @@ pub struct ScriptedConnector {
     creator_info_calls: Mutex<Vec<Value>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
     account_metrics: Script<Result<AccountMetrics, ConnectorError>>,
+    /// An account's recent posts answer from here, `Ok(None)` (the trait's default: not listed)
+    /// when nothing is queued; the limits asked for are kept apart from
+    /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::recent_posts_calls`]).
+    recent_posts: Script<Result<Option<Vec<RecentPost>>, ConnectorError>>,
+    recent_posts_calls: Mutex<Vec<u32>>,
     send_text: Script<Result<SendReceipt, ConnectorError>>,
     /// Sender-name lookups answer from here, `Ok(None)` when nothing is queued; they are kept
     /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::sender_name_calls`]).
@@ -390,6 +395,8 @@ impl ScriptedConnector {
             creator_info_calls: Mutex::default(),
             post_metrics: Script::default(),
             account_metrics: Script::default(),
+            recent_posts: Script::default(),
+            recent_posts_calls: Mutex::default(),
             send_text: Script::default(),
             sender_name: Script::default(),
             sender_name_calls: Mutex::default(),
@@ -493,6 +500,16 @@ impl ScriptedConnector {
 
     pub fn push_account_metrics(&self, result: Result<AccountMetrics, ConnectorError>) {
         self.account_metrics.push(result);
+    }
+
+    /// Queues what the next [`InsightsReader::recent_posts`] answers.
+    pub fn push_recent_posts(&self, result: Result<Option<Vec<RecentPost>>, ConnectorError>) {
+        self.recent_posts.push(result);
+    }
+
+    /// The limits [`InsightsReader::recent_posts`] was asked for, in order.
+    pub fn recent_posts_calls(&self) -> Vec<u32> {
+        lock(&self.recent_posts_calls).clone()
     }
 
     /// Run after recording a provider write, before its result. Supports races and crashes.
@@ -743,6 +760,16 @@ impl InsightsReader for ScriptedConnector {
             public: public.clone(),
         });
         self.next(&self.account_metrics, "account metrics result")
+    }
+
+    async fn recent_posts(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        limit: u32,
+    ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
+        lock(&self.recent_posts_calls).push(limit);
+        self.recent_posts.try_next().unwrap_or(Ok(None))
     }
 }
 

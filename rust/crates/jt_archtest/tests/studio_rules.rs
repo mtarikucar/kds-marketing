@@ -40,8 +40,8 @@ const ACTIONS: &[&str] = &[
 ];
 const EXEMPT: &[&str] = &["brake", "ledger", "ledger_export"];
 /// The TikTok posting screen: panel routes without an MCP tool, since only a human passes it
-/// (TikTok's Content Sharing Guidelines).
-const PANEL_ONLY: &[&str] = &["tiktok_posting", "tiktok_post"];
+/// (TikTok's Content Sharing Guidelines), and its published post's counters.
+const PANEL_ONLY: &[&str] = &["tiktok_posting", "tiktok_post", "tiktok_metrics"];
 fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     values.into_iter().collect()
 }
@@ -52,7 +52,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 20);
+    assert_eq!(rows.len(), 21);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -575,7 +575,7 @@ fn no_paid_creation_api() {
         .map(str::to_owned)
         .collect()
     );
-    // Product catalog's exhaustive 20-name assertion above precludes creation/commission/setup tools.
+    // Product catalog's exhaustive 21-name assertion above precludes creation/commission/setup tools.
 }
 #[tokio::test]
 async fn only_learning_updates_derived_confidence() {

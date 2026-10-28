@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
     AccountMetrics, Asset, Connector, InsightsReader, OAuthApp, OAuthProvider, PostMetrics,
-    PublishReceipt, PublishRequest, PublishResolution, Publisher, TiktokCreator,
+    PublishReceipt, PublishRequest, PublishResolution, Publisher, RecentPost, TiktokCreator,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use serde_json::Value;
@@ -111,5 +111,17 @@ impl InsightsReader for TiktokConnector {
         public: &Value,
     ) -> Result<AccountMetrics, ConnectorError> {
         insights::account_metrics(self, cred, public).await
+    }
+
+    /// Always `Some`: one page of the video list (see the crate docs, "Counters").
+    async fn recent_posts(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        limit: u32,
+    ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
+        insights::recent_posts(self, cred, public, limit)
+            .await
+            .map(Some)
     }
 }

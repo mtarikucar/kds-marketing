@@ -63,6 +63,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/studio/approvals"),
     ("GET", "/api/studio/slots/{slot_id}/tiktok"),
     ("POST", "/api/studio/slots/{slot_id}/tiktok"),
+    ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"),
     ("GET", "/api/inbox/pending"),
     ("POST", "/api/inbox/people/{person_id}/consents"),
     ("GET", "/api/inbox/people/{person_id}/consents"),
@@ -390,6 +391,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/studio/slots/{slot_id}/tiktok",
             "studio.tiktok_post",
             studio::tiktok_post,
+        ),
+        api_route(
+            "GET",
+            "/studio/slots/{slot_id}/tiktok/metrics",
+            "studio.tiktok_metrics",
+            studio::tiktok_metrics,
         ),
         api_route("GET", "/inbox/pending", "inbox.pending", inbox::pending),
         api_route(

@@ -84,6 +84,24 @@ const creator = {
   max_video_post_duration_sec: 600,
   cannot_post: null,
 };
+const recentPosts = [
+  {
+    id: '7300000000000000002',
+    title: 'Dünkü menü',
+    cover_image_url: 'https://p16.tiktokcdn.test/cover-2.image',
+    share_url: 'https://www.tiktok.com/@jeeta_test/video/7300000000000000002',
+    created_at: '2026-10-27T09:00:00Z',
+    metrics: { view_count: 1520, like_count: 98, comment_count: 4, share_count: 2 },
+  },
+  {
+    id: '7300000000000000001',
+    title: null,
+    cover_image_url: null,
+    share_url: 'https://www.tiktok.com/@jeeta_test/video/7300000000000000001',
+    created_at: '2026-10-26T09:00:00Z',
+    metrics: { view_count: 9400, like_count: 250, comment_count: 12, share_count: 7 },
+  },
+];
 const screenAnswer = (overrides: Record<string, unknown> = {}) => ({
   slot,
   creator,
@@ -92,6 +110,8 @@ const screenAnswer = (overrides: Record<string, unknown> = {}) => ({
   max_title_units: 2200,
   previews: [{ url: 'https://files.example.com/files/f1', mime: 'video/mp4' }],
   approval: null,
+  account_metrics: { follower_count: 1200, following_count: 45, likes_count: 8700, video_count: 31 },
+  recent_posts: recentPosts,
   ...overrides,
 });
 const detail = (attempts: unknown[] = []) => ({
@@ -361,6 +381,143 @@ describe('TikTok posting screen', () => {
       ),
     ).toBeInTheDocument();
     expect(within(card).queryByRole('form', { name: "TikTok'ta paylaş" })).not.toBeInTheDocument();
+  });
+
+  it('shows_the_accounts_counters_and_recent_videos_under_its_name', async () => {
+    mockFetch(answers());
+    renderAt('/studio');
+    const form = await postingScreen();
+    const counters = await within(form).findByRole('list', { name: 'TikTok hesabının sayaçları' });
+    for (const text of ['Takipçi: 1.200', 'Takip edilen: 45', 'Beğeni: 8.700', 'Video: 31']) {
+      expect(within(counters).getByText(text)).toBeInTheDocument();
+    }
+    const videos = within(form).getByRole('list', { name: 'Son videolar' });
+    // The list's own items (each holds its counters as a list of its own).
+    const items = Array.from(videos.children) as HTMLElement[];
+    expect(items).toHaveLength(2);
+    // Newest first, each linking to its TikTok page, with its cover, date and counters.
+    const first = within(items[0]).getByRole('link', { name: /Dünkü menü/ });
+    expect(first).toHaveAttribute('href', 'https://www.tiktok.com/@jeeta_test/video/7300000000000000002');
+    // The cover is decorative beside the title.
+    expect(items[0].querySelector('img')).toHaveAttribute('src', 'https://p16.tiktokcdn.test/cover-2.image');
+    expect(items[0]).toHaveTextContent('İzlenme: 1.520');
+    expect(items[0]).toHaveTextContent('Beğeni: 98');
+    expect(items[0]).toHaveTextContent('Yorum: 4');
+    expect(items[0]).toHaveTextContent('Paylaşım: 2');
+    expect(items[0].querySelector('time')).toHaveAttribute('dateTime', '2026-10-27T09:00:00Z');
+    // An untitled video without a cover still lists.
+    expect(within(items[1]).getByRole('link', { name: /Başlıksız video/ })).toBeInTheDocument();
+    expect(items[1]).toHaveTextContent('İzlenme: 9.400');
+  });
+
+  it('works_without_the_counters_when_tiktok_did_not_give_them', async () => {
+    mockFetch(
+      answers(true, {
+        'GET /api/studio/slots/s1/tiktok': screenAnswer({ account_metrics: null, recent_posts: null }),
+      }),
+    );
+    renderAt('/studio');
+    const form = await postingScreen();
+    expect(await within(form).findByText('Jeeta Test (@jeeta_test) hesabında paylaşılacak')).toBeInTheDocument();
+    expect(within(form).queryByRole('list', { name: 'TikTok hesabının sayaçları' })).not.toBeInTheDocument();
+    expect(within(form).queryByRole('list', { name: 'Son videolar' })).not.toBeInTheDocument();
+    expect(within(form).getByLabelText('Bu paylaşımı kimler görebilir')).toBeInTheDocument();
+  });
+
+  it('says_when_the_account_has_no_public_video_yet', async () => {
+    mockFetch(
+      answers(true, { 'GET /api/studio/slots/s1/tiktok': screenAnswer({ recent_posts: [] }) }),
+    );
+    renderAt('/studio');
+    const form = await postingScreen();
+    expect(await within(form).findByText('Henüz herkese açık video yok.')).toBeInTheDocument();
+  });
+
+  it('a_published_post_shows_its_counters_in_the_slot_detail', async () => {
+    // In the plan's seven days, whenever the test runs.
+    const published = { ...slot, scheduled_at: new Date().toISOString(), state: 'published', revision: 4 };
+    mockFetch(
+      answers(false, {
+        'GET /api/studio/overview': {
+          ...overview(false),
+          slots: [published],
+          today: { ...overview(false).today, slots: [] },
+        },
+        'GET /api/studio/slots/s1': {
+          ...detail([
+            {
+              state: 'succeeded',
+              outcome: {
+                status: 'succeeded',
+                evidence: {
+                  external_id: '7300000000000000003',
+                  url: 'https://www.tiktok.com/@jeeta_test/video/7300000000000000003',
+                },
+              },
+            },
+          ]),
+          slot: published,
+        },
+        'GET /api/studio/slots/s1/tiktok/metrics': {
+          post: {
+            external_id: '7300000000000000003',
+            url: 'https://www.tiktok.com/@jeeta_test/video/7300000000000000003',
+          },
+          metrics: { view_count: 42, like_count: 3, comment_count: 1, share_count: 0 },
+          source: 'live',
+          read_at: '2026-10-28T10:00:00Z',
+        },
+      }),
+    );
+    renderAt('/studio');
+    const user = userEvent.setup();
+    const plan = await screen.findByRole('region', { name: 'Plan' });
+    await user.click(
+      await within(plan)
+        .findByTestId('slot-s1')
+        .then((e) => within(e).getByRole('button')),
+    );
+    const editor = await screen.findByTestId('slot-detail');
+    const counters = await within(editor).findByRole('list', { name: 'Paylaşımın TikTok sayaçları' });
+    for (const text of ['İzlenme: 42', 'Beğeni: 3', 'Yorum: 1', 'Paylaşım: 0']) {
+      expect(within(counters).getByText(text)).toBeInTheDocument();
+    }
+    expect(within(editor).getByText("TikTok'tan canlı okundu")).toBeInTheDocument();
+  });
+
+  it('a_published_post_tiktok_gives_no_counters_for_says_so', async () => {
+    // In the plan's seven days, whenever the test runs.
+    const published = { ...slot, scheduled_at: new Date().toISOString(), state: 'published', revision: 4 };
+    mockFetch(
+      answers(false, {
+        'GET /api/studio/overview': {
+          ...overview(false),
+          slots: [published],
+          today: { ...overview(false).today, slots: [] },
+        },
+        'GET /api/studio/slots/s1': { ...detail(), slot: published },
+        'GET /api/studio/slots/s1/tiktok/metrics': {
+          post: { external_id: 'v_pub_file~v2-1.7', url: null },
+          metrics: null,
+          source: null,
+          read_at: null,
+        },
+      }),
+    );
+    renderAt('/studio');
+    const user = userEvent.setup();
+    const plan = await screen.findByRole('region', { name: 'Plan' });
+    await user.click(
+      await within(plan)
+        .findByTestId('slot-s1')
+        .then((e) => within(e).getByRole('button')),
+    );
+    const editor = await screen.findByTestId('slot-detail');
+    expect(
+      await within(editor).findByText(
+        "TikTok bu paylaşım için henüz sayaç vermiyor; yalnızca paylaşanın görebildiği bir paylaşımın sayacı olmaz.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it('speaks_english_with_tiktoks_own_words', async () => {

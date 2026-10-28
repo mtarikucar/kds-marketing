@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import * as api from '@/api/studio';
 import { isApiError } from '@/api/client';
 import { failureText } from '@/lib/delivery';
+import { formatDateTime, formatNumber } from '@/lib/format';
 import type tr from '@/i18n/tr.json';
 import { StudioError, buttonClass, inputClass, useStudioKey, useStudioMutation } from './StudioShared';
 
@@ -16,11 +17,140 @@ import { StudioError, buttonClass, inputClass, useStudioKey, useStudioMutation }
 // turned them off; comments only on photos), the commercial content disclosure, the declaration
 // above the button, a preview with nothing laid over it, and nothing sent before the button is
 // pressed. Once posted, the screen says processing takes minutes and shows the post's status.
+// Under the account's name: its counters and its latest public videos, when TikTok gave them;
+// a published post's own counters read in the slot's detail.
 
 const MUSIC_USAGE = 'https://www.tiktok.com/legal/page/global/music-usage-confirmation/en';
 const BRANDED_CONTENT_POLICY = 'https://www.tiktok.com/legal/page/global/bc-policy/en';
 
 type Refusal = keyof typeof tr.studio.tiktok.refused;
+type Counter = keyof typeof tr.studio.tiktok.counter;
+
+/** The account's counters (`user.info.stats`) and a post's (`video.list`), by TikTok's names. */
+const ACCOUNT_COUNTERS: Counter[] = ['follower_count', 'following_count', 'likes_count', 'video_count'];
+const POST_COUNTERS: Counter[] = ['view_count', 'like_count', 'comment_count', 'share_count'];
+
+/** The counters of `names` TikTok gave in `metrics`, in that order; nothing when it gave none. */
+function Counters({
+  metrics,
+  names,
+  label,
+}: {
+  metrics: Record<string, number>;
+  names: Counter[];
+  label?: string;
+}) {
+  const { t, i18n } = useTranslation();
+  const given = names.filter((name) => typeof metrics[name] === 'number');
+  if (!given.length) return null;
+  return (
+    <ul aria-label={label} className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+      {given.map((name) => (
+        <li key={name}>
+          {t(`studio.tiktok.counter.${name}`)}: {formatNumber(metrics[name], i18n.language)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The account's latest public videos, each linking to its TikTok page. */
+function RecentVideos({ posts }: { posts: api.RecentPost[] }) {
+  const { t, i18n } = useTranslation();
+  if (!posts.length) {
+    return <p className="text-xs text-muted-foreground">{t('studio.tiktok.noRecentVideos')}</p>;
+  }
+  return (
+    <section className="space-y-1">
+      <h4 className="text-xs font-medium">{t('studio.tiktok.recentVideos')}</h4>
+      <ul aria-label={t('studio.tiktok.recentVideos')} className="grid gap-2 sm:grid-cols-2">
+        {posts.map((post) => {
+          const title = post.title ?? t('studio.tiktok.untitled');
+          return (
+            <li key={post.id} className="flex min-w-0 gap-2 rounded-md border border-border p-2">
+              {post.cover_image_url && (
+                <img
+                  src={post.cover_image_url}
+                  alt=""
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                  className="h-16 w-12 shrink-0 rounded object-cover"
+                />
+              )}
+              <div className="min-w-0 space-y-1">
+                {post.share_url ? (
+                  <a
+                    className="block truncate font-medium underline"
+                    href={post.share_url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {title}
+                  </a>
+                ) : (
+                  <span className="block truncate font-medium">{title}</span>
+                )}
+                {post.created_at && (
+                  <time dateTime={post.created_at} className="block text-xs text-muted-foreground">
+                    {formatDateTime(post.created_at, i18n.language)}
+                  </time>
+                )}
+                <Counters metrics={post.metrics} names={POST_COUNTERS} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/** What the screen shows of the account under its name, when TikTok gave it. */
+function AccountView({ posting }: { posting: api.TiktokPosting }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {posting.account_metrics && (
+        <Counters
+          metrics={posting.account_metrics}
+          names={ACCOUNT_COUNTERS}
+          label={t('studio.tiktok.accountCounters')}
+        />
+      )}
+      {posting.recent_posts && <RecentVideos posts={posting.recent_posts} />}
+    </>
+  );
+}
+
+/**
+ * A published TikTok post's counters in its slot's detail: read live, else the latest
+ * measurement's; nothing when the slot has no post, or the read failed.
+ */
+export function TiktokPostCounters({ slotId }: { slotId: string }) {
+  const { t, i18n } = useTranslation();
+  const key = useStudioKey();
+  const counters = useQuery({
+    queryKey: [...key, 'tiktok', 'metrics', slotId],
+    queryFn: () => api.tiktokMetrics(slotId),
+    staleTime: 0,
+    refetchOnMount: 'always',
+  });
+  const data = counters.data;
+  if (!data?.post) return null;
+  if (!data.metrics) {
+    return <p className="text-xs text-muted-foreground">{t('studio.tiktok.noCounters')}</p>;
+  }
+  return (
+    <div className="space-y-1">
+      <Counters metrics={data.metrics} names={POST_COUNTERS} label={t('studio.tiktok.postCounters')} />
+      <p className="text-xs text-muted-foreground">
+        {data.source === 'measurement'
+          ? t('studio.tiktok.measuredCounters', { time: formatDateTime(data.read_at, i18n.language) })
+          : t('studio.tiktok.liveCounters')}
+      </p>
+    </div>
+  );
+}
 
 function isPrivacyLevel(level: string): level is api.TiktokPrivacyLevel {
   return (api.TIKTOK_PRIVACY_LEVELS as readonly string[]).includes(level);
@@ -200,6 +330,7 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
     return (
       <div className="space-y-2 rounded-md border border-border p-3">
         <Creator creator={creator} />
+        <AccountView posting={data} />
         <p role="alert" className="text-sm text-danger">
           {t('studio.tiktok.cannotPost')}
         </p>
@@ -255,6 +386,7 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
     >
       <h3 className="font-medium">{screenName}</h3>
       <Creator creator={creator} />
+      <AccountView posting={data} />
       <div role="group" aria-label={t('studio.tiktok.preview')} className="flex flex-wrap gap-2">
         {data.previews.map((m, i) =>
           m.mime.startsWith('video/') ? (

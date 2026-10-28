@@ -1640,7 +1640,25 @@
         "tiktok_title_too_long": "The caption is too long for TikTok.",
         "tiktok_media_unsupported": "This post has no media TikTok can take: one MP4 video or 1 to 35 photos.",
         "tiktok_creator_info_unavailable": "The TikTok account could not be read. Check its connection."
-      }
+      },
+      "accountCounters": "TikTok account counters",
+      "counter": {
+        "follower_count": "Followers",
+        "following_count": "Following",
+        "likes_count": "Likes",
+        "video_count": "Videos",
+        "view_count": "Views",
+        "like_count": "Likes",
+        "comment_count": "Comments",
+        "share_count": "Shares"
+      },
+      "recentVideos": "Recent videos",
+      "noRecentVideos": "No public videos yet.",
+      "untitled": "Untitled video",
+      "postCounters": "The post's TikTok counters",
+      "liveCounters": "Read live from TikTok",
+      "measuredCounters": "From the latest measurement ({{time}})",
+      "noCounters": "TikTok gives no counters for this post yet; a post only its creator can see has none."
     }
   },
   "billing": {

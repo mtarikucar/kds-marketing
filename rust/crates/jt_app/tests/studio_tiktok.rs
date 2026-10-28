@@ -10,14 +10,18 @@ use jt_app::{
     error::ErrorCode,
     ports::{
         UnitOfWork,
-        connectors::{MediaUpload, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost},
+        connectors::{
+            AccountMetrics, MediaUpload, PostMetrics, PublishReceipt, RecentPost, TiktokCreator,
+            TiktokMedia, TiktokPost,
+        },
         studio::*,
     },
     usecases::studio::{
         control::{ApprovalInput, approve},
+        measure::measure_due,
         pieces::{PieceInput, piece_submit},
         publish::publish_due,
-        tiktok::{TiktokPostInput, tiktok_post, tiktok_posting},
+        tiktok::{MetricsSource, TiktokPostInput, tiktok_metrics, tiktok_post, tiktok_posting},
         work,
     },
 };
@@ -26,10 +30,11 @@ use jt_connector::{ConnectorError, Credential, Provider};
 use jt_strategy::LaneKind;
 use jt_tenancy::{AgentConnectionId, Permission, SystemRole};
 use jt_testkit::fakes::{
-    ConnectorCall, FIXED_NOW, ScriptedConnector, ScriptedRegistry, files::MemoryFiles,
+    ConnectorCall, FIXED_NOW, FixedClock, ScriptedConnector, ScriptedRegistry, files::MemoryFiles,
 };
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
+use time::Duration;
 
 /// The TikTok account's open id.
 const ACCOUNT: &str = "tt-open-id";
@@ -192,6 +197,37 @@ fn choice(privacy: &str) -> TiktokPost {
     }
 }
 
+/// The account's counters, by TikTok's names (`user.info.stats`).
+fn account() -> BTreeMap<String, i64> {
+    [
+        ("follower_count".to_owned(), 1200),
+        ("following_count".to_owned(), 45),
+        ("likes_count".to_owned(), 8700),
+        ("video_count".to_owned(), 31),
+    ]
+    .into()
+}
+
+/// Queues the account's counters, which the screen reads beside the account.
+fn counters(tt: &ScriptedConnector) {
+    tt.push_account_metrics(Ok(AccountMetrics { metrics: account() }));
+}
+
+fn video(id: &str, views: i64) -> RecentPost {
+    RecentPost {
+        id: id.into(),
+        title: Some("Bugünün menüsü".into()),
+        cover_image_url: Some("https://p16.tiktokcdn.test/cover.image".parse().unwrap()),
+        share_url: Some(
+            format!("https://www.tiktok.com/@jeeta_test/video/{id}")
+                .parse()
+                .unwrap(),
+        ),
+        created_at: Some(FIXED_NOW),
+        metrics: [("view_count".to_owned(), views)].into(),
+    }
+}
+
 fn input(t: &Tiktok, post: TiktokPost) -> TiktokPostInput {
     TiktokPostInput {
         slot_id: t.slot.id,
@@ -286,6 +322,8 @@ async fn the_screen_reads_the_account_fresh_each_time_and_sends_nothing() {
         nickname: Some("Jeeta Yeni".into()),
         ..creator()
     })));
+    counters(&t.tt);
+    counters(&t.tt);
     let first = tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
     assert_eq!(first.slot.id, t.slot.id);
     assert_eq!(first.slot.revision, 1);
@@ -309,13 +347,14 @@ async fn the_screen_reads_the_account_fresh_each_time_and_sends_nothing() {
     assert_eq!(asked.len(), 2);
     assert_eq!(asked[0]["kind_key"], "tiktok");
     assert_eq!(asked[0]["external_id"], ACCOUNT);
-    assert!(t.tt.calls().is_empty(), "nothing is sent to TikTok");
+    assert!(publishes(&t.tt).is_empty(), "nothing is sent to TikTok");
 
     // An account that may not post now says so; the screen shows it rather than failing.
     t.tt.push_creator_info(Ok(Some(TiktokCreator {
         cannot_post: Some("spam_risk_too_many_posts".into()),
         ..creator()
     })));
+    counters(&t.tt);
     let busy = tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
     assert_eq!(
         busy.creator.cannot_post.as_deref(),
@@ -377,6 +416,7 @@ async fn the_choice_made_on_the_screen_is_what_goes_to_tiktok() {
     assert!(!pending.approvals.contains(&ApprovalTarget::Slot(t.slot.id)));
     // The screen shows what was chosen.
     t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
     let screen = tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
     assert_eq!(screen.approval.unwrap().tiktok, Some(chosen.clone()));
 
@@ -498,6 +538,7 @@ async fn a_video_longer_than_the_account_may_post_is_refused() {
 async fn photos_offer_comments_only() {
     let t = tiktok_world(vec![photo(1), photo(2)]).await;
     t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
     let screen = tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
     assert_eq!(screen.media, TiktokMedia::Photos);
     assert_eq!(screen.max_title_units, 4000);
@@ -604,4 +645,138 @@ async fn a_stale_revision_or_another_channel_is_refused() {
     .unwrap_err();
     assert_eq!(e.details["reason"], "not_a_tiktok_slot");
     assert!(t.w.uow.snapshot().studio.approvals.is_empty());
+}
+
+#[tokio::test]
+async fn the_screen_shows_the_accounts_counters_and_recent_videos() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    let recent = vec![
+        video("7300000000000000002", 1520),
+        video("7300000000000000001", 9400),
+    ];
+    t.tt.push_recent_posts(Ok(Some(recent.clone())));
+    let screen = tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    // Read with the account, live: followers, following, likes and videos (`user.info.stats`),
+    // and the latest public videos with their counters (`video.list`).
+    assert_eq!(screen.account_metrics, Some(account()));
+    assert_eq!(screen.recent_posts, Some(recent));
+    assert_eq!(t.tt.recent_posts_calls(), [10]);
+    assert!(publishes(&t.tt).is_empty());
+
+    // Best effort: reads TikTok refuses leave them out, and the screen still works.
+    t.tt.push_creator_info(Ok(Some(creator())));
+    t.tt.push_account_metrics(Err(ConnectorError::permission(
+        "HTTP 401 scope_not_authorized",
+    )));
+    t.tt.push_recent_posts(Err(ConnectorError::transient("offline")));
+    let screen = tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert_eq!(screen.creator, creator());
+    assert_eq!(screen.account_metrics, None);
+    assert_eq!(screen.recent_posts, None);
+}
+
+#[tokio::test]
+async fn a_published_tiktok_post_shows_its_counters() {
+    let mut t = tiktok_world(vec![mp4(30)]).await;
+    // Not published yet: no post, no counters, and nothing asked of TikTok.
+    let before = tiktok_metrics(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert_eq!(before.post, None);
+    assert_eq!(before.metrics, None);
+    assert!(t.tt.calls().is_empty());
+
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("PUBLIC_TO_EVERYONE")))
+        .await
+        .unwrap();
+    let post = PublishReceipt {
+        external_id: "7300000000000000001".into(),
+        url: Some(
+            "https://www.tiktok.com/@jeeta_test/video/7300000000000000001"
+                .parse()
+                .unwrap(),
+        ),
+    };
+    t.tt.push_publish(Ok(post.clone()));
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+
+    // Read live, right after it went out.
+    let live: BTreeMap<String, i64> = [
+        ("comment_count".to_owned(), 1),
+        ("like_count".to_owned(), 3),
+        ("share_count".to_owned(), 0),
+        ("view_count".to_owned(), 42),
+    ]
+    .into();
+    t.tt.push_post_metrics(Ok(PostMetrics {
+        metrics: live.clone(),
+    }));
+    let out = tiktok_metrics(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert_eq!(out.post, Some(post.clone()));
+    assert_eq!(out.metrics, Some(live));
+    assert_eq!(out.source, Some(MetricsSource::Live));
+    assert_eq!(out.read_at, Some(FIXED_NOW));
+    assert!(matches!(
+        t.tt.calls().last(),
+        Some(ConnectorCall::PostMetrics { post_id, .. }) if post_id == "7300000000000000001"
+    ));
+
+    // A day later the measurement job has measured it; when TikTok cannot be asked, the latest
+    // measurement stands in.
+    let later = FIXED_NOW + Duration::hours(25);
+    t.w.d.clock = Arc::new(FixedClock(later));
+    t.tt.push_post_metrics(Ok(PostMetrics {
+        metrics: [("view_count".to_owned(), 100), ("like_count".to_owned(), 9)].into(),
+    }));
+    assert_eq!(measure_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+    t.tt.push_post_metrics(Err(ConnectorError::transient("offline")));
+    let out = tiktok_metrics(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert_eq!(out.post, Some(post));
+    assert_eq!(out.source, Some(MetricsSource::Measurement));
+    let metrics = out.metrics.unwrap();
+    assert_eq!((metrics["view_count"], metrics["like_count"]), (100, 9));
+    assert_eq!(out.read_at, Some(later));
+    // Read on its own: nothing is published.
+    assert_eq!(publishes(&t.tt).len(), 1);
+}
+
+#[tokio::test]
+async fn a_post_tiktok_cannot_count_has_no_counters() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("SELF_ONLY")))
+        .await
+        .unwrap();
+    // Seen by its creator only: TikTok names no public id, and the receipt keeps the publish id.
+    let private = PublishReceipt {
+        external_id: "v_pub_file~v2-1.7".into(),
+        url: None,
+    };
+    t.tt.push_publish(Ok(private.clone()));
+    publish_due(&t.w.d, t.w.f.ws).await.unwrap();
+    t.tt.push_post_metrics(Err(ConnectorError::permanent(
+        "not a TikTok video id (a post TikTok names no public id for has no counters)",
+    )));
+    let out = tiktok_metrics(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert_eq!(out.post, Some(private));
+    assert_eq!((out.metrics, out.source, out.read_at), (None, None, None));
+}
+
+#[tokio::test]
+async fn a_posts_counters_are_a_studio_read_of_a_tiktok_slot() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    let e = tiktok_metrics(&t.w.d, &t.w.ctx, t.w.f.slot.id)
+        .await
+        .unwrap_err();
+    assert_eq!(e.details["reason"], "not_a_tiktok_slot");
+    let nobody = Ctx {
+        permissions: Default::default(),
+        ..t.w.ctx.clone()
+    };
+    let e = tiktok_metrics(&t.w.d, &nobody, t.slot.id)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Forbidden);
+    assert!(t.tt.calls().is_empty());
 }

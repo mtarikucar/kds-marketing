@@ -410,6 +410,20 @@ pub struct AccountMetrics {
     pub metrics: BTreeMap<String, i64>,
 }
 
+/// One of an account's recent public posts, as its provider lists them
+/// ([`InsightsReader::recent_posts`]): its id, title, cover image and page (browser URLs, never
+/// fetched), when it was posted, and its counters by the provider's metric name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentPost {
+    pub id: String,
+    pub title: Option<String>,
+    pub cover_image_url: Option<Url>,
+    pub share_url: Option<Url>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub created_at: Option<OffsetDateTime>,
+    pub metrics: BTreeMap<String, i64>,
+}
+
 /// An ad set and its budget, in the ad account's currency's minor units.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdSet {
@@ -732,6 +746,18 @@ pub trait InsightsReader: Send + Sync {
         cred: &Credential,
         public: &Value,
     ) -> Result<AccountMetrics, ConnectorError>;
+    /// The account's most recent public posts, newest first, at most `limit` (the provider may
+    /// cap it), each with its counters, for a provider that lists them (TikTok's
+    /// `/v2/video/list/`). `None`, the default, for one that does not.
+    async fn recent_posts(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        limit: u32,
+    ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
+        let _ = (cred, public, limit);
+        Ok(None)
+    }
 }
 
 /// Sends direct messages (Messenger, Instagram, WhatsApp).

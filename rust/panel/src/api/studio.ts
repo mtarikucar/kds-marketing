@@ -173,6 +173,26 @@ export interface TiktokPosting {
   previews: { url: string; mime: string }[];
   /** The approval carrying the screen's choice, once one was made for this revision. */
   approval: { revision: number; tiktok?: TiktokPost | null } | null;
+  /** The account's counters by TikTok's names, read with the screen; `null` when not given. */
+  account_metrics: Record<string, number> | null;
+  /** The account's latest public videos, newest first; `null` when TikTok did not list them. */
+  recent_posts: RecentPost[] | null;
+}
+/** One of an account's recent public posts (`jt_app::ports::connectors::RecentPost`). */
+export interface RecentPost {
+  id: string;
+  title: string | null;
+  cover_image_url: string | null;
+  share_url: string | null;
+  created_at: string | null;
+  metrics: Record<string, number>;
+}
+/** A TikTok slot's published post and its counters (`studio.tiktok_metrics`). */
+export interface TiktokMetrics {
+  post: { external_id: string; url: string | null } | null;
+  metrics: Record<string, number> | null;
+  source: 'live' | 'measurement' | null;
+  read_at: string | null;
 }
 export interface ExportOut {
   filename: string;
@@ -259,6 +279,9 @@ export const tiktokPosting = (id: string) =>
 /** The TikTok posting screen's publish button: the human's choice, for this revision. */
 export const tiktokPost = (id: string, expected_revision: number, post: TiktokPost) =>
   request('POST', `/api/studio/slots/${seg(id)}/tiktok`, { body: { expected_revision, post } });
+/** A published TikTok slot's post and its counters, read live (else the latest measurement). */
+export const tiktokMetrics = (id: string) =>
+  request<TiktokMetrics>('GET', `/api/studio/slots/${seg(id)}/tiktok/metrics`);
 export const fileUpload = (body: {
   filename: string;
   mime: string;

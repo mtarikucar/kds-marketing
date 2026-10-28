@@ -12,10 +12,16 @@
 //! is sent to TikTok by either: the slot is published when it is due, as chosen
 //! (`publish::publish_due`), and its status then reads on the slot (`work::slot_get`). Both are
 //! panel-only: the screen is the panel's, and only an owner or manager in person passes it.
+//!
+//! The screen also shows the account as it stands, read with it and best effort (a read TikTok
+//! refuses leaves it out; the screen still works): its counters (`user.info.stats`) and its
+//! latest public videos with their counters (`video.list`). Once a slot is published,
+//! [`tiktok_metrics`] reads its post's counters live, or, when TikTok cannot be asked, takes the
+//! latest measurement's.
 use super::{
-    chain::{active, capability_access, refuse},
+    chain::{HistoricalTarget, active, capability_access, refuse},
     control::{ApprovalOut, human_approver, hypothesis_live},
-    files,
+    files, measure,
     publish::content,
     work::gated,
 };
@@ -23,8 +29,14 @@ use crate::{
     ctx::Ctx,
     error::{AppError, ErrorCode},
     ports::{
-        connectors::{MediaUpload, TiktokCreator, TiktokMedia, TiktokPost, TiktokPostRefusal},
-        studio::{ApprovalReceipt, ApprovalTarget, MediaAsset, Piece, Slot, SlotId, SlotState},
+        connectors::{
+            MediaUpload, PublishReceipt, RecentPost, TiktokCreator, TiktokMedia, TiktokPost,
+            TiktokPostRefusal,
+        },
+        studio::{
+            ApprovalReceipt, ApprovalTarget, MeasurementStatus, MediaAsset, Piece, Slot, SlotId,
+            SlotState,
+        },
     },
     usecases::{
         Deps,
@@ -38,7 +50,8 @@ use jt_connector::{Credential, provider_for_kind};
 use jt_tenancy::{Permission, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use time::Duration;
+use std::collections::BTreeMap;
+use time::{Duration, OffsetDateTime};
 use url::Url;
 
 /// One medium of the post, as the screen previews it.
@@ -67,7 +80,42 @@ pub struct TiktokPostingOut {
     pub previews: Vec<PreviewMedia>,
     /// The approval with the screen's choice, once one was made for this revision.
     pub approval: Option<ApprovalReceipt>,
+    /// The account's counters by TikTok's names (`follower_count`, `following_count`,
+    /// `likes_count`, `video_count`), read for this answer; `None` when TikTok did not give them.
+    pub account_metrics: Option<BTreeMap<String, i64>>,
+    /// The account's latest public videos, newest first, at most [`RECENT_POSTS`], with their
+    /// counters, read for this answer; `None` when TikTok did not list them.
+    pub recent_posts: Option<Vec<RecentPost>>,
 }
+
+/// Where a published post's counters came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricsSource {
+    /// Read from TikTok for this answer.
+    Live,
+    /// The latest complete measurement of the post (TikTok could not be asked).
+    Measurement,
+}
+
+/// A TikTok slot's published post and its counters ([`tiktok_metrics`]).
+#[derive(Clone, Debug, Serialize)]
+pub struct TiktokMetricsOut {
+    /// The post TikTok published for the slot (its id and page); `None` until it is published.
+    pub post: Option<PublishReceipt>,
+    /// Its counters by TikTok's names (`view_count`, `like_count`, `comment_count`,
+    /// `share_count`; a measurement adds the Studio's `impressions` and `engagements`); `None`
+    /// when neither TikTok nor a measurement has any (TikTok names no public id, so no counters,
+    /// for a post only its creator may see).
+    pub metrics: Option<BTreeMap<String, i64>>,
+    pub source: Option<MetricsSource>,
+    /// When they were read: now, or the measurement's time.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub read_at: Option<OffsetDateTime>,
+}
+
+/// How many of the account's latest videos the screen lists.
+pub const RECENT_POSTS: u32 = 10;
 
 /// The posting screen's publish button: the human's `post` for the slot at `expected_revision`.
 #[derive(Clone, Debug, Deserialize)]
@@ -156,6 +204,41 @@ async fn creator(d: &Deps, s: &Screen) -> Result<TiktokCreator, AppError> {
             Err(error)
         }
     }
+}
+
+/// The account's counters and its latest videos, each best effort: a read TikTok refuses is left
+/// out (and logged by its kind only).
+async fn account(d: &Deps, s: &Screen) -> (Option<BTreeMap<String, i64>>, Option<Vec<RecentPost>>) {
+    let Some(reader) =
+        provider_for_kind(&s.capability.kind_key).and_then(|p| d.connectors.insights(p))
+    else {
+        return (None, None);
+    };
+    let public = adapter_public(&s.capability);
+    let metrics = match reader.account_metrics(&s.credential, &public).await {
+        Ok(m) => Some(m.metrics),
+        Err(e) => {
+            tracing::warn!(
+                error_kind = e.kind(),
+                "the TikTok account's counters were not read"
+            );
+            None
+        }
+    };
+    let posts = match reader
+        .recent_posts(&s.credential, &public, RECENT_POSTS)
+        .await
+    {
+        Ok(posts) => posts,
+        Err(e) => {
+            tracing::warn!(
+                error_kind = e.kind(),
+                "the TikTok account's videos were not listed"
+            );
+            None
+        }
+    };
+    (metrics, posts)
 }
 
 /// The drafted caption: the text when it has any, and the link on a line of its own after a
@@ -253,6 +336,7 @@ pub async fn tiktok_posting(
     let previews = previews(d, ctx.workspace_id, media).await?;
     let media = kind(&previews)?;
     let creator = creator(d, &s).await?;
+    let (account_metrics, recent_posts) = account(d, &s).await;
     let approval = {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
         r.studio()
@@ -267,7 +351,114 @@ pub async fn tiktok_posting(
         previews,
         creator,
         approval,
+        account_metrics,
+        recent_posts,
         slot: s.slot,
+    })
+}
+
+/// The counters of TikTok slot `slot_id`'s published post (see the module docs): read live with
+/// the post's historical read authority, else the latest complete measurement's; nothing before
+/// the slot is published. Requires `studio.work`. A read: it publishes nothing.
+pub async fn tiktok_metrics(
+    d: &Deps,
+    ctx: &Ctx,
+    slot_id: SlotId,
+) -> Result<TiktokMetricsOut, AppError> {
+    ctx.require(Permission::StudioWork)?;
+    let none = TiktokMetricsOut {
+        post: None,
+        metrics: None,
+        source: None,
+        read_at: None,
+    };
+    let (publication, measured, access) = {
+        let mut r = d.uow.tenant(ctx.workspace_id).await?;
+        gated(r.as_mut(), ctx).await?;
+        let slot = r
+            .studio()
+            .get_slot(slot_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("slot"))?;
+        let capability = r
+            .capabilities()
+            .find(slot.capability_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("capability"))?;
+        if !jt_studio::requires_posting_screen(&capability.kind_key) {
+            return Err(refuse("not_a_tiktok_slot"));
+        }
+        let Some(publication) = r
+            .studio()
+            .list_publications()
+            .await?
+            .into_iter()
+            .filter(|p| p.slot_id == slot.id)
+            .max_by_key(|p| p.published_at)
+        else {
+            return Ok(none);
+        };
+        let measured = r
+            .studio()
+            .list_measurements()
+            .await?
+            .into_iter()
+            .filter(|m| {
+                m.publication_id == Some(publication.id) && m.status == MeasurementStatus::Complete
+            })
+            .max_by_key(|m| m.measured_at);
+        // The post's own read authority, as the measurement job reads it; without it (the
+        // account changed or lost access) only a measurement can stand in.
+        let access = measure::access(d, r.as_mut(), HistoricalTarget::Publication(publication.id))
+            .await
+            .ok();
+        (publication, measured, access)
+    };
+    let post = PublishReceipt {
+        external_id: publication.external_id.clone(),
+        url: publication.url.clone(),
+    };
+    if let Some((capability, credential)) = access
+        && let Some(reader) =
+            provider_for_kind(&capability.kind_key).and_then(|p| d.connectors.insights(p))
+    {
+        match reader
+            .post_metrics(&credential, &adapter_public(&capability), &post.external_id)
+            .await
+        {
+            Ok(live) if !live.metrics.is_empty() => {
+                return Ok(TiktokMetricsOut {
+                    post: Some(post),
+                    metrics: Some(live.metrics),
+                    source: Some(MetricsSource::Live),
+                    read_at: Some(d.clock.now()),
+                });
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error_kind = e.kind(),
+                    "a TikTok post's counters were not read"
+                );
+            }
+        }
+    }
+    let Some(m) = measured else {
+        return Ok(TiktokMetricsOut {
+            post: Some(post),
+            ..none
+        });
+    };
+    let metrics: BTreeMap<String, i64> = m
+        .raw_metrics
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k, v)))
+        .collect();
+    Ok(TiktokMetricsOut {
+        post: Some(post),
+        source: (!metrics.is_empty()).then_some(MetricsSource::Measurement),
+        read_at: (!metrics.is_empty()).then_some(m.measured_at),
+        metrics: (!metrics.is_empty()).then_some(metrics),
     })
 }
 

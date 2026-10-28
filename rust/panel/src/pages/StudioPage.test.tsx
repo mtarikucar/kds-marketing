@@ -229,6 +229,7 @@ it('panel_actions_match_every_studio_tool', async () => {
     ['POST', '/api/studio/files'],
     ['GET', '/api/studio/slots/s1/tiktok'],
     ['POST', '/api/studio/slots/s1/tiktok'],
+    ['GET', '/api/studio/slots/s1/tiktok/metrics'],
   ];
   const calls = mockFetch(Object.fromEntries(expected.map(([m, p]) => [`${m} ${p}`, {}])));
   await api.overview(q);
@@ -301,8 +302,9 @@ it('panel_actions_match_every_studio_tool', async () => {
     branded_content: false,
   };
   await api.tiktokPost('s1', 3, post);
+  await api.tiktokMetrics('s1');
   expect(calls.map((c) => [c.method, c.path])).toEqual(expected);
-  expect(calls.at(-1)?.body).toEqual({ expected_revision: 3, post });
+  expect(calls.at(-2)?.body).toEqual({ expected_revision: 3, post });
   expect(calls[2].body).toEqual({ filter: q });
   expect(
     calls
