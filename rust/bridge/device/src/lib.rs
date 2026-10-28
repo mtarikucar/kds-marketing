@@ -6,7 +6,8 @@
 //! - [`config`]: the TOML file and the key.
 //! - [`client`]: the HTTP calls to Jeeta, over the wire types of `jt_device_protocol`.
 //! - [`driver`]: what the bridge needs of a phone ([`PhoneDriver`], [`PhoneRegistry`]) and the
-//!   file seam it gives a driver ([`FileTransfer`]).
+//!   file seam it gives a driver ([`FileTransfer`]); [`driver::android`], the Android phones over
+//!   `adb` ([`AndroidRegistry`], [`AndroidAdbDriver`]).
 //! - [`run_loop`]: register, poll, run and post ([`run`]).
 //!
 //! The program names no server crate: only the device vocabulary and its wire protocol, so it
@@ -26,6 +27,7 @@ pub mod run_loop;
 
 pub use client::{ClientError, JeetaClient};
 pub use config::{BridgeKey, Config, ConfigError};
+pub use driver::android::{AndroidAdbDriver, AndroidRegistry, SystemAdb};
 pub use driver::{
     AttachedPhone, ContentType, DriverError, FileTransfer, PhoneDriver, PhoneRegistry,
 };

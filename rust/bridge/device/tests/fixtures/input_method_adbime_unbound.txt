@@ -1,0 +1,42 @@
+Current Input Method Manager state:
+  Input Methods: mMethodMapUpdateCount=16
+  mCurMethodId=com.android.adbkeyboard/.AdbIME
+  mCurClient=ClientState{7ac919 uid=10153 pid=2767 displayId=0} mCurSeq=354
+  mCurPerceptible=false
+  mCurFocusedWindow=android.os.BinderProxy@2db28ca softInputMode=STATE_UNSPECIFIED|ADJUST_NOTHING client=ClientState{7ac919 uid=10153 pid=2767 displayId=0}
+  mCurId=com.android.adbkeyboard/.AdbIME mHaveConnection=true mBoundToMethod=true mVisibleBound=true
+  mCurToken=android.os.Binder@4417c12
+  mCurTokenDisplayId=0
+  mCurHostInputToken=null
+  mCurIntent=Intent { act=android.view.InputMethod cmp=com.android.adbkeyboard/.AdbIME (has extras) }
+  mCurMethod=com.android.server.inputmethod.IInputMethodInvoker@cd9fdeb
+  mEnabledSession=SessionState{uid 10153 pid 2767 method f4abea9 session 927f3cf channel ClientState{7ac919 uid=10153 pid=2767 displayId=0} (server)}
+  mShowRequested=false mShowExplicitlyRequested=false mShowForced=false mInputShown=false
+  mInFullscreenMode=false
+  mSystemReady=true mInteractive=true
+ 
+Input method client state for android.view.inputmethod.InputMethodManager@fa55800:
+  mService=com.android.internal.view.IInputMethodManager$Stub$Proxy@a36a839
+  mMainLooper=Looper (main, tid 2) {59d2e7e}
+  mFallbackInputConnection=RemoteInputConnectionImpl{connection=android.view.inputmethod.BaseInputConnection@b8b5fdf finished=false mParentInputMethodManager.isActive()=true mServedView=null}
+  mActive=true mRestartOnNextWindowFocus=false mBindSequence=355 mCurId=com.android.adbkeyboard/.AdbIME
+  mFullscreenMode=false
+  mCurMethod=com.android.internal.view.IInputMethodSession$Stub$Proxy@707f42c
+  mCurRootView=android.view.ViewRootImpl@942e85a
+  mServedView=android.widget.FrameLayout{d08ef5 VFE...... .F...... 0,40-1,1650 #7f0a00ff app:id/default_position aid=1073741824}
+  mNextServedView=android.widget.FrameLayout{d08ef5 VFE...... .F...... 0,40-1,1650 #7f0a00ff app:id/default_position aid=1073741824}
+  mServedConnecting=false
+  mCurrentTextBoxAttribute:
+    inputType=0x0 imeOptions=0x0 privateImeOptions=null
+    actionLabel=null actionId=0
+    initialSelStart=-1 initialSelEnd=-1 initialCapsMode=0x0
+    hintText=null label=null
+    packageName=com.miui.home autofillId=1073741824 fieldId=2131362047 fieldName=null
+    extras=Bundle[{hand_writing_keyboard_type=1}]
+    hintLocales=null
+    contentMimeTypes=null
+  mServedInputConnection=null
+  mServedInputConnectionHandler=null
+  mCompletions=null
+  mCursorRect=Rect(0, 0 - 0, 0)
+  mCursorSelStart=0 mCursorSelEnd=0 mCursorCandStart=0 mCursorCandEnd=0

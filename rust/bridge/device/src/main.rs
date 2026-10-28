@@ -1,8 +1,10 @@
 //! `jeeta-device-bridge [CONFIG]`: connects the phones plugged into this computer to Jeeta.
 //!
 //! `CONFIG` is the configuration file; by default `jeeta-device-bridge.toml` next to the program.
-//! The log goes to the console; `JEETA_DEVICE_BRIDGE_LOG` sets its filter (default `info`, e.g.
-//! `debug`). A panic is logged by where it happened, never by its message.
+//! The phones are the Android phones `adb devices -l` lists ready (`adb` from the configuration),
+//! only the configured `serials` when it names some. The log goes to the console;
+//! `JEETA_DEVICE_BRIDGE_LOG` sets its filter (default `info`, e.g. `debug`). A panic is logged by
+//! where it happened, never by its message.
 //!
 //! The bridge stops on Ctrl+C and Ctrl+Break, and on `SIGTERM` (Unix), within its shutdown
 //! grace. On Windows it also stops when its console window is closed, the user logs off or the
@@ -15,10 +17,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use jeeta_device_bridge::config::FILE_NAME;
 use jeeta_device_bridge::{
-    AttachedPhone, Config, DriverError, PhoneRegistry, Stop, Timing, install_panic_hook, run,
+    AndroidRegistry, Config, Stop, SystemAdb, Timing, install_panic_hook, run,
 };
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -28,19 +29,6 @@ const LOG_ENV: &str = "JEETA_DEVICE_BRIDGE_LOG";
 /// How long the bridge takes to stop when the system ends the process soon (Windows: the
 /// console closing, a log-off, a shutdown).
 const HURRIED_GRACE: Duration = Duration::from_secs(2);
-
-/// A registry that sees no phone: the bridge registers with none and never polls.
-///
-/// TODO(D2-T2): replace with the Android registry (`adb devices -l` through `Config::adb`, one
-/// `AndroidAdbDriver` per serial).
-struct NoPhonesYet;
-
-#[async_trait]
-impl PhoneRegistry for NoPhonesYet {
-    async fn attached(&self) -> Result<Vec<AttachedPhone>, DriverError> {
-        Ok(Vec::new())
-    }
-}
 
 /// The configuration file: the first argument, else [`FILE_NAME`] next to the program, else in
 /// the current directory.
@@ -59,16 +47,22 @@ async fn never() {
     std::future::pending::<()>().await;
 }
 
-/// Completes on the first signal to stop, and says how to stop.
+/// Sets up a listener for each signal to stop, now: one that arrives while the bridge starts,
+/// before the returned future is first polled, is not missed. The future completes on the first
+/// signal and says how to stop. A signal whose listener cannot be set up is never waited for.
 #[cfg(windows)]
-async fn stop_signal() -> Stop {
+fn stop_signal() -> impl Future<Output = Stop> {
     use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
 
-    // One future per event; an event whose handler cannot be set is never waited for.
+    let interrupt = ctrl_c();
+    let brk = ctrl_break();
+    let close = ctrl_close();
+    let logoff = ctrl_logoff();
+    let shutdown = ctrl_shutdown();
     macro_rules! event {
-        ($listen:expr) => {
-            async {
-                match $listen {
+        ($listener:expr) => {
+            async move {
+                match $listener {
                     Ok(mut signal) => {
                         signal.recv().await;
                     }
@@ -77,61 +71,67 @@ async fn stop_signal() -> Stop {
             }
         };
     }
-    tokio::select! {
-        () = event!(ctrl_c()) => {
-            info!("Ctrl+C: the bridge stops");
-            Stop::Graceful
-        }
-        () = event!(ctrl_break()) => {
-            info!("Ctrl+Break: the bridge stops");
-            Stop::Graceful
-        }
-        () = event!(ctrl_close()) => {
-            info!("the console is closing: the bridge stops");
-            Stop::Within(HURRIED_GRACE)
-        }
-        () = event!(ctrl_logoff()) => {
-            info!("the user is logging off: the bridge stops");
-            Stop::Within(HURRIED_GRACE)
-        }
-        () = event!(ctrl_shutdown()) => {
-            info!("the system is shutting down: the bridge stops");
-            Stop::Within(HURRIED_GRACE)
+    async move {
+        tokio::select! {
+            () = event!(interrupt) => {
+                info!("Ctrl+C: the bridge stops");
+                Stop::Graceful
+            }
+            () = event!(brk) => {
+                info!("Ctrl+Break: the bridge stops");
+                Stop::Graceful
+            }
+            () = event!(close) => {
+                info!("the console is closing: the bridge stops");
+                Stop::Within(HURRIED_GRACE)
+            }
+            () = event!(logoff) => {
+                info!("the user is logging off: the bridge stops");
+                Stop::Within(HURRIED_GRACE)
+            }
+            () = event!(shutdown) => {
+                info!("the system is shutting down: the bridge stops");
+                Stop::Within(HURRIED_GRACE)
+            }
         }
     }
 }
 
-/// Completes on the first signal to stop, and says how to stop.
+/// Sets up a listener for each signal to stop, now: one that arrives while the bridge starts,
+/// before the returned future is first polled, is not missed. The future completes on the first
+/// signal and says how to stop. A signal whose listener cannot be set up is never waited for.
 #[cfg(unix)]
-async fn stop_signal() -> Stop {
-    use tokio::signal::unix::{SignalKind, signal};
-    let interrupt = async {
-        if tokio::signal::ctrl_c().await.is_err() {
-            never().await;
-        }
-    };
-    let terminate = async {
-        match signal(SignalKind::terminate()) {
+fn stop_signal() -> impl Future<Output = Stop> {
+    use tokio::signal::unix::{Signal, SignalKind, signal};
+
+    let interrupt = signal(SignalKind::interrupt());
+    let terminate = signal(SignalKind::terminate());
+    let event = |listener: std::io::Result<Signal>| async move {
+        match listener {
             Ok(mut signal) => {
                 signal.recv().await;
             }
             Err(_) => never().await,
         }
     };
-    tokio::select! {
-        () = interrupt => info!("interrupted: the bridge stops"),
-        () = terminate => info!("SIGTERM: the bridge stops"),
+    async move {
+        tokio::select! {
+            () = event(interrupt) => info!("interrupted: the bridge stops"),
+            () = event(terminate) => info!("SIGTERM: the bridge stops"),
+        }
+        Stop::Graceful
     }
-    Stop::Graceful
 }
 
-/// Completes on Ctrl+C.
+/// Completes on Ctrl+C. This platform's listener is set up when the future is first polled.
 #[cfg(not(any(windows, unix)))]
-async fn stop_signal() -> Stop {
-    if tokio::signal::ctrl_c().await.is_err() {
-        never().await;
+fn stop_signal() -> impl Future<Output = Stop> {
+    async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            never().await;
+        }
+        Stop::Graceful
     }
-    Stop::Graceful
 }
 
 #[tokio::main]
@@ -161,14 +161,13 @@ async fn main() -> ExitCode {
         adb = %config.adb().display(),
         "jeeta-device-bridge starting"
     );
-    match run(
-        &config,
-        Arc::new(NoPhonesYet),
-        Timing::default(),
-        stop_signal(),
-    )
-    .await
-    {
+    // Before the bridge runs: from here on, a signal to stop is heard.
+    let stop = stop_signal();
+    let registry = AndroidRegistry::new(
+        Arc::new(SystemAdb::new(config.adb())),
+        config.serials().map(<[String]>::to_vec),
+    );
+    match run(&config, Arc::new(registry), Timing::default(), stop).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             error!(%error, "the bridge stopped on a failure");

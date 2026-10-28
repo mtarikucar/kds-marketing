@@ -100,8 +100,14 @@ async fn the_program_registers_and_stops_cleanly() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    // An `adb` that is not there: the program lists no phone and runs no real `adb` (a computer
+    // with the Android SDK would otherwise read the phones attached to it).
+    let adb = std::env::temp_dir()
+        .join(format!("jdb-no-adb-{}", Uuid::now_v7()))
+        .join("adb");
     let config = ConfigFile::new(&format!(
-        "base_url = \"http://{addr}\"\nkey = \"{KEY}\"\nbridge_id = \"program-test\"\n"
+        "base_url = \"http://{addr}\"\nkey = \"{KEY}\"\nbridge_id = \"program-test\"\nadb = '{}'\n",
+        adb.display()
     ));
     let mut child = program(&config)
         .stdout(Stdio::null())

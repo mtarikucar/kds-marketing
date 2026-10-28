@@ -7,6 +7,8 @@
 //! its phone and carries out one command at a time; the loop never runs two commands on one
 //! phone at once.
 
+pub mod android;
+
 use std::path::Path;
 use std::sync::Arc;
 

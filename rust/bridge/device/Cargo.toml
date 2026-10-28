@@ -11,7 +11,7 @@ publish.workspace = true
 [dependencies]
 jt_device_protocol.workspace = true
 jt_devices.workspace = true
-tokio = { workspace = true, features = ["time", "fs", "io-util"] }
+tokio = { workspace = true, features = ["time", "fs", "io-util", "process"] }
 # The bridge's own HTTP client to Jeeta (rustls). The server's provider traffic goes through
 # `jt_outbound`; this program is not the server and talks to Jeeta alone. `stream`: a pulled file
 # is uploaded from disk without holding it in memory.
@@ -21,14 +21,17 @@ serde_json.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-# `PhoneDriver`, `PhoneRegistry` and `FileTransfer` are used as trait objects.
+# `PhoneDriver`, `PhoneRegistry`, `FileTransfer` and `AdbRunner` are used as trait objects.
 async-trait.workspace = true
+# Text outside ASCII goes to ADBKeyBoard in base64.
+base64.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 # The fake Jeeta of `tests/loop.rs`.
 axum.workspace = true
-tokio = { workspace = true, features = ["net"] }
+# `test-util`: the Android driver's waits run on paused time.
+tokio = { workspace = true, features = ["net", "test-util"] }
 
 [lints]
 workspace = true

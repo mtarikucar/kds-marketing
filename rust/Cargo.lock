@@ -1360,6 +1360,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.23.1",
  "jt_device_protocol",
  "jt_devices",
  "reqwest 0.12.28",

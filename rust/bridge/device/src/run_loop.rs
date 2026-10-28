@@ -438,7 +438,7 @@ impl RecentIds {
 
 /// Text from the server or a phone (a reason, a serial), fit for one log line: control
 /// characters blanked, cut short.
-fn loggable(text: &str) -> String {
+pub(crate) fn loggable(text: &str) -> String {
     text.chars()
         .take(MAX_LOGGED_CHARS)
         .map(|c| if c.is_control() { ' ' } else { c })
