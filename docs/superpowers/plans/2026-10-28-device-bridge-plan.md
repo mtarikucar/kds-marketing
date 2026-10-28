@@ -73,10 +73,10 @@ pub enum DeviceCommand {
     Key { key: DeviceKey },
     OpenUrl { url: String },
     LaunchApp { app_id: String },
-    Shell { argv: Vec<String> },
+    Shell { argv: Vec<String> },          // the bridge quotes each argument for the device shell
     PushFile { file_id: Uuid, dest: String },
     PullFile { path: String },
-    Screenshot,
+    Screenshot {},                        // an EMPTY STRUCT variant: wire form {"kind":"screenshot"}, extra fields refused
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -84,14 +84,26 @@ pub enum ElementTarget { Text(String), Id(String), Desc(String) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceKey { Back, Home, Enter, AppSwitch, Delete, VolumeUp, VolumeDown, Power }
-pub const MAX_TEXT_CHARS: usize = 4000;
+impl DeviceKey {
+    pub const ALL: &[DeviceKey];                       // declaration order
+    pub fn key(self) -> &'static str;                  // the serde name, e.g. "app_switch"
+    pub fn from_key(key: &str) -> Option<DeviceKey>;
+}
+pub const MAX_TEXT_CHARS: usize = 4000;                // a text value, and a tap_on target
 pub const MAX_SWIPE_MS: u32 = 5000;
 pub const MAX_LONG_PRESS_MS: u32 = 10_000;
 pub const MAX_SHELL_ARGS: usize = 64;
 pub const MAX_ARG_CHARS: usize = 4096;
+pub const MAX_SHELL_TOTAL_CHARS: usize = 16_384;       // all shell args, plus one separator per arg
+pub const MAX_URL_CHARS: usize = 8192;
+pub const MAX_APP_ID_CHARS: usize = 256;
+pub const MAX_PATH_CHARS: usize = 4096;                // push_file dest, pull_file path
 impl DeviceCommand {
-    pub fn kind(&self) -> &'static str;              // "observe", "tap", "tap_on", … "screenshot"
-    pub fn validate(&self) -> Result<(), CommandError>; // bounds only; no access policy (spec §1)
+    pub const KINDS: &[&str];                          // the 13 wire tags, also the feature names for the kinds
+    pub fn kind(&self) -> &'static str;                // "observe", "tap", "tap_on", … "screenshot"
+    // Bounds and well-formedness only (no NUL in any string that becomes a process argument:
+    // shell args, url, app_id, dest, path, target, text); NO access policy (spec §1).
+    pub fn validate(&self) -> Result<(), CommandError>;
 }
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CommandError { #[error("{field}: {reason}")] Invalid { field: &'static str, reason: &'static str } }
@@ -100,22 +112,53 @@ pub enum CommandError { #[error("{field}: {reason}")] Invalid { field: &'static 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandStatus { Queued, Leased, Done, Failed, Expired, Canceled }
-impl CommandStatus { pub fn is_final(self) -> bool; }
+impl CommandStatus {
+    pub const ALL: &[CommandStatus];                   // declaration order
+    pub fn key(self) -> &'static str;                  // the serde name, e.g. "leased"
+    pub fn from_key(key: &str) -> Option<CommandStatus>;
+    pub fn is_final(self) -> bool;                     // Done|Failed|Expired|Canceled = never leased again, nobody waits;
+                                                       // NOT "immutable": see the late-result rule below
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailReason { DeviceOffline, ElementNotFound, UnicodeUnsupported, UnsupportedOnPlatform,
-    UnsupportedByBridge, AdbError, ScreenBusy, Timeout, BridgeError }
+    UnsupportedByBridge, AdbError, ScreenBusy, Timeout, BridgeError,
+    #[serde(other)] Unknown }                          // last: a newer bridge's new reason must not reject a batch
+impl FailReason {
+    pub const ALL: &[FailReason];                      // includes Unknown
+    pub fn key(self) -> &'static str;                  // the serde name; Unknown = "unknown"
+    pub fn from_key(key: &str) -> Option<FailReason>;  // a name no variant owns is None (only the wire is forgiving)
+}
 pub const REDELIVER_AFTER: Duration = Duration::seconds(10);
 pub const DEFAULT_EXPIRES_IN: Duration = Duration::minutes(5);
-pub fn next_status(current: CommandStatus, event: LifecycleEvent) -> Result<CommandStatus, LifecycleError>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LifecycleEvent { Leased, Done, Failed, Expired, Canceled }
+impl LifecycleEvent { pub const ALL: &[LifecycleEvent]; pub fn key(self) -> &'static str; }
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("a {} command cannot be {}", .from.key(), .event.key())]   // wire names: "a done command cannot be canceled"
+pub struct LifecycleError { pub from: CommandStatus, pub event: LifecycleEvent }
+pub fn next_status(current: CommandStatus, event: LifecycleEvent) -> Result<CommandStatus, LifecycleError>;
+// Rules of next_status:
+//   Queued  -> Leased | Failed | Expired | Canceled          (Queued -> Done is Err: a command finishes only after a lease)
+//   Leased  -> Leased (redelivery) | Done | Failed | Expired | Canceled
+//   Expired -> Done | Failed     \  a bridge's result is the truth even after the fact: it REPLACES the status;
+//   Canceled -> Done | Failed    /  such a command is never leased again
+//   Done, Failed: nothing (a recorded result is not replaced by another)
 
 // jt_devices::observation
 pub const MAX_ELEMENTS: usize = 300;
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observation { pub screen: Screen, pub foreground_app: Option<String>,
     pub elements: Vec<Element>, pub truncated: bool, pub screenshot_file_id: Option<Uuid> }
+impl Observation {
+    // Applies MAX_ELEMENTS (truncate + truncated = true); a screen within the cap is untouched and an
+    // already-set `truncated` stays set. Both drivers end an observation with this.
+    pub fn cap_elements(&mut self);
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Screen { pub w: u32, pub h: u32, pub rotation: u16 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Element { pub text: Option<String>, pub id: Option<String>, pub desc: Option<String>,
     pub class: Option<String>, pub bounds: [u32; 4], pub tap_point: [u32; 2],
     pub clickable: bool, pub editable: bool, pub focused: bool }
@@ -126,6 +169,11 @@ pub fn supports(features: &[String], cmd: &DeviceCommand) -> bool; // kind liste
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform { Android, Ios }
+impl Platform {
+    pub const ALL: &[Platform];
+    pub fn key(self) -> &'static str;                  // "android" | "ios"
+    pub fn from_key(key: &str) -> Option<Platform>;
+}
 
 // jt_device_protocol (PROTOCOL_VERSION = 1)
 pub struct RegisterIn { pub bridge_id: String, pub version: String, pub protocol: u32, pub phones: Vec<PhoneReport> }
@@ -150,6 +198,17 @@ pub struct FileOut { pub file_id: Uuid }
 
 (`#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]` and `#[serde(deny_unknown_fields)]` on every
 protocol struct; `time::serde::rfc3339` for timestamps.)
+
+Rules of the vocabulary (written in the `jt_devices` crate docs too):
+- **Growing it.** A new command kind needs a feature name (a bridge reports what it runs, and a command is queued
+  only for a bridge that lists its kind). A new field on an existing kind needs a feature name too, and is
+  `#[serde(default, skip_serializing_if = ...)]`, so an older bridge never sees it. A new `FailReason` needs
+  nothing: an older reader takes it as `Unknown`.
+- **Logging.** Log `DeviceCommand::kind()` and counts, never the `{:?}` of a command or an observation (typed text,
+  shell arguments and screen text are in them).
+- **A tagged variant without fields is an empty struct variant** (`Screenshot {}`): serde ignores unknown fields on a
+  unit variant of a tagged enum, so `deny_unknown_fields` would not hold. (`CommandResult::Done` above is such a
+  variant: write it `Done {}` in D1-T2 if extra fields should be refused there too.)
 
 ---
 
