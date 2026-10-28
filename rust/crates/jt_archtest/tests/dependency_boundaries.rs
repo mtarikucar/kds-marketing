@@ -76,17 +76,26 @@ fn devices_depend_on_no_workspace_crate() {
 /// The device wire protocol is compiled into the bridge program, which also builds on a machine
 /// without the server, so it names `jt_devices` and plain serialisation, id, time and error
 /// crates, and no other workspace crate: not even the two foundational domain crates the shared
-/// allowlist would let through. `serde_json` is a dev-dependency only, so it is not listed.
+/// allowlist would let through. `serde_json` is a normal dependency because the protocol reads a
+/// poll's commands one at a time (`CommandsOut::decode_lenient`).
 #[test]
 fn device_protocol_depends_only_on_devices_and_plain_crates() {
     let deps = direct_deps("jt_device_protocol");
     for d in &deps {
         assert!(
-            ["jt_devices", "serde", "time", "uuid", "thiserror"].contains(&d.as_str()),
+            [
+                "jt_devices",
+                "serde",
+                "serde_json",
+                "time",
+                "uuid",
+                "thiserror"
+            ]
+            .contains(&d.as_str()),
             "jt_device_protocol depends on {d}, which is neither jt_devices nor a plain serialisation, id, time or error crate"
         );
     }
-    for needed in ["jt_devices", "serde", "time", "uuid"] {
+    for needed in ["jt_devices", "serde", "serde_json", "time", "uuid"] {
         assert!(
             deps.contains(needed),
             "jt_device_protocol lost its {needed} dependency"

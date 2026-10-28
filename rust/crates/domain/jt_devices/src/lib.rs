@@ -17,6 +17,10 @@
 //! - A new field on an existing kind needs a feature name too, and is declared
 //!   `#[serde(default, skip_serializing_if = ...)]`: a command that leaves it out serializes as
 //!   it always did, so an older bridge, which refuses unknown fields, never sees it.
+//! - A new VALUE of an existing enum field (a new [`DeviceKey`] or [`ElementTarget`] variant, say)
+//!   counts as a new field: it needs a feature name too (for example `key.camera`), and
+//!   [`supports`] must check it. An older bridge cannot read the value, so without the check it
+//!   would be handed a command it can only refuse.
 //! - A new [`FailReason`] needs nothing: an older reader takes it as [`FailReason::Unknown`].
 //!
 //! # Logging
