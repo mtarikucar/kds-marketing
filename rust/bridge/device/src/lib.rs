@@ -29,7 +29,7 @@ pub use config::{BridgeKey, Config, ConfigError};
 pub use driver::{
     AttachedPhone, ContentType, DriverError, FileTransfer, PhoneDriver, PhoneRegistry,
 };
-pub use run_loop::{RunError, Timing, run};
+pub use run_loop::{RunError, Stop, Timing, run};
 
 /// Replaces the panic hook with one that logs where a panic happened (`tracing`, at `error`)
 /// and never its message. A driver's panic message is the driver's own and may quote a command

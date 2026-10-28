@@ -539,26 +539,39 @@ As built (after the spec and quality reviews):
   (`DEFAULT_EXPIRES_IN`, on the monotonic clock from its arrival) is failed as `timeout` unrun. Each command runs in a
   task of its own, bounded by `Timing::command_timeout` (120 s), or `Timing::transfer_timeout` (30 min) for
   `push_file`/`pull_file`. A command that times out is cut off: its task is aborted (the driver's future dropped) and
-  awaited, `STOP_WAIT` (5 s) and then without a bound once that is logged, so two commands never run on one phone;
-  then the worker awaits `PhoneDriver::recover()` (bounded by `RECOVER_TIMEOUT`, 30 s) before the next command. A
-  driver panic fails its command as `bridge_error` (logged at `error` with serial and command id, never the panic's
-  message), the phone recovers and the worker goes on. A worker found stopped all the same (its `send` fails) is
+  awaited, `Timing::stop_wait` (`STOP_WAIT`, 5 s) and then without a bound once that is logged, so two commands never
+  run on one phone; then the worker awaits `PhoneDriver::recover()` (bounded by `Timing::recover_timeout`,
+  `RECOVER_TIMEOUT`, 30 s; a recovery that outlasts it is aborted and awaited the same way) before the next command.
+  The command's result is sent before this cleaning up. While a phone's worker waits without a bound, the phone is
+  left out of the registers (chosen over failing its new commands at dispatch: the server stops queuing for it).
+  Every worker begins with one `recover()`: the poll loop starts a worker for each registered phone, so a phone is
+  recovered once after the bridge starts, before its first command (a crash may have cut a command off). A driver
+  panic fails its command as `bridge_error` (logged at `error` with serial and command id, never the panic's
+  message), the phone recovers and the worker goes on. Serials, which come from the server and from phones, are
+  logged with control characters blanked. A worker found stopped all the same (its `send` fails) is
   logged at `error`, the command is failed as `bridge_error` and the worker started again; the commands lost with it
   are never answered and only expire.
 - **Post.** Batches of at most `MAX_RESULTS`, at most `MAX_RESULTS_BODY_BYTES` serialized, a command once; each
   result first checked with `ResultsIn::validate` and its size, one the server would refuse replaced by a
-  `bridge_error` failure. A transport error, 5xx, 408 or 429 is retried with backoff, at most
-  `Timing::post_attempts` (`MAX_POST_ATTEMPTS`, 10: about four minutes with the default pauses) times in a row; then
-  the batch is split as on a 422, and a lone result that keeps failing is dropped with a `warn` of its command id.
+  `bridge_error` failure. A transport error, 5xx, 408 or 429 is retried with backoff. Such a failure counts against
+  `Timing::post_attempts` (`MAX_POST_ATTEMPTS`, 10) only when a register or a poll succeeded since the try before it
+  (a counter the heartbeat and the poll loop bump): the server is up and the batch is the trouble, such as a body
+  that makes a handler fail. Past the count the batch is split as on a 422, and a lone result that keeps failing is
+  dropped with a `warn` of its command id. A server outage, however long, counts nothing and drops nothing: the
+  results are posted when it is back (D1-T7 applies late results).
   **A 422 is final**: the batch is never sent again as it is but split in halves (the first half first) until the
   refused result stands alone, which is dropped with a `warn` of its command id and the 422's `details.field`. A 413
   is split the same way; any other 4xx drops the batch (`error` log).
-- **Stop.** `run` waits for the shutdown future and its three tasks together: a task that ends on its own is logged
-  at `error`, the bridge stops and `run` answers `RunError::TaskEnded` (the program exits non-zero). Stopping, polling
-  ends, a running command is cut off (and its phone recovers) and failed as `bridge_error`, queued commands stay
-  unanswered (the server hands them out again), and the results made get `Timing::shutdown_grace` (5 s, shared with
-  the cutting off) to be posted; a post in backoff is tried again at once. `main` stops on Ctrl+C, and on Ctrl+Break,
-  console close and shutdown on Windows, `SIGTERM` on Unix.
+- **Stop.** `run` waits for the shutdown future and its three tasks together (`biased`, the tasks first, in order):
+  a task that ends on its own is logged at `error`, the bridge stops and `run` answers `RunError::TaskEnded` (the
+  program exits non-zero). The shutdown future answers a `Stop`: `Graceful` (`Timing::shutdown_grace`, 5 s) or
+  `Within(d)`. Stopping, polling ends, a running command's `bridge_error` failure is sent and then the command is cut
+  off (its phone recovers), so posting and cleaning up share the grace and the failure is not lost to a slow
+  recovery; a command that ended just as the bridge stopped keeps its own outcome; queued commands stay unanswered
+  (the server hands them out again); a post in backoff is tried again at once. `main` stops gracefully on Ctrl+C,
+  Ctrl+Break and `SIGTERM`, and within `HURRIED_GRACE` (2 s) on console close, log-off and shutdown (Windows), which
+  the system follows by ending the process soon. Exit status: 0 when stopped, 2 for a configuration that cannot be
+  used, 1 when a task ended.
 - **Files.** A download goes to `https` only (plain `http` to this computer), follows up to 5 redirects, never from
   `https` down to `http`, takes at most `MAX_DOWNLOAD_BYTES` (256 MiB, checked against the announced length and as it
   arrives) and removes its file when it fails or is dropped part way. `FileTransfer::upload(bytes, ContentType)` and
@@ -581,7 +594,7 @@ intervals (tests shorten them). `main.rs` wires a registry that reports no phone
 server refuses: a `POST` without the request header (403), a body that breaks a limit (422 with `details.field`; a
 register's phone that fails `PhoneReport::validate` listed as refused), a results body over its limit (413), a file
 of another type (415).
-- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`, `posts_carry_the_requested_with_header`, `idle_polls_are_spaced_even_when_the_server_does_not_wait`, `a_driver_panic_fails_its_command_and_the_phone_keeps_working`, `only_the_configured_serials_are_listed`, `each_serial_is_listed_once_and_at_most_max_phones`, `a_failed_requests_url_is_never_logged` (fails if `without_url()` is removed), `a_failed_listing_keeps_the_last_phones`, `a_failed_report_reuses_the_last_one_for_a_few_heartbeats`, `a_register_answer_with_an_unknown_field_is_logged_by_field_and_retried`, `a_hung_command_times_out_and_the_next_runs`, `push_file_is_bounded_by_the_transfer_timeout`, `a_command_that_waited_past_its_expiry_is_failed_unrun`, `results_made_before_shutdown_are_posted`, `a_batch_over_the_body_limit_is_split`, `a_batch_refused_with_another_4xx_is_dropped`, `a_batch_the_server_keeps_failing_is_split_and_a_lone_result_dropped`; `tests/panic_hook.rs::a_panic_is_logged_by_where_it_happened_never_by_its_message`; unit tests `a_command_for_a_stopped_worker_is_failed_and_the_worker_started_again`, `the_first_task_to_end_is_named`, `a_key_that_is_not_a_string_is_not_quoted`, `a_download_goes_to_https_or_to_this_computer`, `a_plain_http_download_elsewhere_is_refused_before_any_request`, `a_download_over_the_cap_is_refused_and_leaves_no_file`, `a_download_cancelled_part_way_leaves_no_file`, `a_decoding_error_is_kept_by_its_field_only`.
+- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`, `posts_carry_the_requested_with_header`, `idle_polls_are_spaced_even_when_the_server_does_not_wait`, `a_driver_panic_fails_its_command_and_the_phone_keeps_working`, `only_the_configured_serials_are_listed`, `each_serial_is_listed_once_and_at_most_max_phones`, `a_failed_requests_url_is_never_logged` (fails if `without_url()` is removed), `a_failed_listing_keeps_the_last_phones`, `a_failed_report_reuses_the_last_one_for_a_few_heartbeats`, `a_register_answer_with_an_unknown_field_is_logged_by_field_and_retried`, `a_hung_command_times_out_and_the_next_runs`, `push_file_is_bounded_by_the_transfer_timeout`, `a_command_that_waited_past_its_expiry_is_failed_unrun`, `results_made_before_shutdown_are_posted`, `a_batch_over_the_body_limit_is_split`, `a_batch_refused_with_another_4xx_is_dropped`, `a_batch_the_server_keeps_failing_is_split_and_a_lone_result_dropped`; `tests/panic_hook.rs::a_panic_is_logged_by_where_it_happened_never_by_its_message`; unit tests `a_command_for_a_stopped_worker_is_failed_and_the_worker_started_again`, `the_first_task_to_end_is_named`, `a_key_that_is_not_a_string_is_not_quoted`, `a_download_goes_to_https_or_to_this_computer`, `a_plain_http_download_elsewhere_is_refused_before_any_request`, `a_download_over_the_cap_is_refused_and_leaves_no_file`, `a_download_cancelled_part_way_leaves_no_file`, `a_decoding_error_is_kept_by_its_field_only`, `a_stuck_phone_is_marked_while_its_guard_lives`; after the re-review `results_survive_a_server_outage`, `a_recover_that_hangs_is_cut_off_before_the_next_command`, `a_phone_is_recovered_once_when_first_registered`, `a_phone_whose_command_will_not_stop_is_left_out_of_registers` (a multi-thread runtime: the command holds its thread), `a_server_serial_is_logged_clean`; `tests/program.rs` (the built program): `a_configuration_that_cannot_be_used_exits_2_without_the_key`, `the_program_registers_and_stops_cleanly` (`SIGTERM` and exit 0 on Unix; on Windows the stop events need `GenerateConsoleCtrlEvent`, an `unsafe` call the workspace forbids, so there it only registers and is killed).
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit**.
 
 ### Task D2-T2: `AndroidAdbDriver`
@@ -654,6 +667,11 @@ What the loop (D2-T1) asks of the driver:
   bounded by `RECOVER_TIMEOUT` (30 s). The Android driver records "an IME to restore" when it sets ADBKeyBoard and
   clears it when it restores it on the normal path; `recover()` restores what is recorded and is cheap when nothing
   is. Test `recover_restores_the_ime_after_a_cut_unicode_text`.
+- **`recover()` also runs once per phone when the bridge starts** (each phone's worker begins with it), when the
+  driver has recorded nothing: a bridge killed mid-command (a crash, a closed console) may have left ADBKeyBoard as
+  the phone's IME. So on that first call the Android driver checks the phone itself: when `settings get secure
+  default_input_method` names `com.android.adbkeyboard/.AdbIME`, it restores the phone's previous IME (or the
+  first other enabled one, `ime list -s`). Test `recover_at_start_restores_a_left_adbkeyboard`.
 - **`report()` never waits behind `execute`.** It runs at every heartbeat, possibly during a 30-minute `push_file` on
   the same phone, so it takes no lock a command holds. The first `adb devices` starts the adb server and can outlast
   `Timing::report_timeout` (10 s): the loop then stands in the last good listing (none on the very first) and the last
@@ -663,7 +681,7 @@ What the loop (D2-T1) asks of the driver:
 - **A transfer has its own bound.** `adb push`/`adb pull` of a large file is bounded by a driver constant (e.g.
   `ADB_TRANSFER_TIMEOUT`) within `Timing::transfer_timeout`, not by the 120 s of other commands; every other `adb`
   call by a shorter constant of its own.
-- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_waits_for_ime_binding`, `unicode_text_ime_never_binds_is_a_failure_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `observe_reports_rotated_screen`, `miui_theme_stack_trace_is_not_a_failure`, `inject_events_refusal_with_exit_0_is_a_failure`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`, `recover_restores_the_ime_after_a_cut_unicode_text`, `report_does_not_wait_behind_execute`, `registry_returns_the_same_driver_for_the_same_serial`.
+- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_waits_for_ime_binding`, `unicode_text_ime_never_binds_is_a_failure_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `observe_reports_rotated_screen`, `miui_theme_stack_trace_is_not_a_failure`, `inject_events_refusal_with_exit_0_is_a_failure`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`, `recover_restores_the_ime_after_a_cut_unicode_text`, `recover_at_start_restores_a_left_adbkeyboard`, `report_does_not_wait_behind_execute`, `registry_returns_the_same_driver_for_the_same_serial`.
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit** `feat(device-bridge): the Android driver`.
 
 ### Task D2-T3: Windows build in CI

@@ -22,7 +22,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use jeeta_device_bridge::{
     AttachedPhone, Config, ContentType, DriverError, FileTransfer, PhoneDriver, PhoneRegistry,
-    Timing, run,
+    Stop, Timing, run,
 };
 use jt_device_protocol::{
     CommandResult, DeviceCommand, FailReason, MAX_PHONES, MAX_RESULTS_BODY_BYTES, PHONE_RETIRED,
@@ -94,6 +94,8 @@ struct Script {
     result_statuses: VecDeque<u16>,
     /// While set, every result post is answered 503.
     results_unavailable: bool,
+    /// While set, the server is down: registers, polls and result posts are answered 503.
+    outage: bool,
     /// A command whose result makes a batch refused with `refuse_status` (422 when `None`).
     refuse_batches_with: Option<Uuid>,
     refuse_status: Option<u16>,
@@ -153,6 +155,10 @@ impl Fake {
         self.script.lock().unwrap().error_body.clone()
     }
 
+    fn down(&self) -> bool {
+        self.script.lock().unwrap().outage
+    }
+
     /// How the API refuses a route call: a mutating one without the request header first (403,
     /// before the key is read, as `jt_panel_http::csrf` does), then one without the key (401).
     fn refusal(&self, headers: &HeaderMap, mutating: bool) -> Option<Response> {
@@ -188,6 +194,9 @@ fn refused_body(field: &str) -> Response {
 async fn register(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
     if let Some(refused) = fake.refusal(&headers, true) {
         return refused;
+    }
+    if fake.down() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let body: Value = serde_json::from_slice(&body).unwrap();
     fake.seen
@@ -244,6 +253,9 @@ async fn commands(
 ) -> Response {
     if let Some(refused) = fake.refusal(&headers, false) {
         return refused;
+    }
+    if fake.down() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     {
         let mut seen = fake.seen.lock().unwrap();
@@ -304,7 +316,7 @@ async fn results(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) ->
             .is_some_and(|id| ids.contains(&id.to_string()));
         let status = if refused {
             script.refuse_status.unwrap_or(422)
-        } else if script.results_unavailable {
+        } else if script.results_unavailable || script.outage {
             503
         } else {
             script.result_statuses.pop_front().unwrap_or(200)
@@ -493,8 +505,10 @@ struct PhoneLog {
     runs: Vec<Run>,
     /// Commands whose future was dropped before they finished: serial, command, when.
     cuts: Vec<(String, String, Instant)>,
-    /// Calls of `recover`: serial and when.
+    /// Calls of `recover` that ended: serial and when.
     recovers: Vec<(String, Instant)>,
+    /// Calls of `recover` whose future was dropped before they ended: serial and when.
+    recover_cuts: Vec<(String, Instant)>,
     /// Commands that started: serial, command, when.
     started: Vec<(String, String, Instant)>,
 }
@@ -520,12 +534,44 @@ impl Drop for Running {
     }
 }
 
+/// How a fake phone recovers.
+#[derive(Clone, Copy, Debug)]
+enum Recovery {
+    /// At once.
+    Quick,
+    /// Never: the call hangs.
+    Hangs,
+    /// At once the first time, then (after a cut-off command) only after two seconds.
+    SlowAfterACut,
+}
+
+/// A recovery under way on a fake phone: logged as cut when dropped before it ends.
+struct Recovering {
+    log: Log,
+    serial: String,
+    done: bool,
+}
+
+impl Drop for Recovering {
+    fn drop(&mut self) {
+        if let Ok(mut log) = self.log.lock() {
+            let at = (self.serial.clone(), Instant::now());
+            if self.done {
+                log.recovers.push(at);
+            } else {
+                log.recover_cuts.push(at);
+            }
+        }
+    }
+}
+
 struct FakePhone {
     serial: String,
     delay: Duration,
     log: Log,
     reports: Vec<Mode>,
     reported: AtomicUsize,
+    recovery: Recovery,
 }
 
 /// What a fake phone calls a command in its log.
@@ -586,6 +632,12 @@ impl PhoneDriver for FakePhone {
             DeviceCommand::Key { .. } => panic!("fake driver bug: PANIC-DETAIL-77"),
             // A command that never ends.
             DeviceCommand::LongPress { .. } => std::future::pending().await,
+            // A command that holds its thread and cannot be cut off until it lets go (the
+            // runtime hands its other tasks to another thread meanwhile: multi-thread only).
+            DeviceCommand::Swipe { .. } => {
+                tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(800)));
+                Ok(CommandResult::Done {})
+            }
             DeviceCommand::Screenshot {} => files
                 .upload(PNG.to_vec(), ContentType::Png)
                 .await
@@ -622,11 +674,24 @@ impl PhoneDriver for FakePhone {
     }
 
     async fn recover(&self) {
-        self.log
-            .lock()
-            .unwrap()
-            .recovers
-            .push((self.serial.clone(), Instant::now()));
+        let mut recovering = Recovering {
+            log: self.log.clone(),
+            serial: self.serial.clone(),
+            done: false,
+        };
+        let cut_before = {
+            let log = self.log.lock().unwrap();
+            log.cuts.iter().any(|(serial, _, _)| *serial == self.serial)
+        };
+        match self.recovery {
+            Recovery::Quick => {}
+            Recovery::Hangs => std::future::pending::<()>().await,
+            Recovery::SlowAfterACut if cut_before => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Recovery::SlowAfterACut => {}
+        }
+        recovering.done = true;
     }
 }
 
@@ -709,6 +774,7 @@ fn bridge_with(
     let task = tokio::spawn(async move {
         let stopped = async {
             let _ = stopped.await;
+            Stop::Graceful
         };
         run(&config, registry, timing, stopped).await.unwrap();
     });
@@ -722,6 +788,7 @@ struct Setup<'a> {
     timing: Timing,
     listing: Vec<Mode>,
     reports: Vec<Mode>,
+    recovery: Recovery,
 }
 
 impl<'a> Setup<'a> {
@@ -732,6 +799,7 @@ impl<'a> Setup<'a> {
             timing: quick(),
             listing: Vec::new(),
             reports: Vec::new(),
+            recovery: Recovery::Quick,
         }
     }
 
@@ -754,6 +822,7 @@ impl<'a> Setup<'a> {
                     log: log.clone(),
                     reports: self.reports.clone(),
                     reported: AtomicUsize::new(0),
+                    recovery: self.recovery,
                 }),
             })
             .collect();
@@ -857,14 +926,17 @@ fn bridge_lines(text: &str) -> Vec<&str> {
 #[tokio::test]
 async fn registers_on_start_and_every_heartbeat() {
     let _logs = Logs::capture();
-    // The server asks for a register every 5 of its seconds: 100 ms here. The protocol's own 15
-    // would be 300 ms.
-    let heartbeat = Duration::from_millis(100);
+    // A server second of 40 ms; the server asks for a register every 5 of them: 200 ms. The
+    // protocol's own 15 would be 600 ms.
+    let heartbeat = Duration::from_millis(200);
     let script = Script {
         heartbeat_s: 5,
         ..Script::default()
     };
-    let rig = Rig::start(script, &[("R58N1", 0)]).await;
+    let phones = [("R58N1", 0)];
+    let mut setup = Setup::new(&phones);
+    setup.timing.server_second = Duration::from_millis(40);
+    let rig = setup.start(script).await;
     rig.until("three registers", |s| s.registers.len() >= 3)
         .await;
     {
@@ -1377,17 +1449,17 @@ async fn a_driver_panic_fails_its_command_and_the_phone_keeps_working() {
         );
     }
     assert_eq!(rig.ran(), ["tap 2"]);
-    // The phone recovered before its next command.
+    // The phone recovered (once at start, once after the panic) before its next command.
     {
         let phones = rig.phones();
-        assert_eq!(phones.recovers.len(), 1);
+        assert_eq!(phones.recovers.len(), 2);
         let tap_2 = phones
             .started
             .iter()
             .find(|(_, w, _)| w == "tap 2")
             .unwrap()
             .2;
-        assert!(phones.recovers[0].1 <= tap_2);
+        assert!(phones.recovers[1].1 <= tap_2);
     }
     // Logged at error level with the serial and the command id, never the panic's message.
     let text = logs.text();
@@ -1432,8 +1504,9 @@ async fn a_hung_command_times_out_and_the_next_runs() {
         assert_eq!(phones.cuts.len(), 1);
         let (_, cut_what, cut) = &phones.cuts[0];
         assert_eq!(cut_what, "long_press");
-        assert_eq!(phones.recovers.len(), 1);
-        let recovered = phones.recovers[0].1;
+        // Once at start, once after the cut.
+        assert_eq!(phones.recovers.len(), 2);
+        let recovered = phones.recovers[1].1;
         let tap_2 = phones
             .started
             .iter()
@@ -1509,13 +1582,19 @@ async fn results_made_before_shutdown_are_posted() {
         polls: [poll(vec![
             leased(1, "PHONE_A", tap(1)),
             leased(2, "PHONE_B", hang()),
+            // Queued behind the hung one.
+            leased(3, "PHONE_B", tap(3)),
         ])]
         .into(),
         // The server takes no result before the bridge is told to stop.
         results_unavailable: true,
         ..Script::default()
     };
-    let rig = Rig::start(script, &[("PHONE_A", 0), ("PHONE_B", 0)]).await;
+    let phones = [("PHONE_A", 0), ("PHONE_B", 0)];
+    let mut setup = Setup::new(&phones);
+    // After a cut, a phone takes two seconds to recover: longer than the whole grace (500 ms).
+    setup.recovery = Recovery::SlowAfterACut;
+    let rig = setup.start(script).await;
     rig.until("a refused post", |s| !s.posts.is_empty()).await;
     rig.until_phones("the hung command running", |p| {
         p.started.iter().any(|(_, w, _)| w == "long_press")
@@ -1525,8 +1604,9 @@ async fn results_made_before_shutdown_are_posted() {
     let fake = rig.fake.clone();
     let log = rig.log.clone();
     rig.stop().await;
-    // Once the bridge has stopped: the result made before is posted, and the running command
-    // was cut off, its phone recovered, and its failure posted.
+    // Once the bridge has stopped: the result made before is posted, and so is the failure of
+    // the command cut off, though its phone's recovery outlasted the grace (the failure is sent
+    // before the cutting off and the recovery).
     let seen = fake.seen.lock().unwrap();
     assert_eq!(
         accepted_for(&seen, 1)[0]["outcome"],
@@ -1535,11 +1615,164 @@ async fn results_made_before_shutdown_are_posted() {
     let cut = &accepted_for(&seen, 2)[0]["outcome"];
     assert_eq!(cut["reason"], "bridge_error");
     assert!(cut["detail"].as_str().unwrap().contains("stopped"), "{cut}");
+    // The command queued behind it was neither run nor answered: the server hands it out again.
+    assert!(
+        seen.posts
+            .iter()
+            .all(|(_, body, _)| !posted_ids(body).contains(&id(3).to_string()))
+    );
     let phones = log.lock().unwrap();
+    assert!(phones.started.iter().all(|(_, w, _)| w != "tap 3"));
     assert_eq!(phones.cuts.len(), 1);
     assert_eq!(phones.cuts[0].0, "PHONE_B");
-    assert_eq!(phones.recovers.len(), 1);
-    assert_eq!(phones.recovers[0].0, "PHONE_B");
+    // Each phone recovered at start; the slow recovery after the cut did not end in the grace.
+    let recovered = |serial: &str| phones.recovers.iter().filter(|(s, _)| s == serial).count();
+    assert_eq!((recovered("PHONE_A"), recovered("PHONE_B")), (1, 1));
+}
+
+#[tokio::test]
+async fn a_recover_that_hangs_is_cut_off_before_the_next_command() {
+    let logs = Logs::capture();
+    let script = Script {
+        polls: [poll(vec![leased(1, "R58N1", tap(1))])].into(),
+        ..Script::default()
+    };
+    let phones = [("R58N1", 0)];
+    let mut setup = Setup::new(&phones);
+    // The phone's recovery never ends: the one at start outlasts its bound.
+    setup.recovery = Recovery::Hangs;
+    setup.timing.recover_timeout = Duration::from_millis(100);
+    let rig = setup.start(script).await;
+    rig.until("the result", |s| accepted_for(s, 1).len() == 1)
+        .await;
+    {
+        // The recovery was cut off (its future dropped) before the command started.
+        let phones = rig.phones();
+        assert_eq!(phones.recover_cuts.len(), 1);
+        let tap_1 = phones
+            .started
+            .iter()
+            .find(|(_, w, _)| w == "tap 1")
+            .unwrap()
+            .2;
+        assert!(phones.recover_cuts[0].1 <= tap_1);
+    }
+    assert!(
+        logs.text().contains("did not recover in time"),
+        "{}",
+        logs.text()
+    );
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn a_phone_is_recovered_once_when_first_registered() {
+    let _logs = Logs::capture();
+    let script = Script {
+        heartbeat_s: 3,
+        // A command arrives a little after the phone is first registered.
+        polls: [Poll {
+            delay: Duration::from_millis(50),
+            ..poll(vec![leased(1, "R58N1", tap(1))])
+        }]
+        .into(),
+        ..Script::default()
+    };
+    let rig = Rig::start(script, &[("R58N1", 0), ("IDLE", 0)]).await;
+    rig.until("five registers and the result", |s| {
+        s.registers.len() >= 5 && accepted_for(s, 1).len() == 1
+    })
+    .await;
+    {
+        let phones = rig.phones();
+        // Each phone once, the one without commands too, however many registers; and before the
+        // phone's first command.
+        for serial in ["R58N1", "IDLE"] {
+            let times: Vec<Instant> = phones
+                .recovers
+                .iter()
+                .filter(|(s, _)| s == serial)
+                .map(|(_, at)| *at)
+                .collect();
+            assert_eq!(times.len(), 1, "{serial}");
+        }
+        let first = phones
+            .recovers
+            .iter()
+            .find(|(s, _)| s == "R58N1")
+            .unwrap()
+            .1;
+        let tap_1 = phones
+            .started
+            .iter()
+            .find(|(_, w, _)| w == "tap 1")
+            .unwrap()
+            .2;
+        assert!(first <= tap_1);
+    }
+    rig.stop().await;
+}
+
+/// A phone whose command holds its thread past the cut-off: it waits for it without a bound, and
+/// meanwhile is left out of the registers, so the server stops sending it commands. A runtime
+/// with threads of its own, so the held thread does not hold the fake Jeeta too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_phone_whose_command_will_not_stop_is_left_out_of_registers() {
+    let script = Script {
+        heartbeat_s: 3,
+        polls: [poll(vec![leased(
+            1,
+            "R58N1",
+            json!({ "kind": "swipe", "x1": 1, "y1": 1, "x2": 2, "y2": 2, "ms": 100 }),
+        )])]
+        .into(),
+        ..Script::default()
+    };
+    let phones = [("R58N1", 0)];
+    let mut setup = Setup::new(&phones);
+    // The swipe holds its thread 800 ms: cut off at 100, given 100 more to stop.
+    setup.timing.command_timeout = Duration::from_millis(100);
+    setup.timing.stop_wait = Duration::from_millis(100);
+    let rig = setup.start(script).await;
+    rig.until("the phone left out and then listed again", |s| {
+        let listed: Vec<bool> = s
+            .registers
+            .iter()
+            .map(|(_, body)| registered_serials(body).contains(&"R58N1".to_owned()))
+            .collect();
+        let out = listed.iter().position(|l| !l);
+        out.is_some_and(|out| listed[out..].iter().any(|l| *l))
+    })
+    .await;
+    {
+        let seen = rig.seen();
+        // Listed at first, and its command's failure posted at the timeout, not held until the
+        // command let go.
+        assert!(registered_serials(&seen.registers[0].1).contains(&"R58N1".to_owned()));
+        assert_eq!(accepted_for(&seen, 1)[0]["outcome"]["reason"], "timeout");
+    }
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn a_server_serial_is_logged_clean() {
+    let logs = Logs::capture();
+    // A command for a phone the server names with control characters.
+    let script = Script {
+        polls: [poll(vec![leased(1, "FORGED\u{1b}[31m\nSERIAL", tap(1))])].into(),
+        ..Script::default()
+    };
+    let rig = Rig::start(script, &[("R58N1", 0)]).await;
+    rig.until("the result", |s| accepted_for(s, 1).len() == 1)
+        .await;
+    assert_eq!(
+        accepted_for(&rig.seen(), 1)[0]["outcome"]["reason"],
+        "device_offline"
+    );
+    let text = logs.text();
+    assert!(text.contains("FORGED [31m SERIAL"), "{text}");
+    assert!(!text.contains('\u{1b}'), "{text}");
+    rig.stop().await;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1693,7 +1926,8 @@ async fn a_batch_refused_with_another_4xx_is_dropped() {
 #[tokio::test]
 async fn a_batch_the_server_keeps_failing_is_split_and_a_lone_result_dropped() {
     let logs = Logs::capture();
-    // The server fails (503) every batch that holds the second result, forever.
+    // The server is up (its polls are answered) but fails (503) every batch that holds the
+    // second result, forever.
     let script = Script {
         polls: three_unreadable(),
         refuse_batches_with: Some(id(2)),
@@ -1704,26 +1938,39 @@ async fn a_batch_the_server_keeps_failing_is_split_and_a_lone_result_dropped() {
     let mut setup = Setup::new(&phones);
     setup.timing.post_attempts = 2;
     let rig = setup.start(script).await;
-    rig.until("eight posts", |s| s.posts.len() >= 8).await;
+    rig.until("the others accepted and the failing one dropped", |s| {
+        accepted_for(s, 1).len() == 1 && accepted_for(s, 3).len() == 1
+    })
+    .await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !logs.text().contains("kept failing a result") {
+        assert!(Instant::now() < deadline, "{}", logs.text());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let posted = rig.seen().posts.len();
     // Longer than the longest pause: nothing more is sent.
     tokio::time::sleep(Duration::from_millis(300)).await;
     {
         let seen = rig.seen();
-        // Each batch gets two tries, then is split; the lone failing result is dropped, and
-        // the others are not held up by it.
-        assert_eq!(
-            posts(&seen),
-            [
-                (ids(&[1, 2, 3]), 503),
-                (ids(&[1, 2, 3]), 503),
-                (ids(&[1]), 200),
-                (ids(&[2, 3]), 503),
-                (ids(&[2, 3]), 503),
-                (ids(&[2]), 503),
-                (ids(&[2]), 503),
-                (ids(&[3]), 200),
-            ]
+        assert_eq!(seen.posts.len(), posted);
+        let posts = posts(&seen);
+        // Each batch that holds the failing result failed, and they shrank: three, two, then
+        // the failing one alone, tried at least as often as the count allows before it went.
+        let failing: Vec<usize> = posts
+            .iter()
+            .filter(|(ids, _)| ids.contains(&id(2).to_string()))
+            .map(|(ids, status)| {
+                assert_eq!(*status, 503);
+                ids.len()
+            })
+            .collect();
+        assert!(failing.windows(2).all(|w| w[1] <= w[0]), "{failing:?}");
+        assert_eq!(failing.first(), Some(&3));
+        assert!(
+            failing.iter().filter(|n| **n == 1).count() >= 2,
+            "{failing:?}"
         );
+        assert!(accepted_for(&seen, 2).is_empty());
     }
     let text = logs.text();
     let dropped = text
@@ -1734,6 +1981,42 @@ async fn a_batch_the_server_keeps_failing_is_split_and_a_lone_result_dropped() {
         dropped.contains("WARN") && dropped.contains(&id(2).to_string()),
         "{dropped}"
     );
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn results_survive_a_server_outage() {
+    let logs = Logs::capture();
+    let script = Script {
+        polls: [poll(vec![leased(1, "R58N1", tap(1))])].into(),
+        ..Script::default()
+    };
+    // The command takes 150 ms: the server goes down while it runs.
+    let phones = [("R58N1", 150)];
+    let mut setup = Setup::new(&phones);
+    setup.timing.post_attempts = 2;
+    let rig = setup.start(script).await;
+    rig.until_phones("the command running", |p| !p.started.is_empty())
+        .await;
+    rig.fake.script.lock().unwrap().outage = true;
+    // Far more failed tries than the count allows, while nothing else gets through either.
+    rig.until("six failed posts", |s| {
+        s.posts
+            .iter()
+            .filter(|(_, _, status)| *status == 503)
+            .count()
+            >= 6
+    })
+    .await;
+    rig.fake.script.lock().unwrap().outage = false;
+    rig.until("the result accepted", |s| accepted_for(s, 1).len() == 1)
+        .await;
+    assert_eq!(
+        accepted_for(&rig.seen(), 1)[0]["outcome"],
+        json!({ "status": "done", "result": { "kind": "done" } })
+    );
+    let text = logs.text();
+    assert!(!text.contains("kept failing"), "{text}");
     rig.stop().await;
 }
 

@@ -3,80 +3,89 @@
 //!
 //! - **Register** on start, then every `heartbeat_s` the server answers, with the phones the
 //!   registry lists: only the configured `serials`, if any; each serial once; at most
-//!   [`MAX_PHONES`]; never a retired one. A listing that fails, panics or takes too long is
-//!   replaced by the last good one, and a phone whose report fails by its last good report for
-//!   up to [`STALE_REPORT_HEARTBEATS`] registers, so a slow `adb` does not take phones offline. A
-//!   phone the server refuses is logged with its serial and the reason (when the refusal is new);
-//!   a retired one ([`PHONE_RETIRED`]) is not listed again until the bridge restarts. A failed
+//!   [`MAX_PHONES`]; never a retired one, nor one whose worker waits on a task that will not stop
+//!   (see *Cut off*). A listing that fails, panics or takes too long is replaced by the last good
+//!   one, and a phone whose report fails by its last good report for up to
+//!   [`STALE_REPORT_HEARTBEATS`] registers, so a slow `adb` does not take phones offline. A phone
+//!   the server refuses is logged with its serial and the reason (when the refusal is new); a
+//!   retired one ([`PHONE_RETIRED`]) is not listed again until the bridge restarts. A failed
 //!   register is tried again after a growing pause, at most a heartbeat.
 //! - **Poll** while a phone is registered: at once after a poll that brought work, and at least
 //!   [`Timing::idle_poll_floor`] after asking for one that brought none. A failed poll (no answer,
 //!   an error status, or a body that is not a poll) is logged and followed by a growing pause: it
 //!   is never read as an idle poll.
 //! - **Run** the commands of different phones at the same time, and those of one phone one after
-//!   the other in the order they came: one worker per phone. A command id runs once: the last
-//!   [`RECENT_IDS`] ids are remembered, so a command handed out again (spec §3: not acknowledged
-//!   within 10 s) is skipped. A command this build cannot read is failed by its id as
+//!   the other in the order they came: one worker per phone, started for each registered phone.
+//!   A worker begins with [`PhoneDriver::recover`]: the first time the bridge sees a phone since
+//!   it started, a command a crash cut off may have left it changed. A command id runs once: the
+//!   last [`RECENT_IDS`] ids are remembered, so a command handed out again (spec §3: not
+//!   acknowledged within 10 s) is skipped. A command this build cannot read is failed by its id as
 //!   `unsupported_by_bridge`, the decoder's message as the failure's detail. One that waited in
 //!   its phone's queue longer than [`Timing::stale_after`] is failed as `timeout` without being
 //!   run.
 //! - **Cut off** a command that outlasts its timeout, or that runs when the bridge stops: its
-//!   task is aborted, which drops the driver's future, and the phone's next step waits until it
-//!   is gone; then the worker awaits [`PhoneDriver::recover`]. Each command runs in a task of its
-//!   own, so a driver that panics fails that command as `bridge_error` (and its phone recovers)
-//!   while the phone's worker goes on.
+//!   result is sent first, then its task is aborted, which drops the driver's future, and the
+//!   phone's next step waits until it is gone; then the worker awaits [`PhoneDriver::recover`],
+//!   which is cut off the same way when it outlasts its own bound. Each command runs in a task of
+//!   its own, so a driver that panics fails that command as `bridge_error` (and its phone
+//!   recovers) while the phone's worker goes on. A task that does not stop within
+//!   [`Timing::stop_wait`] is logged and waited for without a bound, and its phone is left out of
+//!   the registers meanwhile, so the server stops sending it commands.
 //! - **Post** the results in batches of what is ready ([`MAX_RESULTS`] at most, and
 //!   [`MAX_RESULTS_BODY_BYTES`] serialized). A post that got no answer, a server error, or a 408
 //!   or 429 is sent again after a growing pause (results are applied once per command, so that
-//!   is safe), at most [`Timing::post_attempts`] times in a row: then the batch is split as a
-//!   refused one is. A refused batch (422 or 413) is refused for good and is never sent again as
-//!   it is: it is split in halves until the result the server refuses stands alone, and that
-//!   result is dropped. Before it is batched, a result is checked against the protocol's limits:
-//!   one that breaks them is replaced by a `bridge_error` failure, so the server is not sent what
-//!   it must refuse.
+//!   is safe). Such a failure counts against [`Timing::post_attempts`] only when a register or a
+//!   poll succeeded since the try before it: the server is up, and the batch is the trouble. A
+//!   batch over the count is split as a refused one is; an outage, however long, drops nothing. A
+//!   refused batch (422 or 413) is refused for good and is never sent again as it is: it is split
+//!   in halves until the result the server refuses stands alone, and that result is dropped.
+//!   Before it is batched, a result is checked against the protocol's limits: one that breaks
+//!   them is replaced by a `bridge_error` failure, so the server is not sent what it must refuse.
 //! - **Stop** when the shutdown future completes, or when one of the three tasks ends on its own
 //!   (logged at `error`; [`run`] then answers [`RunError::TaskEnded`]). Polling stops, a running
-//!   command is cut off and failed as `bridge_error`, commands still queued stay unanswered (the
-//!   server hands them out again later), and the results made get [`Timing::shutdown_grace`],
-//!   shared with the cutting off, to be posted.
+//!   command is failed as `bridge_error` and cut off (its phone recovers), commands still queued
+//!   stay unanswered (the server hands them out again later), and the results made get the
+//!   grace ([`Timing::shutdown_grace`], or less, as [`Stop`] says), shared with the cutting off,
+//!   to be posted.
 //!
 //! # Logging
 //!
-//! Command ids, kinds and statuses, failure reasons, phone serials, counts, and request errors
-//! without URLs. Never the key, a command's arguments, an observation, shell output, a file, a
-//! failure's detail, a panic's message or a signed address.
+//! Command ids, kinds and statuses, failure reasons, phone serials (control characters blanked),
+//! counts, and request errors without URLs. Never the key, a command's arguments, an
+//! observation, shell output, a file, a failure's detail, a panic's message or a signed address.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use jt_device_protocol::{
-    CommandsOut, CommandsQuery, DeviceCommand, FailReason, HEARTBEAT_S, LeasedCommand,
-    MAX_COMMANDS, MAX_PHONES, MAX_RESULTS, MAX_RESULTS_BODY_BYTES, MAX_WAIT_S, Outcome,
-    PHONE_RETIRED, PROTOCOL_VERSION, PhoneReport, RegisterIn, ResultIn, ResultsIn,
+    CommandResult, CommandsOut, CommandsQuery, DeviceCommand, FailReason, HEARTBEAT_S,
+    LeasedCommand, MAX_COMMANDS, MAX_PHONES, MAX_RESULTS, MAX_RESULTS_BODY_BYTES, MAX_WAIT_S,
+    Outcome, PHONE_RETIRED, PROTOCOL_VERSION, PhoneReport, RegisterIn, ResultIn, ResultsIn,
 };
 use jt_devices::DEFAULT_EXPIRES_IN;
 use tokio::sync::{mpsc, watch};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::client::{ClientError, JeetaClient};
 use crate::config::Config;
-use crate::driver::{AttachedPhone, PhoneDriver, PhoneRegistry};
+use crate::driver::{AttachedPhone, DriverError, PhoneDriver, PhoneRegistry};
 
 /// How many command ids the bridge remembers to run each once.
 pub const RECENT_IDS: usize = 1000;
-/// How many transient failures in a row a batch of results gets before it is split as a refused
-/// one is (and a lone result dropped). With the default pauses, 1 s doubling to 60 s, ten tries
-/// take about four minutes: within the five of a command's default expiry.
+/// How many transient failures (counted while the server is up) a batch of results gets before
+/// it is split as a refused one is, and a lone result dropped.
 pub const MAX_POST_ATTEMPTS: u32 = 10;
 /// For how many registers in a row a phone's last good report stands in for one that failed.
 pub const STALE_REPORT_HEARTBEATS: u32 = 3;
-/// How long a cut-off command's task may take to stop before that is logged. The phone's next
-/// step waits for it all the same: two commands never run on one phone at once.
+/// How long a cut-off task may take to stop before that is logged and its phone left out of
+/// the registers. The phone's next step waits for it all the same: two commands never run on
+/// one phone at once.
 pub const STOP_WAIT: Duration = Duration::from_secs(5);
 /// How long [`PhoneDriver::recover`] may take.
 pub const RECOVER_TIMEOUT: Duration = Duration::from_secs(30);
@@ -104,12 +113,17 @@ pub struct Timing {
     /// `backoff_max`, and a success brings it back.
     pub backoff_min: Duration,
     pub backoff_max: Duration,
-    /// How many transient failures in a row a batch of results gets ([`MAX_POST_ATTEMPTS`]).
+    /// How many transient failures, counted while the server is up, a batch of results gets
+    /// ([`MAX_POST_ATTEMPTS`]).
     pub post_attempts: u32,
     /// How long a driver may take over one command before it is cut off and failed as `timeout`.
     pub command_timeout: Duration,
     /// The same for `push_file` and `pull_file`, which move a whole file.
     pub transfer_timeout: Duration,
+    /// How long a cut-off task may take to stop ([`STOP_WAIT`]).
+    pub stop_wait: Duration,
+    /// How long [`PhoneDriver::recover`] may take ([`RECOVER_TIMEOUT`]).
+    pub recover_timeout: Duration,
     /// How long listing the phones, and reading one, may take before the last good listing or
     /// report stands in.
     pub report_timeout: Duration,
@@ -133,11 +147,22 @@ impl Default for Timing {
             post_attempts: MAX_POST_ATTEMPTS,
             command_timeout: Duration::from_secs(120),
             transfer_timeout: Duration::from_secs(30 * 60),
+            stop_wait: STOP_WAIT,
+            recover_timeout: RECOVER_TIMEOUT,
             report_timeout: Duration::from_secs(10),
             stale_after: DEFAULT_EXPIRES_IN.unsigned_abs(),
             shutdown_grace: Duration::from_secs(5),
         }
     }
+}
+
+/// How the bridge is told to stop: what [`run`]'s shutdown future answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// Within [`Timing::shutdown_grace`].
+    Graceful,
+    /// Within this, when it is shorter: the system ends the process soon.
+    Within(Duration),
 }
 
 /// Why [`run`] ended other than by its shutdown future.
@@ -167,12 +192,14 @@ pub async fn run(
     config: &Config,
     registry: Arc<dyn PhoneRegistry>,
     timing: Timing,
-    shutdown: impl Future<Output = ()>,
+    shutdown: impl Future<Output = Stop>,
 ) -> Result<(), RunError> {
     let client = JeetaClient::new(config).map_err(RunError::Start)?;
     let (stop_tx, stop) = watch::channel(false);
     let (table_tx, table_rx) = watch::channel(PhoneTable::default());
     let (results_tx, results_rx) = mpsc::unbounded_channel();
+    let up = ServerUp::default();
+    let stuck = Stuck::default();
     let listing = Listing {
         bridge_id: config.bridge_id().to_owned(),
         serials: config.serials().map(<[String]>::to_vec),
@@ -183,15 +210,21 @@ pub async fn run(
         listing,
         table_tx,
         timing.clone(),
+        up.clone(),
+        stuck.clone(),
     ));
     let mut poll = tokio::spawn(poll(
-        client.clone(),
-        table_rx,
-        results_tx,
-        timing.clone(),
-        stop.clone(),
+        Workers::new(
+            table_rx,
+            client.clone(),
+            results_tx,
+            timing.clone(),
+            stop.clone(),
+            stuck,
+        ),
+        up.clone(),
     ));
-    let mut post = tokio::spawn(post(client, results_rx, timing.clone(), stop));
+    let mut post = tokio::spawn(post(client, results_rx, timing.clone(), stop, up));
 
     let ended = first_end(
         shutdown,
@@ -202,18 +235,23 @@ pub async fn run(
         ],
     )
     .await;
-    if let Some(task) = ended {
-        error!(
-            task,
-            "a task of the bridge ended while it ran; the bridge stops"
-        );
-    }
+    let grace = match ended {
+        Ended::Shutdown(Stop::Within(grace)) => grace.min(timing.shutdown_grace),
+        Ended::Shutdown(Stop::Graceful) => timing.shutdown_grace,
+        Ended::Task(task) => {
+            error!(
+                task,
+                "a task of the bridge ended while it ran; the bridge stops"
+            );
+            timing.shutdown_grace
+        }
+    };
     let _ = stop_tx.send(true);
     heartbeat.abort();
     // The poll task stops, and its workers cut off what runs and end: then no sender of results
     // is left, and the poster ends once it has posted what they made.
-    let deadline = tokio::time::Instant::now() + timing.shutdown_grace;
-    if ended != Some("poll") {
+    let deadline = tokio::time::Instant::now() + grace;
+    if ended != Ended::Task("poll") {
         settle(
             &mut poll,
             deadline,
@@ -221,27 +259,36 @@ pub async fn run(
         )
         .await;
     }
-    if ended != Some("post") {
+    if ended != Ended::Task("post") {
         settle(&mut post, deadline, "results not yet posted at shutdown").await;
     }
     info!("the bridge stopped");
     match ended {
-        None => Ok(()),
-        Some(task) => Err(RunError::TaskEnded(task)),
+        Ended::Shutdown(_) => Ok(()),
+        Ended::Task(task) => Err(RunError::TaskEnded(task)),
     }
 }
 
-/// Waits for `shutdown`, or for one of `tasks` to end first, and answers that one's name.
+/// What ended the bridge's run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ended {
+    Shutdown(Stop),
+    Task(&'static str),
+}
+
+/// Waits for `shutdown`, or for one of `tasks` to end first (looked at in their order), and
+/// answers which.
 async fn first_end(
-    shutdown: impl Future<Output = ()>,
+    shutdown: impl Future<Output = Stop>,
     tasks: [(&'static str, &mut JoinHandle<()>); 3],
-) -> Option<&'static str> {
+) -> Ended {
     let [(a, first), (b, second), (c, third)] = tasks;
     tokio::select! {
-        () = shutdown => None,
-        _ = first => Some(a),
-        _ = second => Some(b),
-        _ = third => Some(c),
+        biased;
+        _ = first => Ended::Task(a),
+        _ = second => Ended::Task(b),
+        _ = third => Ended::Task(c),
+        stop = shutdown => Ended::Shutdown(stop),
     }
 }
 
@@ -264,6 +311,55 @@ async fn pause(stop: &mut watch::Receiver<bool>, pause: Duration) -> bool {
         biased;
         () = stopping(stop) => true,
         () = tokio::time::sleep(pause) => false,
+    }
+}
+
+/// How many registers and polls the server has answered: it is up when the count moves.
+#[derive(Clone, Default)]
+struct ServerUp(Arc<AtomicU64>);
+
+impl ServerUp {
+    fn answered(&self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn count(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// The phones whose worker waits on a task that will not stop: left out of the registers.
+#[derive(Clone, Default)]
+struct Stuck(Arc<Mutex<HashSet<String>>>);
+
+impl Stuck {
+    fn contains(&self, serial: &str) -> bool {
+        self.0.lock().is_ok_and(|stuck| stuck.contains(serial))
+    }
+
+    /// Marks `serial` stuck until the guard is dropped.
+    fn mark(&self, serial: &str) -> StuckGuard {
+        if let Ok(mut stuck) = self.0.lock() {
+            stuck.insert(serial.to_owned());
+        }
+        StuckGuard {
+            stuck: self.clone(),
+            serial: serial.to_owned(),
+        }
+    }
+}
+
+/// A phone marked stuck; unmarked when dropped.
+struct StuckGuard {
+    stuck: Stuck,
+    serial: String,
+}
+
+impl Drop for StuckGuard {
+    fn drop(&mut self) {
+        if let Ok(mut stuck) = self.stuck.0.lock() {
+            stuck.remove(&self.serial);
+        }
     }
 }
 
@@ -340,7 +436,8 @@ impl RecentIds {
     }
 }
 
-/// Text from the server (a refusal's reason, a serial), fit for one log line.
+/// Text from the server or a phone (a reason, a serial), fit for one log line: control
+/// characters blanked, cut short.
 fn loggable(text: &str) -> String {
     text.chars()
         .take(MAX_LOGGED_CHARS)
@@ -375,6 +472,8 @@ async fn heartbeat(
     listing: Listing,
     table: watch::Sender<PhoneTable>,
     timing: Timing,
+    up: ServerUp,
+    stuck: Stuck,
 ) {
     let mut retired: HashSet<String> = HashSet::new();
     let mut refusals: HashMap<String, String> = HashMap::new();
@@ -383,7 +482,7 @@ async fn heartbeat(
     let mut backoff = Backoff::new(&timing);
     let mut every = timing.server_second * HEARTBEAT_S;
     loop {
-        let listed = listed_phones(&registry, &listing, &retired, &mut last, &timing).await;
+        let listed = listed_phones(&registry, &listing, &retired, &stuck, &mut last, &timing).await;
         let sent: HashSet<String> = listed.iter().map(|(p, _)| p.serial.clone()).collect();
         let body = RegisterIn {
             bridge_id: listing.bridge_id.clone(),
@@ -393,6 +492,7 @@ async fn heartbeat(
         };
         let pause = match client.register(&body).await {
             Ok(out) => {
+                up.answered();
                 backoff.reset();
                 every = timing.server_second * out.heartbeat_s.clamp(1, MAX_HEARTBEAT_S);
                 let mut now_refused = HashMap::new();
@@ -428,7 +528,7 @@ async fn heartbeat(
                     .into_iter()
                     .filter_map(|p| drivers.get(&p.serial).map(|d| (p.serial, d.clone())))
                     .collect();
-                let mut serials: Vec<String> = phones.keys().cloned().collect();
+                let mut serials: Vec<String> = phones.keys().map(|s| loggable(s)).collect();
                 serials.sort();
                 if serials != registered {
                     info!(phones = serials.len(), serials = ?serials, "registered phones");
@@ -451,13 +551,14 @@ async fn heartbeat(
 }
 
 /// The phones to register, each with what it reported: the attached phones the configuration
-/// wants and that are not retired, each serial once, at most [`MAX_PHONES`]. The registry and
-/// each driver run in tasks of their own, within `report_timeout`; one that fails stands in by
-/// what `last` remembers (see the module's notes).
+/// wants and that are neither retired nor stuck, each serial once, at most [`MAX_PHONES`]. The
+/// registry and each driver run in tasks of their own, within `report_timeout`; one that fails
+/// stands in by what `last` remembers (see the module's notes).
 async fn listed_phones(
     registry: &Arc<dyn PhoneRegistry>,
     listing: &Listing,
     retired: &HashSet<String>,
+    stuck: &Stuck,
     last: &mut LastGood,
     timing: &Timing,
 ) -> Vec<(AttachedPhone, PhoneReport)> {
@@ -506,6 +607,16 @@ async fn listed_phones(
                 && once.insert(phone.serial.clone())
         })
         .collect();
+    wanted.retain(|phone| {
+        let free = !stuck.contains(&phone.serial);
+        if !free {
+            debug!(
+                serial = %loggable(&phone.serial),
+                "a phone waits on a task that will not stop; it is left out of this register"
+            );
+        }
+        free
+    });
     if wanted.len() > MAX_PHONES {
         warn!(
             attached = wanted.len(),
@@ -533,7 +644,7 @@ async fn listed_phones(
             Err(failed) => {
                 if let Some(index) = tasks.get(&failed.id()) {
                     error!(
-                        serial = %wanted[*index].serial,
+                        serial = %loggable(&wanted[*index].serial),
                         "a phone's driver failed while reporting"
                     );
                 }
@@ -544,6 +655,7 @@ async fn listed_phones(
         .retain(|serial, _| wanted.iter().any(|phone| phone.serial == *serial));
     let mut listed = Vec::new();
     for (phone, read) in wanted.into_iter().zip(read) {
+        let shown = loggable(&phone.serial);
         let report = match read {
             Ok(mut report) => {
                 report.serial.clone_from(&phone.serial);
@@ -556,7 +668,7 @@ async fn listed_phones(
                 Some((report, stood_in)) if *stood_in < STALE_REPORT_HEARTBEATS => {
                     *stood_in += 1;
                     warn!(
-                        serial = %phone.serial,
+                        serial = %shown,
                         reason,
                         stood_in = *stood_in,
                         "a phone could not be read; its last report stands in"
@@ -566,7 +678,7 @@ async fn listed_phones(
                 _ => {
                     last.reports.remove(&phone.serial);
                     warn!(
-                        serial = %phone.serial,
+                        serial = %shown,
                         reason,
                         "a phone could not be read; it is left out of this register"
                     );
@@ -582,32 +694,29 @@ async fn listed_phones(
 // ---------------------------------------------------------------------------------------------
 // Poll and run
 
-async fn poll(
-    client: JeetaClient,
-    mut table: watch::Receiver<PhoneTable>,
-    results: mpsc::UnboundedSender<ResultIn>,
-    timing: Timing,
-    mut stop: watch::Receiver<bool>,
-) {
+async fn poll(mut workers: Workers, up: ServerUp) {
+    let client = workers.client.clone();
+    let results = workers.results.clone();
+    let timing = workers.timing.clone();
+    let mut table = workers.table.clone();
+    let mut stop = workers.stop.clone();
     let mut recent = RecentIds::new(RECENT_IDS);
-    let mut workers = Workers::new(
-        table.clone(),
-        client.clone(),
-        results.clone(),
-        timing.clone(),
-        stop.clone(),
-    );
     let mut backoff = Backoff::new(&timing);
     loop {
         // Commands are queued for registered phones only.
-        let max_wait_s = tokio::select! {
+        let (max_wait_s, registered) = tokio::select! {
             biased;
             () = stopping(&mut stop) => break,
             ready = table.wait_for(|t| !t.phones.is_empty()) => match ready {
-                Ok(phones) => phones.max_wait_s,
+                Ok(phones) => (
+                    phones.max_wait_s,
+                    phones.phones.keys().cloned().collect::<Vec<String>>(),
+                ),
                 Err(_) => break,
             },
         };
+        // Every registered phone has its worker, which recovers it first.
+        workers.ensure(&registered);
         let query = CommandsQuery {
             wait_s: timing.poll_wait_s.min(max_wait_s),
             limit: MAX_COMMANDS,
@@ -619,12 +728,15 @@ async fn poll(
             answer = client.commands(&query) => answer,
         };
         let read = match answer {
-            Ok(body) => CommandsOut::decode_lenient(body).map_err(|error| {
-                warn!(
-                    field = error.field(),
-                    "a poll's answer is not a poll; polling again after a pause"
-                );
-            }),
+            Ok(body) => {
+                up.answered();
+                CommandsOut::decode_lenient(body).map_err(|error| {
+                    warn!(
+                        field = error.field(),
+                        "a poll's answer is not a poll; polling again after a pause"
+                    );
+                })
+            }
             Err(error) => {
                 warn!(%error, "polling for commands failed; polling again after a pause");
                 Err(())
@@ -672,7 +784,7 @@ async fn poll(
             debug!(
                 command_id = %leased.id,
                 kind = leased.command.kind(),
-                serial = %leased.serial,
+                serial = %loggable(&leased.serial),
                 "command received"
             );
             worked = true;
@@ -696,7 +808,7 @@ struct Queued {
     arrived: Instant,
 }
 
-/// The phones' workers, one each, started on a phone's first command.
+/// The phones' workers, one each.
 struct Workers {
     queues: HashMap<String, mpsc::UnboundedSender<Queued>>,
     tasks: JoinSet<()>,
@@ -705,6 +817,7 @@ struct Workers {
     results: mpsc::UnboundedSender<ResultIn>,
     timing: Timing,
     stop: watch::Receiver<bool>,
+    stuck: Stuck,
 }
 
 impl Workers {
@@ -714,6 +827,7 @@ impl Workers {
         results: mpsc::UnboundedSender<ResultIn>,
         timing: Timing,
         stop: watch::Receiver<bool>,
+        stuck: Stuck,
     ) -> Workers {
         Workers {
             queues: HashMap::new(),
@@ -723,6 +837,17 @@ impl Workers {
             results,
             timing,
             stop,
+            stuck,
+        }
+    }
+
+    /// Starts a worker for each of `serials` that has none.
+    fn ensure(&mut self, serials: &[String]) {
+        for serial in serials {
+            if !self.queues.contains_key(serial) {
+                let queue = self.start(serial);
+                self.queues.insert(serial.clone(), queue);
+            }
         }
     }
 
@@ -749,7 +874,7 @@ impl Workers {
             return;
         };
         error!(
-            serial = %serial,
+            serial = %loggable(&serial),
             command_id = %queued.leased.id,
             "a phone's worker had stopped; the command is failed and the worker started again"
         );
@@ -767,15 +892,16 @@ impl Workers {
 
     fn start(&mut self, serial: &str) -> mpsc::UnboundedSender<Queued> {
         let (queue, commands) = mpsc::unbounded_channel();
-        self.tasks.spawn(work(
-            serial.to_owned(),
-            commands,
-            self.table.clone(),
-            self.client.clone(),
-            self.results.clone(),
-            self.timing.clone(),
-            self.stop.clone(),
-        ));
+        let phone = Phone {
+            serial: serial.to_owned(),
+            shown: loggable(serial),
+            table: self.table.clone(),
+            client: self.client.clone(),
+            results: self.results.clone(),
+            timing: self.timing.clone(),
+            stuck: self.stuck.clone(),
+        };
+        self.tasks.spawn(work(phone, commands, self.stop.clone()));
         queue
     }
 
@@ -786,6 +912,26 @@ impl Workers {
     }
 }
 
+/// What one phone's worker works with.
+struct Phone {
+    /// The phone's serial, as the server sent it.
+    serial: String,
+    /// The serial as the log shows it.
+    shown: String,
+    table: watch::Receiver<PhoneTable>,
+    client: JeetaClient,
+    results: mpsc::UnboundedSender<ResultIn>,
+    timing: Timing,
+    stuck: Stuck,
+}
+
+impl Phone {
+    /// The phone's driver, if the phone is registered now.
+    fn driver(&self) -> Option<Arc<dyn PhoneDriver>> {
+        self.table.borrow().phones.get(&self.serial).cloned()
+    }
+}
+
 /// Whether a worker goes on to its next command or ends.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Then {
@@ -793,16 +939,42 @@ enum Then {
     Stop,
 }
 
-/// One phone's worker: its commands, one after the other.
+type Executed = Result<CommandResult, DriverError>;
+
+/// What running one command left: its outcome, whether the worker goes on, and what is left to
+/// clean up once the outcome is sent.
+struct Ran {
+    outcome: Outcome,
+    then: Then,
+    cleanup: Option<Cleanup>,
+}
+
+impl Ran {
+    fn failed(reason: FailReason, detail: &str) -> Ran {
+        Ran {
+            outcome: Outcome::failed(reason, detail),
+            then: Then::Next,
+            cleanup: None,
+        }
+    }
+}
+
+/// A command's task to cut off, if it still runs, and the driver to recover.
+struct Cleanup {
+    running: Option<AbortOnDrop<Executed>>,
+    driver: Arc<dyn PhoneDriver>,
+}
+
+/// One phone's worker: it recovers the phone, then runs its commands one after the other.
 async fn work(
-    serial: String,
+    phone: Phone,
     mut commands: mpsc::UnboundedReceiver<Queued>,
-    table: watch::Receiver<PhoneTable>,
-    client: JeetaClient,
-    results: mpsc::UnboundedSender<ResultIn>,
-    timing: Timing,
     mut stop: watch::Receiver<bool>,
 ) {
+    // The first time this run sees the phone: undo what a command a crash cut off may have left.
+    if let Some(driver) = phone.driver() {
+        recover(&phone, &driver).await;
+    }
     loop {
         let queued = tokio::select! {
             biased;
@@ -814,14 +986,13 @@ async fn work(
         };
         let leased = &queued.leased;
         let started = Instant::now();
-        let (outcome, then) =
-            carry_out(&serial, &queued, &table, &client, &timing, &mut stop).await;
+        let ran = carry_out(&phone, &queued, &mut stop).await;
         let duration_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
-        match &outcome {
+        match &ran.outcome {
             Outcome::Done { .. } => info!(
                 command_id = %leased.id,
                 kind = leased.command.kind(),
-                serial = %serial,
+                serial = %phone.shown,
                 status = "done",
                 duration_ms,
                 "command finished"
@@ -829,63 +1000,60 @@ async fn work(
             Outcome::Failed { reason, .. } => info!(
                 command_id = %leased.id,
                 kind = leased.command.kind(),
-                serial = %serial,
+                serial = %phone.shown,
                 status = "failed",
                 reason = reason.key(),
                 duration_ms,
                 "command finished"
             ),
         }
-        let _ = results.send(ResultIn {
+        // The result first: the cleaning up after it may take a while, and at shutdown it shares
+        // the grace with the posting.
+        let _ = phone.results.send(ResultIn {
             command_id: leased.id,
-            outcome,
+            outcome: ran.outcome,
             duration_ms,
         });
-        if then == Then::Stop {
+        if let Some(cleanup) = ran.cleanup {
+            if let Some(mut running) = cleanup.running {
+                abort_and_wait(&phone, &mut running.0, Some(leased.id)).await;
+            }
+            recover(&phone, &cleanup.driver).await;
+        }
+        if ran.then == Then::Stop {
             return;
         }
     }
 }
 
 /// Runs one command on its phone's driver, within its timeout, unless the bridge stops first.
-async fn carry_out(
-    serial: &str,
-    queued: &Queued,
-    table: &watch::Receiver<PhoneTable>,
-    client: &JeetaClient,
-    timing: &Timing,
-    stop: &mut watch::Receiver<bool>,
-) -> (Outcome, Then) {
+async fn carry_out(phone: &Phone, queued: &Queued, stop: &mut watch::Receiver<bool>) -> Ran {
     let leased = &queued.leased;
+    let timing = &phone.timing;
     let waited = queued.arrived.elapsed();
     if waited > timing.stale_after {
         let detail = format!(
             "the command waited {} s in the phone's queue, past its expiry; it was not run",
             waited.as_secs()
         );
-        return (Outcome::failed(FailReason::Timeout, &detail), Then::Next);
+        return Ran::failed(FailReason::Timeout, &detail);
     }
     // The server validated it before queuing; a driver relies on the bounds.
     if let Err(error) = leased.command.validate() {
         let detail = format!("the command breaks a limit ({error})");
-        return (
-            Outcome::failed(FailReason::BridgeError, &detail),
-            Then::Next,
-        );
+        return Ran::failed(FailReason::BridgeError, &detail);
     }
-    let driver = table.borrow().phones.get(serial).cloned();
-    let Some(driver) = driver else {
-        let detail = "the phone is not registered by this bridge now";
-        return (
-            Outcome::failed(FailReason::DeviceOffline, detail),
-            Then::Next,
+    let Some(driver) = phone.driver() else {
+        return Ran::failed(
+            FailReason::DeviceOffline,
+            "the phone is not registered by this bridge now",
         );
     };
     let bound = match leased.command {
         DeviceCommand::PushFile { .. } | DeviceCommand::PullFile { .. } => timing.transfer_timeout,
         _ => timing.command_timeout,
     };
-    let files = client.files(leased.download_url.clone());
+    let files = phone.client.files(leased.download_url.clone());
     let command = leased.command.clone();
     // A task of its own: a driver's panic fails this command, not the phone's worker.
     let mut running = {
@@ -899,65 +1067,130 @@ async fn carry_out(
         () = stopping(stop) => None,
         ended = tokio::time::timeout(bound, &mut running.0) => Some(ended),
     };
+    // A command that ended just as its bound ran out, or as the bridge began to stop, keeps its
+    // own outcome.
+    let ended = match ended {
+        Some(Err(_)) | None if running.0.is_finished() => Some(Ok((&mut running.0).await)),
+        other => other,
+    };
+    let then = if *stop.borrow() {
+        Then::Stop
+    } else {
+        Then::Next
+    };
     match ended {
-        Some(Ok(Ok(Ok(result)))) => (Outcome::Done { result }, Then::Next),
-        Some(Ok(Ok(Err(error)))) => (Outcome::failed(error.reason, &error.detail), Then::Next),
-        Some(Ok(Err(_))) => {
+        Some(Ok(finished)) => finished_ran(phone, leased, finished, driver, then),
+        Some(Err(_)) => Ran {
+            outcome: Outcome::failed(
+                FailReason::Timeout,
+                &format!(
+                    "the phone did not finish the command within {} s",
+                    bound.as_secs()
+                ),
+            ),
+            then,
+            cleanup: Some(Cleanup {
+                running: Some(running),
+                driver,
+            }),
+        },
+        None => Ran {
+            outcome: Outcome::failed(
+                FailReason::BridgeError,
+                "the bridge stopped while the command ran",
+            ),
+            then: Then::Stop,
+            cleanup: Some(Cleanup {
+                running: Some(running),
+                driver,
+            }),
+        },
+    }
+}
+
+/// What a command that ended in its task left.
+fn finished_ran(
+    phone: &Phone,
+    leased: &LeasedCommand,
+    finished: Result<Executed, JoinError>,
+    driver: Arc<dyn PhoneDriver>,
+    then: Then,
+) -> Ran {
+    match finished {
+        Ok(Ok(result)) => Ran {
+            outcome: Outcome::Done { result },
+            then,
+            cleanup: None,
+        },
+        Ok(Err(error)) => Ran {
+            outcome: Outcome::failed(error.reason, &error.detail),
+            then,
+            cleanup: None,
+        },
+        Err(_) => {
             // The panic's message is the driver's and may quote the command: not logged.
             error!(
-                serial = %serial,
+                serial = %phone.shown,
                 command_id = %leased.id,
                 kind = leased.command.kind(),
                 "the phone's driver failed while carrying out a command"
             );
-            recover(serial, &driver).await;
-            let detail = "the phone's driver failed while carrying out the command";
-            (Outcome::failed(FailReason::BridgeError, detail), Then::Next)
-        }
-        Some(Err(_)) => {
-            cut_off(serial, leased.id, running).await;
-            recover(serial, &driver).await;
-            let detail = format!(
-                "the phone did not finish the command within {} s",
-                bound.as_secs()
-            );
-            (Outcome::failed(FailReason::Timeout, &detail), Then::Next)
-        }
-        None => {
-            cut_off(serial, leased.id, running).await;
-            recover(serial, &driver).await;
-            let detail = "the bridge stopped while the command ran";
-            (Outcome::failed(FailReason::BridgeError, detail), Then::Stop)
+            Ran {
+                outcome: Outcome::failed(
+                    FailReason::BridgeError,
+                    "the phone's driver failed while carrying out the command",
+                ),
+                then,
+                cleanup: Some(Cleanup {
+                    running: None,
+                    driver,
+                }),
+            }
         }
     }
 }
 
-/// Aborts a command's task and waits until it is gone, so the phone's next step never runs
-/// beside it: [`STOP_WAIT`], then on without a bound once that is logged.
-async fn cut_off<T>(serial: &str, command_id: Uuid, mut running: AbortOnDrop<T>) {
-    running.0.abort();
-    if tokio::time::timeout(STOP_WAIT, &mut running.0)
+/// Aborts `task` and waits until it is gone, so the phone's next step never runs beside it:
+/// [`Timing::stop_wait`], then, once that is logged, on without a bound, the phone left out of
+/// the registers meanwhile.
+async fn abort_and_wait<T>(phone: &Phone, task: &mut JoinHandle<T>, command_id: Option<Uuid>) {
+    task.abort();
+    if tokio::time::timeout(phone.timing.stop_wait, &mut *task)
         .await
-        .is_err()
+        .is_ok()
     {
-        error!(
-            serial = %serial,
-            command_id = %command_id,
-            "a cut-off command has not stopped yet; the phone waits for it"
-        );
-        let _ = (&mut running.0).await;
+        return;
     }
+    match command_id {
+        Some(command_id) => error!(
+            serial = %phone.shown,
+            command_id = %command_id,
+            "a cut-off command has not stopped; the phone waits for it, left out of the registers until it does"
+        ),
+        None => error!(
+            serial = %phone.shown,
+            "a cut-off recovery has not stopped; the phone waits for it, left out of the registers until it does"
+        ),
+    }
+    let _stuck = phone.stuck.mark(&phone.serial);
+    let _ = (&mut *task).await;
 }
 
-/// Awaits the driver's [`PhoneDriver::recover`], in a task of its own, within
-/// [`RECOVER_TIMEOUT`].
-async fn recover(serial: &str, driver: &Arc<dyn PhoneDriver>) {
+/// Awaits the driver's [`PhoneDriver::recover`] in a task of its own, within
+/// [`Timing::recover_timeout`]; one that outlasts it is cut off like a command.
+async fn recover(phone: &Phone, driver: &Arc<dyn PhoneDriver>) {
     let driver = driver.clone();
     let mut recovering = AbortOnDrop(tokio::spawn(async move { driver.recover().await }));
-    match tokio::time::timeout(RECOVER_TIMEOUT, &mut recovering.0).await {
-        Ok(Ok(())) => debug!(serial = %serial, "the phone's driver recovered"),
-        Ok(Err(_)) => error!(serial = %serial, "the phone's driver failed while recovering"),
-        Err(_) => warn!(serial = %serial, "the phone's driver did not recover in time"),
+    match tokio::time::timeout(phone.timing.recover_timeout, &mut recovering.0).await {
+        Ok(Ok(())) => debug!(serial = %phone.shown, "the phone's driver recovered"),
+        Ok(Err(_)) => error!(serial = %phone.shown, "the phone's driver failed while recovering"),
+        Err(_) => {
+            warn!(
+                serial = %phone.shown,
+                "the phone's driver did not recover in time; the recovery is cut off"
+            );
+            abort_and_wait(phone, &mut recovering.0, None).await;
+        }
     }
 }
 
@@ -1051,6 +1284,7 @@ async fn post(
     mut results: mpsc::UnboundedReceiver<ResultIn>,
     timing: Timing,
     mut stop: watch::Receiver<bool>,
+    up: ServerUp,
 ) {
     let mut queue: VecDeque<Ready> = VecDeque::new();
     loop {
@@ -1065,7 +1299,7 @@ async fn post(
             queue.push_back(sendable(result));
         }
         let batch = take_batch(&mut queue);
-        post_batch(&client, batch, &timing, &mut stop).await;
+        post_batch(&client, batch, &timing, &mut stop, &up).await;
     }
 }
 
@@ -1082,19 +1316,21 @@ fn split(mut batch: Vec<ResultIn>, pending: &mut Vec<Vec<ResultIn>>) -> Option<R
     }
 }
 
-/// Posts `batch` until the server takes it, splitting it when the server refuses it or keeps
-/// failing it.
+/// Posts `batch` until the server takes it, splitting it when the server refuses it, or keeps
+/// failing it while it is up.
 async fn post_batch(
     client: &JeetaClient,
     batch: Vec<ResultIn>,
     timing: &Timing,
     stop: &mut watch::Receiver<bool>,
+    up: &ServerUp,
 ) {
     let mut pending = vec![batch];
     while let Some(results) = pending.pop() {
         let body = ResultsIn { results };
         let mut backoff = Backoff::new(timing);
         let mut failures = 0u32;
+        let mut answered = up.count();
         loop {
             match client.results(&body).await {
                 Ok(out) => {
@@ -1130,7 +1366,13 @@ async fn post_batch(
                     break;
                 }
                 Err(error) if error.is_transient() => {
-                    failures += 1;
+                    // Counted only while the server is up: it answered a register or a poll since
+                    // the try before. An outage is waited out, however long.
+                    let now = up.count();
+                    if now != answered {
+                        failures += 1;
+                    }
+                    answered = now;
                     if failures >= timing.post_attempts.max(1) {
                         let results = body.results.len();
                         if let Some(lone) = split(body.results, &mut pending) {
@@ -1174,7 +1416,6 @@ async fn post_batch(
 
 #[cfg(test)]
 mod tests {
-    use jt_device_protocol::CommandResult;
     use serde_json::json;
 
     use super::*;
@@ -1300,34 +1541,51 @@ mod tests {
         assert_eq!(backoff.next(), Duration::from_millis(10));
     }
 
+    fn pending_task() -> JoinHandle<()> {
+        tokio::spawn(std::future::pending::<()>())
+    }
+
     #[tokio::test]
     async fn the_first_task_to_end_is_named() {
         let mut ends = tokio::spawn(async {});
-        let mut runs = tokio::spawn(std::future::pending::<()>());
-        let mut also = tokio::spawn(std::future::pending::<()>());
+        let mut runs = pending_task();
+        let mut also = pending_task();
         let ended = first_end(
             std::future::pending(),
             [("a", &mut runs), ("b", &mut ends), ("c", &mut also)],
         )
         .await;
-        assert_eq!(ended, Some("b"));
-        // The shutdown future wins when it completes first.
+        assert_eq!(ended, Ended::Task("b"));
+        // Two that ended: the first in order is named.
+        let mut one = tokio::spawn(async {});
+        let mut two = tokio::spawn(async {});
+        tokio::task::yield_now().await;
+        while !(one.is_finished() && two.is_finished()) {
+            tokio::task::yield_now().await;
+        }
         let ended = first_end(
-            std::future::ready(()),
+            std::future::ready(Stop::Graceful),
             [
-                ("a", &mut runs),
-                ("c", &mut also),
-                ("d", &mut also_pending()),
+                ("register", &mut one),
+                ("poll", &mut two),
+                ("post", &mut also),
             ],
         )
         .await;
-        assert_eq!(ended, None);
+        assert_eq!(ended, Ended::Task("register"));
+        // The shutdown future when no task ended; it says how to stop.
+        let ended = first_end(
+            std::future::ready(Stop::Within(Duration::from_secs(1))),
+            [
+                ("a", &mut runs),
+                ("c", &mut also),
+                ("d", &mut pending_task()),
+            ],
+        )
+        .await;
+        assert_eq!(ended, Ended::Shutdown(Stop::Within(Duration::from_secs(1))));
         runs.abort();
         also.abort();
-    }
-
-    fn also_pending() -> JoinHandle<()> {
-        tokio::spawn(std::future::pending::<()>())
     }
 
     #[tokio::test]
@@ -1342,7 +1600,14 @@ mod tests {
         let (_stop, stop) = watch::channel(false);
         let (results_tx, mut results) = mpsc::unbounded_channel();
         let client = JeetaClient::new(&config).unwrap();
-        let mut workers = Workers::new(phones, client, results_tx, Timing::default(), stop);
+        let mut workers = Workers::new(
+            phones,
+            client,
+            results_tx,
+            Timing::default(),
+            stop,
+            Stuck::default(),
+        );
         // A worker that stopped: the other end of its queue is gone.
         let (stopped, gone) = mpsc::unbounded_channel();
         drop(gone);
@@ -1389,5 +1654,15 @@ mod tests {
             "{:?}",
             next.outcome
         );
+    }
+
+    #[test]
+    fn a_stuck_phone_is_marked_while_its_guard_lives() {
+        let stuck = Stuck::default();
+        assert!(!stuck.contains("S1"));
+        let guard = stuck.mark("S1");
+        assert!(stuck.contains("S1") && !stuck.contains("S2"));
+        drop(guard);
+        assert!(!stuck.contains("S1"));
     }
 }
