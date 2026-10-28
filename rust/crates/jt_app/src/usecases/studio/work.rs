@@ -106,8 +106,14 @@ pub(crate) async fn pending_in(
     }
 
     for s in slots {
+        // Only unstarted work is pending. A published, measured or retired slot is never sent
+        // (again), so its attempts are history in its detail, not blockers.
+        if !matches!(s.state, SlotState::Planned | SlotState::Ready) {
+            continue;
+        }
         let target = ApprovalTarget::Slot(s.id);
-        for a in r.studio().slot_evidence(s.id).await?.0 {
+        let attempts = r.studio().slot_evidence(s.id).await?.0;
+        for a in &attempts {
             let category = match a.outcome() {
                 Some(
                     jt_studio::PublishOutcome::Failed(e)
@@ -151,9 +157,6 @@ pub(crate) async fn pending_in(
             }
         }
 
-        if !matches!(s.state, SlotState::Planned | SlotState::Ready) {
-            continue;
-        }
         let arm = r
             .studio()
             .get_arm(s.chain.arm_id)
@@ -188,7 +191,10 @@ pub(crate) async fn pending_in(
                 .lanes
                 .get(&arm.key.lane)
                 .is_some_and(|l| l.requires_human_approval);
+        // A slot with an attempt is never claimed again, whatever revision it reaches: no
+        // approval can send it.
         if s.state == SlotState::Ready
+            && attempts.is_empty()
             && required
             && r.studio()
                 .get_approval(target, s.revision)

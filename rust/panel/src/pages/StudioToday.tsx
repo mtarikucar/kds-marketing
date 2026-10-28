@@ -153,6 +153,31 @@ function PiecePreview({
   );
 }
 
+/** Cancels the slot at `revision`, with the reason the ledger keeps. */
+function CancelForm({ id, revision }: { id: string; revision: number }) {
+  const { t } = useTranslation();
+  const cancel = useStudioMutation((form: FormData) =>
+    api.slotCancel(id, revision, String(form.get('reason'))),
+  );
+  return (
+    <form
+      className="space-y-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!cancel.isPending) cancel.mutate(new FormData(e.currentTarget));
+      }}
+    >
+      <Field label="reason">
+        <input className={inputClass} name="reason" required maxLength={2000} />
+      </Field>
+      <button className={buttonClass} disabled={cancel.isPending}>
+        {t('studio.cancel')}
+      </button>
+      <StudioError error={cancel.error} />
+    </form>
+  );
+}
+
 function SlotEditor({
   id,
   close,
@@ -208,9 +233,6 @@ function SlotEditor({
       }),
     () => setMedia([]),
   );
-  const cancel = useStudioMutation((form: FormData) =>
-    api.slotCancel(id, detail.data!.slot.revision, String(form.get('reason'))),
-  );
   const data = detail.data;
   return (
     <div
@@ -247,72 +269,61 @@ function SlotEditor({
           {tiktok && ['published', 'measured'].includes(data.slot.state) && (
             <TiktokPostCounters slotId={id} />
           )}
+          {/* A slot with an attempt is never sent again: new content would be a revision no
+              run sends, so cancelling is its way out. */}
+          {['planned', 'ready'].includes(data.slot.state) && !data.attempts.length && (
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                submit.mutate(new FormData(e.currentTarget));
+              }}
+            >
+              <Field label="text">
+                <textarea
+                  key={`${id}-${data.slot.revision}`}
+                  className={inputClass}
+                  name="text"
+                  rows={5}
+                  defaultValue={data.piece?.text ?? ''}
+                />
+              </Field>
+              <Field label="upload">
+                <input
+                  className={inputClass}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif,video/mp4"
+                  onChange={(e) => setFile(e.target.files?.[0])}
+                />
+              </Field>
+              <button
+                type="button"
+                className={buttonClass}
+                disabled={!file || upload.isPending}
+                onClick={() => upload.mutate()}
+              >
+                {t('studio.upload')}
+              </button>
+              {media.length > 0 && (
+                <p role="status">
+                  {t('studio.uploaded')} ({media.length})
+                </p>
+              )}
+              <button
+                className={`${buttonClass} w-full`}
+                disabled={submit.isPending || upload.isPending}
+              >
+                {t('studio.submit')}
+              </button>
+            </form>
+          )}
           {['planned', 'ready'].includes(data.slot.state) && (
-            <>
-              <form
-                className="space-y-3"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  submit.mutate(new FormData(e.currentTarget));
-                }}
-              >
-                <Field label="text">
-                  <textarea
-                    key={`${id}-${data.slot.revision}`}
-                    className={inputClass}
-                    name="text"
-                    rows={5}
-                    defaultValue={data.piece?.text ?? ''}
-                  />
-                </Field>
-                <Field label="upload">
-                  <input
-                    className={inputClass}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif,video/mp4"
-                    onChange={(e) => setFile(e.target.files?.[0])}
-                  />
-                </Field>
-                <button
-                  type="button"
-                  className={buttonClass}
-                  disabled={!file || upload.isPending}
-                  onClick={() => upload.mutate()}
-                >
-                  {t('studio.upload')}
-                </button>
-                {media.length > 0 && (
-                  <p role="status">
-                    {t('studio.uploaded')} ({media.length})
-                  </p>
-                )}
-                <button
-                  className={`${buttonClass} w-full`}
-                  disabled={submit.isPending || upload.isPending}
-                >
-                  {t('studio.submit')}
-                </button>
-              </form>
-              <form
-                className="space-y-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  cancel.mutate(new FormData(e.currentTarget));
-                }}
-              >
-                <Field label="reason">
-                  <input className={inputClass} name="reason" required maxLength={2000} />
-                </Field>
-                <button className={buttonClass} disabled={cancel.isPending}>
-                  {t('studio.cancel')}
-                </button>
-              </form>
-            </>
+            <CancelForm id={id} revision={data.slot.revision} />
           )}
           {data.slot.state === 'retired' && <p>{t('studio.retirement')}</p>}
         </>
       )}
-      <StudioError error={upload.error || submit.error || cancel.error} />
+      <StudioError error={upload.error || submit.error} />
     </div>
   );
 }
@@ -353,6 +364,16 @@ export function StudioToday({
     );
   // A TikTok piece awaiting its human is its posting screen, not a plain Approve button.
   const screen = (s: api.Slot) => manage && awaiting(s.id) && tiktok(s);
+  // A slot whose publication failed or is uncertain is never sent again (no publish retries):
+  // cancelling it is its way out.
+  const stopped = (id: string) =>
+    data?.today.blockers.some(
+      (b) =>
+        'slot' in b.target &&
+        b.target.slot === id &&
+        (b.next_action === 'reconnect_capability' ||
+          b.next_action === 'review_publication_duplicate_risk'),
+    ) ?? false;
   const arms = data?.learned.arms.map((a) => a.arm) ?? [];
   const others =
     data?.slots.filter(
@@ -443,6 +464,13 @@ export function StudioToday({
               .map((b, i) => (
                 <Reason key={i} reason={b.reason} />
               ))}
+            {/* Its open editor offers the same cancellation. */}
+            {stopped(slot.id) && selectedSlot !== slot.id && (
+              <div className="space-y-2">
+                <p className="text-sm">{t('studio.notResent')}</p>
+                <CancelForm id={slot.id} revision={slot.revision} />
+              </div>
+            )}
             {manage && awaiting(slot.id) && !screen(slot) && (
               <button
                 className={buttonClass}
