@@ -58,7 +58,7 @@
 //! field of one ([`LeasedCommand`]'s own `Debug` masks the download address, but shows the
 //! command). A failure's detail can carry on-screen labels, so it is not logged either. An HTTP
 //! client's error carries the request URL, which for a download is the signed address: a bridge
-//! strips it (`reqwest::Error::without_url`) before it logs the error.
+//! strips it (the client error's `without_url`) before it logs the error.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -102,6 +102,9 @@ pub const MAX_FEATURES: usize = 64;
 pub const MAX_FEATURE_CHARS: usize = 64;
 /// The most pixels along either side of a phone's screen.
 pub const MAX_SCREEN_PX: u32 = 20_000;
+/// The [`RefusedPhone::reason`] of a phone that was retired and is still plugged in. Unlike any
+/// other refusal it is final: a bridge stops listing the phone until it restarts.
+pub const PHONE_RETIRED: &str = "phone_retired";
 
 /// A body that breaks a limit, or that is not the shape the protocol gives it.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -347,8 +350,8 @@ pub struct RegisteredPhone {
 pub struct RefusedPhone {
     pub platform: Platform,
     pub serial: String,
-    /// The refusal in words, e.g. a [`ProtocolError`]'s text, or `phone_retired` for a phone that
-    /// was retired and is still plugged in.
+    /// The refusal in words, e.g. a [`ProtocolError`]'s text, or [`PHONE_RETIRED`] for a phone
+    /// that was retired and is still plugged in.
     pub reason: String,
 }
 

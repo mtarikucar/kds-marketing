@@ -5,9 +5,9 @@ use jt_device_protocol::{
     ElementTarget, FailReason, FileOut, HEARTBEAT_S, LeasedCommand, LenientCommands, MAX_COMMANDS,
     MAX_DETAIL_CHARS, MAX_ELEMENTS, MAX_FEATURE_CHARS, MAX_FEATURES, MAX_ID_CHARS,
     MAX_OUTPUT_BYTES, MAX_PHONES, MAX_RESULTS, MAX_RESULTS_BODY_BYTES, MAX_SCREEN_PX,
-    MAX_TEXT_CHARS, MAX_VERSION_CHARS, MAX_WAIT_S, Observation, Outcome, PROTOCOL_VERSION,
-    PhoneReport, Platform, ProtocolError, RefusedPhone, RegisterIn, RegisterOut, RegisteredPhone,
-    ResultIn, ResultsIn, ResultsOut, Screen, TEXT_UNICODE, supports,
+    MAX_TEXT_CHARS, MAX_VERSION_CHARS, MAX_WAIT_S, Observation, Outcome, PHONE_RETIRED,
+    PROTOCOL_VERSION, PhoneReport, Platform, ProtocolError, RefusedPhone, RegisterIn, RegisterOut,
+    RegisteredPhone, ResultIn, ResultsIn, ResultsOut, Screen, TEXT_UNICODE, supports,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -607,6 +607,8 @@ fn limits_are_the_documented_ones() {
     assert_eq!(MAX_FEATURE_CHARS, 64);
     assert_eq!(MAX_SCREEN_PX, 20_000);
     assert_eq!(MAX_RESULTS_BODY_BYTES, 2 * 1024 * 1024);
+    // The one refusal a bridge acts on by its words.
+    assert_eq!(PHONE_RETIRED, "phone_retired");
 }
 
 /// Everything a bridge needs of the shared vocabulary comes from this crate.
@@ -1417,6 +1419,23 @@ fn shell_cap_inside_a_character_drops_the_character_whole() {
     let (_, out, _, cut) = shell_parts(CommandResult::shell(0, b"ok \xf0\x9f\x98", b""));
     assert_eq!(out, "ok \u{FFFD}");
     assert!(!cut);
+}
+
+/// An earlier bad sequence that does not grow when replaced (three bytes become one U+FFFD, also
+/// three bytes) does not hide the character the cap cuts: only the last stretch of the head is
+/// judged. Judging the head by its FIRST error instead would find the early sequence, see that it
+/// is complete in itself, keep the cut bytes, and end the text with a second, stray U+FFFD; and
+/// the text would still fit, so nothing after the conversion would cut it off.
+#[test]
+fn an_earlier_bad_sequence_does_not_hide_the_character_cut_at_the_cap() {
+    let mut bytes = b"\xF0\x9F\x98x".to_vec();
+    bytes.extend(vec![b'a'; MAX_OUTPUT_BYTES - 7]);
+    bytes.extend("😀😀".as_bytes());
+    let (_, out, _, cut) = shell_parts(CommandResult::shell(0, &bytes, b""));
+    assert!(cut);
+    assert_eq!(out, format!("\u{FFFD}x{}", long(MAX_OUTPUT_BYTES - 7)));
+    assert_eq!(out.matches('\u{FFFD}').count(), 1);
+    assert!(!out.ends_with('\u{FFFD}'));
 }
 
 #[test]

@@ -201,6 +201,7 @@ pub struct RegisterOut { pub phones: Vec<RegisteredPhone>, #[serde(default)] pub
     pub heartbeat_s: u32, pub max_wait_s: u32, pub protocol: u32 }      // the SERVER's protocol; later bodies shaped to the bridge's
 pub struct RegisteredPhone { pub serial: String, pub capability_id: Uuid }
 pub struct RefusedPhone { pub platform: Platform, pub serial: String, pub reason: String }   // not registered, and why
+pub const PHONE_RETIRED: &str = "phone_retired";   // RefusedPhone.reason of a retired phone: the bridge stops listing it
 pub struct CommandsQuery { pub wait_s: u32, pub limit: u32 }
 pub struct LeasedCommand { pub id: Uuid, pub capability_id: Uuid, pub serial: String, pub command: DeviceCommand,
     pub expires_at: OffsetDateTime /* rfc3339; the bridge never judges it by its own clock */,
@@ -416,7 +417,7 @@ Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permissio
   the error's text), the heartbeat itself is not refused. For each valid phone, declare-or-verify a `phone`
   capability (`Reach::Device`) with external id `{platform}:{serial}`; merge facts into `connector_public.device`
   (model, os_version, screen, features, bridge_id, version, protocol) — merge, never replace; a RETIRED
-  phone that is still plugged in is always listed in `RegisterOut.refused` with the reason `"phone_retired"`, and
+  phone that is still plugged in is always listed in `RegisterOut.refused` with the reason `PHONE_RETIRED` (`"phone_retired"`), and
   nothing is declared or merged for it — never a `409`: one phone's faults never refuse the register, so the other
   phones on that bridge stay online; answer `RegisterOut::new(registered, refused)`. Shape every later body to the
   protocol the bridge sent.
