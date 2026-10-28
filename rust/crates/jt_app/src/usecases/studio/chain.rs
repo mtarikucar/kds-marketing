@@ -7,7 +7,9 @@ use crate::{
 use chrono::{Datelike, Timelike};
 use jt_capability::{Capability, CapabilityId, EffectiveStatus, effective_status};
 use jt_strategy::{LaneKind, StrategyVersionId};
-use jt_studio::{AdSetBindingId, Chain, ChainContext, PublicationId, StudioPolicy, validate_chain};
+use jt_studio::{
+    AdSetBindingId, Chain, ChainContext, PublicationId, StudioError, StudioPolicy, validate_chain,
+};
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use serde_json::json;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -55,6 +57,17 @@ pub(crate) fn refuse(reason: &str) -> AppError {
         message: reason.into(),
         details: json!({"reason":reason}),
     }
+}
+/// Whether `e` is [`authorize_execution_at`]'s refusal of a target that only waits for a human:
+/// its approval, or a TikTok piece's posting screen ([`StudioPolicy::check_approval`]).
+pub(crate) fn awaits_human(e: &AppError) -> bool {
+    e.code == ErrorCode::Conflict
+        && [
+            StudioError::ApprovalRequired,
+            StudioError::PostingScreenRequired,
+        ]
+        .iter()
+        .any(|w| e.details["reason"] == w.to_string())
 }
 pub(crate) async fn active(r: &mut dyn TenantRepos) -> Result<WorkspaceId, AppError> {
     let w = r.workspace().get().await?;
