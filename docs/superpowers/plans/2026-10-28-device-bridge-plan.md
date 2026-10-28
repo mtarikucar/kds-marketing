@@ -177,40 +177,89 @@ impl Platform {
     pub fn from_key(key: &str) -> Option<Platform>;
 }
 
-// jt_device_protocol (PROTOCOL_VERSION = 1)
+// jt_device_protocol (PROTOCOL_VERSION = 1) -- final, as built. Re-exports from jt_devices: DeviceCommand, DeviceKey,
+// ElementTarget, Element, Observation, Screen, Platform, FailReason, CommandError, supports, TEXT_UNICODE,
+// MAX_ELEMENTS, MAX_TEXT_CHARS. serde_json is a normal dependency (decode_lenient).
+pub const PROTOCOL_VERSION: u32 = 1;      pub const HEARTBEAT_S: u32 = 15;        pub const MAX_WAIT_S: u32 = 25;
+pub const MAX_COMMANDS: u32 = 20;         pub const MAX_RESULTS: usize = 100;     pub const MAX_DETAIL_CHARS: usize = 300;
+pub const MAX_OUTPUT_BYTES: usize = 65_536;   // per shell stream
+pub const MAX_RESULTS_BODY_BYTES: usize = 2 * 1024 * 1024;   // the results route's body limit; the bridge splits batches
+                                                             // by serialized size to stay under it (D1-T5 sets DefaultBodyLimit)
+pub const MAX_ID_CHARS: usize = 128;      // bridge_id, serial, model, os_version
+pub const MAX_VERSION_CHARS: usize = 64;  pub const MAX_PHONES: usize = 16;
+pub const MAX_FEATURES: usize = 64;       pub const MAX_FEATURE_CHARS: usize = 64;   pub const MAX_SCREEN_PX: u32 = 20_000;
+
+// `RegisterIn` and `PhoneReport` do NOT use deny_unknown_fields (the first register goes out before the bridge knows the
+// server's protocol: a newer bridge's extra optional fields are ignored). Every other struct/enum here does.
+// Observation / Screen / Element (jt_devices) also accept unknown fields.
+// Derives on every struct: Clone, Debug, PartialEq, Serialize, Deserialize (LeasedCommand's Debug is manual and masks
+// download_url). `time::serde::rfc3339` for timestamps.
 pub struct RegisterIn { pub bridge_id: String, pub version: String, pub protocol: u32, pub phones: Vec<PhoneReport> }
 pub struct PhoneReport { pub platform: Platform, pub serial: String, pub model: Option<String>,
     pub os_version: Option<String>, pub screen: Option<Screen>, pub features: Vec<String> }
-pub struct RegisterOut { pub phones: Vec<RegisteredPhone>, pub heartbeat_s: u32, pub max_wait_s: u32 }
+pub struct RegisterOut { pub phones: Vec<RegisteredPhone>, #[serde(default)] pub refused: Vec<RefusedPhone>,
+    pub heartbeat_s: u32, pub max_wait_s: u32, pub protocol: u32 }      // the SERVER's protocol; later bodies shaped to the bridge's
 pub struct RegisteredPhone { pub serial: String, pub capability_id: Uuid }
+pub struct RefusedPhone { pub platform: Platform, pub serial: String, pub reason: String }   // not registered, and why
 pub struct CommandsQuery { pub wait_s: u32, pub limit: u32 }
-pub struct LeasedCommand { pub id: Uuid, pub capability_id: Uuid, pub serial: String,
-    pub command: DeviceCommand, pub expires_at: OffsetDateTime, pub download_url: Option<String> }
+pub struct LeasedCommand { pub id: Uuid, pub capability_id: Uuid, pub serial: String, pub command: DeviceCommand,
+    pub expires_at: OffsetDateTime /* rfc3339; the bridge never judges it by its own clock */,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub download_url: Option<String> }
 pub struct CommandsOut { pub commands: Vec<LeasedCommand> }
 pub struct ResultIn { pub command_id: Uuid, pub outcome: Outcome, pub duration_ms: u32 }
-#[serde(tag = "status", rename_all = "snake_case")]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Outcome { Done { result: CommandResult }, Failed { reason: FailReason, detail: String } }
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum CommandResult { Observation(Observation), Done, Shell { exit_code: i32, stdout: String, stderr: String },
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CommandResult { Observation(Observation), Done {} /* empty struct variant: refuses unknown fields */,
+    Shell { exit_code: i32, stdout: String, stderr: String, #[serde(default)] truncated: bool },
     File { file_id: Uuid } }
-pub struct ResultsIn { pub results: Vec<ResultIn> }          // ≤ 100
-pub struct ResultsOut { pub applied: u32, pub duplicates: u32, pub unknown: u32 }
+pub struct ResultsIn { pub results: Vec<ResultIn> }          // 1..=100, and <= MAX_RESULTS_BODY_BYTES serialized
+pub struct ResultsOut { pub applied: u32, pub duplicates: u32, pub unknown: u32 }   // sums to results.len()
 pub struct FileOut { pub file_id: Uuid }
-```
 
-(`#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]` and `#[serde(deny_unknown_fields)]` on every
-protocol struct; `time::serde::rfc3339` for timestamps.)
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ProtocolError { #[error("{field}: {reason}")] Invalid { field: &'static str, reason: &'static str } }
+impl ProtocolError { pub fn field(&self) -> &'static str; }
+// Server-side validation (what the bridge sent):
+impl RegisterIn   { pub fn validate(&self) -> Result<(), ProtocolError>; }  // the BODY only: protocol >= 1, bridge_id, version,
+                                                                              // <= 16 phones, no serial twice (serial alone: the
+                                                                              // bridge routes by serial)
+impl PhoneReport  { pub fn validate(&self) -> Result<(), ProtocolError>; }  // serial, model/os_version (<= 128, no NUL, may be
+                                                                              // blank), screen (sides 1..=20_000, rotation in
+                                                                              // {0,90,180,270}), features. A phone that fails is NOT
+                                                                              // registered and is listed in RegisterOut.refused;
+                                                                              // the heartbeat itself is not refused.
+impl ResultsIn    { pub fn validate(&self) -> Result<(), ProtocolError>; }  // 1..=100; command_id once; no NUL in detail/stdout/
+                                                                              // stderr/observation strings; detail <= 300 chars;
+                                                                              // streams <= 65_536 bytes; observation: <= 300
+                                                                              // elements, screen as above, strings <= 4000 chars
+impl CommandsQuery { pub fn clamped(self) -> CommandsQuery; }               // wait_s 0..=25, limit 1..=20
+impl RegisterOut  { pub fn new(phones: Vec<RegisteredPhone>, refused: Vec<RefusedPhone>) -> RegisterOut; }
+// Constructors so the bridge builds valid results by construction:
+impl Outcome       { pub fn failed(reason: FailReason, detail: &str) -> Outcome; }                 // NUL -> U+FFFD, <= 300 chars
+impl CommandResult { pub fn shell(exit_code: i32, stdout: &[u8], stderr: &[u8]) -> CommandResult; } // lossy UTF-8, NUL -> U+FFFD,
+                                                                              // each stream cut on a char boundary at 65_536 bytes,
+                                                                              // `truncated` set when either was cut
+// A poll is decoded command by command so one unreadable command does not poison the rest; the bridge fails each
+// unreadable one by id with FailReason::UnsupportedByBridge:
+impl CommandsOut   { pub fn decode_lenient(value: serde_json::Value) -> (Vec<LeasedCommand>, Vec<(Uuid, String)>); }
+```
 
 Rules of the vocabulary (written in the `jt_devices` crate docs too):
 - **Growing it.** A new command kind needs a feature name (a bridge reports what it runs, and a command is queued
   only for a bridge that lists its kind). A new field on an existing kind needs a feature name too, and is
-  `#[serde(default, skip_serializing_if = ...)]`, so an older bridge never sees it. A new `FailReason` needs
-  nothing: an older reader takes it as `Unknown`.
+  `#[serde(default, skip_serializing_if = ...)]`, so an older bridge never sees it. A new VALUE of an existing enum
+  field (a new `DeviceKey` or `ElementTarget` variant) counts as a new field: it needs a feature name (e.g.
+  `key.camera`) that `supports` checks. A new `FailReason` needs nothing: an older reader takes it as `Unknown`. A new
+  `Platform` needs a protocol bump (it is a stored key: no `Unknown` variant). Register is tolerant (unknown fields
+  ignored); after it, each side sends only what the lower protocol defines.
 - **Logging.** Log `DeviceCommand::kind()` and counts, never the `{:?}` of a command or an observation (typed text,
-  shell arguments and screen text are in them).
+  shell arguments and screen text are in them). A failure `detail` can carry on-screen labels. `reqwest` errors carry
+  the request URL (a signed download address): the bridge uses `without_url()` before logging one.
 - **A tagged variant without fields is an empty struct variant** (`Screenshot {}`): serde ignores unknown fields on a
-  unit variant of a tagged enum, so `deny_unknown_fields` would not hold. (`CommandResult::Done` above is such a
-  variant: write it `Done {}` in D1-T2 if extra fields should be refused there too.)
+  unit variant of a tagged enum, so `deny_unknown_fields` would not hold. (`CommandResult::Done {}` is one.)
+- **A refused results batch (422) is refused for good**: the bridge must not retry it as it is. It builds results with
+  `Outcome::failed` / `CommandResult::shell` and `Observation::cap_elements`, so what it sends is valid by construction.
 
 ---
 
@@ -275,8 +324,17 @@ impl and rename (or wrap) it — do not keep two registries.
 
 **Files:** create `rust/crates/domain/jt_device_protocol/{Cargo.toml,src/lib.rs,tests/protocol.rs}`; workspace member; archtest rule (depends on `jt_devices`, `serde`, `time`, `uuid` only).
 
-- [ ] **Tests first:** `register_round_trip`, `leased_command_round_trip_with_rfc3339`, `outcome_failed_carries_reason_and_detail`, `results_batch_limit_constant_is_100`, `protocol_version_is_1`, `unknown_fields_refused`.
+- [ ] **Tests first (`tests/protocol.rs`, built):** `register_round_trip`, `register_out_carries_server_protocol`,
+  `register_out_says_why_a_phone_was_not_registered`, `leased_command_round_trip_with_rfc3339`,
+  `leased_command_debug_masks_the_download_url`, `decode_lenient_*`, `outcome_*`, `unknown_fail_reason_reads_as_unknown`,
+  `results_batch_limit_constant_is_100`, `protocol_version_is_1`, `unknown_fields_refused`,
+  `register_ignores_unknown_fields`, `observation_ignores_unknown_fields`, `register_validation`,
+  `a_phones_own_faults_do_not_refuse_the_register_body`, `phone_validation`, `results_validation`,
+  `observation_results_are_bounded`, `failed_constructor_is_valid_by_construction`,
+  `shell_constructor_is_valid_by_construction`, `commands_query_is_clamped`.
 - [ ] `cargo test -p jt_device_protocol` red → implement → green; fmt + clippy; **commit**.
+- Built as `f9f9f3fe`, `a1ff64aa` and `55143291` (review fixes); the archtest rule allows `jt_devices`, `serde`,
+  `serde_json`, `time`, `uuid`, `thiserror` for this crate.
 
 ### Task D1-T3: permissions + migration
 
@@ -347,19 +405,29 @@ using the existing bearer extractor (`jt_panel_http/src/bearer.rs`, generalize `
 prefixes); catalog count pin +4.
 
 Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permission: DevicesBridge, … }`):
-- `register(RegisterIn)`: for each phone, declare-or-verify a `phone` capability (`Reach::Device`) with external
-  id `{platform}:{serial}`; merge facts into `connector_public.device` (model, os_version, screen, features,
-  bridge_id, version, protocol) — merge, never replace; refuse a retired phone's re-registration
-  (`409 phone_retired`); answer `RegisteredPhone` ids.
-- `commands(CommandsQuery)`: lease for this bridge's phones (≤ `limit` ≤ 20), wait on the kernel signal up to
-  `wait_s` ≤ 25; for `PushFile` attach a 10-minute signed `download_url` (`FileStore::provider_url`).
-- `results(ResultsIn ≤ 100)`: `finish` each; ledger `devices.command.finished {command_id, kind, status, reason,
-  duration_ms}`; signal the waiting agent; observation/shell/file results stored on the row. `ResultsOut` counts
-  `Applied` as `applied`, `Duplicate` as `duplicates`, and `Unknown` (no such command, or a result for a command
-  that was never leased) as `unknown`.
+- `register(RegisterIn)`: `RegisterIn::validate` the body (a `ProtocolError` is `422`); then `PhoneReport::validate`
+  each phone — a phone that fails is NOT registered and is listed in `RegisterOut.refused` (`RefusedPhone`, reason =
+  the error's text), the heartbeat itself is not refused. For each valid phone, declare-or-verify a `phone`
+  capability (`Reach::Device`) with external id `{platform}:{serial}`; merge facts into `connector_public.device`
+  (model, os_version, screen, features, bridge_id, version, protocol) — merge, never replace; refuse a retired
+  phone's re-registration (`409 phone_retired`, or list it in `refused`); answer `RegisterOut::new(registered,
+  refused)`. Shape every later body to the protocol the bridge sent.
+- `commands(CommandsQuery)`: `clamped()`; lease for this bridge's phones (≤ `limit` ≤ 20), wait on the kernel signal
+  up to `wait_s` ≤ 25; **re-check `jt_devices::supports` at lease time** against the phone's CURRENT features (a
+  bridge that re-registered without a feature must not be handed a command that needs it; fail such a command
+  `unsupported_by_bridge` instead of leasing it); for `PushFile` attach a 10-minute signed `download_url`
+  (`FileStore::provider_url`).
+- `results(ResultsIn ≤ 100)`: the route's `DefaultBodyLimit` is `MAX_RESULTS_BODY_BYTES`; `ResultsIn::validate`
+  (a `ProtocolError` is `422`, final — the bridge must not retry the same batch); `finish` each, **after checking the
+  command belongs to one of THIS bridge's phones** (another bridge's command id is `unknown`, not applied);
+  **file ids in a result (`File.file_id`, `Observation.screenshot_file_id`) are resolved within the workspace before
+  anything is signed or stored**; ledger `devices.command.finished {command_id, kind, status, reason, duration_ms}`;
+  signal the waiting agent; observation/shell/file results stored on the row. `ResultsOut` counts `Applied` as
+  `applied`, `Duplicate` as `duplicates`, and `Unknown` (no such command, not this bridge's, or a result for a
+  command that was never leased) as `unknown`; the three sum to `results.len()`.
 - `files` (body ≤ the studio upload limit, `image/png` or `application/octet-stream`): store as a workspace file
   with 7-day expiry metadata, answer `FileOut`.
-- [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_refuses_retired_phone`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused}`; archtest: no MCP tool for `devices.bridge.*`.
+- [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_refuses_retired_phone`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`, `register_refuses_one_bad_phone_not_the_heartbeat`, `commands_rechecks_supports_at_lease_time`, `result_for_another_bridges_command_is_unknown`, `result_with_a_foreign_file_id_is_refused`, `invalid_results_body_is_422`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused}`; archtest: no MCP tool for `devices.bridge.*`.
 - [ ] CI red → implement → green; **commit** `feat(devices): the device bridge's surface`.
 
 ### Task D1-T6: agent use cases + MCP tools + logging rule
