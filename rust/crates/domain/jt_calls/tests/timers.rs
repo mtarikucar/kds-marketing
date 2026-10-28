@@ -2,8 +2,8 @@
 mod support;
 
 use jt_calls::{
-    BridgeEvent, CallSession, CallState, Command, EndCause, PlayKind, TimerAction, TurnKind,
-    apply_timer, next_timer, reduce, say,
+    BridgeEvent, CLOSING_GRACE_S, CallSession, CallState, Command, EndCause, MAX_RING_S, PlayKind,
+    TimerAction, TurnKind, apply_timer, end, next_timer, reduce, say,
 };
 use support::*;
 use time::{Duration, OffsetDateTime};
@@ -126,7 +126,14 @@ fn closing_when_fallbacks_exhausted() {
 fn caller_silence_reprompt() {
     let p = policy();
     let mut s = owing();
-    let step = say(&mut s, "Randevunuz yarın 14:00, uygun mu?", true, at(3)).unwrap();
+    let step = say(
+        &mut s,
+        "Randevunuz yarın 14:00, uygun mu?",
+        true,
+        true,
+        at(3),
+    )
+    .unwrap();
     let Command::Say { seq, .. } = step.commands[0] else {
         panic!("a say command")
     };
@@ -183,4 +190,35 @@ fn max_duration_closes() {
     assert_eq!(next_timer(&human, at(10_000), &short), TimerAction::None);
     s.state = CallState::Ended;
     assert_eq!(next_timer(&s, at(10_000), &short), TimerAction::None);
+}
+
+#[test]
+fn unanswered_call_is_hung_up_after_90s() {
+    let p = policy();
+    let mut s = agent_session();
+    assert_eq!(MAX_RING_S, 90);
+    assert_eq!(next_timer(&s, at(89), &p), TimerAction::None);
+    reduce(&mut s, &BridgeEvent::Ringing, at(10), &p);
+    let (action, commands) = tick(&mut s, 90);
+    assert_eq!(action, TimerAction::Close(EndCause::NoAnswer));
+    assert_eq!(commands, [Command::Hangup]);
+    assert_eq!(s.state, CallState::Ended);
+    assert_eq!(s.end_cause, Some(EndCause::NoAnswer));
+}
+
+#[test]
+fn unreported_closing_ends_the_line_after_60s() {
+    let p = policy();
+    let mut s = owing();
+    end(&mut s, EndCause::MaxDuration, at(10));
+    assert_eq!(s.state, CallState::Ending);
+    assert_eq!(CLOSING_GRACE_S, 60);
+    assert_eq!(tick(&mut s, 69).0, TimerAction::None);
+    let (action, commands) = tick(&mut s, 70);
+    assert_eq!(action, TimerAction::LineLost);
+    assert!(commands.is_empty());
+    assert_eq!(s.state, CallState::Ended);
+    assert_eq!(s.end_cause, Some(EndCause::MaxDuration));
+    assert_eq!(s.ended_at, Some(at(70)));
+    assert_eq!(next_timer(&s, at(500), &p), TimerAction::None);
 }

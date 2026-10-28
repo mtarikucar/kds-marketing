@@ -292,6 +292,8 @@ fn every_job_has_a_lock_named_after_it() {
             "studio_measure",
             "studio_reweight",
             "voice_bridge_health",
+            "call_timers",
+            "purge_call_commands",
         ]
     );
     for job in Job::ALL {

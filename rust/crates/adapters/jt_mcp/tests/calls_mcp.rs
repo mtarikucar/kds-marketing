@@ -1,5 +1,6 @@
-//! The `jeeta.calls.*` tools (voice V0): their permissions, risks, schemas and what they tell an
-//! agent; and one place → end round trip through the dispatcher with numbers masked.
+//! The `jeeta.calls.*` tools (voice V0, V1): their permissions, risks, schemas and what they tell
+//! an agent; one place → end round trip through the dispatcher with numbers masked; and the
+//! shape of the agent's long-poll on its call.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -38,6 +39,9 @@ fn calls_tools_have_their_permissions_risks_and_strict_schemas() {
         ("jeeta.calls.get", Permission::CallsWork, Risk::Read),
         ("jeeta.calls.list", Permission::CallsWork, Risk::Read),
         ("jeeta.calls.end", Permission::CallsWork, Risk::Write),
+        ("jeeta.calls.listen", Permission::CallsWork, Risk::Read),
+        ("jeeta.calls.say", Permission::CallsWork, Risk::Write),
+        ("jeeta.calls.transfer", Permission::CallsWork, Risk::Write),
     ];
     assert_eq!(tools.len(), expected.len());
     for (name, permission, risk) in expected {
@@ -219,4 +223,190 @@ async fn place_and_end_through_the_dispatcher_keep_numbers_masked() {
         assert!(!out.to_string().contains("5321234567"), "{out}");
     }
     assert_eq!(listed["calls"][0]["counterpart"], "+90 5** *** ** 67");
+}
+
+#[tokio::test]
+async fn listen_long_poll_shape() {
+    let tools = tools();
+    // The schema bounds the wait; the description tells the agent the loop and how long it may
+    // think before the script covers for it.
+    let schema = tools["jeeta.calls.listen"].input_schema.as_value().clone();
+    assert_eq!(schema["required"], json!(["call_id"]));
+    assert_eq!(schema["properties"]["wait_s"]["maximum"], 25);
+    for name in ["jeeta.calls.listen", "jeeta.calls.say"] {
+        let text = tools[name].description;
+        for rule in [
+            "within 10 seconds",
+            "after 4 s",
+            "after 20 s",
+            "ends by script",
+        ] {
+            assert!(text.contains(rule), "{name}: {rule}");
+        }
+    }
+    let say = tools["jeeta.calls.say"].input_schema.as_value().clone();
+    assert_eq!(say["required"], json!(["call_id", "text"]));
+    assert_eq!(say["properties"]["text"]["maxLength"], 600);
+
+    // An agent's call through the dispatcher: placed, then listened on while nothing happens.
+    let uow = Arc::new(InMemoryUow::new());
+    let deps = jt_testkit::fakes::deps(uow.clone());
+    let out = jt_app::usecases::auth::register(
+        &deps,
+        jt_app::usecases::auth::RegisterInput {
+            email: "owner@listen.example".into(),
+            password: "correct horse battery".into(),
+            display_name: "Owner".into(),
+            workspace_name: "Listen".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let (ws, owner) = (out.me.current_workspace.unwrap(), out.me.user_id);
+    jt_testkit::flows::activate_workspace(&deps, ws).await;
+    let owner_ctx = Ctx {
+        workspace_id: ws,
+        actor: Actor::Human { user_id: owner },
+        permissions: SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    let mut r = uow.tenant(ws).await.unwrap();
+    r.strategy()
+        .insert(StrategyVersion {
+            id: StrategyVersionId::new_v7(),
+            workspace_id: ws,
+            number: 1,
+            status: VersionStatus::Approved,
+            sections: Sections::default(),
+            created_at: FIXED_NOW,
+            created_by: Actor::Human { user_id: owner },
+            submitted_at: Some(FIXED_NOW),
+            approved_at: Some(FIXED_NOW),
+            approved_by: Some(owner),
+            archived_at: None,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let person = jt_app::usecases::inbox::people::create(
+        &deps,
+        &owner_ctx,
+        serde_json::from_value(json!({
+            "display_name": "Ada",
+            "identities": [{ "channel": "phone", "value": "05321234567" }],
+            "source": "form",
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+    .person;
+    jt_app::usecases::inbox::consent::record_consent(
+        &deps,
+        &owner_ctx,
+        person.id,
+        serde_json::from_value(json!({
+            "channel": "phone",
+            "kind": "explicit",
+            "source": "iys_sync",
+            "at": "2026-10-21T09:00:00Z",
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    jt_app::usecases::calls::policy_set(
+        &deps,
+        &owner_ctx,
+        serde_json::from_value(json!({ "disclosure_sentence": "dijital asistanıyım" })).unwrap(),
+    )
+    .await
+    .unwrap();
+    let key = jt_app::usecases::api_keys::create(
+        &deps,
+        &owner_ctx,
+        jt_app::usecases::api_keys::CreateKey {
+            name: "voice bridge".into(),
+            scopes: vec!["calls.bridge".into()],
+        },
+    )
+    .await
+    .unwrap();
+    let key = jt_app::usecases::api_keys::authenticate(&deps, &key.plaintext)
+        .await
+        .unwrap();
+    jt_app::usecases::calls::bridge::register(
+        &deps,
+        &jt_app::usecases::calls::bridge::ctx_for_bridge(&key, FIXED_NOW),
+        serde_json::from_value(json!({
+            "extension": "101",
+            "codecs": ["PCMA"],
+            "max_calls": 1,
+            "stt": { "engine": "vosk", "model": "vosk-model-small-tr-0.3" },
+            "tts": { "engine": "piper", "voice": "tr_TR-fahrettin-medium" },
+            "version": "0.1.0",
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let agent = Ctx {
+        actor: Actor::Agent {
+            connection_id: jt_tenancy::AgentConnectionId::new_v7(),
+            user_id: owner,
+        },
+        role_key: None,
+        ..owner_ctx.clone()
+    };
+    let run = |name: &str, args: Value| {
+        let tool = &tools[name];
+        (tool.run)(&deps, &agent, args)
+    };
+    let placed = run(
+        "jeeta.calls.place",
+        json!({
+            "person_id": person.id,
+            "purpose": "commercial",
+            "mode": "agent",
+            "plan": {
+                "opening": "Merhaba, ben Listen'in dijital asistanıyım.",
+                "goal": "Randevuyu teyit etmek",
+                "holding": ["Bir saniye lütfen."],
+                "fallback": ["Sizi geri arayacağız."],
+                "closing": "İyi günler.",
+                "max_duration_s": 120,
+            },
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(placed["call"]["state"], "dialing");
+    let id = placed["call"]["id"].clone();
+    let started = std::time::Instant::now();
+    let heard = run("jeeta.calls.listen", json!({ "call_id": id, "wait_s": 1 }))
+        .await
+        .unwrap();
+    let took = started.elapsed();
+    assert!(took >= std::time::Duration::from_millis(900), "{took:?}");
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+    assert_eq!(
+        heard,
+        json!({ "call_id": id, "state": "dialing", "events": [], "timed_out": true })
+    );
+    // A sentence before the answer is refused with its reason; a field it does not take is
+    // refused as an argument error.
+    let refused = run("jeeta.calls.say", json!({ "call_id": id, "text": "Alo?" }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.details["reason"], "not_live");
+    assert!(
+        run("jeeta.calls.listen", json!({ "call_id": id, "wait": 1 }),)
+            .await
+            .is_err()
+    );
+    for out in [&placed, &heard] {
+        assert!(!out.to_string().contains("5321234567"), "{out}");
+    }
 }

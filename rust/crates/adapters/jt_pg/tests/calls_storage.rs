@@ -8,7 +8,7 @@
 use jt_app::error::ErrorCode;
 use jt_app::ports::UnitOfWork;
 use jt_app::ports::calls::{
-    CallCommandId, CallDirection, CallFilter, CallId, CallMetrics, CallMode, CallPolicy,
+    CallCommandId, CallDirection, CallFilter, CallId, CallMetrics, CallMode, CallPlan, CallPolicy,
     CallPurpose, CallSession, CallState, Command, PlayKind, RecordingState, Turn, TurnClock,
     TurnKind, TurnMeta,
 };
@@ -390,4 +390,240 @@ async fn bridge_commands_lease_in_queue_order_and_events_are_noted_once() {
             .unwrap()
     );
     t.commit().await.unwrap();
+}
+
+/// An agent's call of `ws` through `bridge`, known to the bridge as `bridge_call_id`.
+fn agent_call(ws: WorkspaceId, bridge: CapabilityId, bridge_call_id: &str) -> CallSession {
+    CallSession {
+        mode: CallMode::Agent,
+        bridge_call_id: Some(bridge_call_id.into()),
+        crm_id: None,
+        plan: Some(CallPlan {
+            opening: "Merhaba Ada Hanım, ben Acme'nin dijital asistanıyım.".into(),
+            goal: "Ada Hanım'ın randevusunu teyit etmek".into(),
+            holding: vec!["Bir saniye lütfen.".into()],
+            fallback: vec![],
+            closing: "İyi günler.".into(),
+            max_duration_s: 300,
+            language: "tr".into(),
+            disclose_assistant: true,
+        }),
+        ..session(ws, bridge, "unused")
+    }
+}
+
+#[tokio::test]
+async fn live_calls_cut_turns_purged_commands_and_live_workspaces() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let (a, _) = db.seed_workspace("live-a").await;
+    let (b, _) = db.seed_workspace("live-b").await;
+    let bridge = voice_bridge(&uow, a, "101").await;
+    let pb = pbx(&uow, b).await;
+    let live = agent_call(a, bridge, "b-live");
+    let ended = CallSession {
+        id: CallId::new_v7(),
+        state: CallState::Ended,
+        started_at: T0 - time::Duration::minutes(5),
+        ..agent_call(a, bridge, "b-ended")
+    };
+    let mut t = uow.tenant(a).await.unwrap();
+    t.calls().insert(ended.clone(), T0).await.unwrap();
+    t.calls().insert(live.clone(), T0).await.unwrap();
+    // Only the call on the line is live.
+    assert_eq!(t.calls().live().await.unwrap(), vec![live.clone()]);
+    let said = Turn {
+        seq: 0,
+        at: T0,
+        kind: TurnKind::Say {
+            by: jt_app::ports::calls::Speaker::Agent,
+        },
+        text: "Randevunuz perşembe.".into(),
+        meta: TurnMeta {
+            latency_ms: Some(2_000),
+            ..TurnMeta::default()
+        },
+    };
+    t.calls()
+        .append_turns(live.id, vec![said.clone()])
+        .await
+        .unwrap();
+    // The caller cut the sentence: only its measurement changes.
+    assert!(t.calls().mark_interrupted(live.id, 0, 11).await.unwrap());
+    assert!(!t.calls().mark_interrupted(live.id, 9, 11).await.unwrap());
+    let turns = t.calls().turns(live.id, None, 10).await.unwrap();
+    assert_eq!(
+        turns,
+        [Turn {
+            meta: TurnMeta {
+                interrupted_at_char: Some(11),
+                latency_ms: Some(2_000),
+                ..TurnMeta::default()
+            },
+            ..said
+        }]
+    );
+    t.calls()
+        .enqueue_commands(
+            ended.id,
+            vec![(CallCommandId::new_v7(), Command::Hangup)],
+            T0 - time::Duration::days(8),
+        )
+        .await
+        .unwrap();
+    t.calls()
+        .enqueue_commands(
+            live.id,
+            vec![(CallCommandId::new_v7(), Command::Hangup)],
+            T0,
+        )
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    // A rep's call on the line is no agent's call.
+    let mut t = uow.tenant(b).await.unwrap();
+    t.calls().insert(session(b, pb, "crm-b"), T0).await.unwrap();
+    t.commit().await.unwrap();
+    let mut p = uow.platform().await.unwrap();
+    assert_eq!(p.workspaces_with_live_agent_calls().await.unwrap(), [a]);
+    drop(p);
+    // Commands queued more than a week ago are purged, acknowledged or not; the rest stay.
+    let mut t = uow.tenant(a).await.unwrap();
+    assert_eq!(
+        t.calls()
+            .purge_commands(T0 - time::Duration::days(7))
+            .await
+            .unwrap(),
+        1
+    );
+    t.commit().await.unwrap();
+    let mut tx = TenantTx::begin(&db.pool, a).await.unwrap();
+    let left: Vec<Uuid> = sqlx::query_scalar("select call_id from call_commands")
+        .fetch_all(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(left, [live.id.as_uuid()]);
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn erasure_scrubs_a_calls_plan_commands_and_bridge_notes() {
+    use jt_app::usecases::inbox::{erasure, people};
+    let db = TestDb::new().await;
+    let uow = std::sync::Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    let f = jt_testkit::inbox_contract::Fixture::new(uow.clone()).await;
+    let deps = jt_testkit::fakes::deps(uow.clone());
+    let ctx = jt_app::ctx::Ctx {
+        workspace_id: f.ws,
+        actor: Actor::Human { user_id: f.user },
+        permissions: jt_tenancy::SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: T0,
+        agent_connection_id: None,
+    };
+    let person = |name: &str, phone: &str| {
+        let (deps, ctx) = (&deps, &ctx);
+        let body = serde_json::json!({
+            "display_name": name,
+            "identities": [{ "channel": "phone", "value": phone }],
+            "source": "form",
+        });
+        async move {
+            people::create(deps, ctx, serde_json::from_value(body).unwrap())
+                .await
+                .unwrap()
+                .person
+                .id
+        }
+    };
+    let erased = person("Ada", "05321234567").await;
+    let kept = person("Bora", "05329876543").await;
+    let bridge = voice_bridge(&uow, f.ws, "101").await;
+    let mut ids = Vec::new();
+    for (who, number, bridge_call_id) in [
+        (erased, "+905321234567", "b-erased"),
+        (kept, "+905329876543", "b-kept"),
+    ] {
+        let call = CallSession {
+            person_id: Some(who),
+            counterpart_e164: number.into(),
+            ..agent_call(f.ws, bridge, bridge_call_id)
+        };
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        t.calls().insert(call.clone(), T0).await.unwrap();
+        t.calls()
+            .enqueue_commands(
+                call.id,
+                vec![
+                    (
+                        CallCommandId::new_v7(),
+                        Command::Dial {
+                            to_e164: number.into(),
+                            plan: call.plan.clone().unwrap(),
+                        },
+                    ),
+                    (
+                        CallCommandId::new_v7(),
+                        Command::Say {
+                            seq: 2,
+                            text: "Ada Hanım, randevunuz perşembe.".into(),
+                            allow_barge_in: true,
+                        },
+                    ),
+                ],
+                T0,
+            )
+            .await
+            .unwrap();
+        assert!(
+            t.calls()
+                .note_bridge_event(bridge, bridge_call_id, 1, "answered", T0)
+                .await
+                .unwrap()
+        );
+        t.commit().await.unwrap();
+        ids.push(call.id);
+    }
+    erasure::erase(&deps, &ctx, erased, erasure::EraseInput { confirm: true })
+        .await
+        .unwrap();
+    let mut tx = TenantTx::begin(&db.pool, f.ws).await.unwrap();
+    let commands: Vec<(Uuid, String)> =
+        sqlx::query_as("select call_id, payload::text from call_commands order by seq")
+            .fetch_all(tx.conn())
+            .await
+            .unwrap();
+    // The erased person's dial (the number, the plan) and sentence are gone; the other's stay.
+    assert_eq!(commands.len(), 2);
+    assert!(commands.iter().all(|(call, _)| *call == ids[1].as_uuid()));
+    assert!(commands[0].1.contains("5329876543"));
+    let notes: Vec<String> = sqlx::query_scalar("select bridge_call_id from call_bridge_events")
+        .fetch_all(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(notes, ["b-kept"]);
+    let (number, plan, data): (String, Option<serde_json::Value>, String) = sqlx::query_as(
+        "select counterpart_e164, data -> 'plan', data::text from call_sessions where id = $1",
+    )
+    .bind(ids[0].as_uuid())
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(number, "");
+    assert_eq!(plan, Some(serde_json::Value::Null));
+    assert!(!data.contains("5321234567"), "{data}");
+    assert!(!data.contains("Ada"), "{data}");
+    let kept_plan: Option<serde_json::Value> =
+        sqlx::query_scalar("select data -> 'plan' from call_sessions where id = $1")
+            .bind(ids[1].as_uuid())
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    assert_ne!(kept_plan, Some(serde_json::Value::Null));
+    tx.rollback().await.unwrap();
+    // The scrubbed session still decodes.
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let session = t.calls().get(ids[0]).await.unwrap().unwrap();
+    assert_eq!(session.plan, None);
+    assert!(session.counterpart_e164.is_empty());
 }

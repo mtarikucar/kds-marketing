@@ -5,7 +5,7 @@ mod support;
 use jt_calls::{
     BridgeEvent, CallError, CallOutcome, CallPolicy, CallSession, CallState, Command, EndCause,
     PlayKind, RecordingState, RefusalReason, Speaker, Step, TimerAction, TurnKind, apply_timer,
-    end, mask_e164, next_timer, reduce, say,
+    close, end, mask_e164, next_timer, reduce, say, transfer,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use support::*;
@@ -63,7 +63,7 @@ fn ringing_answered_utterance_say_hangup() {
     let step = reduce(&mut s, &utterance("Evet, uygun"), at(6), &p);
     assert_eq!(step.turns[0].kind, TurnKind::Utterance);
     assert_eq!(s.clock.owed_since, Some(at(6)));
-    let step = say(&mut s, "Harika, teşekkürler.", true, at(9)).unwrap();
+    let step = say(&mut s, "Harika, teşekkürler.", true, true, at(9)).unwrap();
     assert_eq!(step.turns[0].meta.latency_ms, Some(3_000));
     assert_eq!(s.metrics.agent_latency_ms, [3_000]);
     assert!(matches!(
@@ -92,7 +92,10 @@ fn ringing_answered_utterance_say_hangup() {
         reduce(&mut s, &utterance("Alo?"), at(21), &p),
         Step::default()
     );
-    assert_eq!(say(&mut s, "Alo", true, at(21)), Err(CallError::NotLive));
+    assert_eq!(
+        say(&mut s, "Alo", true, true, at(21)),
+        Err(CallError::NotLive)
+    );
 }
 
 #[test]
@@ -267,18 +270,24 @@ fn say_is_refused_off_agent_calls_and_out_of_bounds() {
     let mut human = human_session();
     reduce(&mut human, &BridgeEvent::Answered, at(0), &p);
     assert_eq!(
-        say(&mut human, "Merhaba", true, at(1)),
+        say(&mut human, "Merhaba", true, true, at(1)),
         Err(CallError::NotAgentCall)
     );
     let mut s = agent_session();
-    assert_eq!(say(&mut s, "Merhaba", true, at(0)), Err(CallError::NotLive));
-    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
-    assert_eq!(say(&mut s, "  ", true, at(1)), Err(CallError::EmptyText));
     assert_eq!(
-        say(&mut s, &"a".repeat(601), true, at(1)),
+        say(&mut s, "Merhaba", true, true, at(0)),
+        Err(CallError::NotLive)
+    );
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    assert_eq!(
+        say(&mut s, "  ", true, true, at(1)),
+        Err(CallError::EmptyText)
+    );
+    assert_eq!(
+        say(&mut s, &"a".repeat(601), true, true, at(1)),
         Err(CallError::TextTooLong)
     );
-    assert!(say(&mut s, &"a".repeat(600), false, at(1)).is_ok());
+    assert!(say(&mut s, &"a".repeat(600), false, true, at(1)).is_ok());
 }
 
 #[test]
@@ -305,9 +314,9 @@ fn every_played_text_is_authored() {
         let action = next_timer(&s, at(t), &p);
         take(apply_timer(&mut s, &action, at(t), &p));
     }
-    take(say(&mut s, agent_lines[0], true, at(30)).unwrap());
+    take(say(&mut s, agent_lines[0], true, true, at(30)).unwrap());
     take(reduce(&mut s, &utterance("Tamam"), at(31), &p));
-    take(say(&mut s, agent_lines[1], true, at(33)).unwrap());
+    take(say(&mut s, agent_lines[1], true, true, at(33)).unwrap());
     take(end(&mut s, EndCause::AgentEnded, at(34)));
     assert!(played.len() >= 6, "{played:?}");
     for text in &played {
@@ -328,7 +337,7 @@ fn every_record_round_trips() {
     s.recording = RecordingState::Pending;
     let mut turns = reduce(&mut s, &BridgeEvent::Answered, at(0), &p).turns;
     turns.extend(reduce(&mut s, &utterance("Evet"), at(1), &p).turns);
-    turns.extend(say(&mut s, "Peki.", true, at(2)).unwrap().turns);
+    turns.extend(say(&mut s, "Peki.", true, true, at(2)).unwrap().turns);
     round_trip(&s);
     for turn in &turns {
         round_trip(turn);
@@ -435,6 +444,116 @@ fn plan_and_policy_bounds_and_disclosure() {
         assert!(bad.validate().is_err(), "{bad:?}");
     }
     assert_eq!(mask_e164("+905321234567"), "+90 5** *** ** 67");
+}
+
+#[test]
+fn transfer_ends_the_agent_part_without_closing() {
+    let p = policy();
+    let mut s = agent_session();
+    // Not before the call is answered, and never a rep's call.
+    assert_eq!(transfer(&mut s, "102", at(0)), Err(CallError::NotLive));
+    assert_eq!(
+        transfer(&mut human_session(), "102", at(0)),
+        Err(CallError::NotAgentCall)
+    );
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    reduce(
+        &mut s,
+        &utterance("Bir yetkiliyle görüşmek istiyorum"),
+        at(3),
+        &p,
+    );
+    let step = transfer(&mut s, "102", at(5)).unwrap();
+    assert_eq!(step.commands, [Command::Transfer { to: "102".into() }]);
+    assert!(matches!(&step.turns[0].kind, TurnKind::Event { name } if name == "transferred"));
+    assert_eq!(s.state, CallState::Ended);
+    assert_eq!(s.end_cause, Some(EndCause::Transferred));
+    assert_eq!(s.duration_s, Some(5));
+    // The line goes on with the rep: nothing the agent says is played any more.
+    assert_eq!(
+        say(&mut s, "Alo", true, true, at(6)),
+        Err(CallError::NotLive)
+    );
+    assert_eq!(
+        reduce(
+            &mut s,
+            &BridgeEvent::Hangup {
+                cause: "normal".into()
+            },
+            at(90),
+            &p
+        ),
+        Step::default()
+    );
+    assert_eq!(s.duration_s, Some(5));
+}
+
+#[test]
+fn a_sentence_expecting_no_reply_keeps_the_agent_owing() {
+    let p = policy();
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    reduce(&mut s, &utterance("Fiyat nedir?"), at(2), &p);
+    let step = say(&mut s, "Bir saniye, bakıyorum.", true, false, at(4)).unwrap();
+    let Command::Say { seq, .. } = step.commands[0] else {
+        panic!("a say command")
+    };
+    // Played: the agent owes its next sentence from its end, so the holding phrase comes 4 s
+    // later; the caller is not waited for.
+    reduce(
+        &mut s,
+        &BridgeEvent::Said {
+            seq,
+            interrupted_at_char: None,
+            tts_ms: None,
+        },
+        at(6),
+        &p,
+    );
+    assert_eq!(s.clock.owed_since, Some(at(6)));
+    assert_eq!(s.clock.awaiting_caller_since, None);
+    assert_eq!(next_timer(&s, at(9), &p), TimerAction::None);
+    assert_eq!(next_timer(&s, at(10), &p), TimerAction::PlayHolding);
+    // A sentence expecting a reply waits for the caller once played.
+    let step = say(&mut s, "Fiyatı 450 lira.", true, true, at(11)).unwrap();
+    let Command::Say { seq, .. } = step.commands[0] else {
+        panic!("a say command")
+    };
+    reduce(
+        &mut s,
+        &BridgeEvent::Said {
+            seq,
+            interrupted_at_char: None,
+            tts_ms: None,
+        },
+        at(13),
+        &p,
+    );
+    assert_eq!(s.clock.owed_since, None);
+    assert_eq!(s.clock.awaiting_caller_since, Some(at(13)));
+}
+
+#[test]
+fn close_keeps_a_scripted_cause() {
+    let p = policy();
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    let step = end(&mut s, EndCause::AgentTimeout, at(30));
+    assert_eq!(step.commands.len(), 2);
+    assert_eq!(s.state, CallState::Ending);
+    assert_eq!(s.clock.closing_since, Some(at(30)));
+    close(&mut s, EndCause::BridgeOffline, at(95));
+    assert_eq!(s.state, CallState::Ended);
+    assert_eq!(s.end_cause, Some(EndCause::AgentTimeout));
+    assert_eq!(s.ended_at, Some(at(95)));
+    assert_eq!(s.duration_s, Some(95));
+    // A live call closed is ended with the cause given; an ended one is left alone.
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    close(&mut s, EndCause::BridgeOffline, at(10));
+    assert_eq!(s.end_cause, Some(EndCause::BridgeOffline));
+    close(&mut s, EndCause::AgentEnded, at(20));
+    assert_eq!(s.ended_at, Some(at(10)));
 }
 
 /// Keeps `CallSession` constructible for the shared builders.

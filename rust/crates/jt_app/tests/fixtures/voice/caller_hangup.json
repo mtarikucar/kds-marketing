@@ -1,0 +1,43 @@
+{
+  "about": "An agent's call the person ends: they cut the agent's sentence, decline and hang up; the call is settled at the hangup and the agent records the outcome afterwards. Times are seconds after the call was placed; the bridge acknowledges every command it takes.",
+  "plan": {
+    "opening": "Merhaba, ben Acme'nin dijital asistanıyım. Randevunuz için arıyorum.",
+    "goal": "Perşembe randevusunu teyit etmek",
+    "holding": ["Bir saniye, kontrol ediyorum.", "Hemen bakıyorum."],
+    "fallback": ["Bağlantıda bir gecikme var, lütfen bekleyin."],
+    "closing": "Teşekkürler, iyi günler.",
+    "max_duration_s": 300,
+    "language": "tr",
+    "disclose_assistant": true
+  },
+  "script": [
+    { "t": 0, "agent": "place" },
+    { "t": 1, "bridge": "poll", "expect": ["dial"] },
+    { "t": 2, "bridge": "events", "events": [{ "kind": "ringing" }] },
+    { "t": 4, "bridge": "events", "events": [{ "kind": "answered" }] },
+    { "t": 4, "bridge": "poll", "expect": ["play"] },
+    { "t": 7, "bridge": "events", "events": [{ "kind": "said", "seq": "$last", "tts_ms": 360 }] },
+    { "t": 9, "bridge": "events", "events": [
+      { "kind": "utterance", "text": "Kim arıyor?", "is_final": true, "confidence": 0.9, "stt_ms": 180 }
+    ] },
+    { "t": 10, "agent": "listen", "after_seq": 1, "expect": ["utterance"] },
+    { "t": 12, "agent": "say", "text": "Acme'nin dijital asistanıyım, randevunuz için arıyorum." },
+    { "t": 12, "bridge": "poll", "expect": ["say"] },
+    { "t": 13, "bridge": "events", "events": [
+      { "kind": "said", "seq": "$last", "interrupted_at_char": 9, "tts_ms": 410 },
+      { "kind": "utterance", "text": "İstemiyorum, teşekkürler.", "is_final": true, "confidence": 0.84, "stt_ms": 240 }
+    ] },
+    { "t": 14, "bridge": "events", "events": [{ "kind": "hangup", "cause": "normal" }] },
+    { "t": 15, "agent": "listen", "after_seq": 3, "expect": ["utterance", "event:hangup"] },
+    { "t": 16, "agent": "end", "input": { "outcome": "refused_by_customer" } },
+    { "t": 16, "bridge": "poll", "expect": [] }
+  ],
+  "expect": {
+    "state": "ended",
+    "end_cause": "caller_hangup",
+    "duration_s": 10,
+    "turns": ["event:answered", "say:script", "utterance", "say:agent", "utterance", "event:hangup"],
+    "ledger": ["calls.placed", "calls.answered", "calls.ended", "calls.outcome_recorded"],
+    "call_made": [true]
+  }
+}
