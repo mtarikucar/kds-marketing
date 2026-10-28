@@ -118,6 +118,51 @@ fn app_depends_on_no_adapter() {
     }
 }
 
+/// The bridge kernel is every bridge's, none's own: the kernel (`jt_app::usecases::bridges`) and
+/// the bridges' signals (`jt_app::ports::bridges`) name no path of the voice bridge's calls
+/// (`calls::…`, `…::calls`, nor `calls` in a `use`), outside comments, so the next bridge builds
+/// on the kernel without them.
+#[test]
+fn the_bridge_kernel_names_no_calls() {
+    let app = workspace_dir().join("crates/jt_app/src");
+    let mut files = rust_files_under(&app.join("usecases/bridges"));
+    files.push(app.join("ports/bridges.rs"));
+    files.sort();
+    assert!(files.len() >= 3, "the kernel's files moved: {files:?}");
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a readable file");
+        let code: Vec<&str> = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect();
+        for line in &code {
+            assert!(
+                !line.contains("calls::") && !line.contains("::calls"),
+                "{} names a path of the calls: {line}",
+                file.display()
+            );
+        }
+        // A grouped import (`use crate::usecases::{calls, …}`) may span lines: read it whole.
+        for statement in code.join("\n").split(';') {
+            let import: Vec<&str> = statement
+                .lines()
+                .skip_while(|line| {
+                    let line = line.trim_start();
+                    !["use ", "pub use ", "pub(crate) use "]
+                        .iter()
+                        .any(|start| line.starts_with(start))
+                })
+                .collect();
+            let import = import.join("\n");
+            assert!(
+                !mentions_word(&import, "calls"),
+                "{} imports the calls: {import}",
+                file.display()
+            );
+        }
+    }
+}
+
 #[test]
 fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
     for c in [

@@ -39,7 +39,7 @@ use jt_inbox::{
     JourneyStatus, Note, NoteId, PersonId, Task, TaskId, TaskStatus,
 };
 use jt_ledger::Actor;
-use jt_tenancy::{AgentConnectionId, Permission, WorkspaceStatus};
+use jt_tenancy::{AgentConnectionId, Permission, WorkspaceId, WorkspaceStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
@@ -50,15 +50,15 @@ use super::failure::failure_reason;
 use super::{Deps, invalid};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
+use crate::ports::bridges::SignalKey;
 use crate::ports::calls::{CallFilter, MAX_CALL_PAGE};
 use crate::ports::{CapabilityFilter, TenantRepos};
 use bridge::VOICE_BRIDGE_KIND;
 
 /// The longest a long-poll (`calls.listen`, the voice bridge's commands) waits, in seconds.
 pub const MAX_WAIT_S: u32 = 25;
-/// How often a waiting long-poll reads again when no signal woke it: what another server
-/// instance committed reaches it within this.
-pub const FALLBACK_TICK: std::time::Duration = std::time::Duration::from_secs(1);
+/// The topic of the calls' signals ([`signal_key`]).
+const SIGNAL_TOPIC: &str = "calls";
 
 /// The kind of capability a rep's call goes through.
 const PBX_KIND: &str = "netgsm_pbx";
@@ -70,6 +70,15 @@ const RELATIONSHIP_DAYS: i64 = 180;
 const CALLBACK_DAYS: i64 = 7;
 /// The time zone a day's call count is taken in when the capability names none.
 const DEFAULT_TZ: &str = "Europe/Istanbul";
+
+/// What the long-polls on workspace `ws`'s calls watch (`calls.listen`, the voice bridge's
+/// commands), signalled once a turn or a command they wait for was committed.
+fn signal_key(ws: WorkspaceId) -> SignalKey {
+    SignalKey {
+        workspace_id: ws,
+        topic: SIGNAL_TOPIC,
+    }
+}
 
 // ---------------------------------------------------------------------------------------------
 // Inputs and outputs
@@ -951,7 +960,7 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
     )
     .await?;
     r.commit().await?;
-    deps.call_signals.notify(ctx.workspace_id);
+    deps.bridge_signals.notify(signal_key(ctx.workspace_id));
     Ok(CallOut {
         call: view(&session, reveals(ctx)),
         turns: vec![],
@@ -1137,7 +1146,7 @@ pub async fn end(deps: &Deps, ctx: &Ctx, id: CallId, input: EndInput) -> Result<
     }
     r.commit().await?;
     if queued {
-        deps.call_signals.notify(ctx.workspace_id);
+        deps.bridge_signals.notify(signal_key(ctx.workspace_id));
     }
     let turns = {
         let mut r = deps.uow.tenant(ctx.workspace_id).await?;

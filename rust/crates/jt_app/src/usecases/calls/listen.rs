@@ -3,18 +3,20 @@
 //! turn follows `after_seq` (the caller's words, a played sentence, a holding phrase, the caller
 //! falling silent, the hangup), or the call has ended, and otherwise waits up to `wait_s`
 //! (at most [`super::MAX_WAIT_S`]) and answers `timed_out`; the agent listens again. A turn
-//! appended in this server wakes a waiting listen at once ([`crate::ports::calls::CallSignals`]);
-//! one appended by another instance is seen within [`super::FALLBACK_TICK`].
+//! appended in this server wakes a waiting listen at once
+//! ([`crate::ports::bridges::BridgeSignals`]); one appended by another instance is seen within
+//! [`FALLBACK_TICK`].
 
 use jt_calls::{CallId, CallState, Turn};
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 
-use super::{FALLBACK_TICK, MAX_WAIT_S};
+use super::{MAX_WAIT_S, signal_key};
 use crate::ctx::Ctx;
 use crate::error::AppError;
 use crate::ports::calls::MAX_CALL_PAGE;
 use crate::usecases::Deps;
+use crate::usecases::bridges::kernel::FALLBACK_TICK;
 
 /// `calls.listen`: the turns after `after_seq` (all of them when left out), waiting up to
 /// `wait_s` seconds for one (at most 25, which is also what an absent `wait_s` waits; more is cut
@@ -54,7 +56,7 @@ pub async fn listen(
     let started = tokio::time::Instant::now();
     loop {
         // Watching before reading: a turn committed after the read still wakes the wait.
-        let watch = deps.call_signals.watch(ctx.workspace_id);
+        let watch = deps.bridge_signals.watch(signal_key(ctx.workspace_id));
         let (state, events) = {
             let mut r = deps.uow.tenant(ctx.workspace_id).await?;
             let session = r

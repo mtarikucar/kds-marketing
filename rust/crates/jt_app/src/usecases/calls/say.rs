@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::session::Pending;
-use super::{CallOut, extension_is_valid, ledger, reveals, view};
+use super::{CallOut, extension_is_valid, ledger, reveals, signal_key, view};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::calls::MAX_CALL_PAGE;
@@ -99,7 +99,7 @@ pub async fn say(deps: &Deps, ctx: &Ctx, id: CallId, input: SayInput) -> Result<
     let state = session.state;
     r.calls().update(session, ctx.now).await?;
     r.commit().await?;
-    deps.call_signals.notify(ctx.workspace_id);
+    deps.bridge_signals.notify(signal_key(ctx.workspace_id));
     Ok(SayOut {
         call_id: id,
         seq,
@@ -156,7 +156,7 @@ pub async fn transfer(
     .await?;
     let turns = r.calls().turns(id, None, MAX_CALL_PAGE).await?;
     r.commit().await?;
-    deps.call_signals.notify(ctx.workspace_id);
+    deps.bridge_signals.notify(signal_key(ctx.workspace_id));
     Ok(CallOut {
         call: view(&session, reveals(ctx)),
         turns,

@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod api_keys;
 pub mod auth;
+pub mod bridges;
 pub mod budget;
 pub mod calls;
 pub mod capabilities;
@@ -54,8 +55,9 @@ use crate::ports::{
 pub struct Deps {
     pub ops: Arc<dyn crate::ports::ops::OpsSnapshot>,
     pub ops_signals: Arc<crate::ports::ops::OpsSignals>,
-    /// Wakes the long-polls of the calls (`calls.listen`, the voice bridge's commands).
-    pub call_signals: Arc<dyn crate::ports::calls::CallSignals>,
+    /// Wakes the long-polls of the bridges and of what waits on them (the voice bridge's
+    /// commands, `calls.listen`).
+    pub bridge_signals: Arc<dyn crate::ports::bridges::BridgeSignals>,
     pub billing: billing::BillingConfig,
     pub file_maintenance: Arc<dyn crate::ports::files::FileMaintenance>,
     pub media_fetch: Arc<dyn crate::ports::files::MediaFetcher>,
