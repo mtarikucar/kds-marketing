@@ -24,7 +24,8 @@ use jt_app::ports::connectors::{
     InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, LinkedinApp,
     MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp, OAuthApp,
     OAuthProvider, PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest,
-    PublishResolution, Publisher, SendReceipt, SmsSender, Telephony, TiktokApp, Url, XApp,
+    PublishResolution, Publisher, SendReceipt, SmsSender, Telephony, TiktokApp, TiktokCreator, Url,
+    XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -323,6 +324,11 @@ pub struct ScriptedConnector {
     /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::resolve_calls`]).
     resolve: Script<Result<Option<PublishResolution>, ConnectorError>>,
     resolve_calls: Mutex<Vec<PublishReceipt>>,
+    /// The account's posting settings answer from here, `Ok(None)` (the trait's default: no
+    /// posting screen) when nothing is queued; the accounts asked about (their `public`) are kept
+    /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::creator_info_calls`]).
+    creator_info: Script<Result<Option<TiktokCreator>, ConnectorError>>,
+    creator_info_calls: Mutex<Vec<Value>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
     account_metrics: Script<Result<AccountMetrics, ConnectorError>>,
     send_text: Script<Result<SendReceipt, ConnectorError>>,
@@ -380,6 +386,8 @@ impl ScriptedConnector {
             publish: Script::default(),
             resolve: Script::default(),
             resolve_calls: Mutex::default(),
+            creator_info: Script::default(),
+            creator_info_calls: Mutex::default(),
             post_metrics: Script::default(),
             account_metrics: Script::default(),
             send_text: Script::default(),
@@ -467,6 +475,16 @@ impl ScriptedConnector {
     /// The receipts [`Publisher::resolve`] was asked about, in order.
     pub fn resolve_calls(&self) -> Vec<PublishReceipt> {
         lock(&self.resolve_calls).clone()
+    }
+
+    /// Queues what the next [`Publisher::creator_info`] answers.
+    pub fn push_creator_info(&self, result: Result<Option<TiktokCreator>, ConnectorError>) {
+        self.creator_info.push(result);
+    }
+
+    /// The accounts (their `public`) [`Publisher::creator_info`] was asked about, in order.
+    pub fn creator_info_calls(&self) -> Vec<Value> {
+        lock(&self.creator_info_calls).clone()
     }
 
     pub fn push_post_metrics(&self, result: Result<PostMetrics, ConnectorError>) {
@@ -687,6 +705,15 @@ impl Publisher for ScriptedConnector {
     ) -> Result<Option<PublishResolution>, ConnectorError> {
         lock(&self.resolve_calls).push(receipt.clone());
         self.resolve.try_next().unwrap_or(Ok(None))
+    }
+
+    async fn creator_info(
+        &self,
+        _cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<TiktokCreator>, ConnectorError> {
+        lock(&self.creator_info_calls).push(public.clone());
+        self.creator_info.try_next().unwrap_or(Ok(None))
     }
 }
 

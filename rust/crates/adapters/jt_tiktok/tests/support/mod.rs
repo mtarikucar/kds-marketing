@@ -24,7 +24,9 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use jt_app::ports::connectors::{InstagramApp, MetaApp, PlatformAppConfig, TiktokApp, XApp};
+use jt_app::ports::connectors::{
+    InstagramApp, MediaUpload, MetaApp, PlatformAppConfig, TiktokApp, TiktokPost, XApp,
+};
 use jt_connector::Credential;
 use jt_outbound::{Egress, FIXED_HOSTS};
 use jt_tiktok::{TIKTOK_SCOPES, TiktokBases, TiktokConnector};
@@ -423,6 +425,49 @@ pub fn partial() -> Reply {
 
 pub fn complete() -> Reply {
     raw(201, "")
+}
+
+/// What a human chose on the posting screen, as the tests post by default: `privacy`, comments
+/// and stitches allowed (the creator of `creator_info_public` turned duets off), no commercial
+/// content.
+pub fn choice(privacy: &str) -> TiktokPost {
+    TiktokPost {
+        title: "Merhaba".into(),
+        privacy_level: privacy.into(),
+        allow_comment: true,
+        allow_duet: false,
+        allow_stitch: true,
+        disclose_commercial: false,
+        your_brand: false,
+        branded_content: false,
+    }
+}
+
+fn mp4_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let mut out = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(payload);
+    out
+}
+
+/// An MP4 video of `seconds`, as its boxes say (a file type and a movie header, timescale 1000),
+/// padded with media data to `len` bytes at least.
+pub fn mp4(seconds: u32, len: usize) -> MediaUpload {
+    let mut mvhd = vec![0; 12];
+    mvhd.extend_from_slice(&1000u32.to_be_bytes());
+    mvhd.extend_from_slice(&(seconds * 1000).to_be_bytes());
+    mvhd.extend_from_slice(&[0; 80]);
+    let head = [
+        mp4_box(b"ftyp", b"isom\0\0\x02\0isomiso2mp41"),
+        mp4_box(b"moov", &mp4_box(b"mvhd", &mvhd)),
+    ]
+    .concat();
+    let data = len.saturating_sub(head.len() + 8);
+    MediaUpload {
+        bytes: [head, mp4_box(b"mdat", &vec![7; data])].concat(),
+        mime: "video/mp4".into(),
+        filename: "clip.mp4".into(),
+    }
 }
 
 /// Scripts a whole video post that the creator's settings allow publicly: `creator_info`, the

@@ -8,13 +8,13 @@ use std::time::Duration as StdDuration;
 
 use jt_app::ports::connectors::{
     Connector, InsightsReader, MediaUpload, OAuthApp, OAuthProvider, PublishReceipt,
-    PublishRequest, PublishResolution, Publisher, XApp,
+    PublishRequest, PublishResolution, Publisher, TiktokCreator, TiktokPost, XApp,
 };
 use jt_connector::{ConnectorError, Credential, Provider};
 use jt_outbound::FIXED_HOSTS;
 use jt_tiktok::{
-    CHUNK_BYTES, DEFAULT_PRIVACY, MAX_DESCRIPTION_UNITS, MAX_PHOTOS, MAX_TITLE_UNITS,
-    PRIVACY_LEVELS, READ_ATTEMPTS, REFRESH_AHEAD, TIKTOK_HOSTS, TIKTOK_SCOPES, TiktokBases,
+    CHUNK_BYTES, MAX_DESCRIPTION_UNITS, MAX_PHOTOS, MAX_TITLE_UNITS, PRIVACY_LEVELS, READ_ATTEMPTS,
+    REFRESH_AHEAD, TIKTOK_HOSTS, TIKTOK_SCOPES, TiktokBases,
 };
 use serde_json::json;
 use support::*;
@@ -59,10 +59,12 @@ fn clip(len: usize) -> MediaUpload {
     }
 }
 
+/// A video post as the Studio hands it over: chosen on the posting screen to be public.
 fn video_post(text: &str, len: usize) -> PublishRequest {
     PublishRequest {
         text: text.into(),
         media: vec![clip(len)],
+        tiktok: Some(choice("PUBLIC_TO_EVERYONE")),
         ..PublishRequest::default()
     }
 }
@@ -77,12 +79,26 @@ fn photo_post(text: &str, n: usize) -> PublishRequest {
     PublishRequest {
         text: text.into(),
         media_urls: photo_urls(n),
+        tiktok: Some(TiktokPost {
+            allow_stitch: false,
+            ..choice("PUBLIC_TO_EVERYONE")
+        }),
         ..PublishRequest::default()
     }
 }
 
+/// `request` with the screen's privacy chosen as `privacy`.
 fn privately(mut request: PublishRequest, privacy: &str) -> PublishRequest {
     request.privacy = Some(privacy.into());
+    if let Some(post) = &mut request.tiktok {
+        post.privacy_level = privacy.into();
+    }
+    request
+}
+
+/// `request` with the screen's choice changed by `change`.
+fn chosen(mut request: PublishRequest, change: impl FnOnce(&mut TiktokPost)) -> PublishRequest {
+    change(request.tiktok.as_mut().expect("a choice"));
     request
 }
 
@@ -631,7 +647,6 @@ async fn public_privacy_refused_when_not_offered() {
         .on("POST", CREATOR_INFO, answer("creator_info_self_only"));
     r.mock.on("POST", VIDEO_INIT, video_init(&r.mock));
     r.mock.on("POST", CONTENT_INIT, answer("photo_init"));
-    assert_eq!(DEFAULT_PRIVACY, "PUBLIC_TO_EVERYONE");
     for request in [
         video_post("Merhaba", 1_000),
         photo_post("Merhaba", 2),
@@ -692,7 +707,7 @@ async fn self_only_is_posted_when_asked_and_offered() {
         r.tt.publish(
             &cred(),
             &public(),
-            &privately(video_post("Merhaba", 1_000), " self_only "),
+            &privately(video_post("Merhaba", 1_000), "SELF_ONLY"),
         )
         .await
         .unwrap();
@@ -703,9 +718,10 @@ async fn self_only_is_posted_when_asked_and_offered() {
         json!({
             "title": "Merhaba",
             "privacy_level": "SELF_ONLY",
-            // What the creator turned off.
+            // On only what the human allowed (comments, stitches) and the creator did not turn
+            // off (this creator turned both off).
             "disable_comment": true,
-            "disable_duet": false,
+            "disable_duet": true,
             "disable_stitch": true,
             "brand_content_toggle": false,
             "brand_organic_toggle": false,
@@ -720,6 +736,216 @@ async fn self_only_is_posted_when_asked_and_offered() {
             "SELF_ONLY"
         ]
     );
+}
+
+#[tokio::test]
+async fn nothing_is_posted_without_the_posting_screens_choice() {
+    let r = rig().await;
+    script_video(&r.mock);
+    r.mock.on("POST", CONTENT_INIT, answer("photo_init"));
+    for mut request in [video_post("Merhaba", 1_000), photo_post("Merhaba", 1)] {
+        // Not even a privacy named alongside: the adapter never picks one.
+        request.tiktok = None;
+        request.privacy = Some("PUBLIC_TO_EVERYONE".into());
+        let e =
+            r.tt.publish(&cred(), &public(), &request)
+                .await
+                .unwrap_err();
+        assert_eq!(e.kind(), "permanent");
+        assert_eq!(
+            e.reason(),
+            Some(
+                "a TikTok post needs what a human chose on its posting screen (privacy, \
+                 interactions, commercial content)"
+            )
+        );
+    }
+    assert!(r.mock.recorded().is_empty(), "{:?}", r.mock.lines());
+}
+
+#[tokio::test]
+async fn the_posting_screens_choice_is_what_is_sent() {
+    let r = rig().await;
+    script_video(&r.mock);
+    r.mock.on("POST", CONTENT_INIT, answer("photo_init"));
+    let request = chosen(video_post("Merhaba", 1_000), |post| {
+        post.allow_comment = false;
+        post.allow_duet = true;
+        post.allow_stitch = false;
+        post.disclose_commercial = true;
+        post.your_brand = true;
+        post.branded_content = true;
+    });
+    r.tt.publish(&cred(), &public(), &request).await.unwrap();
+    assert_eq!(
+        r.mock.request("POST", VIDEO_INIT).json()["post_info"],
+        json!({
+            "title": "Merhaba",
+            "privacy_level": "PUBLIC_TO_EVERYONE",
+            "disable_comment": true,
+            // Allowed, but the creator turned duets off: TikTok's settings win.
+            "disable_duet": true,
+            "disable_stitch": true,
+            "brand_content_toggle": true,
+            "brand_organic_toggle": true,
+        })
+    );
+    let request = chosen(photo_post("Merhaba", 1), |post| {
+        post.privacy_level = "MUTUAL_FOLLOW_FRIENDS".into();
+        post.allow_comment = false;
+        post.disclose_commercial = true;
+        post.your_brand = true;
+    });
+    r.tt.publish(&cred(), &public(), &request).await.unwrap();
+    assert_eq!(
+        r.mock.request("POST", CONTENT_INIT).json()["post_info"],
+        json!({
+            "description": "Merhaba",
+            "privacy_level": "MUTUAL_FOLLOW_FRIENDS",
+            "disable_comment": true,
+            "brand_content_toggle": false,
+            "brand_organic_toggle": true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_choice_tiktok_would_refuse_is_refused_before_anything_is_posted() {
+    let r = rig().await;
+    script_video(&r.mock);
+    let branded_private = chosen(video_post("x", 10), |post| {
+        post.privacy_level = "SELF_ONLY".into();
+        post.disclose_commercial = true;
+        post.branded_content = true;
+    });
+    let unspecified = chosen(video_post("x", 10), |post| post.disclose_commercial = true);
+    let undisclosed = chosen(video_post("x", 10), |post| post.your_brand = true);
+    let unchosen = privately(video_post("x", 10), "");
+    // `creator_info_public` allows videos of up to 600 s.
+    let mut long = video_post("x", 10);
+    long.media = vec![mp4(601, 4_096)];
+    let mut at_limit = video_post("x", 10);
+    at_limit.media = vec![mp4(600, 4_096)];
+    for (request, reason) in [
+        (
+            &branded_private,
+            "branded content cannot be private (SELF_ONLY)",
+        ),
+        (
+            &unspecified,
+            "the commercial content disclosure names neither your brand nor branded content",
+        ),
+        (
+            &undisclosed,
+            "your brand or branded content chosen without the commercial content disclosure",
+        ),
+        (
+            &unchosen,
+            "no privacy level was chosen on the posting screen",
+        ),
+        (
+            &long,
+            "the video is 601 s long; this TikTok account posts videos of at most 600 s",
+        ),
+    ] {
+        let e = r.tt.publish(&cred(), &public(), request).await.unwrap_err();
+        assert_eq!((e.kind(), e.reason()), ("permanent", Some(reason)));
+    }
+    // Only the creator's settings were read (nothing for the unchosen privacy): nothing posted.
+    assert_eq!(r.mock.lines(), vec![format!("POST {CREATOR_INFO}"); 4]);
+    r.tt.publish(&cred(), &public(), &at_limit).await.unwrap();
+    assert_eq!(r.mock.request("PUT", UPLOAD).bytes, mp4(600, 4_096).bytes);
+}
+
+#[tokio::test]
+async fn the_posting_screen_reads_the_creator_fresh() {
+    let r = rig().await;
+    r.mock
+        .on("POST", CREATOR_INFO, answer("creator_info_public"));
+    let expected = TiktokCreator {
+        nickname: Some(DISPLAY_NAME.into()),
+        username: Some(USERNAME.into()),
+        avatar_url: Some(Url::parse("https://p16-sign-va.tiktokcdn.test/avatar.jpeg").unwrap()),
+        privacy_level_options: vec![
+            "PUBLIC_TO_EVERYONE".into(),
+            "MUTUAL_FOLLOW_FRIENDS".into(),
+            "SELF_ONLY".into(),
+        ],
+        comment_disabled: false,
+        duet_disabled: true,
+        stitch_disabled: false,
+        max_video_post_duration_sec: Some(600),
+        cannot_post: None,
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            r.tt.creator_info(&cred(), &public()).await.unwrap(),
+            Some(expected.clone())
+        );
+    }
+    assert_eq!(r.mock.lines(), vec![format!("POST {CREATOR_INFO}"); 2]);
+    for call in r.mock.requests("POST", CREATOR_INFO) {
+        assert_eq!(call.bearer(), Some(ACCESS_TOKEN));
+        assert_eq!(call.header("content-type"), Some(JSON_UTF8));
+    }
+
+    // An account that may not post at this moment says why (TikTok answers it with HTTP 200).
+    r.mock.set("POST", CREATOR_INFO, answer("error_spam"));
+    let busy =
+        r.tt.creator_info(&cred(), &public())
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        busy.cannot_post.as_deref(),
+        Some("spam_risk_too_many_posts")
+    );
+    for code in [
+        "spam_risk_user_banned_from_posting",
+        "reached_active_user_cap",
+    ] {
+        r.mock.set(
+            "POST",
+            CREATOR_INFO,
+            ok(json!({ "data": {}, "error": { "code": code, "message": "" } })),
+        );
+        let creator =
+            r.tt.creator_info(&cred(), &public())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(creator.cannot_post.as_deref(), Some(code));
+        assert!(creator.privacy_level_options.is_empty());
+    }
+
+    // Only an https avatar is named: the screen shows it as an image.
+    let mut body = fixture("creator_info_public");
+    body["data"]["creator_avatar_url"] = json!("javascript:alert(1)");
+    r.mock.set("POST", CREATOR_INFO, ok(body));
+    let creator =
+        r.tt.creator_info(&cred(), &public())
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(creator.avatar_url, None);
+    assert_eq!(creator.nickname.as_deref(), Some(DISPLAY_NAME));
+
+    // A dead token or a missing scope is an error, not an account that may not post.
+    r.mock
+        .set("POST", CREATOR_INFO, answer_with(401, "error_auth"));
+    assert_eq!(kind_of(r.tt.creator_info(&cred(), &public()).await), "auth");
+    r.mock
+        .set("POST", CREATOR_INFO, answer_with(401, "error_scope"));
+    assert_eq!(
+        kind_of(r.tt.creator_info(&cred(), &public()).await),
+        "permission"
+    );
+    // Another kind is refused before anything is called.
+    r.mock.clear();
+    let mut x = public();
+    x["kind_key"] = json!("x");
+    assert_eq!(kind_of(r.tt.creator_info(&cred(), &x).await), "permanent");
+    assert!(r.mock.recorded().is_empty());
 }
 
 #[tokio::test]
@@ -975,6 +1201,11 @@ async fn post_shape_is_checked_before_anything_is_sent() {
         (
             "an unknown privacy",
             privately(video_post("x", 10), "FRIENDS"),
+            Some("not a TikTok privacy level"),
+        ),
+        (
+            "a privacy named otherwise than TikTok does",
+            privately(video_post("x", 10), " self_only "),
             Some("not a TikTok privacy level"),
         ),
     ];

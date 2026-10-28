@@ -1,6 +1,6 @@
 //! What the Studio sees of the TikTok adapter: the failure lines its refusals become
-//! (`kind: tiktok: reason`, `jt_app::usecases::failure`), and a video piece published end to end,
-//! its receipt resolved from pending to the live post.
+//! (`kind: tiktok: reason`, `jt_app::usecases::failure`), and a video piece published end to end
+//! as chosen on its posting screen, its receipt resolved from pending to the live post.
 
 mod support;
 
@@ -25,6 +25,7 @@ fn video(len: usize) -> PublishRequest {
             mime: "video/mp4".into(),
             filename: "menu.mp4".into(),
         }],
+        tiktok: Some(choice("PUBLIC_TO_EVERYONE")),
         ..PublishRequest::default()
     }
 }
@@ -33,6 +34,7 @@ fn photos() -> PublishRequest {
     PublishRequest {
         text: "Bugünün menüsü".into(),
         media_urls: vec![Url::parse("https://media.jeeta.test/p/0.jpg").unwrap()],
+        tiktok: Some(choice("PUBLIC_TO_EVERYONE")),
         ..PublishRequest::default()
     }
 }

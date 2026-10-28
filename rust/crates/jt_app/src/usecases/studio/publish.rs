@@ -15,7 +15,7 @@ use crate::{
 };
 use jt_capability::Capability;
 use jt_connector::{ConnectorError, Credential, Provider, provider_for_kind};
-use jt_studio::{Piece, PublishAttempt, PublishState, SlotState};
+use jt_studio::{MediaAsset, Piece, PublishAttempt, PublishState, SlotState, TiktokPost};
 use jt_tenancy::WorkspaceId;
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
@@ -53,28 +53,69 @@ fn input(s: &jt_studio::Slot) -> ExecutionInput {
         expected_revision: s.revision,
     }
 }
+/// What piece `p` posts on capability `c`: its text, media, link and privacy, from its adaptation
+/// for `c`'s account when it has one, else its own text and media (no link, no privacy).
+pub(crate) fn content<'a>(
+    p: &'a Piece,
+    c: &Capability,
+) -> (
+    &'a str,
+    &'a [MediaAsset],
+    Option<&'a url::Url>,
+    Option<&'a str>,
+) {
+    match c.external_id.as_ref().and_then(|id| p.adaptations.get(id)) {
+        Some(a) => (&a.text, &a.media, a.link.as_ref(), a.privacy.as_deref()),
+        None => (&p.text, &p.media, None, None),
+    }
+}
+/// The request publishing `p` on `c`. A TikTok post (`tiktok`, the posting screen's choice) goes
+/// out as the human left it there: its caption in place of the drafted text and link, its
+/// privacy in place of the adaptation's.
 async fn request(
     d: &Deps,
     ws: WorkspaceId,
     p: &Piece,
     c: &Capability,
+    tiktok: Option<&TiktokPost>,
 ) -> Result<PublishRequest, AppError> {
     p.validate_persisted()
         .map_err(|_| AppError::validation("invalid piece", json!({"reason":"invalid_piece"})))?;
-    let adaptation = c.external_id.as_ref().and_then(|id| p.adaptations.get(id));
-    let (text, media, link, privacy) = match adaptation {
-        Some(a) => (a.text.clone(), &a.media, a.link.clone(), a.privacy.clone()),
-        None => (p.text.clone(), &p.media, None, None),
-    };
+    let (text, media, link, privacy) = content(p, c);
     let (media_urls, media) = super::files::resolve_media(d, ws, media, &c.kind_key).await?;
-    let out = PublishRequest {
-        text,
-        link,
-        media_urls,
-        media,
-        privacy,
+    let out = match tiktok {
+        Some(post) => PublishRequest {
+            text: post.title.clone(),
+            link: None,
+            media_urls,
+            media,
+            privacy: Some(post.privacy_level.clone()),
+            tiktok: Some(post.clone()),
+        },
+        None => PublishRequest {
+            text: text.to_owned(),
+            link: link.cloned(),
+            media_urls,
+            media,
+            privacy: privacy.map(str::to_owned),
+            tiktok: None,
+        },
     };
     Ok(out)
+}
+/// The posting screen's choice approved for `s`'s revision, for a TikTok slot; `None` otherwise.
+async fn screen_choice(
+    r: &mut dyn TenantRepos,
+    s: &jt_studio::Slot,
+    c: &Capability,
+) -> Result<Option<TiktokPost>, AppError> {
+    if !jt_studio::requires_posting_screen(&c.kind_key) {
+        return Ok(None);
+    }
+    Ok(r.studio()
+        .get_approval(ApprovalTarget::Slot(s.id), s.revision)
+        .await?
+        .and_then(|a| a.tiktok))
 }
 async fn record_daily_cap(
     r: &mut dyn TenantRepos,
@@ -143,7 +184,8 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                     .get_piece(s.id, s.revision)
                     .await?
                     .ok_or_else(|| AppError::not_found("piece"))?;
-                found = Some((s, p, c));
+                let choice = screen_choice(r.as_mut(), &s, &c).await?;
+                found = Some((s, p, c, choice));
                 break;
             }
             if found.is_none()
@@ -154,7 +196,7 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             }
             found
         };
-        let Some((slot, piece, cap)) = candidate else {
+        let Some((slot, piece, cap, choice)) = candidate else {
             break;
         };
         let provider = provider_for_kind(&cap.kind_key)
@@ -163,7 +205,7 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             .connectors
             .publisher(provider)
             .ok_or_else(|| chain::refuse("connector_unavailable"))?;
-        let req = request(d, ws, &piece, &cap).await;
+        let req = request(d, ws, &piece, &cap, choice.as_ref()).await;
         if let Err(e) = &req
             && !matches!(
                 e.code,
@@ -195,6 +237,11 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                 .ok_or_else(|| AppError::not_found("capability"))?;
             if c.external_id != cap.external_id || c.kind_key != cap.kind_key {
                 return Err(chain::refuse("publication_account_changed"));
+            }
+            // The posting screen passed again since the request was built: the next run posts
+            // the new choice instead.
+            if screen_choice(r.as_mut(), &slot, &c).await? != choice {
+                break;
             }
             let cred = credential(d, r.as_mut(), &c).await?;
             let a = match r

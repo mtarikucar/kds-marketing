@@ -668,6 +668,7 @@ async fn no_appsecret_proof_on_instagram_graph() {
                 link: None,
                 media: vec![],
                 privacy: None,
+                tiktok: None,
             },
         )
         .await
@@ -1387,6 +1388,7 @@ fn post(text: &str, media: &[&str], link: Option<&str>) -> PublishRequest {
         link: link.map(|l| Url::parse(l).unwrap()),
         media: vec![],
         privacy: None,
+        tiktok: None,
     }
 }
 

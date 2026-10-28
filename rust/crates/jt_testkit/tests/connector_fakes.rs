@@ -1148,6 +1148,7 @@ async fn scripted_connector_covers_every_operation() {
         link: None,
         media: vec![],
         privacy: None,
+        tiktok: None,
     };
     let publisher = registry.publisher(Provider::Meta).unwrap();
     assert_eq!(

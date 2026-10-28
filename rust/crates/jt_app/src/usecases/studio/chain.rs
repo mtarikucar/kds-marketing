@@ -226,6 +226,8 @@ pub async fn authorize_execution_at(
             .get(&lane)
             .is_some_and(|l| l.requires_human_approval),
         capability_requires_human_approval: c.policy.requires_human_approval,
+        // TikTok's guidelines: a human passes its posting screen whatever the policies above say.
+        posting_screen_required: jt_studio::requires_posting_screen(&c.kind_key),
         approval: None,
     };
     match input.target {

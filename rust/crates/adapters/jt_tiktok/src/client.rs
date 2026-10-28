@@ -222,7 +222,7 @@ pub(crate) fn missing(what: &str) -> ConnectorError {
 
 /// The provider's error code of an answer: an API answer's `error.code`, a token answer's
 /// `error`.
-fn error_code(json: &Value) -> Option<&str> {
+pub(crate) fn error_code(json: &Value) -> Option<&str> {
     match &json["error"] {
         Value::String(_) => words(&json["error"]),
         Value::Object(_) => words(&json["error"]["code"]),
@@ -279,6 +279,24 @@ impl TiktokConnector {
         endpoint: Endpoint,
         effect: Effect,
     ) -> Result<Value, ConnectorError> {
+        self.call_taking(method, url, auth, body, endpoint, effect, &[])
+            .await
+    }
+
+    /// [`TiktokConnector::call`], also taking as an answer an HTTP 2xx whose `error.code` is one
+    /// of `taken` (its JSON, for the caller to read the code from), as `creator_info` answers an
+    /// account that may not post at this moment.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn call_taking(
+        &self,
+        method: Method,
+        url: Url,
+        auth: Auth<'_>,
+        body: &Body<'_>,
+        endpoint: Endpoint,
+        effect: Effect,
+        taken: &[&str],
+    ) -> Result<Value, ConnectorError> {
         let attempts = if effect == Effect::Read {
             READ_ATTEMPTS.max(1)
         } else {
@@ -299,7 +317,7 @@ impl TiktokConnector {
             }
             request = body.apply(request);
             match request.send(SCOPE).await {
-                Ok(response) => return read(response, endpoint, &secrets, effect).await,
+                Ok(response) => return read(response, endpoint, &secrets, effect, taken).await,
                 Err(EgressError::Transport(err)) if attempt < attempts => {
                     tracing::warn!(
                         attempt,
@@ -439,13 +457,14 @@ fn broken(effect: Effect) -> ConnectorError {
     }
 }
 
-/// Reads `response` from `endpoint`: its JSON on success, its mapped error otherwise (see the
-/// crate docs).
+/// Reads `response` from `endpoint`: its JSON on success (or on a 2xx whose code is one of
+/// `taken`), its mapped error otherwise (see the crate docs).
 async fn read(
     mut response: Response,
     endpoint: Endpoint,
     secrets: &[&str],
     effect: Effect,
+    taken: &[&str],
 ) -> Result<Value, ConnectorError> {
     let status = response.status();
     let body = match read_body(&mut response).await {
@@ -473,6 +492,7 @@ async fn read(
     };
     match (endpoint, error_code(&json)) {
         (_, Some("ok")) | (Endpoint::Token, None) => Ok(json),
+        (_, Some(code)) if taken.contains(&code) => Ok(json),
         (_, Some(_)) => Err(classify(status, Some(&json), endpoint, secrets)),
         (Endpoint::Api, None) if effect == Effect::Commit => Err(ConnectorError::unknown(
             "TikTok's answer to a write carries no error code: whether it took effect is unknown",

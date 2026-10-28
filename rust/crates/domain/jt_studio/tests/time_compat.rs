@@ -39,6 +39,7 @@ fn round_trips_rfc3339() {
         revision: 3,
         by: UserId(Uuid::now_v7()),
         at,
+        tiktok: None,
     };
     let wire = serde_json::to_value(&receipt).unwrap();
     assert_eq!(wire["at"], "2026-10-27T09:30:15.25+03:00");
