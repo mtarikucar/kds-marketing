@@ -241,8 +241,11 @@ impl CommandResult { pub fn shell(exit_code: i32, stdout: &[u8], stderr: &[u8]) 
                                                                               // each stream cut on a char boundary at 65_536 bytes,
                                                                               // `truncated` set when either was cut
 // A poll is decoded command by command so one unreadable command does not poison the rest; the bridge fails each
-// unreadable one by id with FailReason::UnsupportedByBridge:
-impl CommandsOut   { pub fn decode_lenient(value: serde_json::Value) -> (Vec<LeasedCommand>, Vec<(Uuid, String)>); }
+// `unreadable` one by id with FailReason::UnsupportedByBridge and logs `dropped` (commands with no readable id, so
+// nothing to fail them by) at warn level. A body that is not a poll (not an object with a `commands` array) is an
+// Err, not an empty poll: the bridge treats it as a failed poll, backs off and polls again.
+pub struct LenientCommands { pub commands: Vec<LeasedCommand>, pub unreadable: Vec<(Uuid, String)>, pub dropped: usize }
+impl CommandsOut   { pub fn decode_lenient(value: serde_json::Value) -> Result<LenientCommands, ProtocolError>; }
 ```
 
 Rules of the vocabulary (written in the `jt_devices` crate docs too):
@@ -251,8 +254,10 @@ Rules of the vocabulary (written in the `jt_devices` crate docs too):
   `#[serde(default, skip_serializing_if = ...)]`, so an older bridge never sees it. A new VALUE of an existing enum
   field (a new `DeviceKey` or `ElementTarget` variant) counts as a new field: it needs a feature name (e.g.
   `key.camera`) that `supports` checks. A new `FailReason` needs nothing: an older reader takes it as `Unknown`. A new
-  `Platform` needs a protocol bump (it is a stored key: no `Unknown` variant). Register is tolerant (unknown fields
-  ignored); after it, each side sends only what the lower protocol defines.
+  `Platform` needs a protocol bump (it is a stored key: no `Unknown` variant), and the first register goes out
+  before the bridge knows the server's protocol, so it lists only phones of the platforms protocol 1 defines: phones
+  of newer platforms are listed only once `RegisterOut.protocol` shows the server defines them. Register is tolerant
+  (unknown fields ignored); after it, each side sends only what the lower protocol defines.
 - **Logging.** Log `DeviceCommand::kind()` and counts, never the `{:?}` of a command or an observation (typed text,
   shell arguments and screen text are in them). A failure `detail` can carry on-screen labels. `reqwest` errors carry
   the request URL (a signed download address): the bridge uses `without_url()` before logging one.
@@ -331,7 +336,8 @@ impl and rename (or wrap) it — do not keep two registries.
   `register_ignores_unknown_fields`, `observation_ignores_unknown_fields`, `register_validation`,
   `a_phones_own_faults_do_not_refuse_the_register_body`, `phone_validation`, `results_validation`,
   `observation_results_are_bounded`, `failed_constructor_is_valid_by_construction`,
-  `shell_constructor_is_valid_by_construction`, `commands_query_is_clamped`.
+  `shell_constructor_is_valid_by_construction`, `shell_cap_inside_a_character_drops_the_character_whole`,
+  `commands_query_is_clamped`.
 - [ ] `cargo test -p jt_device_protocol` red → implement → green; fmt + clippy; **commit**.
 - Built as `f9f9f3fe`, `a1ff64aa` and `55143291` (review fixes); the archtest rule allows `jt_devices`, `serde`,
   `serde_json`, `time`, `uuid`, `thiserror` for this crate.
@@ -409,9 +415,11 @@ Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permissio
   each phone — a phone that fails is NOT registered and is listed in `RegisterOut.refused` (`RefusedPhone`, reason =
   the error's text), the heartbeat itself is not refused. For each valid phone, declare-or-verify a `phone`
   capability (`Reach::Device`) with external id `{platform}:{serial}`; merge facts into `connector_public.device`
-  (model, os_version, screen, features, bridge_id, version, protocol) — merge, never replace; refuse a retired
-  phone's re-registration (`409 phone_retired`, or list it in `refused`); answer `RegisterOut::new(registered,
-  refused)`. Shape every later body to the protocol the bridge sent.
+  (model, os_version, screen, features, bridge_id, version, protocol) — merge, never replace; a RETIRED
+  phone that is still plugged in is always listed in `RegisterOut.refused` with the reason `"phone_retired"`, and
+  nothing is declared or merged for it — never a `409`: one phone's faults never refuse the register, so the other
+  phones on that bridge stay online; answer `RegisterOut::new(registered, refused)`. Shape every later body to the
+  protocol the bridge sent.
 - `commands(CommandsQuery)`: `clamped()`; lease for this bridge's phones (≤ `limit` ≤ 20), wait on the kernel signal
   up to `wait_s` ≤ 25; **re-check `jt_devices::supports` at lease time** against the phone's CURRENT features (a
   bridge that re-registered without a feature must not be handed a command that needs it; fail such a command
@@ -427,7 +435,7 @@ Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permissio
   command that was never leased) as `unknown`; the three sum to `results.len()`.
 - `files` (body ≤ the studio upload limit, `image/png` or `application/octet-stream`): store as a workspace file
   with 7-day expiry metadata, answer `FileOut`.
-- [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_refuses_retired_phone`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`, `register_refuses_one_bad_phone_not_the_heartbeat`, `commands_rechecks_supports_at_lease_time`, `result_for_another_bridges_command_is_unknown`, `result_with_a_foreign_file_id_is_refused`, `invalid_results_body_is_422`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused}`; archtest: no MCP tool for `devices.bridge.*`.
+- [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_lists_retired_phone_as_refused`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`, `register_refuses_one_bad_phone_not_the_heartbeat`, `commands_rechecks_supports_at_lease_time`, `result_for_another_bridges_command_is_unknown`, `result_with_a_foreign_file_id_is_refused`, `invalid_results_body_is_422`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused}`; archtest: no MCP tool for `devices.bridge.*`.
 - [ ] CI red → implement → green; **commit** `feat(devices): the device bridge's surface`.
 
 ### Task D1-T6: agent use cases + MCP tools + logging rule
@@ -476,8 +484,11 @@ Config `jeeta-device-bridge.toml`: `base_url`, `key` (or env `JEETA_DEVICE_BRIDG
 `adb` on PATH or `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`), `serials` (optional filter).
 Loop: every `heartbeat_s` register; continuously long-poll; run commands concurrently per phone but
 sequentially within a phone; post results in batches; retry posts with backoff; dedupe command ids (a set
-of the last 1 000).
-- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `key_never_logged` (capture tracing).
+of the last 1 000). Read each poll body with `CommandsOut::decode_lenient`: run `commands`, fail each `unreadable`
+command by its id with `FailReason::UnsupportedByBridge` (the message is the failure `detail`, never a log line), and
+log `dropped` at `warn` level when it is not zero (a count only: no body, no command). An `Err` is a failed poll, like
+a transport error: log it (the field name only), back off and poll again — it must not read as an idle poll.
+- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing).
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit**.
 
 ### Task D2-T2: `AndroidAdbDriver`

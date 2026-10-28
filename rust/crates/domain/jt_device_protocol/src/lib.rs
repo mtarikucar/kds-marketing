@@ -20,6 +20,9 @@
 //!   is intended.
 //! - A platform this version does not know makes a register unreadable: [`Platform`] is a stored
 //!   key, not a label, so it has no catch-all variant and a new platform needs a protocol bump.
+//!   The first register goes out before the bridge knows the server's protocol, so it lists only
+//!   phones of the platforms protocol 1 defines: phones of newer platforms are listed only once
+//!   [`RegisterOut::protocol`] shows that the server defines them.
 //!
 //! Growing the vocabulary:
 //!
@@ -34,7 +37,11 @@
 //! # A command a bridge cannot read
 //!
 //! A command that a newer server queued but this build cannot decode must not make the whole poll
-//! unreadable: see [`CommandsOut`] and [`CommandsOut::decode_lenient`].
+//! unreadable: see [`CommandsOut`] and [`CommandsOut::decode_lenient`]. That reads the readable
+//! commands, names the unreadable ones by id so that the bridge fails them, and counts the ones it
+//! had to leave out because they carry no id to fail them by (`dropped`: log the count at warn
+//! level). A body that is not a poll at all is an error, not an empty poll: the bridge treats it as
+//! a failed poll, backs off and polls again.
 //!
 //! # Bodies that break a limit
 //!
@@ -96,7 +103,7 @@ pub const MAX_FEATURE_CHARS: usize = 64;
 /// The most pixels along either side of a phone's screen.
 pub const MAX_SCREEN_PX: u32 = 20_000;
 
-/// A body that breaks a limit.
+/// A body that breaks a limit, or that is not the shape the protocol gives it.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ProtocolError {
     #[error("{field}: {reason}")]
@@ -333,13 +340,15 @@ pub struct RegisteredPhone {
     pub capability_id: Uuid,
 }
 
-/// A phone the server did not register, and why.
+/// A phone the server did not register, and why. One phone's refusal never refuses the register:
+/// the other phones of the bridge register as usual.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RefusedPhone {
     pub platform: Platform,
     pub serial: String,
-    /// The refusal in words, e.g. a [`ProtocolError`]'s text.
+    /// The refusal in words, e.g. a [`ProtocolError`]'s text, or `phone_retired` for a phone that
+    /// was retired and is still plugged in.
     pub reason: String,
 }
 
@@ -422,37 +431,54 @@ pub struct CommandsOut {
     pub commands: Vec<LeasedCommand>,
 }
 
+/// A poll read one command at a time, by [`CommandsOut::decode_lenient`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct LenientCommands {
+    /// The commands that decode, in the order the server sent them.
+    pub commands: Vec<LeasedCommand>,
+    /// The id and the message of each command that does not decode but has a readable id, in
+    /// order: the bridge fails each one by its id. The message names the problem and can quote a
+    /// value from the command: it belongs in a failure's detail (see [`Outcome::failed`]), not in a
+    /// log.
+    pub unreadable: Vec<(Uuid, String)>,
+    /// How many commands were left out because they do not decode and carry no readable id (it is
+    /// missing, is not a string or is not a UUID), so there is nothing to fail them by. The
+    /// bridge logs the count at warn level.
+    pub dropped: usize,
+}
+
 impl CommandsOut {
-    /// Reads the JSON body of a poll one command at a time: the commands that decode, in order,
-    /// and the id and the message of each one that does not.
+    /// Reads the JSON body of a poll one command at a time: see [`LenientCommands`].
     ///
-    /// A command without a readable id cannot be failed by id and is left out, and a body that is
-    /// not an object with a `commands` array reads as no commands. The message names the problem
-    /// and can quote a value from the command: it belongs in a failure's detail (see
-    /// [`Outcome::failed`]), not in a log.
-    pub fn decode_lenient(value: serde_json::Value) -> (Vec<LeasedCommand>, Vec<(Uuid, String)>) {
+    /// A body that is not an object with a `commands` array is not a poll: it is an error, not an
+    /// empty poll, so that a malformed answer does not look like an idle server. The bridge treats
+    /// it as a failed poll, backs off and polls again. Other fields of the body are ignored.
+    pub fn decode_lenient(value: serde_json::Value) -> Result<LenientCommands, ProtocolError> {
         let serde_json::Value::Object(mut body) = value else {
-            return (Vec::new(), Vec::new());
+            return Err(invalid("body", "is not a JSON object"));
         };
         let Some(serde_json::Value::Array(items)) = body.remove("commands") else {
-            return (Vec::new(), Vec::new());
+            return Err(invalid("commands", "is missing or is not an array"));
         };
-        let (mut commands, mut unreadable) = (Vec::new(), Vec::new());
+        let mut read = LenientCommands {
+            commands: Vec::new(),
+            unreadable: Vec::new(),
+            dropped: 0,
+        };
         for item in items {
             let id = item
                 .get("id")
                 .and_then(serde_json::Value::as_str)
                 .and_then(|id| Uuid::parse_str(id).ok());
             match serde_json::from_value::<LeasedCommand>(item) {
-                Ok(command) => commands.push(command),
-                Err(error) => {
-                    if let Some(id) = id {
-                        unreadable.push((id, error.to_string()));
-                    }
-                }
+                Ok(command) => read.commands.push(command),
+                Err(error) => match id {
+                    Some(id) => read.unreadable.push((id, error.to_string())),
+                    None => read.dropped += 1,
+                },
             }
         }
-        (commands, unreadable)
+        Ok(read)
     }
 }
 
@@ -523,7 +549,8 @@ pub enum CommandResult {
 impl CommandResult {
     /// A shell result that is valid by construction, from the raw output of the program: bytes
     /// that are not UTF-8 and NUL characters become U+FFFD, and each stream is cut to
-    /// [`MAX_OUTPUT_BYTES`] bytes on a character boundary. `truncated` is set when either was cut.
+    /// [`MAX_OUTPUT_BYTES`] bytes on a character boundary: a character that the cap would cut in
+    /// two is dropped whole, not left as U+FFFD. `truncated` is set when either was cut.
     #[must_use]
     pub fn shell(exit_code: i32, stdout: &[u8], stderr: &[u8]) -> CommandResult {
         let (stdout, out_cut) = stream_text(stdout);
@@ -537,13 +564,32 @@ impl CommandResult {
     }
 }
 
+/// `bytes` without a character that is cut short at its end: the first bytes of a multi-byte
+/// character, whose other bytes are missing. A lossy conversion would turn them into a stray
+/// U+FFFD. Bytes that are invalid in themselves are kept, so they are replaced as everywhere else.
+fn without_partial_char(bytes: &[u8]) -> &[u8] {
+    let Some(last) = bytes.utf8_chunks().last() else {
+        return bytes;
+    };
+    let tail = last.invalid();
+    match std::str::from_utf8(tail) {
+        Err(error) if error.error_len().is_none() => &bytes[..bytes.len() - tail.len()],
+        _ => bytes,
+    }
+}
+
 /// The text of one output stream, and whether it was cut.
 fn stream_text(bytes: &[u8]) -> (String, bool) {
     // Turning bytes into text never makes them shorter (a bad byte or a NUL becomes three), so
     // the first `MAX_OUTPUT_BYTES` bytes are all that can be kept: no need to convert the rest.
-    let head = &bytes[..bytes.len().min(MAX_OUTPUT_BYTES)];
-    let mut text = String::from_utf8_lossy(head).replace('\0', "\u{FFFD}");
     let mut cut = bytes.len() > MAX_OUTPUT_BYTES;
+    let mut head = &bytes[..bytes.len().min(MAX_OUTPUT_BYTES)];
+    if cut {
+        // The cap may fall inside a character: drop the bytes of that character that fit, rather
+        // than let the conversion leave a U+FFFD for them.
+        head = without_partial_char(head);
+    }
+    let mut text = String::from_utf8_lossy(head).replace('\0', "\u{FFFD}");
     if text.len() > MAX_OUTPUT_BYTES {
         let mut end = MAX_OUTPUT_BYTES;
         while !text.is_char_boundary(end) {

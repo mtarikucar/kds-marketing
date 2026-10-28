@@ -2,12 +2,12 @@
 //! constructors that build valid bodies.
 use jt_device_protocol::{
     CommandError, CommandResult, CommandsOut, CommandsQuery, DeviceCommand, DeviceKey, Element,
-    ElementTarget, FailReason, FileOut, HEARTBEAT_S, LeasedCommand, MAX_COMMANDS, MAX_DETAIL_CHARS,
-    MAX_ELEMENTS, MAX_FEATURE_CHARS, MAX_FEATURES, MAX_ID_CHARS, MAX_OUTPUT_BYTES, MAX_PHONES,
-    MAX_RESULTS, MAX_RESULTS_BODY_BYTES, MAX_SCREEN_PX, MAX_TEXT_CHARS, MAX_VERSION_CHARS,
-    MAX_WAIT_S, Observation, Outcome, PROTOCOL_VERSION, PhoneReport, Platform, ProtocolError,
-    RefusedPhone, RegisterIn, RegisterOut, RegisteredPhone, ResultIn, ResultsIn, ResultsOut,
-    Screen, TEXT_UNICODE, supports,
+    ElementTarget, FailReason, FileOut, HEARTBEAT_S, LeasedCommand, LenientCommands, MAX_COMMANDS,
+    MAX_DETAIL_CHARS, MAX_ELEMENTS, MAX_FEATURE_CHARS, MAX_FEATURES, MAX_ID_CHARS,
+    MAX_OUTPUT_BYTES, MAX_PHONES, MAX_RESULTS, MAX_RESULTS_BODY_BYTES, MAX_SCREEN_PX,
+    MAX_TEXT_CHARS, MAX_VERSION_CHARS, MAX_WAIT_S, Observation, Outcome, PROTOCOL_VERSION,
+    PhoneReport, Platform, ProtocolError, RefusedPhone, RegisterIn, RegisterOut, RegisteredPhone,
+    ResultIn, ResultsIn, ResultsOut, Screen, TEXT_UNICODE, supports,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -336,9 +336,28 @@ fn decode_lenient_reads_a_clean_poll_like_serde() {
     let poll = CommandsOut {
         commands: vec![leased(), with_url],
     };
-    let (commands, unreadable) = CommandsOut::decode_lenient(serde_json::to_value(&poll).unwrap());
-    assert_eq!(commands, poll.commands);
-    assert_eq!(unreadable, vec![]);
+    let read = CommandsOut::decode_lenient(serde_json::to_value(&poll).unwrap()).unwrap();
+    assert_eq!(
+        read,
+        LenientCommands {
+            commands: poll.commands,
+            unreadable: vec![],
+            dropped: 0
+        }
+    );
+}
+
+#[test]
+fn decode_lenient_reads_an_empty_poll_as_idle() {
+    let read = CommandsOut::decode_lenient(json!({"commands": []})).unwrap();
+    assert_eq!(
+        read,
+        LenientCommands {
+            commands: vec![],
+            unreadable: vec![],
+            dropped: 0
+        }
+    );
 }
 
 #[test]
@@ -350,7 +369,11 @@ fn decode_lenient_fails_an_unreadable_command_by_id() {
     no_id.as_object_mut().unwrap().remove("id");
     let mut bad_id = poll_item(7, tap.clone());
     bad_id["id"] = json!("not-a-uuid");
-    let (commands, unreadable) = CommandsOut::decode_lenient(json!({"commands": [
+    let LenientCommands {
+        commands,
+        unreadable,
+        dropped,
+    } = CommandsOut::decode_lenient(json!({"commands": [
         poll_item(1, tap.clone()),
         // A kind this build does not know.
         poll_item(2, json!({"kind": "drag", "x": 1})),
@@ -361,8 +384,11 @@ fn decode_lenient_fails_an_unreadable_command_by_id() {
         // No id to fail it by: dropped.
         no_id,
         bad_id,
+        // Not even an object.
+        json!(5),
         poll_item(8, tap),
-    ]}));
+    ]}))
+    .unwrap();
     // The readable ones come back whole and in order; one bad command does not poison the poll.
     let ids: Vec<Uuid> = commands.iter().map(|c| c.id).collect();
     assert_eq!(ids, vec![id(1), id(3), id(8)]);
@@ -380,23 +406,33 @@ fn decode_lenient_fails_an_unreadable_command_by_id() {
         "{unreadable:?}"
     );
     assert!(unreadable[0].1.contains("drag"), "{unreadable:?}");
+    // The ones with no readable id to fail them by are only counted: none was silently lost.
+    assert_eq!(dropped, 3);
+    assert_eq!(commands.len() + unreadable.len() + dropped, 9);
 }
 
 #[test]
-fn decode_lenient_reads_a_body_that_is_not_a_poll_as_no_commands() {
-    for body in [
-        json!(null),
-        json!([]),
-        json!({}),
-        json!({"commands": 5}),
-        json!({"commands": {}}),
+fn decode_lenient_refuses_a_body_that_is_not_a_poll() {
+    // A malformed answer must not look like an idle server.
+    for (body, field) in [
+        (json!(null), "body"),
+        (json!([]), "body"),
+        (json!("commands"), "body"),
+        (json!({}), "commands"),
+        (json!({"commands": null}), "commands"),
+        (json!({"commands": 5}), "commands"),
+        (json!({"commands": {}}), "commands"),
+        (json!({"command": []}), "commands"),
     ] {
-        assert_eq!(
-            CommandsOut::decode_lenient(body.clone()),
-            (vec![], vec![]),
-            "{body}"
-        );
+        let error = CommandsOut::decode_lenient(body.clone()).unwrap_err();
+        assert_eq!(error.field(), field, "{body}");
     }
+}
+
+#[test]
+fn decode_lenient_ignores_other_fields_of_the_body() {
+    let read = CommandsOut::decode_lenient(json!({"commands": [], "next": "later"})).unwrap();
+    assert_eq!(read.commands, vec![]);
 }
 
 #[test]
@@ -1322,6 +1358,65 @@ fn shell_constructor_is_valid_by_construction() {
     ] {
         valid_in_a_batch(CommandResult::shell(0, &bytes, &bytes));
     }
+}
+
+#[test]
+fn shell_cap_inside_a_character_drops_the_character_whole() {
+    // 'a' then four-byte characters: the cap falls three bytes into the last one that fits.
+    let mut bytes = vec![b'a'];
+    bytes.extend("😀".repeat(MAX_OUTPUT_BYTES / 4).as_bytes());
+    assert_eq!(bytes.len(), MAX_OUTPUT_BYTES + 1);
+    let (_, out, _, cut) = shell_parts(CommandResult::shell(0, &bytes, b""));
+    assert!(cut);
+    assert!(out.len() <= MAX_OUTPUT_BYTES);
+    assert!(!out.ends_with('\u{FFFD}'), "{:?}", out.chars().last());
+    assert_eq!(out, format!("a{}", "😀".repeat(MAX_OUTPUT_BYTES / 4 - 1)));
+
+    // The same at every offset into the character, for every width.
+    for (character, width) in [('ş', 2), ('€', 3), ('😀', 4)] {
+        for prefix in 0..width {
+            let mut bytes = vec![b'a'; prefix];
+            bytes.extend(character.to_string().repeat(MAX_OUTPUT_BYTES).as_bytes());
+            let (_, out, _, cut) = shell_parts(CommandResult::shell(0, &bytes, b""));
+            assert!(cut && out.len() <= MAX_OUTPUT_BYTES, "{character} {prefix}");
+            assert!(out.ends_with(character), "{character} {prefix}");
+            assert!(!out.contains('\u{FFFD}'), "{character} {prefix}");
+        }
+    }
+
+    // Both streams, apart.
+    let (_, out, err, cut) = shell_parts(CommandResult::shell(0, &bytes, &bytes));
+    assert!(cut && !out.contains('\u{FFFD}') && !err.contains('\u{FFFD}'));
+
+    // A bad byte before the cap is still replaced, and the half character after it still goes.
+    let mut bytes = b"x\xffy".to_vec();
+    bytes.extend(vec![b'a'; MAX_OUTPUT_BYTES - 7]);
+    bytes.extend("😀😀".as_bytes());
+    let (_, out, _, cut) = shell_parts(CommandResult::shell(0, &bytes, b""));
+    assert!(cut);
+    assert_eq!(out, format!("x\u{FFFD}y{}", long(MAX_OUTPUT_BYTES - 7)));
+
+    // A byte that is invalid in itself near the cap is not a cut character: it is replaced, and
+    // what the replacement pushes over the cap goes after it.
+    let mut bytes = vec![b'a'; MAX_OUTPUT_BYTES - 3];
+    bytes.push(0xFF);
+    bytes.extend(b"more");
+    let (_, out, _, cut) = shell_parts(CommandResult::shell(0, &bytes, b""));
+    assert!(cut);
+    assert_eq!(out, format!("{}\u{FFFD}", long(MAX_OUTPUT_BYTES - 3)));
+    // One at the very edge has no room for its replacement, as before.
+    let mut bytes = vec![b'a'; MAX_OUTPUT_BYTES - 1];
+    bytes.push(0xFF);
+    bytes.extend(b"more");
+    let (_, out, _, cut) = shell_parts(CommandResult::shell(0, &bytes, b""));
+    assert!(cut);
+    assert_eq!(out, long(MAX_OUTPUT_BYTES - 1));
+
+    // Output within the cap keeps what it ends with: a character that the program itself cut
+    // short is a bad byte sequence, replaced like any other.
+    let (_, out, _, cut) = shell_parts(CommandResult::shell(0, b"ok \xf0\x9f\x98", b""));
+    assert_eq!(out, "ok \u{FFFD}");
+    assert!(!cut);
 }
 
 #[test]
