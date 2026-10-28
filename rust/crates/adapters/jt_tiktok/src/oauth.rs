@@ -64,6 +64,9 @@ pub(crate) fn authorize_url(
         ("scope", &scope),
         ("redirect_uri", redirect.as_str()),
         ("state", state),
+        // TikTok skips its authorization page for an account that already granted every scope;
+        // `1` always shows it, so the owner sees what is granted, a reconnect included.
+        ("disable_auto_auth", "1"),
     ])));
     Ok(url)
 }
