@@ -22,7 +22,8 @@
 //! alive, and a payment hold must not turn into reconnecting every account. A suspended
 //! workspace is left alone. The NetGSM polls go only to the workspaces holding a verified SMS
 //! line, found with one platform-wide read before any of their transactions opens. The purges
-//! run for every workspace.
+//! run for every workspace, and so does the voice bridges' health check: it only records that a
+//! bridge stopped reporting, whatever the workspace's status.
 //!
 //! **Who.** What a job writes to the ledger is written by `Actor::System` with the component
 //! `scheduler:<job name>`.
@@ -127,11 +128,12 @@ pub enum Job {
     StudioPublishRecover,
     StudioMeasure,
     StudioReweight,
+    VoiceBridgeHealth,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 22] = [
+    pub const ALL: [Job; 23] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -154,6 +156,7 @@ impl Job {
         Job::StudioPublishRecover,
         Job::StudioMeasure,
         Job::StudioReweight,
+        Job::VoiceBridgeHealth,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -182,6 +185,7 @@ impl Job {
             Job::StudioPublishRecover => "studio_publish_recover",
             Job::StudioMeasure => "studio_measure",
             Job::StudioReweight => "studio_reweight",
+            Job::VoiceBridgeHealth => "voice_bridge_health",
         }
     }
 
@@ -215,6 +219,7 @@ impl Job {
             Job::StudioPublish | Job::StudioPublishRecover => {
                 run_studio_publications(deps, *self).await
             }
+            Job::VoiceBridgeHealth => run_voice_bridge_health(deps, now).await,
         }
     }
 }
@@ -929,6 +934,49 @@ fn verified_lines(capabilities: &[Capability]) -> Vec<CapabilityId> {
         .filter(|c| c.kind_key == SMS_LINE && c.status == StoredStatus::Verified)
         .map(|c| c.id)
         .collect()
+}
+
+// ---------------------------------------------------------------------------------------------
+// voice_bridge_health
+// ---------------------------------------------------------------------------------------------
+
+/// Marks unreachable, in every workspace, each voice bridge that still reads verified although it
+/// has not registered for its heartbeat's `unreachable_after` (ten minutes), writing
+/// `calls.bridge.offline` once per bridge (`calls::bridge`); its next registration verifies it
+/// again. A minute after its last heartbeat it already reads stale, without this job. `touched`
+/// counts the silent bridges found, `changed` those marked, `skipped` those that registered
+/// meanwhile.
+pub async fn run_voice_bridge_health(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::calls::bridge;
+    let job = Job::VoiceBridgeHealth;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let silent = async {
+            let mut repos = deps.uow.tenant(ws).await?;
+            bridge::silent_bridges(repos.as_mut(), now).await
+        };
+        let silent = match silent.await {
+            Ok(silent) => silent,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        let ctx = system_ctx(job, ws, now);
+        for id in silent {
+            report.touched += 1;
+            match bridge::mark_offline(deps, &ctx, id).await {
+                Ok(true) => report.changed += 1,
+                Ok(false) => report.skipped += 1,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(id), &Failure::App(e));
+                }
+            }
+        }
+    }
+    finish(job, report)
 }
 
 // ---------------------------------------------------------------------------------------------

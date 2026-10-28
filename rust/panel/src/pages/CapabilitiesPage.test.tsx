@@ -5,6 +5,7 @@ import tr from '@/i18n/tr.json';
 import { EFFECTIVE_STATUSES } from '@/api/types';
 import i18n from '@/i18n/config';
 import { browser } from '@/lib/browser';
+import { formatRelative } from '@/lib/format';
 import { rememberedFlow } from '@/lib/oauthFlow';
 import {
   PAGE_ID,
@@ -440,6 +441,65 @@ it('pbx_policy_toggle: saves recording and call mode on the PBX card', async () 
     const other = await cardOf('Atölye Instagram');
     expect(within(other).queryByRole('group', { name: tr.capabilities.pbx.title })).toBeNull();
   });
+
+it('voice_bridge_card_shows_engines_extension_and_heartbeat_age', async () => {
+  const at = new Date(Date.now() - 30_000).toISOString();
+  const bridge = {
+    ...smsLine,
+    capability: {
+      ...smsLine.capability,
+      id: '0193a000-0000-7000-8000-0000000000b3',
+      kind_key: 'voice_bridge',
+      name: 'Voice bridge 101',
+      reach: 'device' as const,
+      external_id: '101',
+      has_sealed_config: false,
+      last_verified_at: at,
+      connector_public: {
+        bridge: {
+          extension: '101',
+          codecs: ['PCMA', 'PCMU'],
+          max_calls: 1,
+          stt: { engine: 'vosk', model: 'vosk-model-small-tr-0.3' },
+          tts: { engine: 'piper', voice: 'tr_TR-fahrettin-medium' },
+          version: '0.1.0',
+        },
+      },
+    },
+  };
+  const silent = {
+    ...bridge,
+    capability: {
+      ...bridge.capability,
+      id: '0193a000-0000-7000-8000-0000000000b4',
+      name: 'Voice bridge 102',
+      external_id: '102',
+      status: 'declared' as const,
+      last_verified_at: null,
+      connector_public: {},
+    },
+    effective_status: 'declared' as const,
+  };
+  mockFetch({ ...routes, 'GET /api/capabilities': [...capabilities, bridge, silent] });
+  renderAt('/capabilities');
+  const card = await cardOf('Voice bridge 101');
+  const panel = within(card).getByRole('group', { name: tr.capabilities.bridge.title });
+  expect(within(panel).getByText('101')).toBeInTheDocument();
+  expect(within(panel).getByText('vosk · vosk-model-small-tr-0.3')).toBeInTheDocument();
+  expect(within(panel).getByText('piper · tr_TR-fahrettin-medium')).toBeInTheDocument();
+  expect(within(panel).getByText('0.1.0')).toBeInTheDocument();
+  expect(within(panel).getByText('PCMA, PCMU')).toBeInTheDocument();
+  expect(within(panel).getByText(formatRelative(at, 'tr'))).toBeInTheDocument();
+  // Only its own registration verifies it: no verification by evidence here.
+  expect(within(card).queryByRole('button', { name: tr.capabilities.actions.verify })).toBeNull();
+  expect(within(card).getByRole('button', { name: tr.capabilities.actions.edit })).toBeInTheDocument();
+  // A bridge declared in the panel that never registered says so.
+  const never = await cardOf('Voice bridge 102');
+  expect(within(never).getByText(tr.capabilities.bridge.never)).toBeInTheDocument();
+  // Another kind has no bridge panel.
+  const other = await cardOf('Atölye Instagram');
+  expect(within(other).queryByRole('group', { name: tr.capabilities.bridge.title })).toBeNull();
+});
 
 it('offers a verified PBX\'s "Place a call" only to whoever holds calls.work', async () => {
   const pbx = {

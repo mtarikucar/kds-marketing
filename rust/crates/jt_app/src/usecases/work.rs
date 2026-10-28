@@ -13,7 +13,9 @@
 //!   `unreachable` because its provider no longer accepts its login (a probe failed with `Auth`:
 //!   `connector_public.reconnect_required`);
 //! - `VerifyCapability` (2): each capability reached through an agent or a device that reads
-//!   `declared` or `stale` (a lapsed verification is asked for again);
+//!   `declared` or `stale` (a lapsed verification is asked for again), but a voice bridge;
+//! - `VoiceBridgeOffline` (2): each voice bridge that reads `declared`, `stale` or `unreachable`:
+//!   only its own registration verifies it, so no evidence is asked for;
 //! - `ConnectConnector` (2): each capability reached through a connector that reads `declared`
 //!   (M1b sets connectors up);
 //! - `InboundEvents` (2): inbound events (webhooks, polls) not yet acknowledged, with how many
@@ -169,6 +171,14 @@ pub enum WorkKind {
     /// Read and acknowledge the inbound events not yet processed: `count` of them, counted up to
     /// [`INBOUND_EVENTS_COUNT_CAP`].
     InboundEvents { count: u32 },
+    /// A voice bridge has not registered within its heartbeat, or never has: agent calls through
+    /// it are refused until it does. `last_seen_at` is its last heartbeat.
+    VoiceBridgeOffline {
+        capability_id: CapabilityId,
+        name: String,
+        #[serde(with = "time::serde::rfc3339::option")]
+        last_seen_at: Option<OffsetDateTime>,
+    },
 }
 
 impl WorkKind {
@@ -190,6 +200,7 @@ impl WorkKind {
             WorkKind::ConnectConnector { .. } => "connector.start_oauth",
             WorkKind::ReconnectConnector { .. } => "connector.reconnect",
             WorkKind::InboundEvents { .. } => "events.ack",
+            WorkKind::VoiceBridgeOffline { .. } => "calls.bridge.register",
         }
     }
 }
@@ -473,12 +484,34 @@ fn strategy_items(state: &StrategyState, may_approve: bool) -> Vec<WorkItem> {
 }
 
 /// The capabilities' items, in their order: each agent or device capability to verify, each
-/// connector to connect; and, when none is live, declaring the first.
+/// connector to connect, each voice bridge that does not report; and, when none is live,
+/// declaring the first.
 fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
     let mut items = Vec::new();
     for out in capabilities {
         let c = &out.capability;
         let status = out.effective_status;
+        if c.kind().is_some_and(|k| k.heartbeat().is_some()) {
+            if matches!(
+                status,
+                EffectiveStatus::Declared | EffectiveStatus::Stale | EffectiveStatus::Unreachable
+            ) {
+                items.push(WorkItem {
+                    kind: WorkKind::VoiceBridgeOffline {
+                        capability_id: c.id,
+                        name: c.name.clone(),
+                        last_seen_at: c.last_verified_at,
+                    },
+                    priority: 2,
+                    hint: "The voice bridge has not registered in the last minute (or never has), \
+                           so agent calls through it are refused: ask the operator to check the \
+                           jeeta-voice-bridge service on the server \
+                           (docs/operations/voice-bridge.md). It cannot be verified by evidence."
+                        .to_owned(),
+                });
+            }
+            continue;
+        }
         match c.reach {
             Reach::Agent | Reach::Device
                 if matches!(status, EffectiveStatus::Declared | EffectiveStatus::Stale) =>

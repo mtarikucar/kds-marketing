@@ -30,7 +30,7 @@ base64.workspace = true
 zeroize.workspace = true
 tracing.workspace = true
 url.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
 jt_outbound.workspace = true

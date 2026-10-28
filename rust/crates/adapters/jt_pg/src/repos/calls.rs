@@ -1,17 +1,21 @@
-//! `call_sessions`, `call_turns` and the `calls` column of `workspace_policies` (migration
-//! `0015_voice_calls`). A session is stored whole in `data` (the domain's encoding) beside the
+//! `call_sessions`, `call_turns`, `call_commands` and the `calls` column of
+//! `workspace_policies` (migration `0015_voice_calls`), and `call_bridge_events`
+//! (`0016_voice_bridge`). A session is stored whole in `data` (the domain's encoding) beside the
 //! columns its reads filter on, which every write keeps in step. A turn keeps its text in its own
-//! column (the person-erasure flow empties it) and its kind and measurements in `data`.
+//! column (the person-erasure flow empties it) and its kind and measurements in `data`. A command
+//! keeps the domain's encoding in `payload` and is handed out in its queue order (`seq`).
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::calls::{
-    CallFilter, CallId, CallPolicy, CallRepo, CallSession, MAX_CALL_PAGE, Speaker, Turn, TurnKind,
+    CallCommandId, CallFilter, CallId, CallPolicy, CallRepo, CallSession, Command, MAX_CALL_PAGE,
+    QueuedCommand, Speaker, Turn, TurnKind,
 };
 use jt_capability::CapabilityId;
 use jt_inbox::PersonId;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use super::{map_sqlx, same_workspace};
 use crate::uow::PgTenantRepos;
@@ -137,6 +141,22 @@ impl CallRepo for PgTenantRepos {
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "lock call session by pbx id"))?;
+        row.map(decode).transpose()
+    }
+
+    async fn lock_by_bridge_id(
+        &mut self,
+        bridge_call_id: &str,
+    ) -> Result<Option<CallSession>, AppError> {
+        let row: Option<Value> = sqlx::query_scalar(
+            "select data from call_sessions where workspace_id = $1 and bridge_call_id = $2 \
+             for update",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(bridge_call_id)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock call session by bridge id"))?;
         row.map(decode).transpose()
     }
 
@@ -326,6 +346,135 @@ impl CallRepo for PgTenantRepos {
                 decode(data)
             })
             .collect()
+    }
+
+    async fn enqueue_commands(
+        &mut self,
+        call: CallId,
+        commands: Vec<(CallCommandId, Command)>,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        let known: bool = sqlx::query_scalar(
+            "select exists (select 1 from call_sessions where workspace_id = $1 and id = $2)",
+        )
+        .bind(ws.as_uuid())
+        .bind(call.as_uuid())
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read call session"))?;
+        if !known {
+            return Err(AppError::not_found("no such call"));
+        }
+        for (id, command) in commands {
+            let payload = encode(&command)?;
+            let kind = payload
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::internal("a call command has no kind"))?
+                .to_owned();
+            let done = sqlx::query(
+                "insert into call_commands (workspace_id, id, call_id, kind, payload, created_at) \
+                 values ($1, $2, $3, $4, $5, $6) on conflict do nothing",
+            )
+            .bind(ws.as_uuid())
+            .bind(id.as_uuid())
+            .bind(call.as_uuid())
+            .bind(kind)
+            .bind(payload)
+            .bind(at)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "queue call command"))?;
+            if done.rows_affected() == 0 {
+                return Err(AppError::conflict("the command id is already taken"));
+            }
+        }
+        Ok(())
+    }
+
+    async fn take_commands(
+        &mut self,
+        capability: CapabilityId,
+        now: OffsetDateTime,
+        stale_before: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<QueuedCommand>, AppError> {
+        let mut rows: Vec<(i64, Uuid, Uuid, Value, Option<String>)> = sqlx::query_as(
+            "update call_commands c set taken_at = $3 \
+             from (select q.id, s.bridge_call_id from call_commands q \
+             join call_sessions s on s.workspace_id = q.workspace_id and s.id = q.call_id \
+             where q.workspace_id = $1 and s.capability_id = $2 and q.acked_at is null \
+             and (q.taken_at is null or q.taken_at < $4) \
+             order by q.seq limit $5 for update of q skip locked) picked \
+             where c.workspace_id = $1 and c.id = picked.id \
+             returning c.seq, c.id, c.call_id, c.payload, picked.bridge_call_id",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(capability.as_uuid())
+        .bind(now)
+        .bind(stale_before)
+        .bind(i64::from(limit.clamp(1, MAX_CALL_PAGE)))
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "take call commands"))?;
+        rows.sort_by_key(|(seq, ..)| *seq);
+        rows.into_iter()
+            .map(|(_, id, call_id, payload, bridge_call_id)| {
+                Ok(QueuedCommand {
+                    id: CallCommandId(id),
+                    call_id: CallId(call_id),
+                    bridge_call_id,
+                    command: decode(payload)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn ack_command(
+        &mut self,
+        capability: CapabilityId,
+        id: CallCommandId,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        let done = sqlx::query(
+            "update call_commands c set acked_at = $4 from call_sessions s \
+             where c.workspace_id = $1 and c.id = $3 and c.acked_at is null \
+             and s.workspace_id = c.workspace_id and s.id = c.call_id and s.capability_id = $2",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(capability.as_uuid())
+        .bind(id.as_uuid())
+        .bind(at)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "acknowledge call command"))?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn note_bridge_event(
+        &mut self,
+        capability: CapabilityId,
+        bridge_call_id: &str,
+        bridge_seq: u32,
+        kind: &str,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        let done = sqlx::query(
+            "insert into call_bridge_events (workspace_id, bridge_call_id, bridge_seq, \
+             capability_id, kind, received_at) values ($1, $2, $3, $4, $5, $6) \
+             on conflict do nothing",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(bridge_call_id)
+        .bind(i64::from(bridge_seq))
+        .bind(capability.as_uuid())
+        .bind(kind)
+        .bind(at)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "note bridge event"))?;
+        Ok(done.rows_affected() == 1)
     }
 
     async fn policy(&mut self) -> Result<CallPolicy, AppError> {

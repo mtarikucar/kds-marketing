@@ -75,8 +75,9 @@ fn domain_capability_and_crypto_dependencies_match_explicit_sets() {
 
 // The application core: the domain crates, serialisation and time, and the pure-Rust crates
 // behind `jt_app::std_impls` and token hashing, plus `tokio` only so `Argon2Hasher` can move its
-// CPU-bound work onto a blocking thread and the `probe_all` job can bound its concurrent probes
-// (a semaphore over a task set; no I/O of its own), `zeroize` for the plaintext the `SecretBox`
+// CPU-bound work onto a blocking thread, the `probe_all` job can bound its concurrent probes
+// (a semaphore over a task set) and a long-poll can wait between its reads (a timer; no I/O of
+// its own), `zeroize` for the plaintext the `SecretBox`
 // port hands back, and `url` (a parser, no I/O) for the addresses the connector ports carry. No
 // adapter, database, HTTP or cipher crate.
 const APP_ALLOW: &[&str] = &[

@@ -215,11 +215,33 @@ fn activation_is_panel_only_without_mcp_schema_or_handler() {
 }
 
 #[test]
+fn the_voice_bridge_surface_has_no_mcp_tool() {
+    for id in [
+        "calls.bridge.register",
+        "calls.bridge.commands",
+        "calls.bridge.events",
+    ] {
+        let row = jt_app::catalog::find(id).unwrap();
+        assert!(row.panel_only && row.mcp_tool.is_none(), "{id}");
+        assert!(
+            row.panel_route
+                .is_some_and(|(_, path)| path.starts_with("/api/voice/bridge/")),
+            "{id}"
+        );
+    }
+    assert!(
+        jt_mcp::registry().iter().all(
+            |tool| !tool.use_case.starts_with("calls.bridge.") && !tool.name.contains("bridge")
+        )
+    );
+}
+
+#[test]
 fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows() {
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 154);
+    assert_eq!(CATALOG.len(), 157);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

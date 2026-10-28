@@ -69,6 +69,7 @@ pub struct Intervals {
     pub studio_publish_recover: Duration,
     pub studio_measure: Duration,
     pub studio_reweight: Duration,
+    pub voice_bridge_health: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -105,6 +106,7 @@ impl Default for Intervals {
             studio_publish_recover: MINUTE,
             studio_measure: HOUR * 6,
             studio_reweight: DAY * 7,
+            voice_bridge_health: MINUTE,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -136,6 +138,7 @@ impl Intervals {
             Job::StudioPublishRecover => self.studio_publish_recover,
             Job::StudioMeasure => self.studio_measure,
             Job::StudioReweight => self.studio_reweight,
+            Job::VoiceBridgeHealth => self.voice_bridge_health,
         }
     }
 }
@@ -446,6 +449,7 @@ mod tests {
             studio_publish_recover: every,
             studio_measure: every,
             studio_reweight: every,
+            voice_bridge_health: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -548,6 +552,11 @@ mod tests {
         assert_eq!(i.of(Job::StudioPlan), HOUR);
         assert_eq!(i.of(Job::StudioPublish), MINUTE);
         assert_eq!(i.of(Job::StudioPublishRecover), MINUTE);
+        assert_eq!(i.of(Job::VoiceBridgeHealth), MINUTE);
+        assert_eq!(
+            Job::VoiceBridgeHealth.lock_name(),
+            "jeeta.jobs.voice_bridge_health"
+        );
         assert_eq!(Job::ResponseSla.lock_name(), "jeeta.jobs.response_sla");
         assert_eq!(Job::SnoozeWake.lock_name(), "jeeta.jobs.snooze_wake");
         assert_eq!(Job::InboxConsume.lock_name(), "jeeta.jobs.inbox_consume");

@@ -127,7 +127,8 @@
     },
     "calls": {
       "work": "Place calls and read the call log",
-      "manage": "Manage the call policy"
+      "manage": "Manage the call policy",
+      "bridge": "Act as the voice bridge (the bridge's key only)"
     }
   },
   "roleNames": {
@@ -318,7 +319,8 @@
       "reply_due": "Conversation awaiting reply",
       "reopen_question": "Decision to reopen a lost journey",
       "merge_suggested": "Contact merge suggestion",
-      "task_due": "Task due"
+      "task_due": "Task due",
+      "voice_bridge_offline": "{{name}} is not registering: agent calls are refused until the bridge registers again."
     }
   },
   "team": {
@@ -744,6 +746,7 @@
       "mailbox": "Mailbox",
       "webchat": "Web chat",
       "netgsm_pbx": "NetGSM PBX",
+      "voice_bridge": "Voice bridge",
       "discord": "Discord",
       "reddit": "Reddit",
       "review_google": "Google reviews",
@@ -971,6 +974,18 @@
       "metaUrl": "Meta webhook address",
       "verifyTokenHint": "The verify token is set in the dashboard of the platform's Meta app; it is not shown here.",
       "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is."
+    },
+    "bridge": {
+      "title": "Voice bridge",
+      "extension": "Extension",
+      "stt": "Speech to text",
+      "tts": "Text to speech",
+      "version": "Version",
+      "lines": "Calls at once",
+      "codecs": "Codecs",
+      "heartbeat": "Last registered",
+      "never": "The bridge has not registered yet.",
+      "hint": "Only the bridge's own registration verifies it, never evidence. Setup:"
     }
   },
   "connect": {

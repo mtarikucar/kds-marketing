@@ -27,8 +27,9 @@ async fn studio_schema_exact_table_delta() {
         ]
     );
     let count: i64 = sqlx::query_scalar("select count(*) from pg_tables where schemaname='public' and tablename <> '_sqlx_migrations'").fetch_one(&db.pool).await.unwrap();
-    // 48 inbox-era tables, 14 Studio, 5 billing, 4 calls (0015_voice_calls).
-    assert_eq!(count, 48 + 14 + 5 + 4);
+    // 48 inbox-era tables, 14 Studio, 5 billing, 4 calls (0015_voice_calls), the bridge's event
+    // notes (0016_voice_bridge).
+    assert_eq!(count, 48 + 14 + 5 + 4 + 1);
 }
 
 #[tokio::test]

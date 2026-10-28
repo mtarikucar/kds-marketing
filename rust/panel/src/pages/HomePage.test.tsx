@@ -192,6 +192,28 @@ describe('HomePage', () => {
     expect(screen.queryByText('reconnect it')).not.toBeInTheDocument();
   });
 
+  it('voice_bridge_offline: names the silent bridge and opens the capabilities', async () => {
+    const offline = {
+      ...pendingOverdue,
+      items: [
+        {
+          kind: 'voice_bridge_offline' as const,
+          capability_id: PAGE_ID,
+          name: 'Voice bridge 101',
+          last_seen_at: '2026-10-22T08:00:00Z',
+          priority: 2,
+          hint: 'check the bridge',
+        },
+      ],
+    };
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': offline });
+    renderAt('/');
+    const text = await screen.findByText(i18n.t('home.pending.voice_bridge_offline', { name: 'Voice bridge 101' }));
+    const row = text.closest('li') as HTMLElement;
+    expect(within(row).getByRole('link', { name: tr.home.pending.open })).toHaveAttribute('href', '/capabilities');
+    expect(screen.queryByText('check the bridge')).not.toBeInTheDocument();
+  });
+
   it('shows the draft gaps and the version in force', async () => {
     const draft = {
       ...pendingOverdue,

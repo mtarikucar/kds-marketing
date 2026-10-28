@@ -1,12 +1,13 @@
-//! The in-memory call repository: sessions, turns and the call policy, with the constraints the
-//! `0015_voice_calls` migration enforces (unique ids, `crm_id` and `bridge_call_id`, and turn
-//! numbers per call).
+//! The in-memory call repository: sessions, turns, the voice bridge's commands and event notes,
+//! and the call policy, with the constraints the `0015_voice_calls` and `0016_voice_bridge`
+//! migrations enforce (unique ids, `crm_id` and `bridge_call_id`, turn numbers per call, one note
+//! per bridge event, commands in their queue order).
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::calls::{
-    CallDirection, CallFilter, CallId, CallMode, CallPolicy, CallRepo, CallSession, CallState,
-    EndCause, MAX_CALL_PAGE, Turn,
+    CallCommandId, CallDirection, CallFilter, CallId, CallMode, CallPolicy, CallRepo, CallSession,
+    CallState, Command, EndCause, MAX_CALL_PAGE, QueuedCommand, Turn,
 };
 use jt_capability::CapabilityId;
 use jt_inbox::PersonId;
@@ -25,6 +26,22 @@ pub struct MemCalls {
     pub sessions: Vec<CallSession>,
     pub turns: Vec<(WorkspaceId, CallId, Turn)>,
     pub policies: Vec<(WorkspaceId, CallPolicy)>,
+    /// In their queue order.
+    pub commands: Vec<MemCommand>,
+    /// `(workspace, bridge_call_id, bridge_seq)` of each event a bridge reported.
+    pub bridge_events: Vec<(WorkspaceId, String, u32)>,
+}
+
+/// A command queued for the voice bridge, as the fake stores it.
+#[derive(Clone, Debug)]
+pub struct MemCommand {
+    pub workspace_id: WorkspaceId,
+    pub id: CallCommandId,
+    pub call_id: CallId,
+    pub command: Command,
+    pub created_at: OffsetDateTime,
+    pub taken_at: Option<OffsetDateTime>,
+    pub acked_at: Option<OffsetDateTime>,
 }
 
 fn not_found() -> AppError {
@@ -108,6 +125,20 @@ impl CallRepo for MemTenant {
             .iter()
             .filter(|s| s.workspace_id == ws && s.pbx_unique_id.as_deref() == Some(unique_id))
             .max_by_key(|s| s.started_at)
+            .cloned())
+    }
+
+    async fn lock_by_bridge_id(
+        &mut self,
+        bridge_call_id: &str,
+    ) -> Result<Option<CallSession>, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .calls
+            .sessions
+            .iter()
+            .find(|s| s.workspace_id == ws && s.bridge_call_id.as_deref() == Some(bridge_call_id))
             .cloned())
     }
 
@@ -274,6 +305,139 @@ impl CallRepo for MemTenant {
         out.sort_by_key(|t| t.seq);
         out.truncate(limit.clamp(1, MAX_CALL_PAGE) as usize);
         Ok(out)
+    }
+
+    async fn enqueue_commands(
+        &mut self,
+        call: CallId,
+        commands: Vec<(CallCommandId, Command)>,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            let calls = &this.state().calls;
+            if !calls
+                .sessions
+                .iter()
+                .any(|s| s.workspace_id == ws && s.id == call)
+            {
+                return Err(not_found());
+            }
+            for (id, _) in &commands {
+                unique(
+                    !calls
+                        .commands
+                        .iter()
+                        .any(|c| c.workspace_id == ws && c.id == *id),
+                    "the command id is already taken",
+                )?;
+            }
+            let rows: Vec<MemCommand> = commands
+                .into_iter()
+                .map(|(id, command)| MemCommand {
+                    workspace_id: ws,
+                    id,
+                    call_id: call,
+                    command,
+                    created_at: at,
+                    taken_at: None,
+                    acked_at: None,
+                })
+                .collect();
+            this.tx
+                .write(move |s| s.calls.commands.extend(rows.iter().cloned()));
+            Ok(())
+        })
+    }
+
+    async fn take_commands(
+        &mut self,
+        capability: CapabilityId,
+        now: OffsetDateTime,
+        stale_before: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<QueuedCommand>, AppError> {
+        let ws = self.ws;
+        let calls = &self.state().calls;
+        let taken: Vec<QueuedCommand> = calls
+            .commands
+            .iter()
+            .filter(|c| c.workspace_id == ws && c.acked_at.is_none())
+            .filter(|c| c.taken_at.is_none_or(|t| t < stale_before))
+            .filter_map(|c| {
+                let session = calls
+                    .sessions
+                    .iter()
+                    .find(|s| s.workspace_id == ws && s.id == c.call_id)?;
+                (session.capability_id == capability).then(|| QueuedCommand {
+                    id: c.id,
+                    call_id: c.call_id,
+                    bridge_call_id: session.bridge_call_id.clone(),
+                    command: c.command.clone(),
+                })
+            })
+            .take(limit.clamp(1, MAX_CALL_PAGE) as usize)
+            .collect();
+        let ids: Vec<CallCommandId> = taken.iter().map(|q| q.id).collect();
+        self.tx.write(move |s| {
+            for c in s.calls.commands.iter_mut() {
+                if c.workspace_id == ws && ids.contains(&c.id) {
+                    c.taken_at = Some(now);
+                }
+            }
+        });
+        Ok(taken)
+    }
+
+    async fn ack_command(
+        &mut self,
+        capability: CapabilityId,
+        id: CallCommandId,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        let ws = self.ws;
+        let calls = &self.state().calls;
+        let open = calls.commands.iter().any(|c| {
+            c.workspace_id == ws
+                && c.id == id
+                && c.acked_at.is_none()
+                && calls.sessions.iter().any(|s| {
+                    s.workspace_id == ws && s.id == c.call_id && s.capability_id == capability
+                })
+        });
+        if open {
+            self.tx.write(move |s| {
+                for c in s.calls.commands.iter_mut() {
+                    if c.workspace_id == ws && c.id == id {
+                        c.acked_at = Some(at);
+                    }
+                }
+            });
+        }
+        Ok(open)
+    }
+
+    async fn note_bridge_event(
+        &mut self,
+        _capability: CapabilityId,
+        bridge_call_id: &str,
+        bridge_seq: u32,
+        _kind: &str,
+        _at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        let ws = self.ws;
+        let seen = self
+            .state()
+            .calls
+            .bridge_events
+            .iter()
+            .any(|(w, id, seq)| *w == ws && id == bridge_call_id && *seq == bridge_seq);
+        if !seen {
+            let id = bridge_call_id.to_owned();
+            self.tx
+                .write(move |s| s.calls.bridge_events.push((ws, id.clone(), bridge_seq)));
+        }
+        Ok(!seen)
     }
 
     async fn policy(&mut self) -> Result<CallPolicy, AppError> {

@@ -27,6 +27,7 @@ pub mod roles;
 pub mod strategy;
 pub mod studio;
 pub mod team;
+pub mod voice_bridge;
 pub mod work;
 pub mod workspace;
 
@@ -199,6 +200,9 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/calls/{call_id}"),
     ("GET", "/api/calls"),
     ("POST", "/api/calls/{call_id}/end"),
+    ("POST", "/api/voice/bridge/register"),
+    ("GET", "/api/voice/bridge/commands"),
+    ("POST", "/api/voice/bridge/events"),
     ("GET", "/api/events/pending"),
     ("POST", "/api/events/ack"),
     ("GET", "/api/events"),
@@ -980,6 +984,24 @@ pub fn api_routes() -> Vec<ApiRoute> {
         api_route("GET", "/calls/{call_id}", "calls.get", calls::get),
         api_route("GET", "/calls", "calls.list", calls::list),
         api_route("POST", "/calls/{call_id}/end", "calls.end", calls::end),
+        api_route(
+            "POST",
+            "/voice/bridge/register",
+            "calls.bridge.register",
+            voice_bridge::register,
+        ),
+        api_route(
+            "GET",
+            "/voice/bridge/commands",
+            "calls.bridge.commands",
+            voice_bridge::commands,
+        ),
+        api_route(
+            "POST",
+            "/voice/bridge/events",
+            "calls.bridge.events",
+            voice_bridge::events,
+        ),
         api_route("GET", "/events/pending", "events.pending", events::pending),
         api_route("POST", "/events/ack", "events.ack", events::ack),
         api_route("GET", "/events", "events.list", events::list),

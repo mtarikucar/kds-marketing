@@ -260,11 +260,12 @@ pub fn validate_external_id(external_id: &str) -> Result<(), CapabilityError> {
 /// The top-level keys of `connector_public` that the system's connectors write: the provider
 /// (`provider`), the sealed credential's public facts (`access`), an OAuth asset's facts
 /// (`asset`), the account a probe proved (`account`), the last probe (`health`, `facts`) and the
-/// reconnection flag (`reconnect_required`), the IYS brand binding (`iys`), and a PBX's call
-/// policy (`call_mode`, `recording_allowed`: written only by `connector.set_pbx_policy`, so that
-/// recording calls is one logged decision). Nobody declares or edits them
-/// ([`check_reserved_public_keys`]): public fields claiming a health, an expiry or a reconnection
-/// would read as what no probe found.
+/// reconnection flag (`reconnect_required`), the IYS brand binding (`iys`), a PBX's call policy
+/// (`call_mode`, `recording_allowed`: written only by `connector.set_pbx_policy`, so that
+/// recording calls is one logged decision), and what a voice bridge reported of itself when it
+/// last registered (`bridge`). Nobody declares or edits them ([`check_reserved_public_keys`]):
+/// public fields claiming a health, an expiry, a reconnection or a heartbeat would read as what
+/// no probe or report found.
 ///
 /// `hosts` is not among them: a connector capability names the hosts it reaches when it is
 /// declared, and its connector adds its own to them.
@@ -272,6 +273,7 @@ pub const RESERVED_PUBLIC_KEYS: &[&str] = &[
     "access",
     "account",
     "asset",
+    "bridge",
     "call_mode",
     "facts",
     "health",

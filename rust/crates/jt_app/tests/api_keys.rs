@@ -292,6 +292,7 @@ async fn create_returns_plaintext_once_and_list_hides_it() {
             "studio.manage",
             "calls.work",
             "calls.manage",
+            "calls.bridge",
         ])
     );
     assert!(created.get("key_hash").is_none());

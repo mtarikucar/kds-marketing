@@ -127,7 +127,8 @@
     },
     "calls": {
       "work": "Arama yapma ve görüşme kaydını görme",
-      "manage": "Arama politikasını yönetme"
+      "manage": "Arama politikasını yönetme",
+      "bridge": "Ses köprüsü olarak çalışma (yalnızca köprünün anahtarı)"
     }
   },
   "roleNames": {
@@ -318,7 +319,8 @@
       "reply_due": "Yanıt bekleyen konuşma",
       "reopen_question": "Kaybedilen yolculuğu yeniden açma kararı",
       "merge_suggested": "Kişi birleştirme önerisi",
-      "task_due": "Zamanı gelen görev"
+      "task_due": "Zamanı gelen görev",
+      "voice_bridge_offline": "{{name}} kayıt göndermiyor: köprü yeniden kaydolana kadar ajan aramaları reddedilir."
     }
   },
   "team": {
@@ -744,6 +746,7 @@
       "mailbox": "E-posta kutusu",
       "webchat": "Web sohbeti",
       "netgsm_pbx": "NetGSM santrali",
+      "voice_bridge": "Ses köprüsü",
       "discord": "Discord",
       "reddit": "Reddit",
       "review_google": "Google yorumları",
@@ -971,6 +974,18 @@
       "metaUrl": "Meta webhook adresi",
       "verifyTokenHint": "Doğrulama anahtarı platformun Meta uygulamasının panelinde ayarlıdır; burada gösterilmez.",
       "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür."
+    },
+    "bridge": {
+      "title": "Ses köprüsü",
+      "extension": "Dahili",
+      "stt": "Konuşmadan metne",
+      "tts": "Metinden konuşmaya",
+      "version": "Sürüm",
+      "lines": "Aynı anda arama",
+      "codecs": "Kodekler",
+      "heartbeat": "Son kayıt",
+      "never": "Köprü henüz kaydolmadı.",
+      "hint": "Yalnızca köprünün kendi kaydı doğrular; kanıtla doğrulanmaz. Kurulum:"
     }
   },
   "connect": {

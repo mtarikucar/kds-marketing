@@ -24,7 +24,8 @@ export type Permission =
   | 'studio.work'
   | 'studio.manage'
   | 'calls.work'
-  | 'calls.manage';
+  | 'calls.manage'
+  | 'calls.bridge';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -38,6 +39,7 @@ export const PERMISSIONS: readonly Permission[] = [
   'studio.manage',
   'calls.work',
   'calls.manage',
+  'calls.bridge',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */
@@ -477,6 +479,7 @@ export const KINDS = [
   { group: 'messaging', key: 'mailbox' },
   { group: 'messaging', key: 'webchat' },
   { group: 'telephony', key: 'netgsm_pbx' },
+  { group: 'telephony', key: 'voice_bridge' },
   { group: 'community', key: 'discord' },
   { group: 'community', key: 'reddit' },
   { group: 'community', key: 'review_google' },
@@ -758,7 +761,9 @@ export type WorkKind =
   | { kind: 'reply_due'; conversation_id: string }
   | { kind: 'reopen_question'; conversation_id: string }
   | { kind: 'merge_suggested'; merge_id: string }
-  | { kind: 'task_due'; task_id: string };
+  | { kind: 'task_due'; task_id: string }
+  /** A voice bridge that has not registered within its heartbeat; `last_seen_at` is its last one. */
+  | { kind: 'voice_bridge_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {

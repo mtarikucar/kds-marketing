@@ -101,6 +101,7 @@ döndürür. Sekiz göç vardır:
 | `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
 | `0013_probe_reason` | `probe_runs.reason` (the failure line, at most 300 characters) and `unknown` as a legal `error_kind`; down restores the old check only while no `unknown` run is stored. No new table. |
 | `0015_voice_calls` | Voice V0: `call_sessions`, `call_turns`, `call_commands`, `call_duty` (forced RLS, composite keys; 71 tables), `workspace_policies.calls`, `calls.work` for the system owner/manager/rep and `calls.manage` for owner/manager, and the retry columns of `event_consumption` (`attempts`, `retry_at`). Down refuses while a call is not ended. (`0014` is the social providers' migration of the TikTok/LinkedIn branch.) |
+| `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -1932,6 +1933,22 @@ payload (`calls.get` shows a person holding `calls.manage` the number).
 | `calls.get` | `GET /api/calls/{call_id}` | `jeeta.calls.get` | READ | `calls.work` |
 | `calls.list` | `GET /api/calls` | `jeeta.calls.list` | READ | `calls.work` |
 | `calls.end` | `POST /api/calls/{call_id}/end` | `jeeta.calls.end` | WRITE | `calls.work`; journey `CallMade`, note, task, spend once |
+
+#### The voice bridge (voice V1)
+
+The voice bridge (`docs/operations/voice-bridge.md`) is the sidecar that is a workspace's phone
+line for agent calls. Its three use cases are panel-only rows served under `/api/voice/bridge/*`
+to its bearer API key alone, a key issued with `calls.bridge` and nothing else (any other key,
+and every session cookie, is refused); no MCP tool reaches them. Its registration every 15
+seconds verifies its `voice_bridge` capability (reached like a device, verified only by this
+heartbeat): stale after 60 seconds, unreachable after 10 minutes (the `voice_bridge_health` job,
+every minute), listed as `voice_bridge_offline` pending work meanwhile.
+
+| Use case | Panel | Risk | Notes |
+|---|---|---|---|
+| `calls.bridge.register` | `POST /api/voice/bridge/register` | WRITE | declares the extension's bridge on its first registration; `calls.bridge.online` when it comes back |
+| `calls.bridge.commands` | `GET /api/voice/bridge/commands?wait_s&extension` | READ | long-poll of at most 25 s; a command not acknowledged within 10 s is handed out again |
+| `calls.bridge.events` | `POST /api/voice/bridge/events` | WRITE | at most 100 events, each applied once by `(bridge_call_id, bridge_seq)` |
 
 Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
 dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes
