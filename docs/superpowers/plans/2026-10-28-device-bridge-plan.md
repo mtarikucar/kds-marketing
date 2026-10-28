@@ -390,7 +390,7 @@ idempotent `do $$ … $$` guards. `down` drops the table and removes only the th
 #[async_trait]
 pub trait DeviceCommandRepo: Send {
     async fn enqueue(&mut self, row: NewDeviceCommand) -> Result<DeviceCommandRow, AppError>;
-    async fn lease(&mut self, caps: &[CapabilityId], now: OffsetDateTime, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // queued, or leased and leased_at <= now-10s; not expired; seq order; sets leased, attempts+1
+    async fn lease(&mut self, caps: &[CapabilityId], now: OffsetDateTime, redeliver_before: OffsetDateTime, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // queued, or leased and leased_at <= redeliver_before; not expired; seq order; sets leased, attempts+1. The caller passes `now - kernel REDELIVER_AFTER` (as voice's `take_commands` does): no 10 s in SQL
     async fn finish(&mut self, id: Uuid, outcome: Finish, now: OffsetDateTime) -> Result<FinishOutcome, AppError>;
     // A bridge's result, through jt_devices::next_status(status, event, leased_at.is_some()):
     //   Applied   - a leased command becomes done/failed; or a LATE result for an expired/canceled command that
@@ -407,6 +407,12 @@ pub trait DeviceCommandRepo: Send {
 - [ ] Implement fake first (tests run on Windows via testkit), then Postgres (CI). **Commit**.
 
 ### Task D1-T5: bridge use cases + routes
+
+**Kernel first (from the D0 review, PR #379).** Spec §3 says the kernel owns lease/redeliver and declare. D0 kept those parts in `calls` (it was a pure refactor), so this task moves them into the kernel before the device code uses them. Voice moves onto them, and its tests stay unedited and green:
+- **Redelivery.** Move `REDELIVER_AFTER` (`calls/bridge.rs:83`) into the kernel, or onto `BridgeSpec`. Add a kernel helper that wraps each read: `now = ctx.now + waited`, fresh transaction, lease through a closure, commit, then `Some` if the batch is non-empty. Voice's `commands` and the device `commands` both use it.
+- **Declare.** Move voice's in-transaction declare (`calls/bridge.rs:289-327`) into `kernel::declare(r, ctx, ids, kind_key, name, external_id, in_force)`, plus a shared lookup of live capabilities by kind and external id. What happens to a retired capability stays each bridge's own policy: voice answers `409`; the device lists the phone in `refused` with `PHONE_RETIRED`.
+- **Merge depth.** `kernel::heartbeat` merges `connector_public` one level deep, so it replaces `connector_public.device` whole. If phone facts must merge key by key inside `device` ("merge, never replace"), add that deeper merge to the kernel, not to device code.
+- **Optional:** a `BridgeSpec.kind_key` field, so a spec can't be paired with the wrong kind.
 
 **Files:** `rust/crates/jt_app/src/usecases/devices/{mod.rs,bridge.rs}`; catalog rows
 `panel_only("devices.bridge.register", Exempt, ("POST","/api/devices/bridge/register"), Write)`,
@@ -489,6 +495,9 @@ are set up before a strategy, like the bridge; `Write` for act):
 a late result for a command that was leased then replaces `expired` (D1-T4 `finish`) and writes a SECOND
 `devices.command.finished` with the result's status: intended, the ledger keeps what happened in order),
 `Job::DeviceFilePurge` (hourly, deletes device files older than 7 days); job list pins.
+Health is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, "phone", now)`, the generic loop from D0. Two prerequisites:
+- `phone` needs a heartbeat in `jt_capability/src/kind.rs`. Staleness is read from the kind, not from the spec.
+- `work.rs` must map kind to work item. Today any heartbeat kind that goes offline is reported as `VoiceBridgeOffline`, with the voice hint and the `calls.bridge.register` tool. A phone needs its own work item, e.g. `DeviceBridgeOffline`. Test: `offline_phone_is_not_reported_as_a_voice_bridge`.
 - [ ] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`.
 - [ ] CI red → green; **commit**.
 
