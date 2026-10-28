@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -22,7 +22,8 @@ use jeeta_device_bridge::{
     AttachedPhone, Config, DriverError, FileTransfer, PhoneDriver, PhoneRegistry, Timing, run,
 };
 use jt_device_protocol::{
-    CommandResult, DeviceCommand, FailReason, PHONE_RETIRED, PhoneReport, Platform,
+    CommandResult, DeviceCommand, FailReason, MAX_PHONES, PHONE_RETIRED, PhoneReport, Platform,
+    RegisterIn, ResultsIn,
 };
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -85,6 +86,10 @@ struct Script {
     refuse_batches_with: Option<Uuid>,
     /// The body of every error answer but a 422.
     error_body: String,
+    /// The `max_wait_s` register answers (25 when `None`).
+    max_wait_s: Option<u32>,
+    /// How long an idle poll is held (30 ms when `None`).
+    idle_hold: Option<Duration>,
 }
 
 /// What the fake was sent.
@@ -94,6 +99,8 @@ struct Seen {
     registers: Vec<(Instant, Value)>,
     /// When each poll arrived.
     polls: Vec<Instant>,
+    /// The query of each poll.
+    poll_queries: Vec<String>,
     /// Result posts and the status each was answered with.
     posts: Vec<(Instant, Value, u16)>,
     /// Uploads: content type and bytes.
@@ -102,6 +109,8 @@ struct Seen {
     downloads: Vec<Option<String>>,
     /// Route calls without the right key.
     unauthorized: usize,
+    /// Posts without `X-Requested-With: jeeta-panel`.
+    without_requested_with: usize,
 }
 
 #[derive(Default)]
@@ -128,11 +137,29 @@ impl Fake {
     fn error_body(&self) -> String {
         self.script.lock().unwrap().error_body.clone()
     }
+
+    /// How the API refuses a route call: a mutating one without the request header first (403,
+    /// before the key is read, as `jt_panel_http::csrf` does), then one without the key (401).
+    fn refusal(&self, headers: &HeaderMap, mutating: bool) -> Option<Response> {
+        let requested_with = headers
+            .get("x-requested-with")
+            .is_some_and(|v| v.as_bytes() == b"jeeta-panel");
+        if mutating && !requested_with {
+            self.seen.lock().unwrap().without_requested_with += 1;
+            let body =
+                json!({ "code": "FORBIDDEN", "message": "missing request header", "details": {} });
+            return Some((StatusCode::FORBIDDEN, axum::Json(body)).into_response());
+        }
+        if !self.authorized(headers) {
+            return Some((StatusCode::UNAUTHORIZED, self.error_body()).into_response());
+        }
+        None
+    }
 }
 
 async fn register(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
-    if !fake.authorized(&headers) {
-        return (StatusCode::UNAUTHORIZED, fake.error_body()).into_response();
+    if let Some(refused) = fake.refusal(&headers, true) {
+        return refused;
     }
     let body: Value = serde_json::from_slice(&body).unwrap();
     fake.seen
@@ -140,6 +167,11 @@ async fn register(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -
         .unwrap()
         .registers
         .push((Instant::now(), body.clone()));
+    // Refused as the server refuses a body that breaks a limit.
+    let read: RegisterIn = serde_json::from_value(body.clone()).unwrap();
+    if let Err(error) = read.validate() {
+        return refused_body(error.field());
+    }
     let script = fake.script.lock().unwrap();
     let (mut phones, mut refused) = (Vec::new(), Vec::new());
     for phone in body["phones"].as_array().unwrap() {
@@ -157,17 +189,42 @@ async fn register(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -
     };
     axum::Json(json!({
         "phones": phones, "refused": refused,
-        "heartbeat_s": heartbeat_s, "max_wait_s": 25, "protocol": 1,
+        "heartbeat_s": heartbeat_s, "max_wait_s": script.max_wait_s.unwrap_or(25), "protocol": 1,
     }))
     .into_response()
 }
 
-async fn commands(State(fake): State<Shared>, headers: HeaderMap) -> Response {
-    if !fake.authorized(&headers) {
-        return (StatusCode::UNAUTHORIZED, fake.error_body()).into_response();
+/// A 422 as the server gives one: the field is `ProtocolError::field()`.
+fn refused_body(field: &str) -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        axum::Json(json!({
+            "code": "VALIDATION",
+            "message": format!("{field}: is refused"),
+            "details": { "field": field },
+        })),
+    )
+        .into_response()
+}
+
+async fn commands(
+    State(fake): State<Shared>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    if let Some(refused) = fake.refusal(&headers, false) {
+        return refused;
     }
-    fake.seen.lock().unwrap().polls.push(Instant::now());
-    let next = fake.script.lock().unwrap().polls.pop_front();
+    {
+        let mut seen = fake.seen.lock().unwrap();
+        seen.polls.push(Instant::now());
+        seen.poll_queries.push(query.unwrap_or_default());
+    }
+    let (next, hold) = {
+        let mut script = fake.script.lock().unwrap();
+        let hold = script.idle_hold.unwrap_or(Duration::from_millis(30));
+        (script.polls.pop_front(), hold)
+    };
     match next {
         Some(poll) => {
             tokio::time::sleep(poll.delay).await;
@@ -175,18 +232,27 @@ async fn commands(State(fake): State<Shared>, headers: HeaderMap) -> Response {
         }
         None => {
             // An idle long poll: held a little, then empty.
-            tokio::time::sleep(Duration::from_millis(30)).await;
+            tokio::time::sleep(hold).await;
             (StatusCode::OK, r#"{"commands":[]}"#).into_response()
         }
     }
 }
 
 async fn results(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
-    if !fake.authorized(&headers) {
-        return (StatusCode::UNAUTHORIZED, fake.error_body()).into_response();
+    if let Some(refused) = fake.refusal(&headers, true) {
+        return refused;
     }
     let body: Value = serde_json::from_slice(&body).unwrap();
     let ids = posted_ids(&body);
+    let read: ResultsIn = serde_json::from_value(body.clone()).unwrap();
+    if let Err(error) = read.validate() {
+        fake.seen
+            .lock()
+            .unwrap()
+            .posts
+            .push((Instant::now(), body, 422));
+        return refused_body(error.field());
+    }
     let (status, error_body) = {
         let mut script = fake.script.lock().unwrap();
         let refused = script
@@ -221,8 +287,8 @@ async fn results(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) ->
 }
 
 async fn files(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -> Response {
-    if !fake.authorized(&headers) {
-        return (StatusCode::UNAUTHORIZED, fake.error_body()).into_response();
+    if let Some(refused) = fake.refusal(&headers, true) {
+        return refused;
     }
     let content_type = headers
         .get("content-type")
@@ -347,6 +413,8 @@ impl PhoneDriver for FakePhone {
         tokio::time::sleep(self.delay).await;
         let (what, result) = match cmd {
             DeviceCommand::Tap { x, .. } => (format!("tap {x}"), Ok(CommandResult::Done {})),
+            // A driver with a bug.
+            DeviceCommand::Key { .. } => panic!("fake driver bug: PANIC-DETAIL-77"),
             DeviceCommand::Screenshot {} => (
                 "screenshot".to_owned(),
                 files
@@ -406,9 +474,11 @@ fn quick() -> Timing {
     Timing {
         server_second: Duration::from_millis(20),
         poll_wait_s: 1,
+        idle_poll_floor: Duration::from_millis(25),
         backoff_min: Duration::from_millis(40),
         backoff_max: Duration::from_millis(160),
         command_timeout: Duration::from_secs(5),
+        transfer_timeout: Duration::from_secs(5),
         report_timeout: Duration::from_secs(2),
         shutdown_grace: Duration::from_millis(500),
     }
@@ -455,8 +525,17 @@ impl Logs {
 
 /// A bridge for `base` with `registry`'s phones; answers its stop switch and its task.
 fn bridge(base: &str, registry: Arc<dyn PhoneRegistry>) -> (oneshot::Sender<()>, JoinHandle<()>) {
+    bridge_with(base, registry, "")
+}
+
+/// [`bridge`] with more lines of configuration.
+fn bridge_with(
+    base: &str,
+    registry: Arc<dyn PhoneRegistry>,
+    more: &str,
+) -> (oneshot::Sender<()>, JoinHandle<()>) {
     let config = Config::parse(
-        &format!("base_url = \"{base}\"\nkey = \"{KEY}\"\nbridge_id = \"test-pc\"\n"),
+        &format!("base_url = \"{base}\"\nkey = \"{KEY}\"\nbridge_id = \"test-pc\"\n{more}"),
         |_| None,
     )
     .unwrap();
@@ -487,6 +566,11 @@ impl Rig {
 
     /// A bridge for a fake Jeeta already serving at `base`.
     fn attach(base: &str, fake: Shared, phones: &[(&str, u64)]) -> Rig {
+        Rig::attach_with(base, fake, phones, "")
+    }
+
+    /// [`Rig::attach`] with more lines of configuration.
+    fn attach_with(base: &str, fake: Shared, phones: &[(&str, u64)], more: &str) -> Rig {
         let runs = Arc::new(Mutex::new(Vec::new()));
         let attached = phones
             .iter()
@@ -500,7 +584,7 @@ impl Rig {
             })
             .collect();
         let started = Instant::now();
-        let (stop, task) = bridge(base, Arc::new(Phones(attached)));
+        let (stop, task) = bridge_with(base, Arc::new(Phones(attached)), more);
         Rig {
             fake,
             runs,
@@ -1031,4 +1115,232 @@ async fn file_transfer_uploads_with_the_key_and_downloads_without_it() {
         "{text}"
     );
     rig.stop().await;
+}
+
+#[tokio::test]
+async fn posts_carry_the_requested_with_header() {
+    let _logs = Logs::capture();
+    let script = Script {
+        polls: [poll(vec![leased(
+            1,
+            "R58N1",
+            json!({ "kind": "screenshot" }),
+        )])]
+        .into(),
+        ..Script::default()
+    };
+    let (base, fake) = serve(script).await;
+    // The fake refuses a post without it, as the API does: the rule is not vacuous.
+    let bare = reqwest::Client::new()
+        .post(format!("{base}/api/devices/bridge/results"))
+        .header("authorization", format!("Bearer {KEY}"))
+        .json(&json!({ "results": [] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bare.status(), 403);
+    fake.seen.lock().unwrap().without_requested_with = 0;
+
+    let rig = Rig::attach(&base, fake, &[("R58N1", 0)]);
+    rig.until("the accepted result", |s| !accepted(s).is_empty())
+        .await;
+    {
+        // A register, an upload and a results post went through, every one with the header.
+        let seen = rig.seen();
+        assert!(!seen.registers.is_empty() && seen.uploads.len() == 1);
+        assert_eq!(seen.without_requested_with, 0);
+        assert_eq!(seen.unauthorized, 0);
+    }
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn idle_polls_are_spaced_even_when_the_server_does_not_wait() {
+    let _logs = Logs::capture();
+    // A server that holds no poll: it allows no wait and answers an idle poll at once.
+    let script = Script {
+        max_wait_s: Some(0),
+        idle_hold: Some(Duration::ZERO),
+        ..Script::default()
+    };
+    let rig = Rig::start(script, &[("R58N1", 0)]).await;
+    rig.until("six polls", |s| s.polls.len() >= 6).await;
+    {
+        let seen = rig.seen();
+        // The bridge asked for no wait, as the server allows...
+        assert!(
+            seen.poll_queries.iter().all(|q| q.contains("wait_s=0")),
+            "{:?}",
+            seen.poll_queries
+        );
+        // ... and still spaced the polls (25 ms in these tests), not a busy loop.
+        for gap in gaps(&seen.polls) {
+            assert!(gap >= Duration::from_millis(20), "{gap:?}");
+        }
+    }
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn a_driver_panic_fails_its_command_and_the_phone_keeps_working() {
+    let logs = Logs::capture();
+    let script = Script {
+        polls: [poll(vec![
+            // The fake driver panics on a key press.
+            leased(1, "R58N1", json!({ "kind": "key", "key": "power" })),
+            leased(2, "R58N1", tap(2)),
+        ])]
+        .into(),
+        ..Script::default()
+    };
+    let rig = Rig::start(script, &[("R58N1", 0)]).await;
+    rig.until("both results", |s| accepted(s).len() == 2).await;
+    {
+        let seen = rig.seen();
+        let failed = &accepted_for(&seen, 1)[0]["outcome"];
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["reason"], "bridge_error");
+        assert!(
+            !failed["detail"].as_str().unwrap().contains("PANIC-DETAIL"),
+            "{failed}"
+        );
+        // The phone's next command still ran.
+        assert_eq!(
+            accepted_for(&seen, 2)[0]["outcome"],
+            json!({ "status": "done", "result": { "kind": "done" } })
+        );
+    }
+    let what: Vec<String> = rig.runs().into_iter().map(|r| r.what).collect();
+    assert_eq!(what, ["tap 2"]);
+    // Logged at error level with the serial and the command id, never the panic's message.
+    let text = logs.text();
+    let line = text
+        .lines()
+        .find(|l| l.contains("ERROR") && l.contains(&id(1).to_string()))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(line.contains("R58N1"), "{line}");
+    assert!(!text.contains("PANIC-DETAIL"), "{text}");
+    rig.stop().await;
+}
+
+/// The serials of the phones in a register body.
+fn registered_serials(body: &Value) -> Vec<String> {
+    body["phones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["serial"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn only_the_configured_serials_are_listed() {
+    let _logs = Logs::capture();
+    let (base, fake) = serve(Script::default()).await;
+    let rig = Rig::attach_with(
+        &base,
+        fake,
+        &[("PHONE_A", 0), ("PHONE_B", 0), ("PHONE_C", 0)],
+        "serials = [\"PHONE_C\", \"PHONE_A\", \"PHONE_X\"]\n",
+    );
+    rig.until("a register", |s| !s.registers.is_empty()).await;
+    // In the order they are attached; a configured serial that is not attached is not listed.
+    assert_eq!(
+        registered_serials(&rig.seen().registers[0].1),
+        ["PHONE_A", "PHONE_C"]
+    );
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn each_serial_is_listed_once_and_at_most_max_phones() {
+    let logs = Logs::capture();
+    let mut phones: Vec<(String, u64)> = (0..20).map(|n| (format!("P{n:02}"), 0)).collect();
+    // The registry lists the first phone twice.
+    phones.push(("P00".into(), 0));
+    let phones: Vec<(&str, u64)> = phones.iter().map(|(s, ms)| (s.as_str(), *ms)).collect();
+    let rig = Rig::start(Script::default(), &phones).await;
+    // The fake refuses a register that breaks a limit (a serial twice, more than 16 phones) with
+    // a 422, as the server does: this one is taken, and its phones registered.
+    rig.until("a register taken", |s| {
+        !s.registers.is_empty() && !s.polls.is_empty()
+    })
+    .await;
+    let listed = registered_serials(&rig.seen().registers[0].1);
+    let expected: Vec<String> = (0..MAX_PHONES).map(|n| format!("P{n:02}")).collect();
+    assert_eq!(listed, expected);
+    let text = logs.text();
+    let cut = text
+        .lines()
+        .find(|l| l.contains("more phones than one register carries"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(
+        cut.contains("WARN") && cut.contains("attached=20") && cut.contains("listed=16"),
+        "{cut}"
+    );
+    rig.stop().await;
+}
+
+/// An address that accepts a connection and closes it at once: every request to it fails
+/// without an answer, and fast (a closed port takes about two seconds to refuse on Windows).
+async fn closing_server() -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            drop(socket);
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn a_failed_requests_url_is_never_logged() {
+    let logs = Logs::capture();
+    let closing = closing_server().await;
+
+    // The server's own address, with a path no line may show.
+    let (stop, task) = bridge(
+        &format!("http://{closing}/PRIVATE-PATH-1"),
+        Arc::new(Phones(Vec::new())),
+    );
+
+    // A signed download address that answers nothing: neither the log nor the failure's
+    // detail, which the server keeps, may show it.
+    let (base, fake) = serve(Script::default()).await;
+    let mut push = leased(
+        1,
+        "R58N1",
+        json!({ "kind": "push_file", "file_id": id(9), "dest": "/sdcard/x.bin" }),
+    );
+    push["download_url"] = json!(format!("http://{closing}/signed/file?sig=SIGNED-SECRET-2"));
+    fake.script.lock().unwrap().polls = [poll(vec![push])].into();
+    let rig = Rig::attach(&base, fake, &[("R58N1", 0)]);
+    rig.until("the failed push", |s| accepted_for(s, 1).len() == 1)
+        .await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !logs.text().contains("registering with Jeeta failed") {
+        assert!(Instant::now() < deadline, "{}", logs.text());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let _ = stop.send(());
+    task.await.unwrap();
+    {
+        let seen = rig.seen();
+        let failed = &accepted_for(&seen, 1)[0]["outcome"];
+        assert_eq!(failed["reason"], "bridge_error");
+        let detail = failed["detail"].as_str().unwrap();
+        assert!(detail.contains("downloading the file failed"), "{detail}");
+        assert!(
+            !detail.contains("SIGNED-SECRET") && !detail.contains("signed/file"),
+            "{detail}"
+        );
+    }
+    rig.stop().await;
+    let text = logs.text();
+    // Not vacuous: the request errors were logged.
+    assert!(text.contains("error sending request"), "{text}");
+    for hidden in ["PRIVATE-PATH", "SIGNED-SECRET", "signed/file"] {
+        assert!(!text.contains(hidden), "{hidden} in {text}");
+    }
 }

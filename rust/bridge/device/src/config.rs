@@ -135,12 +135,19 @@ impl Config {
     /// Reads a configuration from the text of its file, with `env` for the environment variables
     /// it consults ([`KEY_ENV`], `PATH`, `LOCALAPPDATA`, `COMPUTERNAME`, `HOSTNAME`).
     pub fn parse(text: &str, env: impl Fn(&str) -> Option<String>) -> Result<Config, ConfigError> {
-        let file: File = toml::from_str(text).map_err(|error| ConfigError::Parse {
+        let parse_error = |error: toml::de::Error| ConfigError::Parse {
             line: error
                 .span()
                 .map(|span| text[..span.start.min(text.len())].matches('\n').count() + 1),
             message: error.message().to_owned(),
-        })?;
+        };
+        // An error about a value of the wrong type quotes the value (`invalid type: integer
+        // `…``): the key's type is checked on its own first, so its error names the setting only.
+        let table: toml::Table = toml::from_str(text).map_err(parse_error)?;
+        if table.get("key").is_some_and(|key| !key.is_str()) {
+            return Err(invalid("key", "must be a quoted string"));
+        }
+        let file: File = toml::from_str(text).map_err(parse_error)?;
         let env = |name: &str| env(name).filter(|value| !value.trim().is_empty());
         Ok(Config {
             base_url: base_url(&file.base_url)?,
@@ -358,6 +365,29 @@ mod tests {
         let typo = format!("base_url = \"https://jeeta.example\"\nkey = \"{KEY}\"\nserial = []\n");
         let error = parse(&typo).unwrap_err();
         assert!(error.to_string().contains("serial"), "{error}");
+        assert!(!error.to_string().contains(KEY), "{error}");
+    }
+
+    #[test]
+    fn a_key_that_is_not_a_string_is_not_quoted() {
+        for value in [
+            "12345678",
+            "1.5e9",
+            "[\"jk_in_a_list\"]",
+            "{ a = \"jk_in_a_table\" }",
+        ] {
+            let text = format!("base_url = \"https://jeeta.example\"\nkey = {value}\n");
+            let error = parse(&text).unwrap_err();
+            let shown = error.to_string();
+            assert_eq!(shown, "key: must be a quoted string", "{value}");
+            for part in ["12345678", "1.5", "jk_in_a"] {
+                assert!(!shown.contains(part), "{shown}");
+            }
+        }
+        // A wrong type elsewhere still names its setting by the parser's words.
+        let text = format!("base_url = 7\nkey = \"{KEY}\"\n");
+        let error = parse(&text).unwrap_err();
+        assert!(matches!(error, ConfigError::Parse { .. }), "{error}");
         assert!(!error.to_string().contains(KEY), "{error}");
     }
 

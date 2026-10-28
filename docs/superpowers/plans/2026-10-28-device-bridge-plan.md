@@ -266,6 +266,10 @@ Rules of the vocabulary (written in the `jt_devices` crate docs too):
   unit variant of a tagged enum, so `deny_unknown_fields` would not hold. (`CommandResult::Done {}` is one.)
 - **A refused results batch (422) is refused for good**: the bridge must not retry it as it is. It builds results with
   `Outcome::failed` / `CommandResult::shell` and `Observation::cap_elements`, so what it sends is valid by construction.
+- **Every `POST` from the bridge carries `X-Requested-With: jeeta-panel`** next to `Authorization: Bearer <key>`:
+  `jt_panel_http` wraps every `/api` route in `csrf::require_requested_with`, which refuses a non-safe method without
+  it with a `403` before authentication (as for the voice bridge, `docs/operations/voice-bridge.md` §3). The poll
+  (`GET`) carries the key only. A signed download carries neither.
 
 ---
 
@@ -436,7 +440,25 @@ Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permissio
   command that was never leased) as `unknown`; the three sum to `results.len()`.
 - `files` (body ≤ the studio upload limit, `image/png` or `application/octet-stream`): store as a workspace file
   with 7-day expiry metadata, answer `FileOut`.
-- [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_lists_retired_phone_as_refused`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`, `register_refuses_one_bad_phone_not_the_heartbeat`, `commands_rechecks_supports_at_lease_time`, `result_for_another_bridges_command_is_unknown`, `result_with_a_foreign_file_id_is_refused`, `invalid_results_body_is_422`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused}`; archtest: no MCP tool for `devices.bridge.*`.
+
+What the bridge as built (D2-T1) relies on, which the server must match:
+- **The request header.** Every `POST` carries `X-Requested-With: jeeta-panel` (Contracts); the `/api` CSRF layer
+  applies to these routes like any other. `jt_panel_http/tests/device_bridge.rs` pins the server side: a `POST`
+  with the bearer key but without the header is `403`, and with it the route answers.
+- **`POST /api/devices/bridge/files` takes a RAW body**: the file itself, with `Content-Type` `image/png` (a
+  screenshot) or `application/octet-stream` (a pulled file). No JSON envelope, no multipart, no filename. It answers
+  `200 {"file_id": …}` (`FileOut`). It needs its own `DefaultBodyLimit`: studio's limit is set on studio's route ids
+  only. An upload is not idempotent: a retried upload makes a new file (the 7-day purge removes what no result names).
+- **A `422` carries `details.field` = `ProtocolError::field()`** (the server's usual error shape). That name is the
+  one thing of a refusal the bridge logs, when it drops a refused result.
+- **`download_url` is an absolute `https` URL that authenticates by itself.** The bridge sends no `Authorization` to
+  it and follows up to 5 redirects. Conflict to resolve here, not decided by D2-T1: `FileStore::provider_url`
+  (`jt_files`) refuses any lifetime but 24 h, while this task asks for a 10-minute URL.
+- **A result the server does not apply is still a `200`.** One for an unknown command, another bridge's, or one that
+  was never leased is counted in `ResultsOut.unknown`, never answered with a 4xx. The bridge retries only
+  transport errors, 5xx, 408 and 429; it splits a batch on a 422 (or 413); any other 4xx (401, 403, 404 included)
+  makes it drop the batch.
+- [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_lists_retired_phone_as_refused`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`, `register_refuses_one_bad_phone_not_the_heartbeat`, `commands_rechecks_supports_at_lease_time`, `result_for_another_bridges_command_is_unknown`, `result_with_a_foreign_file_id_is_refused`, `invalid_results_body_is_422`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused, post_without_requested_with_is_403, files_take_a_raw_body}`; `invalid_results_body_is_422` also checks `details.field`; archtest: no MCP tool for `devices.bridge.*`.
 - [ ] CI red → implement → green; **commit** `feat(devices): the device bridge's surface`.
 
 ### Task D1-T6: agent use cases + MCP tools + logging rule
@@ -490,15 +512,25 @@ command by its id with `FailReason::UnsupportedByBridge` (the message is the fai
 log `dropped` at `warn` level when it is not zero (a count only: no body, no command). An `Err` is a failed poll, like
 a transport error: log it (the field name only), back off and poll again — it must not read as an idle poll.
 
+Every `POST` (register, results, files) carries `X-Requested-With: jeeta-panel` (Contracts); the fake Jeeta refuses
+a `POST` without it with a `403`, as `jt_panel_http` does.
 Results: a post is retried with backoff on a transport error or a 5xx (and 408/429) only. **A 422 is final**: the
 loop never sends the same batch again as it is; it splits it in halves (the first half first) to isolate the bad
 result, and a single result that still gets 422 is dropped with a `warn` log of its command id and the field name
-(the 422 body's `details.field`) only. Before batching, each result is checked with `ResultsIn::validate` and its
+(the 422 body's `details.field`) only. A 413 is split the same way. Any other 4xx drops the batch (`error` log).
+At shutdown the results not yet posted get 5 s (`Timing::shutdown_grace`); a command still running is cut off. Before batching, each result is checked with `ResultsIn::validate` and its
 serialized size; one the server would have to refuse is replaced by a `bridge_error` failure of its command. A batch
 holds at most `MAX_RESULTS`, at most `MAX_RESULTS_BODY_BYTES` serialized, and a command once.
 Register: a `RefusedPhone` is logged at `warn` with its serial and reason (when the refusal is new); a phone refused
 with `PHONE_RETIRED` is not listed again until the bridge restarts. Only the configured `serials`, each once, at most
-`MAX_PHONES`. The loop polls only while a phone is registered.
+`MAX_PHONES`. The loop polls only while a phone is registered, and at least `Timing::idle_poll_floor` (1 s) apart
+when a poll brings nothing new, so a server that answers at once (`max_wait_s = 0`) is never polled in a busy loop.
+Each command runs in a task of its own: a driver panic fails that command as `bridge_error` (logged at `error` with the
+serial and command id, never the panic's message) and the phone's worker goes on. A worker found stopped all the same
+(its `send` fails) is logged at `error` (serial, command id), the command is failed as `bridge_error`, and the worker is
+started again. `push_file`/`pull_file` are bounded by `Timing::transfer_timeout` (30 min), every other command by
+`Timing::command_timeout` (120 s). A non-string `key` in the file is refused by name only (a type error would quote
+it). `main.rs` installs the tracing subscriber without bridging the `log` records of the HTTP client.
 
 As built: a lib target beside the bin (`src/lib.rs`, so `tests/loop.rs` reaches the loop) and `src/driver/mod.rs`
 with the seams D2-T2 fills: `PhoneDriver` and `DriverError` as below, `FileTransfer` (`upload(bytes, content_type) ->
@@ -511,7 +543,7 @@ shutdown)`: `Timing` holds the intervals (tests shorten them), a per-command tim
 `main.rs` wires a registry that reports no phones (`TODO(D2-T2)`). The archtest rule
 (`device_bridge_depends_on_no_server_crate`) checks every dependency kind; `no_crate_but_outbound_names_reqwest` and
 `deny.toml` name the bridge as the one other package with its own HTTP client.
-- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`.
+- [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`, `posts_carry_the_requested_with_header`, `idle_polls_are_spaced_even_when_the_server_does_not_wait`, `a_driver_panic_fails_its_command_and_the_phone_keeps_working`, `only_the_configured_serials_are_listed`, `each_serial_is_listed_once_and_at_most_max_phones`, `a_failed_requests_url_is_never_logged` (fails if `without_url()` is removed); unit tests `a_command_for_a_stopped_worker_is_failed_and_the_worker_started_again`, `a_key_that_is_not_a_string_is_not_quoted`.
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit**.
 
 ### Task D2-T2: `AndroidAdbDriver`
@@ -561,8 +593,21 @@ Specifics:
 - feature detection: `pm list packages com.android.adbkeyboard` → `text.unicode`; all kinds of §4.1 reported for Android.
 - `shell`: `adb -s S shell <argv…>` as separate args, each argument quoted for the device shell; capture exit code (`adb shell` ≥ API 24 propagates it), stdout/stderr capped at 64 KiB each. After quoting, the driver checks the final command-line length against a limit it names as a constant (the quoting can make a command that validated longer) and refuses an over-long one before any `adb` call with `bridge_error` and a clear `detail` (the length and the limit). The ASCII `text` path does the same check after its escaping.
 - `screenshot`: `exec-out screencap -p` bytes → upload via `FileTransfer` → `File{file_id}`.
-- `push_file`: download `download_url` to a temp file → `adb push`; `pull_file`: `adb pull` to temp → upload.
-- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_waits_for_ime_binding`, `unicode_text_ime_never_binds_is_a_failure_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `observe_reports_rotated_screen`, `miui_theme_stack_trace_is_not_a_failure`, `inject_events_refusal_with_exit_0_is_a_failure`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`.
+- `push_file`: `FileTransfer::download(temp)` (the transfer holds the signed address; the driver never sees it) →
+  `adb push`; `pull_file`: `adb pull` to temp → `FileTransfer::upload`.
+
+What the loop (D2-T1) asks of the driver:
+- **`execute` is cancel-safe.** The loop cancels a command by dropping its future: at `Timing::command_timeout`
+  (120 s; `Timing::transfer_timeout` for `push_file`/`pull_file`) and at shutdown. Whatever the driver must undo is
+  undone by a guard on drop, not only on the normal path: above all the IME set for Unicode text, which a guard
+  restores when the command ends or is cancelled. Test `unicode_text_restores_ime_when_cancelled`. Temp files are
+  removed the same way.
+- **Every `adb` child is spawned with `kill_on_drop(true)`** (`tokio::process::Command`), so a cancelled command
+  leaves no `adb` running.
+- **A transfer has its own bound.** `adb push`/`adb pull` of a large file is bounded by a driver constant (e.g.
+  `ADB_TRANSFER_TIMEOUT`) within `Timing::transfer_timeout`, not by the 120 s of other commands; every other `adb`
+  call by a shorter constant of its own.
+- [ ] **Tests first:** `dump_distills_elements`, `numeric_references_decoded`, `idle_state_retried_then_screen_busy`, `tap_on_exact_beats_contains`, `tap_on_missing_lists_labels`, `ascii_text_escapes_for_device_shell`, `unicode_text_uses_adbkeyboard_and_restores_ime`, `unicode_text_waits_for_ime_binding`, `unicode_text_ime_never_binds_is_a_failure_and_restores_ime`, `unicode_text_without_adbkeyboard_refused`, `observe_reports_rotated_screen`, `miui_theme_stack_trace_is_not_a_failure`, `inject_events_refusal_with_exit_0_is_a_failure`, `shell_passes_argv_separately`, `shell_overlong_after_quoting_refused_with_bridge_error`, `every_call_names_the_serial`, `report_merges_getprop`, `unicode_text_restores_ime_when_cancelled`.
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit** `feat(device-bridge): the Android driver`.
 
 ### Task D2-T3: Windows build in CI

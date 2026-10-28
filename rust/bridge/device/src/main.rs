@@ -45,7 +45,13 @@ fn config_path() -> PathBuf {
 #[tokio::main]
 async fn main() -> ExitCode {
     let filter = EnvFilter::try_from_env(LOG_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Installed as the subscriber only, not with `init()`, which would also take in the `log`
+    // records of the HTTP client (at debug level it names each connection it opens): this
+    // program logs only what its logging rule allows.
+    let subscriber = tracing_subscriber::fmt().with_env_filter(filter).finish();
+    if tracing::subscriber::set_global_default(subscriber).is_err() {
+        eprintln!("jeeta-device-bridge: the log could not be set up");
+    }
 
     let path = config_path();
     let config = match Config::load(&path) {

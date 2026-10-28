@@ -7,11 +7,15 @@
 //!   the reason (when the refusal is new). A retired one ([`PHONE_RETIRED`]) is not listed again
 //!   until the bridge restarts. A failed register is tried again after a growing pause, at most a
 //!   heartbeat.
-//! - **Poll** without pause while a phone is registered. A failed poll (no answer, an error
-//!   status, or a body that is not a poll) is logged and followed by a growing pause: it is never
-//!   read as an idle poll.
+//! - **Poll** while a phone is registered: at once after a poll that brought work, and at least
+//!   [`Timing::idle_poll_floor`] after asking for one that brought none. A failed poll (no answer,
+//!   an error status, or a body that is not a poll) is logged and followed by a growing pause: it
+//!   is never read as an idle poll.
 //! - **Run** the commands of different phones at the same time, and those of one phone one after
-//!   the other in the order they came: one worker per phone. A command id runs once: the last
+//!   the other in the order they came: one worker per phone. Each command runs in a task of its
+//!   own, so a driver that panics fails that command as `bridge_error`, and the phone's worker
+//!   goes on. A worker found stopped all the same is logged, started again, and the command that
+//!   found it stopped is failed as `bridge_error`. A command id runs once: the last
 //!   [`RECENT_IDS`] ids are remembered, so a command handed out again (spec §3: not acknowledged
 //!   within 10 s) is skipped. A command this build cannot read is failed by its id as
 //!   `unsupported_by_bridge`, the decoder's message as the failure's detail.
@@ -36,12 +40,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use jt_device_protocol::{
-    CommandsOut, CommandsQuery, FailReason, HEARTBEAT_S, LeasedCommand, MAX_COMMANDS, MAX_PHONES,
-    MAX_RESULTS, MAX_RESULTS_BODY_BYTES, MAX_WAIT_S, Outcome, PHONE_RETIRED, PROTOCOL_VERSION,
-    PhoneReport, RegisterIn, ResultIn, ResultsIn,
+    CommandsOut, CommandsQuery, DeviceCommand, FailReason, HEARTBEAT_S, LeasedCommand,
+    MAX_COMMANDS, MAX_PHONES, MAX_RESULTS, MAX_RESULTS_BODY_BYTES, MAX_WAIT_S, Outcome,
+    PHONE_RETIRED, PROTOCOL_VERSION, PhoneReport, RegisterIn, ResultIn, ResultsIn,
 };
 use tokio::sync::{mpsc, watch};
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -67,12 +71,19 @@ pub struct Timing {
     /// How long a poll asks the server to wait when nothing is queued, in seconds (the server's
     /// `max_wait_s` caps it).
     pub poll_wait_s: u32,
+    /// The least time from asking for one poll to asking for the next when the first brought
+    /// nothing new: a server that answers at once (a `max_wait_s` of 0, say) is not polled in a
+    /// busy loop. A long poll that waited longer adds nothing.
+    pub idle_poll_floor: Duration,
     /// The pause after a first failure; it doubles with each failure after it, up to
     /// `backoff_max`, and a success brings it back.
     pub backoff_min: Duration,
     pub backoff_max: Duration,
-    /// How long a driver may take over one command before it is failed as `timeout`.
+    /// How long a driver may take over one command before it is failed as `timeout` (and its
+    /// future dropped: a driver is cancel-safe).
     pub command_timeout: Duration,
+    /// The same for `push_file` and `pull_file`, which move a whole file.
+    pub transfer_timeout: Duration,
     /// How long listing the phones, and reading one, may take before a register goes without it.
     pub report_timeout: Duration,
     /// How long the results still to post may take at shutdown.
@@ -84,9 +95,11 @@ impl Default for Timing {
         Timing {
             server_second: Duration::from_secs(1),
             poll_wait_s: MAX_WAIT_S,
+            idle_poll_floor: Duration::from_secs(1),
             backoff_min: Duration::from_secs(1),
             backoff_max: Duration::from_secs(60),
             command_timeout: Duration::from_secs(120),
+            transfer_timeout: Duration::from_secs(30 * 60),
             report_timeout: Duration::from_secs(10),
             shutdown_grace: Duration::from_secs(5),
         }
@@ -350,15 +363,27 @@ async fn listed_phones(
     }
     // Read every phone at once: a slow one must not hold up the others' heartbeat.
     let mut reads = JoinSet::new();
+    let mut tasks = HashMap::new();
     for (index, phone) in wanted.iter().enumerate() {
         let driver = phone.driver.clone();
         let bound = timing.report_timeout;
-        reads.spawn(async move { (index, tokio::time::timeout(bound, driver.report()).await) });
+        let task =
+            reads.spawn(async move { (index, tokio::time::timeout(bound, driver.report()).await) });
+        tasks.insert(task.id(), index);
     }
     let mut reports: Vec<Option<PhoneReport>> = vec![None; wanted.len()];
     while let Some(read) = reads.join_next().await {
-        let Ok((index, read)) = read else {
-            continue;
+        let (index, read) = match read {
+            Ok(read) => read,
+            Err(failed) => {
+                if let Some(index) = tasks.get(&failed.id()) {
+                    error!(
+                        serial = %wanted[*index].serial,
+                        "a phone's driver failed while reporting; it is left out of this register"
+                    );
+                }
+                continue;
+            }
         };
         let serial = &wanted[index].serial;
         match read {
@@ -395,9 +420,12 @@ async fn poll(
     timing: Timing,
 ) {
     let mut recent = RecentIds::new(RECENT_IDS);
-    let mut queues: HashMap<String, mpsc::UnboundedSender<LeasedCommand>> = HashMap::new();
-    // Dropped with this task, which ends every worker.
-    let mut workers = JoinSet::new();
+    let mut workers = Workers::new(
+        table.clone(),
+        client.clone(),
+        results.clone(),
+        timing.clone(),
+    );
     let mut backoff = Backoff::new(&timing);
     loop {
         // Commands are queued for registered phones only.
@@ -409,6 +437,7 @@ async fn poll(
             wait_s: timing.poll_wait_s.min(max_wait_s),
             limit: MAX_COMMANDS,
         };
+        let asked = Instant::now();
         let read = match client.commands(&query).await {
             Ok(body) => CommandsOut::decode_lenient(body).map_err(|error| {
                 warn!(
@@ -432,10 +461,12 @@ async fn poll(
                 "a poll carried commands without a readable id; they are left out"
             );
         }
+        let mut worked = false;
         for (command_id, message) in read.unreadable {
             if !recent.insert(command_id) {
                 continue;
             }
+            worked = true;
             warn!(
                 command_id = %command_id,
                 status = "failed",
@@ -462,20 +493,100 @@ async fn poll(
                 serial = %leased.serial,
                 "command received"
             );
-            let queue = queues.entry(leased.serial.clone()).or_insert_with(|| {
-                let (queue, commands) = mpsc::unbounded_channel();
-                workers.spawn(work(
-                    leased.serial.clone(),
-                    commands,
-                    table.clone(),
-                    client.clone(),
-                    results.clone(),
-                    timing.clone(),
-                ));
-                queue
-            });
-            let _ = queue.send(leased);
+            worked = true;
+            workers.dispatch(leased);
         }
+        if !worked {
+            let spent = asked.elapsed();
+            if spent < timing.idle_poll_floor {
+                tokio::time::sleep(timing.idle_poll_floor - spent).await;
+            }
+        }
+    }
+}
+
+/// The phones' workers, one each, started on a phone's first command.
+struct Workers {
+    queues: HashMap<String, mpsc::UnboundedSender<LeasedCommand>>,
+    /// Dropped with the poll task, which ends every worker.
+    tasks: JoinSet<()>,
+    table: watch::Receiver<PhoneTable>,
+    client: JeetaClient,
+    results: mpsc::UnboundedSender<ResultIn>,
+    timing: Timing,
+}
+
+impl Workers {
+    fn new(
+        table: watch::Receiver<PhoneTable>,
+        client: JeetaClient,
+        results: mpsc::UnboundedSender<ResultIn>,
+        timing: Timing,
+    ) -> Workers {
+        Workers {
+            queues: HashMap::new(),
+            tasks: JoinSet::new(),
+            table,
+            client,
+            results,
+            timing,
+        }
+    }
+
+    /// Hands `leased` to its phone's worker, starting one for a phone that has none.
+    ///
+    /// A worker should not stop (a driver's panic is caught per command), but one found stopped
+    /// is logged and started again, and `leased` is failed as `bridge_error` rather than run: the
+    /// commands queued before it were lost with the worker, and running it without them could
+    /// act on the wrong screen.
+    fn dispatch(&mut self, leased: LeasedCommand) {
+        let serial = leased.serial.clone();
+        let Some(queue) = self.queues.get(&serial) else {
+            let queue = self.start(&serial);
+            let _ = queue.send(leased);
+            self.queues.insert(serial, queue);
+            return;
+        };
+        let Err(mpsc::error::SendError(leased)) = queue.send(leased) else {
+            return;
+        };
+        error!(
+            serial = %serial,
+            command_id = %leased.id,
+            "a phone's worker had stopped; the command is failed and the worker started again"
+        );
+        let _ = self.results.send(ResultIn {
+            command_id: leased.id,
+            outcome: Outcome::failed(
+                FailReason::BridgeError,
+                "the bridge's worker for this phone had stopped; it was started again",
+            ),
+            duration_ms: 0,
+        });
+        let queue = self.start(&serial);
+        self.queues.insert(serial, queue);
+    }
+
+    fn start(&mut self, serial: &str) -> mpsc::UnboundedSender<LeasedCommand> {
+        let (queue, commands) = mpsc::unbounded_channel();
+        self.tasks.spawn(work(
+            serial.to_owned(),
+            commands,
+            self.table.clone(),
+            self.client.clone(),
+            self.results.clone(),
+            self.timing.clone(),
+        ));
+        queue
+    }
+}
+
+/// A task aborted when this is dropped.
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -542,19 +653,38 @@ async fn carry_out(
         );
     };
     let files = client.files(leased.download_url.clone());
-    match tokio::time::timeout(
-        timing.command_timeout,
-        driver.execute(&leased.command, &files),
-    )
-    .await
-    {
-        Ok(Ok(result)) => Outcome::Done { result },
-        Ok(Err(error)) => Outcome::failed(error.reason, &error.detail),
+    let command = leased.command.clone();
+    // A task of its own, so that a driver's panic fails this command, not the phone's worker.
+    // The guard aborts it when the wait ends early (the timeout, or shutdown dropping the
+    // worker), which drops the driver's future: that is how a command is cancelled.
+    let mut running = AbortOnDrop(tokio::spawn(async move {
+        driver.execute(&command, &files).await
+    }));
+    let bound = match leased.command {
+        DeviceCommand::PushFile { .. } | DeviceCommand::PullFile { .. } => timing.transfer_timeout,
+        _ => timing.command_timeout,
+    };
+    match tokio::time::timeout(bound, &mut running.0).await {
+        Ok(Ok(Ok(result))) => Outcome::Done { result },
+        Ok(Ok(Err(error))) => Outcome::failed(error.reason, &error.detail),
+        Ok(Err(_)) => {
+            // The panic's message is the driver's and may quote the command: not logged.
+            error!(
+                serial = %serial,
+                command_id = %leased.id,
+                kind = leased.command.kind(),
+                "the phone's driver failed while carrying out a command"
+            );
+            Outcome::failed(
+                FailReason::BridgeError,
+                "the phone's driver failed while carrying out the command",
+            )
+        }
         Err(_) => Outcome::failed(
             FailReason::Timeout,
             &format!(
                 "the phone did not finish the command within {} s",
-                timing.command_timeout.as_secs()
+                bound.as_secs()
             ),
         ),
     }
@@ -731,12 +861,104 @@ async fn post_batch(client: &JeetaClient, batch: Vec<ResultIn>, timing: &Timing)
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::sync::Mutex;
+
     use jt_device_protocol::CommandResult;
+    use serde_json::json;
 
     use super::*;
 
     fn id(n: u128) -> Uuid {
         Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0000 + n)
+    }
+
+    fn leased(n: u128, serial: &str) -> LeasedCommand {
+        serde_json::from_value(json!({
+            "id": id(n), "capability_id": id(100), "serial": serial,
+            "command": { "kind": "tap", "x": 1, "y": 1 }, "expires_at": "2026-10-28T12:30:45Z",
+        }))
+        .unwrap()
+    }
+
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_command_for_a_stopped_worker_is_failed_and_the_worker_started_again() {
+        let buffer = Buffer::default();
+        let writer = buffer.clone();
+        let _logs = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish(),
+        );
+        let config = Config::parse(
+            "base_url = \"http://127.0.0.1:9\"\nkey = \"jk_unit\"\n",
+            |_| None,
+        )
+        .unwrap();
+        let (_table, phones) = watch::channel(PhoneTable::default());
+        let (results_tx, mut results) = mpsc::unbounded_channel();
+        let client = JeetaClient::new(&config).unwrap();
+        let mut workers = Workers::new(phones, client, results_tx, Timing::default());
+        // A worker that stopped: the other end of its queue is gone.
+        let (stopped, gone) = mpsc::unbounded_channel();
+        drop(gone);
+        workers.queues.insert("S1".into(), stopped);
+
+        workers.dispatch(leased(1, "S1"));
+        let failed = results.recv().await.unwrap();
+        assert_eq!(failed.command_id, id(1));
+        assert!(
+            matches!(
+                failed.outcome,
+                Outcome::Failed {
+                    reason: FailReason::BridgeError,
+                    ..
+                }
+            ),
+            "{:?}",
+            failed.outcome
+        );
+        let logged = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+        let line = logged
+            .lines()
+            .find(|l| l.contains("ERROR"))
+            .unwrap_or_else(|| panic!("{logged}"));
+        assert!(
+            line.contains("S1") && line.contains(&id(1).to_string()),
+            "{line}"
+        );
+
+        // Started again: the next command reaches a worker (no phone is registered, so it fails
+        // as offline, from the worker).
+        assert!(!workers.queues["S1"].is_closed());
+        workers.dispatch(leased(2, "S1"));
+        let next = results.recv().await.unwrap();
+        assert_eq!(next.command_id, id(2));
+        assert!(
+            matches!(
+                next.outcome,
+                Outcome::Failed {
+                    reason: FailReason::DeviceOffline,
+                    ..
+                }
+            ),
+            "{:?}",
+            next.outcome
+        );
     }
 
     fn done(n: u128) -> ResultIn {

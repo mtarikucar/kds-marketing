@@ -3,6 +3,9 @@
 //!
 //! - Every route call carries the key as a bearer token, in a header marked sensitive. A signed
 //!   download carries no key: the address is its own authority, and it may lead off the server.
+//! - Every `POST` also carries [`REQUESTED_WITH_HEADER`]`: `[`REQUESTED_WITH_VALUE`]: the API
+//!   refuses a mutating request without it (403, before the key is even read), against
+//!   cross-site request forgery.
 //! - The routes are not redirected: a redirect is a wrong `base_url`, reported as its status.
 //! - A [`ClientError`] never shows a request's URL (`reqwest::Error::without_url`, since a
 //!   download's URL is signed) nor any part of an answer's body: an error answer can echo the
@@ -33,6 +36,10 @@ pub const COMMANDS_PATH: &str = "api/devices/bridge/commands";
 pub const RESULTS_PATH: &str = "api/devices/bridge/results";
 /// The file upload route.
 pub const FILES_PATH: &str = "api/devices/bridge/files";
+/// The header every mutating request to the API carries (`jt_panel_http::csrf`).
+pub const REQUESTED_WITH_HEADER: &str = "x-requested-with";
+/// Its only accepted value.
+pub const REQUESTED_WITH_VALUE: &str = "jeeta-panel";
 
 /// How long a connection may take to open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -175,12 +182,19 @@ impl JeetaClient {
             .expect("a relative route joins the base")
     }
 
+    /// A `POST` to the route `path`, with the key and the request header every mutating call
+    /// carries.
+    fn post(&self, path: &str) -> reqwest::RequestBuilder {
+        self.api
+            .post(self.route(path))
+            .header(AUTHORIZATION, self.authorization.clone())
+            .header(REQUESTED_WITH_HEADER, REQUESTED_WITH_VALUE)
+    }
+
     /// Says the bridge is alive, with the phones it sees.
     pub async fn register(&self, body: &RegisterIn) -> Result<RegisterOut, ClientError> {
         let response = self
-            .api
-            .post(self.route(REGISTER_PATH))
-            .header(AUTHORIZATION, self.authorization.clone())
+            .post(REGISTER_PATH)
             .timeout(CALL_TIMEOUT)
             .json(body)
             .send()
@@ -205,9 +219,7 @@ impl JeetaClient {
     /// Posts a batch of results.
     pub async fn results(&self, body: &ResultsIn) -> Result<ResultsOut, ClientError> {
         let response = self
-            .api
-            .post(self.route(RESULTS_PATH))
-            .header(AUTHORIZATION, self.authorization.clone())
+            .post(RESULTS_PATH)
             .timeout(CALL_TIMEOUT)
             .json(body)
             .send()
@@ -218,9 +230,7 @@ impl JeetaClient {
     /// Uploads `bytes` as a Jeeta file of type `content_type`.
     pub async fn upload(&self, bytes: Vec<u8>, content_type: &str) -> Result<FileOut, ClientError> {
         let response = self
-            .api
-            .post(self.route(FILES_PATH))
-            .header(AUTHORIZATION, self.authorization.clone())
+            .post(FILES_PATH)
             .header(CONTENT_TYPE, content_type)
             .timeout(TRANSFER_TIMEOUT)
             .body(bytes)
