@@ -11,14 +11,18 @@ pub const CLOSING: &str = "Görüşmek üzere, iyi günler.";
 
 const VOWELS: &str = "aeıioöuüâîû";
 
-/// Words whose suffix is front although their last vowel is back (a soft `l` or `k` follows it, or
-/// the word is a loan): "Kemal'in", "Saat'in", "Kontrol'ün". Matched whole, on the Turkish-lowercased
-/// last word of a name; a word that merely begins with one of them is not in the table. Words
-/// ending in "âl" are covered by a rule ([`takes_front_suffix`]), whether or not they are listed.
-const FRONT_SUFFIX_WORDS: [&str; 22] = [
-    "alkol", "bilal", "celal", "cemal", "dikkat", "gol", "hakikat", "hal", "harf", "hayal",
-    "hilal", "kabul", "kalp", "kemal", "kontrol", "nihal", "petrol", "protokol", "rol", "saat",
-    "sembol", "usul",
+/// Words whose suffix is front although their last vowel is back: "Kemal'in", "Saat'in",
+/// "Kontrol'ün". Each is listed in TDK's Güncel Türkçe Sözlük with an ending that has a front vowel
+/// after the back-vowel stem (kemal -li, saat -ti, kalp -bi, petrol -lü; checked 2026-10-29), except
+/// `bilal` and `nihal`: first names the dictionary does not list, which inflect the same way as
+/// `hilal` and `kemal`. Matched whole, on the Turkish-lowercased last word of a name, so a
+/// compound ("Akpetrol") follows the spelling. Words ending in "âl" are covered by a rule
+/// ([`takes_front_suffix`]), whether or not they are listed. Not listed, on purpose: `global` (the
+/// dictionary shows no front mark), `emlak` (its ending is -kı: back) and `iclal` (no entry).
+const FRONT_SUFFIX_WORDS: [&str; 28] = [
+    "alkol", "bilal", "celal", "cemal", "dikkat", "final", "gol", "hakikat", "hal", "harf",
+    "hayal", "hilal", "ikbal", "kabul", "kalp", "kemal", "kontrol", "kristal", "lokal", "metal",
+    "nihal", "petrol", "protokol", "rol", "saat", "sembol", "sinyal", "usul",
 ];
 
 fn is_vowel(c: char) -> bool {
@@ -184,9 +188,9 @@ fn genitive_suffix(spoken: &str, front: bool) -> &'static str {
 ///
 /// - The last vowel decides (a ı → ın, e i → in, o u → un, ö ü → ün), a final vowel takes the buffer
 ///   `n`; capital `I` and `İ` are lowered the Turkish way.
-/// - A short table of loanwords with a soft `l` or `k` (Kemal, Saat, Hal, Kalp, Kontrol, Petrol,
-///   ...), matched whole, and any word ending in "âl" take the front suffix: `Kemal'in`,
-///   `Kontrol'ün`, `İstiklâl'in`.
+/// - A short table of words that TDK's dictionary marks with a front suffix after a back vowel
+///   (Kemal, Saat, Hal, Kalp, Kontrol, Petrol, Metal, Final, ...), matched whole, and any word
+///   ending in "âl" take the front suffix: `Kemal'in`, `Kontrol'ün`, `İstiklâl'in`.
 /// - A word without vowels is read by its last letter's name (`THY'nin`), a dotted acronym by the
 ///   name of its last letter (`A.Ş.'nin`, `T.C.'nin`), a trailing number by its Turkish reading
 ///   (`Studio 54'ün`, `Bina 100'ün`). A number of more than 18 digits is not supported (only its
@@ -194,8 +198,10 @@ fn genitive_suffix(spoken: &str, front: bool) -> &'static str {
 ///
 /// Limits. An acronym that holds a vowel but has no dots (ABD, AKP, AVM, IBM) is read as a word, so
 /// it gets `ABD'ın` where it is spoken "A-Be-De'nin"; a foreign or invented name pronounced
-/// otherwise than spelled ("Apple") has the same problem. An owner whose name is read otherwise
-/// writes the opening by hand in the call policy.
+/// otherwise than spelled ("Apple") has the same problem. So has a word the table lacks: a compound
+/// of a table word (Akpetrol), `İclal` (not in the dictionary) and `global` (listed without a front
+/// mark) get `'ın`. An owner whose name is read otherwise writes the opening by hand in the call
+/// policy.
 pub fn genitive(name: &str) -> String {
     let words: Vec<&str> = name.split_whitespace().collect();
     let Some(end) = words

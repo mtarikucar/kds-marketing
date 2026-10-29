@@ -344,3 +344,45 @@ fn the_approved_closing_is_a_pinned_constant() {
     assert_eq!(CLOSING, "Görüşmek üzere, iyi günler.");
     assert_ne!(CLOSING, TRANSCRIPT_NOTICE);
 }
+
+// Added in the second A3 fix-up: words checked against TDK's Güncel Türkçe Sözlük (sozluk.gov.tr),
+// which shows each entry's suffixed ending: a front vowel after a back-vowel stem (-li, -lü, -ti)
+// is the mark of a front suffix.
+
+#[test]
+fn words_the_dictionary_marks_with_a_front_suffix_take_it() {
+    for (name, want) in [
+        ("Metal", "Metal'in"),
+        ("Kristal", "Kristal'in"),
+        ("Lokal", "Lokal'in"),
+        ("Final", "Final'in"),
+        ("Sinyal", "Sinyal'in"),
+        ("İkbal", "İkbal'in"),
+        ("İKBAL", "İKBAL'in"),
+        ("Ankara Metal", "Ankara Metal'in"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn words_the_dictionary_marks_with_a_back_suffix_stay_back() {
+    // "emlak" is listed with the ending -kı (emlakı): back, though it looks like a soft-k word.
+    for (name, want) in [
+        ("Emlak", "Emlak'ın"),
+        ("Ahlak", "Ahlak'ın"),
+        ("Kitap", "Kitap'ın"),
+        ("Kalpak", "Kalpak'ın"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn words_outside_the_table_follow_the_spelling_whatever_their_pronunciation() {
+    // The documented limits: a compound of a table word, a word the dictionary does not list
+    // (İclal), and one it lists without a front mark (global).
+    assert_eq!(genitive("Akpetrol"), "Akpetrol'un");
+    assert_eq!(genitive("İclal"), "İclal'ın");
+    assert_eq!(genitive("Global"), "Global'ın");
+}
