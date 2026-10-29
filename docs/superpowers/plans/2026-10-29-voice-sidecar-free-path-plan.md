@@ -214,7 +214,7 @@ The HTTP surface (`docs/operations/voice-bridge.md` §3): `POST /api/voice/bridg
 - `src/run_loop.rs` — heartbeat, poll loop, call registry.
 - `src/slice.rs` — the standalone vertical slice.
 - Tests: `tests/g711.rs`, `tests/text.rs`, `tests/netgsm.rs`, `tests/talker.rs`, `tests/logging.rs`, `tests/adapters.rs`, `tests/call.rs`, `tests/jeeta_client.rs`, `tests/run_loop.rs`, `tests/support/mod.rs`.
-- Speech services: `speech/listen/{jeeta_listen.py,endpoint.py,vad.py,turn.py,asr.py,hotwords.py,requirements.txt,models.lock,fetch_models.py,Dockerfile}`, `speech/listen/tests/{test_endpoint.py,test_hotwords.py,test_session.py,test_models.py}`; `speech/speak/{jeeta_speak.py,respell.py,respell.json,requirements.txt,Dockerfile}`, `speech/speak/tests/{test_respell.py,test_session.py,test_models.py}`; `speech/pytest.ini`.
+- Speech services: `speech/listen/{jeeta_listen.py,endpoint.py,vad.py,turn.py,asr.py,hotwords.py,requirements.txt,models.lock,fetch_models.py,Dockerfile}`, `speech/listen/tests/{test_endpoint.py,test_hotwords.py,test_session.py,test_models.py}`; `speech/speak/{jeeta_speak.py,respell.py,respell.json,pins.py,weights.lock,requirements.txt,constraints.txt,wheels.sha256,torch.lock,requirements.lock,Dockerfile,.dockerignore}`, `speech/speak/tests/{test_speak_respell.py,test_speak_session.py,test_speak_mouth.py,test_speak_pins.py,test_speak_image.py,test_speak_models.py}`; `speech/pytest.ini`.
 - Asterisk: `asterisk/Dockerfile`, `asterisk/etc/{asterisk.conf,modules.conf,logger.conf,cdr.conf,cel.conf,pjsip.conf,extensions.conf,http.conf,ari.conf,rtp.conf}`, `asterisk/test_configs.py`, `asterisk/test_target.py`.
 - Deploy: `deploy/{jeeta-asterisk.service,jeeta-voice-listen.service,jeeta-voice-speak.service,jeeta-voice-bridge.service,jeeta-voice.tmpfiles,bridge.env.example,images.env.example,jeeta-voice-target}`.
 - CI: modify `.github/workflows/rust.yml` (Python unit tests and the Linux worker artifact).
@@ -3483,117 +3483,1248 @@ To deploy it:
 ### Task B2: The speak service (EMA Lightning behind Antalia's normaliser)
 
 **Files:**
-- Create: `rust/bridge/voice/speech/speak/respell.py`
-- Create: `rust/bridge/voice/speech/speak/respell.json`
+- Create: `rust/bridge/voice/speech/speak/respell.py`, `respell.json`
 - Create: `rust/bridge/voice/speech/speak/jeeta_speak.py`
-- Create: `rust/bridge/voice/speech/speak/requirements.txt`
-- Create: `rust/bridge/voice/speech/speak/constraints.txt` (generated in Step 7)
-- Create: `rust/bridge/voice/speech/speak/Dockerfile`
-- Create: `rust/bridge/voice/speech/speak/tests/test_respell.py`
-- Create: `rust/bridge/voice/speech/speak/tests/test_session.py`
-- Create: `rust/bridge/voice/speech/speak/tests/test_models.py`
+- Create: `rust/bridge/voice/speech/speak/pins.py`, `weights.lock`
+- Create: `rust/bridge/voice/speech/speak/requirements.txt`; `constraints.txt` and `wheels.sha256` (Step 7, from the server); `torch.lock` and `requirements.lock` (`python pins.py lock`, from `wheels.sha256`)
+- Create: `rust/bridge/voice/speech/speak/Dockerfile`, `.dockerignore`
+- Create: `rust/bridge/voice/speech/speak/tests/{test_speak_respell,test_speak_session,test_speak_mouth,test_speak_pins,test_speak_image,test_speak_models}.py` (named `test_speak_*` so that B3's `test_session.py` and `test_models.py` sit beside them in one pytest run)
 - Create: `rust/bridge/voice/deploy/jeeta-voice-speak.service`
+- Modify: `rust/bridge/voice/.gitignore` (`speech/*/pytest.ini`, copied in for an image build only)
+
+**The service in brief** (the module docstring of `jeeta_speak.py` is the contract):
+- One WebSocket per connection on `/run/jeeta-voice/speak.sock`. The server speaks first, `hello{voice_id, sample_rate: 8000, format: "pcm16le"}`; the voice id (12 hex) names everything that decides how a text sounds (package versions, weight digests, seed, threads, batch, the brand table, the sentence rules and `PIPELINE_VERSION`), and the worker keys its phrase cache by it (B5/B6). `python jeeta_speak.py --voice-id` prints it without loading the model.
+- `synth{id, text}` → binary PCM16 LE 8 kHz frames (EMA's chunks: about 1 s first, then up to 4 s) → `done{id, synth_ms, audio_ms, first_ms}`. `cancel{id}` → `cancelled{id, synth_ms, audio_ms}`. `error{id|null, reason}` with `busy`, `bad_request` (also for a binary or malformed message), `too_long` (over 2 000 characters, or over 4 000 once normalised) or `failed`.
+- Every frame of a synthesis precedes its terminal message (`done`, `cancelled` or `error`) and none follows it; a synthesis starts only after the previous one's terminal message. A cancel can lose the race to `done`, so a client drops frames until the terminal message for that id, whichever it is (B6 `draining`). One synthesis per connection: a second `synth` is refused `busy`, except after a `cancel`, when it waits for the cancelled one and then starts.
+- Text: the brand table (`respell.json`), then `antalia_mini.Antalia.normalize`, then sentences (cut after `. ! ?` and a space, never after one of the worker's abbreviations, a piece under three words joined to the next), each one EMA stream (`sample_rate=8000`, seed 0) with 250 ms between. A one-sentence text is exactly the owner-tested path.
+- EMA: batch 2 (what EMA measured for itself in the owner-tested image; fixed because its measurement writes `~/.cache`), one instance per concurrent synthesis (`SPEAK_WORKERS=2`), since an instance batches its streams and a batched stream's audio differs in its last bits from the same sentence alone.
+- The start-up self-test (also run at build) reads, as EMA's model receives them, the clock ("14:00'e" → "on dörde", no "nokta", no "kesme"), each brand and every owner-approved text (`APPROVED_TEXTS`, held to the jt_calls defaults by a repository test).
+- Logs: the root handler passes only `jeeta-speak` records (a library's is withheld and named), with lengths, timings and kinds; warnings and uncaught exceptions by kind and place. A watchdog ends the process when a chunk or the event loop is stuck over 60 s, so `Restart=always` recovers it.
+- Pins: base image by digest; every package by version and sha256 from two hashed locks, one index each (`--require-hashes --no-deps`, then `pip check`), held by `pins.py check-lock` to the record of the first good build, the frozen owner-tested set and the requirements; EMA's two weight files by sha256 and size (EMA reads its repository's main and takes no revision), checked at build and at every start.
+- Isolation: `--network none`, read-only, no capability, no core dumps, uid 1502 (`jeeta-voice-speak`) in gid 1501 (`jeeta-voice`), so the sticky `/run/jeeta-voice` keeps the listen service (uid 1501) from removing or replacing the socket; pids 128, 2 CPUs, 2 GB, no swap, `--pull never`.
 
 - [ ] **Step 1: Write the failing tests**
 
-`rust/bridge/voice/speech/speak/tests/test_respell.py`:
+`rust/bridge/voice/speech/speak/tests/test_speak_respell.py`:
 
 ```python
+"""The brand respelling table and its matcher. Named test_speak_* so the listen service's tests
+(B3: test_session.py, test_models.py) can sit beside these in one pytest run."""
 import pathlib
 import sys
+
+import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from respell import Respeller  # noqa: E402
+
+TABLE = pathlib.Path(__file__).resolve().parents[1] / "respell.json"
 
 
 def test_brands_are_respelled_with_their_suffixes_kept():
     r = Respeller({"Jeeta": "Cita", "WhatsApp": "vatsap"})
     assert r.apply("Jeeta'nın asistanıyım") == "Cita'nın asistanıyım"
     assert r.apply("WhatsApp'tan yazabilirsiniz") == "vatsap'tan yazabilirsiniz"
+    assert r.apply("WhatsApp’tan yazabilirsiniz") == "vatsap’tan yazabilirsiniz"
     assert r.apply("jeeta ve whatsapp") == "Cita ve vatsap"
+    assert r.apply("JEETA, Whatsapp!") == "Cita, vatsap!"
 
 
 def test_words_that_merely_contain_a_brand_are_left_alone():
-    r = Respeller({"Jeeta": "Cita"})
+    r = Respeller({"Jeeta": "Cita", "Google": "gugıl"})
     assert r.apply("Jeetalar") == "Jeetalar"
+    assert r.apply("jeetagrowth.com") == "jeetagrowth.com"
+    assert r.apply("Googleda Jeeta2") == "Googleda Jeeta2"
+    assert r.apply("SüperJeeta MyGoogle _Google") == "SüperJeeta MyGoogle _Google"
 
 
-def test_the_shipped_table():
-    table = Respeller.load(pathlib.Path(__file__).resolve().parents[1] / "respell.json")
-    assert table.apply("Jeeta") == "Cita"
-    assert table.apply("WhatsApp") == "vatsap"
+def test_the_four_turkish_i_letters_match_one_another():
+    r = Respeller({"Instagram": "instagram", "TikTok": "tiktok"})
+    assert r.apply("İnstagram'da") == "instagram'da"
+    assert r.apply("INSTAGRAM ve TİKTOK") == "instagram ve tiktok"
+    assert r.apply("ınstagram") == "instagram"
+    assert r.apply("Inſtagram ve TiKTOK") == "instagram ve tiktok"  # long s, Kelvin sign
+
+
+def test_one_pass_never_respells_a_replacement():
+    r = Respeller({"Jeeta": "Google", "Google": "gugıl"})
+    assert r.apply("Jeeta ve Google") == "Google ve gugıl"
+
+
+def test_a_bad_table_is_refused():
+    for table in ({"": "x"}, {"Jeeta": ""}, {" Jeeta": "Cita"}, {"Jeeta": 1}, ["Jeeta"]):
+        with pytest.raises(ValueError):
+            Respeller(table)
+    with pytest.raises(ValueError):
+        Respeller({"Jeeta": "Cita", "JEETA": "Cita"})
+    assert Respeller({}).apply("Jeeta") == "Jeeta"
+
+
+def test_the_shipped_table_is_the_owners():
+    # Owner-given (2026-10-29). Each spelling was run through antalia-mini 1.0.1's normaliser and
+    # normalizer-tr 0.8.1 (EMA's own frontend) and reached the model text unchanged; the image
+    # checks it again at start (jeeta_speak.self_test). Pronunciation by ear is the owner's.
+    table = Respeller.load(TABLE)
+    assert table.table == {
+        "Jeeta": "Cita",
+        "WhatsApp": "vatsap",
+        "Instagram": "instagram",
+        "Facebook": "feysbuk",
+        "TikTok": "tiktok",
+        "Google": "gugıl",
+    }
+    assert table.apply("Merhaba, ben Jeeta'nın dijital asistanıyım.") == "Merhaba, ben Cita'nın dijital asistanıyım."
+    assert table.apply("WhatsApp, Facebook, Instagram, TikTok ve Google'da varız.") == (
+        "vatsap, feysbuk, instagram, tiktok ve gugıl'da varız."
+    )
 ```
 
-`rust/bridge/voice/speech/speak/tests/test_session.py`:
+`rust/bridge/voice/speech/speak/tests/test_speak_session.py`:
 
 ```python
-"""The speak protocol over a real WebSocket (TCP loopback here; a unix socket in production)."""
+"""The speak protocol over a real WebSocket, served by the service's own server builder: TCP
+loopback here, a unix socket in production (the unix tests run on Linux only)."""
 import asyncio
 import json
+import logging
+import os
 import pathlib
+import socket
 import sys
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import websockets  # noqa: E402
-from websockets.asyncio.server import serve  # noqa: E402
+from websockets.exceptions import ConnectionClosed  # noqa: E402
 
-from jeeta_speak import session  # noqa: E402
+import jeeta_speak  # noqa: E402
+from jeeta_speak import MAX_MESSAGE_BYTES, MAX_TEXT_CHARS, TooLong, health, open_server, parse_endpoint, session  # noqa: E402
+
+QUIET = logging.getLogger("test-client")
+QUIET.setLevel(logging.WARNING)
 
 
 class FakeMouth:
-    def __init__(self, chunks):
-        self.chunk_list = chunks
+    """chunks(text) like the real mouth: here `n` chunks of one byte value per text, `delay` apart."""
+
+    voice_id = "test-voice"
+
+    def __init__(self, n=2, size=800, delay=0.0, tags=None):
+        self.n, self.size, self.delay = n, size, delay
+        self.tags = tags or {}
+        self.closed = []
 
     def chunks(self, text):
-        for c in self.chunk_list:
-            yield c
+        tag = self.tags.get(text, 1)
+        try:
+            for _ in range(self.n):
+                if self.delay:
+                    time.sleep(self.delay)
+                yield bytes([tag, 0]) * self.size
+        finally:
+            self.closed.append(text)
 
 
-async def exchange(mouth, messages, stop_after):
-    pool = ThreadPoolExecutor(max_workers=1)
-    async with serve(lambda ws: session(ws, mouth, pool), "127.0.0.1", 0) as server:
-        port = server.sockets[0].getsockname()[1]
-        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
-            for m in messages:
-                await ws.send(json.dumps(m))
-            got = []
-            while True:
-                msg = await asyncio.wait_for(ws.recv(), 5)
-                got.append(msg)
-                if isinstance(msg, str) and json.loads(msg)["type"] in stop_after:
-                    return got
+def decode(msg):
+    return msg if isinstance(msg, bytes) else json.loads(msg)
+
+
+async def talk(mouth, script, until, settle=0.0):
+    """Serves `mouth`, reads the hello, runs `script(ws)`, then collects every message until a text
+    message whose (type, id) is in `until`, and for `settle` seconds more; returns them decoded."""
+    pool = ThreadPoolExecutor(max_workers=2)
+    try:
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, mouth, pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            async with websockets.connect(f"ws://127.0.0.1:{port}", logger=QUIET) as ws:
+                hello = json.loads(await ws.recv())
+                assert hello == {"type": "hello", "voice_id": mouth.voice_id, "sample_rate": 8000,
+                                 "format": "pcm16le"}
+                got = []
+                await script(ws)
+                while True:
+                    msg = decode(await asyncio.wait_for(ws.recv(), 10))
+                    got.append(msg)
+                    if isinstance(msg, dict) and (msg["type"], msg.get("id")) in until:
+                        break
+                deadline = time.monotonic() + settle
+                while time.monotonic() < deadline:
+                    try:
+                        got.append(decode(await asyncio.wait_for(ws.recv(), deadline - time.monotonic())))
+                    except asyncio.TimeoutError:
+                        break
+                return got
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def sending(*messages):
+    async def script(ws):
+        for m in messages:
+            await ws.send(m if isinstance(m, (str, bytes)) else json.dumps(m))
+
+    return script
+
+
+def texts(got):
+    return [m for m in got if isinstance(m, dict)]
+
+
+def kinds(got):
+    return [(m["type"], m["id"]) if isinstance(m, dict) else m[0] for m in got]
 
 
 def test_synth_streams_pcm_then_done():
-    mouth = FakeMouth([b"\x01\x00" * 800, b"\x02\x00" * 800])
-    got = asyncio.run(exchange(mouth, [{"type": "synth", "id": "a:0", "text": "Merhaba."}], {"done"}))
-    assert got[0] == b"\x01\x00" * 800 and got[1] == b"\x02\x00" * 800
-    done = json.loads(got[2])
+    mouth = FakeMouth(n=2, size=800)
+    got = asyncio.run(talk(mouth, sending({"type": "synth", "id": "a:0", "text": "Merhaba."}), {("done", "a:0")}))
+    assert got[0] == b"\x01\x00" * 800 and got[1] == b"\x01\x00" * 800
+    done = got[2]
     assert done["id"] == "a:0" and done["audio_ms"] == 200
+    assert isinstance(done["synth_ms"], int) and isinstance(done["first_ms"], int)
 
 
 def test_a_second_synth_while_busy_is_refused():
-    mouth = FakeMouth([b"\x00\x00" * 8000] * 3)
+    mouth = FakeMouth(n=3, size=8000, delay=0.05)
     got = asyncio.run(
-        exchange(
+        talk(
             mouth,
-            [{"type": "synth", "id": "a:0", "text": "Bir."}, {"type": "synth", "id": "a:1", "text": "İki."}],
-            {"done"},
+            sending({"type": "synth", "id": "a:0", "text": "Bir."}, {"type": "synth", "id": "a:1", "text": "İki."}),
+            {("done", "a:0")},
         )
     )
-    texts = [json.loads(m) for m in got if isinstance(m, str)]
-    assert {"type": "error", "id": "a:1", "reason": "busy"} in texts
+    assert {"type": "error", "id": "a:1", "reason": "busy"} in texts(got)
+    assert len([m for m in got if isinstance(m, bytes)]) == 3
+
+
+def test_a_cancel_stops_between_chunks_and_nothing_follows_it():
+    mouth = FakeMouth(n=100, size=160, delay=0.02)
+
+    async def script(ws):
+        await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Uzun bir cümle."}))
+        assert isinstance(await ws.recv(), bytes)
+        await ws.send(json.dumps({"type": "cancel", "id": "a:0"}))
+
+    got = asyncio.run(talk(mouth, script, {("cancelled", "a:0")}, settle=0.5))
+    at = got.index(next(m for m in got if isinstance(m, dict)))
+    assert got[at]["type"] == "cancelled" and got[at]["id"] == "a:0"
+    assert got[at + 1:] == [], "nothing after the terminal message"
+    assert len([m for m in got if isinstance(m, bytes)]) < 50
+    assert mouth.closed == ["Uzun bir cümle."]
+
+
+def test_a_synth_after_a_cancel_waits_for_the_cancelled_one_instead_of_busy():
+    mouth = FakeMouth(n=20, size=160, delay=0.03, tags={"Bir.": 1, "İki.": 2})
+
+    async def script(ws):
+        await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
+        assert await ws.recv() == bytes([1, 0]) * 160
+        await ws.send(json.dumps({"type": "cancel", "id": "a:0"}))
+        await ws.send(json.dumps({"type": "synth", "id": "a:1", "text": "İki."}))
+
+    got = kinds(asyncio.run(talk(mouth, script, {("done", "a:1")})))
+    assert ("error", "a:1") not in got
+    cut = got.index(("cancelled", "a:0"))
+    assert all(k == 1 for k in got[:cut])
+    assert got[cut + 1:-1] == [2] * 20 and got[-1] == ("done", "a:1")
+
+
+def test_a_queued_synth_can_be_cancelled_and_a_third_then_runs():
+    mouth = FakeMouth(n=10, size=160, delay=0.03, tags={"Bir.": 1, "İki.": 2, "Üç.": 3})
+
+    async def script(ws):
+        await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
+        assert await ws.recv() == bytes([1, 0]) * 160
+        for m in [{"type": "cancel", "id": "a:0"}, {"type": "synth", "id": "a:1", "text": "İki."},
+                  {"type": "cancel", "id": "a:1"}, {"type": "synth", "id": "a:2", "text": "Üç."}]:
+            await ws.send(json.dumps(m))
+
+    got = kinds(asyncio.run(talk(mouth, script, {("done", "a:2")})))
+    a0, a1 = got.index(("cancelled", "a:0")), got.index(("cancelled", "a:1"))
+    assert a0 < a1 and all(k == 1 for k in got[:a0]) and got[a0 + 1:a1] == []
+    assert got[a1 + 1:] == [3] * 10 + [("done", "a:2")]
+    assert 2 not in got, "the cancelled queued synthesis never ran"
+    assert "İki." not in mouth.closed
+
+
+def test_a_cancel_that_loses_the_race_to_the_end_is_ignored():
+    mouth = FakeMouth(n=1)
+
+    async def script(ws):
+        await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
+        assert isinstance(await ws.recv(), bytes)
+        assert json.loads(await ws.recv())["type"] == "done"
+        await ws.send(json.dumps({"type": "cancel", "id": "a:0"}))
+        await ws.send(json.dumps({"type": "synth", "id": "a:1", "text": "İki."}))
+
+    got = asyncio.run(talk(mouth, script, {("done", "a:1")}, settle=0.3))
+    assert [m["type"] for m in texts(got)] == ["done"], "no cancelled for a synthesis that had ended"
+
+
+def test_a_cancel_for_another_id_is_ignored():
+    mouth = FakeMouth(n=2)
+    got = asyncio.run(
+        talk(
+            mouth,
+            sending(
+                {"type": "cancel", "id": "x:9"},
+                {"type": "synth", "id": "a:0", "text": "Bir."},
+                {"type": "cancel", "id": "x:9"},
+            ),
+            {("done", "a:0")},
+        )
+    )
+    assert [m["type"] for m in texts(got)] == ["done"]
+
+
+def test_bad_requests_are_answered_and_the_connection_stays_usable():
+    mouth = FakeMouth(n=1)
+    got = asyncio.run(
+        talk(
+            mouth,
+            sending(
+                "{not json",
+                "[1, 2]",
+                "[" * 100_000,
+                b"\x00\x01",
+                {"type": "synth", "text": "Kimliksiz."},
+                {"type": "synth", "id": "a:0"},
+                {"type": "speak", "id": "a:1"},
+                {"type": "synth", "id": "a:2", "text": "x" * (MAX_TEXT_CHARS + 1)},
+                {"type": "synth", "id": "a:3", "text": "Sonunda."},
+            ),
+            {("done", "a:3")},
+        )
+    )
+    assert texts(got)[:8] == [
+        {"type": "error", "id": None, "reason": "bad_request"},
+        {"type": "error", "id": None, "reason": "bad_request"},
+        {"type": "error", "id": None, "reason": "bad_request"},
+        {"type": "error", "id": None, "reason": "bad_request"},
+        {"type": "error", "id": None, "reason": "bad_request"},
+        {"type": "error", "id": "a:0", "reason": "bad_request"},
+        {"type": "error", "id": "a:1", "reason": "bad_request"},
+        {"type": "error", "id": "a:2", "reason": "too_long"},
+    ]
+    assert texts(got)[8]["type"] == "done"
+
+
+def test_a_text_too_long_once_normalised_is_refused_too_long():
+    class Swelling(FakeMouth):
+        def chunks(self, text):
+            raise TooLong()
+            yield  # a generator, like the real mouth
+
+    got = asyncio.run(talk(Swelling(), sending({"type": "synth", "id": "a:0", "text": "9" * 1500}), {("error", "a:0")}))
+    assert texts(got) == [{"type": "error", "id": "a:0", "reason": "too_long"}]
+
+
+def test_a_message_over_the_size_limit_closes_with_1009_only_that_connection():
+    async def run():
+        pool = ThreadPoolExecutor(max_workers=1)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, FakeMouth(n=1), pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            url = f"ws://127.0.0.1:{port}"
+            async with websockets.connect(url, logger=QUIET, max_size=None) as ws:
+                await ws.recv()
+                await ws.send("x" * (MAX_MESSAGE_BYTES + 1))
+                with pytest.raises(ConnectionClosed) as closed:
+                    await asyncio.wait_for(ws.recv(), 5)
+                code = closed.value.rcvd.code
+            async with websockets.connect(url, logger=QUIET) as ws:
+                await ws.recv()
+                await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
+                await ws.recv()
+                done = json.loads(await ws.recv())
+        return code, done
+
+    code, done = asyncio.run(run())
+    assert code == 1009 and done["type"] == "done"
+
+
+def test_the_server_never_compresses_and_never_pings():
+    assert jeeta_speak.SERVER_OPTIONS["compression"] is None
+    assert jeeta_speak.SERVER_OPTIONS["ping_interval"] is None
+
+    async def run():
+        pool = ThreadPoolExecutor(max_workers=1)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, FakeMouth(), pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            async with websockets.connect(f"ws://127.0.0.1:{port}", logger=QUIET, compression="deflate") as ws:
+                await ws.recv()
+                return ws.response.headers.get("Sec-WebSocket-Extensions")
+
+    assert asyncio.run(run()) is None, "the client offered permessage-deflate and the server declined"
+
+
+def test_a_failed_synthesis_reports_its_kind_and_the_next_one_runs():
+    class Flaky(FakeMouth):
+        def chunks(self, text):
+            if text == "Kötü.":
+                raise RuntimeError("Ayşe Yılmaz 0532 111 22 33")
+            return super().chunks(text)
+
+    async def again(ws):
+        await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Kötü."}))
+        assert json.loads(await ws.recv()) == {"type": "error", "id": "a:0", "reason": "failed"}
+        await ws.send(json.dumps({"type": "synth", "id": "a:1", "text": "İyi."}))
+
+    got = asyncio.run(talk(Flaky(n=1), again, {("done", "a:1")}))
+    assert got[-1]["type"] == "done"
+
+
+def test_the_log_never_carries_the_text(caplog):
+    caplog.set_level(logging.DEBUG)
+    logging.getLogger("jeeta-speak").setLevel(logging.DEBUG)
+    secret = "Ayşe Yılmaz, 0532 111 22 33, Bağdat Caddesi"
+
+    class Failing(FakeMouth):
+        def chunks(self, text):
+            if text.startswith("x"):
+                raise ValueError(secret)
+            return super().chunks(text)
+
+    try:
+        asyncio.run(talk(Failing(n=2), sending({"type": "synth", "id": "a:0", "text": secret}), {("done", "a:0")}))
+        asyncio.run(talk(Failing(n=1), sending("{" + secret), {("error", None)}))
+        asyncio.run(talk(Failing(n=1), sending({"type": "synth", "id": "a:2", "text": "x" + secret}), {("error", "a:2")}))
+        asyncio.run(
+            talk(
+                Failing(n=20, delay=0.02),
+                sending({"type": "synth", "id": "a:3", "text": secret}, {"type": "synth", "id": "a:4", "text": secret}),
+                {("error", "a:4")},
+            )
+        )
+    finally:
+        logging.getLogger("jeeta-speak").setLevel(logging.NOTSET)
+    assert "done:" in caplog.text and "chars" in caplog.text and "busy" in caplog.text
+    for word in ("Ayşe", "Yılmaz", "0532", "Bağdat"):
+        assert word not in caplog.text
+
+
+def test_endpoints():
+    assert parse_endpoint("unix:/run/jeeta-voice/speak.sock") == ("unix", "/run/jeeta-voice/speak.sock")
+    assert parse_endpoint("/run/jeeta-voice/speak.sock") == ("unix", "/run/jeeta-voice/speak.sock")
+    assert parse_endpoint("tcp:127.0.0.1:9000") == ("tcp", "127.0.0.1", 9000)
+    assert parse_endpoint("tcp:[::1]:9000") == ("tcp", "::1", 9000)
+    for bad in ("tcp:0.0.0.0:9000", "tcp:10.0.0.5:9000", "tcp:example.com:80", "tcp:127.0.0.1:x",
+                "tcp:127.0.0.1:70000", "speak.sock", "unix:speak.sock"):
+        with pytest.raises(ValueError):
+            parse_endpoint(bad)
+
+
+def test_the_health_check_answers_only_when_the_service_does():
+    async def run():
+        pool = ThreadPoolExecutor(max_workers=1)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, FakeMouth(), pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            return await asyncio.to_thread(health, ("tcp", "127.0.0.1", port)), port
+
+    up, port = asyncio.run(run())
+    assert up == 0
+    assert health(("tcp", "127.0.0.1", port)) == 1
+
+
+def test_main_health_voice_id_and_a_bad_socket(monkeypatch, capsys):
+    async def serve():
+        pool = ThreadPoolExecutor(max_workers=1)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, FakeMouth(), pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            monkeypatch.setenv("SPEAK_SOCKET", f"tcp:127.0.0.1:{port}")
+            return await asyncio.to_thread(jeeta_speak.main, ["--health"])
+
+    assert asyncio.run(serve()) == 0
+    assert jeeta_speak.main(["--health"]) == 1  # nothing listens there any more
+    monkeypatch.setenv("SPEAK_SOCKET", "tcp:0.0.0.0:9")
+    with pytest.raises(SystemExit, match="SPEAK_SOCKET"):
+        jeeta_speak.main(["--health"])
+    monkeypatch.delenv("SPEAK_SOCKET")
+    assert jeeta_speak.main(["--voice-id"]) == 0
+    printed = capsys.readouterr().out.strip()
+    assert len(printed) == 12 and int(printed, 16) >= 0
+    monkeypatch.setenv("SPEAK_BATCH", "1")
+    assert jeeta_speak.main(["--voice-id"]) == 0
+    assert capsys.readouterr().out.strip() != printed, "the batch size is part of the voice"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="asyncio serves unix sockets on Linux and macOS only")
+def test_the_unix_socket_is_the_groups_and_a_stale_one_is_replaced():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "speak.sock")
+        stale = socket.socket(socket.AF_UNIX)
+        stale.bind(path)
+        stale.close()
+
+        async def run():
+            pool = ThreadPoolExecutor(max_workers=1)
+            async with open_server(("unix", path), lambda ws: session(ws, FakeMouth(n=1), pool)):
+                mode = os.stat(path).st_mode & 0o777
+                async with websockets.unix_connect(path, logger=QUIET) as ws:
+                    hello = json.loads(await ws.recv())
+                    await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
+                    first = await ws.recv()
+                    done = json.loads(await ws.recv())
+                healthy = await asyncio.to_thread(health, ("unix", path))
+            return mode, hello, first, done, healthy
+
+        mode, hello, first, done, healthy = asyncio.run(run())
+        assert mode == 0o660
+        assert hello["voice_id"] == "test-voice"
+        assert first == b"\x01\x00" * 800 and done["type"] == "done"
+        assert healthy == 0
+        assert not os.path.exists(path), "the socket is removed when the service stops"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="asyncio serves unix sockets on Linux and macOS only")
+def test_the_socket_is_born_0660_before_any_chmod(monkeypatch):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "speak.sock")
+        monkeypatch.setattr(os, "chmod", lambda *a, **k: None)
+
+        async def run():
+            async with open_server(("unix", path), lambda ws: None):
+                return os.stat(path).st_mode & 0o777
+
+        assert asyncio.run(run()) == 0o660
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="asyncio serves unix sockets on Linux and macOS only")
+def test_a_regular_file_in_the_sockets_place_is_never_deleted():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "speak.sock")
+        pathlib.Path(path).write_text("not a socket", encoding="utf-8")
+
+        async def run():
+            async with open_server(("unix", path), lambda ws: None):
+                pass
+
+        with pytest.raises(SystemExit):
+            asyncio.run(run())
+        assert pathlib.Path(path).read_text(encoding="utf-8") == "not a socket"
+
+
+class PooledMouth:
+    """Like the real mouth: a VoicePool, and chunks(text, tts) noting which instance served whom."""
+
+    voice_id = "test-voice"
+
+    def __init__(self, voices):
+        self.voice_pool = jeeta_speak.VoicePool(voices)
+        self.served = []
+        self.busy = set()
+        self.overlap = []
+
+    def chunks(self, text, tts):
+        self.served.append((text, tts))
+        if tts in self.busy:
+            self.overlap.append(tts)
+        self.busy.add(tts)
+        try:
+            for _ in range(5):
+                time.sleep(0.02)
+                yield b"\x01\x00" * 80
+        finally:
+            self.busy.discard(tts)
+
+
+def test_each_synthesis_has_an_ema_instance_of_its_own():
+    async def run(mouth):
+        pool = ThreadPoolExecutor(max_workers=4)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, mouth, pool)) as server:
+            url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+
+            async def one(n):
+                async with websockets.connect(url, logger=QUIET) as ws:
+                    await ws.recv()
+                    for k in range(3):
+                        await ws.send(json.dumps({"type": "synth", "id": f"{n}:{k}", "text": f"{n}"}))
+                        while not isinstance(m := await ws.recv(), str):
+                            pass
+                        assert json.loads(m)["type"] == "done"
+
+            await asyncio.gather(*(one(n) for n in range(3)))
+
+    two = PooledMouth(["A", "B"])
+    asyncio.run(run(two))
+    assert two.overlap == [], "no instance served two syntheses at once"
+    assert {tts for _, tts in two.served} == {"A", "B"} and len(two.served) == 9
+    asyncio.run(run(two))  # a second event loop: the pool follows it
+    one_voice = PooledMouth(["A"])
+    asyncio.run(run(one_voice))
+    assert one_voice.overlap == [] and len(one_voice.served) == 9
 ```
 
-`rust/bridge/voice/speech/speak/tests/test_models.py`:
+`rust/bridge/voice/speech/speak/tests/test_speak_mouth.py`:
 
 ```python
-"""Runs inside the image on the host: `docker run --rm --network none jeeta-voice-speak:<tag> python -m pytest -m models tests`."""
+"""The mouth around EMA, with fakes: respelling then normalising, sentences, PCM16 framing, the
+batch size, the start-up self-test, the voice id, the watchdog and the logging rules. No model, no
+torch."""
+import asyncio
+import io
+import logging
 import pathlib
 import sys
+import threading
+import warnings
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+import jeeta_speak  # noqa: E402
+from jeeta_speak import (  # noqa: E402
+    APPROVED_TEXTS, SENTENCE_GAP, Mouth, TooLong, Watchdog, env_int, self_test, set_batch, split_sentences,
+    to_pcm16,
+)
+from respell import Respeller  # noqa: E402
+
+FOLD = str.maketrans("âîûÂÎÛ", "aiuAIU")
+
+
+def ema_like(text):
+    """EMA's frontend on Antalia's readings, as far as the approved texts need: the circumflex
+    folded (ema_lightning/frontend.py's alphabet), everything else kept."""
+    return text.translate(FOLD)
+
+
+class FakeTTS:
+    """EMA's surface as the mouth uses it: stream(text, sample_rate, seed), _frontend, _batch_size."""
+
+    def __init__(self, chunks=None, frontend=ema_like):
+        self.calls = []
+        self.closed = []
+        self.chunks = chunks if chunks is not None else [np.array([0.5, -0.25], dtype=np.float32)]
+        self._frontend = frontend
+        self._batch_size = None
+
+    def stream(self, text, sample_rate, seed):
+        self.calls.append((text, sample_rate, seed))
+        try:
+            for c in self.chunks:
+                yield c
+        finally:
+            self.closed.append(text)
+
+
+def lower(text):
+    return text.replace("I", "ı").replace("İ", "i").lower()
+
+
+def good_normalizer(text):
+    return lower(text.replace("14:00'e", "on dörde"))
+
+
+def mouth(tts=None, normalize=good_normalizer, table=None, residue=None):
+    table = table if table is not None else {"Jeeta": "Cita"}
+    return Mouth(Respeller(table), normalize, tts or FakeTTS(), seed=0, residue=residue)
+
+
+def test_text_is_respelled_before_it_is_normalised():
+    m = mouth()
+    assert m.spoken("Jeeta'nın asistanıyım.") == "cita'nın asistanıyım."
+
+
+def test_one_sentence_is_one_stream_of_the_normalised_text_at_8k_with_the_fixed_seed():
+    tts = FakeTTS()
+    m = Mouth(Respeller({"Jeeta": "Cita"}), good_normalizer, tts, seed=7)
+    pcm = b"".join(m.chunks("Merhaba, ben Jeeta'nın dijital asistanıyım."))
+    assert tts.calls == [("merhaba, ben cita'nın dijital asistanıyım.", 8000, 7)]
+    assert pcm == to_pcm16([0.5, -0.25])
+
+
+def test_sentences_are_streamed_one_by_one_with_a_quarter_second_between():
+    tts = FakeTTS()
+    pcm = b"".join(mouth(tts).chunks("Yarın sizi arayacağız. Size uygun mu acaba?"))
+    assert [c[0] for c in tts.calls] == ["yarın sizi arayacağız.", "size uygun mu acaba?"]
+    one = to_pcm16([0.5, -0.25])
+    assert pcm == one + SENTENCE_GAP + one
+    assert len(SENTENCE_GAP) == 2 * 2000
+
+
+def test_samples_become_pcm16_little_endian_rounded_clipped_and_finite():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no "invalid value encountered in cast": NaN never reaches the cast
+        pcm = to_pcm16(np.array([0.5, -1.5, 1.0, 0.0, -0.5, np.nan, np.inf, -np.inf], dtype=np.float32))
+    assert np.frombuffer(pcm, dtype="<i2").tolist() == [16384, -32767, 32767, 0, -16384, 0, 32767, -32767]
+    assert to_pcm16(np.zeros(0, dtype=np.float32)) == b""
+
+
+def test_closing_the_chunks_closes_emas_stream():
+    tts = FakeTTS(chunks=[np.zeros(80, dtype=np.float32)] * 5)
+    gen = mouth(tts).chunks("Bir iki üç dört.")
+    next(gen)
+    gen.close()
+    assert tts.closed == ["bir iki üç dört."]
+
+
+def test_empty_or_unspeakable_text_gives_no_audio():
+    tts = FakeTTS()
+    assert list(mouth(tts, normalize=lambda t: "").chunks("☕")) == []
+    assert tts.calls == []
+
+
+def test_a_text_that_swells_past_the_cap_once_normalised_is_refused():
+    m = mouth(normalize=lambda t: "dokuz " * 1000)
+    with pytest.raises(TooLong):
+        list(m.chunks("9" * 1000))
+
+
+def test_symbols_the_normaliser_left_unread_are_counted_without_the_text(caplog):
+    caplog.set_level(logging.WARNING)
+    m = mouth(residue=lambda t: len(jeeta_speak.RESIDUE.findall(t)))
+    m.spoken("Ayşe 0532 #1 %5 a/b c+d 9:30")
+    assert m.residual_symbols == 9 + 4 + 1  # nine digits, # % / +, and the clock's colon
+    assert "symbols unread" in caplog.text and "Ayşe" not in caplog.text and "0532" not in caplog.text
+    assert jeeta_speak.RESIDUE.findall("Mahalle: Atatürk") == [], "a colon between words is punctuation"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "doktor ahmet bey yarın on otuzda sizi arayacak. profesör doktor ayşe hanım da katılacak.",
+            ["doktor ahmet bey yarın on otuzda sizi arayacak.", "profesör doktor ayşe hanım da katılacak."],
+        ),
+        ("evet. tamam. yarın görüşürüz.", ["evet. tamam. yarın görüşürüz."]),
+        ("saat dokuzda mı, dokuz otuzda mı?", ["saat dokuzda mı, dokuz otuzda mı?"]),
+        (
+            "fiyat bin iki yüz doksan dokuz lira. kampanya üç kasıma kadar sürüyor... ne dersiniz?",
+            ["fiyat bin iki yüz doksan dokuz lira.", "kampanya üç kasıma kadar sürüyor... ne dersiniz?"],
+        ),
+        ("harika! yarın sizi arayacağız.", ["harika! yarın sizi arayacağız."]),
+        ("bir iki üç dört! beş altı yedi sekiz.", ["bir iki üç dört!", "beş altı yedi sekiz."]),
+        # antalia-mini 1.0.1 leaves a lowercase "sn.", "tel." and "st." as written (2026-10-29)
+        ("sayın müşterimiz sn. ahmet yılmaz sizi arıyoruz.", ["sayın müşterimiz sn. ahmet yılmaz sizi arıyoruz."]),
+        ("bize her gün tel. sıfır beş yüz otuz iki ile ulaşın.", ["bize her gün tel. sıfır beş yüz otuz iki ile ulaşın."]),
+        ("dükkanımız çarşı st. yanında, sizi bekliyoruz.", ["dükkanımız çarşı st. yanında, sizi bekliyoruz."]),
+        ("  ", []),
+    ],
+)
+def test_sentences_of_a_normalised_text(text, expected):
+    # The inputs are antalia-mini 1.0.1's readings of the written sentences (dates, prices, times
+    # and abbreviations already words), as produced on 2026-10-29.
+    assert split_sentences(text) == expected
+
+
+def test_no_cut_after_any_of_the_workers_abbreviations():
+    for word in jeeta_speak.ABBREVIATIONS:
+        text = f"bunu yarın {word}. ahmet yılmaz ile konuşacağız."
+        assert split_sentences(text) == [text], word
+
+
+def test_the_batch_size_is_fixed_on_emas_attribute():
+    tts = FakeTTS()
+    set_batch(tts, 2)
+    assert tts._batch_size == 2
+
+    class Changed:
+        pass
+
+    with pytest.raises(SystemExit):
+        set_batch(Changed(), 2)
+
+
+def test_knobs_are_read_strictly(monkeypatch):
+    monkeypatch.setenv("SPEAK_X", "7")
+    assert env_int("SPEAK_X", 1, 1, 9) == 7
+    assert env_int("SPEAK_UNSET", 3, 1, 9) == 3
+    for bad in ("x", "", "0", "10", "1.5"):
+        monkeypatch.setenv("SPEAK_X", bad)
+        with pytest.raises(SystemExit):
+            env_int("SPEAK_X", 1, 1, 9)
+
+
+def test_the_self_test_passes_on_the_owners_readings():
+    self_test(mouth(table={"Jeeta": "Cita", "Google": "gugıl", "Instagram": "instagram"}))
+
+
+def test_the_self_test_refuses_normalizer_tr_s_reading_of_the_clock():
+    def normalizer_tr(text):
+        return lower(text.replace("14:00'e", "on dört iki nokta sıfır sıfır kesme e"))
+
+    with pytest.raises(SystemExit, match="14:00'e"):
+        self_test(mouth(normalize=normalizer_tr))
+
+    def half_right(text):
+        return lower(text.replace("14:00'e", "on dörde iki nokta sıfır sıfır"))
+
+    with pytest.raises(SystemExit, match="14:00'e"):
+        self_test(mouth(normalize=half_right))
+
+    def apostrophe_read(text):
+        return lower(text.replace("14:00'e", "on dörde kesme e"))
+
+    with pytest.raises(SystemExit, match="14:00'e"):
+        self_test(mouth(normalize=apostrophe_read))
+
+
+def test_the_self_test_refuses_a_spelling_the_model_does_not_receive():
+    with pytest.raises(SystemExit, match="Google"):
+        self_test(mouth(tts=FakeTTS(frontend=lambda t: ema_like(t).replace("gugıl", "g")), table={"Google": "gugıl"}))
+
+
+def test_the_self_test_refuses_a_frontend_that_changes_an_approved_text():
+    def drops_apostrophes(t):
+        return ema_like(t).replace("'", " ")
+
+    with pytest.raises(SystemExit, match="approved-text self-test failed: text 0"):
+        self_test(mouth(tts=FakeTTS(frontend=drops_apostrophes)))
+
+    def reads_kesme(t):
+        return ema_like(t).replace("cita'nın", "cita kesme nın")
+
+    with pytest.raises(SystemExit, match="approved-text"):
+        self_test(mouth(tts=FakeTTS(frontend=reads_kesme)))
+
+
+def test_the_self_test_needs_to_see_what_the_model_reads():
+    with pytest.raises(SystemExit):
+        self_test(mouth(tts=FakeTTS(frontend=None)))
+
+
+def test_the_approved_texts_are_the_policys():
+    # The defaults of jt_calls (opening.rs, phrases.rs) with "Jeeta" as the workspace; the
+    # repository test test_speak_image.py checks each against the Rust source.
+    assert len(APPROVED_TEXTS) == 14 and APPROVED_TEXTS[0] == "Merhaba, ben Jeeta'nın dijital asistanıyım."
+
+
+def test_the_voice_id_follows_every_knob_the_table_and_the_rules(monkeypatch):
+    knobs = {"seed": 0, "threads": 2, "batch": 2}
+    base = jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.2"}, {"ema.pt": "ab"}, knobs, {"Jeeta": "Cita"})
+    assert base == jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.2"}, {"ema.pt": "ab"}, dict(knobs),
+                                                 {"Jeeta": "Cita"})
+    for change in ({"seed": 1}, {"threads": 1}, {"batch": 1}):
+        assert base != jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.2"}, {"ema.pt": "ab"},
+                                                     {**knobs, **change}, {"Jeeta": "Cita"}), change
+    assert base != jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.2"}, {"ema.pt": "ab"}, knobs, {"Jeeta": "Ciita"})
+    assert base != jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.3"}, {"ema.pt": "ab"}, knobs, {"Jeeta": "Cita"})
+    for name, value in (("MIN_SENTENCE_WORDS", 4), ("SENTENCE_GAP_MS", 300), ("PIPELINE_VERSION", 2),
+                        ("ABBREVIATIONS", frozenset({"dr"}))):
+        monkeypatch.setattr(jeeta_speak, name, value)
+        assert base != jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.2"}, {"ema.pt": "ab"}, knobs,
+                                                     {"Jeeta": "Cita"}), name
+        monkeypatch.undo()
+
+
+class Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_the_watchdog_ends_a_stuck_synthesis_or_a_stalled_loop():
+    clock, exits = Clock(), []
+    dog = Watchdog(60, clock=clock, exit=exits.append)
+    token = dog.begin()
+    clock.t = 59
+    dog.heartbeat()
+    assert not dog.check() and exits == []
+    dog.end(token)
+    clock.t = 200
+    dog.heartbeat()
+    assert not dog.check(), "an ended wait does not count"
+    dog.begin()
+    clock.t = 261
+    dog.heartbeat()
+    assert dog.check() and exits == [70]
+
+    clock, exits = Clock(), []
+    dog = Watchdog(60, clock=clock, exit=exits.append)
+    clock.t = 61
+    assert dog.check() and exits == [70], "no heartbeat from the loop for over a minute"
+
+
+def test_the_watchdog_brackets_each_chunk_wait(monkeypatch):
+    seen = []
+
+    class Recording(Watchdog):
+        def begin(self):
+            seen.append("begin")
+            return super().begin()
+
+        def end(self, token):
+            seen.append("end")
+            super().end(token)
+
+    monkeypatch.setattr(jeeta_speak, "_watchdog", Recording(60))
+
+    async def one():
+        loop = asyncio.get_running_loop()
+        return await jeeta_speak._next_chunk(loop, ThreadPoolExecutor(1), iter([b"x"]))
+
+    chunk = asyncio.run(one())
+    assert chunk == b"x" and seen == ["begin", "end"]
+
+
+def test_only_the_services_records_reach_its_log(capsys):
+    handler = jeeta_speak.configure_logging("info")
+    stream = io.StringIO()
+    handler.setStream(stream)
+    hooks = sys.excepthook, threading.excepthook, warnings.showwarning
+    try:
+        logging.getLogger("jeeta-speak").info("listening")
+        logging.getLogger("antalia_mini").warning("text normaliser failed (Ayşe Yılmaz 0532)")
+        jeeta_speak.WS_LOG.error("connection handler failed: Ayşe")
+        logging.getLogger("torch").info("anything")
+        with warnings.catch_warnings():
+            warnings.simplefilter("always")
+            warnings.showwarning = jeeta_speak._quiet_warning
+            warnings.warn("text normaliser failed (KeyError: 'Ayşe 0532 111 22 33')", RuntimeWarning, stacklevel=1)
+        try:
+            raise ValueError("Ayşe Yılmaz 0532")
+        except ValueError:
+            jeeta_speak._quiet_exception(*sys.exc_info())
+    finally:
+        logging.getLogger().removeHandler(handler)
+        logging.getLogger("jeeta-speak").setLevel(logging.NOTSET)
+        sys.excepthook, threading.excepthook, warnings.showwarning = hooks
+    out = stream.getvalue()
+    assert "INFO jeeta-speak listening" in out
+    assert "withheld a record (WARNING) from antalia_mini" in out
+    assert "withheld a record (ERROR) from speak.websocket" in out
+    assert "RuntimeWarning at" in out and "uncaught ValueError at test_speak_mouth.py:" in out
+    assert "torch" not in out
+    assert "Ayşe" not in out and "0532" not in out and "Yılmaz" not in out
+```
+
+`rust/bridge/voice/speech/speak/tests/test_speak_pins.py`:
+
+```python
+"""The image's pins: the weights by SHA-256 (with a fake cache), the wheel record, the shipped lock."""
+import hashlib
+import json
+import pathlib
+import sys
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+import pins  # noqa: E402
+
+
+def cache(tmp_path, contents):
+    paths = {}
+    for name, data in contents.items():
+        path = tmp_path / name
+        path.write_bytes(data)
+        paths[name] = path
+    return lambda name: paths.get(name)
+
+
+def lock_of(contents):
+    return {
+        "repo": pins.REPO,
+        "files": {n: {"sha256": hashlib.sha256(d).hexdigest(), "size": len(d)} for n, d in contents.items()},
+    }
+
+
+WEIGHTS = {"ema.pt": b"acoustic", "decoder.pt": b"vocoder!"}
+
+
+def test_the_pinned_weights_pass(tmp_path):
+    digests = pins.verify(lock_of(WEIGHTS), cache(tmp_path, WEIGHTS))
+    assert digests == {n: hashlib.sha256(d).hexdigest() for n, d in WEIGHTS.items()}
+
+
+def test_a_changed_missing_or_resized_weight_is_refused(tmp_path):
+    lock = lock_of(WEIGHTS)
+    with pytest.raises(pins.PinError, match="ema.pt: sha256"):
+        pins.verify(lock, cache(tmp_path, {**WEIGHTS, "ema.pt": b"acoustiK"}))
+    with pytest.raises(pins.PinError, match="decoder.pt: not in"):
+        pins.verify(lock, cache(tmp_path, {"ema.pt": WEIGHTS["ema.pt"]}))
+    with pytest.raises(pins.PinError, match="ema.pt: size"):
+        pins.verify(lock, cache(tmp_path, {**WEIGHTS, "ema.pt": b"acoustic+"}))
+
+
+def test_record_writes_a_lock_that_verifies(tmp_path):
+    located = cache(tmp_path, WEIGHTS)
+    recorded = pins.record(located)
+    assert recorded == lock_of(WEIGHTS)
+    path = tmp_path / "weights.lock"
+    path.write_text(json.dumps(recorded), encoding="utf-8")
+    pins.verify(pins.load_lock(path), located)
+
+
+def test_a_lock_without_both_digests_is_refused(tmp_path):
+    good = lock_of(WEIGHTS)
+    bad = [
+        {**good, "repo": "someone/else"},
+        {**good, "files": {"ema.pt": good["files"]["ema.pt"]}},
+        {**good, "files": {**good["files"], "ema.pt": {"sha256": "abc", "size": 8}}},
+        {**good, "files": {**good["files"], "ema.pt": {"sha256": "0" * 64, "size": 0}}},
+    ]
+    for lock in bad:
+        path = tmp_path / "weights.lock"
+        path.write_text(json.dumps(lock), encoding="utf-8")
+        with pytest.raises(pins.PinError):
+            pins.load_lock(path)
+
+
+def test_the_shipped_lock_pins_both_files_emas_loader_reads():
+    lock = pins.load_lock()
+    assert sorted(lock["files"]) == ["decoder.pt", "ema.pt"]
+
+
+REPORT = {
+    "install": [
+        {
+            "metadata": {"name": "Ema_Lightning", "version": "1.1.2"},
+            "download_info": {"url": "https://files/x.whl", "archive_info": {"hashes": {"sha256": "a" * 64}}},
+        },
+        {
+            "metadata": {"name": "torch", "version": "2.15.0+cpu"},
+            "download_info": {"url": "https://download/t.whl", "archive_info": {"hash": "sha256=" + "b" * 64}},
+        },
+        {"metadata": {"name": "local.thing", "version": "0.1"}, "download_info": {"url": "file:///x", "dir_info": {}}},
+    ]
+}
+
+
+def test_the_wheel_record_is_one_sorted_line_per_install():
+    assert pins.wheels(REPORT) == [
+        "ema-lightning==1.1.2 sha256=" + "a" * 64,
+        "local-thing==0.1 sha256=?",
+        "torch==2.15.0+cpu sha256=" + "b" * 64,
+    ]
+
+
+def test_a_build_whose_wheels_differ_from_the_record_or_lack_a_hash_fails(tmp_path, capsys):
+    known = {"install": REPORT["install"][:2]}
+    first, second = tmp_path / "torch.json", tmp_path / "pypi.json"
+    first.write_text(json.dumps({"install": known["install"][1:]}), encoding="utf-8")
+    second.write_text(json.dumps({"install": known["install"][:1]}), encoding="utf-8")
+    expect = tmp_path / "wheels.sha256"
+    expect.write_text("# a comment\n" + "\n".join(pins.wheels(known)) + "\n", encoding="utf-8")
+    assert pins.main(["wheels", str(first), str(second), "--expect", str(expect)]) == 0
+    assert capsys.readouterr().out.splitlines()[1:] == pins.wheels(known)
+    expect.write_text("ema-lightning==1.1.2 sha256=" + "c" * 64 + "\n", encoding="utf-8")
+    assert pins.main(["wheels", str(first), str(second), "--expect", str(expect)]) == 1
+    assert "ema-lightning" in capsys.readouterr().err
+    expect.write_text("# nothing recorded\n", encoding="utf-8")
+    assert pins.main(["wheels", str(first), str(second), "--expect", str(expect)]) == 1
+    unknown = tmp_path / "unknown.json"
+    unknown.write_text(json.dumps(REPORT), encoding="utf-8")
+    expect.write_text("\n".join(pins.wheels(REPORT)) + "\n", encoding="utf-8")
+    assert pins.main(["wheels", str(unknown), "--expect", str(expect)]) == 1
+    assert "without a known sha256" in capsys.readouterr().err
+
+
+SPEAK = pathlib.Path(__file__).resolve().parents[1]
+
+
+def test_the_shipped_locks_are_the_record_the_frozen_set_and_the_requirements():
+    locked = pins.check_lock()
+    assert locked["ema-lightning"][0] == "1.1.2" and locked["torch"][0].endswith("+cpu")
+    torch, rest = pins.lock_files(pins.read_record((SPEAK / "wheels.sha256").read_text(encoding="utf-8"), "w"))
+    assert (SPEAK / "torch.lock").read_text(encoding="utf-8") == torch
+    assert (SPEAK / "requirements.lock").read_text(encoding="utf-8") == rest, "run `python pins.py lock`"
+
+
+def copy_pins(tmp_path):
+    tmp_path.mkdir(parents=True)
+    for name in ("constraints.txt", "requirements.txt", "wheels.sha256", "torch.lock", "requirements.lock"):
+        (tmp_path / name).write_text((SPEAK / name).read_text(encoding="utf-8"), encoding="utf-8")
+    return tmp_path
+
+
+def edit(path, old, new):
+    text = path.read_text(encoding="utf-8")
+    assert old in text, old
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def test_check_lock_refuses_every_drift(tmp_path):
+    cases = [
+        ("constraints.txt", "ema-lightning==1.1.2", "ema-lightning==1.1.3", "owner's choice"),
+        ("constraints.txt", "antalia-mini==1.0.1", "Antalia_Mini==1.0.2", "owner's choice"),
+        ("constraints.txt", "torch==2.15.0+cpu", "torch==2.15.0", "CPU build"),
+        ("constraints.txt", "numpy==2.5.4", "numpy==2.5.3", "numpy==2.5.3"),
+        ("constraints.txt", "zipp==4.1.2\n", "zipp==4.1.2\nleftpad==1.0\n", "leftpad"),
+        ("requirements.txt", "websockets==17.3", "websockets==18.0", "websockets==18.0"),
+        ("requirements.txt", "antalia-mini==1.0.1", "antalia-mini", "requirements.txt must pin antalia-mini"),
+        ("requirements.txt", "huggingface-hub", "huggingface-hub\nrequests", "requests"),
+        ("requirements.lock", "--hash=sha256:fbde69", "--hash=sha256:fbde70", "wheels.sha256"),
+        ("requirements.lock", "pytest==8.4.2", "pytest==8.4.3", "wheels.sha256"),
+        ("torch.lock", "torch==", "numpy==", "torch alone"),
+    ]
+    for n, (name, old, new, message) in enumerate(cases):
+        folder = copy_pins(tmp_path / str(n))
+        edit(folder / name, old, new)
+        with pytest.raises(pins.PinError, match=message):
+            pins.check_lock(folder)
+    # A package beyond the frozen set and EXTRA, even locked and recorded alike, is refused.
+    folder = copy_pins(tmp_path / "beyond")
+    with (folder / "wheels.sha256").open("a", encoding="utf-8") as f:
+        f.write("leftpad==1.0 sha256=" + "e" * 64 + "\n")
+    with (folder / "requirements.lock").open("a", encoding="utf-8") as f:
+        f.write("leftpad==1.0 --hash=sha256:" + "e" * 64 + "\n")
+    with pytest.raises(pins.PinError, match="beyond constraints.txt"):
+        pins.check_lock(folder)
+    folder = copy_pins(tmp_path / "names")
+    edit(folder / "constraints.txt", "ema-lightning==1.1.2", "EMA_Lightning==1.1.2")
+    pins.check_lock(folder)  # names compare the way PyPI compares them
+```
+
+`rust/bridge/voice/speech/speak/tests/test_speak_image.py`:
+
+```python
+"""The speak image and its unit as shipped: no network, read-only and unprivileged at run time; the
+base image, the packages and the weights pinned; only Antalia's normaliser in our code; the
+approved texts the self-test reads are the policy's."""
+import pathlib
+import re
+import shlex
+
+import pytest
+
+SPEAK = pathlib.Path(__file__).resolve().parents[1]
+UNIT_FILE = SPEAK.parent.parent / "deploy" / "jeeta-voice-speak.service"
+if not UNIT_FILE.exists():  # inside the image, which holds neither the Dockerfile nor the unit
+    pytest.skip("the repository's Dockerfile and unit are not here", allow_module_level=True)
+DOCKERFILE = (SPEAK / "Dockerfile").read_text(encoding="utf-8")
+UNIT = UNIT_FILE.read_text(encoding="utf-8")
+RUST_CALLS = SPEAK.parents[3] / "crates" / "domain" / "jt_calls" / "src"
+
+# Every option of the unit's `docker run`, exactly: adding, dropping or changing one fails here.
+RUN_OPTIONS = [
+    "--rm", "--pull", "never", "--name", "jeeta-voice-speak", "--init", "--network", "none",
+    "--user", "1502:1501", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+    "--pids-limit", "128", "--ulimit", "core=0", "--cpus", "2", "--cpu-shares", "2048",
+    "--memory", "2g", "--memory-swap", "2g",
+    "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
+    "--tmpfs", "/tmp:uid=1502,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev",
+    "--mount", "type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice",
+    "-e", "SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock", "-e", "SPEAK_THREADS=2", "-e", "SPEAK_BATCH=2",
+    "-e", "EMA_SEED=0", "-e", "SPEAK_WORKERS=2", "-e", "SPEAK_WATCHDOG_S=60",
+    "${SPEAK_IMAGE}",
+]
+
+
+def exec_start():
+    joined = re.sub(r"\\\n\s*", " ", UNIT)
+    line = re.search(r"^ExecStart=(.+)$", joined, re.M).group(1)
+    return shlex.split(line)
+
+
+def test_the_container_runs_exactly_as_specified():
+    argv = exec_start()
+    assert argv[:2] == ["/usr/bin/docker", "run"]
+    assert argv[2:] == RUN_OPTIONS
+    assert re.search(r"^Restart=always$", UNIT, re.M)
+    assert re.search(r"^StartLimitBurst=5$", UNIT, re.M)
+    assert "SPEAK_WEIGHTS_LOCK" not in UNIT and "RESPELL_FILE" not in UNIT
+
+
+def test_the_image_user_is_the_units():
+    assert re.findall(r"^USER (\S+)$", DOCKERFILE, re.M) == ["1502:1501"]
+    assert "useradd --uid 1502 --gid 1501" in DOCKERFILE and "groupadd --gid 1501 jeeta-voice" in DOCKERFILE
+
+
+def test_the_base_image_is_pinned_by_digest():
+    froms = re.findall(r"^FROM\s+(\S+)", DOCKERFILE, re.M)
+    assert len(froms) == 1
+    assert re.fullmatch(r"python:3\.12-slim-bookworm@sha256:[0-9a-f]{64}", froms[0]), froms[0]
+
+
+def test_packages_install_only_from_the_hashed_locks_one_index_each():
+    code = re.sub(r"\\\n\s*", " ", re.sub(r"^#.*\n", "", DOCKERFILE, flags=re.M))  # no comments, a RUN per line
+    installs = re.findall(r"pip install (.+?) -r (\S+)", code)
+    assert [lock for _, lock in installs] == ["torch.lock", "requirements.lock"]
+    (torch_options, _), (rest_options, _) = installs
+    for options in (torch_options, rest_options):
+        for flag in ("--no-cache-dir", "--require-hashes", "--no-deps", "--only-binary=:all:"):
+            assert flag in options.split()
+        assert "--extra-index-url" not in options
+    assert "--index-url https://download.pytorch.org/whl/cpu" in torch_options
+    assert "--index-url https://pypi.org/simple" in rest_options
+    assert re.search(r"&& pip check\s+&&", code) and "RUN python pins.py check-lock" in code
+    assert code.index("pins.py check-lock") < code.index("pip install")
+    assert "--expect wheels.sha256" in code
+    assert "constraints.txt" not in code.split("pip install", 1)[1], "constraints only feed the locks"
+
+
+def test_the_weights_are_fetched_checked_and_offline_after():
+    fetch = DOCKERFILE.index("python pins.py fetch-weights")
+    offline = DOCKERFILE.index("HF_HUB_OFFLINE=1")
+    assert fetch < offline < DOCKERFILE.index("python jeeta_speak.py --self-test") < DOCKERFILE.index("\nCMD ")
+    assert "Antalia()" not in DOCKERFILE, "the normaliser is code only: no Antalia weights"
+
+
+def test_every_copied_file_passes_the_dockerignore():
+    allowed = {
+        line[1:] for line in (SPEAK / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.startswith("!")
+    }
+    copied = [src for line in re.findall(r"^COPY (.+)$", DOCKERFILE, re.M) for src in line.split()[:-1]]
+    for src in copied:
+        assert src in allowed or f"{src}/*.py" in allowed, f"{src} is not let through .dockerignore"
+        assert (SPEAK / src).exists() or src == "pytest.ini", f"{src} does not exist"
+
+
+def test_production_reads_no_override_of_its_pinned_files():
+    source = (SPEAK / "jeeta_speak.py").read_text(encoding="utf-8")
+    assert "SPEAK_WEIGHTS_LOCK" not in source and "RESPELL_FILE" not in source
+    knobs = set(re.findall(r'env_int\("([A-Z_]+)"', source)) | set(re.findall(r'os\.environ\.get\("([A-Z_]+)"', source))
+    assert knobs == {"SPEAK_THREADS", "SPEAK_BATCH", "EMA_SEED", "SPEAK_WORKERS", "SPEAK_WATCHDOG_S", "SPEAK_SOCKET",
+                     "SPEAK_LOG"}
+
+
+def test_our_code_never_uses_normalizer_tr():
+    # Owner decision (2026-10-29): normalizer-tr 0.8.1 read "14:00'e" as "on dört iki nokta sıfır
+    # sıfır kesme e"; the normaliser is Antalia's.
+    for name in ("jeeta_speak.py", "respell.py", "pins.py"):
+        source = (SPEAK / name).read_text(encoding="utf-8")
+        assert not re.search(r"^\s*(import|from)\s+normalizer_tr\b", source, re.M), name
+    assert "Antalia.normalize" in (SPEAK / "jeeta_speak.py").read_text(encoding="utf-8")
+
+
+def test_the_approved_texts_are_the_policys_defaults():
+    import sys
+
+    sys.path.insert(0, str(SPEAK))
+    from jeeta_speak import APPROVED_TEXTS
+
+    rust = "\n".join(
+        (RUST_CALLS / name).read_text(encoding="utf-8") for name in ("opening.rs", "phrases.rs")
+    )
+    templates = re.findall(r'format!\("([^"]+)"', rust)
+    for text in APPROVED_TEXTS:
+        workspace = text.replace("Jeeta'nın", "{g}")
+        literal = f'"{text}"' in rust
+        templated = any(t.replace("{o}", "Merhaba, ben {g} dijital asistanıyım.") == workspace for t in templates)
+        assert literal or templated, text
+    phrases = re.findall(r'"([^"]+[.?!])"', (RUST_CALLS / "phrases.rs").read_text(encoding="utf-8"))
+    assert set(phrases) <= set(APPROVED_TEXTS), set(phrases) - set(APPROVED_TEXTS)
+```
+
+`rust/bridge/voice/speech/speak/tests/test_speak_models.py`:
+
+```python
+"""With the real models, inside the image on the host (B2 Step 5), with the unit's isolation:
+
+  docker run --rm --pull never --network none --read-only --cap-drop ALL \\
+    --security-opt no-new-privileges --user 1502:1501 --cpus 2 --memory 2g --memory-swap 2g \\
+    --pids-limit 128 --tmpfs /tmp:uid=1502,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev \\
+    jeeta-voice-speak:<tag> python -m pytest -p no:cacheprovider -s -rs tests
+
+Skipped where EMA Lightning or its weights are not installed (the dev machine, CI)."""
+import asyncio
+import json
+import logging
+import pathlib
+import sys
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -3602,18 +4733,178 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 pytestmark = pytest.mark.models
 
 
-def test_the_mouth_speaks_and_reads_times_the_way_the_owner_heard():
-    from jeeta_speak import build_mouth, self_test
+@pytest.fixture(scope="module")
+def mouth():
+    pytest.importorskip("ema_lightning")
+    pytest.importorskip("antalia_mini")
+    import pins
 
-    mouth = build_mouth()
+    if any(pins.locate(name) is None for name in pins.FILES):
+        pytest.skip("EMA Lightning's weights are not in the model cache")
+    from jeeta_speak import build_mouth
+
+    return build_mouth()
+
+
+def test_the_mouth_speaks_and_reads_times_the_way_the_owner_heard(mouth):
+    from jeeta_speak import measure, self_test
+
     self_test(mouth)
     pcm = b"".join(mouth.chunks("Merhaba, ben Jeeta'nın dijital asistanıyım."))
     assert len(pcm) // 2 > 8000  # more than a second of 8 kHz audio
+    for text in ["Merhaba.", "Bir saniye, hemen bakıyorum.", "Salı saat 14:00'e randevunuz var.",
+                 "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir."]:
+        first, total, audio = measure(mouth, text)
+        print(f"\nTIMING chars={len(text)} first_ms={first} synth_ms={total} audio_ms={audio}")
+        assert audio > 0 and first is not None
+
+
+def test_the_voice_id_without_the_model_is_the_loaded_ones(mouth):
+    from jeeta_speak import voice_id
+
+    assert voice_id() == mouth.voice_id
+
+
+def test_each_brand_reaches_the_model_as_respelled(mouth):
+    from jeeta_speak import tr_lower
+
+    for written, said in mouth.respeller.table.items():
+        reading = mouth.model_text(f"Bize {written} üzerinden ulaşabilirsiniz.")
+        assert f" {tr_lower(said)} " in f" {reading} ", (written, reading)
+
+
+def test_numbers_survive_the_sentence_cut(mouth):
+    sentences = mouth.sentences("Toplam 1.250,50 TL. Randevunuz 3 Kasım saat 09:30'da.")
+    assert sentences == [
+        "toplam bin iki yüz elli lira elli kuruş.",
+        "randevunuz üç kasım saat dokuz otuzda.",
+    ]
+
+
+ABBREVIATED = {
+    "dr": "Yarın Dr. Ahmet Yılmaz sizi arayacak.", "sn": "Sn. Ahmet Yılmaz sizi arıyoruz.",
+    "av": "Av. Ayşe Demir dosyayı inceledi.", "prof": "Prof. Ayşe Demir ders verecek.",
+    "doç": "Doç. Ali Kaya katılacak.", "yrd": "Yrd. Doç. Ali Kaya katılacak.", "no": "Daire No. 5 sizin mi?",
+    "tel": "Tel. sıfır beş yüz otuz iki arayın.", "vb": "Kalem, defter vb. ürünler var.",
+    "vs": "Kalem, defter vs. ürünler var.", "ltd": "Figurunica Ltd. Şti. sizi arıyor.",
+    "şti": "Atölye Şti. adına arıyorum.", "cad": "Bağdat Cad. üzerindeyiz.", "sok": "Lale Sok. içinde bulunuyor.",
+    "mah": "Moda Mah. içinde bulunuyor.", "apt": "Gül Apt. önünde bekliyoruz.",
+    "bul": "Atatürk Bul. üzerindeyiz.", "st": "Çarşı St. yanında bekliyoruz.",
+}
+
+
+def test_no_sentence_is_cut_after_one_of_the_workers_abbreviations(mouth):
+    from jeeta_speak import ABBREVIATIONS
+
+    assert set(ABBREVIATED) == ABBREVIATIONS
+    for word, text in ABBREVIATED.items():
+        for written in (text, text.replace(f"{word.capitalize()}.", f"{word}.")):
+            assert len(mouth.sentences(written)) == 1, (word, mouth.sentences(written))
+
+
+def test_the_same_sentence_sounds_the_same_each_time(mouth):
+    # The worker caches a sentence's audio by its text: one text, one rendering.
+    text = "Anladım."
+    assert b"".join(mouth.chunks(text)) == b"".join(mouth.chunks(text))
+
+
+async def serve_and(mouth, clients):
+    """Serves the real mouth as the service does and runs `clients(url)`."""
+    import jeeta_speak
+
+    pool = ThreadPoolExecutor(max_workers=len(mouth.voices))
+    async with jeeta_speak.open_server(("tcp", "127.0.0.1", 0), lambda ws: jeeta_speak.session(ws, mouth, pool)) as s:
+        return await clients(f"ws://127.0.0.1:{s.sockets[0].getsockname()[1]}")
+
+
+async def synthesise(ws, sid, text):
+    await ws.send(json.dumps({"type": "synth", "id": sid, "text": text}))
+    pcm = b""
+    while True:
+        m = await ws.recv()
+        if isinstance(m, bytes):
+            pcm += m
+        elif json.loads(m)["type"] == "done":
+            return pcm
+
+
+def test_concurrent_streams_sound_as_they_do_alone(mouth):
+    # The live sentence and the pre-synthesis come on two connections at once; each synthesis takes
+    # an EMA instance of its own (one instance batches its streams, and a batched stream's audio
+    # differs in its last bits), so each must get exactly the audio of the same sentence alone.
+    import websockets
+
+    texts = ["Bir saniye, hemen bakıyorum.", "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir."]
+    alone = {t: b"".join(mouth.chunks(t)) for t in texts}
+    assert len(mouth.voices) >= 2
+    for voice in mouth.voices[1:]:
+        assert {t: b"".join(mouth.chunks(t, voice)) for t in texts} == alone, "the instances are one voice"
+
+    async def clients(url):
+        async def one(order, n):
+            async with websockets.connect(url, logger=logging.getLogger("canary-client")) as ws:
+                await ws.recv()
+                return [(t, await synthesise(ws, f"{n}:{k}", t)) for k, t in enumerate(order * 3)]
+
+        a, b = await asyncio.gather(one(texts, 0), one(texts[::-1], 1))
+        return a + b
+
+    results = asyncio.run(serve_and(mouth, clients))
+    assert len(results) == 12
+    for text, pcm in results:
+        assert pcm == alone[text], text
+
+
+def test_a_stream_closed_early_leaves_ema_ready_for_the_next(mouth):
+    gen = mouth.chunks("Bu uzun bir cümle; ilk saniyesinden sonra kesiliyor ve geri kalanı hiç okunmuyor.")
+    assert next(gen)
+    gen.close()
+    assert len(b"".join(mouth.chunks("Tamam."))) > 0
+
+
+def test_a_spoken_name_and_number_reach_no_log(mouth, caplog, capfd):
+    # The canary: a name and a phone number through the real stack (respelling, Antalia, EMA, the
+    # session over a WebSocket), with the service's own logging at debug level.
+    import websockets
+
+    import jeeta_speak
+
+    secret = "Ayşe Yılmaz 0532 412 33 08"
+    spoken = mouth.spoken(secret)
+    caplog.set_level(logging.DEBUG)
+    handler = jeeta_speak.configure_logging("debug")
+    quiet = logging.getLogger("canary-client")
+    quiet.setLevel(logging.WARNING)
+
+    async def run():
+        pool = ThreadPoolExecutor(max_workers=2)
+        async with jeeta_speak.open_server(("tcp", "127.0.0.1", 0),
+                                           lambda ws: jeeta_speak.session(ws, mouth, pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            async with websockets.connect(f"ws://127.0.0.1:{port}", logger=quiet) as ws:
+                await ws.recv()
+                await ws.send(json.dumps({"type": "synth", "id": "c:0", "text": secret}))
+                while True:
+                    m = await ws.recv()
+                    if isinstance(m, str) and json.loads(m)["type"] != "hello":
+                        return json.loads(m)
+
+    try:
+        done = asyncio.run(run())
+    finally:
+        logging.getLogger().removeHandler(handler)
+        logging.getLogger("jeeta-speak").setLevel(logging.NOTSET)
+    assert done["type"] == "done" and done["audio_ms"] > 1000
+    out, err = capfd.readouterr()
+    logged = (caplog.text + out + err).lower()
+    assert "done:" in logged
+    for piece in ["ayşe", "yılmaz", "0532", "412", "33 08", spoken.lower(), "beş yüz otuz iki"]:
+        assert piece not in logged, piece
 ```
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run (from `rust/bridge/voice`, Python 3.12 with `pip install pytest==8.4.2 numpy==2.5.4 websockets==17.3`): `python -m pytest -c speech/pytest.ini -m "not models" speech/speak/tests`
+Run (from `rust/bridge/voice`, Python 3.12 with `pip install pytest==8.4.2 numpy==2.5.4 websockets==17.3`): `python -I -m pytest -c speech/pytest.ini -m "not models" speech/speak/tests`
 Expected: FAIL (`ModuleNotFoundError: No module named 'respell'`).
 
 - [ ] **Step 3: Write the service**
@@ -3622,18 +4913,44 @@ Expected: FAIL (`ModuleNotFoundError: No module named 'respell'`).
 
 ```python
 """Brand respelling in front of the normaliser: a written brand becomes the spelling the voice
-pronounces right ("Jeeta" -> "Cita"). Whole words only, case-insensitive; a suffix after an
-apostrophe stays as written. The transcript keeps the original text: this is pronunciation only."""
+pronounces right ("Jeeta" -> "Cita"). EMA Lightning reads foreign words by Turkish spelling (its
+model card), and Antalia's normaliser keeps these brands as written (its lexicon is reviewed for
+its own voice): without the table EMA's model would receive "jeeta", "whatsapp", "facebook" and
+"google" (checked with antalia-mini 1.0.1 and normalizer-tr 0.8.1 on 2026-10-29).
+
+Whole words only and case-insensitive; Python's matching also pairs the Turkish i letters (I, İ,
+ı, i), so "İNSTAGRAM" and "Instagram" match alike. A suffix after an apostrophe stays as written
+("WhatsApp'tan" -> "vatsap'tan"). One pass: a replacement is never matched again. The transcript
+keeps the original text; this is pronunciation only."""
 import json
 import re
 
 
+def fold(word):
+    """The key a written word is matched by: case-folded, with the four i letters made one."""
+    return word.replace("İ", "i").replace("I", "i").replace("ı", "i").casefold()
+
+
 class Respeller:
     def __init__(self, table):
-        items = sorted(table.items(), key=lambda kv: -len(kv[0]))
-        self.patterns = [
-            (re.compile(r"(?<!\w)" + re.escape(src) + r"(?!\w)", re.IGNORECASE), dst) for src, dst in items
-        ]
+        if not isinstance(table, dict):
+            raise ValueError("the respelling table is an object of written -> spoken")
+        said = {}
+        for written, spoken in table.items():
+            for value in (written, spoken):
+                if not isinstance(value, str) or not value or value != value.strip():
+                    raise ValueError("a respelling entry is a non-empty string without outer spaces")
+            if fold(written) in said:
+                raise ValueError(f"the respelling table names {written!r} twice")
+            said[fold(written)] = spoken
+        self.table = dict(table)
+        self._said = said
+        self._pattern = None
+        if said:
+            alternatives = sorted(table, key=len, reverse=True)
+            self._pattern = re.compile(
+                r"(?<!\w)(" + "|".join(map(re.escape, alternatives)) + r")(?!\w)", re.IGNORECASE
+            )
 
     @classmethod
     def load(cls, path):
@@ -3641,9 +4958,9 @@ class Respeller:
             return cls(json.load(f))
 
     def apply(self, text):
-        for pattern, dst in self.patterns:
-            text = pattern.sub(dst, text)
-        return text
+        if self._pattern is None:
+            return text
+        return self._pattern.sub(lambda m: self._said.get(fold(m.group(1)), m.group(1)), text)
 ```
 
 `rust/bridge/voice/speech/speak/respell.json`:
@@ -3651,32 +4968,64 @@ class Respeller:
 ```json
 {
   "Jeeta": "Cita",
-  "WhatsApp": "vatsap"
+  "WhatsApp": "vatsap",
+  "Instagram": "instagram",
+  "Facebook": "feysbuk",
+  "TikTok": "tiktok",
+  "Google": "gugıl"
 }
 ```
 
 `rust/bridge/voice/speech/speak/jeeta_speak.py`:
 
 ```python
-"""jeeta-speak: the voice bridge's mouth (design addendum section 6).
+"""jeeta-speak: the voice bridge's mouth (design addendum section 6, plan V1-T3 B2).
 
-A long-lived process that keeps EMA Lightning warm. It listens on a unix socket (the container runs
-with --network none) and speaks one protocol, one WebSocket per call:
+A long-lived process that keeps EMA Lightning warm and speaks one protocol, one WebSocket per
+connection, on a unix socket (the container runs with --network none) or, for development, a
+loopback TCP port. SPEAK_SOCKET is `unix:/path`, `/path` or `tcp:127.0.0.1:<port>`.
 
-  client -> {"type": "synth", "id": "<id>", "text": "<one sentence>"}
-  server -> binary frames: PCM16 little-endian mono 8000 Hz, in order
-  server -> {"type": "done", "id": "<id>", "synth_ms": <int>, "audio_ms": <int>}
-  client -> {"type": "cancel", "id": "<id>"}   (stops between chunks; answered "cancelled")
-  server -> {"type": "error", "id": "<id>", "reason": "<kind>"}
+  server -> {"type": "hello", "voice_id": "<12 hex>", "sample_rate": 8000, "format": "pcm16le"}
+  client -> {"type": "synth", "id": "<id>", "text": "<a sentence>"}
+  server -> binary frames: PCM16 little-endian mono 8000 Hz, in order (the worker encodes G.711)
+  server -> {"type": "done", "id": "<id>", "synth_ms": <int>, "audio_ms": <int>, "first_ms": <int>}
+  client -> {"type": "cancel", "id": "<id>"}
+  server -> {"type": "cancelled", "id": "<id>", "synth_ms": <int>, "audio_ms": <int>}
+  server -> {"type": "error", "id": "<id>"|null, "reason": "busy"|"bad_request"|"too_long"|"failed"}
 
-One synthesis at a time per connection. Text goes through the brand respelling table, then
-Antalia-2 Mini's normaliser, then EMA. The log never carries a text.
+`hello` comes first on every connection: its voice id names everything that decides how a text
+sounds (versions, weights, seed, threads, batch, the brand table, the sentence rules), so a client
+keys its audio cache by it. Frames are EMA's chunks (about one second first, then up to four), of
+any even length. Every frame of a synthesis comes before its terminal message (done, cancelled or
+error) and none after it, and a synthesis starts only after the previous one's terminal message.
+A cancel can lose the race: a synthesis that already ended is not cancelled, so a client that
+cancels drops frames until it reads the terminal message for that id, whichever it is. One
+synthesis at a time per connection: a second `synth` while one runs is refused `busy`, except after
+a `cancel`, when it waits for the cancelled one to unwind and then starts. A cancel takes effect
+when EMA hands over its next chunk; the rest of that sentence is dropped. `first_ms` is the time to
+the first frame, absent when there was none.
+
+Text goes through the brand respelling table, then Antalia-2 Mini's normaliser, is cut into
+sentences, and each sentence is one EMA stream (`sample_rate=8000`, a fixed seed), with 250 ms of
+silence between sentences. A one-sentence text is exactly one stream of the normalised text, the
+path the owner's blind test heard. Nothing that holds a text reaches the log: the root handler
+passes only this service's records, which carry lengths, timings and kinds.
 """
+import argparse
 import asyncio
+import contextlib
+import hashlib
 import json
 import logging
 import os
+import re
+import signal
+import stat
+import sys
+import threading
 import time
+import traceback
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -3684,187 +5033,1092 @@ import numpy as np
 from respell import Respeller
 
 LOG = logging.getLogger("jeeta-speak")
+# The connections' logger, outside "jeeta-speak" on purpose: websockets logs every frame (text
+# included) at debug level and quotes exceptions at error level, so the root filter withholds it.
+WS_LOG = logging.getLogger("speak.websocket")
+WS_LOG.setLevel(logging.WARNING)
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 SAMPLE_RATE = 8000
+# EMA's own pause between the pieces it cuts a long text into (ema_lightning/chunker.py).
+SENTENCE_GAP_MS = 250
+SENTENCE_GAP = b"\x00\x00" * (SAMPLE_RATE * SENTENCE_GAP_MS // 1000)
+MIN_SENTENCE_WORDS = 3
+# The worker's abbreviations (plan B4 text.rs). Antalia's normaliser expands all of them except
+# a lowercase "sn.", "tel." and "st." (antalia-mini 1.0.1, checked 2026-10-29), so a period after
+# one of these words never ends a sentence.
+ABBREVIATIONS = frozenset([
+    "dr", "sn", "av", "prof", "doç", "yrd", "no", "tel", "vb", "vs", "ltd", "şti", "cad", "sok", "mah",
+    "apt", "bul", "st",
+])
+# Bump with any change to how a text becomes sentences or audio that the constants below miss.
+PIPELINE_VERSION = 1
+MAX_TEXT_CHARS = 2000
+# The normalised text a request may become (numbers read out grow several times their digits).
+MAX_SPOKEN_CHARS = 4000
+MAX_ID_CHARS = 128
+MAX_MESSAGE_BYTES = 1 << 20
+DEFAULT_SOCKET = "unix:/run/jeeta-voice/speak.sock"
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+CLOCK_PROBE = "Salı saat 14:00'e randevunuz var."
+WARM_TEXT = "Merhaba, ben dijital asistanınız; size nasıl yardımcı olabilirim?"
+# What Antalia's normaliser should have read out: a digit or one of these symbols left in its
+# cased output (before its last pass drops what the model cannot read) was not spoken.
+RESIDUE = re.compile(r"[0-9%@#/+]|(?<=\d):|:(?=\d)")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_LAST_WORD = re.compile(r"(\w+)\.$")
+_RUNNING = set()
+
+# The owner-approved texts the bridge plays (jt_calls opening.rs and phrases.rs defaults, A3/A4),
+# with "Jeeta" as the workspace. The self-test reads each one through the real stack.
+APPROVED_TEXTS = (
+    "Merhaba, ben Jeeta'nın dijital asistanıyım.",
+    "Merhaba, ben Jeeta'nın dijital asistanıyım. Size nasıl yardımcı olabilirim?",
+    "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.",
+    "Görüşmek üzere, iyi günler.",
+    "Hı hı.",
+    "Anladım.",
+    "Tamam.",
+    "Peki.",
+    "Bir saniye, hemen bakıyorum.",
+    "Kontrol ediyorum, kısa bir an.",
+    "Biraz daha zaman alıyor, beklediğiniz için teşekkürler.",
+    "Sizi tam duyamadım, tekrar eder misiniz?",
+    "Hâlâ orada mısınız?",
+    "Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız.",
+)
+# Where EMA's own frontend changes Antalia's reading of an approved text (its alphabet folds the
+# circumflex: ema_lightning/frontend.py); everywhere else it must pass the reading through as is.
+MODEL_READS = {"hâlâ orada mısınız?": "hala orada mısınız?"}
 
 
-def load_normalizer():
-    """Antalia-2 Mini's normaliser: `Antalia.normalize(text)` on the class when it is static,
-    else on one instance (weights baked into the image)."""
-    from antalia_mini import Antalia
+class TooLong(Exception):
+    """The normalised text exceeds MAX_SPOKEN_CHARS."""
 
-    fn = Antalia.normalize
-    try:
-        fn("1")
-        return fn
-    except TypeError:
-        return Antalia().normalize
+
+def tr_lower(text):
+    return text.replace("I", "ı").replace("İ", "i").lower()
+
+
+def split_sentences(text):
+    """The sentences of a normalised text: cut after . ! ? and a space (after Antalia's normaliser
+    numbers, times and most abbreviations are words, so a period left is a sentence's end), never
+    after one of the worker's abbreviations. A piece of fewer than three words joins the next one
+    ("evet. tamam. yarın görüşürüz." stays whole)."""
+    out, pending = [], ""
+    for part in _SENTENCE_END.split(text.strip()):
+        pending = f"{pending} {part}".strip()
+        last = _LAST_WORD.search(pending)
+        if last and tr_lower(last.group(1)) in ABBREVIATIONS:
+            continue
+        if len(pending.split()) >= MIN_SENTENCE_WORDS:
+            out.append(pending)
+            pending = ""
+    if pending:
+        if out:
+            out[-1] = f"{out[-1]} {pending}"
+        else:
+            out.append(pending)
+    return out
+
+
+def to_pcm16(audio):
+    samples = np.nan_to_num(np.asarray(audio, dtype=np.float32).reshape(-1), nan=0.0, posinf=1.0, neginf=-1.0)
+    return np.rint(np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+class VoicePool:
+    """EMA instances, one per synthesis at a time. One instance batches the streams it serves
+    together, and a batched stream's audio differs (in its last bits) from the same sentence alone:
+    each synthesis takes an instance of its own, on the event loop, so no worker thread ever waits
+    for one."""
+
+    def __init__(self, voices):
+        self.voices = list(voices)
+        self.free = None
+        self.loop = None
+
+    async def acquire(self):
+        loop = asyncio.get_running_loop()
+        if self.loop is not loop:  # a queue belongs to one loop: the service has one
+            self.free, self.loop = asyncio.Queue(), loop
+            for v in self.voices:
+                self.free.put_nowait(v)
+        return await self.free.get()
+
+    def release(self, voice):
+        self.free.put_nowait(voice)
 
 
 class Mouth:
-    def __init__(self, respeller, normalize, tts, seed):
+    def __init__(self, respeller, normalize, tts, seed, sample_rate=SAMPLE_RATE, residue=None):
         self.respeller = respeller
         self.normalize = normalize
-        self.tts = tts
+        # One EMA instance or several (a VoicePool hands them out); the first reads the self-test.
+        self.voices = list(tts) if isinstance(tts, (list, tuple)) else [tts]
+        self.tts = self.voices[0]
+        self.voice_pool = None
         self.seed = seed
+        self.sample_rate = sample_rate
+        # text -> how many symbols the normaliser left unread (None: not measured).
+        self.residue = residue
+        self.residual_symbols = 0
+        self.weights = {}  # name -> sha256 of the weights checked before loading
+        self.voice_id = None
 
     def spoken(self, text):
-        return self.normalize(self.respeller.apply(text))
+        respelled = self.respeller.apply(text)
+        if self.residue is not None:
+            left = self.residue(respelled)
+            if left:
+                self.residual_symbols += left
+                LOG.warning("the normaliser left %d symbols unread (%d so far)", left, self.residual_symbols)
+        return self.normalize(respelled)
 
-    def chunks(self, text):
-        for chunk in self.tts.stream(self.spoken(text), sample_rate=SAMPLE_RATE, seed=self.seed):
-            audio = np.asarray(chunk, dtype=np.float32).reshape(-1)
-            yield (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+    def sentences(self, text):
+        spoken = self.spoken(text)
+        if len(spoken) > MAX_SPOKEN_CHARS:
+            raise TooLong()
+        return split_sentences(spoken)
+
+    def model_text(self, text):
+        """What EMA's model reads for `text` (its frontend runs after ours), or None if unknown."""
+        frontend = getattr(self.tts, "_frontend", None)
+        if frontend is None:
+            return None
+        return " ".join(frontend(s) for s in self.sentences(text))
+
+    def chunks(self, text, tts=None):
+        """PCM16 chunks of `text`, as EMA (`tts`, else the first instance) makes them. Closing this
+        generator stops EMA's work."""
+        tts = tts or self.tts
+        for i, sentence in enumerate(self.sentences(text)):
+            if i:
+                yield SENTENCE_GAP
+            stream = tts.stream(sentence, sample_rate=self.sample_rate, seed=self.seed)
+            try:
+                for audio in stream:
+                    pcm = to_pcm16(audio)
+                    if pcm:
+                        yield pcm
+            finally:
+                close = getattr(stream, "close", None)
+                if close is not None:
+                    close()
 
 
-def build_mouth():
+def measure(mouth, text, tts=None):
+    """(first chunk ms, total ms, audio ms) of one synthesis."""
+    started, first, samples = time.monotonic(), None, 0
+    for chunk in mouth.chunks(text, tts):
+        if first is None:
+            first = int((time.monotonic() - started) * 1000)
+        samples += len(chunk) // 2
+    return first, int((time.monotonic() - started) * 1000), samples * 1000 // mouth.sample_rate
+
+
+def env_int(name, default, low, high):
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SystemExit(f"{name} must be an integer") from None
+    if not low <= value <= high:
+        raise SystemExit(f"{name} must be from {low} to {high}")
+    return value
+
+
+def settings():
+    """The environment's knobs (the unit sets each explicitly)."""
+    return {
+        "threads": env_int("SPEAK_THREADS", 2, 1, 16),
+        "batch": env_int("SPEAK_BATCH", 2, 1, 8),
+        "seed": env_int("EMA_SEED", 0, 0, 2**31 - 1),
+        "workers": env_int("SPEAK_WORKERS", 2, 1, 8),
+        "watchdog_s": env_int("SPEAK_WATCHDOG_S", 60, 10, 600),
+    }
+
+
+def set_batch(tts, size):
+    """EMA measures its best batch size on first use (every size up to 8 on its probe sentence) and
+    caches the result under ~/.cache, which this read-only container cannot write; a failed write
+    fails every synthesis in that turn. The size is fixed instead (ema-lightning 1.1.2,
+    `EMA._batch_size`): 2, the value EMA measured for itself in the image the owner tested."""
+    if not hasattr(tts, "_batch_size"):
+        raise SystemExit("ema-lightning changed: it has no batch size to fix")
+    tts._batch_size = size
+
+
+def versions():
+    from importlib.metadata import PackageNotFoundError, version
+
+    out = {}
+    for name in ("ema-lightning", "antalia-mini", "normalizer-tr", "torch"):
+        try:
+            out[name] = version(name)
+        except PackageNotFoundError:
+            out[name] = "?"
+    return out
+
+
+def pipeline():
+    """The sentence and audio rules, as data: a change to any of them changes the voice id."""
+    return {
+        "version": PIPELINE_VERSION,
+        "gap_ms": SENTENCE_GAP_MS,
+        "min_words": MIN_SENTENCE_WORDS,
+        "splitter": _SENTENCE_END.pattern,
+        "abbreviations": sorted(ABBREVIATIONS),
+        "rate": SAMPLE_RATE,
+    }
+
+
+def voice_fingerprint(versions, weights, knobs, table):
+    """A short id of everything that decides how a text sounds: a cache of synthesised sentences
+    is only valid for one (the worker keys its cache by the `hello`'s voice id)."""
+    parts = {"versions": versions, "weights": weights, "seed": knobs["seed"], "threads": knobs["threads"],
+             "batch": knobs["batch"], "respell": table, "pipeline": pipeline()}
+    encoded = json.dumps(parts, sort_keys=True, ensure_ascii=False).encode()
+    return hashlib.sha256(encoded).hexdigest()[:12]
+
+
+def voice_id(knobs=None):
+    """The voice id from the installed versions, weights.lock, the knobs and respell.json, without
+    loading the model (the weights are checked against the same lock before they are loaded)."""
+    import pins
+
+    lock = pins.load_lock()
+    weights = {name: entry["sha256"] for name, entry in lock["files"].items()}
+    table = Respeller.load(os.path.join(HERE, "respell.json")).table
+    return voice_fingerprint(versions(), weights, knobs or settings(), table)
+
+
+def build_mouth(knobs=None):
+    """The real mouth: the pinned weights checked, EMA loaded on the CPU, Antalia's normaliser."""
     import torch
+    from antalia_mini import Antalia
+    from antalia_mini.text import normalize_for_cased_model
     from ema_lightning import EMA
 
-    torch.set_num_threads(int(os.environ.get("SPEAK_THREADS", "2")))
-    respeller = Respeller.load(os.environ.get("RESPELL_FILE", "/app/respell.json"))
-    return Mouth(respeller, load_normalizer(), EMA(), int(os.environ.get("EMA_SEED", "0")))
+    import pins
+
+    knobs = knobs or settings()
+    try:
+        weights = pins.verify(pins.load_lock())
+    except (pins.PinError, OSError, ValueError) as e:
+        raise SystemExit(f"weights check failed: {e}") from None
+    torch.set_num_threads(knobs["threads"])
+    voices = [EMA(device="cpu") for _ in range(knobs["workers"])]
+    for tts in voices:
+        set_batch(tts, knobs["batch"])
+    respeller = Respeller.load(os.path.join(HERE, "respell.json"))
+    # A static method in antalia-mini 1.0.1: the text the model reads, with no weights loaded. Its
+    # cased stage, before the last pass drops what the model cannot read, shows what was not read.
+    mouth = Mouth(respeller, Antalia.normalize, voices, knobs["seed"],
+                  residue=lambda t: len(RESIDUE.findall(normalize_for_cased_model(t))))
+    mouth.voice_pool = VoicePool(voices)
+    mouth.weights = weights
+    mouth.voice_id = voice_fingerprint(versions(), weights, knobs, respeller.table)
+    return mouth
 
 
 def self_test(mouth):
-    """The two readings the owner's test depended on; the process refuses to start without them."""
-    if "on dörde" not in mouth.spoken("Salı saat 14:00'e randevunuz var."):
+    """The readings the owner's test depended on, as EMA's model receives them; the process
+    refuses to start without them. The clock: "on dörde", not normalizer-tr's "iki nokta ... kesme".
+    Each brand: its respelling reaches the model. Each approved text: EMA's frontend keeps
+    Antalia's reading as is (or as MODEL_READS says), and no "kesme" is read aloud."""
+    reading = mouth.model_text(CLOCK_PROBE)
+    if reading is None:
+        raise SystemExit("self-test: the voice does not show the text its model reads")
+    if "on dörde" not in reading or "nokta" in reading or "kesme" in reading:
         raise SystemExit("normaliser self-test failed: 14:00'e")
-    if mouth.respeller.apply("Jeeta'nın") != "Cita'nın":
-        raise SystemExit("respelling self-test failed")
+    for written, said in mouth.respeller.table.items():
+        reading = mouth.model_text(f"Bugün {written} hakkında konuşuyoruz.")
+        if not re.search(rf"(?<!\w){re.escape(tr_lower(said))}(?!\w)", reading):
+            raise SystemExit(f"respelling self-test failed: {written}")
+    frontend = mouth.tts._frontend
+    for n, text in enumerate(APPROVED_TEXTS):
+        for sentence in mouth.sentences(text):
+            read = frontend(sentence)
+            if read != MODEL_READS.get(sentence, sentence) or "kesme" in read:
+                raise SystemExit(f"approved-text self-test failed: text {n}")
 
 
-async def run_synth(ws, mouth, pool, sid, text, cancel):
-    loop = asyncio.get_running_loop()
-    started = time.monotonic()
-    samples = 0
+class Watchdog:
+    """Ends the process when a synthesis chunk, or the event loop itself, is stuck past `limit_s`,
+    so systemd's Restart=always brings a working service back. It runs on its own thread."""
+
+    def __init__(self, limit_s, clock=time.monotonic, exit=os._exit):
+        self.limit_s, self.clock, self.exit = limit_s, clock, exit
+        self.lock = threading.Lock()
+        self.waits = {}
+        self.token = 0
+        self.beat = clock()
+
+    def begin(self):
+        with self.lock:
+            self.token += 1
+            self.waits[self.token] = self.clock()
+            return self.token
+
+    def end(self, token):
+        with self.lock:
+            self.waits.pop(token, None)
+
+    def heartbeat(self):
+        self.beat = self.clock()
+
+    def check(self):
+        now = self.clock()
+        with self.lock:
+            stuck = sum(1 for t in self.waits.values() if now - t > self.limit_s)
+        if stuck or now - self.beat > self.limit_s:
+            LOG.critical("stuck for over %d s (%d synthesis waits, loop %s): exiting", self.limit_s, stuck,
+                         "stalled" if now - self.beat > self.limit_s else "running")
+            self.exit(70)
+            return True
+        return False
+
+    def start(self, period_s=1.0):
+        def run():
+            while not self.check():
+                time.sleep(period_s)
+
+        threading.Thread(target=run, name="speak-watchdog", daemon=True).start()
+
+
+_watchdog = None
+
+
+class OnlyOurs(logging.Filter):
+    """Passes this service's records only. A library's record may quote a text (antalia-mini's
+    normaliser warning does, websockets' frame and error lines can): it is withheld, and one of ours
+    says which logger and level it came from."""
+
+    def filter(self, record):
+        if record.name == LOG.name or record.name.startswith(LOG.name + "."):
+            return True
+        if record.levelno >= logging.WARNING:
+            LOG.warning("withheld a record (%s) from %s", record.levelname, record.name)
+        return False
+
+
+def _quiet_warning(message, category, filename, lineno, file=None, line=None):
+    # A library warning may quote the text it failed on (antalia-mini's normaliser fallback does).
+    LOG.warning("%s at %s:%d", category.__name__, os.path.basename(filename), lineno)
+
+
+def _quiet_exception(kind, value, tb):
+    # An exception's message may quote a text: its kind and where it was raised only.
+    frame = traceback.extract_tb(tb)[-1] if tb else None
+    where = f"{os.path.basename(frame.filename)}:{frame.lineno}" if frame else "?"
+    LOG.critical("uncaught %s at %s", kind.__name__, where)
+
+
+def configure_logging(level_name):
+    """Our handler on the root logger, behind OnlyOurs; library warnings and uncaught exceptions
+    are logged by kind and place. Returns the handler."""
+    level = getattr(logging, level_name.upper(), None)
+    if not isinstance(level, int):
+        raise SystemExit("SPEAK_LOG must be debug, info, warning or error")
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    handler.addFilter(OnlyOurs())
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.setLevel(logging.WARNING)
+    LOG.setLevel(level)
+    warnings.showwarning = _quiet_warning
+    sys.excepthook = _quiet_exception
+    threading.excepthook = lambda a: _quiet_exception(a.exc_type, a.exc_value, a.exc_traceback)
+    return handler
+
+
+def parse_endpoint(value):
+    if value.startswith("tcp:"):
+        host, _, port = value[4:].rpartition(":")
+        host = host.strip("[]")
+        if host not in LOOPBACK:
+            raise ValueError("a TCP endpoint must be on loopback")
+        if not port.isdigit() or int(port) > 65535:
+            raise ValueError("a TCP endpoint needs a port")
+        return ("tcp", host, int(port))
+    path = value.removeprefix("unix:")
+    if not path.startswith("/"):
+        raise ValueError("a unix socket path must be absolute")
+    return ("unix", path)
+
+
+def remove_stale_socket(path):
     try:
-        gen = mouth.chunks(text)
-        while not cancel.is_set():
-            chunk = await loop.run_in_executor(pool, next, gen, None)
-            if chunk is None or cancel.is_set():
-                break
-            samples += len(chunk) // 2
-            await ws.send(chunk)
-        kind = "cancelled" if cancel.is_set() else "done"
-        await ws.send(json.dumps({
-            "type": kind,
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(mode):
+        raise SystemExit(f"{path} exists and is not a socket")
+    os.unlink(path)
+
+
+SERVER_OPTIONS = {
+    # No compression (audio does not shrink), no keepalive pings (a local socket closes when its
+    # peer dies), a megabyte per message so an over-long text is refused, not a dropped connection.
+    "compression": None, "ping_interval": None, "max_size": MAX_MESSAGE_BYTES, "logger": WS_LOG,
+}
+
+
+@contextlib.asynccontextmanager
+async def open_server(endpoint, handler):
+    from websockets.asyncio.server import serve, unix_serve
+
+    if endpoint[0] == "tcp":
+        async with serve(handler, endpoint[1], endpoint[2], **SERVER_OPTIONS) as server:
+            yield server
+        return
+    path = endpoint[1]
+    remove_stale_socket(path)
+    old = os.umask(0o117)
+    try:
+        server = await unix_serve(handler, path, **SERVER_OPTIONS)
+    finally:
+        os.umask(old)
+    try:
+        os.chmod(path, 0o660)
+        yield server
+    finally:
+        server.close()
+        await server.wait_closed()
+        with contextlib.suppress(OSError):
+            if stat.S_ISSOCK(os.lstat(path).st_mode):
+                os.unlink(path)
+
+
+def health(endpoint):
+    """0 when the service answers a WebSocket handshake with its hello, 1 otherwise (the image's
+    HEALTHCHECK)."""
+    from websockets.sync.client import connect, unix_connect
+
+    options = {"open_timeout": 5, "compression": None}
+    try:
+        if endpoint[0] == "tcp":
+            host = f"[{endpoint[1]}]" if ":" in endpoint[1] else endpoint[1]
+            opening = connect(f"ws://{host}:{endpoint[2]}/", **options)
+        else:
+            opening = unix_connect(endpoint[1], **options)
+        with opening as ws:
+            return 0 if json.loads(ws.recv(timeout=5)).get("type") == "hello" else 1
+    except Exception:  # noqa: BLE001 - any failure is "unhealthy"
+        return 1
+
+
+def parse_request(message):
+    """(kind, id, text, problem): problem is None or the reason of the error to answer."""
+    try:
+        msg = json.loads(message)
+    except (ValueError, RecursionError):
+        return None, None, None, "bad_request"
+    if not isinstance(msg, dict):
+        return None, None, None, "bad_request"
+    sid = msg.get("id")
+    if not (isinstance(sid, str) and 0 < len(sid) <= MAX_ID_CHARS):
+        sid = None
+    kind = msg.get("type")
+    if kind not in ("synth", "cancel") or sid is None:
+        return kind, sid, None, "bad_request"
+    if kind == "cancel":
+        return kind, sid, None, None
+    text = msg.get("text")
+    if not isinstance(text, str):
+        return kind, sid, None, "bad_request"
+    if len(text) > MAX_TEXT_CHARS:
+        return kind, sid, None, "too_long"
+    return kind, sid, text, None
+
+
+async def _next_chunk(loop, pool, gen):
+    token = _watchdog.begin() if _watchdog else None
+    try:
+        return await loop.run_in_executor(pool, next, gen, None)
+    finally:
+        if token is not None:
+            _watchdog.end(token)
+
+
+async def run_synth(ws, mouth, pool, sid, text, cancel, after=None):
+    from websockets.exceptions import ConnectionClosed
+
+    if after is not None:
+        with contextlib.suppress(Exception):
+            await after
+    loop = asyncio.get_running_loop()
+    started, first_ms, samples, gen, voice = time.monotonic(), None, 0, None, None
+    voices = getattr(mouth, "voice_pool", None)
+    try:
+        if voices is not None and not cancel.is_set():
+            voice = await voices.acquire()
+        if not cancel.is_set():
+            gen = mouth.chunks(text) if voice is None else mouth.chunks(text, voice)
+            while True:
+                chunk = await _next_chunk(loop, pool, gen)
+                if chunk is None or cancel.is_set():
+                    break
+                if first_ms is None:
+                    first_ms = int((time.monotonic() - started) * 1000)
+                samples += len(chunk) // 2
+                await ws.send(chunk)
+        reply = {
+            "type": "cancelled" if cancel.is_set() else "done",
             "id": sid,
             "synth_ms": int((time.monotonic() - started) * 1000),
             "audio_ms": samples * 1000 // SAMPLE_RATE,
-        }))
+        }
+        if first_ms is not None:
+            reply["first_ms"] = first_ms
+        await ws.send(json.dumps(reply))
+        LOG.debug("%s: %d chars, first %s ms, synth %d ms, audio %d ms", reply["type"], len(text),
+                  first_ms, reply["synth_ms"], reply["audio_ms"])
+    except ConnectionClosed:
+        cancel.set()
+    except TooLong:
+        LOG.warning("refused a request: too_long (normalised)")
+        with contextlib.suppress(Exception):
+            await ws.send(json.dumps({"type": "error", "id": sid, "reason": "too_long"}))
     except Exception as e:  # noqa: BLE001 - report the kind, never the text
         LOG.error("synthesis failed: %s", type(e).__name__)
-        try:
-            await ws.send(json.dumps({"type": "error", "id": sid, "reason": type(e).__name__}))
-        except Exception:  # noqa: BLE001
-            pass
+        with contextlib.suppress(Exception):
+            await ws.send(json.dumps({"type": "error", "id": sid, "reason": "failed"}))
+    finally:
+        if gen is not None:
+            with contextlib.suppress(ValueError):  # still running in a thread only at shutdown
+                gen.close()
+        if voice is not None:
+            voices.release(voice)
 
 
 async def session(ws, mouth, pool):
-    current = {"id": None, "cancel": None, "task": None}
+    from websockets.exceptions import ConnectionClosed
+
+    current = None  # (id, cancel event, task) of the last synthesis started
     try:
+        await ws.send(json.dumps({"type": "hello", "voice_id": mouth.voice_id, "sample_rate": SAMPLE_RATE,
+                                  "format": "pcm16le"}))
         async for message in ws:
             if isinstance(message, bytes):
+                kind, sid, text, problem = None, None, None, "bad_request"
+            else:
+                kind, sid, text, problem = parse_request(message)
+            if problem is not None:
+                LOG.warning("refused a request: %s", problem)
+                await ws.send(json.dumps({"type": "error", "id": sid, "reason": problem}))
                 continue
-            msg = json.loads(message)
-            if msg.get("type") == "synth":
-                task = current["task"]
-                if task is not None and not task.done():
-                    await ws.send(json.dumps({"type": "error", "id": msg.get("id"), "reason": "busy"}))
-                    continue
-                cancel = asyncio.Event()
-                current.update(id=msg["id"], cancel=cancel)
-                current["task"] = asyncio.create_task(
-                    run_synth(ws, mouth, pool, msg["id"], msg.get("text", ""), cancel)
-                )
-            elif msg.get("type") == "cancel" and msg.get("id") == current["id"] and current["cancel"]:
-                current["cancel"].set()
-    finally:
-        if current["cancel"]:
-            current["cancel"].set()
-
-
-async def main():
-    from websockets.asyncio.server import unix_serve
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
-    sock = os.environ.get("SPEAK_SOCKET", "/run/jeeta-voice/speak.sock")
-    mouth = build_mouth()
-    self_test(mouth)
-    for _ in mouth.chunks("Merhaba."):  # warm the model before the first call
+            busy = current is not None and not current[2].done()
+            if kind == "cancel":
+                if busy and current[0] == sid:
+                    current[1].set()
+                continue
+            if busy and not current[1].is_set():
+                LOG.warning("refused a request: busy")
+                await ws.send(json.dumps({"type": "error", "id": sid, "reason": "busy"}))
+                continue
+            cancel = asyncio.Event()
+            after = current[2] if busy else None
+            task = asyncio.create_task(run_synth(ws, mouth, pool, sid, text, cancel, after))
+            _RUNNING.add(task)
+            task.add_done_callback(_RUNNING.discard)
+            current = (sid, cancel, task)
+    except ConnectionClosed:
         pass
-    # Two at once: a call's live sentence never waits behind another call's (or its own) pre-synthesis.
-    pool = ThreadPoolExecutor(max_workers=int(os.environ.get("SPEAK_WORKERS", "2")))
-    if os.path.exists(sock):
-        os.unlink(sock)
-    async with unix_serve(lambda ws: session(ws, mouth, pool), sock, max_size=2**16):
-        os.chmod(sock, 0o660)
+    finally:
+        if current is not None:
+            current[1].set()
+
+
+async def serve_forever(endpoint, mouth, pool, watchdog=None):
+    loop = asyncio.get_running_loop()
+    stop = loop.create_future()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError, AttributeError, ValueError):
+            loop.add_signal_handler(sig, lambda: stop.done() or stop.set_result(None))
+
+    async def beat():
+        while True:
+            watchdog.heartbeat()
+            await asyncio.sleep(1)
+
+    beating = asyncio.create_task(beat()) if watchdog else None
+    if watchdog:
+        watchdog.start()
+    async with open_server(endpoint, lambda ws: session(ws, mouth, pool)):
         LOG.info("listening")
-        await asyncio.Future()
+        await stop
+    if beating:
+        beating.cancel()
+    LOG.info("stopped")
+
+
+def main(argv=None):
+    global _watchdog
+    parser = argparse.ArgumentParser(prog="jeeta_speak.py")
+    parser.add_argument("--health", action="store_true", help="exit 0 if the service answers")
+    parser.add_argument("--self-test", action="store_true", help="load, check the readings, exit")
+    parser.add_argument("--voice-id", action="store_true", help="print the voice id and exit")
+    args = parser.parse_args(argv)
+    try:
+        endpoint = parse_endpoint(os.environ.get("SPEAK_SOCKET", DEFAULT_SOCKET))
+    except ValueError as e:
+        raise SystemExit(f"SPEAK_SOCKET: {e}") from None
+    if args.health:
+        return health(endpoint)
+    knobs = settings()
+    if args.voice_id:
+        print(voice_id(knobs))
+        return 0
+    configure_logging(os.environ.get("SPEAK_LOG", "info"))
+    started = time.monotonic()
+    mouth = build_mouth(knobs)
+    loaded_ms = int((time.monotonic() - started) * 1000)
+    self_test(mouth)
+    LOG.info("loaded in %d ms: %s; seed %d, threads %d, batch %d, voice %s", loaded_ms,
+             ", ".join(f"{k} {v}" for k, v in versions().items()), knobs["seed"], knobs["threads"],
+             knobs["batch"], mouth.voice_id)
+    if args.self_test:
+        LOG.info("self-test passed")
+        return 0
+    for n, tts in enumerate(mouth.voices):
+        first, total, audio = measure(mouth, WARM_TEXT, tts)
+        LOG.info("warm %d: first audio in %s ms, %d ms for %d ms of audio", n, first, total, audio)
+    pool = ThreadPoolExecutor(max_workers=knobs["workers"], thread_name_prefix="speak")
+    _watchdog = Watchdog(knobs["watchdog_s"])
+    asyncio.run(serve_forever(endpoint, mouth, pool, _watchdog))
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(main())
+```
+
+`rust/bridge/voice/speech/speak/pins.py`:
+
+```python
+"""What the speak image pins, and the checks that hold it to them. Standard library only at import
+time: the build runs `check-lock` before anything is installed.
+
+Packages. constraints.txt is the frozen set of the image the owner's blind test ran on (B2 Step 7,
+`pip freeze` of jeeta-ttstest:tmp); requirements.txt names what the service imports; wheels.sha256
+records every wheel of the first good build (name, version, sha256). The build installs only from
+torch.lock (PyTorch's CPU index alone) and requirements.lock (PyPI alone), both
+`--require-hashes --no-deps`, and `lock` writes them from wheels.sha256. `check-lock` refuses a
+lock that is not exactly wheels.sha256, a frozen set without ema-lightning 1.1.2, antalia-mini
+1.0.1 and a torch CPU build, a requirement the locks miss or pin otherwise, and any package beyond
+the frozen set except the service's and pytest's own (EXTRA). `wheels` turns the build's pip
+reports into the same lines and, against an --expect file, refuses any difference or unknown hash.
+
+Weights. EMA() downloads ema.pt and decoder.pt from its repository's main branch and takes no
+revision, so they are pinned by SHA-256 and size in weights.lock: the build fetches and checks them
+(`fetch-weights`), the service checks them again before it loads them (`verify`), and `record`
+prints a lock from a local Hugging Face cache (B2 Step 7 ran `verify` in the tested image).
+
+Usage: python pins.py check-lock | lock | fetch-weights | verify | record [--lock PATH]
+       python pins.py wheels REPORT.json [REPORT.json ...] [--expect wheels.sha256]
+"""
+import argparse
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+REPO = "canberkkkkkk/ema-lightning"
+# The files EMA() loads (ema_lightning/api.py 1.1.2: ema.pt, decoder.pt; config.json is asked for
+# and never read).
+FILES = ("ema.pt", "decoder.pt")
+HERE = Path(__file__).resolve().parent
+LOCK = HERE / "weights.lock"
+HEX64 = re.compile(r"[0-9a-f]{64}")
+# The owner's choices, which the frozen set must hold.
+CHOSEN = {"ema-lightning": "1.1.2", "antalia-mini": "1.0.1"}
+# Packages the image holds beyond the owner-tested set: the service's server library and pytest
+# with its dependencies (the tested image had neither).
+EXTRA = {"websockets", "pytest", "iniconfig", "pluggy", "pygments"}
+TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
+PYPI_INDEX = "https://pypi.org/simple"
+
+
+class PinError(Exception):
+    """A pinned file is missing or differs (the message names the file, never a path's content)."""
+
+
+def canonical(name):
+    """A project name the way PyPI compares them (PEP 503)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+# --- packages ------------------------------------------------------------------------------------
+
+
+def listed(text):
+    return [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+
+
+def read_pins(text, what):
+    """name -> version of `name==version` lines (anything after the version is ignored)."""
+    pins = {}
+    for line in listed(text):
+        m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)(?:\s.*)?", line)
+        if not m:
+            raise PinError(f"{what}: not a name==version line: {line.split()[0]}")
+        name = canonical(m.group(1))
+        if name in pins:
+            raise PinError(f"{what}: {name} is listed twice")
+        pins[name] = m.group(2)
+    return pins
+
+
+def read_record(text, what):
+    """name -> (version, sha256) of `name==version sha256=<hex>` lines (wheels.sha256)."""
+    out = {}
+    for line in listed(text):
+        m = re.fullmatch(r"(\S+)==(\S+) sha256=(\S+)", line)
+        if not m or not HEX64.fullmatch(m.group(3)):
+            raise PinError(f"{what}: a line has no name==version sha256=<hex>")
+        out[canonical(m.group(1))] = (m.group(2), m.group(3))
+    return out
+
+
+def read_lock(text, what):
+    """name -> (version, sha256) of `name==version --hash=sha256:<hex>` lines."""
+    out = {}
+    for line in listed(text):
+        m = re.fullmatch(r"(\S+)==(\S+) --hash=sha256:([0-9a-f]{64})", line)
+        if not m:
+            raise PinError(f"{what}: a line has no name==version --hash=sha256:<hex>")
+        out[canonical(m.group(1))] = (m.group(2), m.group(3))
+    return out
+
+
+def lock_lines(entries):
+    return [f"{name}=={version} --hash=sha256:{digest}" for name, (version, digest) in sorted(entries.items())]
+
+
+def lock_files(record):
+    """(torch.lock, requirements.lock) texts from a wheel record."""
+    torch = {n: e for n, e in record.items() if n == "torch"}
+    rest = {n: e for n, e in record.items() if n != "torch"}
+    head = "# Generated by `python pins.py lock` from wheels.sha256; installed --require-hashes --no-deps"
+    return (
+        "\n".join([head + f" from {TORCH_INDEX} alone.", *lock_lines(torch)]) + "\n",
+        "\n".join([head + f" from {PYPI_INDEX} alone.", *lock_lines(rest)]) + "\n",
+    )
+
+
+def check_lock(folder=HERE):
+    """Every rule of the module docstring, over the files in `folder`; returns the locked set."""
+    read = lambda name: (folder / name).read_text(encoding="utf-8")  # noqa: E731
+    frozen = read_pins(read("constraints.txt"), "constraints.txt")
+    for name, version in CHOSEN.items():
+        if frozen.get(name) != version:
+            raise PinError(f"constraints.txt must hold {name}=={version}, the owner's choice")
+    if not frozen.get("torch", "").endswith("+cpu"):
+        raise PinError("constraints.txt must hold a torch CPU build (torch==...+cpu)")
+    record = read_record(read("wheels.sha256"), "wheels.sha256")
+    torch = read_lock(read("torch.lock"), "torch.lock")
+    rest = read_lock(read("requirements.lock"), "requirements.lock")
+    if list(torch) != ["torch"] or "torch" in rest:
+        raise PinError("torch.lock holds torch alone, and requirements.lock holds no torch")
+    locked = {**torch, **rest}
+    if locked != record:
+        names = sorted(set(locked.items()) ^ set(record.items()))
+        raise PinError("the locks differ from wheels.sha256: " + ", ".join(sorted({n for n, _ in names})))
+    for name, version in frozen.items():
+        if locked.get(name, (None,))[0] != version:
+            raise PinError(f"the locks do not hold {name}=={version} from constraints.txt")
+    if set(locked) - set(frozen) != EXTRA:
+        raise PinError("beyond constraints.txt the locks must hold exactly " + ", ".join(sorted(EXTRA)))
+    required = read_pins("\n".join(r for r in listed(read("requirements.txt")) if "==" in r), "requirements.txt")
+    for name, version in CHOSEN.items():
+        if required.get(name) != version:
+            raise PinError(f"requirements.txt must pin {name}=={version}, the owner's choice")
+    for line in listed(read("requirements.txt")):
+        name, _, version = line.partition("==")
+        entry = locked.get(canonical(name))
+        if entry is None or (version and entry[0] != version):
+            raise PinError(f"the locks do not satisfy {line} from requirements.txt")
+    return locked
+
+
+def wheels(report):
+    """`name==version sha256=<hex>` per installed distribution of a `pip install --report`, sorted."""
+    lines = []
+    for item in report.get("install", []):
+        meta, info = item.get("metadata", {}), item.get("download_info", {})
+        archive = info.get("archive_info", {})
+        digest = archive.get("hashes", {}).get("sha256")
+        if not digest and str(archive.get("hash", "")).startswith("sha256="):
+            digest = archive["hash"].split("=", 1)[1]
+        lines.append(f"{canonical(meta['name'])}=={meta['version']} sha256={digest or '?'}")
+    return sorted(lines)
+
+
+# --- weights -------------------------------------------------------------------------------------
+
+
+def load_lock(path=LOCK):
+    with open(path, encoding="utf-8") as f:
+        lock = json.load(f)
+    if lock.get("repo") != REPO:
+        raise PinError(f"weights.lock is not for {REPO}")
+    files = lock.get("files")
+    if not isinstance(files, dict) or sorted(files) != sorted(FILES):
+        raise PinError(f"weights.lock must pin exactly {', '.join(FILES)}")
+    for name, entry in files.items():
+        if not HEX64.fullmatch(str(entry.get("sha256", ""))):
+            raise PinError(f"weights.lock: {name} has no sha256")
+        if not isinstance(entry.get("size"), int) or entry["size"] <= 0:
+            raise PinError(f"weights.lock: {name} has no size")
+    return lock
+
+
+def locate(name):
+    """The cached file EMA() would load for `name` (the main revision), or None. Offline, no write."""
+    from huggingface_hub import try_to_load_from_cache
+
+    found = try_to_load_from_cache(REPO, name)
+    return Path(found) if isinstance(found, str) else None
+
+
+def verify(lock, locate=locate):
+    """Every pinned file is in the cache with its size and SHA-256; returns name -> sha256."""
+    digests = {}
+    for name, entry in sorted(lock["files"].items()):
+        path = locate(name)
+        if path is None or not path.is_file():
+            raise PinError(f"{name}: not in the model cache")
+        if path.stat().st_size != entry["size"]:
+            raise PinError(f"{name}: size differs from weights.lock")
+        digest = sha256_of(path)
+        if digest != entry["sha256"]:
+            raise PinError(f"{name}: sha256 differs from weights.lock")
+        digests[name] = digest
+    return digests
+
+
+def fetch(lock):
+    """Build time, with network: download what EMA() will load, then verify it."""
+    from huggingface_hub import hf_hub_download
+
+    for name in sorted(lock["files"]):
+        hf_hub_download(REPO, name)
+    return verify(lock)
+
+
+def record(locate=locate):
+    files = {}
+    for name in FILES:
+        path = locate(name)
+        if path is None:
+            raise PinError(f"{name}: not in the model cache")
+        files[name] = {"sha256": sha256_of(path), "size": path.stat().st_size}
+    return {"repo": REPO, "files": files}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="pins.py")
+    parser.add_argument("action", choices=["check-lock", "lock", "fetch-weights", "verify", "record", "wheels"])
+    parser.add_argument("reports", nargs="*")
+    parser.add_argument("--lock", default=str(LOCK))
+    parser.add_argument("--expect")
+    args = parser.parse_args(argv)
+    try:
+        if args.action == "check-lock":
+            print(f"locks: ok ({len(check_lock())} wheels)")
+        elif args.action == "lock":
+            torch, rest = lock_files(read_record((HERE / "wheels.sha256").read_text(encoding="utf-8"), "wheels.sha256"))
+            (HERE / "torch.lock").write_text(torch, encoding="utf-8", newline="\n")
+            (HERE / "requirements.lock").write_text(rest, encoding="utf-8", newline="\n")
+        elif args.action == "record":
+            print(json.dumps(record(), indent=2, sort_keys=True))
+        elif args.action == "wheels":
+            got = []
+            for path in args.reports:
+                with open(path, encoding="utf-8") as f:
+                    got.extend(wheels(json.load(f)))
+            got.sort()
+            if args.expect:
+                want = sorted(listed(Path(args.expect).read_text(encoding="utf-8")))
+                if any(line.endswith("sha256=?") for line in got):
+                    raise PinError("a wheel was installed without a known sha256")
+                if want != got:
+                    names = sorted({line.split("==")[0] for line in set(want) ^ set(got)})
+                    raise PinError("the installed wheels differ from wheels.sha256: " + ", ".join(names))
+            print("# pip install --report of the speak image: one installed wheel per line")
+            print("\n".join(got))
+        else:
+            lock = load_lock(args.lock)
+            digests = fetch(lock) if args.action == "fetch-weights" else verify(lock)
+            print("weights: ok (" + ", ".join(f"{n} {d[:12]}" for n, d in digests.items()) + ")")
+    except PinError as e:
+        print(f"pins: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+`rust/bridge/voice/speech/speak/weights.lock`:
+
+```json
+{
+  "files": {
+    "decoder.pt": {
+      "sha256": "9595819b173f411340f63d11332695121a97f8bf1f6d8b6fef0b21cf99c7ad67",
+      "size": 12103269
+    },
+    "ema.pt": {
+      "sha256": "95aec03dafbe0e1d69bca774ab597c779464729a14bc99bfcb52480090c7dfe6",
+      "size": 22285878
+    }
+  },
+  "note": "LFS sha256 of main at e7c96f2fc0ba843cd0f86e02786655bb56f50df8 (last modified 2026-10-21), read from the Hugging Face API on 2026-10-29; B2 Step 7 checks them against jeeta-ttstest:tmp, the image the owner's blind test ran on.",
+  "repo": "canberkkkkkk/ema-lightning"
+}
 ```
 
 `rust/bridge/voice/speech/speak/requirements.txt`:
 
-```
+```text
+# What the speak service imports, the input of the locks: the two the owner chose and the server
+# and test libraries the plan fixes are pinned here; numpy, torch (its CPU build) and
+# huggingface-hub take the versions of constraints.txt, the frozen set of the image the owner's
+# blind test ran on. The build installs only from the hashed locks (pins.py check-lock holds them
+# to this file). normalizer-tr is not ours: ema-lightning requires it and runs it on the text
+# Antalia's normaliser has already spelled out; the start-up self-test checks that the readings we
+# rely on reach the model unchanged (jeeta_speak.self_test).
 ema-lightning==1.1.2
 antalia-mini==1.0.1
 websockets==17.3
-numpy==2.5.4
 pytest==8.4.2
+numpy
+torch
+huggingface-hub
 ```
 
 - [ ] **Step 4: Run the unit tests**
 
-Run: `python -m pytest -c speech/pytest.ini -m "not models" speech/speak/tests`
-Expected: `5 passed, 1 deselected`.
+Run: `python -I -m pytest -c speech/pytest.ini -m "not models" speech/speak/tests`
+Expected: on Windows `72 passed, 3 skipped, 9 deselected` (the three unix-socket tests skip); on Linux `75 passed, 9 deselected`.
 
 - [ ] **Step 5: Write the image and the unit**
+
+`constraints.txt` and `wheels.sha256` come from the server (Step 7); `python pins.py lock` writes `torch.lock` and `requirements.lock` from `wheels.sha256`, and `python pins.py check-lock` must print `locks: ok (39 wheels)`.
 
 `rust/bridge/voice/speech/speak/Dockerfile`:
 
 ```dockerfile
-FROM python:3.12-slim-bookworm
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HF_HOME=/models/hf
+# jeeta-voice-speak: EMA Lightning 1.1.2 behind Antalia-2 Mini's normaliser (plan V1-T3 B2).
+# Runs with --network none, read-only, as uid 1502 (jeeta-voice-speak) in gid 1501 (jeeta-voice),
+# serving /run/jeeta-voice/speak.sock. Build from this directory with speech/pytest.ini copied in.
+#
+# What is pinned, and how (pins.py has the rules):
+# - the base image by digest (python:3.12-slim-bookworm as published on 2026-10-29);
+# - every package by version and sha256: torch.lock from PyTorch's CPU index alone and
+#   requirements.lock from PyPI alone, --require-hashes --no-deps, wheels only, then `pip check`.
+#   `pins.py check-lock` first holds the locks to wheels.sha256 (the first good build's record),
+#   to constraints.txt (the frozen set of the image the owner tested) and to requirements.txt;
+# - EMA's weights by SHA-256 and size (weights.lock): EMA() reads its repository's main branch and
+#   takes no revision, so the build fetches them and refuses a mismatch, and the service checks
+#   them again at every start. Antalia's normaliser is code only: no Antalia weights are fetched.
+FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/models/hf HF_HUB_DISABLE_TELEMETRY=1
+RUN groupadd --gid 1501 jeeta-voice \
+ && useradd --uid 1502 --gid 1501 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin \
+      jeeta-voice-speak
 WORKDIR /app
-COPY requirements.txt constraints.txt ./
-RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
-      -r requirements.txt -c constraints.txt
-# Bake the weights in: the container runs with --network none.
-RUN python -c "from ema_lightning import EMA; EMA()" \
- && python -c "from antalia_mini import Antalia; Antalia()" \
- && find /models -type f -name '*.pt' -o -type f -name '*.onnx' -o -type f -name '*.safetensors' \
-      | sort | xargs sha256sum > /app/models.sha256
+COPY requirements.txt constraints.txt wheels.sha256 torch.lock requirements.lock pins.py ./
+RUN python pins.py check-lock
+RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: \
+      --index-url https://download.pytorch.org/whl/cpu -r torch.lock --report /tmp/torch.json \
+ && pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: \
+      --index-url https://pypi.org/simple -r requirements.lock --report /tmp/pypi.json \
+ && pip check \
+ && python pins.py wheels /tmp/torch.json /tmp/pypi.json --expect wheels.sha256 > wheels.installed \
+ && rm /tmp/torch.json /tmp/pypi.json
+COPY weights.lock ./
+RUN python pins.py fetch-weights
 COPY respell.py respell.json jeeta_speak.py ./
+# From here on nothing is downloaded; whatever a library caches goes to the run tmpfs.
+ENV HF_HUB_OFFLINE=1 XDG_CACHE_HOME=/tmp/cache HOME=/tmp
+# Fail the build, not the first call: the weights check, EMA's offline load and the readings the
+# owner's test depended on (jeeta_speak.self_test).
+RUN python jeeta_speak.py --self-test
+COPY pytest.ini ./
 COPY tests ./tests
-COPY pytest.ini ./pytest.ini
-ENV HF_HUB_OFFLINE=1
-USER 1501:1501
+USER 1502:1501
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+  CMD ["python", "jeeta_speak.py", "--health"]
 CMD ["python", "jeeta_speak.py"]
+```
+
+`rust/bridge/voice/speech/speak/.dockerignore`:
+
+```text
+# Only what the Dockerfile copies reaches the daemon (no caches, no stray fixtures).
+*
+!requirements.txt
+!constraints.txt
+!wheels.sha256
+!torch.lock
+!requirements.lock
+!pins.py
+!weights.lock
+!respell.py
+!respell.json
+!jeeta_speak.py
+!pytest.ini
+!tests/*.py
 ```
 
 `rust/bridge/voice/deploy/jeeta-voice-speak.service`:
 
 ```ini
 [Unit]
-Description=Jeeta voice: speak (EMA Lightning, no network)
+Description=Jeeta voice: speak (EMA Lightning behind Antalia's normaliser, no network)
 After=docker.service systemd-tmpfiles-setup.service
 Requires=docker.service
+# A start that keeps failing (the weights check or the readings self-test) stops after five tries
+# instead of loading the model every few seconds.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
+# No network, read-only, no capability, no core dumps, uid 1502 (jeeta-voice-speak) in gid 1501
+# (jeeta-voice). Its socket in /run/jeeta-voice (1770 root:jeeta-voice) is the group's, mode 0660,
+# and the sticky directory keeps the listen service (uid 1501) from removing or replacing it. The
+# writable paths are that directory and a small /tmp. No swap, so a paged-out model cannot stall a
+# sentence. The image must already be on the host (--pull never): it is built there, never pulled.
 [Service]
 Type=simple
 EnvironmentFile=/etc/jeeta-voice/images.env
 ExecStartPre=-/usr/bin/docker rm -f jeeta-voice-speak
-ExecStart=/usr/bin/docker run --rm --name jeeta-voice-speak --network none --user 1501:1501 \
-  --cpus 2 --cpu-shares 2048 --memory 2g --read-only --tmpfs /tmp \
-  -v /run/jeeta-voice:/run/jeeta-voice \
-  -e SPEAK_SOCKET=/run/jeeta-voice/speak.sock -e SPEAK_THREADS=2 -e EMA_SEED=0 \
+ExecStart=/usr/bin/docker run --rm --pull never --name jeeta-voice-speak --init --network none \
+  --user 1502:1501 --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
+  --ulimit core=0 --cpus 2 --cpu-shares 2048 --memory 2g --memory-swap 2g \
+  --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
+  --tmpfs /tmp:uid=1502,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev \
+  --mount type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice \
+  -e SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock -e SPEAK_THREADS=2 -e SPEAK_BATCH=2 -e EMA_SEED=0 \
+  -e SPEAK_WORKERS=2 -e SPEAK_WATCHDOG_S=60 \
   ${SPEAK_IMAGE}
 ExecStop=/usr/bin/docker stop -t 10 jeeta-voice-speak
-Restart=on-failure
+Restart=always
 RestartSec=5s
 
 [Install]
@@ -3874,34 +6128,105 @@ WantedBy=multi-user.target
 - [ ] **Step 6: Commit**
 
 ```bash
-git add rust/bridge/voice/speech/speak rust/bridge/voice/deploy/jeeta-voice-speak.service
+git add rust/bridge/voice/.gitignore rust/bridge/voice/speech/speak rust/bridge/voice/deploy/jeeta-voice-speak.service
 git commit -m "feat(voice): the speak service, EMA Lightning behind Antalia's normaliser" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 7: [COORDINATOR, server] Pin the tested versions, build, start**
+- [ ] **Step 7: [COORDINATOR, server] Pin the tested set, build, test, start**
 
-The owner's blind test ran on `jeeta-ttstest:tmp`; its exact package set becomes the constraints:
+From `/root/jeeta-voice-src` at the reviewed commit. Steps 7.1 and 7.2 run once (done on 2026-10-29); 7.3 onward on every rebuild.
 
-```bash
-docker run --rm --network none --entrypoint pip jeeta-ttstest:tmp freeze > /root/jeeta-voice-src/rust/bridge/voice/speech/speak/constraints.txt
-grep -iE '^(ema-lightning|antalia-mini|torch|numpy)==' /root/jeeta-voice-src/rust/bridge/voice/speech/speak/constraints.txt
-```
-
-Expected: `ema-lightning==1.1.2` and a `torch==…` line. If `antalia-mini` is absent, append `antalia-mini==1.0.1`; if `ema-lightning` is not 1.1.2, stop and report (the owner chose 1.1.2). If `numpy` differs from `2.5.4`, change `requirements.txt` to the frozen numpy (the frozen set is the tested one). Copy `constraints.txt` back into the repository (`scp root@38.242.233.166:/root/jeeta-voice-src/rust/bridge/voice/speech/speak/constraints.txt rust/bridge/voice/speech/speak/`) and commit it (`git commit -m "build(voice): the speak image pins the owner-tested package set"`). Then on the host:
+7.1 Freeze the owner-tested package set (the owner's blind test ran on `jeeta-ttstest:tmp`):
 
 ```bash
-cp /root/jeeta-voice-src/rust/bridge/voice/speech/pytest.ini /root/jeeta-voice-src/rust/bridge/voice/speech/speak/
 cd /root/jeeta-voice-src/rust/bridge/voice/speech/speak
-TAG=$(date +%Y%m%d%H%M)
-nice -n 10 docker build -t jeeta-voice-speak:$TAG .
-docker run --rm --network none jeeta-voice-speak:$TAG python -m pytest -m models tests
-printf 'SPEAK_IMAGE=jeeta-voice-speak:%s\n' "$TAG" >> /etc/jeeta-voice/images.env
-install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-speak.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now jeeta-voice-speak
-sleep 20; ls -l /run/jeeta-voice/speak.sock; journalctl -u jeeta-voice-speak -n 5 --no-pager
+docker run --rm --network none --entrypoint pip jeeta-ttstest:tmp freeze > constraints.txt
+grep -iE '^(ema-lightning|antalia-mini|normalizer-tr|torch|numpy|huggingface-hub|websockets|pytest)==' constraints.txt
+grep -E ' @ |^-e' constraints.txt || echo "no local installs"
 ```
 
-Expected: `1 passed` for the models test; `srw-rw---- … speak.sock`; the journal ends with `INFO jeeta-speak listening` and no text. Record the tag in the task notes.
+Expected: `ema-lightning==1.1.2`, `antalia-mini==1.0.1`, `torch==…+cpu`, `no local installs`. A different ema-lightning is a stop (the owner chose 1.1.2).
+
+7.2 Check the weights pin against the tested image's model cache:
+
+```bash
+docker run --rm --network none -v "$PWD":/check:ro -v /root/voicegate/tts/cache:/cache:ro -e HF_HOME=/cache/hf \
+  --entrypoint python jeeta-ttstest:tmp /check/pins.py verify --lock /check/weights.lock
+```
+
+Expected: `weights: ok (decoder.pt 9595819b173f, ema.pt 95aec03dafbe)`; `sha256 differs` is a stop (print the tested hashes with `pins.py record`).
+
+7.3 The speak user, once (uid 1502 in the `jeeta-voice` group of B1 Step 8):
+
+```bash
+getent passwd 1502 || useradd --system --uid 1502 --gid jeeta-voice --no-create-home --shell /usr/sbin/nologin jeeta-voice-speak
+id jeeta-voice-speak
+```
+
+Expected: `uid=1502(jeeta-voice-speak) gid=1501(jeeta-voice)`. If 1502 is taken by another account, stop: the image, the unit and the tests name 1502.
+
+7.4 Build:
+
+```bash
+cp ../pytest.ini .
+TAG=$(date +%Y%m%d%H%M)
+time docker build -t jeeta-voice-speak:$TAG .
+```
+
+Expected: `locks: ok (39 wheels)`, `Successfully installed torch-2.15.0+cpu`, `No broken requirements found.`, `weights: ok (decoder.pt 9595819b173f, ema.pt 95aec03dafbe)`, `INFO jeeta-speak loaded in … ms: ema-lightning 1.1.2, antalia-mini 1.0.1, normalizer-tr 0.8.1, torch 2.15.0+cpu; seed 0, threads 2, batch 2, voice <id>` and `INFO jeeta-speak self-test passed`. On the first build only (before `wheels.sha256` held the record): `docker run --rm --network none --entrypoint cat jeeta-voice-speak:$TAG /app/wheels.installed > wheels.sha256`, then `python3 pins.py lock` on the dev machine, and commit `constraints.txt`, `wheels.sha256` and both locks.
+
+7.5 Every test in the image, with the unit's isolation:
+
+```bash
+docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --user 1502:1501 --cpus 2 --memory 2g --memory-swap 2g --pids-limit 128 --ulimit core=0 \
+  --tmpfs /tmp:uid=1502,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev \
+  jeeta-voice-speak:$TAG python -m pytest -p no:cacheprovider -s -rs tests
+```
+
+Expected: `75 passed, 1 skipped` (the skip: the repository's Dockerfile and unit are not in the image) and four `TIMING` lines; record them.
+
+7.6 Install and start (the old socket belongs to the previous uid and the sticky directory keeps the new one from removing it, so root removes it while the service is stopped):
+
+```bash
+systemctl stop jeeta-voice-speak 2>/dev/null; rm -f /run/jeeta-voice/speak.sock
+grep -q '^SPEAK_IMAGE=' /etc/jeeta-voice/images.env 2>/dev/null \
+  && sed -i "s|^SPEAK_IMAGE=.*|SPEAK_IMAGE=jeeta-voice-speak:$TAG|" /etc/jeeta-voice/images.env \
+  || printf 'SPEAK_IMAGE=jeeta-voice-speak:%s\n' "$TAG" >> /etc/jeeta-voice/images.env
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-speak.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/jeeta-voice-speak.service
+systemctl daemon-reload && systemctl enable --now jeeta-voice-speak
+sleep 30
+ls -l /run/jeeta-voice/speak.sock; journalctl -u jeeta-voice-speak -n 6 --no-pager
+docker ps --filter name=jeeta-voice-speak --format '{{.Names}} {{.Status}}'
+docker stats --no-stream --format '{{.Name}} pids {{.PIDs}} mem {{.MemUsage}}' jeeta-voice-speak
+stat -c '%a %U:%G %n' /run/jeeta-voice /run/jeeta-voice/speak.sock
+docker run --rm --pull never --network none --user 1501:1501 --mount type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice \
+  --entrypoint python jeeta-voice-speak:$TAG jeeta_speak.py --health; echo health=$?
+docker run --rm --pull never --network none --entrypoint python jeeta-voice-speak:$TAG jeeta_speak.py --voice-id
+sudo -u jeeta-voice-bridge test -w /run/jeeta-voice/speak.sock && echo "bridge can connect"
+```
+
+Expected: `srw-rw---- 1 jeeta-voice-speak jeeta-voice … speak.sock`; the journal shows `loaded in …`, `warm 0: …`, `warm 1: …`, `listening`, and no text; `Up … (healthy)`; pids under 30 and memory well under 2 GiB (locally, with its two EMA instances: 16 pids, 430 MiB); `1770 root:jeeta-voice /run/jeeta-voice` and `660 jeeta-voice-speak:jeeta-voice …speak.sock`, so uid 1501 can connect (`health=0`) but the sticky bit keeps it from removing the socket (tried on the dev machine: `Operation not permitted`; not tried here, on the live socket); the printed voice id equals the journal's; `bridge can connect`.
+
+**B2 as run (2026-10-29, first round, image `jeeta-voice-speak:202610291512`).**
+- Step 7.1: `constraints.txt` frozen from `jeeta-ttstest:tmp`: ema-lightning 1.1.2, antalia-mini 1.0.1, normalizer-tr 0.8.1, torch 2.15.0+cpu, numpy 2.5.4; no local installs; 34 lines. Committed with `wheels.sha256` as d1da6a9d.
+- Step 7.2: `weights: ok (decoder.pt 9595819b173f, ema.pt 95aec03dafbe)` against the tested image's cache (`/root/voicegate/tts/cache`, `HF_HOME=/cache/hf`): `weights.lock` is what the owner heard.
+- EMA's own batch measurement in the owner-tested cache (`.cache/ema_lightning/batch_size_v2.json`) reads `{"cpu-6": 2}`: the fixed batch 2 is the owner-heard one.
+- Step 7.4: built in 1 min 55 s, 1.2 GB, voice `0b26ad0520ff` (the first round's id; the review round's id adds batch, threads and the sentence rules, so it differs), self-test passed.
+- Step 7.5: `50 passed, 1 skipped`. TIMING on the host (ms): 8 chars first 244 / synth 244 / audio 520; 28 chars 707 / 710 / 1640; 33 chars 315 / 704 / 2080; 53 chars 381 / 896 / 2840.
+- Step 7.6: live. Socket `srw-rw---- jeeta-voice-svc jeeta-voice` (the first round ran as uid 1501); loaded in 5528 ms; warm first audio in 795 ms; healthy; 11 pids, about 501 MiB; `health=0`; the bridge user can connect.
+
+**B2 review (2026-10-29): what changed.** Nothing was blocking; the round:
+- I1 cancel contract: the terminal-message rule above (docstring, B5 `Spoken`, B6 `draining`), tests for a cancel after `done`, nothing after `cancelled`, a queued cancel then a third synth.
+- I2 concurrency: a real-model test through the session (two connections, two sentences, three rounds each) failed byte for byte against the sentences alone while both streams shared one EMA (batched); each concurrent synthesis now takes an EMA instance of its own from a pool on the event loop, and the test passes.
+- I3 self-test: every approved text and each brand, as the model receives them; `MODEL_READS` holds the one difference EMA's frontend makes (it folds the circumflex of "hâlâ"); no "kesme" anywhere; a warning counts symbols Antalia left unread (`[0-9%@#/+]`, a colon by a digit), with no text.
+- I4 voice id: batch, threads, the sentence rules and `PIPELINE_VERSION` are in it; `hello` on every connection and `--voice-id`; B5/B6 take the worker's cache key from the hello (no `VOICE_ID`).
+- I5 logs: the root filter passes only `jeeta-speak` records (websockets' logger is now outside that name, so it is withheld); warnings and uncaught exceptions by kind and place; a real-model canary ("Ayşe Yılmaz 0532 412 33 08" through respelling, Antalia, EMA and the session at debug level) finds neither the text nor its reading in caplog or the process's output.
+- I6 supply chain: two hashed locks, one index each, `--require-hashes --no-deps`, `pip check`; the test stack (pytest, pluggy, iniconfig, pygments) is hash-locked with the rest (pins.py `EXTRA`); `wheels --expect` refuses an unknown hash.
+- M1–M10: `RecursionError` answered `bad_request`; NaN and infinities made finite before the cast; the splitter never cuts after the worker's abbreviations (Antalia leaves a lowercase "sn.", "tel." and "st."), with a real-model test over all eighteen; the normalised length is capped; the watchdog; speak as uid 1502; `--mount type=bind`, `--pull never`, `--ulimit core=0`, no lock or table override from the environment; the listed tests, exact unit options; binary messages refused; the freeze gate compares names the way PyPI does (`pins.py check-lock`, which also requires requirements.txt to pin the owner's two choices); the brand table's decision record in the design addendum §10.
+- Mutation passes: 53 edits to the service, the respeller, the brand table and pins.py, run on Linux in the image against the pure tests: 51 fail a test. The two that survive are benign: removing the explicit `gen.close()` (CPython closes the generator when the synthesis's frame drops it; kept for clarity) and the respeller's lookup fallback (`.get(key, word)` for `[key]`: unreachable, since every case-insensitive match folds to a table key; kept so an unforeseen fold cannot fail a synthesis). 31 edits to the unit, the Dockerfile, `.dockerignore`, requirements.txt and the locks, run on Windows against the repository tests: all 31 fail. On Windows the unix-socket tests skip, so the `os.chmod`/`os.umask` and not-a-socket edits fail only on Linux.
+- Measured on the dev machine (Docker Desktop, `--cpus 2`, this round's image): loaded in about 4 s with two EMA instances, 430 MiB, 16 pids; TIMING 8 chars 189 / 189 / 520 ms, 28 chars 584 / 589 / 1640, 33 chars 256 / 588 / 2080, 53 chars 231 / 722 / 2840. In the first round an 8 s sentence cancelled after its first chunk answered `cancelled` after 2.7 s (the 4 s window under way finishes first): the worker's `FLUSH_MEDIA` cuts the sound at once, but the next sentence on that connection waits that long.
 
 ### Task B3: The listen service (Silero VAD, Smart Turn v3.2, seda-v0.1)
 
@@ -6063,7 +8388,6 @@ pub struct Config {
     pub speak: Endpoint,
     pub cache_dir: PathBuf,
     pub trace_file: PathBuf,
-    pub voice: String,
     pub timing: Timing,
 }
 
@@ -6121,7 +8445,6 @@ impl Config {
             speak: endpoint("SPEAK_SOCKET", "unix:/run/jeeta-voice/speak.sock")?,
             cache_dir: get("VOICE_CACHE_DIR").unwrap_or_else(|| "/var/lib/jeeta-voice/cache".into()).into(),
             trace_file: get("VOICE_TRACE_FILE").unwrap_or_else(|| "/var/lib/jeeta-voice/traces.jsonl".into()).into(),
-            voice: get("VOICE_ID").unwrap_or_else(|| "ema-lightning-1.1.2-seed0-8k".into()),
             timing: Timing {
                 ack_after_ms: ms(&get, "VOICE_ACK_MS", base.ack_after_ms)?,
                 filler_after_ms: ms(&get, "VOICE_FILLER_MS", base.filler_after_ms)?,
@@ -6141,7 +8464,9 @@ impl Config {
 ```rust
 //! Synthesised sentences, by the SHA-256 of the voice and the text: policy sentences (openings,
 //! notice, phrases: owner-approved, no personal data) are kept on disk as raw PCM16 8 kHz; a call's
-//! own sentences (its plan, the agent's) only in that call's memory, dropped at hang-up.
+//! own sentences (its plan, the agent's) only in that call's memory, dropped at hang-up. The voice
+//! is the speak service's voice id, from the `hello` it sends first on every connection (B2): it
+//! names everything that decides how a text sounds, so audio of another voice is never played.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -6167,6 +8492,11 @@ pub struct PhraseCache {
 impl PhraseCache {
     pub fn new(dir: PathBuf, voice: &str) -> PhraseCache {
         PhraseCache { dir, voice: voice.to_owned(), memory: HashMap::new() }
+    }
+
+    /// The voice id this cache keys by.
+    pub fn voice(&self) -> &str {
+        &self.voice
     }
 
     /// The audio of `text`: from this call's memory, else from disk (then kept in memory too).
@@ -7002,6 +9332,8 @@ pub enum SpeechError {
     Unreachable,
     #[error("unix sockets are not available on this system")]
     Unsupported,
+    #[error("the speak service did not say hello")]
+    NoHello,
 }
 
 /// A WebSocket to the service at `endpoint`.
@@ -7021,6 +9353,24 @@ pub async fn connect(endpoint: &Endpoint) -> Result<Socket, SpeechError> {
         .await
         .map(|(s, _)| s)
         .map_err(|_| SpeechError::Unreachable)
+}
+
+/// How long the speak service may take to send its `hello`.
+const HELLO_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A WebSocket to the speak service and the voice id of its `hello`.
+pub async fn connect_speaker(endpoint: &Endpoint) -> Result<(Socket, String), SpeechError> {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let mut socket = connect(endpoint).await?;
+    match tokio::time::timeout(HELLO_WAIT, socket.next()).await {
+        Ok(Some(Ok(Message::Text(t)))) => match serde_json::from_str::<Spoken>(&t) {
+            Ok(Spoken::Hello { voice_id }) => Ok((socket, voice_id)),
+            _ => Err(SpeechError::NoHello),
+        },
+        _ => Err(SpeechError::NoHello),
+    }
 }
 
 /// What the listener heard.
@@ -7074,10 +9424,15 @@ pub enum ToSpeaker {
     Cancel { id: String },
 }
 
-/// From the speaker (besides the binary PCM16 chunks).
+/// From the speaker (besides the binary PCM16 chunks). Every frame of a synthesis comes before its
+/// terminal message (`done`, `cancelled` or `error`), and a synthesis starts only after the previous
+/// one's: after a cancel the client drops frames until that id's terminal message, whichever it is
+/// (a cancel can lose the race to `done`).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Spoken {
+    /// The first message on every connection: the voice id keys the phrase cache.
+    Hello { voice_id: String },
     Done { id: String, synth_ms: u32, audio_ms: u32 },
     Cancelled { id: String },
     Error {
@@ -7219,11 +9574,13 @@ pub async fn ws_server() -> (String, mpsc::Receiver<WebSocketStream<TcpStream>>)
     (addr, rx)
 }
 
-/// Answers every `synth` on every connection with 160 samples of silence and `done`.
+/// Says hello, then answers every `synth` on every connection with 160 samples of silence and `done`.
 pub fn serve_speaker(mut conns: mpsc::Receiver<WebSocketStream<TcpStream>>) {
     tokio::spawn(async move {
         while let Some(mut ws) = conns.recv().await {
             tokio::spawn(async move {
+                let hello = json!({ "type": "hello", "voice_id": "test-voice", "sample_rate": 8000, "format": "pcm16le" });
+                let _ = ws.send(Message::Text(hello.to_string().into())).await;
                 while let Some(Ok(Message::Text(t))) = ws.next().await {
                     let v: Value = serde_json::from_str(&t).unwrap();
                     if v["type"] == "synth" {
@@ -7302,7 +9659,6 @@ async fn a_call_dials_plays_hears_acknowledges_and_hangs_up() {
         listen: Endpoint::Tcp(listen_addr),
         speak: Endpoint::Tcp(speak_addr),
         cache_dir: cache.clone(),
-        voice: "test".into(),
         timing: Timing::default(),
         traces: None,
     });
@@ -7411,7 +9767,6 @@ pub struct CallDeps {
     pub listen: Endpoint,
     pub speak: Endpoint,
     pub cache_dir: PathBuf,
-    pub voice: String,
     pub timing: Timing,
     pub traces: Option<TraceFile>,
 }
@@ -7494,11 +9849,7 @@ fn presynth_order(setup: &CallSetup) -> Vec<String> {
     out
 }
 
-async fn presynthesize(endpoint: Endpoint, cache: Arc<Mutex<PhraseCache>>, persist: Arc<HashSet<String>>, texts: Vec<String>) {
-    let Ok(socket) = speech::connect(&endpoint).await else {
-        warn!("pre-synthesis cannot reach the speaker");
-        return;
-    };
+async fn presynthesize(socket: speech::Socket, cache: Arc<Mutex<PhraseCache>>, persist: Arc<HashSet<String>>, texts: Vec<String>) {
     let (mut tx, mut rx) = socket.split();
     let mut n = 0u32;
     for t in texts {
@@ -7538,9 +9889,15 @@ async fn presynthesize(endpoint: Endpoint, cache: Arc<Mutex<PhraseCache>>, persi
 pub async fn run_call(deps: Arc<CallDeps>, setup: CallSetup, mut rx: mpsc::Receiver<ToCall>, reports: mpsc::Sender<Report>) {
     let id = setup.bridge_call_id.clone();
     let reporter = Reporter { id: id.clone(), tx: reports };
-    let cache = Arc::new(Mutex::new(PhraseCache::new(deps.cache_dir.clone(), &deps.voice)));
+    // The speaker's hello names the voice this call's cache keys by; without a speaker, no dial.
+    let Ok((pre, voice)) = speech::connect_speaker(&deps.speak).await else {
+        warn!(call = %id, "the speaker is unreachable");
+        reporter.send(BridgeEvent::Error { failure_line: "transient: bridge: the speaker is unreachable".into() }).await;
+        return;
+    };
+    let cache = Arc::new(Mutex::new(PhraseCache::new(deps.cache_dir.clone(), &voice)));
     let persist = Arc::new(policy_sentences(&setup.script));
-    tokio::spawn(presynthesize(deps.speak.clone(), cache.clone(), persist.clone(), presynth_order(&setup)));
+    tokio::spawn(presynthesize(pre, cache.clone(), persist.clone(), presynth_order(&setup)));
     let endpoint = format!("PJSIP/{}@netgsm", setup.dial);
     if deps.ari.originate(&id, &endpoint, RING_TIMEOUT_S).await.is_err() {
         warn!(call = %id, "Asterisk refused the dial");
@@ -7621,6 +9978,9 @@ struct Live {
     listen_rx: Option<SplitStream<speech::Socket>>,
     speak_tx: SpeechSink,
     speak_rx: Option<SplitStream<speech::Socket>>,
+    /// The id of a cancelled synthesis whose terminal message has not come yet: until it does,
+    /// every binary frame from the speaker is that synthesis's and is dropped.
+    draining: Option<String>,
     xoff: bool,
     held: Vec<Message>,
     playing: Option<Playing>,
@@ -7671,7 +10031,14 @@ impl Live {
         let (mut listen_tx, listen_rx) = listen.split();
         let start = ToListener::Start { sample_rate: 8_000, hotwords: setup.script.hotwords.clone() };
         listen_tx.send(text_message(&start)).await.map_err(|_| "listener refused the call")?;
-        let speak = speech::connect(&deps.speak).await.map_err(|_| "speaker unreachable")?;
+        let (speak, live_voice) = speech::connect_speaker(&deps.speak).await.map_err(|_| "speaker unreachable")?;
+        if let Ok(mut c) = cache.lock()
+            && c.voice() != live_voice
+        {
+            // The speak service was replaced while the line rang: this call's audio is the new voice's.
+            warn!(call = %id, "the speaker's voice changed during the call");
+            *c = PhraseCache::new(deps.cache_dir.clone(), &live_voice);
+        }
         let (speak_tx, speak_rx) = speak.split();
         Ok(Live {
             deps: deps.clone(),
@@ -7689,6 +10056,7 @@ impl Live {
             listen_rx: Some(listen_rx),
             speak_tx,
             speak_rx: Some(speak_rx),
+            draining: None,
             xoff: false,
             held: Vec::new(),
             playing: None,
@@ -7930,6 +10298,9 @@ impl Live {
     }
 
     async fn synth_chunk(&mut self, bytes: &[u8]) {
+        if self.draining.is_some() {
+            return; // a cancelled synthesis's frame (its terminal message has not come yet)
+        }
         let pcm = pcm16(bytes);
         let Some(f) = self.playing.as_mut().and_then(|p| p.in_flight.as_mut()) else { return };
         f.pcm.extend_from_slice(&pcm);
@@ -7937,6 +10308,16 @@ impl Live {
     }
 
     async fn synth_event(&mut self, spoken: Spoken) {
+        let terminal = match &spoken {
+            Spoken::Done { id, .. } | Spoken::Cancelled { id } => Some(id.as_str()),
+            Spoken::Error { id, .. } => id.as_deref(),
+            Spoken::Hello { .. } => None,
+        };
+        if terminal.is_some() && terminal == self.draining.as_deref() {
+            // The cancelled synthesis has ended: done, cancelled or error (a cancel can lose the race).
+            self.draining = None;
+            return;
+        }
         let (id, ok) = match spoken {
             Spoken::Done { id, .. } => (id, true),
             Spoken::Error { id: Some(id), .. } => (id, false),
@@ -7999,7 +10380,8 @@ impl Live {
         if let Some(mut p) = self.playing.take() {
             if p.item.id == item.id {
                 if let Some(f) = p.in_flight.take() {
-                    let _ = self.speak_tx.send(text_message(&ToSpeaker::Cancel { id: f.id })).await;
+                    let _ = self.speak_tx.send(text_message(&ToSpeaker::Cancel { id: f.id.clone() })).await;
+                    self.draining = Some(f.id);
                 }
                 let fraction = match (p.audio_started, p.durations.get(p.marked)) {
                     (Some(_), Some(d)) if !d.is_zero() => p.mark_at.elapsed().as_secs_f64() / d.as_secs_f64(),
@@ -8101,6 +10483,10 @@ impl Live {
 ```
 
 This task uses `DialScript`, `BridgeEvent::Phrase` and `BridgeEvent::Trace` from Task A5.
+
+**The speaker's contract in the call (B2 review, 2026-10-29).** The code above already follows it:
+- The voice id comes from the speak service, never from a constant: `speech::connect_speaker` reads the `hello` each connection starts with. `run_call` connects the pre-synthesis socket first, keys the call's `PhraseCache` by its voice id, and reports `error` without dialling when the speaker is unreachable. `Live::connect` compares the live socket's voice id and starts a fresh cache if the service was replaced while the line rang. Config has no `VOICE_ID`.
+- A cancel can lose the race to `done`. `cut` remembers the cancelled id in `draining`; `synth_chunk` drops every binary frame while `draining` is set, and `synth_event` clears it on that id's terminal message, whichever it is (`done`, `cancelled` or `error`). One slot suffices: the service sends a synthesis's frames before its terminal message and starts the next only after it, so while the newest cancelled id is draining, every frame is stale.
 
 **The pacer in the call (B1 review, 2026-10-29).** Where these differ from the code above, they win. They wire B5's `media::Pacer` in: the call writes one frame every 20 ms for its whole life, silence when nothing plays.
 - `use crate::media::{self, MediaEvent, Out, Pacer};`
@@ -8272,7 +10658,6 @@ pub async fn main(args: &[String]) -> ExitCode {
         listen: config.listen.clone(),
         speak: config.speak.clone(),
         cache_dir: config.cache_dir.clone(),
-        voice: config.voice.clone(),
         timing: config.timing,
         traces: Some(TraceFile::new(config.trace_file.clone())),
     });
@@ -8435,13 +10820,18 @@ async fn check() -> ExitCode {
             println!("ari: {e}");
         }
     }
-    for (name, endpoint) in [("listen", &config.listen), ("speak", &config.speak)] {
-        match speech::connect(endpoint).await {
-            Ok(_) => println!("{name}: ok"),
-            Err(e) => {
-                ok = false;
-                println!("{name}: {e}");
-            }
+    match speech::connect(&config.listen).await {
+        Ok(_) => println!("listen: ok"),
+        Err(e) => {
+            ok = false;
+            println!("listen: {e}");
+        }
+    }
+    match speech::connect_speaker(&config.speak).await {
+        Ok((_, voice)) => println!("speak: ok (voice {voice})"),
+        Err(e) => {
+            ok = false;
+            println!("speak: {e}");
         }
     }
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
@@ -8482,7 +10872,7 @@ set -a; . /etc/jeeta-voice/ari.env; set +a
 sudo -E -u jeeta-voice-bridge -g jeeta-voice-bridge --preserve-env=ARI_PASSWORD /opt/jeeta-voice/current/jeeta-voice-bridge check
 ```
 
-Expected: `ari: ok (Asterisk 22.11.0)`, `listen: ok`, `speak: ok`. (`sudo -g` gives the `jeeta-voice` supplementary group through the user's membership; if a socket is refused, run `id jeeta-voice-bridge` and confirm `jeeta-voice` is listed.)
+Expected: `ari: ok (Asterisk 22.11.0)`, `listen: ok`, `speak: ok (voice <the id in the speak journal>)`. (`sudo -g` gives the `jeeta-voice` supplementary group through the user's membership; if a socket is refused, run `id jeeta-voice-bridge` and confirm `jeeta-voice` is listed.)
 
 - [ ] **Step 2: [OWNER] Agree the time; the owner gives the number for this call only**
 
@@ -10463,7 +12853,6 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
         listen: config.listen.clone(),
         speak: config.speak.clone(),
         cache_dir: config.cache_dir.clone(),
-        voice: config.voice.clone(),
         timing: config.timing,
         traces: Some(TraceFile::new(config.trace_file.clone())),
     });
@@ -11092,7 +13481,7 @@ Replace §5 (host setup) with the stack as installed by tasks B1–B3 and D3:
 |---|---|---|
 | `jeeta-asterisk` | Asterisk 22.11 in Docker (`--network host`, uid 1500) | SIP UDP 5070 (all addresses), RTP 40000–40099, ARI/HTTP 127.0.0.1:8188 |
 | `jeeta-voice-listen` | Silero VAD, Smart Turn v3.2, seda-v0.1 (`--network none`, uid 1501) | `/run/jeeta-voice/listen.sock` |
-| `jeeta-voice-speak` | Antalia normaliser + EMA Lightning 1.1.2 (`--network none`, uid 1501) | `/run/jeeta-voice/speak.sock` |
+| `jeeta-voice-speak` | Antalia normaliser + EMA Lightning 1.1.2 (`--network none`, uid 1502 in gid 1501) | `/run/jeeta-voice/speak.sock` |
 | `jeeta-voice-bridge` | the talker (`/opt/jeeta-voice/current`), loopback only | nothing |
 
 Files: `/etc/jeeta-voice/asterisk/` (configuration; `secrets/` 0700 uid 1500 holds `pjsip_auth.conf`

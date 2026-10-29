@@ -41,7 +41,7 @@
 | STT | Vosk `small-tr-0.3` (or faster-whisper) | `seda-v0.1` streaming Zipformer2 (Apache-2.0), beam 4 + LM, per-call hotwords | FLEURS-TR 11.52 % (≈ Whisper-small) at RTF ≈ 0.03/thread, final ≈ 40 ms after audio ends; Vosk TR has no published WER and is wideband-only; Whisper re-encodes 30 s windows, too slow on 2.0 GHz Broadwell (self-hosted report, "Vosk'un yerini…"). |
 | End of turn | Fixed 0.6–0.8 s silence | Silero VAD (8 kHz, `stop 0.2 s`) → Smart Turn v3.2 (p ≥ 0.5) → forced STT final; fallback **1.5 s** (range 1.2–1.8 s) | Decision ≈ 250–300 ms after a complete turn instead of a fixed silence (self-hosted report, "Sıra 250 milisaniyede…"). Disagreements are logged by `endpoint_by`. |
 | TTS | Piper `tr_TR-fahrettin/dfki-medium` | EMA Lightning 1.1.2 (`sample_rate=8000`, `seed=0`), sentence by sentence, process kept warm | Owner's blind phone test (V-1 result: "kesinlikle 2. ses"); dfki is CC BY-NC-SA, never on paid calls (self-hosted report, license map). |
-| Normalisation | none | Brand respelling table (`Jeeta → Cita`, `WhatsApp → vatsap`) then `antalia_mini.Antalia.normalize` | `normalizer-tr` 0.8.1 read "14:00'e" as "on dört iki nokta sıfır sıfır kesme e" in our test; Antalia's normaliser read "on dörde" (owner V-1 notes). The transcript keeps the agent's original text; normalisation is pronunciation only. |
+| Normalisation | none | Brand respelling table (six entries, §10 decision record) then `antalia_mini.Antalia.normalize` | `normalizer-tr` 0.8.1 read "14:00'e" as "on dört iki nokta sıfır sıfır kesme e" in our test; Antalia's normaliser read "on dörde" (owner V-1 notes). The transcript keeps the agent's original text; normalisation is pronunciation only. |
 | Waiting covered by | Plan holding phrases at 4 s and 10 s, fallback at 20 s (server timers) | Bridge-local acknowledgement 0.6 s, filler 2.7 s, long wait 8 s (owner-approved set in the policy); the server's holding timers stay as a backstop, its fallback lines and scripted ending are unchanged | 4 s/10 s is "too late to give the gain"; first sound drops below ~0.8 s independent of the brain (self-hosted report, "Algılanan gecikmeyi…"; Talker–Reasoner split). |
 | Opening | The plan's opening, which must contain the disclosure sentence | Workspace opening (pre-synthesised, cached) → transcript notice → the plan's opening (e.g. "{Ad} ile mi görüşüyorum?"), all queued by the core on `answered` | Owner-approved opening (2026-10-29). The disclosure is in the workspace's own sentence, so every agent call discloses (D3) even if a plan forgets. |
 | Recording | Optional bridge recording after an announcement | **Off.** No raw audio kept anywhere; transcript only | Owner 2026-10-29 ("no raw audio is kept, transcript only"); spec §8 step 8 already makes recording opt-in. |
@@ -80,8 +80,10 @@ superseded by this addendum.
   `CPUWeight=200`. RAM: listen 1 GB, speak 2 GB, Asterisk 512 MB, worker 256 MB (self-hosted report:
   "Altı paylaşımlı vCPU tek hattı taşır"; the risk is neighbour-induced queueing, so p95 is the gate).
 - **No network for the models**: both speech containers run `--network none`, models baked into the
-  image at build from pinned revisions; they talk to the worker over unix sockets in
-  `/run/jeeta-voice/` (group `jeeta-voice`, mode 0660).
+  image at build (listen: pinned revisions; speak: EMA's weights by SHA-256, since EMA reads its
+  repository's main and takes no revision); they talk to the worker over unix sockets in
+  `/run/jeeta-voice/` (group `jeeta-voice`, mode 0660). Listen runs as uid 1501, speak as uid 1502,
+  both in gid 1501, so the directory's sticky bit keeps each from removing the other's socket.
 - **The worker reaches loopback only** (`IPAddressAllow=localhost`, `IPAddressDeny=any`): the core
   (`JEETA_BASE_URL=http://127.0.0.1:809x`, not the Cloudflare address, so no proxy hop), ARI and the
   sockets. It opens no listening socket.
@@ -251,7 +253,7 @@ Only if the gate fails would a WebSocket push be designed (not in this plan).
 | Turn end | Smart Turn v3.2 (`smart-turn-v3.2-cpu.onnx`, int8, BSD-2), last ≤ 8 s at 16 kHz | complete if p ≥ 0.5; else fallback 1 500 ms of silence | report |
 | Resample | soxr HQ 8 → 16 kHz, streaming | — | report |
 | STT | `atasoglu/seda-v0.1` on `sherpa-onnx==2.0.1`, `modified_beam_search`, 4 active paths, RNN LM | `num_threads=1`; LM scale chosen in B3 on a speak→listen loopback fixture (0.1 / 0.3 / 0.5; `sedalib` as the reference if none passes); hotwords score 1.5, lowercase Turkish, tokenised to the model's BPE pieces | report, seda card |
-| TTS | `ema-lightning==1.1.2`, `stream(text, sample_rate=8000, seed=0)` | torch 2 threads, one synthesis at a time per call | owner V-1 |
+| TTS | `ema-lightning==1.1.2`, `stream(text, sample_rate=8000, seed=0)` | torch 2 threads, batch 2 (the size EMA measured for itself in the owner-tested image); one EMA instance per concurrent synthesis (2), since an instance batches its streams and a batched stream's audio differs in its last bits from the same sentence alone; the speak service's `hello` names the voice id the worker keys its cache by | owner V-1; B2 review |
 | Normaliser | respell table → `antalia_mini.Antalia.normalize` (`antalia-mini==1.0.1`) | startup self-test: "14:00'e" must read "on dörde" | owner V-1 notes |
 | Phrase cache | PCM16 8 kHz; **disk** only for policy texts (openings, notice, phrase set); per-call **memory** for plan and agent sentences, dropped at hang-up | key = SHA-256(voice id ‖ text) | report, "ön sentez"; privacy (agent sentences can hold personal data) |
 
@@ -306,5 +308,23 @@ duty mode is V2) that does not block anything else.
 5. **Inbound unknown** (above). **One line**: a second simultaneous call is refused `bridge_busy`.
 6. **Minutes**: about 95 minutes of the NetGSM package remain (valid to 28.11.2026); the plan uses
    ≈ 15.
-7. Open for the owner: the transcript notice text (lawyer), which staging workspace hosts the test
-   calls, and the brand respelling entries beyond the two given.
+7. Open for the owner: the transcript notice text (lawyer) and which staging workspace hosts the
+   test calls. (The brand respelling entries are decided: record below.)
+
+### Decision record: the brand respelling table (2026-10-29)
+
+Owner-approved on 2026-10-29, relayed by the coordinator: six entries, in
+`rust/bridge/voice/speech/speak/respell.json` and pinned by its test.
+
+| Written | Spoken as | Why |
+|---|---|---|
+| Jeeta | Cita | Antalia keeps "jeeta", which EMA would read letter by letter by Turkish spelling |
+| WhatsApp | vatsap | Antalia keeps "whatsapp" (its lexicon maps it to itself, tuned for its own voice) |
+| Instagram | instagram | case only: Antalia 1.0.1 already lowercases it; kept as listed, so the reading holds if the normaliser changes |
+| Facebook | feysbuk | Antalia keeps "facebook" |
+| TikTok | tiktok | case only, as Instagram |
+| Google | gugıl | Antalia keeps "google" |
+
+Each spelling was run through antalia-mini 1.0.1 and normalizer-tr 0.8.1 (EMA's own frontend) and
+reaches EMA's model text unchanged; the speak service's start-up self-test checks this on every
+start. How each sounds is judged by the owner on the phone (B7).
