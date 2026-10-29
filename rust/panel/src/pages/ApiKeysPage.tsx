@@ -42,8 +42,11 @@ export const KEYS_KEY = ['api-keys'] as const;
 /**
  * Issues a key, holding its plaintext only in this hook's state: never in the query cache (no
  * mutation keeps the result), so it lives as long as the one-time dialog that shows it, and
- * `reset` drops it. A second `create` while one runs is ignored; an answer that comes after the
- * dialog is gone is dropped. The key list is read again once a key is issued.
+ * `reset` (the dialog closing) drops it. A second `create` while one runs is ignored. The answer
+ * to a request made before the last `reset`, or after the component is gone, is dropped: the
+ * dialogs stay mounted while closed, and a key issued after its dialog was closed must not show
+ * the next time it opens. Such a key exists all the same, so the key list is read again after
+ * every answer, and the key can be revoked there.
  */
 export function useCreateKey() {
   const queryClient = useQueryClient();
@@ -51,21 +54,26 @@ export function useCreateKey() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const mounted = useRef(false);
+  /** Counts requests and resets: an answer whose number is no longer the last one is dropped. */
+  const latest = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   async function create(input: { name: string; scopes: Permission[] }) {
     if (creating) return;
+    const request = ++latest.current;
+    const current = () => mounted.current && latest.current === request;
     setCreating(true); setError(null);
     try {
       const key = await createKey(input);
-      if (!mounted.current) return;
-      setCreated(key);
-      await queryClient.invalidateQueries({ queryKey: KEYS_KEY });
-    } catch (e) { if (mounted.current) setError(e); }
-    finally { if (mounted.current) setCreating(false); }
+      void queryClient.invalidateQueries({ queryKey: KEYS_KEY });
+      if (current()) setCreated(key);
+    } catch (e) { if (current()) setError(e); }
+    finally { if (current()) setCreating(false); }
   }
   const reset = () => {
+    latest.current += 1;
     setCreated(null);
     setError(null);
+    setCreating(false);
   };
   return { created, creating, error, create, reset };
 }

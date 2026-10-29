@@ -220,10 +220,11 @@ What it does:
 
 Stop it with **Ctrl+C** (or **Ctrl+Break**) in its console: within 5 seconds polling stops, a
 running command is failed `bridge_error` and its phone recovered, commands still queued are
-handed out again later, and the results made are posted. Closing its console window, logging off
-or shutting down are meant to stop it within 2 seconds, but closing the console window currently
-cuts it off at once (section 7). It exits with status 0 when stopped, 2 when its configuration
-cannot be used, and a failure status when one of its tasks ended on its own.
+handed out again to the next bridge that polls for their phone within their 5 minutes, and the
+results made are posted. Closing its console window, logging off or shutting down are meant to
+stop it within 2 seconds, but closing the console window currently cuts it off at once
+(section 7). It exits with status 0 when stopped, 2 when its configuration cannot be used, and a
+failure status when one of its tasks ended on its own.
 
 ## 5. Running it at logon
 
@@ -315,9 +316,12 @@ Ask again once the screen is still, or press `home` / `back` to leave a screen t
 *uiautomator wrote no screen; try again* fails with the same `screen_busy` reason, but means the
 dump held no element at all, not necessarily that the screen moved: try again.
 
-**An observation lists no elements** while the screen is off or locked. Wake the phone and unlock
-it. On Xiaomi phones a proximity guard (`ScreenOnProximitySensorGuide`) turns the screen back off
-while its proximity sensor is covered: keep the phone face up and uncovered.
+**An observation lists no elements** (seen on the Redmi 10C) while the screen is asleep, the lock
+screen behind it; with the screen on, a locked phone's observation lists the lock screen's
+elements. Wake the phone (`key` `power`) and unlock it. Also seen there: after the power key,
+MIUI's `ScreenOnProximitySensorGuide` window appeared and the screen went back off while the phone
+lay face down or covered, so keep it face up and uncovered. A later bridge version is meant to
+report the screen's state, so that an empty observation says why.
 
 **Unicode refused.** Before anything is queued, `devices.act` refuses a `text` with characters
 outside ASCII for a phone whose bridge does not list `text.unicode` (`422 VALIDATION`,
@@ -346,8 +350,12 @@ its issuer no longer holds `devices.bridge` (a key acts with the scopes its issu
 `423`: the workspace is not active. A connection error: check `base_url` and the network.
 
 **Closing the console window** cuts the bridge off at once instead of letting it finish (seen on
-Windows 11): a command it was running is not answered, and Jeeta hands it out again about 10
-seconds later. Stop the bridge with Ctrl+C instead.
+Windows 11): the command it was running is not answered. Jeeta hands an unanswered command out
+again 10 seconds after it was handed out, but only to a bridge that polls for that phone (this
+one once it runs again, or another bridge that holds the phone by then) and only within the
+command's 5 minutes; that bridge cannot know the command already ran, and may run it a second
+time (type the text twice, say). If no bridge polls in time, the command ends `expired`. Stop
+the bridge with Ctrl+C instead.
 
 ## 8. Verified on
 

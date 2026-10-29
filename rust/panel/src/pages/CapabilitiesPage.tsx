@@ -250,7 +250,8 @@ export function CapabilitiesPage() {
       />
       <FilterChips value={filter} onChange={setFilter} />
       {devices && canPair && <PairBridgePanel />}
-      <QueryState query={listed}>
+      {/* A refresh that fails keeps the cards (and an open command row) on screen. */}
+      <QueryState query={listed} keepOnError>
         {items.length === 0 ? (
           <EmptyState title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
         ) : (
@@ -272,6 +273,7 @@ export function CapabilitiesPage() {
                 canCall={canCall}
                 canUsePhones={canUsePhones}
                 livePhones={devices}
+                readAt={listed.dataUpdatedAt}
               />
             ))}
           </div>

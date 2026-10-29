@@ -7,7 +7,7 @@ import tr from '@/i18n/tr.json';
 import { browser } from '@/lib/browser';
 import { formatRelative } from '@/lib/format';
 import { budgetItems, capabilities, connectorHealth, groups, hooks, me, repMe } from '@/test/fixtures';
-import { mockFetch, renderAt } from '@/test/render';
+import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
 
 // Invented phones and computers; the serials are made up.
 
@@ -457,9 +457,15 @@ describe('PhoneCard', () => {
         result: { kind: 'file', file_id: FILE_ID, bytes: 2048 },
         file_url: 'https://files.jeeta.example/files/a9?sig=first',
       };
-      let calls = mockFetch({ ...base, [`GET ${DETAIL}`]: done });
+      const { result: _result, file_url: _url, ...doneLogged } = done;
+      const ended = { ...base, [`GET /api/devices/${ONLINE_ID}/commands`]: [doneLogged] };
+      let calls = mockFetch({ ...ended, [`GET ${DETAIL}`]: done });
       await vi.advanceTimersByTimeAsync(3_000);
       expect(await within(log).findByText(new RegExp(FILE_ID))).toBeInTheDocument();
+      // The row's badge says what its details say: the log is read again once they differ.
+      const row = within(log).getByRole('button', { expanded: true });
+      await waitFor(() => expect(row).toHaveTextContent(tr.capabilities.phone.log.statuses.done));
+      expect(calls.filter((c) => c.path === `/api/devices/${ONLINE_ID}/commands`)).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(calls.filter((c) => c.path === DETAIL)).toHaveLength(1);
 
@@ -468,7 +474,7 @@ describe('PhoneCard', () => {
       const close = vi.fn();
       vi.spyOn(browser, 'openPending').mockReturnValue({ go, close });
       calls = mockFetch({
-        ...base,
+        ...ended,
         [`GET ${DETAIL}`]: { ...done, file_url: 'https://files.jeeta.example/files/a9?sig=second' },
       });
       await user.click(within(log).getByRole('button', { name: tr.capabilities.phone.log.file }));
@@ -477,12 +483,141 @@ describe('PhoneCard', () => {
       expect(close).not.toHaveBeenCalled();
 
       // An address that is neither https nor this computer's is never opened.
-      mockFetch({ ...base, [`GET ${DETAIL}`]: { ...done, file_url: 'http://files.jeeta.example/files/a9?sig=third' } });
+      mockFetch({ ...ended, [`GET ${DETAIL}`]: { ...done, file_url: 'http://files.jeeta.example/files/a9?sig=third' } });
       await user.click(within(log).getByRole('button', { name: tr.capabilities.phone.log.file }));
       await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+      expect(go).toHaveBeenCalledTimes(1);
+
+      // A read that fails opens nothing, not even the address signed before: the tab closes.
+      mockFetch({
+        ...ended,
+        [`GET ${DETAIL}`]: withStatus(503, { code: 'UNAVAILABLE', message: 'down', details: {} }),
+      });
+      await user.click(within(log).getByRole('button', { name: tr.capabilities.phone.log.file }));
+      await waitFor(() => expect(close).toHaveBeenCalledTimes(2));
       expect(go).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('a failed refresh keeps the phones, their logs and an open row on screen', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const tap = {
+        command_id: '0193a000-0000-7000-8000-0000000000f4',
+        capability_id: ONLINE_ID,
+        kind: 'tap',
+        command: { kind: 'tap', x: 540, y: 1200 },
+        status: 'done',
+        attempts: 1,
+        reason: null,
+        detail: null,
+        requested_by: { kind: 'agent', connection_id: '0193a000-0000-7000-8000-0000000000c1', user_id: me.user_id },
+        created_at: '2026-10-29T09:20:00Z',
+        expires_at: '2026-10-29T09:25:00Z',
+        leased_at: '2026-10-29T09:20:01Z',
+        done_at: '2026-10-29T09:20:02Z',
+      };
+      const working = {
+        ...answers(),
+        [`GET /api/devices/${ONLINE_ID}/commands`]: [tap],
+        [`GET /api/devices/commands/${tap.command_id}`]: { ...tap, result: { kind: 'done' }, file_url: null },
+      };
+      mockFetch(working);
+      renderAt('/capabilities');
+      await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
+      const log = await within(await panelOf('Galaxy A52 (R58M00000XX)')).findByRole('list', {
+        name: tr.capabilities.phone.log.title,
+      });
+      await user.click(within(log).getByRole('button', { expanded: false }));
+      expect(await within(log).findByText(/"x": 540/)).toBeInTheDocument();
+
+      // The server is down for a while: what was read stays, with a line that it is not fresh.
+      const down = withStatus(503, { code: 'UNAVAILABLE', message: 'down', details: {} });
+      mockFetch({
+        ...working,
+        'GET /api/capabilities': down,
+        [`GET /api/devices/${ONLINE_ID}/commands`]: down,
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await waitFor(() => expect(screen.getAllByText(tr.common.refreshFailed).length).toBeGreaterThanOrEqual(2));
+      // No error view in place of the content (it carries a retry button, and the role alert).
+      const errorViews = screen
+        .queryAllByRole('alert')
+        .filter((el) => within(el).queryByRole('button', { name: tr.common.retry }));
+      expect(errorViews).toHaveLength(0);
+      expect(await panelOf('Galaxy A52 (R58M00000XX)')).toBeInTheDocument();
+      expect(within(log).getByRole('button', { expanded: true })).toBeInTheDocument();
+      expect(within(log).getByText(/"x": 540/)).toBeInTheDocument();
+
+      // Back up: the line goes, the row is still open.
+      mockFetch(working);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await waitFor(() => expect(screen.queryByText(tr.common.refreshFailed)).toBeNull());
+      expect(within(log).getByRole('button', { expanded: true })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the last-seen age moves on with each refresh of a silent phone', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const routes = answers();
+      // The Tablet's registration stays where it is: 100 seconds ago when the test starts.
+      const tablet = (routes['GET /api/capabilities'] as CapabilityOut[]).find((c) => c.capability.id === SILENT_ID);
+      const at = seconds(100);
+      if (tablet) tablet.capability.last_verified_at = at;
+      mockFetch(routes);
+      renderAt('/capabilities');
+      await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
+      const ago = (s: number) => formatRelative(at, 'tr', new Date(Date.parse(at) + s * 1000));
+      const status = async () => row(await panelOf('Tablet (R58M00000WW)'), tr.capabilities.phone.status);
+      await waitFor(async () => expect(await status()).toContain(ago(100)));
+      await vi.advanceTimersByTimeAsync(120_000);
+      await waitFor(async () => expect(await status()).toContain(ago(220)));
+      expect(ago(220)).not.toBe(ago(100));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a key issued after the pairing dialog was closed is dropped', async () => {
+    const user = userEvent.setup();
+    const secret = 'jt_cd34_kapatildiktan_sonra';
+    const calls = mockFetch({
+      ...answers(),
+      'GET /api/capabilities': [],
+      'POST /api/api-keys': delayed(300, {
+        id: BRIDGE_KEY_ID,
+        name: tr.capabilities.phone.pair.defaultName,
+        prefix: 'jt_cd34',
+        plaintext: secret,
+        scopes: ['devices.bridge'],
+        created_at: '2026-10-29T09:00:00Z',
+      }),
+    });
+    renderAt('/capabilities');
+    await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
+    await user.click(await screen.findByRole('button', { name: tr.capabilities.phone.pair.open }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: tr.apiKeys.dialog.submit }));
+    // Closed while the key is being issued: closing is always possible.
+    await user.click(within(dialog).getByRole('button', { name: tr.common.cancel }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Opened again: a fresh form, and the late key's plaintext nowhere.
+    await user.click(screen.getByRole('button', { name: tr.capabilities.phone.pair.open }));
+    const again = await screen.findByRole('dialog');
+    expect(within(again).getByRole('button', { name: tr.apiKeys.dialog.submit })).toBeInTheDocument();
+    expect(within(again).getByRole('textbox', { name: new RegExp(`^${tr.fields.name}`) })).toHaveValue(
+      tr.capabilities.phone.pair.defaultName,
+    );
+    expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(secret);
   });
 });

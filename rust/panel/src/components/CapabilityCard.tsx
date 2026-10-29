@@ -96,6 +96,7 @@ export function CapabilityCard({
   canCall = false,
   canUsePhones = false,
   livePhones = false,
+  readAt,
 }: {
   item: CapabilityOut;
   budgetItems: readonly BudgetItemOut[];
@@ -115,6 +116,8 @@ export function CapabilityCard({
   canUsePhones?: boolean;
   /** The Devices tab is shown: a phone's log is read again every heartbeat. */
   livePhones?: boolean;
+  /** When `item` was read (its query's `dataUpdatedAt`): a phone's age is told as of then. */
+  readAt?: number;
 }) {
   const { t, i18n } = useTranslation();
   const c = item.capability;
@@ -224,7 +227,7 @@ export function CapabilityCard({
         )}
         {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
         {bridge && !retired && <VoiceBridgePanel capability={c} />}
-        {c.kind_key === 'phone' && !retired && <PhoneCard item={item} canWork={canUsePhones} live={livePhones} />}
+        {c.kind_key === 'phone' && !retired && <PhoneCard item={item} canWork={canUsePhones} live={livePhones} readAt={readAt} />}
         {canCall && c.kind_key === 'netgsm_pbx' && c.status === 'verified' && (
           <div>
             <Button asChild size="sm" variant="outline">

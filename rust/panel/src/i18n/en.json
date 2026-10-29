@@ -18,7 +18,8 @@
     "copyFailed": "Could not copy; select the text and copy it by hand.",
     "actions": "Actions",
     "none": "—",
-    "loadError": "Could not load. Please try again."
+    "loadError": "Could not load. Please try again.",
+    "refreshFailed": "Could not refresh: showing what was read last."
   },
   "kit": {
     "close": "Close",

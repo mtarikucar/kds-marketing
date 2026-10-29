@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Smartphone } from 'lucide-react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -105,9 +105,22 @@ const STATUS_TONE: Record<CommandStatus, Tone> = {
  * `devices.work` (`canWork`), its last commands. It takes a command when it reads verified and
  * its bridge's latest registration lists it, as `devices.act` checks; only those registrations
  * verify it. While `live` (the Devices tab is shown) its log is read again every heartbeat; the
- * page reads the phones themselves as often. The setup is in `docs/operations/device-bridge.md`.
+ * page reads the phones themselves as often. How long ago its bridge listed it is told as of
+ * `readAt`, when the phones were last read, so a silent phone's age moves on with each read. The
+ * setup is in `docs/operations/device-bridge.md`.
  */
-export function PhoneCard({ item, canWork, live }: { item: CapabilityOut; canWork: boolean; live: boolean }) {
+export function PhoneCard({
+  item,
+  canWork,
+  live,
+  readAt,
+}: {
+  item: CapabilityOut;
+  canWork: boolean;
+  live: boolean;
+  /** When `item` was read (the list query's `dataUpdatedAt`); now when unknown. */
+  readAt?: number;
+}) {
   const { t, i18n } = useTranslation();
   const id = useId();
   const c = item.capability;
@@ -133,7 +146,9 @@ export function PhoneCard({ item, canWork, live }: { item: CapabilityOut; canWor
         [
           t('capabilities.phone.status'),
           c.last_verified_at
-            ? `${state(facts)} · ${t('capabilities.phone.seen', { ago: formatRelative(c.last_verified_at, i18n.language) })}`
+            ? `${state(facts)} · ${t('capabilities.phone.seen', {
+                ago: formatRelative(c.last_verified_at, i18n.language, readAt ? new Date(readAt) : undefined),
+              })}`
             : state(facts),
         ],
         [t('capabilities.phone.platform'), platform(facts.platform)],
@@ -204,7 +219,7 @@ function CommandLog({ capabilityId, live }: { capabilityId: string; live: boolea
       <p id={`${id}-log`} className="text-caption text-muted-foreground">
         {t('capabilities.phone.log.title')}
       </p>
-      <QueryState query={log}>
+      <QueryState query={log} keepOnError>
         {commands.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('capabilities.phone.log.empty')}</p>
         ) : (
@@ -253,11 +268,13 @@ const PRE = 'max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bor
 
 /**
  * A command's arguments, why it failed, and its result, read at once (no wait for it to end) and
- * again every few seconds until it has ended. Its file opens at an address signed on the click:
- * one read with the command lives ten minutes.
+ * again every few seconds until it has ended; once that read says another status than the log's
+ * row, the phone's log is read again, so the row's badge says the same. Its file opens at an
+ * address signed on the click: one read with the command lives ten minutes.
  */
 function CommandDetails({ id, command }: { id: string; command: LoggedCommand }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const full = useQuery({
     queryKey: deviceCommandKey(command.command_id),
     queryFn: () => getCommand(command.command_id, { wait_s: 0 }),
@@ -265,21 +282,31 @@ function CommandDetails({ id, command }: { id: string; command: LoggedCommand })
     refetchInterval: (query) => (isFinal(query.state.data?.status ?? command.status) ? false : COMMAND_POLL_MS),
   });
   const current = full.data ?? command;
+  const seen = full.data?.status;
+  useEffect(() => {
+    if (seen && seen !== command.status) {
+      void queryClient.invalidateQueries({ queryKey: phoneLogKey(command.capability_id) });
+    }
+  }, [seen, command.status, command.capability_id, queryClient]);
   const args = Object.fromEntries(Object.entries(command.command).filter(([key]) => key !== 'kind'));
 
   const openFile = async () => {
     // Opened on the click itself, which a browser lets open a tab; sent on once the address is in.
     const tab = browser.openPending();
     const fresh = await full.refetch();
+    // A read that failed still holds the data of the one before: its address may have expired.
+    if (fresh.isError) {
+      tab?.close();
+      toast.error(errorMessage(t, fresh.error));
+      return;
+    }
     const url = fresh.data?.file_url ? fileUrl(fresh.data.file_url) : null;
     if (tab && url) {
       tab.go(url);
       return;
     }
     tab?.close();
-    if (fresh.isError) toast.error(errorMessage(t, fresh.error));
-    else if (!url) toast.error(t('capabilities.phone.log.fileGone'));
-    else toast.error(t('capabilities.phone.log.fileBlocked'));
+    toast.error(t(url ? 'capabilities.phone.log.fileBlocked' : 'capabilities.phone.log.fileGone'));
   };
 
   return (
@@ -296,7 +323,7 @@ function CommandDetails({ id, command }: { id: string; command: LoggedCommand })
       </div>
       <div className="flex flex-col gap-1">
         <p className="text-caption text-muted-foreground">{t('capabilities.phone.log.result')}</p>
-        <QueryState query={full}>
+        <QueryState query={full} keepOnError>
           {full.data?.result ? (
             <pre className={PRE}>{JSON.stringify(full.data.result, null, 2)}</pre>
           ) : (
@@ -348,7 +375,8 @@ export function PairBridgePanel() {
  * Issues a device bridge's key, with exactly `devices.bridge`, and shows it once with the three
  * steps to run the bridge ({@link useCreateKey}, as the API keys page does: the plaintext is held
  * only in the dialog's state and dropped when it closes; while it is shown only the Close button
- * closes the dialog). Closing it reads the phones again: the bridge may be running by then.
+ * closes the dialog). Closing it once a key was issued reads the phones again: the bridge may be
+ * running by then.
  */
 function PairBridgeDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
@@ -358,9 +386,9 @@ function PairBridgeDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
   const close = (next: boolean) => {
     if (!next) {
+      if (created) void invalidateCapabilities(queryClient);
       setName(t('capabilities.phone.pair.defaultName'));
       reset();
-      void invalidateCapabilities(queryClient);
     }
     onOpenChange(next);
   };

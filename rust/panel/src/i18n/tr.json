@@ -18,7 +18,8 @@
     "copyFailed": "Kopyalanamadı; metni elle seçip kopyalayın.",
     "actions": "İşlemler",
     "none": "—",
-    "loadError": "Yüklenemedi. Lütfen yeniden deneyin."
+    "loadError": "Yüklenemedi. Lütfen yeniden deneyin.",
+    "refreshFailed": "Yenilenemedi: en son okunan gösteriliyor."
   },
   "kit": {
     "close": "Kapat",

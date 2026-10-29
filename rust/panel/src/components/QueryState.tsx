@@ -15,17 +15,26 @@ const GATES = {
 } as const;
 type Gate = (typeof GATES)[keyof typeof GATES];
 
-/** The kit's QueryStateBoundary with the panel's copy for errors and retry. */
+/**
+ * The kit's QueryStateBoundary with the panel's copy for errors and retry. With `keepOnError`, a
+ * query that already holds its data keeps showing it when a later read fails (a refresh during an
+ * outage), with a line that it could not be read again, rather than swapping it for the error: an
+ * open row stays open. The content keeps its place in the tree either way, so nothing below it is
+ * mounted again when the line comes or goes.
+ */
 export function QueryState({
   query,
   children,
+  keepOnError = false,
 }: {
-  query: { isLoading: boolean; isError: boolean; error: unknown; refetch: () => unknown };
+  query: { isLoading: boolean; isError: boolean; error: unknown; refetch: () => unknown; data?: unknown };
   children?: ReactNode;
+  keepOnError?: boolean;
 }) {
   const { t } = useTranslation();
+  const kept = keepOnError && query.isError && query.data !== undefined;
   const gate: Gate | undefined =
-    query.isError && isApiError(query.error) ? (GATES as Record<string, Gate>)[query.error.code] : undefined;
+    query.isError && !kept && isApiError(query.error) ? (GATES as Record<string, Gate>)[query.error.code] : undefined;
   if (gate) {
     return (
       <Callout tone="info">
@@ -39,12 +48,26 @@ export function QueryState({
   return (
     <QueryStateBoundary
       isLoading={query.isLoading}
-      isError={query.isError}
+      isError={query.isError && !kept}
       errorMessage={query.isError ? errorMessage(t, query.error) : undefined}
       retryLabel={t('common.retry')}
       onRetry={() => void query.refetch()}
     >
-      {children}
+      {keepOnError ? (
+        <>
+          {kept ? (
+            <p role="status" className="text-caption text-warning">
+              {t('common.refreshFailed')}{' '}
+              <button type="button" className="underline" onClick={() => void query.refetch()}>
+                {t('common.retry')}
+              </button>
+            </p>
+          ) : null}
+          {children}
+        </>
+      ) : (
+        children
+      )}
     </QueryStateBoundary>
   );
 }
