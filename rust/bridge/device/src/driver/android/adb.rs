@@ -166,10 +166,26 @@ pub trait AdbRunner: Send + Sync {
     async fn devices(&self) -> Result<AdbOutput, AdbError>;
 }
 
+/// How each `adb` is started: on Windows in a console of its own, without a window
+/// (`CREATE_NO_WINDOW`), so that the events this program's console sends every process attached
+/// to it (Ctrl+C, Ctrl+Break, the window closing, a log-off) reach the bridge alone. Sharing the
+/// console, `adb` died of them at once, and the command the bridge was stopping ended first
+/// as `adb` reported it (a `shell` command done, with Windows' exit code for such an end,
+/// -1073741510) rather than failed as cut off by the bridge, which then kills `adb` itself
+/// (task D4). Elsewhere, as a child is started by default (used on Windows only; defined
+/// everywhere for its test).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const ADB_CREATION_FLAGS: Option<u32> = if cfg!(windows) {
+    Some(0x0800_0000)
+} else {
+    None
+};
+
 /// The real `adb`, at the configured path.
 ///
 /// Each call is a child process started with `kill_on_drop(true)` and no input, so a dropped
-/// call leaves no `adb` behind. Unbounded in time itself: the driver bounds each call.
+/// call leaves no `adb` behind, and on Windows in a console of its own
+/// ([`ADB_CREATION_FLAGS`]). Unbounded in time itself: the driver bounds each call.
 #[derive(Clone, Debug)]
 pub struct SystemAdb {
     program: PathBuf,
@@ -184,17 +200,21 @@ impl SystemAdb {
     }
 
     async fn exec(&self, args: &[&str], max_output: usize) -> Result<AdbOutput, AdbError> {
-        let mut child = Command::new(&self.program)
+        let mut command = Command::new(&self.program);
+        command
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| match error.kind() {
-                std::io::ErrorKind::NotFound => AdbError::NotFound,
-                kind => AdbError::Io(kind),
-            })?;
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        if let Some(flags) = ADB_CREATION_FLAGS {
+            command.creation_flags(flags);
+        }
+        let mut child = command.spawn().map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => AdbError::NotFound,
+            kind => AdbError::Io(kind),
+        })?;
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let (stdout, stderr, status) = tokio::try_join!(
@@ -384,6 +404,18 @@ pub(crate) fn quote(value: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What this pins cannot be generated in a test (a console event needs `unsafe` FFI, which
+    /// the crate forbids): closing the console, Ctrl+C and Ctrl+Break reach the bridge and not
+    /// its `adb`, checked by hand on Windows (plan, task D4).
+    #[test]
+    fn adb_runs_in_a_console_of_its_own_on_windows() {
+        if cfg!(windows) {
+            assert_eq!(ADB_CREATION_FLAGS, Some(0x0800_0000), "CREATE_NO_WINDOW");
+        } else {
+            assert_eq!(ADB_CREATION_FLAGS, None);
+        }
+    }
 
     #[test]
     fn quoting_leaves_plain_words_and_quotes_the_rest() {
