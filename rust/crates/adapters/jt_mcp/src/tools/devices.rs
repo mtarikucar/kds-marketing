@@ -49,11 +49,13 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           clickable, editable, focused}], truncated, screenshot_file_id} and \
                           file_url (the screenshot, readable for 10 minutes); tap an element at \
                           its tap_point or with tap_on. awake false: the screen is off and shows \
-                          nothing to act on, press key wakeup first; locked true: the lock \
-                          screen is showing, and a phone with a PIN or pattern needs its owner \
-                          to unlock it; either is left out when the phone does not say. Status \
-                          queued or leased means the wait ended first: \
-                          follow it with jeeta.devices.command_get. Refused as \
+                          nothing to act on, press key wakeup first, and if awake stays false \
+                          (a phone's proximity guard keeps the screen off while its sensor is \
+                          covered, say) ask a person to uncover or unlock the phone; locked true: \
+                          the lock screen is showing, and a phone with a PIN or pattern needs \
+                          its owner to unlock it; either is left out when the phone does not \
+                          say. Status queued or leased means the wait ended first: follow it \
+                          with jeeta.devices.command_get. Refused as \
                           jeeta.devices.act refuses. [risk: WRITE]",
             permission: Permission::DevicesWork,
             schema: observe_schema,

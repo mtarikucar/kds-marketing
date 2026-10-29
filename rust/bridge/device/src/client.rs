@@ -526,7 +526,8 @@ impl FileTransfer for CommandFiles {
             ClientError::Status { status: 404, .. } => DriverError::new(
                 FailReason::FileNotFound,
                 format!(
-                    "downloading the file failed: {error}; the file was deleted, or its download                      address ran out"
+                    "downloading the file failed: {error}; the file was deleted, or its download \
+                     address ran out"
                 ),
             ),
             error => DriverError::new(
@@ -708,8 +709,11 @@ Content-Length: 0
             .await
             .unwrap_err();
         assert_eq!(error.reason, FailReason::FileNotFound);
-        assert!(error.detail.contains("404"), "{}", error.detail);
-        assert!(!error.detail.contains("SIGNED-SECRET"), "{}", error.detail);
+        assert_eq!(
+            error.detail,
+            "downloading the file failed: the server answered 404; the file was deleted, or its \
+             download address ran out"
+        );
         assert!(!dest.exists());
         // Any other failure stays the bridge's.
         let broken = raw_server(

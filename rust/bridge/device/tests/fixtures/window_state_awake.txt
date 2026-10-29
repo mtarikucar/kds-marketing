@@ -1,5 +1,17 @@
+WINDOW MANAGER LAST ANR (dumpsys window lastanr)
+WINDOW MANAGER POLICY STATE (dumpsys window policy)
       showing=false
       interactiveState=INTERACTIVE_STATE_AWAKE
+WINDOW MANAGER ANIMATOR STATE (dumpsys window animator)
+WINDOW MANAGER SESSIONS (dumpsys window sessions)
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 rootTasks=5
   mCurrentFocus=Window{c247365 u0 com.android.settings/com.android.settings.MainSettings}
     mAwake=true mScreenOnEarly=true mScreenOnFully=true
     isKeyguardShowing=false
+WINDOW MANAGER TOKENS (dumpsys window tokens)
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+WINDOW MANAGER TRACE (dumpsys window trace)
+WINDOW MANAGER LOGGING (dumpsys window logging)
+WINDOW MANAGER HIGH REFRESH RATE BLACKLIST (dumpsys window refresh)
+WINDOW MANAGER CONSTANTS (dumpsys window constants):

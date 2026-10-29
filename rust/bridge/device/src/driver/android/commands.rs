@@ -98,12 +98,17 @@ impl AndroidAdbDriver {
     ) -> Result<CommandResult, DriverError> {
         let size = DeviceLine::new("wm").word("size");
         // One call for the app in front and the screen's state: the window manager's dump holds
-        // the focus, its display policy's state (`mAwake`, `isKeyguardShowing`) and its
-        // keyguard's (`interactiveState`, `showing`).
+        // each display's focus and policy state (`mAwake`, `isKeyguardShowing`) under its heading,
+        // and its keyguard's (`interactiveState`, `showing`); its sections' headings tell which
+        // lines are a display's.
         let window = DeviceLine::new("dumpsys")
             .word("window")
             .word("|")
             .word("grep")
+            .word("-e")
+            .arg("^WINDOW MANAGER ")
+            .word("-e")
+            .arg("Display: mDisplayId=")
             .word("-e")
             .word("mCurrentFocus=")
             .word("-e")
@@ -121,7 +126,7 @@ impl AndroidAdbDriver {
         );
         // What the window manager said, if anything: what it does not say is left out.
         let window = window
-            .map(|out| out.stdout_text().into_owned())
+            .map(|out| observe::default_display(&out.stdout_text()))
             .unwrap_or_default();
         let state = observe::screen_state(&window);
         let (dump, cut) = dump?;
@@ -553,9 +558,10 @@ fn transferred(op: &str, out: &super::AdbOutput) -> Result<(), DriverError> {
 }
 
 /// Whether a line the phone or `adb` printed says a path names nothing: `stat: '…': No such file
-/// or directory`, as the Redmi answers for a path that is not there.
+/// or directory`, as the Redmi answers for a path that is not there, or `Not a directory`, for a
+/// path that goes through a file.
 fn not_there(line: &str) -> bool {
-    line.contains("No such file or directory")
+    line.contains("No such file or directory") || line.contains("Not a directory")
 }
 
 /// A path in this computer's temporary folder for one transfer, removed (a file, or a folder an

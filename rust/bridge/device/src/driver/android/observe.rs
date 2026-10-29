@@ -328,6 +328,45 @@ pub(crate) fn foreground_app(dumpsys: &str) -> Option<String> {
     })
 }
 
+/// The lines of `dumpsys window` (as grepped, its sections' headings among them) that tell of
+/// the phone's own screen: the lines outside its displays' section (the keyguard's), and in that
+/// section display 0's alone (from its `Display: mDisplayId=0` to the next display's heading).
+/// Each display prints its own focus and policy (`mAwake`, `isKeyguardShowing`), another display
+/// (a screen recording's, a cast's) first, and one that is not the default always reads awake.
+/// Without any display's heading, every line.
+pub(crate) fn default_display(dumpsys: &str) -> String {
+    fn display_heading(line: &str) -> Option<&str> {
+        line.trim_start().strip_prefix("Display: mDisplayId=")
+    }
+    if !dumpsys.lines().any(|line| display_heading(line).is_some()) {
+        return dumpsys.to_owned();
+    }
+    let mut in_displays = false;
+    let mut display: Option<u32> = None;
+    let mut kept = String::new();
+    for line in dumpsys.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("WINDOW MANAGER ") {
+            in_displays = trimmed.starts_with("WINDOW MANAGER DISPLAY CONTENTS");
+            display = None;
+            continue;
+        }
+        if let Some(id) = display_heading(line) {
+            in_displays = true;
+            display = id
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .and_then(|id| id.parse().ok());
+            continue;
+        }
+        if !in_displays || display == Some(0) {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    kept
+}
+
 /// Whether the screen is on and whether the lock screen shows, as `dumpsys window` tells them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ScreenState {
@@ -624,5 +663,48 @@ mod tests {
             state(None, None)
         );
         assert_eq!(screen_state(""), state(None, None));
+    }
+
+    #[test]
+    fn only_the_default_displays_lines_count() {
+        let state = |awake, locked| ScreenState { awake, locked };
+        // A second display (a screen recording's or a cast's) is dumped first, and its policy
+        // always reads awake: the phone's own screen is display 0's.
+        let two = default_display(&fixture("window_state_two_displays.txt"));
+        assert_eq!(screen_state(&two), state(Some(false), Some(true)));
+        assert_eq!(foreground_app(&two), None);
+        // Display 0 in front of an app, the other display showing another one.
+        let awake = fixture("window_state_awake.txt").replace(
+            "  Display: mDisplayId=0 rootTasks=5\n",
+            "  Display: mDisplayId=2 rootTasks=1\n  mCurrentFocus=Window{7a1b2c3 u0 com.example.cast/com.example.cast.Presentation}\n    mAwake=false x=1\n  Display: mDisplayId=0 rootTasks=5\n",
+        );
+        let awake = default_display(&awake);
+        assert_eq!(
+            foreground_app(&awake).as_deref(),
+            Some("com.android.settings")
+        );
+        assert_eq!(screen_state(&awake), state(Some(true), Some(false)));
+        // The keyguard's lines, outside the displays' section, count whatever the display.
+        let keyguard_only = "WINDOW MANAGER POLICY STATE (dumpsys window policy)\n      showing=true\nWINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  Display: mDisplayId=0 rootTasks=5\n";
+        assert_eq!(
+            screen_state(&default_display(keyguard_only)),
+            state(None, Some(true))
+        );
+        // A line after the displays' section is no display's: a focus printed there (as older
+        // versions print it) counts.
+        let after = "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  Display: mDisplayId=1 rootTasks=1\n    mAwake=true\nWINDOW MANAGER WINDOWS (dumpsys window windows)\n  mCurrentFocus=Window{1 u0 com.a.b/com.a.b.Main}\n";
+        let after = default_display(after);
+        assert_eq!(foreground_app(&after).as_deref(), Some("com.a.b"));
+        assert_eq!(screen_state(&after), state(None, None));
+        // Without any display's heading, every line counts, as before.
+        let flat = "  mCurrentFocus=Window{1 u0 com.a.b}\n    mAwake=true\n";
+        assert_eq!(default_display(flat), flat);
+        // Windows' line ends are read the same.
+        assert_eq!(
+            screen_state(&default_display(
+                &fixture("window_state_two_displays.txt").replace('\n', "\r\n")
+            )),
+            state(Some(false), Some(true))
+        );
     }
 }

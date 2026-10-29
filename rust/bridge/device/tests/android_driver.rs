@@ -16,7 +16,9 @@
 //! - read on that phone, awake and unlocked (task D4): `window_state_awake.txt`, what an
 //!   observation's `dumpsys window | grep …` gives; written in its shape with the values D4 read
 //!   on the phone asleep behind its lock screen (the focus on `NotificationShade`, the keyguard
-//!   `showing=true`): `window_state_locked_asleep.txt`;
+//!   `showing=true`): `window_state_locked_asleep.txt`, and the same with a second display
+//!   dumped before the phone's own, awake as Android always reports one that is not the default:
+//!   `window_state_two_displays.txt`;
 //! - written by hand in the shapes the plan's findings record: `dump_whatsapp.xml`,
 //!   `dump_numeric_refs.xml`, `idle_state_error.txt`, `inject_events_refusal.txt` and the other
 //!   phones of `devices_l.txt`.
@@ -54,7 +56,7 @@ const RM_LINE: &str = "shell rm -f /data/local/tmp/jeeta_ui.xml";
 const HISTORY_LINE: &str = "shell settings get secure input_methods_subtype_history";
 /// What an observation reads of the window manager: the focus, and whether the screen is on and
 /// locked.
-const WINDOW_LINE: &str = "shell dumpsys window | grep -e mCurrentFocus= -e mAwake= -e isKeyguardShowing= -e showing= -e interactiveState=";
+const WINDOW_LINE: &str = "shell dumpsys window | grep -e '^WINDOW MANAGER ' -e 'Display: mDisplayId=' -e mCurrentFocus= -e mAwake= -e isKeyguardShowing= -e showing= -e interactiveState=";
 const FILE_ID: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0f11);
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake screen";
 const DOWNLOAD: &[u8] = b"the file the agent pushes";
@@ -537,6 +539,15 @@ async fn observe_says_whether_the_screen_is_on_and_locked() {
     // Asleep behind the lock screen: the notification shade has the focus, no app is in front.
     let adb = Arc::new(FakeAdb::phone().with(|s| {
         s.focus = fixture("window_state_locked_asleep.txt");
+    }));
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app, None);
+    assert_eq!((seen.awake, seen.locked), (Some(false), Some(true)));
+
+    // The same with a second display (a recording's or a cast's), dumped first and always
+    // awake: the phone's own screen is display 0.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.focus = fixture("window_state_two_displays.txt");
     }));
     let seen = observe(&driver(&adb)).await;
     assert_eq!(seen.foreground_app, None);
@@ -1432,6 +1443,11 @@ async fn pull_file_of_a_path_that_is_not_there_is_file_not_found() {
 ",
             ),
         ));
+        // A path through a file, as if it were a folder: nothing is there either.
+        s.answers.push((
+            "shell stat -L -c '%F %s' /sdcard/Download/a.txt/b".to_owned(),
+            AdbOutput::new(1, "", "stat: '/sdcard/Download/a.txt/b': Not a directory\n"),
+        ));
         // Not there for this user is not "not there".
         s.answers.push((
             "shell stat -L -c '%F %s' /data/secret".to_owned(),
@@ -1449,6 +1465,9 @@ async fn pull_file_of_a_path_that_is_not_there_is_file_not_found() {
     let error = failed(run(&phone, pull("/sdcard/Download/gone.txt")).await);
     assert_eq!(error.reason, FailReason::FileNotFound);
     assert!(error.detail.contains("No such file"), "{}", error.detail);
+    let error = failed(run(&phone, pull("/sdcard/Download/a.txt/b")).await);
+    assert_eq!(error.reason, FailReason::FileNotFound);
+    assert!(error.detail.contains("Not a directory"), "{}", error.detail);
     let error = failed(run(&phone, pull("/data/secret")).await);
     assert_eq!(error.reason, FailReason::AdbError);
     assert!(

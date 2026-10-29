@@ -25,7 +25,9 @@
 //! - Auto-rotate turns the screen: its size and rotation are read on every observation.
 //! - Asleep behind its lock screen, the phone dumps System UI's nodes only, with the focus on its
 //!   notification shade and no app in front: an observation says so (`awake`, `locked`), read
-//!   from the `dumpsys window` it runs for the focus anyway (task D4). `power` toggles the
+//!   from the `dumpsys window` it runs for the focus anyway (task D4), display 0's lines only:
+//!   another display (a recording's, a cast's) is dumped first and always reads awake. `power`
+//!   toggles the
 //!   screen, turning one that is on off; `wakeup` (`KEYCODE_WAKEUP`) only turns it on. In D4 a
 //!   wake-up key did not visibly wake the Redmi: MIUI's proximity guard (its
 //!   `ScreenOnProximitySensorGuide` window showed after `power`) turns the screen back off while
