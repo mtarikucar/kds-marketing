@@ -123,6 +123,7 @@ async fn register(
         version: "0.1.0".into(),
         protocol: 1,
         phones,
+        instance: None,
     };
     bridge::register(&w.deps, &bridge_at(key, now), body)
         .await
@@ -163,6 +164,7 @@ async fn poll(w: &World, key: &AgentPrincipal, now: OffsetDateTime) -> Vec<Lease
     let query = CommandsQuery {
         wait_s: 0,
         limit: 20,
+        instance: None,
     };
     bridge::commands(&w.deps, &bridge_at(key, now), query)
         .await
@@ -968,6 +970,7 @@ async fn the_jobs_sweep_every_workspace() {
         version: "0.1.0".into(),
         protocol: 1,
         phones: vec![phone("SER1")],
+        instance: None,
     };
     let theirs = bridge::register(&w.deps, &bridge_at(&other_key, FIXED_NOW), body)
         .await

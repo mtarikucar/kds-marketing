@@ -44,6 +44,7 @@ fn register() -> RegisterIn {
         version: "0.1.0".into(),
         protocol: PROTOCOL_VERSION,
         phones: vec![phone("R58N1234ABC")],
+        instance: None,
     }
 }
 
@@ -124,7 +125,7 @@ fn register_round_trip() {
         json!({
             "bridge_id": "pc-atolye",
             "version": "0.1.0",
-            "protocol": 1,
+            "protocol": 2,
             "phones": [{
                 "platform": "android",
                 "serial": "R58N1234ABC",
@@ -171,7 +172,7 @@ fn register_out_carries_server_protocol() {
             "refused": [],
             "heartbeat_s": 15,
             "max_wait_s": 25,
-            "protocol": 1
+            "protocol": 2
         }),
     );
     // The server answers its own protocol, which may be newer than the bridge's.
@@ -207,7 +208,7 @@ fn register_out_says_why_a_phone_was_not_registered() {
             }],
             "heartbeat_s": 15,
             "max_wait_s": 25,
-            "protocol": 1
+            "protocol": 2
         }),
     );
     // An answer without the list (a server that has none to give) reads as no refusals.
@@ -305,6 +306,7 @@ fn commands_envelope_round_trip() {
         &CommandsQuery {
             wait_s: 25,
             limit: 20,
+            instance: None,
         },
         json!({"wait_s": 25, "limit": 20}),
     );
@@ -591,8 +593,55 @@ fn results_batch_limit_constant_is_100() {
 }
 
 #[test]
-fn protocol_version_is_1() {
-    assert_eq!(PROTOCOL_VERSION, 1);
+fn protocol_version_is_2() {
+    assert_eq!(PROTOCOL_VERSION, 2);
+}
+
+/// Protocol 2: a bridge's run says which it is, on each register and, to a server of protocol 2
+/// or later, on each poll. Left out, both read as protocol 1's.
+#[test]
+fn a_register_and_a_poll_carry_the_bridges_run() {
+    let run = id(42);
+    let register: RegisterIn = serde_json::from_value(json!({
+        "bridge_id": "pc", "version": "0.1.0", "protocol": 2, "phones": [], "instance": run,
+    }))
+    .unwrap();
+    assert_eq!(register.instance, Some(run));
+    assert_eq!(register.validate(), Ok(()));
+    assert_eq!(
+        serde_json::to_value(&register).unwrap()["instance"],
+        json!(run)
+    );
+    // A protocol 1 bridge's register: no instance, and none written back.
+    let older: RegisterIn = serde_json::from_value(json!({
+        "bridge_id": "pc", "version": "0.1.0", "protocol": 1, "phones": [],
+    }))
+    .unwrap();
+    assert_eq!(older.instance, None);
+    assert!(
+        serde_json::to_value(&older)
+            .unwrap()
+            .get("instance")
+            .is_none()
+    );
+
+    let poll: CommandsQuery =
+        serde_json::from_value(json!({"wait_s": 25, "limit": 20, "instance": run})).unwrap();
+    assert_eq!(poll.instance, Some(run));
+    assert_eq!(poll.clone().clamped().instance, Some(run));
+    let older: CommandsQuery = serde_json::from_value(json!({"wait_s": 25, "limit": 20})).unwrap();
+    assert_eq!(older.instance, None);
+    assert!(
+        serde_json::to_value(&older)
+            .unwrap()
+            .get("instance")
+            .is_none()
+    );
+    // Still nothing else.
+    assert!(
+        serde_json::from_value::<CommandsQuery>(json!({"wait_s": 1, "limit": 1, "other": 1}))
+            .is_err()
+    );
 }
 
 #[test]
@@ -1480,20 +1529,29 @@ fn an_earlier_bad_sequence_does_not_hide_the_character_cut_at_the_cap() {
 
 #[test]
 fn commands_query_is_clamped() {
-    let clamped = |wait_s, limit| CommandsQuery { wait_s, limit }.clamped();
+    let clamped = |wait_s, limit| {
+        CommandsQuery {
+            wait_s,
+            limit,
+            instance: None,
+        }
+        .clamped()
+    };
     // In range: left alone.
     assert_eq!(
         clamped(25, 20),
         CommandsQuery {
             wait_s: 25,
-            limit: 20
+            limit: 20,
+            instance: None
         }
     );
     assert_eq!(
         clamped(10, 5),
         CommandsQuery {
             wait_s: 10,
-            limit: 5
+            limit: 5,
+            instance: None
         }
     );
     // `wait_s` is 0 ..= 25: 0 means "answer now".

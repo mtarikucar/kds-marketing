@@ -24,6 +24,15 @@
 //!   phones of the platforms protocol 1 defines: phones of newer platforms are listed only once
 //!   [`RegisterOut::protocol`] shows that the server defines them.
 //!
+//! What each protocol added:
+//!
+//! - 2: the bridge's run ([`RegisterIn::instance`], [`CommandsQuery::instance`]): a random id a
+//!   bridge program draws when it starts, so that the server tells the polls of a run that
+//!   stopped (behind a proxy a held poll outlives its program) from the next run's, which holds
+//!   the same key. Every register carries it (a server of protocol 1 ignores it); a poll carries
+//!   it only to a server of protocol 2 or later, as a poll of protocol 1 refuses what it does not
+//!   know.
+//!
 //! Growing the vocabulary:
 //!
 //! - A new [`FailReason`] needs no bump: an older reader takes it as [`FailReason::Unknown`] (see
@@ -73,8 +82,8 @@ pub use jt_devices::{
     supports,
 };
 
-/// The protocol this build speaks.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// The protocol this build speaks (see the crate's notes for what each added).
+pub const PROTOCOL_VERSION: u32 = 2;
 /// How often a bridge registers, in seconds. The server's answer repeats it.
 pub const HEARTBEAT_S: u32 = 15;
 /// The longest a command poll may wait, in seconds. The server's answer repeats it.
@@ -204,6 +213,12 @@ pub struct RegisterIn {
     /// The protocol the bridge speaks.
     pub protocol: u32,
     pub phones: Vec<PhoneReport>,
+    /// The bridge program's run: drawn at random when it starts, the same on each of its
+    /// registers (protocol 2; a bridge of protocol 1 sends none). A phone the latest registration
+    /// of a run listed is that run's alone: it is leased to that run's polls only, and only that
+    /// run's registers leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<Uuid>,
 }
 
 impl RegisterIn {
@@ -370,6 +385,10 @@ pub struct CommandsQuery {
     pub wait_s: u32,
     /// The most commands to hand out.
     pub limit: u32,
+    /// The run of the bridge that polls ([`RegisterIn::instance`]): sent to a server of protocol
+    /// 2 or later only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<Uuid>,
 }
 
 impl CommandsQuery {
@@ -380,6 +399,7 @@ impl CommandsQuery {
         CommandsQuery {
             wait_s: self.wait_s.min(MAX_WAIT_S),
             limit: self.limit.clamp(1, MAX_COMMANDS),
+            instance: self.instance,
         }
     }
 }

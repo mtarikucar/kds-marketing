@@ -22,7 +22,15 @@
 //! (`jt_capability::RESERVED_PUBLIC_KEYS`). Beside the phone's facts (`platform`, `serial`,
 //! `model`, `os_version`, `screen`, `features`) and the bridge's (`bridge_id`, `version`,
 //! `protocol`), it keeps which bridge holds the phone: `listed_by`, that bridge's key id, and
-//! `listed`, whether that bridge's latest registration lists it (`false` once one leaves it out).
+//! `listed`, whether that bridge's latest registration lists it (`false` once one leaves it out);
+//! and `instance`, the run of the bridge program that registration came from
+//! (`RegisterIn::instance`, protocol 2; `null` from a bridge of protocol 1). A restarted bridge
+//! holds the same key: the run tells it from the one that stopped, whose poll the server may
+//! still hold (behind a proxy a poll outlives its program). A phone whose latest listing names a
+//! run is that run's alone: it is leased to that run's polls only, and only that run's
+//! registrations leave it out (two runs of one bridge at once, one starting while the other
+//! stops: the latest to list a phone holds it). A phone whose latest listing names none is any
+//! poll's and any registration's of its bridge, as before protocol 2.
 //! The `phone` kind has a heartbeat (`jt_capability::Heartbeat`): only these registrations verify
 //! a phone (`capability.verify` refuses one), it reads stale a minute after the last one that
 //! listed it, and the `device_bridge_health` job marks it unreachable ten minutes after
@@ -34,12 +42,13 @@
 //! it out or stops registering, the next bridge to list it holds it. A phone that fails its own
 //! checks is refused with the reason, a retired one that is still plugged in with
 //! [`PHONE_RETIRED`] (nothing is declared or merged for any refused phone), and one phone never
-//! refuses the registration: the others register as usual. Only protocol 1 exists, so every body
-//! sent back is protocol 1's.
+//! refuses the registration: the others register as usual. Protocol 2 added only what a bridge
+//! sends (its run), so every body sent back is the same to a bridge of either protocol.
 //!
 //! **Commands.** A poll leases to the bridge the due commands
 //! (`ports::devices::DeviceCommandRepo::pick_due`) of exactly the phones it holds and its latest
-//! registration lists, oldest first, at most the poll's limit; one handed out and not answered
+//! registration lists (of those a run holds, only to that run's polls), oldest first, at most the
+//! poll's limit; one handed out and not answered
 //! within [`REDELIVER_AFTER`] is handed out again, and the bridge acts on a command id once. Each
 //! read checks every command it picked against what the phone's bridge lists now (the command's
 //! `jt_devices::required_features` against the phone's current `features`): one it does not list
@@ -67,9 +76,11 @@
 //!
 //! **Replacing a bridge's key.** Start the bridge with the new key, stop the old program cleanly
 //! (it posts what it finished, with the old key), then revoke the old key. The new bridge is
-//! refused each phone the old one held until the old one has not registered it for [`HELD_FOR`]
-//! (up to a minute); then it takes it over (`devices.phone.holder_changed`), and the old key's
-//! leases of that phone are its to answer.
+//! refused each phone the old one held while the old one lists it; a clean stop ends with a
+//! registration that lists no phone, which leaves them out at once, so the new bridge takes each
+//! over at its next registration (`devices.phone.holder_changed`). An old program that stopped
+//! without it (a crash) holds them until it has not registered them for [`HELD_FOR`] (up to a
+//! minute). The old key's leases of a phone taken over are the new bridge's to answer.
 //!
 //! **Files.** An upload is the file's bytes, `image/png` (a screenshot) or
 //! `application/octet-stream` (a file pulled off a phone), streamed into the file store and
@@ -228,6 +239,18 @@ fn listed_by(c: &Capability, bridge: ApiKeyId) -> bool {
     held_by(c, bridge) && is_listed(c)
 }
 
+/// The run of the bridge program whose registration listed phone `c` last (`instance`), if it
+/// named one.
+fn instance_of(c: &Capability) -> Option<Uuid> {
+    device_of(c)?.get("instance")?.as_str()?.parse().ok()
+}
+
+/// Whether run `instance` of the bridge that holds phone `c` may act on it (be leased its
+/// commands, leave it out): the phone's latest listing named no run, or this one.
+fn of_this_run(c: &Capability, instance: Option<Uuid>) -> bool {
+    instance_of(c).is_none_or(|listed| Some(listed) == instance)
+}
+
 /// Whether a bridge other than `bridge` holds phone `c` at `now`: it lists it, and registered it
 /// at most [`HELD_FOR`] ago.
 fn held_by_another(c: &Capability, bridge: ApiKeyId, now: OffsetDateTime) -> bool {
@@ -308,6 +331,8 @@ fn device_facts(b: &BridgeCaller, input: &RegisterIn, phone: &PhoneReport) -> Ma
     device.insert("protocol".into(), json!(input.protocol));
     device.insert("listed_by".into(), json!(b.bridge.to_string()));
     device.insert("listed".into(), json!(true));
+    // `null` from a bridge that names no run, in place of a run named before.
+    device.insert("instance".into(), json!(input.instance));
     device
 }
 
@@ -331,8 +356,8 @@ enum Step {
 /// `capability.declare`), its facts merged, and `devices.bridge.online` written (`capability_id`,
 /// `external_id`, `bridge_id`, `version`, `declared`) when it did not read verified until now; a
 /// retired phone, or one another bridge holds, is refused, read under its lock. Each phone this
-/// bridge's previous registration listed and this one leaves out reads as left out. Only the
-/// bridge's key.
+/// bridge's previous registration listed and this one leaves out reads as left out, unless
+/// another run of the bridge listed it since (see the module docs). Only the bridge's key.
 pub async fn register(
     deps: &Deps,
     b: &BridgeCaller,
@@ -404,7 +429,11 @@ pub async fn register(
     }
     let listing: HashSet<CapabilityId> = steps.iter().map(|(id, _)| *id).collect();
     for c in &phones {
-        if c.status != StoredStatus::Retired && listed_by(c, b.bridge) && !listing.contains(&c.id) {
+        if c.status != StoredStatus::Retired
+            && listed_by(c, b.bridge)
+            && of_this_run(c, input.instance)
+            && !listing.contains(&c.id)
+        {
             steps.push((c.id, Step::LeaveOut(c.id)));
         }
     }
@@ -454,7 +483,9 @@ pub async fn register(
                     },
                 ));
             }
-            Step::LeaveOut(id) => leave_out(r.as_mut(), ctx, id, b.bridge).await?,
+            Step::LeaveOut(id) => {
+                leave_out(r.as_mut(), ctx, id, b.bridge, input.instance).await?;
+            }
         }
     }
     r.commit().await?;
@@ -465,16 +496,18 @@ pub async fn register(
 
 /// Marks phone `id` as left out of the latest registration of bridge `bridge`, which listed it
 /// before: no command is leased for it from the next poll on, and another bridge may take it
-/// over. Read under the lock, so a phone that another bridge took over or that was retired since
-/// is left as it stands.
+/// over. Read under the lock, so a phone that another bridge took over, another run of this one
+/// listed (run `instance`'s registration leaves it out), or that was retired since, is left as it
+/// stands.
 async fn leave_out(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     id: CapabilityId,
     bridge: ApiKeyId,
+    instance: Option<Uuid>,
 ) -> Result<(), AppError> {
     let mut c = locked(r, id).await?;
-    if c.status == StoredStatus::Retired || !listed_by(&c, bridge) {
+    if c.status == StoredStatus::Retired || !listed_by(&c, bridge) || !of_this_run(&c, instance) {
         return Ok(());
     }
     kernel::merge_facts(
@@ -501,7 +534,9 @@ enum Taken {
 
 /// `devices.bridge.commands`: the bridge's poll (see the module docs), leasing at most
 /// `query.limit` commands (1 to 20) and waiting up to `query.wait_s` seconds (at most
-/// [`MAX_WAIT_S`]) for one; out-of-range values are cut to the range. Only the bridge's key.
+/// [`MAX_WAIT_S`]) for one; out-of-range values are cut to the range. A poll of run
+/// `query.instance` is leased nothing for a phone another run listed last, also when that run
+/// registered while the poll waits. Only the bridge's key.
 pub async fn commands(
     deps: &Deps,
     b: &BridgeCaller,
@@ -514,7 +549,7 @@ pub async fn commands(
         deps.bridge_signals.as_ref(),
         signal_key(b.ctx.workspace_id),
         wait,
-        move |waited| Box::pin(read(deps, b, limit, waited)),
+        move |waited| Box::pin(read(deps, b, limit, query.instance, waited)),
     )
     .await?;
     Ok(CommandsOut {
@@ -527,12 +562,13 @@ async fn read(
     deps: &Deps,
     b: &BridgeCaller,
     limit: u32,
+    instance: Option<Uuid>,
     waited: StdDuration,
 ) -> Result<Option<Vec<LeasedCommand>>, AppError> {
     let bridge = b.bridge;
     loop {
         let taken = kernel::lease(deps, &b.ctx, &DEVICE_BRIDGE, waited, move |r, ctx, at| {
-            Box::pin(take(r, ctx, bridge, limit, at))
+            Box::pin(take(r, ctx, bridge, instance, limit, at))
         })
         .await?;
         let Some(taken) = taken else {
@@ -566,20 +602,23 @@ async fn read(
 }
 
 /// The lease of one read (in its transaction): picks the due commands of the phones bridge
-/// `bridge` holds and lists now, at most `limit`, fails those their phone's bridge does not list
+/// `bridge` holds and lists now (and run `instance` of it may act on: [`of_this_run`]), at most `limit`, fails those their phone's bridge does not list
 /// what they need for (ledgered), and leases the rest to it. The phones and their features are
 /// read before anything is picked, so nothing waits on another read while rows are locked.
 async fn take(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     bridge: ApiKeyId,
+    instance: Option<Uuid>,
     limit: u32,
     at: Lease,
 ) -> Result<Vec<Taken>, AppError> {
     let phones: HashMap<CapabilityId, (String, Vec<String>)> = kernel::of_kind(r, PHONE_KIND)
         .await?
         .iter()
-        .filter(|c| c.status != StoredStatus::Retired && listed_by(c, bridge))
+        .filter(|c| {
+            c.status != StoredStatus::Retired && listed_by(c, bridge) && of_this_run(c, instance)
+        })
         .filter_map(|c| Some((c.id, (serial_of(c)?, features_of(c)))))
         .collect();
     if phones.is_empty() {

@@ -112,6 +112,7 @@ async fn register(
         version: "0.1.0".into(),
         protocol: 1,
         phones,
+        instance: None,
     };
     bridge::register(&w.deps, &bridge_at(key, now), body)
         .await
@@ -178,6 +179,7 @@ async fn bridge_answers(
     let query = CommandsQuery {
         wait_s: 5,
         limit: 20,
+        instance: None,
     };
     let leased = bridge::commands(&w.deps, &b, query).await.unwrap().commands;
     let results = leased
@@ -303,6 +305,7 @@ async fn act_returns_queued_when_wait_ends() {
     let query = CommandsQuery {
         wait_s: 0,
         limit: 20,
+        instance: None,
     };
     assert_eq!(
         bridge::commands(&w.deps, &b, query)
@@ -971,6 +974,7 @@ async fn a_leased_command_past_its_expiry_reads_leased_until_it_ends() {
     let query = CommandsQuery {
         wait_s: 0,
         limit: 20,
+        instance: None,
     };
     assert_eq!(
         bridge::commands(&w.deps, &b, query)

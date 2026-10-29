@@ -1,8 +1,9 @@
 //! The bridge's loop (spec §6): it registers, polls for commands, runs them on the phones and
 //! posts what they did. Three tasks share it, plus one worker per phone:
 //!
-//! - **Register** on start, then every `heartbeat_s` the server answers, with the phones the
-//!   registry lists: only the configured `serials`, if any; each serial once; at most
+//! - **Register** on start, then every `heartbeat_s` the server answers, as this run of the
+//!   bridge (an instance drawn at random when [`run`] starts, on every register; on every poll
+//!   too once the server answered protocol 2 or later), with the phones the registry lists: only the configured `serials`, if any; each serial once; at most
 //!   [`MAX_PHONES`]; never a retired one, nor one whose worker waits on a task that will not stop
 //!   (see *Cut off*). A listing that fails, panics or takes too long is replaced by the last good
 //!   one, and a phone whose report fails by its last good report for up to
@@ -47,12 +48,17 @@
 //!   stay unanswered (the server hands them out again later), and the results made get the
 //!   grace ([`Timing::shutdown_grace`], or less, as [`Stop`] says), shared with the cutting off,
 //!   to be posted.
+//!   A register on its way when the bridge stops is answered first (within the grace): applied
+//!   after the goodbye, it would list the phones again.
 //! - **Say goodbye** once that is done: a last register that lists no phone, best-effort, within
-//!   [`Timing::goodbye_timeout`] (or less, as [`Stop`] says). A poll the server still holds for
-//!   the bridge (behind a proxy the server may not see the bridge go) then leases nothing, and the
-//!   bridge's phones read offline at once; another bridge's phones are not touched. A bridge that
-//!   crashes, or a computer that sleeps, says nothing: a command such a poll leases is handed out
-//!   again once [`jt_devices::REDELIVER_AFTER`] (10 s) has passed.
+//!   [`Timing::goodbye_timeout`] (or less, as [`Stop`] says). The bridge's phones read offline at
+//!   once, and a poll the server still holds for this run (behind a proxy the server may not see
+//!   the bridge go) leases nothing. That a poll of this run is leased nothing once the next run
+//!   has listed a phone, and that this run's goodbye leaves the phones another run of the same
+//!   key listed since, is the server's: it tells runs apart by their instance (protocol 2).
+//!   Another bridge's phones are not touched. A bridge that crashes, or a computer that sleeps,
+//!   says nothing: until another run lists its phones, a command its held poll leases is handed
+//!   out again once [`jt_devices::REDELIVER_AFTER`] (10 s) has passed.
 //!
 //! # Logging
 //!
@@ -173,7 +179,9 @@ impl Default for Timing {
 pub enum Stop {
     /// Within [`Timing::shutdown_grace`].
     Graceful,
-    /// Within this, when it is shorter: the system ends the process soon.
+    /// Within this, when it is shorter, to cut off what runs and post the results, and as long
+    /// again at most (within [`Timing::goodbye_timeout`]) for the goodbye: the system ends the
+    /// process soon.
     Within(Duration),
 }
 
@@ -208,6 +216,8 @@ pub async fn run(
 ) -> Result<(), RunError> {
     let client = JeetaClient::new(config).map_err(RunError::Start)?;
     let leaving = client.clone();
+    // This run of the bridge, on each register and poll (protocol 2).
+    let instance = Uuid::now_v7();
     let (stop_tx, stop) = watch::channel(false);
     let (table_tx, table_rx) = watch::channel(PhoneTable::default());
     let (results_tx, results_rx) = mpsc::unbounded_channel();
@@ -216,6 +226,7 @@ pub async fn run(
     let listing = Listing {
         bridge_id: config.bridge_id().to_owned(),
         serials: config.serials().map(<[String]>::to_vec),
+        instance,
     };
     let mut heartbeat = tokio::spawn(heartbeat(
         client.clone(),
@@ -225,6 +236,7 @@ pub async fn run(
         timing.clone(),
         up.clone(),
         stuck.clone(),
+        stop.clone(),
     ));
     let mut poll = tokio::spawn(poll(
         Workers::new(
@@ -236,6 +248,7 @@ pub async fn run(
             stuck,
         ),
         up.clone(),
+        instance,
     ));
     let mut post = tokio::spawn(post(client, results_rx, timing.clone(), stop, up));
 
@@ -262,12 +275,8 @@ pub async fn run(
             (timing.shutdown_grace, timing.goodbye_timeout)
         }
     };
+    // The heartbeat sends no register from now on, and lets one on its way be answered.
     let _ = stop_tx.send(true);
-    heartbeat.abort();
-    if ended != Ended::Task("register") {
-        // Gone before the goodbye: no register of the heartbeat's is sent after it.
-        let _ = (&mut heartbeat).await;
-    }
     // The poll task stops, and its workers cut off what runs and end: then no sender of results
     // is left, and the poster ends once it has posted what they made.
     let deadline = tokio::time::Instant::now() + grace;
@@ -282,7 +291,16 @@ pub async fn run(
     if ended != Ended::Task("post") {
         settle(&mut post, deadline, "results not yet posted at shutdown").await;
     }
-    goodbye(&leaving, config.bridge_id(), goodbye_within).await;
+    if ended != Ended::Task("register") {
+        // Answered before the goodbye goes out, or cut off once the grace ran out.
+        settle(
+            &mut heartbeat,
+            deadline,
+            "a register on its way at shutdown",
+        )
+        .await;
+    }
+    goodbye(&leaving, config.bridge_id(), instance, goodbye_within).await;
     info!("the bridge stopped");
     match ended {
         Ended::Shutdown(_) => Ok(()),
@@ -290,14 +308,15 @@ pub async fn run(
     }
 }
 
-/// Tells Jeeta, best-effort and within `within`, that bridge `bridge_id` holds no phone any more:
-/// a register that lists none (see the module's notes).
-async fn goodbye(client: &JeetaClient, bridge_id: &str, within: Duration) {
+/// Tells Jeeta, best-effort and within `within`, that run `instance` of bridge `bridge_id` holds
+/// no phone any more: a register that lists none (see the module's notes).
+async fn goodbye(client: &JeetaClient, bridge_id: &str, instance: Uuid, within: Duration) {
     let body = RegisterIn {
         bridge_id: bridge_id.to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         protocol: PROTOCOL_VERSION,
         phones: Vec::new(),
+        instance: Some(instance),
     };
     match tokio::time::timeout(within, client.register(&body)).await {
         Ok(Ok(_)) => info!("the bridge told Jeeta it holds no phones"),
@@ -412,12 +431,16 @@ struct PhoneTable {
     phones: HashMap<String, Arc<dyn PhoneDriver>>,
     /// The server's `max_wait_s`.
     max_wait_s: u32,
+    /// The server's protocol.
+    protocol: u32,
 }
 
 /// What a register lists.
 struct Listing {
     bridge_id: String,
     serials: Option<Vec<String>>,
+    /// This run of the bridge.
+    instance: Uuid,
 }
 
 /// A pause that doubles with each failure.
@@ -509,6 +532,7 @@ struct LastGood {
     reports: HashMap<String, (PhoneReport, u32)>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn heartbeat(
     client: JeetaClient,
     registry: Arc<dyn PhoneRegistry>,
@@ -517,6 +541,7 @@ async fn heartbeat(
     timing: Timing,
     up: ServerUp,
     stuck: Stuck,
+    mut stop: watch::Receiver<bool>,
 ) {
     let mut retired: HashSet<String> = HashSet::new();
     let mut refusals: HashMap<String, String> = HashMap::new();
@@ -525,14 +550,23 @@ async fn heartbeat(
     let mut backoff = Backoff::new(&timing);
     let mut every = timing.server_second * HEARTBEAT_S;
     loop {
-        let listed = listed_phones(&registry, &listing, &retired, &stuck, &mut last, &timing).await;
+        let listed = tokio::select! {
+            biased;
+            () = stopping(&mut stop) => return,
+            listed = listed_phones(&registry, &listing, &retired, &stuck, &mut last, &timing) => listed,
+        };
+        if *stop.borrow() {
+            return;
+        }
         let sent: HashSet<String> = listed.iter().map(|(p, _)| p.serial.clone()).collect();
         let body = RegisterIn {
             bridge_id: listing.bridge_id.clone(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             protocol: PROTOCOL_VERSION,
             phones: listed.iter().map(|(_, report)| report.clone()).collect(),
+            instance: Some(listing.instance),
         };
+        // Not cut off when the bridge stops: one on its way is answered before the goodbye.
         let pause = match client.register(&body).await {
             Ok(out) => {
                 up.answered();
@@ -581,6 +615,7 @@ async fn heartbeat(
                 table.send_replace(PhoneTable {
                     phones,
                     max_wait_s: out.max_wait_s,
+                    protocol: out.protocol,
                 });
                 every
             }
@@ -589,7 +624,9 @@ async fn heartbeat(
                 backoff.next().min(every)
             }
         };
-        tokio::time::sleep(pause).await;
+        if self::pause(&mut stop, pause).await {
+            return;
+        }
     }
 }
 
@@ -737,7 +774,7 @@ async fn listed_phones(
 // ---------------------------------------------------------------------------------------------
 // Poll and run
 
-async fn poll(mut workers: Workers, up: ServerUp) {
+async fn poll(mut workers: Workers, up: ServerUp, instance: Uuid) {
     let client = workers.client.clone();
     let results = workers.results.clone();
     let timing = workers.timing.clone();
@@ -747,12 +784,13 @@ async fn poll(mut workers: Workers, up: ServerUp) {
     let mut backoff = Backoff::new(&timing);
     loop {
         // Commands are queued for registered phones only.
-        let (max_wait_s, registered) = tokio::select! {
+        let (max_wait_s, protocol, registered) = tokio::select! {
             biased;
             () = stopping(&mut stop) => break,
             ready = table.wait_for(|t| !t.phones.is_empty()) => match ready {
                 Ok(phones) => (
                     phones.max_wait_s,
+                    phones.protocol,
                     phones.phones.keys().cloned().collect::<Vec<String>>(),
                 ),
                 Err(_) => break,
@@ -763,6 +801,8 @@ async fn poll(mut workers: Workers, up: ServerUp) {
         let query = CommandsQuery {
             wait_s: timing.poll_wait_s.min(max_wait_s),
             limit: MAX_COMMANDS,
+            // A poll of protocol 1 refuses what it does not know.
+            instance: (protocol >= 2).then_some(instance),
         };
         let asked = Instant::now();
         let answer = tokio::select! {

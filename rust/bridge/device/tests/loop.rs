@@ -111,6 +111,10 @@ struct Script {
     files_busy: usize,
     /// A register that lists no phone (the bridge's goodbye) is never answered.
     hold_goodbye: bool,
+    /// How long a register that lists phones is held before it is answered.
+    hold_registers: Option<Duration>,
+    /// The protocol register answers (1 when `None`).
+    protocol: Option<u32>,
 }
 
 /// What the fake was sent.
@@ -118,6 +122,8 @@ struct Script {
 struct Seen {
     /// Register bodies.
     registers: Vec<(Instant, Value)>,
+    /// When each register was answered, by its place in `registers`.
+    register_answers: Vec<(usize, Instant)>,
     /// When each poll arrived.
     polls: Vec<Instant>,
     /// The query of each poll.
@@ -203,15 +209,19 @@ async fn register(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let body: Value = serde_json::from_slice(&body).unwrap();
-    fake.seen
-        .lock()
-        .unwrap()
-        .registers
-        .push((Instant::now(), body.clone()));
+    let arrived = {
+        let mut seen = fake.seen.lock().unwrap();
+        seen.registers.push((Instant::now(), body.clone()));
+        seen.registers.len() - 1
+    };
     // Refused as the server refuses a body that breaks a limit...
     let read: RegisterIn = serde_json::from_value(body.clone()).unwrap();
     if read.phones.is_empty() && fake.script.lock().unwrap().hold_goodbye {
         std::future::pending::<()>().await;
+    }
+    let hold = fake.script.lock().unwrap().hold_registers;
+    if let Some(hold) = hold.filter(|_| !read.phones.is_empty()) {
+        tokio::time::sleep(hold).await;
     }
     if let Err(error) = read.validate() {
         return refused_body(error.field());
@@ -245,11 +255,17 @@ async fn register(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -
     };
     let mut answer = json!({
         "phones": phones, "refused": refused,
-        "heartbeat_s": heartbeat_s, "max_wait_s": script.max_wait_s.unwrap_or(25), "protocol": 1,
+        "heartbeat_s": heartbeat_s, "max_wait_s": script.max_wait_s.unwrap_or(25),
+        "protocol": script.protocol.unwrap_or(1),
     });
     if let Some(extra) = script.register_extra {
         answer[extra] = json!("VALUE-OF-AN-EXTRA-FIELD");
     }
+    fake.seen
+        .lock()
+        .unwrap()
+        .register_answers
+        .push((arrived, Instant::now()));
     axum::Json(answer).into_response()
 }
 
@@ -978,7 +994,7 @@ async fn registers_on_start_and_every_heartbeat() {
         }
         let body = &seen.registers[0].1;
         assert_eq!(body["bridge_id"], "test-pc");
-        assert_eq!(body["protocol"], 1);
+        assert_eq!(body["protocol"], jt_device_protocol::PROTOCOL_VERSION);
         assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         // The serial is the registry's and the platform the driver's, whatever the report says.
         assert_eq!(body["phones"][0]["serial"], "R58N1");
@@ -1735,6 +1751,76 @@ async fn a_stopping_bridge_says_it_holds_no_phones_once_it_posted() {
         "{}",
         logs.text()
     );
+}
+
+/// What one run of a bridge sent a server answering `protocol`: the instance of each register, and
+/// the query of each poll.
+async fn one_run(protocol: u32) -> (Vec<String>, Vec<String>) {
+    let script = Script {
+        protocol: Some(protocol),
+        ..Script::default()
+    };
+    let rig = Rig::start(script, &[("PHONE_A", 0)]).await;
+    rig.until("two registers and two polls", |s| {
+        s.registers.len() >= 2 && s.polls.len() >= 2
+    })
+    .await;
+    let fake = rig.fake.clone();
+    rig.stop().await;
+    let seen = fake.seen.lock().unwrap();
+    let instances = seen
+        .registers
+        .iter()
+        .map(|(_, body)| body["instance"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    (instances, seen.poll_queries.clone())
+}
+
+/// Protocol 2: a run of the bridge says which it is, so that a poll the server still holds for a
+/// run that stopped is told from the next run's, which holds the same key. Every register carries
+/// it (the handshake is tolerant); a poll only once the server answered protocol 2 or later, as a
+/// poll of protocol 1 refuses what it does not know.
+#[tokio::test]
+async fn a_run_says_which_it_is_on_each_register_and_on_each_poll_to_a_newer_server() {
+    let (registers, polls) = one_run(2).await;
+    let instance = registers[0].clone();
+    assert!(Uuid::parse_str(&instance).is_ok(), "{instance:?}");
+    // Every register is the same run's, the goodbye included.
+    assert!(registers.iter().all(|i| *i == instance), "{registers:?}");
+    let named = format!("instance={instance}");
+    assert!(polls.iter().all(|q| q.contains(&named)), "{polls:?}");
+    // A server of protocol 1 is not told in a poll.
+    let (older, polls) = one_run(1).await;
+    assert!(polls.iter().all(|q| !q.contains("instance")), "{polls:?}");
+    // Each run draws its own.
+    assert!(Uuid::parse_str(&older[0]).is_ok());
+    assert_ne!(older[0], instance);
+}
+
+/// A register on its way when the bridge stops is answered before the goodbye goes out: applied
+/// after the goodbye, it would list the phones again.
+#[tokio::test]
+async fn a_register_on_its_way_at_shutdown_is_answered_before_the_goodbye() {
+    let rig = Rig::start(Script::default(), &[("PHONE_A", 0)]).await;
+    rig.until("a register", |s| !s.registers.is_empty()).await;
+    rig.fake.script.lock().unwrap().hold_registers = Some(Duration::from_millis(300));
+    let before = rig.seen().registers.len();
+    rig.until("a register on its way", |s| s.registers.len() > before)
+        .await;
+    let fake = rig.fake.clone();
+    rig.stop().await;
+    let seen = fake.seen.lock().unwrap();
+    let (said_at, goodbye) = seen.registers.last().unwrap();
+    assert_eq!(goodbye["phones"], json!([]));
+    let held = seen.registers.len() - 2;
+    assert_eq!(registered_serials(&seen.registers[held].1), ["PHONE_A"]);
+    let answered = seen
+        .register_answers
+        .iter()
+        .find(|(at, _)| *at == held)
+        .map(|(_, when)| *when)
+        .expect("the register on its way was answered");
+    assert!(*said_at >= answered);
 }
 
 #[tokio::test]

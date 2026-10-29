@@ -211,12 +211,33 @@ async fn wrong_permission_key_refused() {
             &registered["max_wait_s"],
             &registered["protocol"]
         ),
-        (&json!(15), &json!(25), &json!(1))
+        (&json!(15), &json!(25), &json!(2))
     );
     assert_eq!(
         ok_json(call(&app, commands).await).await,
         json!({ "commands": [] })
     );
+    // Protocol 2: a poll names the bridge's run; one that is not a run's id is refused.
+    let poll_as = |instance: &str| {
+        request(
+            Method::GET,
+            &format!("/api/devices/bridge/commands?wait_s=0&limit=20&instance={instance}"),
+            Some(&bridge),
+            None,
+            false,
+            None,
+        )
+    };
+    assert_eq!(
+        ok_json(call(&app, poll_as("01900000-0000-7000-8000-0000000000aa")).await).await,
+        json!({ "commands": [] })
+    );
+    expect_error(
+        call(&app, poll_as("not-a-run")).await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VALIDATION",
+    )
+    .await;
     // A result for a command nobody queued is counted, never refused.
     assert_eq!(
         ok_json(call(&app, results).await).await,

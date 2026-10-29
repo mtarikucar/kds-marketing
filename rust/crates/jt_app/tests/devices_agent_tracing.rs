@@ -45,6 +45,7 @@ async fn bridge_answers(w: &World, b: &BridgeCaller, answer: impl Fn(&DeviceComm
     let query = CommandsQuery {
         wait_s: 5,
         limit: 20,
+        instance: None,
     };
     let leased = bridge::commands(&w.deps, b, query).await.unwrap().commands;
     let results = leased
@@ -130,6 +131,7 @@ async fn tracing_never_carries_args() {
                 screen: None,
                 features,
             }],
+            instance: None,
         },
     )
     .await
@@ -333,6 +335,7 @@ async fn tracing_never_carries_args() {
         CommandsQuery {
             wait_s: 0,
             limit: 20,
+            instance: None,
         },
     )
     .await
