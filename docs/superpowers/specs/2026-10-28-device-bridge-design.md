@@ -232,6 +232,10 @@ Not built now (owner). The layer will hook in at three points that already exist
 check in `devices.act` before queuing (allowlists, caps, approvals), the per-command ledger entries (review),
 and the `phone` capability's policy object (per-device rules).
 
+One reach it must weigh (D1-T6 review): `devices.work` in effect grants reading any file of the workspace's store
+whose id is known, since `push_file` takes any stored file and `pull_file` brings it back as a device file whose
+signed `file_url` the agent reads.
+
 ## 11. Steps
 
 - **D0** — extract the bridge kernel from the voice bridge (after V1-T2 merges); voice behaviour unchanged.

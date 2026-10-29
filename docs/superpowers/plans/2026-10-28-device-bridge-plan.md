@@ -603,12 +603,20 @@ As built (D1-T6):
   `list(deps, ctx) -> Vec<PhoneOut>`, `observe(deps, ctx, CapabilityId, ObserveInput{screenshot, wait_s})`,
   `act(deps, ctx, CapabilityId, ActInput{command, wait_s}) -> CommandOut`,
   `command_get(deps, ctx, Uuid, WaitQuery{wait_s}) -> CommandOut`,
-  `commands(deps, ctx, CapabilityId, LogQuery{limit}) -> Vec<CommandOut>`. `CommandOut` is the command as it stands:
+  `commands(deps, ctx, CapabilityId, LogQuery{limit}) -> Vec<LoggedCommand>`. `CommandOut` is the command as it stands:
   `command_id, capability_id, kind, command` (the arguments), `status, attempts, result, reason, detail, file_url,
   requested_by, created_at, expires_at, leased_at, done_at`.
 - **Waits.** `MAX_WAIT_S` = 20 s, also what an absent `wait_s` waits (more is cut to it, 0 answers at once), on the
   kernel's `wait_for` over the devices' signal (woken by the bridge's results, else read every `FALLBACK_TICK`); the
-  wait answers once the command `is_final()`, else reads it once more and answers `queued`/`leased`.
+  wait answers once the command `is_final()` or its `expires_at` has passed (each read as of the call's time plus the
+  wait so far), else reads it once more and answers `queued`/`leased`.
+- **Once queued, `act` answers the command** (review of #384): a wait whose read fails is logged at `warn` (the error
+  code only) and the command is answered as queued, never as an error, which an agent would take for a refusal and
+  retry (the phone would act twice). `command_get` may answer an error: it is a read. Test
+  `act_answers_a_queued_command_when_its_wait_fails` (a unit of work whose bundles fail after the one that queues).
+- **Expiry by the clock.** A command neither final nor finished whose `expires_at` has passed reads `expired` in every
+  answer and in the log, before D1-T7's sweep writes it (`status_at`); its `done_at` stays `null` until then. Test
+  `an_unfinished_command_past_its_expiry_reads_expired`.
 - **Checks, in order** (before anything is queued): `validate()` (`422` naming the field); a `push_file`'s file in
   the store (`422` `file_id`, `reason: file_not_found`; a store that cannot answer does not refuse, the lease checks
   again); a `phone` capability of the workspace (`404`); not retired (`409 phone_retired`); `online`: stored status
@@ -620,7 +628,21 @@ As built (D1-T6):
   transaction that queues it; `devices.command.finished` stays the bridge surface's (spec §5.5: the result is
   referenced, kept on the command row).
 - **File addresses.** An answer whose result names a file (`file.file_id`, `observation.screenshot_file_id`) carries
-  `file_url`, signed for `FILE_URL_LIFETIME` (10 min) at answer time; the log (`commands`) carries none.
+  `file_url`, signed for `FILE_URL_LIFETIME` (10 min) at answer time; a file no longer stored (purged) leaves it `null`
+  with a `debug` line, any other failure with a `warn`. `pushable` asks `FileStore::exists` (the disk store reads the
+  header only; the default reads the file), not a signed address.
+- **The log leaves results out.** `commands` answers `LoggedCommand` (kind, arguments, status, attempts, reason,
+  detail, who and when; no `result`, no `file_url`): a result can be ~2 MiB and a log is up to 200 rows.
+  `DeviceCommandRepo::list` reads no result either (`null::jsonb as result` in `jt_pg`; contract test
+  `list_leaves_the_results_out`); `get` (and so `command_get`) reads it whole.
+- **Result hash.** `devices.command.finished` also carries `result_sha256` (`bridge::result_sha256`: the hex SHA-256
+  of the kept result as JSON text, `null` without one), so the result on the command row can be checked against the
+  append-only ledger.
+- **Schema bounds.** The `jeeta.devices.act` command schema takes its bounds from `jt_devices` (`MAX_TEXT_CHARS`,
+  `MAX_URL_CHARS`, `MAX_APP_ID_CHARS`, `MAX_PATH_CHARS`, `MAX_SHELL_ARGS`, `MAX_ARG_CHARS`, `MAX_SHELL_TOTAL_CHARS`,
+  `MAX_SWIPE_MS`, `MAX_LONG_PRESS_MS`) and bounds every pixel by `MAX_SCREEN_PX` (20 000); unit test
+  `every_kind_fits_its_variant` (one serialized sample per kind against its variant's properties, required and
+  bounds).
 - **Tracing.** `device command queued` (`command_id`, `capability_id`, `kind`) and `device command waited on`
   (`command_id`, `kind`, `status`, `waited_ms`); a URL that cannot be signed is a `warn` with the error code. Pinned by
   `jt_app/tests/devices_agent_tracing.rs::tracing_never_carries_args`, a binary of its own (it installs the global
@@ -632,6 +654,16 @@ As built (D1-T6):
   `Content-Length` and answers `Body::from_stream`, so a file that fails the check is cut short of its length.
   Test `jt_files::a_large_file_is_served_a_chunk_at_a_time` (chunks ≤ 64 KiB, the body's size hint unknown, a
   tampered file cut off).
+- **The route, after review** (`jt_files::serve`): the first chunk is read before anything is answered, so a file that
+  fits in one (most screenshots, an empty one) and fails its check is `404` as before; a larger one is cut off short of
+  its `Content-Length`, which a real client reads as an error (`tests/serve.rs::a_tampered_file_is_an_error_to_a_real_client`,
+  over `axum::serve` with `jt_outbound`'s reqwest client). At most `MAX_CONCURRENT_READS` (32) files are served at once
+  (a turn waited for up to `READ_TURN_WAIT`, 10 s, else `503` with `Retry-After: 5`), held until the body's end or its
+  drop; a watchdog cuts off a response whose client took nothing for `READ_IDLE` (30 s) or that ran past
+  `READ_DEADLINE` (30 min), letting go of its file and turn (`router_with_limits(.., ReadLimits)` for tests).
+- **rmcp in the logs.** `bin/jeeta`'s `JEETA_LOG` is followed by `,rmcp=warn` (`config::RMCP_CAP`), which replaces any
+  directive the operator gave for `rmcp`; `ops::install_tracing` already capped every `rmcp::*` target at `warn` with a
+  `filter_fn` layer. Test `an_operator_filter_never_raises_rmcp`.
 
 ### Task D1-T7: jobs
 
@@ -646,7 +678,15 @@ Health is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, "pho
   (`HELD_FOR`) of the bridge that holds it; with the heartbeat kind `capability.verify` refuses a phone, as it does a
   voice bridge, and only registrations move the time.
 - `work.rs` must map kind to work item. Today any heartbeat kind that goes offline is reported as `VoiceBridgeOffline`, with the voice hint and the `calls.bridge.register` tool. A phone needs its own work item, e.g. `DeviceBridgeOffline`. Test: `offline_phone_is_not_reported_as_a_voice_bridge`.
-- [ ] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`.
+- [ ] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`,
+  `verify_refuses_a_phone` (once `phone` has a heartbeat kind, a person's `capability.verify` on a phone is refused as
+  it is for a voice bridge, so only a registration keeps a phone online: until then a verify extends `online` and the
+  60 s hold). The expiry job's `devices.command.finished` carries `result_sha256: null`, as every server-decided end.
+- **For the later security layer (not built, owner):** `devices.work` reaches more than the phones. `push_file`
+  takes any file of the workspace's store by id (studio media included) and `pull_file` brings it back as a device
+  file whose `file_url` any holder of `devices.work` reads: so `devices.work` in effect grants reading any workspace
+  file whose id is known (push, then pull, then `file_url`). A policy check in `devices.act` (spec §10) is where to
+  limit it (for example, `push_file` only of files the phone's bridges uploaded).
 - [ ] CI red → green; **commit**.
 
 ---

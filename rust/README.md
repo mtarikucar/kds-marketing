@@ -2015,7 +2015,10 @@ bridge's latest registration) and that its bridge lists what the command needs, 
 (it expires after five minutes), writes `devices.command.queued` with the whole command (typed
 text and shell arguments included) and waits up to 20 seconds for its result. A queued command is
 not a done one: the answer is the command as it then stands (`queued`, `leased`, `done`,
-`failed`, `expired`), and `command_get` waits on it again. There is no allowlist, rate cap,
+`failed`, `expired`, the last also for one past its expiry that the sweep has not ended yet), and
+`command_get` waits on it again. Once a command is queued, `act` answers it, never an error (a
+wait that fails answers it as queued): an error means nothing was queued.
+`devices.command.finished` carries `result_sha256`, the hash of the result kept on the command. There is no allowlist, rate cap,
 approval or address filter (owner, spec §1); `tracing` carries ids, kinds and statuses only.
 Exempt from the strategy gate, not from the status check.
 
@@ -2025,12 +2028,18 @@ Exempt from the strategy gate, not from the status check.
 | `devices.observe` | `POST /api/devices/{capability_id}/observe` | `jeeta.devices.observe` | WRITE | `act` with `observe {screenshot}`: the observation, and a 10-minute `file_url` for the screenshot |
 | `devices.act` | `POST /api/devices/{capability_id}/act` | `jeeta.devices.act` | WRITE | `{command, wait_s ≤ 20}`; `422` `unsupported_by_bridge` (`details.kind`) or `unicode_unsupported` (install and enable ADBKeyBoard), `409` `device_offline` or `phone_retired` |
 | `devices.command_get` | `GET /api/devices/commands/{command_id}?wait_s` | `jeeta.devices.command_get` | READ | waits up to 20 s for the command to end; at once once it has |
-| `devices.commands` | `GET /api/devices/{capability_id}/commands?limit` | `jeeta.devices.commands` | READ | the phone's log, newest first, 1 to 200 (50), with arguments and results |
+| `devices.commands` | `GET /api/devices/{capability_id}/commands?limit` | `jeeta.devices.commands` | READ | the phone's log, newest first, 1 to 200 (50), with arguments, without results (`command_get` reads one) |
 
 The signed file address (`GET /files/{id}`, which a `push_file` download and a `file_url` use) is
 served as a stream: 64 KiB read at a time, hashed as it is read, its length announced and its last
 chunk sent only once the hash is the stored one, so a large file, or many reads of one at once,
-are never held in memory whole.
+are never held in memory whole. The first chunk is read before anything is answered, so a
+tampered file that fits in it is a `404`; a larger one is cut off short of its length. At most 32
+files are served at once (a request waits up to 10 s for a turn, then `503`), and a response whose
+client takes nothing for 30 s, or that runs past 30 minutes, is cut off and lets go of its turn.
+
+`JEETA_LOG` is always followed by `rmcp=warn`: rmcp logs whole MCP requests at `debug`, tool
+arguments (typed text, shell arguments) among them.
 
 Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
 dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes
