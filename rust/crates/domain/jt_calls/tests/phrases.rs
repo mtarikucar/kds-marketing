@@ -105,6 +105,8 @@ fn the_approved_texts_are_pinned_set_by_set() {
         jt_calls::TRANSCRIPT_NOTICE,
         "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir."
     );
+    // Not a bridge phrase (the core plays it at the scripted ending), but approved with them.
+    assert_eq!(jt_calls::CLOSING, "Görüşmek üzere, iyi günler.");
 }
 
 #[test]
@@ -115,7 +117,10 @@ fn the_approved_texts_use_the_precomposed_turkish_letters() {
     assert!(p.acknowledgements[0].contains('\u{131}'));
     assert!(!p.acknowledgements[0].contains('i'));
     assert!(p.still_there[0].contains('\u{e2}'));
-    for text in p.all().chain([jt_calls::TRANSCRIPT_NOTICE]) {
+    for text in p
+        .all()
+        .chain([jt_calls::TRANSCRIPT_NOTICE, jt_calls::CLOSING])
+    {
         assert!(
             !text.chars().any(|c| ('\u{300}'..='\u{36f}').contains(&c)),
             "{text}"

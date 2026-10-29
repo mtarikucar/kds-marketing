@@ -3,6 +3,9 @@
 //! wait, "not heard", "still there" and the fault sentence. They are the policy's text: the bridge
 //! picks one by set and index and reports which, and the core logs the policy's text for it. A set
 //! left empty is never played.
+//!
+//! The closing is not a bridge phrase: the core plays it at the scripted ending (`CallPlan.closing`,
+//! by default the policy's `closing`).
 
 use serde::{Deserialize, Serialize};
 
