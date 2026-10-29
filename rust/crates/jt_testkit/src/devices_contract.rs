@@ -7,8 +7,8 @@ use jt_app::{
     ports::UnitOfWork,
     ports::devices::{
         CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, DeviceCommandRow, DeviceFile,
-        ExpiredCommand, FailReason, Finish, Finished, MAX_DETAIL_CHARS, NewDeviceCommand,
-        REDELIVER_AFTER,
+        ExpiredCommand, FailReason, Finish, Finished, MAX_DETAIL_CHARS, MAX_DEVICE_COMMAND_PAGE,
+        NewDeviceCommand, REDELIVER_AFTER,
     },
 };
 use jt_capability::{Capability, CapabilityId, NewCapability};
@@ -146,7 +146,11 @@ async fn expire_due(
     now: OffsetDateTime,
 ) -> Vec<ExpiredCommand> {
     let mut t = uow.tenant(ws).await.unwrap();
-    let expired = t.device_commands().expire_due(now).await.unwrap();
+    let expired = t
+        .device_commands()
+        .expire_due(now, MAX_DEVICE_COMMAND_PAGE)
+        .await
+        .unwrap();
     t.commit().await.unwrap();
     expired
 }
@@ -755,6 +759,28 @@ pub async fn finish_refuses_result_for_never_leased(uow: Arc<dyn UnitOfWork>) {
 /// The expiry sweep ends, at its time, exactly the commands that are queued or leased and expire
 /// at or before it; finished ones and ones that expire later are left as they are, and a second
 /// sweep ends nothing.
+/// One sweep ends at most its limit of the due commands, the oldest first; the next ends the
+/// rest.
+pub async fn expire_due_takes_the_oldest_up_to_the_limit(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let p = phone(&uow, f.ws).await;
+    let rows = enqueue(&uow, f.ws, (1..=5).map(|n| tap(p, n, at(5))).collect()).await;
+    let sweep = |limit: u32| {
+        let uow = uow.clone();
+        async move {
+            let mut t = uow.tenant(f.ws).await.unwrap();
+            let expired = t.device_commands().expire_due(at(6), limit).await.unwrap();
+            t.commit().await.unwrap();
+            expired_ids(&expired)
+        }
+    };
+    assert_eq!(sweep(2).await, ids(&rows[..2]));
+    assert_eq!(sweep(2).await, ids(&rows[2..4]));
+    // A limit of 0 reads as 1.
+    assert_eq!(sweep(0).await, ids(&rows[4..]));
+    assert!(sweep(2).await.is_empty());
+}
+
 pub async fn expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry(
     uow: Arc<dyn UnitOfWork>,
 ) {
@@ -932,7 +958,12 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
         Finished::Unknown
     );
     assert_eq!(
-        expired_ids(&commands.expire_due(at(10)).await.unwrap()),
+        expired_ids(
+            &commands
+                .expire_due(at(10), MAX_DEVICE_COMMAND_PAGE)
+                .await
+                .unwrap()
+        ),
         vec![mine.id]
     );
     t.commit().await.unwrap();
@@ -1052,12 +1083,50 @@ pub async fn expired_device_files_are_found_and_deleted(uow: Arc<dyn UnitOfWork>
 
     let mut t = uow.tenant(f.ws).await.unwrap();
     let commands = t.device_commands();
-    let due = commands.expired_files(FIXED_NOW, 10).await.unwrap();
+    let due = commands.expired_files(FIXED_NOW, None, 10).await.unwrap();
     assert_eq!(due, vec![last_week.clone(), yesterday.clone(), now.clone()]);
     assert_eq!(
-        commands.expired_files(FIXED_NOW, 1).await.unwrap(),
+        commands.expired_files(FIXED_NOW, None, 1).await.unwrap(),
         vec![last_week.clone()]
     );
+    // Read on past a file: only those after it, in the same order (whether or not that one was
+    // deleted); past the last, none.
+    let past = |file: &DeviceFile| Some((file.expires_at, file.id));
+    assert_eq!(
+        commands
+            .expired_files(FIXED_NOW, past(&last_week), 10)
+            .await
+            .unwrap(),
+        vec![yesterday.clone(), now.clone()]
+    );
+    assert_eq!(
+        commands
+            .expired_files(FIXED_NOW, past(&yesterday), 1)
+            .await
+            .unwrap(),
+        vec![now.clone()]
+    );
+    assert!(
+        commands
+            .expired_files(FIXED_NOW, past(&now), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // Two files whose retention ends at the same time are read in id order.
+    let twin = DeviceFile {
+        id: Uuid::from_u128(u128::MAX),
+        ..ending(-1)
+    };
+    commands.save_file(twin.clone()).await.unwrap();
+    assert_eq!(
+        commands
+            .expired_files(FIXED_NOW, past(&yesterday), 10)
+            .await
+            .unwrap(),
+        vec![twin.clone(), now.clone()]
+    );
+    assert!(commands.delete_file(twin.id).await.unwrap());
     // Another workspace's file is not this one's to delete.
     assert!(!commands.delete_file(theirs.id).await.unwrap());
     assert!(commands.delete_file(last_week.id).await.unwrap());
@@ -1068,7 +1137,7 @@ pub async fn expired_device_files_are_found_and_deleted(uow: Arc<dyn UnitOfWork>
     let mut t = uow.tenant(f.ws).await.unwrap();
     assert_eq!(
         t.device_commands()
-            .expired_files(FIXED_NOW, 10)
+            .expired_files(FIXED_NOW, None, 10)
             .await
             .unwrap(),
         vec![yesterday.clone(), now.clone()]
@@ -1081,7 +1150,7 @@ pub async fn expired_device_files_are_found_and_deleted(uow: Arc<dyn UnitOfWork>
     let mut t = uow.tenant(f.other).await.unwrap();
     assert_eq!(
         t.device_commands()
-            .expired_files(FIXED_NOW, 10)
+            .expired_files(FIXED_NOW, None, 10)
             .await
             .unwrap(),
         vec![theirs]

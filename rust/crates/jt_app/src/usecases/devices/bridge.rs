@@ -84,9 +84,10 @@
 //! server decided; `leased_by`: the key id of the bridge last handed it, `null` for none;
 //! `result_sha256`: the hash of the result a done command keeps, [`result_sha256`]); its result
 //! stays on the command. One the expiry sweep ends writes the same entry (`super::sweeps`), and a
-//! late result that replaces the expiry writes a second one. A phone that passes from one bridge to another writes
-//! `devices.phone.holder_changed` (`capability_id`, `from`, `to`: key ids). `tracing` carries ids, kinds, statuses and
-//! counts only: never a command's payload, a result, a failure's detail or a file's bytes.
+//! late result that replaces the expiry writes a second one. A phone that passes from one bridge
+//! to another writes `devices.phone.holder_changed` (`capability_id`, `from`, `to`: key ids).
+//! `tracing` carries ids, kinds, statuses and counts only: never a command's payload, a result, a
+//! failure's detail or a file's bytes.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration as StdDuration;

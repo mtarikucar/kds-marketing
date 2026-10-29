@@ -7,14 +7,17 @@
 //! its own, never a voice bridge's.
 mod support;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration as StdDuration, Instant};
 
 use async_trait::async_trait;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::UnitOfWork;
 use jt_app::ports::connectors::MediaUpload;
-use jt_app::ports::devices::{CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, TEXT_UNICODE};
+use jt_app::ports::devices::{
+    CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, NewDeviceCommand, TEXT_UNICODE,
+};
 use jt_app::ports::files::{FileStore, StoredFile};
 use jt_app::usecases::api_keys::{self, AgentPrincipal, CreateKey};
 use jt_app::usecases::capabilities;
@@ -22,6 +25,7 @@ use jt_app::usecases::devices::agent::{self, ActInput, WaitQuery};
 use jt_app::usecases::devices::bridge::{
     self, BridgeCaller, CommandsQuery, RegisterIn, RegisterOut, ResultsIn, ResultsOut,
 };
+use jt_app::usecases::devices::sweeps::{self, FilesPurged};
 use jt_app::usecases::jobs::{self, JobReport};
 use jt_app::usecases::work::{self, WorkKind};
 use jt_capability::{
@@ -33,7 +37,7 @@ use jt_device_protocol::{
 };
 use jt_ledger::Actor;
 use jt_studio::FileId;
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use jt_testkit::fakes::FIXED_NOW;
 use jt_testkit::fakes::files::{Chunks, MemoryFiles};
 use serde_json::{Value, json};
@@ -413,9 +417,24 @@ async fn verify_refuses_a_phone() {
         for ctx in [&w.owner_ctx, &manager, &declarer] {
             let e = err(capabilities::verify(&w.deps, &at(ctx, later(50)), id, evidence()).await);
             assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+            // It says what verifies a phone instead, and the step to take.
             assert_eq!(
                 e.details,
-                json!({ "reason": "verified_by_heartbeat", "kind_key": "phone" })
+                json!({
+                    "reason": "verified_by_heartbeat",
+                    "kind_key": "phone",
+                    "cleared_by": "devices.bridge.register",
+                })
+            );
+            assert!(
+                e.message.starts_with("a phone is verified only by"),
+                "{}",
+                e.message
+            );
+            assert!(
+                e.message.contains("devices.bridge.register"),
+                "{}",
+                e.message
             );
         }
     }
@@ -441,7 +460,19 @@ async fn verify_refuses_a_phone() {
     let voice = w.declare("voice_bridge", "Ses köprüsü").await.capability.id;
     let e = err(capabilities::verify(&w.deps, &w.owner_ctx, voice, evidence()).await);
     assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
-    assert_eq!(e.details["kind_key"], "voice_bridge");
+    assert_eq!(
+        e.details,
+        json!({
+            "reason": "verified_by_heartbeat",
+            "kind_key": "voice_bridge",
+            "cleared_by": "calls.bridge.register",
+        })
+    );
+    assert!(
+        e.message.starts_with("a voice bridge is verified only by"),
+        "{}",
+        e.message
+    );
 }
 
 #[tokio::test]
@@ -565,6 +596,31 @@ fn every_heartbeat_kind_has_its_own_offline_item() {
 // ---------------------------------------------------------------------------------------------
 // device_command_expiry
 // ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_expiry_sweep_wakes_a_waiting_command_get() {
+    let (w, key, p, agent) = rig().await;
+    // A command its bridge took and never answered reads `leased` past its limit, so an agent's
+    // `command_get` waits on it, until the sweep ends it and wakes the wait at once (a wait not
+    // woken reads again only every second).
+    let id = act(&w, &agent, p, DeviceCommand::Tap { x: 1, y: 1 }).await;
+    assert_eq!(ids(&poll(&w, &key, later(1)).await), [id]);
+    let past = FIXED_NOW + DEFAULT_EXPIRES_IN + Duration::seconds(1);
+    let waiting = at(&agent, past);
+    let get = agent::command_get(&w.deps, &waiting, id, WaitQuery { wait_s: Some(10) });
+    let sweep = async {
+        tokio::time::sleep(StdDuration::from_millis(100)).await;
+        let started = Instant::now();
+        let run = jobs::run_device_command_expiry(&w.deps, past).await;
+        (run, started)
+    };
+    let (out, (run, swept)) = tokio::join!(get, sweep);
+    let woken = swept.elapsed();
+    assert_eq!(run, report(1, 1, 0, 0));
+    let out = out.unwrap();
+    assert_eq!(out.status, CommandStatus::Expired);
+    assert!(woken < StdDuration::from_millis(900), "{woken:?}");
+}
 
 #[tokio::test]
 async fn expiry_job_expires_and_ledgers() {
@@ -744,6 +800,11 @@ async fn file_purge_keeps_6_days_drops_8() {
 struct Deletes {
     inner: MemoryFiles,
     broken: AtomicBool,
+    /// Files whose deletes always fail.
+    stuck: Mutex<Vec<Uuid>>,
+    /// When set, a delete also deletes the file's record, as a purge running beside this one
+    /// would.
+    records: Mutex<Option<jt_testkit::fakes::InMemoryUow>>,
 }
 
 #[async_trait]
@@ -771,11 +832,88 @@ impl FileStore for Deletes {
         self.inner.provider_url(ws, id, expires_at).await
     }
     async fn delete(&self, ws: WorkspaceId, id: FileId) -> Result<(), AppError> {
-        if self.broken.load(Ordering::SeqCst) {
+        if self.broken.load(Ordering::SeqCst) || self.stuck.lock().unwrap().contains(&id.0) {
             return Err(AppError::internal("the store cannot delete now"));
+        }
+        let records = self.records.lock().unwrap().clone();
+        if let Some(uow) = records {
+            let mut r = uow.tenant(ws).await.unwrap();
+            r.device_commands().delete_file(id.0).await.unwrap();
+            r.commit().await.unwrap();
         }
         self.inner.delete(ws, id).await
     }
+}
+
+#[tokio::test]
+async fn a_file_that_keeps_failing_holds_up_no_newer_one() {
+    let (mut w, key, _, _) = rig().await;
+    let store = Arc::new(Deletes::default());
+    w.deps.files = store.clone();
+    // The oldest file can never be deleted; three newer ones can. Read a file at a time, the
+    // purge goes on past it, every run.
+    let stuck = upload(&w, &key, FIXED_NOW, b"stuck").await;
+    let newer = [
+        upload(&w, &key, later(1), b"one").await,
+        upload(&w, &key, later(2), b"two").await,
+        upload(&w, &key, later(3), b"three").await,
+    ];
+    store.stuck.lock().unwrap().push(stuck);
+    let ctx = jt_app::ctx::Ctx {
+        now: days(8),
+        ..w.owner_ctx.clone()
+    };
+    let out = sweeps::purge_files_by(&w.deps, &ctx, 1).await.unwrap();
+    assert_eq!(
+        out,
+        FilesPurged {
+            due: 4,
+            purged: 3,
+            gone: 0,
+            failed: 1
+        }
+    );
+    assert_eq!(recorded(&w, &newer).await, Vec::<Uuid>::new());
+    assert_eq!(recorded(&w, &[stuck]).await, [stuck]);
+    // Every run tries it again, and only it.
+    let out = sweeps::purge_files_by(&w.deps, &ctx, 1).await.unwrap();
+    assert_eq!((out.due, out.failed), (1, 1));
+    let run = jobs::run_device_file_purge(&w.deps, days(8)).await;
+    assert_eq!(run, report(1, 0, 0, 1));
+}
+
+#[tokio::test]
+async fn file_purge_counts_a_record_gone_meanwhile() {
+    let (mut w, key, _, _) = rig().await;
+    let store = Arc::new(Deletes::default());
+    w.deps.files = store.clone();
+    let file = upload(&w, &key, FIXED_NOW, b"twice").await;
+    // Another purge deletes the record while this one deletes the bytes: nothing is left, and
+    // this one counts it as gone, not purged, and no failure.
+    *store.records.lock().unwrap() = Some(w.uow.clone());
+    let ctx = jt_app::ctx::Ctx {
+        now: days(8),
+        ..w.owner_ctx.clone()
+    };
+    let out = sweeps::purge_files(&w.deps, &ctx).await.unwrap();
+    assert_eq!(
+        out,
+        FilesPurged {
+            due: 1,
+            purged: 0,
+            gone: 1,
+            failed: 0
+        }
+    );
+    assert!(recorded(&w, &[file]).await.is_empty());
+    assert!(!kept(&w, file).await);
+    // The job reports it as skipped.
+    let again = upload(&w, &key, FIXED_NOW, b"again").await;
+    assert_eq!(
+        jobs::run_device_file_purge(&w.deps, days(8)).await,
+        report(1, 0, 1, 0)
+    );
+    assert!(recorded(&w, &[again]).await.is_empty());
 }
 
 #[tokio::test]
@@ -839,6 +977,39 @@ async fn the_jobs_sweep_every_workspace() {
     let their_file = upload(&w, &other_key, FIXED_NOW, b"theirs").await;
     let my_file = upload(&w, &key, FIXED_NOW, b"mine").await;
 
+    // A command of theirs that no bridge took, and their workspace suspended: it is swept too.
+    let their_command = Uuid::now_v7();
+    {
+        let mut r = w.uow.tenant(other_ws).await.unwrap();
+        r.device_commands()
+            .enqueue(NewDeviceCommand {
+                id: their_command,
+                capability_id: their_phone,
+                command: DeviceCommand::Tap { x: 2, y: 2 },
+                requested_by: Actor::System {
+                    component: "test".into(),
+                },
+                created_at: FIXED_NOW,
+                expires_at: FIXED_NOW + DEFAULT_EXPIRES_IN,
+            })
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+    }
+    let mut platform = w.uow.platform().await.unwrap();
+    platform
+        .workspace_set_status(
+            other_ws,
+            WorkspaceStatus::Suspended,
+            "test suspension",
+            &Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
+    platform.commit().await.unwrap();
+
     let then = days(8);
     assert_eq!(
         jobs::run_device_bridge_health(&w.deps, then).await,
@@ -846,8 +1017,18 @@ async fn the_jobs_sweep_every_workspace() {
     );
     assert_eq!(
         jobs::run_device_command_expiry(&w.deps, then).await,
-        report(1, 1, 0, 0)
+        report(2, 2, 0, 0)
     );
+    {
+        let mut r = w.uow.tenant(other_ws).await.unwrap();
+        let theirs = r
+            .device_commands()
+            .get(their_command)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(theirs.status, CommandStatus::Expired);
+    }
     assert_eq!(
         jobs::run_device_file_purge(&w.deps, then).await,
         report(2, 2, 0, 0)

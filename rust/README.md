@@ -959,8 +959,8 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `call_timers` | 1 saniye | Hatta ajan araması olan alanlarda (tek bir platform okumasıyla bulunur) her aramanın zamanlayıcılarını işletir: yavaş ajana 4. ve 10. saniyede planın bekleme cümlesi, sessiz ajana her 20 saniyede planın sıradaki yedek cümlesi, yedekler bitince kapanış cümlesi ve kapatma (`agent_timeout`); en uzun süreyi aşan, arayanı sessiz kalan, 90 saniye cevapsız çalan ve köprüsü susmuş arama da senaryoyla biter. Sunucu hiçbir cümle yazmaz | `jeeta.jobs.call_timers` |
 | `purge_call_commands` | 1 gün | Ses köprüsü için 7 günden önce kuyruğa alınmış komutları (onaylanmış olsun olmasın) siler; aramalar ve konuşma kayıtları kalır | `jeeta.jobs.purge_call_commands` |
 | `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
-| `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
-| `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
+| `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
+| `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -2010,14 +2010,21 @@ field.
 
 A phone (`phone`, like `voice_bridge`, a kind with a heartbeat) is verified only by the
 registrations that list it: `capability.verify` refuses it (`409`, `details.reason =
-"verified_by_heartbeat"`). It reads stale a minute after the last registration that listed it,
+"verified_by_heartbeat"`, `details.cleared_by = "devices.bridge.register"`). It reads stale a
+minute after the last registration that listed it,
 and the `device_bridge_health` job (every minute) marks it unreachable after ten minutes, writing
 `devices.bridge.offline`; meanwhile `work.pending` lists it as `phone_offline` (never as a voice
 bridge). The `device_command_expiry` job (every minute) ends the commands past their time limit as
-`expired`, with a `devices.command.finished` each (`leased_by` the bridge last handed it,
-`result_sha256` `null`); a leased command's late result still replaces `expired`, with a second
-entry. The `device_file_purge` job (hourly) deletes the device files past their seven days, bytes
-then record. Command rows are never deleted.
+`expired`, 200 per transaction, with a `devices.command.finished` each (`leased_by` the bridge
+last handed it, `result_sha256` `null`); a leased command's late result still replaces `expired`,
+with a second entry. The `device_file_purge` job (hourly) deletes the device files past their seven
+days, bytes then record, reading on past a file it cannot delete; it writes no ledger entry.
+Command rows are never deleted (an archtest refuses `delete from device_commands`).
+
+**Deploy note (device bridge D1-T7).** A `phone` verified by evidence before this release reads
+stale at once and, unless a device bridge lists it, goes unreachable within about 11 minutes (the
+`device_bridge_health` job) and stays listed as `phone_offline`: retire it. Phones are now declared
+and kept alive by their device bridge.
 
 #### Phones for agents (device bridge D1-T6)
 

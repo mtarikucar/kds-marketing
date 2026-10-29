@@ -1,7 +1,8 @@
 //! `tracing` never carries what a device command or its result says (D1-T6, spec §5.5): typed
 //! text, shell arguments and output, a tap's target, a failure's detail, an address to open, a
 //! path on the phone, screen text, a file's bytes or a signed file address. Ids, kinds, statuses
-//! and counts only; the ledger carries the command (`devices_agent.rs`).
+//! and counts only; the ledger carries the command (`devices_agent.rs`). The jobs that sweep the
+//! phones' commands and files (D1-T7) log the same way.
 //!
 //! A binary of its own, with one test: it installs the process's global subscriber, which sees
 //! every event of every thread, so no other test's first call can leave a callsite without one.
@@ -14,6 +15,7 @@ use jt_app::ports::devices::{DeviceCommand, ElementTarget, FailReason, TEXT_UNIC
 use jt_app::usecases::api_keys::{self, AgentPrincipal, CreateKey};
 use jt_app::usecases::devices::agent::{self, ActInput, LogQuery, ObserveInput, WaitQuery};
 use jt_app::usecases::devices::bridge::{self, BridgeCaller, CommandsQuery, RegisterIn, ResultsIn};
+use jt_app::usecases::jobs;
 use jt_capability::CapabilityId;
 use jt_device_protocol::{
     CommandResult, Element, Observation, Outcome, PhoneReport, Platform, ResultIn, Screen,
@@ -307,6 +309,42 @@ async fn tracing_never_carries_args() {
     .await;
     assert!(refused.is_err());
 
+    // A command its bridge took and never answered, then the sweeps: the expiry ends it (and the
+    // one left waiting above), the purge deletes the files, the health job marks the phone
+    // unreachable.
+    agent::act(
+        &w.deps,
+        &agent,
+        p,
+        ActInput {
+            command: DeviceCommand::Shell {
+                argv: vec!["echo".into(), "SWEEP-CANARY".into()],
+            },
+            wait_s: Some(0),
+        },
+    )
+    .await
+    .unwrap();
+    let leased = bridge::commands(
+        &w.deps,
+        &b,
+        CommandsQuery {
+            wait_s: 0,
+            limit: 20,
+        },
+    )
+    .await
+    .unwrap();
+    // The address left waiting above and the shell command, neither ever answered.
+    assert_eq!(leased.commands.len(), 2);
+    let week = FIXED_NOW + time::Duration::days(8);
+    assert!(jobs::run_device_command_expiry(&w.deps, week).await.changed >= 2);
+    assert!(jobs::run_device_file_purge(&w.deps, week).await.changed >= 2);
+    assert_eq!(
+        jobs::run_device_bridge_health(&w.deps, week).await.changed,
+        1
+    );
+
     let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
     // The subscriber saw the flow: ids, kinds and statuses were logged.
     for line in [
@@ -315,6 +353,11 @@ async fn tracing_never_carries_args() {
         "device commands handed out",
         "device command results",
         "device file uploaded",
+        "device command expired",
+        "device file purged",
+        "job=\"device_command_expiry\"",
+        "job=\"device_file_purge\"",
+        "job=\"device_bridge_health\"",
     ] {
         assert!(logs.contains(line), "`{line}` missing from:\n{logs}");
     }
@@ -337,6 +380,7 @@ async fn tracing_never_carries_args() {
         "DEST-CANARY",
         "URL-CANARY",
         "REFUSED-CANARY",
+        "SWEEP-CANARY",
         "files.example.com",
     ] {
         assert!(!logs.contains(secret), "`{secret}` was logged:\n{logs}");

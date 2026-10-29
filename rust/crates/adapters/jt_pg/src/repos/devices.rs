@@ -321,19 +321,25 @@ impl DeviceCommandRepo for PgTenantRepos {
         Ok(Finished::Applied(Box::new(record.into_row()?)))
     }
 
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError> {
-        // The due rows are picked and locked once, in a materialized CTE: one that another bundle
-        // holds (a bridge's results, a poll) is passed over, not waited for.
+    async fn expire_due(
+        &mut self,
+        now: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ExpiredCommand>, AppError> {
+        // The due rows are picked and locked once, in a materialized CTE, the oldest first and at
+        // most `limit`: one that another bundle holds (a bridge's results, a poll) is passed
+        // over, not waited for.
         let mut records: Vec<ExpiredRecord> = sqlx::query_as(&format!(
             "with due as materialized (select id from device_commands \
              where workspace_id = $1 and status in ('queued', 'leased') and expires_at <= $2 \
-             for update skip locked) \
+             order by seq limit $3 for update skip locked) \
              update device_commands set status = 'expired', done_at = $2 \
              where workspace_id = $1 and id in (select id from due) \
              returning {EXPIRED_COLUMNS}"
         ))
         .bind(self.workspace_id().as_uuid())
         .bind(now)
+        .bind(i64::from(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE)))
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "expire device commands"))?;
@@ -426,16 +432,22 @@ impl DeviceCommandRepo for PgTenantRepos {
     async fn expired_files(
         &mut self,
         now: OffsetDateTime,
+        after: Option<(OffsetDateTime, Uuid)>,
         limit: u32,
     ) -> Result<Vec<DeviceFile>, AppError> {
-        // `device_files_expiry` is `(workspace_id, expires_at)`.
+        // `device_files_expiry` is `(workspace_id, expires_at)`; `after` is compared as a row, in
+        // the order the files are read in.
         let records: Vec<FileRecord> = sqlx::query_as(&format!(
             "select {FILE_COLUMNS} from device_files where workspace_id = $1 \
-             and expires_at <= $2 order by expires_at, id limit $3"
+             and expires_at <= $2 \
+             and ($4::timestamptz is null or (expires_at, id) > ($4::timestamptz, $5::uuid)) \
+             order by expires_at, id limit $3"
         ))
         .bind(self.workspace_id().as_uuid())
         .bind(now)
         .bind(i64::from(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE)))
+        .bind(after.map(|(at, _)| at))
+        .bind(after.map(|(_, id)| id))
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "read expired device files"))?;

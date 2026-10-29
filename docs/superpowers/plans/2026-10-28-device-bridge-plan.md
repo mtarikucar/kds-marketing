@@ -625,7 +625,8 @@ As built (D1-T6):
 - **Checks, in order** (before anything is queued): `validate()` (`422` naming the field); a `push_file`'s file in
   the store (`422` `file_id`, `reason: file_not_found`; a store that cannot answer does not refuse, the lease checks
   again); a `phone` capability of the workspace (`404`); not retired (`409 phone_retired`); `online`: stored status
-  verified, `last_verified_at` within `ONLINE_FOR` (= `HELD_FOR`, 60 s; `phone` has no heartbeat kind until D1-T7)
+  verified, `last_verified_at` within `ONLINE_FOR` (= `HELD_FOR`, 60 s; `phone` has no heartbeat kind until D1-T7;
+  D1-T7 replaced `ONLINE_FOR` by the phone kind's heartbeat: `effective_status == Verified`, see its "As built")
   and `listed` in its holder's latest registration (`409 device_offline`); `required_features`: the kind missing is
   `422 {field: command, reason: unsupported_by_bridge, kind}`, `text.unicode` missing is
   `422 {field: command, reason: unicode_unsupported, hint}` with `UNICODE_HINT` (install and enable ADBKeyBoard).
@@ -718,10 +719,14 @@ As built (D1-T7):
   `effective_status == Verified && listed` (the 60 s `ONLINE_FOR` constant is gone: the kind's clock is the window);
   "missing from the latest register = offline" is unchanged.
 - **`capability.verify` refuses a phone** as it does a voice bridge, one check for every kind with a heartbeat:
-  `409`, message `a {kind} capability is verified only by its bridge's heartbeat, never by evidence`,
-  `details {reason: "verified_by_heartbeat", kind_key}`. So only registrations move a phone's `last_verified_at`, and
-  a person can no longer extend `online` or the 60 s hold. Tests that used `phone` as a generic device verified by
-  evidence now use `computer`.
+  `409`, message `a phone is verified only by the registrations of the device bridge it is plugged into
+  (devices.bridge.register), never by evidence` (`a voice bridge is verified only by its own registration
+  (calls.bridge.register), …`), `details {reason: "verified_by_heartbeat", kind_key, cleared_by}`, `cleared_by` being
+  the kind's work item's (`work::offline_item`). So only registrations move a phone's `last_verified_at`, and a
+  person can no longer extend `online` or the 60 s hold. Tests that used `phone` as a generic device verified by
+  evidence now use `computer`. The MCP descriptions of `capability.declare`, `verify` and `mark_unreachable` say a
+  `voice_bridge` or a `phone` is verified only by its bridge; the panel's capability card shows neither a Verify
+  action nor the policy's "a verification lasts N days" line for them.
 - **Work items.** `work::offline_item(&Capability)` maps each heartbeat kind to its own item: `voice_bridge` →
   `VoiceBridgeOffline` (hint and `cleared_by` `calls.bridge.register` unchanged), `phone` → `PhoneOffline
   {capability_id, name, last_seen_at}` (`phone_offline` on the wire, priority 2, `cleared_by`
@@ -731,20 +736,37 @@ As built (D1-T7):
 - **Jobs** (`usecases/jobs.rs`, `bin/jeeta/src/scheduler.rs`; `Job::ALL` 25 → 28, every workspace status):
   `device_bridge_health` (1 min) is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, PHONE_KIND, now)`
   (`devices.bridge.offline {capability_id, last_seen_at}`, actor `scheduler:device_bridge_health`);
-  `device_command_expiry` (1 min) is `devices::sweeps::expire_commands`: `expire_due` and, in the same transaction,
-  one `devices.command.finished {command_id, kind, status: "expired", reason: null, duration_ms: null, leased_by,
-  result_sha256: null}` per row, in queue order, then the devices' signal; `device_file_purge` (hourly) is
-  `devices::sweeps::purge_files`: pages of `FILE_PURGE_PAGE` (200) files whose `expires_at <= now`, each deleted from
-  the file store, then its record in a transaction of its own (a store delete of a missing file is no error; a file
-  that fails is logged with its id and code, counted, and tried again on the next run, which stops reading at the end
-  of a page that had a failure). Command rows are never deleted.
+  `device_command_expiry` (1 min) is `devices::sweeps::expire_commands`: `expire_due(now, EXPIRY_PAGE)` (200, the
+  oldest first) and, in the same transaction, one `devices.command.finished {command_id, kind, status: "expired",
+  reason: null, duration_ms: null, leased_by, result_sha256: null}` per row, in queue order, then the devices' signal
+  (a waiting `command_get` answers at once); a page at a time, each its own transaction, until a short one.
+  `device_file_purge` (hourly) is `devices::sweeps::purge_files` (`purge_files_by(page)` for tests): pages of
+  `FILE_PURGE_PAGE` (200) files whose `expires_at <= now`, each read after the last of the one before
+  (`(expires_at, id) > after`), each file deleted from the file store, then its record in a transaction of its own
+  (a store delete of a missing file is no error; a file that fails is logged with its id and code, counted, and
+  tried again on the next run; the reads go on past it, so a file that keeps failing never holds up the newer ones).
+  The purge writes no ledger entry. Command rows are never deleted: `jt_archtest/tests/device_rows.rs` fails on any
+  `delete from device_commands` (any case or spacing) under `crates/` or `migrations/` outside a `down` migration.
 - **Port.** `ExpiredCommand` gained `leased_by` (so the expiry entry names the bridge, as every `finished` does);
-  `DeviceCommandRepo::expired_files(now, limit)` (by `expires_at`, then id; index `device_files_expiry`) and
-  `::delete_file(id) -> bool` (contract `expired_device_files_are_found_and_deleted`, fake and Postgres).
-  `bridge::write_finished` (with `Ended`) is the one writer of `devices.command.finished`.
+  `DeviceCommandRepo::expire_due(now, limit)` takes a limit (by `seq`; contract
+  `expire_due_takes_the_oldest_up_to_the_limit`); `::expired_files(now, after, limit)` (by `expires_at`, then id,
+  after `after`; index `device_files_expiry`) and `::delete_file(id) -> bool` (contract
+  `expired_device_files_are_found_and_deleted`, fake and Postgres). `bridge::write_finished` (with `Ended`) is the
+  one writer of `devices.command.finished`.
 - **Tests** (`jt_app/tests/devices_jobs.rs`): the five named, plus `every_heartbeat_kind_has_its_own_offline_item`,
-  `file_purge_finishes_what_it_could_not_do` (a store whose deletes fail, and bytes already gone) and
-  `the_jobs_sweep_every_workspace`.
+  `the_expiry_sweep_wakes_a_waiting_command_get` (under 900 ms), `file_purge_finishes_what_it_could_not_do` (a store
+  whose deletes fail, and bytes already gone), `a_file_that_keeps_failing_holds_up_no_newer_one`,
+  `file_purge_counts_a_record_gone_meanwhile` (`FilesPurged.gone`) and `the_jobs_sweep_every_workspace` (a suspended
+  one included); `devices_agent_tracing.rs` runs the three jobs with a canary in a swept command.
+- **Deploy note.** A `phone` capability verified by evidence before this release (an agent's or a person's
+  `capability.verify`) reads stale at once and, unless a device bridge lists it, is marked unreachable by
+  `device_bridge_health` within about 11 minutes of the release (ten minutes after its `last_verified_at`, plus the
+  job's minute), and is listed as `phone_offline` pending work from then on. Retire those (`capability.retire`): a
+  phone is now a capability its device bridge declares and keeps alive (`android:{serial}`), not one verified by hand.
+- **Follow-up (not built).** The two one-minute jobs open a transaction per workspace each run, whatever it holds.
+  At scale, read first, platform-wide, the workspaces that have due device commands (`device_commands` not finished
+  with `expires_at <= now`) or phones that are verified but silent, as `run_call_timers` reads the workspaces with a
+  live call, and sweep only those.
 
 ---
 

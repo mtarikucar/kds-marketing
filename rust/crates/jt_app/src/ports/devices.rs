@@ -246,10 +246,15 @@ pub trait DeviceCommandRepo: Send + Sync {
         outcome: Finish,
         now: OffsetDateTime,
     ) -> Result<Finished, AppError>;
-    /// Ends as `expired` at `now` the commands that are `queued` or `leased` and expire at or
-    /// before `now`; those commands, by `seq`. A command another bundle holds is passed over (the
+    /// Ends as `expired` at `now` at most `limit` (clamped to `1..=MAX_DEVICE_COMMAND_PAGE`) of
+    /// the commands that are `queued` or `leased` and expire at or before `now`, the oldest first
+    /// (by `seq`); those commands, by `seq`. A command another bundle holds is passed over (the
     /// next sweep ends it), so a sweep never waits for a bridge's results.
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError>;
+    async fn expire_due(
+        &mut self,
+        now: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ExpiredCommand>, AppError>;
     async fn get(&mut self, id: Uuid) -> Result<Option<DeviceCommandRow>, AppError>;
     /// Phone `cap`'s most recent `limit` (clamped to `1..=MAX_DEVICE_COMMAND_PAGE`) commands,
     /// newest first (by `seq`), without their results (`result` is `None`): a result can be
@@ -267,10 +272,13 @@ pub trait DeviceCommandRepo: Send + Sync {
     async fn files(&mut self, ids: &[Uuid]) -> Result<Vec<DeviceFile>, AppError>;
     /// At most `limit` (clamped to `1..=MAX_DEVICE_COMMAND_PAGE`) of the workspace's device
     /// files whose retention ended at or before `now` (`expires_at <= now`), the earliest ended
-    /// first (by `expires_at`, then id).
+    /// first (by `expires_at`, then id), and, given `after` (an `expires_at` and an id), only
+    /// those after it in that order: a purge reads on past the last file it read, whether or not
+    /// that one could be deleted.
     async fn expired_files(
         &mut self,
         now: OffsetDateTime,
+        after: Option<(OffsetDateTime, Uuid)>,
         limit: u32,
     ) -> Result<Vec<DeviceFile>, AppError>;
     /// Deletes the record of the workspace's device file `id`: `true` when it was deleted,

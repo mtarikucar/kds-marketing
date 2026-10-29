@@ -108,6 +108,12 @@ async fn device_files_are_recorded_once_and_found_in_their_workspace() {
 }
 
 #[tokio::test]
+async fn expire_due_takes_the_oldest_up_to_the_limit() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::expire_due_takes_the_oldest_up_to_the_limit(uow).await;
+}
+
+#[tokio::test]
 async fn expired_device_files_are_found_and_deleted() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::devices_contract::expired_device_files_are_found_and_deleted(uow).await;

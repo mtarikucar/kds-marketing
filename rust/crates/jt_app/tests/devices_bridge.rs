@@ -14,7 +14,7 @@ use jt_app::ports::UnitOfWork;
 use jt_app::ports::connectors::MediaUpload;
 use jt_app::ports::devices::{
     CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, DeviceCommandRow, FailReason,
-    NewDeviceCommand, TEXT_UNICODE,
+    MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, TEXT_UNICODE,
 };
 use jt_app::ports::files::{ByteSource, FileMaintenance, FileStore, StoredFile};
 use jt_app::usecases::Deps;
@@ -769,7 +769,10 @@ async fn late_result_after_expiry_is_applied_and_ledgered_again() {
     assert_eq!(ids(&poll(&w, &key, later(1), 20).await), [id]);
     // The expiry sweep ends it while the bridge works on it (D1-T7's job ledgers that ending).
     let mut r = w.uow.tenant(w.ws).await.unwrap();
-    r.device_commands().expire_due(later(6)).await.unwrap();
+    r.device_commands()
+        .expire_due(later(6), MAX_DEVICE_COMMAND_PAGE)
+        .await
+        .unwrap();
     r.commit().await.unwrap();
     assert_eq!(row(&w, id).await.status, CommandStatus::Expired);
 

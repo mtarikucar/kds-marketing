@@ -185,7 +185,8 @@ every use case.
 ### 5.6 Retention
 
 Screenshots and pulled files expire after 7 days (storage hygiene, not access control); command rows are kept
-like ledger history.
+like ledger history. The file purge writes no ledger entry: the commands that named a file, and their ledger
+entries, stay as they were.
 
 ## 6. The bridge program (`jeeta-device-bridge`)
 
