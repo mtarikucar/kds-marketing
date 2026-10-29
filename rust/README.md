@@ -2000,10 +2000,10 @@ field.
 
 | Use case | Panel | Risk | Notes |
 |---|---|---|---|
-| `devices.bridge.register` | `POST /api/devices/bridge/register` | WRITE | a `phone` capability per phone (`{platform}:{serial}`), facts merged key by key under `connector_public.device`; a phone that fails its checks or is retired (`phone_retired`) is listed in `refused`, never the registration |
+| `devices.bridge.register` | `POST /api/devices/bridge/register` | WRITE | a `phone` capability per phone (`{platform}:{serial}`), facts merged key by key under `connector_public.device` (only the bridge writes it); a phone that fails its checks, is retired (`phone_retired`) or is held by another bridge that registered it within 60 s (`phone_held_by_another_bridge`) is listed in `refused`, never the registration |
 | `devices.bridge.commands` | `GET /api/devices/bridge/commands?wait_s&limit` | READ | long-poll of at most 25 s, at most 20 commands, for the phones the bridge's latest registration lists; a command the phone's bridge no longer lists is failed `unsupported_by_bridge`; `push_file` carries a 10-minute signed `download_url` |
-| `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, for a phone the bridge ever registered, else counted `unknown`; a file id that is not one of the workspace's device files refuses the batch |
-| `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself (`image/png` or `application/octet-stream`, at most 256 MiB); a device file kept seven days; `{"file_id"}` |
+| `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, from the bridge the command was leased to (or the one that holds its phone now), else counted `unknown`; a file id that is not a device file this bridge uploaded refuses the batch |
+| `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself, streamed (`image/png` up to 25 MB, `application/octet-stream` up to 256 MiB; two uploads at a time); a device file kept seven days; `{"file_id"}` |
 
 Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
 dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes

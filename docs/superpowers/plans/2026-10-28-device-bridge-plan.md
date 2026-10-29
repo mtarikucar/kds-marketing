@@ -516,22 +516,40 @@ As built (D1-T5):
   Missing}` and `kernel::merge_facts`. Voice uses lease, declare, of_kind and held; `calls_bridge.rs` and
   `calls_session.rs` unedited.
 - **Which bridge.** A poll carries only the key, so the bridge is its API key (`BridgeCaller { ctx, bridge: ApiKeyId }`,
-  `bridge::ctx_for_bridge`): one key per bridge program. `connector_public.device` keeps, beside the phone's and the
-  bridge's facts, `listed_by` (the key id of the bridge that listed it last), `listed` (`false` once that bridge's
-  registration leaves it out) and `registered_by` (`{key id: last registration time}`). Leases: phones not retired
-  with `listed_by` = this bridge and `listed`. Results: phones whose `registered_by` has this bridge. (Field names avoid
-  `key`: `connector_public` refuses secret-looking keys.)
-- **Device files.** `0017` also creates `device_files` (forced RLS; 74 tables); `DeviceCommandRepo::save_file` and
-  `::files`. The file store keeps what `usecases::files::validate_stored` allows: studio's media, and
-  `application/octet-stream` up to `DEVICE_FILE_LIMIT` (256 MiB, the bridge's download cap). Studio's daily orphan
-  sweep passes over device files (it deletes every stored file older than a day that `studio_files` does not know).
-  D1-T7's purge reads `device_files.expires_at` (index `device_files_expiry`).
+  `bridge::ctx_for_bridge`): one key per bridge program. `connector_public.device` (a reserved public key since the
+  D1-T5 review: `capability.declare` refuses it, so only the bridge writes it) keeps, beside the phone's and the
+  bridge's facts, the bridge that holds the phone: `listed_by` (its key id) and `listed` (`false` once its
+  registration leaves the phone out). A phone is one bridge's at a time: another bridge listing it while the holder
+  lists it and registered it within `HELD_FOR` (60 s) is refused with `PHONE_HELD_BY_ANOTHER_BRIDGE`
+  (`"phone_held_by_another_bridge"`, `jt_device_protocol`; not final: the bridge keeps listing it), and takes it over
+  once the holder leaves it out or goes stale; checked under the phone's lock, as is retirement. Leases: phones not
+  retired with `listed_by` = this bridge and `listed`. (Field names avoid `key`: `connector_public` refuses
+  secret-looking keys.)
+- **Results follow the lease.** `device_commands.leased_by` (the key id; set exactly with `leased_at`, a table check)
+  is written by `mark_leased(ids, by, now)`; `finish(by, listed, id, outcome, now)` takes a result from the lease
+  holder, or from the bridge that now holds the command's phone (`listed`: a replaced key), and answers `Unknown`
+  for every other (an old PC's stale result for a command redelivered to the phone's new bridge).
+- **Device files.** `0017` also creates `device_files` (forced RLS; 74 tables; `mime in ('image/png',
+  'application/octet-stream')`; `uploaded_by`, the key id); `DeviceCommandRepo::save_file` and `::files`. A result
+  may name only a file its own bridge uploaded. The file store keeps what `usecases::files::validate_stored` allows:
+  studio's media, and `application/octet-stream` up to `DEVICE_FILE_LIMIT` (256 MiB, the bridge's download cap).
+  Studio's daily orphan sweep passes over device files (it deletes every stored file older than a day that
+  `studio_files` does not know). D1-T7's purge reads `device_files.expires_at` (index `device_files_expiry`).
+- **Uploads stream.** `FileStore::put_stream(ws, id, mime, filename, &mut dyn ByteSource)` (a default that buffers;
+  `jt_files::DiskFiles` writes the chunks to a temporary file, hashing them, then adds the header and links it into
+  place). The route hands the request body over as a stream; `devices::bridge::files` checks the announced
+  `Content-Length`, bounds what it reads (`IMAGE_LIMIT` for a PNG, `DEVICE_FILE_LIMIT` for a pulled file) and takes a
+  turn first (`MAX_CONCURRENT_UPLOADS` = 2). `DeviceBridgeCtx` refuses any key but the bridge's before the body is
+  read. `provider_url` and the end of a put read a file's header only.
 - **Download URL.** `jt_files::DiskFiles::provider_url` now signs any lifetime after now and at most 24 h ahead
   (`verify` already accepted that); studio still asks for 24 h, `push_file` for 10 min, signed after the lease
-  commits. A `push_file` whose file cannot be signed is failed `bridge_error`, not handed out.
-- **Bodies.** Results: `DefaultBodyLimit` `MAX_RESULTS_BODY_BYTES`; an over-limit body is a `422` (the JSON extractor's
-  rejection), which the bridge splits like a `413`. Files: `DefaultBodyLimit` `DEVICE_FILE_LIMIT`; a type other than
-  the two is `422` naming `content_type`, an over-limit or unreadable body `422` naming `body`.
+  commits. A `push_file` whose file is not stored is failed `file_not_found` (a new `FailReason`); one the store
+  cannot sign now is not handed out and stays leased, so it is handed out again after `REDELIVER_AFTER`.
+- **Features.** `jt_devices::required_features(&DeviceCommand)` (the kind, then `text.unicode` for non-ASCII text);
+  `supports` and the lease-time refusal's detail use it.
+- **Bodies.** Results: `DefaultBodyLimit` `MAX_RESULTS_BODY_BYTES`; an over-limit body is `422` naming `body`, which
+  the bridge logs and splits like a `413`. Files: a type other than the two is `422` naming `content_type`, an
+  over-limit or unreadable body `422` naming `body`.
 
 - [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_lists_retired_phone_as_refused`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`, `register_refuses_one_bad_phone_not_the_heartbeat`, `commands_rechecks_supports_at_lease_time`, `result_for_another_bridges_command_is_unknown`, `result_with_a_foreign_file_id_is_refused`, `invalid_results_body_is_422`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused, post_without_requested_with_is_403, files_take_a_raw_body}`; `invalid_results_body_is_422` also checks `details.field`; archtest: no MCP tool for `devices.bridge.*`.
 - [ ] CI red → implement → green; **commit** `feat(devices): the device bridge's surface`.
