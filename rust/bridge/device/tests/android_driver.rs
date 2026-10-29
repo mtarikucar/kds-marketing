@@ -23,7 +23,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use jeeta_device_bridge::driver::android::{
     ADB_TIMEOUT, AdbError, AdbOutput, AdbRunner, AndroidAdbDriver, AndroidRegistry,
-    IDLE_RETRY_PAUSE, IME_BIND_TIMEOUT, MAX_DEVICE_LINE_BYTES, MAX_PULL_BYTES, PUT_BACK_ATTEMPTS,
+    IDLE_RETRY_PAUSE, IME_BIND_TIMEOUT, MAX_CAPTURE_BYTES, MAX_DEVICE_LINE_BYTES, MAX_PULL_BYTES,
+    MAX_READ_BYTES, PUT_BACK_ATTEMPTS, SHELL_CAPTURE_BYTES,
 };
 use jeeta_device_bridge::{ContentType, DriverError, FileTransfer, PhoneDriver, PhoneRegistry};
 use jt_device_protocol::{
@@ -99,6 +100,8 @@ struct State {
     history: String,
     /// The next this many `ime set` of an input method other than ADBKeyBoard do not take.
     failing_put_backs: usize,
+    /// The next this many `ime list -s` fail.
+    failing_ime_lists: usize,
     /// What `screencap` writes before the image.
     screencap_noise: Vec<u8>,
     /// What ADBKeyBoard was sent, decoded.
@@ -119,6 +122,8 @@ struct State {
 struct FakeAdb {
     /// Every call: the serial and the arguments.
     calls: Mutex<Vec<(String, Vec<String>)>>,
+    /// Every call, its arguments joined by spaces, with the output cap it asked for.
+    caps: Mutex<Vec<(String, usize)>>,
     state: Mutex<State>,
 }
 
@@ -127,6 +132,7 @@ impl FakeAdb {
     fn phone() -> FakeAdb {
         FakeAdb {
             calls: Mutex::default(),
+            caps: Mutex::default(),
             state: Mutex::new(State {
                 dumps: VecDeque::from([Dump::Xml(fixture("dump_whatsapp.xml"))]),
                 dump_stderr: String::new(),
@@ -145,6 +151,7 @@ impl FakeAdb {
                 polls_since_selected: 0,
                 history: fixture("input_methods_subtype_history.txt"),
                 failing_put_backs: 0,
+                failing_ime_lists: 0,
                 screencap_noise: Vec::new(),
                 typed: Vec::new(),
                 inject_refused: false,
@@ -232,6 +239,10 @@ impl FakeAdb {
                     ""
                 });
             }
+            "shell ime list -s" if state.failing_ime_lists > 0 => {
+                state.failing_ime_lists -= 1;
+                return AdbOutput::new(255, "", "cmd: Failure calling service input_method\n");
+            }
             "shell ime list -s" => return ok(state.enabled_imes.join("\n") + "\n"),
             "shell settings get secure default_input_method" => {
                 return ok(format!("{}\n", state.current_ime));
@@ -298,18 +309,23 @@ impl AdbRunner for FakeAdb {
         &self,
         serial: &str,
         args: &[&str],
-        _max_output: usize,
+        max_output: usize,
     ) -> Result<AdbOutput, AdbError> {
         let line = args.join(" ");
         self.calls.lock().unwrap().push((
             serial.to_owned(),
             args.iter().map(|a| (*a).to_owned()).collect(),
         ));
+        self.caps.lock().unwrap().push((line.clone(), max_output));
         let hangs = self.state().hang.iter().any(|h| line.starts_with(h));
         if hangs {
             std::future::pending::<()>().await;
         }
-        Ok(self.answer(args, &line))
+        // As the real runner does: each stream kept up to the cap.
+        let mut out = self.answer(args, &line);
+        out.stdout.truncate(max_output);
+        out.stderr.truncate(max_output);
+        Ok(out)
     }
 
     async fn devices(&self) -> Result<AdbOutput, AdbError> {
@@ -569,6 +585,91 @@ async fn the_dump_file_is_removed_once_read() {
         adb.state().file.is_none(),
         "the last screen is not left on the phone"
     );
+}
+
+#[tokio::test]
+async fn each_call_asks_for_its_own_output_cap() {
+    let adb = Arc::new(FakeAdb::phone());
+    let phone = driver(&adb);
+    let files = FakeFiles::default();
+    for cmd in [
+        DeviceCommand::Observe { screenshot: true },
+        DeviceCommand::Tap { x: 1, y: 2 },
+        DeviceCommand::Shell {
+            argv: vec!["echo".to_owned(), "hi".to_owned()],
+        },
+        DeviceCommand::PushFile {
+            file_id: FILE_ID,
+            dest: "/sdcard/x".to_owned(),
+        },
+        DeviceCommand::PullFile {
+            path: "/sdcard/y".to_owned(),
+        },
+    ] {
+        phone.execute(&cmd, &files).await.unwrap();
+    }
+    phone.report().await.unwrap();
+    let caps = adb.caps.lock().unwrap().clone();
+    let cap = |prefix: &str| {
+        let caps: Vec<usize> = caps
+            .iter()
+            .filter(|(line, _)| line.starts_with(prefix))
+            .map(|(_, cap)| *cap)
+            .collect();
+        assert!(!caps.is_empty(), "no call {prefix}");
+        caps
+    };
+    // A screenshot gets room for an image, an agent's shell twice what its result keeps,
+    // everything else the driver's own reading cap.
+    assert!(
+        cap("exec-out screencap")
+            .iter()
+            .all(|c| *c == MAX_CAPTURE_BYTES)
+    );
+    assert!(
+        cap("shell echo hi")
+            .iter()
+            .all(|c| *c == SHELL_CAPTURE_BYTES)
+    );
+    for ordinary in [
+        DUMP_LINE,
+        CAT_LINE,
+        RM_LINE,
+        "shell wm size",
+        "shell input tap",
+        "shell getprop",
+        "shell stat",
+        "push ",
+        "pull ",
+    ] {
+        assert!(
+            cap(ordinary).iter().all(|c| *c == MAX_READ_BYTES),
+            "{ordinary}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_dump_cut_at_its_cap_marks_the_observation_truncated() {
+    // One element, then a node whose text runs past what the bridge reads of a dump.
+    let mut xml = String::from(
+        "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation=\"0\"><node text=\"Ok\" resource-id=\"\" class=\"android.widget.Button\" clickable=\"true\" bounds=\"[0,0][100,100]\" /><node text=\"",
+    );
+    xml.push_str(&"a".repeat(MAX_READ_BYTES));
+    xml.push_str("\" clickable=\"true\" bounds=\"[0,100][100,200]\" /></hierarchy>");
+    let adb = Arc::new(FakeAdb::phone().with(|s| s.dumps = VecDeque::from([Dump::Xml(xml)])));
+    let seen = observe(&driver(&adb)).await;
+    assert!(seen.truncated, "the dump was cut");
+    let texts: Vec<&str> = seen
+        .elements
+        .iter()
+        .filter_map(|e| e.text.as_deref())
+        .collect();
+    assert_eq!(texts, ["Ok"]);
+
+    // Within the cap: not truncated.
+    let adb = Arc::new(FakeAdb::phone());
+    assert!(!observe(&driver(&adb)).await.truncated);
 }
 
 #[tokio::test]
@@ -1556,6 +1657,25 @@ async fn a_put_back_the_phone_does_not_show_is_tried_again() {
         adb.count(&format!("shell ime set {PREFF}")),
         PUT_BACK_ATTEMPTS as usize + 1
     );
+}
+
+#[tokio::test]
+async fn a_recovery_that_could_not_read_the_input_methods_looks_again() {
+    // Left on ADBKeyBoard, and `ime list -s` fails once: nothing is decided, so the next
+    // recovery looks at the phone again and puts its keyboard back.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.current_ime = ADB_IME.to_owned();
+        s.failing_ime_lists = 1;
+    }));
+    let phone = driver(&adb);
+    phone.recover().await;
+    assert_eq!(adb.state().current_ime, ADB_IME);
+    phone.recover().await;
+    assert_eq!(adb.state().current_ime, PREFF);
+    // Decided now: the next recovery makes no call.
+    let calls = adb.lines().len();
+    phone.recover().await;
+    assert_eq!(adb.lines().len(), calls);
 }
 
 #[tokio::test(start_paused = true)]

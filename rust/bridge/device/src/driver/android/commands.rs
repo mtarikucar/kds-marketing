@@ -420,15 +420,19 @@ fn not_found(target: &ElementTarget, exact: bool, dump: &Dump) -> String {
         ElementTarget::Id(v) => ("id", v),
         ElementTarget::Desc(v) => ("desc", v),
     };
-    let needle = observe::short(needle, 16);
-    let labels = observe::labels(&dump.elements, MAX_LABELS, LABEL_CHARS);
+    // Cut first, then control characters blanked: never escaped, so nothing grows.
+    let needle = clean(&observe::short(needle, 16));
+    let labels: Vec<String> = observe::labels(&dump.elements, MAX_LABELS, LABEL_CHARS)
+        .iter()
+        .map(|label| clean(label))
+        .collect();
     let shown = if labels.is_empty() {
         "nothing".to_owned()
     } else {
         labels.join(", ")
     };
     let how = if exact { "exactly " } else { "" };
-    format!("not found: {field} {how}{needle:?}; on screen: {shown}")
+    format!("not found: {field} {how}\"{needle}\"; on screen: {shown}")
 }
 
 /// The Android key code of `key` (`KeyEvent.KEYCODE_*`).
@@ -631,6 +635,31 @@ mod tests {
             detail.chars().count()
         );
         assert_eq!(detail.matches(" is a ").count(), MAX_LABELS, "{detail}");
+
+        // Control characters in the target or a label are blanked, not escaped: the detail
+        // does not grow.
+        let control: Vec<Element> = (1..=30)
+            .map(|n| Element {
+                text: Some(format!(
+                    "{n:02}\u{1}\u{7}\u{1b}\u{1}\u{7}\u{1b}\u{1}\u{7}\u{1b}"
+                )),
+                ..element(n)
+            })
+            .collect();
+        let dump = Dump {
+            rotation: 0,
+            nodes: control.clone(),
+            elements: control,
+        };
+        let target = ElementTarget::Text("\u{1}\u{7}\n\u{1b}".repeat(1000));
+        let detail = not_found(&target, true, &dump);
+        assert!(
+            detail.chars().count() <= MAX_DETAIL_CHARS,
+            "{} characters: {detail}",
+            detail.chars().count()
+        );
+        assert!(!detail.chars().any(char::is_control), "{detail:?}");
+        assert!(!detail.contains("\\u"), "{detail}");
     }
 
     #[test]

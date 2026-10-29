@@ -361,37 +361,39 @@ impl PhoneDriver for AndroidAdbDriver {
     /// also looks at the phone, which a bridge killed mid-command may have left on ADBKeyBoard,
     /// and then sets the input method the phone used before it (see
     /// [`AndroidAdbDriver::ime_to_go_back_to`]), or leaves the phone as it is when it finds none.
-    /// With nothing recorded after that first look, it makes no call.
+    /// That look counts once it has decided: a phone it could not read is looked at again at its
+    /// next recovery. With nothing recorded after it, a recovery makes no call.
     async fn recover(&self) {
         let recorded = self.recorded_ime();
         if recorded.is_none() && self.looked.load(Ordering::SeqCst) {
             return;
         }
+        let unread = |error: DriverError| {
+            warn!(
+                serial = %loggable(&self.serial),
+                reason = error.reason.key(),
+                "the phone's input methods could not be read while recovering; it is looked at again at its next recovery"
+            );
+        };
         let current = match self.current_ime().await {
             Ok(current) => current,
-            Err(error) => {
-                warn!(
-                    serial = %loggable(&self.serial),
-                    reason = error.reason.key(),
-                    "the phone's input method could not be read while recovering"
-                );
-                return;
-            }
+            Err(error) => return unread(error),
         };
-        self.looked.store(true, Ordering::SeqCst);
         if current.as_deref() != Some(ADB_KEYBOARD_IME) {
             // Not on ADBKeyBoard: nothing to undo.
             if let Some(ime) = recorded {
                 self.clear_record(&ime);
             }
+            self.looked.store(true, Ordering::SeqCst);
             return;
         }
         if recorded.is_none() {
-            let back = match self.enabled_imes().await {
-                Ok(enabled) => self.ime_to_go_back_to(&enabled).await,
-                Err(_) => None,
+            let enabled = match self.enabled_imes().await {
+                Ok(enabled) => enabled,
+                Err(error) => return unread(error),
             };
-            let Some(back) = back else {
+            let Some(back) = self.ime_to_go_back_to(&enabled).await else {
+                self.looked.store(true, Ordering::SeqCst);
                 warn!(
                     serial = %loggable(&self.serial),
                     "the phone is left on ADBKeyBoard: no input method to go back to was found"
@@ -400,6 +402,8 @@ impl PhoneDriver for AndroidAdbDriver {
             };
             self.set_record(Some(back));
         }
+        // Decided: from here a put-back that fails stays recorded, and is tried again.
+        self.looked.store(true, Ordering::SeqCst);
         self.put_ime_back().await;
     }
 }
