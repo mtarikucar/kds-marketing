@@ -1,12 +1,14 @@
 //! The workspace's phones (spec `2026-10-28-device-bridge-design.md`): a phone plugged into a PC is
 //! a `phone` capability, kept alive by the device bridge on that PC ([`bridge`], the bridge's own
-//! surface), which takes the commands queued for the phone and reports what each did. The
+//! surface), which takes the commands queued for the phone and reports what each did. An agent,
+//! or a person in the panel, queues those commands and reads what came of them ([`agent`]). The
 //! commands and the files the bridges upload are stored per tenant (`ports::devices`).
 //!
 //! A command carries typed text and shell arguments, and its result screen text and output: they
 //! go to the ledger (the owner's audit log), never to `tracing`, which logs ids, kinds, statuses
 //! and counts only (spec §5.5).
 
+pub mod agent;
 pub mod bridge;
 pub mod uploads;
 

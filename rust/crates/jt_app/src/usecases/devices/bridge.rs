@@ -189,8 +189,16 @@ fn external_id(phone: &PhoneReport) -> String {
 }
 
 /// What a phone's capability keeps of it (`connector_public.device`).
-fn device_of(c: &Capability) -> Option<&Map<String, Value>> {
+pub(super) fn device_of(c: &Capability) -> Option<&Map<String, Value>> {
     c.connector_public.get("device")?.as_object()
+}
+
+/// Whether the latest registration of the bridge that holds phone `c` lists it (`listed`).
+pub(super) fn is_listed(c: &Capability) -> bool {
+    device_of(c)
+        .and_then(|d| d.get("listed"))
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 /// The key id of the bridge that holds phone `c` (`listed_by`), listed or not.
@@ -207,20 +215,13 @@ fn held_by(c: &Capability, bridge: ApiKeyId) -> bool {
 
 /// Whether bridge `bridge` holds phone `c` and its latest registration lists it.
 fn listed_by(c: &Capability, bridge: ApiKeyId) -> bool {
-    held_by(c, bridge)
-        && device_of(c)
-            .and_then(|d| d.get("listed"))
-            .and_then(Value::as_bool)
-            == Some(true)
+    held_by(c, bridge) && is_listed(c)
 }
 
 /// Whether a bridge other than `bridge` holds phone `c` at `now`: it lists it, and registered it
 /// at most [`HELD_FOR`] ago.
 fn held_by_another(c: &Capability, bridge: ApiKeyId, now: OffsetDateTime) -> bool {
-    let listed = device_of(c)
-        .and_then(|d| d.get("listed"))
-        .and_then(Value::as_bool)
-        == Some(true);
+    let listed = is_listed(c);
     let holder = device_of(c)
         .and_then(|d| d.get("listed_by"))
         .and_then(Value::as_str);
@@ -229,7 +230,7 @@ fn held_by_another(c: &Capability, bridge: ApiKeyId, now: OffsetDateTime) -> boo
 }
 
 /// What phone `c`'s bridge lists it can run, as its latest registration reported.
-fn features_of(c: &Capability) -> Vec<String> {
+pub(super) fn features_of(c: &Capability) -> Vec<String> {
     device_of(c)
         .and_then(|d| d.get("features"))
         .and_then(Value::as_array)

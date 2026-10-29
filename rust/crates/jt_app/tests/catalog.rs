@@ -260,6 +260,11 @@ fn catalog_is_the_release_table() {
         ("devices.bridge.commands", None, Some(("GET", "/api/devices/bridge/commands")), true, Risk::Read),
         ("devices.bridge.results", None, Some(("POST", "/api/devices/bridge/results")), true, Risk::Write),
         ("devices.bridge.files", None, Some(("POST", "/api/devices/bridge/files")), true, Risk::Write),
+        ("devices.list", Some("jeeta.devices.list"), Some(("GET", "/api/devices")), false, Risk::Read),
+        ("devices.observe", Some("jeeta.devices.observe"), Some(("POST", "/api/devices/{capability_id}/observe")), false, Risk::Write),
+        ("devices.act", Some("jeeta.devices.act"), Some(("POST", "/api/devices/{capability_id}/act")), false, Risk::Write),
+        ("devices.command_get", Some("jeeta.devices.command_get"), Some(("GET", "/api/devices/commands/{command_id}")), false, Risk::Read),
+        ("devices.commands", Some("jeeta.devices.commands"), Some(("GET", "/api/devices/{capability_id}/commands")), false, Risk::Read),
         ("events.pending", Some("jeeta.events.pending"), Some(("GET", "/api/events/pending")), false, Risk::Read),
         ("events.ack", Some("jeeta.events.ack"), Some(("POST", "/api/events/ack")), false, Risk::Write),
         ("events.list", Some("jeeta.events.list"), Some(("GET", "/api/events")), false, Risk::Read),
@@ -278,7 +283,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 164);
+    assert_eq!(CATALOG.len(), 169);
     for uc in CATALOG {
         assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
