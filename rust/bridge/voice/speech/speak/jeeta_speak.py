@@ -71,7 +71,8 @@ ABBREVIATIONS = frozenset([
     "apt", "bul", "st",
 ])
 # Bump with any change to how a text becomes sentences or audio that the constants below miss.
-PIPELINE_VERSION = 1
+# 2: an ordinal ("3. katta") ends no sentence, and an ellipsis ("…") ends one (B4 review I5).
+PIPELINE_VERSION = 2
 MAX_TEXT_CHARS = 2000
 # The normalised text a request may become (numbers read out grow several times their digits).
 MAX_SPOKEN_CHARS = 4000
@@ -84,8 +85,10 @@ WARM_TEXT = "Merhaba, ben dijital asistanınız; size nasıl yardımcı olabilir
 # What Antalia's normaliser should have read out: a digit or one of these symbols left in its
 # cased output (before its last pass drops what the model cannot read) was not spoken.
 RESIDUE = re.compile(r"[0-9%@#/+]|(?<=\d):|:(?=\d)")
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _LAST_WORD = re.compile(r"(\w+)\.$")
+# A number written in digits alone before the period: before a word in lower case, an ordinal.
+_ORDINAL = re.compile(r"(?:^|\s)[0-9]+\.$")
 _RUNNING = set()
 
 # The owner-approved texts the bridge plays (jt_calls opening.rs and phrases.rs defaults, A3/A4),
@@ -120,15 +123,22 @@ def tr_lower(text):
 
 
 def split_sentences(text):
-    """The sentences of a normalised text: cut after . ! ? and a space (after Antalia's normaliser
-    numbers, times and most abbreviations are words, so a period left is a sentence's end), never
-    after one of the worker's abbreviations. A piece of fewer than three words joins the next one
-    ("evet. tamam. yarın görüşürüz." stays whole)."""
+    """The sentences of a normalised text: cut after . ! ? … and a space (after Antalia's
+    normaliser numbers, times and most abbreviations are words, so a period left is a sentence's
+    end), never after one of the worker's abbreviations, nor after a number in digits before a word
+    in lower case (an ordinal, "3. katta"). A piece of fewer than three words joins the next one
+    ("evet. tamam. yarın görüşürüz." stays whole), the last one the one before it. The worker cuts
+    by the same rules (plan B4 text.rs; one table, tests/speak_sentence_cases.py), so a sentence it
+    sends alone is one stream here."""
     out, pending = [], ""
-    for part in _SENTENCE_END.split(text.strip()):
+    parts = _SENTENCE_END.split(text.strip())
+    for i, part in enumerate(parts):
         pending = f"{pending} {part}".strip()
         last = _LAST_WORD.search(pending)
         if last and tr_lower(last.group(1)) in ABBREVIATIONS:
+            continue
+        following = parts[i + 1] if i + 1 < len(parts) else ""
+        if _ORDINAL.search(pending) and following[:1].islower():
             continue
         if len(pending.split()) >= MIN_SENTENCE_WORDS:
             out.append(pending)
@@ -287,6 +297,7 @@ def pipeline():
         "gap_ms": SENTENCE_GAP_MS,
         "min_words": MIN_SENTENCE_WORDS,
         "splitter": _SENTENCE_END.pattern,
+        "ordinal": _ORDINAL.pattern,
         "abbreviations": sorted(ABBREVIATIONS),
         "rate": SAMPLE_RATE,
     }

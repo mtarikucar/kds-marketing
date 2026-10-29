@@ -1,6 +1,9 @@
 //! Sentences of a text to speak, with their character offsets (so a cut can say how much was
 //! heard), and the caller's acknowledgement words. Synthesis and the phrase cache work sentence by
-//! sentence; a number, a clock time or an abbreviation is never split.
+//! sentence; a number, a clock time, an ordinal or an abbreviation is never split, and a piece of
+//! fewer than three words is never a sentence of its own. The speak service cuts by the same rules
+//! (`split_sentences` of `speech/speak/jeeta_speak.py`), and both tests hold one table
+//! (`speech/speak/tests/speak_sentence_cases.py`), so a sentence sent alone is one stream there.
 
 /// A sentence: characters `[start, end)` of the original text, and its text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,13 +14,17 @@ pub struct Sentence {
 }
 
 /// Words a period after which ends no sentence (the speak service keeps the same list:
-/// `speech/speak/jeeta_speak.py`, `ABBREVIATIONS`).
+/// `speech/speak/jeeta_speak.py`, `ABBREVIATIONS`). "bul", "tel", "sok" and "no" are words too
+/// (find, wire, put in, no): a sentence that ends in one is not cut there, kept for that parity.
 const ABBREVIATIONS: [&str; 18] = [
     "dr", "sn", "av", "prof", "doç", "yrd", "no", "tel", "vb", "vs", "ltd", "şti", "cad", "sok",
     "mah", "apt", "bul", "st",
 ];
 /// A sentence longer than this is cut at its next comma.
 const MAX_SENTENCE_CHARS: usize = 220;
+/// A piece of fewer words joins the next one, the last one the one before it (the speak
+/// service's `MIN_SENTENCE_WORDS`): "Evet. Tamam. Yarın görüşürüz." stays whole.
+const MIN_SENTENCE_WORDS: usize = 3;
 const BACKCHANNEL: [&str; 19] = [
     "hı", "hıhı", "ıhı", "hı-hı", "evet", "tamam", "aynen", "he", "hee", "anladım", "peki",
     "tabii", "tabi", "olur", "ha", "hm", "hmm", "ok", "okey",
@@ -48,41 +55,77 @@ fn ends_abbreviation(chars: &[char], start: usize, dot: usize) -> bool {
     !word.is_empty() && ABBREVIATIONS.contains(&lower_tr(&word).as_str())
 }
 
-/// Adds characters `[start, end)` to `out` as a sentence, without their surrounding spaces.
-fn push(out: &mut Vec<Sentence>, chars: &[char], mut start: usize, mut end: usize) {
+/// Whether the period at `dot` (within the sentence from `start`) follows a number written in
+/// digits alone and comes before a word in lower case: an ordinal ("3. katta"), not an end.
+fn ends_ordinal(chars: &[char], start: usize, dot: usize) -> bool {
+    let token: Vec<char> = chars[start..dot]
+        .iter()
+        .rev()
+        .take_while(|c| !c.is_whitespace())
+        .copied()
+        .collect();
+    let number = !token.is_empty() && token.iter().all(char::is_ascii_digit);
+    let next = chars[dot + 1..].iter().find(|c| !c.is_whitespace());
+    number && next.is_some_and(|c| c.is_lowercase())
+}
+
+/// Characters `[start, end)` as a sentence, without their surrounding spaces, if any are left.
+fn trimmed(chars: &[char], mut start: usize, mut end: usize) -> Option<Sentence> {
     while start < end && chars[start].is_whitespace() {
         start += 1;
     }
     while end > start && chars[end - 1].is_whitespace() {
         end -= 1;
     }
-    if start < end {
-        out.push(Sentence {
-            start,
-            end,
-            text: chars[start..end].iter().collect(),
-        });
-    }
+    (start < end).then(|| Sentence {
+        start,
+        end,
+        text: chars[start..end].iter().collect(),
+    })
+}
+
+fn words(sentence: &Sentence) -> usize {
+    sentence.text.split_whitespace().count()
 }
 
 /// `text` cut after `.`, `!`, `?` and `…` followed by a space or the end, except after an
-/// abbreviation; a sentence past 220 characters is also cut after its next comma.
+/// abbreviation or an ordinal; a sentence past 220 characters is also cut after its next comma.
+/// A piece of fewer than three words then joins the next one (the last, the one before it).
 pub fn sentences(text: &str) -> Vec<Sentence> {
     let chars: Vec<char> = text.chars().collect();
-    let mut out = Vec::new();
+    let mut pieces = Vec::new();
     let mut start = 0;
     for i in 0..chars.len() {
         let at_break = i + 1 >= chars.len() || chars[i + 1].is_whitespace();
         let mark = matches!(chars[i], '.' | '!' | '?' | '…');
-        let sentence_end =
-            mark && at_break && !(chars[i] == '.' && ends_abbreviation(&chars, start, i));
+        let kept = chars[i] == '.'
+            && (ends_abbreviation(&chars, start, i) || ends_ordinal(&chars, start, i));
         let long_comma = chars[i] == ',' && at_break && i + 1 - start >= MAX_SENTENCE_CHARS;
-        if sentence_end || long_comma {
-            push(&mut out, &chars, start, i + 1);
+        if (mark && at_break && !kept) || long_comma {
+            pieces.extend(trimmed(&chars, start, i + 1));
             start = i + 1;
         }
     }
-    push(&mut out, &chars, start, chars.len());
+    pieces.extend(trimmed(&chars, start, chars.len()));
+    let mut out: Vec<Sentence> = Vec::new();
+    let mut pending: Option<Sentence> = None;
+    for piece in pieces {
+        let joined = match pending.take() {
+            Some(first) => trimmed(&chars, first.start, piece.end).unwrap_or(piece),
+            None => piece,
+        };
+        if words(&joined) >= MIN_SENTENCE_WORDS {
+            out.push(joined);
+        } else {
+            pending = Some(joined);
+        }
+    }
+    if let Some(rest) = pending {
+        match out.pop() {
+            Some(last) => out.extend(trimmed(&chars, last.start, rest.end)),
+            None => out.push(rest),
+        }
+    }
     out
 }
 

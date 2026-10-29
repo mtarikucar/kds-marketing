@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import jeeta_speak  # noqa: E402
 from jeeta_speak import (  # noqa: E402
@@ -21,6 +22,7 @@ from jeeta_speak import (  # noqa: E402
     to_pcm16,
 )
 from respell import Respeller  # noqa: E402
+from speak_sentence_cases import CASES  # noqa: E402
 
 FOLD = str.maketrans("âîûÂÎÛ", "aiuAIU")
 
@@ -150,6 +152,16 @@ def test_sentences_of_a_normalised_text(text, expected):
     assert split_sentences(text) == expected
 
 
+@pytest.mark.parametrize(("text", "expected"), CASES)
+def test_sentences_are_cut_where_the_worker_cuts_them(text, expected):
+    # The worker's test reads the same table (rust/bridge/voice/tests/text.rs).
+    assert split_sentences(text) == expected
+
+
+def test_the_shared_table_is_not_empty():
+    assert len(CASES) >= 15
+
+
 def test_no_cut_after_any_of_the_workers_abbreviations():
     for word in jeeta_speak.ABBREVIATIONS:
         text = f"bunu yarın {word}. ahmet yılmaz ile konuşacağız."
@@ -242,7 +254,7 @@ def test_the_voice_id_follows_every_knob_the_table_and_the_rules(monkeypatch):
                                                      {**knobs, **change}, {"Jeeta": "Cita"}), change
     assert base != jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.2"}, {"ema.pt": "ab"}, knobs, {"Jeeta": "Ciita"})
     assert base != jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.3"}, {"ema.pt": "ab"}, knobs, {"Jeeta": "Cita"})
-    for name, value in (("MIN_SENTENCE_WORDS", 4), ("SENTENCE_GAP_MS", 300), ("PIPELINE_VERSION", 2),
+    for name, value in (("MIN_SENTENCE_WORDS", 4), ("SENTENCE_GAP_MS", 300), ("PIPELINE_VERSION", jeeta_speak.PIPELINE_VERSION + 1),
                         ("ABBREVIATIONS", frozenset({"dr"}))):
         monkeypatch.setattr(jeeta_speak, name, value)
         assert base != jeeta_speak.voice_fingerprint({"ema-lightning": "1.1.2"}, {"ema.pt": "ab"}, knobs,
