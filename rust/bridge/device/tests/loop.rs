@@ -107,6 +107,8 @@ struct Script {
     max_wait_s: Option<u32>,
     /// How long an idle poll is held (30 ms when `None`).
     idle_hold: Option<Duration>,
+    /// How many uploads are answered `503` first, as when the workspace's upload turns are taken.
+    files_busy: usize,
 }
 
 /// What the fake was sent.
@@ -361,6 +363,21 @@ async fn files(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -> R
         .unwrap()
         .uploads
         .push((content_type, body.to_vec()));
+    {
+        let mut script = fake.script.lock().unwrap();
+        if script.files_busy > 0 {
+            script.files_busy -= 1;
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(json!({
+                    "code": "UPSTREAM_UNAVAILABLE",
+                    "message": "every upload turn of the workspace is taken; try again later",
+                    "details": { "reason": "upload_turns_taken", "retryable": true, "retry_after_s": 5 },
+                })),
+            )
+                .into_response();
+        }
+    }
     axum::Json(json!({ "file_id": FILE_ID })).into_response()
 }
 
@@ -2107,6 +2124,33 @@ async fn file_transfer_uploads_with_the_key_and_downloads_without_it() {
         !text.contains("SIGNED-SECRET") && !text.contains(KEY),
         "{text}"
     );
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn an_upload_the_server_cannot_take_now_is_tried_again() {
+    let _logs = Logs::capture();
+    // The server answers the first two uploads `503` (its upload turns are taken): the bridge
+    // tries again, and the third is taken.
+    let script = Script {
+        files_busy: 2,
+        polls: [poll(vec![leased(
+            1,
+            "R58N1",
+            json!({ "kind": "screenshot" }),
+        )])]
+        .into(),
+        ..Script::default()
+    };
+    let (base, fake) = serve(script).await;
+    let rig = Setup::new(&[("R58N1", 0)]).attach(&base, fake);
+    rig.until("the result", |s| accepted(s).len() == 1).await;
+    {
+        let seen = rig.seen();
+        assert_eq!(seen.uploads.len(), 3);
+        let file = json!({ "status": "done", "result": { "kind": "file", "file_id": FILE_ID } });
+        assert_eq!(accepted_for(&seen, 1)[0]["outcome"], file);
+    }
     rig.stop().await;
 }
 
