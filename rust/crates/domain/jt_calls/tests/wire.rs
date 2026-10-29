@@ -25,6 +25,7 @@ fn every_command_kind_round_trips_through_the_wire() {
         Command::Dial {
             to_e164: "+905321234567".into(),
             plan: plan(),
+            script: Default::default(),
         },
         Command::Say {
             seq: 3,

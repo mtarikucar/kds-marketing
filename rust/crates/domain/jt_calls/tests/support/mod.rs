@@ -34,6 +34,7 @@ pub fn plan() -> CallPlan {
         max_duration_s: 300,
         language: "tr".into(),
         disclose_assistant: true,
+        hotwords: Vec::new(),
     }
 }
 
@@ -77,6 +78,7 @@ pub fn session(mode: CallMode, plan: Option<CallPlan>) -> CallSession {
         recording: RecordingState::Off,
         metrics: CallMetrics::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     }
 }
 

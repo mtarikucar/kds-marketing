@@ -90,6 +90,7 @@ fn plan() -> CallPlan {
         max_duration_s: 360,
         language: "tr".into(),
         disclose_assistant: true,
+        hotwords: Vec::new(),
     }
 }
 
@@ -126,6 +127,7 @@ async fn dialing(w: &World, bridge: CapabilityId, bridge_call_id: &str) -> CallI
         recording: RecordingState::Off,
         metrics: CallMetrics::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     };
     let id = session.id;
     let mut r = w.uow.tenant(w.ws).await.unwrap();
@@ -138,6 +140,7 @@ async fn dialing(w: &World, bridge: CapabilityId, bridge_call_id: &str) -> CallI
                 Command::Dial {
                     to_e164: E164.into(),
                     plan: plan(),
+                    script: Default::default(),
                 },
             )],
             FIXED_NOW,

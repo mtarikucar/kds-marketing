@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::phrases::BridgePhrases;
 use crate::plan::{MAX_CALL_DURATION_S, MAX_HOLDING_LINES, PlanError, line};
 
 /// The longest summary a finished call keeps.
@@ -45,6 +46,8 @@ pub struct CallPolicy {
     /// The account's tariff estimate per started minute, in the linked budget item's minor
     /// units; 0 when unknown (then no spend is recorded).
     pub estimated_minor_per_minute: i64,
+    /// The phrases the voice bridge plays on its own (the owner-approved set by default).
+    pub phrases: BridgePhrases,
 }
 
 impl Default for CallPolicy {
@@ -64,6 +67,7 @@ impl Default for CallPolicy {
             caller_silence_close_s: 15,
             handoff_extension: None,
             estimated_minor_per_minute: 0,
+            phrases: BridgePhrases::default(),
         }
     }
 }

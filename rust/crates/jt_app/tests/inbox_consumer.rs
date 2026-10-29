@@ -1525,6 +1525,7 @@ async fn placed_call(
         },
         metrics: CallMetrics::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     };
     let id = session.id;
     let mut r = w.uow.tenant(w.ws).await.unwrap();

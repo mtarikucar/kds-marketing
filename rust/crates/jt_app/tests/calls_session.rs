@@ -88,6 +88,7 @@ fn plan() -> CallPlan {
         max_duration_s: 300,
         language: "tr".into(),
         disclose_assistant: true,
+        hotwords: Vec::new(),
     }
 }
 

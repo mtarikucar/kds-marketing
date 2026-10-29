@@ -27,13 +27,14 @@ pub use opening::{
 };
 pub use phrases::{BridgePhrases, PhraseSet};
 pub use plan::{
-    CallPlan, MAX_CALL_DURATION_S, MAX_FALLBACK_LINES, MAX_HOLDING_LINES, MAX_LINE_CHARS, PlanError,
+    CallPlan, MAX_CALL_DURATION_S, MAX_FALLBACK_LINES, MAX_HOLDING_LINES, MAX_HOTWORD_CHARS,
+    MAX_HOTWORDS, MAX_LINE_CHARS, PlanError, call_hotwords,
 };
 pub use policy::{CallPolicy, MAX_SUMMARY_CHARS, PolicyError};
 pub use session::{
     BridgeEvent, CallDirection, CallError, CallMetrics, CallMode, CallOutcome, CallPurpose,
-    CallSession, CallState, Command, EndCause, PlayKind, RecordingState, RefusalReason, Speaker,
-    Step, Turn, TurnClock, TurnKind, TurnMeta, close, end, reduce, say, transfer,
+    CallSession, CallState, Command, DialScript, EndCause, PlayKind, RecordingState, RefusalReason,
+    Speaker, Step, Turn, TurnClock, TurnKind, TurnMeta, close, end, reduce, say, transfer,
 };
 pub use timers::{CLOSING_GRACE_S, MAX_RING_S, TimerAction, apply_timer, next_timer};
 pub use trace::{

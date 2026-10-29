@@ -75,6 +75,7 @@ fn session(ws: WorkspaceId, capability: CapabilityId, crm: &str) -> CallSession 
         recording: RecordingState::Off,
         metrics: CallMetrics::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     }
 }
 
@@ -457,6 +458,7 @@ fn agent_call(ws: WorkspaceId, bridge: CapabilityId, bridge_call_id: &str) -> Ca
             max_duration_s: 300,
             language: "tr".into(),
             disclose_assistant: true,
+            hotwords: Vec::new(),
         }),
         ..session(ws, bridge, "unused")
     }
@@ -610,6 +612,7 @@ async fn erasure_scrubs_a_calls_plan_commands_and_bridge_notes() {
                         Command::Dial {
                             to_e164: number.into(),
                             plan: call.plan.clone().unwrap(),
+                            script: Default::default(),
                         },
                     ),
                     (

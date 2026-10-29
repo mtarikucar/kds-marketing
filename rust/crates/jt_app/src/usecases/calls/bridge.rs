@@ -365,6 +365,8 @@ fn kind_of(event: &BridgeEvent) -> &'static str {
         BridgeEvent::Recording { .. } => "recording",
         BridgeEvent::Hangup { .. } => "hangup",
         BridgeEvent::Error { .. } => "error",
+        BridgeEvent::Phrase { .. } => "phrase",
+        BridgeEvent::Trace { .. } => "trace",
         BridgeEvent::CommandDone { .. } => "command_done",
     }
 }

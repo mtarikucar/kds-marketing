@@ -27,8 +27,8 @@ pub mod session;
 
 use jt_calls::{
     CallCommandId, CallDirection, CallId, CallMode, CallOutcome, CallPlan, CallPolicy, CallPurpose,
-    CallSession, CallState, Command, EndCause, FenceInput, MAX_SUMMARY_CHARS, RecordingState,
-    RefusalReason, RelationshipEvidence, Turn, TurnClock, fence_call, mask_e164,
+    CallSession, CallState, Command, DialScript, EndCause, FenceInput, MAX_SUMMARY_CHARS,
+    RecordingState, RefusalReason, RelationshipEvidence, Turn, TurnClock, fence_call, mask_e164,
 };
 use jt_capability::{
     Capability, CapabilityId, EffectiveStatus, StoredStatus, Unit, effective_status,
@@ -743,6 +743,7 @@ pub async fn place(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut,
         },
         metrics: Default::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     };
     r.calls().insert(session, ctx.now).await?;
     r.commit().await?;
@@ -910,6 +911,7 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
         recording,
         metrics: Default::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     };
     r.calls().insert(session, ctx.now).await?;
     r.commit().await?;
@@ -939,9 +941,14 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
         .plan
         .clone()
         .ok_or_else(|| AppError::internal("an agent's call lost its plan"))?;
+    let script = DialScript::default();
+    // The phrases the bridge is told are the phrases the log will show: keep them with the call.
+    session.phrases = script.phrases.clone();
+    r.calls().update(session.clone(), ctx.now).await?;
     let dial = Command::Dial {
         to_e164: session.counterpart_e164.clone(),
         plan,
+        script,
     };
     r.calls()
         .enqueue_commands(id, vec![(CallCommandId(deps.ids.uuid()), dial)], ctx.now)

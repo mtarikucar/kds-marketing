@@ -12,8 +12,10 @@ use jt_tenancy::{AgentConnectionId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::phrases::{BridgePhrases, PhraseSet};
 use crate::plan::{CallPlan, MAX_LINE_CHARS};
 use crate::policy::CallPolicy;
+use crate::trace::{AgentReply, MAX_TRACES, TurnTrace};
 use crate::{CallCommandId, CallId};
 
 /// The longest failure line a session keeps (the `kind: provider: reason` line).
@@ -345,6 +347,11 @@ pub struct CallMetrics {
     pub tts_ms: Vec<u32>,
     pub holding_played: u8,
     pub fallback_played: u8,
+    /// The bridge's timings of the call's turns (at most [`MAX_TRACES`]).
+    pub traces: Vec<TurnTrace>,
+    /// Each agent `say` that ended a wait, by its `seq`, with that wait (at most [`MAX_TRACES`]):
+    /// what `summarize` matches a trace's `reply_seq` against to measure the transport overhead.
+    pub agent_replies: Vec<AgentReply>,
 }
 
 /// What the timers read (see [`crate::next_timer`]): since when the agent owes a reply (the
@@ -408,6 +415,12 @@ pub struct CallSession {
     pub recording: RecordingState,
     pub metrics: CallMetrics,
     pub clock: TurnClock,
+    /// The phrases dialled with this call (the dial's `DialScript.phrases`): what a `phrase` event
+    /// is logged with, whatever the policy says by the time the event arrives, so an owner who edits
+    /// the phrases during a live call cannot make the log record a sentence that was never played.
+    /// The approved set in a session stored without one.
+    #[serde(default)]
+    pub phrases: BridgePhrases,
 }
 
 /// Who said a sentence that was played: the agent, or the script (plan or policy).
@@ -519,6 +532,15 @@ pub enum BridgeEvent {
     Error {
         failure_line: String,
     },
+    /// The bridge played phrase `index` of `set` of the policy on its own.
+    Phrase {
+        set: PhraseSet,
+        index: u8,
+    },
+    /// What one of the caller's turns took, as the bridge measured it.
+    Trace {
+        trace: TurnTrace,
+    },
     CommandDone {
         id: CallCommandId,
     },
@@ -535,9 +557,25 @@ pub enum PlayKind {
     Announcement,
 }
 
+/// What the voice bridge is told of a dialled call besides its plan: the policy's sentences the
+/// core may queue on it (the workspace opening, the transcript notice), the phrases it may play on
+/// its own, and the words its speech-to-text is biased toward. Absent from an older dial: the
+/// approved phrases, nothing else.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DialScript {
+    pub lines: Vec<String>,
+    pub phrases: BridgePhrases,
+    pub hotwords: Vec<String>,
+}
+
 /// What the voice bridge is asked to do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "commands are few and short-lived"
+)]
 pub enum Command {
     Answer {
         greeting_text: String,
@@ -546,6 +584,8 @@ pub enum Command {
     Dial {
         to_e164: String,
         plan: CallPlan,
+        #[serde(default)]
+        script: DialScript,
     },
     Say {
         seq: u32,
@@ -841,6 +881,30 @@ pub fn reduce(
             step.commands.push(Command::Hangup);
             session.finish(EndCause::Failed(line), now);
         }
+        BridgeEvent::Phrase { set, index } => {
+            // The text dialled with this call is logged, not the policy as it stands now (the owner
+            // may have edited it since); the bridge sends none.
+            if let Some(text) = session.phrases.text(*set, *index).map(str::to_owned) {
+                step.turns
+                    .push(session.turn(now, TurnKind::Holding, text, TurnMeta::default()));
+            }
+            // A filler or the long wait is this wait's holding phrase: the core does not play its
+            // own over it.
+            let covers = match set {
+                PhraseSet::Filler => 1,
+                PhraseSet::LongWait => 2,
+                _ => 0,
+            };
+            if covers > 0 && session.clock.owed_since.is_some() {
+                session.clock.holding_in_turn = session.clock.holding_in_turn.max(covers);
+                session.metrics.holding_played = session.metrics.holding_played.saturating_add(1);
+            }
+        }
+        BridgeEvent::Trace { trace } => {
+            if session.metrics.traces.len() < MAX_TRACES {
+                session.metrics.traces.push(trace.clone());
+            }
+        }
         BridgeEvent::CommandDone { .. } => {}
     }
     step
@@ -882,6 +946,14 @@ pub fn say(
             ..TurnMeta::default()
         },
     );
+    if let Some(latency_ms) = latency
+        && session.metrics.agent_replies.len() < MAX_TRACES
+    {
+        session.metrics.agent_replies.push(AgentReply {
+            seq: turn.seq,
+            latency_ms,
+        });
+    }
     session.clock.owed_since = None;
     session.clock.holding_in_turn = 0;
     session.clock.awaiting_caller_since = None;

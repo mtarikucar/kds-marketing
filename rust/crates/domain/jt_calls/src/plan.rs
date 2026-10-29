@@ -11,6 +11,9 @@ pub const MAX_HOLDING_LINES: usize = 5;
 pub const MAX_FALLBACK_LINES: usize = 3;
 /// The longest call any plan or policy allows, in seconds.
 pub const MAX_CALL_DURATION_S: u16 = 900;
+/// The most hotwords a plan carries, and the longest.
+pub const MAX_HOTWORDS: usize = 20;
+pub const MAX_HOTWORD_CHARS: usize = 40;
 
 /// The script of an agent-driven call: the opening (which must carry the assistant disclosure
 /// when the policy asks for it), the goal (for the transcript, never played), 1 to 5 holding
@@ -31,6 +34,10 @@ pub struct CallPlan {
     /// Whether the opening discloses that an assistant speaks; the policy forces it on.
     #[serde(default = "yes")]
     pub disclose_assistant: bool,
+    /// Words the call's speech-to-text is biased toward (names, products, from the agent's
+    /// context): at most 20, each 1 to 40 characters.
+    #[serde(default)]
+    pub hotwords: Vec<String>,
 }
 
 fn turkish() -> String {
@@ -56,6 +63,8 @@ pub enum PlanError {
     Duration,
     #[error("only Turkish (tr) calls are supported")]
     Language,
+    #[error("a plan has at most 20 hotwords of 1 to 40 characters")]
+    Hotwords,
 }
 
 impl PlanError {
@@ -67,6 +76,7 @@ impl PlanError {
             PlanError::FallbackCount => "plan.fallback",
             PlanError::Duration => "plan.max_duration_s",
             PlanError::Language => "plan.language",
+            PlanError::Hotwords => "plan.hotwords",
         }
     }
 }
@@ -106,6 +116,13 @@ impl CallPlan {
         if self.language != "tr" {
             return Err(PlanError::Language);
         }
+        let bad_hotword = |h: &String| {
+            let n = h.trim().chars().count();
+            n == 0 || n > MAX_HOTWORD_CHARS || h.chars().any(char::is_control)
+        };
+        if self.hotwords.len() > MAX_HOTWORDS || self.hotwords.iter().any(bad_hotword) {
+            return Err(PlanError::Hotwords);
+        }
         Ok(())
     }
 
@@ -116,4 +133,18 @@ impl CallPlan {
             .chain(self.fallback.iter().map(String::as_str))
             .chain(std::iter::once(self.closing.as_str()))
     }
+}
+
+/// The hotwords of a call: the plan's, then the workspace's name, trimmed, each once whatever its
+/// case, at most [`MAX_HOTWORDS`].
+pub fn call_hotwords(plan: &[String], business: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    plan.iter()
+        .map(String::as_str)
+        .chain(std::iter::once(business))
+        .map(str::trim)
+        .filter(|w| !w.is_empty() && seen.insert(w.to_lowercase()))
+        .take(MAX_HOTWORDS)
+        .map(str::to_owned)
+        .collect()
 }
