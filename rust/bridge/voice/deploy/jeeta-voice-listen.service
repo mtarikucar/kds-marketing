@@ -1,0 +1,34 @@
+[Unit]
+Description=Jeeta voice: listen (Silero VAD, Smart Turn v3.2, seda-v0.1; no network)
+After=docker.service systemd-tmpfiles-setup.service
+Requires=docker.service
+# A start that keeps failing (the models check or the self-test) stops after five tries instead of
+# loading the models every few seconds.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+# No network, read-only, no capability, no core dumps, uid 1501 (jeeta-voice-svc) in gid 1501
+# (jeeta-voice). Its socket in /run/jeeta-voice (1770 root:jeeta-voice) is the group's, mode 0660,
+# and the sticky directory keeps the speak service (uid 1502) from removing or replacing it. The
+# writable paths are that directory and a small /tmp (the recognizer's hotword vocabulary). No swap,
+# so a paged-out model cannot stall a turn. The image must already be on the host (--pull never): it
+# is built there, never pulled.
+[Service]
+Type=simple
+EnvironmentFile=/etc/jeeta-voice/images.env
+ExecStartPre=-/usr/bin/docker rm -f jeeta-voice-listen
+ExecStart=/usr/bin/docker run --rm --pull never --name jeeta-voice-listen --init --network none \
+  --user 1501:1501 --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 \
+  --ulimit core=0 --cpus 1.5 --cpu-shares 2048 --memory 1g --memory-swap 1g \
+  --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
+  --tmpfs /tmp:uid=1501,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev \
+  --mount type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice \
+  -e LISTEN_SOCKET=unix:/run/jeeta-voice/listen.sock -e LISTEN_THREADS=2 -e LISTEN_WATCHDOG_S=30 \
+  -e LISTEN_FALLBACK_MS=1500 -e LISTEN_DIGITS_FALLBACK_MS=2800 \
+  ${LISTEN_IMAGE}
+ExecStop=/usr/bin/docker stop -t 10 jeeta-voice-listen
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

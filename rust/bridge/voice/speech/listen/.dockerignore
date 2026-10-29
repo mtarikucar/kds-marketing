@@ -1,0 +1,19 @@
+# Only what the Dockerfile copies reaches the daemon (no caches, no stray recordings).
+*
+!requirements.txt
+!constraints.txt
+!wheels.sha256
+!requirements.lock
+!listen_pins.py
+!models.lock
+!endpoint.py
+!hotwords.py
+!features.py
+!vad.py
+!turn.py
+!asr.py
+!jeeta_listen.py
+!pytest.ini
+!tests/*.py
+!tests/fixtures/*.alaw
+!tests/fixtures/*.json
