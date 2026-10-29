@@ -463,28 +463,20 @@ describe('keeping a connected mailbox alive', () => {
       // The guard above must not turn into "only refresh what has already
       // expired": that is the dead minute REFRESH_WINDOW_MS exists to close,
       // and it would push every refresh into the window where a send races it.
-      prisma.channel.findMany.mockResolvedValue([
-        {
-          id: 'c1',
-          workspaceId: 'ws-1',
-          configSealed: sealed({
-            oauthProvider: 'GOOGLE',
-            oauthRefreshToken: 'rt',
-            oauthAccessToken: 'at-1',
-            oauthExpiresAt: SOON(), // alive, but inside the window
-          }),
-        },
-      ]);
-      prisma.channel.findFirst.mockResolvedValue({
-        id: 'c1',
-        workspaceId: 'ws-1',
-        configSealed: sealed({
-          oauthProvider: 'GOOGLE',
-          oauthRefreshToken: 'rt',
-          oauthAccessToken: 'at-1',
-          oauthExpiresAt: SOON(),
-        }),
+      //
+      // ONE box for the sweep's read and the trade's re-read. Two SOON() calls
+      // are two clock readings, and when the millisecond ticked between them
+      // the re-read's expiry differed from the sweep's snapshot — which the
+      // trade rightly reads as "another lane already minted a token", so it
+      // skipped the very refresh this test is about.
+      const box = sealed({
+        oauthProvider: 'GOOGLE',
+        oauthRefreshToken: 'rt',
+        oauthAccessToken: 'at-1',
+        oauthExpiresAt: SOON(), // alive, but inside the window
       });
+      prisma.channel.findMany.mockResolvedValue([{ id: 'c1', workspaceId: 'ws-1', configSealed: box }]);
+      prisma.channel.findFirst.mockResolvedValue({ id: 'c1', workspaceId: 'ws-1', configSealed: box });
       refreshMock.mockResolvedValue({ accessToken: 'at-2', expiresAt: 999, refreshToken: null, error: null });
 
       await svc.refreshExpiring();
