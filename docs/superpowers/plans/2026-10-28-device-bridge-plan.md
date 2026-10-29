@@ -394,26 +394,60 @@ alter table device_commands force row level security;
 
 **Files:** `rust/crates/jt_app/src/ports/devices.rs`, `ports/mod.rs` (TenantRepos accessor `device_commands()`); `rust/crates/adapters/jt_pg/src/repos/devices.rs`; `rust/crates/jt_testkit/src/fakes/devices.rs`; contract tests `rust/crates/jt_testkit/src/devices_contract.rs` run against both (pattern: `inbox_contract.rs`).
 
+As built (`c76b3404`, `b78f0d29`, then the review follow-ups and the D1-T5 methods); `jt_app::ports::devices`
+re-exports `jt_devices::*` and `jt_device_protocol::MAX_DETAIL_CHARS`:
 ```rust
 #[async_trait]
-pub trait DeviceCommandRepo: Send {
-    async fn enqueue(&mut self, row: NewDeviceCommand) -> Result<DeviceCommandRow, AppError>;
-    async fn lease(&mut self, caps: &[CapabilityId], now: OffsetDateTime, redeliver_before: OffsetDateTime, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // queued, or leased and leased_at <= redeliver_before; not expired; seq order; sets leased, attempts+1. The caller passes `now - kernel REDELIVER_AFTER` (as voice's `take_commands` does): no 10 s in SQL. In SQL, `status in ('queued','leased')` is its own conjunct, so that a finished row that was leased once (its `leased_at` is set) cannot match the redelivery branch, next to `(status = 'queued' or leased_at <= $redeliver_before)` and `expires_at > $now`; `UPDATE … RETURNING` has no order, so sort the returned rows by `seq` afterwards, as voice does (`jt_pg/src/repos/calls.rs`, `take_commands`: `rows.sort_by_key(|(seq, ..)| *seq)`)
-    async fn finish(&mut self, id: Uuid, outcome: Finish, now: OffsetDateTime) -> Result<FinishOutcome, AppError>;
-    // A bridge's result, through jt_devices::next_status(status, event, leased_at.is_some()):
-    //   Applied   - a leased command becomes done/failed; or a LATE result for an expired/canceled command that
-    //               was leased (leased_at not null) REPLACES that status
-    //   Duplicate - only a done/failed row (a result is already recorded)
-    //   Unknown   - no such command in this workspace, or a result for a command that was never leased
-    //               (leased_at null: queued, or expired/canceled in the queue): refused, nothing changes
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<u32, AppError>;
+pub trait DeviceCommandRepo: Send + Sync {
+    async fn enqueue(&mut self, row: NewDeviceCommand) -> Result<DeviceCommandRow, AppError>; // taken id (any workspace) CONFLICT; foreign phone INTERNAL
+    async fn pick_due(&mut self, caps: &[CapabilityId], now: OffsetDateTime, redeliver_before: OffsetDateTime, limit: u32)
+        -> Result<Vec<DeviceCommandRow>, AppError>;   // queued, or leased and leased_at <= redeliver_before; expires_at > now;
+                                                      // seq order, <= limit (1..=200); `for update skip locked`, held until the
+                                                      // bundle ends; marks NOTHING. The caller passes `now - REDELIVER_AFTER`.
+    async fn mark_leased(&mut self, ids: &[Uuid], now: OffsetDateTime) -> Result<Vec<DeviceCommandRow>, AppError>;
+                                                      // ids still queued/leased -> leased at now, attempts + 1; by seq
+    async fn fail_pending(&mut self, ids: &[Uuid], reason: FailReason, detail: &str, now: OffsetDateTime)
+        -> Result<Vec<DeviceCommandRow>, AppError>;   // a server-decided failure: ids still queued/leased -> failed
+                                                      // (`failed_while_pending`, through next_status); leased_at and attempts
+                                                      // untouched; detail cut to 300; ended/unknown/foreign ids passed over; by seq
+    async fn finish(&mut self, caps: &[CapabilityId], id: Uuid, outcome: Finish, now: OffsetDateTime) -> Result<Finished, AppError>;
+    // A bridge's result for a command of one of ITS phones (`capability_id = any(caps)`), through `Finish::status_after`
+    // (never leased -> Unknown, else jt_devices::next_status(status, event, true)):
+    //   Applied(row) - a leased command becomes done/failed; or a LATE result for an expired/canceled command that
+    //                  was leased (leased_at not null) REPLACES that status; the row as it now stands
+    //   Duplicate    - only a done/failed row (a result is already recorded)
+    //   Unknown      - no such command among `caps`' phones (another bridge's included), or a result for a command
+    //                  that was never leased (leased_at null: queued, or expired/canceled in the queue)
+    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError>;
+                                                      // queued/leased with expires_at <= now -> expired, done_at = now; a row
+                                                      // another bundle holds is skipped (`for update skip locked`) for the next
+                                                      // sweep; payload never decoded; by seq
     async fn get(&mut self, id: Uuid) -> Result<Option<DeviceCommandRow>, AppError>;
-    async fn list(&mut self, cap: CapabilityId, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>;
+    async fn list(&mut self, cap: CapabilityId, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // newest first, 1..=200
 }
+pub enum Finish { Done { result: Value }, Failed { reason: FailReason, detail: String } } // Finish::failed(reason, detail) cuts to 300
+pub enum Finished { Applied(Box<DeviceCommandRow>), Duplicate, Unknown }
+pub struct ExpiredCommand { pub id: Uuid, pub capability_id: CapabilityId, pub seq: i64, pub kind: String,
+    pub created_at: OffsetDateTime, pub leased_at: Option<OffsetDateTime> }
 ```
-- `Outcome::Failed.detail` is stored in the `detail` column (at most 300 characters, as the protocol bounds it); `reason` and `kind` are stored as text, not pinned to a list.
-- [ ] **Contract tests first:** `lease_returns_oldest_first`, `lease_skips_fresh_lease_and_redelivers_after_10s`, `lease_never_returns_expired`, `finish_is_idempotent` (a second result for a done/failed row is `Duplicate`), `finish_unknown_id`, `finish_replaces_expired_after_lease`, `finish_refuses_result_for_never_leased`, `expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry`, `rows_are_workspace_scoped`.
-- [ ] Implement fake first (tests run on Windows via testkit), then Postgres (CI). **Commit**.
+- A poll is `pick_due`, then `fail_pending` for what the bridge cannot run and `mark_leased` for the rest, in one
+  bundle: a refused command is never marked leased. There is no cancel method: no D1 task cancels.
+- A pick, and the expiry sweep, lock their rows in a MATERIALIZED CTE (or a plain `select … for update skip locked`)
+  that runs once: `update … from (select … limit … for update skip locked)` over-leased in CI (Postgres ran the pick
+  again during the update and each run skipped the rows already updated). Voice's `take_commands` had the same shape
+  and the same fault; it is fixed the same way.
+- `Outcome::Failed.detail` is stored in the `detail` column (at most `MAX_DETAIL_CHARS` = 300 characters, cut by
+  the store whatever the caller passed); `reason` and `kind` are stored as text, not pinned to a list. A stored
+  reason this version does not know reads as `FailReason::Unknown` (a `warn!` names the key, nothing else).
+- [x] **Contract tests** (`jt_testkit::devices_contract`, run against the fake and Postgres): `lease_returns_oldest_first`,
+  `lease_skips_fresh_lease_and_redelivers_after_10s`, `lease_never_returns_expired` (all three through the pick
+  path: `pick_due` + `mark_leased`, with a limit below the due count), `pick_due_does_not_mark`,
+  `mark_leased_marks_only_still_pending`, `fail_pending_never_sets_leased_at_and_skips_finished`,
+  `finish_is_idempotent`, `finish_unknown_id`, `finish_for_another_bridges_command_is_unknown`,
+  `finish_replaces_expired_after_lease`, `finish_refuses_result_for_never_leased`,
+  `expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry`, `list_is_newest_first_and_bounded`,
+  `rows_are_workspace_scoped`. Postgres only (`jt_pg/tests/devices_repos.rs`): `concurrent_picks_take_different_commands`,
+  `racing_results_apply_once`, `expire_due_passes_over_a_held_command`, `an_unknown_stored_reason_reads_as_unknown`.
 
 ### Task D1-T5: bridge use cases + routes
 
@@ -440,13 +474,13 @@ Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permissio
   nothing is declared or merged for it — never a `409`: one phone's faults never refuse the register, so the other
   phones on that bridge stay online; answer `RegisterOut::new(registered, refused)`. Shape every later body to the
   protocol the bridge sent.
-- `commands(CommandsQuery)`: `clamped()`. "This bridge's phones" means exactly the phones in its LATEST register; a phone the bridge leaves out (e.g. one whose worker is stuck) gets no new leases from the next poll on. Lease for those phones (≤ `limit` ≤ 20), wait on the kernel signal
+- `commands(CommandsQuery)`: `clamped()`. "This bridge's phones" means exactly the phones in its LATEST register; a phone the bridge leaves out (e.g. one whose worker is stuck) gets no new leases from the next poll on. Lease for those phones (≤ `limit` ≤ 20; `pick_due`, then `fail_pending` / `mark_leased`, D1-T4), wait on the kernel signal
   up to `wait_s` ≤ 25; **re-check `jt_devices::supports` at lease time** against the phone's CURRENT features (a
   bridge that re-registered without a feature must not be handed a command that needs it; fail such a command
   `unsupported_by_bridge` instead of leasing it); for `PushFile` attach a 10-minute signed `download_url`
   (`FileStore::provider_url`).
 - `results(ResultsIn ≤ 100)`: the route's `DefaultBodyLimit` is `MAX_RESULTS_BODY_BYTES`; `ResultsIn::validate`
-  (a `ProtocolError` is `422`, final — the bridge must not retry the same batch); `finish` each, **after checking the
+  (a `ProtocolError` is `422`, final — the bridge must not retry the same batch); `finish` each (`finish(caps, …)` takes this bridge's phones, D1-T4), **after checking the
   command belongs to one of THIS bridge's phones** (another bridge's command id is `unknown`, not applied);
   **file ids in a result (`File.file_id`, `Observation.screenshot_file_id`) are resolved within the workspace before
   anything is signed or stored**; ledger `devices.command.finished {command_id, kind, status, reason, duration_ms}`;
@@ -500,7 +534,7 @@ are set up before a strategy, like the bridge; `Write` for act):
 ### Task D1-T7: jobs
 
 **Files:** `usecases/jobs.rs`: `Job::DeviceBridgeHealth` (1 min, kernel `mark_unreachable` for kind `phone`),
-`Job::DeviceCommandExpiry` (1 min, `expire_due`, ledger `devices.command.finished {status: expired}` per row;
+`Job::DeviceCommandExpiry` (1 min, `expire_due`, which returns an `ExpiredCommand` per row it ended, ledger `devices.command.finished {status: expired}` per row;
 a late result for a command that was leased then replaces `expired` (D1-T4 `finish`) and writes a SECOND
 `devices.command.finished` with the result's status: intended, the ledger keeps what happened in order),
 `Job::DeviceFilePurge` (hourly, deletes device files older than 7 days); job list pins.
