@@ -33,15 +33,20 @@ impl Platform {
     }
 }
 
-/// Whether a bridge that lists `features` can carry out `cmd`: the command's kind must be listed,
-/// and a `text` command with any character outside ASCII also needs [`TEXT_UNICODE`].
+/// The features a bridge must list to carry out `cmd`: its kind, and for a `text` command with
+/// any character outside ASCII also [`TEXT_UNICODE`]. The kind comes first.
+pub fn required_features(cmd: &DeviceCommand) -> Vec<&'static str> {
+    let mut required = vec![cmd.kind()];
+    if matches!(cmd, DeviceCommand::Text { value } if !value.is_ascii()) {
+        required.push(TEXT_UNICODE);
+    }
+    required
+}
+
+/// Whether a bridge that lists `features` can carry out `cmd`: it lists every one of
+/// [`required_features`].
 pub fn supports(features: &[String], cmd: &DeviceCommand) -> bool {
-    let listed = |feature: &str| features.iter().any(|f| f == feature);
-    if !listed(cmd.kind()) {
-        return false;
-    }
-    match cmd {
-        DeviceCommand::Text { value } if !value.is_ascii() => listed(TEXT_UNICODE),
-        _ => true,
-    }
+    required_features(cmd)
+        .iter()
+        .all(|needed| features.iter().any(|f| f == needed))
 }

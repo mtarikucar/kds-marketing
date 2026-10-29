@@ -25,7 +25,9 @@ export type Permission =
   | 'studio.manage'
   | 'calls.work'
   | 'calls.manage'
-  | 'calls.bridge';
+  | 'calls.bridge'
+  | 'devices.work'
+  | 'devices.bridge';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -40,6 +42,8 @@ export const PERMISSIONS: readonly Permission[] = [
   'calls.work',
   'calls.manage',
   'calls.bridge',
+  'devices.work',
+  'devices.bridge',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */

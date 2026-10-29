@@ -1432,6 +1432,7 @@ fn reserved_public_keys_are_the_ones_connectors_write() {
             "asset",
             "bridge",
             "call_mode",
+            "device",
             "facts",
             "health",
             "iys",

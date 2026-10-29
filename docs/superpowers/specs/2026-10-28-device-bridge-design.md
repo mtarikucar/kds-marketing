@@ -134,8 +134,10 @@ Element count capped at 300 with `truncated: true`.
 
 Migration `00NN_device_bridge` (next free number at implementation time): `device_commands` (id uuid v7,
 workspace_id, capability_id → the phone, seq bigint for queue order, kind, payload jsonb, status, attempts,
-leased_at, expires_at, result jsonb, reason, requested_by actor jsonb, created_at, done_at), ENABLE + FORCE RLS,
-workspace-scoped policy, indexes on `(workspace_id, capability_id, status, seq)`. Results live on the row;
+leased_at, expires_at, result jsonb, reason, detail (the failure line, at most 300 characters), requested_by actor
+jsonb, created_at, done_at), ENABLE + FORCE RLS, workspace-scoped policy, indexes on
+`(workspace_id, capability_id, status, seq)` (the queue), `(workspace_id, expires_at)` for commands not finished
+yet (the expiry sweep) and `(workspace_id, capability_id, seq)` (a phone's log). Results live on the row;
 screenshots and pulled files are Jeeta files (`jt_files`), referenced by id.
 
 ### 5.2 Capabilities
@@ -154,8 +156,9 @@ queuing — the honest refusal arrives when the agent asks, not later on a desk.
 
 ### 5.4 Use cases and catalog
 
-Agent (MCP + panel), permission `devices.work`; pairing (issuing a bridge key) needs `devices.manage`. Owner and
-manager hold both; `rep` holds neither (a phone reaches everything on it):
+Agent (MCP + panel), permission `devices.work`; pairing (issuing a bridge key) is `api_keys.manage` plus holding
+`devices.bridge`, as in voice. Owner and manager hold all three; `rep` holds none (a phone reaches everything on it).
+There is no `devices.manage` in this build: it would gate nothing, and access policy is a later, separate layer (§10):
 - `devices.list` — phones with status, platform, model, features, last seen.
 - `devices.observe {capability_id, screenshot?, wait_s ≤ 20}` — queues `observe`, waits for the result.
 - `devices.act {capability_id, command, wait_s ≤ 20}` — validates, queues, waits; returns the result or

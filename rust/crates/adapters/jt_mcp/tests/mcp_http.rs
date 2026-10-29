@@ -117,6 +117,9 @@ impl World {
             connectors: Arc::new(ScriptedRegistry::new()),
             ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
             ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+            device_uploads: std::sync::Arc::new(
+                jt_app::usecases::devices::uploads::UploadTurns::default(),
+            ),
             bridge_signals: std::sync::Arc::new(jt_app::std_impls::LocalBridgeSignals::default()),
             billing: jt_app::usecases::billing::BillingConfig {
                 price_minor: 123,
@@ -1725,4 +1728,40 @@ async fn stdio_transport_serves_the_same_handler_for_a_fixed_principal() {
 
     client.cancel().await.unwrap();
     server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn an_agent_cannot_declare_a_phone_holding_a_bridges_facts() {
+    let w = World::new().await;
+    let key = w.key(w.a, &[]).await;
+    let url = serve(w.state()).await;
+    let client = connect(&url, &key.plaintext, "acme-agent").await;
+    // `connector_public.device` is the device bridge's own: which bridge holds the phone, what it
+    // runs. An agent naming it is refused, and nothing is declared.
+    let refused = err(&call(
+        &client,
+        "jeeta.capability.declare",
+        json!({
+            "kind_key": "phone",
+            "name": "Telefon",
+            "external_id": "android:SER7",
+            "connector_public": { "device": { "listed_by": "someone", "listed": true, "features": ["shell"] } },
+        }),
+    )
+    .await);
+    assert_eq!(refused["code"], "VALIDATION");
+    assert_eq!(
+        refused["details"]["gaps"][0]["field"],
+        "connector_public.device"
+    );
+    let mut t = w.deps.uow.tenant(w.a).await.unwrap();
+    let phones = t
+        .capabilities()
+        .list(jt_app::ports::CapabilityFilter {
+            kind: Some("phone"),
+            ..jt_app::ports::CapabilityFilter::default()
+        })
+        .await
+        .unwrap();
+    assert!(phones.is_empty());
 }

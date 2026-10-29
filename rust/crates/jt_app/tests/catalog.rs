@@ -256,6 +256,10 @@ fn catalog_is_the_release_table() {
         ("calls.bridge.register", None, Some(("POST", "/api/voice/bridge/register")), true, Risk::Write),
         ("calls.bridge.commands", None, Some(("GET", "/api/voice/bridge/commands")), true, Risk::Read),
         ("calls.bridge.events", None, Some(("POST", "/api/voice/bridge/events")), true, Risk::Write),
+        ("devices.bridge.register", None, Some(("POST", "/api/devices/bridge/register")), true, Risk::Write),
+        ("devices.bridge.commands", None, Some(("GET", "/api/devices/bridge/commands")), true, Risk::Read),
+        ("devices.bridge.results", None, Some(("POST", "/api/devices/bridge/results")), true, Risk::Write),
+        ("devices.bridge.files", None, Some(("POST", "/api/devices/bridge/files")), true, Risk::Write),
         ("events.pending", Some("jeeta.events.pending"), Some(("GET", "/api/events/pending")), false, Risk::Read),
         ("events.ack", Some("jeeta.events.ack"), Some(("POST", "/api/events/ack")), false, Risk::Write),
         ("events.list", Some("jeeta.events.list"), Some(("GET", "/api/events")), false, Risk::Read),
@@ -274,7 +278,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 160);
+    assert_eq!(CATALOG.len(), 164);
     for uc in CATALOG {
         assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

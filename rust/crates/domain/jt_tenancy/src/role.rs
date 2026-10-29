@@ -49,6 +49,14 @@ pub enum Permission {
     /// owner and the manager hold it only so that they can issue that key.
     #[serde(rename = "calls.bridge")]
     CallsBridge,
+    /// Use the workspace's phones: see them, observe their screens and send them commands.
+    #[serde(rename = "devices.work")]
+    DevicesWork,
+    /// Be the workspace's device bridge: register its phones, take the commands queued for them
+    /// and report their results. The bridge's API key carries it and nothing else; the owner and
+    /// the manager hold it only so that they can issue that key.
+    #[serde(rename = "devices.bridge")]
+    DevicesBridge,
 }
 
 const ALL_PERMISSIONS: &[Permission] = &[
@@ -65,6 +73,8 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::CallsWork,
     Permission::CallsManage,
     Permission::CallsBridge,
+    Permission::DevicesWork,
+    Permission::DevicesBridge,
 ];
 
 impl Permission {
@@ -76,6 +86,8 @@ impl Permission {
             Permission::CallsWork => "calls.work",
             Permission::CallsManage => "calls.manage",
             Permission::CallsBridge => "calls.bridge",
+            Permission::DevicesWork => "devices.work",
+            Permission::DevicesBridge => "devices.bridge",
             Permission::WorkspaceRead => "workspace.read",
             Permission::TeamManage => "team.manage",
             Permission::ApiKeysManage => "api_keys.manage",

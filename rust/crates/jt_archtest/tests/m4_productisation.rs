@@ -36,14 +36,19 @@ const POST_M4_ADDED: [(&str, &str); 10] = [
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
 /// passes (TikTok's Content Sharing Guidelines), so no MCP tool, and its published post's
-/// counters; and the voice bridge's own surface, served to the bridge's key, never as an MCP tool.
-const POST_M4_PANEL_ONLY: [&str; 6] = [
+/// counters; and the voice and device bridges' own surfaces, each served to its bridge's key,
+/// never as an MCP tool.
+const POST_M4_PANEL_ONLY: [&str; 10] = [
     "studio.tiktok_posting",
     "studio.tiktok_post",
     "studio.tiktok_metrics",
     "calls.bridge.register",
     "calls.bridge.commands",
     "calls.bridge.events",
+    "devices.bridge.register",
+    "devices.bridge.commands",
+    "devices.bridge.results",
+    "devices.bridge.files",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {

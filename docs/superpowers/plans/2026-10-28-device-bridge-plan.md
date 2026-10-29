@@ -44,7 +44,7 @@ into it. D0 waits for voice V1-T2 (agent call session) to merge, since it reshap
 | `rust/crates/adapters/jt_pg/src/repos/devices.rs` | new | Postgres impl |
 | `rust/crates/jt_testkit/src/fakes/devices.rs` | new | in-memory impl for tests |
 | `rust/migrations/00NN_device_bridge.{up,down}.sql` | new | `device_commands`, role backfill (NN = next free) |
-| `rust/crates/domain/jt_tenancy/src/role.rs` | changed | `devices.work`, `devices.manage`, `devices.bridge` |
+| `rust/crates/domain/jt_tenancy/src/role.rs` | changed | `devices.work`, `devices.bridge` |
 | `rust/crates/jt_app/src/catalog.rs` | changed | rows (§D1-T5, D1-T6) |
 | `rust/crates/adapters/jt_panel_http/src/routes/device_bridge.rs` + `routes/devices.rs` | new | routes |
 | `rust/crates/adapters/jt_mcp/src/tools/devices.rs` | new | MCP tools |
@@ -349,7 +349,7 @@ impl and rename (or wrap) it — do not keep two registries.
 
 ### Task D1-T3: permissions + migration
 
-**Files:** `rust/crates/domain/jt_tenancy/src/role.rs` (add `DevicesWork` `"devices.work"`, `DevicesManage` `"devices.manage"`, `DevicesBridge` `"devices.bridge"`; owner + manager get work+manage+bridge — bridge only so they can issue a bridge key, as `calls.bridge`; `rep` none); `rust/migrations/00NN_device_bridge.{up,down}.sql`; pins in `jt_archtest`/`jt_app/tests` that list permissions, tables and migrations.
+**Files:** `rust/crates/domain/jt_tenancy/src/role.rs` (add `DevicesWork` `"devices.work"` and `DevicesBridge` `"devices.bridge"`; owner + manager get both — bridge only so they can issue a bridge key, as `calls.bridge`; `rep` none. There is no `devices.manage`: it would gate nothing in this build. Pairing is `api_keys.manage` plus holding `devices.bridge`, exactly as voice does it; access policy is a later, separate layer, and a permission added then costs one backfill); `rust/migrations/00NN_device_bridge.{up,down}.sql`; pins in `jt_archtest`/`jt_app/tests` that list permissions, tables and migrations.
 
 ```sql
 create table if not exists device_commands (
@@ -357,54 +357,97 @@ create table if not exists device_commands (
     workspace_id uuid not null references workspaces(id),
     capability_id uuid not null,
     seq bigint generated always as identity,
-    kind text not null,
-    payload jsonb not null,
+    kind text not null check (char_length(kind) between 1 and 32),   -- not pinned to a list
+    payload jsonb not null check (jsonb_typeof(payload) = 'object'),
     status text not null check (status in ('queued','leased','done','failed','expired','canceled')),
-    attempts int not null default 0,
+    attempts int not null default 0 check (attempts >= 0),
     leased_at timestamptz,
     expires_at timestamptz not null,
     result jsonb,
-    reason text,
-    requested_by jsonb not null,
+    reason text,                                                      -- not pinned to a list
+    detail text check (detail is null or char_length(detail) <= 300), -- Finish::Failed.detail
+    requested_by jsonb not null check (jsonb_typeof(requested_by) = 'object'),
     created_at timestamptz not null,
     done_at timestamptz,
-    foreign key (workspace_id, capability_id) references capabilities(workspace_id, id)
+    constraint device_commands_capability_fkey foreign key (workspace_id, capability_id)
+        references capabilities (workspace_id, id),
+    constraint device_commands_leased_check check (status not in ('leased','done') or leased_at is not null),
+    constraint device_commands_done_check check ((done_at is null) = (status in ('queued','leased')))
 );
 create index if not exists device_commands_queue on device_commands (workspace_id, capability_id, status, seq);
+create index if not exists device_commands_due
+    on device_commands (workspace_id, expires_at) where status in ('queued','leased');
+create index if not exists device_commands_log on device_commands (workspace_id, capability_id, seq);
 alter table device_commands enable row level security;
 alter table device_commands force row level security;
 -- policy device_commands_ws exactly as call_bridge_events_ws in 0016_voice_bridge.up.sql
--- role backfill exactly as 0016's calls.bridge backfill, for the three new keys
+-- role backfill exactly as 0016's calls.bridge backfill, for the two new keys
 ```
-(Check `capabilities` has the `(workspace_id, id)` unique key the other tenant tables reference; copy 0016's
-idempotent `do $$ … $$` guards. `down` drops the table and removes only the three keys.)
+(`capabilities` has the `(workspace_id, id)` unique key the foreign key needs (`0003_capabilities`); the guards are
+0016's idempotent `do $$ … $$`. `down` removes only the two keys, then drops the table, and its indexes with it.
+0017 was still unmerged when the indexes and checks were added, so they are part of it, not a 0018.)
 
-- [ ] **Tests first:** extend the pins (`sql_scoping` sees the new table with FORCE RLS; the migration list includes `00NN`; role permission lists include the three keys; `migration_is_repeatable` for 00NN).
+- [ ] **Tests first:** extend the pins (`sql_scoping` sees the new table with FORCE RLS; the migration list includes `00NN`; role permission lists include the two keys; the repeatability test for 00NN runs up and down twice, checks the role backfill, the three indexes after the final up, forced RLS and exactly one `device_commands_ws` policy).
 - [ ] CI red → implement → green; **commit** `feat(devices): device_commands and the devices permissions`.
 
 ### Task D1-T4: `DeviceCommandRepo` port, Postgres and fake
 
 **Files:** `rust/crates/jt_app/src/ports/devices.rs`, `ports/mod.rs` (TenantRepos accessor `device_commands()`); `rust/crates/adapters/jt_pg/src/repos/devices.rs`; `rust/crates/jt_testkit/src/fakes/devices.rs`; contract tests `rust/crates/jt_testkit/src/devices_contract.rs` run against both (pattern: `inbox_contract.rs`).
 
+As built (`c76b3404`, `b78f0d29`, then the review follow-ups and the D1-T5 methods); `jt_app::ports::devices`
+re-exports `jt_devices::*` and `jt_device_protocol::MAX_DETAIL_CHARS`:
 ```rust
 #[async_trait]
-pub trait DeviceCommandRepo: Send {
-    async fn enqueue(&mut self, row: NewDeviceCommand) -> Result<DeviceCommandRow, AppError>;
-    async fn lease(&mut self, caps: &[CapabilityId], now: OffsetDateTime, redeliver_before: OffsetDateTime, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // queued, or leased and leased_at <= redeliver_before; not expired; seq order; sets leased, attempts+1. The caller passes `now - kernel REDELIVER_AFTER` (as voice's `take_commands` does): no 10 s in SQL
-    async fn finish(&mut self, id: Uuid, outcome: Finish, now: OffsetDateTime) -> Result<FinishOutcome, AppError>;
-    // A bridge's result, through jt_devices::next_status(status, event, leased_at.is_some()):
-    //   Applied   - a leased command becomes done/failed; or a LATE result for an expired/canceled command that
-    //               was leased (leased_at not null) REPLACES that status
-    //   Duplicate - only a done/failed row (a result is already recorded)
-    //   Unknown   - no such command in this workspace, or a result for a command that was never leased
-    //               (leased_at null: queued, or expired/canceled in the queue): refused, nothing changes
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<u32, AppError>;
+pub trait DeviceCommandRepo: Send + Sync {
+    async fn enqueue(&mut self, row: NewDeviceCommand) -> Result<DeviceCommandRow, AppError>; // taken id (any workspace) CONFLICT; foreign phone INTERNAL
+    async fn pick_due(&mut self, caps: &[CapabilityId], now: OffsetDateTime, redeliver_before: OffsetDateTime, limit: u32)
+        -> Result<Vec<DeviceCommandRow>, AppError>;   // queued, or leased and leased_at <= redeliver_before; expires_at > now;
+                                                      // seq order, <= limit (1..=200); `for update skip locked`, held until the
+                                                      // bundle ends; marks NOTHING. The caller passes `now - REDELIVER_AFTER`.
+    async fn mark_leased(&mut self, ids: &[Uuid], now: OffsetDateTime) -> Result<Vec<DeviceCommandRow>, AppError>;
+                                                      // ids still queued/leased -> leased at now, attempts + 1; by seq
+    async fn fail_pending(&mut self, ids: &[Uuid], reason: FailReason, detail: &str, now: OffsetDateTime)
+        -> Result<Vec<DeviceCommandRow>, AppError>;   // a server-decided failure: ids still queued/leased -> failed
+                                                      // (`failed_while_pending`, through next_status); leased_at and attempts
+                                                      // untouched; detail cut to 300; ended/unknown/foreign ids passed over; by seq
+    async fn finish(&mut self, caps: &[CapabilityId], id: Uuid, outcome: Finish, now: OffsetDateTime) -> Result<Finished, AppError>;
+    // A bridge's result for a command of one of ITS phones (`capability_id = any(caps)`), through `Finish::status_after`
+    // (never leased -> Unknown, else jt_devices::next_status(status, event, true)):
+    //   Applied(row) - a leased command becomes done/failed; or a LATE result for an expired/canceled command that
+    //                  was leased (leased_at not null) REPLACES that status; the row as it now stands
+    //   Duplicate    - only a done/failed row (a result is already recorded)
+    //   Unknown      - no such command among `caps`' phones (another bridge's included), or a result for a command
+    //                  that was never leased (leased_at null: queued, or expired/canceled in the queue)
+    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError>;
+                                                      // queued/leased with expires_at <= now -> expired, done_at = now; a row
+                                                      // another bundle holds is skipped (`for update skip locked`) for the next
+                                                      // sweep; payload never decoded; by seq
     async fn get(&mut self, id: Uuid) -> Result<Option<DeviceCommandRow>, AppError>;
-    async fn list(&mut self, cap: CapabilityId, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>;
+    async fn list(&mut self, cap: CapabilityId, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // newest first, 1..=200
 }
+pub enum Finish { Done { result: Value }, Failed { reason: FailReason, detail: String } } // Finish::failed(reason, detail) cuts to 300
+pub enum Finished { Applied(Box<DeviceCommandRow>), Duplicate, Unknown }
+pub struct ExpiredCommand { pub id: Uuid, pub capability_id: CapabilityId, pub seq: i64, pub kind: String,
+    pub created_at: OffsetDateTime, pub leased_at: Option<OffsetDateTime> }
 ```
-- [ ] **Contract tests first:** `lease_returns_oldest_first`, `lease_skips_fresh_lease_and_redelivers_after_10s`, `lease_never_returns_expired`, `finish_is_idempotent` (a second result for a done/failed row is `Duplicate`), `finish_unknown_id`, `finish_replaces_expired_after_lease`, `finish_refuses_result_for_never_leased`, `expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry`, `rows_are_workspace_scoped`.
-- [ ] Implement fake first (tests run on Windows via testkit), then Postgres (CI). **Commit**.
+- A poll is `pick_due`, then `fail_pending` for what the bridge cannot run and `mark_leased` for the rest, in one
+  bundle: a refused command is never marked leased. There is no cancel method: no D1 task cancels.
+- A pick, and the expiry sweep, lock their rows in a MATERIALIZED CTE (or a plain `select … for update skip locked`)
+  that runs once: `update … from (select … limit … for update skip locked)` over-leased in CI (Postgres ran the pick
+  again during the update and each run skipped the rows already updated). Voice's `take_commands` had the same shape
+  and the same fault; it is fixed the same way.
+- `Finish::Failed.detail` is stored in the `detail` column (at most `MAX_DETAIL_CHARS` = 300 characters, cut by
+  the store whatever the caller passed); `reason` and `kind` are stored as text, not pinned to a list. A stored
+  reason this version does not know reads as `FailReason::Unknown` (a `warn!` names the key, nothing else).
+- [x] **Contract tests** (`jt_testkit::devices_contract`, run against the fake and Postgres): `lease_returns_oldest_first`,
+  `lease_skips_fresh_lease_and_redelivers_after_10s`, `lease_never_returns_expired` (all three through the pick
+  path: `pick_due` + `mark_leased`, with a limit below the due count), `pick_due_does_not_mark`,
+  `mark_leased_marks_only_still_pending`, `fail_pending_never_sets_leased_at_and_skips_finished`,
+  `finish_is_idempotent`, `finish_unknown_id`, `finish_for_another_bridges_command_is_unknown`,
+  `finish_replaces_expired_after_lease`, `finish_refuses_result_for_never_leased`,
+  `expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry`, `list_is_newest_first_and_bounded`,
+  `rows_are_workspace_scoped`. Postgres only (`jt_pg/tests/devices_repos.rs`): `concurrent_picks_take_different_commands`,
+  `racing_results_apply_once`, `expire_due_passes_over_a_held_command`, `an_unknown_stored_reason_reads_as_unknown`.
 
 ### Task D1-T5: bridge use cases + routes
 
@@ -431,13 +474,13 @@ Behaviour (on the D0 kernel, `BridgeSpec { component: "device_bridge", permissio
   nothing is declared or merged for it — never a `409`: one phone's faults never refuse the register, so the other
   phones on that bridge stay online; answer `RegisterOut::new(registered, refused)`. Shape every later body to the
   protocol the bridge sent.
-- `commands(CommandsQuery)`: `clamped()`. "This bridge's phones" means exactly the phones in its LATEST register; a phone the bridge leaves out (e.g. one whose worker is stuck) gets no new leases from the next poll on. Lease for those phones (≤ `limit` ≤ 20), wait on the kernel signal
+- `commands(CommandsQuery)`: `clamped()`. "This bridge's phones" means exactly the phones in its LATEST register; a phone the bridge leaves out (e.g. one whose worker is stuck) gets no new leases from the next poll on. Lease for those phones (≤ `limit` ≤ 20; `pick_due`, then `fail_pending` / `mark_leased`, D1-T4), wait on the kernel signal
   up to `wait_s` ≤ 25; **re-check `jt_devices::supports` at lease time** against the phone's CURRENT features (a
   bridge that re-registered without a feature must not be handed a command that needs it; fail such a command
   `unsupported_by_bridge` instead of leasing it); for `PushFile` attach a 10-minute signed `download_url`
   (`FileStore::provider_url`).
 - `results(ResultsIn ≤ 100)`: the route's `DefaultBodyLimit` is `MAX_RESULTS_BODY_BYTES`; `ResultsIn::validate`
-  (a `ProtocolError` is `422`, final — the bridge must not retry the same batch); `finish` each, **after checking the
+  (a `ProtocolError` is `422`, final — the bridge must not retry the same batch); `finish` each (`finish(caps, …)` takes this bridge's phones, D1-T4), **after checking the
   command belongs to one of THIS bridge's phones** (another bridge's command id is `unknown`, not applied);
   **file ids in a result (`File.file_id`, `Observation.screenshot_file_id`) are resolved within the workspace before
   anything is signed or stored**; ledger `devices.command.finished {command_id, kind, status, reason, duration_ms}`;
@@ -464,6 +507,70 @@ What the bridge as built (D2-T1) relies on, which the server must match:
   was never leased is counted in `ResultsOut.unknown`, never answered with a 4xx. The bridge retries only
   transport errors, 5xx, 408 and 429; it splits a batch on a 422 (or 413); any other 4xx (401, 403, 404 included)
   makes it drop the batch.
+As built (D1-T5):
+- **Kernel.** `BridgeSpec` gained `redeliver_after` and `merge` (`FactsMerge::Replace`, voice's; `FactsMerge::Deep`,
+  the device bridge's: an object fact merged key by key as deep as both are objects, an array replaced). New:
+  `kernel::lease(deps, ctx, spec, waited, take) -> Option<Vec<T>>` (one read at `ctx.now + waited`, its own
+  transaction, `take(r, ctx_at_read, Lease { now, redeliver_before })`), `kernel::declare(r, ctx, ids, kind_key, name,
+  external_id, in_force)`, `kernel::of_kind(r, kind_key)`, `kernel::held(caps, external_id) -> Held::{Live, Retired,
+  Missing}` and `kernel::merge_facts`. Voice uses lease, declare, of_kind and held; `calls_bridge.rs` and
+  `calls_session.rs` unedited.
+- **Which bridge.** A poll carries only the key, so the bridge is its API key (`BridgeCaller { ctx, bridge: ApiKeyId }`,
+  `bridge::ctx_for_bridge`): one key per bridge program. `connector_public.device` (a reserved public key since the
+  D1-T5 review: `capability.declare` refuses it, so only the bridge writes it) keeps, beside the phone's and the
+  bridge's facts, the bridge that holds the phone: `listed_by` (its key id) and `listed` (`false` once its
+  registration leaves the phone out). A phone is one bridge's at a time: another bridge listing it while the holder
+  lists it and registered it within `HELD_FOR` (60 s) is refused with `PHONE_HELD_BY_ANOTHER_BRIDGE`
+  (`"phone_held_by_another_bridge"`, `jt_device_protocol`; not final: the bridge keeps listing it), and takes it over
+  once the holder leaves it out or goes stale; checked under the phone's lock, as is retirement. Leases: phones not
+  retired with `listed_by` = this bridge and `listed`. (Field names avoid `key`: `connector_public` refuses
+  secret-looking keys.)
+- **Results follow the lease.** `device_commands.leased_by` (the key id; set exactly with `leased_at`, a table check)
+  is written by `mark_leased(ids, by, now)`; `finish(by, holding, id, outcome, now)` takes a result from the lease
+  holder, or from the bridge that holds the command's phone now (`holding`: its `listed_by` is the bridge, whether
+  or not its latest registration lists the phone; a replaced key), and answers `Unknown` for every other (an old
+  PC's stale result for a command redelivered to the phone's new bridge).
+- **Ledger.** `devices.command.finished` carries `leased_by` (the key id last handed the command, `null` for none)
+  beside `command_id`, `kind`, `status`, `reason`, `duration_ms`. A takeover writes `devices.phone.holder_changed
+  {capability_id, from, to}` (key ids), in the registration's transaction.
+- **Replacing a bridge's key.** Start the bridge with the new key, stop the old program cleanly (it posts what it
+  finished, with the old key), then revoke the old key. For up to `HELD_FOR` (60 s) after the old program's last
+  registration the new one is refused the phones the old one held; then it takes them over, and answers the old
+  key's leases of them.
+- **Device files.** `0017` also creates `device_files` (forced RLS; 74 tables; `mime in ('image/png',
+  'application/octet-stream')`; `uploaded_by`, the key id); `DeviceCommandRepo::save_file` and `::files`. A result
+  may name only a file its own bridge uploaded. The file store keeps what `usecases::files::validate_stored` allows:
+  studio's media, and `application/octet-stream` up to `DEVICE_FILE_LIMIT` (256 MiB, the bridge's download cap).
+  Studio's daily orphan sweep passes over device files (it deletes every stored file older than a day that
+  `studio_files` does not know). D1-T7's purge reads `device_files.expires_at` (index `device_files_expiry`).
+- **Uploads stream.** `FileStore::put_stream(ws, id, mime, filename, &mut dyn ByteSource)` (a default that buffers;
+  `jt_files::DiskFiles` writes the chunks to a temporary file, hashing them, then adds the header and links it into
+  place). The route hands the request body over as a stream; `devices::bridge::files` checks the announced
+  `Content-Length`, bounds what it reads (`IMAGE_LIMIT` for a PNG, `DEVICE_FILE_LIMIT` for a pulled file), and
+  refuses a body that sends nothing for `CHUNK_IDLE` (30 s, `422` naming `body`, nothing kept). `DeviceBridgeCtx`
+  refuses any key but the bridge's before the body is read. `provider_url` and the end of a put read a file's header
+  only.
+- **Upload turns.** `Deps::device_uploads` (`devices::uploads::UploadTurns`, process-local like the bridge signals):
+  a pool per workspace and per kind, `SCREENSHOT_TURNS` (2) for `image/png` and `PULLED_FILE_TURNS` (2) for
+  `application/octet-stream`, so one workspace's slow pulls hold up neither another workspace nor its own
+  screenshots. An upload waits at most `TURN_WAIT` (10 s) for its turn, before its body is read; then it is answered
+  `503 UPSTREAM_UNAVAILABLE` (`details.reason = "upload_turns_taken"`, `retryable`, `retry_after_s` 5). The bridge
+  tries an upload that gets a transient answer (no answer, 5xx, 408, 429) up to `UPLOAD_ATTEMPTS` (3) times,
+  pausing 0.5 s, then 1 s.
+- **Upload size: 95 MiB.** yeni.jeetagrowth.com and staging are behind Cloudflare, whose Free and Pro plans refuse a
+  request body over 100 MB at the edge (`413`, before the server). `DEVICE_FILE_LIMIT` is 95 MiB; the bridge's
+  `MAX_UPLOAD_BYTES` and `MAX_PULL_BYTES` are the same, and it refuses a larger upload before sending it.
+  `MAX_DOWNLOAD_BYTES` (`push_file`) stays 256 MiB: Cloudflare does not cap a proxied download's size that way.
+- **Download URL.** `jt_files::DiskFiles::provider_url` now signs any lifetime after now and at most 24 h ahead
+  (`verify` already accepted that); studio still asks for 24 h, `push_file` for 10 min, signed after the lease
+  commits. A `push_file` whose file is not stored is failed `file_not_found` (a new `FailReason`); one the store
+  cannot sign now is not handed out and stays leased, so it is handed out again after `REDELIVER_AFTER`.
+- **Features.** `jt_devices::required_features(&DeviceCommand)` (the kind, then `text.unicode` for non-ASCII text);
+  `supports` and the lease-time refusal's detail use it.
+- **Bodies.** Results: `DefaultBodyLimit` `MAX_RESULTS_BODY_BYTES`; an over-limit body is `422` naming `body`, which
+  the bridge logs and splits like a `413`. Files: a type other than the two is `422` naming `content_type`, an
+  over-limit or unreadable body `422` naming `body`.
+
 - [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_lists_retired_phone_as_refused`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`, `register_refuses_one_bad_phone_not_the_heartbeat`, `commands_rechecks_supports_at_lease_time`, `result_for_another_bridges_command_is_unknown`, `result_with_a_foreign_file_id_is_refused`, `invalid_results_body_is_422`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused, post_without_requested_with_is_403, files_take_a_raw_body}`; `invalid_results_body_is_422` also checks `details.field`; archtest: no MCP tool for `devices.bridge.*`.
 - [ ] CI red → implement → green; **commit** `feat(devices): the device bridge's surface`.
 
@@ -485,18 +592,24 @@ are set up before a strategy, like the bridge; `Write` for act):
   **full** command; signal the bridge; wait up to `wait_s` for a final status; return `{command_id, status,
   result?, reason?}`.
 - `observe` = `act(Observe{screenshot})` with the observation (and a signed screenshot URL) in the answer.
+- [ ] **Before `act` takes `push_file`:** `jt_files`' signed retrieve route (`/files/{id}`) reads the whole file into
+  memory for each request. A leaked ten-minute `download_url` can be fetched many times at once, so stream the
+  response (or cap the concurrent reads) before D1-T6 lets an agent queue a `push_file`.
 - [ ] **Tests first (`jt_app/tests/devices_agent.rs`):** `act_queues_and_returns_result_when_bridge_answers`, `act_returns_queued_when_wait_ends`, `act_refuses_unsupported_kind`, `act_refuses_unicode_without_feature`, `act_on_offline_phone_refuses_device_offline`, `act_on_phone_missing_from_latest_register_refuses_device_offline` (a stale phone is not "live"), `ledger_carries_full_command`, `tracing_never_carries_args` (capture `tracing` output with a test subscriber; assert typed text / shell args absent), `rep_cannot_act`, `command_get_waits`; `jt_mcp/tests/devices_mcp.rs::tools_listed_with_schemas`.
 - [ ] CI red → implement → green; **commit** `feat(devices): agents act on phones`.
 
 ### Task D1-T7: jobs
 
 **Files:** `usecases/jobs.rs`: `Job::DeviceBridgeHealth` (1 min, kernel `mark_unreachable` for kind `phone`),
-`Job::DeviceCommandExpiry` (1 min, `expire_due`, ledger `devices.command.finished {status: expired}` per row;
+`Job::DeviceCommandExpiry` (1 min, `expire_due`, which returns an `ExpiredCommand` per row it ended, ledger `devices.command.finished {status: expired}` per row;
 a late result for a command that was leased then replaces `expired` (D1-T4 `finish`) and writes a SECOND
 `devices.command.finished` with the result's status: intended, the ledger keeps what happened in order),
 `Job::DeviceFilePurge` (hourly, deletes device files older than 7 days); job list pins.
 Health is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, "phone", now)`, the generic loop from D0. Two prerequisites:
-- `phone` needs a heartbeat in `jt_capability/src/kind.rs`. Staleness is read from the kind, not from the spec.
+- `phone` needs a heartbeat in `jt_capability/src/kind.rs`. Staleness is read from the kind, not from the spec. Until
+  then a person's `capability.verify` on a phone sets its `last_verified_at`, which also extends the 60 s hold
+  (`HELD_FOR`) of the bridge that holds it; with the heartbeat kind `capability.verify` refuses a phone, as it does a
+  voice bridge, and only registrations move the time.
 - `work.rs` must map kind to work item. Today any heartbeat kind that goes offline is reported as `VoiceBridgeOffline`, with the voice hint and the `calls.bridge.register` tool. A phone needs its own work item, e.g. `DeviceBridgeOffline`. Test: `offline_phone_is_not_reported_as_a_voice_bridge`.
 - [ ] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`.
 - [ ] CI red → green; **commit**.
@@ -593,7 +706,7 @@ intervals (tests shorten them). `main.rs` wires a registry that reports no phone
 `deny.toml` name the bridge as the one other package with its own HTTP client. The fake Jeeta refuses what D1-T5's
 server refuses: a `POST` without the request header (403), a body that breaks a limit (422 with `details.field`; a
 register's phone that fails `PhoneReport::validate` listed as refused), a results body over its limit (413), a file
-of another type (415).
+of another type (`422` naming `content_type`, as D1-T5's server answers).
 - [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`, `posts_carry_the_requested_with_header`, `idle_polls_are_spaced_even_when_the_server_does_not_wait`, `a_driver_panic_fails_its_command_and_the_phone_keeps_working`, `only_the_configured_serials_are_listed`, `each_serial_is_listed_once_and_at_most_max_phones`, `a_failed_requests_url_is_never_logged` (fails if `without_url()` is removed), `a_failed_listing_keeps_the_last_phones`, `a_failed_report_reuses_the_last_one_for_a_few_heartbeats`, `a_register_answer_with_an_unknown_field_is_logged_by_field_and_retried`, `a_hung_command_times_out_and_the_next_runs`, `push_file_is_bounded_by_the_transfer_timeout`, `a_command_that_waited_past_its_expiry_is_failed_unrun`, `results_made_before_shutdown_are_posted`, `a_batch_over_the_body_limit_is_split`, `a_batch_refused_with_another_4xx_is_dropped`, `a_batch_the_server_keeps_failing_is_split_and_a_lone_result_dropped`; `tests/panic_hook.rs::a_panic_is_logged_by_where_it_happened_never_by_its_message`; unit tests `a_command_for_a_stopped_worker_is_failed_and_the_worker_started_again`, `the_first_task_to_end_is_named`, `a_key_that_is_not_a_string_is_not_quoted`, `a_download_goes_to_https_or_to_this_computer`, `a_plain_http_download_elsewhere_is_refused_before_any_request`, `a_download_over_the_cap_is_refused_and_leaves_no_file`, `a_download_cancelled_part_way_leaves_no_file`, `a_decoding_error_is_kept_by_its_field_only`, `a_stuck_phone_is_marked_while_its_guard_lives`; after the re-review `results_survive_a_server_outage`, `a_recover_that_hangs_is_cut_off_before_the_next_command`, `a_phone_is_recovered_once_when_first_registered`, `a_phone_whose_command_will_not_stop_is_left_out_of_registers` (a multi-thread runtime: the command holds its thread), `a_server_serial_is_logged_clean`; `tests/program.rs` (the built program): `a_configuration_that_cannot_be_used_exits_2_without_the_key`, `the_program_registers_and_stops_cleanly` (`SIGTERM` and exit 0 on Unix; on Windows the stop events need `GenerateConsoleCtrlEvent`, an `unsafe` call the workspace forbids, so there it only registers and is killed).
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit**.
 
@@ -696,7 +809,7 @@ What the loop (D2-T1) asks of the driver:
 ### Task D3-T1: phone card, pairing, command log
 
 **Files:** `rust/panel/src/api/devices.ts`, `rust/panel/src/pages/capabilities/PhoneCard.tsx` (+ `.test.tsx`), wiring in the Capabilities page's Devices tab, i18n `en.json`/`tr.json`.
-Card: platform, model, OS, status with heartbeat age, bridge version, features (Unicode yes/no with the hint "install **and enable** ADBKeyBoard": the bridge reports `text.unicode` only when it is both installed and enabled as an input method), last 20 commands (kind, status, time; expand to args/result), "Pair a bridge" (issues an API key with exactly `devices.bridge` via the existing API-key use case, shown once, with the three install steps).
+Card: platform, model, OS, status with heartbeat age, bridge version, features (Unicode yes/no with the hint "install **and enable** ADBKeyBoard": the bridge reports `text.unicode` only when it is both installed and enabled as an input method), last 20 commands (kind, status, time; expand to args/result), "Pair a bridge" (issues an API key with exactly `devices.bridge` via the existing API-key use case, shown once, with the three install steps; offered to who holds `api_keys.manage` and `devices.bridge`, which is all that pairing needs, as in voice).
 - [ ] **Tests first:** `renders_phone_facts_and_status`, `unicode_hint_when_feature_missing`, `pairing_shows_key_once`, `command_log_expands_args`.
 - [ ] `pnpm --dir rust/panel test`, typecheck, build; **commit**.
 
@@ -710,6 +823,7 @@ Card: platform, model, OS, status with heartbeat age, bridge version, features (
 
 ### Task D4-T1: emulator, then a real phone
 
+- [ ] **Precondition.** An existing API key does not gain the new permissions: a key's scopes are snapshotted when it is issued. Before the end-to-end run, issue a fresh owner agent key with `devices.work`, and a bridge key with exactly `devices.bridge`; an older key does not carry them.
 - [ ] Emulator `jeeta_test` (`emulator.exe -avd jeeta_test -no-window -gpu swiftshader_indirect -port 5554`) + bridge against **staging** with a `devices.bridge` key; via MCP on staging: `devices.list` → `observe` → `tap_on` → `text` (ASCII) → `shell ["getprop","ro.product.model"]` → `screenshot` → `pull_file`; each appears in the ledger with its args.
 - [ ] Real Android phone over USB on the owner's PC: same sequence; Unicode text with ADBKeyBoard installed (owner approves the APK download).
 - [ ] Checks on the Redmi 10C (Android 13, MIUI 14) that D2-T2 could not make, since it ran read-only captures only:

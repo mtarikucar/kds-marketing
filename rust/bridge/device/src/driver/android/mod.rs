@@ -67,10 +67,11 @@ use crate::run_loop::loggable;
 /// Where `uiautomator dump` writes the screen on the phone: the shell user's own folder, not
 /// the shared storage other apps read; the file is removed once read.
 pub const DUMP_PATH: &str = "/data/local/tmp/jeeta_ui.xml";
-/// The largest file `pull_file` copies: as large as a download the bridge takes
-/// (`client::MAX_DOWNLOAD_BYTES`). It is checked on the phone before the copy, which goes to
-/// this computer's temporary folder.
-pub const MAX_PULL_BYTES: u64 = crate::client::MAX_DOWNLOAD_BYTES;
+/// The largest file `pull_file` copies: as large as an upload carries (`client::MAX_UPLOAD_BYTES`,
+/// 95 MiB, under Cloudflare's 100 MB limit on a request body in front of Jeeta), since the pulled
+/// file is uploaded. It is checked on the phone before the copy, which goes to this computer's
+/// temporary folder.
+pub const MAX_PULL_BYTES: u64 = crate::client::MAX_UPLOAD_BYTES;
 /// How many times the phone's input method is set back before that is left for later.
 pub const PUT_BACK_ATTEMPTS: u32 = 3;
 /// The pause between two of those tries.

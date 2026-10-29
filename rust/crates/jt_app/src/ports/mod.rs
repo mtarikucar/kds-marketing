@@ -26,6 +26,7 @@ pub mod bridges;
 pub mod calls;
 pub mod compliance;
 pub mod connectors;
+pub mod devices;
 pub mod files;
 pub mod inbox;
 pub mod studio;
@@ -1511,6 +1512,7 @@ pub trait TenantRepos: Send + Sync {
     fn studio_budget(&mut self) -> &mut dyn crate::ports::studio::StudioBudgetRepo;
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
     fn calls(&mut self) -> &mut dyn crate::ports::calls::CallRepo;
+    fn device_commands(&mut self) -> &mut dyn crate::ports::devices::DeviceCommandRepo;
 
     fn consents(&mut self) -> &mut dyn ConsentRepo;
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;

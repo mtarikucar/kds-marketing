@@ -44,8 +44,21 @@ pub const REQUESTED_WITH_HEADER: &str = "x-requested-with";
 /// Its only accepted value.
 pub const REQUESTED_WITH_VALUE: &str = "jeeta-panel";
 /// The most bytes a download may bring: 256 MiB, above the largest file Jeeta stores (studio's
-/// 200 MB video limit). Checked against the announced length and against what arrives.
+/// 200 MB video limit). Checked against the announced length and against what arrives. It is not
+/// held to [`MAX_UPLOAD_BYTES`]: Cloudflare caps the size of a request's body, not of a proxied
+/// download.
 pub const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
+/// The most bytes an upload carries: 95 MiB. Jeeta's servers sit behind Cloudflare, whose Free and
+/// Pro plans refuse a request body over 100 MB at the edge (`413`), before Jeeta sees it; the
+/// server's files route takes the same 95 MiB (`jt_app::usecases::files::DEVICE_FILE_LIMIT`). A
+/// larger upload is refused here, before any request.
+pub const MAX_UPLOAD_BYTES: u64 = 95 * 1024 * 1024;
+/// How many times an upload is sent when the server does not take it now (no answer, a 5xx, 408 or
+/// 429: [`ClientError::is_transient`], such as a `503` while the workspace's upload turns are
+/// taken).
+pub const UPLOAD_ATTEMPTS: u32 = 3;
+/// The pause before an upload's second try; each later one waits twice as long.
+pub const UPLOAD_RETRY_PAUSE: Duration = Duration::from_millis(500);
 
 /// How long a connection may take to open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -76,6 +89,8 @@ pub enum ClientError {
     Address,
     /// A download larger than [`MAX_DOWNLOAD_BYTES`].
     TooLarge,
+    /// An upload of this many bytes, more than [`MAX_UPLOAD_BYTES`]: not sent.
+    UploadTooLarge(u64),
     /// Reading the file to upload, or writing the downloaded file, failed.
     File(std::io::Error),
 }
@@ -154,6 +169,10 @@ impl fmt::Display for ClientError {
             ClientError::TooLarge => write!(
                 f,
                 "the download is larger than the {MAX_DOWNLOAD_BYTES} bytes the bridge takes"
+            ),
+            ClientError::UploadTooLarge(size) => write!(
+                f,
+                "the file is {size} bytes, more than the {MAX_UPLOAD_BYTES} bytes an upload carries"
             ),
             ClientError::File(error) => write!(f, "reading or writing the file failed: {error}"),
         }
@@ -280,6 +299,9 @@ impl JeetaClient {
         bytes: Vec<u8>,
         content_type: ContentType,
     ) -> Result<FileOut, ClientError> {
+        if bytes.len() as u64 > MAX_UPLOAD_BYTES {
+            return Err(ClientError::UploadTooLarge(bytes.len() as u64));
+        }
         let response = self
             .post(FILES_PATH)
             .header(CONTENT_TYPE, content_type.mime())
@@ -300,6 +322,9 @@ impl JeetaClient {
             .await
             .map_err(ClientError::File)?;
         let length = file.metadata().await.map_err(ClientError::File)?.len();
+        if length > MAX_UPLOAD_BYTES {
+            return Err(ClientError::UploadTooLarge(length));
+        }
         let response = self
             .post(FILES_PATH)
             .header(CONTENT_TYPE, content_type.mime())
@@ -451,14 +476,33 @@ fn upload_failed(error: ClientError) -> DriverError {
     )
 }
 
+/// `send` up to [`UPLOAD_ATTEMPTS`] times while the server does not take the upload now
+/// ([`ClientError::is_transient`]), pausing [`UPLOAD_RETRY_PAUSE`], then twice as long, between
+/// tries; the file id, or the last error.
+async fn with_retries<F, Fut>(mut send: F) -> Result<Uuid, DriverError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<FileOut, ClientError>>,
+{
+    let (mut pause, mut attempt) = (UPLOAD_RETRY_PAUSE, 1);
+    loop {
+        match send().await {
+            Ok(file) => return Ok(file.file_id),
+            Err(error) if error.is_transient() && attempt < UPLOAD_ATTEMPTS => {
+                tracing::warn!(attempt, error = %error, "an upload was not taken now; trying again");
+                tokio::time::sleep(pause).await;
+                pause *= 2;
+                attempt += 1;
+            }
+            Err(error) => return Err(upload_failed(error)),
+        }
+    }
+}
+
 #[async_trait]
 impl FileTransfer for CommandFiles {
     async fn upload(&self, bytes: Vec<u8>, content_type: ContentType) -> Result<Uuid, DriverError> {
-        self.client
-            .upload(bytes, content_type)
-            .await
-            .map(|file| file.file_id)
-            .map_err(upload_failed)
+        with_retries(|| self.client.upload(bytes.clone(), content_type)).await
     }
 
     async fn upload_file(
@@ -466,11 +510,7 @@ impl FileTransfer for CommandFiles {
         path: &Path,
         content_type: ContentType,
     ) -> Result<Uuid, DriverError> {
-        self.client
-            .upload_file(path, content_type)
-            .await
-            .map(|file| file.file_id)
-            .map_err(upload_failed)
+        with_retries(|| self.client.upload_file(path, content_type)).await
     }
 
     async fn download(&self, dest: &Path) -> Result<u64, DriverError> {
@@ -531,6 +571,31 @@ mod tests {
             &url("http://127.0.0.1/a"),
             &url("http://cdn.example/b")
         ));
+    }
+
+    #[tokio::test]
+    async fn an_upload_over_the_cap_is_refused_before_any_request() {
+        // The client's server is a closed port: a request would be a transport error.
+        let refused = client()
+            .upload(vec![0; MAX_UPLOAD_BYTES as usize + 1], ContentType::Png)
+            .await;
+        assert!(
+            matches!(refused, Err(ClientError::UploadTooLarge(n)) if n == MAX_UPLOAD_BYTES + 1),
+            "{refused:?}"
+        );
+        // A file to stream, as `pull_file` leaves one: sparse, so nothing is written.
+        let path = std::env::temp_dir().join(format!("jdb-unit-{}", Uuid::now_v7()));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_UPLOAD_BYTES + 1).unwrap();
+        drop(file);
+        let refused = client().upload_file(&path, ContentType::OctetStream).await;
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            matches!(refused, Err(ClientError::UploadTooLarge(_))),
+            "{refused:?}"
+        );
+        // Under Cloudflare's 100 MB.
+        const { assert!(MAX_UPLOAD_BYTES == 95 * 1024 * 1024 && MAX_UPLOAD_BYTES < 100_000_000) };
     }
 
     #[tokio::test]

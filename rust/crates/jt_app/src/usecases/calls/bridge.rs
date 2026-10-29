@@ -43,9 +43,7 @@
 use std::collections::BTreeMap;
 
 use jt_calls::{BridgeEvent, CallCommandId, CallId, CallMode, CallState};
-use jt_capability::{
-    Capability, CapabilityId, EffectiveStatus, NewCapability, StoredStatus, effective_status,
-};
+use jt_capability::{Capability, CapabilityId, EffectiveStatus, StoredStatus, effective_status};
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -55,18 +53,21 @@ use super::session::Pending;
 use super::{extension_is_valid, signal_key};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
+use crate::ports::TenantRepos;
 use crate::ports::calls::QueuedCommand;
-use crate::ports::{CapabilityFilter, TenantRepos};
 use crate::usecases::api_keys::AgentPrincipal;
-use crate::usecases::bridges::kernel::{self, Beat, BridgeSpec};
-use crate::usecases::capabilities::{append, version_in_force};
+use crate::usecases::bridges::kernel::{self, Beat, BridgeSpec, FactsMerge, Held};
+use crate::usecases::capabilities::version_in_force;
 use crate::usecases::{Deps, invalid};
 
 /// The kind of the bridge's capability.
 pub const VOICE_BRIDGE_KIND: &str = "voice_bridge";
 /// The voice bridge as the bridge kernel knows it: the system component `voice_bridge`, its key's
-/// one permission `calls.bridge`, a heartbeat every 15 seconds, and `calls.bridge.online` /
-/// `calls.bridge.offline` as its capability comes back and goes silent.
+/// one permission `calls.bridge`, a heartbeat every 15 seconds, `calls.bridge.online` /
+/// `calls.bridge.offline` as its capability comes back and goes silent, a command handed out
+/// again 10 seconds after it was taken unacknowledged, and the facts it reports under
+/// `connector_public.bridge` replaced whole by each registration (it reports all of them every
+/// time).
 pub const VOICE_BRIDGE: BridgeSpec = BridgeSpec {
     component: "voice_bridge",
     name: "voice bridge",
@@ -74,13 +75,15 @@ pub const VOICE_BRIDGE: BridgeSpec = BridgeSpec {
     heartbeat_s: 15,
     online_action: "calls.bridge.online",
     offline_action: "calls.bridge.offline",
+    redeliver_after: Duration::seconds(10),
+    merge: FactsMerge::Replace,
 };
 /// How often the bridge registers, as its registration tells it.
 pub const HEARTBEAT_S: u32 = VOICE_BRIDGE.heartbeat_s;
 /// The longest a poll for commands waits.
 pub use super::MAX_WAIT_S;
 /// How long a command handed out stays the bridge's before it is handed out again.
-pub const REDELIVER_AFTER: Duration = Duration::seconds(10);
+pub const REDELIVER_AFTER: Duration = VOICE_BRIDGE.redeliver_after;
 /// The most commands one poll hands out.
 pub const MAX_COMMANDS: u32 = 20;
 /// The most events one batch carries.
@@ -244,27 +247,30 @@ pub async fn register(
     let facts = bridge_facts(&input)?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     let in_force = version_in_force(r.as_mut()).await?;
-    let of_extension: Vec<Capability> = bridges(r.as_mut())
-        .await?
-        .into_iter()
-        .filter(|c| c.external_id.as_deref() == Some(input.extension.as_str()))
-        .collect();
-    let live = of_extension
-        .iter()
-        .find(|c| c.status != StoredStatus::Retired);
-    let (id, declared) = match live {
-        Some(c) => (c.id, false),
-        None if !of_extension.is_empty() => {
+    let bridges = kernel::of_kind(r.as_mut(), VOICE_BRIDGE_KIND).await?;
+    let (id, declared) = match kernel::held(&bridges, &input.extension) {
+        Held::Live(c) => (c.id, false),
+        Held::Retired => {
             return Err(AppError {
                 code: ErrorCode::Conflict,
                 message: "the voice bridge of this extension is retired".into(),
                 details: json!({ "reason": "bridge_retired" }),
             });
         }
-        None => (
-            declare(deps, ctx, r.as_mut(), &input.extension, in_force).await?,
-            true,
-        ),
+        Held::Missing => {
+            let name = format!("Voice bridge {}", input.extension);
+            let ids = deps.ids.as_ref();
+            let declared = kernel::declare(
+                r.as_mut(),
+                ctx,
+                ids,
+                VOICE_BRIDGE_KIND,
+                &name,
+                &input.extension,
+                in_force,
+            );
+            (declared.await?, true)
+        }
     };
     let beat = Beat {
         capability_id: id,
@@ -285,60 +291,9 @@ pub async fn register(
     })
 }
 
-/// Declares the bridge of `extension` in the caller's bundle, as `capability.declare` would.
-async fn declare(
-    deps: &Deps,
-    ctx: &Ctx,
-    r: &mut dyn TenantRepos,
-    extension: &str,
-    in_force: Option<jt_strategy::StrategyVersionId>,
-) -> Result<CapabilityId, AppError> {
-    let mut capability = Capability::new(
-        CapabilityId(deps.ids.uuid()),
-        ctx.workspace_id,
-        NewCapability {
-            kind_key: VOICE_BRIDGE_KIND.into(),
-            name: format!("Voice bridge {extension}"),
-            external_id: Some(extension.to_owned()),
-            ..NewCapability::default()
-        },
-        ctx.now,
-    )
-    .map_err(|e| AppError::internal(format!("a voice bridge cannot be declared: {e}")))?;
-    capability.strategy_version_id = in_force.map(|v| v.as_uuid());
-    let id = capability.id;
-    let payload = json!({
-        "kind_key": capability.kind_key,
-        "name": capability.name,
-        "external_id": extension,
-    });
-    r.capabilities().insert(capability, None).await?;
-    append(
-        r,
-        ctx,
-        "capability.declare",
-        "capability",
-        id,
-        in_force,
-        payload,
-    )
-    .await?;
-    Ok(id)
-}
-
-/// The workspace's `voice_bridge` capabilities, oldest first.
-async fn bridges(r: &mut dyn TenantRepos) -> Result<Vec<Capability>, AppError> {
-    r.capabilities()
-        .list(CapabilityFilter {
-            kind: Some(VOICE_BRIDGE_KIND),
-            ..CapabilityFilter::default()
-        })
-        .await
-}
-
 /// The workspace's `voice_bridge` capabilities that are not retired, oldest first.
 async fn live_bridges(r: &mut dyn TenantRepos) -> Result<Vec<Capability>, AppError> {
-    Ok(bridges(r)
+    Ok(kernel::of_kind(r, VOICE_BRIDGE_KIND)
         .await?
         .into_iter()
         .filter(|c| c.status != StoredStatus::Retired)
@@ -424,16 +379,20 @@ pub async fn commands(
         signal_key(ctx.workspace_id),
         wait,
         move |waited| {
-            Box::pin(async move {
-                let now = ctx.now + Duration::try_from(waited).unwrap_or(Duration::ZERO);
-                let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-                let taken = r
-                    .calls()
-                    .take_commands(capability, now, now - REDELIVER_AFTER, MAX_COMMANDS)
-                    .await?;
-                r.commit().await?;
-                Ok::<_, AppError>((!taken.is_empty()).then_some(taken))
-            })
+            Box::pin(kernel::lease(
+                deps,
+                ctx,
+                &VOICE_BRIDGE,
+                waited,
+                move |r, _, at| {
+                    Box::pin(r.calls().take_commands(
+                        capability,
+                        at.now,
+                        at.redeliver_before,
+                        MAX_COMMANDS,
+                    ))
+                },
+            ))
         },
     )
     .await?;

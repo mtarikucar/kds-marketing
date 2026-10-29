@@ -9,9 +9,10 @@
 //! an approved strategy. Without a valid session the route answers `401`, without a current workspace
 //! `409 CONFLICT` ("no current workspace"), before the handler runs.
 //!
-//! The voice bridge's use cases ([`crate::bearer::takes_bearer_key`]) are checked the same way
-//! for the workspace of the request's bearer key instead (sharing the lookup with the handler's
-//! `BridgeCtx`): no session is read for them, and without a usable key they answer `401`.
+//! A bridge's use cases (the voice bridge's and the device bridge's,
+//! [`crate::bearer::takes_bearer_key`]) are checked the same way for the workspace of the
+//! request's bearer key instead (sharing the lookup with the handler's `BridgeCtx` or
+//! `DeviceBridgeCtx`): no session is read for them, and without a usable key they answer `401`.
 
 use axum::extract::{FromRequestParts, Request, State};
 use axum::middleware::Next;

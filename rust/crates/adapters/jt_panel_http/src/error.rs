@@ -127,7 +127,9 @@ where
     }
 }
 
-fn json_rejection(rejection: &JsonRejection) -> AppError {
+/// The structured error of a JSON body that was not taken: `422 VALIDATION` with the extractor's
+/// own words.
+pub(crate) fn json_rejection(rejection: &JsonRejection) -> AppError {
     let message = match rejection {
         JsonRejection::MissingJsonContentType(_) => {
             "expected a JSON body with Content-Type: application/json".to_owned()

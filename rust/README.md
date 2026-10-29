@@ -83,7 +83,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. Sekiz göç vardır:
+döndürür. On yedi göç vardır:
 
 | Göç | Ne yapar |
 |---|---|
@@ -100,8 +100,10 @@ döndürür. Sekiz göç vardır:
 | `0011_m4_activation_codes` | Workspace-locked keyed activation challenges, attempt cap and replay history; 67 tables. No plaintext or recipient binding. |
 | `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
 | `0013_probe_reason` | `probe_runs.reason` (the failure line, at most 300 characters) and `unknown` as a legal `error_kind`; down restores the old check only while no `unknown` run is stored. No new table. |
-| `0015_voice_calls` | Voice V0: `call_sessions`, `call_turns`, `call_commands`, `call_duty` (forced RLS, composite keys; 71 tables), `workspace_policies.calls`, `calls.work` for the system owner/manager/rep and `calls.manage` for owner/manager, and the retry columns of `event_consumption` (`attempts`, `retry_at`). Down refuses while a call is not ended. (`0014` is the social providers' migration of the TikTok/LinkedIn branch.) |
+| `0014_social_providers` | `oauth_pending.provider` and `oauth_pending.app` accept `tiktok` and `linkedin`, for their OAuth flows. No new table; `inbound_events` is untouched. |
+| `0015_voice_calls` | Voice V0: `call_sessions`, `call_turns`, `call_commands`, `call_duty` (forced RLS, composite keys; 71 tables), `workspace_policies.calls`, `calls.work` for the system owner/manager/rep and `calls.manage` for owner/manager, and the retry columns of `event_consumption` (`attempts`, `retry_at`). Down refuses while a call is not ended. |
 | `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
+| `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -616,6 +618,16 @@ Sistem rollerinin izinleri:
 | `budget.manage` (bütçe kalemi açma, düzenleme, emekliye ayırma) | ✓ | ✓ | — |
 | `inbox.work` (gelen kutusunda çalışma) | ✓ | ✓ | ✓ |
 | `inbox.manage` (kayıp nedenleri ve yetkili yolculuk işlemleri) | ✓ | ✓ | — |
+| `studio.work` (stüdyoda çalışma) | ✓ | ✓ | — |
+| `studio.manage` (stüdyoyu yönetme) | ✓ | ✓ | — |
+| `calls.work` (arama yapma ve görüşme kaydını görme) | ✓ | ✓ | ✓ |
+| `calls.manage` (arama politikasını yönetme, görüşmenin numarasını görme) | ✓ | ✓ | — |
+| `calls.bridge` (ses köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+| `devices.work` (telefonları kullanma) | ✓ | ✓ | — |
+| `devices.bridge` (cihaz köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+
+`calls.bridge` ve `devices.bridge` bir köprünün API anahtarının izinleridir; sahip ve yönetici onları o anahtarı
+verebilmek için taşır.
 
 `capabilities.manage` ve `budget.manage` M1a ile geldi. Yeni bir alanın sahip ve yönetici rolleri onları
 açılışta alır; M1a'dan önce açılmış alanlarınkine `0004_role_permissions_backfill` göçü ekler (bkz.
@@ -1975,6 +1987,23 @@ heartbeat, the health job's marking and the long-poll are the bridge kernel's
 | `calls.bridge.register` | `POST /api/voice/bridge/register` | WRITE | declares the extension's bridge on its first registration; `calls.bridge.online` when it comes back |
 | `calls.bridge.commands` | `GET /api/voice/bridge/commands?wait_s&extension` | READ | long-poll of at most 25 s; a command not acknowledged within 10 s is handed out again |
 | `calls.bridge.events` | `POST /api/voice/bridge/events` | WRITE | at most 100 events, each applied once by `(bridge_call_id, bridge_seq)` |
+
+#### The device bridge (device bridge D1)
+
+The device bridge (`jeeta-device-bridge`, spec `docs/superpowers/specs/2026-10-28-device-bridge-design.md`)
+runs on the PC a workspace's phones are plugged into, on the same kernel as the voice bridge. Its
+four use cases are panel-only rows served under `/api/devices/bridge/*` to its bearer API key
+alone, a key issued with `devices.bridge` and nothing else; no MCP tool reaches them. The key is
+also which bridge calls, so each bridge program holds a key of its own. The bodies are
+`jt_device_protocol`'s; a body that breaks a limit is a `422` whose `details.field` names the
+field.
+
+| Use case | Panel | Risk | Notes |
+|---|---|---|---|
+| `devices.bridge.register` | `POST /api/devices/bridge/register` | WRITE | a `phone` capability per phone (`{platform}:{serial}`), facts merged key by key under `connector_public.device` (only the bridge writes it); a phone that fails its checks, is retired (`phone_retired`) or is held by another bridge that registered it within 60 s (`phone_held_by_another_bridge`) is listed in `refused`, never the registration |
+| `devices.bridge.commands` | `GET /api/devices/bridge/commands?wait_s&limit` | READ | long-poll of at most 25 s, at most 20 commands, for the phones the bridge's latest registration lists; a command the phone's bridge no longer lists is failed `unsupported_by_bridge`; `push_file` carries a 10-minute signed `download_url` |
+| `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, from the bridge the command was leased to (or the one that holds its phone now), else counted `unknown`; a file id that is not a device file this bridge uploaded refuses the batch |
+| `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself, streamed (`image/png` up to 25 MB, `application/octet-stream` up to 95 MiB, under Cloudflare's 100 MB); each workspace uploads two screenshots and two pulled files at a time, a wait over 10 s is a retryable `503`; a device file kept seven days; `{"file_id"}` |
 
 Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
 dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes

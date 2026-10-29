@@ -376,6 +376,15 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("calls.bridge.register", Exempt, ("POST", "/api/voice/bridge/register"), Write),
     panel_only("calls.bridge.commands", Exempt, ("GET", "/api/voice/bridge/commands"), Read),
     panel_only("calls.bridge.events", Exempt, ("POST", "/api/voice/bridge/events"), Write),
+    // The device bridge's own surface (spec 2026-10-28-device-bridge-design.md §5.4): served
+    // under /api/devices/bridge/* to the bridge's API key alone (`devices.bridge`, nothing else),
+    // never to a panel session and never as an MCP tool; exempt from the strategy gate, since
+    // phones are set up before any strategy. `commands` is a long-poll of at most 25 seconds;
+    // `files` takes the file's own bytes as its body.
+    panel_only("devices.bridge.register", Exempt, ("POST", "/api/devices/bridge/register"), Write),
+    panel_only("devices.bridge.commands", Exempt, ("GET", "/api/devices/bridge/commands"), Read),
+    panel_only("devices.bridge.results", Exempt, ("POST", "/api/devices/bridge/results"), Write),
+    panel_only("devices.bridge.files", Exempt, ("POST", "/api/devices/bridge/files"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

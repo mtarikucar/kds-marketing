@@ -129,6 +129,10 @@
       "work": "Arama yapma ve görüşme kaydını görme",
       "manage": "Arama politikasını yönetme",
       "bridge": "Ses köprüsü olarak çalışma (yalnızca köprünün anahtarı)"
+    },
+    "devices": {
+      "work": "Telefonları kullanma",
+      "bridge": "Cihaz köprüsü olarak çalışma (yalnızca köprünün anahtarı)"
     }
   },
   "roleNames": {

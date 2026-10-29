@@ -76,6 +76,8 @@ pub enum FailReason {
     ScreenBusy,
     Timeout,
     BridgeError,
+    /// The file a command names (a `push_file`'s) is not stored: it was removed, or never was.
+    FileNotFound,
     /// A reason this version does not know: a newer bridge's new reason must not make an older
     /// server reject a whole batch of results. Always the last variant.
     #[serde(other)]
@@ -94,6 +96,7 @@ impl FailReason {
         FailReason::ScreenBusy,
         FailReason::Timeout,
         FailReason::BridgeError,
+        FailReason::FileNotFound,
         FailReason::Unknown,
     ];
 
@@ -109,6 +112,7 @@ impl FailReason {
             FailReason::ScreenBusy => "screen_busy",
             FailReason::Timeout => "timeout",
             FailReason::BridgeError => "bridge_error",
+            FailReason::FileNotFound => "file_not_found",
             FailReason::Unknown => "unknown",
         }
     }

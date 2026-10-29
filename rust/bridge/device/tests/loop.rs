@@ -25,8 +25,8 @@ use jeeta_device_bridge::{
     Stop, Timing, run,
 };
 use jt_device_protocol::{
-    CommandResult, DeviceCommand, FailReason, MAX_PHONES, MAX_RESULTS_BODY_BYTES, PHONE_RETIRED,
-    PhoneReport, Platform, RegisterIn, ResultsIn,
+    CommandResult, DeviceCommand, FailReason, MAX_PHONES, MAX_RESULTS_BODY_BYTES,
+    PHONE_HELD_BY_ANOTHER_BRIDGE, PHONE_RETIRED, PhoneReport, Platform, RegisterIn, ResultsIn,
 };
 use serde_json::{Value, json};
 use support::Logs;
@@ -107,6 +107,8 @@ struct Script {
     max_wait_s: Option<u32>,
     /// How long an idle poll is held (30 ms when `None`).
     idle_hold: Option<Duration>,
+    /// How many uploads are answered `503` first, as when the workspace's upload turns are taken.
+    files_busy: usize,
 }
 
 /// What the fake was sent.
@@ -353,13 +355,29 @@ async fn files(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -> R
         content_type.as_deref(),
         Some("image/png" | "application/octet-stream")
     ) {
-        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+        // Refused as the server refuses it: a 422 naming the field.
+        return refused_body("content_type");
     }
     fake.seen
         .lock()
         .unwrap()
         .uploads
         .push((content_type, body.to_vec()));
+    {
+        let mut script = fake.script.lock().unwrap();
+        if script.files_busy > 0 {
+            script.files_busy -= 1;
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(json!({
+                    "code": "UPSTREAM_UNAVAILABLE",
+                    "message": "every upload turn of the workspace is taken; try again later",
+                    "details": { "reason": "upload_turns_taken", "retryable": true, "retry_after_s": 5 },
+                })),
+            )
+                .into_response();
+        }
+    }
     axum::Json(json!({ "file_id": FILE_ID })).into_response()
 }
 
@@ -962,6 +980,41 @@ async fn registers_on_start_and_every_heartbeat() {
         assert_eq!(body["phones"][0]["model"], "Fake 1");
         assert_eq!(seen.unauthorized, 0);
     }
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn a_phone_another_bridge_holds_is_listed_again() {
+    let logs = Logs::capture();
+    // Another bridge holds the phone for now (the same serial on two PCs): the server refuses it
+    // on every register until that bridge lets go of it.
+    let script = Script {
+        heartbeat_s: 3,
+        refuse: vec![("emulator-5554", PHONE_HELD_BY_ANOTHER_BRIDGE)],
+        ..Script::default()
+    };
+    let rig = Rig::start(script, &[("R58N1", 0), ("emulator-5554", 0)]).await;
+    rig.until("three registers", |s| s.registers.len() >= 3)
+        .await;
+    {
+        // Unlike a retired phone, it is listed on every register, so it is taken once it is free.
+        let seen = rig.seen();
+        for (_, body) in &seen.registers {
+            assert_eq!(registered_serials(body), ["R58N1", "emulator-5554"]);
+        }
+    }
+    // The refusal is logged once, at warn level, with the serial and the reason.
+    let text = logs.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("emulator-5554"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{text}");
+    assert!(
+        lines[0].contains("WARN") && lines[0].contains(PHONE_HELD_BY_ANOTHER_BRIDGE),
+        "{}",
+        lines[0]
+    );
     rig.stop().await;
 }
 
@@ -2071,6 +2124,33 @@ async fn file_transfer_uploads_with_the_key_and_downloads_without_it() {
         !text.contains("SIGNED-SECRET") && !text.contains(KEY),
         "{text}"
     );
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn an_upload_the_server_cannot_take_now_is_tried_again() {
+    let _logs = Logs::capture();
+    // The server answers the first two uploads `503` (its upload turns are taken): the bridge
+    // tries again, and the third is taken.
+    let script = Script {
+        files_busy: 2,
+        polls: [poll(vec![leased(
+            1,
+            "R58N1",
+            json!({ "kind": "screenshot" }),
+        )])]
+        .into(),
+        ..Script::default()
+    };
+    let (base, fake) = serve(script).await;
+    let rig = Setup::new(&[("R58N1", 0)]).attach(&base, fake);
+    rig.until("the result", |s| accepted(s).len() == 1).await;
+    {
+        let seen = rig.seen();
+        assert_eq!(seen.uploads.len(), 3);
+        let file = json!({ "status": "done", "result": { "kind": "file", "file_id": FILE_ID } });
+        assert_eq!(accepted_for(&seen, 1)[0]["outcome"], file);
+    }
     rig.stop().await;
 }
 

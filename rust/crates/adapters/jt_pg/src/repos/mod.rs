@@ -25,6 +25,7 @@ mod budget;
 pub(crate) mod calls;
 pub(crate) mod capabilities;
 mod consultation;
+mod devices;
 mod events;
 mod groups;
 mod hypotheses;

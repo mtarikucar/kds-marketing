@@ -15,6 +15,7 @@ jt_inbox.workspace = true
 jt_app.workspace = true
 jt_studio.workspace = true
 jt_calls.workspace = true
+jt_device_protocol.workspace = true
 serde.workspace = true
 jt_pg.workspace = true
 # For `panel` (the `panel` feature), the panel router in process. `jt_panel_http` lists this

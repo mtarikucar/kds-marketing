@@ -69,7 +69,7 @@ use uuid::Uuid;
 
 pub use jt_devices::{
     CommandError, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, MAX_ELEMENTS,
-    MAX_TEXT_CHARS, Observation, Platform, Screen, TEXT_UNICODE, supports,
+    MAX_TEXT_CHARS, Observation, Platform, Screen, TEXT_UNICODE, required_features, supports,
 };
 
 /// The protocol this build speaks.
@@ -105,6 +105,11 @@ pub const MAX_SCREEN_PX: u32 = 20_000;
 /// The [`RefusedPhone::reason`] of a phone that was retired and is still plugged in. Unlike any
 /// other refusal it is final: a bridge stops listing the phone until it restarts.
 pub const PHONE_RETIRED: &str = "phone_retired";
+/// The [`RefusedPhone::reason`] of a phone another bridge of the workspace holds: that bridge's
+/// latest registration lists it, and is recent. Not final: the bridge keeps listing the phone,
+/// and it registers once the other bridge leaves it out or stops registering (two PCs can see a
+/// phone of the same serial: every emulator is `emulator-5554`).
+pub const PHONE_HELD_BY_ANOTHER_BRIDGE: &str = "phone_held_by_another_bridge";
 
 /// A body that breaks a limit, or that is not the shape the protocol gives it.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
