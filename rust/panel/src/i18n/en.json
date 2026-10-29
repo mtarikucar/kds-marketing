@@ -129,6 +129,11 @@
       "work": "Place calls and read the call log",
       "manage": "Manage the call policy",
       "bridge": "Act as the voice bridge (the bridge's key only)"
+    },
+    "devices": {
+      "work": "See the phones, observe their screens and send them commands",
+      "manage": "Pair phones",
+      "bridge": "Act as the device bridge (the bridge's key only)"
     }
   },
   "roleNames": {

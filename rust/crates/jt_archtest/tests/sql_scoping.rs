@@ -132,6 +132,7 @@ fn tenant_tables_are_read_from_the_migrations() {
         "workspace_entitlements",
         "workspace_billing",
         "activation_codes",
+        "device_commands",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

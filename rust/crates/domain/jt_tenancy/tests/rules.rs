@@ -78,6 +78,9 @@ fn capabilities_and_budget_permissions_belong_to_owner_and_manager_only() {
             "calls.work",
             "calls.manage",
             "calls.bridge",
+            "devices.work",
+            "devices.manage",
+            "devices.bridge",
         ]
     );
 }
@@ -92,6 +95,24 @@ fn calls_bridge_is_owner_and_manager_only() {
     assert!(SystemRole::Owner.permissions().contains(&p));
     assert!(SystemRole::Manager.permissions().contains(&p));
     assert!(!SystemRole::Rep.permissions().contains(&p));
+}
+
+#[test]
+fn devices_permissions_are_owner_and_manager_only() {
+    // A device bridge's key is issued with `devices.bridge` alone; only who holds it may issue it.
+    for (p, key) in [
+        (Permission::DevicesWork, "devices.work"),
+        (Permission::DevicesManage, "devices.manage"),
+        (Permission::DevicesBridge, "devices.bridge"),
+    ] {
+        assert_eq!(p.key(), key);
+        assert_eq!(Permission::parse(key), Some(p));
+        assert_eq!(serde_json::to_value(p).unwrap(), key);
+        assert!(Permission::all().contains(&p), "{key}");
+        assert!(SystemRole::Owner.permissions().contains(&p), "{key}");
+        assert!(SystemRole::Manager.permissions().contains(&p), "{key}");
+        assert!(!SystemRole::Rep.permissions().contains(&p), "{key}");
+    }
 }
 
 #[test]
@@ -237,6 +258,9 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             Permission::CallsWork,
             Permission::CallsManage,
             Permission::CallsBridge,
+            Permission::DevicesWork,
+            Permission::DevicesManage,
+            Permission::DevicesBridge,
         ]),
     });
     // A custom lead may neither demote nor remove a manager.
@@ -373,6 +397,9 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
             Permission::CallsWork,
             Permission::CallsManage,
             Permission::CallsBridge,
+            Permission::DevicesWork,
+            Permission::DevicesManage,
+            Permission::DevicesBridge,
         ]),
     });
     assert_eq!(

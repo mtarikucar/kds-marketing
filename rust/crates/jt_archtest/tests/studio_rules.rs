@@ -111,9 +111,9 @@ async fn studio_exact_catalog_and_gate_set() {
             all_tables.insert(name.to_owned());
         }
     }
-    // 67 through M4, the four call tables of 0015_voice_calls and the bridge's event notes of
-    // 0016_voice_bridge.
-    assert_eq!(all_tables.len(), 72);
+    // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
+    // 0016_voice_bridge and the device commands of 0017_device_bridge.
+    assert_eq!(all_tables.len(), 73);
 
     // All fourteen Studio tables are tenant-scoped.
     assert_eq!(

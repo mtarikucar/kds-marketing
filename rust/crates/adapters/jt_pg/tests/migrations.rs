@@ -30,11 +30,12 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
-/// call tables of `0015_voice_calls` and the bridge's event notes of `0016_voice_bridge`.
-const TABLES_AFTER_ALL: i64 = 72;
+/// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge` and the
+/// device commands of `0017_device_bridge`.
+const TABLES_AFTER_ALL: i64 = 73;
 
-/// Migrations `0001_foundation` through `0016_voice_bridge`.
-const MIGRATIONS: i64 = 16;
+/// Migrations `0001_foundation` through `0017_device_bridge`.
+const MIGRATIONS: i64 = 17;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -173,6 +174,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0017_device_bridge",
         "0016_voice_bridge",
         "0015_voice_calls",
         "0014_social_providers",
@@ -436,9 +438,148 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
 }
 
 #[tokio::test]
+async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_and_manager() {
+    let db = TestDb::new().await; // already migrated up, 0017 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0017_device_bridge.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0017_device_bridge.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
+    let as_strings =
+        |keys: &[&str]| -> Vec<String> { keys.iter().map(|k| (*k).to_owned()).collect() };
+    let keys = ["devices.work", "devices.manage", "devices.bridge"];
+    let base = ["workspace.read", "team.manage"];
+
+    // A second workspace holds a custom role keyed like a system one: only `is_system` tells
+    // them apart.
+    let (ws, other_ws) = (Uuid::now_v7(), Uuid::now_v7());
+    let (owner, manager, rep, custom, custom_manager) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    for (id, name) in [(ws, "devices"), (other_ws, "other")] {
+        sqlx::query(
+            "insert into workspaces (id, name, slug, status) values ($1, $2, $3, 'active')",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(format!("{name}-{}", id.simple()))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    let roles: [(Uuid, Uuid, &str, bool, Vec<&str>); 5] = [
+        (owner, ws, "owner", true, base.to_vec()),
+        // Already granted one of the three (say, by hand): it is not granted twice.
+        (
+            manager,
+            ws,
+            "manager",
+            true,
+            [&base[..], &["devices.work"]].concat(),
+        ),
+        (rep, ws, "rep", true, vec!["workspace.read"]),
+        (
+            custom,
+            ws,
+            "analyst",
+            false,
+            [&base[..], &["devices.work"]].concat(),
+        ),
+        (
+            custom_manager,
+            other_ws,
+            "manager",
+            false,
+            vec!["workspace.read"],
+        ),
+    ];
+    for (id, workspace, key, is_system, permissions) in &roles {
+        sqlx::query(
+            "insert into roles (id, workspace_id, key, name, permissions, is_system) \
+             values ($1, $2, $3, $3, $4, $5)",
+        )
+        .bind(id)
+        .bind(workspace)
+        .bind(key)
+        .bind(permissions)
+        .bind(is_system)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    // Up, twice: the system owner and manager gain exactly the missing keys, once, in order.
+    for _ in 0..2 {
+        run(&up).await;
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        for role in [owner, manager] {
+            assert_eq!(
+                role_permissions(&db.pool, role).await,
+                as_strings(&[&base[..], &keys[..]].concat())
+            );
+        }
+        assert_eq!(role_permissions(&db.pool, rep).await, ["workspace.read"]);
+        assert_eq!(
+            role_permissions(&db.pool, custom).await,
+            as_strings(&[&base[..], &["devices.work"]].concat())
+        );
+        assert_eq!(
+            role_permissions(&db.pool, custom_manager).await,
+            ["workspace.read"]
+        );
+    }
+
+    // Down, twice: the table goes, and the three keys leave the system owner and manager only.
+    for _ in 0..2 {
+        run(&down).await;
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 1);
+        assert!(!index_exists(&db.pool, "device_commands_queue").await);
+        for role in [owner, manager] {
+            assert_eq!(role_permissions(&db.pool, role).await, as_strings(&base));
+        }
+        assert_eq!(role_permissions(&db.pool, rep).await, ["workspace.read"]);
+        assert_eq!(
+            role_permissions(&db.pool, custom).await,
+            as_strings(&[&base[..], &["devices.work"]].concat())
+        );
+        assert_eq!(
+            role_permissions(&db.pool, custom_manager).await,
+            ["workspace.read"]
+        );
+    }
+
+    // Up again: the table is back, with its queue index and forced row-level security.
+    run(&up).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert!(index_exists(&db.pool, "device_commands_queue").await);
+    let forced: bool = sqlx::query_scalar(
+        "select relrowsecurity and relforcerowsecurity from pg_class where relname = 'device_commands'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(forced);
+}
+
+#[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
     // Newest first: the call tables reference the inbox tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0017_device_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0016_voice_bridge.down.sql"
     ))
@@ -567,6 +708,12 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0017_device_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0016_voice_bridge.down.sql"
     ))
