@@ -3,10 +3,14 @@
 //! An allowlist, not a list of forbidden words: a denylist of a few identifiers misses a
 //! `?command` whose derived `Debug` holds the sentence, a field called `utterance`, a message that
 //! interpolates `{text}`, an `#[instrument]` that records every argument, and a `println!`. So:
-//! - a log call (`trace!` … `error!`, `event!`, the `span!` family) carries named fields from
-//!   [`FIELDS`] only (ids, kinds, states, counts, durations, error kinds), and formats a value with
-//!   `Debug` (`?`) only under [`DEBUG_FIELDS`], whose values hold no text; its message is a literal
-//!   that interpolates nothing; no value names one of [`TEXT_WORDS`];
+//! - a log call (`trace!` … `error!`, `event!`, the `span!` family, in `( )`, `{ }` or `[ ]`)
+//!   carries named fields from [`FIELDS`] only (ids, kinds, states, counts, durations, error
+//!   kinds), and formats a value with `Debug` (`?`) only under [`DEBUG_FIELDS`], whose values hold
+//!   no text; a field's value is a bare path that ends in the field's own name or `id` (`cause`,
+//!   `self.id`, `out.status`, `c.kind`), so a listed name cannot carry another value (`kind =
+//!   ?command`), and `error` is `%e` or `%err` alone (the crate's own error types, which carry no
+//!   address); its message is a literal that interpolates nothing (a span's name is a literal
+//!   too); no value names one of [`TEXT_WORDS`];
 //! - `#[instrument]` only with `skip_all`;
 //! - no `dbg!`, and `println!`, `eprintln!`, `print!` or `eprint!` only in the console programs
 //!   ([`CONSOLE`]), where no interpolated value names one of [`TEXT_WORDS`] but the slice's opt-in
@@ -112,7 +116,8 @@ fn strip_comments(code: &str) -> String {
     out
 }
 
-/// The calls of the macros `names` in `code`: each macro's name and its text, `name!(…)` whole.
+/// The calls of the macros `names` in `code`, in any of a macro's delimiters (`( )`, `{ }`,
+/// `[ ]`): each macro's name and its text, `name!(…)` whole.
 fn calls(code: &str, names: &[&str]) -> Vec<(String, String)> {
     let chars: Vec<char> = code.chars().collect();
     let mut out = Vec::new();
@@ -124,7 +129,7 @@ fn calls(code: &str, names: &[&str]) -> Vec<(String, String)> {
             starts_word
                 && chars[i..].starts_with(&n)
                 && chars.get(i + n.len()) == Some(&'!')
-                && chars.get(i + n.len() + 1) == Some(&'(')
+                && matches!(chars.get(i + n.len() + 1), Some('(' | '{' | '['))
         });
         let Some(name) = name else {
             i += 1;
@@ -142,9 +147,9 @@ fn calls(code: &str, names: &[&str]) -> Vec<(String, String)> {
                 }
             } else if c == '"' {
                 in_string = true;
-            } else if c == '(' {
+            } else if matches!(c, '(' | '{' | '[') {
                 depth += 1;
-            } else if c == ')' {
+            } else if matches!(c, ')' | '}' | ']') {
                 depth -= 1;
                 if depth == 0 {
                     break;
@@ -159,9 +164,10 @@ fn calls(code: &str, names: &[&str]) -> Vec<(String, String)> {
     out
 }
 
-/// The arguments of a call's text (`name!(a, b)`), split at its top-level commas.
+/// The arguments of a call's text (`name!(a, b)`, `name!{a, b}`), split at its top-level commas.
 fn arguments(call: &str) -> Vec<String> {
-    let inner = &call[call.find('(').map_or(0, |p| p + 1)..call.len().saturating_sub(1)];
+    let open = call.find(['(', '{', '[']).map_or(0, |p| p + 1);
+    let inner = &call[open..call.len().saturating_sub(1)];
     let (mut out, mut current, mut depth, mut in_string, mut escaped) =
         (Vec::new(), String::new(), 0i32, false, false);
     for c in inner.chars() {
@@ -227,11 +233,33 @@ fn names_text(value: &str) -> Option<&str> {
     words(value).into_iter().find(|w| TEXT_WORDS.contains(w))
 }
 
-/// What is wrong with log call `call`.
-fn log_call_problems(call: &str) -> Vec<String> {
+/// Whether `value` is a bare path (`cause`, `self.id`) that ends in `field` or `id`.
+fn names_its_field(value: &str, field: &str) -> bool {
+    let segments: Vec<&str> = value.split('.').collect();
+    let bare = segments.iter().all(|s| {
+        s.chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_')
+            && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+    });
+    bare && segments
+        .last()
+        .is_some_and(|last| *last == field || *last == "id")
+}
+
+/// What is wrong with log call `call` of macro `name`.
+fn log_call_problems(name: &str, call: &str) -> Vec<String> {
     let mut problems = Vec::new();
     let mut message_seen = false;
+    // A span's first literal is its name, and its fields come after it.
+    let mut span_name = name.ends_with("span");
     for arg in arguments(call) {
+        if arg.starts_with('"') && std::mem::take(&mut span_name) {
+            if !interpolations(&arg).is_empty() {
+                problems.push(format!("the span's name interpolates a value: {call}"));
+            }
+            continue;
+        }
         if arg.starts_with('"') {
             if message_seen {
                 problems.push(format!("a second literal: {call}"));
@@ -272,6 +300,14 @@ fn log_call_problems(call: &str) -> Vec<String> {
         if value.starts_with('?') && !DEBUG_FIELDS.contains(&name.as_str()) {
             problems.push(format!("`{name}` is formatted with Debug: {call}"));
         }
+        let bare = value.trim_start_matches(['%', '?']).trim();
+        if name == "error" {
+            if value != "%e" && value != "%err" {
+                problems.push(format!("`error` is not `%e` or `%err`: {call}"));
+            }
+        } else if !names_its_field(bare, &name) {
+            problems.push(format!("`{name}` carries another value: {call}"));
+        }
         if let Some(word) = names_text(&value) {
             problems.push(format!("a value names `{word}`: {call}"));
         }
@@ -305,8 +341,8 @@ fn problems(file: &str, code: &str) -> (Vec<String>, usize) {
     let code = strip_comments(code);
     let mut out = Vec::new();
     let log_calls = calls(&code, &LOG_MACROS);
-    for (_, call) in &log_calls {
-        out.extend(log_call_problems(call));
+    for (name, call) in &log_calls {
+        out.extend(log_call_problems(name, call));
     }
     let console = CONSOLE.contains(&file);
     for (name, call) in calls(&code, &PRINT_MACROS) {
@@ -413,6 +449,23 @@ fn the_rules_pass_what_the_bridge_logs_and_prints() {
             "main.rs",
             r#"eprintln!("usage: jeeta-voice-bridge slice --opening TEXT --reply TEXT");"#,
         ),
+        // B4 re-review N5: a span's name is no message, and the brace form is a call too.
+        (
+            "call.rs",
+            r#"let span = tracing::info_span!("call", call = %id);"#,
+        ),
+        (
+            "call.rs",
+            r#"tracing::span!(tracing::Level::INFO, "call", call = %self.id);"#,
+        ),
+        (
+            "call.rs",
+            r#"info!{call = %id, state = ?state, "the call is live"};"#,
+        ),
+        (
+            "run_loop.rs",
+            r#"warn!(error = %err, "the core refused an event");"#,
+        ),
     ] {
         let (found, _) = problems(file, code);
         assert!(found.is_empty(), "{file}: {code}: {found:?}");
@@ -454,6 +507,26 @@ fn the_rules_catch_what_would_leak() {
             "client.rs",
             "fn f(e: reqwest::Error) -> String { e.to_string() }",
         ),
+        // B4 re-review N5: a listed field with a value of another name (jt_calls' `Command` and
+        // B5's `AriEvent` derive `Debug`: the sentence, the key pressed).
+        (
+            "call.rs",
+            r#"info!(call = %id, kind = ?command, "a command");"#,
+        ),
+        (
+            "call.rs",
+            r#"info!(call = %id, cause = ?event, "an event");"#,
+        ),
+        (
+            "call.rs",
+            r#"info!(call = %id, state = ?ari_event, "ARI");"#,
+        ),
+        ("call.rs", r#"warn!(call = %id, reason = %t, "refused");"#),
+        ("call.rs", r#"warn!(error = ?e, "refused");"#),
+        ("call.rs", r#"warn!(error = %e.to_string(), "refused");"#),
+        ("call.rs", r#"warn!(error = %response, "refused");"#),
+        ("call.rs", r#"info!{call = %id, heard = ?h, "a turn"};"#),
+        ("call.rs", r#"info![call = %id, "said {text}"];"#),
     ] {
         let (found, _) = problems(file, code);
         assert!(!found.is_empty(), "not caught in {file}: {code}");
