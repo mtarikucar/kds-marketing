@@ -6,8 +6,9 @@ use jt_app::{
     error::ErrorCode,
     ports::UnitOfWork,
     ports::devices::{
-        CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, DeviceCommandRow, ExpiredCommand,
-        FailReason, Finish, Finished, MAX_DETAIL_CHARS, NewDeviceCommand, REDELIVER_AFTER,
+        CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, DeviceCommandRow, DeviceFile,
+        ExpiredCommand, FailReason, Finish, Finished, MAX_DETAIL_CHARS, NewDeviceCommand,
+        REDELIVER_AFTER,
     },
 };
 use jt_capability::{Capability, CapabilityId, NewCapability};
@@ -876,5 +877,67 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(
         ids(&lease(&uow, f.other, &[their_phone], at(1), 10).await),
         vec![theirs.id]
+    );
+}
+
+/// A device file of `size_bytes` bytes uploaded at `FIXED_NOW`, kept for seven days.
+pub fn device_file(mime: &str, size_bytes: u64) -> DeviceFile {
+    DeviceFile {
+        id: Uuid::now_v7(),
+        mime: mime.into(),
+        size_bytes,
+        sha256: "ab".repeat(32),
+        created_at: FIXED_NOW,
+        expires_at: FIXED_NOW + Duration::days(7),
+    }
+}
+
+/// A device file is recorded once, with what it was recorded with, and found by its id within its
+/// workspace only; a taken id, in any workspace, is refused.
+pub async fn device_files_are_recorded_once_and_found_in_their_workspace(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let (png, pulled) = (
+        device_file("image/png", 1_024),
+        device_file("application/octet-stream", 0),
+    );
+    let theirs = device_file("image/png", 7);
+    for (ws, file) in [(f.ws, &png), (f.ws, &pulled), (f.other, &theirs)] {
+        let mut t = uow.tenant(ws).await.unwrap();
+        t.device_commands().save_file(file.clone()).await.unwrap();
+        t.commit().await.unwrap();
+    }
+
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let found = t
+        .device_commands()
+        .files(&[pulled.id, theirs.id, Uuid::now_v7(), png.id])
+        .await
+        .unwrap();
+    let mut expected = vec![png.clone(), pulled.clone()];
+    expected.sort_by_key(|file| file.id);
+    assert_eq!(found, expected);
+    assert!(t.device_commands().files(&[]).await.unwrap().is_empty());
+    drop(t);
+
+    // A taken id is refused, in its own workspace and in another one.
+    for ws in [f.ws, f.other] {
+        let mut t = uow.tenant(ws).await.unwrap();
+        let e = t
+            .device_commands()
+            .save_file(DeviceFile {
+                mime: "application/octet-stream".into(),
+                ..png.clone()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    }
+    let mut t = uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        t.device_commands()
+            .files(&[png.id, theirs.id])
+            .await
+            .unwrap(),
+        vec![theirs]
     );
 }

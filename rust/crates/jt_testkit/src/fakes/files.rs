@@ -40,7 +40,7 @@ impl FileStore for MemoryFiles {
         id: FileId,
         u: MediaUpload,
     ) -> Result<StoredFile, AppError> {
-        jt_app::usecases::studio::files::validate_upload(&u)?;
+        jt_app::usecases::files::validate_stored(&u)?;
         let f = StoredFile {
             id,
             workspace_id: ws,

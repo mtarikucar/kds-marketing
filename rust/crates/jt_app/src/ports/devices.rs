@@ -1,8 +1,9 @@
 //! The commands queued for a workspace's phones (spec `2026-10-28-device-bridge-design.md` §5.1),
 //! stored per tenant: an agent queues a command for a phone, the bridge that phone is plugged into
-//! leases it, and the bridge's result is written on the command's own row. The command vocabulary
-//! and its lifecycle live in `jt_devices` and are re-exported here, as the call records are from
-//! `ports::calls`.
+//! leases it, and the bridge's result is written on the command's own row. The files the bridges
+//! upload (screenshots, pulled files) are recorded here too ([`DeviceFile`]); their bytes are in
+//! the file store. The command vocabulary and its lifecycle live in `jt_devices` and are
+//! re-exported here, as the call records are from `ports::calls`.
 //!
 //! A row carries the whole command and what it produced (typed text, shell arguments, screen
 //! text): log its id, kind and status, never the row (`jt_devices`, "Logging").
@@ -85,6 +86,21 @@ pub struct ExpiredCommand {
     pub created_at: OffsetDateTime,
     /// When it was last leased; `None` when it expired in the queue.
     pub leased_at: Option<OffsetDateTime>,
+}
+
+/// A file a device bridge uploaded (a screenshot, a pulled file). Its bytes are in the workspace's
+/// file store (`ports::files::FileStore`) under the same id; a command's result names it by id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceFile {
+    pub id: Uuid,
+    /// The type it was uploaded as: `image/png` or `application/octet-stream`.
+    pub mime: String,
+    pub size_bytes: u64,
+    /// The lowercase hex SHA-256 of its bytes, as the file store computed it.
+    pub sha256: String,
+    pub created_at: OffsetDateTime,
+    /// When its retention ends (spec §5.6: seven days after the upload).
+    pub expires_at: OffsetDateTime,
 }
 
 /// A bridge's result for a command.
@@ -227,6 +243,12 @@ pub trait DeviceCommandRepo: Send + Sync {
         cap: CapabilityId,
         limit: u32,
     ) -> Result<Vec<DeviceCommandRow>, AppError>;
+    /// Records `file`, which a bridge of the workspace uploaded. A taken id (in any workspace) is
+    /// `CONFLICT`.
+    async fn save_file(&mut self, file: DeviceFile) -> Result<(), AppError>;
+    /// The workspace's device files among `ids`, by id; unknown and other workspaces' ids are
+    /// passed over.
+    async fn files(&mut self, ids: &[Uuid]) -> Result<Vec<DeviceFile>, AppError>;
 }
 
 #[cfg(test)]

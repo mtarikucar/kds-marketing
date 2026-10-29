@@ -10,7 +10,7 @@ use jt_app::{
         connectors::MediaUpload,
         files::{FileStore, StoredFile},
     },
-    usecases::studio::files::{VIDEO_LIMIT, validate_upload},
+    usecases::files::{STORED_LIMIT, validate_stored},
 };
 use jt_studio::FileId;
 use jt_tenancy::WorkspaceId;
@@ -187,7 +187,7 @@ impl DiskFiles {
         let mut metadata = vec![0; n];
         io(file.read_exact(&mut metadata))?;
         let f: StoredFile = serde_json::from_slice(&metadata).map_err(|_| storage())?;
-        if f.id != id || f.workspace_id != ws || f.size_bytes > VIDEO_LIMIT {
+        if f.id != id || f.workspace_id != ws || f.size_bytes > STORED_LIMIT {
             return Err(storage());
         }
         let mut bytes = vec![];
@@ -200,7 +200,7 @@ impl DiskFiles {
             mime: f.mime.clone(),
             filename: f.filename.clone(),
         };
-        validate_upload(&u)?;
+        validate_stored(&u)?;
         Ok((f, u))
     }
 }
@@ -211,7 +211,7 @@ impl DiskFiles {
         id: FileId,
         u: MediaUpload,
     ) -> Result<StoredFile, AppError> {
-        validate_upload(&u)?;
+        validate_stored(&u)?;
         if id.0.is_nil() {
             return Err(storage());
         }
@@ -283,21 +283,26 @@ impl DiskFiles {
             Err(_) => Err(storage()),
         }
     }
+    /// A URL that reads file `id` until `expires_at`: after now and at most 24 hours (and a
+    /// second's grace) ahead, the longest [`verify`] accepts. Studio hands providers 24-hour
+    /// URLs; a device bridge's `push_file` gets a shorter one.
     fn provider_url_inner(
         &self,
         ws: WorkspaceId,
         id: FileId,
         expires_at: OffsetDateTime,
     ) -> Result<Url, AppError> {
-        let expiry = self.clock.now() + Duration::hours(24);
-        if (expires_at - expiry).abs() > Duration::seconds(1) {
+        let now = self.clock.now();
+        if expires_at <= now || expires_at - now > Duration::hours(24) + Duration::seconds(1) {
             return Err(AppError::validation(
-                "file URL lifetime must be 24 hours",
+                "a file URL lives at most 24 hours",
                 serde_json::json!({}),
             ));
         }
         self.load(ws, id)?;
-        let expires = expiry.unix_timestamp();
+        let expires = expires_at
+            .unix_timestamp()
+            .min((now + Duration::hours(24)).unix_timestamp());
         let sig = sign(&self.key, ws, id, expires);
         let mut url = self
             .base

@@ -1,16 +1,17 @@
 //! The in-memory device command repository, with the constraints the `0017_device_bridge`
 //! migration enforces (one command per id across workspaces, the phone a capability of the
-//! command's workspace, the failure detail cut to what the table keeps) and the queue order
-//! (`seq`, one more than the highest stored). Row locks are not modelled: a pick holds nothing,
-//! and races between bundles are tested on PostgreSQL.
+//! command's workspace, the failure detail cut to what the table keeps, one device file per id
+//! across workspaces) and the queue order (`seq`, one more than the highest stored). Row locks are
+//! not modelled: a pick holds nothing, and races between bundles are tested on PostgreSQL.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::devices::{
-    CommandStatus, DeviceCommandRepo, DeviceCommandRow, ExpiredCommand, FailReason, Finish,
-    Finished, MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, cut_detail, failed_while_pending,
+    CommandStatus, DeviceCommandRepo, DeviceCommandRow, DeviceFile, ExpiredCommand, FailReason,
+    Finish, Finished, MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, cut_detail, failed_while_pending,
 };
 use jt_capability::CapabilityId;
+use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -22,6 +23,8 @@ use super::tenant::MemTenant;
 pub struct MemDevices {
     /// In their queue order.
     pub commands: Vec<DeviceCommandRow>,
+    /// The files the bridges uploaded, each with its workspace, as recorded.
+    pub files: Vec<(WorkspaceId, DeviceFile)>,
 }
 
 /// Whether `row` is due at `now`, as `jt_pg`'s pick selects it.
@@ -267,5 +270,37 @@ impl DeviceCommandRepo for MemTenant {
         rows.sort_by_key(|c| std::cmp::Reverse(c.seq));
         rows.truncate(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE) as usize);
         Ok(rows)
+    }
+
+    async fn save_file(&mut self, file: DeviceFile) -> Result<(), AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            unique(
+                !this
+                    .state()
+                    .devices
+                    .files
+                    .iter()
+                    .any(|(_, f)| f.id == file.id),
+                "the file id is already taken",
+            )?;
+            this.tx
+                .write(move |s| s.devices.files.push((ws, file.clone())));
+            Ok(())
+        })
+    }
+
+    async fn files(&mut self, ids: &[Uuid]) -> Result<Vec<DeviceFile>, AppError> {
+        let ws = self.ws;
+        let mut files: Vec<DeviceFile> = self
+            .state()
+            .devices
+            .files
+            .iter()
+            .filter(|(of, f)| *of == ws && ids.contains(&f.id))
+            .map(|(_, f)| f.clone())
+            .collect();
+        files.sort_by_key(|f| f.id);
+        Ok(files)
     }
 }

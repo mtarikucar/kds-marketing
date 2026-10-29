@@ -121,6 +121,14 @@ async fn rows_are_workspace_scoped() {
     jt_testkit::devices_contract::rows_are_workspace_scoped(uow).await;
 }
 
+#[tokio::test]
+async fn device_files_are_recorded_once_and_found_in_their_workspace() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_contract::device_files_are_recorded_once_and_found_in_their_workspace(uow)
+        .await;
+}
+
 /// Two polls open at once, each picking one command, are handed different ones: a command one
 /// bundle picked is passed over by the other until that bundle ends.
 #[tokio::test]

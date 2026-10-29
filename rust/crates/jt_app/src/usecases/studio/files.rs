@@ -43,11 +43,7 @@ pub fn validate_upload(u: &MediaUpload) -> Result<(), AppError> {
     let max = limit(&u.mime)?;
     if u.bytes.is_empty()
         || u.bytes.len() as u64 > max
-        || u.filename.is_empty()
-        || u.filename.len() > 255
-        || u.filename.contains(['/', '\\'])
-        || u.filename.chars().any(char::is_control)
-        || matches!(u.filename.as_str(), "." | "..")
+        || !crate::usecases::files::filename_ok(&u.filename)
     {
         return Err(invalid());
     }
@@ -285,12 +281,24 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     // A 24-hour grace separates abandoned submissions from writes still in progress.
     // The shared control lock prevents a delayed metadata commit from racing reconciliation.
     let known: std::collections::HashSet<_> = usage.files.iter().map(|f| f.id).collect();
-    for id in d
+    let candidates: Vec<FileId> = d
         .file_maintenance
         .orphan_candidates(ws, now - Duration::hours(24))
         .await?
-    {
-        if !known.contains(&id) {
+        .into_iter()
+        .filter(|id| !known.contains(id))
+        .collect();
+    // A device bridge's files are recorded apart (`ports::devices::DeviceFile`): not orphans.
+    let ids: Vec<uuid::Uuid> = candidates.iter().map(|id| id.0).collect();
+    let device: std::collections::HashSet<uuid::Uuid> = r
+        .device_commands()
+        .files(&ids)
+        .await?
+        .into_iter()
+        .map(|f| f.id)
+        .collect();
+    for id in candidates {
+        if !device.contains(&id.0) {
             d.files.delete(ws, id).await?;
         }
     }

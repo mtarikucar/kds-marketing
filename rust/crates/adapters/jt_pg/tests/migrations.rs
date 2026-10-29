@@ -31,8 +31,8 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
 /// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge` and the
-/// device commands of `0017_device_bridge`.
-const TABLES_AFTER_ALL: i64 = 73;
+/// device commands and device files of `0017_device_bridge`.
+const TABLES_AFTER_ALL: i64 = 74;
 
 /// Migrations `0001_foundation` through `0017_device_bridge`.
 const MIGRATIONS: i64 = 17;
@@ -52,12 +52,19 @@ const CONNECTOR_INDEXES: [&str; 3] = [
     "inbound_events_history_idx",
 ];
 
-/// The indexes of `device_commands` (`0017_device_bridge`): the queue a bridge reads, the expiry
-/// sweep, and a phone's command log.
-const DEVICE_COMMAND_INDEXES: [&str; 3] = [
+/// The indexes of `device_commands` and `device_files` (`0017_device_bridge`): the queue a bridge
+/// reads, the expiry sweep, a phone's command log, and the files' retention sweep.
+const DEVICE_BRIDGE_INDEXES: [&str; 4] = [
     "device_commands_queue",
     "device_commands_due",
     "device_commands_log",
+    "device_files_expiry",
+];
+
+/// The tables of `0017_device_bridge`, each with its one row-level policy.
+const DEVICE_BRIDGE_TABLES: [(&str, &str); 2] = [
+    ("device_commands", "device_commands_ws"),
+    ("device_files", "device_files_ws"),
 ];
 
 /// The column `0005_connectors` adds to a table of an earlier migration: a budget item's
@@ -546,11 +553,11 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
         );
     }
 
-    // Down, twice: the table goes, and the two keys leave the system owner and manager only.
+    // Down, twice: the two tables go, and the two keys leave the system owner and manager only.
     for _ in 0..2 {
         run(&down).await;
-        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 1);
-        for index in DEVICE_COMMAND_INDEXES {
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 2);
+        for index in DEVICE_BRIDGE_INDEXES {
             assert!(!index_exists(&db.pool, index).await, "{index}");
         }
         for role in [owner, manager] {
@@ -567,28 +574,33 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
         );
     }
 
-    // Up again: the table is back, with its three indexes, forced row-level security and its one
-    // policy.
+    // Up again: the tables are back, with their indexes, forced row-level security and one policy
+    // each.
     run(&up).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
-    for index in DEVICE_COMMAND_INDEXES {
+    for index in DEVICE_BRIDGE_INDEXES {
         assert!(index_exists(&db.pool, index).await, "{index}");
     }
-    let forced: bool = sqlx::query_scalar(
-        "select relrowsecurity and relforcerowsecurity from pg_class where relname = 'device_commands'",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert!(forced);
-    let policies: i64 = sqlx::query_scalar(
-        "select count(*) from pg_policies where schemaname = current_schema() \
-         and tablename = 'device_commands' and policyname = 'device_commands_ws'",
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert_eq!(policies, 1);
+    for (table, policy) in DEVICE_BRIDGE_TABLES {
+        let forced: bool = sqlx::query_scalar(
+            "select relrowsecurity and relforcerowsecurity from pg_class where relname = $1",
+        )
+        .bind(table)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(forced, "{table}");
+        let policies: i64 = sqlx::query_scalar(
+            "select count(*) from pg_policies where schemaname = current_schema() \
+             and tablename = $1 and policyname = $2",
+        )
+        .bind(table)
+        .bind(policy)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(policies, 1, "{table}");
+    }
 }
 
 #[tokio::test]

@@ -93,3 +93,10 @@ async fn rows_are_workspace_scoped() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::devices_contract::rows_are_workspace_scoped(uow).await;
 }
+
+#[tokio::test]
+async fn device_files_are_recorded_once_and_found_in_their_workspace() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::device_files_are_recorded_once_and_found_in_their_workspace(uow)
+        .await;
+}

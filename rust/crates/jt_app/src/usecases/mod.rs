@@ -15,6 +15,7 @@ pub mod capabilities;
 pub mod connector;
 pub mod events;
 pub mod failure;
+pub mod files;
 pub mod groups;
 pub mod inbox;
 pub mod jobs;

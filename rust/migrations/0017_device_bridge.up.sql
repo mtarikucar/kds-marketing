@@ -1,8 +1,8 @@
 -- The device bridge (spec 2026-10-28-device-bridge-design.md §5): the commands queued for a phone,
--- each leased to the bridge the phone is plugged into and answered on its own row; and
--- devices.work and devices.bridge on the owner and manager system roles, devices.bridge being the
--- permission of the bridge's API key, so that they can issue it. Repeatable: every statement is
--- guarded.
+-- each leased to the bridge the phone is plugged into and answered on its own row; the files the
+-- bridges upload; and devices.work and devices.bridge on the owner and manager system roles,
+-- devices.bridge being the permission of the bridge's API key, so that they can issue it.
+-- Repeatable: every statement is guarded.
 
 -- Handed out in `seq` order, the order they were queued in. `requested_by` is the actor that
 -- queued the command. `detail` is the failure line a bridge reported. Screenshots and pulled
@@ -49,6 +49,35 @@ do $$
 begin
     if not exists (select 1 from pg_policies where schemaname = current_schema() and tablename = 'device_commands' and policyname = 'device_commands_ws') then
         create policy device_commands_ws on device_commands
+            using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                   or current_setting('app.platform', true) = 'on')
+            with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+                        or current_setting('app.platform', true) = 'on');
+    end if;
+end;
+$$;
+
+-- The files the bridges upload (a screenshot, a pulled file), which a command's result names by
+-- id. The bytes are in the file store under the same id; `expires_at` is when the file's retention
+-- ends (seven days after the upload, spec §5.6).
+create table if not exists device_files (
+    id uuid primary key,
+    workspace_id uuid not null references workspaces (id),
+    mime text not null check (char_length(mime) between 1 and 255),
+    size_bytes bigint not null check (size_bytes >= 0),
+    sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'),
+    created_at timestamptz not null,
+    expires_at timestamptz not null
+);
+-- The retention sweep: files by the end of their retention.
+create index if not exists device_files_expiry on device_files (workspace_id, expires_at);
+
+alter table device_files enable row level security;
+alter table device_files force row level security;
+do $$
+begin
+    if not exists (select 1 from pg_policies where schemaname = current_schema() and tablename = 'device_files' and policyname = 'device_files_ws') then
+        create policy device_files_ws on device_files
             using (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
                    or current_setting('app.platform', true) = 'on')
             with check (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid

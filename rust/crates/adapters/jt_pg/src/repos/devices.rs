@@ -2,13 +2,14 @@
 //! phones. A command keeps the domain's encoding in `payload` (its kind beside it in `kind`) and
 //! the actor that queued it in `requested_by`; its bridge's result is written on the same row,
 //! `result` for a done command, `reason` and `detail` for a failed one. Commands are handed out in
-//! their queue order (`seq`).
+//! their queue order (`seq`). `device_files`, of the same migration, records the files the bridges
+//! upload.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::devices::{
-    CommandStatus, DeviceCommandRepo, DeviceCommandRow, ExpiredCommand, FailReason, Finish,
-    Finished, MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, cut_detail, failed_while_pending,
+    CommandStatus, DeviceCommandRepo, DeviceCommandRow, DeviceFile, ExpiredCommand, FailReason,
+    Finish, Finished, MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, cut_detail, failed_while_pending,
 };
 use jt_capability::CapabilityId;
 use jt_tenancy::WorkspaceId;
@@ -95,6 +96,17 @@ struct ExpiredRecord {
     kind: String,
     created_at: OffsetDateTime,
     leased_at: Option<OffsetDateTime>,
+}
+
+/// A `device_files` row.
+#[derive(sqlx::FromRow)]
+struct FileRecord {
+    id: Uuid,
+    mime: String,
+    size_bytes: i64,
+    sha256: String,
+    created_at: OffsetDateTime,
+    expires_at: OffsetDateTime,
 }
 
 fn encode<T: serde::Serialize>(value: &T) -> Result<Value, AppError> {
@@ -354,5 +366,59 @@ impl DeviceCommandRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "list device commands"))?;
         records.into_iter().map(Record::into_row).collect()
+    }
+
+    async fn save_file(&mut self, file: DeviceFile) -> Result<(), AppError> {
+        let size = i64::try_from(file.size_bytes)
+            .map_err(|_| AppError::internal("a device file's size does not fit the table"))?;
+        let saved = sqlx::query(
+            "insert into device_files (id, workspace_id, mime, size_bytes, sha256, created_at, \
+             expires_at) values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing",
+        )
+        .bind(file.id)
+        .bind(self.workspace_id().as_uuid())
+        .bind(&file.mime)
+        .bind(size)
+        .bind(&file.sha256)
+        .bind(file.created_at)
+        .bind(file.expires_at)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "record device file"))?;
+        if saved.rows_affected() == 0 {
+            return Err(AppError::conflict("the file id is already taken"));
+        }
+        Ok(())
+    }
+
+    async fn files(&mut self, ids: &[Uuid]) -> Result<Vec<DeviceFile>, AppError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let records: Vec<FileRecord> = sqlx::query_as(
+            "select id, mime, size_bytes, sha256, created_at, expires_at from device_files \
+             where workspace_id = $1 and id = any($2) order by id",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(ids)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read device files"))?;
+        records
+            .into_iter()
+            .map(|r| {
+                Ok(DeviceFile {
+                    id: r.id,
+                    mime: r.mime,
+                    size_bytes: stored(
+                        u64::try_from(r.size_bytes).ok(),
+                        "device_files.size_bytes",
+                    )?,
+                    sha256: r.sha256,
+                    created_at: r.created_at,
+                    expires_at: r.expires_at,
+                })
+            })
+            .collect()
     }
 }

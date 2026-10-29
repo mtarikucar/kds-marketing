@@ -110,6 +110,46 @@ async fn provider_url_expires_at_24_hours_and_is_tenant_signed() {
     );
     std::fs::remove_dir_all(p).unwrap();
 }
+#[tokio::test]
+async fn a_pulled_file_is_kept_and_a_url_may_live_shorter_than_a_day() {
+    let p = root();
+    let ws = WorkspaceId::new_v7();
+    let d = disk(&p);
+    // A file a device bridge pulled off a phone: any bytes, none too, kept as uploaded.
+    for (bytes, filename) in [
+        (b"\x00\x01any bytes".to_vec(), "pulled.bin"),
+        (Vec::new(), "empty.bin"),
+    ] {
+        let id = FileId::new_v7();
+        let u = MediaUpload {
+            bytes,
+            mime: "application/octet-stream".into(),
+            filename: filename.into(),
+        };
+        d.put(ws, id, u.clone()).await.unwrap();
+        assert_eq!(disk(&p).read(ws, id).await.unwrap(), u);
+    }
+    // A ten-minute URL (a device bridge's `push_file`) reads the file until it expires.
+    let id = FileId::new_v7();
+    d.put(ws, id, upload()).await.unwrap();
+    let url = d
+        .provider_url(ws, id, FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap();
+    assert_eq!(url.scheme(), "https");
+    let q: std::collections::HashMap<_, _> = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    let expiry: i64 = q["expires"].parse().unwrap();
+    assert_eq!(expiry, (FIXED_NOW + Duration::minutes(10)).unix_timestamp());
+    let verify = |now| jt_files::verify(&[42; 32], ws, id, expiry, &q["signature"], now);
+    assert!(verify(FIXED_NOW + Duration::minutes(9)).is_ok());
+    assert!(verify(FIXED_NOW + Duration::minutes(10)).is_err());
+    // A URL that would be over already is refused.
+    assert!(d.provider_url(ws, id, FIXED_NOW).await.is_err());
+    std::fs::remove_dir_all(p).unwrap();
+}
 #[test]
 fn file_config_requires_dir_and_public_base() {
     let p = root();
