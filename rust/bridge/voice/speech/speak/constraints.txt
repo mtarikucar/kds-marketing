@@ -1,0 +1,3 @@
+# B2 Step 7 [COORDINATOR, server] replaces this file with `pip freeze` of jeeta-ttstest:tmp, the
+# image the owner's blind phone test ran on. Until it holds that set (ema-lightning==1.1.2 and a
+# torch ...+cpu line), the Dockerfile refuses to build.

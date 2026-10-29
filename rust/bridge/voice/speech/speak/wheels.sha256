@@ -1,0 +1,3 @@
+# The sha256 of every wheel of the first good speak image, one `name==version sha256=<hex>` per
+# line (B2 Step 7 copies the image's /app/wheels.installed here). While this file lists none, a
+# build only records its wheels; once it lists them, a build whose wheels differ fails.

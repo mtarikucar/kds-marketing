@@ -2,3 +2,5 @@
 __pycache__/
 # The secrets live only on the host (/etc/jeeta-voice/asterisk/secrets, 0600); never a copy here.
 asterisk/etc/secrets/
+# Copied beside a service's Dockerfile for an image build only (B2/B3 server steps).
+speech/*/pytest.ini
