@@ -9,17 +9,21 @@
 //!   its pauses included.
 //! - After the agent's sentence, while the caller stays silent: "still there", once. A line of
 //!   the core (`play`, such as a holding line while the agent works on) ends that wait.
-//! - Words that were not heard: "not heard", at once, when nothing is owed, playing or queued.
+//! - Words that were not heard: "not heard", at once, when nothing is owed, playing or queued. A
+//!   turn still open 35 s after it began ([`TURN_LIMIT_MS`], beyond the listener's own 30 s cut)
+//!   lost its final or unheard words, and is closed as unheard.
 //! - The core lost: what was queued is dropped, the fault sentence plays, then the line is hung
 //!   up; once. A hangup the core already asked for goes on as it was (its closing is not
-//!   replaced).
+//!   replaced), and a sentence that comes after the loss is dropped. The fault sentence carries
+//!   the promise to call back, so it is heard to its end: the caller's speech does not cut it,
+//!   and it waits for an open turn to close, [`FAULT_WAIT_MS`] at most.
 //!
 //! The acknowledgement, the filler, the long wait and "still there" start no sooner than
 //! [`Timing::phrase_gap_ms`] after the last phrase ended; "not heard" and the fault sentence answer
 //! an event and wait for no gap. Nothing starts while the caller speaks, and the caller's speech
-//! cuts what plays unless it asked to be heard through (a phrase always may be cut). Once the core
-//! asked to hang up (or was lost), the line is hung up as soon as nothing is left to play, whether
-//! the last item played to its end or was cut.
+//! cuts what plays unless it asked to be heard through (every phrase but the fault sentence may be
+//! cut). Once the core asked to hang up (or was lost), the line is hung up as soon as nothing is
+//! left to play, whether the last item played to its end or was cut.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -30,6 +34,12 @@ use crate::text::Redacted;
 
 /// Milliseconds since the call was answered.
 pub type Ms = u64;
+
+/// How long the fault sentence waits for an open turn of the caller to close.
+pub const FAULT_WAIT_MS: Ms = 3_000;
+/// A turn of the caller open this long is closed as unheard words: the listener ends every turn
+/// within 30 s, so its final or unheard words were lost.
+pub const TURN_LIMIT_MS: Ms = 35_000;
 
 /// When the talker covers a silence (design addendum §3; tuned on real calls).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,6 +189,12 @@ pub struct Talker {
     speaking: bool,
     /// From the caller's `SpeechStart` to its `Final` or `Unheard`: a `SpeechEnd` is a pause.
     turn_open: bool,
+    /// When the open turn began.
+    turn_since: Ms,
+    /// When the core was lost: the fault sentence is queued, and no sentence of the core plays.
+    fault_since: Option<Ms>,
+    /// The time of the input being handled.
+    now: Ms,
     hangup_when_done: bool,
     hung_up: bool,
     /// The next phrase of each set, by [`PhraseSet::position`].
@@ -201,6 +217,9 @@ impl Talker {
             last_phrase_end: None,
             speaking: false,
             turn_open: false,
+            turn_since: 0,
+            fault_since: None,
+            now: 0,
             hangup_when_done: false,
             hung_up: false,
             rotation: [0; PhraseSet::ALL.len()],
@@ -217,13 +236,34 @@ impl Talker {
         self.playing.as_ref()
     }
 
+    /// A turn of the caller is open: from its `SpeechStart` to its `Final` or `Unheard`.
+    pub fn turn_open(&self) -> bool {
+        self.turn_open
+    }
+
     /// What to do about `input` at `now`.
     pub fn on(&mut self, input: Input, now: Ms) -> Vec<Action> {
         let mut out = Vec::new();
         if self.hung_up {
             return out;
         }
+        self.now = now;
         match input {
+            Input::Speak {
+                seq,
+                text,
+                barge_in,
+                agent,
+            } if self.fault_since.is_some() => {
+                // Too late: the line closes after the fault sentence.
+                let id = self.id();
+                out.push(Action::Dropped(vec![Item {
+                    id,
+                    source: Source::Core { seq, agent },
+                    text,
+                    barge_in,
+                }]));
+            }
             Input::Speak {
                 seq,
                 text,
@@ -249,6 +289,9 @@ impl Talker {
             }
             Input::HangupWhenDone => self.hangup_when_done = true,
             Input::SpeechStart => {
+                if !self.turn_open {
+                    self.turn_since = now;
+                }
                 self.speaking = true;
                 self.turn_open = true;
                 self.awaiting_since = None;
@@ -267,16 +310,7 @@ impl Talker {
                 self.still_there_done = false;
                 self.start_next(&mut out);
             }
-            Input::Unheard => {
-                // The listener may end a turn so without a `SpeechEnd` (its 30 s cut, a failure):
-                // what the caller held back plays now.
-                self.speaking = false;
-                self.turn_open = false;
-                self.start_next(&mut out);
-                if self.is_idle() && self.owed_since.is_none() && !self.hangup_when_done {
-                    self.phrase(PhraseSet::NotHeard, &mut out);
-                }
-            }
+            Input::Unheard => self.unheard(&mut out),
             Input::Played { id } => {
                 if let Some(item) = self.playing.take_if(|p| p.id == id) {
                     if matches!(item.source, Source::Phrase { .. }) {
@@ -296,6 +330,7 @@ impl Talker {
                 // Once: a second loss (the core came back and went again) restarts nothing, and a
                 // hangup the core already asked for ends the call with its own closing.
                 if !self.hangup_when_done {
+                    self.fault_since = Some(now);
                     self.cut(true, &mut out);
                     let dropped: Vec<Item> = self.queue.drain(..).collect();
                     if !dropped.is_empty() {
@@ -307,7 +342,14 @@ impl Talker {
                     self.hangup_when_done = true;
                 }
             }
-            Input::Tick => self.cover(now, &mut out),
+            Input::Tick => {
+                if self.turn_open && now.saturating_sub(self.turn_since) >= TURN_LIMIT_MS {
+                    self.unheard(&mut out);
+                }
+                // The fault sentence may be due now that its wait is over.
+                self.start_next(&mut out);
+                self.cover(now, &mut out);
+            }
         }
         // Whatever happened: a line that is to close closes once nothing is left to play.
         self.finish(&mut out);
@@ -320,8 +362,35 @@ impl Talker {
         id
     }
 
+    /// The caller's turn ended without words (or its words were lost): what the caller held back
+    /// plays now, else "not heard" when nothing is owed. The listener may end a turn so without a
+    /// `SpeechEnd` (its 30 s cut, a failure).
+    fn unheard(&mut self, out: &mut Vec<Action>) {
+        self.speaking = false;
+        self.turn_open = false;
+        self.start_next(out);
+        if self.is_idle() && self.owed_since.is_none() && !self.hangup_when_done {
+            self.phrase(PhraseSet::NotHeard, out);
+        }
+    }
+
     fn start_next(&mut self, out: &mut Vec<Action>) {
         if self.playing.is_some() || self.speaking {
+            return;
+        }
+        let fault_next = self.queue.front().is_some_and(|i| {
+            matches!(
+                i.source,
+                Source::Phrase {
+                    set: PhraseSet::Fault,
+                    ..
+                }
+            )
+        });
+        let fault_waits = self
+            .fault_since
+            .is_some_and(|since| self.now.saturating_sub(since) < FAULT_WAIT_MS);
+        if fault_next && self.turn_open && fault_waits {
             return;
         }
         if let Some(item) = self.queue.pop_front() {
@@ -423,7 +492,8 @@ impl Talker {
                 index: u8::try_from(index).unwrap_or(u8::MAX),
             },
             text,
-            barge_in: true,
+            // The fault sentence is heard to its end: it promises the call back.
+            barge_in: set != PhraseSet::Fault,
         });
         self.start_next(out);
     }

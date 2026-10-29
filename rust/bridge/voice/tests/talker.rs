@@ -252,14 +252,93 @@ fn a_closing_the_caller_talks_over_still_hangs_up() {
     assert!(t.on(Input::Final, 121_000).is_empty());
 }
 
+const FAULT: &str = "Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız.";
+
+/// B4 re-review N1: the fault sentence carries the call-back promise, so the caller's "Alo?" does
+/// not cut it; the line is hung up once it has played.
 #[test]
-fn a_fault_sentence_the_caller_talks_over_still_hangs_up() {
+fn the_fault_sentence_plays_to_its_end_then_hangs_up_even_if_the_caller_talks() {
     let mut t = talker();
     let lost = t.on(Input::CoreLost, 0);
-    assert_eq!(plays(&lost).len(), 1);
-    let cut = t.on(Input::SpeechStart, 500);
-    assert!(cut_of(&cut).is_some(), "{cut:?}");
-    assert!(cut.contains(&Action::Hangup), "{cut:?}");
+    assert_eq!(plays(&lost), [FAULT]);
+    let talked = t.on(Input::SpeechStart, 500);
+    assert!(cut_of(&talked).is_none(), "{talked:?}");
+    assert!(!talked.contains(&Action::Hangup));
+    assert!(t.on(Input::Final, 2_000).is_empty());
+    assert!(finish(&mut t, &lost, 5_000).contains(&Action::Hangup));
+}
+
+#[test]
+fn the_fault_sentence_waits_for_an_open_turn_to_close() {
+    let mut t = talker();
+    t.on(Input::SpeechStart, 0);
+    t.on(Input::SpeechEnd, 1_000);
+    // The core is lost in a pause of the caller's turn: the sentence waits for the turn.
+    assert!(plays(&t.on(Input::CoreLost, 1_500)).is_empty());
+    assert!(plays(&t.on(Input::Tick, 2_000)).is_empty());
+    t.on(Input::SpeechStart, 2_500);
+    t.on(Input::SpeechEnd, 3_000);
+    let fault = t.on(Input::Final, 3_200);
+    assert_eq!(plays(&fault), [FAULT]);
+    assert!(cut_of(&t.on(Input::SpeechStart, 3_600)).is_none());
+    assert!(finish(&mut t, &fault, 8_000).contains(&Action::Hangup));
+}
+
+#[test]
+fn the_fault_sentence_waits_three_seconds_at_most_for_a_turn() {
+    let mut t = talker();
+    t.on(Input::SpeechStart, 0);
+    t.on(Input::SpeechEnd, 1_000);
+    t.on(Input::CoreLost, 1_500);
+    for now in (1_520..4_500).step_by(20) {
+        assert!(plays(&t.on(Input::Tick, now)).is_empty(), "at {now}");
+    }
+    assert_eq!(plays(&t.on(Input::Tick, 4_500)), [FAULT]);
+}
+
+/// B4 re-review N2: a sentence that reaches the talker once the core was lost is never played.
+#[test]
+fn a_sentence_after_the_core_was_lost_is_dropped() {
+    let mut t = talker();
+    let lost = t.on(Input::CoreLost, 0);
+    let late = t.on(say(5, "Yarın uygun mu?"), 100);
+    assert!(plays(&late).is_empty(), "{late:?}");
+    let dropped: Vec<Item> = late
+        .iter()
+        .filter_map(|a| match a {
+            Action::Dropped(items) => Some(items.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(dropped.len(), 1, "{late:?}");
+    assert_eq!(
+        dropped[0].source,
+        Source::Core {
+            seq: 5,
+            agent: true
+        }
+    );
+    let done = finish(&mut t, &lost, 5_000);
+    assert!(done.contains(&Action::Hangup));
+    assert!(plays(&done).is_empty());
+}
+
+/// B4 re-review N3: a turn whose final or unheard words never came (a message the bridge could not
+/// read) is closed 35 s after it opened, beyond the listener's own 30 s cut, as unheard words.
+#[test]
+fn a_turn_left_open_is_closed_after_35_seconds() {
+    let mut t = talker();
+    t.on(Input::SpeechStart, 0);
+    assert!(t.turn_open());
+    for now in (20..35_000).step_by(20) {
+        assert!(plays(&t.on(Input::Tick, now)).is_empty(), "at {now}");
+    }
+    assert_eq!(
+        plays(&t.on(Input::Tick, 35_000)),
+        ["Sizi tam duyamadım, tekrar eder misiniz?"]
+    );
+    assert!(!t.turn_open());
 }
 
 #[test]
