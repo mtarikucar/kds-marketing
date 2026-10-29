@@ -33,7 +33,7 @@ use jt_device_protocol::{
 };
 use uuid::Uuid;
 
-const SERIAL: &str = "18cf9fbb";
+const SERIAL: &str = "0a1b2c3d";
 const ADB_IME: &str = "com.android.adbkeyboard/.AdbIME";
 /// The owner's phone's own keyboard, its input method when the tests begin.
 const PREFF: &str = "com.preff.kb.xm/com.preff.kb.LatinIME";
@@ -1066,7 +1066,7 @@ async fn a_phone_adb_cannot_reach_is_offline() {
     let adb = Arc::new(FakeAdb::phone().with(|s| {
         s.answers.push((
             "shell input tap 1 2".to_owned(),
-            AdbOutput::new(1, "", "adb.exe: device '18cf9fbb' not found\n"),
+            AdbOutput::new(1, "", "adb.exe: device '0a1b2c3d' not found\n"),
         ));
     }));
     let error = failed(run(&driver(&adb), DeviceCommand::Tap { x: 1, y: 2 }).await);
@@ -1366,7 +1366,7 @@ async fn a_failed_push_or_pull_is_told_in_adbs_words() {
             AdbOutput::new(
                 1,
                 "",
-                "adb: error: failed to get feature set: device '18cf9fbb' not found\n",
+                "adb: error: failed to get feature set: device '0a1b2c3d' not found\n",
             ),
         ));
         s.answers_starting.push((

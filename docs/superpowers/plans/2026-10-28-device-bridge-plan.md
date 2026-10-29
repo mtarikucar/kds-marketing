@@ -888,8 +888,8 @@ pub enum ContentType { Png, OctetStream }
 pub trait AdbRunner: Send + Sync { async fn run(&self, serial: &str, args: &[&str]) -> Result<AdbOutput, AdbError>; } // argv only
 pub struct DriverError { pub reason: FailReason, pub detail: String }
 ```
-Mapping per spec §4.1. Real-device findings on the owner's Redmi 10C (Android 13, MIUI 14, serial
-`18cf9fbb`), which the driver and its fixtures must cover:
+Mapping per spec §4.1. Real-device findings on the owner's Redmi 10C (Android 13, MIUI 14; its serial is the made-up
+`0a1b2c3d` in the fixtures), which the driver and its fixtures must cover:
 - MIUI's `uiautomator dump` writes a Java `FileNotFoundException …/theme_compatibility.xml` stack trace and
   still dumps (`UI hierchary dumped to: …`): judge a dump by the file's `<node` content, never by stderr.
   Test `miui_theme_stack_trace_is_not_a_failure`.

@@ -730,11 +730,11 @@ mod tests {
 
     #[test]
     fn devices_are_read_after_the_heading() {
-        let listing = "* daemon not running; starting now at tcp:5037\r\n* daemon started successfully\r\nList of devices attached\r\n18cf9fbb               device product:fog_tr model:220333QAG device:fog transport_id:1\r\nR58N0TEST0A    no permissions (missing udev rules?)\r\n\r\n";
+        let listing = "* daemon not running; starting now at tcp:5037\r\n* daemon started successfully\r\nList of devices attached\r\n0a1b2c3d               device product:fog_tr model:220333QAG device:fog transport_id:1\r\nR58N0TEST0A    no permissions (missing udev rules?)\r\n\r\n";
         assert_eq!(
             devices(listing),
             [
-                ("18cf9fbb".to_owned(), "device".to_owned()),
+                ("0a1b2c3d".to_owned(), "device".to_owned()),
                 ("R58N0TEST0A".to_owned(), "no".to_owned()),
             ]
         );
@@ -745,7 +745,7 @@ mod tests {
     fn adb_that_cannot_reach_the_phone() {
         let gone = |stderr: &str| unreachable(&AdbOutput::new(1, "", stderr)).map(|e| e.reason);
         assert_eq!(
-            gone("adb.exe: device '18cf9fbb' not found\r\n"),
+            gone("adb.exe: device '0a1b2c3d' not found\r\n"),
             Some(FailReason::DeviceOffline)
         );
         assert_eq!(
@@ -758,7 +758,7 @@ mod tests {
         );
         // Said anywhere in a line of adb's own, after what it was doing.
         assert_eq!(
-            gone("adb: error: failed to get feature set: device '18cf9fbb' not found\n"),
+            gone("adb: error: failed to get feature set: device '0a1b2c3d' not found\n"),
             Some(FailReason::DeviceOffline)
         );
         assert_eq!(
