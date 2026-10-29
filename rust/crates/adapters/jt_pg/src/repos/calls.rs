@@ -434,13 +434,17 @@ impl CallRepo for PgTenantRepos {
         stale_before: OffsetDateTime,
         limit: u32,
     ) -> Result<Vec<QueuedCommand>, AppError> {
+        // The pick is a materialized CTE so that it runs once. Joined to the update as a
+        // subquery, Postgres may run it again while updating; a new run passes over the rows
+        // this statement already updated (locking skips them) and picks further ones, so more
+        // than `limit` commands were taken.
         let mut rows: Vec<(i64, Uuid, Uuid, Value, Option<String>)> = sqlx::query_as(
-            "update call_commands c set taken_at = $3 \
-             from (select q.id, s.bridge_call_id from call_commands q \
+            "with picked as materialized (select q.id, s.bridge_call_id from call_commands q \
              join call_sessions s on s.workspace_id = q.workspace_id and s.id = q.call_id \
              where q.workspace_id = $1 and s.capability_id = $2 and q.acked_at is null \
              and (q.taken_at is null or q.taken_at < $4) \
-             order by q.seq limit $5 for update of q skip locked) picked \
+             order by q.seq limit $5 for update of q skip locked) \
+             update call_commands c set taken_at = $3 from picked \
              where c.workspace_id = $1 and c.id = picked.id \
              returning c.seq, c.id, c.call_id, c.payload, picked.bridge_call_id",
         )
