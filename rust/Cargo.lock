@@ -1397,6 +1397,7 @@ dependencies = [
  "jt_calls",
  "jt_capability",
  "jt_connector",
+ "jt_devices",
  "jt_inbox",
  "jt_ledger",
  "jt_mail",

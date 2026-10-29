@@ -50,6 +50,8 @@ pub use calls::MemCalls;
 mod capability;
 mod compliance;
 mod connector;
+mod devices;
+pub use devices::MemDevices;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
 mod platform;

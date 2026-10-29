@@ -121,6 +121,7 @@ pub struct MemState {
     pub billing_references: Vec<(WorkspaceId, String)>,
     pub studio: super::studio::MemStudio,
     pub calls: super::calls::MemCalls,
+    pub devices: super::devices::MemDevices,
     pub inbox: super::inbox::MemInbox,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
