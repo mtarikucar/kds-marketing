@@ -185,7 +185,7 @@ pub(crate) const ADB_CREATION_FLAGS: Option<u32> = if cfg!(windows) {
 ///
 /// Each call is a child process started with `kill_on_drop(true)` and no input, so a dropped
 /// call leaves no `adb` behind, and on Windows in a console of its own
-/// ([`ADB_CREATION_FLAGS`]). Unbounded in time itself: the driver bounds each call.
+/// (`CREATE_NO_WINDOW`). Unbounded in time itself: the driver bounds each call.
 #[derive(Clone, Debug)]
 pub struct SystemAdb {
     program: PathBuf,
