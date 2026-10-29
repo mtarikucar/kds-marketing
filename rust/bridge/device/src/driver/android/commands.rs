@@ -315,7 +315,7 @@ impl AndroidAdbDriver {
 
     /// `adb pull` of one regular file of at most [`MAX_PULL_BYTES`], checked on the phone first
     /// (`stat`, which follows a link as the copy does), so a folder or a huge file never fills
-    /// this computer's temporary folder.
+    /// this computer's temporary folder. A path that names nothing is `file_not_found`.
     async fn pull(
         &self,
         path: &str,
@@ -330,9 +330,15 @@ impl AndroidAdbDriver {
         let out = self.shell(&stat, Limits::ORDINARY).await?;
         if !out.success() {
             let said = String::from_utf8_lossy(&out.stderr);
+            let line = first_line(&said);
+            let reason = if not_there(line) {
+                FailReason::FileNotFound
+            } else {
+                FailReason::AdbError
+            };
             return Err(DriverError::new(
-                FailReason::AdbError,
-                format!("pull_file: {}", clean(first_line(&said))),
+                reason,
+                format!("pull_file: {}", clean(line)),
             ));
         }
         let said = out.stdout_text();
@@ -505,7 +511,9 @@ fn not_an_option(field: &'static str, path: &str) -> Result<(), DriverError> {
     Ok(())
 }
 
-/// An `adb push` or `adb pull` that did not exit with 0, with the line `adb` gave.
+/// An `adb push` or `adb pull` that did not exit with 0, with the line `adb` gave: a pull whose
+/// file is not on the phone (`adb: error: failed to stat remote object '…': No such file or
+/// directory`, gone since it was checked) is `file_not_found`, anything else `adb_error`.
 fn transferred(op: &str, out: &super::AdbOutput) -> Result<(), DriverError> {
     if out.success() {
         return Ok(());
@@ -515,10 +523,21 @@ fn transferred(op: &str, out: &super::AdbOutput) -> Result<(), DriverError> {
         "" => first_line(&out.stdout_text()).to_owned(),
         line => line.to_owned(),
     };
+    let reason = if op == "pull" && line.contains("remote object") && not_there(&line) {
+        FailReason::FileNotFound
+    } else {
+        FailReason::AdbError
+    };
     Err(DriverError::new(
-        FailReason::AdbError,
+        reason,
         format!("adb {op} failed: {}", clean(&line)),
     ))
+}
+
+/// Whether a line the phone or `adb` printed says a path names nothing: `stat: '…': No such file
+/// or directory`, as the Redmi answers for a path that is not there.
+fn not_there(line: &str) -> bool {
+    line.contains("No such file or directory")
 }
 
 /// A path in this computer's temporary folder for one transfer, removed (a file, or a folder an

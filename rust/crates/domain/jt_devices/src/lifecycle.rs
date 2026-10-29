@@ -76,7 +76,8 @@ pub enum FailReason {
     ScreenBusy,
     Timeout,
     BridgeError,
-    /// The file a command names (a `push_file`'s) is not stored: it was removed, or never was.
+    /// The file a command names is not there: a `push_file`'s Jeeta file is not stored (it was
+    /// removed, or never was), or a `pull_file`'s path names nothing on the phone.
     FileNotFound,
     /// A reason this version does not know: a newer bridge's new reason must not make an older
     /// server reject a whole batch of results. Always the last variant.

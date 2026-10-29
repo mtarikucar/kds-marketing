@@ -1349,9 +1349,58 @@ async fn pull_file_over_the_cap_is_refused_before_the_copy() {
         error.detail
     );
     let error = failed(run(&phone, pull("/sdcard/none")).await);
-    assert_eq!(error.reason, FailReason::AdbError);
+    assert_eq!(error.reason, FailReason::FileNotFound);
     assert!(error.detail.contains("No such file"), "{}", error.detail);
     assert!(adb.lines().iter().all(|l| !l.starts_with("pull ")));
+}
+
+#[tokio::test]
+async fn pull_file_of_a_path_that_is_not_there_is_file_not_found() {
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        // As the Redmi answered for a path that is not there.
+        s.answers.push((
+            "shell stat -L -c '%F %s' /sdcard/Download/does_not_exist.txt".to_owned(),
+            AdbOutput::new(
+                1,
+                "",
+                "stat: '/sdcard/Download/does_not_exist.txt': No such file or directory
+",
+            ),
+        ));
+        // Gone between the check and the copy: `adb pull` says so in its own words.
+        s.answers_starting.push((
+            "pull /sdcard/Download/gone.txt ",
+            AdbOutput::new(
+                1,
+                "",
+                "adb: error: failed to stat remote object '/sdcard/Download/gone.txt': No such file or directory
+",
+            ),
+        ));
+        // Not there for this user is not "not there".
+        s.answers.push((
+            "shell stat -L -c '%F %s' /data/secret".to_owned(),
+            AdbOutput::new(1, "", "stat: '/data/secret': Permission denied
+"),
+        ));
+    }));
+    let phone = driver(&adb);
+    let pull = |path: &str| DeviceCommand::PullFile {
+        path: path.to_owned(),
+    };
+    let error = failed(run(&phone, pull("/sdcard/Download/does_not_exist.txt")).await);
+    assert_eq!(error.reason, FailReason::FileNotFound);
+    assert!(error.detail.contains("No such file"), "{}", error.detail);
+    let error = failed(run(&phone, pull("/sdcard/Download/gone.txt")).await);
+    assert_eq!(error.reason, FailReason::FileNotFound);
+    assert!(error.detail.contains("No such file"), "{}", error.detail);
+    let error = failed(run(&phone, pull("/data/secret")).await);
+    assert_eq!(error.reason, FailReason::AdbError);
+    assert!(
+        error.detail.contains("Permission denied"),
+        "{}",
+        error.detail
+    );
 }
 
 #[tokio::test]
