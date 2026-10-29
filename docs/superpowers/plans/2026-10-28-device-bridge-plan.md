@@ -592,11 +592,46 @@ are set up before a strategy, like the bridge; `Write` for act):
   **full** command; signal the bridge; wait up to `wait_s` for a final status; return `{command_id, status,
   result?, reason?}`.
 - `observe` = `act(Observe{screenshot})` with the observation (and a signed screenshot URL) in the answer.
-- [ ] **Before `act` takes `push_file`:** `jt_files`' signed retrieve route (`/files/{id}`) reads the whole file into
+- [x] **Before `act` takes `push_file`:** `jt_files`' signed retrieve route (`/files/{id}`) reads the whole file into
   memory for each request. A leaked ten-minute `download_url` can be fetched many times at once, so stream the
   response (or cap the concurrent reads) before D1-T6 lets an agent queue a `push_file`.
-- [ ] **Tests first (`jt_app/tests/devices_agent.rs`):** `act_queues_and_returns_result_when_bridge_answers`, `act_returns_queued_when_wait_ends`, `act_refuses_unsupported_kind`, `act_refuses_unicode_without_feature`, `act_on_offline_phone_refuses_device_offline`, `act_on_phone_missing_from_latest_register_refuses_device_offline` (a stale phone is not "live"), `ledger_carries_full_command`, `tracing_never_carries_args` (capture `tracing` output with a test subscriber; assert typed text / shell args absent), `rep_cannot_act`, `command_get_waits`; `jt_mcp/tests/devices_mcp.rs::tools_listed_with_schemas`.
-- [ ] CI red → implement → green; **commit** `feat(devices): agents act on phones`.
+- [x] **Tests first (`jt_app/tests/devices_agent.rs`):** `act_queues_and_returns_result_when_bridge_answers`, `act_returns_queued_when_wait_ends`, `act_refuses_unsupported_kind`, `act_refuses_unicode_without_feature`, `act_on_offline_phone_refuses_device_offline`, `act_on_phone_missing_from_latest_register_refuses_device_offline` (a stale phone is not "live"), `ledger_carries_full_command`, `tracing_never_carries_args` (capture `tracing` output with a test subscriber; assert typed text / shell args absent), `rep_cannot_act`, `command_get_waits`; `jt_mcp/tests/devices_mcp.rs::tools_listed_with_schemas`.
+- [x] CI red → implement → green; **commit** `feat(devices): agents act on phones`.
+
+As built (D1-T6):
+- **Use cases** (`jt_app::usecases::devices::agent`), every one `ctx.require(DevicesWork)`:
+  `list(deps, ctx) -> Vec<PhoneOut>`, `observe(deps, ctx, CapabilityId, ObserveInput{screenshot, wait_s})`,
+  `act(deps, ctx, CapabilityId, ActInput{command, wait_s}) -> CommandOut`,
+  `command_get(deps, ctx, Uuid, WaitQuery{wait_s}) -> CommandOut`,
+  `commands(deps, ctx, CapabilityId, LogQuery{limit}) -> Vec<CommandOut>`. `CommandOut` is the command as it stands:
+  `command_id, capability_id, kind, command` (the arguments), `status, attempts, result, reason, detail, file_url,
+  requested_by, created_at, expires_at, leased_at, done_at`.
+- **Waits.** `MAX_WAIT_S` = 20 s, also what an absent `wait_s` waits (more is cut to it, 0 answers at once), on the
+  kernel's `wait_for` over the devices' signal (woken by the bridge's results, else read every `FALLBACK_TICK`); the
+  wait answers once the command `is_final()`, else reads it once more and answers `queued`/`leased`.
+- **Checks, in order** (before anything is queued): `validate()` (`422` naming the field); a `push_file`'s file in
+  the store (`422` `file_id`, `reason: file_not_found`; a store that cannot answer does not refuse, the lease checks
+  again); a `phone` capability of the workspace (`404`); not retired (`409 phone_retired`); `online`: stored status
+  verified, `last_verified_at` within `ONLINE_FOR` (= `HELD_FOR`, 60 s; `phone` has no heartbeat kind until D1-T7)
+  and `listed` in its holder's latest registration (`409 device_offline`); `required_features`: the kind missing is
+  `422 {field: command, reason: unsupported_by_bridge, kind}`, `text.unicode` missing is
+  `422 {field: command, reason: unicode_unsupported, hint}` with `UNICODE_HINT` (install and enable ADBKeyBoard).
+- **Ledger.** `devices.command.queued {command_id, phone, kind, command, expires_at}`, subject `device_command`, in the
+  transaction that queues it; `devices.command.finished` stays the bridge surface's (spec §5.5: the result is
+  referenced, kept on the command row).
+- **File addresses.** An answer whose result names a file (`file.file_id`, `observation.screenshot_file_id`) carries
+  `file_url`, signed for `FILE_URL_LIFETIME` (10 min) at answer time; the log (`commands`) carries none.
+- **Tracing.** `device command queued` (`command_id`, `capability_id`, `kind`) and `device command waited on`
+  (`command_id`, `kind`, `status`, `waited_ms`); a URL that cannot be signed is a `warn` with the error code. Pinned by
+  `jt_app/tests/devices_agent_tracing.rs::tracing_never_carries_args`, a binary of its own (it installs the global
+  subscriber), with canaries in every argument, result, detail, path and file and the signed addresses' host.
+- **Streamed retrieval.** `FileStore::read_stream(ws, id) -> StreamedFile {mime, size_bytes, bytes: Box<dyn
+  ByteSource>}` (a default that reads whole); `jt_files::DiskFiles` opens the file, checks the header and the
+  metadata as `validate_stored` would, and reads `READ_CHUNK` (64 KiB) at a time, hashing; the chunk that completes
+  the file is given out only once nothing follows it and the hash is the header's. The route announces
+  `Content-Length` and answers `Body::from_stream`, so a file that fails the check is cut short of its length.
+  Test `jt_files::a_large_file_is_served_a_chunk_at_a_time` (chunks ≤ 64 KiB, the body's size hint unknown, a
+  tampered file cut off).
 
 ### Task D1-T7: jobs
 

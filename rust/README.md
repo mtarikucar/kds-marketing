@@ -2005,6 +2005,33 @@ field.
 | `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, from the bridge the command was leased to (or the one that holds its phone now), else counted `unknown`; a file id that is not a device file this bridge uploaded refuses the batch |
 | `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself, streamed (`image/png` up to 25 MB, `application/octet-stream` up to 95 MiB, under Cloudflare's 100 MB); each workspace uploads two screenshots and two pulled files at a time, a wait over 10 s is a retryable `503`; a device file kept seven days; `{"file_id"}` |
 
+#### Phones for agents (device bridge D1-T6)
+
+An agent, or a person holding `devices.work` (the owner and the manager; a rep does not), drives a
+phone through these (`jt_app::usecases::devices::agent`). `act` is the one way a command is queued:
+it checks the command's bounds, that a `push_file`'s file is stored, that the phone is online
+(verified, registered within the last minute by the bridge that holds it, and listed in that
+bridge's latest registration) and that its bridge lists what the command needs, then queues it
+(it expires after five minutes), writes `devices.command.queued` with the whole command (typed
+text and shell arguments included) and waits up to 20 seconds for its result. A queued command is
+not a done one: the answer is the command as it then stands (`queued`, `leased`, `done`,
+`failed`, `expired`), and `command_get` waits on it again. There is no allowlist, rate cap,
+approval or address filter (owner, spec §1); `tracing` carries ids, kinds and statuses only.
+Exempt from the strategy gate, not from the status check.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `devices.list` | `GET /api/devices` | `jeeta.devices.list` | READ | the phones that are not retired: `online`, status, platform, serial, model, OS, screen, features, `unicode`, bridge, last seen |
+| `devices.observe` | `POST /api/devices/{capability_id}/observe` | `jeeta.devices.observe` | WRITE | `act` with `observe {screenshot}`: the observation, and a 10-minute `file_url` for the screenshot |
+| `devices.act` | `POST /api/devices/{capability_id}/act` | `jeeta.devices.act` | WRITE | `{command, wait_s ≤ 20}`; `422` `unsupported_by_bridge` (`details.kind`) or `unicode_unsupported` (install and enable ADBKeyBoard), `409` `device_offline` or `phone_retired` |
+| `devices.command_get` | `GET /api/devices/commands/{command_id}?wait_s` | `jeeta.devices.command_get` | READ | waits up to 20 s for the command to end; at once once it has |
+| `devices.commands` | `GET /api/devices/{capability_id}/commands?limit` | `jeeta.devices.commands` | READ | the phone's log, newest first, 1 to 200 (50), with arguments and results |
+
+The signed file address (`GET /files/{id}`, which a `push_file` download and a `file_url` use) is
+served as a stream: 64 KiB read at a time, hashed as it is read, its length announced and its last
+chunk sent only once the hash is the stored one, so a large file, or many reads of one at once,
+are never held in memory whole.
+
 Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
 dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes
 through `jt_studio::time_compat`: written as RFC 3339 text (a date as `YYYY-MM-DD`), so MCP
