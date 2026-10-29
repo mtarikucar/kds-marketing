@@ -8,8 +8,10 @@
 //! connection, so its heartbeat never reads as an agent checking in.
 //!
 //! **Heartbeat.** A bridge registers every [`BridgeSpec::heartbeat_s`] seconds; each registration
-//! verifies the capabilities it keeps alive ([`heartbeat`]): `last_verified_at` is the heartbeat,
-//! and what it reported of each is merged into the capability's `connector_public`. A capability
+//! verifies the capabilities it keeps alive ([`heartbeat`]), declaring one it reports for the
+//! first time ([`declare`]; [`of_kind`] and [`held`] find what the workspace already holds):
+//! `last_verified_at` is the heartbeat, and what it reported of each is merged into the
+//! capability's `connector_public` as the spec's [`FactsMerge`] says. A capability
 //! of a kind with a heartbeat (`jt_capability::Heartbeat`) reads stale once its last one is older
 //! than the kind's `stale_after`, and a health job marks it unreachable once it is older than the
 //! kind's `unreachable_after` ([`silent`], [`mark_unreachable`]). A registration that brings it
@@ -19,22 +21,29 @@
 //! **Waiting.** A long-poll ([`wait_for`]) reads, and while it finds nothing waits until it is
 //! signalled ([`crate::ports::bridges::BridgeSignals`]) or a [`FALLBACK_TICK`] has passed (what
 //! another instance committed, a lease running out), then reads again, until its wait is over.
+//!
+//! **Leasing.** Each read of a bridge's poll for its commands leases in a transaction of its own,
+//! as of when it is made ([`lease`]): the poll's time plus how long it has waited. A command
+//! handed out and not acknowledged within the spec's [`BridgeSpec::redeliver_after`] is due
+//! again. Which commands a read takes, and how, is the bridge's own.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration as StdDuration;
 
-use jt_capability::{Capability, CapabilityId, EffectiveStatus, StoredStatus, effective_status};
+use jt_capability::{
+    Capability, CapabilityId, EffectiveStatus, NewCapability, StoredStatus, effective_status,
+};
 use jt_ledger::Actor;
 use jt_strategy::StrategyVersionId;
 use jt_tenancy::Permission;
 use serde_json::{Map, Value, json};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::bridges::{BridgeSignals, SignalKey};
-use crate::ports::{CapabilityFilter, TenantRepos};
+use crate::ports::{CapabilityFilter, IdGen, TenantRepos};
 use crate::usecases::Deps;
 use crate::usecases::api_keys::AgentPrincipal;
 use crate::usecases::capabilities::{append, locked, not_retired, version_in_force};
@@ -59,6 +68,24 @@ pub struct BridgeSpec {
     pub online_action: &'static str,
     /// The ledger action of a capability marked unreachable, e.g. `"calls.bridge.offline"`.
     pub offline_action: &'static str,
+    /// How long a command handed out stays the bridge's before it is handed out again, when the
+    /// bridge has not acknowledged it ([`lease`]).
+    pub redeliver_after: Duration,
+    /// How a heartbeat's facts are merged into what a capability kept ([`heartbeat`]).
+    pub merge: FactsMerge,
+}
+
+/// How what a heartbeat reports of a capability is merged into its `connector_public`
+/// ([`merge_facts`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FactsMerge {
+    /// Each fact (a key of `connector_public`) in place of the one it had; the other keys kept.
+    Replace,
+    /// As [`FactsMerge::Replace`], except that a fact that is an object is merged into the object
+    /// the capability kept under its name, key by key and as deep as both are objects: what a
+    /// heartbeat leaves out is kept, never dropped (a bridge that cannot read a phone's model once
+    /// does not erase it). Any other value, an array included, replaces the one it had.
+    Deep,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -105,8 +132,8 @@ pub fn require_bridge(spec: &BridgeSpec, ctx: &Ctx) -> Result<(), AppError> {
 // ---------------------------------------------------------------------------------------------
 
 /// What one registration reports of a capability its bridge keeps alive: the facts to keep in
-/// its `connector_public` (each key in place of the one it had, its other keys kept), and the
-/// payload of the `online_action` entry written should this registration bring it back.
+/// its `connector_public` (merged as the bridge's [`BridgeSpec::merge`] says), and the payload
+/// of the `online_action` entry written should this registration bring it back.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Beat {
     pub capability_id: CapabilityId,
@@ -116,7 +143,8 @@ pub struct Beat {
 
 /// Bridge `spec`'s heartbeat on `beat.capability_id`, in the caller's bundle: the capability,
 /// locked, reads verified at `ctx.now` (whatever it read before, a person's `mark_unreachable`
-/// included) with `beat.facts` merged into its `connector_public`; `spec.online_action` is written
+/// included) with `beat.facts` merged into its `connector_public` ([`merge_facts`] with
+/// `spec.merge`); `spec.online_action` is written
 /// (with `beat.online`, under the version in force `in_force`) when it did not read verified until
 /// now. The capability as stored. Only `spec`'s own context ([`require_bridge`]); an unknown
 /// capability is `NOT_FOUND`, a retired one `CONFLICT` "capability is retired", read under the
@@ -136,10 +164,7 @@ pub async fn heartbeat(
     capability.status = StoredStatus::Verified;
     capability.last_verified_at = Some(ctx.now);
     capability.updated_at = ctx.now;
-    match capability.connector_public.as_object_mut() {
-        Some(public) => public.extend(beat.facts),
-        None => capability.connector_public = Value::Object(beat.facts),
-    }
+    merge_facts(&mut capability.connector_public, beat.facts, spec.merge);
     r.capabilities().update(capability.clone()).await?;
     if before != EffectiveStatus::Verified {
         append(
@@ -154,6 +179,118 @@ pub async fn heartbeat(
         .await?;
     }
     Ok(capability)
+}
+
+/// Merges `facts` into `public` as `how` says (see [`FactsMerge`]); a `public` that is not an
+/// object becomes `facts`.
+pub fn merge_facts(public: &mut Value, facts: Map<String, Value>, how: FactsMerge) {
+    match public.as_object_mut() {
+        Some(kept) => merge_into(kept, facts, how == FactsMerge::Deep),
+        None => *public = Value::Object(facts),
+    }
+}
+
+/// Each of `facts` into `kept`, in place of what it had; with `deep`, an object into the object
+/// it had, the same way.
+fn merge_into(kept: &mut Map<String, Value>, facts: Map<String, Value>, deep: bool) {
+    for (key, value) in facts {
+        match kept.get_mut(&key) {
+            Some(Value::Object(old)) if deep && value.is_object() => {
+                if let Value::Object(new) = value {
+                    merge_into(old, new, true);
+                }
+            }
+            Some(slot) => *slot = value,
+            None => {
+                kept.insert(key, value);
+            }
+        }
+    }
+}
+
+/// The workspace's capabilities of kind `kind_key`, oldest first, retired ones included.
+pub async fn of_kind(
+    r: &mut dyn TenantRepos,
+    kind_key: &'static str,
+) -> Result<Vec<Capability>, AppError> {
+    r.capabilities()
+        .list(CapabilityFilter {
+            kind: Some(kind_key),
+            ..CapabilityFilter::default()
+        })
+        .await
+}
+
+/// How a workspace holds what a bridge reports under one external id ([`held`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Held<'c> {
+    /// The capability that is not retired: the one the bridge keeps alive.
+    Live(&'c Capability),
+    /// Only retired ones. It is not declared again; what the bridge is told is its own policy.
+    Retired,
+    /// None: the bridge declares it ([`declare`]).
+    Missing,
+}
+
+/// How `capabilities` (one kind's, as [`of_kind`] reads them) hold external id `external_id`.
+pub fn held<'c>(capabilities: &'c [Capability], external_id: &str) -> Held<'c> {
+    let mut of_id = capabilities
+        .iter()
+        .filter(|c| c.external_id.as_deref() == Some(external_id))
+        .peekable();
+    if of_id.peek().is_none() {
+        return Held::Missing;
+    }
+    of_id
+        .find(|c| c.status != StoredStatus::Retired)
+        .map_or(Held::Retired, Held::Live)
+}
+
+/// Declares, in the caller's bundle, a capability of kind `kind_key` named `name` with external id
+/// `external_id` (its id from `ids`, under the version in force `in_force`), as
+/// `capability.declare` would, writing `capability.declare` (`kind_key`, `name`, `external_id`):
+/// what a bridge reports for the first time. The caller has checked that the name and the
+/// external id are valid ones.
+pub async fn declare(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    ids: &dyn IdGen,
+    kind_key: &str,
+    name: &str,
+    external_id: &str,
+    in_force: Option<StrategyVersionId>,
+) -> Result<CapabilityId, AppError> {
+    let mut capability = Capability::new(
+        CapabilityId(ids.uuid()),
+        ctx.workspace_id,
+        NewCapability {
+            kind_key: kind_key.into(),
+            name: name.into(),
+            external_id: Some(external_id.to_owned()),
+            ..NewCapability::default()
+        },
+        ctx.now,
+    )
+    .map_err(|e| AppError::internal(format!("a {kind_key} cannot be declared: {e}")))?;
+    capability.strategy_version_id = in_force.map(|v| v.as_uuid());
+    let id = capability.id;
+    let payload = json!({
+        "kind_key": capability.kind_key,
+        "name": capability.name,
+        "external_id": external_id,
+    });
+    r.capabilities().insert(capability, None).await?;
+    append(
+        r,
+        ctx,
+        "capability.declare",
+        "capability",
+        id,
+        in_force,
+        payload,
+    )
+    .await?;
+    Ok(id)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -233,7 +370,7 @@ pub async fn mark_unreachable(
 // Waiting
 // ---------------------------------------------------------------------------------------------
 
-/// What one read of a long-poll returns ([`wait_for`]).
+/// What one read of a long-poll returns ([`wait_for`]), and what a lease takes ([`lease`]).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A long-poll on `key` (see the module docs): `poll` reads, told how long the wait has lasted so
@@ -261,4 +398,52 @@ pub async fn wait_for<'a, T>(
         // Woken, or the fallback tick: look again either way.
         let _ = tokio::time::timeout(FALLBACK_TICK.min(wait - waited), watch).await;
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Leasing
+// ---------------------------------------------------------------------------------------------
+
+/// When one read of a bridge's poll leases ([`lease`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lease {
+    /// The read's time: the poll's, plus how long it has waited so far.
+    pub now: OffsetDateTime,
+    /// `now` less the spec's [`BridgeSpec::redeliver_after`]: a command handed out at or before
+    /// this, and not acknowledged, is due again.
+    pub redeliver_before: OffsetDateTime,
+}
+
+/// One read of bridge `spec`'s poll for its commands, `waited` into the wait of the poll made at
+/// `ctx.now` (see the module docs): `take` leases in a transaction of its own, committed once it
+/// answered, given the repos, the bridge's context at the read's time and the [`Lease`]; `Some`
+/// with what it took, `None` when it took nothing. Its error ends the read with nothing committed.
+/// Only `spec`'s own context ([`require_bridge`]).
+pub async fn lease<T, F>(
+    deps: &Deps,
+    ctx: &Ctx,
+    spec: &BridgeSpec,
+    waited: StdDuration,
+    take: F,
+) -> Result<Option<Vec<T>>, AppError>
+where
+    T: Send,
+    F: for<'r> FnOnce(
+            &'r mut dyn TenantRepos,
+            &'r Ctx,
+            Lease,
+        ) -> BoxFuture<'r, Result<Vec<T>, AppError>>
+        + Send,
+{
+    require_bridge(spec, ctx)?;
+    let now = ctx.now + Duration::try_from(waited).unwrap_or(Duration::ZERO);
+    let at = Ctx { now, ..ctx.clone() };
+    let when = Lease {
+        now,
+        redeliver_before: now - spec.redeliver_after,
+    };
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    let taken = take(r.as_mut(), &at, when).await?;
+    r.commit().await?;
+    Ok((!taken.is_empty()).then_some(taken))
 }

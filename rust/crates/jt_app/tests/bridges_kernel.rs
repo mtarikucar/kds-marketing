@@ -19,7 +19,7 @@ use jt_app::ports::UnitOfWork;
 use jt_app::ports::bridges::{BridgeSignals, SignalKey};
 use jt_app::std_impls::LocalBridgeSignals;
 use jt_app::usecases::api_keys::{self, AgentPrincipal, CreateKey};
-use jt_app::usecases::bridges::kernel::{self, Beat, BridgeSpec, FALLBACK_TICK};
+use jt_app::usecases::bridges::kernel::{self, Beat, BridgeSpec, FALLBACK_TICK, FactsMerge, Held};
 use jt_app::usecases::capabilities;
 use jt_capability::{Capability, CapabilityId, EffectiveStatus, StoredStatus, effective_status};
 use jt_ledger::{Actor, Subject};
@@ -38,6 +38,8 @@ const SPEC: BridgeSpec = BridgeSpec {
     heartbeat_s: 15,
     online_action: "test.bridge.online",
     offline_action: "test.bridge.offline",
+    redeliver_after: Duration::seconds(10),
+    merge: FactsMerge::Replace,
 };
 
 /// The kind of the capabilities the test bridge keeps alive: a kind with a heartbeat.
@@ -551,4 +553,222 @@ async fn wait_for_times_out_within_wait_plus_one() {
         .await;
     assert_eq!(err(failed).code, ErrorCode::Conflict);
     assert!(started.elapsed() < StdDuration::from_millis(500));
+}
+
+#[tokio::test]
+async fn lease_reads_at_its_time_and_commits_what_it_took() {
+    let (w, ctx) = rig().await;
+    // A read three seconds into the wait leases as of then, redelivering what was handed out ten
+    // seconds before that, and is given the bridge's context at that time.
+    let waited = StdDuration::from_secs(3);
+    let id = CapabilityId::new_v7();
+    let taken = kernel::lease(&w.deps, &ctx, &SPEC, waited, move |r, at_ctx, lease| {
+        Box::pin(async move {
+            let c = Capability::new(
+                id,
+                at_ctx.workspace_id,
+                jt_capability::NewCapability {
+                    kind_key: KIND.into(),
+                    name: "Köprü".into(),
+                    ..jt_capability::NewCapability::default()
+                },
+                at_ctx.now,
+            )
+            .unwrap();
+            r.capabilities().insert(c, None).await?;
+            Ok(vec![(lease, at_ctx.now, at_ctx.actor.clone())])
+        })
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let now = FIXED_NOW + Duration::seconds(3);
+    assert_eq!(
+        taken,
+        [(
+            kernel::Lease {
+                now,
+                redeliver_before: now - Duration::seconds(10),
+            },
+            now,
+            ctx.actor.clone(),
+        )]
+    );
+    // What it wrote was committed.
+    assert_eq!(stored(&w, id).await.created_at, now);
+
+    // Taking nothing is `None`.
+    let none = kernel::lease(&w.deps, &ctx, &SPEC, StdDuration::ZERO, |_, _, _| {
+        Box::pin(async { Ok(Vec::<()>::new()) })
+    })
+    .await
+    .unwrap();
+    assert_eq!(none, None);
+
+    // An error ends the read with nothing committed.
+    let lost = CapabilityId::new_v7();
+    let failed = kernel::lease(
+        &w.deps,
+        &ctx,
+        &SPEC,
+        StdDuration::ZERO,
+        move |r, at_ctx, _| {
+            Box::pin(async move {
+                let c = Capability::new(
+                    lost,
+                    at_ctx.workspace_id,
+                    jt_capability::NewCapability {
+                        kind_key: KIND.into(),
+                        name: "Köprü".into(),
+                        ..jt_capability::NewCapability::default()
+                    },
+                    at_ctx.now,
+                )
+                .unwrap();
+                r.capabilities().insert(c, None).await?;
+                Err::<Vec<()>, _>(AppError::conflict("busy"))
+            })
+        },
+    )
+    .await;
+    assert_eq!(err(failed).code, ErrorCode::Conflict);
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    assert!(r.capabilities().find(lost).await.unwrap().is_none());
+    drop(r);
+
+    // Only the bridge's own context leases; the read is not made.
+    let refused = kernel::lease(
+        &w.deps,
+        &w.owner_ctx,
+        &SPEC,
+        StdDuration::ZERO,
+        |_, _, _| Box::pin(async { panic!("a context that is not the bridge's never reads") }),
+    )
+    .await;
+    assert_bridge_key_only(&err::<Option<Vec<()>>>(refused));
+}
+
+#[tokio::test]
+async fn declare_and_held_find_what_the_workspace_holds() {
+    let (w, ctx) = rig().await;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    assert!(kernel::of_kind(r.as_mut(), KIND).await.unwrap().is_empty());
+    let id = kernel::declare(
+        r.as_mut(),
+        &ctx,
+        w.deps.ids.as_ref(),
+        KIND,
+        "Köprü 7",
+        "7",
+        None,
+    )
+    .await
+    .unwrap();
+    r.commit().await.unwrap();
+
+    // Declared as `capability.declare` would, by the bridge.
+    let c = stored(&w, id).await;
+    assert_eq!(
+        (
+            c.kind_key.as_str(),
+            c.name.as_str(),
+            c.external_id.as_deref()
+        ),
+        (KIND, "Köprü 7", Some("7"))
+    );
+    assert_eq!(c.status, StoredStatus::Declared);
+    let entries = w.entries("capability.declare");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].payload,
+        json!({ "kind_key": KIND, "name": "Köprü 7", "external_id": "7" })
+    );
+    assert_eq!(entries[0].actor, ctx.actor);
+
+    // Held live under its external id; nothing under another.
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let all = kernel::of_kind(r.as_mut(), KIND).await.unwrap();
+    drop(r);
+    assert!(matches!(kernel::held(&all, "7"), Held::Live(c) if c.id == id));
+    assert_eq!(kernel::held(&all, "8"), Held::Missing);
+
+    // Retired, it is held as retired only, never as live.
+    capabilities::retire(&w.deps, &w.owner_ctx, id, true)
+        .await
+        .unwrap();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let all = kernel::of_kind(r.as_mut(), KIND).await.unwrap();
+    drop(r);
+    assert_eq!(all.len(), 1, "a retired capability is still of its kind");
+    assert_eq!(kernel::held(&all, "7"), Held::Retired);
+}
+
+#[tokio::test]
+async fn deep_merge_keeps_what_a_heartbeat_leaves_out() {
+    let (w, ctx) = rig().await;
+    let deep = BridgeSpec {
+        merge: FactsMerge::Deep,
+        ..SPEC
+    };
+    let id = w.declare(KIND, "Köprü").await.capability.id;
+    let beat_deep = |facts: Value, now: OffsetDateTime| {
+        let (w, ctx) = (&w, &ctx);
+        async move {
+            let mut r = w.uow.tenant(w.ws).await.unwrap();
+            let c = kernel::heartbeat(
+                r.as_mut(),
+                &at(ctx, now),
+                &deep,
+                None,
+                Beat {
+                    capability_id: id,
+                    facts: facts.as_object().unwrap().clone(),
+                    online: online(id),
+                },
+            )
+            .await
+            .unwrap();
+            r.commit().await.unwrap();
+            c
+        }
+    };
+    beat_deep(
+        json!({ "device": { "model": "A", "screen": { "w": 1, "h": 2 }, "features": ["a", "b"] }, "lines": 1 }),
+        FIXED_NOW,
+    )
+    .await;
+    // What the next one reports changes, key by key and as deep as both are objects; what it
+    // leaves out is kept; an array is replaced whole.
+    let c = beat_deep(
+        json!({ "device": { "screen": { "w": 3 }, "features": ["c"], "os": "13" }, "lines": 2 }),
+        FIXED_NOW + Duration::seconds(15),
+    )
+    .await;
+    assert_eq!(
+        c.connector_public,
+        json!({
+            "device": { "model": "A", "screen": { "w": 3, "h": 2 }, "features": ["c"], "os": "13" },
+            "lines": 2,
+        })
+    );
+
+    // Replacing, as the voice bridge does, replaces each fact whole.
+    let mut kept = json!({ "bridge": { "version": "1", "codecs": ["PCMA"] }, "lines": 1 });
+    kernel::merge_facts(
+        &mut kept,
+        json!({ "bridge": { "version": "2" } })
+            .as_object()
+            .unwrap()
+            .clone(),
+        FactsMerge::Replace,
+    );
+    assert_eq!(kept, json!({ "bridge": { "version": "2" }, "lines": 1 }));
+    // Facts over something that is not an object become the facts.
+    let mut kept = Value::Null;
+    kernel::merge_facts(
+        &mut kept,
+        json!({ "lines": 1 }).as_object().unwrap().clone(),
+        FactsMerge::Deep,
+    );
+    assert_eq!(kept, json!({ "lines": 1 }));
 }
