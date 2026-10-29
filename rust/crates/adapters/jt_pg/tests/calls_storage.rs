@@ -392,6 +392,56 @@ async fn bridge_commands_lease_in_queue_order_and_events_are_noted_once() {
     t.commit().await.unwrap();
 }
 
+/// A poll takes at most its limit, in queue order; the commands it leaves wait, untaken, for the
+/// next poll.
+#[tokio::test]
+async fn bridge_commands_take_at_most_the_limit() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let (a, _) = db.seed_workspace("bridge-limit").await;
+    let bridge = voice_bridge(&uow, a, "101").await;
+    let call = CallSession {
+        mode: CallMode::Agent,
+        bridge_call_id: Some("b-1".into()),
+        crm_id: None,
+        ..session(a, bridge, "unused")
+    };
+    // Four commands, queued in the opposite order of their ids.
+    let ids: Vec<CallCommandId> = (1..=4u128)
+        .rev()
+        .map(|n| CallCommandId(Uuid::from_u128(n)))
+        .collect();
+    let mut t = uow.tenant(a).await.unwrap();
+    t.calls().insert(call.clone(), T0).await.unwrap();
+    t.calls()
+        .enqueue_commands(
+            call.id,
+            ids.iter().map(|id| (*id, Command::Hangup)).collect(),
+            T0,
+        )
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+
+    let later = |s: i64| T0 + time::Duration::seconds(s);
+    let take = |at: i64| {
+        let uow = uow.clone();
+        async move {
+            let mut t = uow.tenant(a).await.unwrap();
+            let taken = t
+                .calls()
+                .take_commands(bridge, later(at), later(at - 10), 2)
+                .await
+                .unwrap();
+            t.commit().await.unwrap();
+            taken.into_iter().map(|q| q.id).collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(take(1).await, ids[..2]);
+    assert_eq!(take(2).await, ids[2..]);
+    assert!(take(3).await.is_empty());
+}
+
 /// An agent's call of `ws` through `bridge`, known to the bridge as `bridge_call_id`.
 fn agent_call(ws: WorkspaceId, bridge: CapabilityId, bridge_call_id: &str) -> CallSession {
     CallSession {
