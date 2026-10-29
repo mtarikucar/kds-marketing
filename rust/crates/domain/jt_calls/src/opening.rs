@@ -30,7 +30,7 @@ fn is_vowel(c: char) -> bool {
 }
 
 /// `c` lowercased the Turkish way (`I` → `ı`, `İ` → `i`).
-fn lower_tr(c: char) -> char {
+pub(crate) fn lower_tr(c: char) -> char {
     match c {
         'I' => 'ı',
         'İ' => 'i',

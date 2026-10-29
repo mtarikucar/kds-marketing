@@ -28,7 +28,7 @@ pub use opening::{
 pub use phrases::{BridgePhrases, PhraseSet};
 pub use plan::{
     CallPlan, MAX_CALL_DURATION_S, MAX_FALLBACK_LINES, MAX_HOLDING_LINES, MAX_HOTWORD_CHARS,
-    MAX_HOTWORDS, MAX_LINE_CHARS, PlanError, call_hotwords,
+    MAX_HOTWORDS, MAX_LINE_CHARS, MAX_PLAN_HOTWORDS, PlanError, call_hotwords,
 };
 pub use policy::{CallPolicy, MAX_SUMMARY_CHARS, PolicyError};
 pub use session::{

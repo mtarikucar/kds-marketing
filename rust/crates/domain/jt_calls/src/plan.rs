@@ -1,7 +1,9 @@
 //! What the caller authored before an agent-driven call: every sentence the server may play
 //! without the agent (spec §3.3, §5).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::opening::lower_tr;
 
 /// The longest sentence of a plan or a policy, and of one `calls.say`.
 pub const MAX_LINE_CHARS: usize = 600;
@@ -11,9 +13,12 @@ pub const MAX_HOLDING_LINES: usize = 5;
 pub const MAX_FALLBACK_LINES: usize = 3;
 /// The longest call any plan or policy allows, in seconds.
 pub const MAX_CALL_DURATION_S: u16 = 900;
-/// The most hotwords a plan carries, and the longest.
+/// The most hotwords a call carries (the plan's and the workspace's name), and the longest.
 pub const MAX_HOTWORDS: usize = 20;
 pub const MAX_HOTWORD_CHARS: usize = 40;
+/// The most hotwords a plan brings: one fewer than a call carries, the workspace's name taking the
+/// last.
+pub const MAX_PLAN_HOTWORDS: usize = MAX_HOTWORDS - 1;
 
 /// The script of an agent-driven call: the opening (which must carry the assistant disclosure
 /// when the policy asks for it), the goal (for the transcript, never played), 1 to 5 holding
@@ -35,8 +40,14 @@ pub struct CallPlan {
     #[serde(default = "yes")]
     pub disclose_assistant: bool,
     /// Words the call's speech-to-text is biased toward (names, products, from the agent's
-    /// context): at most 20, each 1 to 40 characters.
-    #[serde(default)]
+    /// context): at most [`MAX_PLAN_HOTWORDS`], each 1 to 40 characters once trimmed, and read
+    /// trimmed. Written only when there is one, so that a plan without any still reads in a
+    /// release that knows no hotwords (which reads a plan strictly).
+    #[serde(
+        default,
+        deserialize_with = "trimmed",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub hotwords: Vec<String>,
 }
 
@@ -46,6 +57,12 @@ fn turkish() -> String {
 
 fn yes() -> bool {
     true
+}
+
+/// The words, each trimmed: what is stored is what was length-checked.
+fn trimmed<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let words = Vec::<String>::deserialize(d)?;
+    Ok(words.into_iter().map(|w| w.trim().to_owned()).collect())
 }
 
 /// Why a plan is refused.
@@ -63,7 +80,7 @@ pub enum PlanError {
     Duration,
     #[error("only Turkish (tr) calls are supported")]
     Language,
-    #[error("a plan has at most 20 hotwords of 1 to 40 characters")]
+    #[error("a plan has at most 19 hotwords of 1 to 40 characters")]
     Hotwords,
 }
 
@@ -120,7 +137,7 @@ impl CallPlan {
             let n = h.trim().chars().count();
             n == 0 || n > MAX_HOTWORD_CHARS || h.chars().any(char::is_control)
         };
-        if self.hotwords.len() > MAX_HOTWORDS || self.hotwords.iter().any(bad_hotword) {
+        if self.hotwords.len() > MAX_PLAN_HOTWORDS || self.hotwords.iter().any(bad_hotword) {
             return Err(PlanError::Hotwords);
         }
         Ok(())
@@ -135,16 +152,23 @@ impl CallPlan {
     }
 }
 
-/// The hotwords of a call: the plan's, then the workspace's name, trimmed, each once whatever its
-/// case, at most [`MAX_HOTWORDS`].
+/// The hotwords of a call: the plan's (at most [`MAX_PLAN_HOTWORDS`] of them), then the
+/// workspace's name, which always has its slot, so at most [`MAX_HOTWORDS`]. Each is trimmed, a
+/// blank one dropped, and each kept once whatever its case, lowercased the Turkish way (`IŞIK` and
+/// `ışık` are one word).
 pub fn call_hotwords(plan: &[String], business: &str) -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();
-    plan.iter()
-        .map(String::as_str)
-        .chain(std::iter::once(business))
-        .map(str::trim)
-        .filter(|w| !w.is_empty() && seen.insert(w.to_lowercase()))
-        .take(MAX_HOTWORDS)
+    let mut fresh = |w: &str| seen.insert(w.chars().map(lower_tr).collect::<String>());
+    let mut words: Vec<String> = plan
+        .iter()
+        .map(|w| w.trim())
+        .filter(|w| !w.is_empty() && fresh(w))
+        .take(MAX_PLAN_HOTWORDS)
         .map(str::to_owned)
-        .collect()
+        .collect();
+    let name = business.trim();
+    if !name.is_empty() && fresh(name) {
+        words.push(name.to_owned());
+    }
+    words
 }

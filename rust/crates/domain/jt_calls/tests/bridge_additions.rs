@@ -3,8 +3,9 @@
 mod support;
 
 use jt_calls::{
-    AgentReply, BridgeEvent, BridgePhrases, Command, DialScript, MAX_TRACES, PhraseSet, PlanError,
-    TimerAction, TurnKind, TurnTrace, call_hotwords, next_timer, reduce, say,
+    AgentReply, BridgeEvent, BridgePhrases, CallPlan, CallState, Command, DialScript, EndCause,
+    MAX_HOTWORDS, MAX_PLAN_HOTWORDS, MAX_TRACES, PhraseSet, PlanError, TimerAction, TurnKind,
+    TurnTrace, call_hotwords, close, end, next_timer, reduce, say,
 };
 use serde_json::json;
 use support::*;
@@ -229,21 +230,147 @@ fn the_new_events_read_from_the_wire() {
 }
 
 #[test]
-fn plan_hotwords_are_bounded_and_the_workspace_name_joins_them() {
+fn a_trace_reported_after_the_callers_hangup_is_kept() {
+    // The bridge times the last turn to its end and reports it after the hangup.
+    let p = policy();
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    reduce(
+        &mut s,
+        &BridgeEvent::Hangup {
+            cause: "normal".into(),
+        },
+        at(9_000),
+        &p,
+    );
+    assert_eq!(s.state, CallState::Ended);
+    let trace = TurnTrace {
+        endpoint_ms: 250,
+        ..TurnTrace::default()
+    };
+    let step = reduce(&mut s, &BridgeEvent::Trace { trace }, at(9_100), &p);
+    assert_eq!(s.metrics.traces.len(), 1);
+    assert_eq!(s.metrics.traces[0].endpoint_ms, 250);
+    assert_eq!(step, Default::default());
+    // Nothing else reaches an ended session.
+    let step = reduce(&mut s, &utterance(), at(9_200), &p);
+    assert!(step.turns.is_empty());
+    assert_eq!(s.metrics.turns, 0);
+}
+
+#[test]
+fn a_trace_reported_after_the_core_ended_the_call_is_kept() {
+    let p = policy();
+    // The core closed the call without waiting for the line.
+    let mut closed = agent_session();
+    reduce(&mut closed, &BridgeEvent::Answered, at(0), &p);
+    close(&mut closed, EndCause::AgentEnded, at(5_000));
+    assert_eq!(closed.state, CallState::Ended);
+    reduce(
+        &mut closed,
+        &BridgeEvent::Trace {
+            trace: TurnTrace::default(),
+        },
+        at(5_100),
+        &p,
+    );
+    assert_eq!(closed.metrics.traces.len(), 1);
+    // The core ended it by script, and the line's hangup came before the trace.
+    let mut ended = agent_session();
+    reduce(&mut ended, &BridgeEvent::Answered, at(0), &p);
+    end(&mut ended, EndCause::AgentEnded, at(5_000));
+    reduce(
+        &mut ended,
+        &BridgeEvent::Hangup {
+            cause: "normal".into(),
+        },
+        at(7_000),
+        &p,
+    );
+    assert_eq!(ended.state, CallState::Ended);
+    reduce(
+        &mut ended,
+        &BridgeEvent::Trace {
+            trace: TurnTrace::default(),
+        },
+        at(7_100),
+        &p,
+    );
+    assert_eq!(ended.metrics.traces.len(), 1);
+    assert_eq!(ended.end_cause, Some(EndCause::AgentEnded));
+}
+
+#[test]
+fn a_plan_without_hotwords_is_written_without_the_key() {
+    // A release before hotwords reads plans strictly: one without hotwords must still read there.
+    let value = serde_json::to_value(plan()).unwrap();
+    assert!(value.get("hotwords").is_none(), "{value}");
     let mut p = plan();
-    p.hotwords = (0..20).map(|i| format!("ürün{i}")).collect();
+    p.hotwords = vec!["Ada".into()];
+    assert_eq!(
+        serde_json::to_value(&p).unwrap()["hotwords"],
+        json!(["Ada"])
+    );
+}
+
+#[test]
+fn a_plans_hotwords_are_read_trimmed() {
+    let mut value = serde_json::to_value(plan()).unwrap();
+    value["hotwords"] = json!([" Ada ", "perşembe	", "   "]);
+    let p: CallPlan = serde_json::from_value(value).unwrap();
+    assert_eq!(p.hotwords, ["Ada", "perşembe", ""]);
+    // The blank one is refused, as it was given.
+    assert_eq!(p.validate(), Err(PlanError::Hotwords));
+}
+
+#[test]
+fn plan_hotwords_are_bounded_and_leave_room_for_the_workspace_name() {
+    assert_eq!(MAX_PLAN_HOTWORDS, MAX_HOTWORDS - 1);
+    let mut p = plan();
+    p.hotwords = (0..MAX_PLAN_HOTWORDS).map(|i| format!("ürün{i}")).collect();
     assert_eq!(p.validate(), Ok(()));
+    let words = call_hotwords(&p.hotwords, "Figurunica");
+    assert_eq!(words.len(), MAX_HOTWORDS);
+    assert_eq!(words.last().map(String::as_str), Some("Figurunica"));
     p.hotwords.push("bir fazla".into());
     assert_eq!(p.validate(), Err(PlanError::Hotwords));
     p.hotwords = vec!["   ".into()];
     assert_eq!(p.validate(), Err(PlanError::Hotwords));
     p.hotwords = vec!["x".repeat(41)];
     assert_eq!(p.validate(), Err(PlanError::Hotwords));
+    p.hotwords = vec![format!("  {}  ", "x".repeat(40))];
+    assert_eq!(p.validate(), Ok(()));
+}
+
+#[test]
+fn the_workspace_name_joins_the_plans_hotwords_trimmed_and_once() {
     assert_eq!(
-        call_hotwords(
-            &["Ada".into(), "ada".into(), " Figurunica ".into()],
-            "Figurunica"
-        ),
+        call_hotwords(&["Ada".into(), "ada".into()], " Figurunica "),
         ["Ada", "Figurunica"]
+    );
+    // A name the plan already has is not added again.
+    assert_eq!(
+        call_hotwords(&["figurunica".into()], "Figurunica"),
+        ["figurunica"]
+    );
+    // An unvalidated plan longer than allowed still leaves the name its slot.
+    let many: Vec<String> = (0..30).map(|i| format!("w{i}")).collect();
+    let words = call_hotwords(&many, "Acme");
+    assert_eq!(words.len(), MAX_HOTWORDS);
+    assert_eq!(words.last().map(String::as_str), Some("Acme"));
+    // Blank words and a blank name are dropped.
+    assert_eq!(call_hotwords(&[" ".into(), "Ada".into()], "  "), ["Ada"]);
+}
+
+#[test]
+fn hotwords_differing_only_in_turkish_case_are_one() {
+    // Lowercased the default way, "IŞIK" reads "işik" and would not meet "ışık".
+    assert_eq!(
+        call_hotwords(&["IŞIK".into(), "ışık".into()], "İzmir Kahve"),
+        ["IŞIK", "İzmir Kahve"]
+    );
+    assert_eq!(
+        call_hotwords(&["izmir kahve".into()], "İZMİR KAHVE"),
+        ["izmir kahve"]
     );
 }

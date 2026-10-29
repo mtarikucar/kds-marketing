@@ -704,7 +704,7 @@ fn hangup_cause(cause: &str, answered: bool) -> EndCause {
 }
 
 /// Applies `event`, reported at `now`, to `session` (see the module docs). An ended session takes
-/// nothing more; a partial utterance is not logged.
+/// nothing more but a turn's trace; a partial utterance is not logged.
 pub fn reduce(
     session: &mut CallSession,
     event: &BridgeEvent,
@@ -712,6 +712,15 @@ pub fn reduce(
     policy: &CallPolicy,
 ) -> Step {
     let mut step = Step::default();
+    // A turn's trace is kept whenever it arrives: the bridge times the last turn to its end and
+    // reports it after the line closed, and the core may have ended the call before that. It
+    // changes nothing else.
+    if let BridgeEvent::Trace { trace } = event {
+        if session.metrics.traces.len() < MAX_TRACES {
+            session.metrics.traces.push(trace.clone());
+        }
+        return step;
+    }
     if session.state == CallState::Ended {
         return step;
     }
@@ -900,11 +909,8 @@ pub fn reduce(
                 session.metrics.holding_played = session.metrics.holding_played.saturating_add(1);
             }
         }
-        BridgeEvent::Trace { trace } => {
-            if session.metrics.traces.len() < MAX_TRACES {
-                session.metrics.traces.push(trace.clone());
-            }
-        }
+        // Kept above, whatever the session's state.
+        BridgeEvent::Trace { .. } => {}
         BridgeEvent::CommandDone { .. } => {}
     }
     step
