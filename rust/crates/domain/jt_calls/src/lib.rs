@@ -17,6 +17,7 @@ mod policy;
 mod session;
 mod timers;
 mod trace;
+pub mod wire;
 
 pub use fence::{FenceInput, RelationshipEvidence, fence_call};
 pub use ids::{CallCommandId, CallId};
