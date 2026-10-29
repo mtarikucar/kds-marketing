@@ -2445,9 +2445,11 @@ Server conventions for every server step: run as `root` on the Contabo host (the
 
 ```bash
 # on the dev machine, from the repository root, at the commit to deploy
-git archive --format=tar HEAD rust/bridge/voice | ssh root@38.242.233.166 \
+git -c core.autocrlf=false archive --format=tar HEAD rust/bridge/voice | ssh root@38.242.233.166 \
   'rm -rf /root/jeeta-voice-src && mkdir -p /root/jeeta-voice-src && tar -x -C /root/jeeta-voice-src'
 ```
+
+On the Windows dev machine (`core.autocrlf=true`) a plain `git archive` writes CRLF line endings (checked 2026-10-29 on `rust/Cargo.toml`). `rust/bridge/voice/.gitattributes` (`* text=auto eol=lf`, B1) makes the archive of that tree LF on its own; `-c core.autocrlf=false` keeps any other path LF too.
 
 ### Task B1: Asterisk 22.11 as extension 102
 
@@ -2458,6 +2460,10 @@ git archive --format=tar HEAD rust/bridge/voice | ssh root@38.242.233.166 \
 - Create: `rust/bridge/voice/deploy/jeeta-asterisk.service`
 - Create: `rust/bridge/voice/deploy/jeeta-voice.tmpfiles`
 - Create: `rust/bridge/voice/speech/pytest.ini`
+- Create: `rust/bridge/voice/.gitattributes` (`* text=auto eol=lf`: the archive the host receives keeps LF, see the section intro)
+- Create: `rust/bridge/voice/.gitignore` (`__pycache__/`: the repository ignores no Python cache, and `git add rust/bridge/voice/asterisk` after a test run would take it)
+
+**Version check (2026-10-29).** `asterisk-22.11.0.tar.gz` is the newest 22.x release on downloads.asterisk.org (22.12.0 is at rc3). Its published `asterisk-22.11.0.sha256` reads `3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94`, and the tarball fetched from both `…/asterisk/` and `…/asterisk/releases/` hashes to that value. The Dockerfile fetches from `releases/`, because the top directory keeps only the current release and drops 22.11.0 once 22.12.0 ships. The bundled pjproject is 2.17. Configure fetches it from `raw.githubusercontent.com/asterisk/third-party` and checks it against the MD5 inside the verified tarball.
 
 - [ ] **Step 1: Write the failing config test**
 
@@ -2513,6 +2519,9 @@ def test_extension_102_registers_over_udp():
     assert "protocol=udp" in pjsip
     assert "bind=0.0.0.0:5070" in pjsip
     assert "allow=alaw,ulaw" in pjsip
+    # Asterisk stops registering for good after max_retries (default 10) timeouts in a row: a
+    # five-minute NetGSM outage must not leave the line unregistered until a restart.
+    assert re.search(r"^max_retries=10000$", pjsip, re.M)
     rtp = read("rtp.conf")
     assert "rtpstart=40000" in rtp and "rtpend=40099" in rtp
 
@@ -2523,7 +2532,7 @@ def test_inbound_calls_enter_the_bridge_application():
 
 - [ ] **Step 2: Run it to see it fail**
 
-Run (Windows or Linux, from `rust/bridge/voice`): `python -m pytest -c speech/pytest.ini asterisk/test_configs.py`
+Run (Windows or Linux, from `rust/bridge/voice`, Python 3.12 with `pip install pytest==8.4.2`): `python -I -m pytest -c speech/pytest.ini asterisk/test_configs.py`
 Expected: FAIL (`FileNotFoundError` for `etc/http.conf`).
 
 - [ ] **Step 3: Write the configuration**
@@ -2610,6 +2619,9 @@ bind=0.0.0.0:5070
 
 #include secrets/pjsip_auth.conf
 
+; max_retries: Asterisk gives a registration up for good after this many timeouts or 5xx in a row
+; (default 10, five minutes at retry_interval=30). A wrong secret still stops it at once
+; (auth_rejection_permanent stays yes), so NetGSM is not hammered with bad credentials.
 [netgsm-reg]
 type=registration
 transport=transport-udp
@@ -2619,6 +2631,7 @@ client_uri=sip:102-8508407303@sip5.netsantral.com
 contact_user=102-8508407303
 retry_interval=30
 forbidden_retry_interval=300
+max_retries=10000
 expiration=120
 line=yes
 endpoint=netgsm
@@ -2700,7 +2713,7 @@ rtpend=40099
 
 - [ ] **Step 4: Run the config test**
 
-Run: `python -m pytest -c speech/pytest.ini asterisk/test_configs.py`
+Run: `python -I -m pytest -c speech/pytest.ini asterisk/test_configs.py`
 Expected: `5 passed`.
 
 - [ ] **Step 5: Write the image and the units**
@@ -2710,18 +2723,26 @@ Expected: `5 passed`.
 ```dockerfile
 # Asterisk 22.11.0 (>= 22.8: chan_websocket with JSON control and ARI externalMedia websocket),
 # built from the verified release tarball. Runs as uid/gid 1500 with the host network.
+# The tarball is fetched from releases/, where every version stays; the top directory keeps only
+# the current one. The sha256 is the one downloads.asterisk.org publishes (asterisk-22.11.0.sha256),
+# checked against the tarball itself on 2026-10-29. The bundled pjproject (2.17) is fetched during
+# configure and checked against the MD5 that this verified tarball ships.
 FROM debian:bookworm-slim AS build
 ARG ASTERISK_VERSION=22.11.0
 ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
+# Parallel compile jobs: 2 of the host's 6 shared vCPUs, so the neighbours keep theirs.
+ARG MAKE_JOBS=2
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential ca-certificates curl wget bzip2 patch file pkg-config python3 \
       libedit-dev libjansson-dev libssl-dev libsqlite3-dev libxml2-dev uuid-dev libcurl4-openssl-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN curl -fsSLo asterisk.tar.gz \
-      "https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}.tar.gz" \
+      "https://downloads.asterisk.org/pub/telephony/asterisk/releases/asterisk-${ASTERISK_VERSION}.tar.gz" \
  && echo "${ASTERISK_SHA256}  asterisk.tar.gz" | sha256sum -c - \
  && tar -xzf asterisk.tar.gz --strip-components=1 && rm asterisk.tar.gz
+# make install creates a real /out/var/run; in the runtime image /var/run is a symlink to /run, and
+# the COPY below would collide with it, so it is dropped here and made through the symlink there.
 RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
  && make menuselect.makeopts \
  && menuselect/menuselect --disable BUILD_NATIVE --enable chan_websocket --enable chan_pjsip \
@@ -2730,7 +2751,8 @@ RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
       --enable codec_ulaw --disable-category MENUSELECT_CORE_SOUNDS \
       --disable-category MENUSELECT_MOH --disable-category MENUSELECT_EXTRA_SOUNDS \
       menuselect.makeopts \
- && make -j2 && make install DESTDIR=/out
+ && make -j"${MAKE_JOBS}" && make install DESTDIR=/out \
+ && rm -rf /out/var/run
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -2739,6 +2761,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && groupadd --gid 1500 asterisk && useradd --uid 1500 --gid 1500 --home-dir /var/lib/asterisk \
       --shell /usr/sbin/nologin asterisk
 COPY --from=build /out/ /
+# Fail the build, not the first call, when a module needs a library this stage lacks.
+RUN ldconfig \
+ && ! { ldd /usr/sbin/asterisk /usr/lib/libasterisk*.so* /usr/lib/asterisk/modules/*.so 2>&1 \
+        | grep -F 'not found'; }
 RUN mkdir -p /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk \
  && chown -R 1500:1500 /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk
 USER 1500:1500
@@ -2782,7 +2808,7 @@ d /run/jeeta-voice 0770 root jeeta-voice -
 - [ ] **Step 6: Commit**
 
 ```bash
-git add rust/bridge/voice/asterisk rust/bridge/voice/deploy rust/bridge/voice/speech/pytest.ini
+git add rust/bridge/voice/.gitattributes rust/bridge/voice/.gitignore rust/bridge/voice/asterisk rust/bridge/voice/deploy rust/bridge/voice/speech/pytest.ini
 git commit -m "feat(voice): Asterisk 22.11 image and config for extension 102" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -2792,13 +2818,21 @@ Copy the sources (section intro), then on the host:
 
 ```bash
 docker ps --format '{{.Image}} {{.Names}}' | grep -i voicegate || echo "no Gate V1 rig running"
-ss -lunp | grep -E ':5070\b' || echo "5070/udp free"
+ss -lunp | grep -E ':(5062|5070)\b' || echo "5062/udp and 5070/udp free"
+ss -Hlunp '( sport >= :40000 and sport <= :40099 )' | grep . || echo "40000-40099/udp free"
+docker ps --format '{{.Names}} {{.Ports}}' | grep -E ':400[0-9]{2}' || echo "no container publishes 40000-40099"
 ss -ltnp | grep -E ':8188\b' || echo "8188/tcp free"
 getent passwd 1500 1501; getent group 1500 1501 || true
+command -v docker
 ufw status | head -5
 ```
 
-Expected: `no Gate V1 rig running` (a running baresip on 102 would fight the registration; stop it with `docker rm -f <name>` if listed), both ports free, uid/gid 1500 and 1501 unused (if taken, change the uid in the Dockerfile, the units and every `1500`/`1501` below together), ufw status recorded.
+Expected:
+- `no Gate V1 rig running`. A baresip still registered as 102 would fight the registration. Gate V1's baresip listened on 5062. If one is listed, stop it with `docker rm -f <name>`.
+- 5070/udp, the RTP range 40000–40099 and 8188/tcp are free. Asterisk owns the RTP range on the host network.
+- uid/gid 1500 and 1501 are unused. If one is taken, change the uid in the Dockerfile, in the units and in every `1500`/`1501` below together.
+- `docker` is `/usr/bin/docker` (the unit's path).
+- The ufw status is recorded.
 
 - [ ] **Step 8: [COORDINATOR, server] Users, directories and secrets**
 
@@ -2812,7 +2846,10 @@ install -d -m 0755 /etc/jeeta-voice/asterisk
 install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/asterisk/etc/*.conf /etc/jeeta-voice/asterisk/
 install -d -m 0700 -o 1500 -g 1500 /etc/jeeta-voice/asterisk/secrets
 umask 077
-{ printf '[netgsm-auth]\ntype=auth\nauth_type=userpass\nusername=102-8508407303\nrealm=asterisk\npassword='
+# Asterisk reads ";" as the start of a comment and trims spaces: such a secret needs escaping.
+tr -d '\r\n' < /root/voicegate/p102 | grep -q '[;\\[:space:]]' \
+  && echo "STOP: the secret holds ; \\ or a space" || echo "secret charset ok"
+{ printf '[netgsm-auth]\ntype=auth\nauth_type=digest\nusername=102-8508407303\nrealm=asterisk\npassword='
   tr -d '\r\n' < /root/voicegate/p102; printf '\n'; } > /etc/jeeta-voice/asterisk/secrets/pjsip_auth.conf
 ARI_PW="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
 printf '[jeeta-voice]\ntype=user\nread_only=no\npassword_format=plain\npassword=%s\n' "$ARI_PW" \
@@ -2823,27 +2860,47 @@ chown 1500:1500 /etc/jeeta-voice/asterisk/secrets/*.conf
 chmod 0600 /etc/jeeta-voice/asterisk/secrets/*.conf /etc/jeeta-voice/ari.env
 install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice.tmpfiles /etc/tmpfiles.d/jeeta-voice.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/jeeta-voice.conf
-ls -l /etc/jeeta-voice/asterisk/secrets /run/jeeta-voice -d /run/jeeta-voice
+ls -l /etc/jeeta-voice/asterisk/secrets /etc/jeeta-voice/ari.env
+ls -ld /run/jeeta-voice
 ```
 
-Expected: both secret files `-rw------- 1500 1500`, `/run/jeeta-voice` `drwxrwx--- root jeeta-voice`. Nothing printed contains the secret.
+Expected:
+- `secret charset ok`.
+- Both secret files are `-rw------- 1500 1500`, and `ari.env` is `-rw------- root root`.
+- `/run/jeeta-voice` is `drwxrwx--- root jeeta-voice`.
+- Nothing printed contains the secret.
+
+`auth_type=digest` replaces `userpass`, which Asterisk 22 still reads but documents as deprecated. `realm=asterisk` is the realm Gate V1's REGISTER saw. A blank realm would match any realm the server sends.
 
 - [ ] **Step 9: [COORDINATOR, server] Build and start**
 
 ```bash
 cd /root/jeeta-voice-src/rust/bridge/voice/asterisk
-nice -n 10 docker build -t jeeta-asterisk:22.11.0 .
+time docker build -t jeeta-asterisk:22.11.0 .
 install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-asterisk.service /etc/systemd/system/
 systemd-analyze verify /etc/systemd/system/jeeta-asterisk.service
 systemctl daemon-reload && systemctl enable --now jeeta-asterisk
 sleep 15
 docker exec jeeta-asterisk asterisk -rx 'pjsip show registrations'
+docker exec jeeta-asterisk asterisk -rx 'pjsip show contacts'
 docker exec jeeta-asterisk asterisk -rx 'module show like websocket'
+ss -lunp | grep asterisk; ss -ltnp | grep asterisk
 set -a; . /etc/jeeta-voice/ari.env; set +a
 printf 'user = "jeeta-voice:%s"\n' "$ARI_PASSWORD" | curl -s -K - http://127.0.0.1:8188/ari/asterisk/info | head -c 120; echo
+unset ARI_PASSWORD
+journalctl -u jeeta-asterisk -b --no-pager | grep -ciE 'error' || true
 ```
 
-Expected: the build ends with `naming to docker.io/library/jeeta-asterisk:22.11.0`; the registration line shows `netgsm-reg/sip:sip5.netsantral.com` and `Registered`; `chan_websocket.so` listed `Running`; ARI answers JSON starting `{"build":`. If the registration reads `Rejected`, check the secret file (without printing it) and that no other UA registers 102; if `No Response`, check `ufw` outbound and DNS.
+Expected:
+- The build ends with `naming to docker.io/library/jeeta-asterisk:22.11.0`. `nice` is not used: the build's processes run under dockerd, not under the CLI. The throttle is the Dockerfile's `MAKE_JOBS=2`. Override it with `--build-arg MAKE_JOBS=…`.
+- The registration line shows `netgsm-reg/sip:sip5.netsantral.com` and `Registered`.
+- The contact `netgsm/sip:sip5.netsantral.com` reads `Avail`. The dial (`PJSIP/<number>@netgsm`) uses only a reachable contact. If it reads `Unavail`, NetGSM does not answer the qualify OPTIONS. In that case set `qualify_frequency=0` in `/etc/jeeta-voice/asterisk/pjsip.conf` and run `docker exec jeeta-asterisk asterisk -rx 'module reload res_pjsip.so'`, then report it so the repository follows.
+- `chan_websocket.so` is listed `Running`.
+- The sockets are UDP `0.0.0.0:5070` and TCP `127.0.0.1:8188`, nothing else. RTP ports open only during a call.
+- ARI answers JSON starting `{"build":`.
+- The error count is read: the journal holds only Asterisk's warnings and errors. Modules that find no config of their own may warn once at start.
+
+If the registration reads `Rejected`, check the secret file without printing it, and check that no other UA registers 102. If it reads `No Response`, check `ufw` outbound and DNS.
 
 - [ ] **Step 10: [COORDINATOR, server] One-way audio fallback (only if B7 shows it)**
 
@@ -2851,7 +2908,9 @@ Expected: the build ends with `naming to docker.io/library/jeeta-asterisk:22.11.
 ufw allow proto udp from 185.88.7.0/24 to any port 40000:40099 comment 'jeeta-voice RTP from NetGSM'
 ```
 
-Not applied by default: Gate V1 showed conntrack admits the replies; Asterisk sends silence frames first.
+Not applied by default. Gate V1 showed that conntrack admits the replies once this host has sent RTP. Asterisk itself does not send RTP first. Since 22.9.0, chan_websocket generates no silence ("chan_websocket: Remove silence generation and frame padding", ChangeLog-22.9.0). `transmit_silence` covers only waits, not a bridged channel. So the first RTP leaves when the worker writes its first frame. That is the cached opening, played on `answered`. Until then, while ufw denies incoming traffic, NetGSM's first packets (the callee's "Alo?") can be dropped. Gate V1's baresip played its clip at once, so it never showed this case. B5/B6 should decide whether the worker writes silence frames while nothing plays. The design's "Asterisk keeps sending silence frames" does not hold on 22.11.
+
+Before applying the rule, confirm NetGSM's media network during a call. For example, run `conntrack -L -p udp 2>/dev/null | grep -E 'port=400[0-9]{2}'`, which shows addresses and ports only. `185.88.7.0/24` is not verified.
 
 ### Task B2: The speak service (EMA Lightning behind Antalia's normaliser)
 
@@ -7936,14 +7995,17 @@ The rollback note in E1 Step 4 still applies: 047da0cd keeps its strict `CallPla
 
 - [ ] **Step 6: The approved texts are a person's to change; an agent reads them**
 
-**Owner decision** (coordinator, 2026-10-29). These policy fields are **person-only**: `opening_outbound`, `transcript_notice`, `closing` and `phrases`.
+**Owner decision** (coordinator, 2026-10-29; widened in the A4/A5 review). These policy fields are **person-only**: `opening_outbound`, `transcript_notice`, `closing`, `phrases`, `disclosure_sentence` and `greeting_inbound`.
 - The owner approved these texts word for word, and the notice is legal text.
+- `disclosure_sentence` is what the fence's disclosure check (D3) looks for. An agent that could rewrite it could make any opening "disclose".
+- `greeting_inbound` is the inbound twin of `opening_outbound`.
 - An agent reads them: `calls.policy_get` shows them, and the schema describes them.
 - An agent's `calls.policy_set` that leaves one out keeps the stored value, never the default.
-- An agent's `calls.policy_set` that sends a different value is refused, naming the field.
+- A read-back value counts as unchanged. An agent's `calls.policy_set` that sends a value as stored, or as `calls.policy_get` showed it (with the workspace's templates filled in), keeps the stored value. So a read sent back changes nothing and freezes no template.
+- An agent's `calls.policy_set` that sends any other value is refused, naming the field.
 - A person (the panel) changes them.
 
-This reuses the mechanism that makes turning `disclose_assistant` off person-only (`policy_set`: `!matches!(ctx.actor, Actor::Human { .. })`, `FORBIDDEN`). There is no `opening_inbound`. The inbound greeting is the older `greeting_inbound`, which stays agent-editable as today unless the owner rules otherwise.
+This reuses the mechanism that makes turning `disclose_assistant` off person-only (`policy_set`: `!matches!(ctx.actor, Actor::Human { .. })`, `FORBIDDEN`). There is no `opening_inbound`. The inbound greeting is the older `greeting_inbound`, person-only like the outbound opening.
 
 `PolicyInput` keeps the keys its body named:
 
@@ -8000,7 +8062,9 @@ Change `policy_set` in three ways:
 
 ```rust
 /// The call policy's texts only a person changes (owner decision 2026-10-29).
-pub const PERSON_ONLY: [&str; 4] = ["opening_outbound", "transcript_notice", "closing", "phrases"];
+pub const PERSON_ONLY: [&str; 6] = [
+    "opening_outbound", "transcript_notice", "closing", "phrases", "disclosure_sentence", "greeting_inbound",
+];
 
 /// An agent's policy with the person-only texts as stored. A text the body left out keeps the
 /// stored value. A text sent as stored, or as `calls.policy_get` shows it (`shown`, the
@@ -8034,11 +8098,13 @@ fn keep_person_only(
     keep("opening_outbound", &mut policy.opening_outbound, &stored.opening_outbound, &shown.opening_outbound, named("opening_outbound"))?;
     keep("transcript_notice", &mut policy.transcript_notice, &stored.transcript_notice, &shown.transcript_notice, named("transcript_notice"))?;
     keep("closing", &mut policy.closing, &stored.closing, &shown.closing, named("closing"))?;
-    keep("phrases", &mut policy.phrases, &stored.phrases, &shown.phrases, named("phrases"))
+    keep("phrases", &mut policy.phrases, &stored.phrases, &shown.phrases, named("phrases"))?;
+    keep("disclosure_sentence", &mut policy.disclosure_sentence, &stored.disclosure_sentence, &shown.disclosure_sentence, named("disclosure_sentence"))?;
+    keep("greeting_inbound", &mut policy.greeting_inbound, &stored.greeting_inbound, &shown.greeting_inbound, named("greeting_inbound"))
 }
 ```
 
-(`disclosure_sentence` and `greeting_inbound` are also filled by `with_workspace`. A person's or an agent's read sent back stores the filled template, which freezes the workspace's name in it. Decide in this step whether those two get the same "as shown means unchanged" rule.)
+`disclosure_sentence` and `greeting_inbound` are also filled by `with_workspace`, and they get the same "as shown means unchanged" rule. Stored empty, `calls.policy_get` shows the template with the workspace's name. An agent that sends that back keeps the stored empty value, so the template keeps following the workspace's name. The same holds when the agent sends back an owner's own text exactly as stored. A person's save is stored as sent (unchanged here). A panel save of an untouched template therefore still freezes the name; that is C5's to avoid.
 
 MCP, `jt_mcp/src/tools/calls.rs`. Extend `policy_schema`'s `properties` with:
 
@@ -8060,9 +8126,16 @@ MCP, `jt_mcp/src/tools/calls.rs`. Extend `policy_schema`'s `properties` with:
             },
 ```
 
-with `fn phrase_list() -> Value { json!({ "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 600 } }) }`. Change the tool descriptions:
-- `calls.policy_get` names the four texts after the existing fields: "…, and the texts only a person changes (you may read them): opening_outbound, transcript_notice, closing and phrases (the six lists of sentences the voice bridge plays on its own)".
-- `calls.policy_set` becomes: "Replace the workspace's call policy with the given one (every field as jeeta.calls.policy_get returns it; a field left out takes its default, except opening_outbound, transcript_notice, closing and phrases, which only a person changes: left out or sent as read, they keep their stored values; a different value is FORBIDDEN, details.reason person_only naming the field). Only a person may turn disclose_assistant off (FORBIDDEN for you). Returns the stored policy. [risk: WRITE]".
+with `fn phrase_list() -> Value { json!({ "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 600 } }) }`. Replace the two existing entries:
+
+```rust
+            "greeting_inbound": text("Played when an agent on duty answers an inbound call (empty: the approved greeting with the workspace's name). Person-only; agents may read."),
+            "disclosure_sentence": text("The sentence an agent-driven opening must contain (empty: the approved one with the workspace's name). Person-only; agents may read."),
+```
+
+Change the tool descriptions:
+- `calls.policy_get` names the six texts after the existing fields: "…, and the texts only a person changes (you may read them): opening_outbound, transcript_notice, closing, phrases (the six lists of sentences the voice bridge plays on its own), disclosure_sentence and greeting_inbound".
+- `calls.policy_set` becomes: "Replace the workspace's call policy with the given one (every field as jeeta.calls.policy_get returns it; a field left out takes its default, except opening_outbound, transcript_notice, closing, phrases, disclosure_sentence and greeting_inbound, which only a person changes: left out or sent as read, they keep their stored values; a different value is FORBIDDEN, details.reason person_only naming the field). Only a person may turn disclose_assistant off (FORBIDDEN for you). Returns the stored policy. [risk: WRITE]".
 
 Tests. In `calls_mcp.rs`:
 
@@ -8082,7 +8155,10 @@ fn the_policy_schema_names_every_policy_field_and_marks_the_approved_texts_perso
     }
     assert_eq!(props["phrases"]["additionalProperties"], false);
     let get = tools["jeeta.calls.policy_get"].description;
-    for key in ["opening_outbound", "transcript_notice", "closing", "phrases"] {
+    let person_only =
+        ["opening_outbound", "transcript_notice", "closing", "phrases", "disclosure_sentence", "greeting_inbound"];
+    assert_eq!(jt_app::usecases::calls::PERSON_ONLY, person_only);
+    for key in person_only {
         let text = props[key]["description"].as_str().unwrap();
         assert!(text.contains("Person-only; agents may read."), "{key}: {text}");
         assert!(get.contains(key), "calls.policy_get does not name {key}");
@@ -8116,10 +8192,14 @@ async fn an_agent_reads_the_approved_texts_but_only_a_person_changes_them() {
     // What the agent read, sent back with a timer changed: stored, the texts as they were.
     let mut read = serde_json::to_value(calls::policy_get(&w.deps, &agent).await.unwrap()).unwrap();
     read["slow_agent_s"] = json!(5);
+    // The read shows the templates with the workspace's name; sent back, they count as unchanged.
+    assert_eq!(read["disclosure_sentence"], "ben Acme'nin dijital asistanıyım");
     let out = calls::policy_set(&w.deps, &agent, body(read)).await.unwrap();
     assert_eq!(out.slow_agent_s, 5);
     assert_eq!(out.closing.as_deref(), Some("Hoşça kalın."));
     assert_eq!(out.opening_outbound, None, "the template is not frozen into the stored policy");
+    assert_eq!(out.disclosure_sentence, "", "the template is not frozen into the stored policy");
+    assert_eq!(out.greeting_inbound, "", "the template is not frozen into the stored policy");
     // Left out: kept, never reset to the defaults.
     let out = calls::policy_set(&w.deps, &agent, body(json!({ "slow_agent_s": 6 }))).await.unwrap();
     assert_eq!(out.closing.as_deref(), Some("Hoşça kalın."));
@@ -8129,6 +8209,8 @@ async fn an_agent_reads_the_approved_texts_but_only_a_person_changes_them() {
         ("transcript_notice", json!("")),
         ("closing", json!("Görüşürüz.")),
         ("phrases", json!({ "fillers": ["Bekleyin."] })),
+        ("disclosure_sentence", json!("Merhaba")),
+        ("greeting_inbound", json!("Merhaba, buyurun.")),
     ] {
         let mut sent = serde_json::Map::new();
         sent.insert(field.into(), value);
