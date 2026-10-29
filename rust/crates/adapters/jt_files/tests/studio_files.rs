@@ -169,7 +169,7 @@ async fn a_streamed_file_is_hashed_as_it_comes_and_linked_whole() {
         )
         .await
         .unwrap();
-    assert_eq!(f.size_bytes, 5);
+    assert_eq!(f.size_bytes, 6);
     let back = disk(&p).read(ws, id).await.unwrap();
     assert_eq!(back.bytes, b"abcd\x00e");
     assert_eq!(f.sha256, hex_of(&back.bytes));
