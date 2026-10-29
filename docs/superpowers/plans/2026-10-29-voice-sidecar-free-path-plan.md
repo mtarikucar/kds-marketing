@@ -2426,6 +2426,14 @@ git add rust/crates
 git commit -m "feat(calls): the dial's script, plan hotwords, and the bridge's phrase and trace events" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+- [x] **Step 7: Review revisions (PR #382, commit `87299316`)**. Where they differ from the code above, these win:
+  - `reduce` keeps a `BridgeEvent::Trace` **before** the ended-session guard. The bridge reports the last turn's trace after the hangup, and the core may have ended the call first (`close`, or `end` and then the line's hangup). On an ended session a trace changes nothing else. Tests: `a_trace_reported_after_the_callers_hangup_is_kept`, `a_trace_reported_after_the_core_ended_the_call_is_kept`.
+  - `CallPlan.hotwords` is `#[serde(default, deserialize_with = "trimmed", skip_serializing_if = "Vec::is_empty")]`:
+    - It is written only when non-empty, so a plan without hotwords still reads in 047da0cd, which reads plans with `deny_unknown_fields`. C1 removes that strictness from the stored type.
+    - It is read trimmed, so what is stored is what was length-checked.
+  - A plan carries at most `MAX_PLAN_HOTWORDS` = 19, and `PlanError::Hotwords` says 19. `call_hotwords` takes at most 19 of the plan's words, then the workspace's name, which always keeps its slot (at most `MAX_HOTWORDS` = 20 in total).
+  - Words are deduplicated after Turkish lowercasing with `opening::lower_tr` (now `pub(crate)`), so `IŞIK` and `ışık` are one word.
+
 
 ---
 
@@ -7501,10 +7509,17 @@ Phase C changes what the core plays and returns; every change is additive and ex
 
 **Files:**
 - Modify: `rust/crates/domain/jt_calls/src/policy.rs`
-- Modify: `rust/crates/domain/jt_calls/src/plan.rs` (`closing` optional)
+- Modify: `rust/crates/domain/jt_calls/src/plan.rs` (`closing` optional; the stored plan reads tolerantly, `CallPlan::FIELDS`)
 - Create: `rust/crates/domain/jt_calls/tests/policy_opening.rs`
-- Modify: `rust/crates/jt_app/src/usecases/calls.rs` (`policy_get`, `facts`, `place_agent`, a new `policy_of`), `calls/bridge.rs` (`apply_call`), `calls/session.rs` (`tick`)
-- Modify: `rust/crates/jt_app/tests/calls_session.rs` (rig policy; two tests)
+- Modify: `rust/crates/jt_app/src/usecases/calls.rs`:
+  - `policy_get`, `facts`, `place_agent`, a new `policy_of`;
+  - `PolicyInput` (the keys the body named; unknown keys at any depth refused) and `PlaceInput` (its plan read strictly);
+  - `policy_set` (the person-only texts).
+- Modify: `calls/bridge.rs` (`apply_call`), `calls/session.rs` (`tick`).
+- Modify: `rust/crates/jt_app/tests/calls_session.rs` (rig policy; two tests), and `calls_session.rs`, `calls_end.rs`, `calls_place.rs` wherever they build `PolicyInput(policy)`, which becomes `PolicyInput::from(policy)`.
+- Create: `rust/crates/jt_app/tests/calls_policy.rs` (the person-only texts; strict input boundaries).
+- Modify: `rust/crates/adapters/jt_mcp/src/tools/calls.rs` (`policy_schema`; the `calls.policy_get` and `calls.policy_set` descriptions).
+- Modify: `rust/crates/adapters/jt_mcp/tests/calls_mcp.rs` (schema parity; person-only wording).
 
 - [ ] **Step 1: Write the failing domain test**
 
@@ -7855,15 +7870,321 @@ and, still in `place_agent`, right after `plan.disclose_assistant |= policy.disc
     }
 ```
 
-- [ ] **Step 5: Run the core tests (CI) and commit**
+- [ ] **Step 5: The stored plan reads tolerantly; `calls.place` reads it strictly**
 
-CI: `cargo test --locked -p jt_app --test calls_session --test calls_place --test calls_bridge`
-Expected: all pass, including the four new tests and `every_played_text_is_authored` (the rig's empty opening and notice leave the plan's opening alone).
+This must land before E1. `CallPlan` carries `#[serde(deny_unknown_fields)]`, so every plan field added later makes stored sessions and queued dials unreadable to an older release (a rollback) and to a bridge built before it. Strictness belongs at the boundary where an agent hands a plan in, not on the stored type.
+
+In `plan.rs`, delete `#[serde(deny_unknown_fields)]` from `CallPlan`, and add to `impl CallPlan`:
+
+```rust
+    /// Every field of a plan, as `calls.place` accepts them (an input naming another is refused;
+    /// a stored plan reads whatever a later release added).
+    pub const FIELDS: [&'static str; 9] = [
+        "opening", "goal", "holding", "fallback", "closing", "max_duration_s", "language",
+        "disclose_assistant", "hotwords",
+    ];
+```
+
+In `policy_opening.rs`, add:
+
+```rust
+#[test]
+fn a_stored_plan_reads_a_field_a_later_release_added() {
+    let mut value = json!({
+        "opening": "Ada Hanım ile mi görüşüyorum?", "goal": "Randevuyu teyit etmek",
+        "holding": ["Bir saniye."], "max_duration_s": 60,
+    });
+    value["spoken_by"] = json!("a later release");
+    assert!(serde_json::from_value::<CallPlan>(value).is_ok());
+}
+
+#[test]
+fn the_plans_field_list_is_every_field_it_writes() {
+    let p: CallPlan = serde_json::from_value(json!({
+        "opening": "a", "goal": "b", "holding": ["c"], "fallback": ["d"], "closing": "e",
+        "max_duration_s": 60, "hotwords": ["Ada"],
+    }))
+    .unwrap();
+    let mut written: Vec<String> = serde_json::to_value(&p).unwrap().as_object().unwrap().keys().cloned().collect();
+    written.sort();
+    let mut fields: Vec<String> = CallPlan::FIELDS.iter().map(|f| (*f).to_owned()).collect();
+    fields.sort();
+    assert_eq!(written, fields);
+}
+```
+
+In `calls.rs`, `PlaceInput.plan` becomes `#[serde(default, deserialize_with = "strict_plan")] pub plan: Option<CallPlan>`, with:
+
+```rust
+/// The plan as `calls.place` takes it: a field the plan does not have is refused (`unknown field
+/// `plan.<key>``), though a stored plan reads tolerantly.
+fn strict_plan<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<CallPlan>, D::Error> {
+    let Some(raw) = Option::<Value>::deserialize(d)?.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    if let Some(unknown) = raw
+        .as_object()
+        .and_then(|o| o.keys().find(|k| !CallPlan::FIELDS.contains(&k.as_str())))
+    {
+        return Err(serde::de::Error::custom(format!("unknown field `plan.{unknown}`")));
+    }
+    serde_json::from_value(raw).map(Some).map_err(serde::de::Error::custom)
+}
+```
+
+The rollback note in E1 Step 4 still applies: 047da0cd keeps its strict `CallPlan`.
+
+- [ ] **Step 6: The approved texts are a person's to change; an agent reads them**
+
+**Owner decision** (coordinator, 2026-10-29). These policy fields are **person-only**: `opening_outbound`, `transcript_notice`, `closing` and `phrases`.
+- The owner approved these texts word for word, and the notice is legal text.
+- An agent reads them: `calls.policy_get` shows them, and the schema describes them.
+- An agent's `calls.policy_set` that leaves one out keeps the stored value, never the default.
+- An agent's `calls.policy_set` that sends a different value is refused, naming the field.
+- A person (the panel) changes them.
+
+This reuses the mechanism that makes turning `disclose_assistant` off person-only (`policy_set`: `!matches!(ctx.actor, Actor::Human { .. })`, `FORBIDDEN`). There is no `opening_inbound`. The inbound greeting is the older `greeting_inbound`, which stays agent-editable as today unless the owner rules otherwise.
+
+`PolicyInput` keeps the keys its body named:
+
+```rust
+/// `calls.policy_set`'s body: a whole policy, read strictly (an unknown key is refused at any
+/// depth, `phrases.filler` included), and the top-level keys it named.
+#[derive(Clone, Debug)]
+pub struct PolicyInput {
+    pub policy: CallPolicy,
+    /// The keys the body named; `None` for a policy built in code, which names every key.
+    pub given: Option<BTreeSet<String>>,
+}
+
+impl From<CallPolicy> for PolicyInput {
+    fn from(policy: CallPolicy) -> Self {
+        PolicyInput { policy, given: None }
+    }
+}
+```
+
+Its `Deserialize` replaces the top-level known-keys check with the nested one below, and fills `given` with `raw.as_object().map(|o| o.keys().cloned().collect())`:
+
+```rust
+/// The first key of `given`, at any depth, that `known` (the default policy's encoding) lacks,
+/// as a dotted path. Only objects are compared: a list or a scalar is its field's type to check.
+fn unknown_key(given: &Value, known: &Value, prefix: &str) -> Option<String> {
+    let (Some(given), Some(known)) = (given.as_object(), known.as_object()) else {
+        return None;
+    };
+    given.iter().find_map(|(k, v)| {
+        let path = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
+        match known.get(k) {
+            None => Some(path),
+            Some(inner) => unknown_key(v, inner, &path),
+        }
+    })
+}
+```
+
+Do not add `deny_unknown_fields` to the stored `CallPolicy` or `BridgePhrases`: stored values stay tolerant, and only the input is strict.
+
+Change `policy_set` in three ways:
+- It takes `input: PolicyInput` and opens with `let PolicyInput { mut policy, given } = input;`.
+- It reads `before` first.
+- For an actor that is not a person, it merges the stored texts back before the disclosure check. Move `policy.validate()` after this merge, so it checks what will be stored:
+
+```rust
+    if !matches!(ctx.actor, Actor::Human { .. }) {
+        let name = r.workspace().get().await?.name;
+        let shown = before.clone().with_workspace(&name);
+        keep_person_only(&mut policy, &before, &shown, given.as_ref())?;
+    }
+```
+
+```rust
+/// The call policy's texts only a person changes (owner decision 2026-10-29).
+pub const PERSON_ONLY: [&str; 4] = ["opening_outbound", "transcript_notice", "closing", "phrases"];
+
+/// An agent's policy with the person-only texts as stored. A text the body left out keeps the
+/// stored value. A text sent as stored, or as `calls.policy_get` shows it (`shown`, the
+/// workspace's templates filled in), also keeps the stored value, so a read sent back changes
+/// nothing and freezes no template. Any other value is `FORBIDDEN` with
+/// `details.reason = "person_only"` and `details.field` naming it.
+fn keep_person_only(
+    policy: &mut CallPolicy,
+    stored: &CallPolicy,
+    shown: &CallPolicy,
+    given: Option<&BTreeSet<String>>,
+) -> Result<(), AppError> {
+    fn keep<T: PartialEq + Clone>(
+        field: &'static str,
+        sent: &mut T,
+        stored: &T,
+        shown: &T,
+        named: bool,
+    ) -> Result<(), AppError> {
+        if !named || sent == stored || sent == shown {
+            *sent = stored.clone();
+            return Ok(());
+        }
+        Err(AppError {
+            code: ErrorCode::Forbidden,
+            message: format!("only a person changes the call policy's {field}"),
+            details: json!({ "reason": "person_only", "field": field }),
+        })
+    }
+    let named = |k: &str| given.is_none_or(|g| g.contains(k));
+    keep("opening_outbound", &mut policy.opening_outbound, &stored.opening_outbound, &shown.opening_outbound, named("opening_outbound"))?;
+    keep("transcript_notice", &mut policy.transcript_notice, &stored.transcript_notice, &shown.transcript_notice, named("transcript_notice"))?;
+    keep("closing", &mut policy.closing, &stored.closing, &shown.closing, named("closing"))?;
+    keep("phrases", &mut policy.phrases, &stored.phrases, &shown.phrases, named("phrases"))
+}
+```
+
+(`disclosure_sentence` and `greeting_inbound` are also filled by `with_workspace`. A person's or an agent's read sent back stores the filled template, which freezes the workspace's name in it. Decide in this step whether those two get the same "as shown means unchanged" rule.)
+
+MCP, `jt_mcp/src/tools/calls.rs`. Extend `policy_schema`'s `properties` with:
+
+```rust
+            "opening_outbound": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played first when an outbound agent call is answered (null: the approved opening with the workspace's name; empty: none). Person-only; agents may read." },
+            "transcript_notice": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played after the opening on every agent call (null: the approved notice; empty: none). Person-only; agents may read." },
+            "closing": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played before an agent's call is hung up when its plan brings no closing (null: the approved closing). Person-only; agents may read." },
+            "phrases": {
+                "type": "object",
+                "description": "The phrases the voice bridge plays on its own, six lists. Person-only; agents may read.",
+                "properties": {
+                    "acknowledgements": phrase_list(), "fillers": phrase_list(), "long_wait": phrase_list(),
+                    "not_heard": phrase_list(), "still_there": phrase_list(), "fault": phrase_list(),
+                },
+                "additionalProperties": false,
+            },
+```
+
+with `fn phrase_list() -> Value { json!({ "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 600 } }) }`. Change the tool descriptions:
+- `calls.policy_get` names the four texts after the existing fields: "…, and the texts only a person changes (you may read them): opening_outbound, transcript_notice, closing and phrases (the six lists of sentences the voice bridge plays on its own)".
+- `calls.policy_set` becomes: "Replace the workspace's call policy with the given one (every field as jeeta.calls.policy_get returns it; a field left out takes its default, except opening_outbound, transcript_notice, closing and phrases, which only a person changes: left out or sent as read, they keep their stored values; a different value is FORBIDDEN, details.reason person_only naming the field). Only a person may turn disclose_assistant off (FORBIDDEN for you). Returns the stored policy. [risk: WRITE]".
+
+Tests. In `calls_mcp.rs`:
+
+```rust
+#[test]
+fn the_policy_schema_names_every_policy_field_and_marks_the_approved_texts_person_only() {
+    let tools = tools();
+    let schema = tools["jeeta.calls.policy_set"].input_schema.as_value().clone();
+    let props = &schema["properties"];
+    let policy = serde_json::to_value(jt_calls::CallPolicy::default()).unwrap();
+    for key in policy.as_object().unwrap().keys() {
+        assert!(props.get(key).is_some(), "policy_schema lacks {key}");
+    }
+    let phrases = serde_json::to_value(jt_calls::BridgePhrases::default()).unwrap();
+    for key in phrases.as_object().unwrap().keys() {
+        assert!(props["phrases"]["properties"].get(key).is_some(), "phrases lacks {key}");
+    }
+    assert_eq!(props["phrases"]["additionalProperties"], false);
+    let get = tools["jeeta.calls.policy_get"].description;
+    for key in ["opening_outbound", "transcript_notice", "closing", "phrases"] {
+        let text = props[key]["description"].as_str().unwrap();
+        assert!(text.contains("Person-only; agents may read."), "{key}: {text}");
+        assert!(get.contains(key), "calls.policy_get does not name {key}");
+    }
+}
+```
+
+`rust/crates/jt_app/tests/calls_policy.rs`:
+
+```rust
+//! The call policy at its input boundary: the texts the owner approved are a person's to change
+//! (an agent reads them), and a body's unknown keys are refused at any depth.
+mod support;
+
+use jt_app::error::ErrorCode;
+use jt_app::usecases::calls::{self, PlaceInput, PolicyInput};
+use jt_calls::{BridgePhrases, CallPolicy};
+use serde_json::{Value, json};
+use support::*;
+
+fn body(v: Value) -> PolicyInput {
+    serde_json::from_value(v).unwrap()
+}
+
+#[tokio::test]
+async fn an_agent_reads_the_approved_texts_but_only_a_person_changes_them() {
+    let w = world().await;
+    let agent = w.agent(&["calls.work", "calls.manage"]).await;
+    let own = CallPolicy { closing: Some("Hoşça kalın.".into()), ..CallPolicy::default() };
+    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput::from(own)).await.unwrap();
+    // What the agent read, sent back with a timer changed: stored, the texts as they were.
+    let mut read = serde_json::to_value(calls::policy_get(&w.deps, &agent).await.unwrap()).unwrap();
+    read["slow_agent_s"] = json!(5);
+    let out = calls::policy_set(&w.deps, &agent, body(read)).await.unwrap();
+    assert_eq!(out.slow_agent_s, 5);
+    assert_eq!(out.closing.as_deref(), Some("Hoşça kalın."));
+    assert_eq!(out.opening_outbound, None, "the template is not frozen into the stored policy");
+    // Left out: kept, never reset to the defaults.
+    let out = calls::policy_set(&w.deps, &agent, body(json!({ "slow_agent_s": 6 }))).await.unwrap();
+    assert_eq!(out.closing.as_deref(), Some("Hoşça kalın."));
+    // Sent different: refused, naming the field, and nothing stored.
+    for (field, value) in [
+        ("opening_outbound", json!("Selam, ben bir asistanım.")),
+        ("transcript_notice", json!("")),
+        ("closing", json!("Görüşürüz.")),
+        ("phrases", json!({ "fillers": ["Bekleyin."] })),
+    ] {
+        let mut sent = serde_json::Map::new();
+        sent.insert(field.into(), value);
+        let e = calls::policy_set(&w.deps, &agent, body(Value::Object(sent))).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Forbidden, "{field}");
+        assert_eq!(e.details["reason"], "person_only", "{field}");
+        assert_eq!(e.details["field"], field);
+    }
+    assert_eq!(calls::policy_get(&w.deps, &w.owner_ctx).await.unwrap().slow_agent_s, 6);
+    // A person changes them.
+    let sent = json!({ "closing": "Görüşürüz.", "phrases": { "fillers": ["Bekleyin."] } });
+    let out = calls::policy_set(&w.deps, &w.owner_ctx, body(sent)).await.unwrap();
+    assert_eq!(out.closing.as_deref(), Some("Görüşürüz."));
+    assert_eq!(out.phrases.fillers, ["Bekleyin."]);
+    assert_eq!(out.phrases.acknowledgements, BridgePhrases::default().acknowledgements);
+}
+
+#[test]
+fn a_policy_body_with_an_unknown_key_at_any_depth_is_refused() {
+    for (sent, path) in [
+        (json!({ "phrase": {} }), "phrase"),
+        (json!({ "phrases": { "filler": ["Bir saniye."] } }), "phrases.filler"),
+    ] {
+        let e = serde_json::from_value::<PolicyInput>(sent).unwrap_err().to_string();
+        assert!(e.contains(&format!("unknown field `{path}`")), "{e}");
+    }
+    assert!(serde_json::from_value::<PolicyInput>(json!({ "phrases": { "fillers": ["Bir saniye."] } })).is_ok());
+}
+
+#[test]
+fn a_place_body_refuses_a_field_the_plan_does_not_have() {
+    let plan = json!({
+        "opening": "Ada Hanım ile mi görüşüyorum?", "goal": "Randevuyu teyit etmek",
+        "holding": ["Bir saniye."], "max_duration_s": 60, "spoken_by": "x",
+    });
+    let e = serde_json::from_value::<PlaceInput>(json!({ "purpose": "service", "mode": "agent", "plan": plan }))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("unknown field `plan.spoken_by`"), "{e}");
+}
+```
+
+- [ ] **Step 7: Run the core tests (CI) and commit**
+
+CI: `cargo test --locked -p jt_app --test calls_session --test calls_place --test calls_bridge --test calls_end --test calls_policy` and `cargo test --locked -p jt_mcp --test calls_mcp`
+Expected: all pass, including:
+- the four new `calls_session` tests;
+- `every_played_text_is_authored` (the rig's empty opening and notice leave the plan's opening alone);
+- the three `calls_policy` tests and the MCP schema parity test.
 
 ```bash
-git add rust/crates/domain/jt_calls rust/crates/jt_app
+git add rust/crates/domain/jt_calls rust/crates/jt_app rust/crates/adapters/jt_mcp
 git commit -m "feat(calls): the workspace's approved opening and transcript notice open every agent call" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+
+(Steps 5 and 6 may be their own commits: `fix(calls): a stored plan reads tolerantly, calls.place reads it strictly` and `feat(calls): the approved texts are a person's to change`.)
 
 ### Task C2: The core fills the dial's script; the agent may pass hotwords
 
@@ -7903,7 +8224,7 @@ fn place_takes_hotwords_and_tells_the_opening_order() {
     let tools = tools();
     let place = tools["jeeta.calls.place"].input_schema.as_value().clone();
     let hotwords = &place["properties"]["plan"]["properties"]["hotwords"];
-    assert_eq!(hotwords["maxItems"], 20);
+    assert_eq!(hotwords["maxItems"], 19);
     assert_eq!(hotwords["items"]["maxLength"], 40);
     // The closing is optional: left out, the call policy's closing plays.
     let required = place["properties"]["plan"]["required"].as_array().unwrap();
@@ -7947,9 +8268,9 @@ In `jt_mcp/src/tools/calls.rs` `place_schema`, inside `plan.properties`, add:
 ```rust
                     "hotwords": {
                         "type": "array",
-                        "maxItems": 20,
+                        "maxItems": 19,
                         "items": { "type": "string", "minLength": 1, "maxLength": 40 },
-                        "description": "Names and product words from your context the speech recognition should expect on this call."
+                        "description": "Names and product words from your context the speech recognition should expect on this call (at most 19; the workspace's name is added)."
                     },
 ```
 
@@ -7963,8 +8284,8 @@ görüşüyorum?"; the whole spoken opening must contain the policy's disclosure
 played), holding (1 to 5 phrases played while you think when the bridge's own fillers did not cover
 it), fallback (0 to 3 lines played when you stay silent), closing (optional; played before the call
 is hung up; left out, the call policy's closing plays, by default "Görüşmek üzere, iyi günler."),
-max_duration_s (1 to 900), language tr, hotwords (at most 20 names or product words the speech
-recognition should expect); every sentence at most 600 characters.
+max_duration_s (1 to 900), language tr, hotwords (at most 19 names or product words the speech
+recognition should expect; the workspace's name is added); every sentence at most 600 characters.
 ```
 
 (the rest of the description — the purposes, one live call per connection, the refusal reasons, the masked number, `jeeta.calls.end`, `[risk: SPEND]` — unchanged; the `plan.opening` schema description becomes "Played after the workspace's opening and the transcript notice.").
@@ -8117,6 +8438,14 @@ and, after inserting `counterpart`:
             )),
         );
 ```
+
+Consider also leaving `metrics.traces` out of the `calls.list` items and keeping it in `calls.get`. A call keeps up to 200 traces, and a list needs only the `latency` summary. If you do, the list builds its items with a `view` variant that removes `metrics.traces` after inserting `latency`, and the test above also asserts that `calls.list` items have no `metrics.traces` and do have `latency`.
+
+**Do not cut a release between A5 and C3.** From A5 on, `calls.get` and `calls.list` carry the dialled `phrases` (about ten sentences per call) and the raw `metrics.traces`. Only C3 strips them.
+
+Optional follow-ups (here or in B6):
+- Count a `phrase` event whose index is outside the dialled set: `CallMetrics.phrase_mismatches: u32`, `#[serde(default)]`, incremented where `session.phrases.text(set, index)` is `None`. Today such an event logs nothing and is otherwise invisible; a non-zero count shows a bridge playing from a stale cache.
+- On `Phrase { set: NotHeard }`, restart the caller-silence clock. The caller did speak, only unrecognised. Set `awaiting_caller_since = Some(now)` when it was set, and clear `silence_noted`, so `caller_silence_s`/`caller_silence_close_s` count from the "not heard" phrase, not from the agent's last sentence.
 
 - [ ] **Step 3: Run (CI) and commit**
 
@@ -9461,6 +9790,23 @@ journalctl -u jeeta-staging --since "-5 min" -p warning --no-pager | head
 Expected: a non-empty dump; `readyz` 200; no WARN/ERROR. No migration is applied (this plan adds none). The Meta reviewer workspace is untouched.
 
 - [ ] **Step 3: [OWNER OK] Prod after the e2e (E3) passed**: `/root/upgrade.sh /root/jeeta-release-<sha8>.tar` (it backs up, checks compatibility, swaps, checks `readyz`), then `curl -fsS http://127.0.0.1:8090/readyz`. Only then may the bridge be pointed at prod (E2).
+
+The release contains Phase C through C3 at least (see C3: no release between A5 and C3).
+
+- [ ] **Step 4: [COORDINATOR, server] Rollback to 047da0cd (only if needed)**
+
+1. **Stop or switch `jeeta-voice-bridge` first** (`systemctl stop jeeta-voice-bridge`, or point it at the other environment, E2). The old core reads `BridgeEvent` without `phrase` and `trace`, so it refuses the whole event batch that contains one, and with it the `hangup` and `command_done` in that batch.
+2. **Remove the plans' hotwords**, which the old core's strict `CallPlan` refuses. Run as the postgres superuser, who is not subject to row-level security, against the environment's database (staging: `sudo -u postgres psql -p 5437 -d jeeta`; prod: its own cluster). Both statements are idempotent:
+
+   ```sql
+   update call_sessions set data = data #- '{plan,hotwords}' where data->'plan' ? 'hotwords';
+   update call_commands set payload = payload #- '{plan,hotwords}' where kind = 'dial' and payload->'plan' ? 'hotwords';
+   ```
+
+   A plan without hotwords is written without the key (A5 review), so only plans that carried some are touched. Everything else A5–C3 added reads in the old core: `CallSession.phrases`, `CallMetrics.{traces, agent_replies}`, the dial's `script` and `CallPolicy`'s new fields are not refused by types without `deny_unknown_fields`.
+3. Then run the old release's `upgrade.sh` / `staging-upgrade.sh` with the old tarball.
+
+**Known loss.** If the old core re-saves the call policy (a `calls.policy_set`, or a panel save), it drops `phrases` and C1's `opening_outbound`, `transcript_notice` and `closing`. After rolling forward again they read as their defaults (the approved set and templates), not as what the owner had written. Re-enter them in the panel after a roll-forward, or export `workspace_policies.calls` before rolling back.
 
 ### Task E2: One extension, one environment: the switch
 
