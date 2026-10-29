@@ -567,8 +567,8 @@ git commit -m "refactor(calls): the voice bridge's wire types live in jt_calls::
 ```rust
 //! A caller turn's timings and their percentiles (design addendum §7).
 use jt_calls::{
-    BARGE_IN_P95_ALERT_MS, CONTENT_P95_ALERT_MS, EndpointBy, PERCEIVED_P95_ALERT_MS, TurnTrace,
-    percentiles, summarize,
+    AgentReply, BARGE_IN_P95_ALERT_MS, CONTENT_P95_ALERT_MS, EndpointBy, PERCEIVED_P95_ALERT_MS,
+    TurnTrace, percentiles, summarize,
 };
 
 fn turn(ack: Option<u32>, first_audio: Option<u32>) -> TurnTrace {
@@ -583,6 +583,7 @@ fn turn(ack: Option<u32>, first_audio: Option<u32>) -> TurnTrace {
         ack_ms: ack,
         barge_in_stop_ms: None,
         backchannel_cut: false,
+        reply_seq: None,
     }
 }
 
@@ -610,7 +611,7 @@ fn perceived_is_the_first_sound_and_content_the_reply() {
 #[test]
 fn summary_alerts_on_the_reports_thresholds() {
     let traces = vec![turn(Some(620), Some(4_760)), turn(Some(640), Some(3_900))];
-    let s = summarize(&traces, &[4_100, 3_200]);
+    let s = summarize(&traces, &[4_100, 3_200], &[]);
     assert_eq!(s.turns, 2);
     assert_eq!(s.perceived.p95, Some(640));
     assert_eq!(s.content.p95, Some(4_760));
@@ -618,16 +619,16 @@ fn summary_alerts_on_the_reports_thresholds() {
     assert!(s.content.p95.unwrap() > CONTENT_P95_ALERT_MS);
     assert_eq!(s.alerts, vec!["content_p95_over_3s".to_owned()]);
     let slow = vec![turn(Some(1_200), Some(1_500))];
-    let s = summarize(&slow, &[]);
+    let s = summarize(&slow, &[], &[]);
     assert!(s.perceived.p95.unwrap() > PERCEIVED_P95_ALERT_MS);
     assert_eq!(s.alerts, vec!["perceived_p95_over_1s".to_owned()]);
     let mut cut = turn(Some(600), Some(900));
     cut.barge_in_stop_ms = Some(BARGE_IN_P95_ALERT_MS + 50);
     assert_eq!(
-        summarize(&[cut], &[]).alerts,
+        summarize(&[cut], &[], &[]).alerts,
         vec!["barge_in_p95_over_300ms".to_owned()]
     );
-    assert!(summarize(&[], &[]).alerts.is_empty());
+    assert!(summarize(&[], &[], &[]).alerts.is_empty());
 }
 
 #[test]
@@ -638,6 +639,9 @@ fn a_trace_reads_tolerantly() {
     .unwrap();
     assert_eq!(t.endpoint_by, None);
     assert_eq!(t.first_audio_ms, None);
+    assert_eq!(t.reply_seq, None);
+    let t: TurnTrace = serde_json::from_value(serde_json::json!({ "reply_seq": 7 })).unwrap();
+    assert_eq!(t.reply_seq, Some(7));
 }
 
 // Added in the A2 fix-up: the thresholds are strict (a p95 exactly at the limit is no alert).
@@ -654,7 +658,7 @@ fn a_p95_exactly_at_a_limit_raises_no_alert_and_one_millisecond_over_does() {
     );
     let mut at = turn(Some(1_000), Some(3_000));
     at.barge_in_stop_ms = Some(300);
-    let s = summarize(&[at], &[]);
+    let s = summarize(&[at], &[], &[]);
     assert_eq!(s.perceived.p95, Some(1_000));
     assert_eq!(s.content.p95, Some(3_000));
     assert_eq!(s.barge_in_stop.p95, Some(300));
@@ -663,7 +667,7 @@ fn a_p95_exactly_at_a_limit_raises_no_alert_and_one_millisecond_over_does() {
     let mut over = turn(Some(1_001), Some(3_001));
     over.barge_in_stop_ms = Some(301);
     assert_eq!(
-        summarize(&[over], &[]).alerts,
+        summarize(&[over], &[], &[]).alerts,
         [
             "perceived_p95_over_1s",
             "content_p95_over_3s",
@@ -678,11 +682,11 @@ fn each_alert_is_raised_on_its_own_measure_only() {
     // quick acknowledgement alerts on content alone.
     let quick_ack_slow_reply = turn(Some(500), Some(3_500));
     assert_eq!(
-        summarize(&[quick_ack_slow_reply], &[]).alerts,
+        summarize(&[quick_ack_slow_reply], &[], &[]).alerts,
         ["content_p95_over_3s"]
     );
     // A turn with no sound at all alerts on nothing: there is nothing to measure.
-    assert!(summarize(&[turn(None, None)], &[]).alerts.is_empty());
+    assert!(summarize(&[turn(None, None)], &[], &[]).alerts.is_empty());
 }
 
 #[test]
@@ -690,11 +694,11 @@ fn the_p95_of_twenty_turns_ignores_only_the_worst_one() {
     let slow = |ms| turn(Some(ms), Some(ms));
     let mut traces = vec![slow(600); 19];
     traces.push(slow(5_000));
-    let s = summarize(&traces, &[]);
+    let s = summarize(&traces, &[], &[]);
     assert_eq!(s.perceived.p95, Some(600));
     assert!(s.alerts.is_empty(), "{:?}", s.alerts);
     traces[18] = slow(5_000);
-    let s = summarize(&traces, &[]);
+    let s = summarize(&traces, &[], &[]);
     assert_eq!(s.perceived.p95, Some(5_000));
     assert_eq!(s.alerts, ["perceived_p95_over_1s", "content_p95_over_3s"]);
 }
@@ -720,6 +724,135 @@ fn percentiles_ignore_input_order_and_keep_duplicates() {
     let p = percentiles([5, 1, 5, 5, 1, 9]);
     assert_eq!((p.n, p.p50, p.p95), (6, Some(5), Some(9)));
 }
+
+// Added in the third A2 fix-up: the transport overhead, matched by the reply's seq.
+
+/// A turn the core answered: its trace names the agent `say` (`reply_seq`) that arrived `say_ms`
+/// after speech end, the core having answered the utterance `delivered_ms` after it.
+fn answered(reply_seq: u32, delivered_ms: u32, say_ms: u32) -> TurnTrace {
+    TurnTrace {
+        delivered_ms: Some(delivered_ms),
+        say_ms: Some(say_ms),
+        reply_seq: Some(reply_seq),
+        ..TurnTrace::default()
+    }
+}
+
+/// The last turn of a call, which the agent never answered: a trace with no reply.
+fn unanswered() -> TurnTrace {
+    TurnTrace {
+        delivered_ms: Some(300),
+        ..TurnTrace::default()
+    }
+}
+
+fn reply(seq: u32, latency_ms: u32) -> AgentReply {
+    AgentReply { seq, latency_ms }
+}
+
+#[test]
+fn transport_is_the_core_round_less_the_latency_of_the_named_reply() {
+    // The replies are listed in the other order: the match is by seq, not by position.
+    let traces = [answered(3, 340, 4_340), answered(7, 100, 3_100)];
+    let replies = [reply(7, 2_950), reply(3, 3_900)];
+    let s = summarize(&traces, &[3_900, 2_950], &replies);
+    assert_eq!(
+        (s.transport.n, s.transport.p50, s.transport.p95),
+        (2, Some(50), Some(100))
+    );
+    // The measures that do not need the pairing are unchanged.
+    assert_eq!(s.core_round.n, 2);
+    assert_eq!(s.agent.n, 2);
+}
+
+#[test]
+fn a_trace_without_a_reply_seq_is_left_out_of_transport() {
+    let mut no_key = answered(3, 340, 4_340);
+    no_key.reply_seq = None;
+    let s = summarize(&[no_key, unanswered()], &[3_900], &[reply(3, 3_900)]);
+    assert_eq!(s.transport, Default::default());
+    // A trace whose say came before the core answered has no core round either.
+    let backwards = answered(3, 500, 400);
+    let s = summarize(&[backwards], &[3_900], &[reply(3, 3_900)]);
+    assert_eq!(s.transport.n, 0);
+}
+
+#[test]
+fn a_seq_with_no_latency_is_left_out_of_transport() {
+    // The agent spoke when nothing was owed (no latency recorded), or the seq is a core `play`.
+    let traces = [answered(3, 340, 4_340), answered(9, 100, 3_100)];
+    let s = summarize(&traces, &[3_900], &[reply(3, 3_900)]);
+    assert_eq!((s.transport.n, s.transport.p95), (1, Some(100)));
+    let s = summarize(&traces, &[], &[]);
+    assert_eq!(s.transport, Default::default());
+}
+
+#[test]
+fn transport_saturates_at_zero_when_the_two_windows_differ_by_the_post_tail() {
+    // The core's wait began when it took the utterance; the bridge's round began when its POST was
+    // answered, a little later: the core's latency can exceed the bridge's round.
+    let s = summarize(&[answered(3, 400, 4_300)], &[3_950], &[reply(3, 3_950)]);
+    assert_eq!(
+        (s.transport.n, s.transport.p50, s.transport.p95),
+        (1, Some(0), Some(0))
+    );
+}
+
+#[test]
+fn the_e3_scripts_shapes_pair_what_they_can() {
+    // Three caller turns, the last unanswered, two replies: two pairs.
+    let traces = [
+        answered(2, 300, 2_300),
+        answered(4, 300, 3_300),
+        unanswered(),
+    ];
+    let s = summarize(
+        &traces,
+        &[2_000, 3_000],
+        &[reply(2, 2_000), reply(4, 3_000)],
+    );
+    assert_eq!(s.turns, 3);
+    assert_eq!((s.transport.n, s.transport.p95), (2, Some(0)));
+    // Two caller turns, the last unanswered, one reply: one pair.
+    let traces = [answered(2, 300, 2_380), unanswered()];
+    let s = summarize(&traces, &[2_000], &[reply(2, 2_000)]);
+    assert_eq!((s.transport.n, s.transport.p95), (1, Some(80)));
+    // A latency no trace names (a key press the agent answered, a say after a fallback line) is
+    // simply not used, and the counts need not agree.
+    let traces = [answered(2, 300, 2_300), answered(4, 300, 3_340)];
+    let replies = [
+        reply(2, 2_000),
+        reply(4, 3_000),
+        reply(6, 1_200),
+        reply(8, 900),
+    ];
+    let s = summarize(&traces, &[2_000, 3_000, 1_200, 900], &replies);
+    assert_eq!(
+        (s.transport.n, s.transport.p50, s.transport.p95),
+        (2, Some(0), Some(40))
+    );
+}
+
+#[test]
+fn the_first_latency_of_a_seq_is_the_one_used() {
+    let s = summarize(
+        &[answered(3, 340, 4_340)],
+        &[3_900, 1_000],
+        &[reply(3, 3_900), reply(3, 1_000)],
+    );
+    assert_eq!(s.transport.p95, Some(100));
+}
+
+#[test]
+fn transport_is_not_an_alert() {
+    let s = summarize(&[answered(3, 100, 5_100)], &[1_000], &[reply(3, 1_000)]);
+    assert_eq!(s.transport.p95, Some(4_000));
+    assert!(
+        !s.alerts.iter().any(|a| a.contains("transport")),
+        "{:?}",
+        s.alerts
+    );
+}
 ```
 
 - [ ] **Step 2: Run it to see it fail**
@@ -735,9 +868,12 @@ Expected: FAIL to compile (`TurnTrace` not found in `jt_calls`).
 //! What one caller turn took, as the voice bridge measured it (design addendum
 //! `2026-10-29-voice-sidecar-free-path-design.md` §7), and the percentiles of a call's turns. Every
 //! field is an offset in milliseconds from the caller's end of speech (the last voiced 20 ms
-//! frame), on the bridge's monotonic clock, except `barge_in_stop_ms`: a duration from the caller's
-//! onset (the first voiced frame of the interruption) to the agent's voice stopping. Numbers only:
-//! a trace never carries a word or a number dialled.
+//! frame), on the bridge's monotonic clock, except `barge_in_stop_ms`, a duration from the caller's
+//! onset (the first voiced frame of the interruption) to the agent's voice stopping, and
+//! `reply_seq`, the number of the agent's `say` that `say_ms` timed. Numbers only: a trace never
+//! carries a word or a number dialled.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -760,7 +896,8 @@ pub enum EndpointBy {
     Fallback,
 }
 
-/// The timings of one caller turn (offsets from the end of speech, bar `barge_in_stop_ms`).
+/// The timings of one caller turn (offsets from the end of speech, bar `barge_in_stop_ms` and the
+/// `reply_seq` key).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TurnTrace {
@@ -784,6 +921,9 @@ pub struct TurnTrace {
     pub barge_in_stop_ms: Option<u32>,
     /// The caller cut the reply with words that were only acknowledgement ("hı hı", "evet").
     pub backchannel_cut: bool,
+    /// The `seq` of the agent `say` whose arrival `say_ms` timed: the key that pairs this turn with
+    /// the core's own latency for that sentence ([`AgentReply`]). `None` when no `say` arrived.
+    pub reply_seq: Option<u32>,
 }
 
 impl TurnTrace {
@@ -800,6 +940,16 @@ impl TurnTrace {
     pub fn core_round_ms(&self) -> Option<u32> {
         self.say_ms?.checked_sub(self.delivered_ms?)
     }
+}
+
+/// What the core measured for one agent `say`: its turn `seq` (the number a bridge trace carries
+/// as `reply_seq`) and the wait the sentence ended, in milliseconds from the moment the agent owed
+/// one (the caller's final words, a key press, a fallback line) to the `say`. One per `say` that
+/// ended a wait, so the list can be longer or shorter than the call's traces: the match is by `seq`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentReply {
+    pub seq: u32,
+    pub latency_ms: u32,
 }
 
 /// How many values, and their nearest-rank median and 95th percentile.
@@ -842,12 +992,27 @@ pub struct LatencySummary {
     /// The agent's reply time as the core measured it (`CallMetrics::agent_latency_ms`).
     pub agent: Percentiles,
     pub barge_in_stop: Percentiles,
+    /// What the bridge-to-core hops added, per turn: `core_round_ms` less the core's latency for the
+    /// reply the trace names, saturating at 0 (the two windows differ by the tail of the utterance
+    /// POST). Only the turns whose reply has both a `reply_seq` and a recorded latency count. A
+    /// reply that followed a fallback line has its latency counted from the fallback, so it
+    /// overstates the hop. Reported, never an alert (the acceptance gate is p95 ≤ 100 ms).
+    pub transport: Percentiles,
     pub backchannel_cuts: u32,
     pub alerts: Vec<String>,
 }
 
-/// The summary of `traces` and the core's own `agent_latency_ms`.
-pub fn summarize(traces: &[TurnTrace], agent_latency_ms: &[u32]) -> LatencySummary {
+/// The summary of `traces`, the core's own `agent_latency_ms`, and its `agent_replies` (the same
+/// latencies keyed by the `say`'s `seq`, which is how a trace finds its own).
+pub fn summarize(
+    traces: &[TurnTrace],
+    agent_latency_ms: &[u32],
+    agent_replies: &[AgentReply],
+) -> LatencySummary {
+    let mut latency_of = BTreeMap::new();
+    for r in agent_replies {
+        latency_of.entry(r.seq).or_insert(r.latency_ms);
+    }
     let s = LatencySummary {
         turns: u32::try_from(traces.len()).unwrap_or(u32::MAX),
         perceived: percentiles(traces.iter().filter_map(TurnTrace::perceived_ms)),
@@ -857,6 +1022,10 @@ pub fn summarize(traces: &[TurnTrace], agent_latency_ms: &[u32]) -> LatencySumma
         core_round: percentiles(traces.iter().filter_map(TurnTrace::core_round_ms)),
         agent: percentiles(agent_latency_ms.iter().copied()),
         barge_in_stop: percentiles(traces.iter().filter_map(|t| t.barge_in_stop_ms)),
+        transport: percentiles(traces.iter().filter_map(|t| {
+            let latency = latency_of.get(&t.reply_seq?)?;
+            Some(t.core_round_ms()?.saturating_sub(*latency))
+        })),
         backchannel_cuts: u32::try_from(traces.iter().filter(|t| t.backchannel_cut).count())
             .unwrap_or(u32::MAX),
         alerts: Vec::new(),
@@ -880,15 +1049,15 @@ In `lib.rs` add `mod trace;` beside the other modules and:
 
 ```rust
 pub use trace::{
-    BARGE_IN_P95_ALERT_MS, CONTENT_P95_ALERT_MS, EndpointBy, LatencySummary, MAX_TRACES,
-    PERCEIVED_P95_ALERT_MS, Percentiles, TurnTrace, percentiles, summarize,
+    AgentReply, BARGE_IN_P95_ALERT_MS, CONTENT_P95_ALERT_MS, EndpointBy, LatencySummary,
+    MAX_TRACES, PERCEIVED_P95_ALERT_MS, Percentiles, TurnTrace, percentiles, summarize,
 };
 ```
 
 - [ ] **Step 4: Run the test**
 
 Run: `cargo test -p jt_calls --test trace`
-Expected: `test result: ok. 9 passed`.
+Expected: `test result: ok. 16 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -1255,6 +1424,48 @@ fn the_approved_closing_is_a_pinned_constant() {
     assert_eq!(CLOSING, "Görüşmek üzere, iyi günler.");
     assert_ne!(CLOSING, TRANSCRIPT_NOTICE);
 }
+
+// Added in the second A3 fix-up: words checked against TDK's Güncel Türkçe Sözlük (sozluk.gov.tr),
+// which shows each entry's suffixed ending: a front vowel after a back-vowel stem (-li, -lü, -ti)
+// is the mark of a front suffix.
+
+#[test]
+fn words_the_dictionary_marks_with_a_front_suffix_take_it() {
+    for (name, want) in [
+        ("Metal", "Metal'in"),
+        ("Kristal", "Kristal'in"),
+        ("Lokal", "Lokal'in"),
+        ("Final", "Final'in"),
+        ("Sinyal", "Sinyal'in"),
+        ("İkbal", "İkbal'in"),
+        ("İKBAL", "İKBAL'in"),
+        ("Ankara Metal", "Ankara Metal'in"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn words_the_dictionary_marks_with_a_back_suffix_stay_back() {
+    // "emlak" is listed with the ending -kı (emlakı): back, though it looks like a soft-k word.
+    for (name, want) in [
+        ("Emlak", "Emlak'ın"),
+        ("Ahlak", "Ahlak'ın"),
+        ("Kitap", "Kitap'ın"),
+        ("Kalpak", "Kalpak'ın"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn words_outside_the_table_follow_the_spelling_whatever_their_pronunciation() {
+    // The documented limits: a compound of a table word, a word the dictionary does not list
+    // (İclal), and one it lists without a front mark (global).
+    assert_eq!(genitive("Akpetrol"), "Akpetrol'un");
+    assert_eq!(genitive("İclal"), "İclal'ın");
+    assert_eq!(genitive("Global"), "Global'ın");
+}
 ```
 
 - [ ] **Step 2: Run it to see it fail**
@@ -1280,14 +1491,18 @@ pub const CLOSING: &str = "Görüşmek üzere, iyi günler.";
 
 const VOWELS: &str = "aeıioöuüâîû";
 
-/// Words whose suffix is front although their last vowel is back (a soft `l` or `k` follows it, or
-/// the word is a loan): "Kemal'in", "Saat'in", "Kontrol'ün". Matched whole, on the Turkish-lowercased
-/// last word of a name; a word that merely begins with one of them is not in the table. Words
-/// ending in "âl" are covered by a rule ([`takes_front_suffix`]), whether or not they are listed.
-const FRONT_SUFFIX_WORDS: [&str; 22] = [
-    "alkol", "bilal", "celal", "cemal", "dikkat", "gol", "hakikat", "hal", "harf", "hayal",
-    "hilal", "kabul", "kalp", "kemal", "kontrol", "nihal", "petrol", "protokol", "rol", "saat",
-    "sembol", "usul",
+/// Words whose suffix is front although their last vowel is back: "Kemal'in", "Saat'in",
+/// "Kontrol'ün". Each is listed in TDK's Güncel Türkçe Sözlük with an ending that has a front vowel
+/// after the back-vowel stem (kemal -li, saat -ti, kalp -bi, petrol -lü; checked 2026-10-29), except
+/// `bilal` and `nihal`: first names the dictionary does not list, which inflect the same way as
+/// `hilal` and `kemal`. Matched whole, on the Turkish-lowercased last word of a name, so a
+/// compound ("Akpetrol") follows the spelling. Words ending in "âl" are covered by a rule
+/// ([`takes_front_suffix`]), whether or not they are listed. Not listed, on purpose: `global` (the
+/// dictionary shows no front mark), `emlak` (its ending is -kı: back) and `iclal` (no entry).
+const FRONT_SUFFIX_WORDS: [&str; 28] = [
+    "alkol", "bilal", "celal", "cemal", "dikkat", "final", "gol", "hakikat", "hal", "harf",
+    "hayal", "hilal", "ikbal", "kabul", "kalp", "kemal", "kontrol", "kristal", "lokal", "metal",
+    "nihal", "petrol", "protokol", "rol", "saat", "sembol", "sinyal", "usul",
 ];
 
 fn is_vowel(c: char) -> bool {
@@ -1453,9 +1668,9 @@ fn genitive_suffix(spoken: &str, front: bool) -> &'static str {
 ///
 /// - The last vowel decides (a ı → ın, e i → in, o u → un, ö ü → ün), a final vowel takes the buffer
 ///   `n`; capital `I` and `İ` are lowered the Turkish way.
-/// - A short table of loanwords with a soft `l` or `k` (Kemal, Saat, Hal, Kalp, Kontrol, Petrol,
-///   ...), matched whole, and any word ending in "âl" take the front suffix: `Kemal'in`,
-///   `Kontrol'ün`, `İstiklâl'in`.
+/// - A short table of words that TDK's dictionary marks with a front suffix after a back vowel
+///   (Kemal, Saat, Hal, Kalp, Kontrol, Petrol, Metal, Final, ...), matched whole, and any word
+///   ending in "âl" take the front suffix: `Kemal'in`, `Kontrol'ün`, `İstiklâl'in`.
 /// - A word without vowels is read by its last letter's name (`THY'nin`), a dotted acronym by the
 ///   name of its last letter (`A.Ş.'nin`, `T.C.'nin`), a trailing number by its Turkish reading
 ///   (`Studio 54'ün`, `Bina 100'ün`). A number of more than 18 digits is not supported (only its
@@ -1463,8 +1678,10 @@ fn genitive_suffix(spoken: &str, front: bool) -> &'static str {
 ///
 /// Limits. An acronym that holds a vowel but has no dots (ABD, AKP, AVM, IBM) is read as a word, so
 /// it gets `ABD'ın` where it is spoken "A-Be-De'nin"; a foreign or invented name pronounced
-/// otherwise than spelled ("Apple") has the same problem. An owner whose name is read otherwise
-/// writes the opening by hand in the call policy.
+/// otherwise than spelled ("Apple") has the same problem. So has a word the table lacks: a compound
+/// of a table word (Akpetrol), `İclal` (not in the dictionary) and `global` (listed without a front
+/// mark) get `'ın`. An owner whose name is read otherwise writes the opening by hand in the call
+/// policy.
 pub fn genitive(name: &str) -> String {
     let words: Vec<&str> = name.split_whitespace().collect();
     let Some(end) = words
@@ -1502,7 +1719,7 @@ In `lib.rs` add `mod opening;` and `pub use opening::{CLOSING, TRANSCRIPT_NOTICE
 - [ ] **Step 4: Run the test**
 
 Run: `cargo test -p jt_calls --test opening`
-Expected: `test result: ok. 22 passed`.
+Expected: `test result: ok. 25 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -1835,8 +2052,8 @@ git commit -m "feat(calls): the owner-approved phrase set the bridge may play on
 mod support;
 
 use jt_calls::{
-    BridgeEvent, BridgePhrases, Command, DialScript, MAX_TRACES, PhraseSet, PlanError, TimerAction,
-    TurnKind, TurnTrace, call_hotwords, next_timer, reduce,
+    AgentReply, BridgeEvent, BridgePhrases, Command, DialScript, MAX_TRACES, PhraseSet, PlanError,
+    TimerAction, TurnKind, TurnTrace, call_hotwords, next_timer, reduce, say,
 };
 use serde_json::json;
 use support::*;
@@ -1931,6 +2148,28 @@ fn traces_are_kept_up_to_the_limit() {
     }
     assert_eq!(s.metrics.traces.len(), MAX_TRACES);
     assert_eq!(s.metrics.traces[0].endpoint_ms, 0);
+}
+
+#[test]
+fn an_agents_say_records_its_seq_with_its_latency_up_to_the_limit() {
+    let p = policy();
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    reduce(&mut s, &utterance(), at(5_000), &p);
+    let step = say(&mut s, "Perşembe uygun.", true, true, at(8_000)).unwrap();
+    let Command::Say { seq, .. } = step.commands[0] else { panic!("a say") };
+    assert_eq!(s.metrics.agent_replies, [AgentReply { seq, latency_ms: 3_000 }]);
+    assert_eq!(s.metrics.agent_latency_ms, [3_000]);
+    // A sentence said when nothing was owed ends no wait: no latency, so no reply either.
+    say(&mut s, "Devam ediyorum.", true, true, at(9_000)).unwrap();
+    assert_eq!(s.metrics.agent_replies.len(), 1);
+    // The list is capped like the traces, keeping the first ones.
+    for i in 0..(MAX_TRACES + 5) as i64 {
+        reduce(&mut s, &utterance(), at(10_000 + i * 10), &p);
+        say(&mut s, "Tamam.", true, true, at(10_005 + i * 10)).unwrap();
+    }
+    assert_eq!(s.metrics.agent_replies.len(), MAX_TRACES);
+    assert_eq!(s.metrics.agent_replies[0].seq, seq);
 }
 
 #[test]
@@ -2047,7 +2286,7 @@ and `phrases: BridgePhrases::default(),` in `Default for CallPolicy`.
 
 ```rust
 use crate::phrases::{BridgePhrases, PhraseSet};
-use crate::trace::{MAX_TRACES, TurnTrace};
+use crate::trace::{AgentReply, MAX_TRACES, TurnTrace};
 ```
 
 add to `CallSession`, after `clock`:
@@ -2066,6 +2305,19 @@ add to `CallMetrics`, after `fallback_played`:
 ```rust
     /// The bridge's timings of the call's turns (at most [`MAX_TRACES`]).
     pub traces: Vec<TurnTrace>,
+    /// Each agent `say` that ended a wait, by its `seq`, with that wait (at most [`MAX_TRACES`]):
+    /// what `summarize` matches a trace's `reply_seq` against to measure the transport overhead.
+    pub agent_replies: Vec<AgentReply>,
+```
+
+and, in `say` (same file), right after `let turn = session.turn(…);`, record the pair beside the existing `agent_latency_ms` push:
+
+```rust
+    if let Some(latency_ms) = latency
+        && session.metrics.agent_replies.len() < MAX_TRACES
+    {
+        session.metrics.agent_replies.push(AgentReply { seq: turn.seq, latency_ms });
+    }
 ```
 
 add before `pub enum Command`:
@@ -2095,7 +2347,7 @@ change `Command::Dial` to:
     },
 ```
 
-and put `#[allow(clippy::large_enum_variant)] // a dial carries its plan and script; commands are few and short-lived` above `pub enum Command` (with the script the dial is 392 bytes against 30 for the next variant, and `clippy -D warnings` refuses the enum; boxing the script would change every consumer for nothing).
+and put `#[expect(clippy::large_enum_variant, reason = "commands are few and short-lived")]` above `pub enum Command`. With the script the dial is at least 392 bytes against 30 for the next variant, and `clippy -D warnings` refuses the enum. A command is built, queued and sent, never held in bulk, so its size costs nothing, while boxing the script would change every consumer. `expect` (not `allow`) so that the build says when the attribute stops being needed.
 
 add to `BridgeEvent`, before `CommandDone`:
 
@@ -2165,7 +2417,7 @@ Find any other literal with: `grep -rn "Command::Dial {\|CallPlan {" rust/crates
 - [ ] **Step 5: Run the tests**
 
 Run: `cargo test -p jt_calls` and `cargo clippy --locked -p jt_app --lib --features tokio/time -- -D warnings`
-Expected: `bridge_additions` 9 passed and every earlier `jt_calls` test passing; `jt_app` lib clean. CI: `jt_app`, `jt_pg` tests unchanged in behaviour.
+Expected: `bridge_additions` 10 passed and every earlier `jt_calls` test passing; `jt_app` lib clean. CI: `jt_app`, `jt_pg` tests unchanged in behaviour.
 
 - [ ] **Step 6: Commit**
 
@@ -5074,8 +5326,10 @@ fn marks_become_a_trace_and_traces_go_to_their_file() {
     m.delivered = Some(t0 + Duration::from_millis(340));
     m.ack = Some(t0 + Duration::from_millis(620));
     m.first_audio = Some(t0 + Duration::from_millis(4_760));
+    m.reply_seq = Some(4);
     let trace = m.trace();
     assert_eq!((trace.endpoint_ms, trace.stt_final_ms), (260, 310));
+    assert_eq!(trace.reply_seq, Some(4));
     assert_eq!((trace.ack_ms, trace.first_audio_ms), (Some(620), Some(4_760)));
     let path = std::env::temp_dir().join(format!("voice-traces-{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&path);
@@ -5373,6 +5627,8 @@ pub struct TurnMarks {
     pub tts_first: Option<Instant>,
     pub first_audio: Option<Instant>,
     pub ack: Option<Instant>,
+    /// The `seq` of the agent `say` that `say` timed (the trace's `reply_seq`).
+    pub reply_seq: Option<u32>,
     pub barge_in_stop_ms: Option<u32>,
     pub backchannel_cut: bool,
 }
@@ -5389,6 +5645,7 @@ impl TurnMarks {
             tts_first: None,
             first_audio: None,
             ack: None,
+            reply_seq: None,
             barge_in_stop_ms: None,
             backchannel_cut: false,
         }
@@ -5407,6 +5664,7 @@ impl TurnMarks {
             ack_ms: since(base, self.ack),
             barge_in_stop_ms: self.barge_in_stop_ms,
             backchannel_cut: self.backchannel_cut,
+            reply_seq: self.reply_seq,
         }
     }
 }
@@ -6128,6 +6386,7 @@ async fn a_call_dials_plays_hears_acknowledges_and_hangs_up() {
     let BridgeEvent::Trace { trace } = next(&mut reports).await.event else { panic!("a trace") };
     assert_eq!(trace.endpoint_ms, 260);
     assert!(trace.ack_ms.is_some() && trace.say_ms.is_some() && trace.first_audio_ms.is_some());
+    assert_eq!(trace.reply_seq, Some(4));
     tokio::time::timeout(Duration::from_secs(3), task).await.unwrap().unwrap();
     let sent: Vec<String> = std::iter::from_fn(|| controls.try_recv().ok()).collect();
     assert!(sent.iter().any(|c| c == "MARK_MEDIA"));
@@ -6833,6 +7092,8 @@ impl Live {
             Command::Say { seq, text, allow_barge_in } => {
                 if let Some(m) = self.marks.as_mut() {
                     m.say.get_or_insert_with(Instant::now);
+                    // The key the core matches its own latency for this sentence by (`summarize`).
+                    m.reply_seq.get_or_insert(seq);
                 }
                 self.input(Input::Speak { seq, text, barge_in: allow_barge_in, agent: true }).await;
             }
@@ -7075,7 +7336,9 @@ fn report(args: &[String]) -> ExitCode {
     let path = std::env::var("VOICE_TRACE_FILE").unwrap_or_else(|_| "/var/lib/jeeta-voice/traces.jsonl".into());
     match read_traces(std::path::Path::new(&path), since) {
         Ok(traces) => {
-            let summary = jt_calls::summarize(&traces, &[]);
+            // The worker alone cannot see the core's latencies: `agent` and `transport` stay empty here
+            // (the call view, `calls.get`, has them).
+            let summary = jt_calls::summarize(&traces, &[], &[]);
             println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
             ExitCode::SUCCESS
         }
@@ -7776,27 +8039,89 @@ async fn a_turns_trace_is_kept_and_summarised_in_the_call_view() {
     assert_eq!(shown.call["latency"]["perceived"]["p50"], 620);
     assert_eq!(shown.call["latency"]["content"]["p95"], 4760);
     assert_eq!(shown.call["latency"]["alerts"], json!(["content_p95_over_3s"]));
+    // No agent sentence was ever said, so nothing pairs.
+    assert_eq!(shown.call["latency"]["transport"]["n"], 0);
+}
+
+#[tokio::test]
+async fn the_transport_overhead_pairs_a_trace_with_its_reply_by_seq() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.say_at(12, call, "Uygun.").await;
+    let seq = r.shown(call).await.turns.last().unwrap().seq;
+    // The bridge's trace names the say it timed: 2.06 s from the answered POST to the say.
+    r.report(
+        14,
+        call,
+        json!([{ "kind": "trace", "trace": {
+            "endpoint_ms": 260, "stt_final_ms": 310, "delivered_ms": 340, "say_ms": 2400, "reply_seq": seq } }]),
+    )
+    .await;
+    // A last turn nobody answered: a trace with no reply, which pairs with nothing.
+    r.report(
+        16,
+        call,
+        json!([{ "kind": "trace", "trace": { "endpoint_ms": 250, "stt_final_ms": 300, "delivered_ms": 320 } }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    let latency = shown.call["metrics"]["agent_latency_ms"][0].as_u64().unwrap();
+    assert_eq!(shown.call["metrics"]["agent_replies"][0]["seq"], seq);
+    assert_eq!(shown.call["latency"]["turns"], 2);
+    assert_eq!(shown.call["latency"]["transport"]["n"], 1);
+    assert_eq!(shown.call["latency"]["transport"]["p95"], 2_060 - latency);
+}
+
+#[tokio::test]
+async fn a_calls_view_carries_neither_its_clock_nor_its_dialled_phrases() {
+    // The phrases are the reducer's source for the turn log (about ten sentences a call), not
+    // something `calls.get` or `calls.list` should repeat on every call.
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    let shown = r.shown(call).await;
+    for key in ["clock", "phrases"] {
+        assert!(shown.call.get(key).is_none(), "calls.get shows {key}");
+    }
+    let listed = calls::list(&r.w.deps, &r.agent_at(5), calls::ListQuery::default()).await.unwrap();
+    assert!(!listed.is_empty());
+    for item in &listed {
+        for key in ["clock", "phrases"] {
+            assert!(item.get(key).is_none(), "calls.list shows {key}");
+        }
+    }
 }
 ```
 
-CI: `cargo test --locked -p jt_app --test calls_session a_turns_trace`
-Expected: FAIL (`latency` is null). (The two filler tests already pass from A5 and C2: keep them as the end-to-end guard.)
+CI: `cargo test --locked -p jt_app --test calls_session a_turns_trace the_transport a_calls_view`
+Expected: FAIL (`latency` is null; `transport` is missing; the view carries `phrases`). (The two filler tests already pass from A5 and C2: keep them as the end-to-end guard.)
 
 - [ ] **Step 2: Implement**
 
-In `view` (calls.rs), after inserting `counterpart`:
+In `view` (calls.rs), next to `fields.remove("clock");` strip the dialled phrases the same way:
+
+```rust
+        fields.remove("phrases");
+```
+
+and, after inserting `counterpart`:
 
 ```rust
         fields.insert(
             "latency".into(),
-            json!(jt_calls::summarize(&session.metrics.traces, &session.metrics.agent_latency_ms)),
+            json!(jt_calls::summarize(
+                &session.metrics.traces,
+                &session.metrics.agent_latency_ms,
+                &session.metrics.agent_replies,
+            )),
         );
 ```
 
 - [ ] **Step 3: Run (CI) and commit**
 
 CI: `cargo test --locked -p jt_app --test calls_session --test calls_place --test calls_end` and `-p jt_mcp --test calls_mcp`
-Expected: all pass (the view only gained a key).
+Expected: all pass (the view gained `latency` and lost `phrases`; nothing in the panel or the MCP outputs reads `call.phrases`).
 
 ```bash
 git add rust/crates/jt_app
@@ -8108,7 +8433,7 @@ it('shows_the_calls_latency', async () => {
       perceived: { n: 2, p50: 620, p95: 640 }, content: { n: 2, p50: 3900, p95: 4760 },
       endpoint: { n: 2, p50: 260, p95: 280 }, stt_final: { n: 2, p50: 310, p95: 330 },
       core_round: { n: 2, p50: 3600, p95: 4000 }, agent: { n: 2, p50: 3200, p95: 4100 },
-      barge_in_stop: { n: 0, p50: null, p95: null },
+      barge_in_stop: { n: 0, p50: null, p95: null }, transport: { n: 1, p50: 40, p95: 40 },
     },
   };
   mockFetch({ 'GET /api/auth/me': manager, 'GET /api/calls/c-1': { call, turns: [] } });
@@ -8154,6 +8479,7 @@ export interface LatencySummary {
   core_round: Percentiles;
   agent: Percentiles;
   barge_in_stop: Percentiles;
+  transport: Percentiles;
   backchannel_cuts: number;
   alerts: string[];
 }
@@ -9280,12 +9606,12 @@ and `jeeta.calls.get` of each call (its `call.latency` and turns). Record in the
 | Perceived p95 (`latency.perceived.p95`) | ≤ 1 000 ms (report threshold) |
 | Filler heard during the tool call; `phrase` turns in the log | must |
 | Barge-in: playback stopped, `interrupted_at_char` set | must; `barge_in_stop` p95 reported against the 300 ms target |
-| Transport overhead: p95 over the turns of `core_round_ms − agent_latency_ms`, per turn (below) | ≤ 100 ms (push-like long-poll proven) |
+| Transport overhead: `latency.transport.p95` (the larger of the two calls'; below) | ≤ 100 ms (push-like long-poll proven); `latency.transport.n` ≥ 2 on the first call, or the measurement failed |
 | Content p95 | reported (brain-dominated; the 3 s alert is expected with the unchanged agent) |
 | Closing heard, line closed, session `agent_ended`, journey `CallMade{connected}` | must |
 | Numbers in the four units' journals | 0 |
 
-The transport overhead is worked out **per turn**, and the gate is the p95 of those differences (design addendum §4). It is not `core_round.p95 − agent.p95`: a difference of two percentiles can hide a slow hop or invent one. For each caller turn, `core_round_ms` is its trace's `say_ms − delivered_ms` (the worker's clock: the core answered the utterance → the reply's first sentence reached the bridge) and the core's `agent_latency_ms` for the reply that turn provoked is its own clock's view of the same wait (the utterance reached the core → the agent's `say` committed). `calls.get` returns both lists (`call.metrics.traces[i]`, `call.metrics.agent_latency_ms[i]`); a trace carries no turn id, so pair them by order, and only for a call whose two lists have the same length. A call whose lists differ (a turn the agent never answered, a `say` that was not owed) is left out of the gate, and the report says so. Pool the differences of both calls, then take the p95.
+The transport overhead is `latency.transport`, which the core works out per turn (design addendum §4): for each caller turn, the trace's `core_round_ms` (`say_ms − delivered_ms` on the worker's clock: the core answered the utterance → the reply's first sentence reached the bridge) less the core's own latency for the agent `say` the trace names (`reply_seq`; on the core's clock: the wait that sentence ended → the `say` committed), saturating at 0. The two are matched by that `seq`, never by position: the core records a latency whenever it was waiting for the agent (a key press, a fallback line, a sentence after one that expected no reply), while the bridge reports a trace per final transcript, including a last turn nobody answered, so the counts differ in E3's own script (for example 3 traces against 2 latencies). The gate is the larger of the two calls' `latency.transport.p95`; record each call's `latency.transport.n` too. An `n` of 0 on a call that had replies means its traces carried no `reply_seq`: a bridge bug, not a pass. One caveat: a reply that follows a fallback line has its agent latency counted from the fallback, so for that turn the figure overstates the hop; E3's script plays no fallback.
 
 If a "must" fails, stop, file the finding, do not point the bridge at prod.
 
@@ -9397,7 +9723,7 @@ No gap found. Deliberately not in this plan: inbound duty mode (V2-T1), a digit-
 
 **2. Placeholder scan.** Searched for "TBD", "TODO", "implement later", "fill in", "similar to", "handle edge cases". The angle-bracket items that remain are run-time values a coordinator reads off the environment (the commit sha, a CI run id, the test person's id, the image tags B2/B3 record), each with the command that produces it; `images.env.example` says so. The measured table in E4 is filled from B7/E3 output by design.
 
-**3. Type consistency.** `DialScript { lines, phrases, hotwords }` (A5) is what C2 fills, B6/D2 read and the slice builds. `BridgeEvent::Phrase { set, index }` and `BridgeEvent::Trace { trace }` (A5) are what `call.rs` reports and C3 tests. `TurnTrace` fields (A2) match `TurnMarks::trace` (B5), the C3 test JSON and the C5 types (`perceived`, `content`, `agent`, `barge_in_stop`, `alerts`). `Talker::on(Input, Ms) -> Vec<Action>` (B4) is what `Live::input` calls. `Report { bridge_call_id, event, taken }` is shared by `call.rs`, `slice.rs` and `run_loop.rs`. `CallPolicy::{with_workspace, opening_lines, spoken_opening}` (C1) are what C2 uses. `CallSession.phrases` (A5) is set from `script.phrases` in the dialling transaction (A5, C2) and read by the reducer (A5) and C3's test. `jt_calls::CLOSING` (A3) is the policy's default closing (C1), the slice's closing (B6) and what C5's panel shows. `SayInput.wait_reply_s` / `SayOut.{events, timed_out}` (C4) match the MCP schema and tests. `Ari::with_ws_base` (B6 Step 1) is used by the test support only.
+**3. Type consistency.** `DialScript { lines, phrases, hotwords }` (A5) is what C2 fills, B6/D2 read and the slice builds. `BridgeEvent::Phrase { set, index }` and `BridgeEvent::Trace { trace }` (A5) are what `call.rs` reports and C3 tests. `TurnTrace` fields (A2) match `TurnMarks::trace` (B5), the C3 test JSON and the C5 types (`perceived`, `content`, `agent`, `barge_in_stop`, `alerts`). `Talker::on(Input, Ms) -> Vec<Action>` (B4) is what `Live::input` calls. `Report { bridge_call_id, event, taken }` is shared by `call.rs`, `slice.rs` and `run_loop.rs`. `CallPolicy::{with_workspace, opening_lines, spoken_opening}` (C1) are what C2 uses. `CallSession.phrases` (A5) is set from `script.phrases` in the dialling transaction (A5, C2) and read by the reducer (A5) and C3's test. `TurnTrace.reply_seq` (A2, set by B5/B6 from the `Say` it timed) is matched by `summarize` against `CallMetrics.agent_replies` (`AgentReply { seq, latency_ms }`, A2 type, A5 recording) to give `latency.transport` (C3, read by E3). `jt_calls::CLOSING` (A3) is the policy's default closing (C1), the slice's closing (B6) and what C5's panel shows. `SayInput.wait_reply_s` / `SayOut.{events, timed_out}` (C4) match the MCP schema and tests. `Ari::with_ws_base` (B6 Step 1) is used by the test support only.
 
 ## Execution handoff
 

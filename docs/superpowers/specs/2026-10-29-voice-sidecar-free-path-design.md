@@ -164,7 +164,7 @@ deployed, so this is the first shipped shape):
   `script.phrases`); a `phrase` event is logged with that text, not the policy's at the time the
   event arrives, so an owner who edits the phrases during a live call cannot make the log record a
   sentence that was never played.
-- `CallMetrics` gains `traces` (≤ 200); `calls.get`'s call view gains `latency` (p50/p95).
+- `CallMetrics` gains `traces` and `agent_replies` (each ≤ 200; `agent_replies` is the core's latency per agent `say`, keyed by its `seq`); `calls.get`'s call view gains `latency` (p50/p95, with `transport`) and loses `phrases` (the dialled snapshot is the log's source, not part of the view).
 
 Agent-facing (MCP and panel route `POST /api/calls/{id}/say`), backward compatible:
 
@@ -179,11 +179,16 @@ Agent-facing (MCP and panel route `POST /api/calls/{id}/say`), backward compatib
 **Push transport.** The kernel's `BridgeSignals` wakes the bridge's parked poll on the commit of a
 `say`, and an agent's parked `listen`/`say` on the commit of an utterance; the worker always keeps
 one poll outstanding and posts each event the moment it happens. The plan proves the hop on the box
-with the trace: per caller turn, `core_round_ms` (bridge: the core answered the utterance → the
-reply's `say` received) minus the core's own `agent_latency_ms` for that reply is the transport
-overhead; acceptance is the p95 of those per-turn differences ≤ 100 ms (not a difference of two
-percentiles, which can hide a slow hop). Only if it fails would a WebSocket push be designed (not
-in this plan).
+with the trace. The bridge's trace names the agent `say` it timed (`reply_seq`, the `Say`'s `seq`);
+the core records `(seq, latency)` for each `say` that ended a wait. Per caller turn, `core_round_ms`
+(bridge: the core answered the utterance → the reply's `say` received) less the core's latency for
+that `seq`, saturating at 0 (the two windows differ by the tail of the utterance POST), is the
+transport overhead, and `latency.transport` is its p50/p95 over the call's turns; acceptance is
+`transport.p95` ≤ 100 ms (not a difference of two percentiles, which can hide a slow hop). The match
+is by `seq`, not by position: the core also records a latency for a key press or a fallback line,
+and the bridge traces a last turn nobody answered, so the two lists differ in length. A reply that
+follows a fallback line has its latency counted from the fallback, so that turn overstates the hop.
+Only if the gate fails would a WebSocket push be designed (not in this plan).
 
 ## 5. Opening, disclosure, transcript notice
 
@@ -196,14 +201,18 @@ in this plan).
   last word (a ı → ın, e i → in, o u → un, ö ü → ün), buffer `n` after a final vowel; a vowel-less
   word is read by its letter names (`THY'nin`), a trailing number by its Turkish reading
   (`Studio 54'ün`). Jeeta'nın, Figurunica'nın, Atölye'nin, Ahmet'in. Pure and unit-tested. Beyond
-  the harmony rule: a short whole-word table of loanwords with a soft `l` or `k` (Kemal, Saat, Hal,
-  Kalp, Kontrol, Petrol, ...) and any word ending in "âl" take the front suffix (`Kemal'in`,
-  `Kontrol'ün`, `İstiklâl'in`); a dotted acronym is read by its last letter's name (`A.Ş.'nin`,
+  the harmony rule: a short whole-word table of words that TDK's Güncel Türkçe Sözlük shows with a
+  front ending after a back vowel (kemal -li, saat -ti, kalp -bi, petrol -lü: Kemal, Saat, Hal,
+  Kalp, Kontrol, Petrol, Metal, Final, ...; checked 2026-10-29, `bilal` and `nihal` being first
+  names the dictionary does not list) and any word ending in "âl" take the front suffix
+  (`Kemal'in`, `Kontrol'ün`, `İstiklâl'in`); a dotted acronym is read by its last letter's name (`A.Ş.'nin`,
   `T.C.'nin`); a trailing word of symbols ("☕", "-") is dropped and the words are joined by single
   spaces, so a newline never reaches the spoken sentence. Known limits: it follows the spelling, so
   an acronym that holds a vowel but has no dots (ABD, AKP, AVM, IBM) is read as a word (`ABD'ın`,
   where it is spoken "A-Be-De'nin"), numbers of more than 18 digits are not supported, and a foreign
-  name pronounced otherwise ("Apple") has the same problem. An owner whose name is read otherwise
+  name pronounced otherwise ("Apple") has the same problem. So has a word the table lacks: a compound
+  of a table word (Akpetrol), İclal (no dictionary entry) and global (listed without a front mark);
+  emlak is listed with -kı, a back ending, and needs nothing. An owner whose name is read otherwise
   writes the opening by hand in the policy.
 - Closing: the plan's `closing` is optional. Left out, the core plays the policy's `closing`
   (`None` = the approved "Görüşmek üzere, iyi günler.", `jt_calls::CLOSING`; empty = none, so every
@@ -239,11 +248,11 @@ measured on the worker's monotonic clock (the listener reports
 positions in audio time, which the worker maps to the instants it forwarded those frames):
 `endpoint_ms`, `endpoint_by` (smart_turn | fallback), `stt_final_ms`, `delivered_ms` (the core
 answered the utterance POST), `say_ms` (the reply's first `say`/`play` received), `tts_first_ms`,
-`first_audio_ms` (first reply frame written to Asterisk), `ack_ms` (first frame of a local phrase),
+`reply_seq` (the `seq` of the agent `say` that `say_ms` timed), `first_audio_ms` (first reply frame written to Asterisk), `ack_ms` (first frame of a local phrase),
 `barge_in_stop_ms` (caller onset → `FLUSH_MEDIA`, when the reply was cut).
 
 Derived: perceived = min(ack, first audio); content = first audio; core round = say − delivered;
-agent (core-side) = `CallMetrics.agent_latency_ms`. `jt_calls::summarize` gives n/p50/p95 (nearest
+agent (core-side) = `CallMetrics.agent_latency_ms`; transport = per turn, core round less the core's latency for the `say` `reply_seq` names, matched by `seq`. `jt_calls::summarize` gives n/p50/p95 (nearest
 rank) per measure and alerts: **perceived p95 > 1.0 s, content p95 > 3.0 s** (the report's
 thresholds), barge-in stop p95 > 300 ms (the report's step-5 target). Where they show: `calls.get`
 (`call.latency`), the panel's call page, and `jeeta-voice-bridge report` over the worker's own
