@@ -1,5 +1,6 @@
 import { Logger } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
+import { poolSizeFor } from "../../prisma/pool-size";
 
 /**
  * Postgres advisory-lock wrapper, factored out of SubscriptionSchedulerService
@@ -22,6 +23,64 @@ import { PrismaService } from "../../prisma/prisma.service";
  *  surfaces to the cron's own logger — strictly better than the silent
  *  stall/duplicate the old session-lock semantics allowed. */
 const LOCK_BODY_TIMEOUT_MS = 55 * 60 * 1000;
+
+/**
+ * Lock transactions that may stand open at once, per client: half its pool.
+ *
+ * Both helpers below hold their lock in an interactive transaction, which pins
+ * one pooled connection for the whole body — and the body runs its queries on
+ * the SAME pool. With as many locks open as the pool has connections, every
+ * connection is a transaction waiting on its body and every body is waiting on
+ * a connection: nothing moves until pool_timeout fails all of them, together
+ * with every request that arrived in between. Crons tick together on the wall
+ * clock, so this is the normal case, not the rare one — CI's pool of 5 met
+ * eleven locked crons on every :X0 tick, production's pool of 40 meets
+ * thirty-four at :00.
+ *
+ * Capped at half, the other half of the pool always belongs to the bodies and
+ * to everything else; a lock past the cap waits its turn here instead of taking
+ * a connection it cannot use. Half of Prisma's DEFAULT pool stays safe even
+ * though Node counts logical CPUs where Prisma counts physical ones:
+ * ⌊(2L+1)/2⌋ = L is still under the real 2P+1 while a core runs ≤ 2 threads.
+ *
+ * One rule follows: a locked body must never AWAIT another locked job. With
+ * every slot held by bodies waiting on more slots, nothing would move again.
+ * Nothing does today — listeners a body fires are not awaited by it.
+ */
+class LockSlots {
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private free: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.free > 0) this.free -= 1;
+    else await new Promise<void>((resolve) => this.waiting.push(resolve));
+    try {
+      return await fn();
+    } finally {
+      // Hand the slot straight to the next in line, or put it back.
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.free += 1;
+    }
+  }
+}
+
+const slotsByClient = new WeakMap<object, LockSlots>();
+
+function lockSlots(prisma: PrismaService): LockSlots {
+  let slots = slotsByClient.get(prisma);
+  if (!slots) {
+    // A client that does not say (a test double) is taken to be the app's own.
+    const pool =
+      typeof prisma.poolSize === "number"
+        ? prisma.poolSize
+        : poolSizeFor(process.env.DATABASE_URL);
+    slots = new LockSlots(Math.max(1, Math.floor(pool / 2)));
+    slotsByClient.set(prisma, slots);
+  }
+  return slots;
+}
 
 export async function withAdvisoryLock(
   prisma: PrismaService,
@@ -50,19 +109,21 @@ export async function withAdvisoryLock(
   let failure: string | null = null;
 
   try {
-    await prisma.$transaction(
-      async (tx) => {
-        const acquired = await tx.$queryRaw<{ locked: boolean }[]>`
-          SELECT pg_try_advisory_xact_lock(${lockId}) AS locked
-        `;
-        if (!acquired[0]?.locked) {
-          logger?.debug(`skip ${jobName}: advisory lock held by another replica`);
-          return;
-        }
-        ranHere = true;
-        await run();
-      },
-      { maxWait: 5_000, timeout: LOCK_BODY_TIMEOUT_MS },
+    await lockSlots(prisma).run(() =>
+      prisma.$transaction(
+        async (tx) => {
+          const acquired = await tx.$queryRaw<{ locked: boolean }[]>`
+            SELECT pg_try_advisory_xact_lock(${lockId}) AS locked
+          `;
+          if (!acquired[0]?.locked) {
+            logger?.debug(`skip ${jobName}: advisory lock held by another replica`);
+            return;
+          }
+          ranHere = true;
+          await run();
+        },
+        { maxWait: 5_000, timeout: LOCK_BODY_TIMEOUT_MS },
+      ),
     );
   } catch (e) {
     failure = (e as Error)?.message ?? String(e);
@@ -160,17 +221,19 @@ export async function withAdvisoryXactLock(
   let failure: string | null = null;
 
   try {
-    await prisma.$transaction(
-      async (tx) => {
-        const rows = await tx.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_xact_lock(${lockId}) AS locked`;
-        if (!rows[0]?.locked) {
-          opts?.logger?.debug(`skip ${jobName}: advisory xact lock held elsewhere`);
-          return;
-        }
-        ranHere = true;
-        await run();
-      },
-      { timeout: opts?.timeoutMs ?? 45_000 },
+    await lockSlots(prisma).run(() =>
+      prisma.$transaction(
+        async (tx) => {
+          const rows = await tx.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_xact_lock(${lockId}) AS locked`;
+          if (!rows[0]?.locked) {
+            opts?.logger?.debug(`skip ${jobName}: advisory xact lock held elsewhere`);
+            return;
+          }
+          ranHere = true;
+          await run();
+        },
+        { timeout: opts?.timeoutMs ?? 45_000 },
+      ),
     );
   } catch (e) {
     failure = (e as Error)?.message ?? String(e);
