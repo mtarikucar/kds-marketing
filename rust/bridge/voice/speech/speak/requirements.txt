@@ -1,9 +1,10 @@
-# What the speak service imports. The two the owner chose are pinned here, with the server and test
-# libraries the plan fixes; every other version (torch's CPU build, numpy, huggingface-hub and all
-# transitive dependencies) comes from constraints.txt, the package set of the image the owner's
-# blind test ran on (B2 Step 7). normalizer-tr is not ours: ema-lightning requires it and runs it
-# on the text Antalia's normaliser has already spelled out; the start-up self-test checks that the
-# readings we rely on reach the model unchanged (jeeta_speak.self_test).
+# What the speak service imports, the input of the locks: the two the owner chose and the server
+# and test libraries the plan fixes are pinned here; numpy, torch (its CPU build) and
+# huggingface-hub take the versions of constraints.txt, the frozen set of the image the owner's
+# blind test ran on. The build installs only from the hashed locks (pins.py check-lock holds them
+# to this file). normalizer-tr is not ours: ema-lightning requires it and runs it on the text
+# Antalia's normaliser has already spelled out; the start-up self-test checks that the readings we
+# rely on reach the model unchanged (jeeta_speak.self_test).
 ema-lightning==1.1.2
 antalia-mini==1.0.1
 websockets==17.3

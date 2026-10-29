@@ -1,15 +1,23 @@
-"""What the speak image pins besides package versions: EMA Lightning's weights by content, and the
-sha256 of every wheel the build installed.
+"""What the speak image pins, and the checks that hold it to them. Standard library only at import
+time: the build runs `check-lock` before anything is installed.
 
-EMA() downloads its two weight files from its repository's main branch and takes no revision, so
-the weights are pinned by SHA-256 and size in weights.lock. The build fetches them and refuses a
-mismatch (`fetch-weights`); the service checks them again before it loads them (`verify`).
-`record` prints a lock from the files in the local Hugging Face cache (B2 Step 7 runs it, or
-`verify`, in the image the owner tested). `wheels` turns pip's installation report into one line
-per wheel and, once wheels.sha256 lists any, refuses a build whose wheels differ.
+Packages. constraints.txt is the frozen set of the image the owner's blind test ran on (B2 Step 7,
+`pip freeze` of jeeta-ttstest:tmp); requirements.txt names what the service imports; wheels.sha256
+records every wheel of the first good build (name, version, sha256). The build installs only from
+torch.lock (PyTorch's CPU index alone) and requirements.lock (PyPI alone), both
+`--require-hashes --no-deps`, and `lock` writes them from wheels.sha256. `check-lock` refuses a
+lock that is not exactly wheels.sha256, a frozen set without ema-lightning 1.1.2, antalia-mini
+1.0.1 and a torch CPU build, a requirement the locks miss or pin otherwise, and any package beyond
+the frozen set except the service's and pytest's own (EXTRA). `wheels` turns the build's pip
+reports into the same lines and, against an --expect file, refuses any difference or unknown hash.
 
-Usage: python pins.py fetch-weights | verify | record [--lock PATH]
-       python pins.py wheels REPORT.json [--expect wheels.sha256]
+Weights. EMA() downloads ema.pt and decoder.pt from its repository's main branch and takes no
+revision, so they are pinned by SHA-256 and size in weights.lock: the build fetches and checks them
+(`fetch-weights`), the service checks them again before it loads them (`verify`), and `record`
+prints a lock from a local Hugging Face cache (B2 Step 7 ran `verify` in the tested image).
+
+Usage: python pins.py check-lock | lock | fetch-weights | verify | record [--lock PATH]
+       python pins.py wheels REPORT.json [REPORT.json ...] [--expect wheels.sha256]
 """
 import argparse
 import hashlib
@@ -25,10 +33,22 @@ FILES = ("ema.pt", "decoder.pt")
 HERE = Path(__file__).resolve().parent
 LOCK = HERE / "weights.lock"
 HEX64 = re.compile(r"[0-9a-f]{64}")
+# The owner's choices, which the frozen set must hold.
+CHOSEN = {"ema-lightning": "1.1.2", "antalia-mini": "1.0.1"}
+# Packages the image holds beyond the owner-tested set: the service's server library and pytest
+# with its dependencies (the tested image had neither).
+EXTRA = {"websockets", "pytest", "iniconfig", "pluggy", "pygments"}
+TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
+PYPI_INDEX = "https://pypi.org/simple"
 
 
 class PinError(Exception):
     """A pinned file is missing or differs (the message names the file, never a path's content)."""
+
+
+def canonical(name):
+    """A project name the way PyPI compares them (PEP 503)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def sha256_of(path):
@@ -37,6 +57,115 @@ def sha256_of(path):
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
+
+
+# --- packages ------------------------------------------------------------------------------------
+
+
+def listed(text):
+    return [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+
+
+def read_pins(text, what):
+    """name -> version of `name==version` lines (anything after the version is ignored)."""
+    pins = {}
+    for line in listed(text):
+        m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)(?:\s.*)?", line)
+        if not m:
+            raise PinError(f"{what}: not a name==version line: {line.split()[0]}")
+        name = canonical(m.group(1))
+        if name in pins:
+            raise PinError(f"{what}: {name} is listed twice")
+        pins[name] = m.group(2)
+    return pins
+
+
+def read_record(text, what):
+    """name -> (version, sha256) of `name==version sha256=<hex>` lines (wheels.sha256)."""
+    out = {}
+    for line in listed(text):
+        m = re.fullmatch(r"(\S+)==(\S+) sha256=(\S+)", line)
+        if not m or not HEX64.fullmatch(m.group(3)):
+            raise PinError(f"{what}: a line has no name==version sha256=<hex>")
+        out[canonical(m.group(1))] = (m.group(2), m.group(3))
+    return out
+
+
+def read_lock(text, what):
+    """name -> (version, sha256) of `name==version --hash=sha256:<hex>` lines."""
+    out = {}
+    for line in listed(text):
+        m = re.fullmatch(r"(\S+)==(\S+) --hash=sha256:([0-9a-f]{64})", line)
+        if not m:
+            raise PinError(f"{what}: a line has no name==version --hash=sha256:<hex>")
+        out[canonical(m.group(1))] = (m.group(2), m.group(3))
+    return out
+
+
+def lock_lines(entries):
+    return [f"{name}=={version} --hash=sha256:{digest}" for name, (version, digest) in sorted(entries.items())]
+
+
+def lock_files(record):
+    """(torch.lock, requirements.lock) texts from a wheel record."""
+    torch = {n: e for n, e in record.items() if n == "torch"}
+    rest = {n: e for n, e in record.items() if n != "torch"}
+    head = "# Generated by `python pins.py lock` from wheels.sha256; installed --require-hashes --no-deps"
+    return (
+        "\n".join([head + f" from {TORCH_INDEX} alone.", *lock_lines(torch)]) + "\n",
+        "\n".join([head + f" from {PYPI_INDEX} alone.", *lock_lines(rest)]) + "\n",
+    )
+
+
+def check_lock(folder=HERE):
+    """Every rule of the module docstring, over the files in `folder`; returns the locked set."""
+    read = lambda name: (folder / name).read_text(encoding="utf-8")  # noqa: E731
+    frozen = read_pins(read("constraints.txt"), "constraints.txt")
+    for name, version in CHOSEN.items():
+        if frozen.get(name) != version:
+            raise PinError(f"constraints.txt must hold {name}=={version}, the owner's choice")
+    if not frozen.get("torch", "").endswith("+cpu"):
+        raise PinError("constraints.txt must hold a torch CPU build (torch==...+cpu)")
+    record = read_record(read("wheels.sha256"), "wheels.sha256")
+    torch = read_lock(read("torch.lock"), "torch.lock")
+    rest = read_lock(read("requirements.lock"), "requirements.lock")
+    if list(torch) != ["torch"] or "torch" in rest:
+        raise PinError("torch.lock holds torch alone, and requirements.lock holds no torch")
+    locked = {**torch, **rest}
+    if locked != record:
+        names = sorted(set(locked.items()) ^ set(record.items()))
+        raise PinError("the locks differ from wheels.sha256: " + ", ".join(sorted({n for n, _ in names})))
+    for name, version in frozen.items():
+        if locked.get(name, (None,))[0] != version:
+            raise PinError(f"the locks do not hold {name}=={version} from constraints.txt")
+    if set(locked) - set(frozen) != EXTRA:
+        raise PinError("beyond constraints.txt the locks must hold exactly " + ", ".join(sorted(EXTRA)))
+    required = read_pins("\n".join(r for r in listed(read("requirements.txt")) if "==" in r), "requirements.txt")
+    for name, version in CHOSEN.items():
+        if required.get(name) != version:
+            raise PinError(f"requirements.txt must pin {name}=={version}, the owner's choice")
+    for line in listed(read("requirements.txt")):
+        name, _, version = line.partition("==")
+        entry = locked.get(canonical(name))
+        if entry is None or (version and entry[0] != version):
+            raise PinError(f"the locks do not satisfy {line} from requirements.txt")
+    return locked
+
+
+def wheels(report):
+    """`name==version sha256=<hex>` per installed distribution of a `pip install --report`, sorted."""
+    lines = []
+    for item in report.get("install", []):
+        meta, info = item.get("metadata", {}), item.get("download_info", {})
+        archive = info.get("archive_info", {})
+        digest = archive.get("hashes", {}).get("sha256")
+        if not digest and str(archive.get("hash", "")).startswith("sha256="):
+            digest = archive["hash"].split("=", 1)[1]
+        lines.append(f"{canonical(meta['name'])}=={meta['version']} sha256={digest or '?'}")
+    return sorted(lines)
+
+
+# --- weights -------------------------------------------------------------------------------------
 
 
 def load_lock(path=LOCK):
@@ -98,44 +227,35 @@ def record(locate=locate):
     return {"repo": REPO, "files": files}
 
 
-def _canonical(name):
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def wheels(report):
-    """`name==version sha256=<hex>` per installed distribution of a `pip install --report`, sorted."""
-    lines = []
-    for item in report.get("install", []):
-        meta, info = item.get("metadata", {}), item.get("download_info", {})
-        archive = info.get("archive_info", {})
-        digest = archive.get("hashes", {}).get("sha256")
-        if not digest and str(archive.get("hash", "")).startswith("sha256="):
-            digest = archive["hash"].split("=", 1)[1]
-        lines.append(f"{_canonical(meta['name'])}=={meta['version']} sha256={digest or '?'}")
-    return sorted(lines)
-
-
-def listed(text):
-    return sorted(line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#"))
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="pins.py")
-    parser.add_argument("action", choices=["fetch-weights", "verify", "record", "wheels"])
-    parser.add_argument("report", nargs="?")
+    parser.add_argument("action", choices=["check-lock", "lock", "fetch-weights", "verify", "record", "wheels"])
+    parser.add_argument("reports", nargs="*")
     parser.add_argument("--lock", default=str(LOCK))
     parser.add_argument("--expect")
     args = parser.parse_args(argv)
     try:
-        if args.action == "record":
+        if args.action == "check-lock":
+            print(f"locks: ok ({len(check_lock())} wheels)")
+        elif args.action == "lock":
+            torch, rest = lock_files(read_record((HERE / "wheels.sha256").read_text(encoding="utf-8"), "wheels.sha256"))
+            (HERE / "torch.lock").write_text(torch, encoding="utf-8", newline="\n")
+            (HERE / "requirements.lock").write_text(rest, encoding="utf-8", newline="\n")
+        elif args.action == "record":
             print(json.dumps(record(), indent=2, sort_keys=True))
         elif args.action == "wheels":
-            with open(args.report, encoding="utf-8") as f:
-                got = wheels(json.load(f))
-            want = listed(Path(args.expect).read_text(encoding="utf-8")) if args.expect else []
-            if want and want != got:
-                names = sorted({line.split("==")[0] for line in set(want) ^ set(got)})
-                raise PinError("the installed wheels differ from wheels.sha256: " + ", ".join(names))
+            got = []
+            for path in args.reports:
+                with open(path, encoding="utf-8") as f:
+                    got.extend(wheels(json.load(f)))
+            got.sort()
+            if args.expect:
+                want = sorted(listed(Path(args.expect).read_text(encoding="utf-8")))
+                if any(line.endswith("sha256=?") for line in got):
+                    raise PinError("a wheel was installed without a known sha256")
+                if want != got:
+                    names = sorted({line.split("==")[0] for line in set(want) ^ set(got)})
+                    raise PinError("the installed wheels differ from wheels.sha256: " + ", ".join(names))
             print("# pip install --report of the speak image: one installed wheel per line")
             print("\n".join(got))
         else:

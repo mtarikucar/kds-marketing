@@ -1,5 +1,5 @@
 """The speak protocol over a real WebSocket, served by the service's own server builder: TCP
-loopback here, a unix socket in production (the unix test runs on Linux only)."""
+loopback here, a unix socket in production (the unix tests run on Linux only)."""
 import asyncio
 import json
 import logging
@@ -16,8 +16,10 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import websockets  # noqa: E402
+from websockets.exceptions import ConnectionClosed  # noqa: E402
 
-from jeeta_speak import MAX_TEXT_CHARS, health, open_server, parse_endpoint, session  # noqa: E402
+import jeeta_speak  # noqa: E402
+from jeeta_speak import MAX_MESSAGE_BYTES, MAX_TEXT_CHARS, TooLong, health, open_server, parse_endpoint, session  # noqa: E402
 
 QUIET = logging.getLogger("test-client")
 QUIET.setLevel(logging.WARNING)
@@ -25,6 +27,8 @@ QUIET.setLevel(logging.WARNING)
 
 class FakeMouth:
     """chunks(text) like the real mouth: here `n` chunks of one byte value per text, `delay` apart."""
+
+    voice_id = "test-voice"
 
     def __init__(self, n=2, size=800, delay=0.0, tags=None):
         self.n, self.size, self.delay = n, size, delay
@@ -42,22 +46,35 @@ class FakeMouth:
             self.closed.append(text)
 
 
-async def talk(mouth, script, until):
-    """Serves `mouth`, runs `script(ws)` (sends), then collects every message until a text message
-    whose (type, id) is in `until`; returns them decoded (bytes stay bytes)."""
+def decode(msg):
+    return msg if isinstance(msg, bytes) else json.loads(msg)
+
+
+async def talk(mouth, script, until, settle=0.0):
+    """Serves `mouth`, reads the hello, runs `script(ws)`, then collects every message until a text
+    message whose (type, id) is in `until`, and for `settle` seconds more; returns them decoded."""
     pool = ThreadPoolExecutor(max_workers=2)
     try:
         async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, mouth, pool)) as server:
             port = server.sockets[0].getsockname()[1]
             async with websockets.connect(f"ws://127.0.0.1:{port}", logger=QUIET) as ws:
+                hello = json.loads(await ws.recv())
+                assert hello == {"type": "hello", "voice_id": mouth.voice_id, "sample_rate": 8000,
+                                 "format": "pcm16le"}
                 got = []
                 await script(ws)
                 while True:
-                    msg = await asyncio.wait_for(ws.recv(), 10)
-                    msg = msg if isinstance(msg, bytes) else json.loads(msg)
+                    msg = decode(await asyncio.wait_for(ws.recv(), 10))
                     got.append(msg)
                     if isinstance(msg, dict) and (msg["type"], msg.get("id")) in until:
-                        return got
+                        break
+                deadline = time.monotonic() + settle
+                while time.monotonic() < deadline:
+                    try:
+                        got.append(decode(await asyncio.wait_for(ws.recv(), deadline - time.monotonic())))
+                    except asyncio.TimeoutError:
+                        break
+                return got
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
 
@@ -65,13 +82,17 @@ async def talk(mouth, script, until):
 def sending(*messages):
     async def script(ws):
         for m in messages:
-            await ws.send(m if isinstance(m, str) else json.dumps(m))
+            await ws.send(m if isinstance(m, (str, bytes)) else json.dumps(m))
 
     return script
 
 
 def texts(got):
     return [m for m in got if isinstance(m, dict)]
+
+
+def kinds(got):
+    return [(m["type"], m["id"]) if isinstance(m, dict) else m[0] for m in got]
 
 
 def test_synth_streams_pcm_then_done():
@@ -104,13 +125,10 @@ def test_a_cancel_stops_between_chunks_and_nothing_follows_it():
         assert isinstance(await ws.recv(), bytes)
         await ws.send(json.dumps({"type": "cancel", "id": "a:0"}))
 
-    async def run():
-        got = await talk(mouth, script, {("cancelled", "a:0")})
-        return got
-
-    got = asyncio.run(run())
-    cancelled = got[-1]
-    assert cancelled["type"] == "cancelled" and cancelled["id"] == "a:0"
+    got = asyncio.run(talk(mouth, script, {("cancelled", "a:0")}, settle=0.5))
+    at = got.index(next(m for m in got if isinstance(m, dict)))
+    assert got[at]["type"] == "cancelled" and got[at]["id"] == "a:0"
+    assert got[at + 1:] == [], "nothing after the terminal message"
     assert len([m for m in got if isinstance(m, bytes)]) < 50
     assert mouth.closed == ["Uzun bir cümle."]
 
@@ -124,15 +142,46 @@ def test_a_synth_after_a_cancel_waits_for_the_cancelled_one_instead_of_busy():
         await ws.send(json.dumps({"type": "cancel", "id": "a:0"}))
         await ws.send(json.dumps({"type": "synth", "id": "a:1", "text": "İki."}))
 
-    got = asyncio.run(talk(mouth, script, {("done", "a:1")}))
-    kinds = [(m["type"], m["id"]) if isinstance(m, dict) else m[0] for m in got]
-    assert ("error", "a:1") not in kinds
-    cut = kinds.index(("cancelled", "a:0"))
-    assert all(k == 1 for k in kinds[:cut])
-    assert kinds[cut + 1:-1] == [2] * 20 and kinds[-1] == ("done", "a:1")
+    got = kinds(asyncio.run(talk(mouth, script, {("done", "a:1")})))
+    assert ("error", "a:1") not in got
+    cut = got.index(("cancelled", "a:0"))
+    assert all(k == 1 for k in got[:cut])
+    assert got[cut + 1:-1] == [2] * 20 and got[-1] == ("done", "a:1")
 
 
-def test_a_cancel_for_another_id_or_after_the_end_is_ignored():
+def test_a_queued_synth_can_be_cancelled_and_a_third_then_runs():
+    mouth = FakeMouth(n=10, size=160, delay=0.03, tags={"Bir.": 1, "İki.": 2, "Üç.": 3})
+
+    async def script(ws):
+        await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
+        assert await ws.recv() == bytes([1, 0]) * 160
+        for m in [{"type": "cancel", "id": "a:0"}, {"type": "synth", "id": "a:1", "text": "İki."},
+                  {"type": "cancel", "id": "a:1"}, {"type": "synth", "id": "a:2", "text": "Üç."}]:
+            await ws.send(json.dumps(m))
+
+    got = kinds(asyncio.run(talk(mouth, script, {("done", "a:2")})))
+    a0, a1 = got.index(("cancelled", "a:0")), got.index(("cancelled", "a:1"))
+    assert a0 < a1 and all(k == 1 for k in got[:a0]) and got[a0 + 1:a1] == []
+    assert got[a1 + 1:] == [3] * 10 + [("done", "a:2")]
+    assert 2 not in got, "the cancelled queued synthesis never ran"
+    assert "İki." not in mouth.closed
+
+
+def test_a_cancel_that_loses_the_race_to_the_end_is_ignored():
+    mouth = FakeMouth(n=1)
+
+    async def script(ws):
+        await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
+        assert isinstance(await ws.recv(), bytes)
+        assert json.loads(await ws.recv())["type"] == "done"
+        await ws.send(json.dumps({"type": "cancel", "id": "a:0"}))
+        await ws.send(json.dumps({"type": "synth", "id": "a:1", "text": "İki."}))
+
+    got = asyncio.run(talk(mouth, script, {("done", "a:1")}, settle=0.3))
+    assert [m["type"] for m in texts(got)] == ["done"], "no cancelled for a synthesis that had ended"
+
+
+def test_a_cancel_for_another_id_is_ignored():
     mouth = FakeMouth(n=2)
     got = asyncio.run(
         talk(
@@ -156,6 +205,8 @@ def test_bad_requests_are_answered_and_the_connection_stays_usable():
             sending(
                 "{not json",
                 "[1, 2]",
+                "[" * 100_000,
+                b"\x00\x01",
                 {"type": "synth", "text": "Kimliksiz."},
                 {"type": "synth", "id": "a:0"},
                 {"type": "speak", "id": "a:1"},
@@ -165,7 +216,9 @@ def test_bad_requests_are_answered_and_the_connection_stays_usable():
             {("done", "a:3")},
         )
     )
-    assert texts(got)[:6] == [
+    assert texts(got)[:8] == [
+        {"type": "error", "id": None, "reason": "bad_request"},
+        {"type": "error", "id": None, "reason": "bad_request"},
         {"type": "error", "id": None, "reason": "bad_request"},
         {"type": "error", "id": None, "reason": "bad_request"},
         {"type": "error", "id": None, "reason": "bad_request"},
@@ -173,7 +226,55 @@ def test_bad_requests_are_answered_and_the_connection_stays_usable():
         {"type": "error", "id": "a:1", "reason": "bad_request"},
         {"type": "error", "id": "a:2", "reason": "too_long"},
     ]
-    assert texts(got)[6]["type"] == "done"
+    assert texts(got)[8]["type"] == "done"
+
+
+def test_a_text_too_long_once_normalised_is_refused_too_long():
+    class Swelling(FakeMouth):
+        def chunks(self, text):
+            raise TooLong()
+            yield  # a generator, like the real mouth
+
+    got = asyncio.run(talk(Swelling(), sending({"type": "synth", "id": "a:0", "text": "9" * 1500}), {("error", "a:0")}))
+    assert texts(got) == [{"type": "error", "id": "a:0", "reason": "too_long"}]
+
+
+def test_a_message_over_the_size_limit_closes_with_1009_only_that_connection():
+    async def run():
+        pool = ThreadPoolExecutor(max_workers=1)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, FakeMouth(n=1), pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            url = f"ws://127.0.0.1:{port}"
+            async with websockets.connect(url, logger=QUIET, max_size=None) as ws:
+                await ws.recv()
+                await ws.send("x" * (MAX_MESSAGE_BYTES + 1))
+                with pytest.raises(ConnectionClosed) as closed:
+                    await asyncio.wait_for(ws.recv(), 5)
+                code = closed.value.rcvd.code
+            async with websockets.connect(url, logger=QUIET) as ws:
+                await ws.recv()
+                await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
+                await ws.recv()
+                done = json.loads(await ws.recv())
+        return code, done
+
+    code, done = asyncio.run(run())
+    assert code == 1009 and done["type"] == "done"
+
+
+def test_the_server_never_compresses_and_never_pings():
+    assert jeeta_speak.SERVER_OPTIONS["compression"] is None
+    assert jeeta_speak.SERVER_OPTIONS["ping_interval"] is None
+
+    async def run():
+        pool = ThreadPoolExecutor(max_workers=1)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, FakeMouth(), pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            async with websockets.connect(f"ws://127.0.0.1:{port}", logger=QUIET, compression="deflate") as ws:
+                await ws.recv()
+                return ws.response.headers.get("Sec-WebSocket-Extensions")
+
+    assert asyncio.run(run()) is None, "the client offered permessage-deflate and the server declined"
 
 
 def test_a_failed_synthesis_reports_its_kind_and_the_next_one_runs():
@@ -183,18 +284,9 @@ def test_a_failed_synthesis_reports_its_kind_and_the_next_one_runs():
                 raise RuntimeError("Ayşe Yılmaz 0532 111 22 33")
             return super().chunks(text)
 
-    got = asyncio.run(
-        talk(
-            Flaky(n=1),
-            sending({"type": "synth", "id": "a:0", "text": "Kötü."}),
-            {("error", "a:0")},
-        )
-    )
-    assert texts(got) == [{"type": "error", "id": "a:0", "reason": "failed"}]
-
     async def again(ws):
         await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Kötü."}))
-        assert json.loads(await ws.recv())["reason"] == "failed"
+        assert json.loads(await ws.recv()) == {"type": "error", "id": "a:0", "reason": "failed"}
         await ws.send(json.dumps({"type": "synth", "id": "a:1", "text": "İyi."}))
 
     got = asyncio.run(talk(Flaky(n=1), again, {("done", "a:1")}))
@@ -253,6 +345,28 @@ def test_the_health_check_answers_only_when_the_service_does():
     assert health(("tcp", "127.0.0.1", port)) == 1
 
 
+def test_main_health_voice_id_and_a_bad_socket(monkeypatch, capsys):
+    async def serve():
+        pool = ThreadPoolExecutor(max_workers=1)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, FakeMouth(), pool)) as server:
+            port = server.sockets[0].getsockname()[1]
+            monkeypatch.setenv("SPEAK_SOCKET", f"tcp:127.0.0.1:{port}")
+            return await asyncio.to_thread(jeeta_speak.main, ["--health"])
+
+    assert asyncio.run(serve()) == 0
+    assert jeeta_speak.main(["--health"]) == 1  # nothing listens there any more
+    monkeypatch.setenv("SPEAK_SOCKET", "tcp:0.0.0.0:9")
+    with pytest.raises(SystemExit, match="SPEAK_SOCKET"):
+        jeeta_speak.main(["--health"])
+    monkeypatch.delenv("SPEAK_SOCKET")
+    assert jeeta_speak.main(["--voice-id"]) == 0
+    printed = capsys.readouterr().out.strip()
+    assert len(printed) == 12 and int(printed, 16) >= 0
+    monkeypatch.setenv("SPEAK_BATCH", "1")
+    assert jeeta_speak.main(["--voice-id"]) == 0
+    assert capsys.readouterr().out.strip() != printed, "the batch size is part of the voice"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="asyncio serves unix sockets on Linux and macOS only")
 def test_the_unix_socket_is_the_groups_and_a_stale_one_is_replaced():
     with tempfile.TemporaryDirectory() as d:
@@ -266,17 +380,32 @@ def test_the_unix_socket_is_the_groups_and_a_stale_one_is_replaced():
             async with open_server(("unix", path), lambda ws: session(ws, FakeMouth(n=1), pool)):
                 mode = os.stat(path).st_mode & 0o777
                 async with websockets.unix_connect(path, logger=QUIET) as ws:
+                    hello = json.loads(await ws.recv())
                     await ws.send(json.dumps({"type": "synth", "id": "a:0", "text": "Bir."}))
                     first = await ws.recv()
                     done = json.loads(await ws.recv())
                 healthy = await asyncio.to_thread(health, ("unix", path))
-            return mode, first, done, healthy
+            return mode, hello, first, done, healthy
 
-        mode, first, done, healthy = asyncio.run(run())
+        mode, hello, first, done, healthy = asyncio.run(run())
         assert mode == 0o660
+        assert hello["voice_id"] == "test-voice"
         assert first == b"\x01\x00" * 800 and done["type"] == "done"
         assert healthy == 0
         assert not os.path.exists(path), "the socket is removed when the service stops"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="asyncio serves unix sockets on Linux and macOS only")
+def test_the_socket_is_born_0660_before_any_chmod(monkeypatch):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "speak.sock")
+        monkeypatch.setattr(os, "chmod", lambda *a, **k: None)
+
+        async def run():
+            async with open_server(("unix", path), lambda ws: None):
+                return os.stat(path).st_mode & 0o777
+
+        assert asyncio.run(run()) == 0o660
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="asyncio serves unix sockets on Linux and macOS only")
@@ -292,3 +421,54 @@ def test_a_regular_file_in_the_sockets_place_is_never_deleted():
         with pytest.raises(SystemExit):
             asyncio.run(run())
         assert pathlib.Path(path).read_text(encoding="utf-8") == "not a socket"
+
+
+class PooledMouth:
+    """Like the real mouth: a VoicePool, and chunks(text, tts) noting which instance served whom."""
+
+    voice_id = "test-voice"
+
+    def __init__(self, voices):
+        self.voice_pool = jeeta_speak.VoicePool(voices)
+        self.served = []
+        self.busy = set()
+        self.overlap = []
+
+    def chunks(self, text, tts):
+        self.served.append((text, tts))
+        if tts in self.busy:
+            self.overlap.append(tts)
+        self.busy.add(tts)
+        try:
+            for _ in range(5):
+                time.sleep(0.02)
+                yield b"\x01\x00" * 80
+        finally:
+            self.busy.discard(tts)
+
+
+def test_each_synthesis_has_an_ema_instance_of_its_own():
+    async def run(mouth):
+        pool = ThreadPoolExecutor(max_workers=4)
+        async with open_server(("tcp", "127.0.0.1", 0), lambda ws: session(ws, mouth, pool)) as server:
+            url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+
+            async def one(n):
+                async with websockets.connect(url, logger=QUIET) as ws:
+                    await ws.recv()
+                    for k in range(3):
+                        await ws.send(json.dumps({"type": "synth", "id": f"{n}:{k}", "text": f"{n}"}))
+                        while not isinstance(m := await ws.recv(), str):
+                            pass
+                        assert json.loads(m)["type"] == "done"
+
+            await asyncio.gather(*(one(n) for n in range(3)))
+
+    two = PooledMouth(["A", "B"])
+    asyncio.run(run(two))
+    assert two.overlap == [], "no instance served two syntheses at once"
+    assert {tts for _, tts in two.served} == {"A", "B"} and len(two.served) == 9
+    asyncio.run(run(two))  # a second event loop: the pool follows it
+    one_voice = PooledMouth(["A"])
+    asyncio.run(run(one_voice))
+    assert one_voice.overlap == [] and len(one_voice.served) == 9

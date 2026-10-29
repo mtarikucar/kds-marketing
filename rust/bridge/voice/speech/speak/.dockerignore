@@ -3,6 +3,8 @@
 !requirements.txt
 !constraints.txt
 !wheels.sha256
+!torch.lock
+!requirements.lock
 !pins.py
 !weights.lock
 !respell.py
