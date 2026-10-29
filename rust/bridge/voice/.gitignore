@@ -1,0 +1,2 @@
+# Left by the Python tests (pytest writes its own .gitignore into .pytest_cache).
+__pycache__/

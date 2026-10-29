@@ -1,0 +1,23 @@
+[Unit]
+Description=Jeeta voice edge (Asterisk, NetGSM extension 102)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f jeeta-asterisk
+ExecStart=/usr/bin/docker run --rm --name jeeta-asterisk --network host --user 1500:1500 \
+  --cpus 1 --memory 512m --read-only \
+  --tmpfs /var/run/asterisk:uid=1500,gid=1500,mode=0750 \
+  --tmpfs /var/log/asterisk:uid=1500,gid=1500,mode=0750 \
+  --tmpfs /var/spool/asterisk:uid=1500,gid=1500,mode=0750 \
+  -v jeeta-asterisk-lib:/var/lib/asterisk \
+  -v /etc/jeeta-voice/asterisk:/etc/asterisk:ro \
+  jeeta-asterisk:22.11.0
+ExecStop=/usr/bin/docker stop -t 10 jeeta-asterisk
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
