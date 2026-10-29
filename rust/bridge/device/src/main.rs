@@ -9,7 +9,8 @@
 //! The bridge stops on Ctrl+C and Ctrl+Break, and on `SIGTERM` (Unix), within its shutdown
 //! grace. On Windows it also stops when its console window is closed, the user logs off or the
 //! system shuts down; Windows ends the process soon after those, so the bridge then takes
-//! [`HURRIED_GRACE`] at most. Windows ends the process once its console handler returns, and
+//! [`HURRIED_GRACE`] at most to cut off what runs and post the results, and as long again at most
+//! to tell Jeeta it holds no phones. Windows ends the process once its console handler returns, and
 //! tokio's handler for those three events never returns: the process lives until it exits on
 //! its own or Windows' time-out runs out (about 5 s after the console window closed, measured on
 //! Windows 11 under the classic console and Windows Terminal), so the grace holds. Its `adb`

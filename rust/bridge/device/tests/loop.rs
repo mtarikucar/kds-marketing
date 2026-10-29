@@ -109,6 +109,8 @@ struct Script {
     idle_hold: Option<Duration>,
     /// How many uploads are answered `503` first, as when the workspace's upload turns are taken.
     files_busy: usize,
+    /// A register that lists no phone (the bridge's goodbye) is never answered.
+    hold_goodbye: bool,
 }
 
 /// What the fake was sent.
@@ -208,6 +210,9 @@ async fn register(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -
         .push((Instant::now(), body.clone()));
     // Refused as the server refuses a body that breaks a limit...
     let read: RegisterIn = serde_json::from_value(body.clone()).unwrap();
+    if read.phones.is_empty() && fake.script.lock().unwrap().hold_goodbye {
+        std::future::pending::<()>().await;
+    }
     if let Err(error) = read.validate() {
         return refused_body(error.field());
     }
@@ -767,6 +772,7 @@ fn quick() -> Timing {
         transfer_timeout: Duration::from_secs(5),
         report_timeout: Duration::from_secs(2),
         shutdown_grace: Duration::from_millis(500),
+        goodbye_timeout: Duration::from_millis(500),
         ..Timing::default()
     }
 }
@@ -1681,6 +1687,80 @@ async fn results_made_before_shutdown_are_posted() {
     // Each phone recovered at start; the slow recovery after the cut did not end in the grace.
     let recovered = |serial: &str| phones.recovers.iter().filter(|(s, _)| s == serial).count();
     assert_eq!((recovered("PHONE_A"), recovered("PHONE_B")), (1, 1));
+}
+
+/// A poll the server still holds for a bridge that stopped (behind a proxy the server may not see
+/// it go) would lease the next command to nobody, until it is handed out again: the bridge's last
+/// word is that it holds no phone.
+#[tokio::test]
+async fn a_stopping_bridge_says_it_holds_no_phones_once_it_posted() {
+    let logs = Logs::capture();
+    let script = Script {
+        polls: [poll(vec![leased(1, "PHONE_A", hang())])].into(),
+        ..Script::default()
+    };
+    let rig = Rig::start(script, &[("PHONE_A", 0)]).await;
+    rig.until_phones("the hung command running", |p| {
+        p.started.iter().any(|(_, w, _)| w == "long_press")
+    })
+    .await;
+    let fake = rig.fake.clone();
+    rig.stop().await;
+    let seen = fake.seen.lock().unwrap();
+    let (said_at, goodbye) = seen.registers.last().unwrap();
+    assert_eq!(goodbye["phones"], json!([]), "{goodbye}");
+    assert_eq!(goodbye["bridge_id"], "test-pc");
+    // After the cut-off command's failure was posted.
+    let cut = &accepted_for(&seen, 1)[0]["outcome"];
+    assert_eq!(cut["reason"], "bridge_error");
+    let posted_at = seen
+        .posts
+        .iter()
+        .filter(|(_, body, status)| *status == 200 && posted_ids(body).contains(&id(1).to_string()))
+        .map(|(at, _, _)| *at)
+        .max()
+        .unwrap();
+    assert!(*said_at >= posted_at);
+    // Once: every register before it listed the phone.
+    let before = &seen.registers[..seen.registers.len() - 1];
+    assert!(!before.is_empty());
+    assert!(
+        before
+            .iter()
+            .all(|(_, body)| registered_serials(body) == ["PHONE_A"])
+    );
+    assert!(
+        logs.text()
+            .contains("the bridge told Jeeta it holds no phones"),
+        "{}",
+        logs.text()
+    );
+}
+
+#[tokio::test]
+async fn a_goodbye_the_server_does_not_answer_holds_up_the_stop_no_longer_than_its_bound() {
+    let logs = Logs::capture();
+    let script = Script {
+        hold_goodbye: true,
+        ..Script::default()
+    };
+    let mut setup = Setup::new(&[("PHONE_A", 0)]);
+    setup.timing.goodbye_timeout = Duration::from_millis(300);
+    let rig = setup.start(script).await;
+    rig.until("a register", |s| !s.registers.is_empty()).await;
+    let fake = rig.fake.clone();
+    let asked = Instant::now();
+    rig.stop().await;
+    let took = asked.elapsed();
+    assert!(took >= Duration::from_millis(300), "{took:?}");
+    assert!(took < Duration::from_secs(2), "{took:?}");
+    let seen = fake.seen.lock().unwrap();
+    assert_eq!(seen.registers.last().unwrap().1["phones"], json!([]));
+    let text = logs.text();
+    assert!(
+        text.contains("telling Jeeta the bridge holds no phones failed"),
+        "{text}"
+    );
 }
 
 #[tokio::test]

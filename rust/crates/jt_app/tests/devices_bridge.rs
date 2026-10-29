@@ -1134,6 +1134,57 @@ async fn leases_follow_the_latest_register() {
     assert_eq!(ids(&poll(&w, &key, later(31), 20).await), [second]);
 }
 
+/// What a stopping bridge's last register (one that lists no phone) does, which its program relies
+/// on: a poll the server still holds for it (behind a proxy the server may not see the program go)
+/// leases nothing from then on, its phones read offline at once, and the phones another bridge
+/// holds are left as they are.
+#[tokio::test]
+async fn a_bridge_that_lists_no_phone_is_leased_nothing_and_leaves_other_bridges_alone() {
+    let w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let (a, b) = (bridge_key(&w, "pc-a").await, bridge_key(&w, "pc-b").await);
+    let mine = cap(&register(&w, &a, FIXED_NOW, vec![phone("SER1")]).await, 0);
+    let theirs = cap(&register(&w, &b, FIXED_NOW, vec![phone("SER2")]).await, 0);
+    let online = |c: &Capability| devices::agent::online(c, later(1));
+    assert!(online(&stored(&w, mine).await) && online(&stored(&w, theirs).await));
+
+    // Bridge B says goodbye: bridge A's phone is not B's to leave out.
+    register(&w, &b, later(1), Vec::new()).await;
+    assert!(online(&stored(&w, mine).await));
+    assert!(!online(&stored(&w, theirs).await));
+    assert_eq!(
+        stored(&w, theirs).await.connector_public["device"]["listed"],
+        false
+    );
+    let first = enqueue(&w, mine, tap(), expires()).await;
+    assert_eq!(ids(&poll(&w, &a, later(2), 20).await), [first]);
+    post(&w, &a, later(2), vec![done(first)]).await.unwrap();
+
+    // A poll of bridge A is held when A says goodbye; a command queued after is leased to nobody.
+    let deps = w.deps.clone();
+    let held_as = bridge_at(&a, later(3));
+    let held = tokio::spawn(async move {
+        bridge::commands(
+            &deps,
+            &held_as,
+            CommandsQuery {
+                wait_s: 2,
+                limit: 20,
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    register(&w, &a, later(3), Vec::new()).await;
+    assert!(!online(&stored(&w, mine).await));
+    let second = enqueue(&w, mine, tap(), expires()).await;
+    assert!(held.await.unwrap().unwrap().commands.is_empty());
+    assert_eq!(row(&w, second).await.status, CommandStatus::Queued);
+    // Registered again, A is handed it.
+    register(&w, &a, later(10), vec![phone("SER1")]).await;
+    assert_eq!(ids(&poll(&w, &a, later(10), 20).await), [second]);
+}
+
 #[tokio::test]
 async fn a_late_result_from_a_phone_the_bridge_left_out_is_applied() {
     let w = world().await;

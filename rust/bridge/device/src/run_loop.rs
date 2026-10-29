@@ -47,6 +47,12 @@
 //!   stay unanswered (the server hands them out again later), and the results made get the
 //!   grace ([`Timing::shutdown_grace`], or less, as [`Stop`] says), shared with the cutting off,
 //!   to be posted.
+//! - **Say goodbye** once that is done: a last register that lists no phone, best-effort, within
+//!   [`Timing::goodbye_timeout`] (or less, as [`Stop`] says). A poll the server still holds for
+//!   the bridge (behind a proxy the server may not see the bridge go) then leases nothing, and the
+//!   bridge's phones read offline at once; another bridge's phones are not touched. A bridge that
+//!   crashes, or a computer that sleeps, says nothing: a command such a poll leases is handed out
+//!   again once [`jt_devices::REDELIVER_AFTER`] (10 s) has passed.
 //!
 //! # Logging
 //!
@@ -89,6 +95,9 @@ pub const STALE_REPORT_HEARTBEATS: u32 = 3;
 pub const STOP_WAIT: Duration = Duration::from_secs(5);
 /// How long [`PhoneDriver::recover`] may take.
 pub const RECOVER_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the last register at shutdown may take ([`Timing::goodbye_timeout`]). With a hurried
+/// stop's grace (2 s on Windows) the whole stop stays within what Windows waits for.
+pub const GOODBYE_TIMEOUT: Duration = Duration::from_secs(2);
 /// The longest heartbeat the bridge follows, in the server's seconds.
 const MAX_HEARTBEAT_S: u32 = 300;
 /// What a results body adds around its results: `{"results":[` and `]}`.
@@ -134,6 +143,8 @@ pub struct Timing {
     /// How long cutting off the running commands and posting the results left may take at
     /// shutdown.
     pub shutdown_grace: Duration,
+    /// How long the last register, which lists no phone, may take at shutdown, after the grace.
+    pub goodbye_timeout: Duration,
 }
 
 impl Default for Timing {
@@ -152,6 +163,7 @@ impl Default for Timing {
             report_timeout: Duration::from_secs(10),
             stale_after: DEFAULT_EXPIRES_IN.unsigned_abs(),
             shutdown_grace: Duration::from_secs(5),
+            goodbye_timeout: GOODBYE_TIMEOUT,
         }
     }
 }
@@ -195,6 +207,7 @@ pub async fn run(
     shutdown: impl Future<Output = Stop>,
 ) -> Result<(), RunError> {
     let client = JeetaClient::new(config).map_err(RunError::Start)?;
+    let leaving = client.clone();
     let (stop_tx, stop) = watch::channel(false);
     let (table_tx, table_rx) = watch::channel(PhoneTable::default());
     let (results_tx, results_rx) = mpsc::unbounded_channel();
@@ -235,19 +248,26 @@ pub async fn run(
         ],
     )
     .await;
-    let grace = match ended {
-        Ended::Shutdown(Stop::Within(grace)) => grace.min(timing.shutdown_grace),
-        Ended::Shutdown(Stop::Graceful) => timing.shutdown_grace,
+    let (grace, goodbye_within) = match ended {
+        Ended::Shutdown(Stop::Within(within)) => (
+            within.min(timing.shutdown_grace),
+            within.min(timing.goodbye_timeout),
+        ),
+        Ended::Shutdown(Stop::Graceful) => (timing.shutdown_grace, timing.goodbye_timeout),
         Ended::Task(task) => {
             error!(
                 task,
                 "a task of the bridge ended while it ran; the bridge stops"
             );
-            timing.shutdown_grace
+            (timing.shutdown_grace, timing.goodbye_timeout)
         }
     };
     let _ = stop_tx.send(true);
     heartbeat.abort();
+    if ended != Ended::Task("register") {
+        // Gone before the goodbye: no register of the heartbeat's is sent after it.
+        let _ = (&mut heartbeat).await;
+    }
     // The poll task stops, and its workers cut off what runs and end: then no sender of results
     // is left, and the poster ends once it has posted what they made.
     let deadline = tokio::time::Instant::now() + grace;
@@ -262,10 +282,33 @@ pub async fn run(
     if ended != Ended::Task("post") {
         settle(&mut post, deadline, "results not yet posted at shutdown").await;
     }
+    goodbye(&leaving, config.bridge_id(), goodbye_within).await;
     info!("the bridge stopped");
     match ended {
         Ended::Shutdown(_) => Ok(()),
         Ended::Task(task) => Err(RunError::TaskEnded(task)),
+    }
+}
+
+/// Tells Jeeta, best-effort and within `within`, that bridge `bridge_id` holds no phone any more:
+/// a register that lists none (see the module's notes).
+async fn goodbye(client: &JeetaClient, bridge_id: &str, within: Duration) {
+    let body = RegisterIn {
+        bridge_id: bridge_id.to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        protocol: PROTOCOL_VERSION,
+        phones: Vec::new(),
+    };
+    match tokio::time::timeout(within, client.register(&body)).await {
+        Ok(Ok(_)) => info!("the bridge told Jeeta it holds no phones"),
+        Ok(Err(error)) => warn!(
+            %error,
+            "telling Jeeta the bridge holds no phones failed; they read offline once their heartbeat is late"
+        ),
+        Err(_) => warn!(
+            reason = FailReason::Timeout.key(),
+            "telling Jeeta the bridge holds no phones failed; they read offline once their heartbeat is late"
+        ),
     }
 }
 
