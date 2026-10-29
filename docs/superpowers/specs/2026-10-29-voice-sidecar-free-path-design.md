@@ -84,6 +84,10 @@ superseded by this addendum.
   repository's main and takes no revision); they talk to the worker over unix sockets in
   `/run/jeeta-voice/` (group `jeeta-voice`, mode 0660). Listen runs as uid 1501, speak as uid 1502,
   both in gid 1501, so the directory's sticky bit keeps each from removing the other's socket.
+  Listen's socket sits in a directory of its own, `/run/jeeta-voice/listen` (0710, its user's), the
+  only one its container mounts, so speak cannot bind that name while listen restarts and listen
+  cannot reach speak's socket; the worker also checks each socket's peer uid (B3 review). Speak
+  moves to a directory of its own with B5.
 - **The worker reaches loopback only** (`IPAddressAllow=localhost`, `IPAddressDeny=any`): the core
   (`JEETA_BASE_URL=http://127.0.0.1:809x`, not the Cloudflare address, so no proxy hop), ARI and the
   sockets. It opens no listening socket.
@@ -129,8 +133,9 @@ reported as `phrase{set, index}`: the core appends a `holding` turn **with the p
 bridge sends no text back) and counts a filler or long wait as the holding phrases of that wait, so
 its own 4 s / 10 s holding timer does not play over them.
 
-**Barge-in**: while anything plays, the listener runs with an echo guard (Silero threshold 0.6,
-minimum speech 250 ms instead of 0.5 / 200 ms). A `speech_start` while an item with
+**Barge-in**: while anything plays, and for 400 ms after (the line's echo of the last sound), the
+listener runs with an echo guard (Silero threshold 0.6, minimum speech 250 ms instead of 0.5 /
+200 ms; at 32 ms chunks a guarded `speech_start` needs 256 ms of speech). A `speech_start` while an item with
 `allow_barge_in` plays cuts it at once: `FLUSH_MEDIA`, the synthesis cancelled, the queue dropped;
 the cut sentence is reported `said{seq, interrupted_at_char}` (characters heard, from the last
 `MEDIA_MARK_PROCESSED` and the time since), every dropped one `said{seq, interrupted_at_char: 0}`.
@@ -249,8 +254,8 @@ Only if the gate fails would a WebSocket push be designed (not in this plan).
 | Part | Choice | Parameters (start values, tuned on real calls) | Source |
 |---|---|---|---|
 | Inbound audio | Asterisk → 20 ms A-law (or μ-law per `MEDIA_START`) → PCM16 8 kHz in the worker | no denoiser, no AGC | report: RNNoise/DeepFilterNet hurt ASR |
-| VAD | Silero VAD (the ONNX file inside the `silero-vad==6.2.3` wheel, hash-pinned as a model: the package itself requires torch) at 8 kHz, 256-sample chunks | threshold 0.5 (0.6 while playing), speech continues down to 0.15 below it (Silero's neg_threshold), min speech 200 ms (250 while playing), stop 200 ms | report, "Sıra…"; B3 |
-| Turn end | Smart Turn v3.2 (`smart-turn-v3.2-cpu.onnx`, int8, BSD-2), last ≤ 8 s at 16 kHz from 500 ms before the onset; its Whisper features in numpy (no transformers, as Pipecat) | complete if p ≥ 0.5; else fallback 1 500 ms of silence, 2 800 ms when the words end in two number words (digits being read out); a turn is cut at 30 s | report; B3 |
+| VAD | Silero VAD (the ONNX file inside the `silero-vad==6.2.3` wheel, hash-pinned as a model: the package itself requires torch) at 8 kHz, 256-sample chunks | threshold 0.5 (0.6 while playing and for 400 ms after: the line's echo), a started run and running speech continue down to 0.15 below it (Silero's neg_threshold), min speech 200 ms (250 while playing), stop 200 ms | report, "Sıra…"; B3 |
+| Turn end | Smart Turn v3.2 (`smart-turn-v3.2-cpu.onnx`, int8, BSD-2), last ≤ 8 s at 16 kHz from 500 ms before the onset; its Whisper features in numpy (no transformers, as Pipecat) | complete if p ≥ 0.5; else fallback 1 500 ms of silence; while the words end in numbers being read out only 2 800 ms of silence ends the turn, a "complete" not taken; a turn is cut at 30 s | report; B3 |
 | Resample | soxr HQ 8 → 16 kHz, streaming | — | report |
 | STT | `atasoglu/seda-v0.1` on `sherpa-onnx==2.0.1`, `modified_beam_search`, 4 active paths, RNN LM with LODR | `num_threads=1`; LM 0.6 with LODR −0.5 (the card's and sedalib's scales; in B3 the lowest WER on 30 loopback sentences: 5.2 % against 8.7 % without an LM); a turn decoded in segments cut at its pauses, each beside Smart Turn; hotwords score 1.5, cleaned Turkish words cut by sherpa-onnx (`modeling_unit` bpe) over a Zipf-scored vocabulary from `tokens.txt` | report, seda card, B3 |
 | TTS | `ema-lightning==1.1.2`, `stream(text, sample_rate=8000, seed=0)` | torch 2 threads, batch 2 (the size EMA measured for itself in the owner-tested image); one EMA instance per concurrent synthesis (2), since an instance batches its streams and a batched stream's audio differs in its last bits from the same sentence alone; the speak service's `hello` names the voice id the worker keys its cache by | owner V-1; B2 review |
@@ -306,7 +311,9 @@ duty mode is V2) that does not block anything else.
    it sounds (Jeeta, said "Cita") is boosted in its written spelling, which the model is unlikely
    to produce: the agent should pass such names as they are said. Real calls decide the gain.
 3. **Neighbour load** on the shared box: p95, not mean, is the gate; CPU shares are raised for the
-   voice containers.
+   voice containers. On the box at `--cpus 1.5` the frame that ends a turn took 241-416 ms (B3,
+   synthetic speech): fine for now; listen's `--cpus` may go to 2 if B7's traces show its endpoint
+   in the p95.
 4. **EMA naturalness on edge cases** (weeks-old synthetic-data model) and its card's request for
    human review of banking/health/legal messages (the D3 disclosure covers AI disclosure).
 5. **Inbound unknown** (above). **One line**: a second simultaneous call is refused `bridge_busy`.
@@ -314,6 +321,14 @@ duty mode is V2) that does not block anything else.
    ≈ 15.
 7. Open for the owner: the transcript notice text (lawyer) and which staging workspace hosts the
    test calls. (The brand respelling entries are decided: record below.)
+8. **Digits wait.** While the words end in numbers being read out, Smart Turn's "complete" is not
+   taken and only 2.8 s of silence ends the turn, so a phone number read in groups is one turn. An
+   answer that ends in two number words ("saat on dört") waits as long. The agent reading a number
+   back stays the second line of defence; `LISTEN_DIGITS_FALLBACK_MS` (2.5-3 s) is the knob.
+9. **Synthetic test speech.** Every listen measurement so far is the speak voice through A-law: each
+   piece of a fixture sounds finished, so Smart Turn ended sentences at their inner pauses there.
+   Real callers' pauses, accuracy and barge-in (256 ms of speech needed while the bridge plays,
+   against the 300 ms alert) are B7's to measure.
 
 ### Decision record: the brand respelling table (2026-10-29)
 

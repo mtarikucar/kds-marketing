@@ -6241,14 +6241,14 @@ Expected: `srw-rw---- 1 jeeta-voice-speak jeeta-voice … speak.sock`; the journ
 - Modify: `rust/bridge/voice/.gitattributes` (`*.alaw binary`)
 
 **The service in brief** (the module docstring of `jeeta_listen.py` is the contract):
-- One WebSocket per call on `/run/jeeta-voice/listen.sock`. The server speaks first, `hello{listen_id, sample_rate: 8000, format: "pcm16le"}`; the listen id (12 hex) names the versions, the model digests, the endpoint and decoding rules (`python jeeta_listen.py --listen-id` prints it without loading a model). B6 reads `Heard` with `if let Ok`, so the hello (a type `Heard` lacks) is passed over; B5 may add `Heard::Hello` to log the id.
-- `start{sample_rate: 8000, hotwords}` first, then binary PCM16 LE 8 kHz frames (any even length) and `playback{active}` (the echo guard). Out: `speech_start{audio_ms}` (the onset), `speech_end{audio_ms}`, `resume{audio_ms}`, `partial{text}`, `final{text, speech_end_ms, endpoint_ms, endpoint_by, stt_ms}`, `unheard{audio_ms}`, `error{reason}` (`bad_request`, `busy` beyond 4 calls with close 1013, `failed`). Bad hotwords never refuse a start (a refused start would leave the call deaf); a failure while processing audio drops the turn and the call goes on.
-- Turns: Silero at 8 kHz (32 ms chunks; 0.5, 0.6 while the bridge plays; speech continues down to the threshold less 0.15, Silero's neg_threshold), 200 ms (250) of speech to start, a pause after 200 ms of silence, Smart Turn v3.2 on the turn from 500 ms before its onset (last 8 s), complete at p >= 0.5, else the fallback silence: 1.5 s, or 2.8 s when the turn's words end in two number words (`endpoint.dictating`: a number being read out), within the report's 1.2-1.8 s and 2.5-3 s; a turn is cut at 30 s.
+- One WebSocket per call on `/run/jeeta-voice/listen/listen.sock` (listen's own directory: B3 review I4). The server speaks first, `hello{listen_id, sample_rate: 8000, format: "pcm16le"}`; the listen id (12 hex) names the versions, the model digests, the endpoint and decoding rules (`python jeeta_listen.py --listen-id` prints it without loading a model). B6 reads `Heard` with `if let Ok`, so the hello (a type `Heard` lacks) is passed over; B5 may add `Heard::Hello` to log the id.
+- `start{sample_rate: 8000, hotwords}` first, then binary PCM16 LE 8 kHz frames (any even length) and `playback{active}` (the echo guard). Out: `speech_start{audio_ms}` (the onset), `speech_end{audio_ms}`, `resume{audio_ms}`, `partial{text}`, `final{text, speech_end_ms, endpoint_ms, endpoint_by, stt_ms}`, `unheard{audio_ms}`, `error{reason}` (`bad_request`, `busy` beyond 4 calls with close 1013, `failed`). Bad hotwords, or hotwords that are not a list, never refuse a start (a refused start would leave the call deaf); a failure while processing audio is answered `failed`, then `unheard` when a turn was open, and the call goes on.
+- Turns: Silero at 8 kHz (32 ms chunks; 0.5, 0.6 while the bridge plays and for 400 ms after; a started run and running speech continue down to the threshold less 0.15, Silero's neg_threshold), 200 ms (250) of speech to start, a pause after 200 ms of silence, Smart Turn v3.2 on the turn from 500 ms before its onset (last 8 s), complete at p >= 0.5, else the fallback silence of 1.5 s; while the words end in a number being read out (`endpoint.dictating`: the last word a number word and two of the last three, or four in the turn) the "complete" is not taken and only 2.8 s of silence ends the turn, within the report's 1.2-1.8 s and 2.5-3 s; a turn is cut at 30 s.
 - Decoding: seda-v0.1, modified beam search over 4 paths, RNN LM 0.6 with LODR -0.5 (the card's FLEURS-dev scales, sedalib 1.1.0's), one thread; a turn is decoded in segments cut at its pauses, each flushed (0.9 s of silence, sedalib's padding for 0.64 s chunks) on the session's thread while Smart Turn judges on its own, so a "complete" is final at once and a fallback has nothing left to decode.
 - Hotwords: up to 20 per call, Turkish-lowercased, circumflexes folded, apostrophes dropped, other punctuation a space; a hotword with a digit or a letter the model lacks is dropped whole (sherpa-onnx's native code prints a hotword it cannot encode, and aborts on a word that starts with ":" or "#" and is not a number). sherpa-onnx cuts them itself (`modeling_unit="bpe"`) over a `piece score` vocabulary the service writes to the run tmpfs from `tokens.txt`, with Zipf scores by rank; `hotwords.Vocab` makes the same cut (held to a byte-level port of simple-sentencepiece 0.7).
 - Logs: the root handler passes only `jeeta-listen` records (counts, lengths, timings, kinds); a library's record is withheld and named; never a word, a hotword or audio. A watchdog ends the process when audio processing or the event loop is stuck over 30 s.
 - Pins: base image by digest (the speak image's); 13 wheels by version and sha256 from one hashed lock (PyPI alone, `--require-hashes --no-deps`, then `pip check`), held by `listen_pins.py check-lock` to the bootstrap's record, the frozen resolution and the exact requirements; 8 model files by URL (a fixed Hugging Face revision, or a member of the silero-vad wheel), SHA-256 and size, fetched and checked at build and checked again at every start.
-- Isolation: `--network none`, read-only, no capability, no core dumps, uid 1501 (`jeeta-voice-svc`, B1 Step 8) in gid 1501, beside speak's uid 1502, so the sticky `/run/jeeta-voice` keeps each from removing the other's socket; pids 64, 1.5 CPUs, 1 GB, no swap, `--pull never`, `--mount type=bind`, one BLAS thread.
+- Isolation: `--network none`, read-only, no capability, no core dumps, uid 1501 (`jeeta-voice-svc`, B1 Step 8) in gid 1501, beside speak's uid 1502, its socket in a directory of its own (`/run/jeeta-voice/listen`, 0710, the only one it mounts) so speak cannot bind its name; pids 64, 1.5 CPUs, 1 GB, no swap, `--pull never`, `--mount type=bind`, one BLAS thread.
 
 **B3 as built (2026-10-29): what differs from the draft below.** Steps 1 to 7 below are the first draft; the committed files supersede them, and Step 8 is the server procedure as it now stands.
 - No transformers: `features.py` computes Smart Turn's Whisper log-mel features in numpy (as Pipecat does since May 2026), held to values transformers 5.21.0 computed (largest difference over 80 x 800: 1.2e-7). The image drops transformers, tokenizers, huggingface-hub and their dependencies.
@@ -6256,12 +6256,35 @@ Expected: `srw-rw---- 1 jeeta-voice-speak jeeta-voice … speak.sock`; the journ
 - The LM scale: chosen on the dev machine, not on the server. 30 conversational sentences in the speak voice through G.711 A-law (WER / CER without spaces): no LM 8.7 / 1.2 %, LM 0.3 7.6 / 1.2 %, LM 0.5 8.1 / 4.6 %, LM 0.6 14.0 / 9.5 % (whole phrases deleted), LM 0.3 + LODR -0.25 6.4 / 1.0 %, **LM 0.6 + LODR -0.5 5.2 / 1.3 %** (kept), LM 0.8 + LODR -0.5 5.2 / 1.9 %. The draft's LM 0.3 without LODR and its `SEDA_LM_SCALE` knob are gone.
 - Hotwords: the draft's greedy cut, passed with sherpa-onnx's default `modeling_unit` (`cjkchar`), would have been split back into single characters, a path the model never emits. As built (above), the cut agrees with the model's own pieces on 40 of 40 words of the fixtures (about 94 % on 30 more sentences on the dev machine), and the boost recovers 2 of 3 names in the names fixture (`selin karaosmanoğlu` for `selim kara osmanoğlu`, `kılıçarslan` for `kılıç arslan`; `Talas` stays `falan`) without changing sentences that hold none; score 2.5 began to damage neighbouring words, so 1.5 stays.
 - Turn end: segments cut at pauses, the decode beside the turn model (above), instead of the draft's turn model then the decode; the processing of the frame that ends a turn went from 233-360 ms to 157-203 ms natively on the dev machine. A resumed segment never re-reads decoded speech, and the preroll is 500 ms (Pipecat's pre-speech), not 300.
-- Digits: the longer fallback (2.8 s) while the words end in two number words; the draft had none.
+- Digits: the longer fallback (2.8 s) while the words end in two number words; the draft had none (the review round widened the rule and stopped taking a "complete" while dictating: below).
 - Protocol: `hello` first (B2's pattern), `error{reason}`, a session limit, odd or early audio refused once; `speech_start` and `resume` report the onset; the draft's `max_size` of 64 KiB is kept with a 256-message queue.
 - Hardening as B2's: uid 1501 (the draft ran as 1501 too, without the named user), `--pull never`, `--mount type=bind`, `--ulimit core=0`, `--cap-drop ALL`, no-new-privileges, pids, no swap, `Restart=always` with a start limit, a health check and a watchdog, `OPENBLAS_NUM_THREADS=1` (numpy's spinning BLAS threads doubled a turn's end under the CPU quota: 511 against 253 ms).
 - Fixtures: four A-law files in the speak voice (`make_fixtures.py`, run in the speak image), so the model tests run in the image with no recording mounted; the draft's `LISTEN_FIXTURE_WAV` loop is gone.
 - Measured on the dev machine (i5-9300H): natively, streaming RTF 0.08-0.12, the turn-ending frame 156-203 ms, a final 224 ms of audio after the end of speech plus that; in Docker Desktop at `--cpus 1.5` (a noisy VM: the same run gave 266 and 531 ms) 163-531 ms; through the live socket at real time, finals arrived 377-441 ms after the end of speech; 14 pids, about 246 MiB; built in 1 min 33 s, 413 MB. Smart Turn alone: 142 ms on one thread, 83 ms on two. The server's numbers are Step 8.4's TIMING lines.
 - Mutation pass: 33 edits to the service, the pins, the Dockerfile, `.dockerignore` and the unit, against the pure tests: all 33 fail a test (two, the socket umask and the models' 0644, only on Linux, where those tests run).
+
+**B3 as run (2026-10-29, first round, image `jeeta-voice-listen:202610291826`, commit `ebbd524c`).**
+- Build: 0 min 44 s, 413 MB; `locks: ok (13 wheels)`, `No broken requirements found.`, `models: ok (8 files)`; loaded in 7097 ms (sherpa-onnx 2.0.1, onnxruntime 1.31.1, soxr 1.1.0, numpy 2.5.4), listen `afd024d659de`, self-test passed.
+- In the image under the unit's isolation (`--cpus 1.5`): `83 passed, 1 skipped`; `TIMING yarin turn_end_ms=308 stt_ms=223 endpoint_after_speech_ms=224 rtf=0.126`, `TIMING pause turn_end_ms=241,416 rtf=0.186`, `TIMING fallback turn_end_ms=0 stt_ms=408`; `HOTWORDS recovered 2/3; talas heard: False`, `HOTWORDS cut agreement 40/40`.
+- Live: healthy, 10 pids, 230 MiB; warm 1500 ms decoded in 225 ms, a turn judged in 176 ms; socket `660 jeeta-voice-svc:jeeta-voice` beside speak's `660 jeeta-voice-speak:jeeta-voice` in `1770 root:jeeta-voice`; `health=0` from uid 1502, the bridge user can connect. Probes: `pause` 2/2 finals 441 ms after the end of speech (stt 94 ms), `names` 3/3 at 492 ms (stt 234 ms). The journal holds counts only.
+
+**B3 review (2026-10-29): what changed.**
+- I1, digits: while the words end in numbers being read out, Smart Turn's "complete" is not taken (a digit group sounds finished) and only 2.8 s of silence ends the turn. `dictating` widened: the last word a number word and two of the last three number words, or four or more in the turn, so one misheard digit does not end it. A separate, shorter hold after a "complete" (1.8 s) was considered and not taken: the digits fixture's groups are 2 s apart, as a number read from a card can be, and one rule is one knob (`LISTEN_DIGITS_FALLBACK_MS`). Tests: four digit groups under a turn model that always says complete are one final; the `digits` fixture at the default threshold is one final. The cost: an answer that ends in two number words ("saat on dört") waits about 2.8 s (design §10).
+- I2: a failure while processing audio is answered `error{failed}` and then `unheard{audio_ms}` when a turn was open toward the bridge (a `speech_start` out and no final, or the endpointer mid-turn), so the talker asks again instead of waiting.
+- I3: the echo guard outlasts `playback{false}` by `guard_tail_ms` = 400 of audio (`LISTEN_GUARD_TAIL_MS`, 200-800), the line's echo of the last sound; playing again within the tail keeps it; a second stop does not stretch it. B7 records the guarded barge-in against the 300 ms alert.
+- I4: listen's socket moved into a directory of its own, `/run/jeeta-voice/listen` (0710 `jeeta-voice-svc:jeeta-voice`, tmpfiles), mounted alone into the listen container: the group (speak, the bridge) may reach the socket but create nothing there, and listen no longer sees speak's socket. Tried locally: uid 1502 with speak's mount of `/run/jeeta-voice` could not list, create or bind in `listen/` (Permission denied), and connected (`health=0`). Speak keeps its place in the shared sticky directory for now (it is deployed; it moves with B5). B5's `speech::connect` now checks the peer's uid (listen 1501, speak 1502) and refuses `WrongPeer`. A socket path held by another user, or by something that is not a socket, ends listen once with status 78, which the unit does not restart (`RestartPreventExitStatus=78`): the unit fails and the alert fires instead of a restart loop.
+- M1: a segment's end is the audio it was given, so the 30 s cut decodes no frame twice; the cut stays `endpoint_by: "fallback"`: B5's `Heard::Final` reads `jt_calls::EndpointBy`, which has two kinds, and a final the bridge cannot parse would be dropped whole (a third kind means jt_calls, the core's trace and the panel).
+- M2: a stream whose hotwords the recognizer refuses goes without them; hotwords are given up only after three refusals.
+- M3: hotwords are NFC-composed first; a Linux test pushes 300 rounds of random strings of the model's letters and sherpa-onnx's special characters through `clean` and a real biased stream: native stdout and stderr stay empty.
+- M4: hotwords that are not a list are no hotwords; the start is never refused for them.
+- M5: tests for the mutants that survived the coordinator's pass (the sample rate check, a failed start's slot, `drop_turn`, `OnlyOurs`, the health check's hello, the contract's values, `stt_ms`, the decoding pins over a stand-in sherpa-onnx, the BLAS and HEALTHCHECK lines, the exact `.dockerignore`).
+- M6: `THIRD_PARTY.md` (in the image at `/app`): each model's source, revision, author and licence, unmodified (seda Apache-2.0, its LM CC BY-SA 4.0, Smart Turn BSD-2-Clause, Silero MIT from the wheel's LICENSE), the packages' licences from their wheel metadata (python-soxr LGPL-2.1-or-later), and the fixtures: EMA Lightning and antalia-mini are Apache-2.0, which sets no terms on output, and EMA's voice is itself synthetic; labelled AI-generated as EMA's card asks.
+- M7: design §10 notes that `--cpus` may go to 2 on B7's numbers (241-416 ms at 1.5 on the box).
+- M8: a download is cut at its pinned size (a wheel or a lookup at 64 MiB); `sys.unraisablehook` logs by kind; a run that has started stays voiced down to the threshold less 0.15 (the onset's hysteresis).
+- WER with pauses inside a sentence: ten such sentences (76 words) in the speak voice, decoded in segments and in one stream: 3.9 % both ways, so cutting at pauses cost nothing here. A `multi` fixture (two pauses inside one sentence) holds it in the model tests. At the default threshold Smart Turn ended all ten turns at the first inner pause: each piece was synthesised as a sentence of its own, so it sounds finished; real callers' inner pauses are B7's to measure.
+- Smart Turn's probability is pinned on `yarin` and on `pause`'s first turn against the reference pipeline (transformers 5.21.0's features, the model card's call): equal to six decimals (`fixtures/smart_turn_reference.json`).
+- Mutation pass over the round: 32 edits, all fail a test; the first pass's 33 still do (two lines were rewritten; the two Linux-only ones as before).
+- Tests: Windows 108 passed, 3 skipped; in the image under the unit's isolation 112 passed, 1 skipped. The listen id is `75fd70c20156` (the endpoint config gained the guard's tail).
 
 - [ ] **Step 1: Write the failing pure tests**
 
@@ -7079,7 +7102,17 @@ WantedBy=multi-user.target
 
 - [ ] **Step 8: [COORDINATOR, server] Build, test, start**
 
-From `/root/jeeta-voice-src` at the reviewed commit. Nothing is frozen on the server: the lock and the models lock are committed (Step 8.2 says how to redo them).
+From `/root/jeeta-voice-src` at the reviewed commit. Nothing is frozen on the server: the lock and the models lock are committed (Step 8.2 says how to redo them). On a host where the first round ran, 8.1 and 8.2 need nothing; run 8.0, then 8.3 onward.
+
+8.0 Listen's own directory (once; the review round's tmpfiles line):
+
+```bash
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice.tmpfiles /etc/tmpfiles.d/jeeta-voice.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/jeeta-voice.conf
+stat -c '%a %U:%G %n' /run/jeeta-voice /run/jeeta-voice/listen
+```
+
+Expected: `1770 root:jeeta-voice /run/jeeta-voice` and `710 jeeta-voice-svc:jeeta-voice /run/jeeta-voice/listen`.
 
 8.1 The listen user, already there (B1 Step 8 made uid 1501; B2 moved speak to 1502):
 
@@ -7111,7 +7144,7 @@ TAG=$(date +%Y%m%d%H%M)
 time nice -n 10 docker build -t jeeta-voice-listen:$TAG .
 ```
 
-Expected: `locks: ok (13 wheels)`, `Successfully installed flatbuffers-25.12.19 ... sherpa-onnx-2.0.1 sherpa-onnx-core-2.0.1 soxr-1.1.0 websockets-17.3`, `No broken requirements found.`, `models: ok (8 files)`, `INFO jeeta-listen loaded in … ms: sherpa-onnx 2.0.1, sherpa-onnx-core 2.0.1, onnxruntime 1.31.1, soxr 1.1.0, numpy 2.5.4; fallback 1500 ms, digits 2800 ms, listen afd024d659de` and `INFO jeeta-listen self-test passed`. The build fetches about 90 MB (seda, Smart Turn, the silero-vad wheel) and 60 MB of wheels; a `differs from models.lock` or a `pins:` line is a stop.
+Expected: `locks: ok (13 wheels)`, `Successfully installed flatbuffers-25.12.19 ... sherpa-onnx-2.0.1 sherpa-onnx-core-2.0.1 soxr-1.1.0 websockets-17.3`, `No broken requirements found.`, `models: ok (8 files)`, `INFO jeeta-listen loaded in … ms: sherpa-onnx 2.0.1, sherpa-onnx-core 2.0.1, onnxruntime 1.31.1, soxr 1.1.0, numpy 2.5.4; fallback 1500 ms, digits 2800 ms, listen 75fd70c20156` and `INFO jeeta-listen self-test passed`. A `differs from models.lock`, a `larger than` or a `pins:` line is a stop.
 
 8.4 Every test in the image, with the unit's isolation:
 
@@ -7122,12 +7155,12 @@ docker run --rm --pull never --network none --read-only --cap-drop ALL --securit
   jeeta-voice-listen:$TAG python -m pytest -p no:cacheprovider -s -rs tests
 ```
 
-Expected: `83 passed, 1 skipped` (the skip: the repository's Dockerfile and unit are not in the image), three `TIMING` lines and two `HOTWORDS` lines (`recovered 2/3; talas heard: False`, `cut agreement 40/40`); record them. A failing model test is a stop-and-report, not a tuning round on the server.
+Expected: `112 passed, 1 skipped` (the skip: the repository's Dockerfile and unit are not in the image), three `TIMING` lines, two `HOTWORDS` lines (`recovered 2/3; talas heard: False`, `cut agreement 40/40`) and `WER multi: segments 0/9 words wrong, one stream 0/9`; record them. The hotword fuzz runs here only (Linux) and must pass: it fails if sherpa-onnx prints anything. A failing model test is a stop-and-report, not a tuning round on the server.
 
-8.5 Install and start:
+8.5 Install and start (the first round's socket sits at the old path, `/run/jeeta-voice/listen.sock`; root removes it while the service is stopped):
 
 ```bash
-systemctl stop jeeta-voice-listen 2>/dev/null; rm -f /run/jeeta-voice/listen.sock
+systemctl stop jeeta-voice-listen 2>/dev/null; rm -f /run/jeeta-voice/listen.sock /run/jeeta-voice/listen/listen.sock
 grep -q '^LISTEN_IMAGE=' /etc/jeeta-voice/images.env \
   && sed -i "s|^LISTEN_IMAGE=.*|LISTEN_IMAGE=jeeta-voice-listen:$TAG|" /etc/jeeta-voice/images.env \
   || printf 'LISTEN_IMAGE=jeeta-voice-listen:%s\n' "$TAG" >> /etc/jeeta-voice/images.env
@@ -7135,17 +7168,19 @@ install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-liste
 systemd-analyze verify /etc/systemd/system/jeeta-voice-listen.service
 systemctl daemon-reload && systemctl enable --now jeeta-voice-listen
 sleep 30
-ls -l /run/jeeta-voice/listen.sock; journalctl -u jeeta-voice-listen -n 5 --no-pager
+ls -l /run/jeeta-voice/listen/listen.sock; journalctl -u jeeta-voice-listen -n 5 --no-pager
 docker ps --filter name=jeeta-voice-listen --format '{{.Names}} {{.Status}}'
 docker stats --no-stream --format '{{.Name}} pids {{.PIDs}} mem {{.MemUsage}}' jeeta-voice-listen
-stat -c '%a %U:%G %n' /run/jeeta-voice /run/jeeta-voice/listen.sock /run/jeeta-voice/speak.sock
+stat -c '%a %U:%G %n' /run/jeeta-voice /run/jeeta-voice/listen /run/jeeta-voice/listen/listen.sock /run/jeeta-voice/speak.sock
 docker run --rm --pull never --network none --user 1502:1501 --mount type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice \
-  --entrypoint python jeeta-voice-listen:$TAG jeeta_listen.py --health; echo health=$?
+  --entrypoint sh jeeta-voice-listen:$TAG -c \
+  'python jeeta_listen.py --health; echo health=$?; touch /run/jeeta-voice/listen/x 2>&1 | grep -c "Permission denied"'
 docker run --rm --pull never --network none --entrypoint python jeeta-voice-listen:$TAG jeeta_listen.py --listen-id
-sudo -u jeeta-voice-bridge test -w /run/jeeta-voice/listen.sock && echo "bridge can connect"
+sudo -u jeeta-voice-bridge test -w /run/jeeta-voice/listen/listen.sock && echo "bridge can connect"
+docker exec jeeta-voice-listen ls /run/jeeta-voice
 ```
 
-Expected: `srw-rw---- 1 jeeta-voice-svc jeeta-voice … listen.sock`; the journal shows `loaded in …`, `warm: 1500 ms decoded in … ms, a turn judged in … ms`, `listening`, and no word; `Up … (healthy)`; pids under 30 and memory well under 1 GiB (locally 14 pids, 246 MiB); `1770 root:jeeta-voice /run/jeeta-voice`, `660 jeeta-voice-svc:jeeta-voice …listen.sock` and speak's `660 jeeta-voice-speak:jeeta-voice …speak.sock` unchanged; `health=0` (uid 1502 connects through the group; locally it could not remove the socket: `Operation not permitted`); the printed listen id equals the journal's; `bridge can connect`.
+Expected: `srw-rw---- 1 jeeta-voice-svc jeeta-voice … listen.sock`; the journal shows `loaded in … listen 75fd70c20156`, `warm: 1500 ms decoded in … ms, a turn judged in … ms`, `listening`, and no word; `Up … (healthy)`; pids under 30 and memory well under 1 GiB (first round: 10 pids, 230 MiB); `1770 root:jeeta-voice /run/jeeta-voice`, `710 jeeta-voice-svc:jeeta-voice /run/jeeta-voice/listen`, `660 jeeta-voice-svc:jeeta-voice …listen.sock` and speak's `660 jeeta-voice-speak:jeeta-voice …speak.sock` unchanged; `health=0` and `1` (uid 1502 connects through the group and cannot create a file in listen's directory); the printed listen id equals the journal's; `bridge can connect`; the last line is `listen` alone (the container sees its own directory, not speak's socket).
 
 8.6 A call through the live socket (numbers only), and the journal after it:
 
@@ -7157,7 +7192,7 @@ done
 journalctl -u jeeta-voice-listen -n 4 --no-pager
 ```
 
-Expected: `2/2 sentences final` and `3/3 sentences final`, each final `by smart_turn` and a few hundred ms after the end of speech (locally 377-441 ms); the journal shows `a call started: 0 hotwords (0 dropped)` and `a call ended after … s: … turns (… by smart turn, … by fallback, 0 unheard)`, no word.
+Expected: `2/2 sentences final` and `3/3 sentences final`, each final `by smart_turn` and a few hundred ms after the end of speech (first round: 441 and 492 ms); the journal shows `a call started: 0 hotwords (0 dropped)` and `a call ended after … s: … turns (… by smart turn, … by fallback, 0 unheard)`, no word.
 
 - [ ] **Step 9: Commit**
 
@@ -8297,7 +8332,7 @@ fn configuration_reads_the_environment_and_hides_secrets() {
     assert_eq!(c.extension, "102");
     assert_eq!(c.ari_url, "http://127.0.0.1:8188");
     assert_eq!(c.timing.ack_after_ms, 500);
-    assert_eq!(c.listen, Endpoint::Unix("/run/jeeta-voice/listen.sock".into()));
+    assert_eq!(c.listen, Endpoint::Unix("/run/jeeta-voice/listen/listen.sock".into()));
     let shown = format!("{c:?}");
     assert!(!shown.contains("jeeta_secret") && !shown.contains("ari-secret"), "{shown}");
     assert!(Config::from_env(env(&[("ARI_PASSWORD", "x")]), true).is_err());
@@ -8502,7 +8537,7 @@ impl Config {
             ari_url: get("ARI_URL").unwrap_or_else(|| "http://127.0.0.1:8188".into()),
             ari_user: get("ARI_USER").unwrap_or_else(|| "jeeta-voice".into()),
             ari_password: required("ARI_PASSWORD")?,
-            listen: endpoint("LISTEN_SOCKET", "unix:/run/jeeta-voice/listen.sock")?,
+            listen: endpoint("LISTEN_SOCKET", "unix:/run/jeeta-voice/listen/listen.sock")?,
             speak: endpoint("SPEAK_SOCKET", "unix:/run/jeeta-voice/speak.sock")?,
             cache_dir: get("VOICE_CACHE_DIR").unwrap_or_else(|| "/var/lib/jeeta-voice/cache".into()).into(),
             trace_file: get("VOICE_TRACE_FILE").unwrap_or_else(|| "/var/lib/jeeta-voice/traces.jsonl".into()).into(),
@@ -9395,17 +9430,30 @@ pub enum SpeechError {
     Unsupported,
     #[error("the speak service did not say hello")]
     NoHello,
+    #[error("the speech service's socket is held by another user")]
+    WrongPeer,
 }
 
-/// A WebSocket to the service at `endpoint`.
-pub async fn connect(endpoint: &Endpoint) -> Result<Socket, SpeechError> {
+/// The users the speech services run as (B3 uid 1501, B2 uid 1502). A unix socket whose peer is
+/// another user is refused: a service that took the other's socket name is never talked to (the
+/// B3 review, I4; listen also sits in a directory of its own that speak cannot write).
+pub const LISTEN_UID: u32 = 1501;
+pub const SPEAK_UID: u32 = 1502;
+
+/// A WebSocket to the service at `endpoint`; on a unix socket its peer must run as `owner`.
+pub async fn connect(endpoint: &Endpoint, owner: u32) -> Result<Socket, SpeechError> {
     let stream: Pin<Box<dyn Stream>> = match endpoint {
         Endpoint::Tcp(addr) => {
+            let _ = owner; // loopback TCP is for tests only; it carries no peer credential
             Box::pin(tokio::net::TcpStream::connect(addr).await.map_err(|_| SpeechError::Unreachable)?)
         }
         #[cfg(unix)]
         Endpoint::Unix(path) => {
-            Box::pin(tokio::net::UnixStream::connect(path).await.map_err(|_| SpeechError::Unreachable)?)
+            let s = tokio::net::UnixStream::connect(path).await.map_err(|_| SpeechError::Unreachable)?;
+            if s.peer_cred().map(|c| c.uid()).ok() != Some(owner) {
+                return Err(SpeechError::WrongPeer);
+            }
+            Box::pin(s)
         }
         #[cfg(not(unix))]
         Endpoint::Unix(_) => return Err(SpeechError::Unsupported),
@@ -9424,7 +9472,7 @@ pub async fn connect_speaker(endpoint: &Endpoint) -> Result<(Socket, String), Sp
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
 
-    let mut socket = connect(endpoint).await?;
+    let mut socket = connect(endpoint, SPEAK_UID).await?;
     match tokio::time::timeout(HELLO_WAIT, socket.next()).await {
         Ok(Some(Ok(Message::Text(t)))) => match serde_json::from_str::<Spoken>(&t) {
             Ok(Spoken::Hello { voice_id }) => Ok((socket, voice_id)),
@@ -9503,6 +9551,11 @@ pub enum Spoken {
     },
 }
 ```
+
+The peer check (B3 review, I4) has a `cfg(unix)` test of its own in `tests/adapters.rs`: a
+`tokio::net::UnixListener` the test binds in a temporary directory; `connect(&Endpoint::Unix(path),
+own_uid)` succeeds and `connect(&Endpoint::Unix(path), own_uid + 1)` is `SpeechError::WrongPeer`
+(`own_uid` from `std::os::unix::fs::MetadataExt::uid` of the socket file, so no `libc` is needed).
 
 In `lib.rs` add the modules and extend the module map:
 
@@ -10088,7 +10141,7 @@ impl Live {
         })
         .await;
         let (codec, frame_bytes) = started.ok().flatten().ok_or("no media start")?;
-        let listen = speech::connect(&deps.listen).await.map_err(|_| "listener unreachable")?;
+        let listen = speech::connect(&deps.listen, speech::LISTEN_UID).await.map_err(|_| "listener unreachable")?;
         let (mut listen_tx, listen_rx) = listen.split();
         let start = ToListener::Start { sample_rate: 8_000, hotwords: setup.script.hotwords.clone() };
         listen_tx.send(text_message(&start)).await.map_err(|_| "listener refused the call")?;
@@ -10881,7 +10934,7 @@ async fn check() -> ExitCode {
             println!("ari: {e}");
         }
     }
-    match speech::connect(&config.listen).await {
+    match speech::connect(&config.listen, speech::LISTEN_UID).await {
         Ok(_) => println!("listen: ok"),
         Err(e) => {
             ok = false;
@@ -10971,6 +11024,7 @@ Expected on the terminal, in order: `answered`; `said 1 cut at None`; `caller: �
 Go criteria:
 - two-way audio;
 - the transcript is recognisable;
+- a barge-in while the bridge plays needs 256 ms of speech before `speech_start` (eight 32 ms chunks over the guarded 250 ms, B3) and the guard lasts 400 ms past the playback: against the design's 300 ms barge-in alert (onset to `FLUSH_MEDIA`) that leaves under 50 ms for the worker. Record `barge_in_stop_ms` if the owner cuts in, and tune `LISTEN_GUARD_TAIL_MS` (200-800) or the guarded minimum only from that number;
 - `ack_ms` ≤ 1 000 and `endpoint_ms` ≤ 1 800;
 - **the line never goes quiet** (the B1 review). In the agent's 9 s gap, two `channelstats` rows 5 s apart show the Tx count up by about 250 (50 packets a second, from the pacer's silence frames and the phrases). Every other 5 s pair shows the same, and Rx rises too (two-way RTP).
 - `tcpdump` shows packets in both directions between this host's address and NetGSM's media address.
@@ -13280,7 +13334,7 @@ JEETA_BRIDGE_KEY=
 VOICE_EXTENSION=102
 ARI_URL=http://127.0.0.1:8188
 ARI_USER=jeeta-voice
-LISTEN_SOCKET=unix:/run/jeeta-voice/listen.sock
+LISTEN_SOCKET=unix:/run/jeeta-voice/listen/listen.sock
 SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock
 VOICE_CACHE_DIR=/var/lib/jeeta-voice/cache
 VOICE_TRACE_FILE=/var/lib/jeeta-voice/traces.jsonl
@@ -13541,7 +13595,7 @@ Replace §5 (host setup) with the stack as installed by tasks B1–B3 and D3:
 | Unit | What | Listens |
 |---|---|---|
 | `jeeta-asterisk` | Asterisk 22.11 in Docker (`--network host`, uid 1500) | SIP UDP 5070 (all addresses), RTP 40000–40099, ARI/HTTP 127.0.0.1:8188 |
-| `jeeta-voice-listen` | Silero VAD, Smart Turn v3.2, seda-v0.1 (`--network none`, uid 1501) | `/run/jeeta-voice/listen.sock` |
+| `jeeta-voice-listen` | Silero VAD, Smart Turn v3.2, seda-v0.1 (`--network none`, uid 1501) | `/run/jeeta-voice/listen/listen.sock` (its own directory, 0710) |
 | `jeeta-voice-speak` | Antalia normaliser + EMA Lightning 1.1.2 (`--network none`, uid 1502 in gid 1501) | `/run/jeeta-voice/speak.sock` |
 | `jeeta-voice-bridge` | the talker (`/opt/jeeta-voice/current`), loopback only | nothing |
 
