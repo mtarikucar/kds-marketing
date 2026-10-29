@@ -159,6 +159,29 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # The device bridge on Windows, the owner's PC that phones are plugged into (plan D2-T3): its
+  # tests and its release build, uploaded as the program to install. It names no server crate, so
+  # it builds without a database; the Linux jobs above build and lint it with the workspace.
+  device-bridge-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo test --locked -p jeeta-device-bridge -p jt_devices -p jt_device_protocol
+      - run: cargo build --locked --release -p jeeta-device-bridge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-device-bridge-windows-${{ github.sha }}
+          path: rust/target/release/jeeta-device-bridge.exe
+          if-no-files-found: error
+          retention-days: 14
+
   # Build and assemble only. No registry publication, deployment, or secret inputs.
   release-artifact:
     runs-on: ubuntu-latest

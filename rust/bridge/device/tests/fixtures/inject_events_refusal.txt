@@ -1,0 +1,10 @@
+Exception occurred while executing 'tap':
+java.lang.SecurityException: Injecting input events requires the caller (or the source of the instrumentation, if any) to have the INJECT_EVENTS permission.
+	at com.android.server.input.InputManagerService.injectInputEventToTarget(InputManagerService.java:1102)
+	at com.android.server.input.InputManagerService.injectInputEvent(InputManagerService.java:1079)
+	at android.hardware.input.InputManager.injectInputEvent(InputManager.java:1123)
+	at com.android.server.input.InputShellCommand.injectMotionEvent(InputShellCommand.java:133)
+	at com.android.server.input.InputShellCommand.sendTap(InputShellCommand.java:333)
+	at com.android.server.input.InputShellCommand.onCommand(InputShellCommand.java:212)
+	at com.android.modules.utils.BasicShellCommandHandler.exec(BasicShellCommandHandler.java:97)
+	at android.os.ShellCommand.exec(ShellCommand.java:38)
