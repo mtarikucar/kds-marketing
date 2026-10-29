@@ -269,7 +269,10 @@ impl DeviceCommandRepo for MemTenant {
             .commands
             .iter()
             .filter(|c| c.workspace_id == ws && c.capability_id == cap)
-            .cloned()
+            .map(|c| DeviceCommandRow {
+                result: None,
+                ..c.clone()
+            })
             .collect();
         rows.sort_by_key(|c| std::cmp::Reverse(c.seq));
         rows.truncate(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE) as usize);

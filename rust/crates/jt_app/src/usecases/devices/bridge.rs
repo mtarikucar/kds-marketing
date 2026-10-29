@@ -76,8 +76,9 @@
 //!
 //! **Logging.** Every command that ends through this surface writes `devices.command.finished`
 //! (`command_id`, `kind`, `status`, `reason`, `duration_ms`: the bridge's, `null` for a failure the
-//! server decided; `leased_by`: the key id of the bridge last handed it, `null` for none); its
-//! result stays on the command. A phone that passes from one bridge to another writes
+//! server decided; `leased_by`: the key id of the bridge last handed it, `null` for none;
+//! `result_sha256`: the hash of the result a done command keeps, [`result_sha256`]); its result
+//! stays on the command. A phone that passes from one bridge to another writes
 //! `devices.phone.holder_changed` (`capability_id`, `from`, `to`: key ids). `tracing` carries ids, kinds, statuses and
 //! counts only: never a command's payload, a result, a failure's detail or a file's bytes.
 
@@ -709,8 +710,21 @@ async fn hand_out(
     Ok(handed)
 }
 
+/// The lowercase hex SHA-256 of `result` as JSON text (`serde_json` writes an object's keys in
+/// order), which `devices.command.finished` carries as `result_sha256`: the result kept on the
+/// command can be checked against the ledger, whose entries are never changed.
+pub fn result_sha256(result: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let text = serde_json::to_vec(result).unwrap_or_default();
+    Sha256::digest(&text)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Writes `devices.command.finished` for command `row`, which just ended, under the version in
-/// force `in_force`: `duration_ms` is the bridge's, `None` for a failure the server decided.
+/// force `in_force`: `duration_ms` is the bridge's, `None` for a failure the server decided;
+/// `result_sha256` is [`result_sha256`] of the result a done command keeps, `None` for any other.
 async fn finished(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -732,6 +746,7 @@ async fn finished(
             "reason": row.reason.map(FailReason::key),
             "duration_ms": duration_ms,
             "leased_by": row.leased_by.map(|by| by.to_string()),
+            "result_sha256": row.result.as_ref().map(result_sha256),
         }),
     )
     .await

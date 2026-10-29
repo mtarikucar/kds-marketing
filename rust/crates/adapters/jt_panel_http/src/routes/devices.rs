@@ -7,7 +7,7 @@
 use axum::Json;
 use axum::extract::State;
 use jt_app::usecases::devices::agent::{
-    self, ActInput, CommandOut, LogQuery, ObserveInput, PhoneOut, WaitQuery,
+    self, ActInput, CommandOut, LogQuery, LoggedCommand, ObserveInput, PhoneOut, WaitQuery,
 };
 use jt_capability::CapabilityId;
 use uuid::Uuid;
@@ -59,13 +59,13 @@ pub async fn command_get(
     ))
 }
 
-/// `200` with the phone's most recent commands, newest first: `?limit=`.
+/// `200` with the phone's most recent commands, newest first, without their results: `?limit=`.
 pub async fn commands(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiPath(phone): ApiPath<CapabilityId>,
     ApiQuery(query): ApiQuery<LogQuery>,
-) -> Result<Json<Vec<CommandOut>>, ApiError> {
+) -> Result<Json<Vec<LoggedCommand>>, ApiError> {
     Ok(Json(
         agent::commands(&state.deps, &ctx, phone, query).await?,
     ))

@@ -260,6 +260,12 @@ async fn stored(w: &World, id: CapabilityId) -> Capability {
     r.capabilities().find(id).await.unwrap().unwrap()
 }
 
+/// What `devices.command.finished` carries as `result_sha256` for a command done with `result`:
+/// the hash of the result as the command keeps it.
+fn hash_of(result: &CommandResult) -> String {
+    bridge::result_sha256(&serde_json::to_value(result).unwrap())
+}
+
 /// The payloads of the workspace's `devices.command.finished` entries, oldest first.
 fn finished(w: &World) -> Vec<Value> {
     w.entries("devices.command.finished")
@@ -723,8 +729,9 @@ async fn results_idempotent_and_ledgered() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": getprop, "kind": "shell", "status": "done", "reason": null, "duration_ms": 120, "leased_by": key.api_key_id.to_string() }),
-            json!({ "command_id": touch, "kind": "tap", "status": "failed", "reason": "adb_error", "duration_ms": 30, "leased_by": key.api_key_id.to_string() }),
+            json!({ "command_id": getprop, "kind": "shell", "status": "done", "reason": null, "duration_ms": 120, "leased_by": key.api_key_id.to_string(), "result_sha256": hash_of(&CommandResult::shell(0, b"Redmi 10C
+", b"")) }),
+            json!({ "command_id": touch, "kind": "tap", "status": "failed", "reason": "adb_error", "duration_ms": 30, "leased_by": key.api_key_id.to_string(), "result_sha256": null }),
         ]
     );
     let entries = w.entries("devices.command.finished");
@@ -780,7 +787,7 @@ async fn late_result_after_expiry_is_applied_and_ledgered_again() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": id, "kind": "tap", "status": "done", "reason": null, "duration_ms": 42, "leased_by": key.api_key_id.to_string() })
+            json!({ "command_id": id, "kind": "tap", "status": "done", "reason": null, "duration_ms": 42, "leased_by": key.api_key_id.to_string(), "result_sha256": hash_of(&CommandResult::Done {}) })
         ]
     );
     // Once.
@@ -854,7 +861,7 @@ async fn push_file_gets_signed_download_url() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": lost, "kind": "push_file", "status": "failed", "reason": "file_not_found", "duration_ms": null, "leased_by": key.api_key_id.to_string() })
+            json!({ "command_id": lost, "kind": "push_file", "status": "failed", "reason": "file_not_found", "duration_ms": null, "leased_by": key.api_key_id.to_string(), "result_sha256": null })
         ]
     );
     // While the store cannot sign, the command is not handed out, and stays leased: its lease
@@ -1058,8 +1065,8 @@ async fn commands_rechecks_supports_at_lease_time() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": getprop, "kind": "shell", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null }),
-            json!({ "command_id": unicode, "kind": "text", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null }),
+            json!({ "command_id": getprop, "kind": "shell", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null, "result_sha256": null }),
+            json!({ "command_id": unicode, "kind": "text", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null, "result_sha256": null }),
         ]
     );
 }

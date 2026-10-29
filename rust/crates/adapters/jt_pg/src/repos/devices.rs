@@ -24,6 +24,10 @@ use crate::uow::PgTenantRepos;
 const COLUMNS: &str = "id, workspace_id, capability_id, seq, payload, status, attempts, \
                        leased_at, leased_by, expires_at, result, reason, detail, requested_by, \
                        created_at, done_at";
+/// [`COLUMNS`] without the result, read as null: what a phone's log reads (`list`).
+const LOG_COLUMNS: &str = "id, workspace_id, capability_id, seq, payload, status, attempts, \
+                           leased_at, leased_by, expires_at, null::jsonb as result, reason, \
+                           detail, requested_by, created_at, done_at";
 
 #[derive(sqlx::FromRow)]
 struct Record {
@@ -361,7 +365,7 @@ impl DeviceCommandRepo for PgTenantRepos {
         limit: u32,
     ) -> Result<Vec<DeviceCommandRow>, AppError> {
         let records: Vec<Record> = sqlx::query_as(&format!(
-            "select {COLUMNS} from device_commands where workspace_id = $1 \
+            "select {LOG_COLUMNS} from device_commands where workspace_id = $1 \
              and capability_id = $2 order by seq desc limit $3"
         ))
         .bind(self.workspace_id().as_uuid())

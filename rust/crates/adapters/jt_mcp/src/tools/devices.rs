@@ -6,10 +6,13 @@
 
 use jt_app::ctx::Ctx;
 use jt_app::error::AppError;
-use jt_app::ports::devices::DeviceKey;
+use jt_app::ports::devices::{
+    DeviceKey, MAX_APP_ID_CHARS, MAX_ARG_CHARS, MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SHELL_ARGS,
+    MAX_SHELL_TOTAL_CHARS, MAX_SWIPE_MS, MAX_TEXT_CHARS, MAX_URL_CHARS,
+};
 use jt_app::usecases::Deps;
 use jt_app::usecases::devices::agent::{
-    self, ActInput, LogQuery, MAX_WAIT_S, ObserveInput, WaitQuery,
+    self, ActInput, LogQuery, MAX_SCREEN_PX, MAX_WAIT_S, ObserveInput, WaitQuery,
 };
 use jt_capability::CapabilityId;
 use jt_tenancy::Permission;
@@ -75,7 +78,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           device_offline), queued (no bridge has taken it yet) or leased (the \
                           phone is running it) when the wait ended first: follow it with \
                           jeeta.devices.command_get. A command no bridge takes within 5 \
-                          minutes expires. Refused before anything is queued: VALIDATION with \
+                          minutes expires. Once a command is queued the answer is always that \
+                          command, never an error, so an error means nothing was queued. \
+                          Refused before anything is queued: VALIDATION with \
                           details.field for a bound, with details.reason unsupported_by_bridge \
                           (details.kind: the phone's bridge does not run it) or \
                           unicode_unsupported (text outside ASCII without text.unicode: install \
@@ -103,9 +108,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "devices.commands",
             description: "List a phone's most recent commands (capability_id), newest first, \
-                          limit 1 to 200 (50): the phone's log, each command with its arguments, \
-                          status, attempts, result, reason, detail, who asked and when. Returns \
-                          {commands: [...]}. [risk: READ]",
+                          limit 1 to 200 (50): the phone's log, each command with its kind, \
+                          arguments, status, attempts, reason, detail, who asked and when, \
+                          without its result (read one command's result with \
+                          jeeta.devices.command_get). Returns {commands: [...]}. [risk: READ]",
             permission: Permission::DevicesWork,
             schema: commands_schema,
             run: commands,
@@ -126,8 +132,10 @@ fn wait_s() -> Value {
     })
 }
 
+/// A screen coordinate: at most the largest screen side a bridge reports
+/// (`jt_device_protocol::MAX_SCREEN_PX`).
 fn pixel(description: &str) -> Value {
-    json!({ "type": "integer", "minimum": 0, "description": description })
+    json!({ "type": "integer", "minimum": 0, "maximum": MAX_SCREEN_PX, "description": description })
 }
 
 fn text(max: usize, description: &str) -> Value {
@@ -162,9 +170,9 @@ pub(crate) fn command_schema() -> Value {
     let mut tap_on = variant(
         "tap_on",
         json!({
-            "text": text(4000, "The element's text."),
-            "id": text(4000, "The element's resource id."),
-            "desc": text(4000, "The element's content description."),
+            "text": text(MAX_TEXT_CHARS, "The element's text."),
+            "id": text(MAX_TEXT_CHARS, "The element's resource id."),
+            "desc": text(MAX_TEXT_CHARS, "The element's content description."),
             "exact": { "type": "boolean", "description": "Match the whole string, not a part of it (false when left out)." },
         }),
         &[],
@@ -187,7 +195,7 @@ pub(crate) fn command_schema() -> Value {
             tap_on,
             variant(
                 "long_press",
-                json!({ "x": pixel("Screen pixels."), "y": pixel("Screen pixels."), "ms": millis(10_000, "How long to press.") }),
+                json!({ "x": pixel("Screen pixels."), "y": pixel("Screen pixels."), "ms": millis(MAX_LONG_PRESS_MS, "How long to press.") }),
                 &["x", "y", "ms"],
             ),
             variant(
@@ -197,27 +205,31 @@ pub(crate) fn command_schema() -> Value {
                     "y1": pixel("From, screen pixels."),
                     "x2": pixel("To, screen pixels."),
                     "y2": pixel("To, screen pixels."),
-                    "ms": millis(5000, "How long the swipe takes."),
+                    "ms": millis(MAX_SWIPE_MS, "How long the swipe takes."),
                 }),
                 &["x1", "y1", "x2", "y2", "ms"],
             ),
             variant(
                 "text",
-                json!({ "value": text(4000, "Typed into the focused field; outside ASCII it needs the phone's text.unicode feature.") }),
+                json!({ "value": text(MAX_TEXT_CHARS, "Typed into the focused field; outside ASCII it needs the phone's text.unicode feature.") }),
                 &["value"],
             ),
             variant("key", json!({ "key": { "type": "string", "enum": keys } }), &["key"]),
-            variant("open_url", json!({ "url": text(8192, "A URL, or any address the phone resolves (an intent).") }), &["url"]),
-            variant("launch_app", json!({ "app_id": text(256, "The package (Android) or bundle id (iOS).") }), &["app_id"]),
+            variant("open_url", json!({ "url": text(MAX_URL_CHARS, "A URL, or any address the phone resolves (an intent).") }), &["url"]),
+            variant("launch_app", json!({ "app_id": text(MAX_APP_ID_CHARS, "The package (Android) or bundle id (iOS).") }), &["app_id"]),
             variant(
                 "shell",
                 json!({
                     "argv": {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": 64,
-                        "items": { "type": "string", "maxLength": 4096 },
-                        "description": "The program and its arguments, each passed on its own (16384 characters in all at most).",
+                        "maxItems": MAX_SHELL_ARGS,
+                        "items": { "type": "string", "maxLength": MAX_ARG_CHARS },
+                        "description": format!(
+                            "The program and its arguments, each passed on its own \
+                             ({MAX_SHELL_TOTAL_CHARS} characters in all at most, counting one \
+                             separator per argument)."
+                        ),
                     },
                 }),
                 &["argv"],
@@ -226,11 +238,11 @@ pub(crate) fn command_schema() -> Value {
                 "push_file",
                 json!({
                     "file_id": uuid("A file stored in the workspace."),
-                    "dest": text(4096, "Where on the phone the file goes."),
+                    "dest": text(MAX_PATH_CHARS, "Where on the phone the file goes."),
                 }),
                 &["file_id", "dest"],
             ),
-            variant("pull_file", json!({ "path": text(4096, "The file on the phone to copy into Jeeta.") }), &["path"]),
+            variant("pull_file", json!({ "path": text(MAX_PATH_CHARS, "The file on the phone to copy into Jeeta.") }), &["path"]),
             variant("screenshot", json!({}), &[]),
         ],
     })
@@ -343,6 +355,163 @@ mod tests {
     use jt_app::ports::devices::DeviceCommand;
 
     use super::*;
+
+    /// One command of every kind, every optional field set, at its bounds.
+    fn samples() -> Vec<DeviceCommand> {
+        use jt_app::ports::devices::ElementTarget;
+        vec![
+            DeviceCommand::Observe { screenshot: true },
+            DeviceCommand::Tap { x: 1, y: 2 },
+            DeviceCommand::TapOn {
+                target: ElementTarget::Desc("Gönder".into()),
+                exact: true,
+            },
+            DeviceCommand::LongPress {
+                x: 1,
+                y: 2,
+                ms: MAX_LONG_PRESS_MS,
+            },
+            DeviceCommand::Swipe {
+                x1: 0,
+                y1: 0,
+                x2: MAX_SCREEN_PX,
+                y2: MAX_SCREEN_PX,
+                ms: MAX_SWIPE_MS,
+            },
+            DeviceCommand::Text {
+                value: "a".repeat(MAX_TEXT_CHARS),
+            },
+            DeviceCommand::Key {
+                key: DeviceKey::AppSwitch,
+            },
+            DeviceCommand::OpenUrl {
+                url: "https://example.com".into(),
+            },
+            DeviceCommand::LaunchApp {
+                app_id: "com.whatsapp".into(),
+            },
+            DeviceCommand::Shell {
+                argv: vec!["getprop".into(), "ro.product.model".into()],
+            },
+            DeviceCommand::PushFile {
+                file_id: uuid::Uuid::nil(),
+                dest: "/sdcard/x".into(),
+            },
+            DeviceCommand::PullFile {
+                path: "/sdcard/x".into(),
+            },
+            DeviceCommand::Screenshot {},
+        ]
+    }
+
+    /// Every command kind's sample, serialized as the bridge reads it, fits its variant of the
+    /// schema: the variant names exactly the sample's kind, every field the sample has is one of
+    /// the variant's properties, and every property the variant requires is in the sample. Every
+    /// sample is a valid command, and a number or string in it is within its property's bounds.
+    #[test]
+    fn every_kind_fits_its_variant() {
+        let schema = command_schema();
+        let variants = schema["oneOf"].as_array().unwrap();
+        let samples = samples();
+        let kinds: Vec<&str> = samples.iter().map(DeviceCommand::kind).collect();
+        assert_eq!(kinds, DeviceCommand::KINDS, "one sample per kind");
+        for sample in &samples {
+            sample.validate().unwrap();
+            let wire = serde_json::to_value(sample).unwrap();
+            let fields = wire.as_object().unwrap();
+            let fitting: Vec<&Value> = variants
+                .iter()
+                .filter(|v| v["properties"]["kind"]["const"] == wire["kind"])
+                .collect();
+            assert_eq!(fitting.len(), 1, "{wire}");
+            let variant = fitting[0];
+            let properties = variant["properties"].as_object().unwrap();
+            for (field, value) in fields {
+                let property = properties
+                    .get(field)
+                    .unwrap_or_else(|| panic!("{field} of {wire} is not in its variant"));
+                if let Some(max) = property["maximum"].as_u64() {
+                    assert!(
+                        value.as_u64().unwrap() <= max,
+                        "{field} of {}",
+                        wire["kind"]
+                    );
+                }
+                if let Some(max) = property["maxLength"].as_u64() {
+                    let chars = value.as_str().unwrap().chars().count() as u64;
+                    assert!(chars <= max, "{field} of {}", wire["kind"]);
+                }
+            }
+            for required in variant["required"].as_array().unwrap() {
+                let required = required.as_str().unwrap();
+                assert!(fields.contains_key(required), "{required} of {wire}");
+            }
+            if let Some(one_of) = variant["oneOf"].as_array() {
+                let met = one_of
+                    .iter()
+                    .filter(|alt| {
+                        alt["required"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .all(|r| fields.contains_key(r.as_str().unwrap()))
+                    })
+                    .count();
+                assert_eq!(met, 1, "exactly one target in {wire}");
+            }
+            assert_eq!(variant["additionalProperties"], false, "{}", wire["kind"]);
+        }
+    }
+
+    /// The bounds are `jt_devices`' own.
+    #[test]
+    fn the_bounds_are_the_vocabularys() {
+        let schema = command_schema();
+        let variant = |kind: &str| {
+            schema["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["properties"]["kind"]["const"] == kind)
+                .unwrap()
+                .clone()
+        };
+        let shell = variant("shell");
+        assert_eq!(shell["properties"]["argv"]["maxItems"], MAX_SHELL_ARGS);
+        assert_eq!(
+            shell["properties"]["argv"]["items"]["maxLength"],
+            MAX_ARG_CHARS
+        );
+        assert_eq!(
+            variant("text")["properties"]["value"]["maxLength"],
+            MAX_TEXT_CHARS
+        );
+        assert_eq!(
+            variant("swipe")["properties"]["ms"]["maximum"],
+            MAX_SWIPE_MS
+        );
+        assert_eq!(
+            variant("long_press")["properties"]["ms"]["maximum"],
+            MAX_LONG_PRESS_MS
+        );
+        assert_eq!(
+            variant("open_url")["properties"]["url"]["maxLength"],
+            MAX_URL_CHARS
+        );
+        assert_eq!(
+            variant("launch_app")["properties"]["app_id"]["maxLength"],
+            MAX_APP_ID_CHARS
+        );
+        for (kind, field) in [("push_file", "dest"), ("pull_file", "path")] {
+            assert_eq!(
+                variant(kind)["properties"][field]["maxLength"],
+                MAX_PATH_CHARS
+            );
+        }
+        for (kind, field) in [("tap", "x"), ("long_press", "y"), ("swipe", "x2")] {
+            assert_eq!(variant(kind)["properties"][field]["maximum"], MAX_SCREEN_PX);
+        }
+    }
 
     /// The command schema has one object per command kind, each tagged as `DeviceCommand` reads
     /// it, and every example it allows is a command.

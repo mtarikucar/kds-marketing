@@ -11,7 +11,13 @@
 //! what an absent `wait_s` waits; 0 answers at once. A result its bridge reports wakes the wait at
 //! once (the devices' signals, [`super::signal_key`]); one another server instance applied is seen
 //! within `kernel::FALLBACK_TICK`. A command no bridge took within
-//! `jt_devices::DEFAULT_EXPIRES_IN` (five minutes) is never handed out (it ends `expired`).
+//! `jt_devices::DEFAULT_EXPIRES_IN` (five minutes) is never handed out: it reads `expired` from
+//! then on, even before the expiry sweep ends it.
+//!
+//! **Once a command is queued, [`act`] answers it.** Whatever goes wrong while it waits (a read
+//! that fails), the answer is the command as queued, never an error: an agent that took an error
+//! for a refusal would queue it again, and the phone would do it twice. Its refusals all come
+//! before anything is queued.
 //!
 //! **Before anything is queued** [`act`] checks, in this order: the command's own bounds
 //! (`DeviceCommand::validate`, `VALIDATION` naming the field); for a `push_file`, that its file is
@@ -30,8 +36,9 @@
 //! (`command_id`, `phone`, `kind`, `command`: typed text and shell arguments included, and
 //! `expires_at`), by the caller, in the transaction that queues it; how it ended is the bridge
 //! surface's `devices.command.finished`, and its result stays on the command, which
-//! [`command_get`] and [`commands`] read. `tracing` carries the command's id, kind, phone and
-//! status only: never its arguments, its result, a failure's detail or a file address.
+//! [`command_get`] reads ([`commands`], the phone's log, leaves results out: one can be megabytes
+//! of screen). `tracing` carries the command's id, kind, phone and status only: never its
+//! arguments, its result, a failure's detail or a file address.
 
 use std::time::Duration as StdDuration;
 
@@ -56,6 +63,10 @@ use crate::ports::devices::{
 use crate::usecases::bridges::kernel;
 use crate::usecases::capabilities::{append, version_in_force};
 use crate::usecases::{Deps, invalid};
+
+/// The largest screen side a bridge reports (`jt_device_protocol`), and so the largest coordinate a
+/// command's schema offers.
+pub use jt_device_protocol::MAX_SCREEN_PX;
 
 /// The longest an agent's call waits for a command to end, in seconds; also what an absent
 /// `wait_s` waits. Below the bridge's own long-poll (`bridge::MAX_WAIT_S`, 25), so a tool call
@@ -174,6 +185,31 @@ pub struct CommandOut {
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     /// No bridge is handed it from then on.
+    #[serde(with = "time::serde::rfc3339")]
+    pub expires_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub leased_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub done_at: Option<OffsetDateTime>,
+}
+
+/// A command as a phone's log ([`commands`]) shows it: [`CommandOut`] without the result (one can
+/// be megabytes of screen, and a log shows up to 200 commands; [`command_get`] reads it whole) and
+/// without a file address. The arguments are kept: they are bounded (`jt_devices`, at most 16 384
+/// characters of shell arguments).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LoggedCommand {
+    pub command_id: Uuid,
+    pub capability_id: CapabilityId,
+    pub kind: &'static str,
+    pub command: DeviceCommand,
+    pub status: CommandStatus,
+    pub attempts: u32,
+    pub reason: Option<FailReason>,
+    pub detail: Option<String>,
+    pub requested_by: Actor,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub expires_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -305,21 +341,18 @@ fn bounded(cmd: &DeviceCommand) -> Result<(), AppError> {
     })
 }
 
-/// `Ok` unless the file a `push_file` names is not in the workspace's file store (`VALIDATION`
-/// naming `file_id`, `details.reason = "file_not_found"`). A store that cannot answer now does not
-/// refuse it: the bridge's lease checks the file again.
+/// `Ok` unless the file a `push_file` names is not in the workspace's file store
+/// (`FileStore::exists`, which reads a stored file's header only; `VALIDATION` naming `file_id`,
+/// `details.reason = "file_not_found"`). Another workspace's file is not in this one's store. A
+/// store that cannot answer now does not refuse it: the bridge's lease checks the file again.
 async fn pushable(deps: &Deps, ws: WorkspaceId, file_id: Uuid) -> Result<(), AppError> {
-    let probe = deps
-        .files
-        .provider_url(ws, FileId(file_id), deps.clock.now() + Duration::minutes(1))
-        .await;
-    match probe {
-        Err(e) if e.code == ErrorCode::NotFound => Err(AppError {
+    match deps.files.exists(ws, FileId(file_id)).await {
+        Ok(false) => Err(AppError {
             code: ErrorCode::Validation,
             message: "the file to push is not stored in the workspace".into(),
             details: json!({ "field": "file_id", "reason": FailReason::FileNotFound.key() }),
         }),
-        _ => Ok(()),
+        Ok(true) | Err(_) => Ok(()),
     }
 }
 
@@ -336,8 +369,9 @@ fn wait_of(wait_s: Option<u32>) -> StdDuration {
 /// `devices.act`: queues `input.command` for phone `phone` and waits up to `input.wait_s` seconds
 /// for it to end (see the module docs for what is checked and refused first, and what is
 /// ledgered). The command expires `jt_devices::DEFAULT_EXPIRES_IN` after it was queued. Answers
-/// the command as it then stands, with an address for the file its result names. Needs
-/// `devices.work`.
+/// the command as it then stands, with an address for the file its result names; once it is
+/// queued, never an error (a wait that fails answers it as queued, logged at `warn` by its error
+/// code). Needs `devices.work`.
 pub async fn act(
     deps: &Deps,
     ctx: &Ctx,
@@ -398,8 +432,23 @@ pub async fn act(
         kind = row.command.kind(),
         "device command queued"
     );
-    let row = settle(deps, ws, row, wait_of(wait_s)).await?;
-    Ok(answer(deps, ctx, row).await)
+    // Queued: from here on the answer is the command. An error now would read as a refusal, and the
+    // command, which runs all the same, would be queued again.
+    let queued = row.clone();
+    let started = tokio::time::Instant::now();
+    let row = match settle(deps, ws, ctx.now, row, wait_of(wait_s)).await {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(
+                command_id = %id,
+                kind = queued.command.kind(),
+                code = e.code.as_str(),
+                "the wait on a queued device command failed; it is answered as queued"
+            );
+            queued
+        }
+    };
+    Ok(answer(deps, ws, row, since(ctx.now, started)).await)
 }
 
 /// `devices.observe`: [`act`] with an `observe` command (with a screenshot when
@@ -418,7 +467,8 @@ pub async fn observe(
 
 /// `devices.command_get`: command `id` of the workspace, after waiting up to `query.wait_s`
 /// seconds (as for [`act`]) for it to end; at once when it has. An unknown command is
-/// `NOT_FOUND`. Needs `devices.work`.
+/// `NOT_FOUND`; a read that fails is its error (a read changes nothing: ask again). Needs
+/// `devices.work`.
 pub async fn command_get(
     deps: &Deps,
     ctx: &Ctx,
@@ -430,19 +480,21 @@ pub async fn command_get(
     let row = current(deps, ws, id)
         .await?
         .ok_or_else(|| AppError::not_found("no such device command"))?;
-    let row = settle(deps, ws, row, wait_of(query.wait_s)).await?;
-    Ok(answer(deps, ctx, row).await)
+    let started = tokio::time::Instant::now();
+    let row = settle(deps, ws, ctx.now, row, wait_of(query.wait_s)).await?;
+    Ok(answer(deps, ws, row, since(ctx.now, started)).await)
 }
 
 /// `devices.commands`: phone `phone`'s most recent commands, newest first, at most
-/// `query.limit` (see [`LogQuery`]), with their arguments and results; a retired phone's too. An
-/// unknown phone is `NOT_FOUND`. Needs `devices.work`.
+/// `query.limit` (see [`LogQuery`]), with their arguments, without their results
+/// ([`LoggedCommand`]); a retired phone's too. An unknown phone, or another workspace's, is
+/// `NOT_FOUND`. Needs `devices.work`.
 pub async fn commands(
     deps: &Deps,
     ctx: &Ctx,
     phone: CapabilityId,
     query: LogQuery,
-) -> Result<Vec<CommandOut>, AppError> {
+) -> Result<Vec<LoggedCommand>, AppError> {
     ctx.require(Permission::DevicesWork)?;
     let limit = query
         .limit
@@ -456,7 +508,7 @@ pub async fn commands(
         .ok_or_else(|| AppError::not_found("no such phone"))?;
     let rows = r.device_commands().list(phone, limit).await?;
     r.commit().await?;
-    Ok(rows.into_iter().map(|row| view(row, None)).collect())
+    Ok(rows.into_iter().map(|row| logged(row, ctx.now)).collect())
 }
 
 /// Command `id` of workspace `ws` as it stands, in a read of its own.
@@ -471,26 +523,33 @@ async fn current(
     Ok(row)
 }
 
-/// Command `id` once it has ended (`done`, `failed`, `expired`, `canceled`), `None` before.
+/// Whether command `row` has ended at `now`: its status is final, or it was never finished and
+/// its expiry has passed (the expiry sweep, which writes that, may not have run yet).
+fn over(row: &DeviceCommandRow, now: OffsetDateTime) -> bool {
+    row.status.is_final() || row.expires_at <= now
+}
+
+/// Command `id` once it has ended at `now` ([`over`]), `None` before.
 async fn ended(
     deps: &Deps,
     ws: WorkspaceId,
     id: Uuid,
+    now: OffsetDateTime,
 ) -> Result<Option<DeviceCommandRow>, AppError> {
-    Ok(current(deps, ws, id)
-        .await?
-        .filter(|row| row.status.is_final()))
+    Ok(current(deps, ws, id).await?.filter(|row| over(row, now)))
 }
 
 /// Command `row` once it has ended, or as it stands after `wait` (at once when it has ended
-/// already, or `wait` is zero).
+/// already at `now`, or `wait` is zero). Each read is made as of `now` plus how long the wait has
+/// lasted.
 async fn settle(
     deps: &Deps,
     ws: WorkspaceId,
+    now: OffsetDateTime,
     row: DeviceCommandRow,
     wait: StdDuration,
 ) -> Result<DeviceCommandRow, AppError> {
-    if row.status.is_final() || wait.is_zero() {
+    if over(&row, now) || wait.is_zero() {
         return Ok(row);
     }
     let id = row.id;
@@ -499,7 +558,10 @@ async fn settle(
         deps.bridge_signals.as_ref(),
         signal_key(ws),
         wait,
-        move |_| Box::pin(ended(deps, ws, id)),
+        move |waited| {
+            let at = now + Duration::try_from(waited).unwrap_or(Duration::ZERO);
+            Box::pin(ended(deps, ws, id, at))
+        },
     )
     .await?;
     let row = match end {
@@ -516,19 +578,48 @@ async fn settle(
     Ok(row)
 }
 
-/// Row `row` as an answer, with `file_url` the address of the file its result names.
-fn view(row: DeviceCommandRow, file_url: Option<String>) -> CommandOut {
+/// The status command `row` reads at `now`: as stored, except that one never finished whose expiry
+/// has passed reads `expired` (no bridge is handed it any more), before the expiry sweep writes it.
+fn status_at(row: &DeviceCommandRow, now: OffsetDateTime) -> CommandStatus {
+    if !row.status.is_final() && row.expires_at <= now {
+        CommandStatus::Expired
+    } else {
+        row.status
+    }
+}
+
+/// Row `row` as an answer at `now`, with `file_url` the address of the file its result names.
+fn view(row: DeviceCommandRow, file_url: Option<String>, now: OffsetDateTime) -> CommandOut {
     CommandOut {
+        status: status_at(&row, now),
         command_id: row.id,
         capability_id: row.capability_id,
         kind: row.command.kind(),
         command: row.command,
-        status: row.status,
         attempts: row.attempts,
         result: row.result,
         reason: row.reason,
         detail: row.detail,
         file_url,
+        requested_by: row.requested_by,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        leased_at: row.leased_at,
+        done_at: row.done_at,
+    }
+}
+
+/// Row `row` as a phone's log shows it at `now` ([`LoggedCommand`]).
+fn logged(row: DeviceCommandRow, now: OffsetDateTime) -> LoggedCommand {
+    LoggedCommand {
+        status: status_at(&row, now),
+        command_id: row.id,
+        capability_id: row.capability_id,
+        kind: row.command.kind(),
+        command: row.command,
+        attempts: row.attempts,
+        reason: row.reason,
+        detail: row.detail,
         requested_by: row.requested_by,
         created_at: row.created_at,
         expires_at: row.expires_at,
@@ -548,20 +639,35 @@ fn named_file(result: &Value) -> Option<Uuid> {
     result.get(field)?.as_str()?.parse().ok()
 }
 
-/// Row `row` as an agent's answer: with an address, signed for [`FILE_URL_LIFETIME`], for the
-/// file its result names; without one when the store cannot sign it (a file purged after its
-/// seven days, say).
-async fn answer(deps: &Deps, ctx: &Ctx, row: DeviceCommandRow) -> CommandOut {
+/// `now` plus the time passed since `started`: the time of a call that began at `now`, as of its
+/// last read.
+fn since(now: OffsetDateTime, started: tokio::time::Instant) -> OffsetDateTime {
+    now + Duration::try_from(started.elapsed()).unwrap_or(Duration::ZERO)
+}
+
+/// Row `row` of workspace `ws` as an agent's answer at `now`: with an address, signed for
+/// [`FILE_URL_LIFETIME`], for the file its result names; without one when the store cannot sign
+/// it (a file purged after its seven days, logged at `debug`; any other failure at `warn`).
+async fn answer(
+    deps: &Deps,
+    ws: WorkspaceId,
+    row: DeviceCommandRow,
+    now: OffsetDateTime,
+) -> CommandOut {
     let Some(file) = row.result.as_ref().and_then(named_file) else {
-        return view(row, None);
+        return view(row, None, now);
     };
     let expires_at = deps.clock.now() + FILE_URL_LIFETIME;
-    let url = match deps
-        .files
-        .provider_url(ctx.workspace_id, FileId(file), expires_at)
-        .await
-    {
+    let url = match deps.files.provider_url(ws, FileId(file), expires_at).await {
         Ok(url) => Some(url.to_string()),
+        Err(e) if e.code == ErrorCode::NotFound => {
+            tracing::debug!(
+                command_id = %row.id,
+                kind = row.command.kind(),
+                "the file a device command's result names is no longer stored"
+            );
+            None
+        }
         Err(e) => {
             tracing::warn!(
                 command_id = %row.id,
@@ -572,7 +678,7 @@ async fn answer(deps: &Deps, ctx: &Ctx, row: DeviceCommandRow) -> CommandOut {
             None
         }
     };
-    view(row, url)
+    view(row, url, now)
 }
 
 /// `at` as RFC 3339 text.

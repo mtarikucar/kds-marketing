@@ -115,6 +115,13 @@ async fn list_is_newest_first_and_bounded() {
 }
 
 #[tokio::test]
+async fn list_leaves_the_results_out() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_contract::list_leaves_the_results_out(uow).await;
+}
+
+#[tokio::test]
 async fn rows_are_workspace_scoped() {
     let db = TestDb::new().await;
     let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));

@@ -248,7 +248,8 @@ pub trait DeviceCommandRepo: Send + Sync {
     async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError>;
     async fn get(&mut self, id: Uuid) -> Result<Option<DeviceCommandRow>, AppError>;
     /// Phone `cap`'s most recent `limit` (clamped to `1..=MAX_DEVICE_COMMAND_PAGE`) commands,
-    /// newest first (by `seq`).
+    /// newest first (by `seq`), without their results (`result` is `None`): a result can be
+    /// megabytes of screen, and a log reads many; [`get`](DeviceCommandRepo::get) reads one whole.
     async fn list(
         &mut self,
         cap: CapabilityId,

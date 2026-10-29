@@ -1,6 +1,6 @@
 //! Workspace-scoped binary storage, separate from provider publishing.
 use super::{connectors::MediaUpload, studio::FileId};
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use async_trait::async_trait;
 use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
@@ -71,6 +71,16 @@ pub trait FileStore: Send + Sync {
             size_bytes: upload.bytes.len() as u64,
             bytes: Box::new(Whole(Some(upload.bytes))),
         })
+    }
+    /// Whether file `id` is stored: from what the store keeps of it alone where it can (the disk
+    /// store reads its header); this default reads it ([`FileStore::read`], `NOT_FOUND` read as
+    /// `false`). Another workspace's file is not this one's.
+    async fn exists(&self, ws: WorkspaceId, id: FileId) -> Result<bool, AppError> {
+        match self.read(ws, id).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.code == ErrorCode::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
     }
     /// Stores, as [`FileStore::put`] does and with the same checks, the file of type `mime` named
     /// `filename` whose bytes `source` yields. A store that can keeps at most a chunk in memory

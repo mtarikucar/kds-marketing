@@ -2,12 +2,21 @@
 //! what its bridge runs before anything is queued, queues it with a ledger entry carrying the whole
 //! command, and waits for the bridge's result, answering where the command stands when the wait
 //! ends first; `observe` is `act` with an observation; `command_get` waits on one command;
-//! `commands` is a phone's log; `list` the phones. Every one needs `devices.work`. (That `tracing`
-//! never carries a command's arguments is `devices_agent_tracing.rs`, a binary of its own.)
+//! `commands` is a phone's log, without results; `list` the phones. Every one needs
+//! `devices.work`, and reaches only its own workspace's phones and files. Once a command is queued,
+//! `act` answers it, whatever its wait meets; a command past its expiry reads `expired`. (That
+//! `tracing` never carries a command's arguments is `devices_agent_tracing.rs`, a binary of its
+//! own.)
 mod support;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration as StdDuration, Instant};
+
+use async_trait::async_trait;
+use jt_app::error::AppError;
+use jt_app::ports::{PlatformRepos, TenantRepos, UserRepos};
+use jt_tenancy::WorkspaceId;
 
 use jt_app::error::ErrorCode;
 use jt_app::ports::UnitOfWork;
@@ -28,8 +37,8 @@ use jt_device_protocol::{
     CommandResult, Element, Observation, Outcome, PhoneReport, Platform, ResultIn, Screen,
 };
 use jt_ledger::Subject;
-use jt_testkit::fakes::FIXED_NOW;
 use jt_testkit::fakes::files::{Chunks, MemoryFiles};
+use jt_testkit::fakes::{FIXED_NOW, InMemoryUow};
 use serde_json::{Value, json};
 use support::*;
 use time::{Duration, OffsetDateTime};
@@ -573,8 +582,9 @@ async fn command_get_waits() {
     let took = started.elapsed();
     let out = out.unwrap();
     assert_eq!(out.status, CommandStatus::Done);
+    // Woken by the result, 300 ms in: without the signal, the next read is a second after the first.
     assert!(took >= StdDuration::from_millis(300), "{took:?}");
-    assert!(took < StdDuration::from_millis(1200), "{took:?}");
+    assert!(took < StdDuration::from_millis(900), "{took:?}");
     // A command that ended answers at once, whatever the wait.
     let started = Instant::now();
     let again = agent::command_get(&w.deps, &agent, id, WaitQuery { wait_s: Some(20) })
@@ -671,7 +681,12 @@ async fn observe_answers_the_screen_and_a_screenshot_address() {
         .await
         .unwrap();
     assert_eq!(log[0].command_id, out.command_id);
-    assert_eq!(log[0].file_url, None);
+    // The log carries neither the observation nor an address.
+    let entry = serde_json::to_value(&log[0]).unwrap();
+    assert!(
+        entry.get("result").is_none() && entry.get("file_url").is_none(),
+        "{entry}"
+    );
     let got = agent::command_get(&w.deps, &agent, out.command_id, WaitQuery::default())
         .await
         .unwrap();
@@ -697,9 +712,16 @@ async fn commands_is_the_phones_log_newest_first() {
         log.iter().map(|c| c.command_id).collect::<Vec<_>>(),
         [ids[2], ids[1]]
     );
-    // Each with its arguments.
+    // Each with its arguments, kind, status and times, never its result.
     assert_eq!(log[1].command, shell());
+    assert_eq!(log[1].kind, "shell");
+    assert_eq!(log[0].status, CommandStatus::Queued);
     assert_eq!(log[0].requested_by, agent.actor);
+    assert_eq!(log[0].created_at, FIXED_NOW);
+    let wire = serde_json::to_value(&log).unwrap();
+    for entry in wire.as_array().unwrap() {
+        assert!(entry.get("result").is_none(), "{entry}");
+    }
     // Out-of-range limits are cut to the range; the default shows them all here.
     let all = agent::commands(&w.deps, &agent, p, LogQuery::default())
         .await
@@ -782,4 +804,183 @@ async fn act_checks_the_command_and_its_file_first() {
     assert_eq!(e.code, ErrorCode::NotFound);
     assert!(queued(&w, p).await.is_empty());
     assert!(w.entries("devices.command.queued").is_empty());
+}
+
+/// A unit of work whose tenant bundles fail once `left` of them were opened: the database going
+/// away part way through a call.
+struct GoesAway {
+    inner: InMemoryUow,
+    left: AtomicUsize,
+}
+
+#[async_trait]
+impl UnitOfWork for GoesAway {
+    async fn tenant(&self, ws: WorkspaceId) -> Result<Box<dyn TenantRepos>, AppError> {
+        let open = self
+            .left
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if !open {
+            return Err(AppError::internal("the database went away"));
+        }
+        self.inner.tenant(ws).await
+    }
+    async fn platform(&self) -> Result<Box<dyn PlatformRepos>, AppError> {
+        self.inner.platform().await
+    }
+    async fn user(&self) -> Result<Box<dyn UserRepos>, AppError> {
+        self.inner.user().await
+    }
+}
+
+#[tokio::test]
+async fn act_answers_a_queued_command_when_its_wait_fails() {
+    let (w, _, p, agent) = rig().await;
+    // The bundle that queues the command opens; every read of the wait after it fails.
+    let mut deps = w.deps.clone();
+    deps.uow = Arc::new(GoesAway {
+        inner: w.uow.clone(),
+        left: AtomicUsize::new(1),
+    });
+    let out = agent::act(&deps, &agent, p, input(shell(), 5))
+        .await
+        .expect("a queued command is answered, never an error");
+    assert_eq!(out.status, CommandStatus::Queued);
+    assert_eq!(out.command, shell());
+    // It is queued, once, and ledgered: an agent that retried would queue it twice.
+    assert_eq!(queued(&w, p).await, [out.command_id]);
+    let entries = w.entries("devices.command.queued");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].payload["command_id"], json!(out.command_id));
+    // A read on its own may fail: it changes nothing, and can be asked again.
+    let e = err(agent::command_get(&deps, &agent, out.command_id, WaitQuery::default()).await);
+    assert_eq!(e.code, ErrorCode::Internal);
+    // A refusal still comes before anything is queued.
+    let e = err(agent::act(&deps, &agent, p, input(tap(), 5)).await);
+    assert_eq!(e.code, ErrorCode::Internal);
+    assert_eq!(queued(&w, p).await, [out.command_id]);
+}
+
+#[tokio::test]
+async fn an_unfinished_command_past_its_expiry_reads_expired() {
+    let (w, _, p, agent) = rig().await;
+    let id = agent::act(&w.deps, &agent, p, input(tap(), 0))
+        .await
+        .unwrap()
+        .command_id;
+    let expiry = FIXED_NOW + DEFAULT_EXPIRES_IN;
+    let before = at(&agent, expiry - Duration::seconds(1));
+    let after = at(&agent, expiry + Duration::seconds(1));
+    let read = |ctx: jt_app::ctx::Ctx, wait_s| {
+        let deps = w.deps.clone();
+        async move {
+            agent::command_get(
+                &deps,
+                &ctx,
+                id,
+                WaitQuery {
+                    wait_s: Some(wait_s),
+                },
+            )
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(read(before, 0).await.status, CommandStatus::Queued);
+    // No sweep has run: the command is still queued as stored, and reads expired, at once, even
+    // with a wait (nobody will be handed it any more).
+    let started = Instant::now();
+    let out = read(after.clone(), 20).await;
+    assert!(started.elapsed() < StdDuration::from_millis(500));
+    assert_eq!(out.status, CommandStatus::Expired);
+    assert_eq!(out.done_at, None);
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let stored = r.device_commands().get(id).await.unwrap().unwrap();
+    assert_eq!(stored.status, CommandStatus::Queued);
+    let log = agent::commands(&w.deps, &after, p, LogQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(log[0].status, CommandStatus::Expired);
+    // A wait that runs past the expiry ends there: a command expiring in a second.
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let soon = Uuid::now_v7();
+    r.device_commands()
+        .enqueue(jt_app::ports::devices::NewDeviceCommand {
+            id: soon,
+            capability_id: p,
+            command: tap(),
+            requested_by: agent.actor.clone(),
+            created_at: FIXED_NOW,
+            expires_at: FIXED_NOW + Duration::seconds(1),
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let started = Instant::now();
+    let out = agent::command_get(&w.deps, &agent, soon, WaitQuery { wait_s: Some(10) })
+        .await
+        .unwrap();
+    let took = started.elapsed();
+    assert_eq!(out.status, CommandStatus::Expired);
+    assert!(took >= StdDuration::from_millis(900), "{took:?}");
+    assert!(took < StdDuration::from_secs(3), "{took:?}");
+}
+
+#[tokio::test]
+async fn another_workspaces_phone_and_file_are_not_found() {
+    let (w, key, p, _) = rig().await;
+    let (beta, beta_owner) = w.other_workspace().await;
+    jt_testkit::flows::activate_workspace(&w.deps, beta).await;
+    // Acme's phone, from Beta: not found, whatever is asked of it.
+    let e = err(agent::act(&w.deps, &beta_owner, p, input(tap(), 0)).await);
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    let e = err(agent::observe(&w.deps, &beta_owner, p, ObserveInput::default()).await);
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    let e = err(agent::commands(&w.deps, &beta_owner, p, LogQuery::default()).await);
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    assert!(agent::list(&w.deps, &beta_owner).await.unwrap().is_empty());
+    assert!(queued(&w, p).await.is_empty());
+
+    // A file Acme's bridge uploaded cannot be pushed to Beta's own phone: not in Beta's store.
+    let acme_file = bridge::files(
+        &w.deps,
+        &bridge_at(&key, FIXED_NOW),
+        Some("application/octet-stream"),
+        None,
+        &mut Chunks::of(b"acme's file"),
+    )
+    .await
+    .unwrap()
+    .file_id;
+    let beta_key = api_keys::create(
+        &w.deps,
+        &beta_owner,
+        CreateKey {
+            name: "beta phones".into(),
+            scopes: vec!["devices.bridge".into()],
+        },
+    )
+    .await
+    .unwrap();
+    let beta_key = api_keys::authenticate(&w.deps, &beta_key.plaintext)
+        .await
+        .unwrap();
+    let beta_phone = cap(
+        &register(&w, &beta_key, FIXED_NOW, vec![phone("SER9")]).await,
+        0,
+    );
+    let push = DeviceCommand::PushFile {
+        file_id: acme_file,
+        dest: "/sdcard/Download/x.bin".into(),
+    };
+    let e = err(agent::act(&w.deps, &beta_owner, beta_phone, input(push.clone(), 0)).await);
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(
+        e.details,
+        json!({ "field": "file_id", "reason": "file_not_found" })
+    );
+    // In Acme, the same command is queued.
+    agent::act(&w.deps, &w.owner_ctx, p, input(push, 0))
+        .await
+        .unwrap();
 }

@@ -856,6 +856,35 @@ pub async fn list_is_newest_first_and_bounded(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(commands.list(b, 10).await.unwrap(), vec![of_b.clone()]);
 }
 
+/// A phone's log leaves the results out (`result` is `None`, everything else as stored): a result
+/// can be megabytes of screen, and a log reads up to 200 commands. One command, read by its id,
+/// carries its result.
+pub async fn list_leaves_the_results_out(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let p = phone(&uow, f.ws).await;
+    let expires = FIXED_NOW + DEFAULT_EXPIRES_IN;
+    let rows = enqueue(&uow, f.ws, vec![tap(p, 1, expires), tap(p, 2, expires)]).await;
+    lease(&uow, f.ws, &[p], at(1), 10).await;
+    let screen = Finish::Done {
+        result: json!({ "kind": "shell", "exit_code": 0, "stdout": "a lot", "stderr": "", "truncated": false }),
+    };
+    let done_row = applied(finish(&uow, f.ws, &[p], rows[0].id, screen, at(2)).await);
+    assert!(done_row.result.is_some());
+    let failed_row = applied(finish(&uow, f.ws, &[p], rows[1].id, failed("no"), at(3)).await);
+
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let log = t.device_commands().list(p, 10).await.unwrap();
+    let without = |row: &DeviceCommandRow| DeviceCommandRow {
+        result: None,
+        ..row.clone()
+    };
+    assert_eq!(log, vec![without(&failed_row), without(&done_row)]);
+    assert_eq!(
+        t.device_commands().get(rows[0].id).await.unwrap(),
+        Some(done_row)
+    );
+}
+
 /// Every read and write sees only the bundle's workspace: another workspace's commands are not
 /// read, picked, marked, failed, finished or expired, its phones take no command from this one,
 /// and an id is taken across workspaces.

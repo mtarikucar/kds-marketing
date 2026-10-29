@@ -108,6 +108,17 @@ fn tools_listed_with_schemas() {
         .find(|v| v["properties"]["kind"]["const"] == "shell")
         .unwrap();
     assert_eq!(shell["required"], json!(["kind", "argv"]));
+    let tap = command["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["properties"]["kind"]["const"] == "tap")
+        .unwrap();
+    assert_eq!(tap["properties"]["x"]["maximum"], 20_000);
+    // The log says it carries no result, and where the result is read.
+    let log = tools["jeeta.devices.commands"].description;
+    assert!(log.contains("without its result"), "{log}");
+    assert!(log.contains("jeeta.devices.command_get"), "{log}");
     assert_eq!(shell["properties"]["argv"]["maxItems"], 64);
     // The agent is told that a queued command is not a done one, how long it may wait, and that
     // text outside ASCII needs text.unicode.
@@ -129,6 +140,7 @@ fn tools_listed_with_schemas() {
         "unicode_unsupported",
         "device_offline",
         "ledger",
+        "never an error",
     ] {
         assert!(act.contains(word), "{word}");
     }
@@ -330,4 +342,19 @@ async fn a_command_round_trips_through_the_tools() {
         .map(|c| &c["command_id"])
         .collect();
     assert_eq!(ids, [&queued["command_id"], &done["command_id"]]);
+    for entry in log["commands"].as_array().unwrap() {
+        assert!(entry.get("result").is_none(), "{entry}");
+    }
+    // One command, read by its id, carries its result.
+    let one = run(
+        "jeeta.devices.command_get",
+        json!({ "command_id": done["command_id"], "wait_s": 0 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        one["result"]["stdout"],
+        "Redmi 10C
+"
+    );
 }
