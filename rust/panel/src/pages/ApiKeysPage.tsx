@@ -36,50 +36,71 @@ import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import { can } from '@/lib/roles';
 
-const KEYS_KEY = ['api-keys'] as const;
+/** Every API key list query key starts with this. */
+export const KEYS_KEY = ['api-keys'] as const;
 
 /**
- * Issues a key and shows its plaintext exactly once. The plaintext is held only in this
- * dialog's state (the mutation keeps no cached result) and is dropped when the dialog closes.
- * While it is shown, only the explicit Close button closes the dialog: not Escape, not a click
- * outside, so the key is not lost by accident.
+ * Issues a key, holding its plaintext only in this hook's state: never in the query cache (no
+ * mutation keeps the result), so it lives as long as the one-time dialog that shows it, and
+ * `reset` (the dialog closing) drops it. A second `create` while one runs is ignored. The answer
+ * to a request made before the last `reset`, or after the component is gone, is dropped: the
+ * dialogs stay mounted while closed, and a key issued after its dialog was closed must not show
+ * the next time it opens. Such a key exists all the same, so the key list is read again after
+ * every answer, and the key can be revoked there.
+ */
+export function useCreateKey() {
+  const queryClient = useQueryClient();
+  const [created, setCreated] = useState<KeyOut | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const mounted = useRef(false);
+  /** Counts requests and resets: an answer whose number is no longer the last one is dropped. */
+  const latest = useRef(0);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  async function create(input: { name: string; scopes: Permission[] }) {
+    if (creating) return;
+    const request = ++latest.current;
+    const current = () => mounted.current && latest.current === request;
+    setCreating(true); setError(null);
+    try {
+      const key = await createKey(input);
+      void queryClient.invalidateQueries({ queryKey: KEYS_KEY });
+      if (current()) setCreated(key);
+    } catch (e) { if (current()) setError(e); }
+    finally { if (current()) setCreating(false); }
+  }
+  const reset = () => {
+    latest.current += 1;
+    setCreated(null);
+    setError(null);
+    setCreating(false);
+  };
+  return { created, creating, error, create, reset };
+}
+
+/**
+ * Issues a key and shows its plaintext exactly once ({@link useCreateKey}); it is dropped when the
+ * dialog closes. While it is shown, only the explicit Close button closes the dialog: not Escape,
+ * not a click outside, so the key is not lost by accident.
  */
 function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Permission[]>([]);
-  const [created, setCreated] = useState<KeyOut | null>(null);
-
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<unknown>(null);
-  const mounted = useRef(false);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  async function create() {
-    if (creating) return;
-    setCreating(true); setCreateError(null);
-    try {
-      const key = await createKey({ name: name.trim(), scopes });
-      if (!mounted.current) return;
-      setCreated(key);
-      await queryClient.invalidateQueries({ queryKey: KEYS_KEY });
-    } catch (error) { if (mounted.current) setCreateError(error); }
-    finally { if (mounted.current) setCreating(false); }
-  }
+  const { created, creating, error: createError, create, reset } = useCreateKey();
 
   const close = (next: boolean) => {
     if (!next) {
       setName('');
       setScopes([]);
-      setCreated(null);
-      setCreateError(null);
+      reset();
     }
     onOpenChange(next);
   };
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    void create();
+    void create({ name: name.trim(), scopes });
   };
 
   return (
