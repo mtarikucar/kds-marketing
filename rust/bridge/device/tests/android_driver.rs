@@ -54,7 +54,9 @@ fn fixture(name: &str) -> String {
         .join("tests")
         .join("fixtures")
         .join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    // As a runner hands it over (`SystemAdb` undoes Windows' CR LF), whatever the checkout did.
+    text.replace("\r\n", "\n")
 }
 
 fn ok(stdout: impl Into<Vec<u8>>) -> AdbOutput {
