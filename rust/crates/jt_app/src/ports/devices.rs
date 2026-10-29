@@ -8,6 +8,10 @@
 //! text): log its id, kind and status, never the row (`jt_devices`, "Logging").
 pub use jt_devices::*;
 
+/// The longest failure detail a command keeps: the bound the protocol puts on a bridge's detail,
+/// and the table's check.
+pub use jt_device_protocol::MAX_DETAIL_CHARS;
+
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
 use jt_ledger::Actor;
@@ -18,8 +22,13 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-/// The most commands one lease or one read of a phone's log returns.
+/// The most commands one pick or one read of a phone's log returns.
 pub const MAX_DEVICE_COMMAND_PAGE: u32 = 200;
+
+/// `detail`'s first [`MAX_DETAIL_CHARS`] characters: what a failed command keeps of it.
+pub fn cut_detail(detail: &str) -> String {
+    detail.chars().take(MAX_DETAIL_CHARS).collect()
+}
 
 /// A command to queue for a phone.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,7 +40,7 @@ pub struct NewDeviceCommand {
     /// Who queued it.
     pub requested_by: Actor,
     pub created_at: OffsetDateTime,
-    /// From this moment on the command is never leased, and [`DeviceCommandRepo::expire_due`]
+    /// From this moment on the command is never picked, and [`DeviceCommandRepo::expire_due`]
     /// ends it if it is still `queued` or `leased`.
     pub expires_at: OffsetDateTime,
 }
@@ -55,7 +64,7 @@ pub struct DeviceCommandRow {
     pub result: Option<Value>,
     /// Why a `failed` command failed.
     pub reason: Option<FailReason>,
-    /// The line its bridge reported with the failure.
+    /// The line reported with the failure, at most [`MAX_DETAIL_CHARS`] characters.
     pub detail: Option<String>,
     pub requested_by: Actor,
     pub created_at: OffsetDateTime,
@@ -64,16 +73,38 @@ pub struct DeviceCommandRow {
     pub done_at: Option<OffsetDateTime>,
 }
 
+/// A command [`DeviceCommandRepo::expire_due`] ended, read from its columns only (its payload is
+/// not decoded, so a command this version cannot read does not stop the sweep).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpiredCommand {
+    pub id: Uuid,
+    pub capability_id: CapabilityId,
+    pub seq: i64,
+    /// The command's kind, as stored.
+    pub kind: String,
+    pub created_at: OffsetDateTime,
+    /// When it was last leased; `None` when it expired in the queue.
+    pub leased_at: Option<OffsetDateTime>,
+}
+
 /// A bridge's result for a command.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Finish {
     /// The command was carried out; `result` is what it produced.
     Done { result: Value },
-    /// It was not. The stored `detail` is its first 300 characters (what the table keeps).
+    /// It was not. Only the first [`MAX_DETAIL_CHARS`] characters of `detail` are stored.
     Failed { reason: FailReason, detail: String },
 }
 
 impl Finish {
+    /// A failure, its detail cut to [`MAX_DETAIL_CHARS`] characters.
+    pub fn failed(reason: FailReason, detail: &str) -> Finish {
+        Finish::Failed {
+            reason,
+            detail: cut_detail(detail),
+        }
+    }
+
     /// The lifecycle event this result is.
     pub fn event(&self) -> LifecycleEvent {
         match self {
@@ -84,71 +115,110 @@ impl Finish {
 
     /// What this result does to a command that stands at `current` and was leased at some point
     /// (`ever_leased`: its `leased_at` is set) or never: the status it moves the command to,
-    /// through [`next_status`], or, as the error, how [`DeviceCommandRepo::finish`] answers when
-    /// the result is not applied. A command no bridge was ever handed refuses any result, before
-    /// its status is looked at.
+    /// through [`next_status`], or, as the error, [`Finished::Duplicate`] or
+    /// [`Finished::Unknown`], as [`DeviceCommandRepo::finish`] answers when the result is not
+    /// applied. A command no bridge was ever handed refuses any result, before its status is
+    /// looked at.
     pub fn status_after(
         &self,
         current: CommandStatus,
         ever_leased: bool,
-    ) -> Result<CommandStatus, FinishOutcome> {
+    ) -> Result<CommandStatus, Finished> {
         if !ever_leased {
-            return Err(FinishOutcome::Unknown);
+            return Err(Finished::Unknown);
         }
         next_status(current, self.event(), ever_leased).map_err(|_| match current {
-            CommandStatus::Done | CommandStatus::Failed => FinishOutcome::Duplicate,
-            _ => FinishOutcome::Unknown,
+            CommandStatus::Done | CommandStatus::Failed => Finished::Duplicate,
+            _ => Finished::Unknown,
         })
     }
 }
 
 /// What [`DeviceCommandRepo::finish`] did with a result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FinishOutcome {
+#[derive(Clone, Debug, PartialEq)]
+pub enum Finished {
     /// Written: a leased command is now `done` or `failed`, or a late result replaced the
-    /// `expired` or `canceled` status of a command that was leased before it ended.
-    Applied,
+    /// `expired` or `canceled` status of a command that was leased before it ended. The row as it
+    /// now stands.
+    Applied(Box<DeviceCommandRow>),
     /// The command is `done` or `failed` already: a recorded result is not replaced.
     Duplicate,
-    /// No such command in the workspace, or one no bridge was ever handed (`queued`, or
-    /// `expired` or `canceled` in the queue): nothing changes.
+    /// No such command among the bridge's phones, or one no bridge was ever handed (`queued`,
+    /// or `expired` or `canceled` in the queue): nothing changes.
     Unknown,
 }
 
+/// The status a server-decided failure moves a command at `current` to: `Failed` while the
+/// command is pending (`queued` or `leased`), through [`next_status`]; `None` once it ended.
+pub fn failed_while_pending(current: CommandStatus, ever_leased: bool) -> Option<CommandStatus> {
+    match current {
+        CommandStatus::Queued | CommandStatus::Leased => {
+            next_status(current, LifecycleEvent::Failed, ever_leased).ok()
+        }
+        _ => None,
+    }
+}
+
 /// The workspace's device commands. A command is queued once, leased to the bridge of its phone
-/// (again when a lease went unanswered), and ends with its bridge's result, an expiry or a
-/// cancellation. Rows are never deleted: they are kept like ledger history (spec §5.6).
+/// (again when a lease went unanswered), and ends with its bridge's result, a failure the server
+/// decides, or an expiry. Rows are never deleted: they are kept like ledger history (spec §5.6).
+///
+/// A bridge's poll takes three calls in one bundle: [`pick_due`](DeviceCommandRepo::pick_due),
+/// then [`mark_leased`](DeviceCommandRepo::mark_leased) for the commands it hands out and
+/// [`fail_pending`](DeviceCommandRepo::fail_pending) for those it refuses, so a refused command
+/// is never marked leased.
 #[async_trait]
 pub trait DeviceCommandRepo: Send + Sync {
     /// Queues `row` as `queued`, after every command queued before it. A taken id (in any
     /// workspace) is `CONFLICT`; a phone that is not a capability of the workspace breaks a
     /// foreign key and is `INTERNAL`.
     async fn enqueue(&mut self, row: NewDeviceCommand) -> Result<DeviceCommandRow, AppError>;
-    /// Leases to a bridge at most `limit` (clamped to `1..=MAX_DEVICE_COMMAND_PAGE`) of the
-    /// commands of the phones `caps` that expire after `now` and are `queued`, or `leased` at or
-    /// before `redeliver_before` (a lease that went unanswered; the caller passes
-    /// `now - REDELIVER_AFTER`): oldest first (by `seq`), each marked `leased` at `now` with one
-    /// more attempt. A command another bundle is leasing at that moment is passed over.
-    async fn lease(
+    /// At most `limit` (clamped to `1..=MAX_DEVICE_COMMAND_PAGE`) of the commands of the phones
+    /// `caps` that expire after `now` and are `queued`, or `leased` at or before
+    /// `redeliver_before` (a lease that went unanswered; the caller passes
+    /// `now - REDELIVER_AFTER`), oldest first (by `seq`). Nothing is marked: each is locked until
+    /// the bundle ends, and a command another bundle holds is passed over.
+    async fn pick_due(
         &mut self,
         caps: &[CapabilityId],
         now: OffsetDateTime,
         redeliver_before: OffsetDateTime,
         limit: u32,
     ) -> Result<Vec<DeviceCommandRow>, AppError>;
-    /// Applies a bridge's result for command `id`, received at `now`, as
-    /// [`Finish::status_after`] decides: when it is applied, writes the new status, the result
-    /// (`Done`) or the reason and detail (`Failed`), and `done_at` = `now`. A second result for
-    /// the same command waits for the first one's bundle to end.
+    /// Marks the commands `ids` that are still `queued` or `leased` as `leased` at `now`, each
+    /// with one more attempt; those rows, by `seq`. Other ids are passed over.
+    async fn mark_leased(
+        &mut self,
+        ids: &[Uuid],
+        now: OffsetDateTime,
+    ) -> Result<Vec<DeviceCommandRow>, AppError>;
+    /// Fails, at `now`, the commands `ids` that are still `queued` or `leased`
+    /// ([`failed_while_pending`]): a failure the server decides, not a bridge's result. Their
+    /// lease time and attempts stay as they were, and their detail is cut to
+    /// [`MAX_DETAIL_CHARS`] characters. Those rows, by `seq`; ended, unknown and other
+    /// workspaces' ids are passed over.
+    async fn fail_pending(
+        &mut self,
+        ids: &[Uuid],
+        reason: FailReason,
+        detail: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<DeviceCommandRow>, AppError>;
+    /// Applies a bridge's result for its command `id` (of one of its phones `caps`), received at
+    /// `now`, as [`Finish::status_after`] decides: when it is applied, writes the new status, the
+    /// result (`Done`) or the reason and detail (`Failed`), and `done_at` = `now`. A second
+    /// result for the same command waits for the first one's bundle to end.
     async fn finish(
         &mut self,
+        caps: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,
-    ) -> Result<FinishOutcome, AppError>;
-    /// Ends as `expired` at `now` every command that is `queued` or `leased` and expires at or
-    /// before `now`; the commands it ended, by `seq`.
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<DeviceCommandRow>, AppError>;
+    ) -> Result<Finished, AppError>;
+    /// Ends as `expired` at `now` the commands that are `queued` or `leased` and expire at or
+    /// before `now`; those commands, by `seq`. A command another bundle holds is passed over (the
+    /// next sweep ends it), so a sweep never waits for a bridge's results.
+    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError>;
     async fn get(&mut self, id: Uuid) -> Result<Option<DeviceCommandRow>, AppError>;
     /// Phone `cap`'s most recent `limit` (clamped to `1..=MAX_DEVICE_COMMAND_PAGE`) commands,
     /// newest first (by `seq`).

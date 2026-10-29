@@ -15,6 +15,7 @@ jt_inbox.workspace = true
 jt_studio.workspace = true
 jt_calls.workspace = true
 jt_devices.workspace = true
+jt_device_protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

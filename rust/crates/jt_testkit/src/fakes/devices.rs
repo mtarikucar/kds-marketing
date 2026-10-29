@@ -1,23 +1,21 @@
 //! The in-memory device command repository, with the constraints the `0017_device_bridge`
 //! migration enforces (one command per id across workspaces, the phone a capability of the
 //! command's workspace, the failure detail cut to what the table keeps) and the queue order
-//! (`seq`, one more than the highest stored).
+//! (`seq`, one more than the highest stored). Row locks are not modelled: a pick holds nothing,
+//! and races between bundles are tested on PostgreSQL.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::devices::{
-    CommandStatus, DeviceCommandRepo, DeviceCommandRow, Finish, FinishOutcome,
-    MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand,
+    CommandStatus, DeviceCommandRepo, DeviceCommandRow, ExpiredCommand, FailReason, Finish,
+    Finished, MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, cut_detail, failed_while_pending,
 };
 use jt_capability::CapabilityId;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::state::{MemBundle, exists, unique};
+use super::state::{MemBundle, MemState, exists, unique};
 use super::tenant::MemTenant;
-
-/// The longest failure detail the table keeps.
-const MAX_DETAIL_CHARS: usize = 300;
 
 /// The workspaces' device commands, as the fake stores them.
 #[derive(Clone, Debug, Default)]
@@ -26,14 +24,50 @@ pub struct MemDevices {
     pub commands: Vec<DeviceCommandRow>,
 }
 
-/// Whether `row` can be leased at `now`, as `jt_pg`'s lease selects it.
-fn leasable(row: &DeviceCommandRow, now: OffsetDateTime, redeliver_before: OffsetDateTime) -> bool {
+/// Whether `row` is due at `now`, as `jt_pg`'s pick selects it.
+fn due(row: &DeviceCommandRow, now: OffsetDateTime, redeliver_before: OffsetDateTime) -> bool {
     let waiting = match row.status {
         CommandStatus::Queued => true,
         CommandStatus::Leased => row.leased_at.is_some_and(|at| at <= redeliver_before),
         _ => false,
     };
     waiting && row.expires_at > now
+}
+
+impl MemTenant {
+    /// The workspace's commands `ids`, by `seq`, as they stand in this bundle.
+    fn commands_in(&self, ids: &[Uuid]) -> Vec<DeviceCommandRow> {
+        let ws = self.ws;
+        let mut rows: Vec<DeviceCommandRow> = self
+            .state()
+            .devices
+            .commands
+            .iter()
+            .filter(|c| c.workspace_id == ws && ids.contains(&c.id))
+            .cloned()
+            .collect();
+        rows.sort_by_key(|c| c.seq);
+        rows
+    }
+
+    /// Applies `change` to the workspace's commands `ids` (in this bundle, and on commit); those
+    /// rows as they then stand, by `seq`.
+    fn change_commands(
+        &mut self,
+        ids: Vec<Uuid>,
+        change: impl Fn(&mut DeviceCommandRow) + Send + Sync + 'static,
+    ) -> Vec<DeviceCommandRow> {
+        let ws = self.ws;
+        let targets = ids.clone();
+        self.tx.write(move |s: &mut MemState| {
+            for c in s.devices.commands.iter_mut() {
+                if c.workspace_id == ws && targets.contains(&c.id) {
+                    change(c);
+                }
+            }
+        });
+        self.commands_in(&ids)
+    }
 }
 
 #[async_trait]
@@ -84,7 +118,7 @@ impl DeviceCommandRepo for MemTenant {
         })
     }
 
-    async fn lease(
+    async fn pick_due(
         &mut self,
         caps: &[CapabilityId],
         now: OffsetDateTime,
@@ -92,50 +126,74 @@ impl DeviceCommandRepo for MemTenant {
         limit: u32,
     ) -> Result<Vec<DeviceCommandRow>, AppError> {
         let ws = self.ws;
-        let mut leased: Vec<DeviceCommandRow> = self
+        let mut picked: Vec<DeviceCommandRow> = self
             .state()
             .devices
             .commands
             .iter()
             .filter(|c| c.workspace_id == ws && caps.contains(&c.capability_id))
-            .filter(|c| leasable(c, now, redeliver_before))
+            .filter(|c| due(c, now, redeliver_before))
             .cloned()
             .collect();
-        leased.sort_by_key(|c| c.seq);
-        leased.truncate(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE) as usize);
-        for c in &mut leased {
+        picked.sort_by_key(|c| c.seq);
+        picked.truncate(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE) as usize);
+        Ok(picked)
+    }
+
+    async fn mark_leased(
+        &mut self,
+        ids: &[Uuid],
+        now: OffsetDateTime,
+    ) -> Result<Vec<DeviceCommandRow>, AppError> {
+        let pending: Vec<Uuid> = self
+            .commands_in(ids)
+            .into_iter()
+            .filter(|c| matches!(c.status, CommandStatus::Queued | CommandStatus::Leased))
+            .map(|c| c.id)
+            .collect();
+        Ok(self.change_commands(pending, move |c| {
             c.status = CommandStatus::Leased;
             c.leased_at = Some(now);
             c.attempts += 1;
-        }
-        let ids: Vec<Uuid> = leased.iter().map(|c| c.id).collect();
-        self.tx.write(move |s| {
-            for c in s.devices.commands.iter_mut() {
-                if c.workspace_id == ws && ids.contains(&c.id) {
-                    c.status = CommandStatus::Leased;
-                    c.leased_at = Some(now);
-                    c.attempts += 1;
-                }
-            }
-        });
-        Ok(leased)
+        }))
+    }
+
+    async fn fail_pending(
+        &mut self,
+        ids: &[Uuid],
+        reason: FailReason,
+        detail: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<DeviceCommandRow>, AppError> {
+        let failing: Vec<Uuid> = self
+            .commands_in(ids)
+            .into_iter()
+            .filter(|c| failed_while_pending(c.status, c.leased_at.is_some()).is_some())
+            .map(|c| c.id)
+            .collect();
+        let detail = cut_detail(detail);
+        Ok(self.change_commands(failing, move |c| {
+            c.status = CommandStatus::Failed;
+            c.result = None;
+            c.reason = Some(reason);
+            c.detail = Some(detail.clone());
+            c.done_at = Some(now);
+        }))
     }
 
     async fn finish(
         &mut self,
+        caps: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,
-    ) -> Result<FinishOutcome, AppError> {
-        let ws = self.ws;
+    ) -> Result<Finished, AppError> {
         let Some(current) = self
-            .state()
-            .devices
-            .commands
-            .iter()
-            .find(|c| c.workspace_id == ws && c.id == id)
+            .commands_in(&[id])
+            .into_iter()
+            .find(|c| caps.contains(&c.capability_id))
         else {
-            return Ok(FinishOutcome::Unknown);
+            return Ok(Finished::Unknown);
         };
         let next = match outcome.status_after(current.status, current.leased_at.is_some()) {
             Ok(next) => next,
@@ -143,29 +201,23 @@ impl DeviceCommandRepo for MemTenant {
         };
         let (result, reason, detail) = match outcome {
             Finish::Done { result } => (Some(result), None, None),
-            Finish::Failed { reason, detail } => (
-                None,
-                Some(reason),
-                Some(detail.chars().take(MAX_DETAIL_CHARS).collect::<String>()),
-            ),
+            Finish::Failed { reason, detail } => (None, Some(reason), Some(cut_detail(&detail))),
         };
-        self.tx.write(move |s| {
-            for c in s.devices.commands.iter_mut() {
-                if c.workspace_id == ws && c.id == id {
-                    c.status = next;
-                    c.result = result.clone();
-                    c.reason = reason;
-                    c.detail = detail.clone();
-                    c.done_at = Some(now);
-                }
-            }
+        let mut changed = self.change_commands(vec![id], move |c| {
+            c.status = next;
+            c.result = result.clone();
+            c.reason = reason;
+            c.detail = detail.clone();
+            c.done_at = Some(now);
         });
-        Ok(FinishOutcome::Applied)
+        Ok(changed
+            .pop()
+            .map_or(Finished::Unknown, |row| Finished::Applied(Box::new(row))))
     }
 
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<DeviceCommandRow>, AppError> {
+    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError> {
         let ws = self.ws;
-        let mut expired: Vec<DeviceCommandRow> = self
+        let due: Vec<Uuid> = self
             .state()
             .devices
             .commands
@@ -175,34 +227,27 @@ impl DeviceCommandRepo for MemTenant {
                     && matches!(c.status, CommandStatus::Queued | CommandStatus::Leased)
                     && c.expires_at <= now
             })
-            .cloned()
+            .map(|c| c.id)
             .collect();
-        expired.sort_by_key(|c| c.seq);
-        for c in &mut expired {
+        let expired = self.change_commands(due, move |c| {
             c.status = CommandStatus::Expired;
             c.done_at = Some(now);
-        }
-        let ids: Vec<Uuid> = expired.iter().map(|c| c.id).collect();
-        self.tx.write(move |s| {
-            for c in s.devices.commands.iter_mut() {
-                if c.workspace_id == ws && ids.contains(&c.id) {
-                    c.status = CommandStatus::Expired;
-                    c.done_at = Some(now);
-                }
-            }
         });
-        Ok(expired)
+        Ok(expired
+            .into_iter()
+            .map(|c| ExpiredCommand {
+                id: c.id,
+                capability_id: c.capability_id,
+                seq: c.seq,
+                kind: c.command.kind().to_owned(),
+                created_at: c.created_at,
+                leased_at: c.leased_at,
+            })
+            .collect())
     }
 
     async fn get(&mut self, id: Uuid) -> Result<Option<DeviceCommandRow>, AppError> {
-        let ws = self.ws;
-        Ok(self
-            .state()
-            .devices
-            .commands
-            .iter()
-            .find(|c| c.workspace_id == ws && c.id == id)
-            .cloned())
+        Ok(self.commands_in(&[id]).pop())
     }
 
     async fn list(

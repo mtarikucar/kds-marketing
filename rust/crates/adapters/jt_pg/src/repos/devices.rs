@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::devices::{
-    CommandStatus, DeviceCommandRepo, DeviceCommandRow, FailReason, Finish, FinishOutcome,
-    MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand,
+    CommandStatus, DeviceCommandRepo, DeviceCommandRow, ExpiredCommand, FailReason, Finish,
+    Finished, MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, cut_detail, failed_while_pending,
 };
 use jt_capability::CapabilityId;
 use jt_tenancy::WorkspaceId;
@@ -18,9 +18,6 @@ use uuid::Uuid;
 
 use super::{map_sqlx, stored};
 use crate::uow::PgTenantRepos;
-
-/// The longest failure detail the table keeps.
-const MAX_DETAIL_CHARS: usize = 300;
 
 /// The columns a [`Record`] is read from.
 const COLUMNS: &str = "id, workspace_id, capability_id, seq, payload, status, attempts, \
@@ -65,16 +62,39 @@ impl Record {
             leased_at: self.leased_at,
             expires_at: self.expires_at,
             result: self.result,
-            reason: self
-                .reason
-                .map(|r| stored(FailReason::from_key(&r), "device_commands.reason"))
-                .transpose()?,
+            reason: self.reason.map(|r| reason_from(&r)),
             detail: self.detail,
             requested_by: decode(self.requested_by)?,
             created_at: self.created_at,
             done_at: self.done_at,
         })
     }
+}
+
+/// A stored failure reason. One this version does not know (a newer server wrote it) reads as
+/// [`FailReason::Unknown`], so that the command stays readable.
+fn reason_from(key: &str) -> FailReason {
+    FailReason::from_key(key).unwrap_or_else(|| {
+        tracing::warn!(
+            column = "device_commands.reason",
+            key = %key,
+            "reading an unknown stored failure reason as unknown"
+        );
+        FailReason::Unknown
+    })
+}
+
+/// The columns an [`ExpiredRecord`] is read from: no payload.
+const EXPIRED_COLUMNS: &str = "id, capability_id, seq, kind, created_at, leased_at";
+
+#[derive(sqlx::FromRow)]
+struct ExpiredRecord {
+    id: Uuid,
+    capability_id: Uuid,
+    seq: i64,
+    kind: String,
+    created_at: OffsetDateTime,
+    leased_at: Option<OffsetDateTime>,
 }
 
 fn encode<T: serde::Serialize>(value: &T) -> Result<Value, AppError> {
@@ -95,6 +115,10 @@ fn in_queue_order(records: Vec<Record>) -> Result<Vec<DeviceCommandRow>, AppErro
         .collect::<Result<Vec<_>, _>>()?;
     rows.sort_by_key(|r| r.seq);
     Ok(rows)
+}
+
+fn uuids(caps: &[CapabilityId]) -> Vec<Uuid> {
+    caps.iter().map(|c| c.as_uuid()).collect()
 }
 
 #[async_trait]
@@ -122,7 +146,7 @@ impl DeviceCommandRepo for PgTenantRepos {
             .into_row()
     }
 
-    async fn lease(
+    async fn pick_due(
         &mut self,
         caps: &[CapabilityId],
         now: OffsetDateTime,
@@ -132,52 +156,117 @@ impl DeviceCommandRepo for PgTenantRepos {
         if caps.is_empty() {
             return Ok(Vec::new());
         }
-        let caps: Vec<Uuid> = caps.iter().map(|c| c.as_uuid()).collect();
-        // The pick is a materialized CTE so that it runs once. Joined to the update as a
-        // subquery, Postgres may run it again while updating; a new run passes over the rows
-        // this statement already updated (locking skips them) and picks further ones, so more
-        // than `limit` commands were leased.
         let records: Vec<Record> = sqlx::query_as(&format!(
-            "with picked as materialized (select id from device_commands \
+            "select {COLUMNS} from device_commands \
              where workspace_id = $1 and capability_id = any($2) \
              and status in ('queued', 'leased') \
              and (status = 'queued' or leased_at <= $4) \
              and expires_at > $3 \
-             order by seq limit $5 for update skip locked) \
-             update device_commands set status = 'leased', leased_at = $3, \
-             attempts = attempts + 1 \
-             where workspace_id = $1 and id in (select id from picked) \
-             returning {COLUMNS}"
+             order by seq limit $5 for update skip locked"
         ))
         .bind(self.workspace_id().as_uuid())
-        .bind(caps)
+        .bind(uuids(caps))
         .bind(now)
         .bind(redeliver_before)
         .bind(i64::from(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE)))
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "pick device commands"))?;
+        in_queue_order(records)
+    }
+
+    async fn mark_leased(
+        &mut self,
+        ids: &[Uuid],
+        now: OffsetDateTime,
+    ) -> Result<Vec<DeviceCommandRow>, AppError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let records: Vec<Record> = sqlx::query_as(&format!(
+            "update device_commands set status = 'leased', leased_at = $3, \
+             attempts = attempts + 1 \
+             where workspace_id = $1 and id = any($2) and status in ('queued', 'leased') \
+             returning {COLUMNS}"
+        ))
+        .bind(self.workspace_id().as_uuid())
+        .bind(ids)
+        .bind(now)
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "lease device commands"))?;
         in_queue_order(records)
     }
 
+    async fn fail_pending(
+        &mut self,
+        ids: &[Uuid],
+        reason: FailReason,
+        detail: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<DeviceCommandRow>, AppError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ws = self.workspace_id();
+        let current: Vec<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
+            "select id, status, leased_at from device_commands \
+             where workspace_id = $1 and id = any($2) for update",
+        )
+        .bind(ws.as_uuid())
+        .bind(ids)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock device commands"))?;
+        let mut failing = Vec::new();
+        for (id, status, leased_at) in current {
+            let status = stored(CommandStatus::from_key(&status), "device_commands.status")?;
+            if failed_while_pending(status, leased_at.is_some()).is_some() {
+                failing.push(id);
+            }
+        }
+        if failing.is_empty() {
+            return Ok(Vec::new());
+        }
+        let records: Vec<Record> = sqlx::query_as(&format!(
+            "update device_commands set status = 'failed', result = null, reason = $3, \
+             detail = $4, done_at = $5 where workspace_id = $1 and id = any($2) \
+             returning {COLUMNS}"
+        ))
+        .bind(ws.as_uuid())
+        .bind(failing)
+        .bind(reason.key())
+        .bind(cut_detail(detail))
+        .bind(now)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "fail device commands"))?;
+        in_queue_order(records)
+    }
+
     async fn finish(
         &mut self,
+        caps: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,
-    ) -> Result<FinishOutcome, AppError> {
+    ) -> Result<Finished, AppError> {
+        if caps.is_empty() {
+            return Ok(Finished::Unknown);
+        }
         let ws = self.workspace_id();
         let current: Option<(String, Option<OffsetDateTime>)> = sqlx::query_as(
             "select status, leased_at from device_commands \
-             where workspace_id = $1 and id = $2 for update",
+             where workspace_id = $1 and id = $2 and capability_id = any($3) for update",
         )
         .bind(ws.as_uuid())
         .bind(id)
+        .bind(uuids(caps))
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "lock device command"))?;
         let Some((status, leased_at)) = current else {
-            return Ok(FinishOutcome::Unknown);
+            return Ok(Finished::Unknown);
         };
         let status = stored(CommandStatus::from_key(&status), "device_commands.status")?;
         let next = match outcome.status_after(status, leased_at.is_some()) {
@@ -186,16 +275,14 @@ impl DeviceCommandRepo for PgTenantRepos {
         };
         let (result, reason, detail) = match outcome {
             Finish::Done { result } => (Some(result), None, None),
-            Finish::Failed { reason, detail } => (
-                None,
-                Some(reason.key()),
-                Some(detail.chars().take(MAX_DETAIL_CHARS).collect::<String>()),
-            ),
+            Finish::Failed { reason, detail } => {
+                (None, Some(reason.key()), Some(cut_detail(&detail)))
+            }
         };
-        sqlx::query(
+        let record: Record = sqlx::query_as(&format!(
             "update device_commands set status = $3, result = $4, reason = $5, detail = $6, \
-             done_at = $7 where workspace_id = $1 and id = $2",
-        )
+             done_at = $7 where workspace_id = $1 and id = $2 returning {COLUMNS}"
+        ))
         .bind(ws.as_uuid())
         .bind(id)
         .bind(next.key())
@@ -203,24 +290,40 @@ impl DeviceCommandRepo for PgTenantRepos {
         .bind(reason)
         .bind(detail)
         .bind(now)
-        .execute(self.tx.conn())
+        .fetch_one(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "finish device command"))?;
-        Ok(FinishOutcome::Applied)
+        Ok(Finished::Applied(Box::new(record.into_row()?)))
     }
 
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<DeviceCommandRow>, AppError> {
-        let records: Vec<Record> = sqlx::query_as(&format!(
-            "update device_commands set status = 'expired', done_at = $2 \
+    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError> {
+        // The due rows are picked and locked once, in a materialized CTE: one that another bundle
+        // holds (a bridge's results, a poll) is passed over, not waited for.
+        let mut records: Vec<ExpiredRecord> = sqlx::query_as(&format!(
+            "with due as materialized (select id from device_commands \
              where workspace_id = $1 and status in ('queued', 'leased') and expires_at <= $2 \
-             returning {COLUMNS}"
+             for update skip locked) \
+             update device_commands set status = 'expired', done_at = $2 \
+             where workspace_id = $1 and id in (select id from due) \
+             returning {EXPIRED_COLUMNS}"
         ))
         .bind(self.workspace_id().as_uuid())
         .bind(now)
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "expire device commands"))?;
-        in_queue_order(records)
+        records.sort_by_key(|r| r.seq);
+        Ok(records
+            .into_iter()
+            .map(|r| ExpiredCommand {
+                id: r.id,
+                capability_id: CapabilityId(r.capability_id),
+                seq: r.seq,
+                kind: r.kind,
+                created_at: r.created_at,
+                leased_at: r.leased_at,
+            })
+            .collect())
     }
 
     async fn get(&mut self, id: Uuid) -> Result<Option<DeviceCommandRow>, AppError> {

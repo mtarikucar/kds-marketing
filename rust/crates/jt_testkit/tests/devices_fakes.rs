@@ -20,6 +20,24 @@ async fn lease_never_returns_expired() {
 }
 
 #[tokio::test]
+async fn pick_due_does_not_mark() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::pick_due_does_not_mark(uow).await;
+}
+
+#[tokio::test]
+async fn mark_leased_marks_only_still_pending() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::mark_leased_marks_only_still_pending(uow).await;
+}
+
+#[tokio::test]
+async fn fail_pending_never_sets_leased_at_and_skips_finished() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::fail_pending_never_sets_leased_at_and_skips_finished(uow).await;
+}
+
+#[tokio::test]
 async fn finish_is_idempotent() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::devices_contract::finish_is_idempotent(uow).await;
@@ -29,6 +47,12 @@ async fn finish_is_idempotent() {
 async fn finish_unknown_id() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::devices_contract::finish_unknown_id(uow).await;
+}
+
+#[tokio::test]
+async fn finish_for_another_bridges_command_is_unknown() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::finish_for_another_bridges_command_is_unknown(uow).await;
 }
 
 #[tokio::test]
@@ -47,6 +71,12 @@ async fn finish_refuses_result_for_never_leased() {
 async fn expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::devices_contract::expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry(uow).await;
+}
+
+#[tokio::test]
+async fn list_is_newest_first_and_bounded() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::list_is_newest_first_and_bounded(uow).await;
 }
 
 #[tokio::test]
