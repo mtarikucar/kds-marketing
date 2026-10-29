@@ -6,8 +6,8 @@ runs on the Windows PC the phone is plugged into by USB, reaches the phone throu
 talks to Jeeta as an HTTPS **client**: Jeeta never connects to the PC or to the phone. It
 registers the phones it sees, long-polls for their commands, runs each on its phone and posts
 what it did. Agents reach the phones through the `jeeta.devices.*` tools (`list`, `observe`,
-`act`, `command_get`, `commands`); a person holding `devices.work` sees the same phones in the
-panel.
+`act`, `command_get`, `commands`). In the panel, everyone who can see the capabilities sees the
+phones' cards; only a person holding `devices.work` also sees each phone's commands.
 
 There are no access restrictions in this phase (owner, spec §1): no app allowlist, no rate cap,
 no approval per command, and `shell` runs whatever argument list it is given. Every command is
@@ -15,8 +15,8 @@ logged: the ledger's `devices.command.queued` entry carries the whole command, t
 shell arguments included, and `devices.command.finished` how it ended.
 
 This page covers the phone's setup, the bridge's key and configuration file, running the bridge
-(at logon too), how its heartbeat shows in the panel, and what to do when something fails. The
-program's code is `rust/bridge/device/`.
+(at logon too), how its heartbeat shows in the panel, what to do when something fails, and where
+it was verified. The program's code is `rust/bridge/device/`.
 
 ## 1. The phone
 
@@ -38,9 +38,14 @@ Once per phone.
      input (SecurityException, INJECT_EVENTS); on a Xiaomi phone, turn on "USB debugging
      (Security settings)" in Developer options*. MIUI may ask you to sign in to a Mi account
      before it lets you turn it on.
-   - **Install via USB**, if you will install ADBKeyBoard with `adb install` (below).
+   - **Install via USB**, if you will install ADBKeyBoard with `adb install` (below). Here too
+     MIUI may ask for a Mi account first.
 4. Keep the phone unlocked, with its screen on, while agents use it: the bridge does not unlock
-   it, and a locked phone shows its lock screen to every observation.
+   it (section 7).
+
+Menu names vary with the phone and its version: HyperOS shows **OS version** where MIUI shows
+**MIUI version**, and on Android 13 and later the keyboards are under **Settings → System →
+Keyboard** (or **Languages & input**).
 
 ### The computer's adb and the RSA prompt
 
@@ -76,7 +81,8 @@ wrong. The bridge types such text through **ADBKeyBoard** (`com.android.adbkeybo
 method that types the text it is sent. Without it, ASCII text still works and other text is
 refused (section 7).
 
-1. Get the APK from the ADBKeyBoard project's releases (`github.com/senzhk/ADBKeyBoard`).
+1. Get the APK from its GitHub page, `github.com/senzhk/ADBKeyBoard` (its releases, or
+   `ADBKeyboard.apk` in the repository).
 2. Install it:
 
    ```powershell
@@ -111,9 +117,9 @@ refused (section 7).
    midway (the bridge stopped, or the command ran out of time) is undone when the bridge next
    recovers the phone: it puts back the keyboard it recorded, or, after a crash, the one the
    phone used before ADBKeyBoard.
-4. Check: `adb shell ime list -s` lists `com.android.adbkeyboard/.AdbIME`. After the bridge's
-   next registration (within 15 seconds) the phone's card in the panel reads **Unicode metin:
-   Evet** (section 6).
+4. Check: `adb shell ime list -s` lists `com.android.adbkeyboard/.AdbIME`. Within about 15
+   seconds (the bridge's next registration, and the Devices tab's next refresh) the phone's card
+   in the panel reads **Unicode metin: Evet** (section 6).
 
 ## 2. The bridge's API key
 
@@ -121,8 +127,8 @@ The bridge calls Jeeta with an API key issued with the single scope `devices.bri
 
 - In the panel: **Kabiliyetler → Cihazlar → Köprü eşleştir** issues it, shows it once, with the
   three install steps and a configuration file ready to copy (this server's address and the
-  key). Or **API anahtarları**, a new key with the one scope **Cihaz köprüsü olarak çalışma**
-  (`devices.bridge`); or `jeeta.api_keys.create` with
+  key). Or **API anahtarları**, a new key with the one scope **Cihaz köprüsü olarak çalışma
+  (yalnızca köprünün anahtarı)** (`devices.bridge`); or `jeeta.api_keys.create` with
   `{"name": "Workshop PC", "scopes": ["devices.bridge"]}`. Never issue it with no scopes: a key
   issued without scopes holds every permission of its issuer, which the bridge routes refuse.
 - Only someone holding `api_keys.manage` and `devices.bridge` can issue it: a key's scopes must
@@ -212,11 +218,12 @@ What it does:
   7 days, then the `device_file_purge` job deletes them; the address an agent gets for one
   (`file_url`) works for 10 minutes.
 
-It stops on **Ctrl+C** or **Ctrl+Break** within 5 seconds: polling stops, a running command is
-failed `bridge_error` and its phone recovered, commands still queued are handed out again later,
-and the results made are posted. Closing its console window, logging off or shutting down stops
-it within 2 seconds. It exits with status 0 when stopped, 2 when its configuration cannot be
-used, and a failure status when one of its tasks ended on its own.
+Stop it with **Ctrl+C** (or **Ctrl+Break**) in its console: within 5 seconds polling stops, a
+running command is failed `bridge_error` and its phone recovered, commands still queued are
+handed out again later, and the results made are posted. Closing its console window, logging off
+or shutting down are meant to stop it within 2 seconds, but closing the console window currently
+cuts it off at once (section 7). It exits with status 0 when stopped, 2 when its configuration
+cannot be used, and a failure status when one of its tasks ended on its own.
 
 ## 5. Running it at logon
 
@@ -251,8 +258,8 @@ Or in the Task Scheduler window: **Create Task…**
 5. **Settings**: untick **Stop the task if it runs longer than**; tick **If the task fails,
    restart every: 1 minute**, attempts 3.
 
-Closing the bridge's console window stops it (cleanly, within 2 seconds) until the next logon or
-**Run** in Task Scheduler.
+Stop it with Ctrl+C in its console window (closing the window cuts it off, section 7); it starts
+again at the next logon, or with **Run** in Task Scheduler.
 
 ## 6. Heartbeat and the panel
 
@@ -274,12 +281,14 @@ Closing the bridge's console window stops it (cleanly, within 2 seconds) until t
   used is retired (`jeeta.capability.retire`, or **Emekliye ayır** on its card); a retired phone
   that is still plugged in is refused at registration (`phone_retired`) and not listed again
   until the bridge restarts.
-- Its card on the **Kabiliyetler** page (the **Cihazlar** filter) shows its status and how long
-  ago its bridge last listed it, the platform, model, Android version, the computer, the bridge's
-  version, whether it types Unicode text (with the ADBKeyBoard hint when not), and the commands
-  it runs. To someone holding `devices.work` it also shows the phone's last 20 commands (kind,
-  status, time), each opening to its arguments and its result. Commands are never deleted; the
-  ledger keeps every one.
+- Its card on the **Kabiliyetler** page shows its status and how long ago its bridge last
+  listed it, the platform, model, Android version, the computer, the bridge's version, whether it
+  types Unicode text (with the ADBKeyBoard hint when not), and the commands it runs; everyone who
+  can see the capabilities sees it. To someone holding `devices.work` it also shows the phone's
+  last 20 commands (kind, status, time), each opening to its arguments and its result, followed
+  until the command ends; a file a result names opens at an address signed on the click. The
+  **Cihazlar** filter reads the phones and their logs again every 15 seconds while it is shown.
+  Commands are never deleted; the ledger keeps every one.
 
 ## 7. Troubleshooting
 
@@ -303,7 +312,12 @@ refused to inject input (SecurityException, INJECT_EVENTS); …*). Turn on **USB
 also when tried again; try again once it is still*). `uiautomator dump` refuses a screen that is
 still moving (an animation, a video, a page loading); the bridge tries again once after 700 ms.
 Ask again once the screen is still, or press `home` / `back` to leave a screen that never stops.
-*uiautomator wrote no screen; try again* is the same case.
+*uiautomator wrote no screen; try again* fails with the same `screen_busy` reason, but means the
+dump held no element at all, not necessarily that the screen moved: try again.
+
+**An observation lists no elements** while the screen is off or locked. Wake the phone and unlock
+it. On Xiaomi phones a proximity guard (`ScreenOnProximitySensorGuide`) turns the screen back off
+while its proximity sensor is covered: keep the phone face up and uncovered.
 
 **Unicode refused.** Before anything is queued, `devices.act` refuses a `text` with characters
 outside ASCII for a phone whose bridge does not list `text.unicode` (`422 VALIDATION`,
@@ -319,13 +333,25 @@ first* found no focused text field: tap one, then type.
 `FileNotFoundException … theme_compatibility.xml`). Harmless: MIUI's tools print it and dump all
 the same, and the bridge judges a dump by the file it wrote.
 
-**A phone is refused at registration** (the bridge logs *the server refused a phone* with its
-serial and the reason). `phone_held_by_another_bridge`: another PC's bridge holds it (section 2);
-it is free a minute after that bridge stops listing it. `phone_retired`: it was retired in
-Jeeta; the bridge does not list it again until it restarts.
+**A phone is refused at registration.** *the server refused a phone* with its serial and
+`phone_held_by_another_bridge`: another PC's bridge holds it (section 2); it is free a minute
+after that bridge stops listing it. *the server refused a retired phone; it is not listed again
+until the bridge restarts*: it was retired in Jeeta, and the bridge leaves it out until it
+restarts.
 
 **The bridge cannot register** (*registering with Jeeta failed*, tried again after a growing
 pause). `the server answered 401`: the key is wrong or revoked, or whoever issued it is no longer
 a member of the workspace. `403`: the key holds more than `devices.bridge` (`bridge_key_only`), or
 its issuer no longer holds `devices.bridge` (a key acts with the scopes its issuer still holds).
 `423`: the workspace is not active. A connection error: check `base_url` and the network.
+
+**Closing the console window** cuts the bridge off at once instead of letting it finish (seen on
+Windows 11): a command it was running is not answered, and Jeeta hands it out again about 10
+seconds later. Stop the bridge with Ctrl+C instead.
+
+## 8. Verified on
+
+- Xiaomi Redmi 10C, Android 13, MIUI 14, on Windows 11, 2026-10-29: `devices.list`, `observe`,
+  `shell`, `key`, `launch_app`, `tap_on`, ASCII and Turkish `text` (through ADBKeyBoard, the
+  phone's own keyboard set back after it), `screenshot`, `pull_file`; the ledger carries each
+  command with its full arguments; Ctrl+C stops the bridge cleanly.

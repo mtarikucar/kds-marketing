@@ -36,50 +36,63 @@ import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import { can } from '@/lib/roles';
 
-const KEYS_KEY = ['api-keys'] as const;
+/** Every API key list query key starts with this. */
+export const KEYS_KEY = ['api-keys'] as const;
 
 /**
- * Issues a key and shows its plaintext exactly once. The plaintext is held only in this
- * dialog's state (the mutation keeps no cached result) and is dropped when the dialog closes.
- * While it is shown, only the explicit Close button closes the dialog: not Escape, not a click
- * outside, so the key is not lost by accident.
+ * Issues a key, holding its plaintext only in this hook's state: never in the query cache (no
+ * mutation keeps the result), so it lives as long as the one-time dialog that shows it, and
+ * `reset` drops it. A second `create` while one runs is ignored; an answer that comes after the
+ * dialog is gone is dropped. The key list is read again once a key is issued.
  */
-function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { t } = useTranslation();
+export function useCreateKey() {
   const queryClient = useQueryClient();
-  const [name, setName] = useState('');
-  const [scopes, setScopes] = useState<Permission[]>([]);
   const [created, setCreated] = useState<KeyOut | null>(null);
-
   const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<unknown>(null);
+  const [error, setError] = useState<unknown>(null);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  async function create() {
+  async function create(input: { name: string; scopes: Permission[] }) {
     if (creating) return;
-    setCreating(true); setCreateError(null);
+    setCreating(true); setError(null);
     try {
-      const key = await createKey({ name: name.trim(), scopes });
+      const key = await createKey(input);
       if (!mounted.current) return;
       setCreated(key);
       await queryClient.invalidateQueries({ queryKey: KEYS_KEY });
-    } catch (error) { if (mounted.current) setCreateError(error); }
+    } catch (e) { if (mounted.current) setError(e); }
     finally { if (mounted.current) setCreating(false); }
   }
+  const reset = () => {
+    setCreated(null);
+    setError(null);
+  };
+  return { created, creating, error, create, reset };
+}
+
+/**
+ * Issues a key and shows its plaintext exactly once ({@link useCreateKey}); it is dropped when the
+ * dialog closes. While it is shown, only the explicit Close button closes the dialog: not Escape,
+ * not a click outside, so the key is not lost by accident.
+ */
+function CreateKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { t } = useTranslation();
+  const [name, setName] = useState('');
+  const [scopes, setScopes] = useState<Permission[]>([]);
+  const { created, creating, error: createError, create, reset } = useCreateKey();
 
   const close = (next: boolean) => {
     if (!next) {
       setName('');
       setScopes([]);
-      setCreated(null);
-      setCreateError(null);
+      reset();
     }
     onOpenChange(next);
   };
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    void create();
+    void create({ name: name.trim(), scopes });
   };
 
   return (

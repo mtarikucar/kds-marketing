@@ -1,10 +1,9 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Smartphone } from 'lucide-react';
 import { Trans, useTranslation } from 'react-i18next';
-import { createKey } from '@/api/apiKeys';
-import { getCommand, phoneCommands, type CommandStatus, type LoggedCommand } from '@/api/devices';
-import type { Capability, CapabilityOut, KeyOut, Permission } from '@/api/types';
+import { getCommand, isFinal, phoneCommands, type CommandStatus, type LoggedCommand } from '@/api/devices';
+import type { Capability, CapabilityOut, Permission } from '@/api/types';
 import { CopyField } from '@/components/CopyField';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
@@ -20,15 +19,21 @@ import {
   DialogTitle,
   Field,
   Input,
+  toast,
   type BadgeProps,
 } from '@/components/ui';
-import { providerUrl } from '@/lib/browser';
+import { browser, fileUrl } from '@/lib/browser';
+import { errorMessage } from '@/lib/errors';
 import { formatDateTime, formatRelative } from '@/lib/format';
+import { useCreateKey } from '@/pages/ApiKeysPage';
+import { PHONE_REFRESH_MS, deviceCommandKey, invalidateCapabilities, phoneLogKey } from './queries';
 
 /** The feature a bridge lists for a phone that types text outside ASCII (`jt_devices`). */
 const TEXT_UNICODE = 'text.unicode';
 /** How many of a phone's most recent commands its card shows. */
 const LOG_LIMIT = 20;
+/** How often an open command that has not ended is read again. */
+const COMMAND_POLL_MS = 3_000;
 /** The one permission a device bridge's key holds: any other makes every bridge route refuse it. */
 const BRIDGE_SCOPE: Permission = 'devices.bridge';
 /** Where the bridge's setup, its logon task and its troubleshooting are written down. */
@@ -72,6 +77,16 @@ export function phoneFactsOf(capability: Capability): PhoneFacts | null {
   };
 }
 
+/**
+ * Whether a command's result names a file (`jt_app::usecases::devices::agent::named_file`): a
+ * pulled file, or an observation's screenshot.
+ */
+function namesFile(result: Record<string, unknown> | null | undefined): boolean {
+  if (!result) return false;
+  if (result.kind === 'file') return typeof result.file_id === 'string';
+  return result.kind === 'observation' && typeof result.screenshot_file_id === 'string';
+}
+
 type Tone = NonNullable<BadgeProps['tone']>;
 
 const STATUS_TONE: Record<CommandStatus, Tone> = {
@@ -89,23 +104,24 @@ const STATUS_TONE: Record<CommandStatus, Tone> = {
  * whether it takes a command now and how long ago its bridge last listed it, and, for who holds
  * `devices.work` (`canWork`), its last commands. It takes a command when it reads verified and
  * its bridge's latest registration lists it, as `devices.act` checks; only those registrations
- * verify it. The setup is in `docs/operations/device-bridge.md`.
+ * verify it. While `live` (the Devices tab is shown) its log is read again every heartbeat; the
+ * page reads the phones themselves as often. The setup is in `docs/operations/device-bridge.md`.
  */
-export function PhoneCard({ item, canWork }: { item: CapabilityOut; canWork: boolean }) {
+export function PhoneCard({ item, canWork, live }: { item: CapabilityOut; canWork: boolean; live: boolean }) {
   const { t, i18n } = useTranslation();
   const id = useId();
   const c = item.capability;
   const facts = phoneFactsOf(c);
   const unicode = facts?.features.includes(TEXT_UNICODE) ?? false;
 
+  // The card's status in a few words, beside how long ago its bridge last listed it: neutral
+  // past "online", since a phone can also be marked unreachable by hand.
   const state = (f: PhoneFacts): string => {
     switch (item.effective_status) {
       case 'verified':
         return t(f.listed ? 'capabilities.phone.states.online' : 'capabilities.phone.states.unlisted');
       case 'stale':
         return t('capabilities.phone.states.stale');
-      case 'unreachable':
-        return t('capabilities.phone.states.unreachable');
       default:
         return t(`status.capability.${item.effective_status}`);
     }
@@ -155,7 +171,7 @@ export function PhoneCard({ item, canWork }: { item: CapabilityOut; canWork: boo
               <Trans i18nKey="capabilities.phone.unicodeHint" components={{ b: <strong /> }} />
             </p>
           )}
-          {canWork && <CommandLog capabilityId={c.id} />}
+          {canWork && <CommandLog capabilityId={c.id} live={live} />}
         </>
       ) : (
         <p className="text-sm text-foreground">{t('capabilities.phone.never')}</p>
@@ -169,15 +185,18 @@ export function PhoneCard({ item, canWork }: { item: CapabilityOut; canWork: boo
 
 /**
  * A phone's last {@link LOG_LIMIT} commands, newest first: kind, status and when it was queued;
- * each opens to its arguments and, read then, its result. The arguments carry what was typed and
- * the shell's arguments: shown here, never logged.
+ * each opens to its arguments and, read then, its result. Read again every heartbeat while
+ * `live`. The arguments carry what was typed and the shell's arguments: shown here, never logged,
+ * and dropped from the cache as soon as the log is gone.
  */
-function CommandLog({ capabilityId }: { capabilityId: string }) {
+function CommandLog({ capabilityId, live }: { capabilityId: string; live: boolean }) {
   const { t } = useTranslation();
   const id = useId();
   const log = useQuery({
-    queryKey: ['devices', capabilityId, 'commands'],
+    queryKey: phoneLogKey(capabilityId),
     queryFn: () => phoneCommands(capabilityId, { limit: LOG_LIMIT }),
+    gcTime: 0,
+    refetchInterval: live ? PHONE_REFRESH_MS : false,
   });
   const commands = log.data ?? [];
   return (
@@ -210,7 +229,8 @@ function CommandRow({ command }: { command: LoggedCommand }) {
       <button
         type="button"
         aria-expanded={open}
-        aria-controls={detailsId}
+        // Only an open row has a region to point at.
+        aria-controls={open ? detailsId : undefined}
         onClick={() => setOpen((v) => !v)}
         className="flex w-full flex-wrap items-center gap-2 px-2 py-1.5 text-start text-sm hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -231,21 +251,43 @@ function CommandRow({ command }: { command: LoggedCommand }) {
 
 const PRE = 'max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-surface p-2 font-mono text-micro text-foreground';
 
-/** A command's arguments, why it failed, and its result, read at once (no wait for it to end). */
+/**
+ * A command's arguments, why it failed, and its result, read at once (no wait for it to end) and
+ * again every few seconds until it has ended. Its file opens at an address signed on the click:
+ * one read with the command lives ten minutes.
+ */
 function CommandDetails({ id, command }: { id: string; command: LoggedCommand }) {
   const { t } = useTranslation();
   const full = useQuery({
-    queryKey: ['devices', 'command', command.command_id],
+    queryKey: deviceCommandKey(command.command_id),
     queryFn: () => getCommand(command.command_id, { wait_s: 0 }),
+    gcTime: 0,
+    refetchInterval: (query) => (isFinal(query.state.data?.status ?? command.status) ? false : COMMAND_POLL_MS),
   });
+  const current = full.data ?? command;
   const args = Object.fromEntries(Object.entries(command.command).filter(([key]) => key !== 'kind'));
-  const fileUrl = full.data?.file_url ? providerUrl(full.data.file_url) : null;
+
+  const openFile = async () => {
+    // Opened on the click itself, which a browser lets open a tab; sent on once the address is in.
+    const tab = browser.openPending();
+    const fresh = await full.refetch();
+    const url = fresh.data?.file_url ? fileUrl(fresh.data.file_url) : null;
+    if (tab && url) {
+      tab.go(url);
+      return;
+    }
+    tab?.close();
+    if (fresh.isError) toast.error(errorMessage(t, fresh.error));
+    else if (!url) toast.error(t('capabilities.phone.log.fileGone'));
+    else toast.error(t('capabilities.phone.log.fileBlocked'));
+  };
+
   return (
     <div id={id} className="flex flex-col gap-2 px-2 pb-2">
-      {command.reason && (
+      {current.reason && (
         <p className="text-caption text-danger">
-          {t('capabilities.phone.log.reason', { reason: t(`capabilities.phone.log.reasons.${command.reason}`) })}
-          {command.detail && <> — {command.detail}</>}
+          {t('capabilities.phone.log.reason', { reason: t(`capabilities.phone.log.reasons.${current.reason}`) })}
+          {current.detail && <> — {current.detail}</>}
         </p>
       )}
       <div className="flex flex-col gap-1">
@@ -260,10 +302,12 @@ function CommandDetails({ id, command }: { id: string; command: LoggedCommand })
           ) : (
             <p className="text-sm text-muted-foreground">{t('capabilities.phone.log.noResult')}</p>
           )}
-          {fileUrl && (
-            <a className="text-caption text-primary underline" href={fileUrl} target="_blank" rel="noreferrer noopener">
-              {t('capabilities.phone.log.file')}
-            </a>
+          {namesFile(full.data?.result) && (
+            <div>
+              <Button type="button" size="sm" variant="outline" onClick={() => void openFile()}>
+                {t('capabilities.phone.log.file')}
+              </Button>
+            </div>
           )}
         </QueryState>
       </div>
@@ -302,54 +346,29 @@ export function PairBridgePanel() {
 
 /**
  * Issues a device bridge's key, with exactly `devices.bridge`, and shows it once with the three
- * steps to run the bridge. As the API keys page does, the plaintext is held only in this
- * dialog's state and dropped when it closes; while it is shown only the Close button closes the
- * dialog.
+ * steps to run the bridge ({@link useCreateKey}, as the API keys page does: the plaintext is held
+ * only in the dialog's state and dropped when it closes; while it is shown only the Close button
+ * closes the dialog). Closing it reads the phones again: the bridge may be running by then.
  */
 function PairBridgeDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [name, setName] = useState(() => t('capabilities.phone.pair.defaultName'));
-  const [created, setCreated] = useState<KeyOut | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<unknown>(null);
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  async function create() {
-    if (creating) return;
-    setCreating(true);
-    setCreateError(null);
-    try {
-      // Never an empty list: a key issued without scopes holds every permission of its issuer.
-      const key = await createKey({ name: name.trim(), scopes: [BRIDGE_SCOPE] });
-      if (!mounted.current) return;
-      setCreated(key);
-      await queryClient.invalidateQueries({ queryKey: ['api-keys'] });
-    } catch (error) {
-      if (mounted.current) setCreateError(error);
-    } finally {
-      if (mounted.current) setCreating(false);
-    }
-  }
+  const { created, creating, error, create, reset } = useCreateKey();
 
   const close = (next: boolean) => {
     if (!next) {
       setName(t('capabilities.phone.pair.defaultName'));
-      setCreated(null);
-      setCreateError(null);
+      reset();
+      void invalidateCapabilities(queryClient);
     }
     onOpenChange(next);
   };
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    void create();
+    // Never an empty list: a key issued without scopes holds every permission of its issuer.
+    void create({ name: name.trim(), scopes: [BRIDGE_SCOPE] });
   };
 
   return (
@@ -375,7 +394,7 @@ function PairBridgeDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           </div>
         ) : (
           <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
-            <ErrorCallout error={createError} />
+            <ErrorCallout error={error} />
             <Field label={t('fields.name')} hint={t('capabilities.phone.pair.nameHint')} required>
               {(ids) => (
                 <Input
@@ -393,7 +412,7 @@ function PairBridgeDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                 {t('common.cancel')}
               </Button>
               <Button type="submit" loading={creating}>
-                {t('capabilities.phone.pair.submit')}
+                {t('apiKeys.dialog.submit')}
               </Button>
             </DialogFooter>
           </form>

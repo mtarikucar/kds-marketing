@@ -78,7 +78,8 @@ const HEARTBEAT_KINDS = new Set(['voice_bridge', 'phone']);
  * the budget items it spends from and the groups it is in. Actions show only for someone who may
  * take them, and never on a retired capability; a connector is verified by its probe, a voice
  * bridge or a phone by its bridge's registrations, neither here. A phone shows what its bridge
- * reported of it, and its last commands to who may use phones (`canUsePhones`).
+ * reported of it, and its last commands to who may use phones (`canUsePhones`), read again every
+ * heartbeat while `livePhones` (the Devices tab is shown).
  */
 export function CapabilityCard({
   item,
@@ -94,6 +95,7 @@ export function CapabilityCard({
   connectorBusy = false,
   canCall = false,
   canUsePhones = false,
+  livePhones = false,
 }: {
   item: CapabilityOut;
   budgetItems: readonly BudgetItemOut[];
@@ -111,6 +113,8 @@ export function CapabilityCard({
   canCall?: boolean;
   /** Whoever views it may use phones (`devices.work`): a phone shows its last commands. */
   canUsePhones?: boolean;
+  /** The Devices tab is shown: a phone's log is read again every heartbeat. */
+  livePhones?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const c = item.capability;
@@ -220,7 +224,7 @@ export function CapabilityCard({
         )}
         {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
         {bridge && !retired && <VoiceBridgePanel capability={c} />}
-        {c.kind_key === 'phone' && !retired && <PhoneCard item={item} canWork={canUsePhones} />}
+        {c.kind_key === 'phone' && !retired && <PhoneCard item={item} canWork={canUsePhones} live={livePhones} />}
         {canCall && c.kind_key === 'netgsm_pbx' && c.status === 'verified' && (
           <div>
             <Button asChild size="sm" variant="outline">

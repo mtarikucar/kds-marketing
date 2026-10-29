@@ -997,9 +997,8 @@
       "status": "Durum",
       "states": {
         "online": "Çevrimiçi",
-        "unlisted": "Çevrimdışı: köprüsü artık listelemiyor (çıkarılmış ya da adb'de hazır değil)",
-        "stale": "Sessiz: son bir dakikada kayıt yok",
-        "unreachable": "Ulaşılamıyor: 10 dakikadan uzun süredir sessiz"
+        "unlisted": "Çevrimdışı: köprü bu telefonu artık listelemiyor (çıkarılmış ya da adb'de hazır değil)",
+        "stale": "Doğrulama eskidi: son bir dakikada hiçbir kayıt onu listelemedi"
       },
       "seen": "son görülme {{ago}}",
       "platform": "Platform",
@@ -1044,26 +1043,27 @@
           "screen_busy": "ekran durmadan hareket ediyordu",
           "timeout": "telefon zamanında yanıt vermedi",
           "bridge_error": "köprü hatası",
-          "file_not_found": "dosya kayıtlı değil",
+          "file_not_found": "dosya artık saklanmıyor",
           "unknown": "bilinmeyen bir neden"
-        }
+        },
+        "fileGone": "Dosya artık saklanmıyor (dosyalar 7 gün saklanır).",
+        "fileBlocked": "Tarayıcı yeni sekmeyi engelledi: bu site için açılır pencerelere izin verip yeniden deneyin."
       },
       "pair": {
         "title": "Telefon bağlayın",
         "body": "USB ile bir bilgisayara takılı Android telefonu, o bilgisayarda çalışan Jeeta cihaz köprüsü programı bağlar. Eşleştirme, programa anahtarını verir.",
         "open": "Köprü eşleştir",
         "dialogTitle": "Cihaz köprüsü eşleştir",
-        "dialogDescription": "Tek bir bilgisayar için, köprünün ihtiyaç duyduğu tek izinle (devices.bridge) bir anahtar üretir.",
+        "dialogDescription": "Tek bir bilgisayar için, köprünün ihtiyaç duyduğu tek izinle (devices.bridge) bir anahtar oluşturur.",
         "defaultName": "Cihaz köprüsü",
         "nameHint": "Bilgisayarın adını verin, ör. Atölye bilgisayarı.",
-        "submit": "Anahtarı üret",
         "keyDescription": "Anahtarı şimdi kopyalayın; köprüyü çalıştırmanın üç adımı aşağıda.",
-        "stepsLabel": "Köprünün kurulumu",
+        "stepsLabel": "Köprü kurulumu",
         "step1": "Telefonun takılı olacağı bilgisayara adb'yi (Android SDK Platform-Tools) kurun. Telefonda Geliştirici seçeneklerini ve USB hata ayıklamayı açın, telefonu USB ile bağlayın ve telefon sorduğunda bu bilgisayara izin verin.",
-        "step2": "jeeta-device-bridge.exe programını bir klasöre koyun; yanına da şu içerikle jeeta-device-bridge.toml adlı bir dosya oluşturun:",
+        "step2": "jeeta-device-bridge.exe programını bir klasöre koyun (nereden alınacağı: docs/operations/device-bridge.md, 4. bölüm); yanına da şu içerikle jeeta-device-bridge.toml adlı bir dosya oluşturun:",
         "configLabel": "jeeta-device-bridge.toml",
         "keyEnv": "Anahtarı dosyaya yazmak yerine JEETA_DEVICE_BRIDGE_KEY ortam değişkenine de koyabilirsiniz.",
-        "step3": "jeeta-device-bridge.exe'yi çalıştırın. Gördüğü her telefon birkaç saniye içinde bu sayfada doğrulanmış olarak görünür. Her oturum açılışında kendiliğinden başlatmak için:",
+        "step3": "jeeta-device-bridge.exe'yi çalıştırın. Gördüğü her telefon yaklaşık 15 saniye içinde bu sayfada, Cihazlar altında doğrulanmış olarak görünür. Her oturum açılışında kendiliğinden başlatmak için:",
         "ownKey": "Her bilgisayardaki köprünün kendi anahtarı olmalı: Jeeta köprüleri anahtarlarından ayırt eder ve çalışan başka bir köprünün tuttuğu telefonu reddeder. Başka bir bilgisayar için yeniden eşleştirin."
       }
     }

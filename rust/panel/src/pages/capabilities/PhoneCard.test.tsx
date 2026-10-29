@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { CapabilityOut, MeOut } from '@/api/types';
 import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
+import { browser } from '@/lib/browser';
 import { formatRelative } from '@/lib/format';
 import { budgetItems, capabilities, connectorHealth, groups, hooks, me, repMe } from '@/test/fixtures';
 import { mockFetch, renderAt } from '@/test/render';
@@ -24,6 +25,18 @@ const deviceMe: MeOut = {
     {
       ...me.memberships[0],
       permissions: [...me.memberships[0].permissions, 'devices.work', 'devices.bridge'],
+    },
+  ],
+};
+
+/** Holds `devices.bridge` but not `api_keys.manage`: may not issue a bridge's key. */
+const bridgeOnlyMe: MeOut = {
+  ...me,
+  memberships: [
+    {
+      ...me.memberships[0],
+      role_key: 'phones',
+      permissions: ['workspace.read', 'capabilities.manage', 'devices.work', 'devices.bridge'],
     },
   ],
 };
@@ -98,8 +111,8 @@ function answers() {
     PLAIN_ID,
     'Redmi Note (R58M00000YY)',
     'verified',
-    'verified',
-    seconds(5),
+    'stale',
+    seconds(90),
     facts('R58M00000YY', { model: 'Redmi Note', features: KINDS }),
   );
   const unlisted = phone(
@@ -174,11 +187,15 @@ describe('PhoneCard', () => {
     // Verified, but its bridge's latest registration leaves it out: not online.
     const out = row(await panelOf('Pixel (R58M00000ZZ)'), tr.capabilities.phone.status);
     expect(out.startsWith(`${tr.capabilities.phone.states.unlisted} · `)).toBe(true);
-    // Silent for hours: unreachable, and how long ago it was last seen.
+    // No registration listed it in the last minute: the card's badge and its panel say it alike.
+    const lapsed = row(await panelOf('Redmi Note (R58M00000YY)'), tr.capabilities.phone.status);
+    expect(lapsed.startsWith(`${tr.capabilities.phone.states.stale} · `)).toBe(true);
+    expect(tr.capabilities.phone.states.stale.startsWith(tr.status.capability.stale)).toBe(true);
+    const badge = (await cardOf('Redmi Note (R58M00000YY)')).querySelector('[data-capability-status]');
+    expect(badge).toHaveTextContent(tr.status.capability.stale);
+    // Unreachable (by its silence, or marked so by hand), and how long ago it was last seen.
     const gone = row(await panelOf('Tablet (R58M00000WW)'), tr.capabilities.phone.status);
-    expect(gone).toBe(
-      `${tr.capabilities.phone.states.unreachable} · ${seen(formatRelative(seconds(2 * 3600), 'tr'))}`,
-    );
+    expect(gone).toBe(`${tr.status.capability.unreachable} · ${seen(formatRelative(seconds(2 * 3600), 'tr'))}`);
     // A phone declared by hand that no bridge registered yet says so.
     const declared = await panelOf('Saha telefonu 2');
     expect(within(declared).getByText(tr.capabilities.phone.never)).toBeInTheDocument();
@@ -208,7 +225,7 @@ describe('PhoneCard', () => {
 
   it('pairing_shows_key_once', async () => {
     const user = userEvent.setup();
-    const log = vi.spyOn(console, 'log');
+    const consoles = (['log', 'info', 'warn', 'error'] as const).map((level) => vi.spyOn(console, level));
     const secret = 'jt_ab12_cihaz_kopru_anahtari';
     // No phone yet: pairing is how the first one comes.
     const calls = mockFetch({
@@ -234,14 +251,15 @@ describe('PhoneCard', () => {
     expect(name).toHaveValue(tr.capabilities.phone.pair.defaultName);
     await user.clear(name);
     await user.type(name, 'Atölye PC');
-    await user.click(within(dialog).getByRole('button', { name: tr.capabilities.phone.pair.submit }));
+    await user.click(within(dialog).getByRole('button', { name: tr.apiKeys.dialog.submit }));
 
-    // A key with exactly devices.bridge, never an empty scope list (which means every permission).
-    await waitFor(() => expect(calls.find((c) => c.method === 'POST')?.body).toEqual({
-      name: 'Atölye PC',
-      scopes: ['devices.bridge'],
-    }));
+    // One key, with exactly devices.bridge, never an empty scope list (which means every
+    // permission).
     expect(await within(dialog).findByDisplayValue(secret)).toBeInTheDocument();
+    const posts = calls.filter((c) => c.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].path).toBe('/api/api-keys');
+    expect(posts[0].body).toEqual({ name: 'Atölye PC', scopes: ['devices.bridge'] });
     expect(within(dialog).getByText(tr.apiKeys.dialog.plaintextWarning)).toBeInTheDocument();
     // The three steps, the configuration file ready with the key and this server, and the note
     // that each computer's bridge holds a key of its own.
@@ -255,20 +273,26 @@ describe('PhoneCard', () => {
     await user.keyboard('{Escape}');
     fireEvent.pointerDown(document.body);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // Closing it reads the phones again: the bridge may be running by now.
+    const listed = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/capabilities').length;
+    const before = listed();
     await user.click(within(dialog).getByRole('button', { name: tr.common.close }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument();
+    await waitFor(() => expect(listed()).toBeGreaterThan(before));
     // Opened again, it asks for a new key: the old one is gone.
     await user.click(screen.getByRole('button', { name: tr.capabilities.phone.pair.open }));
     const again = await screen.findByRole('dialog');
     expect(within(again).queryByDisplayValue(secret)).not.toBeInTheDocument();
-    expect(within(again).getByRole('button', { name: tr.capabilities.phone.pair.submit })).toBeInTheDocument();
-    expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    expect(within(again).getByRole('button', { name: tr.apiKeys.dialog.submit })).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+    for (const spy of consoles) expect(JSON.stringify(spy.mock.calls)).not.toContain(secret);
   });
 
   it('offers pairing only to who holds api_keys.manage and devices.bridge', async () => {
     const user = userEvent.setup();
-    for (const who of [me, repMe]) {
+    // `me` manages API keys without devices.bridge; `bridgeOnlyMe` the other way round.
+    for (const who of [me, bridgeOnlyMe, repMe]) {
       mockFetch({ ...answers(), 'GET /api/auth/me': who, 'GET /api/capabilities': [] });
       const { unmount } = renderAt('/capabilities');
       await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
@@ -327,12 +351,15 @@ describe('PhoneCard', () => {
     expect(rows[0]).toHaveTextContent(tr.capabilities.phone.log.statuses.done);
     expect(rows[1]).toHaveTextContent('shell');
     expect(rows[1]).toHaveTextContent(tr.capabilities.phone.log.statuses.failed);
-    // Arguments and results stay folded until asked for: nothing is fetched before.
+    // Arguments and results stay folded until asked for: nothing is fetched before, and a folded
+    // row controls no region.
     expect(within(log).queryByText(new RegExp(typed))).toBeNull();
     expect(calls.some((c) => c.path.startsWith('/api/devices/commands/'))).toBe(false);
+    expect(rows[0]).not.toHaveAttribute('aria-controls');
 
     await user.click(rows[0]);
     expect(rows[0]).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(rows[0].getAttribute('aria-controls') ?? '')).not.toBeNull();
     expect(within(log).getByText(new RegExp(typed))).toBeInTheDocument();
     // Its result, read at once (no wait on a command that ended).
     expect(await within(log).findByText(/typed through ADBKeyBoard/)).toBeInTheDocument();
@@ -353,5 +380,109 @@ describe('PhoneCard', () => {
     const panel = await panelOf('Galaxy A52 (R58M00000XX)');
     expect(within(panel).queryByRole('list', { name: tr.capabilities.phone.log.title })).toBeNull();
     expect(calls.some((c) => c.path.startsWith('/api/devices/'))).toBe(false);
+  });
+
+  it('refreshes the phones and their logs every 15 seconds while the Devices tab is shown', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const calls = mockFetch(answers());
+      renderAt('/capabilities');
+      await panelOf('Galaxy A52 (R58M00000XX)');
+      const count = (path: string, search?: string) =>
+        calls.filter((c) => c.method === 'GET' && c.path === path && (search === undefined || c.search === search))
+          .length;
+      const LOG = `/api/devices/${ONLINE_ID}/commands`;
+      // Every kind at once: read once, never again on its own.
+      const [all, logs] = [count('/api/capabilities'), count(LOG)];
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect([count('/api/capabilities'), count(LOG)]).toEqual([all, logs]);
+
+      // The Devices tab: the phones and each log, every heartbeat (15 s).
+      await user.click(screen.getByRole('button', { name: tr.capabilities.groups.device }));
+      await panelOf('Galaxy A52 (R58M00000XX)');
+      const phones = count('/api/capabilities', '?group=device');
+      const logged = count(LOG);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await waitFor(() => expect(count('/api/capabilities', '?group=device')).toBe(phones + 1));
+      await waitFor(() => expect(count(LOG)).toBeGreaterThan(logged));
+      await vi.advanceTimersByTimeAsync(15_000);
+      await waitFor(() => expect(count('/api/capabilities', '?group=device')).toBe(phones + 2));
+
+      // Back to every kind: the refresh stops.
+      await user.click(screen.getByRole('button', { name: tr.capabilities.filterAll }));
+      await panelOf('Galaxy A52 (R58M00000XX)');
+      const [still, stillLogged] = [count('/api/capabilities', '?group=device'), count(LOG)];
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect([count('/api/capabilities', '?group=device'), count(LOG)]).toEqual([still, stillLogged]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('follows a running command until it ends, and opens its file at a fresh address', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const FILE_ID = '0193a000-0000-7000-8000-0000000000a9';
+      const pull = {
+        command_id: '0193a000-0000-7000-8000-0000000000f3',
+        capability_id: ONLINE_ID,
+        kind: 'pull_file',
+        command: { kind: 'pull_file', path: '/sdcard/Download/rapor.pdf' },
+        status: 'leased',
+        attempts: 1,
+        reason: null,
+        detail: null,
+        requested_by: { kind: 'agent', connection_id: '0193a000-0000-7000-8000-0000000000c1', user_id: me.user_id },
+        created_at: '2026-10-29T09:10:00Z',
+        expires_at: '2026-10-29T09:15:00Z',
+        leased_at: '2026-10-29T09:10:01Z',
+        done_at: null,
+      };
+      const DETAIL = `/api/devices/commands/${pull.command_id}`;
+      const base = { ...answers(), [`GET /api/devices/${ONLINE_ID}/commands`]: [pull] };
+      mockFetch({ ...base, [`GET ${DETAIL}`]: { ...pull, result: null, file_url: null } });
+      renderAt('/capabilities');
+      const panel = await panelOf('Galaxy A52 (R58M00000XX)');
+      const log = await within(panel).findByRole('list', { name: tr.capabilities.phone.log.title });
+      await user.click(within(log).getByRole('button', { expanded: false }));
+      expect(await within(log).findByText(tr.capabilities.phone.log.noResult)).toBeInTheDocument();
+
+      // The bridge finishes it: the open row reads it again until it has ended.
+      const done = {
+        ...pull,
+        status: 'done',
+        done_at: '2026-10-29T09:10:09Z',
+        result: { kind: 'file', file_id: FILE_ID, bytes: 2048 },
+        file_url: 'https://files.jeeta.example/files/a9?sig=first',
+      };
+      let calls = mockFetch({ ...base, [`GET ${DETAIL}`]: done });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(await within(log).findByText(new RegExp(FILE_ID))).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(calls.filter((c) => c.path === DETAIL)).toHaveLength(1);
+
+      // Opening the file asks for an address signed now, not the one read before.
+      const go = vi.fn();
+      const close = vi.fn();
+      vi.spyOn(browser, 'openPending').mockReturnValue({ go, close });
+      calls = mockFetch({
+        ...base,
+        [`GET ${DETAIL}`]: { ...done, file_url: 'https://files.jeeta.example/files/a9?sig=second' },
+      });
+      await user.click(within(log).getByRole('button', { name: tr.capabilities.phone.log.file }));
+      await waitFor(() => expect(go).toHaveBeenCalledWith('https://files.jeeta.example/files/a9?sig=second'));
+      expect(calls.filter((c) => c.path === DETAIL)).toHaveLength(1);
+      expect(close).not.toHaveBeenCalled();
+
+      // An address that is neither https nor this computer's is never opened.
+      mockFetch({ ...base, [`GET ${DETAIL}`]: { ...done, file_url: 'http://files.jeeta.example/files/a9?sig=third' } });
+      await user.click(within(log).getByRole('button', { name: tr.capabilities.phone.log.file }));
+      await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+      expect(go).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

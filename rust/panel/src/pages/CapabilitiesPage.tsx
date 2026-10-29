@@ -47,6 +47,7 @@ import {
   CAPABILITIES_KEY,
   CONNECTOR_HEALTH_KEY,
   GROUPS_KEY,
+  PHONE_REFRESH_MS,
   invalidateCapabilities,
 } from './capabilities/queries';
 
@@ -153,9 +154,13 @@ export function CapabilitiesPage() {
   const [action, setAction] = useState<{ kind: CapabilityAction; item: CapabilityOut } | null>(null);
 
   // The filter is the server's `group` parameter; the unfiltered list also feeds the groups panel.
+  // The Devices tab follows its phones: their bridges register every heartbeat, so it reads them
+  // (and each card its log) again as often, while it is shown.
+  const devices = filter === 'device';
   const listed = useQuery({
     queryKey: [...CAPABILITIES_KEY, filter],
     queryFn: () => listCapabilities(filter === 'all' ? {} : { group: filter }),
+    refetchInterval: devices ? PHONE_REFRESH_MS : false,
   });
   const all = useQuery({ queryKey: [...CAPABILITIES_KEY, 'all'], queryFn: () => listCapabilities() });
   const groups = useQuery({ queryKey: GROUPS_KEY, queryFn: listGroups });
@@ -244,7 +249,7 @@ export function CapabilitiesPage() {
         }
       />
       <FilterChips value={filter} onChange={setFilter} />
-      {filter === 'device' && canPair && <PairBridgePanel />}
+      {devices && canPair && <PairBridgePanel />}
       <QueryState query={listed}>
         {items.length === 0 ? (
           <EmptyState title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
@@ -266,6 +271,7 @@ export function CapabilitiesPage() {
                 connectorBusy={probe.isPending || reconnect.isPending}
                 canCall={canCall}
                 canUsePhones={canUsePhones}
+                livePhones={devices}
               />
             ))}
           </div>

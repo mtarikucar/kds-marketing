@@ -8,14 +8,14 @@ import type { Actor, Rfc3339, Uuid } from './types';
 
 /** `jt_devices::CommandStatus`: `queued` and `leased` are not done yet. */
 export type CommandStatus = 'queued' | 'leased' | 'done' | 'failed' | 'expired' | 'canceled';
-export const COMMAND_STATUSES: readonly CommandStatus[] = [
-  'queued',
-  'leased',
-  'done',
-  'failed',
-  'expired',
-  'canceled',
-];
+
+/**
+ * Whether a command is over (`jt_devices::CommandStatus::is_final`): no bridge is handed it again.
+ * A result that arrives late can still replace `expired` or `canceled`.
+ */
+export function isFinal(status: CommandStatus): boolean {
+  return status !== 'queued' && status !== 'leased';
+}
 
 /** `jt_devices::FailReason`: why a `failed` command failed; `unknown` for a newer bridge's. */
 export type FailReason =
