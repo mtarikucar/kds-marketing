@@ -614,9 +614,14 @@ As built (D1-T6):
   code only) and the command is answered as queued, never as an error, which an agent would take for a refusal and
   retry (the phone would act twice). `command_get` may answer an error: it is a read. Test
   `act_answers_a_queued_command_when_its_wait_fails` (a unit of work whose bundles fail after the one that queues).
-- **Expiry by the clock.** A command neither final nor finished whose `expires_at` has passed reads `expired` in every
-  answer and in the log, before D1-T7's sweep writes it (`status_at`); its `done_at` stays `null` until then. Test
-  `an_unfinished_command_past_its_expiry_reads_expired`.
+- **Expiry by the clock, of queued commands only.** A command still `queued` whose `expires_at` has passed reads
+  `expired` in every answer and in the log, before D1-T7's sweep writes it (`status_at`); its `done_at` stays `null`
+  until then. A `leased` one reads `leased` until the sweep ends it (the phone may still be running it, and its result
+  replaces `expired` even after); the `act` and `command_get` descriptions say that `expired` with `leased_at` set may
+  still finish and is to be checked before running it again. Tests
+  `an_unfinished_command_past_its_expiry_reads_expired`,
+  `a_leased_command_past_its_expiry_reads_leased_until_it_ends`. The `act` description says "an error answer means
+  nothing was queued; after a dropped connection, check `jeeta.devices.commands`".
 - **Checks, in order** (before anything is queued): `validate()` (`422` naming the field); a `push_file`'s file in
   the store (`422` `file_id`, `reason: file_not_found`; a store that cannot answer does not refuse, the lease checks
   again); a `phone` capability of the workspace (`404`); not retired (`409 phone_retired`); `online`: stored status
@@ -636,8 +641,11 @@ As built (D1-T6):
   `DeviceCommandRepo::list` reads no result either (`null::jsonb as result` in `jt_pg`; contract test
   `list_leaves_the_results_out`); `get` (and so `command_get`) reads it whole.
 - **Result hash.** `devices.command.finished` also carries `result_sha256` (`bridge::result_sha256`: the hex SHA-256
-  of the kept result as JSON text, `null` without one), so the result on the command row can be checked against the
-  append-only ledger.
+  of the kept result as compact JSON with every object's keys sorted, `null` without one), so the result on the command
+  row can be checked against the append-only ledger. The key order relies on `serde_json` without `preserve_order`,
+  pinned by `result_sha256_hashes_compact_json_with_sorted_keys`.
+- **Coordinates.** `jt_devices::MAX_SCREEN_PX` (20 000, moved from `jt_device_protocol`, which re-exports it) bounds a
+  `tap`, `long_press` or `swipe` coordinate in `DeviceCommand::validate`, as the schema does.
 - **Schema bounds.** The `jeeta.devices.act` command schema takes its bounds from `jt_devices` (`MAX_TEXT_CHARS`,
   `MAX_URL_CHARS`, `MAX_APP_ID_CHARS`, `MAX_PATH_CHARS`, `MAX_SHELL_ARGS`, `MAX_ARG_CHARS`, `MAX_SHELL_TOTAL_CHARS`,
   `MAX_SWIPE_MS`, `MAX_LONG_PRESS_MS`) and bounds every pixel by `MAX_SCREEN_PX` (20 000); unit test
@@ -657,10 +665,23 @@ As built (D1-T6):
 - **The route, after review** (`jt_files::serve`): the first chunk is read before anything is answered, so a file that
   fits in one (most screenshots, an empty one) and fails its check is `404` as before; a larger one is cut off short of
   its `Content-Length`, which a real client reads as an error (`tests/serve.rs::a_tampered_file_is_an_error_to_a_real_client`,
-  over `axum::serve` with `jt_outbound`'s reqwest client). At most `MAX_CONCURRENT_READS` (32) files are served at once
-  (a turn waited for up to `READ_TURN_WAIT`, 10 s, else `503` with `Retry-After: 5`), held until the body's end or its
-  drop; a watchdog cuts off a response whose client took nothing for `READ_IDLE` (30 s) or that ran past
-  `READ_DEADLINE` (30 min), letting go of its file and turn (`router_with_limits(.., ReadLimits)` for tests).
+  over `axum::serve` with `jt_outbound`'s reqwest client). A watchdog cuts off a response whose client took nothing
+  for `READ_IDLE` (30 s) or that ran past `READ_DEADLINE` (30 min), letting go of its file and turns
+  (`router_with_limits(.., ReadLimits)` for tests).
+- **The route's turns (re-review).** A response holds three turns, taken in this order within `READ_TURN_WAIT` (10 s,
+  else `503`, `Retry-After: 5`) and kept until its body ends or is dropped: its file's (`READS_PER_FILE`, 3: a leaked
+  address cannot take a workspace's pool), its workspace's pool for its use (`READS_PER_WORKSPACE`, 8, keyed by the
+  address's verified `workspace`), and the process-wide ceiling (`MAX_CONCURRENT_READS`, 96, a backstop). A workspace
+  has two pools: its providers' fetches (addresses signed without a purpose, `jeeta.files.v1`, as studio hands media to
+  Meta and TikTok) and its devices' reads (`purpose=device`, signed `jeeta.files.v2` with the purpose:
+  `FileStore::device_url`, which the `push_file` download and an agent's `file_url` use). So one workspace's readers
+  hold up no other workspace, and a bridge's downloads never hold up a publish (a failed provider fetch is a permanent
+  publish failure). Tests `one_workspaces_full_pool_does_not_hold_up_another`, `one_file_takes_at_most_its_cap`,
+  `the_ceiling_holds_across_workspaces`, `device_downloads_never_hold_up_provider_fetches`.
+- **Write timeout, server-wide.** `bin/jeeta` serves through `net::TimedListener`: each connection fails a write its
+  client has taken nothing of for `net::WRITE_TIMEOUT` (60 s), so a socket the watchdog cut off is closed too. The timer
+  runs only while a write waits, so long-polls (25 s bridge polls, `calls.listen`) and idle MCP event streams arm
+  nothing (tests `a_long_poll_through_the_listener_is_answered`, `a_client_that_stops_reading_loses_its_connection`).
 - **rmcp in the logs.** `bin/jeeta`'s `JEETA_LOG` is followed by `,rmcp=warn` (`config::RMCP_CAP`), which replaces any
   directive the operator gave for `rmcp`; `ops::install_tracing` already capped every `rmcp::*` target at `warn` with a
   `filter_fn` layer. Test `an_operator_filter_never_raises_rmcp`.

@@ -2034,9 +2034,12 @@ The signed file address (`GET /files/{id}`, which a `push_file` download and a `
 served as a stream: 64 KiB read at a time, hashed as it is read, its length announced and its last
 chunk sent only once the hash is the stored one, so a large file, or many reads of one at once,
 are never held in memory whole. The first chunk is read before anything is answered, so a
-tampered file that fits in it is a `404`; a larger one is cut off short of its length. At most 32
-files are served at once (a request waits up to 10 s for a turn, then `503`), and a response whose
-client takes nothing for 30 s, or that runs past 30 minutes, is cut off and lets go of its turn.
+tampered file that fits in it is a `404`; a larger one is cut off short of its length. Reads take
+turns: at most 3 at once of one file, 8 of one workspace's provider fetches (studio's media) and 8
+of its devices' reads (`push_file` downloads and `file_url`s, addresses signed with
+`purpose=device`), and 96 in all; a request waits up to 10 s for its turns, then `503`. A response
+whose client takes nothing for 30 s, or that runs past 30 minutes, is cut off and lets go of its
+turns, and the server closes any connection whose write its client has taken nothing of for 60 s.
 
 `JEETA_LOG` is always followed by `rmcp=warn`: rmcp logs whole MCP requests at `debug`, tool
 arguments (typed text, shell arguments) among them.
