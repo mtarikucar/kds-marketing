@@ -4,13 +4,22 @@
 //! sentences, and the policy's phrases ([`BridgePhrases`]), which it picks by set and rotation.
 //!
 //! - After the caller's turn, while no reply is queued: an acknowledgement, then a filler, then
-//!   the long wait ([`Timing`]); after that the core's fallback line and closing take over.
-//! - After the agent's sentence, while the caller stays silent: "still there", once.
-//! - Words that were not heard: "not heard", when nothing else is owed.
-//! - The core lost: the fault sentence, then the hangup.
+//!   the long wait ([`Timing`]); after that the core's fallback line and closing take over. None
+//!   plays while a turn of the caller is open (from its start to its final or unheard words),
+//!   its pauses included.
+//! - After the agent's sentence, while the caller stays silent: "still there", once. A line of
+//!   the core (`play`, such as a holding line while the agent works on) ends that wait.
+//! - Words that were not heard: "not heard", at once, when nothing is owed, playing or queued.
+//! - The core lost: what was queued is dropped, the fault sentence plays, then the line is hung
+//!   up; once. A hangup the core already asked for goes on as it was (its closing is not
+//!   replaced).
 //!
-//! No phrase starts within [`Timing::phrase_gap_ms`] of the last one's end, nothing starts while
-//! the caller speaks, and the caller's speech cuts what plays unless it asked to be heard through.
+//! The acknowledgement, the filler, the long wait and "still there" start no sooner than
+//! [`Timing::phrase_gap_ms`] after the last phrase ended; "not heard" and the fault sentence answer
+//! an event and wait for no gap. Nothing starts while the caller speaks, and the caller's speech
+//! cuts what plays unless it asked to be heard through (a phrase always may be cut). Once the core
+//! asked to hang up (or was lost), the line is hung up as soon as nothing is left to play, whether
+//! the last item played to its end or was cut.
 
 use std::collections::VecDeque;
 
@@ -102,6 +111,9 @@ pub enum Action {
     },
     /// `item` played to its end.
     Done(Item),
+    /// Items that were queued and will never play, while nothing played (the core was lost while
+    /// the caller held the queue back): reported as heard to their first character.
+    Dropped(Vec<Item>),
     /// Raise (or lower) the listener's echo guard: something is (no longer) playing.
     EchoGuard(bool),
     Hangup,
@@ -124,6 +136,8 @@ pub struct Talker {
     still_there_done: bool,
     last_phrase_end: Option<Ms>,
     speaking: bool,
+    /// From the caller's `SpeechStart` to its `Final` or `Unheard`: a `SpeechEnd` is a pause.
+    turn_open: bool,
     hangup_when_done: bool,
     hung_up: bool,
     /// The next phrase of each set, by [`PhraseSet::position`].
@@ -145,6 +159,7 @@ impl Talker {
             still_there_done: false,
             last_phrase_end: None,
             speaking: false,
+            turn_open: false,
             hangup_when_done: false,
             hung_up: false,
             rotation: [0; PhraseSet::ALL.len()],
@@ -177,9 +192,11 @@ impl Talker {
                 if agent {
                     self.owed_since = None;
                     self.stage = 0;
-                    self.awaiting_since = None;
                     self.still_there_done = false;
                 }
+                // The agent's sentence is waited for again once it has played; a line of the core
+                // (a holding line while the agent works on) is no question to the caller.
+                self.awaiting_since = None;
                 let id = self.id();
                 self.queue.push_back(Item {
                     id,
@@ -189,12 +206,10 @@ impl Talker {
                 });
                 self.start_next(&mut out);
             }
-            Input::HangupWhenDone => {
-                self.hangup_when_done = true;
-                self.finish(&mut out);
-            }
+            Input::HangupWhenDone => self.hangup_when_done = true,
             Input::SpeechStart => {
                 self.speaking = true;
+                self.turn_open = true;
                 self.awaiting_since = None;
                 self.cut(false, &mut out);
             }
@@ -204,6 +219,7 @@ impl Talker {
             }
             Input::Final => {
                 self.speaking = false;
+                self.turn_open = false;
                 self.owed_since = Some(now);
                 self.stage = 0;
                 self.awaiting_since = None;
@@ -211,14 +227,17 @@ impl Talker {
                 self.start_next(&mut out);
             }
             Input::Unheard => {
+                // The listener may end a turn so without a `SpeechEnd` (its 30 s cut, a failure):
+                // what the caller held back plays now.
                 self.speaking = false;
-                if self.is_idle() && self.owed_since.is_none() {
+                self.turn_open = false;
+                self.start_next(&mut out);
+                if self.is_idle() && self.owed_since.is_none() && !self.hangup_when_done {
                     self.phrase(PhraseSet::NotHeard, &mut out);
                 }
             }
             Input::Played { id } => {
-                if self.playing.as_ref().is_some_and(|p| p.id == id) {
-                    let item = self.playing.take().expect("checked above");
+                if let Some(item) = self.playing.take_if(|p| p.id == id) {
                     if matches!(item.source, Source::Phrase { .. }) {
                         self.last_phrase_end = Some(now);
                     }
@@ -229,21 +248,28 @@ impl Talker {
                         self.still_there_done = false;
                     }
                     self.start_next(&mut out);
-                    self.lower_guard_if_idle(&mut out);
-                    self.finish(&mut out);
+                    self.lower_guard_if_silent(&mut out);
                 }
             }
             Input::CoreLost => {
-                self.cut(true, &mut out);
-                self.queue.clear();
-                self.owed_since = None;
-                self.awaiting_since = None;
-                self.phrase(PhraseSet::Fault, &mut out);
-                self.hangup_when_done = true;
-                self.finish(&mut out);
+                // Once: a second loss (the core came back and went again) restarts nothing, and a
+                // hangup the core already asked for ends the call with its own closing.
+                if !self.hangup_when_done {
+                    self.cut(true, &mut out);
+                    let dropped: Vec<Item> = self.queue.drain(..).collect();
+                    if !dropped.is_empty() {
+                        out.push(Action::Dropped(dropped));
+                    }
+                    self.owed_since = None;
+                    self.awaiting_since = None;
+                    self.phrase(PhraseSet::Fault, &mut out);
+                    self.hangup_when_done = true;
+                }
             }
             Input::Tick => self.cover(now, &mut out),
         }
+        // Whatever happened: a line that is to close closes once nothing is left to play.
+        self.finish(&mut out);
         out
     }
 
@@ -267,8 +293,9 @@ impl Talker {
         }
     }
 
-    fn lower_guard_if_idle(&mut self, out: &mut Vec<Action>) {
-        if self.guard && self.is_idle() {
+    /// Lowers the echo guard when nothing plays, even while the caller holds a queue back.
+    fn lower_guard_if_silent(&mut self, out: &mut Vec<Action>) {
+        if self.guard && self.playing.is_none() {
             self.guard = false;
             out.push(Action::EchoGuard(false));
         }
@@ -276,17 +303,15 @@ impl Talker {
 
     /// Cuts what plays when the caller speaks over it (or always, with `force`).
     fn cut(&mut self, force: bool, out: &mut Vec<Action>) {
-        let cuttable = self.playing.as_ref().is_some_and(|p| force || p.barge_in);
-        if !cuttable {
+        let Some(item) = self.playing.take_if(|p| force || p.barge_in) else {
             return;
-        }
-        let item = self.playing.take().expect("checked above");
+        };
         if matches!(item.source, Source::Phrase { .. }) {
             self.last_phrase_end = None;
         }
         let dropped: Vec<Item> = self.queue.drain(..).collect();
         out.push(Action::Cut { item, dropped });
-        self.lower_guard_if_idle(out);
+        self.lower_guard_if_silent(out);
     }
 
     fn finish(&mut self, out: &mut Vec<Action>) {
@@ -298,7 +323,8 @@ impl Talker {
 
     /// Covers a silence with the next phrase that is due (see the module docs).
     fn cover(&mut self, now: Ms, out: &mut Vec<Action>) {
-        if !self.is_idle() || self.speaking || self.hangup_when_done {
+        // `turn_open` holds while the caller speaks and through the turn's pauses.
+        if !self.is_idle() || self.turn_open || self.hangup_when_done {
             return;
         }
         if self
