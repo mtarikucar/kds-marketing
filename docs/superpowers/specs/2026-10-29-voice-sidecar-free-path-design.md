@@ -123,12 +123,17 @@ fills the gaps the core cannot fill fast enough, with text the policy already ho
 | still no `say` | plays the **long wait** ("Biraz daha zaman alıyor, beklediğiniz için teşekkürler.") | 8 000 ms |
 | still no `say` | nothing more: the core's fallback line (20 s) and scripted closing take over | core |
 | A `say`/`play` is already queued | skips the acknowledgement and fillers | — |
-| Agent's sentence played, caller silent | **"Hâlâ orada mısınız?"** once | 9 000 ms after the sentence ended (the core reports `caller_silence` at 6 s and closes at 15 s) |
+| Agent's sentence played, caller silent | **"Hâlâ orada mısınız?"** once; a line of the core (a holding line while the agent works on) ends that wait | 9 000 ms after the sentence ended (the core reports `caller_silence` at 6 s and closes at 15 s) |
 | Caller spoke but STT gave no words | **"Sizi tam duyamadım, tekrar eder misiniz?"** when nothing else is due | immediate |
 | Core unreachable ≥ 5 s during a live call | **fault** ("Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."), then hangs up, reports `error` when the core is back | 5 000 ms |
 
-Rules: two local phrases never play within 1 s of each other; a local phrase is always cuttable;
-a `say` that arrives while a local phrase plays waits for it (they are ≤ 1.5 s). Each local phrase is
+Rules: the acknowledgement, filler, long wait and "still there" never start within 1 s of the last
+local phrase's end ("not heard" and the fault sentence answer an event and wait for no gap); none
+of the first three plays while a turn of the caller is open (from its speech start to its final or
+unheard words, its pauses included); a local phrase is always cuttable; a `say` that arrives while
+a local phrase plays waits for it (an acknowledgement is about 0.5 s and a filler about 1.7 s, but
+the long wait, 55 characters, about 3 s and the fault sentence, 77, longer still: B2's TIMING read
+520 ms of audio for 8 characters, 1 640 ms for 28 and 2 840 ms for 53). Each local phrase is
 reported as `phrase{set, index}`: the core appends a `holding` turn **with the policy's text** (the
 bridge sends no text back) and counts a filler or long wait as the holding phrases of that wait, so
 its own 4 s / 10 s holding timer does not play over them.
@@ -143,8 +148,9 @@ Target ≤ 300 ms from the caller's onset to the last agent frame (report, roadm
 whose final transcript is only backchannel ("hı hı", "evet", "tamam", …) after a cut is flagged in
 the trace (false barge-in rate is measured, no resume in V1).
 
-**Playback**: a text is split into sentences (abbreviations, decimals and clock times kept
-whole), and each sentence is synthesised as one EMA stream. The next sentence is synthesised while
+**Playback**: a text is split into sentences (abbreviations, decimals, clock times and ordinals
+kept whole; a piece of fewer than three words joins the next, as the speak service cuts, both held
+to one table), and each sentence is synthesised as one EMA stream. The next sentence is synthesised while
 the current one plays, at most one ahead.
 
 What reaches Asterisk is paced by the worker (plan B5 `media::Pacer`, B1 review), because since
@@ -160,7 +166,11 @@ What reaches Asterisk is paced by the worker (plan B5 `media::Pacer`, B1 review)
   not count toward what the caller heard.
 
 **Closing**: the core queues `play{clip: closing}` then `hangup`; the talker plays the closing to
-its mark, waits 400 ms, then hangs up the channel (report: drain + 300–500 ms before BYE).
+its mark (the caller's speech does not cut it), waits 400 ms, then hangs up the channel (report:
+drain + 300–500 ms before BYE). Once a hangup is asked for, or the fault sentence is queued, the
+line is hung up as soon as nothing is left to play, whether the last item played to its end or
+was cut; a second loss of the core changes nothing, and a closing already asked for is not
+replaced by the fault sentence (B4 review).
 
 ## 4. Wire changes (the bridge protocol stays V1-T1/T2's)
 

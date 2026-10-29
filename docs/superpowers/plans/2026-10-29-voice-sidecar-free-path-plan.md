@@ -8297,6 +8297,36 @@ CI then runs `jt_archtest` (Expected: `voice_bridge_depends_on_no_server_crate` 
 - The talker's `Action::Hangup` and `EchoGuard(false)` are immediate. The plan leaves the timing around them to later tasks: the 400 ms after the closing (B6 `HANGUP_TAIL`), the echo guard's 400 ms tail (the listener's `guard_tail_ms`, B3 I3) and the 5 s without the core before `CoreLost` (D2 `CORE_LOST_AFTER`).
 - Checks: `cargo test -p jeeta-voice-bridge` g711 3, text 6, netgsm 2, talker 12, logging 1; clippy (`--all-targets -D warnings`), `cargo fmt --all -- --check` and `cargo doc --no-deps` (`-D warnings`) clean; `jt_archtest` clippy clean.
 
+**B4 review (2026-10-29): what changed.** The reviewer reproduced each finding in a scratch crate. Each fix began with a failing test of its scenario. Steps 4 to 7 above are the first draft: the committed `talker.rs`, `text.rs`, `netgsm.rs` and `tests/logging.rs` supersede them.
+- C1, a cut ending never hung up: the caller talking over the closing or the fault sentence left the line open, and the pacer kept its RTP alive. Every input now ends with `finish`, so a line that is to close (the core's `hangup`, or a loss of the core) closes once nothing is left to play, whether the last item played to its end or was cut. B6 now plays `PlayKind::Closing` with `barge_in: false`, so the closing is heard to its end; the talker's fix holds regardless. Tests: a closing, then a fault sentence, each cut and hung up.
+- I1, `unheard` without a `speech_end` (the listener's 30 s cut, a processing failure) left the queue held back and the guard up. `Unheard` now closes the turn like `Final` and starts what was queued. The echo guard is down whenever nothing plays, even while the caller holds a queue back. Tests: a queued sentence after `unheard`; a `barge_in: false` item that ends while the caller speaks; a loss of the core while the caller speaks still ends in a hangup.
+- I2, a second `CoreLost` cut and restarted the fault sentence. The talker now takes the first only, and none at all once a hangup was asked for. B6's listen arm restarted the loop at once after its stream ended (an `Error` and a `CoreLost` on every pass), so it is now disabled when the stream ends (`listening`). D2 resets `lost` after any post that succeeds, so a flapping core can send `CoreLost` again; a comment there says the talker covers it.
+- I3, fillers played in the pauses of an open turn: `SpeechEnd` is the listener's pause, and the previous `Final`'s wait kept counting. A `turn_open` flag now runs from `SpeechStart` to `Final` or `Unheard`, and no acknowledgement, filler, long wait or "still there" plays while it is set. Test: the reviewer's replay (an acknowledgement, then the caller goes on and pauses at 4 s): nothing until the turn's final.
+- I4, "still there" played between the core's holding lines. Fix in B4: a line of the core (`Speak { agent: false }`, such as a holding line while the agent works on after `expect_reply: false`) ends the wait for the caller. Test: an agent sentence, a holding line at 5.5 s, then nothing for 20 s. Cleaner later, and noted for phase C: carry `expect_reply` on `Command::Say` (jt_calls wire, serde default `true`), so the talker waits only after a sentence that expects a reply. That would also hold if a policy's `slow_agent_s` reached 9 s, where the first holding line would come after "still there".
+- I5, sentences:
+  - The worker cut "3. katta" and "1. seçenek". A period after a number written in digits, before a word in lower case, now ends no sentence.
+  - The worker also sent "Evet. Tamam. Yarın görüşürüz." as three requests, while the speak service keeps it whole. It now joins a piece of fewer than three words to the next one, and the last such piece to the one before it, as the speak service does.
+  - Both now cut after "…".
+  - The speak service (`jeeta_speak.py`) gained the ordinal rule and "…" in its splitter, `PIPELINE_VERSION` 2, and the ordinal rule in `pipeline()`, so its voice id changes. Its image is to be rebuilt (the coordinator's step; the server is untouched).
+  - One table, `speech/speak/tests/speak_sentence_cases.py` (19 cases, one JSON array per line), is read by pytest (parametrized) and by the worker's `texts_are_cut_where_the_speak_service_cuts_them`. 3,5, 14:00, 14.30, 1.250, Dr., Prof.Dr. and ?! keep their behaviour.
+- I6, `dial_string` took any ten digits after +90. It now takes national numbers starting 2, 3, 4 or 5 (geographic and mobile), 800 and 850, and refuses the rest: 0 (abroad through the national prefix), 1, 6, 7, 9 and the other 8xx (the coordinator's decision, the owner informed). D2's refusal line and log, and the slice's usage line, say so.
+- I7, logging: an allowlist instead of a denylist of eleven words, over sources that had no log call.
+  - `tests/logging.rs` reads every file under `src/`. A log call (the level macros, `event!` and the `span!` family) carries only fields on a list (call, command, kind, state, cause, reason, status, count, ms, seq, set, index, error), and formats with `Debug` only cause, status, state, kind and set. Its message is a literal with no interpolation, and no value names a text word (text, texts, transcript, sentence, sentences, utterance, words, digit, digits, e164, to_e164, dial, phone, number, password, key, url, body, hotwords, pcm, audio).
+  - `#[instrument]` needs `skip_all`. `dbg!` is never allowed. Print macros appear only in `main.rs` and `slice.rs`, and print no text there but the slice's opt-in `println!("caller: {text}")`. A file that names `reqwest::Error` must call `without_url`.
+  - The rules are checked on 15 samples taken from B6's and D2's calls (all pass) and on 20 leaks (all caught), so the test proves something before the bridge logs.
+  - `talker::Item`, `talker::Input` and `text::Sentence` print a text's length in `Debug` (`text::Redacted`, `<36 chars>`), held by `tests/redaction.rs`.
+  - jt_calls' `Command` and `BridgeEvent` keep their derived `Debug` (they are the core's types); the `?` rule keeps them out of the bridge's logs. B5's `Heard` already prints no word.
+- M1: a loss of the core with nothing playing now reports what was queued as `Action::Dropped` (B6 sends `said{seq, 0}` for each line of the core), and a closing already asked for plays to its end instead of being replaced by the fault sentence.
+- M2: the talker's module docs and the design's §3 rules say which phrases wait for the 1 s gap ("not heard" and the fault sentence do not). The spec's "≤ 1.5 s" is corrected from B2's TIMING: the long wait is about 3 s.
+- M3: `bul`, `tel`, `sok` and `no` stay abbreviations, for parity with the speak service. A note says what that costs, and a table case ("Kutuyu rafa sok. …") shows it.
+- M4: G.711's ends of scale are pinned (μ-law ±32767 to 0x80/0x00, A-law to 0xAA/0x2A, and back). All 256 code words survive a round trip (μ-law 0x7F comes back as 0xFF). Every one of the 65 536 samples comes back within half its segment's step, where the old bound let more than a step through. In a mutation pass of three edits to `g711.rs`, two fail these tests; the third (μ-law's clip at 32 000 instead of 32 635) gives the same code words, so no test can tell it apart.
+- M5: Q.850 1, 3 and 28 before the answer are `netgsm::permanent_failure`, a `permanent: bridge: …` line. B6 reports it as the call's `error`, the distinction jt_calls already has: a failure line's kind, the same one D2 uses for a refused number. A `hangup` would read as the transient `failed`.
+- Plan and spec text corrected so later tasks keep these fixes:
+  - B6 `call.rs`: the closing's `barge_in`, the `Dropped` arm, the listen arm's `listening` guard, `permanent_failure` before the answer, `PlayKind` imported; the slice's `SLICE_TO` line.
+  - D2: the refusal line and its log, and the `lost` comment.
+  - Design §3: the "still there" row, the rules, playback and closing.
+- Checks after the round: `cargo test -p jeeta-voice-bridge` g711 5, logging 3, netgsm 4, redaction 4, talker 22, text 10 (48); clippy, fmt and doc clean. The speech tests (Windows, a scratch venv with the pinned pytest, numpy and websockets) give 200 passed and 28 skipped, against 180 and 28 before.
+
 ### Task B5: The worker's adapters (config, phrase cache, trace, ARI, media, speech)
 
 **Files:**
@@ -9861,7 +9891,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use jt_calls::{BridgeEvent, Command, DialScript, PhraseSet};
+use jt_calls::{BridgeEvent, Command, DialScript, PhraseSet, PlayKind};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
@@ -10041,7 +10071,12 @@ pub async fn run_call(deps: Arc<CallDeps>, setup: CallSetup, mut rx: mpsc::Recei
             Some(ToCall::Ari(AriEvent::Answered { channel, .. })) if channel == id => break,
             Some(ToCall::Ari(AriEvent::Gone { channel, cause })) if channel == id => {
                 info!(call = %id, cause = ?cause, "the line closed before an answer");
-                reporter.send(BridgeEvent::Hangup { cause: netgsm::hangup_cause(cause, false).into() }).await;
+                // A number that cannot be called at all fails for good (B4 review M5).
+                let event = match netgsm::permanent_failure(cause, false) {
+                    Some(line) => BridgeEvent::Error { failure_line: line.into() },
+                    None => BridgeEvent::Hangup { cause: netgsm::hangup_cause(cause, false).into() },
+                };
+                reporter.send(event).await;
                 return;
             }
             Some(ToCall::Command(Command::Hangup)) => {
@@ -10203,6 +10238,9 @@ impl Live {
         }
         let mut delivered: Option<oneshot::Receiver<()>> = None;
         let mut hangup_at: Option<tokio::time::Instant> = None;
+        // A closed listener's stream resolves at once on every pass: its arm is disabled once it
+        // ends, so the fault sentence it asks for plays instead of a tight loop (B4 review I2).
+        let mut listening = true;
         let mut tick = tokio::time::interval(Duration::from_millis(20));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -10216,7 +10254,7 @@ impl Live {
                         break;
                     }
                 },
-                m = listen_rx.next() => match m {
+                m = listen_rx.next(), if listening => match m {
                     Some(Ok(Message::Text(t))) => {
                         if let Ok(h) = serde_json::from_str::<Heard>(&t) {
                             self.heard(h).await;
@@ -10224,6 +10262,7 @@ impl Live {
                     }
                     Some(Ok(_)) => {}
                     _ => {
+                        listening = false;
                         warn!(call = %self.id, "the listener closed");
                         let failure_line = "transient: bridge: the listener stopped during the call".to_owned();
                         self.reporter.send(BridgeEvent::Error { failure_line }).await;
@@ -10326,6 +10365,14 @@ impl Live {
                 }
             }
             Action::Cut { item, dropped } => self.cut(item, dropped).await,
+            // Queued while the caller held them back, and dropped when the core was lost (B4 review M1).
+            Action::Dropped(items) => {
+                for d in items {
+                    if let Source::Core { seq, .. } = d.source {
+                        self.reporter.send(BridgeEvent::Said { seq, interrupted_at_char: Some(0), tts_ms: None }).await;
+                    }
+                }
+            }
             Action::Hangup => self.pending_hangup = true,
         }
     }
@@ -10572,8 +10619,11 @@ impl Live {
                 }
                 self.input(Input::Speak { seq, text, barge_in: allow_barge_in, agent: true }).await;
             }
-            Command::Play { seq, text, .. } => {
-                self.input(Input::Speak { seq, text, barge_in: true, agent: false }).await;
+            Command::Play { seq, clip, text, .. } => {
+                // The closing is heard to its end (B4 review C1; the talker hangs up after a cut
+                // one all the same); every other line of the core may be cut.
+                let barge_in = clip != PlayKind::Closing;
+                self.input(Input::Speak { seq, text, barge_in, agent: false }).await;
             }
             Command::Hangup => self.input(Input::HangupWhenDone).await,
             Command::Transfer { to } => {
@@ -10765,7 +10815,7 @@ pub async fn main(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     let Some(dial) = std::env::var("SLICE_TO").ok().as_deref().and_then(netgsm::dial_string) else {
-        eprintln!("SLICE_TO must hold a +90 number");
+        eprintln!("SLICE_TO must hold a number the line may call (+90 and 2, 3, 4, 5, 800 or 850)");
         return ExitCode::from(2);
     };
     let config = match Config::from_env(|k| std::env::var(k).ok(), false) {
@@ -13068,8 +13118,11 @@ async fn start_call(
         taken: None,
     };
     let Some(dial) = netgsm::dial_string(to_e164) else {
-        warn!(call, "a dial outside Türkiye was refused");
-        let _ = reports.send(refuse("permanent: bridge: this line calls Turkish numbers only")).await;
+        // Geographic, mobile, 0800 and 0850 numbers only (B4 review I6).
+        warn!(call, "a number the line may not call was refused");
+        let _ = reports
+            .send(refuse("permanent: bridge: this line calls Turkish geographic, mobile, 0800 and 0850 numbers only"))
+            .await;
         return;
     };
     if calls.lock().map(|m| !m.is_empty()).unwrap_or(true) {
@@ -13128,6 +13181,8 @@ async fn post_reports(jeeta: Arc<JeetaClient>, mut rx: mpsc::Receiver<Report>, c
             match jeeta.events(&body).await {
                 Ok(_) => {
                     failing_since = None;
+                    // A core that comes back and goes again sends `CoreLost` again; the talker
+                    // takes the first only (B4 review I2), so the fault sentence never restarts.
                     lost = false;
                     if let Some(t) = taken {
                         let _ = t.send(());
