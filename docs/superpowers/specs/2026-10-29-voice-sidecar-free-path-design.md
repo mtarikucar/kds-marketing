@@ -95,10 +95,15 @@ superseded by this addendum.
   user), copied from `/root/voicegate/p102` without being printed; the ARI password in
   `secrets/ari_users.conf` (0600) and in the bridge env files (0600 root, read by systemd); the
   bridge key in the env files. None is in the repo, a log or chat.
-- **Firewall**: no new inbound rule. Gate V1 showed conntrack admits NetGSM's replies, OPTIONS and
-  INVITEs on the registered socket; Asterisk sends RTP first (silence frames) so the RTP replies are
-  admitted the same way. ARI binds 127.0.0.1 only. If one-way audio is seen, the fallback rule is a
-  UDP allow from NetGSM's media network to 40000–40099 (plan task B1, step "one-way audio").
+- **Firewall**: no new inbound rule, and a default-deny firewall is a precondition (plan task B1,
+  Step 7: ufw active with `Default: deny (incoming)`, or an iptables INPUT policy of DROP; otherwise
+  stop). Gate V1 showed conntrack admits NetGSM's replies, OPTIONS and INVITEs on the registered
+  socket. RTP replies are admitted the same way once this host has sent RTP first. Asterisk does
+  not do that on its own: since 22.9.0, chan_websocket generates no silence frames (ChangeLog
+  22.9.0, "Remove silence generation and frame padding"), and `transmit_silence` covers only waits,
+  not a bridged channel. So the worker's pacer (§3, Playback) writes a frame every 20 ms from
+  `MEDIA_START`. ARI binds 127.0.0.1 only. If one-way audio is seen, the fallback rule is a UDP
+  allow from NetGSM's media network to 40000–40099 (plan task B1, step "one-way audio").
 
 ## 3. The talker: one call's state machine
 
@@ -132,10 +137,20 @@ whose final transcript is only backchannel ("hı hı", "evet", "tamam", …) aft
 the trace (false barge-in rate is measured, no resume in V1).
 
 **Playback**: a text is split into sentences (abbreviations, decimals and clock times kept
-whole), each sentence synthesised as one EMA stream, written to Asterisk as soon as it arrives
-(Asterisk re-times and queues ≤ 1 000 frames; XOFF/XON honoured), followed by `MARK_MEDIA`. The
-next sentence is synthesised while the current one plays, at most one ahead. Asterisk keeps sending
-silence frames while nothing plays (no dead-line feeling, NAT/conntrack kept alive).
+whole), and each sentence is synthesised as one EMA stream. The next sentence is synthesised while
+the current one plays, at most one ahead.
+
+What reaches Asterisk is paced by the worker (plan B5 `media::Pacer`, B1 review), because since
+22.9 chan_websocket sends nothing to the line when the worker writes nothing:
+- One frame every 20 ms from `MEDIA_START` for the whole call: the queued audio's next frame, or a
+  silence frame (0xD5 A-law, 0xFF μ-law) when the worker's own buffer is empty. This gives no
+  dead-line feeling, keeps NAT and conntrack alive, and stops a carrier's RTP timeout.
+- At most about 3 frames queued in Asterisk, so a barge-in's `FLUSH_MEDIA` drops at most 60 ms.
+- Paused on `MEDIA_XOFF`, resumed on `MEDIA_XON`, and resumed at once after a flush.
+- Whole 160-byte frames: a streamed chunk's remainder waits for the rest of its sentence, and the
+  sentence's tail is padded with silence.
+- `MARK_MEDIA` goes right after a sentence's last real frame. Silence frames carry no mark and do
+  not count toward what the caller heard.
 
 **Closing**: the core queues `play{clip: closing}` then `hangup`; the talker plays the closing to
 its mark, waits 400 ms, then hangs up the channel (report: drain + 300–500 ms before BYE).

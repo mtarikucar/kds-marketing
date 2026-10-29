@@ -2455,13 +2455,42 @@ On the Windows dev machine (`core.autocrlf=true`) a plain `git archive` writes C
 
 **Files:**
 - Create: `rust/bridge/voice/asterisk/Dockerfile`
-- Create: `rust/bridge/voice/asterisk/etc/{asterisk.conf,modules.conf,logger.conf,cdr.conf,cel.conf,pjsip.conf,extensions.conf,http.conf,ari.conf,rtp.conf}`
+- Create: `rust/bridge/voice/asterisk/etc/{asterisk.conf,modules.conf,logger.conf,cdr.conf,cel.conf,pjsip.conf,extensions.conf,http.conf,ari.conf,rtp.conf,manager.conf}`
 - Create: `rust/bridge/voice/asterisk/test_configs.py`
+- Create: `rust/bridge/voice/asterisk/.dockerignore` (`*`: the image copies nothing from its context)
+- Create: `rust/bridge/voice/asterisk/sip_probe.py` and `test_sip_probe.py` (Step 9's OPTIONS probe)
 - Create: `rust/bridge/voice/deploy/jeeta-asterisk.service`
 - Create: `rust/bridge/voice/deploy/jeeta-voice.tmpfiles`
+- Create: `rust/bridge/voice/deploy/jeeta-voice.sysctl` (reserves the RTP range, Step 8)
 - Create: `rust/bridge/voice/speech/pytest.ini`
 - Create: `rust/bridge/voice/.gitattributes` (`* text=auto eol=lf`: the archive the host receives keeps LF, see the section intro)
-- Create: `rust/bridge/voice/.gitignore` (`__pycache__/`: the repository ignores no Python cache, and `git add rust/bridge/voice/asterisk` after a test run would take it)
+- Create: `rust/bridge/voice/.gitignore` (`__pycache__/`: the repository ignores no Python cache, and `git add rust/bridge/voice/asterisk` after a test run would take it; and `asterisk/etc/secrets/`)
+- Modify: `docs/operations/voice-bridge.md` (alert when the registration reads `Rejected`)
+
+**Review revisions (PR #382, B1 review, 2026-10-29).** These are in the code below:
+- The endpoint is identified by address only (`identify_by=ip`, `allow_transfer=no`, `match=sip5.netsantral.com,185.88.7.227`).
+- A 403 stops the registration (`forbidden_retry_interval=0`).
+- There is no persistent volume: astdb is on the run tmpfs, and `[directories]` is applied.
+- AMI is off in an explicit `manager.conf`.
+- The image checks each required module and runs `asterisk -V`.
+- The container is hardened (`--cap-drop ALL`, `no-new-privileges`, `--pids-limit 256`, capped json-file logs, `noexec,nosuid,nodev` tmpfs, `Restart=always`, `--init`).
+- The config test guards each invariant, and 56 of 56 mutations fail it.
+- Steps 7–9 gate on the firewall, reserve the RTP range and probe the identification.
+
+**Security check (2026-10-29).** This decision is needed before Step 9.
+- **Asterisk 22.11.0: no open advisory.** The newest advisories in `asterisk/asterisk` were published on 2026-06-25 (20 of them). Each is patched in 22.10.1, and 22.11.0's ChangeLog diffs from 22.10.1, so 22.11.0 carries those fixes.
+- **pjproject 2.17 (bundled): 40 advisories have been published since its release (2026-04-22), and none has a patched release.** Neither Asterisk's 22.12.0-rc3 nor `master` bumps pjproject (still 2.17) or adds a patch for them (`third-party/pjproject/patches` holds only build fixes).
+- Most of them are in parts Asterisk does not use: pjmedia audio and video, pjsua/pjsua2, ICE/TURN/STUN, TLS/DTLS, the HTTP client, the telnet CLI, UPnP, AVI and H.263.
+- These touch the code Asterisk runs:
+  - the SIP parser: GHSA-pjx6-7vrm-3w6f (high, pre-auth over-read via an empty multipart body) and GHSA-277r-3q2j-mxcw;
+  - the SDP parser and negotiator: GHSA-rfwg-w9gq-9mw2 (high, OOB write), GHSA-m9g3-jcj8-qjfm (high, a=crypto), GHSA-wf9x-v65x-5qh3 (high) and GHSA-966q-2r4w-549m (high, RED);
+  - the registration client: GHSA-xc62-j9h2-mp84 (high, Service-Route in a registration response) and GHSA-3659-543c-qm3g;
+  - dialog routing: GHSA-j4c2-253v-jgxw (high);
+  - the PIDF/XML/NOTIFY bodies: GHSA-9vx3-qvj7-65c7, GHSA-cgmx-7mqj-77qp and GHSA-jw49-x2jp-8m4v.
+- Here they are reachable only from NetGSM's signalling path. ufw denies incoming (Step 7 gate), and the only SIP admitted is conntrack's replies from `sip5.netsantral.com:5060` to 5070. A blind attacker would have to spoof that exact UDP 4-tuple.
+- Options for the coordinator:
+  1. Deploy 22.11.0 for the B7 slice with that exposure, and rebuild when Asterisk ships pjproject fixes (watch `asterisk/asterisk` `third-party/pjproject` and pjproject 2.18).
+  2. Build the bundled pjproject from a pjproject `master` commit that holds the fixes. This is not tried here, and Asterisk's patches may not apply.
 
 **Version check (2026-10-29).** `asterisk-22.11.0.tar.gz` is the newest 22.x release on downloads.asterisk.org (22.12.0 is at rc3). Its published `asterisk-22.11.0.sha256` reads `3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94`, and the tarball fetched from both `…/asterisk/` and `…/asterisk/releases/` hashes to that value. The Dockerfile fetches from `releases/`, because the top directory keeps only the current release and drops 22.11.0 once 22.12.0 ships. The bundled pjproject is 2.17. Configure fetches it from `raw.githubusercontent.com/asterisk/third-party` and checks it against the MD5 inside the verified tarball.
 
@@ -2479,30 +2508,100 @@ addopts = -q
 `rust/bridge/voice/asterisk/test_configs.py`:
 
 ```python
-"""The Asterisk configuration shipped in the repository: no secret, loopback-only control,
-no verbose console (dialplan lines carry phone numbers), extension 102 over UDP."""
+"""The Asterisk configuration shipped in the repository, and the container it runs in.
+
+Invariants: no secret in the repository; control (ARI) on loopback only and no AMI; no verbose
+console (dialplan lines carry phone numbers); one UDP transport and one endpoint, NetGSM's,
+identified by its address only; a dialplan that can only hand a call to the bridge or hang it up;
+state on tmpfs; a read-only, unprivileged container; every module the bridge needs built and
+never disabled."""
 import pathlib
 import re
 
-ETC = pathlib.Path(__file__).parent / "etc"
+HERE = pathlib.Path(__file__).parent
+ETC = HERE / "etc"
+UNIT = HERE.parent / "deploy" / "jeeta-asterisk.service"
+DOCKERFILE = HERE / "Dockerfile"
+
+NETGSM_HOST = "sip5.netsantral.com"
+CREDENTIAL_KEYS = {"password", "secret", "md5_cred", "password_digest", "oauth_secret", "refresh_token"}
+ALLOWED_DIRECTIVES = {
+    "pjsip.conf": ["#include secrets/pjsip_auth.conf"],
+    "ari.conf": ["#include secrets/ari_users.conf"],
+}
+DIALPLAN_APPS = {"stasis", "hangup"}
+# The modules the bridge cannot work without (B1 review); the Dockerfile checks each is built.
+REQUIRED_MODULES = [
+    "chan_websocket", "chan_pjsip", "res_pjsip", "res_pjsip_session", "res_pjsip_sdp_rtp",
+    "res_pjsip_outbound_registration", "res_pjsip_outbound_authenticator_digest",
+    "res_pjsip_endpoint_identifier_ip", "res_rtp_asterisk", "res_http_websocket",
+    "res_websocket_client", "res_ari", "res_ari_asterisk", "res_ari_channels", "res_ari_bridges",
+    "res_ari_events", "res_stasis", "app_stasis", "bridge_simple", "bridge_softmix",
+    "res_timing_timerfd", "codec_alaw", "codec_ulaw",
+]
 
 
 def read(name: str) -> str:
     return (ETC / name).read_text(encoding="utf-8")
 
 
+def strip_comment(raw: str) -> str:
+    return raw.split(";", 1)[0].strip()
+
+
+def sections(name: str) -> list[tuple[str, str | None, list[tuple[str, str]]]]:
+    """The file's sections in order: (name, template suffix or None, [(key lowercased, value)])."""
+    out: list[tuple[str, str | None, list[tuple[str, str]]]] = []
+    for raw in read(name).splitlines():
+        line = strip_comment(raw)
+        if not line or line.startswith("#"):
+            continue
+        header = re.match(r"^\[([^\]]+)\]\s*(\(.*\))?$", line)
+        if header:
+            out.append((header.group(1).strip(), header.group(2), []))
+            continue
+        key, sep, value = line.partition("=")
+        assert sep, f"{name}: not a key = value line: {line}"
+        assert out, f"{name}: a setting before the first section: {line}"
+        value = value[1:] if value.startswith(">") else value
+        out[-1][2].append((key.strip().lower(), value.strip()))
+    return out
+
+
+def values(items: list[tuple[str, str]], key: str) -> list[str]:
+    return [v for k, v in items if k == key]
+
+
+def pjsip_of_type(kind: str) -> list[tuple[str, list[tuple[str, str]]]]:
+    return [
+        (name, items)
+        for name, _, items in sections("pjsip.conf")
+        if kind in [v.lower() for v in values(items, "type")]
+    ]
+
+
 def test_no_secret_lives_in_the_repository():
-    for path in ETC.glob("*.conf"):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            assert not re.match(r"\s*password\s*=", line), f"{path.name}: {line}"
-    assert "#include secrets/pjsip_auth.conf" in read("pjsip.conf")
-    assert "#include secrets/ari_users.conf" in read("ari.conf")
+    for path in sorted(ETC.glob("*.conf")):
+        for name, _, items in sections(path.name):
+            for key, _ in items:
+                assert key not in CREDENTIAL_KEYS, f"{path.name} [{name}] sets {key}"
+        directives = [
+            strip_comment(line) for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("#")
+        ]
+        assert directives == ALLOWED_DIRECTIVES.get(path.name, []), f"{path.name}: {directives}"
 
 
-def test_control_binds_loopback_only():
-    http = read("http.conf")
-    assert re.search(r"^bindaddr\s*=\s*127\.0\.0\.1\s*$", http, re.M)
-    assert re.search(r"^bindport\s*=\s*8188\s*$", http, re.M)
+def test_control_binds_loopback_only_and_ami_is_off():
+    http = sections("http.conf")
+    assert [n for n, _, _ in http] == ["general"]
+    general = http[0][2]
+    assert values(general, "bindaddr") == ["127.0.0.1"]
+    assert values(general, "bindport") == ["8188"]
+    assert not [k for k, _ in general if k.startswith("tls")], "http.conf must not enable TLS"
+    manager = sections("manager.conf")
+    assert [n for n, _, _ in manager] == ["general"], "manager.conf holds no AMI user"
+    assert values(manager[0][2], "enabled") == ["no"]
 
 
 def test_console_logs_warnings_and_errors_only():
@@ -2512,39 +2611,180 @@ def test_console_logs_warnings_and_errors_only():
     assert re.search(r"^enable\s*=\s*no\s*$", read("cel.conf"), re.M)
 
 
-def test_extension_102_registers_over_udp():
-    pjsip = read("pjsip.conf")
-    assert "client_uri=sip:102-8508407303@sip5.netsantral.com" in pjsip
-    assert "server_uri=sip:sip5.netsantral.com" in pjsip
-    assert "protocol=udp" in pjsip
-    assert "bind=0.0.0.0:5070" in pjsip
-    assert "allow=alaw,ulaw" in pjsip
-    # Asterisk stops registering for good after max_retries (default 10) timeouts in a row: a
-    # five-minute NetGSM outage must not leave the line unregistered until a restart.
-    assert re.search(r"^max_retries=10000$", pjsip, re.M)
+def test_state_lives_on_the_run_tmpfs():
+    directories = [(mark, items) for name, mark, items in sections("asterisk.conf") if name == "directories"]
+    assert len(directories) == 1, "asterisk.conf has one [directories]"
+    mark, items = directories[0]
+    assert mark is None, f"[directories]{mark} is a template, which Asterisk does not apply"
+    assert values(items, "astdbdir") == ["/var/run/asterisk"]
+    assert values(items, "astrundir") == ["/var/run/asterisk"]
+
+
+def test_extension_102_registers_over_one_udp_transport():
+    for name, mark, items in sections("pjsip.conf"):
+        assert mark is None, f"pjsip.conf [{name}] uses a template: {mark}"
+        assert len(values(items, "type")) == 1, f"pjsip.conf [{name}] needs exactly one type"
+    transports = pjsip_of_type("transport")
+    assert len(transports) == 1, f"one transport, not {len(transports)}"
+    _, transport = transports[0]
+    assert values(transport, "protocol") == ["udp"]
+    assert values(transport, "bind") == ["0.0.0.0:5070"]
+    registrations = pjsip_of_type("registration")
+    assert len(registrations) == 1
+    _, reg = registrations[0]
+    assert values(reg, "client_uri") == [f"sip:102-8508407303@{NETGSM_HOST}"]
+    assert values(reg, "server_uri") == [f"sip:{NETGSM_HOST}"]
+    # A 403 stops for good; timeouts and 5xx are retried for days, not stopped after ten tries.
+    assert values(reg, "forbidden_retry_interval") == ["0"]
+    assert values(reg, "max_retries") == ["10000"]
+    assert values(reg, "auth_rejection_permanent") in ([], ["yes"])
     rtp = read("rtp.conf")
     assert "rtpstart=40000" in rtp and "rtpend=40099" in rtp
 
 
-def test_inbound_calls_enter_the_bridge_application():
+def test_the_only_endpoint_is_netgsm_identified_by_its_address():
+    names = [name.lower() for name, _, _ in sections("pjsip.conf")]
+    assert "anonymous" not in names, "an [anonymous] endpoint would take unidentified requests"
+    endpoints = pjsip_of_type("endpoint")
+    assert [name for name, _ in endpoints] == ["netgsm"], f"endpoints: {[n for n, _ in endpoints]}"
+    _, endpoint = endpoints[0]
+    assert values(endpoint, "identify_by") == ["ip"]
+    assert values(endpoint, "allow_transfer") == ["no"]
+    assert values(endpoint, "context") == ["jeeta-in"]
+    assert not values(endpoint, "auth"), "no inbound auth object: identification is by address"
+    keys = [k for k, _ in endpoint]
+    assert values(endpoint, "disallow") == ["all"]
+    assert keys.index("disallow") < keys.index("allow"), "disallow=all must come before allow"
+    every_allow = [v for _, _, items in sections("pjsip.conf") for v in values(items, "allow")]
+    assert every_allow == ["alaw,ulaw"], f"allow: {every_allow}"
+    identifies = pjsip_of_type("identify")
+    assert len(identifies) == 1
+    _, identify = identifies[0]
+    assert values(identify, "endpoint") == ["netgsm"]
+    (match,) = values(identify, "match")
+    entries = [e.strip() for e in match.split(",")]
+    assert entries[0] == NETGSM_HOST, f"match starts with {entries[0]}"
+    for entry in entries[1:]:
+        address = re.fullmatch(r"(\d{1,3}(?:\.\d{1,3}){3})(?:/(\d{1,2}))?", entry)
+        assert address, f"match entry {entry}: a host address or a /24-/32 network only"
+        assert int(address.group(2) or 32) >= 24, f"match entry {entry} is too wide"
+
+
+def test_inbound_calls_can_only_enter_the_bridge_application():
+    plan = sections("extensions.conf")
+    assert [name for name, _, _ in plan] == ["general", "jeeta-in"]
+    apps = []
+    for key, value in plan[1][2]:
+        assert key in {"exten", "same"}, f"extensions.conf: {key} => {value}"
+        fields = value.split(",", 2 if key == "exten" else 1)
+        app = re.match(r"\s*([A-Za-z_]+)", fields[-1])
+        assert app, f"extensions.conf: no application in {value}"
+        apps.append(app.group(1).lower())
+    assert set(apps) <= DIALPLAN_APPS, f"applications: {sorted(set(apps))}"
+    assert "stasis" in apps
     assert "Stasis(jeeta-voice,in)" in read("extensions.conf")
+
+
+def test_the_container_runs_read_only_and_unprivileged():
+    unit = UNIT.read_text(encoding="utf-8")
+    for flag in [
+        "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--pids-limit 256",
+        "--network host", "--user 1500:1500", "--init",
+    ]:
+        assert flag in unit, f"jeeta-asterisk.service lacks {flag}"
+    assert "/var/lib/asterisk" not in unit, "no persistent volume: state lives on tmpfs"
+    tmpfs = re.findall(r"--tmpfs (\S+)", unit)
+    assert len(tmpfs) == 3
+    for mount in tmpfs:
+        options = mount.split(":", 1)[1].split(",")
+        assert {"noexec", "nosuid", "nodev"} <= set(options), f"{mount}"
+    assert "/etc/jeeta-voice/asterisk:/etc/asterisk:ro" in unit
+    assert re.search(r"^Restart=always$", unit, re.M)
+
+
+def test_every_module_the_bridge_needs_is_built_and_never_disabled():
+    modules = sections("modules.conf")
+    noload = {v.removesuffix(".so") for _, _, items in modules for v in values(items, "noload")}
+    assert not noload & set(REQUIRED_MODULES), f"disabled: {sorted(noload & set(REQUIRED_MODULES))}"
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    checked = re.search(r"for m in ([^;]+);", dockerfile)
+    assert checked, "the Dockerfile checks the required modules in a `for m in ...;` loop"
+    assert [t for t in checked.group(1).split() if t != "\\"] == REQUIRED_MODULES
+```
+
+`rust/bridge/voice/asterisk/test_sip_probe.py` (the probe of Step 9, below):
+
+```python
+"""The SIP OPTIONS probe of B1 Step 9: one well-formed request, and only the status line back."""
+import socket
+import threading
+
+from sip_probe import options, probe
+
+
+def test_the_request_is_one_well_formed_options():
+    raw = options("203.0.113.7", 5070, "netgsm", ("198.51.100.2", 40123), "abc123").decode("ascii")
+    lines = raw.split("\r\n")
+    assert lines[0] == "OPTIONS sip:203.0.113.7:5070 SIP/2.0"
+    assert "Via: SIP/2.0/UDP 198.51.100.2:40123;branch=z9hG4bKabc123;rport" in lines
+    assert "From: <sip:netgsm@probe.invalid>;tag=abc123" in lines
+    assert "CSeq: 1 OPTIONS" in lines
+    assert raw.endswith("Content-Length: 0\r\n\r\n")
+
+
+def answer_once(reply: bytes) -> tuple[int, threading.Thread]:
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", 0))
+    server.settimeout(5)
+
+    def run():
+        with server:
+            request, peer = server.recvfrom(65535)
+            assert request.startswith(b"OPTIONS ")
+            server.sendto(b"SIP/2.0 100 Trying\r\n\r\n", peer)
+            server.sendto(reply, peer)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return server.getsockname()[1], thread
+
+
+def test_the_probe_prints_the_final_status_line_and_nothing_else():
+    reply = (
+        b"SIP/2.0 401 Unauthorized\r\n"
+        b"From: <sip:05321234567@probe.invalid>;tag=x\r\n"
+        b'WWW-Authenticate: Digest realm="asterisk",nonce="n"\r\n\r\n'
+    )
+    port, thread = answer_once(reply)
+    assert probe("127.0.0.1", port, "netgsm") == "SIP/2.0 401 Unauthorized"
+    thread.join()
+
+
+def test_silence_reads_no_answer():
+    closed = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    closed.bind(("127.0.0.1", 0))
+    port = closed.getsockname()[1]
+    with closed:  # bound but never answering
+        assert probe("127.0.0.1", port, "netgsm", timeout_s=0.3) == "no answer"
 ```
 
 - [ ] **Step 2: Run it to see it fail**
 
-Run (Windows or Linux, from `rust/bridge/voice`, Python 3.12 with `pip install pytest==8.4.2`): `python -I -m pytest -c speech/pytest.ini asterisk/test_configs.py`
-Expected: FAIL (`FileNotFoundError` for `etc/http.conf`).
+Run (Windows or Linux, from `rust/bridge/voice`, Python 3.12 with `pip install pytest==8.4.2`): `python -I -m pytest -c speech/pytest.ini asterisk`
+Expected: FAIL (`FileNotFoundError` for the configs, `ModuleNotFoundError: sip_probe`).
 
 - [ ] **Step 3: Write the configuration**
 
 `rust/bridge/voice/asterisk/etc/asterisk.conf`:
 
 ```ini
-[directories](!)
+; Applied as written (no "(!)" template mark). The image is read-only: the database lives on the
+; run directory's tmpfs, so nothing persists between starts.
+[directories]
 astetcdir => /etc/asterisk
 astmoddir => /usr/lib/asterisk/modules
 astvarlibdir => /var/lib/asterisk
-astdbdir => /var/lib/asterisk
+astdbdir => /var/run/asterisk
 astkeydir => /var/lib/asterisk
 astdatadir => /var/lib/asterisk
 astagidir => /var/lib/asterisk/agi-bin
@@ -2556,6 +2796,8 @@ astsbindir => /usr/sbin
 [options]
 verbose = 0
 debug = 0
+; Silence while a channel waits (Wait, Record, ...). It has no effect on a channel in a bridge: the
+; websocket media channel sends nothing unless the worker writes frames (B5/B6 pacer).
 transmit_silence = yes
 ```
 
@@ -2619,9 +2861,13 @@ bind=0.0.0.0:5070
 
 #include secrets/pjsip_auth.conf
 
-; max_retries: Asterisk gives a registration up for good after this many timeouts or 5xx in a row
-; (default 10, five minutes at retry_interval=30). A wrong secret still stops it at once
-; (auth_rejection_permanent stays yes), so NetGSM is not hammered with bad credentials.
+; What a registrar's answer does (Asterisk 22.11, res_pjsip_outbound_registration):
+; - 401/407 to the authenticated REGISTER (a wrong secret): stops for good, until a restart
+;   (auth_rejection_permanent defaults to yes).
+; - 403: stops for good (forbidden_retry_interval=0); retrying would only hammer NetGSM.
+; - 408 (no answer, also DNS or network failure) and 500/502/503/504: retried every
+;   retry_interval (30 s), at most max_retries times in a row (about 83 hours), then it stops.
+; - Any stop reads "Rejected" in `pjsip show registrations`: alert on it (docs/operations/voice-bridge.md).
 [netgsm-reg]
 type=registration
 transport=transport-udp
@@ -2630,7 +2876,7 @@ server_uri=sip:sip5.netsantral.com
 client_uri=sip:102-8508407303@sip5.netsantral.com
 contact_user=102-8508407303
 retry_interval=30
-forbidden_retry_interval=300
+forbidden_retry_interval=0
 max_retries=10000
 expiration=120
 line=yes
@@ -2641,10 +2887,14 @@ type=aor
 contact=sip:sip5.netsantral.com
 qualify_frequency=20
 
+; The only endpoint. No inbound auth: it is identified by NetGSM's source address only
+; (identify_by=ip; the default username,ip would let any From: <sip:netgsm@...> in), or by the
+; random line token Asterisk puts in its registration Contact (line=yes above).
 [netgsm]
 type=endpoint
 transport=transport-udp
 context=jeeta-in
+identify_by=ip
 disallow=all
 allow=alaw,ulaw
 outbound_auth=netgsm-auth
@@ -2658,11 +2908,14 @@ rewrite_contact=yes
 dtmf_mode=rfc4733
 trust_id_inbound=no
 send_pai=no
+allow_transfer=no
 
+; The hostname is resolved when the configuration loads; the literal address keeps the match when
+; DNS fails at start-up. If NetGSM's address changes: update it here, then `pjsip reload`.
 [netgsm]
 type=identify
 endpoint=netgsm
-match=sip5.netsantral.com
+match=sip5.netsantral.com,185.88.7.227
 ```
 
 `rust/bridge/voice/asterisk/etc/extensions.conf`:
@@ -2711,10 +2964,21 @@ rtpstart=40000
 rtpend=40099
 ```
 
+`rust/bridge/voice/asterisk/etc/manager.conf`:
+
+```ini
+; No AMI: the voice bridge drives Asterisk through ARI only (http.conf, loopback).
+[general]
+enabled = no
+webenabled = no
+```
+
 - [ ] **Step 4: Run the config test**
 
-Run: `python -I -m pytest -c speech/pytest.ini asterisk/test_configs.py`
-Expected: `5 passed`.
+Run: `python -I -m pytest -c speech/pytest.ini asterisk`
+Expected: `12 passed` (9 config, 3 probe). The probe module must exist for this run, so write `sip_probe.py` (Step 5) before it.
+
+The config test was mutation-tested. Each of 56 edits fails at least one assertion. The edits include: `Dial`/`System`/`Exec`/`Originate`/`include` in the dialplan; an `[anonymous]` or second endpoint; a template; http `tls*` or `bindaddr=0.0.0.0`; `g722`; `disallow=all` removed or moved after `allow`; `match=0.0.0.0/0` (also `/0.0.0.0` or `/8`); `Password`/`md5_cred`/`secret`/`password_digest`; `#exec`; an extra transport or TCP; `identify_by` removed or `username,ip`; `allow_transfer` removed; inbound `auth`; a 403 retry; `max_retries` removed; AMI on, or `manager.conf` deleted; `(!)` back; astdb off the tmpfs; the volume back; `--cap-drop`/`no-new-privileges`/`--read-only` removed; exec allowed on a tmpfs; `Restart=on-failure`; a required module noloaded or dropped from the Dockerfile check.
 
 - [ ] **Step 5: Write the image and the units**
 
@@ -2727,6 +2991,7 @@ Expected: `5 passed`.
 # the current one. The sha256 is the one downloads.asterisk.org publishes (asterisk-22.11.0.sha256),
 # checked against the tarball itself on 2026-10-29. The bundled pjproject (2.17) is fetched during
 # configure and checked against the MD5 that this verified tarball ships.
+# After the first good build, pin both base images by digest (debian:bookworm-slim@sha256:...).
 FROM debian:bookworm-slim AS build
 ARG ASTERISK_VERSION=22.11.0
 ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
@@ -2737,12 +3002,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libedit-dev libjansson-dev libssl-dev libsqlite3-dev libxml2-dev uuid-dev libcurl4-openssl-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-RUN curl -fsSLo asterisk.tar.gz \
+RUN curl --proto =https --tlsv1.2 -fsSLo asterisk.tar.gz \
       "https://downloads.asterisk.org/pub/telephony/asterisk/releases/asterisk-${ASTERISK_VERSION}.tar.gz" \
  && echo "${ASTERISK_SHA256}  asterisk.tar.gz" | sha256sum -c - \
  && tar -xzf asterisk.tar.gz --strip-components=1 && rm asterisk.tar.gz
 # make install creates a real /out/var/run; in the runtime image /var/run is a symlink to /run, and
 # the COPY below would collide with it, so it is dropped here and made through the symlink there.
+# Headers and man pages are not needed at run time.
 RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
  && make menuselect.makeopts \
  && menuselect/menuselect --disable BUILD_NATIVE --enable chan_websocket --enable chan_pjsip \
@@ -2752,7 +3018,7 @@ RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
       --disable-category MENUSELECT_MOH --disable-category MENUSELECT_EXTRA_SOUNDS \
       menuselect.makeopts \
  && make -j"${MAKE_JOBS}" && make install DESTDIR=/out \
- && rm -rf /out/var/run
+ && rm -rf /out/var/run /out/usr/include /out/usr/share/man
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -2760,15 +3026,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 1500 asterisk && useradd --uid 1500 --gid 1500 --home-dir /var/lib/asterisk \
       --shell /usr/sbin/nologin asterisk
+# Root-owned and read-only at run time: nothing is chowned. The only writable paths are the three
+# tmpfs mounts of the unit (run, log, spool), owned 1500 by their mount options; their empty mount
+# points are made here so the image also starts without them.
 COPY --from=build /out/ /
-# Fail the build, not the first call, when a module needs a library this stage lacks.
+# Fail the build, not the first call: every module the bridge needs is built (the list is
+# asterisk/test_configs.py's REQUIRED_MODULES), no module lacks a library, and the binary runs.
 RUN ldconfig \
+ && for m in chan_websocket chan_pjsip res_pjsip res_pjsip_session res_pjsip_sdp_rtp \
+      res_pjsip_outbound_registration res_pjsip_outbound_authenticator_digest \
+      res_pjsip_endpoint_identifier_ip res_rtp_asterisk res_http_websocket res_websocket_client \
+      res_ari res_ari_asterisk res_ari_channels res_ari_bridges res_ari_events res_stasis app_stasis \
+      bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw; do \
+      test -f "/usr/lib/asterisk/modules/$m.so" || { echo "module $m was not built"; exit 1; }; \
+    done \
  && ! { ldd /usr/sbin/asterisk /usr/lib/libasterisk*.so* /usr/lib/asterisk/modules/*.so 2>&1 \
-        | grep -F 'not found'; }
-RUN mkdir -p /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk \
- && chown -R 1500:1500 /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk
+        | grep -F 'not found'; } \
+ && /usr/sbin/asterisk -V \
+ && install -d -o 1500 -g 1500 -m 0750 /var/run/asterisk /var/log/asterisk /var/spool/asterisk
 USER 1500:1500
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD ["/usr/sbin/asterisk", "-rx", "core waitfullybooted"]
 CMD ["/usr/sbin/asterisk", "-f"]
+```
+
+`rust/bridge/voice/asterisk/.dockerignore`:
+
+```
+# The image downloads its sources and copies nothing from the build context; the configs are
+# mounted at run time, so neither they nor the tests are sent to the daemon.
+*
 ```
 
 `rust/bridge/voice/deploy/jeeta-asterisk.service`:
@@ -2780,19 +3067,23 @@ After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target
 
+# Read-only and unprivileged: no capability is needed (SIP 5070, RTP 40000-40099 and ARI 8188 are
+# above 1024; Asterisk runs without -p, so no realtime scheduling). Nothing persists between starts:
+# the database is on the run tmpfs (asterisk.conf astdbdir).
 [Service]
 Type=simple
 ExecStartPre=-/usr/bin/docker rm -f jeeta-asterisk
-ExecStart=/usr/bin/docker run --rm --name jeeta-asterisk --network host --user 1500:1500 \
-  --cpus 1 --memory 512m --read-only \
-  --tmpfs /var/run/asterisk:uid=1500,gid=1500,mode=0750 \
-  --tmpfs /var/log/asterisk:uid=1500,gid=1500,mode=0750 \
-  --tmpfs /var/spool/asterisk:uid=1500,gid=1500,mode=0750 \
-  -v jeeta-asterisk-lib:/var/lib/asterisk \
+ExecStart=/usr/bin/docker run --rm --name jeeta-asterisk --init --network host --user 1500:1500 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+  --cpus 1 --memory 512m \
+  --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
+  --tmpfs /var/run/asterisk:uid=1500,gid=1500,mode=0750,size=16m,noexec,nosuid,nodev \
+  --tmpfs /var/log/asterisk:uid=1500,gid=1500,mode=0750,size=16m,noexec,nosuid,nodev \
+  --tmpfs /var/spool/asterisk:uid=1500,gid=1500,mode=0750,size=16m,noexec,nosuid,nodev \
   -v /etc/jeeta-voice/asterisk:/etc/asterisk:ro \
   jeeta-asterisk:22.11.0
 ExecStop=/usr/bin/docker stop -t 10 jeeta-asterisk
-Restart=on-failure
+Restart=always
 RestartSec=5s
 
 [Install]
@@ -2802,53 +3093,136 @@ WantedBy=multi-user.target
 `rust/bridge/voice/deploy/jeeta-voice.tmpfiles` (installed as `/etc/tmpfiles.d/jeeta-voice.conf`):
 
 ```
-d /run/jeeta-voice 0770 root jeeta-voice -
+d /run/jeeta-voice 1770 root jeeta-voice -
+```
+
+`rust/bridge/voice/deploy/jeeta-voice.sysctl` (installed as `/etc/sysctl.d/60-jeeta-voice.conf` in Step 8):
+
+```
+# Installed as /etc/sysctl.d/60-jeeta-voice.conf. Asterisk's RTP range (asterisk/etc/rtp.conf) is
+# inside the kernel's ephemeral range (32768-60999): reserved, no outgoing connection takes one of
+# its ports. This value replaces the whole list: merge it with any existing reservation first.
+net.ipv4.ip_local_reserved_ports = 40000-40099
+```
+
+`rust/bridge/voice/asterisk/sip_probe.py` (one OPTIONS, only the status line printed; used in Step 9):
+
+```python
+"""One SIP OPTIONS to host:port; prints only the answer's status line (never a header, which
+could carry a number), or `no answer` after the timeout. Standard library only (B1 Step 9).
+
+    python3 sip_probe.py <host> <port> <from-user>
+"""
+import secrets
+import socket
+import sys
+
+
+def options(host: str, port: int, from_user: str, local: tuple[str, int], tag: str) -> bytes:
+    """An OPTIONS from <sip:from_user@probe.invalid>, answered to `local` (rport)."""
+    local_host, local_port = local[0], local[1]
+    return (
+        f"OPTIONS sip:{host}:{port} SIP/2.0\r\n"
+        f"Via: SIP/2.0/UDP {local_host}:{local_port};branch=z9hG4bK{tag};rport\r\n"
+        "Max-Forwards: 70\r\n"
+        f"From: <sip:{from_user}@probe.invalid>;tag={tag}\r\n"
+        f"To: <sip:{host}:{port}>\r\n"
+        f"Call-ID: {tag}@probe.invalid\r\n"
+        "CSeq: 1 OPTIONS\r\n"
+        "User-Agent: jeeta-sip-probe\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n"
+    ).encode("ascii")
+
+
+def status_line(reply: bytes) -> str:
+    """The reply's first line when it is a SIP answer; nothing else of it."""
+    first = reply.split(b"\r\n", 1)[0].decode("ascii", "replace")
+    return first if first.startswith("SIP/2.0 ") else "not a SIP answer"
+
+
+def probe(host: str, port: int, from_user: str, timeout_s: float = 3.0) -> str:
+    """The final answer's status line (a provisional 1xx is skipped), or `no answer`."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.settimeout(timeout_s)
+        s.connect((host, port))
+        s.send(options(host, port, from_user, s.getsockname(), secrets.token_hex(8)))
+        for _ in range(3):
+            try:
+                line = status_line(s.recv(65535))
+            except OSError:  # timeout, or an ICMP port unreachable
+                return "no answer"
+            if not line.startswith("SIP/2.0 1"):
+                return line
+        return "no answer"
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        sys.exit("usage: sip_probe.py <host> <port> <from-user>")
+    print(probe(sys.argv[1], int(sys.argv[2]), sys.argv[3]))
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add rust/bridge/voice/.gitattributes rust/bridge/voice/.gitignore rust/bridge/voice/asterisk rust/bridge/voice/deploy rust/bridge/voice/speech/pytest.ini
+git add rust/bridge/voice/.gitattributes rust/bridge/voice/.gitignore rust/bridge/voice/asterisk rust/bridge/voice/deploy rust/bridge/voice/speech/pytest.ini docs/operations/voice-bridge.md
 git commit -m "feat(voice): Asterisk 22.11 image and config for extension 102" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 7: [COORDINATOR, server] Preconditions**
+- [ ] **Step 7: [COORDINATOR, server] Preconditions and the firewall gate**
 
 Copy the sources (section intro), then on the host:
 
 ```bash
+# The gate: SIP and RTP rely on conntrack; 5070 and 40000-40099 are never opened to the internet.
+{ ufw status verbose | grep -qx 'Status: active' \
+    && ufw status verbose | grep -q '^Default: deny (incoming)' && echo "FIREWALL OK (ufw)"; } \
+  || { iptables -S INPUT | grep -qx -- '-P INPUT DROP' && echo "FIREWALL OK (iptables INPUT policy DROP)"; } \
+  || echo "STOP: no default-deny firewall"
+ufw status | grep -E '\b(5070|400[0-9]{2})\b' && echo "STOP: a rule opens 5070 or the RTP range" \
+  || echo "no rule opens 5070 or 40000-40099"
 docker ps --format '{{.Image}} {{.Names}}' | grep -i voicegate || echo "no Gate V1 rig running"
 ss -lunp | grep -E ':(5062|5070)\b' || echo "5062/udp and 5070/udp free"
 ss -Hlunp '( sport >= :40000 and sport <= :40099 )' | grep . || echo "40000-40099/udp free"
 docker ps --format '{{.Names}} {{.Ports}}' | grep -E ':400[0-9]{2}' || echo "no container publishes 40000-40099"
 ss -ltnp | grep -E ':8188\b' || echo "8188/tcp free"
+sysctl -n net.ipv4.ip_local_reserved_ports
 getent passwd 1500 1501; getent group 1500 1501 || true
-command -v docker
-ufw status | head -5
+command -v docker docker-init python3
 ```
 
 Expected:
+- The gate prints `FIREWALL OK`. **If it prints `STOP: no default-deny firewall`, stop B1.** Do not open 5070 or the RTP range to make it pass: the design relies on conntrack for SIP and RTP.
+- `no rule opens 5070 or 40000-40099`.
 - `no Gate V1 rig running`. A baresip still registered as 102 would fight the registration. Gate V1's baresip listened on 5062. If one is listed, stop it with `docker rm -f <name>`.
-- 5070/udp, the RTP range 40000–40099 and 8188/tcp are free. Asterisk owns the RTP range on the host network.
+- 5070/udp, the RTP range and 8188/tcp are free. Asterisk owns the RTP range on the host network.
+- `ip_local_reserved_ports` is empty; Step 8 sets it.
 - uid/gid 1500 and 1501 are unused. If one is taken, change the uid in the Dockerfile, in the units and in every `1500`/`1501` below together.
-- `docker` is `/usr/bin/docker` (the unit's path).
-- The ufw status is recorded.
+- `/usr/bin/docker` (the unit's path), `docker-init` (`--init`) and `python3` (Step 9's probe) all exist.
 
-- [ ] **Step 8: [COORDINATOR, server] Users, directories and secrets**
+- [ ] **Step 8: [COORDINATOR, server] Users, directories, secrets and the RTP reservation**
+
+One script with `set -eu`, so the first failure stops it without closing your shell:
 
 ```bash
-groupadd --system --gid 1501 jeeta-voice
-useradd --system --uid 1501 --gid jeeta-voice --no-create-home --shell /usr/sbin/nologin jeeta-voice-svc
-useradd --system --user-group --home-dir /var/lib/jeeta-voice --shell /usr/sbin/nologin jeeta-voice-bridge
+bash -eu <<'STEP8'
+[ -s /root/voicegate/p102 ] || { echo "STOP: /root/voicegate/p102 is missing or empty"; exit 1; }
+# Asterisk reads ";" as the start of a comment and trims spaces: such a secret would be cut.
+if tr -d '\r\n' < /root/voicegate/p102 | grep -q '[;\\[:space:]]'; then
+  echo "STOP: the secret holds ; \\ or a space"; exit 1
+fi
+getent group jeeta-voice >/dev/null || groupadd --system --gid 1501 jeeta-voice
+getent passwd jeeta-voice-svc >/dev/null \
+  || useradd --system --uid 1501 --gid jeeta-voice --no-create-home --shell /usr/sbin/nologin jeeta-voice-svc
+getent passwd jeeta-voice-bridge >/dev/null \
+  || useradd --system --user-group --home-dir /var/lib/jeeta-voice --shell /usr/sbin/nologin jeeta-voice-bridge
 usermod -aG jeeta-voice jeeta-voice-bridge
 install -d -m 0750 /etc/jeeta-voice
 install -d -m 0755 /etc/jeeta-voice/asterisk
 install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/asterisk/etc/*.conf /etc/jeeta-voice/asterisk/
 install -d -m 0700 -o 1500 -g 1500 /etc/jeeta-voice/asterisk/secrets
 umask 077
-# Asterisk reads ";" as the start of a comment and trims spaces: such a secret needs escaping.
-tr -d '\r\n' < /root/voicegate/p102 | grep -q '[;\\[:space:]]' \
-  && echo "STOP: the secret holds ; \\ or a space" || echo "secret charset ok"
 { printf '[netgsm-auth]\ntype=auth\nauth_type=digest\nusername=102-8508407303\nrealm=asterisk\npassword='
   tr -d '\r\n' < /root/voicegate/p102; printf '\n'; } > /etc/jeeta-voice/asterisk/secrets/pjsip_auth.conf
 ARI_PW="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
@@ -2860,47 +3234,87 @@ chown 1500:1500 /etc/jeeta-voice/asterisk/secrets/*.conf
 chmod 0600 /etc/jeeta-voice/asterisk/secrets/*.conf /etc/jeeta-voice/ari.env
 install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice.tmpfiles /etc/tmpfiles.d/jeeta-voice.conf
 systemd-tmpfiles --create /etc/tmpfiles.d/jeeta-voice.conf
+reserved="$(sysctl -n net.ipv4.ip_local_reserved_ports)"
+if [ -n "$reserved" ] && [ "$reserved" != "40000-40099" ]; then
+  echo "STOP: $reserved is already reserved; merge it into jeeta-voice.sysctl before installing"; exit 1
+fi
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice.sysctl /etc/sysctl.d/60-jeeta-voice.conf
+sysctl -p /etc/sysctl.d/60-jeeta-voice.conf
 ls -l /etc/jeeta-voice/asterisk/secrets /etc/jeeta-voice/ari.env
 ls -ld /run/jeeta-voice
+STEP8
 ```
 
 Expected:
-- `secret charset ok`.
+- No `STOP` line.
 - Both secret files are `-rw------- 1500 1500`, and `ari.env` is `-rw------- root root`.
-- `/run/jeeta-voice` is `drwxrwx--- root jeeta-voice`.
+- `/run/jeeta-voice` is `drwxrwx--T root jeeta-voice` (1770, sticky).
+- `net.ipv4.ip_local_reserved_ports = 40000-40099`.
 - Nothing printed contains the secret.
 
-`auth_type=digest` replaces `userpass`, which Asterisk 22 still reads but documents as deprecated. `realm=asterisk` is the realm Gate V1's REGISTER saw. A blank realm would match any realm the server sends.
+Notes:
+- `auth_type=digest` replaces `userpass`, which Asterisk 22 documents as deprecated.
+- `realm=asterisk` is the realm Gate V1's REGISTER saw.
+- A second run writes a new ARI password. Restart `jeeta-asterisk` (and later the bridge) after it.
 
-- [ ] **Step 9: [COORDINATOR, server] Build and start**
+- [ ] **Step 9: [COORDINATOR, server] Build, start, and check**
 
 ```bash
 cd /root/jeeta-voice-src/rust/bridge/voice/asterisk
+docker pull -q debian:bookworm-slim && docker image inspect --format '{{index .RepoDigests 0}}' debian:bookworm-slim
 time docker build -t jeeta-asterisk:22.11.0 .
 install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-asterisk.service /etc/systemd/system/
 systemd-analyze verify /etc/systemd/system/jeeta-asterisk.service
 systemctl daemon-reload && systemctl enable --now jeeta-asterisk
-sleep 15
+sleep 20
+docker ps --filter name=jeeta-asterisk --format '{{.Names}} {{.Status}}'
 docker exec jeeta-asterisk asterisk -rx 'pjsip show registrations'
 docker exec jeeta-asterisk asterisk -rx 'pjsip show contacts'
-docker exec jeeta-asterisk asterisk -rx 'module show like websocket'
+docker exec jeeta-asterisk asterisk -rx 'pjsip show identifies'
+for m in chan_websocket chan_pjsip res_pjsip res_pjsip_session res_pjsip_sdp_rtp res_pjsip_outbound_registration res_pjsip_outbound_authenticator_digest res_pjsip_endpoint_identifier_ip res_rtp_asterisk res_http_websocket res_websocket_client res_ari res_ari_asterisk res_ari_channels res_ari_bridges res_ari_events res_stasis app_stasis bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw; do
+  docker exec jeeta-asterisk asterisk -rx "module show like $m.so" | grep -q Running || echo "NOT RUNNING: $m"
+done; echo "required modules checked"
+for p in ari stasis pjsip; do docker exec jeeta-asterisk asterisk -rx "module show like $p" | tail -1; done
 ss -lunp | grep asterisk; ss -ltnp | grep asterisk
+docker stats --no-stream --format '{{.Name}} pids {{.PIDs}} mem {{.MemUsage}}' jeeta-asterisk
 set -a; . /etc/jeeta-voice/ari.env; set +a
 printf 'user = "jeeta-voice:%s"\n' "$ARI_PASSWORD" | curl -s -K - http://127.0.0.1:8188/ari/asterisk/info | head -c 120; echo
 unset ARI_PASSWORD
 journalctl -u jeeta-asterisk -b --no-pager | grep -ciE 'error' || true
+# The identification probe (B1 review). From the host to its own public address (over lo, which
+# ufw admits). Any From user, NetGSM's endpoint name included, must be challenged.
+for u in netgsm 102-8508407303 probe; do
+  python3 /root/jeeta-voice-src/rust/bridge/voice/asterisk/sip_probe.py 38.242.233.166 5070 "$u"
+done
+# NetGSM's own answer to OPTIONS, which decides qualify_frequency (below).
+python3 /root/jeeta-voice-src/rust/bridge/voice/asterisk/sip_probe.py sip5.netsantral.com 5060 102-8508407303
 ```
 
-Expected:
-- The build ends with `naming to docker.io/library/jeeta-asterisk:22.11.0`. `nice` is not used: the build's processes run under dockerd, not under the CLI. The throttle is the Dockerfile's `MAKE_JOBS=2`. Override it with `--build-arg MAKE_JOBS=…`.
-- The registration line shows `netgsm-reg/sip:sip5.netsantral.com` and `Registered`.
-- The contact `netgsm/sip:sip5.netsantral.com` reads `Avail`. The dial (`PJSIP/<number>@netgsm`) uses only a reachable contact. If it reads `Unavail`, NetGSM does not answer the qualify OPTIONS. In that case set `qualify_frequency=0` in `/etc/jeeta-voice/asterisk/pjsip.conf` and run `docker exec jeeta-asterisk asterisk -rx 'module reload res_pjsip.so'`, then report it so the repository follows.
-- `chan_websocket.so` is listed `Running`.
-- The sockets are UDP `0.0.0.0:5070` and TCP `127.0.0.1:8188`, nothing else. RTP ports open only during a call.
-- ARI answers JSON starting `{"build":`.
-- The error count is read: the journal holds only Asterisk's warnings and errors. Modules that find no config of their own may warn once at start.
+From the dev machine, the same probe from outside: `python -I rust/bridge/voice/asterisk/sip_probe.py 38.242.233.166 5070 netgsm`
 
-If the registration reads `Rejected`, check the secret file without printing it, and check that no other UA registers 102. If it reads `No Response`, check `ufw` outbound and DNS.
+Expected:
+- **The build** ends with `naming to docker.io/library/jeeta-asterisk:22.11.0`. Before that, the runtime stage prints `Asterisk 22.11.0` from its module check.
+  - Record `time` and the digest printed before the build. Pin both `FROM` lines to it (`debian:bookworm-slim@sha256:…`) in a follow-up commit.
+  - `nice` is not used: the build's processes run under dockerd. The throttle is `MAKE_JOBS=2`; override it with `--build-arg MAKE_JOBS=…`.
+- **`docker ps`** shows `Up … (healthy)` once the 30 s start period is over. The `HEALTHCHECK` is `asterisk -rx 'core waitfullybooted'`.
+- **The registration** line shows `netgsm-reg/sip:sip5.netsantral.com` and `Registered`.
+- **`pjsip show identifies`** lists `netgsm` with the match `185.88.7.227/32`. The hostname and the literal resolve to the same address today.
+- **Modules:** no `NOT RUNNING` line. The three counts list `ari`, `stasis` and `pjsip` modules.
+- **Sockets:** UDP `0.0.0.0:5070` and TCP `127.0.0.1:8188`, nothing else. RTP ports open only during a call.
+- **`docker stats`:** pids well under 256 (about 60–150 expected), mem under 512 MiB. Report pids if they come near 200.
+- **ARI** answers JSON starting `{"build":`.
+- **The journal** holds only warnings and errors. Modules without a config of their own may warn once at start.
+- **The probe from the host** prints `SIP/2.0 401 Unauthorized` for each of `netgsm`, `102-8508407303` and `probe`.
+  - Under the old default (`identify_by=username,ip`), `From: netgsm` would have been taken as the endpoint unchallenged, answered 200 or 404.
+  - Run the probe again after any change to `pjsip.conf` (`pjsip reload` or a restart).
+- **The probe from outside** prints `no answer`: ufw drops unsolicited SIP.
+- **NetGSM's answer** decides `qualify_frequency`. In 22.11 a qualify counts any reply as `Avail`, 401 included; only silence makes the contact `Unavail`, and the dial (`PJSIP/<n>@netgsm`) uses only a reachable contact.
+  - `SIP/2.0 200 OK`: keep `qualify_frequency=20`. The keep-alive refreshes the conntrack entry every 20 s.
+  - `401`/`407`: start at `qualify_frequency=0`. Each qualify would cost NetGSM a challenge and an authenticated OPTIONS. Without it, the REGISTER refresh (every ~110 s) and NetGSM's own OPTIONS keep the entry.
+  - `no answer`: `qualify_frequency=0`. An `Unavail` contact would block every dial.
+  - To change it: `sed -i 's/^qualify_frequency=20$/qualify_frequency=0/' /etc/jeeta-voice/asterisk/pjsip.conf && docker exec jeeta-asterisk asterisk -rx 'pjsip reload'`. Then `pjsip show contacts` reads `Unknown`, which is dialable. Report the result so the repository follows.
+
+If the registration reads `Rejected`, check the secret file without printing it, and check that no other UA registers 102. If it reads `No Response`, check `ufw` outbound and DNS. A lasting `Rejected` is the alert of `docs/operations/voice-bridge.md` §6.
 
 - [ ] **Step 10: [COORDINATOR, server] One-way audio fallback (only if B7 shows it)**
 
@@ -2908,9 +3322,24 @@ If the registration reads `Rejected`, check the secret file without printing it,
 ufw allow proto udp from 185.88.7.0/24 to any port 40000:40099 comment 'jeeta-voice RTP from NetGSM'
 ```
 
-Not applied by default. Gate V1 showed that conntrack admits the replies once this host has sent RTP. Asterisk itself does not send RTP first. Since 22.9.0, chan_websocket generates no silence ("chan_websocket: Remove silence generation and frame padding", ChangeLog-22.9.0). `transmit_silence` covers only waits, not a bridged channel. So the first RTP leaves when the worker writes its first frame. That is the cached opening, played on `answered`. Until then, while ufw denies incoming traffic, NetGSM's first packets (the callee's "Alo?") can be dropped. Gate V1's baresip played its clip at once, so it never showed this case. B5/B6 should decide whether the worker writes silence frames while nothing plays. The design's "Asterisk keeps sending silence frames" does not hold on 22.11.
+Not applied by default. Since 22.9.0, chan_websocket generates no silence ("chan_websocket: Remove silence generation and frame padding", ChangeLog-22.9.0), and `transmit_silence` covers only waits, not a bridged channel. The worker's pacer (B5, B6) therefore writes one frame every 20 ms from `MEDIA_START`, silence when nothing plays. So RTP leaves as soon as the media is up, and conntrack admits NetGSM's replies, as in Gate V1.
 
-Before applying the rule, confirm NetGSM's media network during a call. For example, run `conntrack -L -p udp 2>/dev/null | grep -E 'port=400[0-9]{2}'`, which shows addresses and ports only. `185.88.7.0/24` is not verified.
+Apply this rule only if B7 still shows one-way audio. First confirm NetGSM's media network during a call, for example with `conntrack -L -p udp 2>/dev/null | grep -E 'port=400[0-9]{2}'` (addresses and ports only). `185.88.7.0/24` is not verified.
+
+- [ ] **Step 11: [COORDINATOR, server, later] After the first working boot: an explicit module list**
+
+Not before B7 passes. `autoload = yes` loads every module that was built, which is more than the bridge uses. Once a call has worked, record what runs (names and states only), then narrow the list:
+
+```bash
+docker exec jeeta-asterisk asterisk -rx 'module show' | awk '$NF ~ /core|extended|deprecated/ && /Running/ {print $1}' | sort > /root/jeeta-asterisk-modules.txt
+wc -l /root/jeeta-asterisk-modules.txt
+```
+
+Then, in a repository commit:
+- `modules.conf` becomes `autoload = no`, with one `load => <module>.so` for each module the bridge needs: `REQUIRED_MODULES` of `asterisk/test_configs.py`, plus the dependencies `module show` reported (for example `res_sorcery_*`, `res_pjsip_*` helpers, `res_http_websocket`, `func_*` used by ARI).
+- The config test asserts that `REQUIRED_MODULES` is a subset of the `load` list.
+
+Deploy it with Step 8's config install. The configs are mounted, so the image is not rebuilt: run `systemctl restart jeeta-asterisk`, then Step 9's checks and one more B7-style call. Keep `autoload = yes` if anything is missing.
 
 ### Task B2: The speak service (EMA Lightning behind Antalia's normaliser)
 
@@ -5303,7 +5732,7 @@ CI then runs `jt_archtest` (Expected: `voice_bridge_depends_on_no_server_crate` 
 
 **Files:**
 - Create: `rust/bridge/voice/src/config.rs`, `src/cache.rs`, `src/trace.rs`, `src/ari.rs`, `src/media.rs`, `src/speech.rs`
-- Create: `rust/bridge/voice/tests/adapters.rs`
+- Create: `rust/bridge/voice/tests/adapters.rs`, `tests/pacer.rs` (the media pacer, B1 review)
 - Modify: `rust/bridge/voice/src/lib.rs`
 
 - [ ] **Step 1: Write the failing tests**
@@ -6054,6 +6483,341 @@ pub fn pad_to_frames(mut pcm: Vec<i16>, frame_samples: usize) -> Vec<i16> {
 }
 ```
 
+**The pacer (B1 review, 2026-10-29).** Since Asterisk 22.9, chan_websocket sends nothing to the line when the worker writes nothing ("chan_websocket: Remove silence generation and frame padding", ChangeLog-22.9.0). So the worker must pace the media itself, for the whole call, from `MEDIA_START`:
+- one frame every 20 ms: the queued audio's next frame, or a silence frame (0xD5 A-law, 0xFF μ-law) when the worker's own buffer is empty;
+- at most `LEAD_FRAMES` (3) frames queued in Asterisk ahead of real time, so a barge-in's `FLUSH_MEDIA` drops at most 60 ms;
+- paused on `MEDIA_XOFF`; resumed with a fresh lead on `MEDIA_XON`, and at once after a flush;
+- whole frames only: a sentence's tail is padded with silence, and a remainder waits for the rest of its sentence (a streamed synthesis chunk is not padded on its own);
+- `MARK_MEDIA` right after the sentence's last real frame. Silence frames carry no mark and count toward nothing but the clock.
+
+It is pure (the call task feeds it its monotonic milliseconds), so it is tested on Windows.
+
+Add `use std::collections::VecDeque;` to `media.rs`'s imports, and append:
+
+```rust
+/// The line's frame: 20 ms, `MEDIA_START`'s `optimal_frame_size` bytes (160 for G.711).
+pub const FRAME_MS: u64 = 20;
+/// Frames kept queued in Asterisk ahead of real time: enough to ride out a late tick, few enough
+/// that a barge-in's `FLUSH_MEDIA` drops at most 60 ms.
+pub const LEAD_FRAMES: u64 = 3;
+/// Owing more frames than this (the worker's loop was held up) restarts the clock: the lead is
+/// written again instead of a burst that would queue the stall's length in Asterisk.
+const MAX_OWED_FRAMES: u64 = 2 * LEAD_FRAMES;
+
+/// What the pacer writes to Asterisk, in this order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Out {
+    /// One whole frame: queued audio, or silence (`silence: true`) when none is queued.
+    Frame { bytes: Vec<u8>, silence: bool },
+    /// A `MARK_MEDIA` with this correlation id, right after the last real frame queued before it.
+    Mark(String),
+}
+
+#[derive(Debug)]
+enum Queued {
+    Frame(Vec<u8>),
+    Mark(String),
+}
+
+/// The worker's playout buffer and its 20 ms clock (design addendum §3, B1 review). Since 22.9
+/// `chan_websocket` sends nothing when the worker writes nothing, so the pacer writes one frame per
+/// 20 ms from `MEDIA_START` for the whole call: the queued audio's next frame, or a silence frame
+/// when none is queued. Pure: the call task feeds it its own monotonic milliseconds.
+#[derive(Debug)]
+pub struct Pacer {
+    frame_bytes: usize,
+    silence: Vec<u8>,
+    queue: VecDeque<Queued>,
+    /// The current sentence's bytes short of a whole frame.
+    partial: Vec<u8>,
+    /// Frames written since the clock's origin.
+    written: u64,
+    /// When frame 0 was due, in the caller's milliseconds (before 0 after a restart).
+    origin_ms: i128,
+    paused: bool,
+}
+
+impl Pacer {
+    /// The pacer of a call whose media started at `now_ms`. `silence_byte` is the codec's encoding
+    /// of a zero sample: 0xD5 (A-law) or 0xFF (μ-law).
+    pub fn new(frame_bytes: usize, silence_byte: u8, now_ms: u64) -> Pacer {
+        let frame_bytes = frame_bytes.max(1);
+        Pacer {
+            frame_bytes,
+            silence: vec![silence_byte; frame_bytes],
+            queue: VecDeque::new(),
+            partial: Vec::new(),
+            written: 0,
+            origin_ms: i128::from(now_ms),
+            paused: false,
+        }
+    }
+
+    /// Queues encoded audio as whole frames; a remainder waits for the rest of its sentence.
+    pub fn audio(&mut self, bytes: &[u8]) {
+        self.partial.extend_from_slice(bytes);
+        let whole = self.partial.len() / self.frame_bytes * self.frame_bytes;
+        let rest = self.partial.split_off(whole);
+        for frame in self.partial.chunks(self.frame_bytes) {
+            self.queue.push_back(Queued::Frame(frame.to_vec()));
+        }
+        self.partial = rest;
+    }
+
+    /// Ends a sentence: its last frame is padded with silence, then the mark is queued after it.
+    pub fn mark(&mut self, correlation: impl Into<String>) {
+        if !self.partial.is_empty() {
+            let mut last = std::mem::take(&mut self.partial);
+            last.resize(self.frame_bytes, self.silence[0]);
+            self.queue.push_back(Queued::Frame(last));
+        }
+        self.queue.push_back(Queued::Mark(correlation.into()));
+    }
+
+    /// Whether any real audio or mark is still queued.
+    pub fn is_idle(&self) -> bool {
+        self.queue.is_empty() && self.partial.is_empty()
+    }
+
+    /// A barge-in: drops everything queued (the caller sends `FLUSH_MEDIA`, which drops the at
+    /// most `LEAD_FRAMES` Asterisk holds) and restarts the clock, so the next `due` writes the lead
+    /// of silence at once.
+    pub fn flush(&mut self, now_ms: u64) {
+        self.queue.clear();
+        self.partial.clear();
+        self.restart(now_ms);
+    }
+
+    /// `MEDIA_XOFF`: nothing is written until [`Pacer::resume`].
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// `MEDIA_XON`: writing resumes with a fresh lead, not a burst of the paused time.
+    pub fn resume(&mut self, now_ms: u64) {
+        self.paused = false;
+        self.restart(now_ms);
+    }
+
+    /// What is due at `now_ms`: frames until `LEAD_FRAMES` ahead of the clock, real ones first and
+    /// silence when none is queued, each mark right after the frame before it. Silence frames carry
+    /// no mark and count toward nothing but the clock.
+    pub fn due(&mut self, now_ms: u64) -> Vec<Out> {
+        let mut out = Vec::new();
+        if self.paused {
+            return out;
+        }
+        if self.target(now_ms) > self.written + MAX_OWED_FRAMES {
+            self.restart(now_ms);
+        }
+        let target = self.target(now_ms);
+        self.marks(&mut out);
+        while self.written < target {
+            let frame = match self.queue.front() {
+                Some(Queued::Frame(_)) => match self.queue.pop_front() {
+                    Some(Queued::Frame(bytes)) => Out::Frame {
+                        bytes,
+                        silence: false,
+                    },
+                    _ => unreachable!("the front was a frame"),
+                },
+                _ => Out::Frame {
+                    bytes: self.silence.clone(),
+                    silence: true,
+                },
+            };
+            out.push(frame);
+            self.written += 1;
+            self.marks(&mut out);
+        }
+        out
+    }
+
+    fn target(&self, now_ms: u64) -> u64 {
+        let elapsed = (i128::from(now_ms) - self.origin_ms).max(0) / i128::from(FRAME_MS);
+        u64::try_from(elapsed)
+            .unwrap_or(u64::MAX)
+            .saturating_add(LEAD_FRAMES)
+    }
+
+    fn restart(&mut self, now_ms: u64) {
+        self.origin_ms = i128::from(now_ms) - i128::from(self.written) * i128::from(FRAME_MS);
+    }
+
+    fn marks(&mut self, out: &mut Vec<Out>) {
+        while let Some(Queued::Mark(_)) = self.queue.front() {
+            if let Some(Queued::Mark(m)) = self.queue.pop_front() {
+                out.push(Out::Mark(m));
+            }
+        }
+    }
+}
+```
+
+`pad_to_frames` stays for its callers, but B6 no longer pads before the pacer: the pacer pads at the sentence's end.
+
+`rust/bridge/voice/tests/pacer.rs`:
+
+```rust
+//! The media pacer (B1 review): one frame per 20 ms from `MEDIA_START`, silence when nothing is
+//! queued, at most the lead ahead of Asterisk, paused by XOFF, back at once after a flush.
+use jeeta_voice_bridge::media::{Out, Pacer};
+
+fn frames(out: &[Out]) -> Vec<bool> {
+    out.iter()
+        .filter_map(|o| match o {
+            Out::Frame { silence, .. } => Some(*silence),
+            Out::Mark(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn silence_flows_from_media_start_one_frame_per_20_ms() {
+    let mut p = Pacer::new(160, 0xD5, 1_000);
+    let first = p.due(1_000);
+    assert_eq!(first.len(), 3, "the lead at once");
+    assert!(first.iter().all(|o| *o
+        == Out::Frame {
+            bytes: vec![0xD5; 160],
+            silence: true
+        }));
+    assert!(p.due(1_019).is_empty());
+    assert_eq!(frames(&p.due(1_020)), [true]);
+    assert_eq!(
+        frames(&p.due(1_100)),
+        [true; 4],
+        "8 written by 100 ms: 5 periods and the lead"
+    );
+    assert_eq!(
+        Pacer::new(160, 0xFF, 0).due(0)[0],
+        Out::Frame {
+            bytes: vec![0xFF; 160],
+            silence: true
+        }
+    );
+}
+
+#[test]
+fn audio_goes_in_whole_frames_and_a_sentence_tail_is_padded_before_its_mark() {
+    let mut p = Pacer::new(160, 0xD5, 0);
+    p.audio(&[0x11; 250]);
+    p.audio(&[0x22; 150]); // 400 bytes: two whole frames and 80 waiting for the sentence's end
+    p.mark("7:0");
+    let out = p.due(0);
+    let mut tail = vec![0x22; 80];
+    tail.resize(160, 0xD5);
+    let mut second = vec![0x11; 90];
+    second.extend([0x22; 70]);
+    assert_eq!(
+        out,
+        [
+            Out::Frame {
+                bytes: vec![0x11; 160],
+                silence: false
+            },
+            Out::Frame {
+                bytes: second,
+                silence: false
+            },
+            Out::Frame {
+                bytes: tail,
+                silence: false
+            },
+            Out::Mark("7:0".into()),
+        ]
+    );
+    assert!(p.is_idle());
+    assert_eq!(
+        frames(&p.due(20)),
+        [true],
+        "silence again, and no mark for it"
+    );
+}
+
+#[test]
+fn asterisk_never_holds_more_than_the_lead() {
+    let mut p = Pacer::new(160, 0xD5, 0);
+    p.audio(&[0x11; 1_600]);
+    p.mark("1:0");
+    assert_eq!(frames(&p.due(0)), [false; 3]);
+    for t in 1..=6 {
+        assert_eq!(
+            p.due(t * 20),
+            [Out::Frame {
+                bytes: vec![0x11; 160],
+                silence: false
+            }],
+            "one per period"
+        );
+    }
+    // The tenth and last frame at 140 ms, its mark right after it; then silence.
+    assert_eq!(
+        p.due(140),
+        [
+            Out::Frame {
+                bytes: vec![0x11; 160],
+                silence: false
+            },
+            Out::Mark("1:0".into())
+        ]
+    );
+    assert_eq!(frames(&p.due(160)), [true]);
+}
+
+#[test]
+fn a_flush_drops_the_queue_and_writes_the_lead_of_silence_at_once() {
+    let mut p = Pacer::new(160, 0xD5, 0);
+    p.audio(&[0x11; 1_600]);
+    p.mark("1:0");
+    p.due(0);
+    p.due(20);
+    p.audio(&[0x33; 10]);
+    p.flush(30);
+    assert!(p.is_idle());
+    let out = p.due(30);
+    assert_eq!(
+        frames(&out),
+        [true; 3],
+        "no real frame and no mark survive the flush"
+    );
+    assert!(p.due(49).is_empty());
+    assert_eq!(frames(&p.due(50)), [true]);
+}
+
+#[test]
+fn xoff_pauses_and_xon_resumes_with_the_lead_not_a_burst() {
+    let mut p = Pacer::new(160, 0xD5, 0);
+    p.due(0);
+    p.pause();
+    assert!(p.due(400).is_empty());
+    p.resume(600);
+    assert_eq!(frames(&p.due(600)), [true; 3]);
+    assert_eq!(frames(&p.due(620)), [true]);
+}
+
+#[test]
+fn a_held_up_loop_restarts_the_clock_instead_of_bursting() {
+    let mut p = Pacer::new(160, 0xD5, 0);
+    p.due(0);
+    assert_eq!(frames(&p.due(60)).len(), 3, "a late tick is caught up");
+    assert_eq!(
+        frames(&p.due(2_000)).len(),
+        3,
+        "a 2 s stall: the lead again, not 97 frames"
+    );
+    assert_eq!(frames(&p.due(2_020)).len(), 1);
+}
+
+#[test]
+fn a_mark_with_nothing_queued_goes_out_at_once() {
+    let mut p = Pacer::new(160, 0xD5, 0);
+    p.due(0);
+    p.mark("2:0");
+    assert_eq!(p.due(0), [Out::Mark("2:0".into())]);
+}
+```
+
 `rust/bridge/voice/src/speech.rs`:
 
 ```rust
@@ -6205,7 +6969,7 @@ pub mod trace;
 - [ ] **Step 5: Run the tests**
 
 Run: `cargo test -p jeeta-voice-bridge` and `cargo clippy -p jeeta-voice-bridge --all-targets -- -D warnings`
-Expected: `adapters` 8 passed, the earlier files unchanged, clippy clean.
+Expected: `adapters` 8 passed, `pacer` 7 passed, the earlier files unchanged, clippy clean.
 
 - [ ] **Step 6: Commit**
 
@@ -7199,6 +7963,105 @@ impl Live {
 
 This task uses `DialScript`, `BridgeEvent::Phrase` and `BridgeEvent::Trace` from Task A5.
 
+**The pacer in the call (B1 review, 2026-10-29).** Where these differ from the code above, they win. They wire B5's `media::Pacer` in: the call writes one frame every 20 ms for its whole life, silence when nothing plays.
+- `use crate::media::{self, MediaEvent, Out, Pacer};`
+- `Live` loses `xoff` and `held` and gains `pacer: Pacer`. In `connect`, `pacer: Pacer::new(frame_bytes, codec.encode(&[0])[0], 0),` sits beside `started: Instant::now()` (the pacer's clock is `now_ms()`, 0 at `started`). `codec.encode(&[0])[0]` is 0xD5 for A-law and 0xFF for μ-law.
+- In `run`, the tick arm paces before the talker ticks:
+
+```rust
+                _ = tick.tick() => {
+                    self.pace().await;
+                    self.input(Input::Tick).await;
+                }
+```
+
+- `send_media` is deleted. `write_pcm` and `mark` only queue, and become plain `fn`s; their callers (`advance`, `synth_chunk`, `synth_event`) drop the `.await`:
+
+```rust
+    /// Queues the sentence's audio with the pacer, unpadded: the pacer pads at the sentence's end.
+    fn write_pcm(&mut self, pcm: &[i16]) {
+        let bytes = self.codec.encode(pcm);
+        self.pacer.audio(&bytes);
+    }
+
+    fn mark(&mut self, item: u64, index: usize) {
+        self.pacer.mark(format!("{item}:{index}"));
+    }
+
+    /// Writes what the pacer has due: one frame per 20 ms for the whole call, silence when
+    /// nothing plays (Asterisk >= 22.9 sends nothing otherwise), each mark after its last frame.
+    async fn pace(&mut self) {
+        let now = self.now_ms();
+        for out in self.pacer.due(now) {
+            match out {
+                Out::Frame { bytes, silence } => {
+                    if !silence {
+                        self.first_real_frame();
+                    }
+                    let _ = self.media_tx.send(Message::Binary(bytes.into())).await;
+                }
+                Out::Mark(correlation) => {
+                    let mark = media::command("MARK_MEDIA", Some(&correlation));
+                    let _ = self.media_tx.send(Message::Text(mark.into())).await;
+                }
+            }
+        }
+    }
+
+    /// A real frame left for Asterisk. The turn's first-audio marks, the opening's log line and the
+    /// item's audio clock start at its first one, not when the audio was queued.
+    fn first_real_frame(&mut self) {
+        self.first_audio_marks();
+        if !self.opening_logged {
+            self.opening_logged = true;
+            let ms = u64::try_from(self.answered.elapsed().as_millis()).unwrap_or(u64::MAX);
+            info!(call = %self.id, ms, "first audio after the answer");
+        }
+        if let Some(p) = self.playing.as_mut()
+            && p.audio_started.is_none()
+        {
+            let now = Instant::now();
+            p.audio_started = Some(now);
+            p.mark_at = now;
+        }
+    }
+```
+
+- In `media_control`: `MediaEvent::Xoff => self.pacer.pause(),` and `MediaEvent::Xon => { let now = self.now_ms(); self.pacer.resume(now); }`.
+- `cut` opens with the flush, then writes the fresh lead of silence at once, in place of `self.held.clear();` and its `FLUSH_MEDIA` send:
+
+```rust
+        let now = self.now_ms();
+        self.pacer.flush(now);
+        let _ = self.media_tx.send(Message::Text(media::command("FLUSH_MEDIA", None).into())).await;
+        self.pace().await;
+```
+
+- Tests. `serve_media` (in `tests/support/mod.rs`) matches binary messages as well, with `let mut silence_seen = false;` before its loop. It reports `silence frame` the first time a frame of all 0xD5 arrives, and `frame of N bytes` (`try_send`, never blocking) for any frame that is not 160 bytes. At 50 frames a second, it never reports each frame: the channel holds 64.
+
+```rust
+            match msg {
+                Message::Binary(b) => {
+                    if !silence_seen && b.iter().all(|&x| x == 0xD5) {
+                        silence_seen = true;
+                        let _ = tx.try_send("silence frame".to_owned());
+                    }
+                    if b.len() != 160 {
+                        let _ = tx.try_send(format!("frame of {} bytes", b.len()));
+                    }
+                }
+                Message::Text(t) => { /* as before: answer MARK_MEDIA, send the command's name */ }
+                _ => {}
+            }
+```
+
+`a_call_dials_plays_hears_acknowledges_and_hangs_up` ends with:
+
+```rust
+    assert!(sent.iter().any(|c| c == "silence frame"), "silence fills the gaps: {sent:?}");
+    assert!(!sent.iter().any(|c| c.starts_with("frame of")), "whole 160-byte frames only: {sent:?}");
+```
+
 - [ ] **Step 4: Write `slice.rs` and `main.rs`**
 
 `rust/bridge/voice/src/slice.rs`:
@@ -7498,15 +8361,35 @@ SLICE_TO="$(cat /root/jeeta-voice-slice-to)" VOICE_TRACE_FILE=/var/lib/jeeta-voi
   sudo -E -u jeeta-voice-bridge --preserve-env=ARI_PASSWORD,SLICE_TO,VOICE_TRACE_FILE \
   /opt/jeeta-voice/current/jeeta-voice-bridge slice \
   --opening "Merhaba, ben Jeeta'nın dijital asistanıyım. Görüşmemiz hizmet kalitesi için yazıya dökülmektedir. Bu bir deneme aramasıdır, lütfen bir cümle söyleyin." \
-  --reply "Teşekkürler, sizi duydum." --think-ms 3000 --show-transcript
+  --reply "Teşekkürler, sizi duydum." --think-ms 9000 --show-transcript
 shred -u /root/jeeta-voice-slice-to
+```
+
+`--think-ms 9000` holds the reply 9 s after the owner's turn, an agent gap long enough for the long wait (8 s) and the silence check below.
+
+In a second root terminal, start these just before the call. They print addresses, ports and counts, never a number or a payload:
+
+```bash
+timeout 120 tcpdump -nn -q -c 10 udp portrange 40000-40099
+for i in $(seq 1 24); do date +%T; docker exec jeeta-asterisk asterisk -rx 'pjsip show channelstats' | grep -E 'netgsm-'; sleep 5; done
 ```
 
 The owner answers, says one sentence (e.g. "Yarın saat on dörtte uygunum."), then listens to the end.
 
-Expected on the terminal, in order: `answered`; `said 1 cut at None`; `caller: …` (the owner's words, close to what was said); `phrase Acknowledgement 0` about 0.6 s after the owner stopped; `phrase Filler 0` about 2.7 s after; `said 2 cut at None`; `said 3 cut at None`; `hangup normal`; one `trace {…}` line. The owner confirms: the opening began immediately and sounded like the chosen voice; "Hı hı." and the filler were heard; the reply and the closing were heard; the line closed cleanly. Record the trace numbers (endpoint, stt_final, ack, first_audio).
+Expected on the terminal, in order: `answered`; `said 1 cut at None`; `caller: …` (the owner's words, close to what was said); `phrase Acknowledgement 0` about 0.6 s after the owner stopped; `phrase Filler 0` about 2.7 s after; `phrase LongWait 0` about 8 s after; `said 2 cut at None`; `said 3 cut at None`; `hangup normal`; one `trace {…}` line. The owner confirms: the opening began immediately and sounded like the chosen voice; "Hı hı.", the filler and the long wait were heard; the reply and the closing were heard; the line closed cleanly. Record the trace numbers (endpoint, stt_final, ack, first_audio).
 
-Go criteria: two-way audio; transcript recognisable; `ack_ms` ≤ 1 000; `endpoint_ms` ≤ 1 800. Failure handling: one-way audio → B1 Step 10 rule, retry once; no `caller:` line → `journalctl -u jeeta-voice-listen -n 50` (errors only), check the echo-guard and VAD thresholds; garbled voice → compare `alaw`/`ulaw` in `MEDIA_START` with the PJSIP codec (`docker exec jeeta-asterisk asterisk -rx 'core show channels verbose'` during a call shows the format without numbers only with `verbose=0` off: do not enable verbose; use `pjsip show channelstats` instead). If two-way audio cannot be obtained, stop and report before Phase C.
+Go criteria:
+- two-way audio;
+- the transcript is recognisable;
+- `ack_ms` ≤ 1 000 and `endpoint_ms` ≤ 1 800;
+- **the line never goes quiet** (the B1 review). In the agent's 9 s gap, two `channelstats` rows 5 s apart show the Tx count up by about 250 (50 packets a second, from the pacer's silence frames and the phrases). Every other 5 s pair shows the same, and Rx rises too (two-way RTP).
+- `tcpdump` shows packets in both directions between this host's address and NetGSM's media address.
+  - Only outbound packets: NetGSM's RTP does not arrive. Check the SDP's `c=` address. If it is not this host's public address, set `external_media_address` (and `external_signaling_address`) on `[transport-udp]` and run `pjsip reload`. Otherwise apply the B1 Step 10 rule.
+  - Inbound only, or Tx flat in the gap: the worker is not pacing (B5/B6).
+
+After the call, a count-only check that no phone number reached Asterisk's journal: `journalctl -u jeeta-asterisk | grep -cE '[0-9]{10}'`. The expected count is 0. If it is not 0, look at the lines with the digits masked: `journalctl -u jeeta-asterisk | grep -E '[0-9]{10}' | sed -E 's/[0-9]{10,}/<n>/g' | sort | uniq -c`. A channel's unique id (epoch seconds) also has 10 digits. Report what logs a number.
+
+Failure handling: one-way audio → B1 Step 10 rule, retry once; no `caller:` line → `journalctl -u jeeta-voice-listen -n 50` (errors only), check the echo-guard and VAD thresholds; garbled voice → compare `alaw`/`ulaw` in `MEDIA_START` with the PJSIP codec (`docker exec jeeta-asterisk asterisk -rx 'core show channels verbose'` during a call shows the format without numbers only with `verbose=0` off: do not enable verbose; use `pjsip show channelstats` instead). If two-way audio cannot be obtained, stop and report before Phase C.
 
 ### Task B8: Inbound investigation (non-blocking)
 
@@ -8416,7 +9299,7 @@ async fn a_phrase_is_logged_with_the_text_dialled_even_after_the_owner_edits_the
     // The owner rewrites the fillers while the call is live.
     let mut edited = policy();
     edited.phrases.fillers = vec!["Biraz bekleyin.".into()];
-    calls::policy_set(&r.w.deps, &r.w.owner_ctx, PolicyInput(edited)).await.unwrap();
+    calls::policy_set(&r.w.deps, &r.w.owner_ctx, PolicyInput::from(edited)).await.unwrap();
     r.utterance(10, call, "Perşembe uygun mu?").await;
     r.report(12, call, json!([{ "kind": "phrase", "set": "filler", "index": 0 }])).await;
     let shown = r.shown(call).await;
@@ -10077,9 +10960,12 @@ Files: `/etc/jeeta-voice/asterisk/` (configuration; `secrets/` 0700 uid 1500 hol
 and `ari_users.conf`, 0600), `/etc/jeeta-voice/ari.env` (0600), `/etc/jeeta-voice/bridge.{staging,prod}.env`
 (0600) and the `bridge.env` symlink choosing one, `/etc/jeeta-voice/images.env` (the speech images'
 tags), `/var/lib/jeeta-voice/cache` (synthesised policy sentences only) and `traces.jsonl` (numbers
-only). No secret is in the repository, a command line or a log. Firewall: no inbound rule; the PBX's
-replies are admitted by conntrack (Gate V1); if audio is one-way, allow UDP 40000–40099 from
-185.88.7.0/24.
+only). No secret is in the repository, a command line or a log. Firewall: default-deny incoming is
+required (B1 Step 7). There is no inbound rule: the PBX's replies are admitted by conntrack (Gate
+V1), and RTP's too, because the worker's pacer sends a frame every 20 ms from the media's start.
+If audio is one-way, allow UDP 40000–40099 from NetGSM's media network, confirmed on a call (B1
+Step 10). When `pjsip show registrations` reads `Rejected` for more than two minutes, alert, fix
+the cause and run `systemctl restart jeeta-asterisk` (`pjsip.conf` says what stops it for good).
 
 Switch environments with `jeeta-voice-target staging|prod` (refuses while a call is on the line).
 Check the stack with `jeeta-voice-bridge check`; read latency with `jeeta-voice-bridge report --since <RFC 3339>`.
