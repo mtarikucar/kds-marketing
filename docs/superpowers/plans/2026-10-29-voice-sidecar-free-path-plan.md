@@ -180,11 +180,11 @@ The HTTP surface (`docs/operations/voice-bridge.md` §3): `POST /api/voice/bridg
 **Domain (`rust/crates/domain/jt_calls/`)**
 - Create `src/wire.rs` — the bridge's HTTP envelopes (moved from `jt_app`), both directions serialisable, plus `BridgeCommand::{of, command}`.
 - Create `src/trace.rs` — `TurnTrace`, `EndpointBy`, `Percentiles`, `LatencySummary`, `summarize`, alert thresholds.
-- Create `src/opening.rs` — `genitive`, `outbound_opening`, `inbound_greeting`, `disclosure`, `TRANSCRIPT_NOTICE`.
+- Create `src/opening.rs` — `genitive`, `outbound_opening`, `inbound_greeting`, `disclosure`, `TRANSCRIPT_NOTICE`, `CLOSING`.
 - Create `src/phrases.rs` — `BridgePhrases` (owner-approved defaults), `PhraseSet`.
-- Modify `src/policy.rs` — `opening_outbound`, `transcript_notice`, `phrases`, `with_workspace`, `spoken_opening`.
-- Modify `src/plan.rs` — `hotwords`.
-- Modify `src/session.rs` — `DialScript`, `Command::Dial{script}`, `BridgeEvent::{Phrase, Trace}`, `CallMetrics.traces`, reducer.
+- Modify `src/policy.rs` — `opening_outbound`, `transcript_notice`, `closing`, `phrases`, `with_workspace`, `spoken_opening`.
+- Modify `src/plan.rs` — `hotwords`; `closing` optional (empty: the policy's closing plays).
+- Modify `src/session.rs` — `DialScript`, `Command::Dial{script}`, `BridgeEvent::{Phrase, Trace}`, `CallMetrics.traces`, `CallSession.phrases` (the phrases dialled with the call), reducer.
 - Modify `src/lib.rs`, `Cargo.toml` (`serde_json` becomes a normal dependency).
 - Tests: create `tests/wire.rs`, `tests/trace.rs`, `tests/opening.rs`, `tests/phrases.rs`, `tests/bridge_additions.rs`, `tests/policy_opening.rs`; modify `tests/support/mod.rs`.
 
@@ -623,7 +623,10 @@ fn summary_alerts_on_the_reports_thresholds() {
     assert_eq!(s.alerts, vec!["perceived_p95_over_1s".to_owned()]);
     let mut cut = turn(Some(600), Some(900));
     cut.barge_in_stop_ms = Some(BARGE_IN_P95_ALERT_MS + 50);
-    assert_eq!(summarize(&[cut], &[]).alerts, vec!["barge_in_p95_over_300ms".to_owned()]);
+    assert_eq!(
+        summarize(&[cut], &[]).alerts,
+        vec!["barge_in_p95_over_300ms".to_owned()]
+    );
     assert!(summarize(&[], &[]).alerts.is_empty());
 }
 
@@ -635,6 +638,87 @@ fn a_trace_reads_tolerantly() {
     .unwrap();
     assert_eq!(t.endpoint_by, None);
     assert_eq!(t.first_audio_ms, None);
+}
+
+// Added in the A2 fix-up: the thresholds are strict (a p95 exactly at the limit is no alert).
+
+#[test]
+fn a_p95_exactly_at_a_limit_raises_no_alert_and_one_millisecond_over_does() {
+    assert_eq!(
+        (
+            PERCEIVED_P95_ALERT_MS,
+            CONTENT_P95_ALERT_MS,
+            BARGE_IN_P95_ALERT_MS
+        ),
+        (1_000, 3_000, 300)
+    );
+    let mut at = turn(Some(1_000), Some(3_000));
+    at.barge_in_stop_ms = Some(300);
+    let s = summarize(&[at], &[]);
+    assert_eq!(s.perceived.p95, Some(1_000));
+    assert_eq!(s.content.p95, Some(3_000));
+    assert_eq!(s.barge_in_stop.p95, Some(300));
+    assert!(s.alerts.is_empty(), "{:?}", s.alerts);
+
+    let mut over = turn(Some(1_001), Some(3_001));
+    over.barge_in_stop_ms = Some(301);
+    assert_eq!(
+        summarize(&[over], &[]).alerts,
+        [
+            "perceived_p95_over_1s",
+            "content_p95_over_3s",
+            "barge_in_p95_over_300ms"
+        ]
+    );
+}
+
+#[test]
+fn each_alert_is_raised_on_its_own_measure_only() {
+    // Perceived is the smaller of the acknowledgement and the reply, so a slow reply behind a
+    // quick acknowledgement alerts on content alone.
+    let quick_ack_slow_reply = turn(Some(500), Some(3_500));
+    assert_eq!(
+        summarize(&[quick_ack_slow_reply], &[]).alerts,
+        ["content_p95_over_3s"]
+    );
+    // A turn with no sound at all alerts on nothing: there is nothing to measure.
+    assert!(summarize(&[turn(None, None)], &[]).alerts.is_empty());
+}
+
+#[test]
+fn the_p95_of_twenty_turns_ignores_only_the_worst_one() {
+    let slow = |ms| turn(Some(ms), Some(ms));
+    let mut traces = vec![slow(600); 19];
+    traces.push(slow(5_000));
+    let s = summarize(&traces, &[]);
+    assert_eq!(s.perceived.p95, Some(600));
+    assert!(s.alerts.is_empty(), "{:?}", s.alerts);
+    traces[18] = slow(5_000);
+    let s = summarize(&traces, &[]);
+    assert_eq!(s.perceived.p95, Some(5_000));
+    assert_eq!(s.alerts, ["perceived_p95_over_1s", "content_p95_over_3s"]);
+}
+
+#[test]
+fn nearest_rank_is_the_smallest_rank_covering_the_share_for_every_size() {
+    // Pinned against the definition itself (the smallest k with k / n >= q), not against a
+    // formula: no rounding of a float product may move a rank by one.
+    for n in 1..=400_u32 {
+        let p = percentiles(1..=n);
+        let smallest = |num: u32, den: u32| (1..=n).find(|k| k * den >= num * n).unwrap();
+        assert_eq!(p.n, n);
+        assert_eq!(p.p50, Some(smallest(50, 100)), "n = {n}");
+        assert_eq!(p.p95, Some(smallest(95, 100)), "n = {n}");
+    }
+    assert_eq!(percentiles(1..=20).p95, Some(19));
+    assert_eq!(percentiles(1..=40).p95, Some(38));
+    assert_eq!(percentiles(1..=21).p95, Some(20));
+}
+
+#[test]
+fn percentiles_ignore_input_order_and_keep_duplicates() {
+    let p = percentiles([5, 1, 5, 5, 1, 9]);
+    assert_eq!((p.n, p.p50, p.p95), (6, Some(5), Some(9)));
 }
 ```
 
@@ -650,8 +734,10 @@ Expected: FAIL to compile (`TurnTrace` not found in `jt_calls`).
 ```rust
 //! What one caller turn took, as the voice bridge measured it (design addendum
 //! `2026-10-29-voice-sidecar-free-path-design.md` §7), and the percentiles of a call's turns. Every
-//! offset is in milliseconds from the caller's end of speech (the last voiced 20 ms frame), on the
-//! bridge's monotonic clock. Numbers only: a trace never carries a word or a number dialled.
+//! field is an offset in milliseconds from the caller's end of speech (the last voiced 20 ms
+//! frame), on the bridge's monotonic clock, except `barge_in_stop_ms`: a duration from the caller's
+//! onset (the first voiced frame of the interruption) to the agent's voice stopping. Numbers only:
+//! a trace never carries a word or a number dialled.
 
 use serde::{Deserialize, Serialize};
 
@@ -674,7 +760,7 @@ pub enum EndpointBy {
     Fallback,
 }
 
-/// The timings of one caller turn (offsets from the end of speech).
+/// The timings of one caller turn (offsets from the end of speech, bar `barge_in_stop_ms`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TurnTrace {
@@ -693,7 +779,8 @@ pub struct TurnTrace {
     pub first_audio_ms: Option<u32>,
     /// The first frame of a phrase the bridge played on its own (acknowledgement, filler).
     pub ack_ms: Option<u32>,
-    /// When the caller cut the reply: from the caller's onset to the agent's voice stopping.
+    /// When the caller cut the reply: a duration from the caller's onset (not from the end of
+    /// speech) to the agent's voice stopping.
     pub barge_in_stop_ms: Option<u32>,
     /// The caller cut the reply with words that were only acknowledgement ("hı hı", "evet").
     pub backchannel_cut: bool,
@@ -723,21 +810,22 @@ pub struct Percentiles {
     pub p95: Option<u32>,
 }
 
-/// The nearest-rank percentiles of `values`.
+/// The nearest-rank percentiles of `values`: the value at rank `ceil(q * n)`, worked out in
+/// integers so that no rounding of a float product can move a rank by one.
 pub fn percentiles(values: impl IntoIterator<Item = u32>) -> Percentiles {
     let mut v: Vec<u32> = values.into_iter().collect();
     v.sort_unstable();
-    let rank = |q: f64| -> Option<u32> {
+    let rank = |percent: usize| -> Option<u32> {
         if v.is_empty() {
             return None;
         }
-        let k = (q * v.len() as f64).ceil() as usize;
+        let k = (percent * v.len()).div_ceil(100);
         v.get(k.clamp(1, v.len()) - 1).copied()
     };
     Percentiles {
         n: u32::try_from(v.len()).unwrap_or(u32::MAX),
-        p50: rank(0.5),
-        p95: rank(0.95),
+        p50: rank(50),
+        p95: rank(95),
     }
 }
 
@@ -800,7 +888,7 @@ pub use trace::{
 - [ ] **Step 4: Run the test**
 
 Run: `cargo test -p jt_calls --test trace`
-Expected: `test result: ok. 4 passed`.
+Expected: `test result: ok. 9 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -822,7 +910,9 @@ git commit -m "feat(calls): a caller turn's latency trace and its p50/p95 with t
 
 ```rust
 //! The approved opening with the business's name, its suffix fitted (owner decision 2026-10-29).
-use jt_calls::{TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening};
+use jt_calls::{
+    CLOSING, TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening,
+};
 
 #[test]
 fn genitive_follows_vowel_harmony_and_the_buffer_n() {
@@ -898,7 +988,272 @@ fn the_approved_sentences() {
     assert_eq!(d, "ben Figurunica'nın dijital asistanıyım");
     assert!(outbound_opening("Figurunica").unwrap().contains(&d));
     assert!(inbound_greeting("Figurunica").unwrap().contains(&d));
-    assert_eq!(TRANSCRIPT_NOTICE, "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.");
+    assert_eq!(
+        TRANSCRIPT_NOTICE,
+        "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir."
+    );
+}
+
+// Added beyond the plan's tests: the owner's checklist of names, and the edges of the rules.
+
+#[test]
+fn every_vowel_class_with_and_without_the_buffer_n() {
+    for (name, want) in [
+        ("Zeytin", "Zeytin'in"),
+        ("Okul", "Okul'un"),
+        ("Göz", "Göz'ün"),
+        ("Arı", "Arı'nın"),
+        ("Kapı", "Kapı'nın"),
+        ("Bahçe", "Bahçe'nin"),
+        ("Kulüp", "Kulüp'ün"),
+        ("Gözlük", "Gözlük'ün"),
+        ("Ev", "Ev'in"),
+        ("O", "O'nun"),
+        ("Ömer", "Ömer'in"),
+        ("Kâr", "Kâr'ın"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn capital_dotted_and_dotless_i_decide_the_suffix_wherever_they_stand() {
+    for (name, want) in [
+        ("İzmir", "İzmir'in"),
+        ("Işık", "Işık'ın"),
+        ("Iğdır", "Iğdır'ın"),
+        ("ALİ", "ALİ'nin"),
+        ("TAKSİ", "TAKSİ'nin"),
+        ("ISI", "ISI'nın"),
+        ("KIZILIRMAK", "KIZILIRMAK'ın"),
+        ("ÇİÇEK", "ÇİÇEK'in"),
+        ("DİKİLİ", "DİKİLİ'nin"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn a_number_glued_to_the_name_or_inside_it_is_read_the_same_way() {
+    for (name, want) in [
+        ("Studio54", "Studio54'ün"),
+        ("B2B", "B2B'nin"),
+        ("7Eleven", "7Eleven'in"),
+        ("3 Kardeşler", "3 Kardeşler'in"),
+        ("Hotel 40", "Hotel 40'ın"),
+        ("Hotel 20", "Hotel 20'nin"),
+        ("Hotel 30", "Hotel 30'un"),
+        ("Kat 11", "Kat 11'in"),
+        ("Kat 5", "Kat 5'in"),
+        ("Plaza 1000000", "Plaza 1000000'un"),
+        ("Plaza 1100", "Plaza 1100'ün"),
+        ("Plaza 12", "Plaza 12'nin"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn an_absurdly_long_number_does_not_panic() {
+    let name = format!("Hat {}", "9".repeat(40));
+    assert!(genitive(&name).starts_with("Hat 99"));
+}
+
+#[test]
+fn a_name_of_nothing_but_punctuation_gives_no_opening() {
+    assert_eq!(genitive("..."), "");
+    assert_eq!(outbound_opening("- -"), None);
+    assert_eq!(inbound_greeting("   "), None);
+}
+
+#[test]
+fn the_name_is_trimmed_but_otherwise_kept_as_written() {
+    assert_eq!(genitive("  Atölye\t"), "Atölye'nin");
+    assert_eq!(
+        outbound_opening("  Test Atölye ").unwrap(),
+        "Merhaba, ben Test Atölye'nin dijital asistanıyım."
+    );
+}
+
+// Added in the A3 fix-up: words whose suffix is front although their last vowel is back.
+
+#[test]
+fn soft_l_loanwords_and_the_front_table_take_the_front_suffix() {
+    for (name, want) in [
+        ("Kemal", "Kemal'in"),
+        ("Saat", "Saat'in"),
+        ("Hal", "Hal'in"),
+        ("Kalp", "Kalp'in"),
+        ("Kontrol", "Kontrol'ün"),
+        ("Petrol", "Petrol'ün"),
+        ("İstiklâl", "İstiklâl'in"),
+        ("Kuzey Petrol", "Kuzey Petrol'ün"),
+        // Every word of the table, once.
+        ("Alkol", "Alkol'ün"),
+        ("Bilal", "Bilal'in"),
+        ("Celal", "Celal'in"),
+        ("Cemal", "Cemal'in"),
+        ("Dikkat", "Dikkat'in"),
+        ("Gol", "Gol'ün"),
+        ("Hakikat", "Hakikat'in"),
+        ("Harf", "Harf'in"),
+        ("Hayal", "Hayal'in"),
+        ("Hilal", "Hilal'in"),
+        ("Kabul", "Kabul'ün"),
+        ("Nihal", "Nihal'in"),
+        ("Protokol", "Protokol'ün"),
+        ("Rol", "Rol'ün"),
+        ("Sembol", "Sembol'ün"),
+        ("Usul", "Usul'ün"),
+        // Any word ending in "âl".
+        ("Kemâl", "Kemâl'in"),
+        ("Hilâl", "Hilâl'in"),
+        ("Celâl", "Celâl'in"),
+        ("İSTİKLÂL", "İSTİKLÂL'in"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn the_front_table_is_matched_on_the_turkish_lowercased_whole_word() {
+    for (name, want) in [
+        ("KONTROL", "KONTROL'ün"),
+        ("HAL", "HAL'in"),
+        ("ROL", "ROL'ün"),
+        ("DİKKAT", "DİKKAT'in"),
+        ("BİLAL", "BİLAL'in"),
+        ("HİLAL", "HİLAL'in"),
+        ("NİHAL", "NİHAL'in"),
+        ("HAKİKAT", "HAKİKAT'in"),
+        ("kalp", "kalp'in"),
+        ("Petrol.", "Petrol.'ün"),
+        // Only a whole word: these merely begin with a table word, or are plain back words.
+        ("Sanat", "Sanat'ın"),
+        ("Okul", "Okul'un"),
+        ("Halk", "Halk'ın"),
+        ("Kalpak", "Kalpak'ın"),
+        ("Kemalpaşa", "Kemalpaşa'nın"),
+        ("Petrolcü", "Petrolcü'nün"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn the_front_table_is_not_applied_to_a_trailing_number() {
+    assert_eq!(genitive("Hal 7"), "Hal 7'nin");
+    assert_eq!(genitive("Rol 4"), "Rol 4'ün");
+}
+
+// Added in the A3 fix-up: a trailing word of symbols, and whitespace inside the name.
+
+#[test]
+fn a_trailing_word_of_symbols_is_dropped_and_the_last_real_word_decides() {
+    for (name, want) in [
+        ("Kafe ☕", "Kafe'nin"),
+        ("Acme -", "Acme'nin"),
+        ("Acme .", "Acme'nin"),
+        ("Acme - ☕ .", "Acme'nin"),
+        ("Atölye &", "Atölye'nin"),
+        ("Studio 54 ★", "Studio 54'ün"),
+        ("☕ Kafe", "☕ Kafe'nin"),
+        ("Test & Atölye", "Test & Atölye'nin"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+    assert_eq!(
+        outbound_opening("Kafe ☕").unwrap(),
+        "Merhaba, ben Kafe'nin dijital asistanıyım."
+    );
+    assert_eq!(
+        disclosure("Acme .").unwrap(),
+        "ben Acme'nin dijital asistanıyım"
+    );
+    assert_eq!(outbound_opening("☕ -"), None);
+}
+
+#[test]
+fn words_are_joined_by_single_spaces_so_no_newline_reaches_the_sentence() {
+    assert_eq!(genitive("Test\nAtölye"), "Test Atölye'nin");
+    assert_eq!(genitive("  Test \t\r\n  Atölye \n"), "Test Atölye'nin");
+    for text in [
+        outbound_opening("Test\nAtölye").unwrap(),
+        inbound_greeting("Test\r\nAtölye").unwrap(),
+        disclosure("Test\u{a0}\u{a0}Atölye").unwrap(),
+    ] {
+        assert!(!text.contains(['\n', '\r', '\t']), "{text:?}");
+        assert!(!text.contains("  "), "{text:?}");
+        assert!(text.contains("Test Atölye'nin"), "{text:?}");
+    }
+}
+
+// Added in the A3 fix-up: numbers of a trillion and more.
+
+#[test]
+fn round_numbers_up_to_a_trillion_and_more_are_read_by_their_unit() {
+    for (name, want) in [
+        ("Plaza 1000000000", "Plaza 1000000000'ın"),
+        ("Plaza 1000000000000", "Plaza 1000000000000'un"),
+        ("Plaza 5000000000000", "Plaza 5000000000000'un"),
+        ("Plaza 1000000000000000", "Plaza 1000000000000000'un"),
+        ("Plaza 100000000000000000", "Plaza 100000000000000000'un"),
+        ("Plaza 1500000000000", "Plaza 1500000000000'ın"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+// Added in the A3 fix-up: dotted acronyms are spelled out by their last letter.
+
+#[test]
+fn a_dotted_acronym_is_read_by_the_name_of_its_last_letter() {
+    for (name, want) in [
+        ("A.Ş.", "A.Ş.'nin"),
+        ("Acme A.Ş.", "Acme A.Ş.'nin"),
+        ("Acme A.Ş", "Acme A.Ş'nin"),
+        ("T.C.", "T.C.'nin"),
+        ("A.B.D.", "A.B.D.'nin"),
+        ("I.B.M.", "I.B.M.'nin"),
+        ("S.A.", "S.A.'nın"),
+        ("A.O.", "A.O.'nun"),
+        ("Ö.Ü.", "Ö.Ü.'nün"),
+        ("T.İ.", "T.İ.'nin"),
+        ("Y.Ğ.", "Y.Ğ.'nin"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn dots_that_do_not_spell_an_acronym_change_nothing() {
+    for (name, want) in [
+        ("Ltd.", "Ltd.'nin"),
+        ("Ahmet A.", "Ahmet A.'nın"),
+        ("St.Anne", "St.Anne'nin"),
+        ("Dr.", "Dr.'nin"),
+        ("v1.2", "v1.2'nin"),
+        ("3.5", "3.5'in"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn an_acronym_with_vowels_and_no_dots_is_read_as_a_word() {
+    // The documented limit: ABD is spoken "A-Be-De" but its spelling has a vowel, so it follows
+    // the spelling. An owner whose name is read otherwise writes the opening by hand.
+    assert_eq!(genitive("ABD"), "ABD'ın");
+    assert_eq!(genitive("AVM"), "AVM'ın");
+    assert_eq!(genitive("IBM"), "IBM'ın");
+    // Without a vowel the same names are spelled out.
+    assert_eq!(genitive("BMW"), "BMW'nin");
+}
+
+#[test]
+fn the_approved_closing_is_a_pinned_constant() {
+    assert_eq!(CLOSING, "Görüşmek üzere, iyi günler.");
+    assert_ne!(CLOSING, TRANSCRIPT_NOTICE);
 }
 ```
 
@@ -919,7 +1274,21 @@ Expected: FAIL to compile (`genitive` not found).
 /// Played after the opening on every agent call (owner-approved 2026-10-29).
 pub const TRANSCRIPT_NOTICE: &str = "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.";
 
+/// Played before an agent's call is hung up when its plan brings none (owner-approved 2026-10-29;
+/// the policy's `closing` by default, task C1).
+pub const CLOSING: &str = "Görüşmek üzere, iyi günler.";
+
 const VOWELS: &str = "aeıioöuüâîû";
+
+/// Words whose suffix is front although their last vowel is back (a soft `l` or `k` follows it, or
+/// the word is a loan): "Kemal'in", "Saat'in", "Kontrol'ün". Matched whole, on the Turkish-lowercased
+/// last word of a name; a word that merely begins with one of them is not in the table. Words
+/// ending in "âl" are covered by a rule ([`takes_front_suffix`]), whether or not they are listed.
+const FRONT_SUFFIX_WORDS: [&str; 22] = [
+    "alkol", "bilal", "celal", "cemal", "dikkat", "gol", "hakikat", "hal", "harf", "hayal",
+    "hilal", "kabul", "kalp", "kemal", "kontrol", "nihal", "petrol", "protokol", "rol", "saat",
+    "sembol", "usul",
+];
 
 fn is_vowel(c: char) -> bool {
     VOWELS.contains(c)
@@ -934,28 +1303,36 @@ fn lower_tr(c: char) -> char {
     }
 }
 
-/// How a letter is read when a word without vowels is spelled out.
+/// How a letter is read when a word is spelled out (a vowel letter is read as itself).
 fn letter_name(c: char) -> &'static str {
     match c {
+        'a' => "a",
         'b' => "be",
         'c' => "ce",
         'ç' => "çe",
         'd' => "de",
+        'e' => "e",
         'f' => "fe",
         'g' => "ge",
         'ğ' => "yumuşak ge",
         'h' => "he",
+        'ı' => "ı",
+        'i' => "i",
         'j' => "je",
         'k' => "ke",
         'l' => "le",
         'm' => "me",
         'n' => "ne",
+        'o' => "o",
+        'ö' => "ö",
         'p' => "pe",
         'q' => "kü",
         'r' => "re",
         's' => "se",
         'ş' => "şe",
         't' => "te",
+        'u' => "u",
+        'ü' => "ü",
         'v' | 'w' => "ve",
         'x' => "iks",
         'y' => "ye",
@@ -964,7 +1341,8 @@ fn letter_name(c: char) -> &'static str {
     }
 }
 
-/// The last word of a number's Turkish reading (`54` → `dört`, `100` → `yüz`).
+/// The last word of a number's Turkish reading (`54` → `dört`, `100` → `yüz`, `10^12` → `trilyon`).
+/// Only the last 18 digits are read: a longer number is not supported.
 fn number_tail(digits: &str) -> &'static str {
     const ONES: [&str; 10] = [
         "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz",
@@ -976,71 +1354,128 @@ fn number_tail(digits: &str) -> &'static str {
     let n: u64 = tail.parse().unwrap_or(0);
     if n == 0 {
         "sıfır"
-    } else if n % 10 != 0 {
+    } else if !n.is_multiple_of(10) {
         ONES[(n % 10) as usize]
-    } else if n % 100 != 0 {
+    } else if !n.is_multiple_of(100) {
         TENS[((n / 10) % 10) as usize]
-    } else if n % 1_000 != 0 {
+    } else if !n.is_multiple_of(1_000) {
         "yüz"
-    } else if n % 1_000_000 != 0 {
+    } else if !n.is_multiple_of(1_000_000) {
         "bin"
-    } else if n % 1_000_000_000 != 0 {
+    } else if !n.is_multiple_of(1_000_000_000) {
         "milyon"
-    } else {
+    } else if !n.is_multiple_of(1_000_000_000_000) {
         "milyar"
+    } else {
+        "trilyon"
     }
 }
 
-/// How the end of `word` (letters and digits only) is read aloud: a trailing number by its
-/// reading, a word without vowels by its last letter's name, any other word as written.
-fn spoken_tail(word: &str) -> String {
-    let digits: Vec<char> = word
+/// Whether the last word `lower` (Turkish-lowercased, letters and digits only) takes the front
+/// suffix although its last vowel is back: a word of [`FRONT_SUFFIX_WORDS`], or any word ending in
+/// "âl" (İstiklâl'in, Hilâl'in).
+fn takes_front_suffix(lower: &str) -> bool {
+    FRONT_SUFFIX_WORDS.contains(&lower) || lower.ends_with("âl")
+}
+
+/// The last letter of a dotted acronym (`A.Ş.`, `T.C.`, `A.B.D.`; the last dot is optional): two or
+/// more single letters, each followed by a dot. Anything else is not one.
+fn dotted_acronym_last_letter(word: &str) -> Option<char> {
+    let parts: Vec<&str> = word.trim_end_matches('.').split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let mut last = None;
+    for part in parts {
+        let mut chars = part.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else {
+            return None;
+        };
+        if !c.is_alphabetic() {
+            return None;
+        }
+        last = Some(c);
+    }
+    last
+}
+
+/// How the end of `word` (a name's last word, which has a letter or a digit) is read aloud, and
+/// whether its suffix is front although its last vowel is back: a dotted acronym by its last
+/// letter's name, a trailing number by its reading, a word without vowels by its last letter's
+/// name, any other word as written.
+fn spoken_tail(word: &str) -> (String, bool) {
+    if let Some(letter) = dotted_acronym_last_letter(word) {
+        return (letter_name(lower_tr(letter)).to_owned(), false);
+    }
+    let core: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+    let digits: Vec<char> = core
         .chars()
         .rev()
         .take_while(char::is_ascii_digit)
         .collect();
     if !digits.is_empty() {
         let digits: String = digits.into_iter().rev().collect();
-        return number_tail(&digits).to_owned();
+        return (number_tail(&digits).to_owned(), false);
     }
-    let lower: String = word.chars().map(lower_tr).collect();
+    let lower: String = core.chars().map(lower_tr).collect();
     if lower.chars().any(is_vowel) {
-        return lower;
+        let front = takes_front_suffix(&lower);
+        return (lower, front);
     }
-    lower
+    let spelled = lower
         .chars()
         .last()
         .map(letter_name)
         .unwrap_or_default()
-        .to_owned()
+        .to_owned();
+    (spelled, false)
 }
 
 /// The genitive suffix of a word read as `spoken`: the last vowel picks it (a ı → ın, e i → in,
-/// o u → un, ö ü → ün), and a final vowel takes the buffer `n`.
-fn genitive_suffix(spoken: &str) -> &'static str {
+/// o u → un, ö ü → ün; `front` turns a ı → in and o u → ün), and a final vowel takes the buffer `n`.
+fn genitive_suffix(spoken: &str, front: bool) -> &'static str {
     let ends_in_vowel = spoken.chars().last().is_some_and(is_vowel);
-    let (bare, buffered) = match spoken.chars().rev().find(|c| is_vowel(*c)) {
-        Some('a' | 'ı' | 'â') => ("ın", "nın"),
-        Some('o' | 'u' | 'û') => ("un", "nun"),
-        Some('ö' | 'ü') => ("ün", "nün"),
+    let (bare, buffered) = match (spoken.chars().rev().find(|c| is_vowel(*c)), front) {
+        (Some('a' | 'ı' | 'â'), false) => ("ın", "nın"),
+        (Some('o' | 'u' | 'û'), false) => ("un", "nun"),
+        (Some('ö' | 'ü'), _) | (Some('o' | 'u' | 'û'), true) => ("ün", "nün"),
         _ => ("in", "nin"),
     };
     if ends_in_vowel { buffered } else { bare }
 }
 
 /// `name` with its genitive suffix after an apostrophe: `Jeeta'nın`, `Atölye'nin`, `Ahmet'in`,
-/// `THY'nin`, `Studio 54'ün`. The suffix follows the name's last word as it is spelled; a name
-/// pronounced otherwise needs its opening written by hand in the call policy. Blank → blank.
+/// `THY'nin`, `A.Ş.'nin`, `Studio 54'ün`, `Kontrol'ün`. Blank → blank.
+///
+/// The name is its words joined by single spaces (so a newline inside it never reaches the spoken
+/// sentence), up to its last word that holds a letter or a digit: a trailing word of symbols only
+/// ("☕", "-", ".") is dropped. The suffix follows that last word as it is *spelled*:
+///
+/// - The last vowel decides (a ı → ın, e i → in, o u → un, ö ü → ün), a final vowel takes the buffer
+///   `n`; capital `I` and `İ` are lowered the Turkish way.
+/// - A short table of loanwords with a soft `l` or `k` (Kemal, Saat, Hal, Kalp, Kontrol, Petrol,
+///   ...), matched whole, and any word ending in "âl" take the front suffix: `Kemal'in`,
+///   `Kontrol'ün`, `İstiklâl'in`.
+/// - A word without vowels is read by its last letter's name (`THY'nin`), a dotted acronym by the
+///   name of its last letter (`A.Ş.'nin`, `T.C.'nin`), a trailing number by its Turkish reading
+///   (`Studio 54'ün`, `Bina 100'ün`). A number of more than 18 digits is not supported (only its
+///   last 18 digits are read).
+///
+/// Limits. An acronym that holds a vowel but has no dots (ABD, AKP, AVM, IBM) is read as a word, so
+/// it gets `ABD'ın` where it is spoken "A-Be-De'nin"; a foreign or invented name pronounced
+/// otherwise than spelled ("Apple") has the same problem. An owner whose name is read otherwise
+/// writes the opening by hand in the call policy.
 pub fn genitive(name: &str) -> String {
-    let name = name.trim();
-    let Some(word) = name.split_whitespace().last() else {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let Some(end) = words
+        .iter()
+        .rposition(|w| w.chars().any(char::is_alphanumeric))
+    else {
         return String::new();
     };
-    let core: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
-    if core.is_empty() {
-        return String::new();
-    }
-    format!("{name}'{}", genitive_suffix(&spoken_tail(&core)))
+    let shown = words[..=end].join(" ");
+    let (spoken, front) = spoken_tail(words[end]);
+    format!("{shown}'{}", genitive_suffix(&spoken, front))
 }
 
 /// The approved outbound opening: "Merhaba, ben {İşletme}'nın dijital asistanıyım."; `None` for a
@@ -1062,12 +1497,12 @@ pub fn disclosure(business: &str) -> Option<String> {
 }
 ```
 
-In `lib.rs` add `mod opening;` and `pub use opening::{TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening};`.
+In `lib.rs` add `mod opening;` and `pub use opening::{CLOSING, TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening};`.
 
 - [ ] **Step 4: Run the test**
 
 Run: `cargo test -p jt_calls --test opening`
-Expected: `test result: ok. 6 passed`.
+Expected: `test result: ok. 22 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -1095,9 +1530,21 @@ use serde_json::json;
 #[test]
 fn the_defaults_are_the_approved_set() {
     let p = BridgePhrases::default();
-    assert_eq!(p.acknowledgements, ["Hı hı.", "Anladım.", "Tamam.", "Peki."]);
-    assert_eq!(p.fillers, ["Bir saniye, hemen bakıyorum.", "Kontrol ediyorum, kısa bir an."]);
-    assert_eq!(p.long_wait, ["Biraz daha zaman alıyor, beklediğiniz için teşekkürler."]);
+    assert_eq!(
+        p.acknowledgements,
+        ["Hı hı.", "Anladım.", "Tamam.", "Peki."]
+    );
+    assert_eq!(
+        p.fillers,
+        [
+            "Bir saniye, hemen bakıyorum.",
+            "Kontrol ediyorum, kısa bir an."
+        ]
+    );
+    assert_eq!(
+        p.long_wait,
+        ["Biraz daha zaman alıyor, beklediğiniz için teşekkürler."]
+    );
     assert_eq!(p.not_heard, ["Sizi tam duyamadım, tekrar eder misiniz?"]);
     assert_eq!(p.still_there, ["Hâlâ orada mısınız?"]);
     assert_eq!(
@@ -1110,18 +1557,126 @@ fn the_defaults_are_the_approved_set() {
 #[test]
 fn a_phrase_is_found_by_its_set_and_index() {
     let p = BridgePhrases::default();
-    assert_eq!(p.text(PhraseSet::Filler, 1), Some("Kontrol ediyorum, kısa bir an."));
+    assert_eq!(
+        p.text(PhraseSet::Filler, 1),
+        Some("Kontrol ediyorum, kısa bir an.")
+    );
     assert_eq!(p.text(PhraseSet::LongWait, 1), None);
     assert_eq!(p.set(PhraseSet::Acknowledgement).len(), 4);
 }
 
 #[test]
 fn sets_read_and_write_snake_case_and_missing_sets_keep_their_defaults() {
-    assert_eq!(serde_json::to_value(PhraseSet::LongWait).unwrap(), json!("long_wait"));
-    assert_eq!(serde_json::to_value(PhraseSet::StillThere).unwrap(), json!("still_there"));
+    assert_eq!(
+        serde_json::to_value(PhraseSet::LongWait).unwrap(),
+        json!("long_wait")
+    );
+    assert_eq!(
+        serde_json::to_value(PhraseSet::StillThere).unwrap(),
+        json!("still_there")
+    );
     let p: BridgePhrases = serde_json::from_value(json!({ "fillers": ["Bir dakika."] })).unwrap();
     assert_eq!(p.fillers, ["Bir dakika."]);
-    assert_eq!(p.acknowledgements, BridgePhrases::default().acknowledgements);
+    assert_eq!(
+        p.acknowledgements,
+        BridgePhrases::default().acknowledgements
+    );
+}
+
+// Added beyond the plan's tests: the owner's approved texts, pinned character for character.
+
+/// Every text the owner approved on 2026-10-29 that the domain holds, set by set, in the order
+/// `BridgePhrases::all` yields them.
+const APPROVED: [(PhraseSet, &[&str]); 6] = [
+    (
+        PhraseSet::Acknowledgement,
+        &["Hı hı.", "Anladım.", "Tamam.", "Peki."],
+    ),
+    (
+        PhraseSet::Filler,
+        &[
+            "Bir saniye, hemen bakıyorum.",
+            "Kontrol ediyorum, kısa bir an.",
+        ],
+    ),
+    (
+        PhraseSet::LongWait,
+        &["Biraz daha zaman alıyor, beklediğiniz için teşekkürler."],
+    ),
+    (
+        PhraseSet::NotHeard,
+        &["Sizi tam duyamadım, tekrar eder misiniz?"],
+    ),
+    (PhraseSet::StillThere, &["Hâlâ orada mısınız?"]),
+    (
+        PhraseSet::Fault,
+        &["Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."],
+    ),
+];
+
+#[test]
+fn the_approved_texts_are_pinned_set_by_set() {
+    let p = BridgePhrases::default();
+    for (set, texts) in APPROVED {
+        let have: Vec<&str> = p.set(set).iter().map(String::as_str).collect();
+        assert_eq!(have, texts, "{set:?}");
+    }
+    let flat: Vec<&str> = APPROVED
+        .iter()
+        .flat_map(|(_, t)| t.iter().copied())
+        .collect();
+    assert_eq!(p.all().collect::<Vec<_>>(), flat);
+    assert_eq!(
+        jt_calls::TRANSCRIPT_NOTICE,
+        "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir."
+    );
+    // Not a bridge phrase (the core plays it at the scripted ending), but approved with them.
+    assert_eq!(jt_calls::CLOSING, "Görüşmek üzere, iyi günler.");
+}
+
+#[test]
+fn the_approved_texts_use_the_precomposed_turkish_letters() {
+    // "Hı hı." has the dotless ı (U+0131) and "Hâlâ" the precomposed â (U+00E2), never an i or an
+    // a followed by a combining mark: the speech engine and the phrase cache key on the bytes.
+    let p = BridgePhrases::default();
+    assert!(p.acknowledgements[0].contains('\u{131}'));
+    assert!(!p.acknowledgements[0].contains('i'));
+    assert!(p.still_there[0].contains('\u{e2}'));
+    for text in p
+        .all()
+        .chain([jt_calls::TRANSCRIPT_NOTICE, jt_calls::CLOSING])
+    {
+        assert!(
+            !text.chars().any(|c| ('\u{300}'..='\u{36f}').contains(&c)),
+            "{text}"
+        );
+        assert_eq!(text, text.trim(), "{text}");
+        assert!(text.ends_with(['.', '?']), "{text}");
+    }
+}
+
+#[test]
+fn sets_have_stable_positions_and_a_cleared_set_is_never_played() {
+    for (i, set) in PhraseSet::ALL.into_iter().enumerate() {
+        assert_eq!(set.position(), i, "{set:?}");
+    }
+    let p: BridgePhrases = serde_json::from_value(json!({ "fillers": [] })).unwrap();
+    assert!(p.set(PhraseSet::Filler).is_empty());
+    assert_eq!(p.text(PhraseSet::Filler, 0), None);
+    assert_eq!(p.all().count(), 8);
+    assert_eq!(
+        BridgePhrases::default().text(PhraseSet::Fault, u8::MAX),
+        None
+    );
+}
+
+#[test]
+fn the_defaults_survive_a_trip_through_json() {
+    let p = BridgePhrases::default();
+    let back: BridgePhrases = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+    assert_eq!(back, p);
+    let empty: BridgePhrases = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(empty, p);
 }
 ```
 
@@ -1140,6 +1695,9 @@ Expected: FAIL to compile (`BridgePhrases` not found).
 //! wait, "not heard", "still there" and the fault sentence. They are the policy's text: the bridge
 //! picks one by set and index and reports which, and the core logs the policy's text for it. A set
 //! left empty is never played.
+//!
+//! The closing is not a bridge phrase: the core plays it at the scripted ending (`CallPlan.closing`,
+//! by default the policy's `closing`).
 
 use serde::{Deserialize, Serialize};
 
@@ -1259,12 +1817,12 @@ git commit -m "feat(calls): the owner-approved phrase set the bridge may play on
 ### Task A5: The wire's additions in the domain (dial script, hotwords, phrase and trace events)
 
 **Files:**
-- Modify: `rust/crates/domain/jt_calls/src/session.rs` (`CallMetrics`, `Command::Dial`, `BridgeEvent`, `reduce`; new `DialScript`)
+- Modify: `rust/crates/domain/jt_calls/src/session.rs` (`CallSession.phrases`, `CallMetrics`, `Command::Dial`, `BridgeEvent`, `reduce`; new `DialScript`)
 - Modify: `rust/crates/domain/jt_calls/src/plan.rs` (`hotwords`, `PlanError::Hotwords`, `call_hotwords`)
 - Modify: `rust/crates/domain/jt_calls/src/policy.rs` (`phrases` field only; its validation is C1)
 - Modify: `rust/crates/domain/jt_calls/src/lib.rs`
 - Create: `rust/crates/domain/jt_calls/tests/bridge_additions.rs`
-- Modify (struct literals that must name the new fields): `rust/crates/domain/jt_calls/tests/support/mod.rs:21`, `rust/crates/domain/jt_calls/tests/wire.rs`, `rust/crates/jt_app/tests/calls_bridge.rs:84,138`, `rust/crates/jt_app/tests/calls_session.rs:76`, `rust/crates/adapters/jt_pg/tests/calls_storage.rs:401,560`
+- Modify (struct literals that must name the new fields): `rust/crates/domain/jt_calls/tests/support/mod.rs:21`, `rust/crates/domain/jt_calls/tests/wire.rs`, `rust/crates/jt_app/tests/calls_bridge.rs:84,138`, `rust/crates/jt_app/tests/calls_session.rs:76`, `rust/crates/adapters/jt_pg/tests/calls_storage.rs:401,560`; and, for `CallSession.phrases`, every `CallSession { … }` literal (find them with `grep -rn "CallSession {" rust/crates --include=*.rs`; a literal that ends in `..other` needs nothing): `rust/crates/domain/jt_calls/tests/support/mod.rs:49`, `rust/crates/jt_app/src/usecases/calls.rs` (`place_human`, `place_agent`), `rust/crates/jt_app/tests/calls_bridge.rs:99`, `rust/crates/jt_app/tests/inbox_consumer.rs:1494`, `rust/crates/adapters/jt_pg/tests/calls_storage.rs` (six)
 - Modify: `rust/crates/jt_app/src/usecases/calls.rs:942` (the `Command::Dial` it builds), `rust/crates/jt_app/src/usecases/calls/bridge.rs` (`kind_of`)
 
 - [ ] **Step 1: Write the failing tests**
@@ -1293,7 +1851,7 @@ fn utterance() -> BridgeEvent {
 }
 
 #[test]
-fn a_bridge_filler_is_logged_with_the_policys_text_and_counts_as_this_waits_holding() {
+fn a_bridge_filler_is_logged_with_the_dialled_text_and_counts_as_this_waits_holding() {
     let p = policy();
     let mut s = agent_session();
     reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
@@ -1301,7 +1859,7 @@ fn a_bridge_filler_is_logged_with_the_policys_text_and_counts_as_this_waits_hold
     let step = reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::Filler, index: 0 }, at(7_700), &p);
     assert_eq!(step.turns.len(), 1);
     assert_eq!(step.turns[0].kind, TurnKind::Holding);
-    assert_eq!(step.turns[0].text, p.phrases.fillers[0]);
+    assert_eq!(step.turns[0].text, s.phrases.fillers[0]);
     assert!(step.commands.is_empty());
     // The core's own first holding phrase (4 s after the words) is covered already.
     assert_eq!(next_timer(&s, at(9_000), &p), TimerAction::None);
@@ -1312,7 +1870,7 @@ fn a_bridge_filler_is_logged_with_the_policys_text_and_counts_as_this_waits_hold
 }
 
 #[test]
-fn a_phrase_the_policy_lacks_logs_no_text() {
+fn a_phrase_the_dial_lacks_logs_no_text() {
     let p = policy();
     let mut s = agent_session();
     reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
@@ -1320,6 +1878,35 @@ fn a_phrase_the_policy_lacks_logs_no_text() {
     let step = reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::Filler, index: 9 }, at(3_700), &p);
     assert!(step.turns.is_empty());
     assert_eq!(s.clock.holding_in_turn, 1);
+}
+
+#[test]
+fn a_phrase_is_logged_with_the_text_dialled_for_this_call_not_the_policys_current_one() {
+    // The call was dialled with the approved phrases; the owner then rewrites the fillers.
+    let mut p = policy();
+    p.phrases.fillers = vec!["Hemen dönüyorum.".into()];
+    let mut s = agent_session();
+    assert_eq!(s.phrases, BridgePhrases::default());
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    reduce(&mut s, &utterance(), at(5_000), &p);
+    let step = reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::Filler, index: 0 }, at(7_700), &p);
+    assert_eq!(step.turns[0].text, "Bir saniye, hemen bakıyorum.");
+    // Index 1 is in the dialled set but no longer in the policy's: still the dialled text.
+    let step = reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::Filler, index: 1 }, at(8_000), &p);
+    assert_eq!(step.turns[0].text, "Kontrol ediyorum, kısa bir an.");
+    // A phrase the dial carried none of logs nothing, whatever the policy has now.
+    s.phrases.long_wait.clear();
+    p.phrases.long_wait = vec!["Çok sürdü.".into()];
+    let step = reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::LongWait, index: 0 }, at(9_000), &p);
+    assert!(step.turns.is_empty());
+}
+
+#[test]
+fn a_session_stored_without_dialled_phrases_reads_the_approved_set() {
+    let mut value = serde_json::to_value(agent_session()).unwrap();
+    value.as_object_mut().unwrap().remove("phrases");
+    let back: jt_calls::CallSession = serde_json::from_value(value).unwrap();
+    assert_eq!(back.phrases, BridgePhrases::default());
 }
 
 #[test]
@@ -1463,6 +2050,17 @@ use crate::phrases::{BridgePhrases, PhraseSet};
 use crate::trace::{MAX_TRACES, TurnTrace};
 ```
 
+add to `CallSession`, after `clock`:
+
+```rust
+    /// The phrases dialled with this call (the dial's `DialScript.phrases`): what a `phrase` event
+    /// is logged with, whatever the policy says by the time the event arrives, so an owner who edits
+    /// the phrases during a live call cannot make the log record a sentence that was never played.
+    /// The approved set in a session stored without one.
+    #[serde(default)]
+    pub phrases: BridgePhrases,
+```
+
 add to `CallMetrics`, after `fallback_played`:
 
 ```rust
@@ -1497,6 +2095,8 @@ change `Command::Dial` to:
     },
 ```
 
+and put `#[allow(clippy::large_enum_variant)] // a dial carries its plan and script; commands are few and short-lived` above `pub enum Command` (with the script the dial is 392 bytes against 30 for the next variant, and `clippy -D warnings` refuses the enum; boxing the script would change every consumer for nothing).
+
 add to `BridgeEvent`, before `CommandDone`:
 
 ```rust
@@ -1510,10 +2110,11 @@ and in `reduce`, before `BridgeEvent::CommandDone { .. } => {}`:
 
 ```rust
         BridgeEvent::Phrase { set, index } => {
-            // The policy's own text is logged; the bridge sends none.
-            if let Some(text) = policy.phrases.text(*set, *index) {
+            // The text dialled with this call is logged, not the policy as it stands now (the owner
+            // may have edited it since); the bridge sends none.
+            if let Some(text) = session.phrases.text(*set, *index).map(str::to_owned) {
                 step.turns
-                    .push(session.turn(now, TurnKind::Holding, text.to_owned(), TurnMeta::default()));
+                    .push(session.turn(now, TurnKind::Holding, text, TurnMeta::default()));
             }
             // A filler or the long wait is this wait's holding phrase: the core does not play its
             // own over it.
@@ -1541,14 +2142,18 @@ and in `reduce`, before `BridgeEvent::CommandDone { .. } => {}`:
 Add `hotwords: Vec::new(),` to the `CallPlan { … }` literals in `rust/crates/domain/jt_calls/tests/support/mod.rs`, `rust/crates/jt_app/tests/calls_bridge.rs`, `rust/crates/jt_app/tests/calls_session.rs`, `rust/crates/adapters/jt_pg/tests/calls_storage.rs`; add `script: Default::default(),` to the `Command::Dial { … }` literals in `rust/crates/domain/jt_calls/tests/wire.rs`, `rust/crates/jt_app/tests/calls_bridge.rs`, `rust/crates/adapters/jt_pg/tests/calls_storage.rs`; in `rust/crates/jt_app/src/usecases/calls.rs` change the dial to
 
 ```rust
+    let script = DialScript::default();
+    // The phrases the bridge is told are the phrases the log will show: keep them with the call.
+    session.phrases = script.phrases.clone();
+    r.calls().update(session.clone(), ctx.now).await?;
     let dial = Command::Dial {
         to_e164: session.counterpart_e164.clone(),
         plan,
-        script: DialScript::default(),
+        script,
     };
 ```
 
-(Task C2 fills the script) and import `DialScript` in its `use jt_calls::{…}`. In `rust/crates/jt_app/src/usecases/calls/bridge.rs` `kind_of`, add:
+(Task C2 fills the script from the policy and snapshots its phrases the same way) and import `DialScript` in its `use jt_calls::{…}`. Add `phrases: Default::default(),` to every `CallSession { … }` literal listed above. In `rust/crates/jt_app/src/usecases/calls/bridge.rs` `kind_of`, add:
 
 ```rust
         BridgeEvent::Phrase { .. } => "phrase",
@@ -1560,7 +2165,7 @@ Find any other literal with: `grep -rn "Command::Dial {\|CallPlan {" rust/crates
 - [ ] **Step 5: Run the tests**
 
 Run: `cargo test -p jt_calls` and `cargo clippy --locked -p jt_app --lib --features tokio/time -- -D warnings`
-Expected: `bridge_additions` 7 passed and every earlier `jt_calls` test passing; `jt_app` lib clean. CI: `jt_app`, `jt_pg` tests unchanged in behaviour.
+Expected: `bridge_additions` 9 passed and every earlier `jt_calls` test passing; `jt_app` lib clean. CI: `jt_app`, `jt_pg` tests unchanged in behaviour.
 
 - [ ] **Step 6: Commit**
 
@@ -4138,7 +4743,7 @@ pub struct Talker {
     speaking: bool,
     hangup_when_done: bool,
     hung_up: bool,
-    rotation: [usize; 6],
+    rotation: [usize; PhraseSet::ALL.len()],
 }
 
 impl Talker {
@@ -4158,7 +4763,7 @@ impl Talker {
             speaking: false,
             hangup_when_done: false,
             hung_up: false,
-            rotation: [0; 6],
+            rotation: [0; PhraseSet::ALL.len()],
         }
     }
 
@@ -6283,7 +6888,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use jt_calls::{BridgeEvent, BridgePhrases, Command, DialScript, PlayKind};
+use jt_calls::{BridgeEvent, BridgePhrases, CLOSING, Command, DialScript, PlayKind};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -6292,8 +6897,6 @@ use crate::call::{CallDeps, CallSetup, ToCall, run_call};
 use crate::config::Config;
 use crate::netgsm;
 use crate::trace::TraceFile;
-
-const CLOSING: &str = "Görüşmek üzere, iyi günler.";
 
 struct Args {
     opening: String,
@@ -6631,10 +7234,11 @@ Check the registration's contact as NetGSM sees it (`docker exec jeeta-asterisk 
 
 Phase C changes what the core plays and returns; every change is additive and existing callers keep working. `jt_calls` parts run on Windows; `jt_app`, `jt_mcp` and `jt_panel_http` tests run in CI only (section 2).
 
-### Task C1: The workspace opening and the transcript notice come first
+### Task C1: The workspace opening and the transcript notice come first (and the closing has a default)
 
 **Files:**
 - Modify: `rust/crates/domain/jt_calls/src/policy.rs`
+- Modify: `rust/crates/domain/jt_calls/src/plan.rs` (`closing` optional)
 - Create: `rust/crates/domain/jt_calls/tests/policy_opening.rs`
 - Modify: `rust/crates/jt_app/src/usecases/calls.rs` (`policy_get`, `facts`, `place_agent`, a new `policy_of`), `calls/bridge.rs` (`apply_call`), `calls/session.rs` (`tick`)
 - Modify: `rust/crates/jt_app/tests/calls_session.rs` (rig policy; two tests)
@@ -6645,7 +7249,7 @@ Phase C changes what the core plays and returns; every change is additive and ex
 
 ```rust
 //! The policy's own opening, notice and phrases (owner decisions of 2026-10-29).
-use jt_calls::{BridgePhrases, CallPolicy, TRANSCRIPT_NOTICE};
+use jt_calls::{BridgePhrases, CLOSING, CallPlan, CallPolicy, TRANSCRIPT_NOTICE};
 use serde_json::json;
 
 #[test]
@@ -6653,6 +7257,7 @@ fn the_workspace_fills_only_what_the_owner_left_unwritten() {
     let p = CallPolicy::default().with_workspace("Acme");
     assert_eq!(p.opening_outbound.as_deref(), Some("Merhaba, ben Acme'nin dijital asistanıyım."));
     assert_eq!(p.transcript_notice.as_deref(), Some(TRANSCRIPT_NOTICE));
+    assert_eq!(p.closing.as_deref(), Some(CLOSING));
     assert_eq!(p.disclosure_sentence, "ben Acme'nin dijital asistanıyım");
     assert_eq!(
         p.greeting_inbound,
@@ -6661,13 +7266,18 @@ fn the_workspace_fills_only_what_the_owner_left_unwritten() {
     let own = CallPolicy {
         opening_outbound: Some("Merhaba, Acme asistanı ben.".into()),
         transcript_notice: Some(String::new()),
+        closing: Some("Hoşça kalın.".into()),
         disclosure_sentence: "Acme asistanı".into(),
         ..CallPolicy::default()
     }
     .with_workspace("Acme");
     assert_eq!(own.opening_outbound.as_deref(), Some("Merhaba, Acme asistanı ben."));
     assert_eq!(own.transcript_notice.as_deref(), Some(""));
+    assert_eq!(own.closing.as_deref(), Some("Hoşça kalın."));
     assert_eq!(own.disclosure_sentence, "Acme asistanı");
+    // An empty closing is the owner's "none", not "unwritten".
+    let none = CallPolicy { closing: Some(String::new()), ..CallPolicy::default() }.with_workspace("Acme");
+    assert_eq!(none.closing.as_deref(), Some(""));
 }
 
 #[test]
@@ -6704,9 +7314,34 @@ fn openings_and_phrases_are_validated_and_read_tolerantly() {
     assert_eq!(p.validate().unwrap_err().field, "phrases.acknowledgements");
     let p = CallPolicy { opening_outbound: Some("x".repeat(601)), ..CallPolicy::default() };
     assert_eq!(p.validate().unwrap_err().field, "opening_outbound");
+    let p = CallPolicy { closing: Some("x".repeat(601)), ..CallPolicy::default() };
+    assert_eq!(p.validate().unwrap_err().field, "closing");
+    let p = CallPolicy { closing: Some(String::new()), ..CallPolicy::default() };
+    assert_eq!(p.validate(), Ok(()));
     let p: CallPolicy = serde_json::from_value(json!({})).unwrap();
-    assert_eq!((p.opening_outbound, p.transcript_notice), (None, None));
+    assert_eq!((p.opening_outbound, p.transcript_notice, p.closing), (None, None, None));
     assert_eq!(p.phrases, BridgePhrases::default());
+}
+
+#[test]
+fn a_plan_may_leave_its_closing_to_the_policy() {
+    let mut plan: CallPlan = serde_json::from_value(json!({
+        "opening": "Ada Hanım ile mi görüşüyorum?",
+        "goal": "Randevuyu teyit etmek",
+        "holding": ["Bir saniye."],
+        "max_duration_s": 60,
+    }))
+    .unwrap();
+    assert_eq!(plan.closing, "");
+    assert_eq!(plan.validate(), Ok(()));
+    // The closing is played when there is one: an empty one is not a sentence the plan authors.
+    assert_eq!(plan.playable().collect::<Vec<_>>(), ["Ada Hanım ile mi görüşüyorum?", "Bir saniye."]);
+    plan.closing = "Hoşça kalın.".into();
+    assert_eq!(plan.playable().last(), Some("Hoşça kalın."));
+    plan.closing = "   ".into();
+    assert!(plan.validate().is_err());
+    plan.closing = "x".repeat(601);
+    assert!(plan.validate().is_err());
 }
 ```
 
@@ -6718,7 +7353,7 @@ Expected: FAIL to compile (`with_workspace` not found).
 In `rust/crates/domain/jt_calls/src/policy.rs` add the imports
 
 ```rust
-use crate::opening::{TRANSCRIPT_NOTICE, disclosure, inbound_greeting, outbound_opening};
+use crate::opening::{CLOSING, TRANSCRIPT_NOTICE, disclosure, inbound_greeting, outbound_opening};
 use crate::phrases::PhraseSet;
 ```
 
@@ -6731,9 +7366,13 @@ the fields (after `disclosure_sentence`):
     pub opening_outbound: Option<String>,
     /// Played after the opening on every agent call. `None`: the approved notice; empty: none.
     pub transcript_notice: Option<String>,
+    /// Played before an agent's call is hung up when its plan brings no closing. `None`: the
+    /// approved closing ([`CLOSING`], filled in by [`CallPolicy::with_workspace`]); empty: none (a
+    /// plan must then bring its own).
+    pub closing: Option<String>,
 ```
 
-`opening_outbound: None, transcript_notice: None,` in `Default`, and in `validate`, before the timers:
+`opening_outbound: None, transcript_notice: None, closing: None,` in `Default`, and in `validate`, before the timers:
 
 ```rust
         if let Some(t) = &self.opening_outbound {
@@ -6741,6 +7380,9 @@ the fields (after `disclosure_sentence`):
         }
         if let Some(t) = &self.transcript_notice {
             optional_line(t, "transcript_notice")?;
+        }
+        if let Some(t) = &self.closing {
+            optional_line(t, "closing")?;
         }
         for set in PhraseSet::ALL {
             let field = phrase_field(set);
@@ -6774,13 +7416,17 @@ and the methods in `impl CallPolicy`:
 ```rust
     /// This policy with the workspace's own sentences where the owner wrote none: the approved
     /// outbound opening and inbound greeting with `business` in them, the approved transcript
-    /// notice, and the disclosure sentence both openings contain. The owner's own texts are kept.
+    /// notice and closing, and the disclosure sentence both openings contain. The owner's own texts
+    /// are kept (an empty one is the owner's "none").
     pub fn with_workspace(mut self, business: &str) -> CallPolicy {
         if self.opening_outbound.is_none() {
             self.opening_outbound = outbound_opening(business);
         }
         if self.transcript_notice.is_none() {
             self.transcript_notice = Some(TRANSCRIPT_NOTICE.to_owned());
+        }
+        if self.closing.is_none() {
+            self.closing = Some(CLOSING.to_owned());
         }
         if self.disclosure_sentence.trim().is_empty()
             && let Some(d) = disclosure(business)
@@ -6812,8 +7458,27 @@ and the methods in `impl CallPolicy`:
     }
 ```
 
+In `rust/crates/domain/jt_calls/src/plan.rs` a plan may leave its closing to the policy. In `CallPlan` the field becomes
+
+```rust
+    /// Played before the call is hung up. Empty: the call policy's `closing` (the core fills it in
+    /// when the call is placed; a plan with neither is refused).
+    #[serde(default)]
+    pub closing: String,
+```
+
+in `validate` replace `line(&self.closing, "plan.closing")?;` with
+
+```rust
+        if !self.closing.is_empty() {
+            line(&self.closing, "plan.closing")?;
+        }
+```
+
+and in `playable` replace `.chain(std::iter::once(self.closing.as_str()))` with `.chain((!self.closing.is_empty()).then_some(self.closing.as_str()))`.
+
 Run: `cargo test -p jt_calls`
-Expected: all pass (`policy_opening` 3 new).
+Expected: all pass (`policy_opening` 4 new).
 
 - [ ] **Step 3: Write the failing core tests**
 
@@ -6852,8 +7517,33 @@ async fn policy_get_shows_the_workspaces_own_sentences() {
     let w = world().await;
     let p = calls::policy_get(&w.deps, &w.owner_ctx).await.unwrap();
     assert_eq!(p.opening_outbound.as_deref(), Some("Merhaba, ben Acme'nin dijital asistanıyım."));
+    assert_eq!(p.closing.as_deref(), Some(jt_calls::CLOSING));
     assert_eq!(p.disclosure_sentence, "ben Acme'nin dijital asistanıyım");
     assert_eq!(p.phrases, jt_calls::BridgePhrases::default());
+}
+
+#[tokio::test]
+async fn a_plan_without_a_closing_ends_with_the_policys_closing() {
+    let mut brief = plan();
+    brief.closing = String::new();
+    brief.max_duration_s = 60;
+    let r = rig().await;
+    let call = r.place_at(0, brief).await;
+    r.answer(call).await;
+    r.timers(65).await;
+    let queued = r.poll(65).await;
+    let closing = queued.iter().find(|c| c.payload["clip"] == "closing").expect("a closing");
+    assert_eq!(closing.payload["text"], jt_calls::CLOSING);
+}
+
+#[tokio::test]
+async fn a_plan_without_a_closing_is_refused_when_the_policy_has_none() {
+    let r = rig_with(1, CallPolicy { closing: Some(String::new()), ..policy() }).await;
+    let mut brief = plan();
+    brief.closing = String::new();
+    let e = calls::place(&r.w.deps, &r.agent_at(0), place_input(&r, brief)).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Validation);
+    assert_eq!(e.details["field"], "plan.closing");
 }
 ```
 
@@ -6893,10 +7583,19 @@ In `place_agent`, right after `plan.disclose_assistant |= policy.disclose_assist
     plan.opening = policy.spoken_opening(&plan.opening);
 ```
 
+and, still in `place_agent`, right after `plan.disclose_assistant |= policy.disclose_assistant;` and before the session is built (a plan that brings no closing plays the policy's):
+
+```rust
+    if plan.closing.is_empty() {
+        plan.closing = policy.closing.clone().filter(|c| !c.trim().is_empty())
+            .ok_or_else(|| invalid("plan.closing", "is empty and the call policy has no closing"))?;
+    }
+```
+
 - [ ] **Step 5: Run the core tests (CI) and commit**
 
 CI: `cargo test --locked -p jt_app --test calls_session --test calls_place --test calls_bridge`
-Expected: all pass, including the two new tests and `every_played_text_is_authored` (the rig's empty opening and notice leave the plan's opening alone).
+Expected: all pass, including the four new tests and `every_played_text_is_authored` (the rig's empty opening and notice leave the plan's opening alone).
 
 ```bash
 git add rust/crates/domain/jt_calls rust/crates/jt_app
@@ -6943,8 +7642,13 @@ fn place_takes_hotwords_and_tells_the_opening_order() {
     let hotwords = &place["properties"]["plan"]["properties"]["hotwords"];
     assert_eq!(hotwords["maxItems"], 20);
     assert_eq!(hotwords["items"]["maxLength"], 40);
+    // The closing is optional: left out, the call policy's closing plays.
+    let required = place["properties"]["plan"]["required"].as_array().unwrap();
+    assert!(!required.iter().any(|r| r == "closing"), "{required:?}");
+    assert!(required.iter().any(|r| r == "opening"), "{required:?}");
     let text = tools["jeeta.calls.place"].description;
     assert!(text.contains("transcript notice"), "{text}");
+    assert!(text.contains("the call policy's closing plays"), "{text}");
     assert!(text.contains("Görüşmek üzere, iyi günler."), "{text}");
 }
 ```
@@ -6964,6 +7668,10 @@ In `place_agent`'s dialing transaction, replace the dial built in Task A5 with:
         phrases: policy.phrases.clone(),
         hotwords: jt_calls::call_hotwords(&plan.hotwords, &business),
     };
+    // The phrases the bridge is told are the phrases the log will show (the reducer logs a
+    // `phrase` event with `session.phrases`, not with whatever the policy says by then).
+    session.phrases = script.phrases.clone();
+    r.calls().update(session.clone(), ctx.now).await?;
     let dial = Command::Dial {
         to_e164: session.counterpart_e164.clone(),
         plan,
@@ -6982,7 +7690,7 @@ In `jt_mcp/src/tools/calls.rs` `place_schema`, inside `plan.properties`, add:
                     },
 ```
 
-and change the plan part of the `calls.place` description to:
+drop `"closing"` from the plan's `required` (`"required": ["opening", "goal", "holding", "max_duration_s"]`, currently `tools/calls.rs:244`), make the `closing` property's description `"Optional. Played before the call is hung up; left out, the call policy's closing plays."`, and change the plan part of the `calls.place` description to:
 
 ```text
 mode agent: you talk to the person yourself through the workspace's voice bridge, with a plan
@@ -6990,10 +7698,10 @@ written before you dial: opening (played right after the workspace's own opening
 notice of the call policy, which already disclose the assistant; for example "Ada Hanım ile mi
 görüşüyorum?"; the whole spoken opening must contain the policy's disclosure_sentence), goal (never
 played), holding (1 to 5 phrases played while you think when the bridge's own fillers did not cover
-it), fallback (0 to 3 lines played when you stay silent), closing (played before the call is hung
-up; the approved one is "Görüşmek üzere, iyi günler."), max_duration_s (1 to 900), language tr,
-hotwords (at most 20 names or product words the speech recognition should expect); every sentence
-at most 600 characters.
+it), fallback (0 to 3 lines played when you stay silent), closing (optional; played before the call
+is hung up; left out, the call policy's closing plays, by default "Görüşmek üzere, iyi günler."),
+max_duration_s (1 to 900), language tr, hotwords (at most 20 names or product words the speech
+recognition should expect); every sentence at most 600 characters.
 ```
 
 (the rest of the description — the purposes, one live call per connection, the refusal reasons, the masked number, `jeeta.calls.end`, `[risk: SPEND]` — unchanged; the `plan.opening` schema description becomes "Played after the workspace's opening and the transcript notice.").
@@ -7018,7 +7726,7 @@ git commit -m "feat(calls): the dial carries the policy's lines, its phrases and
 
 ```rust
 #[tokio::test]
-async fn a_bridge_filler_is_logged_with_the_policys_text_and_the_core_plays_no_holding_over_it() {
+async fn a_bridge_filler_is_logged_with_the_dialled_text_and_the_core_plays_no_holding_over_it() {
     let r = rig().await;
     let call = r.place_at(0, plan()).await;
     r.answer(call).await;
@@ -7030,6 +7738,24 @@ async fn a_bridge_filler_is_logged_with_the_policys_text_and_the_core_plays_no_h
     assert_eq!(last.text, "Bir saniye, hemen bakıyorum.");
     r.timers(14).await;
     assert!(r.poll(14).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_phrase_is_logged_with_the_text_dialled_even_after_the_owner_edits_the_policy() {
+    let mut dialled = jt_calls::BridgePhrases::default();
+    dialled.fillers = vec!["Hemen bakıyorum.".into()];
+    let r = rig_with(1, CallPolicy { phrases: dialled, ..policy() }).await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    // The owner rewrites the fillers while the call is live.
+    let mut edited = policy();
+    edited.phrases.fillers = vec!["Biraz bekleyin.".into()];
+    calls::policy_set(&r.w.deps, &r.w.owner_ctx, PolicyInput(edited)).await.unwrap();
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.report(12, call, json!([{ "kind": "phrase", "set": "filler", "index": 0 }])).await;
+    let shown = r.shown(call).await;
+    // The caller heard the dialled filler; the log says so.
+    assert_eq!(shown.turns.last().unwrap().text, "Hemen bakıyorum.");
 }
 
 #[tokio::test]
@@ -7054,7 +7780,7 @@ async fn a_turns_trace_is_kept_and_summarised_in_the_call_view() {
 ```
 
 CI: `cargo test --locked -p jt_app --test calls_session a_turns_trace`
-Expected: FAIL (`latency` is null). (The filler test already passes from A5: keep it as the end-to-end guard.)
+Expected: FAIL (`latency` is null). (The two filler tests already pass from A5 and C2: keep them as the end-to-end guard.)
 
 - [ ] **Step 2: Implement**
 
@@ -7326,6 +8052,7 @@ In `CallsPolicy.test.tsx`, extend `stored` with:
 ```ts
   opening_outbound: "Merhaba, ben Acme'nin dijital asistanıyım.",
   transcript_notice: 'Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.',
+  closing: 'Görüşmek üzere, iyi günler.',
   phrases: {
     acknowledgements: ['Hı hı.', 'Anladım.', 'Tamam.', 'Peki.'],
     fillers: ['Bir saniye, hemen bakıyorum.', 'Kontrol ediyorum, kısa bir an.'],
@@ -7349,6 +8076,7 @@ and add:
     });
     renderAt('/calls');
     const notice = await screen.findByLabelText(tr.calls.policy.fields.transcript_notice);
+    expect(screen.getByLabelText(tr.calls.policy.fields.closing)).toHaveValue(stored.closing);
     await user.clear(notice);
     await user.type(notice, 'Görüşme yazıya dökülür.');
     await user.type(screen.getByLabelText(tr.calls.policy.phrases.fillers), '{enter}Hemen dönüyorum.');
@@ -7431,13 +8159,13 @@ export interface LatencySummary {
 }
 ```
 
-`CallPolicy` gains `opening_outbound: string | null; transcript_notice: string | null; phrases: CallPhrases;` and `CallView` gains `latency?: LatencySummary;`.
+`CallPolicy` gains `opening_outbound: string | null; transcript_notice: string | null; closing: string | null; phrases: CallPhrases;` and `CallView` gains `latency?: LatencySummary;`.
 
 `CallsPolicy.tsx`: after the `TEXTS` constants add
 
 ```tsx
-type OpeningKey = 'opening_outbound' | 'transcript_notice';
-const OPENINGS: OpeningKey[] = ['opening_outbound', 'transcript_notice'];
+type OpeningKey = 'opening_outbound' | 'transcript_notice' | 'closing';
+const OPENINGS: OpeningKey[] = ['opening_outbound', 'transcript_notice', 'closing'];
 type PhraseKey = keyof CallPhrases;
 const PHRASE_SETS: PhraseKey[] = ['acknowledgements', 'fillers', 'long_wait', 'not_heard', 'still_there', 'fault'];
 const lines = (text: string) =>
@@ -7453,7 +8181,11 @@ const joined = (p: CallPhrases) =>
 
 ```tsx
       {OPENINGS.map((key) => (
-        <Field key={key} label={t(`calls.policy.fields.${key}`)} hint={t('calls.policy.openingHint')}>
+        <Field
+          key={key}
+          label={t(`calls.policy.fields.${key}`)}
+          hint={t(key === 'closing' ? 'calls.policy.closingHint' : 'calls.policy.openingHint')}
+        >
           {(ids) => (
             <Textarea
               id={ids.id}
@@ -7519,7 +8251,7 @@ function Latency({ latency }: { latency: LatencySummary }) {
 
 and in the first card, right after `</dl>`: `{c.latency && c.latency.turns > 0 && <Latency latency={c.latency} />}`.
 
-`tr.json`, under `calls.policy`: `"openingHint": "Arama açılınca hemen çalınır; boş bırakılırsa çalınmaz."`, `"phrasesHint": "Her satıra bir cümle (en çok 5). Köprü bunları ajan düşünürken kendi başına çalar."`, in `fields`: `"opening_outbound": "Giden aramada işletmenin açılış cümlesi"`, `"transcript_notice": "Yazıya dökme bildirimi"`, and
+`tr.json`, under `calls.policy`: `"openingHint": "Arama açılınca hemen çalınır; boş bırakılırsa çalınmaz."`, `"phrasesHint": "Her satıra bir cümle (en çok 5). Köprü bunları ajan düşünürken kendi başına çalar."`, in `fields`: `"opening_outbound": "Giden aramada işletmenin açılış cümlesi"`, `"transcript_notice": "Yazıya dökme bildirimi"`, `"closing": "Planda kapanış yoksa kapanış cümlesi"`, `"closingHint": "Plan bir kapanış cümlesi getirmediğinde arama kapatılmadan önce çalınır; boş bırakılırsa her plan kendi kapanışını getirmek zorundadır."` (beside `openingHint`), and
 
 ```json
 "phrases": {
@@ -7542,7 +8274,7 @@ under `calls.detail`: `"latencyTitle": "Gecikme (p50 / p95)"`, `"latency_perceiv
 }
 ```
 
-`en.json`, the same keys: `"openingHint": "Played as soon as the call is answered; left empty, nothing is played."`, `"phrasesHint": "One sentence per line (at most 5). The bridge plays these on its own while the agent thinks."`, `"opening_outbound": "Business opening on outbound calls"`, `"transcript_notice": "Transcription notice"`, phrases `"Acknowledgements (≈0.6 s)"`, `"Fillers (≈2.7 s)"`, `"Long wait (≈8 s)"`, `"When not heard"`, `"When the other side stays silent"`, `"Technical problem"`; detail `"Latency (p50 / p95)"`, `"First sound"`, `"First sound of the reply"`, `"Agent's reply time"`, `"Stopping on barge-in"`, `"{{p50}} / {{p95}} ms"`, alerts `"First sound p95 above 1 second"`, `"Reply p95 above 3 seconds"`, `"Stopping on barge-in p95 above 300 ms"`.
+`en.json`, the same keys: `"openingHint": "Played as soon as the call is answered; left empty, nothing is played."`, `"phrasesHint": "One sentence per line (at most 5). The bridge plays these on its own while the agent thinks."`, `"opening_outbound": "Business opening on outbound calls"`, `"transcript_notice": "Transcription notice"`, `"closing": "Closing when the plan brings none"`, `"closingHint": "Played before the call is hung up when the plan brings no closing; left empty, every plan must bring its own."`, phrases `"Acknowledgements (≈0.6 s)"`, `"Fillers (≈2.7 s)"`, `"Long wait (≈8 s)"`, `"When not heard"`, `"When the other side stays silent"`, `"Technical problem"`; detail `"Latency (p50 / p95)"`, `"First sound"`, `"First sound of the reply"`, `"Agent's reply time"`, `"Stopping on barge-in"`, `"{{p50}} / {{p95}} ms"`, alerts `"First sound p95 above 1 second"`, `"Reply p95 above 3 seconds"`, `"Stopping on barge-in p95 above 300 ms"`.
 
 - [ ] **Step 3: Run and commit**
 
@@ -8548,10 +9280,12 @@ and `jeeta.calls.get` of each call (its `call.latency` and turns). Record in the
 | Perceived p95 (`latency.perceived.p95`) | ≤ 1 000 ms (report threshold) |
 | Filler heard during the tool call; `phrase` turns in the log | must |
 | Barge-in: playback stopped, `interrupted_at_char` set | must; `barge_in_stop` p95 reported against the 300 ms target |
-| Transport overhead: `core_round.p50 − agent.p50` | ≤ 100 ms (push-like long-poll proven) |
+| Transport overhead: p95 over the turns of `core_round_ms − agent_latency_ms`, per turn (below) | ≤ 100 ms (push-like long-poll proven) |
 | Content p95 | reported (brain-dominated; the 3 s alert is expected with the unchanged agent) |
 | Closing heard, line closed, session `agent_ended`, journey `CallMade{connected}` | must |
 | Numbers in the four units' journals | 0 |
+
+The transport overhead is worked out **per turn**, and the gate is the p95 of those differences (design addendum §4). It is not `core_round.p95 − agent.p95`: a difference of two percentiles can hide a slow hop or invent one. For each caller turn, `core_round_ms` is its trace's `say_ms − delivered_ms` (the worker's clock: the core answered the utterance → the reply's first sentence reached the bridge) and the core's `agent_latency_ms` for the reply that turn provoked is its own clock's view of the same wait (the utterance reached the core → the agent's `say` committed). `calls.get` returns both lists (`call.metrics.traces[i]`, `call.metrics.agent_latency_ms[i]`); a trace carries no turn id, so pair them by order, and only for a call whose two lists have the same length. A call whose lists differ (a turn the agent never answered, a `say` that was not owed) is left out of the gate, and the report says so. Pool the differences of both calls, then take the p95.
 
 If a "must" fails, stop, file the finding, do not point the bridge at prod.
 
@@ -8647,8 +9381,8 @@ git commit -m "docs(voice): the free-path voice stack on the host, what the call
 | Never logs numbers, audio or transcript text | lib.rs rule, B4 `tests/logging.rs`, `Heard`'s redacting `Debug`, E3 journal check |
 | seda-v0.1 on sherpa-onnx, Silero VAD 8 kHz, Smart Turn v3.2, fallback 1.2–1.8 s, per-call hotwords | B3 (fallback 1.5 s, `hotwords.py`), A5/C2 (`plan.hotwords` → `script.hotwords`) |
 | EMA Lightning 1.1.2, 8 kHz, fixed seed, Antalia normaliser (not normalizer-tr), respelling, sentence by sentence, warm process, isolated service with local API | B2, B6 (`text::sentences`, one synthesis per sentence) |
-| Pre-synthesised, cached openings per workspace; genitive suffix pure and tested; disclosure mandatory | A3, C1 (`with_workspace`, spoken-opening disclosure check), B6 (disk cache for policy sentences, pre-synthesis during ringing) |
-| The owner-approved phrase set, played by the bridge, never composed | A4, A5 (core logs the policy's text), B4 talker, C5 panel |
+| Pre-synthesised, cached openings per workspace; genitive suffix pure and tested; disclosure mandatory | A3 (genitive with its front-suffix table; `CLOSING`), C1 (`with_workspace`, spoken-opening disclosure check, the policy's closing as the plan's default), B6 (disk cache for policy sentences, pre-synthesis during ringing) |
+| The owner-approved phrase set, played by the bridge, never composed | A4, A5 (core logs the text dialled with the call, `CallSession.phrases`), B4 talker, C3 (an owner's edit mid-call changes nothing logged), C5 panel |
 | No raw audio storage; recording off | constraint 5, cache rule (policy sentences only), B8 shreds nothing needed (no recordings), addendum §5 |
 | Brain unchanged; say+listen merge backward compatible; one sentence per `say`; `say` returns when queued | C4 (`wait_reply_s` optional; descriptions; no model advice anywhere) |
 | Push transport proven or kept | addendum §4, existing `utterance_wakes_listen_immediately`, D2 (one poll always outstanding, events posted at once), E3 transport-overhead gate |
@@ -8663,7 +9397,7 @@ No gap found. Deliberately not in this plan: inbound duty mode (V2-T1), a digit-
 
 **2. Placeholder scan.** Searched for "TBD", "TODO", "implement later", "fill in", "similar to", "handle edge cases". The angle-bracket items that remain are run-time values a coordinator reads off the environment (the commit sha, a CI run id, the test person's id, the image tags B2/B3 record), each with the command that produces it; `images.env.example` says so. The measured table in E4 is filled from B7/E3 output by design.
 
-**3. Type consistency.** `DialScript { lines, phrases, hotwords }` (A5) is what C2 fills, B6/D2 read and the slice builds. `BridgeEvent::Phrase { set, index }` and `BridgeEvent::Trace { trace }` (A5) are what `call.rs` reports and C3 tests. `TurnTrace` fields (A2) match `TurnMarks::trace` (B5), the C3 test JSON and the C5 types (`perceived`, `content`, `agent`, `barge_in_stop`, `alerts`). `Talker::on(Input, Ms) -> Vec<Action>` (B4) is what `Live::input` calls. `Report { bridge_call_id, event, taken }` is shared by `call.rs`, `slice.rs` and `run_loop.rs`. `CallPolicy::{with_workspace, opening_lines, spoken_opening}` (C1) are what C2 uses. `SayInput.wait_reply_s` / `SayOut.{events, timed_out}` (C4) match the MCP schema and tests. `Ari::with_ws_base` (B6 Step 1) is used by the test support only.
+**3. Type consistency.** `DialScript { lines, phrases, hotwords }` (A5) is what C2 fills, B6/D2 read and the slice builds. `BridgeEvent::Phrase { set, index }` and `BridgeEvent::Trace { trace }` (A5) are what `call.rs` reports and C3 tests. `TurnTrace` fields (A2) match `TurnMarks::trace` (B5), the C3 test JSON and the C5 types (`perceived`, `content`, `agent`, `barge_in_stop`, `alerts`). `Talker::on(Input, Ms) -> Vec<Action>` (B4) is what `Live::input` calls. `Report { bridge_call_id, event, taken }` is shared by `call.rs`, `slice.rs` and `run_loop.rs`. `CallPolicy::{with_workspace, opening_lines, spoken_opening}` (C1) are what C2 uses. `CallSession.phrases` (A5) is set from `script.phrases` in the dialling transaction (A5, C2) and read by the reducer (A5) and C3's test. `jt_calls::CLOSING` (A3) is the policy's default closing (C1), the slice's closing (B6) and what C5's panel shows. `SayInput.wait_reply_s` / `SayOut.{events, timed_out}` (C4) match the MCP schema and tests. `Ari::with_ws_base` (B6 Step 1) is used by the test support only.
 
 ## Execution handoff
 

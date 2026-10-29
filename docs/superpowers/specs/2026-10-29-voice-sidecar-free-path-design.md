@@ -154,8 +154,16 @@ deployed, so this is the first shipped shape):
 - `CallPlan` gains `hotwords` (≤ 20 entries, 1–40 characters): words from the agent's context
   (names, products) the STT is biased toward on this call.
 - `BridgeEvent` gains `phrase{set, index}` and `trace{trace}`.
-- `CallPolicy` gains `opening_outbound`, `transcript_notice` (both `Option`, `None` = the approved
-  default) and `phrases` (the approved set by default). Stored tolerant; no migration.
+- `CallPolicy` gains `opening_outbound`, `transcript_notice`, `closing` (all `Option`, `None` = the
+  approved default; empty = none) and `phrases` (the approved set by default). Stored tolerant; no
+  migration.
+- `CallPlan.closing` becomes optional: left out, the core plays the policy's `closing` (by default
+  the approved "Görüşmek üzere, iyi günler.", `jt_calls::CLOSING`) and refuses a plan that has none
+  when the policy has none either.
+- The session keeps the phrases dialled with it (`CallSession.phrases`, the dial's
+  `script.phrases`); a `phrase` event is logged with that text, not the policy's at the time the
+  event arrives, so an owner who edits the phrases during a live call cannot make the log record a
+  sentence that was never played.
 - `CallMetrics` gains `traces` (≤ 200); `calls.get`'s call view gains `latency` (p50/p95).
 
 Agent-facing (MCP and panel route `POST /api/calls/{id}/say`), backward compatible:
@@ -171,9 +179,11 @@ Agent-facing (MCP and panel route `POST /api/calls/{id}/say`), backward compatib
 **Push transport.** The kernel's `BridgeSignals` wakes the bridge's parked poll on the commit of a
 `say`, and an agent's parked `listen`/`say` on the commit of an utterance; the worker always keeps
 one poll outstanding and posts each event the moment it happens. The plan proves the hop on the box
-with the trace: `core_round_ms` (bridge: utterance posted → reply's `say` received) minus the core's
-own `agent_latency_ms` is the transport overhead; acceptance p95 ≤ 100 ms. Only if it fails would a
-WebSocket push be designed (not in this plan).
+with the trace: per caller turn, `core_round_ms` (bridge: the core answered the utterance → the
+reply's `say` received) minus the core's own `agent_latency_ms` for that reply is the transport
+overhead; acceptance is the p95 of those per-turn differences ≤ 100 ms (not a difference of two
+percentiles, which can hide a slow hop). Only if it fails would a WebSocket push be designed (not
+in this plan).
 
 ## 5. Opening, disclosure, transcript notice
 
@@ -185,9 +195,19 @@ WebSocket push be designed (not in this plan).
 - The suffix: `jt_calls::genitive(name)` — Turkish vowel harmony on the last vowel of the name's
   last word (a ı → ın, e i → in, o u → un, ö ü → ün), buffer `n` after a final vowel; a vowel-less
   word is read by its letter names (`THY'nin`), a trailing number by its Turkish reading
-  (`Studio 54'ün`). Jeeta'nın, Figurunica'nın, Atölye'nin, Ahmet'in. Pure and unit-tested. Known
-  limit: it follows the spelling, so a foreign name pronounced otherwise ("Apple") needs the owner to
-  write the opening by hand in the policy.
+  (`Studio 54'ün`). Jeeta'nın, Figurunica'nın, Atölye'nin, Ahmet'in. Pure and unit-tested. Beyond
+  the harmony rule: a short whole-word table of loanwords with a soft `l` or `k` (Kemal, Saat, Hal,
+  Kalp, Kontrol, Petrol, ...) and any word ending in "âl" take the front suffix (`Kemal'in`,
+  `Kontrol'ün`, `İstiklâl'in`); a dotted acronym is read by its last letter's name (`A.Ş.'nin`,
+  `T.C.'nin`); a trailing word of symbols ("☕", "-") is dropped and the words are joined by single
+  spaces, so a newline never reaches the spoken sentence. Known limits: it follows the spelling, so
+  an acronym that holds a vowel but has no dots (ABD, AKP, AVM, IBM) is read as a word (`ABD'ın`,
+  where it is spoken "A-Be-De'nin"), numbers of more than 18 digits are not supported, and a foreign
+  name pronounced otherwise ("Apple") has the same problem. An owner whose name is read otherwise
+  writes the opening by hand in the policy.
+- Closing: the plan's `closing` is optional. Left out, the core plays the policy's `closing`
+  (`None` = the approved "Görüşmek üzere, iyi günler.", `jt_calls::CLOSING`; empty = none, so every
+  plan must then bring its own). It is the core's scripted ending, not one of the bridge's phrases.
 - The templates are the owner's approved text; the server only inserts the workspace's own name.
   `calls.policy_get` returns the policy with these defaults filled in, so the owner sees and can edit
   the exact sentences; saving makes them explicit.
@@ -214,7 +234,8 @@ WebSocket push be designed (not in this plan).
 ## 7. Measurement
 
 `jt_calls::TurnTrace`, one per caller turn, every field a millisecond offset from the caller's end
-of speech (the last voiced frame), measured on the worker's monotonic clock (the listener reports
+of speech (the last voiced frame) except `barge_in_stop_ms`, a duration from the caller's onset,
+measured on the worker's monotonic clock (the listener reports
 positions in audio time, which the worker maps to the instants it forwarded those frames):
 `endpoint_ms`, `endpoint_by` (smart_turn | fallback), `stt_final_ms`, `delivered_ms` (the core
 answered the utterance POST), `say_ms` (the reply's first `say`/`play` received), `tts_first_ms`,
