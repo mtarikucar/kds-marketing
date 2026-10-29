@@ -16,13 +16,19 @@ use jt_app::ports::devices::{
     CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, DeviceCommandRow, FailReason,
     NewDeviceCommand, TEXT_UNICODE,
 };
-use jt_app::ports::files::{FileMaintenance, FileStore, StoredFile};
+use jt_app::ports::files::{ByteSource, FileMaintenance, FileStore, StoredFile};
+use jt_app::usecases::Deps;
 use jt_app::usecases::api_keys::{self, AgentPrincipal, CreateKey};
-use jt_app::usecases::capabilities;
+use jt_app::usecases::capabilities::{self, DeclareInput};
 use jt_app::usecases::devices::{
     self,
-    bridge::{self, BridgeCaller, CommandsQuery, RegisterIn, RegisterOut, ResultsIn, ResultsOut},
+    bridge::{
+        self, BridgeCaller, CommandsQuery, FileOut, MAX_CONCURRENT_UPLOADS, RegisterIn,
+        RegisterOut, ResultsIn, ResultsOut,
+    },
 };
+use jt_app::usecases::files::DEVICE_FILE_LIMIT;
+use jt_app::usecases::studio::files::IMAGE_LIMIT;
 use jt_capability::{Capability, CapabilityId, Reach, StoredStatus};
 use jt_device_protocol::{
     CommandResult, LeasedCommand, Observation, Outcome, PHONE_RETIRED, PhoneReport, Platform,
@@ -32,10 +38,9 @@ use jt_ledger::{Actor, Subject};
 use jt_studio::FileId;
 use jt_tenancy::WorkspaceId;
 use jt_testkit::fakes::FIXED_NOW;
-use jt_testkit::fakes::files::MemoryFiles;
-use serde_json::{Map, Value, json};
+use jt_testkit::fakes::files::{Chunks, MemoryFiles};
+use serde_json::{Value, json};
 use support::*;
-use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
@@ -51,11 +56,6 @@ fn later(seconds: i64) -> OffsetDateTime {
 /// how long it has waited, a poll that does not wait included.
 fn read_at(at: OffsetDateTime, expected: OffsetDateTime) -> bool {
     at >= expected && at - expected < Duration::seconds(1)
-}
-
-/// `at` as the RFC 3339 a phone's facts keep.
-fn rfc3339(at: OffsetDateTime) -> String {
-    at.format(&Rfc3339).unwrap()
 }
 
 /// A key the owner of workspace `ctx` issues with `scopes`, as the API resolves it.
@@ -268,11 +268,24 @@ fn finished(w: &World) -> Vec<Value> {
         .collect()
 }
 
-/// A file store that records the lifetime of each download address it is asked to sign.
+/// The bridge `b` uploads `bytes` as `content_type`, announcing their length.
+async fn upload_as(
+    deps: &Deps,
+    b: &BridgeCaller,
+    content_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<FileOut, AppError> {
+    let len = Some(bytes.len() as u64);
+    bridge::files(deps, b, content_type, len, &mut Chunks::of(bytes)).await
+}
+
+/// A file store that records the lifetime of each download address it is asked to sign, and
+/// fails to sign one while `broken` is set.
 #[derive(Default)]
 struct Signing {
     inner: MemoryFiles,
     asked: Mutex<Vec<(FileId, OffsetDateTime)>>,
+    broken: std::sync::atomic::AtomicBool,
 }
 
 impl Signing {
@@ -304,6 +317,9 @@ impl FileStore for Signing {
         expires_at: OffsetDateTime,
     ) -> Result<url::Url, AppError> {
         self.asked.lock().unwrap().push((id, expires_at));
+        if self.broken.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::internal("the store cannot sign now"));
+        }
         self.inner.provider_url(ws, id, expires_at).await
     }
     async fn delete(&self, ws: WorkspaceId, id: FileId) -> Result<(), AppError> {
@@ -344,7 +360,7 @@ async fn register_declares_phones_and_merges_facts() {
     assert_eq!(c.status, StoredStatus::Verified);
     assert_eq!(c.last_verified_at, Some(FIXED_NOW));
     let bridge = key.api_key_id.to_string();
-    let mut expected = json!({
+    let expected = json!({
         "platform": "android",
         "serial": "SER1",
         "model": "Redmi 10C",
@@ -357,10 +373,6 @@ async fn register_declares_phones_and_merges_facts() {
         "listed_by": bridge,
         "listed": true,
     });
-    expected["registered_by"] = Value::Object(Map::from_iter([(
-        bridge.clone(),
-        json!(rfc3339(FIXED_NOW)),
-    )]));
     assert_eq!(c.connector_public["device"], expected);
 
     // Declared as `capability.declare` would, and came online, by the bridge.
@@ -410,7 +422,7 @@ async fn register_declares_phones_and_merges_facts() {
         json!({ "w": 720, "h": 1650, "rotation": 0 })
     );
     assert_eq!(device["features"], json!(["tap"]));
-    assert_eq!(device["registered_by"][&bridge], json!(rfc3339(later(15))));
+    assert_eq!(device["listed_by"], json!(bridge));
     assert_eq!(c.last_verified_at, Some(later(15)));
     assert_eq!(w.entries("capability.declare").len(), 2);
     assert_eq!(w.entries("devices.bridge.online").len(), 2);
@@ -543,7 +555,7 @@ async fn bridge_key_only() {
                 },
             )
             .await),
-            err(bridge::files(&w.deps, &caller, Some("image/png"), PNG.to_vec()).await),
+            err(upload_as(&w.deps, &caller, Some("image/png"), PNG).await),
         ];
         for e in &errors {
             match permission {
@@ -587,7 +599,8 @@ async fn commands_long_poll_wakes_on_enqueue() {
     let id = enqueue(&w, p, tap(), expires()).await;
     let out = waiting.await.unwrap().unwrap();
     let took = started.elapsed();
-    assert!(took < StdDuration::from_secs(2), "{took:?}");
+    // Woken by the signal: without it the next read is a fallback tick (a second) after the first.
+    assert!(took < StdDuration::from_millis(900), "{took:?}");
     assert_eq!(
         out.commands,
         [LeasedCommand {
@@ -783,11 +796,11 @@ async fn push_file_gets_signed_download_url() {
     let (mut w, key, p) = rig().await;
     let store = Arc::new(Signing::default());
     w.deps.files = store.clone();
-    let file = bridge::files(
+    let file = upload_as(
         &w.deps,
         &bridge_at(&key, FIXED_NOW),
         Some("application/octet-stream"),
-        b"payload".to_vec(),
+        b"payload",
     )
     .await
     .unwrap()
@@ -828,29 +841,42 @@ async fn push_file_gets_signed_download_url() {
             "{asked:?}"
         );
     }
-    // One whose file cannot be signed is failed instead of handed out, and ledgered.
+    // One whose file is not stored is failed instead of handed out, and ledgered.
     let failed = row(&w, lost).await;
     assert_eq!(
         (failed.status, failed.reason, failed.detail.as_deref()),
         (
             CommandStatus::Failed,
-            Some(FailReason::BridgeError),
-            Some("the file to push could not be read for download")
+            Some(FailReason::FileNotFound),
+            Some("the file to push is not stored: it was removed, or never uploaded")
         )
     );
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": lost, "kind": "push_file", "status": "failed", "reason": "bridge_error", "duration_ms": null })
+            json!({ "command_id": lost, "kind": "push_file", "status": "failed", "reason": "file_not_found", "duration_ms": null })
         ]
     );
-    // Handed out again, it is signed again, from the new lease.
+    // While the store cannot sign, the command is not handed out, and stays leased: its lease
+    // runs out and it is handed out again once it can.
+    store
+        .broken
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(poll(&w, &key, later(13), 20).await.is_empty());
+    assert_eq!(row(&w, push).await.status, CommandStatus::Leased);
+    assert_eq!(finished(&w).len(), 1);
+    store
+        .broken
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     let again = poll(&w, &key, later(13), 20).await;
+    assert!(again.is_empty(), "its new lease runs: {again:?}");
+    // Handed out again, it is signed again, from the new lease.
+    let again = poll(&w, &key, later(24), 20).await;
     assert_eq!(ids(&again), [push]);
     assert!(again[0].download_url.is_some());
     let (id, expires_at) = *store.asked().last().unwrap();
     assert_eq!(id, FileId(file));
-    assert!(read_at(expires_at, later(13) + Duration::minutes(10)));
+    assert!(read_at(expires_at, later(24) + Duration::minutes(10)));
 }
 
 #[tokio::test]
@@ -861,7 +887,7 @@ async fn files_upload_returns_id() {
     let b = bridge_at(&key, FIXED_NOW);
     let upload = |content_type: Option<&'static str>, bytes: &[u8]| {
         let (deps, b, bytes) = (w.deps.clone(), b.clone(), bytes.to_vec());
-        async move { bridge::files(&deps, &b, content_type, bytes).await }
+        async move { upload_as(&deps, &b, content_type, &bytes).await }
     };
     let png = upload(Some("image/png"), PNG).await.unwrap().file_id;
     let pulled = upload(Some("application/octet-stream"), b"\x00any bytes")
@@ -945,15 +971,10 @@ async fn studio_cleanup_keeps_device_files() {
     let store = Arc::new(MemoryFiles::default());
     w.deps.files = store.clone();
     w.deps.file_maintenance = Arc::new(EveryFile(store.clone()));
-    let kept = bridge::files(
-        &w.deps,
-        &bridge_at(&key, FIXED_NOW),
-        Some("image/png"),
-        PNG.to_vec(),
-    )
-    .await
-    .unwrap()
-    .file_id;
+    let kept = upload_as(&w.deps, &bridge_at(&key, FIXED_NOW), Some("image/png"), PNG)
+        .await
+        .unwrap()
+        .file_id;
     // A stored file nothing records is an orphan.
     let stray = FileId::new_v7();
     store
@@ -1154,15 +1175,10 @@ async fn result_with_a_foreign_file_id_is_refused() {
     let upload = |key: AgentPrincipal| {
         let deps = w.deps.clone();
         async move {
-            bridge::files(
-                &deps,
-                &bridge_at(&key, FIXED_NOW),
-                Some("image/png"),
-                PNG.to_vec(),
-            )
-            .await
-            .unwrap()
-            .file_id
+            upload_as(&deps, &bridge_at(&key, FIXED_NOW), Some("image/png"), PNG)
+                .await
+                .unwrap()
+                .file_id
         }
     };
     let (ours, foreign) = (upload(key.clone()).await, upload(beta).await);
@@ -1194,8 +1210,13 @@ async fn result_with_a_foreign_file_id_is_refused() {
         )
     };
 
-    // Another workspace's file, or one nobody uploaded, refuses the whole batch, naming the field.
-    for named in [foreign, Uuid::now_v7()] {
+    // Another bridge of the workspace uploads a file too.
+    let other = bridge_key(&w, "other phones").await;
+    let neighbour = upload(other).await;
+
+    // Another workspace's file, another bridge's, or one nobody uploaded, refuses the whole batch,
+    // naming the field.
+    for named in [foreign, neighbour, Uuid::now_v7()] {
         let e = err(post(&w, &key, later(2), vec![done(touch), file(named)]).await);
         assert_invalid(&e, "file_id");
         let e = err(post(&w, &key, later(2), vec![done(touch), seen(named)]).await);
@@ -1247,4 +1268,185 @@ async fn invalid_results_body_is_422() {
     }
     assert_eq!(row(&w, id).await.status, CommandStatus::Leased);
     assert!(finished(&w).is_empty());
+}
+
+#[tokio::test]
+async fn nobody_but_the_bridge_writes_a_phones_bridge_facts() {
+    let (w, key, _) = rig().await;
+    // A person or an agent declaring a phone that names a bridge, as if one held it, is refused:
+    // `connector_public.device` is the bridge's own.
+    let agent = w.agent(&[]).await;
+    for ctx in [&w.owner_ctx, &agent] {
+        let e = err(capabilities::declare(
+            &w.deps,
+            ctx,
+            DeclareInput {
+                kind_key: "phone".into(),
+                name: "Telefon".into(),
+                external_id: Some("android:SER7".into()),
+                connector_public: json!({ "device": {
+                    "listed_by": key.api_key_id.to_string(),
+                    "listed": true,
+                    "features": ["shell"],
+                } }),
+                ..DeclareInput::default()
+            },
+        )
+        .await);
+        assert_eq!(gap_fields(&e), ["connector_public.device"]);
+    }
+}
+
+/// A file store whose stream path reads its source to the end and keeps nothing: a large upload
+/// costs no memory.
+struct Draining;
+
+#[async_trait]
+impl FileStore for Draining {
+    async fn probe(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+    async fn put(&self, _: WorkspaceId, _: FileId, _: MediaUpload) -> Result<StoredFile, AppError> {
+        Err(AppError::internal("not in this test"))
+    }
+    async fn read(&self, _: WorkspaceId, _: FileId) -> Result<MediaUpload, AppError> {
+        Err(AppError::not_found("file"))
+    }
+    async fn put_stream(
+        &self,
+        _: WorkspaceId,
+        _: FileId,
+        _: &str,
+        _: &str,
+        source: &mut dyn ByteSource,
+    ) -> Result<StoredFile, AppError> {
+        while source.next_chunk().await?.is_some() {}
+        Err(AppError::internal("kept nothing"))
+    }
+    async fn provider_url(
+        &self,
+        _: WorkspaceId,
+        _: FileId,
+        _: OffsetDateTime,
+    ) -> Result<url::Url, AppError> {
+        Err(AppError::not_found("file"))
+    }
+    async fn delete(&self, _: WorkspaceId, _: FileId) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+/// `head`, then zeros, `len` bytes in all, a mebibyte at a time.
+struct Zeros {
+    head: Vec<u8>,
+    left: u64,
+}
+
+#[async_trait]
+impl ByteSource for Zeros {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        if self.left == 0 {
+            return Ok(None);
+        }
+        let n = self.left.min(1 << 20);
+        self.left -= n;
+        let mut chunk = std::mem::take(&mut self.head);
+        chunk.resize(usize::try_from(n).unwrap().max(chunk.len()), 0);
+        Ok(Some(chunk))
+    }
+}
+
+/// A source that must not be read.
+struct Untouched;
+
+#[async_trait]
+impl ByteSource for Untouched {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        panic!("the body was read")
+    }
+}
+
+#[tokio::test]
+async fn an_upload_over_its_limit_is_refused() {
+    let (mut w, key, _) = rig().await;
+    w.deps.files = Arc::new(Draining);
+    let b = bridge_at(&key, FIXED_NOW);
+    // An announced length over the type's limit is refused before the body is read.
+    for (content_type, limit) in [
+        ("application/octet-stream", DEVICE_FILE_LIMIT),
+        ("image/png", IMAGE_LIMIT),
+    ] {
+        let e = err(bridge::files(
+            &w.deps,
+            &b,
+            Some(content_type),
+            Some(limit + 1),
+            &mut Untouched,
+        )
+        .await);
+        assert_invalid(&e, "body");
+    }
+    // A body that grows past it as it is read is refused too, with nothing kept, a chunk in memory
+    // at a time.
+    for (content_type, head, limit) in [
+        ("application/octet-stream", Vec::new(), DEVICE_FILE_LIMIT),
+        ("image/png", PNG.to_vec(), IMAGE_LIMIT),
+    ] {
+        let mut body = Zeros {
+            head,
+            left: limit + 1,
+        };
+        let e = err(bridge::files(&w.deps, &b, Some(content_type), None, &mut body).await);
+        assert_invalid(&e, "body");
+    }
+}
+
+/// A source that, read, counts that it was and waits until `go` lets it end.
+struct Gated {
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+    go: Arc<tokio::sync::Semaphore>,
+}
+
+#[async_trait]
+impl ByteSource for Gated {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.go.acquire().await.unwrap();
+        Ok(None)
+    }
+}
+
+#[tokio::test]
+async fn uploads_take_turns() {
+    let (mut w, key, _) = rig().await;
+    w.deps.files = Arc::new(MemoryFiles::default());
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let go = Arc::new(tokio::sync::Semaphore::new(0));
+    let start = |w: &World| {
+        let (deps, b) = (w.deps.clone(), bridge_at(&key, FIXED_NOW));
+        let mut body = Gated {
+            reads: reads.clone(),
+            go: go.clone(),
+        };
+        tokio::spawn(async move {
+            bridge::files(&deps, &b, Some("application/octet-stream"), None, &mut body).await
+        })
+    };
+    let read = || reads.load(std::sync::atomic::Ordering::SeqCst);
+    // As many uploads as there are turns are read at once...
+    let first: Vec<_> = (0..MAX_CONCURRENT_UPLOADS).map(|_| start(&w)).collect();
+    let begun = Instant::now();
+    while read() < MAX_CONCURRENT_UPLOADS {
+        assert!(begun.elapsed() < StdDuration::from_secs(5), "not read");
+        tokio::time::sleep(StdDuration::from_millis(5)).await;
+    }
+    // ...and one more waits for a turn before its body is read.
+    let last = start(&w);
+    tokio::time::sleep(StdDuration::from_millis(200)).await;
+    assert_eq!(read(), MAX_CONCURRENT_UPLOADS);
+    go.add_permits(MAX_CONCURRENT_UPLOADS + 1);
+    for upload in first.into_iter().chain([last]) {
+        upload.await.unwrap().unwrap();
+    }
+    assert_eq!(read(), MAX_CONCURRENT_UPLOADS + 1);
 }

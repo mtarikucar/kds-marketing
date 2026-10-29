@@ -100,3 +100,31 @@ async fn device_files_are_recorded_once_and_found_in_their_workspace() {
     jt_testkit::devices_contract::device_files_are_recorded_once_and_found_in_their_workspace(uow)
         .await;
 }
+
+#[tokio::test]
+async fn finish_takes_the_phones_bridge_and_a_lease_keeps_its_bridge() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::finish_takes_the_phones_bridge_and_a_lease_keeps_its_bridge(uow)
+        .await;
+}
+
+#[tokio::test]
+async fn bridge_registers_many_phones_and_leaves_one_out() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_bridge_contract::many_phones_register_lease_and_one_is_left_out(uow).await;
+}
+
+#[tokio::test]
+async fn two_bridges_never_hold_one_phone() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_bridge_contract::two_bridges_never_hold_one_phone(uow).await;
+}
+
+#[tokio::test]
+async fn a_result_counts_from_the_lease_holder_or_the_phones_bridge() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_bridge_contract::a_result_counts_from_the_lease_holder_or_the_phones_bridge(
+        uow,
+    )
+    .await;
+}

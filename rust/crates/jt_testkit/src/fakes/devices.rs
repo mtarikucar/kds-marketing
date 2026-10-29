@@ -11,7 +11,7 @@ use jt_app::ports::devices::{
     Finish, Finished, MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, cut_detail, failed_while_pending,
 };
 use jt_capability::CapabilityId;
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{ApiKeyId, WorkspaceId};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -106,6 +106,7 @@ impl DeviceCommandRepo for MemTenant {
                 status: CommandStatus::Queued,
                 attempts: 0,
                 leased_at: None,
+                leased_by: None,
                 expires_at: row.expires_at,
                 result: None,
                 reason: None,
@@ -146,6 +147,7 @@ impl DeviceCommandRepo for MemTenant {
     async fn mark_leased(
         &mut self,
         ids: &[Uuid],
+        by: ApiKeyId,
         now: OffsetDateTime,
     ) -> Result<Vec<DeviceCommandRow>, AppError> {
         let pending: Vec<Uuid> = self
@@ -157,6 +159,7 @@ impl DeviceCommandRepo for MemTenant {
         Ok(self.change_commands(pending, move |c| {
             c.status = CommandStatus::Leased;
             c.leased_at = Some(now);
+            c.leased_by = Some(by);
             c.attempts += 1;
         }))
     }
@@ -186,7 +189,8 @@ impl DeviceCommandRepo for MemTenant {
 
     async fn finish(
         &mut self,
-        caps: &[CapabilityId],
+        by: ApiKeyId,
+        listed: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,
@@ -194,7 +198,7 @@ impl DeviceCommandRepo for MemTenant {
         let Some(current) = self
             .commands_in(&[id])
             .into_iter()
-            .find(|c| caps.contains(&c.capability_id))
+            .find(|c| c.leased_by == Some(by) || listed.contains(&c.capability_id))
         else {
             return Ok(Finished::Unknown);
         };

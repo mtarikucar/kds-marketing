@@ -83,14 +83,12 @@ pub fn router_with_test_route(
 
 /// The body limit of use case `id`'s route, when it is not axum's default (2 MiB): studio's
 /// uploads carry media as base64; a device bridge's results batch is held to the protocol's
-/// `MAX_RESULTS_BODY_BYTES`, which the bridge splits its batches by; its file upload is the file
-/// itself, up to `DEVICE_FILE_LIMIT` (the bridge's download cap, so what one phone gave can be
-/// pushed to another).
+/// `MAX_RESULTS_BODY_BYTES`, which the bridge splits its batches by. (A device bridge's file
+/// upload is read as a stream, which its use case bounds: `routes::device_bridge::files`.)
 fn body_limit(id: &str) -> Option<usize> {
     match id {
         "studio.file_upload" | "studio.piece_submit" => Some(280_000_000),
         "devices.bridge.results" => Some(jt_app::usecases::devices::bridge::MAX_RESULTS_BODY_BYTES),
-        "devices.bridge.files" => usize::try_from(jt_app::usecases::files::DEVICE_FILE_LIMIT).ok(),
         _ => None,
     }
 }

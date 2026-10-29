@@ -64,7 +64,9 @@ impl FromRequestParts<AppState> for BridgeCtx {
 }
 
 /// The call of a device bridge: its key's principal as `devices::bridge::ctx_for_bridge` makes it,
-/// at the clock's time. `401` without a usable bearer key.
+/// at the clock's time, and only the device bridge's own key (`devices::bridge::authorize`). `401`
+/// without a usable bearer key, `403` for another key, before the request's body is read (a file
+/// upload's body is large).
 #[derive(Clone, Debug)]
 pub struct DeviceBridgeCtx(pub BridgeCaller);
 
@@ -73,9 +75,8 @@ impl FromRequestParts<AppState> for DeviceBridgeCtx {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let principal = principal(parts, state).await?;
-        Ok(DeviceBridgeCtx(device_bridge::ctx_for_bridge(
-            &principal,
-            state.deps.clock.now(),
-        )))
+        let caller = device_bridge::ctx_for_bridge(&principal, state.deps.clock.now());
+        device_bridge::authorize(&caller)?;
+        Ok(DeviceBridgeCtx(caller))
     }
 }

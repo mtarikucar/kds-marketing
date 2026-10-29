@@ -13,11 +13,16 @@ use jt_app::{
 };
 use jt_capability::{Capability, CapabilityId, NewCapability};
 use jt_ledger::Actor;
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{ApiKeyId, WorkspaceId};
 use serde_json::json;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
+
+/// The bridge (its API key's id) the contracts lease to and report as.
+pub const BRIDGE: ApiKeyId = ApiKeyId(Uuid::from_u128(0xb1));
+/// Another bridge of the same workspace.
+pub const OTHER_BRIDGE: ApiKeyId = ApiKeyId(Uuid::from_u128(0xb2));
 
 /// `FIXED_NOW` plus `s` seconds.
 pub fn at(s: i64) -> OffsetDateTime {
@@ -72,8 +77,8 @@ pub async fn enqueue(
     stored
 }
 
-/// A bridge's poll of phones `caps` at `now`, in one bundle: picks what is due (redelivering
-/// leases older than `REDELIVER_AFTER`) and marks all of it leased.
+/// A poll of [`BRIDGE`] for phones `caps` at `now`, in one bundle: picks what is due
+/// (redelivering leases older than `REDELIVER_AFTER`) and marks all of it leased to it.
 pub async fn lease(
     uow: &Arc<dyn UnitOfWork>,
     ws: WorkspaceId,
@@ -89,7 +94,7 @@ pub async fn lease(
         .unwrap();
     let leased = t
         .device_commands()
-        .mark_leased(&ids(&picked), now)
+        .mark_leased(&ids(&picked), BRIDGE, now)
         .await
         .unwrap();
     assert_eq!(ids(&leased), ids(&picked));
@@ -97,7 +102,7 @@ pub async fn lease(
     leased
 }
 
-/// A bridge of phones `caps` reports `outcome` for command `id` at `now`, in one bundle.
+/// [`BRIDGE`], holding phones `caps`, reports `outcome` for command `id` at `now`, in one bundle.
 pub async fn finish(
     uow: &Arc<dyn UnitOfWork>,
     ws: WorkspaceId,
@@ -106,10 +111,24 @@ pub async fn finish(
     outcome: Finish,
     now: OffsetDateTime,
 ) -> Finished {
+    finish_by(uow, ws, BRIDGE, caps, id, outcome, now).await
+}
+
+/// Bridge `by`, holding phones `listed`, reports `outcome` for command `id` at `now`, in one
+/// bundle.
+pub async fn finish_by(
+    uow: &Arc<dyn UnitOfWork>,
+    ws: WorkspaceId,
+    by: ApiKeyId,
+    listed: &[CapabilityId],
+    id: Uuid,
+    outcome: Finish,
+    now: OffsetDateTime,
+) -> Finished {
     let mut t = uow.tenant(ws).await.unwrap();
     let answer = t
         .device_commands()
-        .finish(caps, id, outcome, now)
+        .finish(by, listed, id, outcome, now)
         .await
         .unwrap();
     t.commit().await.unwrap();
@@ -202,6 +221,7 @@ pub async fn lease_returns_oldest_first(uow: Arc<dyn UnitOfWork>) {
             status: CommandStatus::Queued,
             attempts: 0,
             leased_at: None,
+            leased_by: None,
             expires_at: expires,
             result: None,
             reason: None,
@@ -224,6 +244,7 @@ pub async fn lease_returns_oldest_first(uow: Arc<dyn UnitOfWork>) {
                 status: CommandStatus::Leased,
                 attempts: 1,
                 leased_at: Some(at(1)),
+                leased_by: Some(BRIDGE),
                 ..before.clone()
             }
         );
@@ -361,6 +382,7 @@ pub async fn mark_leased_marks_only_still_pending(uow: Arc<dyn UnitOfWork>) {
                 failed_id,
                 leased,
             ],
+            BRIDGE,
             at(20),
         )
         .await
@@ -575,7 +597,7 @@ pub async fn finish_unknown_id(uow: Arc<dyn UnitOfWork>) {
     for outcome in [done(), failed("nobody")] {
         assert_eq!(
             t.device_commands()
-                .finish(&[p], Uuid::now_v7(), outcome, at(1))
+                .finish(BRIDGE, &[p], Uuid::now_v7(), outcome, at(1))
                 .await
                 .unwrap(),
             Finished::Unknown
@@ -599,17 +621,49 @@ pub async fn finish_for_another_bridges_command_is_unknown(uow: Arc<dyn UnitOfWo
     .await[0]
         .id;
     let leased = lease(&uow, f.ws, &[mine], at(1), 10).await.remove(0);
+    assert_eq!(leased.leased_by, Some(BRIDGE));
 
+    // Another bridge, holding another phone or none, may not report for it.
     let none: &[CapabilityId] = &[];
-    for caps in [&[other][..], none] {
+    for listed in [&[other][..], none] {
         assert_eq!(
-            finish(&uow, f.ws, caps, id, done(), at(2)).await,
+            finish_by(&uow, f.ws, OTHER_BRIDGE, listed, id, done(), at(2)).await,
             Finished::Unknown
         );
         assert_eq!(get(&uow, f.ws, id).await.as_ref(), Some(&leased));
     }
-    let row = applied(finish(&uow, f.ws, &[other, mine], id, done(), at(3)).await);
+    // The bridge it was leased to may, whatever phones it holds now.
+    let row = applied(finish_by(&uow, f.ws, BRIDGE, none, id, done(), at(3)).await);
     assert_eq!(row.status, CommandStatus::Done);
+}
+
+/// A bridge that holds a command's phone now may report for it, though the command was leased to
+/// another key (the bridge's key was replaced). A lease names its bridge, and keeps it while the
+/// command fails or expires.
+pub async fn finish_takes_the_phones_bridge_and_a_lease_keeps_its_bridge(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let p = phone(&uow, f.ws).await;
+    let rows = enqueue(
+        &uow,
+        f.ws,
+        vec![tap(p, 1, at(60)), tap(p, 2, at(60)), tap(p, 3, at(5))],
+    )
+    .await;
+    let (replaced, refused, lapsed) = (rows[0].id, rows[1].id, rows[2].id);
+    assert!(rows.iter().all(|r| r.leased_by.is_none()));
+    let leased = lease(&uow, f.ws, &[p], at(1), 10).await;
+    assert!(leased.iter().all(|r| r.leased_by == Some(BRIDGE)));
+
+    let row = applied(finish_by(&uow, f.ws, OTHER_BRIDGE, &[p], replaced, done(), at(2)).await);
+    assert_eq!(
+        (row.status, row.leased_by),
+        (CommandStatus::Done, Some(BRIDGE))
+    );
+    fail_pending(&uow, f.ws, &[refused], "refused", at(3)).await;
+    expire_due(&uow, f.ws, at(6)).await;
+    for id in [refused, lapsed] {
+        assert_eq!(get(&uow, f.ws, id).await.unwrap().leased_by, Some(BRIDGE));
+    }
 }
 
 /// A result that arrives after a leased command expired replaces `expired`: the bridge's result
@@ -828,7 +882,7 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
     );
     assert_eq!(
         ids(&commands
-            .mark_leased(&[mine.id, theirs.id], at(1))
+            .mark_leased(&[mine.id, theirs.id], BRIDGE, at(1))
             .await
             .unwrap()),
         vec![mine.id]
@@ -842,7 +896,7 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
     );
     assert_eq!(
         commands
-            .finish(&[mine_phone, their_phone], theirs.id, done(), at(2))
+            .finish(BRIDGE, &[mine_phone, their_phone], theirs.id, done(), at(2))
             .await
             .unwrap(),
         Finished::Unknown
@@ -880,13 +934,14 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
     );
 }
 
-/// A device file of `size_bytes` bytes uploaded at `FIXED_NOW`, kept for seven days.
+/// A device file of `size_bytes` bytes uploaded by [`BRIDGE`] at `FIXED_NOW`, kept for seven days.
 pub fn device_file(mime: &str, size_bytes: u64) -> DeviceFile {
     DeviceFile {
         id: Uuid::now_v7(),
         mime: mime.into(),
         size_bytes,
         sha256: "ab".repeat(32),
+        uploaded_by: BRIDGE,
         created_at: FIXED_NOW,
         expires_at: FIXED_NOW + Duration::days(7),
     }

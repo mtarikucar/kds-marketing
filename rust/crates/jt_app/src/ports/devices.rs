@@ -16,7 +16,7 @@ pub use jt_device_protocol::MAX_DETAIL_CHARS;
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
 use jt_ledger::Actor;
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{ApiKeyId, WorkspaceId};
 use serde_json::Value;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -60,6 +60,8 @@ pub struct DeviceCommandRow {
     pub attempts: u32,
     /// When it was last leased; `None` while no bridge was ever handed it.
     pub leased_at: Option<OffsetDateTime>,
+    /// The bridge (its API key) it was last leased to; set exactly when `leased_at` is.
+    pub leased_by: Option<ApiKeyId>,
     pub expires_at: OffsetDateTime,
     /// What a `done` command produced, as its bridge reported it.
     pub result: Option<Value>,
@@ -98,6 +100,8 @@ pub struct DeviceFile {
     pub size_bytes: u64,
     /// The lowercase hex SHA-256 of its bytes, as the file store computed it.
     pub sha256: String,
+    /// The bridge (its API key) that uploaded it: the one whose results may name it.
+    pub uploaded_by: ApiKeyId,
     pub created_at: OffsetDateTime,
     /// When its retention ends (spec §5.6: seven days after the upload).
     pub expires_at: OffsetDateTime,
@@ -159,8 +163,9 @@ pub enum Finished {
     Applied(Box<DeviceCommandRow>),
     /// The command is `done` or `failed` already: a recorded result is not replaced.
     Duplicate,
-    /// No such command among the bridge's phones, or one no bridge was ever handed (`queued`,
-    /// or `expired` or `canceled` in the queue): nothing changes.
+    /// No such command whose result the bridge may report (see [`DeviceCommandRepo::finish`]),
+    /// or one no bridge was ever handed (`queued`, or `expired` or `canceled` in the queue):
+    /// nothing changes.
     Unknown,
 }
 
@@ -201,16 +206,17 @@ pub trait DeviceCommandRepo: Send + Sync {
         redeliver_before: OffsetDateTime,
         limit: u32,
     ) -> Result<Vec<DeviceCommandRow>, AppError>;
-    /// Marks the commands `ids` that are still `queued` or `leased` as `leased` at `now`, each
-    /// with one more attempt; those rows, by `seq`. Other ids are passed over.
+    /// Marks the commands `ids` that are still `queued` or `leased` as `leased` to bridge `by` at
+    /// `now`, each with one more attempt; those rows, by `seq`. Other ids are passed over.
     async fn mark_leased(
         &mut self,
         ids: &[Uuid],
+        by: ApiKeyId,
         now: OffsetDateTime,
     ) -> Result<Vec<DeviceCommandRow>, AppError>;
     /// Fails, at `now`, the commands `ids` that are still `queued` or `leased`
     /// ([`failed_while_pending`]): a failure the server decides, not a bridge's result. Their
-    /// lease time and attempts stay as they were, and their detail is cut to
+    /// lease (time and bridge) and attempts stay as they were, and their detail is cut to
     /// [`MAX_DETAIL_CHARS`] characters. Those rows, by `seq`; ended, unknown and other
     /// workspaces' ids are passed over.
     async fn fail_pending(
@@ -220,13 +226,17 @@ pub trait DeviceCommandRepo: Send + Sync {
         detail: &str,
         now: OffsetDateTime,
     ) -> Result<Vec<DeviceCommandRow>, AppError>;
-    /// Applies a bridge's result for its command `id` (of one of its phones `caps`), received at
-    /// `now`, as [`Finish::status_after`] decides: when it is applied, writes the new status, the
-    /// result (`Done`) or the reason and detail (`Failed`), and `done_at` = `now`. A second
-    /// result for the same command waits for the first one's bundle to end.
+    /// Applies the result bridge `by` reports for command `id`, received at `now`, as
+    /// [`Finish::status_after`] decides. The bridge reports only for a command it was last leased
+    /// (`leased_by` = `by`), or for one of a phone it now holds (`listed`: a bridge whose key was
+    /// replaced reports for its old key's leases); for any other the answer is
+    /// [`Finished::Unknown`]. When it is applied, writes the new status, the result (`Done`) or
+    /// the reason and detail (`Failed`), and `done_at` = `now`. A second result for the same
+    /// command waits for the first one's bundle to end.
     async fn finish(
         &mut self,
-        caps: &[CapabilityId],
+        by: ApiKeyId,
+        listed: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,
@@ -243,8 +253,8 @@ pub trait DeviceCommandRepo: Send + Sync {
         cap: CapabilityId,
         limit: u32,
     ) -> Result<Vec<DeviceCommandRow>, AppError>;
-    /// Records `file`, which a bridge of the workspace uploaded. A taken id (in any workspace) is
-    /// `CONFLICT`.
+    /// Records `file`, which bridge `file.uploaded_by` of the workspace uploaded. A taken id (in
+    /// any workspace) is `CONFLICT`.
     async fn save_file(&mut self, file: DeviceFile) -> Result<(), AppError>;
     /// The workspace's device files among `ids`, by id; unknown and other workspaces' ids are
     /// passed over.

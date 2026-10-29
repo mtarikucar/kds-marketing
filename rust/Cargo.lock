@@ -1702,6 +1702,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "futures-util",
  "http",
  "jt_app",
  "jt_capability",
@@ -1818,6 +1819,7 @@ dependencies = [
  "jt_calls",
  "jt_capability",
  "jt_connector",
+ "jt_device_protocol",
  "jt_inbox",
  "jt_ledger",
  "jt_panel_http",

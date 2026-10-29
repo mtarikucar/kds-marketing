@@ -9,7 +9,7 @@ use jt_app::ports::UnitOfWork;
 use jt_app::ports::devices::{DEFAULT_EXPIRES_IN, FailReason, Finished, REDELIVER_AFTER};
 use jt_pg::{PgUnitOfWork, TenantTx};
 use jt_testkit::TestDb;
-use jt_testkit::devices_contract::{at, done, enqueue, get, ids, lease, phone, tap};
+use jt_testkit::devices_contract::{BRIDGE, at, done, enqueue, get, ids, lease, phone, tap};
 use jt_testkit::fakes::FIXED_NOW;
 use jt_testkit::inbox_contract::Fixture;
 
@@ -122,6 +122,40 @@ async fn rows_are_workspace_scoped() {
 }
 
 #[tokio::test]
+async fn finish_takes_the_phones_bridge_and_a_lease_keeps_its_bridge() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_contract::finish_takes_the_phones_bridge_and_a_lease_keeps_its_bridge(uow)
+        .await;
+}
+
+/// The bridge's flows over Postgres: many phones and one left out, two bridges and one phone,
+/// results from the lease holder (`jt_testkit::devices_bridge_contract`).
+#[tokio::test]
+async fn bridge_registers_many_phones_and_leaves_one_out() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_bridge_contract::many_phones_register_lease_and_one_is_left_out(uow).await;
+}
+
+#[tokio::test]
+async fn two_bridges_never_hold_one_phone() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_bridge_contract::two_bridges_never_hold_one_phone(uow).await;
+}
+
+#[tokio::test]
+async fn a_result_counts_from_the_lease_holder_or_the_phones_bridge() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_bridge_contract::a_result_counts_from_the_lease_holder_or_the_phones_bridge(
+        uow,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn device_files_are_recorded_once_and_found_in_their_workspace() {
     let db = TestDb::new().await;
     let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
@@ -158,7 +192,7 @@ async fn concurrent_picks_take_different_commands() {
     for (t, picked) in [(&mut a, &picked_a), (&mut b, &picked_b)] {
         let marked = t
             .device_commands()
-            .mark_leased(&ids(picked), now)
+            .mark_leased(&ids(picked), BRIDGE, now)
             .await
             .unwrap();
         assert_eq!(ids(&marked), ids(picked));
@@ -183,13 +217,13 @@ async fn racing_results_apply_once() {
     let mut b = uow.tenant(f.ws).await.unwrap();
     let first = a
         .device_commands()
-        .finish(&[p], id, done(), at(2))
+        .finish(BRIDGE, &[p], id, done(), at(2))
         .await
         .unwrap();
     assert!(matches!(first, Finished::Applied(_)));
     let caps = [p];
     let answer = {
-        let second = b.device_commands().finish(&caps, id, done(), at(3));
+        let second = b.device_commands().finish(BRIDGE, &caps, id, done(), at(3));
         tokio::pin!(second);
         assert!(
             tokio::time::timeout(StdDuration::from_millis(50), &mut second)
@@ -219,7 +253,7 @@ async fn expire_due_passes_over_a_held_command() {
     let mut holder = uow.tenant(f.ws).await.unwrap();
     let held = holder
         .device_commands()
-        .finish(&[p], rows[0].id, done(), at(6))
+        .finish(BRIDGE, &[p], rows[0].id, done(), at(6))
         .await
         .unwrap();
     assert!(matches!(held, Finished::Applied(_)));

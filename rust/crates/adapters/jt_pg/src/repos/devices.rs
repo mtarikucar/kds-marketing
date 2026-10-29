@@ -12,7 +12,7 @@ use jt_app::ports::devices::{
     Finish, Finished, MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, cut_detail, failed_while_pending,
 };
 use jt_capability::CapabilityId;
-use jt_tenancy::WorkspaceId;
+use jt_tenancy::{ApiKeyId, WorkspaceId};
 use serde_json::Value;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -22,8 +22,8 @@ use crate::uow::PgTenantRepos;
 
 /// The columns a [`Record`] is read from.
 const COLUMNS: &str = "id, workspace_id, capability_id, seq, payload, status, attempts, \
-                       leased_at, expires_at, result, reason, detail, requested_by, created_at, \
-                       done_at";
+                       leased_at, leased_by, expires_at, result, reason, detail, requested_by, \
+                       created_at, done_at";
 
 #[derive(sqlx::FromRow)]
 struct Record {
@@ -35,6 +35,7 @@ struct Record {
     status: String,
     attempts: i32,
     leased_at: Option<OffsetDateTime>,
+    leased_by: Option<Uuid>,
     expires_at: OffsetDateTime,
     result: Option<Value>,
     reason: Option<String>,
@@ -61,6 +62,7 @@ impl Record {
                 "device_commands.attempts",
             )?,
             leased_at: self.leased_at,
+            leased_by: self.leased_by.map(ApiKeyId),
             expires_at: self.expires_at,
             result: self.result,
             reason: self.reason.map(|r| reason_from(&r)),
@@ -105,6 +107,7 @@ struct FileRecord {
     mime: String,
     size_bytes: i64,
     sha256: String,
+    uploaded_by: Uuid,
     created_at: OffsetDateTime,
     expires_at: OffsetDateTime,
 }
@@ -190,13 +193,14 @@ impl DeviceCommandRepo for PgTenantRepos {
     async fn mark_leased(
         &mut self,
         ids: &[Uuid],
+        by: ApiKeyId,
         now: OffsetDateTime,
     ) -> Result<Vec<DeviceCommandRow>, AppError> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
         let records: Vec<Record> = sqlx::query_as(&format!(
-            "update device_commands set status = 'leased', leased_at = $3, \
+            "update device_commands set status = 'leased', leased_at = $3, leased_by = $4, \
              attempts = attempts + 1 \
              where workspace_id = $1 and id = any($2) and status in ('queued', 'leased') \
              returning {COLUMNS}"
@@ -204,6 +208,7 @@ impl DeviceCommandRepo for PgTenantRepos {
         .bind(self.workspace_id().as_uuid())
         .bind(ids)
         .bind(now)
+        .bind(by.as_uuid())
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "lease device commands"))?;
@@ -258,22 +263,22 @@ impl DeviceCommandRepo for PgTenantRepos {
 
     async fn finish(
         &mut self,
-        caps: &[CapabilityId],
+        by: ApiKeyId,
+        listed: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,
     ) -> Result<Finished, AppError> {
-        if caps.is_empty() {
-            return Ok(Finished::Unknown);
-        }
         let ws = self.workspace_id();
         let current: Option<(String, Option<OffsetDateTime>)> = sqlx::query_as(
             "select status, leased_at from device_commands \
-             where workspace_id = $1 and id = $2 and capability_id = any($3) for update",
+             where workspace_id = $1 and id = $2 \
+             and (leased_by = $3 or capability_id = any($4)) for update",
         )
         .bind(ws.as_uuid())
         .bind(id)
-        .bind(uuids(caps))
+        .bind(by.as_uuid())
+        .bind(uuids(listed))
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "lock device command"))?;
@@ -372,14 +377,16 @@ impl DeviceCommandRepo for PgTenantRepos {
         let size = i64::try_from(file.size_bytes)
             .map_err(|_| AppError::internal("a device file's size does not fit the table"))?;
         let saved = sqlx::query(
-            "insert into device_files (id, workspace_id, mime, size_bytes, sha256, created_at, \
-             expires_at) values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing",
+            "insert into device_files (id, workspace_id, mime, size_bytes, sha256, uploaded_by, \
+             created_at, expires_at) values ($1, $2, $3, $4, $5, $6, $7, $8) \
+             on conflict do nothing",
         )
         .bind(file.id)
         .bind(self.workspace_id().as_uuid())
         .bind(&file.mime)
         .bind(size)
         .bind(&file.sha256)
+        .bind(file.uploaded_by.as_uuid())
         .bind(file.created_at)
         .bind(file.expires_at)
         .execute(self.tx.conn())
@@ -396,8 +403,8 @@ impl DeviceCommandRepo for PgTenantRepos {
             return Ok(Vec::new());
         }
         let records: Vec<FileRecord> = sqlx::query_as(
-            "select id, mime, size_bytes, sha256, created_at, expires_at from device_files \
-             where workspace_id = $1 and id = any($2) order by id",
+            "select id, mime, size_bytes, sha256, uploaded_by, created_at, expires_at \
+             from device_files where workspace_id = $1 and id = any($2) order by id",
         )
         .bind(self.workspace_id().as_uuid())
         .bind(ids)
@@ -415,6 +422,7 @@ impl DeviceCommandRepo for PgTenantRepos {
                         "device_files.size_bytes",
                     )?,
                     sha256: r.sha256,
+                    uploaded_by: ApiKeyId(r.uploaded_by),
                     created_at: r.created_at,
                     expires_at: r.expires_at,
                 })

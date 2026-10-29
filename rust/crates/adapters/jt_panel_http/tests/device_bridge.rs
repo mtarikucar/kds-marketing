@@ -1,14 +1,17 @@
 //! The device bridge's routes end to end through Postgres: they take the bridge's bearer key alone
 //! (`devices.bridge`, nothing else), never a session cookie or another key; every `POST` needs the
 //! request header the bridge sends, as every mutating API call does; a refused body names its
-//! field; and a file upload is the file's own bytes.
+//! field; and a file upload is the file's own bytes, streamed, never read for another key.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
+use jt_app::usecases::devices::bridge::MAX_RESULTS_BODY_BYTES;
+use jt_app::usecases::files::DEVICE_FILE_LIMIT;
 use jt_panel_http::AppState;
 use jt_testkit::fakes::files::MemoryFiles;
 use jt_testkit::panel::{Panel, REQUESTED_WITH, body_json, expect_error, ok_json};
@@ -311,6 +314,20 @@ async fn files_take_a_raw_body() {
     let again = ok_json(call(&app, upload("image/png", PNG.to_vec())).await).await;
     assert_ne!(shot["file_id"], pulled["file_id"]);
     assert_ne!(shot["file_id"], again["file_id"]);
+    // A body sent in chunks, without a length, is the same file.
+    let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+        Ok(Bytes::from_static(&PNG[..4])),
+        Ok(Bytes::from_static(&PNG[4..])),
+    ];
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/devices/bridge/files")
+        .header(header::AUTHORIZATION, format!("Bearer {bridge}"))
+        .header(REQUESTED_WITH.0, REQUESTED_WITH.1)
+        .header(header::CONTENT_TYPE, "image/png")
+        .body(Body::from_stream(futures_util::stream::iter(chunks)))
+        .unwrap();
+    assert!(ok_json(call(&app, req).await).await["file_id"].is_string());
 
     // A JSON envelope or a multipart form is not a device file; nor is a PNG that is not one.
     let envelope = json!({ "content": "iVBORw0KGgo=" })
@@ -376,4 +393,75 @@ async fn invalid_results_body_is_422_naming_its_field() {
     )
     .await;
     assert_eq!(body["details"]["field"], "protocol");
+}
+
+#[tokio::test]
+async fn another_key_is_refused_before_the_body_is_read() {
+    let p = Panel::new().await;
+    let (owner, _) = p.register("owner@zeta.example", "Zeta").await;
+    let app = with_files(&p);
+    let agent = key(&p, &owner, "agent", &[]).await;
+    // A body that, read, says so and fails.
+    let read = Arc::new(AtomicBool::new(false));
+    let flag = read.clone();
+    let body = futures_util::stream::poll_fn(move |_| {
+        flag.store(true, Ordering::SeqCst);
+        std::task::Poll::Ready(Some(Err::<Bytes, _>(std::io::Error::other("read"))))
+    });
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/devices/bridge/files")
+        .header(header::AUTHORIZATION, format!("Bearer {agent}"))
+        .header(REQUESTED_WITH.0, REQUESTED_WITH.1)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .body(Body::from_stream(body))
+        .unwrap();
+    let refused = expect_error(call(&app, req).await, StatusCode::FORBIDDEN, "FORBIDDEN").await;
+    assert_eq!(refused["details"]["reason"], "bridge_key_only");
+    assert!(!read.load(Ordering::SeqCst), "the body was read");
+}
+
+#[tokio::test]
+async fn over_limit_bodies_are_422_naming_body() {
+    let p = Panel::new().await;
+    let (owner, _) = p.register("owner@eta.example", "Eta").await;
+    let app = with_files(&p);
+    let bridge = key(&p, &owner, "device bridge", &["devices.bridge"]).await;
+
+    // A results body over its 2 MiB: refused naming `body`, so the bridge logs a field.
+    let padding = "x".repeat(MAX_RESULTS_BODY_BYTES + 1);
+    let big = json!({ "results": [], "padding": padding });
+    let req = request(
+        Method::POST,
+        "/api/devices/bridge/results",
+        Some(&bridge),
+        None,
+        true,
+        json_body(&big),
+    );
+    let body = expect_error(
+        call(&app, req).await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VALIDATION",
+    )
+    .await;
+    assert_eq!(body["details"], json!({ "field": "body" }));
+
+    // A file whose announced length is over the limit: refused before it is read.
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/devices/bridge/files")
+        .header(header::AUTHORIZATION, format!("Bearer {bridge}"))
+        .header(REQUESTED_WITH.0, REQUESTED_WITH.1)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, (DEVICE_FILE_LIMIT + 1).to_string())
+        .body(Body::empty())
+        .unwrap();
+    let body = expect_error(
+        call(&app, req).await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VALIDATION",
+    )
+    .await;
+    assert_eq!(body["details"]["field"], "body");
 }

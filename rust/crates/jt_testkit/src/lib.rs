@@ -29,4 +29,5 @@ mod activation_control;
 
 pub mod platform_access_contract;
 
+pub mod devices_bridge_contract;
 pub mod devices_contract;

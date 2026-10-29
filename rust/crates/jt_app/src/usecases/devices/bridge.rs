@@ -18,26 +18,33 @@
 //! **Phones.** A registration verifies a `phone` capability for each phone it lists (declaring it
 //! on the first one, `{platform}:{serial}` as its external id) and merges what it reported into
 //! `connector_public.device` key by key ([`FactsMerge::Deep`]): a fact one registration leaves out
-//! (a model `adb` could not read) is kept. Beside the phone's facts (`platform`, `serial`, `model`,
-//! `os_version`, `screen`, `features`) and the bridge's (`bridge_id`, `version`, `protocol`), it
-//! keeps which bridge listed the phone last (`listed_by`, that bridge's key id), whether that
-//! bridge's latest registration lists it (`listed`, made `false` by a registration of that bridge
-//! that leaves it out) and every bridge that ever registered it (`registered_by`, each with when it
-//! last did). A phone that fails its own checks is refused with the reason, a retired one that is
-//! still plugged in with [`PHONE_RETIRED`] (nothing is declared or merged for either), and one
-//! phone never refuses the registration: the others register as usual. Only protocol 1 exists, so
-//! every body sent back is protocol 1's.
+//! (a model `adb` could not read) is kept. Only this surface writes `connector_public.device`
+//! (`jt_capability::RESERVED_PUBLIC_KEYS`). Beside the phone's facts (`platform`, `serial`,
+//! `model`, `os_version`, `screen`, `features`) and the bridge's (`bridge_id`, `version`,
+//! `protocol`), it keeps which bridge holds the phone: `listed_by`, that bridge's key id, and
+//! `listed`, whether that bridge's latest registration lists it (`false` once one leaves it out).
 //!
-//! **Commands.** A poll leases the due commands (`ports::devices::DeviceCommandRepo::pick_due`)
-//! of exactly the phones the bridge's latest registration lists, oldest first, at most the poll's
-//! limit; one handed out and not answered within [`REDELIVER_AFTER`] is handed out again, and the
-//! bridge acts on a command id once. Each read checks every command it picked against what the
-//! phone's bridge lists now (`jt_devices::supports` over the phone's current `features`): one it
-//! does not list any more is failed `unsupported_by_bridge`, never leased. A read that failed all
-//! it picked and leased nothing reads again at once. A `push_file` command carries the address its
-//! file is downloaded from, signed for [`DOWNLOAD_URL_LIFETIME`] (made after the read committed);
-//! one whose file cannot be signed is failed `bridge_error` instead of handed out. While nothing
-//! is due the poll waits: a command queued in this server wakes it at once (the devices' signals,
+//! A phone is one bridge's at a time. Another bridge that lists it while the holder lists it and
+//! registered it within [`HELD_FOR`] is refused with [`PHONE_HELD_BY_ANOTHER_BRIDGE`] (two PCs
+//! can see a phone of the same serial: every emulator is `emulator-5554`); once the holder leaves
+//! it out or stops registering, the next bridge to list it holds it. A phone that fails its own
+//! checks is refused with the reason, a retired one that is still plugged in with
+//! [`PHONE_RETIRED`] (nothing is declared or merged for any refused phone), and one phone never
+//! refuses the registration: the others register as usual. Only protocol 1 exists, so every body
+//! sent back is protocol 1's.
+//!
+//! **Commands.** A poll leases to the bridge the due commands
+//! (`ports::devices::DeviceCommandRepo::pick_due`) of exactly the phones it holds and its latest
+//! registration lists, oldest first, at most the poll's limit; one handed out and not answered
+//! within [`REDELIVER_AFTER`] is handed out again, and the bridge acts on a command id once. Each
+//! read checks every command it picked against what the phone's bridge lists now (the command's
+//! `jt_devices::required_features` against the phone's current `features`): one it does not list
+//! any more is failed `unsupported_by_bridge`, never leased. A read that failed all it picked and
+//! leased nothing reads again at once. A `push_file` command carries the address its file is
+//! downloaded from, signed for [`DOWNLOAD_URL_LIFETIME`] after the read committed; one whose file
+//! is not stored is failed `file_not_found`, and one the store cannot sign now is not handed out
+//! this time (its lease runs out and it is handed out again). While nothing is due the poll
+//! waits: a command queued in this server wakes it at once (the devices' signals,
 //! [`super::signal_key`]), and it looks again at least every [`kernel::FALLBACK_TICK`].
 //!
 //! A command redelivered after its lease went unanswered can be failed at its redelivery (its
@@ -45,18 +52,18 @@
 //! delivery is a duplicate: the command already ended.
 //!
 //! **Results.** A batch is checked whole first: one that breaks a limit
-//! (`jt_device_protocol::ResultsIn::validate`), or that names a file that is not one of the
-//! workspace's device files, is refused (`VALIDATION` naming the field) and nothing of it is
-//! applied. Then each result is applied once, by command id, to a command of a phone this bridge
-//! ever registered: a late one from a phone the bridge has left out since still counts, since the
-//! command really ran. Results are matched to phones, not to leases: a phone that moved from one
-//! bridge to another is both bridges' for this. A result for any other command (unknown, of a
-//! phone this bridge never registered, or never handed out) changes nothing and is counted
-//! `unknown`, never refused.
+//! (`jt_device_protocol::ResultsIn::validate`), or that names a file that is not a device file
+//! this bridge uploaded, is refused (`VALIDATION` naming the field) and nothing of it is applied.
+//! Then each result is applied once, by command id, when the bridge may report it: the command
+//! was last leased to it (a late result from a phone it has left out since still counts, since the
+//! command really ran), or the bridge now holds the command's phone (a bridge whose key was
+//! replaced reports for the old key's leases). A result for any other command (unknown, leased to
+//! another bridge, or never handed out) changes nothing and is counted `unknown`, never refused.
 //!
 //! **Files.** An upload is the file's bytes, `image/png` (a screenshot) or
-//! `application/octet-stream` (a file pulled off a phone), kept in the file store and recorded as
-//! the workspace's for [`FILE_RETENTION`]. Each upload is a new file, a retried one included.
+//! `application/octet-stream` (a file pulled off a phone), streamed into the file store (at most
+//! [`MAX_CONCURRENT_UPLOADS`] at a time) and recorded as the workspace's, uploaded by the bridge,
+//! for [`FILE_RETENTION`]. Each upload is a new file, a retried one included.
 //!
 //! **Logging.** Every command that ends through this surface writes `devices.command.finished`
 //! (`command_id`, `kind`, `status`, `reason`, `duration_ms`: the bridge's, `null` for a failure the
@@ -68,30 +75,31 @@ use std::time::Duration as StdDuration;
 
 use jt_capability::{Capability, CapabilityId, MAX_NAME_CHARS, StoredStatus, validate_external_id};
 use jt_device_protocol::{
-    CommandResult, LeasedCommand, Outcome, PHONE_RETIRED, PhoneReport, ProtocolError, RefusedPhone,
-    RegisteredPhone,
+    CommandResult, LeasedCommand, Outcome, PHONE_HELD_BY_ANOTHER_BRIDGE, PHONE_RETIRED,
+    PhoneReport, ProtocolError, RefusedPhone, RegisteredPhone,
 };
 use jt_strategy::StrategyVersionId;
 use jt_studio::FileId;
 use jt_tenancy::{ApiKeyId, Permission};
 use serde_json::{Map, Value, json};
-use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use super::{PHONE_KIND, signal_key};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::TenantRepos;
-use crate::ports::connectors::MediaUpload;
 use crate::ports::devices::{
     DeviceCommand, DeviceCommandRow, DeviceFile, FailReason, Finish, Finished, REDELIVER_AFTER,
-    TEXT_UNICODE, supports,
+    required_features, supports,
 };
+use crate::ports::files::ByteSource;
 use crate::usecases::api_keys::AgentPrincipal;
 use crate::usecases::bridges::kernel::{self, Beat, BridgeSpec, FactsMerge, Held, Lease};
 use crate::usecases::capabilities::{append, locked, version_in_force};
-use crate::usecases::files::{DEVICE_FILE_LIMIT, OCTET_STREAM, validate_stored};
+use crate::usecases::files::{DEVICE_FILE_LIMIT, OCTET_STREAM, PNG};
+use crate::usecases::studio::files::IMAGE_LIMIT;
 use crate::usecases::{Deps, invalid};
 
 /// The device bridge as the bridge kernel knows it: the system component `device_bridge`, its
@@ -115,6 +123,9 @@ pub use jt_device_protocol::{
 };
 /// How often the bridge registers, and the longest a poll for commands waits, in seconds.
 pub use jt_device_protocol::{HEARTBEAT_S, MAX_WAIT_S};
+/// How long a phone a bridge lists stays that bridge's when the bridge stops registering it: the
+/// spec's stale clock for a bridge, four missed heartbeats. Another bridge can take it over after.
+pub const HELD_FOR: Duration = Duration::seconds(60);
 /// How long the download address of a `push_file` command lives: long enough for the bridge to
 /// start the download after the command waited its turn on the phone (the bridge fails a command
 /// that waited longer than `jt_devices::DEFAULT_EXPIRES_IN`, five minutes), short enough that an
@@ -122,8 +133,12 @@ pub use jt_device_protocol::{HEARTBEAT_S, MAX_WAIT_S};
 pub const DOWNLOAD_URL_LIFETIME: Duration = Duration::minutes(10);
 /// How long a device file is kept (spec §5.6).
 pub const FILE_RETENTION: Duration = Duration::days(7);
-/// The type of a screenshot.
-const PNG: &str = "image/png";
+/// The most uploads ([`files`]) this server stores at once; a further one waits for its turn
+/// before its body is read.
+pub const MAX_CONCURRENT_UPLOADS: usize = 2;
+
+/// The uploads' turns ([`MAX_CONCURRENT_UPLOADS`]).
+static UPLOADS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_UPLOADS);
 
 // ---------------------------------------------------------------------------------------------
 // Who
@@ -147,8 +162,9 @@ pub fn ctx_for_bridge(p: &AgentPrincipal, now: OffsetDateTime) -> BridgeCaller {
 }
 
 /// `Ok` for the bridge's own context: `devices.bridge` (else `FORBIDDEN` naming it), held alone by
-/// the bridge's component (else `FORBIDDEN` with `details.reason = "bridge_key_only"`).
-fn authorize(b: &BridgeCaller) -> Result<(), AppError> {
+/// the bridge's component (else `FORBIDDEN` with `details.reason = "bridge_key_only"`). An adapter
+/// may check it before reading a request's body; every use case here checks it again.
+pub fn authorize(b: &BridgeCaller) -> Result<(), AppError> {
     kernel::require_bridge(&DEVICE_BRIDGE, &b.ctx)
 }
 
@@ -172,20 +188,34 @@ fn device_of(c: &Capability) -> Option<&Map<String, Value>> {
     c.connector_public.get("device")?.as_object()
 }
 
-/// Whether bridge `bridge`'s latest registration lists phone `c`.
-fn listed_by(c: &Capability, bridge: ApiKeyId) -> bool {
+/// Whether bridge `bridge` holds phone `c` (`listed_by`), listed or not.
+fn held_by(c: &Capability, bridge: ApiKeyId) -> bool {
     device_of(c).is_some_and(|d| {
         d.get("listed_by").and_then(Value::as_str) == Some(bridge.to_string().as_str())
-            && d.get("listed").and_then(Value::as_bool) == Some(true)
     })
 }
 
-/// Whether bridge `bridge` ever registered phone `c`.
-fn registered_by(c: &Capability, bridge: ApiKeyId) -> bool {
-    device_of(c)
-        .and_then(|d| d.get("registered_by"))
-        .and_then(Value::as_object)
-        .is_some_and(|by| by.contains_key(&bridge.to_string()))
+/// Whether bridge `bridge` holds phone `c` and its latest registration lists it.
+fn listed_by(c: &Capability, bridge: ApiKeyId) -> bool {
+    held_by(c, bridge)
+        && device_of(c)
+            .and_then(|d| d.get("listed"))
+            .and_then(Value::as_bool)
+            == Some(true)
+}
+
+/// Whether a bridge other than `bridge` holds phone `c` at `now`: it lists it, and registered it
+/// at most [`HELD_FOR`] ago.
+fn held_by_another(c: &Capability, bridge: ApiKeyId, now: OffsetDateTime) -> bool {
+    let listed = device_of(c)
+        .and_then(|d| d.get("listed"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let holder = device_of(c)
+        .and_then(|d| d.get("listed_by"))
+        .and_then(Value::as_str);
+    let recent = c.last_verified_at.is_some_and(|at| now - at <= HELD_FOR);
+    listed && recent && holder.is_some_and(|holder| holder != bridge.to_string())
 }
 
 /// What phone `c`'s bridge lists it can run, as its latest registration reported.
@@ -238,9 +268,8 @@ fn name_of(phone: &PhoneReport) -> String {
 
 /// What a registration keeps of phone `phone` under `connector_public.device`: what it reported
 /// (a model or an OS version it could not read, left out or blank, is not written, so the one
-/// kept stays), the bridge's own facts, and that bridge `b` lists it now.
+/// kept stays), the bridge's own facts, and that bridge `b` holds it and lists it now.
 fn device_facts(b: &BridgeCaller, input: &RegisterIn, phone: &PhoneReport) -> Map<String, Value> {
-    let bridge = b.bridge.to_string();
     let mut device = Map::new();
     device.insert("platform".into(), json!(phone.platform.key()));
     device.insert("serial".into(), json!(phone.serial));
@@ -256,13 +285,8 @@ fn device_facts(b: &BridgeCaller, input: &RegisterIn, phone: &PhoneReport) -> Ma
     device.insert("bridge_id".into(), json!(input.bridge_id));
     device.insert("version".into(), json!(input.version));
     device.insert("protocol".into(), json!(input.protocol));
-    device.insert("listed_by".into(), json!(bridge));
+    device.insert("listed_by".into(), json!(b.bridge.to_string()));
     device.insert("listed".into(), json!(true));
-    let at = b.ctx.now.format(&Rfc3339).ok();
-    device.insert(
-        "registered_by".into(),
-        Value::Object(Map::from_iter([(bridge, json!(at))])),
-    );
     device
 }
 
@@ -284,9 +308,10 @@ enum Step {
 /// a phone of its own is refused in [`RegisterOut::refused`], never the registration. Each phone
 /// it lists is verified (declared first when the workspace has none of its external id, writing
 /// `capability.declare`), its facts merged, and `devices.bridge.online` written (`capability_id`,
-/// `external_id`, `bridge_id`, `version`, `declared`) when it did not read verified until now.
-/// Each phone this bridge's previous registration listed and this one leaves out reads as left
-/// out. Only the bridge's key.
+/// `external_id`, `bridge_id`, `version`, `declared`) when it did not read verified until now; a
+/// retired phone, or one another bridge holds, is refused, read under its lock. Each phone this
+/// bridge's previous registration listed and this one leaves out reads as left out. Only the
+/// bridge's key.
 pub async fn register(
     deps: &Deps,
     b: &BridgeCaller,
@@ -298,23 +323,23 @@ pub async fn register(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     let in_force = version_in_force(r.as_mut()).await?;
     let phones = kernel::of_kind(r.as_mut(), PHONE_KIND).await?;
-    let refusal = |phone: &PhoneReport, reason: String| RefusedPhone {
-        platform: phone.platform,
-        serial: phone.serial.clone(),
-        reason,
+    let refusal = |platform, serial: &str, reason: &str| RefusedPhone {
+        platform,
+        serial: serial.to_owned(),
+        reason: reason.to_owned(),
     };
     let mut refused_phones = Vec::new();
     let mut steps: Vec<(CapabilityId, Step)> = Vec::new();
     for (index, phone) in input.phones.iter().enumerate() {
         if let Some(fault) = phone_fault(phone) {
-            refused_phones.push(refusal(phone, fault));
+            refused_phones.push(refusal(phone.platform, &phone.serial, &fault));
             continue;
         }
         let external_id = external_id(phone);
         let (id, declared) = match kernel::held(&phones, &external_id) {
             Held::Live(c) => (c.id, false),
             Held::Retired => {
-                refused_phones.push(refusal(phone, PHONE_RETIRED.into()));
+                refused_phones.push(refusal(phone.platform, &phone.serial, PHONE_RETIRED));
                 continue;
             }
             Held::Missing => {
@@ -356,9 +381,9 @@ pub async fn register(
             },
         ));
     }
-    let listed: HashSet<CapabilityId> = steps.iter().map(|(id, _)| *id).collect();
+    let listing: HashSet<CapabilityId> = steps.iter().map(|(id, _)| *id).collect();
     for c in &phones {
-        if c.status != StoredStatus::Retired && listed_by(c, b.bridge) && !listed.contains(&c.id) {
+        if c.status != StoredStatus::Retired && listed_by(c, b.bridge) && !listing.contains(&c.id) {
             steps.push((c.id, Step::LeaveOut(c.id)));
         }
     }
@@ -373,22 +398,26 @@ pub async fn register(
                 platform,
                 serial,
                 beat,
-            } => match kernel::heartbeat(r.as_mut(), ctx, &DEVICE_BRIDGE, in_force, beat).await {
-                Ok(_) => registered.push((
+            } => {
+                let current = locked(r.as_mut(), id).await?;
+                if current.status == StoredStatus::Retired {
+                    // Retired since it was read.
+                    refused_phones.push(refusal(platform, &serial, PHONE_RETIRED));
+                    continue;
+                }
+                if held_by_another(&current, b.bridge, ctx.now) {
+                    refused_phones.push(refusal(platform, &serial, PHONE_HELD_BY_ANOTHER_BRIDGE));
+                    continue;
+                }
+                kernel::heartbeat(r.as_mut(), ctx, &DEVICE_BRIDGE, in_force, beat).await?;
+                registered.push((
                     index,
                     RegisteredPhone {
                         serial,
                         capability_id: id.as_uuid(),
                     },
-                )),
-                // Retired since it was read: refused as every retired phone is.
-                Err(e) if e.code == ErrorCode::Conflict => refused_phones.push(RefusedPhone {
-                    platform,
-                    serial,
-                    reason: PHONE_RETIRED.into(),
-                }),
-                Err(e) => return Err(e),
-            },
+                ));
+            }
             Step::LeaveOut(id) => leave_out(r.as_mut(), ctx, id, b.bridge).await?,
         }
     }
@@ -399,8 +428,9 @@ pub async fn register(
 }
 
 /// Marks phone `id` as left out of the latest registration of bridge `bridge`, which listed it
-/// before: no command is leased for it from the next poll on. Read under the lock, so a phone that
-/// another bridge listed or that was retired since is left as it stands.
+/// before: no command is leased for it from the next poll on, and another bridge may take it
+/// over. Read under the lock, so a phone that another bridge took over or that was retired since
+/// is left as it stands.
 async fn leave_out(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -494,15 +524,15 @@ async fn read(
             );
             return Ok(Some(handed));
         }
-        // Every command this read picked was failed: the next due ones, if any, are read at once
-        // rather than at the next signal.
+        // Nothing this read picked can be handed out now: the next due ones, if any, are read at
+        // once rather than at the next signal.
     }
 }
 
 /// The lease of one read (in its transaction): picks the due commands of the phones bridge
-/// `bridge` lists now, at most `limit`, fails those their phone's bridge does not list what they
-/// need for (ledgered), and leases the rest. The phones and their features are read before
-/// anything is picked, so nothing waits on another read while rows are locked.
+/// `bridge` holds and lists now, at most `limit`, fails those their phone's bridge does not list
+/// what they need for (ledgered), and leases the rest to it. The phones and their features are
+/// read before anything is picked, so nothing waits on another read while rows are locked.
 async fn take(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -559,7 +589,11 @@ async fn take(
         }
     }
     let ids: Vec<Uuid> = fit.iter().map(|row| row.id).collect();
-    for row in r.device_commands().mark_leased(&ids, at.now).await? {
+    for row in r
+        .device_commands()
+        .mark_leased(&ids, bridge, at.now)
+        .await?
+    {
         let serial = phones
             .get(&row.capability_id)
             .map(|(serial, _)| serial.clone())
@@ -569,20 +603,19 @@ async fn take(
     Ok(taken)
 }
 
-/// What a bridge listing `features` lacks for `cmd`: its kind, or [`TEXT_UNICODE`] for text
-/// outside ASCII.
-fn missing<'a>(features: &[String], cmd: &'a DeviceCommand) -> &'a str {
-    if features.iter().any(|f| f == cmd.kind()) {
-        TEXT_UNICODE
-    } else {
-        cmd.kind()
-    }
+/// The first feature `cmd` needs ([`required_features`]) that a bridge listing `features` lacks.
+fn missing(features: &[String], cmd: &DeviceCommand) -> &'static str {
+    required_features(cmd)
+        .into_iter()
+        .find(|needed| !features.iter().any(|f| f == needed))
+        .unwrap_or_else(|| cmd.kind())
 }
 
 /// The commands `leased`, as the bridge takes them, each `push_file` with its download address
 /// signed at `now`, after the lease committed (signing may reach the file store). One whose file
-/// cannot be signed is failed `bridge_error` in a transaction of its own, ledgered, and not handed
-/// out.
+/// is not stored is failed `file_not_found` in a transaction of its own, ledgered, and not handed
+/// out; one the store cannot sign now is not handed out either, and stays leased until its lease
+/// runs out and it is handed out again.
 async fn hand_out(
     deps: &Deps,
     ctx: &Ctx,
@@ -591,7 +624,7 @@ async fn hand_out(
 ) -> Result<Vec<LeasedCommand>, AppError> {
     let ws = ctx.workspace_id;
     let mut handed = Vec::new();
-    let mut unsigned = Vec::new();
+    let mut not_stored = Vec::new();
     for (row, serial) in leased {
         let download_url = match &row.command {
             DeviceCommand::PushFile { file_id, .. } => {
@@ -610,7 +643,9 @@ async fn hand_out(
                             code = e.code.as_str(),
                             "the file of a leased command could not be signed for download"
                         );
-                        unsigned.push(row.id);
+                        if e.code == ErrorCode::NotFound {
+                            not_stored.push(row.id);
+                        }
                         continue;
                     }
                 }
@@ -626,16 +661,16 @@ async fn hand_out(
             download_url,
         });
     }
-    if !unsigned.is_empty() {
+    if !not_stored.is_empty() {
         let at = Ctx { now, ..ctx.clone() };
         let mut r = deps.uow.tenant(ws).await?;
         let in_force = version_in_force(r.as_mut()).await?;
         let failed = r
             .device_commands()
             .fail_pending(
-                &unsigned,
-                FailReason::BridgeError,
-                "the file to push could not be read for download",
+                &not_stored,
+                FailReason::FileNotFound,
+                "the file to push is not stored: it was removed, or never uploaded",
                 now,
             )
             .await?;
@@ -682,7 +717,7 @@ async fn finished(
 /// `devices.bridge.results`: a batch of the bridge's results (see the module docs), at most 100.
 /// A batch that breaks a limit (`ResultsIn::validate`) is `VALIDATION` naming the field
 /// (`results`, `command_id`, `detail`, ...); one that names a file (a `file` result's `file_id`,
-/// an observation's `screenshot_file_id`) that is not one of the workspace's device files is
+/// an observation's `screenshot_file_id`) that is not a device file this bridge uploaded is
 /// `VALIDATION` naming `file_id` or `screenshot_file_id`; either is final, and nothing of it is
 /// applied. Each result is then applied in a transaction of its own (writing
 /// `devices.command.finished`) and counted `applied`, `duplicates` (the command ended already) or
@@ -696,13 +731,13 @@ pub async fn results(
     authorize(b)?;
     input.validate().map_err(refused)?;
     let ctx = &b.ctx;
-    let caps: Vec<CapabilityId> = {
+    let holding: Vec<CapabilityId> = {
         let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-        device_files_only(r.as_mut(), &input).await?;
+        own_files_only(r.as_mut(), b.bridge, &input).await?;
         kernel::of_kind(r.as_mut(), PHONE_KIND)
             .await?
             .iter()
-            .filter(|c| registered_by(c, b.bridge))
+            .filter(|c| held_by(c, b.bridge))
             .map(|c| c.id)
             .collect()
     };
@@ -720,11 +755,11 @@ pub async fn results(
             Outcome::Failed { reason, detail } => Finish::failed(reason, &detail),
         };
         let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-        match r
+        let answer = r
             .device_commands()
-            .finish(&caps, result.command_id, finish, ctx.now)
-            .await?
-        {
+            .finish(b.bridge, &holding, result.command_id, finish, ctx.now)
+            .await?;
+        match answer {
             Finished::Applied(row) => {
                 let in_force = version_in_force(r.as_mut()).await?;
                 finished(r.as_mut(), ctx, in_force, &row, Some(result.duration_ms)).await?;
@@ -748,9 +783,13 @@ pub async fn results(
     Ok(out)
 }
 
-/// `Ok` when every file the results of `input` name is one of the workspace's device files; else
-/// `VALIDATION` naming the field of the first that is not.
-async fn device_files_only(r: &mut dyn TenantRepos, input: &ResultsIn) -> Result<(), AppError> {
+/// `Ok` when every file the results of `input` name is a device file of the workspace that
+/// bridge `bridge` uploaded; else `VALIDATION` naming the field of the first that is not.
+async fn own_files_only(
+    r: &mut dyn TenantRepos,
+    bridge: ApiKeyId,
+    input: &ResultsIn,
+) -> Result<(), AppError> {
     let named: Vec<(Uuid, &'static str)> = input
         .results
         .iter()
@@ -768,17 +807,18 @@ async fn device_files_only(r: &mut dyn TenantRepos, input: &ResultsIn) -> Result
         return Ok(());
     }
     let ids: Vec<Uuid> = named.iter().map(|(id, _)| *id).collect();
-    let known: HashSet<Uuid> = r
+    let own: HashSet<Uuid> = r
         .device_commands()
         .files(&ids)
         .await?
         .into_iter()
+        .filter(|f| f.uploaded_by == bridge)
         .map(|f| f.id)
         .collect();
-    match named.iter().find(|(id, _)| !known.contains(id)) {
+    match named.iter().find(|(id, _)| !own.contains(id)) {
         Some((_, field)) => Err(invalid(
             field,
-            "names a file that is not one of the workspace's device files",
+            "names a file that is not a device file this bridge uploaded",
         )),
         None => Ok(()),
     }
@@ -798,23 +838,58 @@ fn media_type(content_type: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// `devices.bridge.files`: stores `bytes`, uploaded as `content_type`, as a device file of the
-/// workspace (see the module docs), kept for [`FILE_RETENTION`]; its id. A type that is neither
-/// `image/png` nor `application/octet-stream` is `VALIDATION` naming `content_type`; a PNG that is
-/// not one, or over studio's image limit, or a file over [`DEVICE_FILE_LIMIT`] bytes, `VALIDATION`
-/// naming `body`. The bytes are written before the file is recorded, and removed again when it
+/// `VALIDATION` naming `body`: a file over its type's limit.
+fn too_large(limit: u64) -> AppError {
+    invalid(
+        "body",
+        &format!("a device file of this type is at most {limit} bytes"),
+    )
+}
+
+/// `source`, refused once it yields more than `limit` bytes.
+struct Bounded<'a> {
+    source: &'a mut dyn ByteSource,
+    read: u64,
+    limit: u64,
+    over: bool,
+}
+
+#[async_trait::async_trait]
+impl ByteSource for Bounded<'_> {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        let Some(chunk) = self.source.next_chunk().await? else {
+            return Ok(None);
+        };
+        self.read += chunk.len() as u64;
+        if self.read > self.limit {
+            self.over = true;
+            return Err(too_large(self.limit));
+        }
+        Ok(Some(chunk))
+    }
+}
+
+/// `devices.bridge.files`: stores the file `source` yields, uploaded as `content_type`, as a device
+/// file of the workspace uploaded by the bridge (see the module docs), kept for
+/// [`FILE_RETENTION`]; its id. A type that is neither `image/png` nor `application/octet-stream`
+/// is `VALIDATION` naming `content_type`; a body over its type's limit ([`IMAGE_LIMIT`] for a PNG,
+/// [`DEVICE_FILE_LIMIT`] for a pulled file; `declared_len` is the length the request announces,
+/// refused before anything is read), or a PNG that is not one, `VALIDATION` naming `body`. The
+/// body is read only once the bridge's turn comes ([`MAX_CONCURRENT_UPLOADS`]) and streamed into
+/// the file store; the bytes are written before the file is recorded, and removed again when it
 /// cannot be. Only the bridge's key.
 pub async fn files(
     deps: &Deps,
     b: &BridgeCaller,
     content_type: Option<&str>,
-    bytes: Vec<u8>,
+    declared_len: Option<u64>,
+    source: &mut dyn ByteSource,
 ) -> Result<FileOut, AppError> {
     authorize(b)?;
     let ws = b.ctx.workspace_id;
-    let mime = match content_type.map(media_type).as_deref() {
-        Some(PNG) => PNG,
-        Some(OCTET_STREAM) => OCTET_STREAM,
+    let (mime, limit) = match content_type.map(media_type).as_deref() {
+        Some(PNG) => (PNG, IMAGE_LIMIT),
+        Some(OCTET_STREAM) => (OCTET_STREAM, DEVICE_FILE_LIMIT),
         _ => {
             return Err(invalid(
                 "content_type",
@@ -822,31 +897,46 @@ pub async fn files(
             ));
         }
     };
-    if bytes.len() as u64 > DEVICE_FILE_LIMIT {
-        return Err(invalid(
-            "body",
-            &format!("a device file is at most {DEVICE_FILE_LIMIT} bytes"),
-        ));
+    if declared_len.is_some_and(|len| len > limit) {
+        return Err(too_large(limit));
     }
+    let _turn = UPLOADS
+        .acquire()
+        .await
+        .map_err(|_| AppError::internal("the uploads' turns are closed"))?;
     let id = deps.ids.uuid();
     let extension = if mime == PNG { "png" } else { "bin" };
-    let upload = MediaUpload {
-        bytes,
-        mime: mime.to_owned(),
-        filename: format!("{id}.{extension}"),
+    let filename = format!("{id}.{extension}");
+    let mut bounded = Bounded {
+        source,
+        read: 0,
+        limit,
+        over: false,
     };
-    validate_stored(&upload).map_err(|_| {
-        invalid(
-            "body",
-            "an image/png file is a PNG image of at most 25000000 bytes",
-        )
-    })?;
-    let stored = deps.files.put(ws, FileId(id), upload).await?;
+    let stored = deps
+        .files
+        .put_stream(ws, FileId(id), mime, &filename, &mut bounded)
+        .await;
+    let stored = match stored {
+        Ok(stored) => stored,
+        Err(_) if bounded.over => return Err(too_large(limit)),
+        Err(e)
+            if e.code == ErrorCode::Validation
+                && e.details.get("field") == Some(&json!("media")) =>
+        {
+            return Err(invalid(
+                "body",
+                &format!("an image/png file is a PNG image of at most {IMAGE_LIMIT} bytes"),
+            ));
+        }
+        Err(e) => return Err(e),
+    };
     let file = DeviceFile {
         id,
         mime: mime.to_owned(),
         size_bytes: stored.size_bytes,
         sha256: stored.sha256,
+        uploaded_by: b.bridge,
         created_at: b.ctx.now,
         expires_at: b.ctx.now + FILE_RETENTION,
     };

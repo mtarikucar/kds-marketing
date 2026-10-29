@@ -17,6 +17,8 @@ create table if not exists device_commands (
     status text not null check (status in ('queued', 'leased', 'done', 'failed', 'expired', 'canceled')),
     attempts int not null default 0 check (attempts >= 0),
     leased_at timestamptz,
+    -- The bridge (its API key's id) the command was last leased to: the one whose result counts.
+    leased_by uuid,
     expires_at timestamptz not null,
     result jsonb,
     reason text,
@@ -26,9 +28,10 @@ create table if not exists device_commands (
     done_at timestamptz,
     constraint device_commands_capability_fkey foreign key (workspace_id, capability_id)
         references capabilities (workspace_id, id),
-    -- A leased or done command was leased.
+    -- A leased or done command was leased, and a lease names its bridge.
     constraint device_commands_leased_check
         check (status not in ('leased', 'done') or leased_at is not null),
+    constraint device_commands_lease_check check ((leased_at is null) = (leased_by is null)),
     -- A command is finished exactly when it is neither queued nor leased.
     constraint device_commands_done_check
         check ((done_at is null) = (status in ('queued', 'leased')))
@@ -63,9 +66,11 @@ $$;
 create table if not exists device_files (
     id uuid primary key,
     workspace_id uuid not null references workspaces (id),
-    mime text not null check (char_length(mime) between 1 and 255),
+    mime text not null check (mime in ('image/png', 'application/octet-stream')),
     size_bytes bigint not null check (size_bytes >= 0),
     sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'),
+    -- The bridge (its API key's id) that uploaded it: the one whose results may name it.
+    uploaded_by uuid not null,
     created_at timestamptz not null,
     expires_at timestamptz not null
 );
