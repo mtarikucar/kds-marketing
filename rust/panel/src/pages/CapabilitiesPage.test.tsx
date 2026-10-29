@@ -493,12 +493,19 @@ it('voice_bridge_card_shows_engines_extension_and_heartbeat_age', async () => {
   // Only its own registration verifies it: no verification by evidence here.
   expect(within(card).queryByRole('button', { name: tr.capabilities.actions.verify })).toBeNull();
   expect(within(card).getByRole('button', { name: tr.capabilities.actions.edit })).toBeInTheDocument();
-  // Nor is a phone (its device bridge's registrations verify it); a printer still is.
+  // Nor is a phone (its device bridge's registrations verify it); a printer still is. Neither
+  // bridge's kind shows how long a verification lasts by its policy: a heartbeat's does not.
   const phone = await cardOf('Saha telefonu');
   expect(within(phone).queryByRole('button', { name: tr.capabilities.actions.verify })).toBeNull();
   expect(within(phone).getByRole('button', { name: tr.capabilities.actions.edit })).toBeInTheDocument();
+  const ageLine = i18n.t('capabilities.policy.verifyAge', { days: 30 });
+  for (const heartbeat of [card, phone]) {
+    expect(within(heartbeat).queryByText(ageLine)).toBeNull();
+    expect(within(heartbeat).queryByText(tr.capabilities.policy.verifyNever)).toBeNull();
+  }
   const printer = await cardOf('Ofis yazıcısı');
   expect(within(printer).getByRole('button', { name: tr.capabilities.actions.verify })).toBeInTheDocument();
+  expect(within(printer).getByText(ageLine)).toBeInTheDocument();
   // A bridge declared in the panel that never registered says so.
   const never = await cardOf('Voice bridge 102');
   expect(within(never).getByText(tr.capabilities.bridge.never)).toBeInTheDocument();

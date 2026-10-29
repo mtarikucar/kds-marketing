@@ -65,7 +65,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           tool's name, 2 to 40 of a-z, 0-9, _ and -. connector_public holds \
                           public settings only, never a secret; a connector may name its hosts \
                           in connector_public.hosts. policy is optional. The capability starts \
-                          declared: verify your own with jeeta.capability.verify. Returns the \
+                          declared: verify your own with jeeta.capability.verify, except a \
+                          voice_bridge or a phone, which only its bridge's registration verifies \
+                          (a phone is declared by its device bridge on its own). Returns the \
                           capability. [risk: WRITE]",
             permission: Permission::CapabilitiesManage,
             schema: schema_for::<DeclareArgs>,
@@ -89,14 +91,18 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.verify",
             description: "Mark a capability verified on your evidence: for your own \
                           agent/device capabilities; connectors are verified by their probe, \
-                          and a voice bridge or a phone only by its bridge's registration. Your own are those you declared through this connection; verifying \
-                          one another connection or a person declared needs \
-                          capabilities.manage. evidence.text says what you ran or saw (the command's output, the \
-                          printer's status page); evidence.refs may name what backs it (a \
-                          serial number, a file or screenshot id). The evidence is recorded as \
-                          your claim and never checked; the verification lasts the policy's \
-                          verify_max_age_days, then the capability reads as stale until you \
-                          verify it again. Returns the capability. [risk: WRITE]",
+                          and a voice_bridge or a phone only by its bridge's registration \
+                          (refused here: details.reason verified_by_heartbeat, with the \
+                          cleared_by step). Your own are those you declared through this \
+                          connection; verifying one another connection or a person declared \
+                          needs capabilities.manage. evidence.text says what you ran or saw \
+                          (the command's output, the printer's status page); evidence.refs may \
+                          name what backs it (a serial number, a file or screenshot id). The \
+                          evidence is recorded as your claim and never checked; the \
+                          verification lasts the policy's verify_max_age_days, then the \
+                          capability reads as stale until you verify it again (a voice_bridge's \
+                          or a phone's lasts a minute after its bridge's last registration, \
+                          whatever its policy). Returns the capability. [risk: WRITE]",
             permission: Permission::WorkspaceRead,
             schema: schema_for::<VerifyArgs>,
             run: verify,
@@ -105,7 +111,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.mark_unreachable",
             description: "Mark a capability unreachable, with a reason of 1 to 500 characters \
                           (the phone is off, the account is locked). Verify it again once it is \
-                          back. Returns the capability. [risk: WRITE]",
+                          back; a voice_bridge or a phone is verified again by its bridge's next \
+                          registration, not by you. Returns the capability. [risk: WRITE]",
             permission: Permission::CapabilitiesManage,
             schema: schema_for::<UnreachableArgs>,
             run: mark_unreachable,

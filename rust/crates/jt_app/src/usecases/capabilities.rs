@@ -507,7 +507,8 @@ async fn update_with_hosts(
 /// reached through a connector is `CONFLICT` "connector capabilities are verified by their
 /// probe"; one of a kind verified by its heartbeat (a voice bridge, by its own registration,
 /// `calls.bridge.register`; a phone, by its device bridge's, `devices.bridge.register`) is
-/// `CONFLICT` naming its kind, with `details.reason = "verified_by_heartbeat"`; a retired one
+/// `CONFLICT` saying so, with `details.reason = "verified_by_heartbeat"`, its `kind_key` and the
+/// step that verifies it, `cleared_by` ([`verified_by_heartbeat`]); a retired one
 /// `CONFLICT` "capability is retired"; then an agent verifying what another connection declared
 /// without `capabilities.manage` is `FORBIDDEN` naming it. Writes
 /// `capability.verify` (payload `evidence_refs`: how many references the evidence has; never
@@ -538,17 +539,7 @@ pub async fn verify(
         ));
     }
     if capability.kind().is_some_and(|k| k.heartbeat().is_some()) {
-        return Err(AppError {
-            code: ErrorCode::Conflict,
-            message: format!(
-                "a {} capability is verified only by its bridge's heartbeat, never by evidence",
-                capability.kind_key
-            ),
-            details: json!({
-                "reason": "verified_by_heartbeat",
-                "kind_key": capability.kind_key,
-            }),
-        });
+        return Err(verified_by_heartbeat(&capability));
     }
     not_retired(&capability)?;
     let declared_here = ctx.agent_connection_id.is_some()
@@ -574,6 +565,35 @@ pub async fn verify(
     .await?;
     repos.commit().await?;
     Ok(CapabilityOut::at(capability, ctx.now))
+}
+
+/// The refusal of `capability.verify` on `c`, of a kind verified by its heartbeat: `CONFLICT`
+/// saying what verifies it and how, with `details.reason = "verified_by_heartbeat"`, its
+/// `kind_key` and `cleared_by`, the step that verifies it (its bridge's registration,
+/// `calls.bridge.register` or `devices.bridge.register`: what clears its pending item,
+/// `work::offline_item`; `null` for a kind with none).
+fn verified_by_heartbeat(c: &Capability) -> AppError {
+    use super::calls::bridge::VOICE_BRIDGE_KIND;
+    use super::devices::PHONE_KIND;
+    let cleared_by = super::work::offline_item(c).map(|item| item.kind.cleared_by());
+    let (what, by) = match c.kind_key.as_str() {
+        VOICE_BRIDGE_KIND => ("a voice bridge", "its own registration"),
+        PHONE_KIND => (
+            "a phone",
+            "the registrations of the device bridge it is plugged into",
+        ),
+        _ => ("this capability", "its bridge's registrations"),
+    };
+    let step = cleared_by.map(|s| format!(" ({s})")).unwrap_or_default();
+    AppError {
+        code: ErrorCode::Conflict,
+        message: format!("{what} is verified only by {by}{step}, never by evidence"),
+        details: json!({
+            "reason": "verified_by_heartbeat",
+            "kind_key": c.kind_key,
+            "cleared_by": cleared_by,
+        }),
+    }
 }
 
 /// Marks capability `id` unreachable for `reason` and returns it. Needs `capabilities.manage`.
