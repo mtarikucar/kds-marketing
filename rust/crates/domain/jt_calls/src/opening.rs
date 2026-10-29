@@ -5,7 +5,21 @@
 /// Played after the opening on every agent call (owner-approved 2026-10-29).
 pub const TRANSCRIPT_NOTICE: &str = "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.";
 
+/// Played before an agent's call is hung up when its plan brings none (owner-approved 2026-10-29;
+/// the policy's `closing` by default, task C1).
+pub const CLOSING: &str = "Görüşmek üzere, iyi günler.";
+
 const VOWELS: &str = "aeıioöuüâîû";
+
+/// Words whose suffix is front although their last vowel is back (a soft `l` or `k` follows it, or
+/// the word is a loan): "Kemal'in", "Saat'in", "Kontrol'ün". Matched whole, on the Turkish-lowercased
+/// last word of a name; a word that merely begins with one of them is not in the table. Words
+/// ending in "âl" are covered by a rule ([`takes_front_suffix`]), whether or not they are listed.
+const FRONT_SUFFIX_WORDS: [&str; 22] = [
+    "alkol", "bilal", "celal", "cemal", "dikkat", "gol", "hakikat", "hal", "harf", "hayal",
+    "hilal", "kabul", "kalp", "kemal", "kontrol", "nihal", "petrol", "protokol", "rol", "saat",
+    "sembol", "usul",
+];
 
 fn is_vowel(c: char) -> bool {
     VOWELS.contains(c)
@@ -20,28 +34,36 @@ fn lower_tr(c: char) -> char {
     }
 }
 
-/// How a letter is read when a word without vowels is spelled out.
+/// How a letter is read when a word is spelled out (a vowel letter is read as itself).
 fn letter_name(c: char) -> &'static str {
     match c {
+        'a' => "a",
         'b' => "be",
         'c' => "ce",
         'ç' => "çe",
         'd' => "de",
+        'e' => "e",
         'f' => "fe",
         'g' => "ge",
         'ğ' => "yumuşak ge",
         'h' => "he",
+        'ı' => "ı",
+        'i' => "i",
         'j' => "je",
         'k' => "ke",
         'l' => "le",
         'm' => "me",
         'n' => "ne",
+        'o' => "o",
+        'ö' => "ö",
         'p' => "pe",
         'q' => "kü",
         'r' => "re",
         's' => "se",
         'ş' => "şe",
         't' => "te",
+        'u' => "u",
+        'ü' => "ü",
         'v' | 'w' => "ve",
         'x' => "iks",
         'y' => "ye",
@@ -50,7 +72,8 @@ fn letter_name(c: char) -> &'static str {
     }
 }
 
-/// The last word of a number's Turkish reading (`54` → `dört`, `100` → `yüz`).
+/// The last word of a number's Turkish reading (`54` → `dört`, `100` → `yüz`, `10^12` → `trilyon`).
+/// Only the last 18 digits are read: a longer number is not supported.
 fn number_tail(digits: &str) -> &'static str {
     const ONES: [&str; 10] = [
         "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz",
@@ -72,61 +95,118 @@ fn number_tail(digits: &str) -> &'static str {
         "bin"
     } else if !n.is_multiple_of(1_000_000_000) {
         "milyon"
-    } else {
+    } else if !n.is_multiple_of(1_000_000_000_000) {
         "milyar"
+    } else {
+        "trilyon"
     }
 }
 
-/// How the end of `word` (letters and digits only) is read aloud: a trailing number by its
-/// reading, a word without vowels by its last letter's name, any other word as written.
-fn spoken_tail(word: &str) -> String {
-    let digits: Vec<char> = word
+/// Whether the last word `lower` (Turkish-lowercased, letters and digits only) takes the front
+/// suffix although its last vowel is back: a word of [`FRONT_SUFFIX_WORDS`], or any word ending in
+/// "âl" (İstiklâl'in, Hilâl'in).
+fn takes_front_suffix(lower: &str) -> bool {
+    FRONT_SUFFIX_WORDS.contains(&lower) || lower.ends_with("âl")
+}
+
+/// The last letter of a dotted acronym (`A.Ş.`, `T.C.`, `A.B.D.`; the last dot is optional): two or
+/// more single letters, each followed by a dot. Anything else is not one.
+fn dotted_acronym_last_letter(word: &str) -> Option<char> {
+    let parts: Vec<&str> = word.trim_end_matches('.').split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let mut last = None;
+    for part in parts {
+        let mut chars = part.chars();
+        let (Some(c), None) = (chars.next(), chars.next()) else {
+            return None;
+        };
+        if !c.is_alphabetic() {
+            return None;
+        }
+        last = Some(c);
+    }
+    last
+}
+
+/// How the end of `word` (a name's last word, which has a letter or a digit) is read aloud, and
+/// whether its suffix is front although its last vowel is back: a dotted acronym by its last
+/// letter's name, a trailing number by its reading, a word without vowels by its last letter's
+/// name, any other word as written.
+fn spoken_tail(word: &str) -> (String, bool) {
+    if let Some(letter) = dotted_acronym_last_letter(word) {
+        return (letter_name(lower_tr(letter)).to_owned(), false);
+    }
+    let core: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+    let digits: Vec<char> = core
         .chars()
         .rev()
         .take_while(char::is_ascii_digit)
         .collect();
     if !digits.is_empty() {
         let digits: String = digits.into_iter().rev().collect();
-        return number_tail(&digits).to_owned();
+        return (number_tail(&digits).to_owned(), false);
     }
-    let lower: String = word.chars().map(lower_tr).collect();
+    let lower: String = core.chars().map(lower_tr).collect();
     if lower.chars().any(is_vowel) {
-        return lower;
+        let front = takes_front_suffix(&lower);
+        return (lower, front);
     }
-    lower
+    let spelled = lower
         .chars()
         .last()
         .map(letter_name)
         .unwrap_or_default()
-        .to_owned()
+        .to_owned();
+    (spelled, false)
 }
 
 /// The genitive suffix of a word read as `spoken`: the last vowel picks it (a ı → ın, e i → in,
-/// o u → un, ö ü → ün), and a final vowel takes the buffer `n`.
-fn genitive_suffix(spoken: &str) -> &'static str {
+/// o u → un, ö ü → ün; `front` turns a ı → in and o u → ün), and a final vowel takes the buffer `n`.
+fn genitive_suffix(spoken: &str, front: bool) -> &'static str {
     let ends_in_vowel = spoken.chars().last().is_some_and(is_vowel);
-    let (bare, buffered) = match spoken.chars().rev().find(|c| is_vowel(*c)) {
-        Some('a' | 'ı' | 'â') => ("ın", "nın"),
-        Some('o' | 'u' | 'û') => ("un", "nun"),
-        Some('ö' | 'ü') => ("ün", "nün"),
+    let (bare, buffered) = match (spoken.chars().rev().find(|c| is_vowel(*c)), front) {
+        (Some('a' | 'ı' | 'â'), false) => ("ın", "nın"),
+        (Some('o' | 'u' | 'û'), false) => ("un", "nun"),
+        (Some('ö' | 'ü'), _) | (Some('o' | 'u' | 'û'), true) => ("ün", "nün"),
         _ => ("in", "nin"),
     };
     if ends_in_vowel { buffered } else { bare }
 }
 
 /// `name` with its genitive suffix after an apostrophe: `Jeeta'nın`, `Atölye'nin`, `Ahmet'in`,
-/// `THY'nin`, `Studio 54'ün`. The suffix follows the name's last word as it is spelled; a name
-/// pronounced otherwise needs its opening written by hand in the call policy. Blank → blank.
+/// `THY'nin`, `A.Ş.'nin`, `Studio 54'ün`, `Kontrol'ün`. Blank → blank.
+///
+/// The name is its words joined by single spaces (so a newline inside it never reaches the spoken
+/// sentence), up to its last word that holds a letter or a digit: a trailing word of symbols only
+/// ("☕", "-", ".") is dropped. The suffix follows that last word as it is *spelled*:
+///
+/// - The last vowel decides (a ı → ın, e i → in, o u → un, ö ü → ün), a final vowel takes the buffer
+///   `n`; capital `I` and `İ` are lowered the Turkish way.
+/// - A short table of loanwords with a soft `l` or `k` (Kemal, Saat, Hal, Kalp, Kontrol, Petrol,
+///   ...), matched whole, and any word ending in "âl" take the front suffix: `Kemal'in`,
+///   `Kontrol'ün`, `İstiklâl'in`.
+/// - A word without vowels is read by its last letter's name (`THY'nin`), a dotted acronym by the
+///   name of its last letter (`A.Ş.'nin`, `T.C.'nin`), a trailing number by its Turkish reading
+///   (`Studio 54'ün`, `Bina 100'ün`). A number of more than 18 digits is not supported (only its
+///   last 18 digits are read).
+///
+/// Limits. An acronym that holds a vowel but has no dots (ABD, AKP, AVM, IBM) is read as a word, so
+/// it gets `ABD'ın` where it is spoken "A-Be-De'nin"; a foreign or invented name pronounced
+/// otherwise than spelled ("Apple") has the same problem. An owner whose name is read otherwise
+/// writes the opening by hand in the call policy.
 pub fn genitive(name: &str) -> String {
-    let name = name.trim();
-    let Some(word) = name.split_whitespace().last() else {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let Some(end) = words
+        .iter()
+        .rposition(|w| w.chars().any(char::is_alphanumeric))
+    else {
         return String::new();
     };
-    let core: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
-    if core.is_empty() {
-        return String::new();
-    }
-    format!("{name}'{}", genitive_suffix(&spoken_tail(&core)))
+    let shown = words[..=end].join(" ");
+    let (spoken, front) = spoken_tail(words[end]);
+    format!("{shown}'{}", genitive_suffix(&spoken, front))
 }
 
 /// The approved outbound opening: "Merhaba, ben {İşletme}'nın dijital asistanıyım."; `None` for a

@@ -1,5 +1,7 @@
 //! The approved opening with the business's name, its suffix fitted (owner decision 2026-10-29).
-use jt_calls::{TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening};
+use jt_calls::{
+    CLOSING, TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening,
+};
 
 #[test]
 fn genitive_follows_vowel_harmony_and_the_buffer_n() {
@@ -160,4 +162,185 @@ fn the_name_is_trimmed_but_otherwise_kept_as_written() {
         outbound_opening("  Test Atölye ").unwrap(),
         "Merhaba, ben Test Atölye'nin dijital asistanıyım."
     );
+}
+
+// Added in the A3 fix-up: words whose suffix is front although their last vowel is back.
+
+#[test]
+fn soft_l_loanwords_and_the_front_table_take_the_front_suffix() {
+    for (name, want) in [
+        ("Kemal", "Kemal'in"),
+        ("Saat", "Saat'in"),
+        ("Hal", "Hal'in"),
+        ("Kalp", "Kalp'in"),
+        ("Kontrol", "Kontrol'ün"),
+        ("Petrol", "Petrol'ün"),
+        ("İstiklâl", "İstiklâl'in"),
+        ("Kuzey Petrol", "Kuzey Petrol'ün"),
+        // Every word of the table, once.
+        ("Alkol", "Alkol'ün"),
+        ("Bilal", "Bilal'in"),
+        ("Celal", "Celal'in"),
+        ("Cemal", "Cemal'in"),
+        ("Dikkat", "Dikkat'in"),
+        ("Gol", "Gol'ün"),
+        ("Hakikat", "Hakikat'in"),
+        ("Harf", "Harf'in"),
+        ("Hayal", "Hayal'in"),
+        ("Hilal", "Hilal'in"),
+        ("Kabul", "Kabul'ün"),
+        ("Nihal", "Nihal'in"),
+        ("Protokol", "Protokol'ün"),
+        ("Rol", "Rol'ün"),
+        ("Sembol", "Sembol'ün"),
+        ("Usul", "Usul'ün"),
+        // Any word ending in "âl".
+        ("Kemâl", "Kemâl'in"),
+        ("Hilâl", "Hilâl'in"),
+        ("Celâl", "Celâl'in"),
+        ("İSTİKLÂL", "İSTİKLÂL'in"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn the_front_table_is_matched_on_the_turkish_lowercased_whole_word() {
+    for (name, want) in [
+        ("KONTROL", "KONTROL'ün"),
+        ("HAL", "HAL'in"),
+        ("ROL", "ROL'ün"),
+        ("DİKKAT", "DİKKAT'in"),
+        ("BİLAL", "BİLAL'in"),
+        ("HİLAL", "HİLAL'in"),
+        ("NİHAL", "NİHAL'in"),
+        ("HAKİKAT", "HAKİKAT'in"),
+        ("kalp", "kalp'in"),
+        ("Petrol.", "Petrol.'ün"),
+        // Only a whole word: these merely begin with a table word, or are plain back words.
+        ("Sanat", "Sanat'ın"),
+        ("Okul", "Okul'un"),
+        ("Halk", "Halk'ın"),
+        ("Kalpak", "Kalpak'ın"),
+        ("Kemalpaşa", "Kemalpaşa'nın"),
+        ("Petrolcü", "Petrolcü'nün"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn the_front_table_is_not_applied_to_a_trailing_number() {
+    assert_eq!(genitive("Hal 7"), "Hal 7'nin");
+    assert_eq!(genitive("Rol 4"), "Rol 4'ün");
+}
+
+// Added in the A3 fix-up: a trailing word of symbols, and whitespace inside the name.
+
+#[test]
+fn a_trailing_word_of_symbols_is_dropped_and_the_last_real_word_decides() {
+    for (name, want) in [
+        ("Kafe ☕", "Kafe'nin"),
+        ("Acme -", "Acme'nin"),
+        ("Acme .", "Acme'nin"),
+        ("Acme - ☕ .", "Acme'nin"),
+        ("Atölye &", "Atölye'nin"),
+        ("Studio 54 ★", "Studio 54'ün"),
+        ("☕ Kafe", "☕ Kafe'nin"),
+        ("Test & Atölye", "Test & Atölye'nin"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+    assert_eq!(
+        outbound_opening("Kafe ☕").unwrap(),
+        "Merhaba, ben Kafe'nin dijital asistanıyım."
+    );
+    assert_eq!(
+        disclosure("Acme .").unwrap(),
+        "ben Acme'nin dijital asistanıyım"
+    );
+    assert_eq!(outbound_opening("☕ -"), None);
+}
+
+#[test]
+fn words_are_joined_by_single_spaces_so_no_newline_reaches_the_sentence() {
+    assert_eq!(genitive("Test\nAtölye"), "Test Atölye'nin");
+    assert_eq!(genitive("  Test \t\r\n  Atölye \n"), "Test Atölye'nin");
+    for text in [
+        outbound_opening("Test\nAtölye").unwrap(),
+        inbound_greeting("Test\r\nAtölye").unwrap(),
+        disclosure("Test\u{a0}\u{a0}Atölye").unwrap(),
+    ] {
+        assert!(!text.contains(['\n', '\r', '\t']), "{text:?}");
+        assert!(!text.contains("  "), "{text:?}");
+        assert!(text.contains("Test Atölye'nin"), "{text:?}");
+    }
+}
+
+// Added in the A3 fix-up: numbers of a trillion and more.
+
+#[test]
+fn round_numbers_up_to_a_trillion_and_more_are_read_by_their_unit() {
+    for (name, want) in [
+        ("Plaza 1000000000", "Plaza 1000000000'ın"),
+        ("Plaza 1000000000000", "Plaza 1000000000000'un"),
+        ("Plaza 5000000000000", "Plaza 5000000000000'un"),
+        ("Plaza 1000000000000000", "Plaza 1000000000000000'un"),
+        ("Plaza 100000000000000000", "Plaza 100000000000000000'un"),
+        ("Plaza 1500000000000", "Plaza 1500000000000'ın"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+// Added in the A3 fix-up: dotted acronyms are spelled out by their last letter.
+
+#[test]
+fn a_dotted_acronym_is_read_by_the_name_of_its_last_letter() {
+    for (name, want) in [
+        ("A.Ş.", "A.Ş.'nin"),
+        ("Acme A.Ş.", "Acme A.Ş.'nin"),
+        ("Acme A.Ş", "Acme A.Ş'nin"),
+        ("T.C.", "T.C.'nin"),
+        ("A.B.D.", "A.B.D.'nin"),
+        ("I.B.M.", "I.B.M.'nin"),
+        ("S.A.", "S.A.'nın"),
+        ("A.O.", "A.O.'nun"),
+        ("Ö.Ü.", "Ö.Ü.'nün"),
+        ("T.İ.", "T.İ.'nin"),
+        ("Y.Ğ.", "Y.Ğ.'nin"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn dots_that_do_not_spell_an_acronym_change_nothing() {
+    for (name, want) in [
+        ("Ltd.", "Ltd.'nin"),
+        ("Ahmet A.", "Ahmet A.'nın"),
+        ("St.Anne", "St.Anne'nin"),
+        ("Dr.", "Dr.'nin"),
+        ("v1.2", "v1.2'nin"),
+        ("3.5", "3.5'in"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn an_acronym_with_vowels_and_no_dots_is_read_as_a_word() {
+    // The documented limit: ABD is spoken "A-Be-De" but its spelling has a vowel, so it follows
+    // the spelling. An owner whose name is read otherwise writes the opening by hand.
+    assert_eq!(genitive("ABD"), "ABD'ın");
+    assert_eq!(genitive("AVM"), "AVM'ın");
+    assert_eq!(genitive("IBM"), "IBM'ın");
+    // Without a vowel the same names are spelled out.
+    assert_eq!(genitive("BMW"), "BMW'nin");
+}
+
+#[test]
+fn the_approved_closing_is_a_pinned_constant() {
+    assert_eq!(CLOSING, "Görüşmek üzere, iyi günler.");
+    assert_ne!(CLOSING, TRANSCRIPT_NOTICE);
 }
