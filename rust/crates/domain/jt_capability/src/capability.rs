@@ -262,10 +262,11 @@ pub fn validate_external_id(external_id: &str) -> Result<(), CapabilityError> {
 /// (`asset`), the account a probe proved (`account`), the last probe (`health`, `facts`) and the
 /// reconnection flag (`reconnect_required`), the IYS brand binding (`iys`), a PBX's call policy
 /// (`call_mode`, `recording_allowed`: written only by `connector.set_pbx_policy`, so that
-/// recording calls is one logged decision), and what a voice bridge reported of itself when it
-/// last registered (`bridge`). Nobody declares or edits them ([`check_reserved_public_keys`]):
-/// public fields claiming a health, an expiry, a reconnection or a heartbeat would read as what
-/// no probe or report found.
+/// recording calls is one logged decision), what a voice bridge reported of itself when it last
+/// registered (`bridge`), and what a device bridge reported of a phone, with which bridge holds it
+/// (`device`). Nobody declares or edits them ([`check_reserved_public_keys`]): public fields
+/// claiming a health, an expiry, a reconnection, a heartbeat or a phone's bridge would read as
+/// what no probe or report found.
 ///
 /// `hosts` is not among them: a connector capability names the hosts it reaches when it is
 /// declared, and its connector adds its own to them.
@@ -275,6 +276,7 @@ pub const RESERVED_PUBLIC_KEYS: &[&str] = &[
     "asset",
     "bridge",
     "call_mode",
+    "device",
     "facts",
     "health",
     "iys",
