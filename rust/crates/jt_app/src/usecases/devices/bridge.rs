@@ -49,8 +49,10 @@
 //! workspace's device files, is refused (`VALIDATION` naming the field) and nothing of it is
 //! applied. Then each result is applied once, by command id, to a command of a phone this bridge
 //! ever registered: a late one from a phone the bridge has left out since still counts, since the
-//! command really ran. A result for any other command (unknown, another bridge's, or one never
-//! handed out) changes nothing and is counted `unknown`, never refused.
+//! command really ran. Results are matched to phones, not to leases: a phone that moved from one
+//! bridge to another is both bridges' for this. A result for any other command (unknown, of a
+//! phone this bridge never registered, or never handed out) changes nothing and is counted
+//! `unknown`, never refused.
 //!
 //! **Files.** An upload is the file's bytes, `image/png` (a screenshot) or
 //! `application/octet-stream` (a file pulled off a phone), kept in the file store and recorded as
@@ -360,8 +362,8 @@ pub async fn register(
             steps.push((c.id, Step::LeaveOut(c.id)));
         }
     }
-    // Locked in the order of their ids, so two registrations that share phones never wait on
-    // each other in a circle.
+    // Locked in the order of their ids: two registrations that share phones lock them in the
+    // same order.
     steps.sort_by_key(|(id, _)| *id);
     let mut registered = Vec::new();
     for (id, step) in steps {
