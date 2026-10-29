@@ -249,10 +249,10 @@ Only if the gate fails would a WebSocket push be designed (not in this plan).
 | Part | Choice | Parameters (start values, tuned on real calls) | Source |
 |---|---|---|---|
 | Inbound audio | Asterisk → 20 ms A-law (or μ-law per `MEDIA_START`) → PCM16 8 kHz in the worker | no denoiser, no AGC | report: RNNoise/DeepFilterNet hurt ASR |
-| VAD | Silero VAD (ONNX, from the `silero-vad==6.2.3` wheel) at 8 kHz, 256-sample chunks | threshold 0.5 (0.6 while playing), min speech 200 ms (250 while playing), stop 200 ms | report, "Sıra…" |
-| Turn end | Smart Turn v3.2 (`smart-turn-v3.2-cpu.onnx`, int8, BSD-2), last ≤ 8 s at 16 kHz | complete if p ≥ 0.5; else fallback 1 500 ms of silence | report |
+| VAD | Silero VAD (the ONNX file inside the `silero-vad==6.2.3` wheel, hash-pinned as a model: the package itself requires torch) at 8 kHz, 256-sample chunks | threshold 0.5 (0.6 while playing), speech continues down to 0.15 below it (Silero's neg_threshold), min speech 200 ms (250 while playing), stop 200 ms | report, "Sıra…"; B3 |
+| Turn end | Smart Turn v3.2 (`smart-turn-v3.2-cpu.onnx`, int8, BSD-2), last ≤ 8 s at 16 kHz from 500 ms before the onset; its Whisper features in numpy (no transformers, as Pipecat) | complete if p ≥ 0.5; else fallback 1 500 ms of silence, 2 800 ms when the words end in two number words (digits being read out); a turn is cut at 30 s | report; B3 |
 | Resample | soxr HQ 8 → 16 kHz, streaming | — | report |
-| STT | `atasoglu/seda-v0.1` on `sherpa-onnx==2.0.1`, `modified_beam_search`, 4 active paths, RNN LM | `num_threads=1`; LM scale chosen in B3 on a speak→listen loopback fixture (0.1 / 0.3 / 0.5; `sedalib` as the reference if none passes); hotwords score 1.5, lowercase Turkish, tokenised to the model's BPE pieces | report, seda card |
+| STT | `atasoglu/seda-v0.1` on `sherpa-onnx==2.0.1`, `modified_beam_search`, 4 active paths, RNN LM with LODR | `num_threads=1`; LM 0.6 with LODR −0.5 (the card's and sedalib's scales; in B3 the lowest WER on 30 loopback sentences: 5.2 % against 8.7 % without an LM); a turn decoded in segments cut at its pauses, each beside Smart Turn; hotwords score 1.5, cleaned Turkish words cut by sherpa-onnx (`modeling_unit` bpe) over a Zipf-scored vocabulary from `tokens.txt` | report, seda card, B3 |
 | TTS | `ema-lightning==1.1.2`, `stream(text, sample_rate=8000, seed=0)` | torch 2 threads, batch 2 (the size EMA measured for itself in the owner-tested image); one EMA instance per concurrent synthesis (2), since an instance batches its streams and a batched stream's audio differs in its last bits from the same sentence alone; the speak service's `hello` names the voice id the worker keys its cache by | owner V-1; B2 review |
 | Normaliser | respell table → `antalia_mini.Antalia.normalize` (`antalia-mini==1.0.1`) | startup self-test: "14:00'e" must read "on dörde" | owner V-1 notes |
 | Phrase cache | PCM16 8 kHz; **disk** only for policy texts (openings, notice, phrase set); per-call **memory** for plan and agent sentences, dropped at hang-up | key = SHA-256(voice id ‖ text) | report, "ön sentez"; privacy (agent sentences can hold personal data) |
@@ -284,7 +284,7 @@ number the owner chose by keeping the brain (V-2).
 The worker logs call ids, kinds, states, counts, durations and errors' kinds; never a phone number,
 a transcript, a sentence, audio, an audio path that holds a number, the key or a password; an HTTP
 error is logged without its URL. Asterisk's console is `warning,error` only (verbose dialplan lines
-carry numbers). The speech services log startup and errors only. The trace file holds numbers and
+carry numbers). The speech services log startup, errors and counts (listen: a call's turns and seconds), never a word, a hotword or audio. The trace file holds numbers and
 call ids. No raw audio is written anywhere except the policy-phrase cache (owner/approved text, no
 personal data). The core keeps what spec §9 says: turns (transcript), sessions, metrics.
 
@@ -299,8 +299,12 @@ duty mode is V2) that does not block anything else.
 1. **Telephone-band accuracy is unmeasured** for seda and Smart Turn (8 kHz upsampled); expect
    roughly double the read-speech WER; names and numbers need read-back by the agent (report).
 2. **Hotwords** need the model's BPE pieces; seda ships `tokens.txt` but no `bpe.model`, so the
-   listener tokenises greedily over `tokens.txt` and falls back to no hotwords when sherpa-onnx
-   refuses them. Gain is measured in B3; it may be zero.
+   listener has sherpa-onnx cut them over a vocabulary it scores from `tokens.txt`'s ranks, and
+   falls back to no hotwords when sherpa-onnx refuses them. Measured in B3 on synthetic speech: the
+   cut agrees with the model's own pieces on 40 of 40 words, and the boost recovered 2 of 3 names
+   (the two seda splits into words; a short, confusable one it did not). A name spelled other than
+   it sounds (Jeeta, said "Cita") is boosted in its written spelling, which the model is unlikely
+   to produce: the agent should pass such names as they are said. Real calls decide the gain.
 3. **Neighbour load** on the shared box: p95, not mean, is the gate; CPU shares are raised for the
    voice containers.
 4. **EMA naturalness on edge cases** (weeks-old synthetic-data model) and its card's request for

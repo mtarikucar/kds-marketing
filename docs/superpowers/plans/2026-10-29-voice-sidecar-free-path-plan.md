@@ -214,7 +214,7 @@ The HTTP surface (`docs/operations/voice-bridge.md` §3): `POST /api/voice/bridg
 - `src/run_loop.rs` — heartbeat, poll loop, call registry.
 - `src/slice.rs` — the standalone vertical slice.
 - Tests: `tests/g711.rs`, `tests/text.rs`, `tests/netgsm.rs`, `tests/talker.rs`, `tests/logging.rs`, `tests/adapters.rs`, `tests/call.rs`, `tests/jeeta_client.rs`, `tests/run_loop.rs`, `tests/support/mod.rs`.
-- Speech services: `speech/listen/{jeeta_listen.py,endpoint.py,vad.py,turn.py,asr.py,hotwords.py,requirements.txt,models.lock,fetch_models.py,Dockerfile}`, `speech/listen/tests/{test_endpoint.py,test_hotwords.py,test_session.py,test_models.py}`; `speech/speak/{jeeta_speak.py,respell.py,respell.json,pins.py,weights.lock,requirements.txt,constraints.txt,wheels.sha256,torch.lock,requirements.lock,Dockerfile,.dockerignore}`, `speech/speak/tests/{test_speak_respell.py,test_speak_session.py,test_speak_mouth.py,test_speak_pins.py,test_speak_image.py,test_speak_models.py}`; `speech/pytest.ini`.
+- Speech services: `speech/listen/{jeeta_listen.py,endpoint.py,hotwords.py,features.py,vad.py,turn.py,asr.py,listen_pins.py,models.lock,requirements.txt,constraints.txt,wheels.sha256,requirements.lock,Dockerfile,.dockerignore}`, `speech/listen/tests/{test_listen_endpoint.py,test_listen_hotwords.py,test_listen_features.py,test_listen_session.py,test_listen_protocol.py,test_listen_pins.py,test_listen_image.py,test_listen_models.py,listen_audio.py,make_fixtures.py,probe_socket.py}`, `speech/listen/tests/fixtures/{yarin,pause,digits,names}.alaw`, `fixtures.json`, `whisper_features.json`; `speech/speak/{jeeta_speak.py,respell.py,respell.json,pins.py,weights.lock,requirements.txt,constraints.txt,wheels.sha256,torch.lock,requirements.lock,Dockerfile,.dockerignore}`, `speech/speak/tests/{test_speak_respell.py,test_speak_session.py,test_speak_mouth.py,test_speak_pins.py,test_speak_image.py,test_speak_models.py}`; `speech/pytest.ini`.
 - Asterisk: `asterisk/Dockerfile`, `asterisk/etc/{asterisk.conf,modules.conf,logger.conf,cdr.conf,cel.conf,pjsip.conf,extensions.conf,http.conf,ari.conf,rtp.conf}`, `asterisk/test_configs.py`, `asterisk/test_target.py`.
 - Deploy: `deploy/{jeeta-asterisk.service,jeeta-voice-listen.service,jeeta-voice-speak.service,jeeta-voice-bridge.service,jeeta-voice.tmpfiles,bridge.env.example,images.env.example,jeeta-voice-target}`.
 - CI: modify `.github/workflows/rust.yml` (Python unit tests and the Linux worker artifact).
@@ -6230,19 +6230,38 @@ Expected: `srw-rw---- 1 jeeta-voice-speak jeeta-voice … speak.sock`; the journ
 
 ### Task B3: The listen service (Silero VAD, Smart Turn v3.2, seda-v0.1)
 
-**Files:**
-- Create: `rust/bridge/voice/speech/listen/endpoint.py`
-- Create: `rust/bridge/voice/speech/listen/hotwords.py`
-- Create: `rust/bridge/voice/speech/listen/vad.py`
-- Create: `rust/bridge/voice/speech/listen/turn.py`
-- Create: `rust/bridge/voice/speech/listen/asr.py`
-- Create: `rust/bridge/voice/speech/listen/jeeta_listen.py`
-- Create: `rust/bridge/voice/speech/listen/fetch_models.py`
-- Create: `rust/bridge/voice/speech/listen/models.lock` (generated in Step 6)
-- Create: `rust/bridge/voice/speech/listen/requirements.txt`, `constraints.txt` (generated in Step 8)
-- Create: `rust/bridge/voice/speech/listen/Dockerfile`
-- Create: `rust/bridge/voice/speech/listen/tests/{test_endpoint.py,test_hotwords.py,test_session.py,test_models.py}`
+**Files (as built):**
+- Create: `rust/bridge/voice/speech/listen/{jeeta_listen.py,endpoint.py,hotwords.py,features.py,vad.py,turn.py,asr.py}`
+- Create: `rust/bridge/voice/speech/listen/listen_pins.py`, `models.lock` (`python listen_pins.py resolve`)
+- Create: `rust/bridge/voice/speech/listen/requirements.txt`; `constraints.txt` and `wheels.sha256` (the bootstrap, Step 8.2); `requirements.lock` (`python listen_pins.py lock`)
+- Create: `rust/bridge/voice/speech/listen/Dockerfile`, `.dockerignore`
+- Create: `rust/bridge/voice/speech/listen/tests/{test_listen_endpoint,test_listen_hotwords,test_listen_features,test_listen_session,test_listen_protocol,test_listen_pins,test_listen_image,test_listen_models}.py` (named `test_listen_*`, and the pins module `listen_pins.py`, so that one pytest run holds asterisk, speak and listen: D3's `voice-speech` job)
+- Create: `rust/bridge/voice/speech/listen/tests/{listen_audio.py,make_fixtures.py,probe_socket.py}`, `tests/fixtures/{yarin,pause,digits,names}.alaw`, `fixtures.json`, `whisper_features.json`
 - Create: `rust/bridge/voice/deploy/jeeta-voice-listen.service`
+- Modify: `rust/bridge/voice/.gitattributes` (`*.alaw binary`)
+
+**The service in brief** (the module docstring of `jeeta_listen.py` is the contract):
+- One WebSocket per call on `/run/jeeta-voice/listen.sock`. The server speaks first, `hello{listen_id, sample_rate: 8000, format: "pcm16le"}`; the listen id (12 hex) names the versions, the model digests, the endpoint and decoding rules (`python jeeta_listen.py --listen-id` prints it without loading a model). B6 reads `Heard` with `if let Ok`, so the hello (a type `Heard` lacks) is passed over; B5 may add `Heard::Hello` to log the id.
+- `start{sample_rate: 8000, hotwords}` first, then binary PCM16 LE 8 kHz frames (any even length) and `playback{active}` (the echo guard). Out: `speech_start{audio_ms}` (the onset), `speech_end{audio_ms}`, `resume{audio_ms}`, `partial{text}`, `final{text, speech_end_ms, endpoint_ms, endpoint_by, stt_ms}`, `unheard{audio_ms}`, `error{reason}` (`bad_request`, `busy` beyond 4 calls with close 1013, `failed`). Bad hotwords never refuse a start (a refused start would leave the call deaf); a failure while processing audio drops the turn and the call goes on.
+- Turns: Silero at 8 kHz (32 ms chunks; 0.5, 0.6 while the bridge plays; speech continues down to the threshold less 0.15, Silero's neg_threshold), 200 ms (250) of speech to start, a pause after 200 ms of silence, Smart Turn v3.2 on the turn from 500 ms before its onset (last 8 s), complete at p >= 0.5, else the fallback silence: 1.5 s, or 2.8 s when the turn's words end in two number words (`endpoint.dictating`: a number being read out), within the report's 1.2-1.8 s and 2.5-3 s; a turn is cut at 30 s.
+- Decoding: seda-v0.1, modified beam search over 4 paths, RNN LM 0.6 with LODR -0.5 (the card's FLEURS-dev scales, sedalib 1.1.0's), one thread; a turn is decoded in segments cut at its pauses, each flushed (0.9 s of silence, sedalib's padding for 0.64 s chunks) on the session's thread while Smart Turn judges on its own, so a "complete" is final at once and a fallback has nothing left to decode.
+- Hotwords: up to 20 per call, Turkish-lowercased, circumflexes folded, apostrophes dropped, other punctuation a space; a hotword with a digit or a letter the model lacks is dropped whole (sherpa-onnx's native code prints a hotword it cannot encode, and aborts on a word that starts with ":" or "#" and is not a number). sherpa-onnx cuts them itself (`modeling_unit="bpe"`) over a `piece score` vocabulary the service writes to the run tmpfs from `tokens.txt`, with Zipf scores by rank; `hotwords.Vocab` makes the same cut (held to a byte-level port of simple-sentencepiece 0.7).
+- Logs: the root handler passes only `jeeta-listen` records (counts, lengths, timings, kinds); a library's record is withheld and named; never a word, a hotword or audio. A watchdog ends the process when audio processing or the event loop is stuck over 30 s.
+- Pins: base image by digest (the speak image's); 13 wheels by version and sha256 from one hashed lock (PyPI alone, `--require-hashes --no-deps`, then `pip check`), held by `listen_pins.py check-lock` to the bootstrap's record, the frozen resolution and the exact requirements; 8 model files by URL (a fixed Hugging Face revision, or a member of the silero-vad wheel), SHA-256 and size, fetched and checked at build and checked again at every start.
+- Isolation: `--network none`, read-only, no capability, no core dumps, uid 1501 (`jeeta-voice-svc`, B1 Step 8) in gid 1501, beside speak's uid 1502, so the sticky `/run/jeeta-voice` keeps each from removing the other's socket; pids 64, 1.5 CPUs, 1 GB, no swap, `--pull never`, `--mount type=bind`, one BLAS thread.
+
+**B3 as built (2026-10-29): what differs from the draft below.** Steps 1 to 7 below are the first draft; the committed files supersede them, and Step 8 is the server procedure as it now stands.
+- No transformers: `features.py` computes Smart Turn's Whisper log-mel features in numpy (as Pipecat does since May 2026), held to values transformers 5.21.0 computed (largest difference over 80 x 800: 1.2e-7). The image drops transformers, tokenizers, huggingface-hub and their dependencies.
+- No silero-vad package: it requires torch, so `pip check` fails with it installed `--no-deps`. Its ONNX file is a model in `models.lock`, taken from inside the pinned wheel (wheel and member both hash-checked). `fetch_models.py` became `listen_pins.py` (stdlib-only fetch by URL, B2's lock rules); huggingface-hub is not needed.
+- The LM scale: chosen on the dev machine, not on the server. 30 conversational sentences in the speak voice through G.711 A-law (WER / CER without spaces): no LM 8.7 / 1.2 %, LM 0.3 7.6 / 1.2 %, LM 0.5 8.1 / 4.6 %, LM 0.6 14.0 / 9.5 % (whole phrases deleted), LM 0.3 + LODR -0.25 6.4 / 1.0 %, **LM 0.6 + LODR -0.5 5.2 / 1.3 %** (kept), LM 0.8 + LODR -0.5 5.2 / 1.9 %. The draft's LM 0.3 without LODR and its `SEDA_LM_SCALE` knob are gone.
+- Hotwords: the draft's greedy cut, passed with sherpa-onnx's default `modeling_unit` (`cjkchar`), would have been split back into single characters, a path the model never emits. As built (above), the cut agrees with the model's own pieces on 40 of 40 words of the fixtures (about 94 % on 30 more sentences on the dev machine), and the boost recovers 2 of 3 names in the names fixture (`selin karaosmanoğlu` for `selim kara osmanoğlu`, `kılıçarslan` for `kılıç arslan`; `Talas` stays `falan`) without changing sentences that hold none; score 2.5 began to damage neighbouring words, so 1.5 stays.
+- Turn end: segments cut at pauses, the decode beside the turn model (above), instead of the draft's turn model then the decode; the processing of the frame that ends a turn went from 233-360 ms to 157-203 ms natively on the dev machine. A resumed segment never re-reads decoded speech, and the preroll is 500 ms (Pipecat's pre-speech), not 300.
+- Digits: the longer fallback (2.8 s) while the words end in two number words; the draft had none.
+- Protocol: `hello` first (B2's pattern), `error{reason}`, a session limit, odd or early audio refused once; `speech_start` and `resume` report the onset; the draft's `max_size` of 64 KiB is kept with a 256-message queue.
+- Hardening as B2's: uid 1501 (the draft ran as 1501 too, without the named user), `--pull never`, `--mount type=bind`, `--ulimit core=0`, `--cap-drop ALL`, no-new-privileges, pids, no swap, `Restart=always` with a start limit, a health check and a watchdog, `OPENBLAS_NUM_THREADS=1` (numpy's spinning BLAS threads doubled a turn's end under the CPU quota: 511 against 253 ms).
+- Fixtures: four A-law files in the speak voice (`make_fixtures.py`, run in the speak image), so the model tests run in the image with no recording mounted; the draft's `LISTEN_FIXTURE_WAV` loop is gone.
+- Measured on the dev machine (i5-9300H): natively, streaming RTF 0.08-0.12, the turn-ending frame 156-203 ms, a final 224 ms of audio after the end of speech plus that; in Docker Desktop at `--cpus 1.5` (a noisy VM: the same run gave 266 and 531 ms) 163-531 ms; through the live socket at real time, finals arrived 377-441 ms after the end of speech; 14 pids, about 246 MiB; built in 1 min 33 s, 413 MB. Smart Turn alone: 142 ms on one thread, 83 ms on two. The server's numbers are Step 8.4's TIMING lines.
+- Mutation pass: 33 edits to the service, the pins, the Dockerfile, `.dockerignore` and the unit, against the pure tests: all 33 fail a test (two, the socket umask and the models' 0644, only on Linux, where those tests run).
 
 - [ ] **Step 1: Write the failing pure tests**
 
@@ -7058,50 +7077,92 @@ RestartSec=5s
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 8: [COORDINATOR, server] Freeze, build, verify, choose the LM scale, start**
+- [ ] **Step 8: [COORDINATOR, server] Build, test, start**
+
+From `/root/jeeta-voice-src` at the reviewed commit. Nothing is frozen on the server: the lock and the models lock are committed (Step 8.2 says how to redo them).
+
+8.1 The listen user, already there (B1 Step 8 made uid 1501; B2 moved speak to 1502):
+
+```bash
+id jeeta-voice-svc; getent passwd 1502
+```
+
+Expected: `uid=1501(jeeta-voice-svc) gid=1501(jeeta-voice) groups=1501(jeeta-voice)` and `jeeta-voice-speak:x:1502:1501:...`. If uid 1501 is not `jeeta-voice-svc`, stop: the image, the unit and the tests name 1501.
+
+8.2 Only when a pinned version or model changes (done on the dev machine on 2026-10-29; any Docker host with network will do):
+
+```bash
+cd rust/bridge/voice/speech/listen
+docker run --rm -v "$PWD":/w -w /w python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337 sh -c \
+  'pip install --no-cache-dir -q --root-user-action=ignore --only-binary=:all: --index-url https://pypi.org/simple \
+     -r requirements.txt --report /tmp/r.json && pip freeze > constraints.txt && python -I listen_pins.py wheels /tmp/r.json > wheels.sha256'
+python3 -I listen_pins.py lock && python3 -I listen_pins.py check-lock
+python3 -I listen_pins.py resolve   # only when a revision in listen_pins.SOURCES changes
+```
+
+Expected: `locks: ok (13 wheels)`; restore the two comment lines at the head of constraints.txt; commit all four files with the change.
+
+8.3 Build:
 
 ```bash
 cd /root/jeeta-voice-src/rust/bridge/voice/speech/listen
 cp ../pytest.ini .
-: > constraints.txt
-docker run --rm -v "$PWD":/w -w /w python:3.12-slim-bookworm sh -c \
-  'pip install --no-cache-dir -q -r requirements.txt && pip freeze > constraints.txt'
 TAG=$(date +%Y%m%d%H%M)
-nice -n 10 docker build -t jeeta-voice-listen:$TAG .
-docker run --rm --network none jeeta-voice-listen:$TAG python -m pytest -m models tests
+time nice -n 10 docker build -t jeeta-voice-listen:$TAG .
 ```
 
-Expected: `1 passed, 1 skipped`. Then the loopback check and the LM-scale choice (speak → listen, no call needed):
+Expected: `locks: ok (13 wheels)`, `Successfully installed flatbuffers-25.12.19 ... sherpa-onnx-2.0.1 sherpa-onnx-core-2.0.1 soxr-1.1.0 websockets-17.3`, `No broken requirements found.`, `models: ok (8 files)`, `INFO jeeta-listen loaded in … ms: sherpa-onnx 2.0.1, sherpa-onnx-core 2.0.1, onnxruntime 1.31.1, soxr 1.1.0, numpy 2.5.4; fallback 1500 ms, digits 2800 ms, listen afd024d659de` and `INFO jeeta-listen self-test passed`. The build fetches about 90 MB (seda, Smart Turn, the silero-vad wheel) and 60 MB of wheels; a `differs from models.lock` or a `pins:` line is a stop.
+
+8.4 Every test in the image, with the unit's isolation:
 
 ```bash
-SPEAK=$(grep SPEAK_IMAGE /etc/jeeta-voice/images.env | cut -d= -f2)
-mkdir -p /root/voice-fixtures && chmod 0700 /root/voice-fixtures
-docker run --rm --network none -v /root/voice-fixtures:/out --user 0 "$SPEAK" python -c \
-"import wave; from jeeta_speak import build_mouth; m=build_mouth(); pcm=b''.join(m.chunks('Evet, yarın saat on dörtte geliyorum.')); \
-w=wave.open('/out/yarin.wav','wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000); w.writeframes(pcm); w.close()"
-for s in 0.1 0.3 0.5; do
-  docker run --rm --network none -v /root/voice-fixtures:/f -e SEDA_LM_SCALE=$s \
-    -e LISTEN_FIXTURE_WAV=/f/yarin.wav -e LISTEN_EXPECT=yarın jeeta-voice-listen:$TAG \
-    python -m pytest -m models tests -k recorded
-done
+docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --user 1501:1501 --cpus 1.5 --memory 1g --memory-swap 1g --pids-limit 64 --ulimit core=0 \
+  --tmpfs /tmp:uid=1501,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev \
+  jeeta-voice-listen:$TAG python -m pytest -p no:cacheprovider -s -rs tests
 ```
 
-Expected: `1 passed` for at least one scale. Keep the smallest scale that passes as the default: if it is not `0.3`, change `LM_SCALE` default in `asr.py` and commit (`fix(voice): seda LM scale chosen on the loopback fixture`). A failure at every scale is a stop-and-report (the recognizer is misconfigured; compare with `sedalib`: `pip install sedalib==1.1.0` in a throwaway container and transcribe the same file with `Recognizer.from_pretrained("atasoglu/seda-v0.1")`). Copy `constraints.txt` back to the repository and commit it with `models.lock` (Step 9). Then:
+Expected: `83 passed, 1 skipped` (the skip: the repository's Dockerfile and unit are not in the image), three `TIMING` lines and two `HOTWORDS` lines (`recovered 2/3; talas heard: False`, `cut agreement 40/40`); record them. A failing model test is a stop-and-report, not a tuning round on the server.
+
+8.5 Install and start:
 
 ```bash
-printf 'LISTEN_IMAGE=jeeta-voice-listen:%s\n' "$TAG" >> /etc/jeeta-voice/images.env
+systemctl stop jeeta-voice-listen 2>/dev/null; rm -f /run/jeeta-voice/listen.sock
+grep -q '^LISTEN_IMAGE=' /etc/jeeta-voice/images.env \
+  && sed -i "s|^LISTEN_IMAGE=.*|LISTEN_IMAGE=jeeta-voice-listen:$TAG|" /etc/jeeta-voice/images.env \
+  || printf 'LISTEN_IMAGE=jeeta-voice-listen:%s\n' "$TAG" >> /etc/jeeta-voice/images.env
 install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-listen.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/jeeta-voice-listen.service
 systemctl daemon-reload && systemctl enable --now jeeta-voice-listen
-sleep 15; ls -l /run/jeeta-voice/listen.sock; journalctl -u jeeta-voice-listen -n 5 --no-pager
-shred -u /root/voice-fixtures/yarin.wav
+sleep 30
+ls -l /run/jeeta-voice/listen.sock; journalctl -u jeeta-voice-listen -n 5 --no-pager
+docker ps --filter name=jeeta-voice-listen --format '{{.Names}} {{.Status}}'
+docker stats --no-stream --format '{{.Name}} pids {{.PIDs}} mem {{.MemUsage}}' jeeta-voice-listen
+stat -c '%a %U:%G %n' /run/jeeta-voice /run/jeeta-voice/listen.sock /run/jeeta-voice/speak.sock
+docker run --rm --pull never --network none --user 1502:1501 --mount type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice \
+  --entrypoint python jeeta-voice-listen:$TAG jeeta_listen.py --health; echo health=$?
+docker run --rm --pull never --network none --entrypoint python jeeta-voice-listen:$TAG jeeta_listen.py --listen-id
+sudo -u jeeta-voice-bridge test -w /run/jeeta-voice/listen.sock && echo "bridge can connect"
 ```
 
-Expected: `srw-rw---- … listen.sock`, journal `INFO jeeta-listen listening`.
+Expected: `srw-rw---- 1 jeeta-voice-svc jeeta-voice … listen.sock`; the journal shows `loaded in …`, `warm: 1500 ms decoded in … ms, a turn judged in … ms`, `listening`, and no word; `Up … (healthy)`; pids under 30 and memory well under 1 GiB (locally 14 pids, 246 MiB); `1770 root:jeeta-voice /run/jeeta-voice`, `660 jeeta-voice-svc:jeeta-voice …listen.sock` and speak's `660 jeeta-voice-speak:jeeta-voice …speak.sock` unchanged; `health=0` (uid 1502 connects through the group; locally it could not remove the socket: `Operation not permitted`); the printed listen id equals the journal's; `bridge can connect`.
+
+8.6 A call through the live socket (numbers only), and the journal after it:
+
+```bash
+for f in pause names; do
+  docker run --rm --pull never --network none --user 1502:1501 --mount type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice \
+    --entrypoint python jeeta-voice-listen:$TAG tests/probe_socket.py $f
+done
+journalctl -u jeeta-voice-listen -n 4 --no-pager
+```
+
+Expected: `2/2 sentences final` and `3/3 sentences final`, each final `by smart_turn` and a few hundred ms after the end of speech (locally 377-441 ms); the journal shows `a call started: 0 hotwords (0 dropped)` and `a call ended after … s: … turns (… by smart turn, … by fallback, 0 unheard)`, no word.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add rust/bridge/voice/speech/listen rust/bridge/voice/deploy/jeeta-voice-listen.service
+git add rust/bridge/voice/.gitattributes rust/bridge/voice/speech/listen rust/bridge/voice/deploy/jeeta-voice-listen.service
 git commit -m "feat(voice): the listen service, Silero VAD, Smart Turn v3.2 and seda-v0.1" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
