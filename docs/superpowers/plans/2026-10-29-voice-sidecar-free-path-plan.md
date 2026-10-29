@@ -8288,6 +8288,15 @@ git commit -m "feat(voice-bridge): the worker crate, its codecs, sentences and t
 
 CI then runs `jt_archtest` (Expected: `voice_bridge_depends_on_no_server_crate` and `no_crate_but_outbound_names_reqwest` pass) and `cargo deny --locked check` (Expected: pass; if a new transitive licence of `tungstenite` is flagged, add it to `[licenses].allow` in `rust/deny.toml` with a one-line reason in the same commit series).
 
+**B4 as built (2026-10-29, commit `6640635f`).** The steps ran as written, test first; the code is the plan's, reflowed by rustfmt. What differs:
+- Step 2 also ran on Windows, with `jt_pg/src/wal.rs`'s two unix-only lines removed for the build only (never committed): `voice_bridge_depends_on_no_server_crate` failed `jeeta-voice-bridge is a workspace package` and `no_crate_but_outbound_names_reqwest` `left: 25, right: 24`. After Step 3, all 17 of `dependency_boundaries` pass.
+- Step 4 failed with E0583 (`file not found for module g711`, ...), not "could not find g711": Step 3's `lib.rs` already declares the modules.
+- The archtest also asserts that the bridge is the only direct user of `tokio-tungstenite`, so the workspace manifest's "(deny.toml, archtest)" is true. The test sits beside the device bridge's, not at the file's end. `deny.toml`'s comment now names two other reqwest users.
+- Docs only: one line on each codec function and each `Timing` field; the talker's module docs list its rules (`cover` points to them); `text::ABBREVIATIONS` names its twin in the speak service (`speech/speak/jeeta_speak.py`).
+- `cargo deny` 0.19.9 on Windows: advisories, bans, licences and sources ok. No new licence. tungstenite 0.30 adds `sha1` 0.11 (sqlx-mysql's `sha1` 0.10 is outside the checked graph) and uses the workspace's `rand` 0.10 and `thiserror` 2, so there is no new duplicate and no `skip` entry.
+- The talker's `Action::Hangup` and `EchoGuard(false)` are immediate. The plan leaves the timing around them to later tasks: the 400 ms after the closing (B6 `HANGUP_TAIL`), the echo guard's 400 ms tail (the listener's `guard_tail_ms`, B3 I3) and the 5 s without the core before `CoreLost` (D2 `CORE_LOST_AFTER`).
+- Checks: `cargo test -p jeeta-voice-bridge` g711 3, text 6, netgsm 2, talker 12, logging 1; clippy (`--all-targets -D warnings`), `cargo fmt --all -- --check` and `cargo doc --no-deps` (`-D warnings`) clean; `jt_archtest` clippy clean.
+
 ### Task B5: The worker's adapters (config, phrase cache, trace, ARI, media, speech)
 
 **Files:**
