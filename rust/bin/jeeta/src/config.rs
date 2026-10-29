@@ -150,6 +150,12 @@ pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
 /// `info`, with rmcp held to warnings: rmcp logs every new MCP session id at `info`, and a
 /// session id must not reach the logs.
 pub const DEFAULT_LOG: &str = "info,rmcp=warn";
+/// What every log filter ends with, the operator's own (`JEETA_LOG`) included: rmcp held to
+/// warnings. Besides session ids at `info`, rmcp logs whole requests at `debug`, a tool call's
+/// arguments among them (a phone's typed text and shell arguments). Given last, it replaces any
+/// directive the operator gave for `rmcp` itself; `ops::install_tracing` also caps every `rmcp::*`
+/// target at warnings, whatever the filter says.
+pub const RMCP_CAP: &str = "rmcp=warn";
 
 /// The env files tried in order; the first that exists is loaded (from the repository root, or
 /// from `rust/` itself).
@@ -482,7 +488,10 @@ impl Config {
         }
         let stdio_api_key = get(STDIO_API_KEY).map(|key| key.trim().to_owned());
 
-        let log_filter = get(LOG).map_or(DEFAULT_LOG, str::trim).to_owned();
+        let log_filter = match get(LOG) {
+            Some(filter) => format!("{},{RMCP_CAP}", filter.trim().trim_end_matches(',')),
+            None => DEFAULT_LOG.to_owned(),
+        };
         EnvFilter::try_new(&log_filter)
             .map_err(|_| ConfigError::new(LOG, "is not a valid tracing filter"))?;
 
@@ -988,7 +997,7 @@ mod tests {
         assert_eq!(config.panel_dir, Some(PathBuf::from("panel/dist")));
         assert!(!config.cookie_secure);
         assert_eq!(config.stdio_api_key.as_deref(), Some("jt_live_abc"));
-        assert_eq!(config.log_filter, "jeeta=debug,info");
+        assert_eq!(config.log_filter, "jeeta=debug,info,rmcp=warn");
         assert_eq!(config.log_format, LogFormat::Json);
 
         let blank = Config::from_map(&with(&[
@@ -1019,6 +1028,44 @@ mod tests {
         ] {
             assert_eq!(error(&with(&[(var, bad)])).var, var, "{var}={bad}");
         }
+    }
+
+    #[test]
+    fn an_operator_filter_never_raises_rmcp() {
+        use tracing::Level;
+        use tracing_subscriber::prelude::*;
+        assert!(DEFAULT_LOG.ends_with(RMCP_CAP));
+        for operator in [
+            "debug",
+            "trace",
+            "rmcp=debug",
+            "info,rmcp=trace,",
+            " jeeta=debug ",
+        ] {
+            let config = Config::from_map(&with(&[(LOG, operator)])).unwrap();
+            assert!(config.log_filter.ends_with(",rmcp=warn"), "{operator}");
+            let filter = EnvFilter::try_new(&config.log_filter).unwrap();
+            let subscriber = tracing_subscriber::registry().with(filter);
+            tracing::subscriber::with_default(subscriber, || {
+                assert!(
+                    !tracing::enabled!(target: "rmcp", Level::DEBUG),
+                    "{operator}: rmcp debug, which carries tool arguments"
+                );
+                assert!(
+                    !tracing::enabled!(target: "rmcp", Level::INFO),
+                    "{operator}"
+                );
+                assert!(tracing::enabled!(target: "rmcp", Level::WARN), "{operator}");
+            });
+        }
+        // What the operator asked for stays, for every other target.
+        let config = Config::from_map(&with(&[(LOG, "debug")])).unwrap();
+        assert_eq!(config.log_filter, "debug,rmcp=warn");
+        let subscriber =
+            tracing_subscriber::registry().with(EnvFilter::try_new(&config.log_filter).unwrap());
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(tracing::enabled!(target: "jeeta", Level::DEBUG));
+        });
     }
 
     #[test]
