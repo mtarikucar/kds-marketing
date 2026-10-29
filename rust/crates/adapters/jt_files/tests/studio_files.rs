@@ -285,6 +285,10 @@ async fn a_large_file_is_served_a_chunk_at_a_time() {
     // A file that is not there is NOT_FOUND.
     let e = d.read_stream(ws, FileId::new_v7()).await.err().unwrap();
     assert_eq!(e.code, jt_app::error::ErrorCode::NotFound);
+    // Whether a file is stored is read from its header: another workspace has none of it.
+    assert!(d.exists(ws, id).await.unwrap());
+    assert!(!d.exists(ws, FileId::new_v7()).await.unwrap());
+    assert!(!d.exists(WorkspaceId::new_v7(), id).await.unwrap());
 
     // Served the same way: the body is a stream, not bytes held whole (it does not know its own
     // length, which the response announces), arriving in chunks of at most READ_CHUNK bytes.

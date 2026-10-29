@@ -4,13 +4,15 @@
 //! and only then given its header and linked into place, so memory holds a chunk at a time. The
 //! signed retrieval route ([`router`]) serves a file the same way: read [`READ_CHUNK`] bytes at a
 //! time ([`FileStore::read_stream`]), hashed as they are read, the last chunk given out only once
-//! the hash is the header's.
+//! the hash is the header's; a few files at a time ([`MAX_CONCURRENT_READS`]), and never held by
+//! a client that stopped reading ([`READ_IDLE`], [`READ_DEADLINE`]).
 mod fetch;
+mod serve;
 use async_trait::async_trait;
 pub use fetch::CheckedMediaFetcher;
 use hmac::{Hmac, KeyInit, Mac};
 use jt_app::{
-    error::AppError,
+    error::{AppError, ErrorCode},
     ports::{
         Clock,
         connectors::MediaUpload,
@@ -24,6 +26,10 @@ use jt_app::{
 };
 use jt_studio::FileId;
 use jt_tenancy::WorkspaceId;
+pub use serve::{
+    MAX_CONCURRENT_READS, READ_DEADLINE, READ_IDLE, READ_TURN_WAIT, ReadLimits, router,
+    router_with_limits,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
@@ -498,77 +504,6 @@ pub fn verify(
         .verify_slice(&bytes)
         .map_err(|_| AppError::not_found("file"))
 }
-#[derive(Clone)]
-struct Retrieval {
-    store: Arc<dyn FileStore>,
-    clock: Arc<dyn Clock>,
-    key: [u8; 32],
-}
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SignedQuery {
-    workspace: WorkspaceId,
-    expires: i64,
-    signature: String,
-}
-/// The signed retrieval route, `GET /files/{id}?workspace&expires&signature`: a file the store
-/// keeps, while its address is signed for ([`verify`]), served as a stream
-/// ([`FileStore::read_stream`]) with its length announced, so neither a large file nor many reads
-/// of one at once (a ten-minute `push_file` address that leaked, say) are held in memory whole. A
-/// file whose bytes fail the store's check is cut off short of its announced length. A request for
-/// anything else is `404`.
-pub fn router(store: Arc<dyn FileStore>, clock: Arc<dyn Clock>, key: [u8; 32]) -> axum::Router {
-    axum::Router::new()
-        .route("/files/{id}", axum::routing::get(retrieve))
-        .with_state(Retrieval { store, clock, key })
-}
-async fn retrieve(
-    axum::extract::State(s): axum::extract::State<Retrieval>,
-    axum::extract::Path(id): axum::extract::Path<FileId>,
-    axum::extract::Query(q): axum::extract::Query<SignedQuery>,
-) -> Result<impl axum::response::IntoResponse, axum::http::StatusCode> {
-    use axum::http::{StatusCode, header};
-    verify(
-        &s.key,
-        q.workspace,
-        id,
-        q.expires,
-        &q.signature,
-        s.clock.now(),
-    )
-    .map_err(|_| StatusCode::NOT_FOUND)?;
-    let file = s
-        .store
-        .read_stream(q.workspace, id)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, file.mime),
-            (header::CONTENT_LENGTH, file.size_bytes.to_string()),
-            (header::CACHE_CONTROL, "private, no-store".into()),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
-        ],
-        axum::body::Body::from_stream(chunks(file.bytes)),
-    ))
-}
-/// The chunks of `source` as a response body: each as it is read, then the end. An error ends the
-/// body there, short of its announced length (the connection is cut), and nothing more is read.
-fn chunks(
-    source: Box<dyn ByteSource>,
-) -> impl futures_util::Stream<Item = Result<axum::body::Bytes, std::io::Error>> + Send + 'static {
-    futures_util::stream::unfold(Some(source), |source| async move {
-        let mut source = source?;
-        match source.next_chunk().await {
-            Ok(Some(chunk)) => Some((Ok(axum::body::Bytes::from(chunk)), Some(source))),
-            Ok(None) => None,
-            Err(_) => Some((
-                Err(std::io::Error::other("the stored file could not be served")),
-                None,
-            )),
-        }
-    })
-}
 /// A stored file's bytes as they are served ([`FileStore::read_stream`]): read at most
 /// [`READ_CHUNK`] bytes at a time, hashed as they come. The chunk that completes the file is given
 /// out only once nothing follows it and the hash of all of them is the header's; else, as when the
@@ -654,6 +589,17 @@ impl FileStore for DiskFiles {
         tokio::task::spawn_blocking(move || this.read_inner(ws, id))
             .await
             .map_err(|_| storage())?
+    }
+    async fn exists(&self, ws: WorkspaceId, id: FileId) -> Result<bool, AppError> {
+        let this = self.clone();
+        let header = tokio::task::spawn_blocking(move || this.load_meta(ws, id))
+            .await
+            .map_err(|_| storage())?;
+        match header {
+            Ok(_) => Ok(true),
+            Err(e) if e.code == ErrorCode::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
     }
     async fn read_stream(&self, ws: WorkspaceId, id: FileId) -> Result<StreamedFile, AppError> {
         let this = self.clone();
