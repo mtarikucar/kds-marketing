@@ -9637,6 +9637,20 @@ git add rust/bridge/voice
 git commit -m "feat(voice-bridge): configuration, phrase cache, turn traces, ARI, media and speech adapters" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**B5 as built (2026-10-30, commits `14652911` and `aade9c37`).** The steps ran as written, test first; the code is the plan's, reflowed by rustfmt. What differs:
+- Step 1 failed with E0432 (`could not find ari in jeeta_voice_bridge`, and the same for the other five modules). The pacer went into a commit of its own: with the rest of `media.rs` in place, `tests/pacer.rs` failed with E0432 on `media::Out` and `media::Pacer` before the pacer was written.
+- `tests/adapters.rs` has two more tests. One is the `cfg(unix)` peer check that the text above asks for (`a_unix_socket_held_by_another_user_is_refused`: the socket file's owner connects, and that uid plus one is `WrongPeer`). The other, `the_speakers_hello_names_its_voice` (TCP, both systems), checks that the voice id comes from the `hello`, and that a service whose first message is anything else is `NoHello`. So `adapters` is 9 on Windows and 10 on Linux, not 8.
+- Code, against the draft:
+  - `parse_control` reads `optimal_frame_size` with `usize::try_from`, not `as`.
+  - `Pacer::due` takes the front frame after a `matches!` check instead of `unreachable!`, so the pacer cannot panic.
+  - `Ari::connect` marks the `Authorization` header sensitive (`HeaderValue::set_sensitive`), so a `Debug` of the request shows no credential.
+  - Docs only: `config.rs` lists every variable and its default, each public item has a doc line, and `lib.rs`'s Logging paragraph names `speech::Heard` (no word) and `config::Config` (no key, no password).
+- No manifest change: B4's `Cargo.toml` already holds every dependency B5 uses.
+- B5 makes no log call yet, and `tests/logging.rs` passes on the six new files. `AriEvent` and `MediaEvent` keep their derived `Debug`, which holds the key pressed, as `tests/logging.rs` expects: its `?` rule keeps them out of the logs.
+- Not done here: design §2 and the B3 review (I4) say speak's socket moves to a directory of its own "with B5". B5's steps have no such step, and D2's `bridge.env.example` keeps `SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock`, the config's default. The move is server work (speak's unit, tmpfiles, its mount and its tests), so it stays open for the coordinator. Until then the bridge finds speak through `SPEAK_SOCKET`, and the peer check (uid 1502) holds.
+- Carried over from B4's re-review (commit `a2aaa925`): the talker's docs and design §3 said the fault sentence waits "3 s at most". In fact `start_next` starts nothing while the caller speaks. So the sentence waits for the caller's pause (200 ms of silence). In a pause of an open turn, it waits for the turn to close, until `FAULT_WAIT_MS` after the loss; after that it starts at the next pause. A caller who never pauses holds it back until the listener's 30 s cut. The behaviour stays (playing over a talking caller is worse). The docs now say so, and `the_fault_sentence_waits_for_the_callers_pause_past_three_seconds` pins it.
+- Checks on Windows: `cargo test -p jeeta-voice-bridge` gives adapters 9, g711 5, logging 3, netgsm 4, pacer 7, redaction 4, talker 27 and text 11 (70). Clippy (`--all-targets -D warnings`), `cargo fmt --all -- --check` and `cargo doc --no-deps` (`-D warnings`) are clean. On Linux (CI on PR #382, run 40963551097), `rust-checks` (fmt, workspace clippy, doc, deny) and `rust-test` pass, with adapters 10 (the unix peer test included) and the same counts otherwise (71).
+
 
 ### Task B6: One call's task, and the standalone `slice`
 
