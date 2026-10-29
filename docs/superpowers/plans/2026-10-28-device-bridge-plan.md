@@ -44,7 +44,7 @@ into it. D0 waits for voice V1-T2 (agent call session) to merge, since it reshap
 | `rust/crates/adapters/jt_pg/src/repos/devices.rs` | new | Postgres impl |
 | `rust/crates/jt_testkit/src/fakes/devices.rs` | new | in-memory impl for tests |
 | `rust/migrations/00NN_device_bridge.{up,down}.sql` | new | `device_commands`, role backfill (NN = next free) |
-| `rust/crates/domain/jt_tenancy/src/role.rs` | changed | `devices.work`, `devices.manage`, `devices.bridge` |
+| `rust/crates/domain/jt_tenancy/src/role.rs` | changed | `devices.work`, `devices.bridge` |
 | `rust/crates/jt_app/src/catalog.rs` | changed | rows (§D1-T5, D1-T6) |
 | `rust/crates/adapters/jt_panel_http/src/routes/device_bridge.rs` + `routes/devices.rs` | new | routes |
 | `rust/crates/adapters/jt_mcp/src/tools/devices.rs` | new | MCP tools |
@@ -349,7 +349,7 @@ impl and rename (or wrap) it — do not keep two registries.
 
 ### Task D1-T3: permissions + migration
 
-**Files:** `rust/crates/domain/jt_tenancy/src/role.rs` (add `DevicesWork` `"devices.work"`, `DevicesManage` `"devices.manage"`, `DevicesBridge` `"devices.bridge"`; owner + manager get work+manage+bridge — bridge only so they can issue a bridge key, as `calls.bridge`; `rep` none); `rust/migrations/00NN_device_bridge.{up,down}.sql`; pins in `jt_archtest`/`jt_app/tests` that list permissions, tables and migrations.
+**Files:** `rust/crates/domain/jt_tenancy/src/role.rs` (add `DevicesWork` `"devices.work"` and `DevicesBridge` `"devices.bridge"`; owner + manager get both — bridge only so they can issue a bridge key, as `calls.bridge`; `rep` none. There is no `devices.manage`: it would gate nothing in this build. Pairing is `api_keys.manage` plus holding `devices.bridge`, exactly as voice does it; access policy is a later, separate layer, and a permission added then costs one backfill); `rust/migrations/00NN_device_bridge.{up,down}.sql`; pins in `jt_archtest`/`jt_app/tests` that list permissions, tables and migrations.
 
 ```sql
 create table if not exists device_commands (
@@ -357,29 +357,37 @@ create table if not exists device_commands (
     workspace_id uuid not null references workspaces(id),
     capability_id uuid not null,
     seq bigint generated always as identity,
-    kind text not null,
-    payload jsonb not null,
+    kind text not null check (char_length(kind) between 1 and 32),   -- not pinned to a list
+    payload jsonb not null check (jsonb_typeof(payload) = 'object'),
     status text not null check (status in ('queued','leased','done','failed','expired','canceled')),
-    attempts int not null default 0,
+    attempts int not null default 0 check (attempts >= 0),
     leased_at timestamptz,
     expires_at timestamptz not null,
     result jsonb,
-    reason text,
-    requested_by jsonb not null,
+    reason text,                                                      -- not pinned to a list
+    detail text check (detail is null or char_length(detail) <= 300), -- Outcome::Failed.detail
+    requested_by jsonb not null check (jsonb_typeof(requested_by) = 'object'),
     created_at timestamptz not null,
     done_at timestamptz,
-    foreign key (workspace_id, capability_id) references capabilities(workspace_id, id)
+    constraint device_commands_capability_fkey foreign key (workspace_id, capability_id)
+        references capabilities (workspace_id, id),
+    constraint device_commands_leased_check check (status not in ('leased','done') or leased_at is not null),
+    constraint device_commands_done_check check ((done_at is null) = (status in ('queued','leased')))
 );
 create index if not exists device_commands_queue on device_commands (workspace_id, capability_id, status, seq);
+create index if not exists device_commands_due
+    on device_commands (workspace_id, expires_at) where status in ('queued','leased');
+create index if not exists device_commands_log on device_commands (workspace_id, capability_id, seq);
 alter table device_commands enable row level security;
 alter table device_commands force row level security;
 -- policy device_commands_ws exactly as call_bridge_events_ws in 0016_voice_bridge.up.sql
--- role backfill exactly as 0016's calls.bridge backfill, for the three new keys
+-- role backfill exactly as 0016's calls.bridge backfill, for the two new keys
 ```
-(Check `capabilities` has the `(workspace_id, id)` unique key the other tenant tables reference; copy 0016's
-idempotent `do $$ … $$` guards. `down` drops the table and removes only the three keys.)
+(`capabilities` has the `(workspace_id, id)` unique key the foreign key needs (`0003_capabilities`); the guards are
+0016's idempotent `do $$ … $$`. `down` removes only the two keys, then drops the table, and its indexes with it.
+0017 was still unmerged when the indexes and checks were added, so they are part of it, not a 0018.)
 
-- [ ] **Tests first:** extend the pins (`sql_scoping` sees the new table with FORCE RLS; the migration list includes `00NN`; role permission lists include the three keys; `migration_is_repeatable` for 00NN).
+- [ ] **Tests first:** extend the pins (`sql_scoping` sees the new table with FORCE RLS; the migration list includes `00NN`; role permission lists include the two keys; the repeatability test for 00NN runs up and down twice, checks the role backfill, the three indexes after the final up, forced RLS and exactly one `device_commands_ws` policy).
 - [ ] CI red → implement → green; **commit** `feat(devices): device_commands and the devices permissions`.
 
 ### Task D1-T4: `DeviceCommandRepo` port, Postgres and fake
@@ -390,7 +398,7 @@ idempotent `do $$ … $$` guards. `down` drops the table and removes only the th
 #[async_trait]
 pub trait DeviceCommandRepo: Send {
     async fn enqueue(&mut self, row: NewDeviceCommand) -> Result<DeviceCommandRow, AppError>;
-    async fn lease(&mut self, caps: &[CapabilityId], now: OffsetDateTime, redeliver_before: OffsetDateTime, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // queued, or leased and leased_at <= redeliver_before; not expired; seq order; sets leased, attempts+1. The caller passes `now - kernel REDELIVER_AFTER` (as voice's `take_commands` does): no 10 s in SQL
+    async fn lease(&mut self, caps: &[CapabilityId], now: OffsetDateTime, redeliver_before: OffsetDateTime, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>; // queued, or leased and leased_at <= redeliver_before; not expired; seq order; sets leased, attempts+1. The caller passes `now - kernel REDELIVER_AFTER` (as voice's `take_commands` does): no 10 s in SQL. In SQL, `status in ('queued','leased')` is its own conjunct, so that a finished row that was leased once (its `leased_at` is set) cannot match the redelivery branch, next to `(status = 'queued' or leased_at <= $redeliver_before)` and `expires_at > $now`; `UPDATE … RETURNING` has no order, so sort the returned rows by `seq` afterwards, as voice does (`jt_pg/src/repos/calls.rs`, `take_commands`: `rows.sort_by_key(|(seq, ..)| *seq)`)
     async fn finish(&mut self, id: Uuid, outcome: Finish, now: OffsetDateTime) -> Result<FinishOutcome, AppError>;
     // A bridge's result, through jt_devices::next_status(status, event, leased_at.is_some()):
     //   Applied   - a leased command becomes done/failed; or a LATE result for an expired/canceled command that
@@ -403,6 +411,7 @@ pub trait DeviceCommandRepo: Send {
     async fn list(&mut self, cap: CapabilityId, limit: u32) -> Result<Vec<DeviceCommandRow>, AppError>;
 }
 ```
+- `Outcome::Failed.detail` is stored in the `detail` column (at most 300 characters, as the protocol bounds it); `reason` and `kind` are stored as text, not pinned to a list.
 - [ ] **Contract tests first:** `lease_returns_oldest_first`, `lease_skips_fresh_lease_and_redelivers_after_10s`, `lease_never_returns_expired`, `finish_is_idempotent` (a second result for a done/failed row is `Duplicate`), `finish_unknown_id`, `finish_replaces_expired_after_lease`, `finish_refuses_result_for_never_leased`, `expire_due_marks_only_unleased_past_expiry_and_leased_past_expiry`, `rows_are_workspace_scoped`.
 - [ ] Implement fake first (tests run on Windows via testkit), then Postgres (CI). **Commit**.
 
@@ -696,7 +705,7 @@ What the loop (D2-T1) asks of the driver:
 ### Task D3-T1: phone card, pairing, command log
 
 **Files:** `rust/panel/src/api/devices.ts`, `rust/panel/src/pages/capabilities/PhoneCard.tsx` (+ `.test.tsx`), wiring in the Capabilities page's Devices tab, i18n `en.json`/`tr.json`.
-Card: platform, model, OS, status with heartbeat age, bridge version, features (Unicode yes/no with the hint "install **and enable** ADBKeyBoard": the bridge reports `text.unicode` only when it is both installed and enabled as an input method), last 20 commands (kind, status, time; expand to args/result), "Pair a bridge" (issues an API key with exactly `devices.bridge` via the existing API-key use case, shown once, with the three install steps).
+Card: platform, model, OS, status with heartbeat age, bridge version, features (Unicode yes/no with the hint "install **and enable** ADBKeyBoard": the bridge reports `text.unicode` only when it is both installed and enabled as an input method), last 20 commands (kind, status, time; expand to args/result), "Pair a bridge" (issues an API key with exactly `devices.bridge` via the existing API-key use case, shown once, with the three install steps; offered to who holds `api_keys.manage` and `devices.bridge`, which is all that pairing needs, as in voice).
 - [ ] **Tests first:** `renders_phone_facts_and_status`, `unicode_hint_when_feature_missing`, `pairing_shows_key_once`, `command_log_expands_args`.
 - [ ] `pnpm --dir rust/panel test`, typecheck, build; **commit**.
 
@@ -710,6 +719,7 @@ Card: platform, model, OS, status with heartbeat age, bridge version, features (
 
 ### Task D4-T1: emulator, then a real phone
 
+- [ ] **Precondition.** An existing API key does not gain the new permissions: a key's scopes are snapshotted when it is issued. Before the end-to-end run, issue a fresh owner agent key with `devices.work`, and a bridge key with exactly `devices.bridge`; an older key does not carry them.
 - [ ] Emulator `jeeta_test` (`emulator.exe -avd jeeta_test -no-window -gpu swiftshader_indirect -port 5554`) + bridge against **staging** with a `devices.bridge` key; via MCP on staging: `devices.list` → `observe` → `tap_on` → `text` (ASCII) → `shell ["getprop","ro.product.model"]` → `screenshot` → `pull_file`; each appears in the ledger with its args.
 - [ ] Real Android phone over USB on the owner's PC: same sequence; Unicode text with ADBKeyBoard installed (owner approves the APK download).
 - [ ] Checks on the Redmi 10C (Android 13, MIUI 14) that D2-T2 could not make, since it ran read-only captures only:

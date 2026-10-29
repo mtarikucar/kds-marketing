@@ -131,8 +131,7 @@
       "bridge": "Ses köprüsü olarak çalışma (yalnızca köprünün anahtarı)"
     },
     "devices": {
-      "work": "Telefonları görme, ekranlarını izleme ve onlara komut gönderme",
-      "manage": "Telefon eşleme",
+      "work": "Telefonları kullanma",
       "bridge": "Cihaz köprüsü olarak çalışma (yalnızca köprünün anahtarı)"
     }
   },

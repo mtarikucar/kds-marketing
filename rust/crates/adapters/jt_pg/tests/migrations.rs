@@ -52,6 +52,14 @@ const CONNECTOR_INDEXES: [&str; 3] = [
     "inbound_events_history_idx",
 ];
 
+/// The indexes of `device_commands` (`0017_device_bridge`): the queue a bridge reads, the expiry
+/// sweep, and a phone's command log.
+const DEVICE_COMMAND_INDEXES: [&str; 3] = [
+    "device_commands_queue",
+    "device_commands_due",
+    "device_commands_log",
+];
+
 /// The column `0005_connectors` adds to a table of an earlier migration: a budget item's
 /// retirement time.
 const RETIRED_AT: (&str, &str) = ("budget_items", "retired_at");
@@ -450,7 +458,7 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
     };
     let as_strings =
         |keys: &[&str]| -> Vec<String> { keys.iter().map(|k| (*k).to_owned()).collect() };
-    let keys = ["devices.work", "devices.manage", "devices.bridge"];
+    let keys = ["devices.work", "devices.bridge"];
     let base = ["workspace.read", "team.manage"];
 
     // A second workspace holds a custom role keyed like a system one: only `is_system` tells
@@ -477,7 +485,7 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
     }
     let roles: [(Uuid, Uuid, &str, bool, Vec<&str>); 5] = [
         (owner, ws, "owner", true, base.to_vec()),
-        // Already granted one of the three (say, by hand): it is not granted twice.
+        // Already granted one of the two (say, by hand): it is not granted twice.
         (
             manager,
             ws,
@@ -538,11 +546,13 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
         );
     }
 
-    // Down, twice: the table goes, and the three keys leave the system owner and manager only.
+    // Down, twice: the table goes, and the two keys leave the system owner and manager only.
     for _ in 0..2 {
         run(&down).await;
         assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 1);
-        assert!(!index_exists(&db.pool, "device_commands_queue").await);
+        for index in DEVICE_COMMAND_INDEXES {
+            assert!(!index_exists(&db.pool, index).await, "{index}");
+        }
         for role in [owner, manager] {
             assert_eq!(role_permissions(&db.pool, role).await, as_strings(&base));
         }
@@ -557,10 +567,13 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
         );
     }
 
-    // Up again: the table is back, with its queue index and forced row-level security.
+    // Up again: the table is back, with its three indexes, forced row-level security and its one
+    // policy.
     run(&up).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
-    assert!(index_exists(&db.pool, "device_commands_queue").await);
+    for index in DEVICE_COMMAND_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
     let forced: bool = sqlx::query_scalar(
         "select relrowsecurity and relforcerowsecurity from pg_class where relname = 'device_commands'",
     )
@@ -568,6 +581,14 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
     .await
     .unwrap();
     assert!(forced);
+    let policies: i64 = sqlx::query_scalar(
+        "select count(*) from pg_policies where schemaname = current_schema() \
+         and tablename = 'device_commands' and policyname = 'device_commands_ws'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(policies, 1);
 }
 
 #[tokio::test]

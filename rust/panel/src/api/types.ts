@@ -27,7 +27,6 @@ export type Permission =
   | 'calls.manage'
   | 'calls.bridge'
   | 'devices.work'
-  | 'devices.manage'
   | 'devices.bridge';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
@@ -44,7 +43,6 @@ export const PERMISSIONS: readonly Permission[] = [
   'calls.manage',
   'calls.bridge',
   'devices.work',
-  'devices.manage',
   'devices.bridge',
 ];
 

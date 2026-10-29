@@ -1149,7 +1149,6 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
         "calls.manage",
         "calls.bridge",
         "devices.work",
-        "devices.manage",
         "devices.bridge",
     ];
 
@@ -1268,7 +1267,6 @@ async fn custom_role_cannot_demote_or_remove_a_manager() {
         "calls.manage",
         "calls.bridge",
         "devices.work",
-        "devices.manage",
         "devices.bridge",
     ];
     for role_key in ["rep", "team_lead"] {

@@ -17,7 +17,7 @@ use jt_testkit::panel::{
 };
 use serde_json::{Value, json};
 
-const ALL_PERMISSIONS: [&str; 16] = [
+const ALL_PERMISSIONS: [&str; 15] = [
     "workspace.read",
     "team.manage",
     "api_keys.manage",
@@ -32,7 +32,6 @@ const ALL_PERMISSIONS: [&str; 16] = [
     "calls.manage",
     "calls.bridge",
     "devices.work",
-    "devices.manage",
     "devices.bridge",
 ];
 

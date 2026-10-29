@@ -294,7 +294,6 @@ async fn create_returns_plaintext_once_and_list_hides_it() {
             "calls.manage",
             "calls.bridge",
             "devices.work",
-            "devices.manage",
             "devices.bridge",
         ])
     );

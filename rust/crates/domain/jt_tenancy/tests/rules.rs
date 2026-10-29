@@ -79,7 +79,6 @@ fn capabilities_and_budget_permissions_belong_to_owner_and_manager_only() {
             "calls.manage",
             "calls.bridge",
             "devices.work",
-            "devices.manage",
             "devices.bridge",
         ]
     );
@@ -102,7 +101,6 @@ fn devices_permissions_are_owner_and_manager_only() {
     // A device bridge's key is issued with `devices.bridge` alone; only who holds it may issue it.
     for (p, key) in [
         (Permission::DevicesWork, "devices.work"),
-        (Permission::DevicesManage, "devices.manage"),
         (Permission::DevicesBridge, "devices.bridge"),
     ] {
         assert_eq!(p.key(), key);
@@ -259,7 +257,6 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             Permission::CallsManage,
             Permission::CallsBridge,
             Permission::DevicesWork,
-            Permission::DevicesManage,
             Permission::DevicesBridge,
         ]),
     });
@@ -398,7 +395,6 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
             Permission::CallsManage,
             Permission::CallsBridge,
             Permission::DevicesWork,
-            Permission::DevicesManage,
             Permission::DevicesBridge,
         ]),
     });

@@ -219,7 +219,6 @@ async fn create_refuses_bad_input_with_structured_errors() {
             "calls.manage",
             "calls.bridge",
             "devices.work",
-            "devices.manage",
             "devices.bridge",
         ])
     );
