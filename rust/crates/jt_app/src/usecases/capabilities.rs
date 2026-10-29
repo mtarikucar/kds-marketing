@@ -508,7 +508,7 @@ async fn update_with_hosts(
 /// probe"; one of a kind verified by its heartbeat (a voice bridge, by its own registration,
 /// `calls.bridge.register`; a phone, by its device bridge's, `devices.bridge.register`) is
 /// `CONFLICT` saying so, with `details.reason = "verified_by_heartbeat"`, its `kind_key` and the
-/// step that verifies it, `cleared_by` ([`verified_by_heartbeat`]); a retired one
+/// step that verifies it, `cleared_by` (`verified_by_heartbeat`); a retired one
 /// `CONFLICT` "capability is retired"; then an agent verifying what another connection declared
 /// without `capabilities.manage` is `FORBIDDEN` naming it. Writes
 /// `capability.verify` (payload `evidence_refs`: how many references the evidence has; never
