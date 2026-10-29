@@ -526,9 +526,17 @@ As built (D1-T5):
   retired with `listed_by` = this bridge and `listed`. (Field names avoid `key`: `connector_public` refuses
   secret-looking keys.)
 - **Results follow the lease.** `device_commands.leased_by` (the key id; set exactly with `leased_at`, a table check)
-  is written by `mark_leased(ids, by, now)`; `finish(by, listed, id, outcome, now)` takes a result from the lease
-  holder, or from the bridge that now holds the command's phone (`listed`: a replaced key), and answers `Unknown`
-  for every other (an old PC's stale result for a command redelivered to the phone's new bridge).
+  is written by `mark_leased(ids, by, now)`; `finish(by, holding, id, outcome, now)` takes a result from the lease
+  holder, or from the bridge that holds the command's phone now (`holding`: its `listed_by` is the bridge, whether
+  or not its latest registration lists the phone; a replaced key), and answers `Unknown` for every other (an old
+  PC's stale result for a command redelivered to the phone's new bridge).
+- **Ledger.** `devices.command.finished` carries `leased_by` (the key id last handed the command, `null` for none)
+  beside `command_id`, `kind`, `status`, `reason`, `duration_ms`. A takeover writes `devices.phone.holder_changed
+  {capability_id, from, to}` (key ids), in the registration's transaction.
+- **Replacing a bridge's key.** Start the bridge with the new key, stop the old program cleanly (it posts what it
+  finished, with the old key), then revoke the old key. For up to `HELD_FOR` (60 s) after the old program's last
+  registration the new one is refused the phones the old one held; then it takes them over, and answers the old
+  key's leases of them.
 - **Device files.** `0017` also creates `device_files` (forced RLS; 74 tables; `mime in ('image/png',
   'application/octet-stream')`; `uploaded_by`, the key id); `DeviceCommandRepo::save_file` and `::files`. A result
   may name only a file its own bridge uploaded. The file store keeps what `usecases::files::validate_stored` allows:
@@ -538,9 +546,21 @@ As built (D1-T5):
 - **Uploads stream.** `FileStore::put_stream(ws, id, mime, filename, &mut dyn ByteSource)` (a default that buffers;
   `jt_files::DiskFiles` writes the chunks to a temporary file, hashing them, then adds the header and links it into
   place). The route hands the request body over as a stream; `devices::bridge::files` checks the announced
-  `Content-Length`, bounds what it reads (`IMAGE_LIMIT` for a PNG, `DEVICE_FILE_LIMIT` for a pulled file) and takes a
-  turn first (`MAX_CONCURRENT_UPLOADS` = 2). `DeviceBridgeCtx` refuses any key but the bridge's before the body is
-  read. `provider_url` and the end of a put read a file's header only.
+  `Content-Length`, bounds what it reads (`IMAGE_LIMIT` for a PNG, `DEVICE_FILE_LIMIT` for a pulled file), and
+  refuses a body that sends nothing for `CHUNK_IDLE` (30 s, `422` naming `body`, nothing kept). `DeviceBridgeCtx`
+  refuses any key but the bridge's before the body is read. `provider_url` and the end of a put read a file's header
+  only.
+- **Upload turns.** `Deps::device_uploads` (`devices::uploads::UploadTurns`, process-local like the bridge signals):
+  a pool per workspace and per kind, `SCREENSHOT_TURNS` (2) for `image/png` and `PULLED_FILE_TURNS` (2) for
+  `application/octet-stream`, so one workspace's slow pulls hold up neither another workspace nor its own
+  screenshots. An upload waits at most `TURN_WAIT` (10 s) for its turn, before its body is read; then it is answered
+  `503 UPSTREAM_UNAVAILABLE` (`details.reason = "upload_turns_taken"`, `retryable`, `retry_after_s` 5). The bridge
+  tries an upload that gets a transient answer (no answer, 5xx, 408, 429) up to `UPLOAD_ATTEMPTS` (3) times,
+  pausing 0.5 s, then 1 s.
+- **Upload size: 95 MiB.** yeni.jeetagrowth.com and staging are behind Cloudflare, whose Free and Pro plans refuse a
+  request body over 100 MB at the edge (`413`, before the server). `DEVICE_FILE_LIMIT` is 95 MiB; the bridge's
+  `MAX_UPLOAD_BYTES` and `MAX_PULL_BYTES` are the same, and it refuses a larger upload before sending it.
+  `MAX_DOWNLOAD_BYTES` (`push_file`) stays 256 MiB: Cloudflare does not cap a proxied download's size that way.
 - **Download URL.** `jt_files::DiskFiles::provider_url` now signs any lifetime after now and at most 24 h ahead
   (`verify` already accepted that); studio still asks for 24 h, `push_file` for 10 min, signed after the lease
   commits. A `push_file` whose file is not stored is failed `file_not_found` (a new `FailReason`); one the store
@@ -572,6 +592,9 @@ are set up before a strategy, like the bridge; `Write` for act):
   **full** command; signal the bridge; wait up to `wait_s` for a final status; return `{command_id, status,
   result?, reason?}`.
 - `observe` = `act(Observe{screenshot})` with the observation (and a signed screenshot URL) in the answer.
+- [ ] **Before `act` takes `push_file`:** `jt_files`' signed retrieve route (`/files/{id}`) reads the whole file into
+  memory for each request. A leaked ten-minute `download_url` can be fetched many times at once, so stream the
+  response (or cap the concurrent reads) before D1-T6 lets an agent queue a `push_file`.
 - [ ] **Tests first (`jt_app/tests/devices_agent.rs`):** `act_queues_and_returns_result_when_bridge_answers`, `act_returns_queued_when_wait_ends`, `act_refuses_unsupported_kind`, `act_refuses_unicode_without_feature`, `act_on_offline_phone_refuses_device_offline`, `act_on_phone_missing_from_latest_register_refuses_device_offline` (a stale phone is not "live"), `ledger_carries_full_command`, `tracing_never_carries_args` (capture `tracing` output with a test subscriber; assert typed text / shell args absent), `rep_cannot_act`, `command_get_waits`; `jt_mcp/tests/devices_mcp.rs::tools_listed_with_schemas`.
 - [ ] CI red → implement → green; **commit** `feat(devices): agents act on phones`.
 
@@ -583,7 +606,10 @@ a late result for a command that was leased then replaces `expired` (D1-T4 `fini
 `devices.command.finished` with the result's status: intended, the ledger keeps what happened in order),
 `Job::DeviceFilePurge` (hourly, deletes device files older than 7 days); job list pins.
 Health is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, "phone", now)`, the generic loop from D0. Two prerequisites:
-- `phone` needs a heartbeat in `jt_capability/src/kind.rs`. Staleness is read from the kind, not from the spec.
+- `phone` needs a heartbeat in `jt_capability/src/kind.rs`. Staleness is read from the kind, not from the spec. Until
+  then a person's `capability.verify` on a phone sets its `last_verified_at`, which also extends the 60 s hold
+  (`HELD_FOR`) of the bridge that holds it; with the heartbeat kind `capability.verify` refuses a phone, as it does a
+  voice bridge, and only registrations move the time.
 - `work.rs` must map kind to work item. Today any heartbeat kind that goes offline is reported as `VoiceBridgeOffline`, with the voice hint and the `calls.bridge.register` tool. A phone needs its own work item, e.g. `DeviceBridgeOffline`. Test: `offline_phone_is_not_reported_as_a_voice_bridge`.
 - [ ] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`.
 - [ ] CI red → green; **commit**.
