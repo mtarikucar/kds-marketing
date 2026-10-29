@@ -1,0 +1,265 @@
+# Voice sidecar on the free path — design addendum
+
+> Date: 2026-10-29 · Status: **design, owner decisions of 2026-10-29 applied** · Amends
+> `2026-10-27-agent-voice-calls-design.md` (the "voice design") for plan task V1-T3.
+> Companion plan: `docs/superpowers/plans/2026-10-29-voice-sidecar-free-path-plan.md`.
+> Sources: `reports/Kendi sunucumuzda Türkçe sesli ajan.md` (the "self-hosted report", every engine
+> choice below), `reports/Türkçe telefon sesli ajan pazarı.md` (the "market report", background),
+> their notes under `research_notes/`, the owner's decisions of 2026-10-29 (V-1…V-5, the phrase set,
+> the opening) and the Gate V1 results. The reports live in the main checkout
+> (`D:\HDD\projects\kds-marketing\reports\`), not in this branch.
+> Paths are relative to `rust/` unless prefixed `docs/`.
+
+## 0. Decision in six lines
+
+1. **The edge is Asterisk 22.11 (≥ 22.8) with `chan_websocket`**, registered to NetGSM as extension
+   102 over SIP/UDP; it owns SIP, RTP, the jitter buffer and DTMF (self-hosted report, "SIP kenarını
+   Asterisk'e bırakmak", owner V-3).
+2. **The talker is a Rust worker, `jeeta-voice-bridge`** (`rust/bridge/voice/`): it speaks the
+   V1-T1/T2 bridge protocol to the core unchanged in shape, runs each call's state machine (opening,
+   turns, barge-in, acknowledgements, fillers, closing) and drives two local speech services.
+3. **Engines are free and local**: `seda-v0.1` on sherpa-onnx with Silero VAD at 8 kHz and Smart
+   Turn v3.2 (ears); EMA Lightning 1.1.2 at 8 kHz behind Antalia-2 Mini's normalizer and a brand
+   respelling table (mouth). No cloud speech, no new server, no GPU (owner V-5).
+4. **The bridge plays owner-authored phrases on its own** (acknowledgement at 0.6 s, filler at
+   2.7 s, long wait at 8 s, "not heard", "still there", fault). It never composes a sentence: every
+   text it plays is the plan's, the policy's or the agent's (owner V-4).
+5. **The brain does not change.** The connected agent keeps its model and its reasoning (owner
+   V-2). The only agent-side change is protocol: `calls.say` may wait for the caller's reply
+   (`wait_reply_s`), one short sentence per `say` is encouraged, `say` still returns at once by
+   default.
+6. **Measure first.** Every caller turn carries a monotonic trace (end of speech → endpoint → STT
+   final → delivered → `say` → first TTS chunk → first audio frame; local acknowledgement; barge-in),
+   summarised as p50/p95 per call with the report's alert thresholds.
+
+## 1. What changes relative to the 2026-10-27 design, and why
+
+| Topic | 2026-10-27 design | Now | Why (source) |
+|---|---|---|---|
+| SIP/RTP edge | A software UA inside the sidecar (Go `sipgo`+`diago`, or Python `pjsua2`) as ext 101 | Asterisk 22.11 in Docker (`--network host`), ext **102**, UDP, `chan_websocket` + ARI | Mature NAT/keepalive/DTMF and native `FLUSH_MEDIA` / `MARK_MEDIA` barge-in primitives; diago is young, pjsua2 fights the GIL (self-hosted report, stack table). Ext 101 is WSS-only and must stay so for the v1 webphone (Gate V1). |
+| Sidecar language | Go or Python, "implementer's choice" | Rust worker in the workspace (`jeeta-voice-bridge`), Python only for the two model servers | No cgo, no second core language; GPL Piper/Asterisk and the Python model code stay separate processes (self-hosted report, license map). |
+| STT | Vosk `small-tr-0.3` (or faster-whisper) | `seda-v0.1` streaming Zipformer2 (Apache-2.0), beam 4 + LM, per-call hotwords | FLEURS-TR 11.52 % (≈ Whisper-small) at RTF ≈ 0.03/thread, final ≈ 40 ms after audio ends; Vosk TR has no published WER and is wideband-only; Whisper re-encodes 30 s windows, too slow on 2.0 GHz Broadwell (self-hosted report, "Vosk'un yerini…"). |
+| End of turn | Fixed 0.6–0.8 s silence | Silero VAD (8 kHz, `stop 0.2 s`) → Smart Turn v3.2 (p ≥ 0.5) → forced STT final; fallback **1.5 s** (range 1.2–1.8 s) | Decision ≈ 250–300 ms after a complete turn instead of a fixed silence (self-hosted report, "Sıra 250 milisaniyede…"). Disagreements are logged by `endpoint_by`. |
+| TTS | Piper `tr_TR-fahrettin/dfki-medium` | EMA Lightning 1.1.2 (`sample_rate=8000`, `seed=0`), sentence by sentence, process kept warm | Owner's blind phone test (V-1 result: "kesinlikle 2. ses"); dfki is CC BY-NC-SA, never on paid calls (self-hosted report, license map). |
+| Normalisation | none | Brand respelling table (`Jeeta → Cita`, `WhatsApp → vatsap`) then `antalia_mini.Antalia.normalize` | `normalizer-tr` 0.8.1 read "14:00'e" as "on dört iki nokta sıfır sıfır kesme e" in our test; Antalia's normaliser read "on dörde" (owner V-1 notes). The transcript keeps the agent's original text; normalisation is pronunciation only. |
+| Waiting covered by | Plan holding phrases at 4 s and 10 s, fallback at 20 s (server timers) | Bridge-local acknowledgement 0.6 s, filler 2.7 s, long wait 8 s (owner-approved set in the policy); the server's holding timers stay as a backstop, its fallback lines and scripted ending are unchanged | 4 s/10 s is "too late to give the gain"; first sound drops below ~0.8 s independent of the brain (self-hosted report, "Algılanan gecikmeyi…"; Talker–Reasoner split). |
+| Opening | The plan's opening, which must contain the disclosure sentence | Workspace opening (pre-synthesised, cached) → transcript notice → the plan's opening (e.g. "{Ad} ile mi görüşüyorum?"), all queued by the core on `answered` | Owner-approved opening (2026-10-29). The disclosure is in the workspace's own sentence, so every agent call discloses (D3) even if a plan forgets. |
+| Recording | Optional bridge recording after an announcement | **Off.** No raw audio kept anywhere; transcript only | Owner 2026-10-29 ("no raw audio is kept, transcript only"); spec §8 step 8 already makes recording opt-in. |
+| Brain | Connected agent, any model | Unchanged; **no** fast reasoning-off model | Owner V-2 ("hata yapabilir"). The report's step 1 is applied only in its model-neutral parts (say+listen merge, one sentence per `say`). |
+| Core ↔ bridge transport | Long-poll ≤ 25 s | Unchanged; proven push-like by the kernel's in-process signals, measured on the box | `BridgeSignals` wakes a waiting poll on commit (test `utterance_wakes_listen_immediately` asserts < 600 ms, i.e. before the 1 s fallback tick); the report: a parked long-poll "is practically as fast as push; only measure it". |
+| Line count | `max_calls` 1–8 | 1 | Netsantral Eko: 2 extensions, **1 external line** (Gate V1). |
+
+What stays exactly as in the 2026-10-27 design: the session model, the fence (run twice, the second
+time in the transaction that queues the dial), the turn log, the scripted ending, `every played text
+is authored`, masking, the bridge key (`calls.bridge` alone), the heartbeat and health job, the
+catalog rows, the panel pages. The 2026-10-27 §3.2 engine table and §10's sidecar language are
+superseded by this addendum.
+
+## 2. Topology on the Contabo host
+
+```
+ NetGSM sip5.netsantral.com ── SIP/UDP + RTP G.711 ──► jeeta-asterisk (Docker, --network host)
+                                                         SIP :5070, RTP 40000–40099, ARI/HTTP 127.0.0.1:8188
+                                                         │ ARI REST + events (/ari/events)
+                                                         │ chan_websocket media (/media/<id>), 20 ms A-law, JSON control
+                                                         ▼
+ jeeta-voice-bridge (Rust, systemd, user jeeta-voice-bridge, egress loopback only)
+   heartbeat 15 s ─┐  commands long-poll ─┐  events POST ─┐        ▲ unix WS            ▲ unix WS
+                   ▼                      ▼               ▼        │                    │
+        jeeta core 127.0.0.1:8091 (staging)  OR  127.0.0.1:8090 (prod)   jeeta-voice-listen      jeeta-voice-speak
+        (one environment at a time: one extension)                       (Docker, --network none) (Docker, --network none)
+                                                                         Silero VAD 8 kHz         respell → Antalia.normalize
+                                                                         Smart Turn v3.2          → EMA Lightning 8 kHz
+                                                                         seda-v0.1 (sherpa-onnx)
+        ▲ MCP (unchanged)
+        connected agent (Claude Code / Codex): the brain
+```
+
+- **No new server**; the voice stack shares the 6 vCPU / 11 GB box. CPU: listen `--cpus 1.5`,
+  speak `--cpus 2`, both `--cpu-shares 2048` (twice a default neighbour's weight), worker
+  `CPUWeight=200`. RAM: listen 1 GB, speak 2 GB, Asterisk 512 MB, worker 256 MB (self-hosted report:
+  "Altı paylaşımlı vCPU tek hattı taşır"; the risk is neighbour-induced queueing, so p95 is the gate).
+- **No network for the models**: both speech containers run `--network none`, models baked into the
+  image at build from pinned revisions; they talk to the worker over unix sockets in
+  `/run/jeeta-voice/` (group `jeeta-voice`, mode 0660).
+- **The worker reaches loopback only** (`IPAddressAllow=localhost`, `IPAddressDeny=any`): the core
+  (`JEETA_BASE_URL=http://127.0.0.1:809x`, not the Cloudflare address, so no proxy hop), ARI and the
+  sockets. It opens no listening socket.
+- **One environment at a time.** One extension registers once; one worker serves one Jeeta.
+  `/etc/jeeta-voice/bridge.env` is a symlink to `bridge.staging.env` or `bridge.prod.env`;
+  `jeeta-voice-target staging|prod` switches it only when ARI shows no channel. The environment left
+  behind sees its `voice_bridge` capability go stale and refuses agent calls `bridge_offline`, which
+  is correct.
+- **Secrets**: the extension's SIP secret lives only in
+  `/etc/jeeta-voice/asterisk/secrets/pjsip_auth.conf` (0600, uid 1500, the container's asterisk
+  user), copied from `/root/voicegate/p102` without being printed; the ARI password in
+  `secrets/ari_users.conf` (0600) and in the bridge env files (0600 root, read by systemd); the
+  bridge key in the env files. None is in the repo, a log or chat.
+- **Firewall**: no new inbound rule. Gate V1 showed conntrack admits NetGSM's replies, OPTIONS and
+  INVITEs on the registered socket; Asterisk sends RTP first (silence frames) so the RTP replies are
+  admitted the same way. ARI binds 127.0.0.1 only. If one-way audio is seen, the fallback rule is a
+  UDP allow from NetGSM's media network to 40000–40099 (plan task B1, step "one-way audio").
+
+## 3. The talker: one call's state machine
+
+The core keeps the session's truth (turns, clock, fallback lines, closing, settlement). The talker
+fills the gaps the core cannot fill fast enough, with text the policy already holds.
+
+| Situation | Talker does | Timer (default) |
+|---|---|---|
+| Caller's turn ended (final transcript posted), no `say` yet | plays an **acknowledgement** ("Hı hı." / "Anladım." / "Tamam." / "Peki.", rotating) | 600 ms |
+| still no `say` | plays a **filler** ("Bir saniye, hemen bakıyorum." / "Kontrol ediyorum, kısa bir an.") | 2 700 ms |
+| still no `say` | plays the **long wait** ("Biraz daha zaman alıyor, beklediğiniz için teşekkürler.") | 8 000 ms |
+| still no `say` | nothing more: the core's fallback line (20 s) and scripted closing take over | core |
+| A `say`/`play` is already queued | skips the acknowledgement and fillers | — |
+| Agent's sentence played, caller silent | **"Hâlâ orada mısınız?"** once | 9 000 ms after the sentence ended (the core reports `caller_silence` at 6 s and closes at 15 s) |
+| Caller spoke but STT gave no words | **"Sizi tam duyamadım, tekrar eder misiniz?"** when nothing else is due | immediate |
+| Core unreachable ≥ 5 s during a live call | **fault** ("Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."), then hangs up, reports `error` when the core is back | 5 000 ms |
+
+Rules: two local phrases never play within 1 s of each other; a local phrase is always cuttable;
+a `say` that arrives while a local phrase plays waits for it (they are ≤ 1.5 s). Each local phrase is
+reported as `phrase{set, index}`: the core appends a `holding` turn **with the policy's text** (the
+bridge sends no text back) and counts a filler or long wait as the holding phrases of that wait, so
+its own 4 s / 10 s holding timer does not play over them.
+
+**Barge-in**: while anything plays, the listener runs with an echo guard (Silero threshold 0.6,
+minimum speech 250 ms instead of 0.5 / 200 ms). A `speech_start` while an item with
+`allow_barge_in` plays cuts it at once: `FLUSH_MEDIA`, the synthesis cancelled, the queue dropped;
+the cut sentence is reported `said{seq, interrupted_at_char}` (characters heard, from the last
+`MEDIA_MARK_PROCESSED` and the time since), every dropped one `said{seq, interrupted_at_char: 0}`.
+Target ≤ 300 ms from the caller's onset to the last agent frame (report, roadmap step 5). A turn
+whose final transcript is only backchannel ("hı hı", "evet", "tamam", …) after a cut is flagged in
+the trace (false barge-in rate is measured, no resume in V1).
+
+**Playback**: a text is split into sentences (abbreviations, decimals and clock times kept
+whole), each sentence synthesised as one EMA stream, written to Asterisk as soon as it arrives
+(Asterisk re-times and queues ≤ 1 000 frames; XOFF/XON honoured), followed by `MARK_MEDIA`. The
+next sentence is synthesised while the current one plays, at most one ahead. Asterisk keeps sending
+silence frames while nothing plays (no dead-line feeling, NAT/conntrack kept alive).
+
+**Closing**: the core queues `play{clip: closing}` then `hangup`; the talker plays the closing to
+its mark, waits 400 ms, then hangs up the channel (report: drain + 300–500 ms before BYE).
+
+## 4. Wire changes (the bridge protocol stays V1-T1/T2's)
+
+The bridge's envelope types move from `jt_app::usecases::calls::bridge` to a new module
+`jt_calls::wire` (re-exported under the same names), so the worker and the core compile against the
+same structs, as the device bridge does with `jt_device_protocol`. `jt_calls` is already pure and
+builds on Windows; no new protocol crate is needed. Additive changes only (no bridge was ever
+deployed, so this is the first shipped shape):
+
+- `Command::Dial` gains `script: DialScript { lines, phrases, hotwords }`: the policy sentences the
+  core may queue on this call (workspace opening, transcript notice) and the phrase set, for
+  pre-synthesis, and the STT hotwords (the plan's `hotwords` plus the workspace name).
+- `CallPlan` gains `hotwords` (≤ 20 entries, 1–40 characters): words from the agent's context
+  (names, products) the STT is biased toward on this call.
+- `BridgeEvent` gains `phrase{set, index}` and `trace{trace}`.
+- `CallPolicy` gains `opening_outbound`, `transcript_notice` (both `Option`, `None` = the approved
+  default) and `phrases` (the approved set by default). Stored tolerant; no migration.
+- `CallMetrics` gains `traces` (≤ 200); `calls.get`'s call view gains `latency` (p50/p95).
+
+Agent-facing (MCP and panel route `POST /api/calls/{id}/say`), backward compatible:
+
+- `calls.say` gains `wait_reply_s` (0–25). Absent: returns `{call_id, seq, state}` at once, as
+  today. Present: queues the sentence, then waits for the caller's next words (an utterance, a key,
+  `caller_silence`, the hangup or the end) and returns them as `events` with `timed_out`, saving the
+  agent one `calls.listen` inference per turn (report: 0.5–2 s per turn).
+- Tool descriptions ask for **one short sentence per `say`** so the first one plays while the agent
+  writes the next.
+- No catalog row is added or changed (count stays 160).
+
+**Push transport.** The kernel's `BridgeSignals` wakes the bridge's parked poll on the commit of a
+`say`, and an agent's parked `listen`/`say` on the commit of an utterance; the worker always keeps
+one poll outstanding and posts each event the moment it happens. The plan proves the hop on the box
+with the trace: `core_round_ms` (bridge: utterance posted → reply's `say` received) minus the core's
+own `agent_latency_ms` is the transport overhead; acceptance p95 ≤ 100 ms. Only if it fails would a
+WebSocket push be designed (not in this plan).
+
+## 5. Opening, disclosure, transcript notice
+
+- Outbound: **"Merhaba, ben {İşletme}'nın dijital asistanıyım."** → **"Görüşmemiz hizmet kalitesi
+  için yazıya dökülmektedir."** → the plan's opening, e.g. "{Ad} ile mi görüşüyorum?" (the agent
+  writes it before dialing, so it is synthesised during ringing).
+- Inbound (V2, not built here): "Merhaba, ben {İşletme}'nın dijital asistanıyım. Size nasıl yardımcı
+  olabilirim?" then the notice; `greeting_inbound` defaults to it.
+- The suffix: `jt_calls::genitive(name)` — Turkish vowel harmony on the last vowel of the name's
+  last word (a ı → ın, e i → in, o u → un, ö ü → ün), buffer `n` after a final vowel; a vowel-less
+  word is read by its letter names (`THY'nin`), a trailing number by its Turkish reading
+  (`Studio 54'ün`). Jeeta'nın, Figurunica'nın, Atölye'nin, Ahmet'in. Pure and unit-tested. Known
+  limit: it follows the spelling, so a foreign name pronounced otherwise ("Apple") needs the owner to
+  write the opening by hand in the policy.
+- The templates are the owner's approved text; the server only inserts the workspace's own name.
+  `calls.policy_get` returns the policy with these defaults filled in, so the owner sees and can edit
+  the exact sentences; saving makes them explicit.
+- The fence's disclosure check (D3) now reads the **spoken opening** (workspace opening + notice +
+  plan opening). The default disclosure sentence is "ben {İşletme}'nın dijital asistanıyım", which
+  the default workspace opening contains; only a person can turn `disclose_assistant` off (unchanged).
+- Recording stays off: `recording_allowed` stays false on the bridge, the bridge has no recorder,
+  and the notice says "yazıya dökülmektedir" (transcribed), which the owner should have a lawyer
+  confirm (owner note, 2026-10-29).
+
+## 6. Engines and their parameters
+
+| Part | Choice | Parameters (start values, tuned on real calls) | Source |
+|---|---|---|---|
+| Inbound audio | Asterisk → 20 ms A-law (or μ-law per `MEDIA_START`) → PCM16 8 kHz in the worker | no denoiser, no AGC | report: RNNoise/DeepFilterNet hurt ASR |
+| VAD | Silero VAD (ONNX, from the `silero-vad==6.2.3` wheel) at 8 kHz, 256-sample chunks | threshold 0.5 (0.6 while playing), min speech 200 ms (250 while playing), stop 200 ms | report, "Sıra…" |
+| Turn end | Smart Turn v3.2 (`smart-turn-v3.2-cpu.onnx`, int8, BSD-2), last ≤ 8 s at 16 kHz | complete if p ≥ 0.5; else fallback 1 500 ms of silence | report |
+| Resample | soxr HQ 8 → 16 kHz, streaming | — | report |
+| STT | `atasoglu/seda-v0.1` on `sherpa-onnx==2.0.1`, `modified_beam_search`, 4 active paths, RNN LM | `num_threads=1`; LM scale chosen in B3 on a speak→listen loopback fixture (0.1 / 0.3 / 0.5; `sedalib` as the reference if none passes); hotwords score 1.5, lowercase Turkish, tokenised to the model's BPE pieces | report, seda card |
+| TTS | `ema-lightning==1.1.2`, `stream(text, sample_rate=8000, seed=0)` | torch 2 threads, one synthesis at a time per call | owner V-1 |
+| Normaliser | respell table → `antalia_mini.Antalia.normalize` (`antalia-mini==1.0.1`) | startup self-test: "14:00'e" must read "on dörde" | owner V-1 notes |
+| Phrase cache | PCM16 8 kHz; **disk** only for policy texts (openings, notice, phrase set); per-call **memory** for plan and agent sentences, dropped at hang-up | key = SHA-256(voice id ‖ text) | report, "ön sentez"; privacy (agent sentences can hold personal data) |
+
+## 7. Measurement
+
+`jt_calls::TurnTrace`, one per caller turn, every field a millisecond offset from the caller's end
+of speech (the last voiced frame), measured on the worker's monotonic clock (the listener reports
+positions in audio time, which the worker maps to the instants it forwarded those frames):
+`endpoint_ms`, `endpoint_by` (smart_turn | fallback), `stt_final_ms`, `delivered_ms` (the core
+answered the utterance POST), `say_ms` (the reply's first `say`/`play` received), `tts_first_ms`,
+`first_audio_ms` (first reply frame written to Asterisk), `ack_ms` (first frame of a local phrase),
+`barge_in_stop_ms` (caller onset → `FLUSH_MEDIA`, when the reply was cut).
+
+Derived: perceived = min(ack, first audio); content = first audio; core round = say − delivered;
+agent (core-side) = `CallMetrics.agent_latency_ms`. `jt_calls::summarize` gives n/p50/p95 (nearest
+rank) per measure and alerts: **perceived p95 > 1.0 s, content p95 > 3.0 s** (the report's
+thresholds), barge-in stop p95 > 300 ms (the report's step-5 target). Where they show: `calls.get`
+(`call.latency`), the panel's call page, and `jeeta-voice-bridge report` over the worker's own
+`traces.jsonl` (numbers and call ids only).
+
+Expected with a reasoning-on agent: perceived ≈ 0.6–0.9 s (the acknowledgement), content dominated
+by the brain (the report's 3–10 s), so the content alert is expected to fire; that is the honest
+number the owner chose by keeping the brain (V-2).
+
+## 8. Privacy and logging
+
+The worker logs call ids, kinds, states, counts, durations and errors' kinds; never a phone number,
+a transcript, a sentence, audio, an audio path that holds a number, the key or a password; an HTTP
+error is logged without its URL. Asterisk's console is `warning,error` only (verbose dialplan lines
+carry numbers). The speech services log startup and errors only. The trace file holds numbers and
+call ids. No raw audio is written anywhere except the policy-phrase cache (owner/approved text, no
+personal data). The core keeps what spec §9 says: turns (transcript), sessions, metrics.
+
+## 9. Inbound
+
+Gate V1 never saw 0850 → 102 reach the UA. The plan keeps an investigation task (route 0850 to 102
+for a test, `Stasis(jeeta-voice,in)` in Asterisk, the worker reports `inbound` and hangs up busy since
+duty mode is V2) that does not block anything else.
+
+## 10. Risks and open questions
+
+1. **Telephone-band accuracy is unmeasured** for seda and Smart Turn (8 kHz upsampled); expect
+   roughly double the read-speech WER; names and numbers need read-back by the agent (report).
+2. **Hotwords** need the model's BPE pieces; seda ships `tokens.txt` but no `bpe.model`, so the
+   listener tokenises greedily over `tokens.txt` and falls back to no hotwords when sherpa-onnx
+   refuses them. Gain is measured in B3; it may be zero.
+3. **Neighbour load** on the shared box: p95, not mean, is the gate; CPU shares are raised for the
+   voice containers.
+4. **EMA naturalness on edge cases** (weeks-old synthetic-data model) and its card's request for
+   human review of banking/health/legal messages (the D3 disclosure covers AI disclosure).
+5. **Inbound unknown** (above). **One line**: a second simultaneous call is refused `bridge_busy`.
+6. **Minutes**: about 95 minutes of the NetGSM package remain (valid to 28.11.2026); the plan uses
+   ≈ 15.
+7. Open for the owner: the transcript notice text (lawyer), which staging workspace hosts the test
+   calls, and the brand respelling entries beyond the two given.

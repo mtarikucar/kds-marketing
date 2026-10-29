@@ -1,0 +1,8676 @@
+# Voice Sidecar (Free Path) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Put the connected agent on a real NetGSM phone call through a free, self-hosted voice stack on the existing Contabo host: Asterisk as the SIP edge for extension 102, a Rust talker that speaks the existing V1-T1/T2 bridge protocol, seda/Silero/Smart Turn for listening and EMA Lightning for speaking, with every turn measured.
+
+**Architecture:** Asterisk 22.11 (`chan_websocket` + ARI, Docker, host network) owns SIP/RTP/DTMF and hands 20 ms G.711 frames to `jeeta-voice-bridge`, a new Rust workspace program in `rust/bridge/voice/`. The worker is a pure client: of Jeeta's `/api/voice/bridge/*` (loopback), of ARI, and of two network-less Python model servers on unix sockets (`jeeta-voice-listen`, `jeeta-voice-speak`). The core keeps the session's truth and authorship rules; the worker's per-call talker plays owner-approved phrases while the agent thinks, handles barge-in and closing, and reports a latency trace per turn. Core changes are additive and backward compatible (`jt_calls::wire`, policy openings and phrases, `calls.say{wait_reply_s}`).
+
+**Tech Stack:** Rust 2024 (tokio, tokio-tungstenite 0.30, reqwest, serde, sha2), `jt_calls` domain crate; Asterisk 22.11.0 (source build, Debian bookworm, `chan_websocket`, `res_ari`, `chan_pjsip`); Python 3.12 (`sherpa-onnx==2.0.1`, `onnxruntime==1.31.1`, `silero-vad==6.2.3` model file, `transformers==5.21.0` feature extractor, `soxr==1.1.0`, `websockets==17.3`, `ema-lightning==1.1.2`, `antalia-mini==1.0.1`, CPU torch); Docker; systemd; React panel (vitest).
+
+---
+
+## 0. Read before starting
+
+- Design addendum (what and why): `docs/superpowers/specs/2026-10-29-voice-sidecar-free-path-design.md`.
+- Voice design (session, fence, protocol): `docs/superpowers/specs/2026-10-27-agent-voice-calls-design.md`.
+- V-section of `docs/superpowers/plans/2026-10-27-cleanup-and-voice-plan.md` (V1-T1, V1-T2 are done; this plan is V1-T3; V2-T1 inbound duty stays out of scope).
+- `docs/operations/voice-bridge.md` (key, routes, heartbeat; rewritten in task E4).
+- The built code you extend: `rust/crates/jt_app/src/usecases/calls.rs`, `calls/{bridge,session,listen,say}.rs`, `usecases/bridges/kernel.rs`, `ports/bridges.rs`, `ports/calls.rs`, `rust/crates/domain/jt_calls/src/*`, `rust/crates/adapters/jt_panel_http/src/routes/voice_bridge.rs`, `bearer.rs`, `rust/crates/jt_app/src/catalog.rs` rows `calls.*`.
+- The device bridge as the model of a workspace program that is not the server: `rust/bridge/device/` and its archtest rules in `rust/crates/jt_archtest/tests/dependency_boundaries.rs`.
+
+Paths below are relative to the repository root unless they start with `/` (server paths).
+
+## 1. Constraints that bind every task
+
+1. **Free and self-hosted only.** No cloud STT/TTS, no new server, no GPU. Everything runs on the Contabo VPS (6 vCPU Broadwell 2.0 GHz AVX2, 11 GB RAM, ~29 neighbour containers). Prod Jeeta is `jeeta.service` on `127.0.0.1:8090`, staging `jeeta-staging.service` on `127.0.0.1:8091`.
+2. **The server never composes a sentence.** Every text played is the plan's, the policy's (owner-approved) or the agent's. The talker selects among policy phrases; the core logs the policy text for each.
+3. **The brain is unchanged.** Do not add, suggest or switch to a fast/reasoning-off model anywhere (code, tool descriptions, docs). Owner decision V-2.
+4. **Never log** a phone number, transcript text, a sentence, audio, an audio path holding a number, a key or a password. Ledger and events carry only what spec §12 says.
+5. **No raw audio storage.** Recording stays off. The only audio on disk is the policy-phrase cache.
+6. **Hexagonal boundaries** (`rust/crates/jt_archtest`): the worker names no server crate (`jt_app`, `jt_pg`, adapters), only `jt_calls`; `reqwest` and `tokio-tungstenite` are allowed in `jeeta-voice-bridge` only (archtest + `rust/deny.toml`).
+7. **Catalog discipline.** This plan adds no catalog row (`rust/crates/jt_app/tests/catalog.rs` keeps `assert_eq!(CATALOG.len(), 160)`). If a task ever needs a row, the catalog row, handler, permission, status-gate expectation in `catalog_is_the_release_table`, `jt_archtest/tests/{gate_rule,m4_productisation,twin_rule}.rs` and the count pin change in the same commit.
+8. **Migrations.** None are needed: every new field lives in tolerant JSON (`workspace_policies.calls`, `call_sessions.data`, `call_commands.payload`) and new event kinds fit `call_bridge_events.kind` (`char_length 1..32`). If one becomes necessary it follows `rust/migrations/0016_voice_bridge.*`: repeatable guarded statements, ENABLE + FORCE RLS with the `0008` policy on any tenant table, a down that refuses unsafe states.
+9. **Panel copy**: Turkish and English keys together (`rust/panel/src/i18n/{tr,en}.json`); the panel's i18n parity test must pass.
+10. **No push, no PR, no deploy from a worker.** Deploy tasks (the server steps of B1–B3, B7, B8, D3, E1–E3) are run by the coordinator in the main session, with the owner's OK where marked. Workers implement and commit code tasks only.
+11. **Prod deploy** of the core follows `/root/upgrade.sh` (backup → compat check → swap → readyz); staging first, with `sudo -u postgres pg_dump -p 5437 -Fc jeeta > /var/backups/jeeta-staging/pre-<sha8>-<stamp>.dump` before `staging-upgrade.sh`.
+
+## 2. Where things run
+
+| What | Windows dev machine | Linux CI (`.github/workflows/rust.yml`) | Contabo host |
+|---|---|---|---|
+| `cargo fmt --all -- --check` | yes | yes | — |
+| `cargo test -p jt_calls` (pure domain) | **yes** | yes | — |
+| `cargo test -p jeeta-voice-bridge` (all but the `cfg(unix)` socket transport) | **yes** | yes | — |
+| `cargo clippy -p jeeta-voice-bridge --all-targets -- -D warnings` | yes | yes | — |
+| `jt_app`, `jt_mcp`, `jt_panel_http`, `jt_archtest` tests (pull `jt_pg` through `jt_testkit`, unix only) | **no** | yes (`rust-test`, ~15 min) | — |
+| `cargo clippy --locked -p jt_app --lib --features tokio/time -- -D warnings` | yes | — | — |
+| `pnpm --dir rust/panel test` / `typecheck` | yes | yes | — |
+| Python unit tests without models (`pytest -m "not models"`) | yes (Python 3.12) | yes (new job) | yes |
+| Model-backed tests (`pytest -m models`), Docker images, Asterisk | no | no | **yes** |
+| Real calls | no | no | yes, **owner's phone** |
+
+When a step says "CI", push nothing yourself: the coordinator pushes the branch and reads the run. When a test cannot run locally, write it, run what compiles (`cargo check -p jt_app --tests` does not build on Windows either; rely on CI), and note it in the commit body.
+
+## 3. Owner involvement (marked **[OWNER]** in tasks)
+
+- **B7** the vertical-slice call to the owner's mobile (≈ 3 min of package).
+- **B8** optional: route 0850 → 102 in the Netsantral portal (OTP login) and call 0850 once (≈ 2 min). Non-blocking.
+- **E1** OK to upgrade staging (and later prod) with the Phase C release.
+- **E3** the end-to-end acceptance calls (≈ 2 × 4 min).
+- Open questions: the transcript notice text (lawyer), the staging workspace that hosts test calls (proposed: "Test Atölye", never "Jeeta Demo"), extra brand respellings.
+- About 95 minutes of the NetGSM package remain (valid to 28.11.2026). This plan budgets ≈ 15.
+
+## 4. The wire as it is today (quoted from the code at `a9c22b99`)
+
+The worker must speak exactly this. Server-side envelope types, `rust/crates/jt_app/src/usecases/calls/bridge.rs`:
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeechToText { pub engine: String, pub model: String }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextToSpeech { pub engine: String, pub voice: String }
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterInput {
+    pub extension: String,
+    #[serde(default)]
+    pub codecs: Vec<String>,
+    pub max_calls: u8,
+    pub stt: SpeechToText,
+    pub tts: TextToSpeech,
+    pub version: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RegisterOut { pub capability_id: CapabilityId, pub status: EffectiveStatus, pub heartbeat_s: u32 }
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandsQuery {
+    #[serde(default)] pub wait_s: Option<u32>,
+    #[serde(default)] pub extension: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BridgeCommand {
+    pub id: CallCommandId,
+    pub call_id: CallId,
+    pub bridge_call_id: Option<String>,
+    pub kind: String,
+    pub payload: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CommandsOut { pub commands: Vec<BridgeCommand>, pub timed_out: bool }
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct EventIn {
+    pub bridge_call_id: String,
+    pub bridge_seq: u32,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    #[serde(flatten)]
+    pub event: BridgeEvent,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventsInput { pub events: Vec<EventIn> }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct EventsOut { pub accepted: u32, pub duplicates: u32, pub unmatched: u32 }
+```
+
+Payload types, `rust/crates/domain/jt_calls/src/session.rs` and `plan.rs`:
+
+```rust
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BridgeEvent {
+    Inbound { from_e164: String, to_e164: String },
+    Ringing,
+    Answered,
+    Utterance { text: String, is_final: bool,
+        #[serde(default)] confidence: Option<f32>, #[serde(default)] stt_ms: Option<u32> },
+    Dtmf { digit: String },
+    Said { seq: u32, #[serde(default)] interrupted_at_char: Option<u32>, #[serde(default)] tts_ms: Option<u32> },
+    Silence { ms: u32 },
+    Recording { file_ref: String },
+    Hangup { cause: String },
+    Error { failure_line: String },
+    CommandDone { id: CallCommandId },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayKind { Opening, Holding, Fallback, Closing, Announcement }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Command {
+    Answer { greeting_text: String, then_record: bool },
+    Dial { to_e164: String, plan: CallPlan },
+    Say { seq: u32, text: String, allow_barge_in: bool },
+    Play { seq: u32, clip: PlayKind, index: u8, text: String },
+    Record { start: bool },
+    Transfer { to: String },
+    Hangup,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallPlan {
+    pub opening: String, pub goal: String, pub holding: Vec<String>,
+    #[serde(default)] pub fallback: Vec<String>,
+    pub closing: String, pub max_duration_s: u16,
+    #[serde(default = "turkish")] pub language: String,
+    #[serde(default = "yes")] pub disclose_assistant: bool,
+}
+```
+
+The HTTP surface (`docs/operations/voice-bridge.md` §3): `POST /api/voice/bridge/register` every 15 s; `GET /api/voice/bridge/commands?wait_s=25&extension=102` (≤ 25 s long-poll, commands leased, re-delivered after 10 s unless acknowledged by an event `command_done{id}`); `POST /api/voice/bridge/events` (≤ 100 events, idempotent by `(bridge_call_id, bridge_seq)`, answer `{accepted, duplicates, unmatched}`). `Authorization: Bearer <calls.bridge key>` on all; `X-Requested-With: jeeta-panel` on POSTs. For an agent's call the session's `bridge_call_id` is its call id (`place_agent` sets `bridge_call_id: Some(id.to_string())`). The kernel wakes a parked poll on commit (`ports/bridges.rs` `BridgeSignals`) with a 1 s fallback tick (`kernel::FALLBACK_TICK`).
+
+## 5. File structure
+
+**Domain (`rust/crates/domain/jt_calls/`)**
+- Create `src/wire.rs` — the bridge's HTTP envelopes (moved from `jt_app`), both directions serialisable, plus `BridgeCommand::{of, command}`.
+- Create `src/trace.rs` — `TurnTrace`, `EndpointBy`, `Percentiles`, `LatencySummary`, `summarize`, alert thresholds.
+- Create `src/opening.rs` — `genitive`, `outbound_opening`, `inbound_greeting`, `disclosure`, `TRANSCRIPT_NOTICE`.
+- Create `src/phrases.rs` — `BridgePhrases` (owner-approved defaults), `PhraseSet`.
+- Modify `src/policy.rs` — `opening_outbound`, `transcript_notice`, `phrases`, `with_workspace`, `spoken_opening`.
+- Modify `src/plan.rs` — `hotwords`.
+- Modify `src/session.rs` — `DialScript`, `Command::Dial{script}`, `BridgeEvent::{Phrase, Trace}`, `CallMetrics.traces`, reducer.
+- Modify `src/lib.rs`, `Cargo.toml` (`serde_json` becomes a normal dependency).
+- Tests: create `tests/wire.rs`, `tests/trace.rs`, `tests/opening.rs`, `tests/phrases.rs`, `tests/bridge_additions.rs`, `tests/policy_opening.rs`; modify `tests/support/mod.rs`.
+
+**Core (`rust/crates/jt_app/`, adapters, panel)**
+- Modify `src/usecases/calls/bridge.rs` (re-export the wire, `kind_of`), `src/usecases/calls.rs` (`policy_of`, disclosure over the spoken opening, dial script, latency in the view), `src/usecases/calls/session.rs`, `src/usecases/calls/listen.rs` (`wait_turns`), `src/usecases/calls/say.rs` (`wait_reply_s`).
+- Tests: modify `tests/calls_session.rs`, `tests/calls_bridge.rs`.
+- Modify `rust/crates/adapters/jt_mcp/src/tools/calls.rs` (schemas, descriptions); test `rust/crates/adapters/jt_mcp/tests/calls_mcp.rs`.
+- Modify `rust/panel/src/api/calls.ts`, `pages/CallsPolicy.tsx`, `pages/CallDetail.tsx`, `i18n/{tr,en}.json`; tests `pages/CallsPolicy.test.tsx`, `pages/CallDetail.test.tsx`.
+- Modify `rust/crates/jt_archtest/tests/dependency_boundaries.rs`, `rust/deny.toml`, `rust/Cargo.toml` (member + workspace deps).
+
+**Worker (`rust/bridge/voice/`, package `jeeta-voice-bridge`)**
+- `Cargo.toml`
+- `src/main.rs` — `run` | `slice` | `report` | `check`.
+- `src/lib.rs` — module map and the logging rule.
+- `src/config.rs` — environment configuration.
+- `src/g711.rs` — A-law/μ-law.
+- `src/text.rs` — sentence split with character offsets; backchannel words.
+- `src/netgsm.rs` — E.164 → NetGSM dial string; Q.850 → hangup cause word.
+- `src/talker.rs` — the pure per-call state machine.
+- `src/trace.rs` — the per-turn trace builder (monotonic) and the JSONL writer.
+- `src/cache.rs` — phrase cache (disk for policy texts, memory per call).
+- `src/ari.rs` — ARI REST client and event parser.
+- `src/media.rs` — `chan_websocket` control parser and command builder.
+- `src/speech.rs` — socket endpoints, listen/speak message types and clients.
+- `src/call.rs` — one call's task: ARI, media, listener, speaker, talker, reports.
+- `src/jeeta.rs` — the core client (register, commands, events).
+- `src/run_loop.rs` — heartbeat, poll loop, call registry.
+- `src/slice.rs` — the standalone vertical slice.
+- Tests: `tests/g711.rs`, `tests/text.rs`, `tests/netgsm.rs`, `tests/talker.rs`, `tests/logging.rs`, `tests/adapters.rs`, `tests/call.rs`, `tests/jeeta_client.rs`, `tests/run_loop.rs`, `tests/support/mod.rs`.
+- Speech services: `speech/listen/{jeeta_listen.py,endpoint.py,vad.py,turn.py,asr.py,hotwords.py,requirements.txt,models.lock,fetch_models.py,Dockerfile}`, `speech/listen/tests/{test_endpoint.py,test_hotwords.py,test_session.py,test_models.py}`; `speech/speak/{jeeta_speak.py,respell.py,respell.json,requirements.txt,Dockerfile}`, `speech/speak/tests/{test_respell.py,test_session.py,test_models.py}`; `speech/pytest.ini`.
+- Asterisk: `asterisk/Dockerfile`, `asterisk/etc/{asterisk.conf,modules.conf,logger.conf,cdr.conf,cel.conf,pjsip.conf,extensions.conf,http.conf,ari.conf,rtp.conf}`, `asterisk/test_configs.py`, `asterisk/test_target.py`.
+- Deploy: `deploy/{jeeta-asterisk.service,jeeta-voice-listen.service,jeeta-voice-speak.service,jeeta-voice-bridge.service,jeeta-voice.tmpfiles,bridge.env.example,images.env.example,jeeta-voice-target}`.
+- CI: modify `.github/workflows/rust.yml` (Python unit tests and the Linux worker artifact).
+- Docs: rewrite `docs/operations/voice-bridge.md` (E4).
+
+## 6. Phases
+
+| Phase | Tasks | Produces |
+|---|---|---|
+| **A — pure foundations** | A1 wire home, A2 trace, A3 opening/genitive, A4 phrases, A5 the wire's additions in the domain (dial script, hotwords, phrase and trace events) | Shared types the worker and the core compile against; all testable on Windows |
+| **B — the vertical slice (riskiest first)** | B1 Asterisk + ext 102, B2 speak service, B3 listen service, B4 worker crate and its pure modules (codec, text, NetGSM, talker), B5 worker adapters (config, cache, trace, ARI, media, speech), B6 the call task and `slice`, **B7 [OWNER] slice call**, B8 inbound investigation | Real audio through Asterisk to and from the engines: register 102, call the owner, play the cached opening, transcribe one turn, play an EMA reply, print the trace. Go/no-go before any polishing |
+| **C — core protocol additions** | C1 the workspace opening and notice come first, C2 the core fills the dial script (and MCP hotwords), C3 phrases and traces reach the turn log and the call view, C4 `say{wait_reply_s}` + tool texts, C5 panel | The core plays the approved opening, logs bridge phrases, keeps traces, merges say+listen |
+| **D — the talker against the core** | D1 Jeeta client, D2 run loop, D3 deploy the worker on staging | The worker is the workspace's line |
+| **E — release and acceptance** | E1 release core to staging (then prod), E2 environment switch, **E3 [OWNER] e2e acceptance**, E4 docs | A measured agent call to the owner's mobile |
+
+
+Every commit in this plan ends with the trailer line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (shown once per commit step as a second `-m`).
+
+---
+
+## Phase A — pure foundations (Windows-testable)
+
+### Task A1: The bridge's wire moves into `jt_calls::wire`
+
+**Files:**
+- Create: `rust/crates/domain/jt_calls/src/wire.rs`
+- Create: `rust/crates/domain/jt_calls/tests/wire.rs`
+- Modify: `rust/crates/domain/jt_calls/src/lib.rs`
+- Modify: `rust/crates/domain/jt_calls/Cargo.toml`
+- Modify: `rust/crates/jt_app/src/usecases/calls/bridge.rs` (the struct definitions between `// Register` and `// Events` sections, and `impl From<QueuedCommand> for BridgeCommand`)
+
+- [ ] **Step 1: Write the failing test**
+
+`rust/crates/domain/jt_calls/tests/wire.rs`:
+
+```rust
+//! The voice bridge's HTTP bodies read and write the same in the server and the bridge program.
+use jt_calls::wire::{
+    BridgeCommand, CommandsQuery, EventsInput, RegisterInput, RegisterOut,
+};
+use jt_calls::{BridgeEvent, CallCommandId, CallId, CallPlan, Command, PlayKind};
+use serde_json::json;
+use uuid::Uuid;
+
+fn plan() -> CallPlan {
+    serde_json::from_value(json!({
+        "opening": "Ahmet Bey ile mi görüşüyorum?",
+        "goal": "Randevuyu teyit etmek",
+        "holding": ["Bir saniye."],
+        "closing": "Görüşmek üzere, iyi günler.",
+        "max_duration_s": 300,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn every_command_kind_round_trips_through_the_wire() {
+    let commands = vec![
+        Command::Answer { greeting_text: "Merhaba.".into(), then_record: false },
+        Command::Dial { to_e164: "+905321234567".into(), plan: plan() },
+        Command::Say { seq: 3, text: "Tamam.".into(), allow_barge_in: true },
+        Command::Play { seq: 4, clip: PlayKind::Closing, index: 0, text: "İyi günler.".into() },
+        Command::Record { start: false },
+        Command::Transfer { to: "101".into() },
+        Command::Hangup,
+    ];
+    for c in commands {
+        let wire = BridgeCommand::of(
+            CallCommandId(Uuid::nil()),
+            CallId(Uuid::nil()),
+            Some("c-1".into()),
+            &c,
+        );
+        let text = serde_json::to_string(&wire).unwrap();
+        let back: BridgeCommand = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, wire, "{text}");
+        assert!(back.payload.get("kind").is_none(), "{text}");
+        assert_eq!(back.command().unwrap(), c, "{text}");
+    }
+}
+
+#[test]
+fn events_input_reads_the_documented_batch_and_writes_it_back() {
+    let batch = json!({ "events": [
+        { "bridge_call_id": "c-1", "bridge_seq": 1, "at": "2026-10-28T09:00:01Z", "kind": "ringing" },
+        { "bridge_call_id": "c-1", "bridge_seq": 2, "at": "2026-10-28T09:00:04Z", "kind": "command_done",
+          "id": "00000000-0000-0000-0000-000000000000" },
+        { "bridge_call_id": "c-1", "bridge_seq": 3, "at": "2026-10-28T09:00:06Z", "kind": "utterance",
+          "text": "evet", "is_final": true, "confidence": 0.5, "stt_ms": 80 }
+    ]});
+    let read: EventsInput = serde_json::from_value(batch).unwrap();
+    assert_eq!(read.events.len(), 3);
+    assert!(matches!(read.events[2].event, BridgeEvent::Utterance { is_final: true, .. }));
+    let again: EventsInput = serde_json::from_value(serde_json::to_value(&read).unwrap()).unwrap();
+    assert_eq!(again.events[1].bridge_seq, 2);
+    assert!(matches!(again.events[1].event, BridgeEvent::CommandDone { .. }));
+}
+
+#[test]
+fn register_input_refuses_unknown_fields() {
+    let body = json!({
+        "extension": "102", "codecs": ["PCMA"], "max_calls": 1,
+        "stt": { "engine": "seda", "model": "seda-v0.1" },
+        "tts": { "engine": "ema", "voice": "ema-lightning-1.1.2" },
+        "version": "0.1.0", "extra": 1,
+    });
+    assert!(serde_json::from_value::<RegisterInput>(body).is_err());
+}
+
+#[test]
+fn commands_query_writes_only_what_is_set() {
+    let q = CommandsQuery { wait_s: Some(25), extension: None };
+    assert_eq!(serde_json::to_value(&q).unwrap(), json!({ "wait_s": 25 }));
+}
+
+#[test]
+fn register_out_reads_the_servers_answer() {
+    let out: RegisterOut = serde_json::from_value(json!({
+        "capability_id": "00000000-0000-0000-0000-000000000000",
+        "status": "verified",
+        "heartbeat_s": 15,
+    }))
+    .unwrap();
+    assert_eq!(out.heartbeat_s, 15);
+}
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run (from `rust/`): `cargo test -p jt_calls --test wire`
+Expected: FAIL to compile with `unresolved import jt_calls::wire`.
+
+- [ ] **Step 3: Write `wire.rs`**
+
+`rust/crates/domain/jt_calls/src/wire.rs`:
+
+```rust
+//! The voice bridge's HTTP bodies (spec `2026-10-27-agent-voice-calls-design.md` §10, routes
+//! `/api/voice/bridge/*`), shared by the server (`jt_app::usecases::calls::bridge`, which re-exports
+//! them under these names) and the bridge program (`jeeta-voice-bridge`), so that the two cannot
+//! drift. Each type reads and writes both ways: the server reads what the bridge writes and the
+//! bridge reads what the server writes. The limits are the server's; these types carry shapes only.
+
+use jt_capability::{CapabilityId, EffectiveStatus};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use time::OffsetDateTime;
+
+use crate::session::{BridgeEvent, Command};
+use crate::{CallCommandId, CallId};
+
+/// The bridge's speech-to-text engine and its model.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeechToText {
+    pub engine: String,
+    pub model: String,
+}
+
+/// The bridge's text-to-speech engine and its voice.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextToSpeech {
+    pub engine: String,
+    pub voice: String,
+}
+
+/// `calls.bridge.register`: what the bridge reports of itself. `extension` is its PBX extension
+/// (1 to 16 digits), `codecs` at most 8 names (`[A-Za-z0-9._-]`, 1 to 16 characters each),
+/// `max_calls` how many calls it carries at once (1 to 8), the engines' names 1 to 32 characters
+/// of `[a-z0-9_-]`, the model, voice and version 1 to 128 characters without control characters.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterInput {
+    pub extension: String,
+    #[serde(default)]
+    pub codecs: Vec<String>,
+    pub max_calls: u8,
+    pub stt: SpeechToText,
+    pub tts: TextToSpeech,
+    pub version: String,
+}
+
+/// What a registration answers: the bridge's capability, its status now, and how often to
+/// register again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisterOut {
+    pub capability_id: CapabilityId,
+    pub status: EffectiveStatus,
+    pub heartbeat_s: u32,
+}
+
+/// `calls.bridge.commands`: how long to wait for a command (at most 25 seconds, which is also
+/// what an absent `wait_s` waits), and which bridge is asking (its extension; the workspace's only
+/// bridge when left out).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandsQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_s: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+}
+
+/// A command as the bridge takes it: `kind` names it (`dial`, `play`, `say`, `hangup`, ...) and
+/// `payload` carries the rest of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BridgeCommand {
+    pub id: CallCommandId,
+    pub call_id: CallId,
+    pub bridge_call_id: Option<String>,
+    pub kind: String,
+    pub payload: Value,
+}
+
+impl BridgeCommand {
+    /// Command `command` (id `id`, of call `call_id`, which the bridge knows as `bridge_call_id`)
+    /// as a poll hands it out: its `kind` apart, its other fields in `payload`.
+    pub fn of(
+        id: CallCommandId,
+        call_id: CallId,
+        bridge_call_id: Option<String>,
+        command: &Command,
+    ) -> BridgeCommand {
+        let mut payload =
+            serde_json::to_value(command).unwrap_or_else(|_| Value::Object(Map::new()));
+        let kind = payload
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if let Some(fields) = payload.as_object_mut() {
+            fields.remove("kind");
+        }
+        BridgeCommand {
+            id,
+            call_id,
+            bridge_call_id,
+            kind,
+            payload,
+        }
+    }
+
+    /// The command, read back from its kind and fields; an error for a kind or a field this build
+    /// does not know.
+    pub fn command(&self) -> Result<Command, serde_json::Error> {
+        let mut fields = match &self.payload {
+            Value::Object(m) => m.clone(),
+            _ => Map::new(),
+        };
+        fields.insert("kind".to_owned(), Value::String(self.kind.clone()));
+        serde_json::from_value(Value::Object(fields))
+    }
+}
+
+/// What a poll answers: the commands now the bridge's, oldest first, and whether it waited its
+/// whole time for none.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CommandsOut {
+    pub commands: Vec<BridgeCommand>,
+    pub timed_out: bool,
+}
+
+/// One event the bridge reports: its id of the call, the event's number in that call (the bridge
+/// counts up from 1), when it happened, and what it is (`kind` and its fields, as [`BridgeEvent`]
+/// reads them).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EventIn {
+    pub bridge_call_id: String,
+    pub bridge_seq: u32,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    #[serde(flatten)]
+    pub event: BridgeEvent,
+}
+
+/// `calls.bridge.events`: at most 100 events, of any of the bridge's calls.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventsInput {
+    pub events: Vec<EventIn>,
+}
+
+/// What a batch did: the events applied now, those applied before (a retry), and those of a call
+/// the bridge has no session for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventsOut {
+    pub accepted: u32,
+    pub duplicates: u32,
+    pub unmatched: u32,
+}
+```
+
+In `rust/crates/domain/jt_calls/src/lib.rs` add after `mod timers;`:
+
+```rust
+pub mod wire;
+```
+
+In `rust/crates/domain/jt_calls/Cargo.toml` move `serde_json.workspace = true` from `[dev-dependencies]` to `[dependencies]` (the dev section keeps nothing else; delete the empty `[dev-dependencies]` header). `serde_json` is on the domain allowlist (`DOMAIN_ALLOW` in `jt_archtest/tests/dependency_boundaries.rs`).
+
+- [ ] **Step 4: Run the new test**
+
+Run: `cargo test -p jt_calls --test wire`
+Expected: `test result: ok. 5 passed`.
+
+- [ ] **Step 5: Point the server at the shared types**
+
+In `rust/crates/jt_app/src/usecases/calls/bridge.rs`, delete the definitions of `SpeechToText`, `TextToSpeech`, `RegisterInput`, `RegisterOut`, `CommandsQuery`, `BridgeCommand`, `CommandsOut`, `EventIn`, `EventsInput`, `EventsOut` (their doc comments now live in `wire.rs`) and replace the body of `impl From<QueuedCommand> for BridgeCommand` so the block reads:
+
+```rust
+pub use jt_calls::wire::{
+    BridgeCommand, CommandsOut, CommandsQuery, EventIn, EventsInput, EventsOut, RegisterInput,
+    RegisterOut, SpeechToText, TextToSpeech,
+};
+
+impl From<QueuedCommand> for BridgeCommand {
+    fn from(q: QueuedCommand) -> Self {
+        BridgeCommand::of(q.id, q.call_id, q.bridge_call_id, &q.command)
+    }
+}
+```
+
+Delete the imports clippy then reports unused in `bridge.rs` (`Deserialize`, `Serialize` and `OffsetDateTime` may be among them).
+
+- [ ] **Step 6: Check the server still compiles and lints**
+
+Run (Windows works): `cargo clippy --locked -p jt_app --lib --features tokio/time -- -D warnings`
+Expected: no warnings. Run `cargo fmt --all -- --check`: no diff.
+CI (Linux) runs `cargo test --locked --workspace`; expected: every existing `calls_bridge` and `calls_session` test passes unchanged (the types and their JSON are identical).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add rust/crates/domain/jt_calls rust/crates/jt_app/src/usecases/calls/bridge.rs
+git commit -m "refactor(calls): the voice bridge's wire types live in jt_calls::wire" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task A2: The per-turn latency trace and its p50/p95
+
+**Files:**
+- Create: `rust/crates/domain/jt_calls/src/trace.rs`
+- Create: `rust/crates/domain/jt_calls/tests/trace.rs`
+- Modify: `rust/crates/domain/jt_calls/src/lib.rs`
+
+- [ ] **Step 1: Write the failing test**
+
+`rust/crates/domain/jt_calls/tests/trace.rs`:
+
+```rust
+//! A caller turn's timings and their percentiles (design addendum §7).
+use jt_calls::{
+    BARGE_IN_P95_ALERT_MS, CONTENT_P95_ALERT_MS, EndpointBy, PERCEIVED_P95_ALERT_MS, TurnTrace,
+    percentiles, summarize,
+};
+
+fn turn(ack: Option<u32>, first_audio: Option<u32>) -> TurnTrace {
+    TurnTrace {
+        endpoint_ms: 260,
+        endpoint_by: Some(EndpointBy::SmartTurn),
+        stt_final_ms: 310,
+        delivered_ms: Some(340),
+        say_ms: Some(4_340),
+        tts_first_ms: Some(4_700),
+        first_audio_ms: first_audio,
+        ack_ms: ack,
+        barge_in_stop_ms: None,
+        backchannel_cut: false,
+    }
+}
+
+#[test]
+fn nearest_rank_percentiles() {
+    let p = percentiles([400, 100, 300, 200]);
+    assert_eq!((p.n, p.p50, p.p95), (4, Some(200), Some(400)));
+    let p = percentiles(1..=100);
+    assert_eq!((p.n, p.p50, p.p95), (100, Some(50), Some(95)));
+    let p = percentiles([7]);
+    assert_eq!((p.p50, p.p95), (Some(7), Some(7)));
+    let p = percentiles(std::iter::empty());
+    assert_eq!((p.n, p.p50, p.p95), (0, None, None));
+}
+
+#[test]
+fn perceived_is_the_first_sound_and_content_the_reply() {
+    let t = turn(Some(620), Some(4_760));
+    assert_eq!(t.perceived_ms(), Some(620));
+    assert_eq!(t.core_round_ms(), Some(4_000));
+    assert_eq!(turn(None, Some(900)).perceived_ms(), Some(900));
+    assert_eq!(turn(None, None).perceived_ms(), None);
+}
+
+#[test]
+fn summary_alerts_on_the_reports_thresholds() {
+    let traces = vec![turn(Some(620), Some(4_760)), turn(Some(640), Some(3_900))];
+    let s = summarize(&traces, &[4_100, 3_200]);
+    assert_eq!(s.turns, 2);
+    assert_eq!(s.perceived.p95, Some(640));
+    assert_eq!(s.content.p95, Some(4_760));
+    assert_eq!(s.agent.p50, Some(3_200));
+    assert!(s.content.p95.unwrap() > CONTENT_P95_ALERT_MS);
+    assert_eq!(s.alerts, vec!["content_p95_over_3s".to_owned()]);
+    let slow = vec![turn(Some(1_200), Some(1_500))];
+    let s = summarize(&slow, &[]);
+    assert!(s.perceived.p95.unwrap() > PERCEIVED_P95_ALERT_MS);
+    assert_eq!(s.alerts, vec!["perceived_p95_over_1s".to_owned()]);
+    let mut cut = turn(Some(600), Some(900));
+    cut.barge_in_stop_ms = Some(BARGE_IN_P95_ALERT_MS + 50);
+    assert_eq!(summarize(&[cut], &[]).alerts, vec!["barge_in_p95_over_300ms".to_owned()]);
+    assert!(summarize(&[], &[]).alerts.is_empty());
+}
+
+#[test]
+fn a_trace_reads_tolerantly() {
+    let t: TurnTrace = serde_json::from_value(serde_json::json!({
+        "endpoint_ms": 250, "stt_final_ms": 300
+    }))
+    .unwrap();
+    assert_eq!(t.endpoint_by, None);
+    assert_eq!(t.first_audio_ms, None);
+}
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `cargo test -p jt_calls --test trace`
+Expected: FAIL to compile (`TurnTrace` not found in `jt_calls`).
+
+- [ ] **Step 3: Write `trace.rs`**
+
+`rust/crates/domain/jt_calls/src/trace.rs`:
+
+```rust
+//! What one caller turn took, as the voice bridge measured it (design addendum
+//! `2026-10-29-voice-sidecar-free-path-design.md` §7), and the percentiles of a call's turns. Every
+//! offset is in milliseconds from the caller's end of speech (the last voiced 20 ms frame), on the
+//! bridge's monotonic clock. Numbers only: a trace never carries a word or a number dialled.
+
+use serde::{Deserialize, Serialize};
+
+/// The first sound the caller hears after speaking (perceived latency): alert above this p95.
+pub const PERCEIVED_P95_ALERT_MS: u32 = 1_000;
+/// The first sound of the agent's real reply (content latency): alert above this p95.
+pub const CONTENT_P95_ALERT_MS: u32 = 3_000;
+/// The caller's onset to the agent's voice stopping when the caller cuts in: alert above this p95.
+pub const BARGE_IN_P95_ALERT_MS: u32 = 300;
+/// The most traces one call keeps.
+pub const MAX_TRACES: usize = 200;
+
+/// What decided that the caller's turn had ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointBy {
+    /// The turn model judged it complete after a short pause.
+    SmartTurn,
+    /// The silence ran past the fallback.
+    Fallback,
+}
+
+/// The timings of one caller turn (offsets from the end of speech).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TurnTrace {
+    /// The end of the turn was decided.
+    pub endpoint_ms: u32,
+    pub endpoint_by: Option<EndpointBy>,
+    /// The final transcript was ready.
+    pub stt_final_ms: u32,
+    /// The core answered the utterance's report.
+    pub delivered_ms: Option<u32>,
+    /// The reply's first sentence (`say` or `play`) reached the bridge.
+    pub say_ms: Option<u32>,
+    /// The reply's first synthesised audio was ready.
+    pub tts_first_ms: Option<u32>,
+    /// The reply's first frame was written to the line.
+    pub first_audio_ms: Option<u32>,
+    /// The first frame of a phrase the bridge played on its own (acknowledgement, filler).
+    pub ack_ms: Option<u32>,
+    /// When the caller cut the reply: from the caller's onset to the agent's voice stopping.
+    pub barge_in_stop_ms: Option<u32>,
+    /// The caller cut the reply with words that were only acknowledgement ("hı hı", "evet").
+    pub backchannel_cut: bool,
+}
+
+impl TurnTrace {
+    /// The first sound the caller heard after speaking: a local phrase or the reply.
+    pub fn perceived_ms(&self) -> Option<u32> {
+        match (self.ack_ms, self.first_audio_ms) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// From the core taking the caller's words to the reply reaching the bridge: the agent's think
+    /// time plus both hops.
+    pub fn core_round_ms(&self) -> Option<u32> {
+        self.say_ms?.checked_sub(self.delivered_ms?)
+    }
+}
+
+/// How many values, and their nearest-rank median and 95th percentile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Percentiles {
+    pub n: u32,
+    pub p50: Option<u32>,
+    pub p95: Option<u32>,
+}
+
+/// The nearest-rank percentiles of `values`.
+pub fn percentiles(values: impl IntoIterator<Item = u32>) -> Percentiles {
+    let mut v: Vec<u32> = values.into_iter().collect();
+    v.sort_unstable();
+    let rank = |q: f64| -> Option<u32> {
+        if v.is_empty() {
+            return None;
+        }
+        let k = (q * v.len() as f64).ceil() as usize;
+        v.get(k.clamp(1, v.len()) - 1).copied()
+    };
+    Percentiles {
+        n: u32::try_from(v.len()).unwrap_or(u32::MAX),
+        p50: rank(0.5),
+        p95: rank(0.95),
+    }
+}
+
+/// A call's latency: each measure's percentiles over its turns, and the alerts the thresholds
+/// raise (`perceived_p95_over_1s`, `content_p95_over_3s`, `barge_in_p95_over_300ms`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LatencySummary {
+    pub turns: u32,
+    pub perceived: Percentiles,
+    pub content: Percentiles,
+    pub endpoint: Percentiles,
+    pub stt_final: Percentiles,
+    pub core_round: Percentiles,
+    /// The agent's reply time as the core measured it (`CallMetrics::agent_latency_ms`).
+    pub agent: Percentiles,
+    pub barge_in_stop: Percentiles,
+    pub backchannel_cuts: u32,
+    pub alerts: Vec<String>,
+}
+
+/// The summary of `traces` and the core's own `agent_latency_ms`.
+pub fn summarize(traces: &[TurnTrace], agent_latency_ms: &[u32]) -> LatencySummary {
+    let s = LatencySummary {
+        turns: u32::try_from(traces.len()).unwrap_or(u32::MAX),
+        perceived: percentiles(traces.iter().filter_map(TurnTrace::perceived_ms)),
+        content: percentiles(traces.iter().filter_map(|t| t.first_audio_ms)),
+        endpoint: percentiles(traces.iter().map(|t| t.endpoint_ms)),
+        stt_final: percentiles(traces.iter().map(|t| t.stt_final_ms)),
+        core_round: percentiles(traces.iter().filter_map(TurnTrace::core_round_ms)),
+        agent: percentiles(agent_latency_ms.iter().copied()),
+        barge_in_stop: percentiles(traces.iter().filter_map(|t| t.barge_in_stop_ms)),
+        backchannel_cuts: u32::try_from(traces.iter().filter(|t| t.backchannel_cut).count())
+            .unwrap_or(u32::MAX),
+        alerts: Vec::new(),
+    };
+    let over = |p: Percentiles, limit: u32| p.p95.is_some_and(|v| v > limit);
+    let mut alerts = Vec::new();
+    if over(s.perceived, PERCEIVED_P95_ALERT_MS) {
+        alerts.push("perceived_p95_over_1s".to_owned());
+    }
+    if over(s.content, CONTENT_P95_ALERT_MS) {
+        alerts.push("content_p95_over_3s".to_owned());
+    }
+    if over(s.barge_in_stop, BARGE_IN_P95_ALERT_MS) {
+        alerts.push("barge_in_p95_over_300ms".to_owned());
+    }
+    LatencySummary { alerts, ..s }
+}
+```
+
+In `lib.rs` add `mod trace;` beside the other modules and:
+
+```rust
+pub use trace::{
+    BARGE_IN_P95_ALERT_MS, CONTENT_P95_ALERT_MS, EndpointBy, LatencySummary, MAX_TRACES,
+    PERCEIVED_P95_ALERT_MS, Percentiles, TurnTrace, percentiles, summarize,
+};
+```
+
+- [ ] **Step 4: Run the test**
+
+Run: `cargo test -p jt_calls --test trace`
+Expected: `test result: ok. 4 passed`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add rust/crates/domain/jt_calls
+git commit -m "feat(calls): a caller turn's latency trace and its p50/p95 with the report's alerts" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task A3: The workspace opening and its genitive suffix
+
+**Files:**
+- Create: `rust/crates/domain/jt_calls/src/opening.rs`
+- Create: `rust/crates/domain/jt_calls/tests/opening.rs`
+- Modify: `rust/crates/domain/jt_calls/src/lib.rs`
+
+- [ ] **Step 1: Write the failing test**
+
+`rust/crates/domain/jt_calls/tests/opening.rs`:
+
+```rust
+//! The approved opening with the business's name, its suffix fitted (owner decision 2026-10-29).
+use jt_calls::{TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening};
+
+#[test]
+fn genitive_follows_vowel_harmony_and_the_buffer_n() {
+    for (name, want) in [
+        ("Jeeta", "Jeeta'nın"),
+        ("Figurunica", "Figurunica'nın"),
+        ("Atölye", "Atölye'nin"),
+        ("Ahmet", "Ahmet'in"),
+        ("Test Atölye", "Test Atölye'nin"),
+        ("Acme", "Acme'nin"),
+        ("Kuzu", "Kuzu'nun"),
+        ("Ütü", "Ütü'nün"),
+        ("Gül", "Gül'ün"),
+        ("Ayşe", "Ayşe'nin"),
+        ("Kitap", "Kitap'ın"),
+        ("Sırçalı", "Sırçalı'nın"),
+        ("Oto", "Oto'nun"),
+        ("Doğruluk", "Doğruluk'un"),
+        ("Ahmet Usta", "Ahmet Usta'nın"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn capitals_are_lowered_the_turkish_way() {
+    assert_eq!(genitive("İSTANBUL"), "İSTANBUL'un");
+    assert_eq!(genitive("ISPARTA"), "ISPARTA'nın");
+    assert_eq!(genitive("KIRIKKALE"), "KIRIKKALE'nin");
+}
+
+#[test]
+fn vowelless_words_are_read_by_their_letters() {
+    assert_eq!(genitive("THY"), "THY'nin");
+    assert_eq!(genitive("KDS"), "KDS'nin");
+    assert_eq!(genitive("BMW"), "BMW'nin");
+}
+
+#[test]
+fn trailing_numbers_are_read_aloud() {
+    for (name, want) in [
+        ("Studio 54", "Studio 54'ün"),
+        ("Kahve 10", "Kahve 10'un"),
+        ("Bina 100", "Bina 100'ün"),
+        ("Lokanta 2000", "Lokanta 2000'in"),
+        ("Oda 6", "Oda 6'nın"),
+        ("Ofis 3", "Ofis 3'ün"),
+        ("Kat 0", "Kat 0'ın"),
+        ("Cafe 7", "Cafe 7'nin"),
+    ] {
+        assert_eq!(genitive(name), want, "{name}");
+    }
+}
+
+#[test]
+fn blank_names_give_no_opening() {
+    assert_eq!(genitive("  "), "");
+    assert_eq!(outbound_opening(""), None);
+    assert_eq!(disclosure("\t"), None);
+}
+
+#[test]
+fn the_approved_sentences() {
+    assert_eq!(
+        outbound_opening("Jeeta").unwrap(),
+        "Merhaba, ben Jeeta'nın dijital asistanıyım."
+    );
+    assert_eq!(
+        inbound_greeting("Atölye").unwrap(),
+        "Merhaba, ben Atölye'nin dijital asistanıyım. Size nasıl yardımcı olabilirim?"
+    );
+    let d = disclosure("Figurunica").unwrap();
+    assert_eq!(d, "ben Figurunica'nın dijital asistanıyım");
+    assert!(outbound_opening("Figurunica").unwrap().contains(&d));
+    assert!(inbound_greeting("Figurunica").unwrap().contains(&d));
+    assert_eq!(TRANSCRIPT_NOTICE, "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.");
+}
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `cargo test -p jt_calls --test opening`
+Expected: FAIL to compile (`genitive` not found).
+
+- [ ] **Step 3: Write `opening.rs`**
+
+`rust/crates/domain/jt_calls/src/opening.rs`:
+
+```rust
+//! The workspace's own opening of an agent's call (owner decision 2026-10-29): the approved
+//! sentences with the business's name in them, its genitive suffix fitted by Turkish vowel harmony.
+//! The sentences are the owner's; the server only puts the workspace's own name in them.
+
+/// Played after the opening on every agent call (owner-approved 2026-10-29).
+pub const TRANSCRIPT_NOTICE: &str = "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.";
+
+const VOWELS: &str = "aeıioöuüâîû";
+
+fn is_vowel(c: char) -> bool {
+    VOWELS.contains(c)
+}
+
+/// `c` lowercased the Turkish way (`I` → `ı`, `İ` → `i`).
+fn lower_tr(c: char) -> char {
+    match c {
+        'I' => 'ı',
+        'İ' => 'i',
+        _ => c.to_lowercase().next().unwrap_or(c),
+    }
+}
+
+/// How a letter is read when a word without vowels is spelled out.
+fn letter_name(c: char) -> &'static str {
+    match c {
+        'b' => "be",
+        'c' => "ce",
+        'ç' => "çe",
+        'd' => "de",
+        'f' => "fe",
+        'g' => "ge",
+        'ğ' => "yumuşak ge",
+        'h' => "he",
+        'j' => "je",
+        'k' => "ke",
+        'l' => "le",
+        'm' => "me",
+        'n' => "ne",
+        'p' => "pe",
+        'q' => "kü",
+        'r' => "re",
+        's' => "se",
+        'ş' => "şe",
+        't' => "te",
+        'v' | 'w' => "ve",
+        'x' => "iks",
+        'y' => "ye",
+        'z' => "ze",
+        _ => "",
+    }
+}
+
+/// The last word of a number's Turkish reading (`54` → `dört`, `100` → `yüz`).
+fn number_tail(digits: &str) -> &'static str {
+    const ONES: [&str; 10] = [
+        "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz",
+    ];
+    const TENS: [&str; 10] = [
+        "", "on", "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan",
+    ];
+    let tail = &digits[digits.len().saturating_sub(18)..];
+    let n: u64 = tail.parse().unwrap_or(0);
+    if n == 0 {
+        "sıfır"
+    } else if n % 10 != 0 {
+        ONES[(n % 10) as usize]
+    } else if n % 100 != 0 {
+        TENS[((n / 10) % 10) as usize]
+    } else if n % 1_000 != 0 {
+        "yüz"
+    } else if n % 1_000_000 != 0 {
+        "bin"
+    } else if n % 1_000_000_000 != 0 {
+        "milyon"
+    } else {
+        "milyar"
+    }
+}
+
+/// How the end of `word` (letters and digits only) is read aloud: a trailing number by its
+/// reading, a word without vowels by its last letter's name, any other word as written.
+fn spoken_tail(word: &str) -> String {
+    let digits: Vec<char> = word
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    if !digits.is_empty() {
+        let digits: String = digits.into_iter().rev().collect();
+        return number_tail(&digits).to_owned();
+    }
+    let lower: String = word.chars().map(lower_tr).collect();
+    if lower.chars().any(is_vowel) {
+        return lower;
+    }
+    lower
+        .chars()
+        .last()
+        .map(letter_name)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The genitive suffix of a word read as `spoken`: the last vowel picks it (a ı → ın, e i → in,
+/// o u → un, ö ü → ün), and a final vowel takes the buffer `n`.
+fn genitive_suffix(spoken: &str) -> &'static str {
+    let ends_in_vowel = spoken.chars().last().is_some_and(is_vowel);
+    let (bare, buffered) = match spoken.chars().rev().find(|c| is_vowel(*c)) {
+        Some('a' | 'ı' | 'â') => ("ın", "nın"),
+        Some('o' | 'u' | 'û') => ("un", "nun"),
+        Some('ö' | 'ü') => ("ün", "nün"),
+        _ => ("in", "nin"),
+    };
+    if ends_in_vowel { buffered } else { bare }
+}
+
+/// `name` with its genitive suffix after an apostrophe: `Jeeta'nın`, `Atölye'nin`, `Ahmet'in`,
+/// `THY'nin`, `Studio 54'ün`. The suffix follows the name's last word as it is spelled; a name
+/// pronounced otherwise needs its opening written by hand in the call policy. Blank → blank.
+pub fn genitive(name: &str) -> String {
+    let name = name.trim();
+    let Some(word) = name.split_whitespace().last() else {
+        return String::new();
+    };
+    let core: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+    if core.is_empty() {
+        return String::new();
+    }
+    format!("{name}'{}", genitive_suffix(&spoken_tail(&core)))
+}
+
+/// The approved outbound opening: "Merhaba, ben {İşletme}'nın dijital asistanıyım."; `None` for a
+/// blank name.
+pub fn outbound_opening(business: &str) -> Option<String> {
+    let g = genitive(business);
+    (!g.is_empty()).then(|| format!("Merhaba, ben {g} dijital asistanıyım."))
+}
+
+/// The approved inbound greeting: the opening, then "Size nasıl yardımcı olabilirim?".
+pub fn inbound_greeting(business: &str) -> Option<String> {
+    outbound_opening(business).map(|o| format!("{o} Size nasıl yardımcı olabilirim?"))
+}
+
+/// The disclosure sentence both openings contain: "ben {İşletme}'nın dijital asistanıyım".
+pub fn disclosure(business: &str) -> Option<String> {
+    let g = genitive(business);
+    (!g.is_empty()).then(|| format!("ben {g} dijital asistanıyım"))
+}
+```
+
+In `lib.rs` add `mod opening;` and `pub use opening::{TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening};`.
+
+- [ ] **Step 4: Run the test**
+
+Run: `cargo test -p jt_calls --test opening`
+Expected: `test result: ok. 6 passed`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add rust/crates/domain/jt_calls
+git commit -m "feat(calls): the approved workspace opening with its genitive suffix fitted" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task A4: The owner-approved phrase set
+
+**Files:**
+- Create: `rust/crates/domain/jt_calls/src/phrases.rs`
+- Create: `rust/crates/domain/jt_calls/tests/phrases.rs`
+- Modify: `rust/crates/domain/jt_calls/src/lib.rs`
+
+- [ ] **Step 1: Write the failing test**
+
+`rust/crates/domain/jt_calls/tests/phrases.rs`:
+
+```rust
+//! The phrases the bridge may play on its own: exactly the set the owner approved on 2026-10-29.
+use jt_calls::{BridgePhrases, PhraseSet};
+use serde_json::json;
+
+#[test]
+fn the_defaults_are_the_approved_set() {
+    let p = BridgePhrases::default();
+    assert_eq!(p.acknowledgements, ["Hı hı.", "Anladım.", "Tamam.", "Peki."]);
+    assert_eq!(p.fillers, ["Bir saniye, hemen bakıyorum.", "Kontrol ediyorum, kısa bir an."]);
+    assert_eq!(p.long_wait, ["Biraz daha zaman alıyor, beklediğiniz için teşekkürler."]);
+    assert_eq!(p.not_heard, ["Sizi tam duyamadım, tekrar eder misiniz?"]);
+    assert_eq!(p.still_there, ["Hâlâ orada mısınız?"]);
+    assert_eq!(
+        p.fault,
+        ["Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."]
+    );
+    assert_eq!(p.all().count(), 10);
+}
+
+#[test]
+fn a_phrase_is_found_by_its_set_and_index() {
+    let p = BridgePhrases::default();
+    assert_eq!(p.text(PhraseSet::Filler, 1), Some("Kontrol ediyorum, kısa bir an."));
+    assert_eq!(p.text(PhraseSet::LongWait, 1), None);
+    assert_eq!(p.set(PhraseSet::Acknowledgement).len(), 4);
+}
+
+#[test]
+fn sets_read_and_write_snake_case_and_missing_sets_keep_their_defaults() {
+    assert_eq!(serde_json::to_value(PhraseSet::LongWait).unwrap(), json!("long_wait"));
+    assert_eq!(serde_json::to_value(PhraseSet::StillThere).unwrap(), json!("still_there"));
+    let p: BridgePhrases = serde_json::from_value(json!({ "fillers": ["Bir dakika."] })).unwrap();
+    assert_eq!(p.fillers, ["Bir dakika."]);
+    assert_eq!(p.acknowledgements, BridgePhrases::default().acknowledgements);
+}
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `cargo test -p jt_calls --test phrases`
+Expected: FAIL to compile (`BridgePhrases` not found).
+
+- [ ] **Step 3: Write `phrases.rs`**
+
+`rust/crates/domain/jt_calls/src/phrases.rs`:
+
+```rust
+//! The phrases the voice bridge may play on its own while the agent thinks or the line needs a word
+//! (owner decisions V-4 and the approved set of 2026-10-29): acknowledgements, fillers, the long
+//! wait, "not heard", "still there" and the fault sentence. They are the policy's text: the bridge
+//! picks one by set and index and reports which, and the core logs the policy's text for it. A set
+//! left empty is never played.
+
+use serde::{Deserialize, Serialize};
+
+/// Which kind of phrase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhraseSet {
+    /// Right after the caller's turn, when no reply is queued yet (about 0.6 s).
+    Acknowledgement,
+    /// The reply is late (about 2.7 s).
+    Filler,
+    /// The reply is very late (about 8 s).
+    LongWait,
+    /// The caller spoke but no words were recognised.
+    NotHeard,
+    /// The caller stayed silent after the agent spoke.
+    StillThere,
+    /// The bridge lost the core during a call; played before it hangs up.
+    Fault,
+}
+
+impl PhraseSet {
+    pub const ALL: [PhraseSet; 6] = [
+        PhraseSet::Acknowledgement,
+        PhraseSet::Filler,
+        PhraseSet::LongWait,
+        PhraseSet::NotHeard,
+        PhraseSet::StillThere,
+        PhraseSet::Fault,
+    ];
+
+    /// The set's position in [`PhraseSet::ALL`].
+    pub fn position(self) -> usize {
+        PhraseSet::ALL
+            .iter()
+            .position(|s| *s == self)
+            .unwrap_or_default()
+    }
+}
+
+/// The policy's phrases, one list per set.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BridgePhrases {
+    pub acknowledgements: Vec<String>,
+    pub fillers: Vec<String>,
+    pub long_wait: Vec<String>,
+    pub not_heard: Vec<String>,
+    pub still_there: Vec<String>,
+    pub fault: Vec<String>,
+}
+
+fn lines(texts: &[&str]) -> Vec<String> {
+    texts.iter().map(|t| (*t).to_owned()).collect()
+}
+
+impl Default for BridgePhrases {
+    /// The set the owner approved on 2026-10-29.
+    fn default() -> Self {
+        BridgePhrases {
+            acknowledgements: lines(&["Hı hı.", "Anladım.", "Tamam.", "Peki."]),
+            fillers: lines(&[
+                "Bir saniye, hemen bakıyorum.",
+                "Kontrol ediyorum, kısa bir an.",
+            ]),
+            long_wait: lines(&["Biraz daha zaman alıyor, beklediğiniz için teşekkürler."]),
+            not_heard: lines(&["Sizi tam duyamadım, tekrar eder misiniz?"]),
+            still_there: lines(&["Hâlâ orada mısınız?"]),
+            fault: lines(&[
+                "Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız.",
+            ]),
+        }
+    }
+}
+
+impl BridgePhrases {
+    /// The phrases of `set`.
+    pub fn set(&self, set: PhraseSet) -> &[String] {
+        match set {
+            PhraseSet::Acknowledgement => &self.acknowledgements,
+            PhraseSet::Filler => &self.fillers,
+            PhraseSet::LongWait => &self.long_wait,
+            PhraseSet::NotHeard => &self.not_heard,
+            PhraseSet::StillThere => &self.still_there,
+            PhraseSet::Fault => &self.fault,
+        }
+    }
+
+    /// Phrase `index` of `set`, if there is one.
+    pub fn text(&self, set: PhraseSet, index: u8) -> Option<&str> {
+        self.set(set).get(usize::from(index)).map(String::as_str)
+    }
+
+    /// Every phrase, set by set.
+    pub fn all(&self) -> impl Iterator<Item = &str> {
+        PhraseSet::ALL
+            .into_iter()
+            .flat_map(move |s| self.set(s).iter().map(String::as_str))
+    }
+}
+```
+
+In `lib.rs` add `mod phrases;` and `pub use phrases::{BridgePhrases, PhraseSet};`.
+
+- [ ] **Step 4: Run the whole crate**
+
+Run: `cargo test -p jt_calls`
+Expected: every test passes (the existing `fence`, `session`, `timers` and the four new files).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add rust/crates/domain/jt_calls
+git commit -m "feat(calls): the owner-approved phrase set the bridge may play on its own" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task A5: The wire's additions in the domain (dial script, hotwords, phrase and trace events)
+
+**Files:**
+- Modify: `rust/crates/domain/jt_calls/src/session.rs` (`CallMetrics`, `Command::Dial`, `BridgeEvent`, `reduce`; new `DialScript`)
+- Modify: `rust/crates/domain/jt_calls/src/plan.rs` (`hotwords`, `PlanError::Hotwords`, `call_hotwords`)
+- Modify: `rust/crates/domain/jt_calls/src/policy.rs` (`phrases` field only; its validation is C1)
+- Modify: `rust/crates/domain/jt_calls/src/lib.rs`
+- Create: `rust/crates/domain/jt_calls/tests/bridge_additions.rs`
+- Modify (struct literals that must name the new fields): `rust/crates/domain/jt_calls/tests/support/mod.rs:21`, `rust/crates/domain/jt_calls/tests/wire.rs`, `rust/crates/jt_app/tests/calls_bridge.rs:84,138`, `rust/crates/jt_app/tests/calls_session.rs:76`, `rust/crates/adapters/jt_pg/tests/calls_storage.rs:401,560`
+- Modify: `rust/crates/jt_app/src/usecases/calls.rs:942` (the `Command::Dial` it builds), `rust/crates/jt_app/src/usecases/calls/bridge.rs` (`kind_of`)
+
+- [ ] **Step 1: Write the failing tests**
+
+`rust/crates/domain/jt_calls/tests/bridge_additions.rs`:
+
+```rust
+//! What the free-path bridge adds to the protocol (design addendum §4): the dial's script, the
+//! plan's hotwords, the bridge's own phrases in the turn log, and the turns' traces.
+mod support;
+
+use jt_calls::{
+    BridgeEvent, BridgePhrases, Command, DialScript, MAX_TRACES, PhraseSet, PlanError, TimerAction,
+    TurnKind, TurnTrace, call_hotwords, next_timer, reduce,
+};
+use serde_json::json;
+use support::*;
+use time::{Duration, OffsetDateTime};
+
+fn at(ms: i64) -> OffsetDateTime {
+    T0 + Duration::milliseconds(ms)
+}
+
+fn utterance() -> BridgeEvent {
+    BridgeEvent::Utterance { text: "evet".into(), is_final: true, confidence: None, stt_ms: Some(40) }
+}
+
+#[test]
+fn a_bridge_filler_is_logged_with_the_policys_text_and_counts_as_this_waits_holding() {
+    let p = policy();
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    reduce(&mut s, &utterance(), at(5_000), &p);
+    let step = reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::Filler, index: 0 }, at(7_700), &p);
+    assert_eq!(step.turns.len(), 1);
+    assert_eq!(step.turns[0].kind, TurnKind::Holding);
+    assert_eq!(step.turns[0].text, p.phrases.fillers[0]);
+    assert!(step.commands.is_empty());
+    // The core's own first holding phrase (4 s after the words) is covered already.
+    assert_eq!(next_timer(&s, at(9_000), &p), TimerAction::None);
+    reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::LongWait, index: 0 }, at(13_000), &p);
+    assert_eq!(next_timer(&s, at(15_000), &p), TimerAction::None);
+    // The plan's fallback line still comes at 20 s.
+    assert_eq!(next_timer(&s, at(25_000), &p), TimerAction::PlayFallback);
+}
+
+#[test]
+fn a_phrase_the_policy_lacks_logs_no_text() {
+    let p = policy();
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    reduce(&mut s, &utterance(), at(1_000), &p);
+    let step = reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::Filler, index: 9 }, at(3_700), &p);
+    assert!(step.turns.is_empty());
+    assert_eq!(s.clock.holding_in_turn, 1);
+}
+
+#[test]
+fn an_acknowledgement_is_logged_but_covers_nothing() {
+    let p = policy();
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    reduce(&mut s, &utterance(), at(1_000), &p);
+    let step = reduce(&mut s, &BridgeEvent::Phrase { set: PhraseSet::Acknowledgement, index: 1 }, at(1_600), &p);
+    assert_eq!(step.turns[0].text, "Anladım.");
+    assert_eq!(s.clock.holding_in_turn, 0);
+}
+
+#[test]
+fn traces_are_kept_up_to_the_limit() {
+    let p = policy();
+    let mut s = agent_session();
+    reduce(&mut s, &BridgeEvent::Answered, at(0), &p);
+    for i in 0..(MAX_TRACES + 5) {
+        let trace = TurnTrace { endpoint_ms: i as u32, ..TurnTrace::default() };
+        reduce(&mut s, &BridgeEvent::Trace { trace }, at(1_000), &p);
+    }
+    assert_eq!(s.metrics.traces.len(), MAX_TRACES);
+    assert_eq!(s.metrics.traces[0].endpoint_ms, 0);
+}
+
+#[test]
+fn a_dial_without_a_script_reads_the_approved_phrases() {
+    let dial: Command = serde_json::from_value(json!({
+        "kind": "dial",
+        "to_e164": "+905321234567",
+        "plan": serde_json::to_value(plan()).unwrap(),
+    }))
+    .unwrap();
+    let Command::Dial { script, .. } = dial else { panic!("a dial") };
+    assert_eq!(script, DialScript::default());
+    assert_eq!(script.phrases, BridgePhrases::default());
+}
+
+#[test]
+fn the_new_events_read_from_the_wire() {
+    let phrase: BridgeEvent = serde_json::from_value(json!({ "kind": "phrase", "set": "filler", "index": 1 })).unwrap();
+    assert_eq!(phrase, BridgeEvent::Phrase { set: PhraseSet::Filler, index: 1 });
+    let trace: BridgeEvent =
+        serde_json::from_value(json!({ "kind": "trace", "trace": { "endpoint_ms": 250, "stt_final_ms": 300 } })).unwrap();
+    assert!(matches!(trace, BridgeEvent::Trace { trace } if trace.endpoint_ms == 250));
+}
+
+#[test]
+fn plan_hotwords_are_bounded_and_the_workspace_name_joins_them() {
+    let mut p = plan();
+    p.hotwords = (0..20).map(|i| format!("ürün{i}")).collect();
+    assert_eq!(p.validate(), Ok(()));
+    p.hotwords.push("bir fazla".into());
+    assert_eq!(p.validate(), Err(PlanError::Hotwords));
+    p.hotwords = vec!["   ".into()];
+    assert_eq!(p.validate(), Err(PlanError::Hotwords));
+    p.hotwords = vec!["x".repeat(41)];
+    assert_eq!(p.validate(), Err(PlanError::Hotwords));
+    assert_eq!(
+        call_hotwords(&["Ada".into(), "ada".into(), " Figurunica ".into()], "Figurunica"),
+        ["Ada", "Figurunica"]
+    );
+}
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `cargo test -p jt_calls --test bridge_additions`
+Expected: FAIL to compile (`DialScript`, `call_hotwords`, `BridgeEvent::Phrase` not found).
+
+- [ ] **Step 3: Implement the domain changes**
+
+`plan.rs`: add the constants, the field, the error and the helper:
+
+```rust
+/// The most hotwords a plan carries, and the longest.
+pub const MAX_HOTWORDS: usize = 20;
+pub const MAX_HOTWORD_CHARS: usize = 40;
+```
+
+In `CallPlan`, after `disclose_assistant`:
+
+```rust
+    /// Words the call's speech-to-text is biased toward (names, products, from the agent's
+    /// context): at most 20, each 1 to 40 characters.
+    #[serde(default)]
+    pub hotwords: Vec<String>,
+```
+
+In `PlanError`:
+
+```rust
+    #[error("a plan has at most 20 hotwords of 1 to 40 characters")]
+    Hotwords,
+```
+
+and in `PlanError::field`: `PlanError::Hotwords => "plan.hotwords",`. At the end of `CallPlan::validate`, before `Ok(())`:
+
+```rust
+        let bad_hotword = |h: &String| {
+            let n = h.trim().chars().count();
+            n == 0 || n > MAX_HOTWORD_CHARS || h.chars().any(char::is_control)
+        };
+        if self.hotwords.len() > MAX_HOTWORDS || self.hotwords.iter().any(bad_hotword) {
+            return Err(PlanError::Hotwords);
+        }
+```
+
+and the helper after the `impl CallPlan` block:
+
+```rust
+/// The hotwords of a call: the plan's, then the workspace's name, trimmed, each once whatever its
+/// case, at most [`MAX_HOTWORDS`].
+pub fn call_hotwords(plan: &[String], business: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    plan.iter()
+        .map(String::as_str)
+        .chain(std::iter::once(business))
+        .map(str::trim)
+        .filter(|w| !w.is_empty() && seen.insert(w.to_lowercase()))
+        .take(MAX_HOTWORDS)
+        .map(str::to_owned)
+        .collect()
+}
+```
+
+`policy.rs`: add `use crate::phrases::BridgePhrases;`, the field after `estimated_minor_per_minute`:
+
+```rust
+    /// The phrases the voice bridge plays on its own (the owner-approved set by default).
+    pub phrases: BridgePhrases,
+```
+
+and `phrases: BridgePhrases::default(),` in `Default for CallPolicy`.
+
+`session.rs`: add the imports
+
+```rust
+use crate::phrases::{BridgePhrases, PhraseSet};
+use crate::trace::{MAX_TRACES, TurnTrace};
+```
+
+add to `CallMetrics`, after `fallback_played`:
+
+```rust
+    /// The bridge's timings of the call's turns (at most [`MAX_TRACES`]).
+    pub traces: Vec<TurnTrace>,
+```
+
+add before `pub enum Command`:
+
+```rust
+/// What the voice bridge is told of a dialled call besides its plan: the policy's sentences the
+/// core may queue on it (the workspace opening, the transcript notice), the phrases it may play on
+/// its own, and the words its speech-to-text is biased toward. Absent from an older dial: the
+/// approved phrases, nothing else.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DialScript {
+    pub lines: Vec<String>,
+    pub phrases: BridgePhrases,
+    pub hotwords: Vec<String>,
+}
+```
+
+change `Command::Dial` to:
+
+```rust
+    Dial {
+        to_e164: String,
+        plan: CallPlan,
+        #[serde(default)]
+        script: DialScript,
+    },
+```
+
+add to `BridgeEvent`, before `CommandDone`:
+
+```rust
+    /// The bridge played phrase `index` of `set` of the policy on its own.
+    Phrase { set: PhraseSet, index: u8 },
+    /// What one of the caller's turns took, as the bridge measured it.
+    Trace { trace: TurnTrace },
+```
+
+and in `reduce`, before `BridgeEvent::CommandDone { .. } => {}`:
+
+```rust
+        BridgeEvent::Phrase { set, index } => {
+            // The policy's own text is logged; the bridge sends none.
+            if let Some(text) = policy.phrases.text(*set, *index) {
+                step.turns
+                    .push(session.turn(now, TurnKind::Holding, text.to_owned(), TurnMeta::default()));
+            }
+            // A filler or the long wait is this wait's holding phrase: the core does not play its
+            // own over it.
+            let covers = match set {
+                PhraseSet::Filler => 1,
+                PhraseSet::LongWait => 2,
+                _ => 0,
+            };
+            if covers > 0 && session.clock.owed_since.is_some() {
+                session.clock.holding_in_turn = session.clock.holding_in_turn.max(covers);
+                session.metrics.holding_played = session.metrics.holding_played.saturating_add(1);
+            }
+        }
+        BridgeEvent::Trace { trace } => {
+            if session.metrics.traces.len() < MAX_TRACES {
+                session.metrics.traces.push(trace.clone());
+            }
+        }
+```
+
+`lib.rs`: export `DialScript` from `session` and `MAX_HOTWORDS, MAX_HOTWORD_CHARS, call_hotwords` from `plan`.
+
+- [ ] **Step 4: Name the new fields at every struct literal**
+
+Add `hotwords: Vec::new(),` to the `CallPlan { … }` literals in `rust/crates/domain/jt_calls/tests/support/mod.rs`, `rust/crates/jt_app/tests/calls_bridge.rs`, `rust/crates/jt_app/tests/calls_session.rs`, `rust/crates/adapters/jt_pg/tests/calls_storage.rs`; add `script: Default::default(),` to the `Command::Dial { … }` literals in `rust/crates/domain/jt_calls/tests/wire.rs`, `rust/crates/jt_app/tests/calls_bridge.rs`, `rust/crates/adapters/jt_pg/tests/calls_storage.rs`; in `rust/crates/jt_app/src/usecases/calls.rs` change the dial to
+
+```rust
+    let dial = Command::Dial {
+        to_e164: session.counterpart_e164.clone(),
+        plan,
+        script: DialScript::default(),
+    };
+```
+
+(Task C2 fills the script) and import `DialScript` in its `use jt_calls::{…}`. In `rust/crates/jt_app/src/usecases/calls/bridge.rs` `kind_of`, add:
+
+```rust
+        BridgeEvent::Phrase { .. } => "phrase",
+        BridgeEvent::Trace { .. } => "trace",
+```
+
+Find any other literal with: `grep -rn "Command::Dial {\|CallPlan {" rust/crates --include=*.rs` (Expected: only the sites above and the definitions).
+
+- [ ] **Step 5: Run the tests**
+
+Run: `cargo test -p jt_calls` and `cargo clippy --locked -p jt_app --lib --features tokio/time -- -D warnings`
+Expected: `bridge_additions` 7 passed and every earlier `jt_calls` test passing; `jt_app` lib clean. CI: `jt_app`, `jt_pg` tests unchanged in behaviour.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add rust/crates
+git commit -m "feat(calls): the dial's script, plan hotwords, and the bridge's phrase and trace events" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+
+---
+
+## Phase B — the vertical slice (riskiest first)
+
+Phase B proves real audio end to end before any core change: Asterisk registers 102, the worker dials the owner's mobile through ARI, plays a cached EMA opening, transcribes one caller turn with seda, plays an EMA reply (with the bridge's own acknowledgement and filler in between) and prints the turn trace. If B7 fails, stop and report before Phase C.
+
+Server conventions for every server step: run as `root` on the Contabo host (the coordinator's SSH method is in its own notes; never paste a password into a command or a file in the repo). Sources reach the host as a `git archive` of the reviewed commit:
+
+```bash
+# on the dev machine, from the repository root, at the commit to deploy
+git archive --format=tar HEAD rust/bridge/voice | ssh root@38.242.233.166 \
+  'rm -rf /root/jeeta-voice-src && mkdir -p /root/jeeta-voice-src && tar -x -C /root/jeeta-voice-src'
+```
+
+### Task B1: Asterisk 22.11 as extension 102
+
+**Files:**
+- Create: `rust/bridge/voice/asterisk/Dockerfile`
+- Create: `rust/bridge/voice/asterisk/etc/{asterisk.conf,modules.conf,logger.conf,cdr.conf,cel.conf,pjsip.conf,extensions.conf,http.conf,ari.conf,rtp.conf}`
+- Create: `rust/bridge/voice/asterisk/test_configs.py`
+- Create: `rust/bridge/voice/deploy/jeeta-asterisk.service`
+- Create: `rust/bridge/voice/deploy/jeeta-voice.tmpfiles`
+- Create: `rust/bridge/voice/speech/pytest.ini`
+
+- [ ] **Step 1: Write the failing config test**
+
+`rust/bridge/voice/speech/pytest.ini` (shared by every Python test under `rust/bridge/voice`):
+
+```ini
+[pytest]
+markers =
+    models: needs the real model files (run on the Contabo host inside the images)
+addopts = -q
+```
+
+`rust/bridge/voice/asterisk/test_configs.py`:
+
+```python
+"""The Asterisk configuration shipped in the repository: no secret, loopback-only control,
+no verbose console (dialplan lines carry phone numbers), extension 102 over UDP."""
+import pathlib
+import re
+
+ETC = pathlib.Path(__file__).parent / "etc"
+
+
+def read(name: str) -> str:
+    return (ETC / name).read_text(encoding="utf-8")
+
+
+def test_no_secret_lives_in_the_repository():
+    for path in ETC.glob("*.conf"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            assert not re.match(r"\s*password\s*=", line), f"{path.name}: {line}"
+    assert "#include secrets/pjsip_auth.conf" in read("pjsip.conf")
+    assert "#include secrets/ari_users.conf" in read("ari.conf")
+
+
+def test_control_binds_loopback_only():
+    http = read("http.conf")
+    assert re.search(r"^bindaddr\s*=\s*127\.0\.0\.1\s*$", http, re.M)
+    assert re.search(r"^bindport\s*=\s*8188\s*$", http, re.M)
+
+
+def test_console_logs_warnings_and_errors_only():
+    assert re.search(r"^console\s*=>\s*warning,error\s*$", read("logger.conf"), re.M)
+    assert re.search(r"^verbose\s*=\s*0\s*$", read("asterisk.conf"), re.M)
+    assert re.search(r"^enable\s*=\s*no\s*$", read("cdr.conf"), re.M)
+    assert re.search(r"^enable\s*=\s*no\s*$", read("cel.conf"), re.M)
+
+
+def test_extension_102_registers_over_udp():
+    pjsip = read("pjsip.conf")
+    assert "client_uri=sip:102-8508407303@sip5.netsantral.com" in pjsip
+    assert "server_uri=sip:sip5.netsantral.com" in pjsip
+    assert "protocol=udp" in pjsip
+    assert "bind=0.0.0.0:5070" in pjsip
+    assert "allow=alaw,ulaw" in pjsip
+    rtp = read("rtp.conf")
+    assert "rtpstart=40000" in rtp and "rtpend=40099" in rtp
+
+
+def test_inbound_calls_enter_the_bridge_application():
+    assert "Stasis(jeeta-voice,in)" in read("extensions.conf")
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run (Windows or Linux, from `rust/bridge/voice`): `python -m pytest -c speech/pytest.ini asterisk/test_configs.py`
+Expected: FAIL (`FileNotFoundError` for `etc/http.conf`).
+
+- [ ] **Step 3: Write the configuration**
+
+`rust/bridge/voice/asterisk/etc/asterisk.conf`:
+
+```ini
+[directories](!)
+astetcdir => /etc/asterisk
+astmoddir => /usr/lib/asterisk/modules
+astvarlibdir => /var/lib/asterisk
+astdbdir => /var/lib/asterisk
+astkeydir => /var/lib/asterisk
+astdatadir => /var/lib/asterisk
+astagidir => /var/lib/asterisk/agi-bin
+astspooldir => /var/spool/asterisk
+astrundir => /var/run/asterisk
+astlogdir => /var/log/asterisk
+astsbindir => /usr/sbin
+
+[options]
+verbose = 0
+debug = 0
+transmit_silence = yes
+```
+
+`rust/bridge/voice/asterisk/etc/modules.conf`:
+
+```ini
+[modules]
+autoload = yes
+noload = chan_iax2.so
+noload = chan_unistim.so
+noload = chan_mgcp.so
+noload = chan_skinny.so
+noload = cdr_csv.so
+noload = cdr_custom.so
+noload = cdr_manager.so
+noload = cel_custom.so
+noload = cel_manager.so
+noload = pbx_ael.so
+noload = pbx_lua.so
+noload = res_phoneprov.so
+noload = res_pjsip_phoneprov_provider.so
+```
+
+`rust/bridge/voice/asterisk/etc/logger.conf`:
+
+```ini
+[general]
+
+[logfiles]
+console => warning,error
+```
+
+`rust/bridge/voice/asterisk/etc/cdr.conf`:
+
+```ini
+[general]
+enable = no
+```
+
+`rust/bridge/voice/asterisk/etc/cel.conf`:
+
+```ini
+[general]
+enable = no
+```
+
+`rust/bridge/voice/asterisk/etc/pjsip.conf`:
+
+```ini
+; NetGSM Netsantral extension 102 ("jeetases"): UDP, registered from this host only. The secret
+; lives in secrets/pjsip_auth.conf (0600, uid 1500), never in the repository.
+[global]
+type=global
+user_agent=jeeta-voice
+endpoint_identifier_order=ip,username
+
+[transport-udp]
+type=transport
+protocol=udp
+bind=0.0.0.0:5070
+
+#include secrets/pjsip_auth.conf
+
+[netgsm-reg]
+type=registration
+transport=transport-udp
+outbound_auth=netgsm-auth
+server_uri=sip:sip5.netsantral.com
+client_uri=sip:102-8508407303@sip5.netsantral.com
+contact_user=102-8508407303
+retry_interval=30
+forbidden_retry_interval=300
+expiration=120
+line=yes
+endpoint=netgsm
+
+[netgsm]
+type=aor
+contact=sip:sip5.netsantral.com
+qualify_frequency=20
+
+[netgsm]
+type=endpoint
+transport=transport-udp
+context=jeeta-in
+disallow=all
+allow=alaw,ulaw
+outbound_auth=netgsm-auth
+aors=netgsm
+from_user=102-8508407303
+from_domain=sip5.netsantral.com
+direct_media=no
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+dtmf_mode=rfc4733
+trust_id_inbound=no
+send_pai=no
+
+[netgsm]
+type=identify
+endpoint=netgsm
+match=sip5.netsantral.com
+```
+
+`rust/bridge/voice/asterisk/etc/extensions.conf`:
+
+```ini
+[general]
+static=yes
+writeprotect=yes
+
+; Every inbound call goes to the voice bridge's application; it answers or refuses it.
+[jeeta-in]
+exten => _X.,1,Stasis(jeeta-voice,in)
+ same => n,Hangup(17)
+exten => _+X.,1,Stasis(jeeta-voice,in)
+ same => n,Hangup(17)
+exten => s,1,Stasis(jeeta-voice,in)
+ same => n,Hangup(17)
+exten => i,1,Stasis(jeeta-voice,in)
+ same => n,Hangup(17)
+```
+
+`rust/bridge/voice/asterisk/etc/http.conf`:
+
+```ini
+[general]
+enabled=yes
+bindaddr=127.0.0.1
+bindport=8188
+```
+
+`rust/bridge/voice/asterisk/etc/ari.conf`:
+
+```ini
+[general]
+enabled=yes
+pretty=no
+
+#include secrets/ari_users.conf
+```
+
+`rust/bridge/voice/asterisk/etc/rtp.conf`:
+
+```ini
+[general]
+rtpstart=40000
+rtpend=40099
+```
+
+- [ ] **Step 4: Run the config test**
+
+Run: `python -m pytest -c speech/pytest.ini asterisk/test_configs.py`
+Expected: `5 passed`.
+
+- [ ] **Step 5: Write the image and the units**
+
+`rust/bridge/voice/asterisk/Dockerfile`:
+
+```dockerfile
+# Asterisk 22.11.0 (>= 22.8: chan_websocket with JSON control and ARI externalMedia websocket),
+# built from the verified release tarball. Runs as uid/gid 1500 with the host network.
+FROM debian:bookworm-slim AS build
+ARG ASTERISK_VERSION=22.11.0
+ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl wget bzip2 patch file pkg-config python3 \
+      libedit-dev libjansson-dev libssl-dev libsqlite3-dev libxml2-dev uuid-dev libcurl4-openssl-dev \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fsSLo asterisk.tar.gz \
+      "https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}.tar.gz" \
+ && echo "${ASTERISK_SHA256}  asterisk.tar.gz" | sha256sum -c - \
+ && tar -xzf asterisk.tar.gz --strip-components=1 && rm asterisk.tar.gz
+RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
+ && make menuselect.makeopts \
+ && menuselect/menuselect --disable BUILD_NATIVE --enable chan_websocket --enable chan_pjsip \
+      --enable res_pjsip_outbound_registration --enable res_ari --enable res_ari_channels \
+      --enable res_ari_bridges --enable res_stasis --enable app_stasis --enable codec_alaw \
+      --enable codec_ulaw --disable-category MENUSELECT_CORE_SOUNDS \
+      --disable-category MENUSELECT_MOH --disable-category MENUSELECT_EXTRA_SOUNDS \
+      menuselect.makeopts \
+ && make -j2 && make install DESTDIR=/out
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates libedit2 libjansson4 libssl3 libsqlite3-0 libxml2 libuuid1 libcurl4 \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --gid 1500 asterisk && useradd --uid 1500 --gid 1500 --home-dir /var/lib/asterisk \
+      --shell /usr/sbin/nologin asterisk
+COPY --from=build /out/ /
+RUN mkdir -p /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk \
+ && chown -R 1500:1500 /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk
+USER 1500:1500
+CMD ["/usr/sbin/asterisk", "-f"]
+```
+
+`rust/bridge/voice/deploy/jeeta-asterisk.service`:
+
+```ini
+[Unit]
+Description=Jeeta voice edge (Asterisk, NetGSM extension 102)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f jeeta-asterisk
+ExecStart=/usr/bin/docker run --rm --name jeeta-asterisk --network host --user 1500:1500 \
+  --cpus 1 --memory 512m --read-only \
+  --tmpfs /var/run/asterisk:uid=1500,gid=1500,mode=0750 \
+  --tmpfs /var/log/asterisk:uid=1500,gid=1500,mode=0750 \
+  --tmpfs /var/spool/asterisk:uid=1500,gid=1500,mode=0750 \
+  -v jeeta-asterisk-lib:/var/lib/asterisk \
+  -v /etc/jeeta-voice/asterisk:/etc/asterisk:ro \
+  jeeta-asterisk:22.11.0
+ExecStop=/usr/bin/docker stop -t 10 jeeta-asterisk
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`rust/bridge/voice/deploy/jeeta-voice.tmpfiles` (installed as `/etc/tmpfiles.d/jeeta-voice.conf`):
+
+```
+d /run/jeeta-voice 0770 root jeeta-voice -
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add rust/bridge/voice/asterisk rust/bridge/voice/deploy rust/bridge/voice/speech/pytest.ini
+git commit -m "feat(voice): Asterisk 22.11 image and config for extension 102" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 7: [COORDINATOR, server] Preconditions**
+
+Copy the sources (section intro), then on the host:
+
+```bash
+docker ps --format '{{.Image}} {{.Names}}' | grep -i voicegate || echo "no Gate V1 rig running"
+ss -lunp | grep -E ':5070\b' || echo "5070/udp free"
+ss -ltnp | grep -E ':8188\b' || echo "8188/tcp free"
+getent passwd 1500 1501; getent group 1500 1501 || true
+ufw status | head -5
+```
+
+Expected: `no Gate V1 rig running` (a running baresip on 102 would fight the registration; stop it with `docker rm -f <name>` if listed), both ports free, uid/gid 1500 and 1501 unused (if taken, change the uid in the Dockerfile, the units and every `1500`/`1501` below together), ufw status recorded.
+
+- [ ] **Step 8: [COORDINATOR, server] Users, directories and secrets**
+
+```bash
+groupadd --system --gid 1501 jeeta-voice
+useradd --system --uid 1501 --gid jeeta-voice --no-create-home --shell /usr/sbin/nologin jeeta-voice-svc
+useradd --system --user-group --home-dir /var/lib/jeeta-voice --shell /usr/sbin/nologin jeeta-voice-bridge
+usermod -aG jeeta-voice jeeta-voice-bridge
+install -d -m 0750 /etc/jeeta-voice
+install -d -m 0755 /etc/jeeta-voice/asterisk
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/asterisk/etc/*.conf /etc/jeeta-voice/asterisk/
+install -d -m 0700 -o 1500 -g 1500 /etc/jeeta-voice/asterisk/secrets
+umask 077
+{ printf '[netgsm-auth]\ntype=auth\nauth_type=userpass\nusername=102-8508407303\nrealm=asterisk\npassword='
+  tr -d '\r\n' < /root/voicegate/p102; printf '\n'; } > /etc/jeeta-voice/asterisk/secrets/pjsip_auth.conf
+ARI_PW="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
+printf '[jeeta-voice]\ntype=user\nread_only=no\npassword_format=plain\npassword=%s\n' "$ARI_PW" \
+  > /etc/jeeta-voice/asterisk/secrets/ari_users.conf
+printf 'ARI_PASSWORD=%s\n' "$ARI_PW" > /etc/jeeta-voice/ari.env
+unset ARI_PW
+chown 1500:1500 /etc/jeeta-voice/asterisk/secrets/*.conf
+chmod 0600 /etc/jeeta-voice/asterisk/secrets/*.conf /etc/jeeta-voice/ari.env
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice.tmpfiles /etc/tmpfiles.d/jeeta-voice.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/jeeta-voice.conf
+ls -l /etc/jeeta-voice/asterisk/secrets /run/jeeta-voice -d /run/jeeta-voice
+```
+
+Expected: both secret files `-rw------- 1500 1500`, `/run/jeeta-voice` `drwxrwx--- root jeeta-voice`. Nothing printed contains the secret.
+
+- [ ] **Step 9: [COORDINATOR, server] Build and start**
+
+```bash
+cd /root/jeeta-voice-src/rust/bridge/voice/asterisk
+nice -n 10 docker build -t jeeta-asterisk:22.11.0 .
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-asterisk.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/jeeta-asterisk.service
+systemctl daemon-reload && systemctl enable --now jeeta-asterisk
+sleep 15
+docker exec jeeta-asterisk asterisk -rx 'pjsip show registrations'
+docker exec jeeta-asterisk asterisk -rx 'module show like websocket'
+set -a; . /etc/jeeta-voice/ari.env; set +a
+printf 'user = "jeeta-voice:%s"\n' "$ARI_PASSWORD" | curl -s -K - http://127.0.0.1:8188/ari/asterisk/info | head -c 120; echo
+```
+
+Expected: the build ends with `naming to docker.io/library/jeeta-asterisk:22.11.0`; the registration line shows `netgsm-reg/sip:sip5.netsantral.com` and `Registered`; `chan_websocket.so` listed `Running`; ARI answers JSON starting `{"build":`. If the registration reads `Rejected`, check the secret file (without printing it) and that no other UA registers 102; if `No Response`, check `ufw` outbound and DNS.
+
+- [ ] **Step 10: [COORDINATOR, server] One-way audio fallback (only if B7 shows it)**
+
+```bash
+ufw allow proto udp from 185.88.7.0/24 to any port 40000:40099 comment 'jeeta-voice RTP from NetGSM'
+```
+
+Not applied by default: Gate V1 showed conntrack admits the replies; Asterisk sends silence frames first.
+
+### Task B2: The speak service (EMA Lightning behind Antalia's normaliser)
+
+**Files:**
+- Create: `rust/bridge/voice/speech/speak/respell.py`
+- Create: `rust/bridge/voice/speech/speak/respell.json`
+- Create: `rust/bridge/voice/speech/speak/jeeta_speak.py`
+- Create: `rust/bridge/voice/speech/speak/requirements.txt`
+- Create: `rust/bridge/voice/speech/speak/constraints.txt` (generated in Step 7)
+- Create: `rust/bridge/voice/speech/speak/Dockerfile`
+- Create: `rust/bridge/voice/speech/speak/tests/test_respell.py`
+- Create: `rust/bridge/voice/speech/speak/tests/test_session.py`
+- Create: `rust/bridge/voice/speech/speak/tests/test_models.py`
+- Create: `rust/bridge/voice/deploy/jeeta-voice-speak.service`
+
+- [ ] **Step 1: Write the failing tests**
+
+`rust/bridge/voice/speech/speak/tests/test_respell.py`:
+
+```python
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from respell import Respeller  # noqa: E402
+
+
+def test_brands_are_respelled_with_their_suffixes_kept():
+    r = Respeller({"Jeeta": "Cita", "WhatsApp": "vatsap"})
+    assert r.apply("Jeeta'nın asistanıyım") == "Cita'nın asistanıyım"
+    assert r.apply("WhatsApp'tan yazabilirsiniz") == "vatsap'tan yazabilirsiniz"
+    assert r.apply("jeeta ve whatsapp") == "Cita ve vatsap"
+
+
+def test_words_that_merely_contain_a_brand_are_left_alone():
+    r = Respeller({"Jeeta": "Cita"})
+    assert r.apply("Jeetalar") == "Jeetalar"
+
+
+def test_the_shipped_table():
+    table = Respeller.load(pathlib.Path(__file__).resolve().parents[1] / "respell.json")
+    assert table.apply("Jeeta") == "Cita"
+    assert table.apply("WhatsApp") == "vatsap"
+```
+
+`rust/bridge/voice/speech/speak/tests/test_session.py`:
+
+```python
+"""The speak protocol over a real WebSocket (TCP loopback here; a unix socket in production)."""
+import asyncio
+import json
+import pathlib
+import sys
+from concurrent.futures import ThreadPoolExecutor
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+import websockets  # noqa: E402
+from websockets.asyncio.server import serve  # noqa: E402
+
+from jeeta_speak import session  # noqa: E402
+
+
+class FakeMouth:
+    def __init__(self, chunks):
+        self.chunk_list = chunks
+
+    def chunks(self, text):
+        for c in self.chunk_list:
+            yield c
+
+
+async def exchange(mouth, messages, stop_after):
+    pool = ThreadPoolExecutor(max_workers=1)
+    async with serve(lambda ws: session(ws, mouth, pool), "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            for m in messages:
+                await ws.send(json.dumps(m))
+            got = []
+            while True:
+                msg = await asyncio.wait_for(ws.recv(), 5)
+                got.append(msg)
+                if isinstance(msg, str) and json.loads(msg)["type"] in stop_after:
+                    return got
+
+
+def test_synth_streams_pcm_then_done():
+    mouth = FakeMouth([b"\x01\x00" * 800, b"\x02\x00" * 800])
+    got = asyncio.run(exchange(mouth, [{"type": "synth", "id": "a:0", "text": "Merhaba."}], {"done"}))
+    assert got[0] == b"\x01\x00" * 800 and got[1] == b"\x02\x00" * 800
+    done = json.loads(got[2])
+    assert done["id"] == "a:0" and done["audio_ms"] == 200
+
+
+def test_a_second_synth_while_busy_is_refused():
+    mouth = FakeMouth([b"\x00\x00" * 8000] * 3)
+    got = asyncio.run(
+        exchange(
+            mouth,
+            [{"type": "synth", "id": "a:0", "text": "Bir."}, {"type": "synth", "id": "a:1", "text": "İki."}],
+            {"done"},
+        )
+    )
+    texts = [json.loads(m) for m in got if isinstance(m, str)]
+    assert {"type": "error", "id": "a:1", "reason": "busy"} in texts
+```
+
+`rust/bridge/voice/speech/speak/tests/test_models.py`:
+
+```python
+"""Runs inside the image on the host: `docker run --rm --network none jeeta-voice-speak:<tag> python -m pytest -m models tests`."""
+import pathlib
+import sys
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+pytestmark = pytest.mark.models
+
+
+def test_the_mouth_speaks_and_reads_times_the_way_the_owner_heard():
+    from jeeta_speak import build_mouth, self_test
+
+    mouth = build_mouth()
+    self_test(mouth)
+    pcm = b"".join(mouth.chunks("Merhaba, ben Jeeta'nın dijital asistanıyım."))
+    assert len(pcm) // 2 > 8000  # more than a second of 8 kHz audio
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run (from `rust/bridge/voice`, Python 3.12 with `pip install pytest==8.4.2 numpy==2.5.4 websockets==17.3`): `python -m pytest -c speech/pytest.ini -m "not models" speech/speak/tests`
+Expected: FAIL (`ModuleNotFoundError: No module named 'respell'`).
+
+- [ ] **Step 3: Write the service**
+
+`rust/bridge/voice/speech/speak/respell.py`:
+
+```python
+"""Brand respelling in front of the normaliser: a written brand becomes the spelling the voice
+pronounces right ("Jeeta" -> "Cita"). Whole words only, case-insensitive; a suffix after an
+apostrophe stays as written. The transcript keeps the original text: this is pronunciation only."""
+import json
+import re
+
+
+class Respeller:
+    def __init__(self, table):
+        items = sorted(table.items(), key=lambda kv: -len(kv[0]))
+        self.patterns = [
+            (re.compile(r"(?<!\w)" + re.escape(src) + r"(?!\w)", re.IGNORECASE), dst) for src, dst in items
+        ]
+
+    @classmethod
+    def load(cls, path):
+        with open(path, encoding="utf-8") as f:
+            return cls(json.load(f))
+
+    def apply(self, text):
+        for pattern, dst in self.patterns:
+            text = pattern.sub(dst, text)
+        return text
+```
+
+`rust/bridge/voice/speech/speak/respell.json`:
+
+```json
+{
+  "Jeeta": "Cita",
+  "WhatsApp": "vatsap"
+}
+```
+
+`rust/bridge/voice/speech/speak/jeeta_speak.py`:
+
+```python
+"""jeeta-speak: the voice bridge's mouth (design addendum section 6).
+
+A long-lived process that keeps EMA Lightning warm. It listens on a unix socket (the container runs
+with --network none) and speaks one protocol, one WebSocket per call:
+
+  client -> {"type": "synth", "id": "<id>", "text": "<one sentence>"}
+  server -> binary frames: PCM16 little-endian mono 8000 Hz, in order
+  server -> {"type": "done", "id": "<id>", "synth_ms": <int>, "audio_ms": <int>}
+  client -> {"type": "cancel", "id": "<id>"}   (stops between chunks; answered "cancelled")
+  server -> {"type": "error", "id": "<id>", "reason": "<kind>"}
+
+One synthesis at a time per connection. Text goes through the brand respelling table, then
+Antalia-2 Mini's normaliser, then EMA. The log never carries a text.
+"""
+import asyncio
+import json
+import logging
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
+
+from respell import Respeller
+
+LOG = logging.getLogger("jeeta-speak")
+SAMPLE_RATE = 8000
+
+
+def load_normalizer():
+    """Antalia-2 Mini's normaliser: `Antalia.normalize(text)` on the class when it is static,
+    else on one instance (weights baked into the image)."""
+    from antalia_mini import Antalia
+
+    fn = Antalia.normalize
+    try:
+        fn("1")
+        return fn
+    except TypeError:
+        return Antalia().normalize
+
+
+class Mouth:
+    def __init__(self, respeller, normalize, tts, seed):
+        self.respeller = respeller
+        self.normalize = normalize
+        self.tts = tts
+        self.seed = seed
+
+    def spoken(self, text):
+        return self.normalize(self.respeller.apply(text))
+
+    def chunks(self, text):
+        for chunk in self.tts.stream(self.spoken(text), sample_rate=SAMPLE_RATE, seed=self.seed):
+            audio = np.asarray(chunk, dtype=np.float32).reshape(-1)
+            yield (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+def build_mouth():
+    import torch
+    from ema_lightning import EMA
+
+    torch.set_num_threads(int(os.environ.get("SPEAK_THREADS", "2")))
+    respeller = Respeller.load(os.environ.get("RESPELL_FILE", "/app/respell.json"))
+    return Mouth(respeller, load_normalizer(), EMA(), int(os.environ.get("EMA_SEED", "0")))
+
+
+def self_test(mouth):
+    """The two readings the owner's test depended on; the process refuses to start without them."""
+    if "on dörde" not in mouth.spoken("Salı saat 14:00'e randevunuz var."):
+        raise SystemExit("normaliser self-test failed: 14:00'e")
+    if mouth.respeller.apply("Jeeta'nın") != "Cita'nın":
+        raise SystemExit("respelling self-test failed")
+
+
+async def run_synth(ws, mouth, pool, sid, text, cancel):
+    loop = asyncio.get_running_loop()
+    started = time.monotonic()
+    samples = 0
+    try:
+        gen = mouth.chunks(text)
+        while not cancel.is_set():
+            chunk = await loop.run_in_executor(pool, next, gen, None)
+            if chunk is None or cancel.is_set():
+                break
+            samples += len(chunk) // 2
+            await ws.send(chunk)
+        kind = "cancelled" if cancel.is_set() else "done"
+        await ws.send(json.dumps({
+            "type": kind,
+            "id": sid,
+            "synth_ms": int((time.monotonic() - started) * 1000),
+            "audio_ms": samples * 1000 // SAMPLE_RATE,
+        }))
+    except Exception as e:  # noqa: BLE001 - report the kind, never the text
+        LOG.error("synthesis failed: %s", type(e).__name__)
+        try:
+            await ws.send(json.dumps({"type": "error", "id": sid, "reason": type(e).__name__}))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def session(ws, mouth, pool):
+    current = {"id": None, "cancel": None, "task": None}
+    try:
+        async for message in ws:
+            if isinstance(message, bytes):
+                continue
+            msg = json.loads(message)
+            if msg.get("type") == "synth":
+                task = current["task"]
+                if task is not None and not task.done():
+                    await ws.send(json.dumps({"type": "error", "id": msg.get("id"), "reason": "busy"}))
+                    continue
+                cancel = asyncio.Event()
+                current.update(id=msg["id"], cancel=cancel)
+                current["task"] = asyncio.create_task(
+                    run_synth(ws, mouth, pool, msg["id"], msg.get("text", ""), cancel)
+                )
+            elif msg.get("type") == "cancel" and msg.get("id") == current["id"] and current["cancel"]:
+                current["cancel"].set()
+    finally:
+        if current["cancel"]:
+            current["cancel"].set()
+
+
+async def main():
+    from websockets.asyncio.server import unix_serve
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    sock = os.environ.get("SPEAK_SOCKET", "/run/jeeta-voice/speak.sock")
+    mouth = build_mouth()
+    self_test(mouth)
+    for _ in mouth.chunks("Merhaba."):  # warm the model before the first call
+        pass
+    # Two at once: a call's live sentence never waits behind another call's (or its own) pre-synthesis.
+    pool = ThreadPoolExecutor(max_workers=int(os.environ.get("SPEAK_WORKERS", "2")))
+    if os.path.exists(sock):
+        os.unlink(sock)
+    async with unix_serve(lambda ws: session(ws, mouth, pool), sock, max_size=2**16):
+        os.chmod(sock, 0o660)
+        LOG.info("listening")
+        await asyncio.Future()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+`rust/bridge/voice/speech/speak/requirements.txt`:
+
+```
+ema-lightning==1.1.2
+antalia-mini==1.0.1
+websockets==17.3
+numpy==2.5.4
+pytest==8.4.2
+```
+
+- [ ] **Step 4: Run the unit tests**
+
+Run: `python -m pytest -c speech/pytest.ini -m "not models" speech/speak/tests`
+Expected: `5 passed, 1 deselected`.
+
+- [ ] **Step 5: Write the image and the unit**
+
+`rust/bridge/voice/speech/speak/Dockerfile`:
+
+```dockerfile
+FROM python:3.12-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HF_HOME=/models/hf
+WORKDIR /app
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
+      -r requirements.txt -c constraints.txt
+# Bake the weights in: the container runs with --network none.
+RUN python -c "from ema_lightning import EMA; EMA()" \
+ && python -c "from antalia_mini import Antalia; Antalia()" \
+ && find /models -type f -name '*.pt' -o -type f -name '*.onnx' -o -type f -name '*.safetensors' \
+      | sort | xargs sha256sum > /app/models.sha256
+COPY respell.py respell.json jeeta_speak.py ./
+COPY tests ./tests
+COPY pytest.ini ./pytest.ini
+ENV HF_HUB_OFFLINE=1
+USER 1501:1501
+CMD ["python", "jeeta_speak.py"]
+```
+
+`rust/bridge/voice/deploy/jeeta-voice-speak.service`:
+
+```ini
+[Unit]
+Description=Jeeta voice: speak (EMA Lightning, no network)
+After=docker.service systemd-tmpfiles-setup.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/jeeta-voice/images.env
+ExecStartPre=-/usr/bin/docker rm -f jeeta-voice-speak
+ExecStart=/usr/bin/docker run --rm --name jeeta-voice-speak --network none --user 1501:1501 \
+  --cpus 2 --cpu-shares 2048 --memory 2g --read-only --tmpfs /tmp \
+  -v /run/jeeta-voice:/run/jeeta-voice \
+  -e SPEAK_SOCKET=/run/jeeta-voice/speak.sock -e SPEAK_THREADS=2 -e EMA_SEED=0 \
+  ${SPEAK_IMAGE}
+ExecStop=/usr/bin/docker stop -t 10 jeeta-voice-speak
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add rust/bridge/voice/speech/speak rust/bridge/voice/deploy/jeeta-voice-speak.service
+git commit -m "feat(voice): the speak service, EMA Lightning behind Antalia's normaliser" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 7: [COORDINATOR, server] Pin the tested versions, build, start**
+
+The owner's blind test ran on `jeeta-ttstest:tmp`; its exact package set becomes the constraints:
+
+```bash
+docker run --rm --network none --entrypoint pip jeeta-ttstest:tmp freeze > /root/jeeta-voice-src/rust/bridge/voice/speech/speak/constraints.txt
+grep -iE '^(ema-lightning|antalia-mini|torch|numpy)==' /root/jeeta-voice-src/rust/bridge/voice/speech/speak/constraints.txt
+```
+
+Expected: `ema-lightning==1.1.2` and a `torch==…` line. If `antalia-mini` is absent, append `antalia-mini==1.0.1`; if `ema-lightning` is not 1.1.2, stop and report (the owner chose 1.1.2). If `numpy` differs from `2.5.4`, change `requirements.txt` to the frozen numpy (the frozen set is the tested one). Copy `constraints.txt` back into the repository (`scp root@38.242.233.166:/root/jeeta-voice-src/rust/bridge/voice/speech/speak/constraints.txt rust/bridge/voice/speech/speak/`) and commit it (`git commit -m "build(voice): the speak image pins the owner-tested package set"`). Then on the host:
+
+```bash
+cp /root/jeeta-voice-src/rust/bridge/voice/speech/pytest.ini /root/jeeta-voice-src/rust/bridge/voice/speech/speak/
+cd /root/jeeta-voice-src/rust/bridge/voice/speech/speak
+TAG=$(date +%Y%m%d%H%M)
+nice -n 10 docker build -t jeeta-voice-speak:$TAG .
+docker run --rm --network none jeeta-voice-speak:$TAG python -m pytest -m models tests
+printf 'SPEAK_IMAGE=jeeta-voice-speak:%s\n' "$TAG" >> /etc/jeeta-voice/images.env
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-speak.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now jeeta-voice-speak
+sleep 20; ls -l /run/jeeta-voice/speak.sock; journalctl -u jeeta-voice-speak -n 5 --no-pager
+```
+
+Expected: `1 passed` for the models test; `srw-rw---- … speak.sock`; the journal ends with `INFO jeeta-speak listening` and no text. Record the tag in the task notes.
+
+### Task B3: The listen service (Silero VAD, Smart Turn v3.2, seda-v0.1)
+
+**Files:**
+- Create: `rust/bridge/voice/speech/listen/endpoint.py`
+- Create: `rust/bridge/voice/speech/listen/hotwords.py`
+- Create: `rust/bridge/voice/speech/listen/vad.py`
+- Create: `rust/bridge/voice/speech/listen/turn.py`
+- Create: `rust/bridge/voice/speech/listen/asr.py`
+- Create: `rust/bridge/voice/speech/listen/jeeta_listen.py`
+- Create: `rust/bridge/voice/speech/listen/fetch_models.py`
+- Create: `rust/bridge/voice/speech/listen/models.lock` (generated in Step 6)
+- Create: `rust/bridge/voice/speech/listen/requirements.txt`, `constraints.txt` (generated in Step 8)
+- Create: `rust/bridge/voice/speech/listen/Dockerfile`
+- Create: `rust/bridge/voice/speech/listen/tests/{test_endpoint.py,test_hotwords.py,test_session.py,test_models.py}`
+- Create: `rust/bridge/voice/deploy/jeeta-voice-listen.service`
+
+- [ ] **Step 1: Write the failing pure tests**
+
+`rust/bridge/voice/speech/listen/tests/test_endpoint.py`:
+
+```python
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from endpoint import EndpointConfig, Endpointer  # noqa: E402
+
+VOICED, SILENT = 0.9, 0.1
+
+
+def feed(e, prob, chunks):
+    out = []
+    for _ in range(chunks):
+        out += e.feed(prob)
+    return out
+
+
+def test_speech_starts_after_the_minimum_speech_and_reports_its_onset():
+    e = Endpointer(EndpointConfig())
+    assert feed(e, SILENT, 3) == []
+    events = feed(e, VOICED, 7)  # 7 x 32 ms = 224 ms >= 200 ms
+    assert events == [("speech_start", 96)]
+
+
+def test_a_complete_turn_ends_on_the_turn_models_verdict():
+    e = Endpointer(EndpointConfig())
+    feed(e, VOICED, 20)
+    events = feed(e, SILENT, 7)  # 224 ms >= 200 ms stop
+    assert events == [("pause", 640)]
+    assert e.verdict(False) == []
+    final = e.verdict(True)
+    assert final == [("finalize", {"speech_end_ms": 640, "endpoint_ms": 864, "by": "smart_turn"})]
+
+
+def test_an_incomplete_turn_ends_on_the_fallback_silence():
+    e = Endpointer(EndpointConfig(fallback_ms=1500))
+    feed(e, VOICED, 10)
+    feed(e, SILENT, 7)
+    e.verdict(False)
+    events = feed(e, SILENT, 40)  # 47 chunks of silence in all: 1504 ms
+    assert events == [("finalize", {"speech_end_ms": 320, "endpoint_ms": 1824, "by": "fallback"})]
+
+
+def test_speech_after_a_pause_resumes_the_turn():
+    e = Endpointer(EndpointConfig())
+    feed(e, VOICED, 10)
+    feed(e, SILENT, 7)
+    assert feed(e, VOICED, 1) == [("resume", 576)]
+    assert e.verdict(True) == []
+
+
+def test_the_echo_guard_raises_the_threshold_and_the_minimum():
+    e = Endpointer(EndpointConfig())
+    e.guarded = True
+    assert feed(e, 0.55, 20) == []
+    assert feed(e, VOICED, 7) == []  # 224 ms < 250 ms while guarded
+    assert feed(e, VOICED, 1) == [("speech_start", 640)]
+```
+
+`rust/bridge/voice/speech/listen/tests/test_hotwords.py`:
+
+```python
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from hotwords import encode, lower_tr  # noqa: E402
+
+VOCAB = {"▁je", "e", "ta", "▁fi", "gu", "ru", "ni", "ca", "▁is", "tan", "bul", "▁a", "hmet"}
+
+
+def test_turkish_lowercase():
+    assert lower_tr("İSTANBUL") == "istanbul"
+    assert lower_tr("ISPARTA") == "ısparta"
+
+
+def test_words_are_cut_into_the_models_pieces_greedily():
+    assert encode(["Jeeta"], VOCAB) == "▁je e ta"
+    assert encode(["Figurunica", "İstanbul"], VOCAB) == "▁fi gu ru ni ca/▁is tan bul"
+
+
+def test_a_word_the_vocabulary_cannot_spell_is_dropped():
+    assert encode(["Jeeta", "Xq"], VOCAB) == "▁je e ta"
+    assert encode([], VOCAB) == ""
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `python -m pytest -c speech/pytest.ini -m "not models" speech/listen/tests/test_endpoint.py speech/listen/tests/test_hotwords.py`
+Expected: FAIL (`ModuleNotFoundError: No module named 'endpoint'`).
+
+- [ ] **Step 3: Write `endpoint.py` and `hotwords.py`**
+
+`rust/bridge/voice/speech/listen/endpoint.py`:
+
+```python
+"""When a caller's turn starts and ends (design addendum section 6), from Silero VAD probabilities,
+one per 32 ms chunk of 8 kHz audio. Pure: the turn model's verdict is handed in.
+
+Events: ("speech_start", onset_ms) after the minimum speech; ("pause", speech_end_ms) after `stop_ms`
+of silence, when the turn model should judge the turn; ("resume", audio_ms) when speech comes back
+during the pause; ("finalize", {...}) when the turn ends, by the model's "complete" or after
+`fallback_ms` of silence. Times are audio positions in milliseconds since the stream began."""
+from dataclasses import dataclass
+
+
+@dataclass
+class EndpointConfig:
+    threshold: float = 0.5
+    guarded_threshold: float = 0.6
+    min_speech_ms: int = 200
+    guarded_min_speech_ms: int = 250
+    stop_ms: int = 200
+    fallback_ms: int = 1500
+    smart_turn_threshold: float = 0.5
+
+
+class Endpointer:
+    CHUNK_MS = 32
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.guarded = False
+        self.audio_ms = 0
+        self.state = "idle"
+        self.voiced_ms = 0
+        self.silence_ms = 0
+        self.onset_ms = 0
+        self.speech_end_ms = 0
+
+    def feed(self, prob):
+        self.audio_ms += self.CHUNK_MS
+        cfg = self.cfg
+        voiced = prob >= (cfg.guarded_threshold if self.guarded else cfg.threshold)
+        out = []
+        if self.state == "idle":
+            if voiced:
+                if self.voiced_ms == 0:
+                    self.onset_ms = self.audio_ms - self.CHUNK_MS
+                self.voiced_ms += self.CHUNK_MS
+                need = cfg.guarded_min_speech_ms if self.guarded else cfg.min_speech_ms
+                if self.voiced_ms >= need:
+                    self.state = "speaking"
+                    self.speech_end_ms = self.audio_ms
+                    self.silence_ms = 0
+                    out.append(("speech_start", self.onset_ms))
+            else:
+                self.voiced_ms = 0
+        elif self.state == "speaking":
+            if voiced:
+                self.speech_end_ms = self.audio_ms
+                self.silence_ms = 0
+            else:
+                self.silence_ms += self.CHUNK_MS
+                if self.silence_ms >= cfg.stop_ms:
+                    self.state = "paused"
+                    out.append(("pause", self.speech_end_ms))
+        elif self.state == "paused":
+            if voiced:
+                self.state = "speaking"
+                self.speech_end_ms = self.audio_ms
+                self.silence_ms = 0
+                out.append(("resume", self.audio_ms))
+            else:
+                self.silence_ms += self.CHUNK_MS
+                if self.silence_ms >= cfg.fallback_ms:
+                    out.append(self._finalize("fallback"))
+        return out
+
+    def verdict(self, complete):
+        """The turn model's verdict on the pause just reported."""
+        if self.state == "paused" and complete:
+            return [self._finalize("smart_turn")]
+        return []
+
+    def _finalize(self, by):
+        event = ("finalize", {"speech_end_ms": self.speech_end_ms, "endpoint_ms": self.audio_ms, "by": by})
+        self.state = "idle"
+        self.voiced_ms = 0
+        self.silence_ms = 0
+        return event
+```
+
+`rust/bridge/voice/speech/listen/hotwords.py`:
+
+```python
+"""Per-call hotwords for sherpa-onnx's contextual biasing. seda ships `tokens.txt` (BPE-500) but no
+`bpe.model`, so words are cut into the model's pieces here: lowercase Turkish, a word-start marker
+"▁", greedy longest match. A word the vocabulary cannot spell is dropped. Phrases are joined with
+"/" as sherpa-onnx's per-stream hotwords expect."""
+
+MARK = "▁"
+
+
+def lower_tr(text):
+    return text.replace("I", "ı").replace("İ", "i").lower()
+
+
+def load_vocab(tokens_path):
+    with open(tokens_path, encoding="utf-8") as f:
+        return {line.split(" ")[0] for line in f if line.strip()}
+
+
+def _pieces(word, vocab):
+    s = MARK + word
+    out = []
+    while s:
+        for end in range(len(s), 0, -1):
+            if s[:end] in vocab:
+                out.append(s[:end])
+                s = s[end:]
+                break
+        else:
+            return None
+    return out
+
+
+def encode(words, vocab):
+    lines = []
+    for phrase in words:
+        pieces = []
+        for word in lower_tr(phrase).split():
+            p = _pieces(word, vocab)
+            if p is None:
+                pieces = None
+                break
+            pieces += p
+        if pieces:
+            lines.append(" ".join(pieces))
+    return "/".join(lines)
+```
+
+- [ ] **Step 4: Run the pure tests**
+
+Run: `python -m pytest -c speech/pytest.ini -m "not models" speech/listen/tests/test_endpoint.py speech/listen/tests/test_hotwords.py`
+Expected: `8 passed`.
+
+- [ ] **Step 5: Write the engines and the session, with its test**
+
+`rust/bridge/voice/speech/listen/vad.py`:
+
+```python
+"""Silero VAD (ONNX, the file shipped in the silero-vad 6.2.3 wheel) at 8 kHz: 256-sample chunks
+with 32 samples of context, as the reference wrapper feeds it."""
+import importlib.util
+import os
+
+import numpy as np
+
+
+def model_path():
+    spec = importlib.util.find_spec("silero_vad")
+    return os.path.join(spec.submodule_search_locations[0], "data", "silero_vad.onnx")
+
+
+class SileroVad:
+    CHUNK = 256
+    CONTEXT = 32
+
+    def __init__(self, path=None, threads=1):
+        import onnxruntime as ort
+
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = threads
+        opts.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(path or model_path(), sess_options=opts,
+                                            providers=["CPUExecutionProvider"])
+        self.reset()
+
+    def reset(self):
+        self.state = np.zeros((2, 1, 128), dtype=np.float32)
+        self.context = np.zeros((1, self.CONTEXT), dtype=np.float32)
+
+    def prob(self, chunk):
+        x = np.concatenate([self.context, chunk.reshape(1, -1).astype(np.float32)], axis=1)
+        out, self.state = self.session.run(
+            None, {"input": x, "state": self.state, "sr": np.array(8000, dtype=np.int64)}
+        )
+        self.context = x[:, -self.CONTEXT:]
+        return float(out[0][0])
+```
+
+`rust/bridge/voice/speech/listen/turn.py`:
+
+```python
+"""Smart Turn v3.2 (smart-turn-v3.2-cpu.onnx, BSD-2): the probability that the caller finished,
+from the turn's last 8 s at 16 kHz, zero-padded at the start as the model card asks."""
+import numpy as np
+
+SECONDS = 8
+RATE = 16000
+
+
+class SmartTurn:
+    def __init__(self, path, threads=1):
+        import onnxruntime as ort
+        from transformers import WhisperFeatureExtractor
+
+        opts = ort.SessionOptions()
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = threads
+        self.session = ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
+        self.features = WhisperFeatureExtractor(chunk_length=SECONDS)
+
+    def complete_probability(self, audio16k):
+        n = SECONDS * RATE
+        audio = np.asarray(audio16k, dtype=np.float32)[-n:]
+        if len(audio) < n:
+            audio = np.concatenate([np.zeros(n - len(audio), dtype=np.float32), audio])
+        f = self.features(audio, sampling_rate=RATE, return_tensors="np", padding="max_length",
+                          max_length=n, truncation=True, do_normalize=True)
+        out = self.session.run(None, {"input_features": f.input_features.astype(np.float32)})
+        return float(np.asarray(out[0]).reshape(-1)[0])
+```
+
+`rust/bridge/voice/speech/listen/asr.py`:
+
+```python
+"""seda-v0.1 (atasoglu, Apache-2.0) on sherpa-onnx: streaming Zipformer2 transducer, beam search
+with 4 active paths and the shipped RNN LM, one thread per stream, per-stream hotwords."""
+import logging
+import os
+
+from hotwords import encode, load_vocab
+
+LOG = logging.getLogger("jeeta-listen.asr")
+LM_SCALE = float(os.environ.get("SEDA_LM_SCALE", "0.3"))
+
+
+class Seda:
+    def __init__(self, model_dir, threads=1, hotwords_score=1.5):
+        import sherpa_onnx
+
+        tokens = os.path.join(model_dir, "tokens.txt")
+        self.rec = sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=tokens,
+            encoder=os.path.join(model_dir, "encoder.int8.onnx"),
+            decoder=os.path.join(model_dir, "decoder.onnx"),
+            joiner=os.path.join(model_dir, "joiner.int8.onnx"),
+            num_threads=threads,
+            sample_rate=16000,
+            feature_dim=80,
+            decoding_method="modified_beam_search",
+            max_active_paths=4,
+            hotwords_score=hotwords_score,
+            lm=os.path.join(model_dir, "lm", "rnnlm.int8.onnx"),
+            lm_scale=LM_SCALE,
+            enable_endpoint_detection=False,
+        )
+        self.vocab = load_vocab(tokens)
+        self.hotwords_ok = True
+
+    def stream(self, hotwords):
+        encoded = encode(hotwords, self.vocab)
+        if encoded and self.hotwords_ok:
+            try:
+                return self.rec.create_stream(hotwords=encoded)
+            except (TypeError, RuntimeError):
+                self.hotwords_ok = False
+                LOG.warning("hotwords are not accepted by this recognizer; continuing without")
+        return self.rec.create_stream()
+
+    def accept(self, stream, samples16k):
+        stream.accept_waveform(16000, samples16k)
+        while self.rec.is_ready(stream):
+            self.rec.decode_stream(stream)
+
+    def text(self, stream):
+        r = self.rec.get_result(stream)
+        return (r if isinstance(r, str) else getattr(r, "text", "")).strip()
+
+    def finish(self, stream):
+        stream.input_finished()
+        while self.rec.is_ready(stream):
+            self.rec.decode_stream(stream)
+        return self.text(stream)
+```
+
+`rust/bridge/voice/speech/listen/jeeta_listen.py`:
+
+```python
+"""jeeta-listen: the voice bridge's ears (design addendum section 6).
+
+One WebSocket per call on a unix socket (the container runs with --network none):
+
+  client -> {"type": "start", "sample_rate": 8000, "hotwords": ["..."]}
+  client -> binary frames: PCM16 little-endian mono 8000 Hz (20 ms each)
+  client -> {"type": "playback", "active": true|false}   (echo guard while the bridge speaks)
+  server -> {"type": "speech_start", "audio_ms": n} | {"type": "speech_end", "audio_ms": n}
+          | {"type": "resume", "audio_ms": n} | {"type": "partial", "text": "..."}
+          | {"type": "final", "text": "...", "speech_end_ms": n, "endpoint_ms": n,
+             "endpoint_by": "smart_turn"|"fallback", "stt_ms": n}
+          | {"type": "unheard", "audio_ms": n}
+
+Positions are audio time since the stream began. The log never carries a word."""
+import asyncio
+import collections
+import json
+import logging
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
+
+from endpoint import EndpointConfig, Endpointer
+
+LOG = logging.getLogger("jeeta-listen")
+PREROLL_MS = 300
+PARTIAL_EVERY_MS = 160
+
+
+class Ears:
+    """The loaded models, shared by every call."""
+
+    def __init__(self, vad_factory, turn, asr, resampler_factory):
+        self.vad_factory = vad_factory
+        self.turn = turn
+        self.asr = asr
+        self.resampler_factory = resampler_factory
+
+
+def soxr_resampler():
+    import soxr
+
+    stream = soxr.ResampleStream(8000, 16000, 1, dtype="float32", quality="HQ")
+    return stream.resample_chunk
+
+
+class Session:
+    def __init__(self, ears, hotwords, cfg=None):
+        self.ears = ears
+        self.cfg = cfg or EndpointConfig()
+        self.endpointer = Endpointer(self.cfg)
+        self.vad = ears.vad_factory()
+        self.resample = ears.resampler_factory()
+        self.hotwords = hotwords
+        self.pending8 = np.zeros(0, dtype=np.float32)
+        self.preroll = collections.deque(maxlen=max(1, PREROLL_MS // 20))
+        self.turn16 = []
+        self.stream = None
+        self.last_partial = ""
+        self.since_partial_ms = 0
+
+    def playback(self, active):
+        self.endpointer.guarded = bool(active)
+
+    def feed(self, pcm):
+        x8 = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        x16 = self.resample(x8)
+        events = []
+        if self.stream is not None:
+            self.ears.asr.accept(self.stream, x16)
+            self.turn16.append(x16)
+            self.since_partial_ms += len(x8) * 1000 // 8000
+        else:
+            self.preroll.append(x16)
+        self.pending8 = np.concatenate([self.pending8, x8])
+        while len(self.pending8) >= 256:
+            chunk, self.pending8 = self.pending8[:256], self.pending8[256:]
+            for kind, at in self.endpointer.feed(self.vad.prob(chunk)):
+                events += self.on(kind, at)
+        if self.stream is not None and self.since_partial_ms >= PARTIAL_EVERY_MS:
+            self.since_partial_ms = 0
+            text = self.ears.asr.text(self.stream)
+            if text and text != self.last_partial:
+                self.last_partial = text
+                events.append({"type": "partial", "text": text})
+        return events
+
+    def on(self, kind, at):
+        if kind == "speech_start":
+            self.stream = self.ears.asr.stream(self.hotwords)
+            self.turn16 = list(self.preroll)
+            for chunk in self.turn16:
+                self.ears.asr.accept(self.stream, chunk)
+            self.last_partial = ""
+            return [{"type": "speech_start", "audio_ms": at}]
+        if kind == "resume":
+            return [{"type": "resume", "audio_ms": at}]
+        if kind == "pause":
+            events = [{"type": "speech_end", "audio_ms": at}]
+            audio = np.concatenate(self.turn16) if self.turn16 else np.zeros(0, dtype=np.float32)
+            p = self.ears.turn.complete_probability(audio)
+            for k, a in self.endpointer.verdict(p >= self.cfg.smart_turn_threshold):
+                events += self.on(k, a)
+            return events
+        if kind == "finalize":
+            started = time.monotonic()
+            text = self.ears.asr.finish(self.stream) if self.stream is not None else ""
+            stt_ms = int((time.monotonic() - started) * 1000)
+            self.stream = None
+            self.turn16 = []
+            self.preroll.clear()
+            if not text:
+                return [{"type": "unheard", "audio_ms": at["endpoint_ms"]}]
+            return [{"type": "final", "text": text, "speech_end_ms": at["speech_end_ms"],
+                     "endpoint_ms": at["endpoint_ms"], "endpoint_by": at["by"], "stt_ms": stt_ms}]
+        return []
+
+
+async def serve_session(ws, ears, pool):
+    loop = asyncio.get_running_loop()
+    session = None
+    async for message in ws:
+        if isinstance(message, bytes):
+            if session is None:
+                continue
+            events = await loop.run_in_executor(pool, session.feed, message)
+            for e in events:
+                await ws.send(json.dumps(e, ensure_ascii=False))
+            continue
+        msg = json.loads(message)
+        if msg.get("type") == "start":
+            session = Session(ears, list(msg.get("hotwords", []))[:20])
+        elif msg.get("type") == "playback" and session is not None:
+            session.playback(msg.get("active"))
+
+
+def build_ears():
+    from asr import Seda
+    from turn import SmartTurn
+    from vad import SileroVad
+
+    models = os.environ.get("LISTEN_MODELS", "/models")
+    asr = Seda(os.path.join(models, "seda-v0.1"))
+    turn = SmartTurn(os.path.join(models, "smart-turn", "smart-turn-v3.2-cpu.onnx"))
+    return Ears(lambda: SileroVad(), turn, asr, soxr_resampler)
+
+
+async def main():
+    from websockets.asyncio.server import unix_serve
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    sock = os.environ.get("LISTEN_SOCKET", "/run/jeeta-voice/listen.sock")
+    ears = build_ears()
+    pool = ThreadPoolExecutor(max_workers=int(os.environ.get("LISTEN_THREADS", "2")))
+    if os.path.exists(sock):
+        os.unlink(sock)
+    async with unix_serve(lambda ws: serve_session(ws, ears, pool), sock, max_size=2**16):
+        os.chmod(sock, 0o660)
+        LOG.info("listening")
+        await asyncio.Future()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+`rust/bridge/voice/speech/listen/tests/test_session.py`:
+
+```python
+"""The session over fake engines: a turn is opened at speech start, judged at the pause, and its
+final transcript (or 'unheard') is reported with the audio positions."""
+import pathlib
+import sys
+
+import numpy as np
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from jeeta_listen import Ears, Session  # noqa: E402
+
+
+class LoudVad:
+    def prob(self, chunk):
+        return 0.9 if float(np.abs(chunk).mean()) > 0.05 else 0.1
+
+
+class FakeTurn:
+    def __init__(self, p):
+        self.p = p
+
+    def complete_probability(self, audio):
+        return self.p
+
+
+class FakeAsr:
+    def __init__(self, text):
+        self.result = text
+        self.fed = 0
+
+    def stream(self, hotwords):
+        return {"hotwords": hotwords}
+
+    def accept(self, stream, samples):
+        self.fed += len(samples)
+
+    def text(self, stream):
+        return self.result
+
+    def finish(self, stream):
+        return self.result
+
+
+def frames(loud, ms):
+    level = 8000 if loud else 0
+    return [np.full(160, level, dtype="<i2").tobytes() for _ in range(ms // 20)]
+
+
+def run(session, pcm_frames):
+    events = []
+    for f in pcm_frames:
+        events += session.feed(f)
+    return events
+
+
+def ears(text, p):
+    return Ears(lambda: LoudVad(), FakeTurn(p), FakeAsr(text), lambda: (lambda x: np.repeat(x, 2)))
+
+
+def test_a_complete_turn_is_reported_final_with_positions():
+    s = Session(ears("evet perşembe uygun", 0.9), ["Jeeta"])
+    events = run(s, frames(False, 200) + frames(True, 600) + frames(False, 400))
+    kinds = [e["type"] for e in events]
+    assert kinds[0] == "speech_start" and "speech_end" in kinds and kinds[-1] == "final"
+    final = events[-1]
+    assert final["text"] == "evet perşembe uygun"
+    assert final["endpoint_by"] == "smart_turn"
+    assert final["endpoint_ms"] > final["speech_end_ms"]
+
+
+def test_no_words_is_reported_unheard():
+    s = Session(ears("", 0.9), [])
+    events = run(s, frames(True, 600) + frames(False, 400))
+    assert events[-1]["type"] == "unheard"
+
+
+def test_an_incomplete_turn_waits_for_the_fallback():
+    s = Session(ears("şey salı günü", 0.1), [])
+    events = run(s, frames(True, 600) + frames(False, 1000))
+    assert all(e["type"] != "final" for e in events)
+    events = run(s, frames(False, 800))
+    assert events[-1]["type"] == "final" and events[-1]["endpoint_by"] == "fallback"
+```
+
+`rust/bridge/voice/speech/listen/tests/test_models.py`:
+
+```python
+"""Runs inside the image on the host. With LISTEN_FIXTURE_WAV (8 kHz mono PCM16 WAV) and
+LISTEN_EXPECT (a word the transcript must contain), it transcribes the file through the full session."""
+import os
+import pathlib
+import sys
+import wave
+
+import numpy as np
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+pytestmark = pytest.mark.models
+
+
+def test_the_models_load_and_silence_is_not_speech():
+    from jeeta_listen import Session, build_ears
+
+    s = Session(build_ears(), ["Jeeta"])
+    events = []
+    for _ in range(100):
+        events += s.feed(np.zeros(160, dtype="<i2").tobytes())
+    assert events == []
+
+
+@pytest.mark.skipif(not os.environ.get("LISTEN_FIXTURE_WAV"), reason="no fixture recording")
+def test_a_recorded_sentence_is_transcribed():
+    from jeeta_listen import Session, build_ears
+
+    s = Session(build_ears(), [])
+    with wave.open(os.environ["LISTEN_FIXTURE_WAV"]) as w:
+        assert w.getframerate() == 8000 and w.getsampwidth() == 2 and w.getnchannels() == 1
+        pcm = w.readframes(w.getnframes())
+    pcm += b"\x00\x00" * 8000 * 2  # two seconds of silence after it
+    events = []
+    for i in range(0, len(pcm), 320):
+        events += s.feed(pcm[i:i + 320])
+    finals = [e for e in events if e["type"] == "final"]
+    assert finals and os.environ["LISTEN_EXPECT"] in finals[-1]["text"]
+```
+
+Run: `python -m pytest -c speech/pytest.ini -m "not models" speech/listen/tests`
+Expected: `11 passed, 2 deselected`.
+
+- [ ] **Step 6: Pin the model revisions**
+
+`rust/bridge/voice/speech/listen/fetch_models.py`:
+
+```python
+"""Downloads the listen models at the revisions in models.lock and checks their SHA-256.
+`--resolve` (dev machine, with network) writes models.lock from the repositories' current heads."""
+import hashlib
+import json
+import os
+import sys
+
+from huggingface_hub import HfApi, hf_hub_download
+
+FILES = {
+    "atasoglu/seda-v0.1": ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx", "tokens.txt",
+                           "lm/rnnlm.int8.onnx"],
+    "pipecat-ai/smart-turn-v3": ["smart-turn-v3.2-cpu.onnx"],
+}
+TARGET = {"atasoglu/seda-v0.1": "seda-v0.1", "pipecat-ai/smart-turn-v3": "smart-turn"}
+LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models.lock")
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def resolve():
+    lock = {}
+    for repo, files in FILES.items():
+        rev = HfApi().model_info(repo).sha
+        lock[repo] = {"revision": rev, "files": {}}
+        for name in files:
+            path = hf_hub_download(repo, name, revision=rev)
+            lock[repo]["files"][name] = sha256(path)
+    with open(LOCK, "w", encoding="utf-8") as f:
+        json.dump(lock, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+def fetch(dest):
+    with open(LOCK, encoding="utf-8") as f:
+        lock = json.load(f)
+    for repo, entry in lock.items():
+        for name, digest in entry["files"].items():
+            path = hf_hub_download(repo, name, revision=entry["revision"],
+                                   local_dir=os.path.join(dest, TARGET[repo]))
+            if sha256(path) != digest:
+                raise SystemExit(f"checksum mismatch: {repo}/{name}")
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--resolve"]:
+        resolve()
+    else:
+        fetch(sys.argv[1] if len(sys.argv) > 1 else "/models")
+```
+
+Run on the dev machine (network): `pip install huggingface-hub==2.3.0 && python rust/bridge/voice/speech/listen/fetch_models.py --resolve`
+Expected: `rust/bridge/voice/speech/listen/models.lock` holds a 40-hex `revision` per repository and a 64-hex digest per file. Inspect it, then commit it in Step 9.
+
+- [ ] **Step 7: Write the image and the unit**
+
+`rust/bridge/voice/speech/listen/requirements.txt`:
+
+```
+sherpa-onnx==2.0.1
+onnxruntime==1.31.1
+transformers==5.21.0
+soxr==1.1.0
+numpy==2.5.4
+websockets==17.3
+huggingface-hub==2.3.0
+pytest==8.4.2
+```
+
+`rust/bridge/voice/speech/listen/Dockerfile`:
+
+```dockerfile
+FROM python:3.12-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HF_HUB_DISABLE_TELEMETRY=1
+WORKDIR /app
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt \
+ && pip install --no-cache-dir --no-deps silero-vad==6.2.3
+COPY fetch_models.py models.lock ./
+RUN python fetch_models.py /models
+COPY endpoint.py hotwords.py vad.py turn.py asr.py jeeta_listen.py ./
+COPY tests ./tests
+COPY pytest.ini ./pytest.ini
+ENV HF_HUB_OFFLINE=1 LISTEN_MODELS=/models
+USER 1501:1501
+CMD ["python", "jeeta_listen.py"]
+```
+
+`rust/bridge/voice/deploy/jeeta-voice-listen.service`:
+
+```ini
+[Unit]
+Description=Jeeta voice: listen (Silero VAD, Smart Turn v3.2, seda-v0.1; no network)
+After=docker.service systemd-tmpfiles-setup.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/jeeta-voice/images.env
+ExecStartPre=-/usr/bin/docker rm -f jeeta-voice-listen
+ExecStart=/usr/bin/docker run --rm --name jeeta-voice-listen --network none --user 1501:1501 \
+  --cpus 1.5 --cpu-shares 2048 --memory 1g --read-only --tmpfs /tmp \
+  -v /run/jeeta-voice:/run/jeeta-voice \
+  -e LISTEN_SOCKET=/run/jeeta-voice/listen.sock -e LISTEN_THREADS=2 \
+  ${LISTEN_IMAGE}
+ExecStop=/usr/bin/docker stop -t 10 jeeta-voice-listen
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+- [ ] **Step 8: [COORDINATOR, server] Freeze, build, verify, choose the LM scale, start**
+
+```bash
+cd /root/jeeta-voice-src/rust/bridge/voice/speech/listen
+cp ../pytest.ini .
+: > constraints.txt
+docker run --rm -v "$PWD":/w -w /w python:3.12-slim-bookworm sh -c \
+  'pip install --no-cache-dir -q -r requirements.txt && pip freeze > constraints.txt'
+TAG=$(date +%Y%m%d%H%M)
+nice -n 10 docker build -t jeeta-voice-listen:$TAG .
+docker run --rm --network none jeeta-voice-listen:$TAG python -m pytest -m models tests
+```
+
+Expected: `1 passed, 1 skipped`. Then the loopback check and the LM-scale choice (speak → listen, no call needed):
+
+```bash
+SPEAK=$(grep SPEAK_IMAGE /etc/jeeta-voice/images.env | cut -d= -f2)
+mkdir -p /root/voice-fixtures && chmod 0700 /root/voice-fixtures
+docker run --rm --network none -v /root/voice-fixtures:/out --user 0 "$SPEAK" python -c \
+"import wave; from jeeta_speak import build_mouth; m=build_mouth(); pcm=b''.join(m.chunks('Evet, yarın saat on dörtte geliyorum.')); \
+w=wave.open('/out/yarin.wav','wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000); w.writeframes(pcm); w.close()"
+for s in 0.1 0.3 0.5; do
+  docker run --rm --network none -v /root/voice-fixtures:/f -e SEDA_LM_SCALE=$s \
+    -e LISTEN_FIXTURE_WAV=/f/yarin.wav -e LISTEN_EXPECT=yarın jeeta-voice-listen:$TAG \
+    python -m pytest -m models tests -k recorded
+done
+```
+
+Expected: `1 passed` for at least one scale. Keep the smallest scale that passes as the default: if it is not `0.3`, change `LM_SCALE` default in `asr.py` and commit (`fix(voice): seda LM scale chosen on the loopback fixture`). A failure at every scale is a stop-and-report (the recognizer is misconfigured; compare with `sedalib`: `pip install sedalib==1.1.0` in a throwaway container and transcribe the same file with `Recognizer.from_pretrained("atasoglu/seda-v0.1")`). Copy `constraints.txt` back to the repository and commit it with `models.lock` (Step 9). Then:
+
+```bash
+printf 'LISTEN_IMAGE=jeeta-voice-listen:%s\n' "$TAG" >> /etc/jeeta-voice/images.env
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-listen.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now jeeta-voice-listen
+sleep 15; ls -l /run/jeeta-voice/listen.sock; journalctl -u jeeta-voice-listen -n 5 --no-pager
+shred -u /root/voice-fixtures/yarin.wav
+```
+
+Expected: `srw-rw---- … listen.sock`, journal `INFO jeeta-listen listening`.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add rust/bridge/voice/speech/listen rust/bridge/voice/deploy/jeeta-voice-listen.service
+git commit -m "feat(voice): the listen service, Silero VAD, Smart Turn v3.2 and seda-v0.1" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+
+### Task B4: The worker crate and its pure modules
+
+**Files:**
+- Create: `rust/bridge/voice/Cargo.toml`
+- Create: `rust/bridge/voice/src/lib.rs`
+- Create: `rust/bridge/voice/src/g711.rs`, `src/text.rs`, `src/netgsm.rs`, `src/talker.rs`
+- Create: `rust/bridge/voice/tests/g711.rs`, `tests/text.rs`, `tests/netgsm.rs`, `tests/talker.rs`, `tests/logging.rs`
+- Modify: `rust/Cargo.toml` (member `bridge/voice`; `tokio-tungstenite = "0.30"`)
+- Modify: `rust/deny.toml` (the `reqwest` wrappers; `tokio-tungstenite`)
+- Modify: `rust/crates/jt_archtest/tests/dependency_boundaries.rs`
+
+- [ ] **Step 1: Write the failing boundary test**
+
+Append to `rust/crates/jt_archtest/tests/dependency_boundaries.rs`:
+
+```rust
+/// The voice bridge (`bridge/voice`) is a program of its own beside the server, on the same host:
+/// it reaches Jeeta, Asterisk and the speech services over loopback only, and builds and tests on
+/// Windows. So no section of its manifest names a workspace crate but the calls domain (`jt_calls`,
+/// pure, whose wire it speaks): not `jt_pg`, not `jt_app`, no adapter.
+#[test]
+fn voice_bridge_depends_on_no_server_crate() {
+    const BRIDGE: &str = "jeeta-voice-bridge";
+    let metadata = metadata();
+    let bridge = metadata["packages"]
+        .as_array()
+        .expect("`cargo metadata` has no `packages` array")
+        .iter()
+        .find(|p| p["name"] == BRIDGE)
+        .expect("jeeta-voice-bridge is a workspace package");
+    let workspace = workspace_packages();
+    let named: BTreeSet<&str> = bridge["dependencies"]
+        .as_array()
+        .expect("package has no `dependencies` array")
+        .iter()
+        .map(|d| d["name"].as_str().expect("dependency has no `name`"))
+        .collect();
+    for d in &named {
+        assert!(
+            !workspace.contains(*d) || *d == "jt_calls",
+            "{BRIDGE} depends on {d}: the bridge names no server crate"
+        );
+        assert_ne!(*d, "sqlx", "{BRIDGE} depends on sqlx");
+    }
+    let deps = direct_deps(BRIDGE);
+    for needed in ["jt_calls", "reqwest", "tokio-tungstenite"] {
+        assert!(deps.contains(needed), "{BRIDGE} lost its {needed} dependency");
+    }
+}
+```
+
+In `no_crate_but_outbound_names_reqwest`, change the list and the count:
+
+```rust
+    const OWN_CLIENT: &[&str] = &["jt_outbound", "jeeta-device-bridge", "jeeta-voice-bridge"];
+```
+
+```rust
+    // Every crate but the four: not vacuous.
+    assert_eq!(checked, workspace_packages().len() - 4);
+```
+
+and extend that test's doc comment with: "And the voice bridge (`jeeta-voice-bridge`, design addendum 2026-10-29), whose HTTP peers are Jeeta's and Asterisk's loopback addresses."
+
+- [ ] **Step 2: Run it to see it fail (CI)**
+
+CI `rust-test` (Linux): `cargo test --locked -p jt_archtest --test dependency_boundaries`
+Expected: FAIL `jeeta-voice-bridge is a workspace package`. (On Windows `jt_archtest` does not build; push nothing yourself, the coordinator reads CI after Step 9.)
+
+- [ ] **Step 3: Create the crate**
+
+`rust/Cargo.toml`: add `"bridge/voice",` after `"bridge/device",` in `members`, and under `# Third-party crates`:
+
+```toml
+# The voice bridge's WebSocket client (Asterisk's events and media, the local speech services);
+# only jeeta-voice-bridge may name it (deny.toml, archtest).
+tokio-tungstenite = "0.30"
+```
+
+`rust/bridge/voice/Cargo.toml`:
+
+```toml
+[package]
+name = "jeeta-voice-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The talker beside Asterisk on the Jeeta host (design addendum 2026-10-29-voice-sidecar-free-path).
+# A program of its own: it reaches Jeeta, ARI and the speech services over loopback, and names no
+# server crate, only the calls domain whose wire it speaks (archtest).
+[dependencies]
+jt_calls.workspace = true
+tokio = { workspace = true, features = ["time", "net", "io-util", "fs"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+# The bridge's own HTTP client to Jeeta and ARI, both on loopback.
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# The fake Jeeta and fake ARI of the tests.
+axum.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
+```
+
+`rust/deny.toml`: replace the `reqwest` line and add the WebSocket client:
+
+```toml
+  { crate = "reqwest", wrappers = ["jt_outbound", "jeeta-device-bridge", "jeeta-voice-bridge"] },
+  { crate = "tokio-tungstenite", wrappers = ["jeeta-voice-bridge"] },
+```
+
+and extend the comment above `deny = [` with: "The voice bridge, a program beside the server whose peers are Jeeta's and Asterisk's loopback addresses, has its own HTTP and WebSocket clients too."
+
+`rust/bridge/voice/src/lib.rs`:
+
+```rust
+//! `jeeta-voice-bridge`: the talker beside Asterisk (design addendum
+//! `docs/superpowers/specs/2026-10-29-voice-sidecar-free-path-design.md`). It registers the
+//! workspace's line with Jeeta, takes the commands queued for its calls, drives each call through
+//! Asterisk (ARI and `chan_websocket` media) and the local speech services, and reports what
+//! happened, as the voice bridge protocol of `jt_calls::wire` says.
+//!
+//! - [`g711`], [`text`], [`netgsm`]: codecs, sentences and the line's dialling rules (pure).
+//! - [`talker`]: one call's state machine: openings, turns, barge-in, acknowledgements and
+//!   fillers, closing (pure).
+//!
+//! # Logging
+//!
+//! Call ids, command ids and kinds, states, counts, durations and error kinds. Never a phone
+//! number, a transcript, a sentence, audio, an audio path holding a number, the key or a password;
+//! an HTTP error is logged without its URL (`tests/logging.rs` checks the log calls).
+
+pub mod g711;
+pub mod netgsm;
+pub mod talker;
+pub mod text;
+```
+
+- [ ] **Step 4: Write the failing pure tests**
+
+`rust/bridge/voice/tests/g711.rs`:
+
+```rust
+use jeeta_voice_bridge::g711::{Codec, alaw_decode, alaw_encode, ulaw_decode, ulaw_encode};
+
+#[test]
+fn silence_has_its_known_code_words() {
+    assert_eq!(ulaw_encode(0), 0xFF);
+    assert_eq!(ulaw_decode(0xFF), 0);
+    assert_eq!(alaw_encode(0), 0xD5);
+    assert_eq!(alaw_decode(0xD5), 8);
+}
+
+#[test]
+fn every_sample_survives_a_round_trip_within_the_step() {
+    for x in (i16::MIN..=i16::MAX).step_by(7) {
+        let bound = i32::from(x).unsigned_abs() as i32 / 16 + 16;
+        let u = i32::from(ulaw_decode(ulaw_encode(x)));
+        let a = i32::from(alaw_decode(alaw_encode(x)));
+        assert!((u - i32::from(x)).abs() <= bound + 32, "ulaw {x} -> {u}");
+        assert!((a - i32::from(x)).abs() <= bound + 32, "alaw {x} -> {a}");
+    }
+}
+
+#[test]
+fn a_frame_is_160_bytes_both_ways() {
+    let pcm = vec![1000i16; 160];
+    for codec in [Codec::Alaw, Codec::Ulaw] {
+        let bytes = codec.encode(&pcm);
+        assert_eq!(bytes.len(), 160);
+        assert_eq!(codec.decode(&bytes).len(), 160);
+    }
+    assert_eq!(Codec::from_format("alaw"), Some(Codec::Alaw));
+    assert_eq!(Codec::from_format("ulaw"), Some(Codec::Ulaw));
+    assert_eq!(Codec::from_format("slin16"), None);
+}
+```
+
+`rust/bridge/voice/tests/text.rs`:
+
+```rust
+use jeeta_voice_bridge::text::{heard_chars, is_backchannel, sentences};
+
+fn texts(t: &str) -> Vec<String> {
+    sentences(t).into_iter().map(|s| s.text).collect()
+}
+
+#[test]
+fn a_text_is_cut_at_its_sentence_ends() {
+    assert_eq!(
+        texts("Merhaba, ben Acme'nin dijital asistanıyım. Görüşmemiz yazıya dökülmektedir. Ada Hanım ile mi görüşüyorum?"),
+        [
+            "Merhaba, ben Acme'nin dijital asistanıyım.",
+            "Görüşmemiz yazıya dökülmektedir.",
+            "Ada Hanım ile mi görüşüyorum?",
+        ]
+    );
+}
+
+#[test]
+fn numbers_times_and_abbreviations_stay_whole() {
+    assert_eq!(
+        texts("Tutar 1.250 TL. Saat 14.30'da Dr. Ahmet bekliyor! Tamam mı?"),
+        ["Tutar 1.250 TL.", "Saat 14.30'da Dr. Ahmet bekliyor!", "Tamam mı?"]
+    );
+    assert_eq!(texts("Randevunuz 14:00'e."), ["Randevunuz 14:00'e."]);
+}
+
+#[test]
+fn offsets_are_characters_of_the_original_text() {
+    let s = sentences("Öğle. İkindi.");
+    assert_eq!((s[0].start, s[0].end), (0, 5));
+    assert_eq!((s[1].start, s[1].end), (6, 13));
+}
+
+#[test]
+fn a_very_long_sentence_is_cut_at_a_comma() {
+    let long = format!("{}, ve devamı.", "kelime ".repeat(40).trim_end());
+    let parts = sentences(&long);
+    assert_eq!(parts.len(), 2);
+    assert!(parts[0].text.ends_with(','));
+}
+
+#[test]
+fn heard_characters_count_finished_sentences_and_the_share_of_the_current_one() {
+    let s = sentences("Bir iki. Üç dört beş.");
+    assert_eq!(heard_chars(&s, 0, 0.0), 0);
+    assert_eq!(heard_chars(&s, 1, 0.0), 9);
+    assert_eq!(heard_chars(&s, 1, 0.5), 15);
+    assert_eq!(heard_chars(&s, 2, 0.0), 21);
+}
+
+#[test]
+fn backchannel_words_alone_are_an_acknowledgement() {
+    assert!(is_backchannel("hı hı"));
+    assert!(is_backchannel("evet evet tamam"));
+    assert!(!is_backchannel("evet ama yarın olmaz"));
+    assert!(!is_backchannel(""));
+}
+```
+
+`rust/bridge/voice/tests/netgsm.rs`:
+
+```rust
+use jeeta_voice_bridge::netgsm::{dial_string, hangup_cause};
+
+#[test]
+fn only_turkish_numbers_are_dialled_in_national_form() {
+    assert_eq!(dial_string("+905321234567").as_deref(), Some("05321234567"));
+    assert_eq!(dial_string("+902125550000").as_deref(), Some("02125550000"));
+    assert_eq!(dial_string("+4915112345678"), None);
+    assert_eq!(dial_string("+90532"), None);
+    assert_eq!(dial_string("05321234567"), None);
+}
+
+#[test]
+fn q850_causes_map_to_the_cores_words() {
+    assert_eq!(hangup_cause(Some(16), true), "normal");
+    assert_eq!(hangup_cause(Some(17), false), "busy");
+    assert_eq!(hangup_cause(Some(21), false), "busy");
+    assert_eq!(hangup_cause(Some(19), false), "no_answer");
+    assert_eq!(hangup_cause(Some(34), false), "congestion");
+    assert_eq!(hangup_cause(Some(1), false), "failed");
+    assert_eq!(hangup_cause(None, false), "no_answer");
+}
+```
+
+`rust/bridge/voice/tests/talker.rs`:
+
+```rust
+//! One call's talker against a scripted clock (design addendum §3).
+use jeeta_voice_bridge::talker::{Action, Input, Source, Talker, Timing};
+use jt_calls::{BridgePhrases, PhraseSet};
+
+fn talker() -> Talker {
+    Talker::new(Timing::default(), BridgePhrases::default())
+}
+
+fn plays(actions: &[Action]) -> Vec<String> {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Play(item) => Some(item.text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every item `actions` started plays to its end at `now`.
+fn finish(t: &mut Talker, actions: &[Action], now: u64) -> Vec<Action> {
+    let mut out = Vec::new();
+    for a in actions {
+        if let Action::Play(item) = a {
+            out.extend(t.on(Input::Played { id: item.id }, now));
+        }
+    }
+    out
+}
+
+fn say(seq: u32, text: &str) -> Input {
+    Input::Speak { seq, text: text.into(), barge_in: true, agent: true }
+}
+
+#[test]
+fn an_acknowledgement_plays_600_ms_after_the_callers_turn() {
+    let mut t = talker();
+    t.on(Input::Final, 1_000);
+    assert!(plays(&t.on(Input::Tick, 1_580)).is_empty());
+    let a = t.on(Input::Tick, 1_600);
+    assert_eq!(plays(&a), ["Hı hı."]);
+    assert!(a.contains(&Action::EchoGuard(true)));
+}
+
+#[test]
+fn no_acknowledgement_when_the_reply_came_first() {
+    let mut t = talker();
+    t.on(Input::Final, 1_000);
+    assert_eq!(plays(&t.on(say(7, "Perşembe uygun."), 1_400)), ["Perşembe uygun."]);
+    assert!(plays(&t.on(Input::Tick, 1_700)).is_empty());
+    assert!(plays(&t.on(Input::Tick, 4_000)).is_empty());
+}
+
+#[test]
+fn a_filler_then_the_long_wait_cover_a_slow_reply_and_rotate_next_time() {
+    let mut t = talker();
+    t.on(Input::Final, 0);
+    let ack = t.on(Input::Tick, 600);
+    assert_eq!(plays(&ack), ["Hı hı."]);
+    finish(&mut t, &ack, 1_100);
+    let filler = t.on(Input::Tick, 2_700);
+    assert_eq!(plays(&filler), ["Bir saniye, hemen bakıyorum."]);
+    finish(&mut t, &filler, 4_500);
+    let long = t.on(Input::Tick, 8_000);
+    assert_eq!(plays(&long), ["Biraz daha zaman alıyor, beklediğiniz için teşekkürler."]);
+    finish(&mut t, &long, 11_000);
+    assert!(plays(&t.on(Input::Tick, 15_000)).is_empty());
+    t.on(Input::Final, 20_000);
+    assert_eq!(plays(&t.on(Input::Tick, 20_600)), ["Anladım."]);
+}
+
+#[test]
+fn two_phrases_never_play_within_a_second() {
+    let mut t = talker();
+    t.on(Input::Final, 0);
+    let ack = t.on(Input::Tick, 600);
+    finish(&mut t, &ack, 2_500);
+    assert!(plays(&t.on(Input::Tick, 2_700)).is_empty());
+    assert_eq!(plays(&t.on(Input::Tick, 3_500)), ["Bir saniye, hemen bakıyorum."]);
+}
+
+#[test]
+fn the_caller_cuts_the_agent_and_the_queue_is_dropped() {
+    let mut t = talker();
+    t.on(say(3, "Uzun bir cümle."), 0);
+    t.on(say(4, "İkinci cümle."), 10);
+    let cut = t.on(Input::SpeechStart, 500);
+    let (item, dropped) = cut
+        .iter()
+        .find_map(|a| match a {
+            Action::Cut { item, dropped } => Some((item.clone(), dropped.clone())),
+            _ => None,
+        })
+        .expect("a cut");
+    assert_eq!(item.source, Source::Core { seq: 3, agent: true });
+    assert_eq!(dropped.len(), 1);
+    assert!(cut.contains(&Action::EchoGuard(false)));
+}
+
+#[test]
+fn a_sentence_that_asks_to_be_heard_through_is_not_cut() {
+    let mut t = talker();
+    t.on(Input::Speak { seq: 3, text: "Önemli bilgi.".into(), barge_in: false, agent: true }, 0);
+    let a = t.on(Input::SpeechStart, 500);
+    assert!(!a.iter().any(|x| matches!(x, Action::Cut { .. })));
+}
+
+#[test]
+fn the_caller_is_asked_once_whether_they_are_still_there() {
+    let mut t = talker();
+    let a = t.on(say(5, "Hangi gün uygun?"), 0);
+    finish(&mut t, &a, 2_000);
+    assert!(plays(&t.on(Input::Tick, 10_900)).is_empty());
+    assert_eq!(plays(&t.on(Input::Tick, 11_000)), ["Hâlâ orada mısınız?"]);
+    let again = t.on(Input::Tick, 30_000);
+    assert!(plays(&again).is_empty());
+}
+
+#[test]
+fn unheard_words_are_asked_again_only_when_nothing_is_owed() {
+    let mut t = talker();
+    assert_eq!(plays(&t.on(Input::Unheard, 100)), ["Sizi tam duyamadım, tekrar eder misiniz?"]);
+    let mut t = talker();
+    t.on(Input::Final, 0);
+    assert!(plays(&t.on(Input::Unheard, 100)).is_empty());
+}
+
+#[test]
+fn the_closing_plays_to_its_end_then_the_line_is_hung_up() {
+    let mut t = talker();
+    let a = t.on(
+        Input::Speak { seq: 9, text: "Görüşmek üzere, iyi günler.".into(), barge_in: true, agent: false },
+        0,
+    );
+    assert!(!t.on(Input::HangupWhenDone, 5).contains(&Action::Hangup));
+    let done = finish(&mut t, &a, 3_000);
+    assert!(done.contains(&Action::Hangup));
+    assert!(t.on(Input::Tick, 3_020).is_empty());
+}
+
+#[test]
+fn losing_the_core_plays_the_fault_sentence_and_hangs_up() {
+    let mut t = talker();
+    t.on(Input::Speak { seq: 3, text: "Bir şey.".into(), barge_in: false, agent: true }, 0);
+    let lost = t.on(Input::CoreLost, 100);
+    assert!(lost.iter().any(|a| matches!(a, Action::Cut { .. })));
+    assert_eq!(
+        plays(&lost),
+        ["Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."]
+    );
+    assert!(finish(&mut t, &lost, 5_000).contains(&Action::Hangup));
+}
+
+#[test]
+fn nothing_starts_while_the_caller_is_speaking() {
+    let mut t = talker();
+    t.on(Input::SpeechStart, 0);
+    assert!(plays(&t.on(say(2, "Evet."), 100)).is_empty());
+    assert_eq!(plays(&t.on(Input::SpeechEnd, 300)), ["Evet."]);
+}
+
+#[test]
+fn a_phrase_is_reported_by_its_set_and_index() {
+    let mut t = talker();
+    t.on(Input::Final, 0);
+    let a = t.on(Input::Tick, 600);
+    let Some(Action::Play(item)) = a.iter().find(|x| matches!(x, Action::Play(_))) else {
+        panic!("a phrase");
+    };
+    assert_eq!(item.source, Source::Phrase { set: PhraseSet::Acknowledgement, index: 0 });
+}
+```
+
+`rust/bridge/voice/tests/logging.rs`:
+
+```rust
+//! No log call of the bridge names a phone number, a text, a key or a password (lib.rs, Logging).
+use std::path::Path;
+
+const MACROS: [&str; 5] = ["info!(", "warn!(", "error!(", "debug!(", "trace!("];
+const FORBIDDEN: [&str; 11] = [
+    "text", "e164", "to_e164", "dial", "transcript", "password", "key", "body", "url", "phone", "number",
+];
+
+fn words(s: &str) -> Vec<String> {
+    s.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn no_log_call_names_a_number_a_text_or_a_secret() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut checked = 0;
+    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    files.sort();
+    for file in files.into_iter().filter(|p| p.extension().is_some_and(|e| e == "rs")) {
+        let code = std::fs::read_to_string(&file).unwrap();
+        for m in MACROS {
+            let mut rest = code.as_str();
+            while let Some(at) = rest.find(m) {
+                let call = &rest[at..];
+                let end = call.find(");").unwrap_or(call.len());
+                for w in words(&call[..end]) {
+                    assert!(
+                        !FORBIDDEN.contains(&w.as_str()),
+                        "{}: a log call names `{w}`: {}",
+                        file.display(),
+                        &call[..end]
+                    );
+                }
+                checked += 1;
+                rest = &call[m.len()..];
+            }
+        }
+    }
+    // Not vacuous once the run loop exists (task D2): it logs.
+    assert!(checked > 0 || !dir.join("run_loop.rs").exists(), "no log call found");
+}
+```
+
+Run (Windows works): `cargo test -p jeeta-voice-bridge`
+Expected: FAIL to compile (`could not find g711 in jeeta_voice_bridge` …).
+
+- [ ] **Step 5: Write `g711.rs`**
+
+```rust
+//! G.711 A-law and μ-law (ITU-T G.711), the line's codecs: one byte per 8 kHz sample, 160 bytes a
+//! 20 ms frame. Asterisk's `MEDIA_START` names which one the call uses.
+
+/// The codec of a call's media.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Codec {
+    Alaw,
+    Ulaw,
+}
+
+impl Codec {
+    /// The codec of an Asterisk format name (`alaw`, `ulaw`).
+    pub fn from_format(format: &str) -> Option<Codec> {
+        match format {
+            "alaw" => Some(Codec::Alaw),
+            "ulaw" => Some(Codec::Ulaw),
+            _ => None,
+        }
+    }
+
+    pub fn encode(self, pcm: &[i16]) -> Vec<u8> {
+        match self {
+            Codec::Alaw => pcm.iter().map(|s| alaw_encode(*s)).collect(),
+            Codec::Ulaw => pcm.iter().map(|s| ulaw_encode(*s)).collect(),
+        }
+    }
+
+    pub fn decode(self, bytes: &[u8]) -> Vec<i16> {
+        match self {
+            Codec::Alaw => bytes.iter().map(|b| alaw_decode(*b)).collect(),
+            Codec::Ulaw => bytes.iter().map(|b| ulaw_decode(*b)).collect(),
+        }
+    }
+}
+
+const ULAW_BIAS: i32 = 0x84;
+const ULAW_CLIP: i32 = 32_635;
+
+pub fn ulaw_encode(sample: i16) -> u8 {
+    let mut pcm = i32::from(sample);
+    let sign = if pcm < 0 {
+        pcm = -pcm;
+        0x80
+    } else {
+        0
+    };
+    pcm = pcm.min(ULAW_CLIP) + ULAW_BIAS;
+    let mut exponent = 7;
+    let mut mask = 0x4000;
+    while exponent > 0 && pcm & mask == 0 {
+        exponent -= 1;
+        mask >>= 1;
+    }
+    let mantissa = (pcm >> (exponent + 3)) & 0x0F;
+    !((sign | (exponent << 4) | mantissa) as u8)
+}
+
+pub fn ulaw_decode(byte: u8) -> i16 {
+    let u = !byte;
+    let exponent = i32::from((u >> 4) & 0x07);
+    let mantissa = i32::from(u & 0x0F);
+    let magnitude = (((mantissa << 3) + ULAW_BIAS) << exponent) - ULAW_BIAS;
+    (if u & 0x80 != 0 { -magnitude } else { magnitude }) as i16
+}
+
+const ALAW_SEGMENT_END: [i32; 8] = [0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF];
+
+pub fn alaw_encode(sample: i16) -> u8 {
+    let mut pcm = i32::from(sample) >> 3;
+    let mask = if pcm >= 0 {
+        0xD5
+    } else {
+        pcm = -pcm - 1;
+        0x55
+    };
+    let segment = ALAW_SEGMENT_END.iter().position(|end| pcm <= *end).unwrap_or(8) as i32;
+    if segment >= 8 {
+        return (0x7F ^ mask) as u8;
+    }
+    let mut value = segment << 4;
+    value |= if segment < 2 { (pcm >> 1) & 0x0F } else { (pcm >> segment) & 0x0F };
+    (value ^ mask) as u8
+}
+
+pub fn alaw_decode(byte: u8) -> i16 {
+    let a = i32::from(byte ^ 0x55);
+    let mut t = (a & 0x0F) << 4;
+    let segment = (a & 0x70) >> 4;
+    match segment {
+        0 => t += 8,
+        1 => t += 0x108,
+        _ => {
+            t += 0x108;
+            t <<= segment - 1;
+        }
+    }
+    (if a & 0x80 != 0 { t } else { -t }) as i16
+}
+```
+
+- [ ] **Step 6: Write `text.rs` and `netgsm.rs`**
+
+`rust/bridge/voice/src/text.rs`:
+
+```rust
+//! Sentences of a text to speak, with their character offsets (so a cut can say how much was
+//! heard), and the caller's acknowledgement words. Synthesis and the phrase cache work sentence by
+//! sentence; a number, a clock time or an abbreviation is never split.
+
+/// A sentence: characters `[start, end)` of the original text, and its text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sentence {
+    pub start: usize,
+    pub end: usize,
+    pub text: String,
+}
+
+const ABBREVIATIONS: [&str; 18] = [
+    "dr", "sn", "av", "prof", "doç", "yrd", "no", "tel", "vb", "vs", "ltd", "şti", "cad", "sok", "mah",
+    "apt", "bul", "st",
+];
+/// A sentence longer than this is cut at its next comma.
+const MAX_SENTENCE_CHARS: usize = 220;
+const BACKCHANNEL: [&str; 19] = [
+    "hı", "hıhı", "ıhı", "hı-hı", "evet", "tamam", "aynen", "he", "hee", "anladım", "peki", "tabii",
+    "tabi", "olur", "ha", "hm", "hmm", "ok", "okey",
+];
+
+fn lower_tr(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            'I' => 'ı',
+            'İ' => 'i',
+            _ => c.to_lowercase().next().unwrap_or(c),
+        })
+        .collect()
+}
+
+fn ends_abbreviation(chars: &[char], start: usize, dot: usize) -> bool {
+    let word: String = chars[start..dot]
+        .iter()
+        .rev()
+        .take_while(|c| c.is_alphabetic())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    !word.is_empty() && ABBREVIATIONS.contains(&lower_tr(&word).as_str())
+}
+
+fn push(out: &mut Vec<Sentence>, chars: &[char], mut start: usize, mut end: usize) {
+    while start < end && chars[start].is_whitespace() {
+        start += 1;
+    }
+    while end > start && chars[end - 1].is_whitespace() {
+        end -= 1;
+    }
+    if start < end {
+        out.push(Sentence { start, end, text: chars[start..end].iter().collect() });
+    }
+}
+
+/// `text` cut after `.`, `!`, `?` and `…` followed by a space or the end, except after an
+/// abbreviation; a sentence past 220 characters is also cut after its next comma.
+pub fn sentences(text: &str) -> Vec<Sentence> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    for i in 0..chars.len() {
+        let at_break = i + 1 >= chars.len() || chars[i + 1].is_whitespace();
+        let mark = matches!(chars[i], '.' | '!' | '?' | '…');
+        let sentence_end = mark && at_break && !(chars[i] == '.' && ends_abbreviation(&chars, start, i));
+        let long_comma = chars[i] == ',' && at_break && i + 1 - start >= MAX_SENTENCE_CHARS;
+        if sentence_end || long_comma {
+            push(&mut out, &chars, start, i + 1);
+            start = i + 1;
+        }
+    }
+    push(&mut out, &chars, start, chars.len());
+    out
+}
+
+/// How many characters of the text the caller heard: every sentence before `finished` (the
+/// sentences whose end was reported played) and `fraction` of sentence `finished`.
+pub fn heard_chars(sentences: &[Sentence], finished: usize, fraction: f64) -> u32 {
+    let Some(current) = sentences.get(finished) else {
+        return sentences.last().map_or(0, |s| s.end as u32);
+    };
+    let share = ((current.end - current.start) as f64 * fraction.clamp(0.0, 1.0)).round() as usize;
+    (current.start + share) as u32
+}
+
+/// Whether `text` is only acknowledgement words ("hı hı", "evet", "tamam", ...).
+pub fn is_backchannel(text: &str) -> bool {
+    let lowered = lower_tr(text);
+    let words: Vec<&str> = lowered
+        .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    !words.is_empty() && words.iter().all(|w| BACKCHANNEL.contains(w))
+}
+```
+
+Check: in "Bir iki. Üç dört beş." the second sentence starts at 9 and ends at 21 (12 characters), so half of it is 6 → 15, as the test says.
+
+`rust/bridge/voice/src/netgsm.rs`:
+
+```rust
+//! The line's rules: extension 102 may call Turkish numbers only (Dahili, Şehiriçi, GSM; no
+//! international), dialled in national form; Asterisk's Q.850 causes become the core's words.
+
+/// `+90XXXXXXXXXX` as the PBX dials it (`0XXXXXXXXXX`); `None` for any other number.
+pub fn dial_string(e164: &str) -> Option<String> {
+    let national = e164.strip_prefix("+90")?;
+    (national.len() == 10 && national.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| format!("0{national}"))
+}
+
+/// The core's word for why a line closed (`jt_calls` reads `busy`, `failed`, `congestion`, and any
+/// other word before the answer as no answer): after the answer always `normal`.
+pub fn hangup_cause(q850: Option<u32>, answered: bool) -> &'static str {
+    if answered {
+        return "normal";
+    }
+    match q850 {
+        Some(17 | 21) => "busy",
+        Some(1 | 3 | 28) => "failed",
+        Some(34 | 38 | 41 | 42 | 44 | 58) => "congestion",
+        _ => "no_answer",
+    }
+}
+```
+
+- [ ] **Step 7: Write `talker.rs`**
+
+```rust
+//! The talker: what one call does on its own between the core's commands (design addendum §3).
+//! Pure: it is told what happened and when (milliseconds since the call was answered, on the
+//! bridge's monotonic clock) and answers what to do. It plays only texts it was given: the core's
+//! sentences, and the policy's phrases ([`BridgePhrases`]), which it picks by set and rotation.
+
+use std::collections::VecDeque;
+
+use jt_calls::{BridgePhrases, PhraseSet};
+
+/// Milliseconds since the call was answered.
+pub type Ms = u64;
+
+/// When the talker covers a silence (design addendum §3; tuned on real calls).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timing {
+    pub ack_after_ms: Ms,
+    pub filler_after_ms: Ms,
+    pub long_wait_after_ms: Ms,
+    pub still_there_after_ms: Ms,
+    /// No phrase starts sooner than this after the last one ended.
+    pub phrase_gap_ms: Ms,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Timing {
+            ack_after_ms: 600,
+            filler_after_ms: 2_700,
+            long_wait_after_ms: 8_000,
+            still_there_after_ms: 9_000,
+            phrase_gap_ms: 1_000,
+        }
+    }
+}
+
+/// Where an item's text comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// A command of the core: the agent's `say` (`agent`) or a `play` of the plan or policy.
+    Core { seq: u32, agent: bool },
+    /// One of the policy's phrases.
+    Phrase { set: PhraseSet, index: u8 },
+}
+
+/// Something to play.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Item {
+    pub id: u64,
+    pub source: Source,
+    pub text: String,
+    pub barge_in: bool,
+}
+
+/// What happened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Input {
+    Speak { seq: u32, text: String, barge_in: bool, agent: bool },
+    /// The core asked to hang up: once everything queued has played.
+    HangupWhenDone,
+    /// The caller started (or resumed) speaking.
+    SpeechStart,
+    SpeechEnd,
+    /// The caller's turn ended with words (reported to the core).
+    Final,
+    /// The caller spoke but no words were recognised.
+    Unheard,
+    /// Item `id` played to its end.
+    Played { id: u64 },
+    /// The core is unreachable.
+    CoreLost,
+    Tick,
+}
+
+/// What to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    Play(Item),
+    /// Stop `item` now (flush the line), and drop what was queued behind it.
+    Cut { item: Item, dropped: Vec<Item> },
+    /// `item` played to its end.
+    Done(Item),
+    /// Raise (or lower) the listener's echo guard: something is (no longer) playing.
+    EchoGuard(bool),
+    Hangup,
+}
+
+pub struct Talker {
+    timing: Timing,
+    phrases: BridgePhrases,
+    next_id: u64,
+    queue: VecDeque<Item>,
+    playing: Option<Item>,
+    guard: bool,
+    owed_since: Option<Ms>,
+    stage: u8,
+    awaiting_since: Option<Ms>,
+    still_there_done: bool,
+    last_phrase_end: Option<Ms>,
+    speaking: bool,
+    hangup_when_done: bool,
+    hung_up: bool,
+    rotation: [usize; 6],
+}
+
+impl Talker {
+    pub fn new(timing: Timing, phrases: BridgePhrases) -> Talker {
+        Talker {
+            timing,
+            phrases,
+            next_id: 1,
+            queue: VecDeque::new(),
+            playing: None,
+            guard: false,
+            owed_since: None,
+            stage: 0,
+            awaiting_since: None,
+            still_there_done: false,
+            last_phrase_end: None,
+            speaking: false,
+            hangup_when_done: false,
+            hung_up: false,
+            rotation: [0; 6],
+        }
+    }
+
+    /// Nothing plays and nothing is queued.
+    pub fn is_idle(&self) -> bool {
+        self.playing.is_none() && self.queue.is_empty()
+    }
+
+    /// The item playing now.
+    pub fn playing(&self) -> Option<&Item> {
+        self.playing.as_ref()
+    }
+
+    /// What to do about `input` at `now`.
+    pub fn on(&mut self, input: Input, now: Ms) -> Vec<Action> {
+        let mut out = Vec::new();
+        if self.hung_up {
+            return out;
+        }
+        match input {
+            Input::Speak { seq, text, barge_in, agent } => {
+                if agent {
+                    self.owed_since = None;
+                    self.stage = 0;
+                    self.awaiting_since = None;
+                    self.still_there_done = false;
+                }
+                let id = self.id();
+                self.queue.push_back(Item { id, source: Source::Core { seq, agent }, text, barge_in });
+                self.start_next(&mut out);
+            }
+            Input::HangupWhenDone => {
+                self.hangup_when_done = true;
+                self.finish(&mut out);
+            }
+            Input::SpeechStart => {
+                self.speaking = true;
+                self.awaiting_since = None;
+                self.cut(false, &mut out);
+            }
+            Input::SpeechEnd => {
+                self.speaking = false;
+                self.start_next(&mut out);
+            }
+            Input::Final => {
+                self.speaking = false;
+                self.owed_since = Some(now);
+                self.stage = 0;
+                self.awaiting_since = None;
+                self.still_there_done = false;
+                self.start_next(&mut out);
+            }
+            Input::Unheard => {
+                self.speaking = false;
+                if self.is_idle() && self.owed_since.is_none() {
+                    self.phrase(PhraseSet::NotHeard, &mut out);
+                }
+            }
+            Input::Played { id } => {
+                if self.playing.as_ref().is_some_and(|p| p.id == id) {
+                    let item = self.playing.take().expect("checked above");
+                    if matches!(item.source, Source::Phrase { .. }) {
+                        self.last_phrase_end = Some(now);
+                    }
+                    let agent_spoke = matches!(item.source, Source::Core { agent: true, .. });
+                    out.push(Action::Done(item));
+                    if agent_spoke && self.queue.is_empty() && self.owed_since.is_none() {
+                        self.awaiting_since = Some(now);
+                        self.still_there_done = false;
+                    }
+                    self.start_next(&mut out);
+                    self.lower_guard_if_idle(&mut out);
+                    self.finish(&mut out);
+                }
+            }
+            Input::CoreLost => {
+                self.cut(true, &mut out);
+                self.queue.clear();
+                self.owed_since = None;
+                self.awaiting_since = None;
+                self.phrase(PhraseSet::Fault, &mut out);
+                self.hangup_when_done = true;
+                self.finish(&mut out);
+            }
+            Input::Tick => self.cover(now, &mut out),
+        }
+        out
+    }
+
+    fn id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    fn start_next(&mut self, out: &mut Vec<Action>) {
+        if self.playing.is_some() || self.speaking {
+            return;
+        }
+        if let Some(item) = self.queue.pop_front() {
+            if !self.guard {
+                self.guard = true;
+                out.push(Action::EchoGuard(true));
+            }
+            self.playing = Some(item.clone());
+            out.push(Action::Play(item));
+        }
+    }
+
+    fn lower_guard_if_idle(&mut self, out: &mut Vec<Action>) {
+        if self.guard && self.is_idle() {
+            self.guard = false;
+            out.push(Action::EchoGuard(false));
+        }
+    }
+
+    /// Cuts what plays when the caller speaks over it (or always, with `force`).
+    fn cut(&mut self, force: bool, out: &mut Vec<Action>) {
+        let cuttable = self.playing.as_ref().is_some_and(|p| force || p.barge_in);
+        if !cuttable {
+            return;
+        }
+        let item = self.playing.take().expect("checked above");
+        if matches!(item.source, Source::Phrase { .. }) {
+            self.last_phrase_end = None;
+        }
+        let dropped: Vec<Item> = self.queue.drain(..).collect();
+        out.push(Action::Cut { item, dropped });
+        self.lower_guard_if_idle(out);
+    }
+
+    fn finish(&mut self, out: &mut Vec<Action>) {
+        if self.hangup_when_done && self.is_idle() && !self.hung_up {
+            self.hung_up = true;
+            out.push(Action::Hangup);
+        }
+    }
+
+    /// Covers a silence with the next phrase that is due (see the module docs).
+    fn cover(&mut self, now: Ms, out: &mut Vec<Action>) {
+        if !self.is_idle() || self.speaking || self.hangup_when_done {
+            return;
+        }
+        if self
+            .last_phrase_end
+            .is_some_and(|end| now.saturating_sub(end) < self.timing.phrase_gap_ms)
+        {
+            return;
+        }
+        if let Some(since) = self.owed_since {
+            let waited = now.saturating_sub(since);
+            let due = if waited >= self.timing.long_wait_after_ms {
+                3
+            } else if waited >= self.timing.filler_after_ms {
+                2
+            } else if waited >= self.timing.ack_after_ms {
+                1
+            } else {
+                0
+            };
+            if due > self.stage {
+                self.stage = due;
+                let set = match due {
+                    1 => PhraseSet::Acknowledgement,
+                    2 => PhraseSet::Filler,
+                    _ => PhraseSet::LongWait,
+                };
+                self.phrase(set, out);
+            }
+            return;
+        }
+        if let Some(since) = self.awaiting_since
+            && !self.still_there_done
+            && now.saturating_sub(since) >= self.timing.still_there_after_ms
+        {
+            self.still_there_done = true;
+            self.phrase(PhraseSet::StillThere, out);
+        }
+    }
+
+    /// Queues the next phrase of `set` (rotating), if the policy has one.
+    fn phrase(&mut self, set: PhraseSet, out: &mut Vec<Action>) {
+        let count = self.phrases.set(set).len();
+        if count == 0 {
+            return;
+        }
+        let slot = set.position();
+        let index = self.rotation[slot] % count;
+        self.rotation[slot] += 1;
+        let text = self.phrases.set(set)[index].clone();
+        let id = self.id();
+        self.queue.push_back(Item {
+            id,
+            source: Source::Phrase { set, index: u8::try_from(index).unwrap_or(u8::MAX) },
+            text,
+            barge_in: true,
+        });
+        self.start_next(out);
+    }
+}
+```
+
+- [ ] **Step 8: Run the tests and lints**
+
+Run: `cargo test -p jeeta-voice-bridge` then `cargo clippy -p jeeta-voice-bridge --all-targets -- -D warnings` then `cargo fmt --all -- --check`
+Expected: `g711` 3 passed, `text` 6 passed, `netgsm` 2 passed, `talker` 12 passed, `logging` 1 passed; clippy and fmt clean.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add rust/Cargo.toml rust/Cargo.lock rust/deny.toml rust/bridge/voice rust/crates/jt_archtest/tests/dependency_boundaries.rs
+git commit -m "feat(voice-bridge): the worker crate, its codecs, sentences and the talker" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+CI then runs `jt_archtest` (Expected: `voice_bridge_depends_on_no_server_crate` and `no_crate_but_outbound_names_reqwest` pass) and `cargo deny --locked check` (Expected: pass; if a new transitive licence of `tungstenite` is flagged, add it to `[licenses].allow` in `rust/deny.toml` with a one-line reason in the same commit series).
+
+### Task B5: The worker's adapters (config, phrase cache, trace, ARI, media, speech)
+
+**Files:**
+- Create: `rust/bridge/voice/src/config.rs`, `src/cache.rs`, `src/trace.rs`, `src/ari.rs`, `src/media.rs`, `src/speech.rs`
+- Create: `rust/bridge/voice/tests/adapters.rs`
+- Modify: `rust/bridge/voice/src/lib.rs`
+
+- [ ] **Step 1: Write the failing tests**
+
+`rust/bridge/voice/tests/adapters.rs`:
+
+```rust
+//! The adapters' pure parts: configuration, cache keys, traces and the wire parsers.
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use jeeta_voice_bridge::ari::{AriEvent, parse_event};
+use jeeta_voice_bridge::cache::{PhraseCache, key};
+use jeeta_voice_bridge::config::Config;
+use jeeta_voice_bridge::media::{MediaEvent, command, parse_control};
+use jeeta_voice_bridge::speech::{Endpoint, Heard};
+use jeeta_voice_bridge::trace::{AudioClock, TurnMarks, read_traces, TraceFile};
+use jt_calls::EndpointBy;
+
+fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+    let map: HashMap<String, String> = pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
+    move |k| map.get(k).cloned()
+}
+
+#[test]
+fn configuration_reads_the_environment_and_hides_secrets() {
+    let c = Config::from_env(
+        env(&[
+            ("JEETA_BASE_URL", "http://127.0.0.1:8091"),
+            ("JEETA_BRIDGE_KEY", "jeeta_secret"),
+            ("ARI_PASSWORD", "ari-secret"),
+            ("VOICE_ACK_MS", "500"),
+        ]),
+        true,
+    )
+    .unwrap();
+    assert_eq!(c.extension, "102");
+    assert_eq!(c.ari_url, "http://127.0.0.1:8188");
+    assert_eq!(c.timing.ack_after_ms, 500);
+    assert_eq!(c.listen, Endpoint::Unix("/run/jeeta-voice/listen.sock".into()));
+    let shown = format!("{c:?}");
+    assert!(!shown.contains("jeeta_secret") && !shown.contains("ari-secret"), "{shown}");
+    assert!(Config::from_env(env(&[("ARI_PASSWORD", "x")]), true).is_err());
+    assert!(Config::from_env(env(&[("ARI_PASSWORD", "x")]), false).is_ok());
+}
+
+#[test]
+fn endpoints_parse() {
+    assert_eq!("tcp:127.0.0.1:7071".parse::<Endpoint>().unwrap(), Endpoint::Tcp("127.0.0.1:7071".into()));
+    assert!("http://x".parse::<Endpoint>().is_err());
+}
+
+#[test]
+fn the_cache_keeps_policy_sentences_on_disk_and_call_sentences_in_memory() {
+    let dir = std::env::temp_dir().join(format!("voice-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut a = PhraseCache::new(dir.clone(), "ema-test");
+    a.put("Hı hı.", vec![1, 2, 3], true);
+    a.put("Ada Hanım ile mi görüşüyorum?", vec![4, 5], false);
+    let mut b = PhraseCache::new(dir.clone(), "ema-test");
+    assert_eq!(b.get("Hı hı.").as_deref(), Some(&vec![1i16, 2, 3]));
+    assert_eq!(b.get("Ada Hanım ile mi görüşüyorum?"), None);
+    assert_eq!(a.get("Ada Hanım ile mi görüşüyorum?").as_deref(), Some(&vec![4i16, 5]));
+    assert_ne!(key("ema-test", "Hı hı."), key("ema-other", "Hı hı."));
+    assert_eq!(key("v", "t").len(), 64);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_audio_clock_maps_positions_to_arrival() {
+    let mut clock = AudioClock::default();
+    let t0 = Instant::now();
+    for i in 0..10u64 {
+        clock.push(20, t0 + Duration::from_millis(20 * i));
+    }
+    assert_eq!(clock.position_ms(), 200);
+    assert_eq!(clock.at(0), Some(t0));
+    assert_eq!(clock.at(100), Some(t0 + Duration::from_millis(100)));
+    assert_eq!(clock.at(119), Some(t0 + Duration::from_millis(100)));
+    assert_eq!(clock.at(500), None);
+}
+
+#[test]
+fn marks_become_a_trace_and_traces_go_to_their_file() {
+    let t0 = Instant::now();
+    let mut m = TurnMarks::new(t0, 260, EndpointBy::SmartTurn, t0 + Duration::from_millis(310));
+    m.delivered = Some(t0 + Duration::from_millis(340));
+    m.ack = Some(t0 + Duration::from_millis(620));
+    m.first_audio = Some(t0 + Duration::from_millis(4_760));
+    let trace = m.trace();
+    assert_eq!((trace.endpoint_ms, trace.stt_final_ms), (260, 310));
+    assert_eq!((trace.ack_ms, trace.first_audio_ms), (Some(620), Some(4_760)));
+    let path = std::env::temp_dir().join(format!("voice-traces-{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let file = TraceFile::new(path.clone());
+    file.append("c-1", &trace).unwrap();
+    file.append("c-1", &trace).unwrap();
+    let read = read_traces(&path, None).unwrap();
+    assert_eq!(read, vec![trace.clone(), trace]);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains('+'), "{text}");
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[test]
+fn ari_events_are_read() {
+    assert_eq!(
+        parse_event(r#"{"type":"StasisStart","args":["out"],"channel":{"id":"c-1","state":"Up"}}"#),
+        AriEvent::Answered { channel: "c-1".into(), inbound: false }
+    );
+    assert_eq!(
+        parse_event(r#"{"type":"StasisStart","args":["in"],"channel":{"id":"x"}}"#),
+        AriEvent::Answered { channel: "x".into(), inbound: true }
+    );
+    assert_eq!(
+        parse_event(r#"{"type":"ChannelStateChange","channel":{"id":"c-1","state":"Ringing"}}"#),
+        AriEvent::Ringing { channel: "c-1".into() }
+    );
+    assert_eq!(
+        parse_event(r#"{"type":"ChannelDtmfReceived","digit":"5","channel":{"id":"c-1"}}"#),
+        AriEvent::Dtmf { channel: "c-1".into(), digit: "5".into() }
+    );
+    assert_eq!(
+        parse_event(r#"{"type":"ChannelDestroyed","cause":17,"channel":{"id":"c-1"}}"#),
+        AriEvent::Gone { channel: "c-1".into(), cause: Some(17) }
+    );
+    assert_eq!(parse_event(r#"{"type":"StasisStart","args":[],"channel":{"id":"c-1-m"}}"#), AriEvent::Other);
+    assert_eq!(parse_event("not json"), AriEvent::Other);
+}
+
+#[test]
+fn media_control_is_read_and_written_as_json() {
+    assert_eq!(
+        parse_control(r#"{"event":"MEDIA_START","connection_id":"k","channel":"WebSocket/x","channel_id":"c-1-m","format":"alaw","optimal_frame_size":160,"ptime":20}"#),
+        MediaEvent::Start { format: "alaw".into(), frame_bytes: 160 }
+    );
+    assert_eq!(
+        parse_control(r#"{"event":"MEDIA_MARK_PROCESSED","channel_id":"c-1-m","correlation_id":"7:2"}"#),
+        MediaEvent::MarkProcessed { correlation: "7:2".into() }
+    );
+    assert_eq!(parse_control(r#"{"event":"MEDIA_XOFF","channel_id":"c"}"#), MediaEvent::Xoff);
+    assert_eq!(parse_control(r#"{"event":"MEDIA_XON","channel_id":"c"}"#), MediaEvent::Xon);
+    assert_eq!(command("FLUSH_MEDIA", None), r#"{"command":"FLUSH_MEDIA"}"#);
+    assert_eq!(
+        command("MARK_MEDIA", Some("7:2")),
+        r#"{"command":"MARK_MEDIA","correlation_id":"7:2"}"#
+    );
+}
+
+#[test]
+fn listener_events_are_read_and_never_printed_with_their_words() {
+    let h: Heard = serde_json::from_str(
+        r#"{"type":"final","text":"evet perşembe","speech_end_ms":900,"endpoint_ms":1160,"endpoint_by":"smart_turn","stt_ms":45}"#,
+    )
+    .unwrap();
+    assert!(matches!(h, Heard::Final { endpoint_ms: 1160, .. }));
+    assert!(!format!("{h:?}").contains("perşembe"));
+    let s: Heard = serde_json::from_str(r#"{"type":"speech_start","audio_ms":420}"#).unwrap();
+    assert!(matches!(s, Heard::SpeechStart { audio_ms: 420 }));
+}
+```
+
+Run: `cargo test -p jeeta-voice-bridge --test adapters`
+Expected: FAIL to compile (modules missing).
+
+- [ ] **Step 2: Write `config.rs`**
+
+```rust
+//! The bridge's configuration, from its environment (systemd `EnvironmentFile`s
+//! `/etc/jeeta-voice/ari.env` and `/etc/jeeta-voice/bridge.env`). `Debug` hides the key and the
+//! ARI password.
+
+use std::path::PathBuf;
+
+use crate::speech::Endpoint;
+use crate::talker::Timing;
+
+#[derive(Clone)]
+pub struct Config {
+    pub jeeta_base_url: String,
+    pub bridge_key: String,
+    pub extension: String,
+    pub ari_url: String,
+    pub ari_user: String,
+    pub ari_password: String,
+    pub listen: Endpoint,
+    pub speak: Endpoint,
+    pub cache_dir: PathBuf,
+    pub trace_file: PathBuf,
+    pub voice: String,
+    pub timing: Timing,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("jeeta_base_url", &self.jeeta_base_url)
+            .field("extension", &self.extension)
+            .field("ari_url", &self.ari_url)
+            .field("listen", &self.listen)
+            .field("speak", &self.speak)
+            .field("cache_dir", &self.cache_dir)
+            .field("timing", &self.timing)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("{0} is not set")]
+    Missing(&'static str),
+    #[error("{0} is not valid")]
+    Invalid(&'static str),
+}
+
+fn ms(get: &impl Fn(&str) -> Option<String>, name: &'static str, default: u64) -> Result<u64, ConfigError> {
+    match get(name) {
+        Some(v) => v.trim().parse().map_err(|_| ConfigError::Invalid(name)),
+        None => Ok(default),
+    }
+}
+
+impl Config {
+    /// The configuration from `get` (the environment). `need_core`: the core's address and the key
+    /// must be set (`run`); the slice and the checks run without them.
+    pub fn from_env(get: impl Fn(&str) -> Option<String>, need_core: bool) -> Result<Config, ConfigError> {
+        let required = |name: &'static str| get(name).filter(|v| !v.trim().is_empty()).ok_or(ConfigError::Missing(name));
+        let (jeeta_base_url, bridge_key) = if need_core {
+            (required("JEETA_BASE_URL")?, required("JEETA_BRIDGE_KEY")?)
+        } else {
+            (get("JEETA_BASE_URL").unwrap_or_default(), get("JEETA_BRIDGE_KEY").unwrap_or_default())
+        };
+        let endpoint = |name: &'static str, default: &str| -> Result<Endpoint, ConfigError> {
+            get(name).unwrap_or_else(|| default.to_owned()).parse().map_err(|_| ConfigError::Invalid(name))
+        };
+        let base = Timing::default();
+        Ok(Config {
+            jeeta_base_url: jeeta_base_url.trim_end_matches('/').to_owned(),
+            bridge_key,
+            extension: get("VOICE_EXTENSION").unwrap_or_else(|| "102".into()),
+            ari_url: get("ARI_URL").unwrap_or_else(|| "http://127.0.0.1:8188".into()),
+            ari_user: get("ARI_USER").unwrap_or_else(|| "jeeta-voice".into()),
+            ari_password: required("ARI_PASSWORD")?,
+            listen: endpoint("LISTEN_SOCKET", "unix:/run/jeeta-voice/listen.sock")?,
+            speak: endpoint("SPEAK_SOCKET", "unix:/run/jeeta-voice/speak.sock")?,
+            cache_dir: get("VOICE_CACHE_DIR").unwrap_or_else(|| "/var/lib/jeeta-voice/cache".into()).into(),
+            trace_file: get("VOICE_TRACE_FILE").unwrap_or_else(|| "/var/lib/jeeta-voice/traces.jsonl".into()).into(),
+            voice: get("VOICE_ID").unwrap_or_else(|| "ema-lightning-1.1.2-seed0-8k".into()),
+            timing: Timing {
+                ack_after_ms: ms(&get, "VOICE_ACK_MS", base.ack_after_ms)?,
+                filler_after_ms: ms(&get, "VOICE_FILLER_MS", base.filler_after_ms)?,
+                long_wait_after_ms: ms(&get, "VOICE_LONG_WAIT_MS", base.long_wait_after_ms)?,
+                still_there_after_ms: ms(&get, "VOICE_STILL_THERE_MS", base.still_there_after_ms)?,
+                phrase_gap_ms: ms(&get, "VOICE_PHRASE_GAP_MS", base.phrase_gap_ms)?,
+            },
+        })
+    }
+}
+```
+
+- [ ] **Step 3: Write `cache.rs` and `trace.rs`**
+
+`rust/bridge/voice/src/cache.rs`:
+
+```rust
+//! Synthesised sentences, by the SHA-256 of the voice and the text: policy sentences (openings,
+//! notice, phrases: owner-approved, no personal data) are kept on disk as raw PCM16 8 kHz; a call's
+//! own sentences (its plan, the agent's) only in that call's memory, dropped at hang-up.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use sha2::{Digest, Sha256};
+
+/// The cache key of `text` spoken by `voice`.
+pub fn key(voice: &str, text: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(voice.as_bytes());
+    h.update([0u8]);
+    h.update(text.as_bytes());
+    hex::encode(h.finalize())
+}
+
+pub struct PhraseCache {
+    dir: PathBuf,
+    voice: String,
+    memory: HashMap<String, Arc<Vec<i16>>>,
+}
+
+impl PhraseCache {
+    pub fn new(dir: PathBuf, voice: &str) -> PhraseCache {
+        PhraseCache { dir, voice: voice.to_owned(), memory: HashMap::new() }
+    }
+
+    /// The audio of `text`: from this call's memory, else from disk (then kept in memory too).
+    pub fn get(&mut self, text: &str) -> Option<Arc<Vec<i16>>> {
+        let k = key(&self.voice, text);
+        if let Some(pcm) = self.memory.get(&k) {
+            return Some(pcm.clone());
+        }
+        let bytes = std::fs::read(self.dir.join(format!("{k}.pcm"))).ok()?;
+        let pcm: Arc<Vec<i16>> =
+            Arc::new(bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect());
+        self.memory.insert(k, pcm.clone());
+        Some(pcm)
+    }
+
+    /// Keeps `pcm` as the audio of `text`; on disk too when `persist` (a policy sentence).
+    pub fn put(&mut self, text: &str, pcm: Vec<i16>, persist: bool) {
+        let k = key(&self.voice, text);
+        if persist && std::fs::create_dir_all(&self.dir).is_ok() {
+            let bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+            let tmp = self.dir.join(format!("{k}.tmp"));
+            if std::fs::write(&tmp, bytes).is_ok() {
+                let _ = std::fs::rename(&tmp, self.dir.join(format!("{k}.pcm")));
+            }
+        }
+        self.memory.insert(k, Arc::new(pcm));
+    }
+}
+```
+
+`rust/bridge/voice/src/trace.rs`:
+
+```rust
+//! The per-turn trace on the bridge's monotonic clock (design addendum §7): the listener reports
+//! audio positions, which [`AudioClock`] maps to the instants the bridge forwarded those frames;
+//! [`TurnMarks`] collects a turn's instants and gives its [`TurnTrace`]; [`TraceFile`] keeps one JSON
+//! line per trace (numbers and the call id only) for `jeeta-voice-bridge report`.
+
+use std::collections::VecDeque;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use jt_calls::{EndpointBy, TurnTrace};
+use time::OffsetDateTime;
+
+/// How much audio history the clock keeps, in milliseconds.
+const KEEP_MS: u64 = 60_000;
+
+/// Inbound audio positions and when they arrived.
+#[derive(Debug, Default)]
+pub struct AudioClock {
+    entries: VecDeque<(u64, Instant)>,
+    position_ms: u64,
+}
+
+impl AudioClock {
+    /// `ms` more audio arrived at `at`.
+    pub fn push(&mut self, ms: u64, at: Instant) {
+        self.entries.push_back((self.position_ms, at));
+        self.position_ms += ms;
+        while self.entries.front().is_some_and(|(p, _)| self.position_ms - p > KEEP_MS) {
+            self.entries.pop_front();
+        }
+    }
+
+    pub fn position_ms(&self) -> u64 {
+        self.position_ms
+    }
+
+    /// When the frame holding audio position `ms` arrived.
+    pub fn at(&self, ms: u64) -> Option<Instant> {
+        if ms >= self.position_ms {
+            return None;
+        }
+        self.entries.iter().rev().find(|(p, _)| *p <= ms).map(|(_, at)| *at)
+    }
+}
+
+fn since(base: Instant, at: Option<Instant>) -> Option<u32> {
+    at.map(|t| u32::try_from(t.saturating_duration_since(base).as_millis()).unwrap_or(u32::MAX))
+}
+
+/// One turn's instants.
+#[derive(Clone, Debug)]
+pub struct TurnMarks {
+    pub speech_end: Instant,
+    pub endpoint_ms: u32,
+    pub endpoint_by: EndpointBy,
+    pub stt_final: Instant,
+    pub delivered: Option<Instant>,
+    pub say: Option<Instant>,
+    pub tts_first: Option<Instant>,
+    pub first_audio: Option<Instant>,
+    pub ack: Option<Instant>,
+    pub barge_in_stop_ms: Option<u32>,
+    pub backchannel_cut: bool,
+}
+
+impl TurnMarks {
+    pub fn new(speech_end: Instant, endpoint_ms: u32, endpoint_by: EndpointBy, stt_final: Instant) -> TurnMarks {
+        TurnMarks {
+            speech_end,
+            endpoint_ms,
+            endpoint_by,
+            stt_final,
+            delivered: None,
+            say: None,
+            tts_first: None,
+            first_audio: None,
+            ack: None,
+            barge_in_stop_ms: None,
+            backchannel_cut: false,
+        }
+    }
+
+    pub fn trace(&self) -> TurnTrace {
+        let base = self.speech_end;
+        TurnTrace {
+            endpoint_ms: self.endpoint_ms,
+            endpoint_by: Some(self.endpoint_by),
+            stt_final_ms: since(base, Some(self.stt_final)).unwrap_or_default(),
+            delivered_ms: since(base, self.delivered),
+            say_ms: since(base, self.say),
+            tts_first_ms: since(base, self.tts_first),
+            first_audio_ms: since(base, self.first_audio),
+            ack_ms: since(base, self.ack),
+            barge_in_stop_ms: self.barge_in_stop_ms,
+            backchannel_cut: self.backchannel_cut,
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Line {
+    #[serde(with = "time::serde::rfc3339")]
+    at: OffsetDateTime,
+    call: String,
+    trace: TurnTrace,
+}
+
+/// The bridge's own trace log.
+#[derive(Clone, Debug)]
+pub struct TraceFile {
+    path: PathBuf,
+}
+
+impl TraceFile {
+    pub fn new(path: PathBuf) -> TraceFile {
+        TraceFile { path }
+    }
+
+    pub fn append(&self, call: &str, trace: &TurnTrace) -> std::io::Result<()> {
+        let line = Line { at: OffsetDateTime::now_utc(), call: call.to_owned(), trace: trace.clone() };
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&self.path)?;
+        writeln!(file, "{}", serde_json::to_string(&line).map_err(std::io::Error::other)?)
+    }
+}
+
+/// The traces of `path` written at or after `since` (all of them without), unreadable lines skipped.
+pub fn read_traces(path: &Path, since: Option<OffsetDateTime>) -> std::io::Result<Vec<TurnTrace>> {
+    let text = std::fs::read_to_string(path)?;
+    Ok(text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Line>(l).ok())
+        .filter(|l| since.is_none_or(|s| l.at >= s))
+        .map(|l| l.trace)
+        .collect())
+}
+```
+
+- [ ] **Step 4: Write `ari.rs`, `media.rs` and `speech.rs`**
+
+`rust/bridge/voice/src/ari.rs`:
+
+```rust
+//! The Asterisk REST Interface on loopback (design addendum §2): originate, external media over
+//! `chan_websocket` (Asterisk's own HTTP server, the INCOMING mode: the bridge connects in), mixing
+//! bridges, hangup, and the application's events. Errors never carry a URL, a query or a body.
+
+use std::time::Duration;
+
+use base64::Engine as _;
+use reqwest::Method;
+use serde_json::Value;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+
+/// The bridge's Stasis application.
+pub const APP: &str = "jeeta-voice";
+
+#[derive(Debug, thiserror::Error)]
+pub enum AriError {
+    #[error("ARI answered {0}")]
+    Status(u16),
+    #[error("ARI unreachable")]
+    Transport,
+    #[error("ARI's answer is unreadable")]
+    Decode,
+}
+
+pub type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// An ARI event the bridge acts on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AriEvent {
+    Ringing { channel: String },
+    /// The channel entered the application: an outbound call was answered, or an inbound one rang.
+    Answered { channel: String, inbound: bool },
+    Dtmf { channel: String, digit: String },
+    Gone { channel: String, cause: Option<u32> },
+    Other,
+}
+
+/// Reads one event of the application's stream.
+pub fn parse_event(text: &str) -> AriEvent {
+    let Ok(v) = serde_json::from_str::<Value>(text) else {
+        return AriEvent::Other;
+    };
+    let channel = v["channel"]["id"].as_str().unwrap_or_default().to_owned();
+    match v["type"].as_str() {
+        Some("StasisStart") => match v["args"].get(0).and_then(Value::as_str) {
+            Some("out") => AriEvent::Answered { channel, inbound: false },
+            Some("in") => AriEvent::Answered { channel, inbound: true },
+            _ => AriEvent::Other,
+        },
+        Some("ChannelStateChange") if v["channel"]["state"] == "Ringing" => AriEvent::Ringing { channel },
+        Some("ChannelDtmfReceived") => AriEvent::Dtmf {
+            channel,
+            digit: v["digit"].as_str().unwrap_or_default().to_owned(),
+        },
+        Some("ChannelDestroyed") => AriEvent::Gone {
+            channel,
+            cause: v["cause"].as_u64().and_then(|c| u32::try_from(c).ok()),
+        },
+        _ => AriEvent::Other,
+    }
+}
+
+pub struct Ari {
+    http: reqwest::Client,
+    base: String,
+    user: String,
+    password: String,
+}
+
+impl Ari {
+    pub fn new(base: &str, user: &str, password: &str) -> Ari {
+        Ari {
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap_or_default(),
+            base: base.trim_end_matches('/').to_owned(),
+            user: user.to_owned(),
+            password: password.to_owned(),
+        }
+    }
+
+    async fn call(&self, method: Method, path: &str, query: &[(&str, &str)]) -> Result<Value, AriError> {
+        let response = self
+            .http
+            .request(method, format!("{}/ari{path}", self.base))
+            .basic_auth(&self.user, Some(&self.password))
+            .query(query)
+            .send()
+            .await
+            .map_err(|_| AriError::Transport)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AriError::Status(status.as_u16()));
+        }
+        let text = response.text().await.map_err(|_| AriError::Transport)?;
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|_| AriError::Decode)
+    }
+
+    fn gone_is_fine(r: Result<Value, AriError>) -> Result<(), AriError> {
+        match r {
+            Ok(_) | Err(AriError::Status(404)) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Dials `endpoint` (`PJSIP/05…@netgsm`) as channel `channel_id`; it enters the application when
+    /// answered.
+    pub async fn originate(&self, channel_id: &str, endpoint: &str, timeout_s: u32) -> Result<(), AriError> {
+        let timeout = timeout_s.to_string();
+        self.call(
+            Method::POST,
+            "/channels",
+            &[("endpoint", endpoint), ("app", APP), ("appArgs", "out"), ("channelId", channel_id), ("timeout", &timeout)],
+        )
+        .await
+        .map(drop)
+    }
+
+    /// A media channel `channel_id` the bridge connects to over WebSocket, in `format`.
+    pub async fn external_media(&self, channel_id: &str, format: &str) -> Result<(), AriError> {
+        self.call(
+            Method::POST,
+            "/channels/externalMedia",
+            &[
+                ("app", APP),
+                ("channelId", channel_id),
+                ("external_host", "INCOMING"),
+                ("transport", "websocket"),
+                ("encapsulation", "none"),
+                ("connection_type", "server"),
+                ("format", format),
+                ("transport_data", "f(json)"),
+            ],
+        )
+        .await
+        .map(drop)
+    }
+
+    pub async fn variable(&self, channel: &str, name: &str) -> Result<String, AriError> {
+        let v = self.call(Method::GET, &format!("/channels/{channel}/variable"), &[("variable", name)]).await?;
+        v.get("value").and_then(Value::as_str).map(str::to_owned).ok_or(AriError::Decode)
+    }
+
+    /// A mixing bridge `bridge_id` holding `channels`.
+    pub async fn mix(&self, bridge_id: &str, channels: &[&str]) -> Result<(), AriError> {
+        self.call(Method::POST, "/bridges", &[("type", "mixing"), ("bridgeId", bridge_id)]).await?;
+        let list = channels.join(",");
+        self.call(Method::POST, &format!("/bridges/{bridge_id}/addChannel"), &[("channel", &list)])
+            .await
+            .map(drop)
+    }
+
+    pub async fn hangup(&self, channel: &str) -> Result<(), AriError> {
+        Self::gone_is_fine(self.call(Method::DELETE, &format!("/channels/{channel}"), &[("reason", "normal")]).await)
+    }
+
+    /// Refuses a ringing channel as busy.
+    pub async fn refuse(&self, channel: &str) -> Result<(), AriError> {
+        Self::gone_is_fine(self.call(Method::DELETE, &format!("/channels/{channel}"), &[("reason", "busy")]).await)
+    }
+
+    pub async fn destroy_bridge(&self, bridge_id: &str) -> Result<(), AriError> {
+        Self::gone_is_fine(self.call(Method::DELETE, &format!("/bridges/{bridge_id}"), &[]).await)
+    }
+
+    pub async fn redirect(&self, channel: &str, endpoint: &str) -> Result<(), AriError> {
+        self.call(Method::POST, &format!("/channels/{channel}/redirect"), &[("endpoint", endpoint)])
+            .await
+            .map(drop)
+    }
+
+    /// The channels Asterisk has now.
+    pub async fn channel_ids(&self) -> Result<Vec<String>, AriError> {
+        let v = self.call(Method::GET, "/channels", &[]).await?;
+        Ok(v.as_array()
+            .map(|a| a.iter().filter_map(|c| c["id"].as_str().map(str::to_owned)).collect())
+            .unwrap_or_default())
+    }
+
+    /// Asterisk's version line (the `check` command).
+    pub async fn info(&self) -> Result<String, AriError> {
+        let v = self.call(Method::GET, "/asterisk/info", &[]).await?;
+        Ok(v["system"]["version"].as_str().unwrap_or("?").to_owned())
+    }
+
+    fn ws_base(&self) -> String {
+        self.base.replacen("http", "ws", 1)
+    }
+
+    async fn connect(&self, url: String) -> Result<Socket, AriError> {
+        let mut request = url.into_client_request().map_err(|_| AriError::Transport)?;
+        let token = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", self.user, self.password));
+        let header = HeaderValue::from_str(&format!("Basic {token}")).map_err(|_| AriError::Transport)?;
+        request.headers_mut().insert("Authorization", header);
+        tokio_tungstenite::connect_async(request).await.map(|(s, _)| s).map_err(|_| AriError::Transport)
+    }
+
+    /// The application's event stream.
+    pub async fn events(&self) -> Result<Socket, AriError> {
+        self.connect(format!("{}/ari/events?app={APP}&subscribeAll=false", self.ws_base())).await
+    }
+
+    /// The media of an external media channel, by its `MEDIA_WEBSOCKET_CONNECTION_ID`.
+    pub async fn media(&self, connection_id: &str) -> Result<Socket, AriError> {
+        self.connect(format!("{}/media/{connection_id}", self.ws_base())).await
+    }
+}
+```
+
+`rust/bridge/voice/src/media.rs`:
+
+```rust
+//! `chan_websocket`'s control messages in JSON mode (`f(json)`; Asterisk ≥ 22.8): the events the
+//! bridge reads and the commands it writes. Audio goes as binary messages of whole frames, at most
+//! [`MAX_MESSAGE_BYTES`] (Asterisk closes the call above 65 500 bytes).
+
+use serde_json::{Value, json};
+
+pub const MAX_MESSAGE_BYTES: usize = 64_000;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MediaEvent {
+    Start { format: String, frame_bytes: usize },
+    MarkProcessed { correlation: String },
+    Xoff,
+    Xon,
+    Dtmf { digit: String },
+    Other,
+}
+
+pub fn parse_control(text: &str) -> MediaEvent {
+    let Ok(v) = serde_json::from_str::<Value>(text) else {
+        return MediaEvent::Other;
+    };
+    match v["event"].as_str() {
+        Some("MEDIA_START") => MediaEvent::Start {
+            format: v["format"].as_str().unwrap_or("ulaw").to_owned(),
+            frame_bytes: v["optimal_frame_size"].as_u64().map_or(160, |n| n as usize),
+        },
+        Some("MEDIA_MARK_PROCESSED") => MediaEvent::MarkProcessed {
+            correlation: v["correlation_id"].as_str().unwrap_or_default().to_owned(),
+        },
+        Some("MEDIA_XOFF") => MediaEvent::Xoff,
+        Some("MEDIA_XON") => MediaEvent::Xon,
+        Some("DTMF_END") => MediaEvent::Dtmf { digit: v["digit"].as_str().unwrap_or_default().to_owned() },
+        _ => MediaEvent::Other,
+    }
+}
+
+/// A control command (`FLUSH_MEDIA`, `MARK_MEDIA`, `HANGUP`, ...), with its correlation id.
+pub fn command(name: &str, correlation: Option<&str>) -> String {
+    match correlation {
+        Some(c) => json!({ "command": name, "correlation_id": c }),
+        None => json!({ "command": name }),
+    }
+    .to_string()
+}
+
+/// `pcm` padded with silence to whole frames of `frame_samples`.
+pub fn pad_to_frames(mut pcm: Vec<i16>, frame_samples: usize) -> Vec<i16> {
+    let frame = frame_samples.max(1);
+    let rest = pcm.len() % frame;
+    if rest != 0 {
+        pcm.resize(pcm.len() + frame - rest, 0);
+    }
+    pcm
+}
+```
+
+`rust/bridge/voice/src/speech.rs`:
+
+```rust
+//! The two local speech services (design addendum §6): where they listen (a unix socket in
+//! production, TCP loopback in tests) and their messages. `Heard`'s `Debug` never prints a word.
+
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::str::FromStr;
+
+use jt_calls::EndpointBy;
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_tungstenite::WebSocketStream;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Endpoint {
+    Unix(PathBuf),
+    Tcp(String),
+}
+
+impl FromStr for Endpoint {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Endpoint, ()> {
+        if let Some(path) = s.strip_prefix("unix:") {
+            return Ok(Endpoint::Unix(path.into()));
+        }
+        if let Some(addr) = s.strip_prefix("tcp:") {
+            return Ok(Endpoint::Tcp(addr.to_owned()));
+        }
+        Err(())
+    }
+}
+
+pub trait Stream: AsyncRead + AsyncWrite + Send + Unpin {}
+impl<T: AsyncRead + AsyncWrite + Send + Unpin> Stream for T {}
+
+pub type Socket = WebSocketStream<Pin<Box<dyn Stream>>>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SpeechError {
+    #[error("the speech service is unreachable")]
+    Unreachable,
+    #[error("unix sockets are not available on this system")]
+    Unsupported,
+}
+
+/// A WebSocket to the service at `endpoint`.
+pub async fn connect(endpoint: &Endpoint) -> Result<Socket, SpeechError> {
+    let stream: Pin<Box<dyn Stream>> = match endpoint {
+        Endpoint::Tcp(addr) => {
+            Box::pin(tokio::net::TcpStream::connect(addr).await.map_err(|_| SpeechError::Unreachable)?)
+        }
+        #[cfg(unix)]
+        Endpoint::Unix(path) => {
+            Box::pin(tokio::net::UnixStream::connect(path).await.map_err(|_| SpeechError::Unreachable)?)
+        }
+        #[cfg(not(unix))]
+        Endpoint::Unix(_) => return Err(SpeechError::Unsupported),
+    };
+    tokio_tungstenite::client_async("ws://localhost/", stream)
+        .await
+        .map(|(s, _)| s)
+        .map_err(|_| SpeechError::Unreachable)
+}
+
+/// What the listener heard.
+#[derive(Clone, PartialEq, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Heard {
+    SpeechStart { audio_ms: u64 },
+    SpeechEnd { audio_ms: u64 },
+    Resume { audio_ms: u64 },
+    Partial { text: String },
+    Final {
+        text: String,
+        #[serde(default)]
+        confidence: Option<f32>,
+        speech_end_ms: u64,
+        endpoint_ms: u64,
+        endpoint_by: EndpointBy,
+        stt_ms: u32,
+    },
+    Unheard { audio_ms: u64 },
+}
+
+impl std::fmt::Debug for Heard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Heard::SpeechStart { audio_ms } => write!(f, "SpeechStart({audio_ms})"),
+            Heard::SpeechEnd { audio_ms } => write!(f, "SpeechEnd({audio_ms})"),
+            Heard::Resume { audio_ms } => write!(f, "Resume({audio_ms})"),
+            Heard::Partial { .. } => write!(f, "Partial"),
+            Heard::Final { endpoint_ms, endpoint_by, .. } => {
+                write!(f, "Final(endpoint_ms: {endpoint_ms}, by: {endpoint_by:?})")
+            }
+            Heard::Unheard { audio_ms } => write!(f, "Unheard({audio_ms})"),
+        }
+    }
+}
+
+/// To the listener.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToListener {
+    Start { sample_rate: u32, hotwords: Vec<String> },
+    Playback { active: bool },
+}
+
+/// To the speaker.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToSpeaker {
+    Synth { id: String, text: String },
+    Cancel { id: String },
+}
+
+/// From the speaker (besides the binary PCM16 chunks).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Spoken {
+    Done { id: String, synth_ms: u32, audio_ms: u32 },
+    Cancelled { id: String },
+    Error {
+        #[serde(default)]
+        id: Option<String>,
+        reason: String,
+    },
+}
+```
+
+In `lib.rs` add the modules and extend the module map:
+
+```rust
+pub mod ari;
+pub mod cache;
+pub mod config;
+pub mod media;
+pub mod speech;
+pub mod trace;
+```
+
+```rust
+//! - [`config`], [`cache`], [`trace`]: the environment, the phrase cache, the turn traces.
+//! - [`ari`], [`media`], [`speech`]: Asterisk's REST and events, `chan_websocket` media control,
+//!   the local speech services.
+```
+
+- [ ] **Step 5: Run the tests**
+
+Run: `cargo test -p jeeta-voice-bridge` and `cargo clippy -p jeeta-voice-bridge --all-targets -- -D warnings`
+Expected: `adapters` 8 passed, the earlier files unchanged, clippy clean.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add rust/bridge/voice
+git commit -m "feat(voice-bridge): configuration, phrase cache, turn traces, ARI, media and speech adapters" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+
+### Task B6: One call's task, and the standalone `slice`
+
+**Files:**
+- Create: `rust/bridge/voice/src/call.rs`
+- Create: `rust/bridge/voice/src/slice.rs`
+- Create: `rust/bridge/voice/src/main.rs`
+- Create: `rust/bridge/voice/tests/support/mod.rs`
+- Create: `rust/bridge/voice/tests/call.rs`
+- Modify: `rust/bridge/voice/src/ari.rs` (a separate WebSocket base for tests)
+- Modify: `rust/bridge/voice/src/lib.rs`
+
+- [ ] **Step 1: Let ARI's WebSocket base be set apart (tests serve REST and WebSocket on two ports)**
+
+In `ari.rs`, add a field `ws_base: String` to `Ari`, set it in `new` to `base.trim_end_matches('/').replacen("http", "ws", 1)`, replace the body of `fn ws_base(&self)` with `self.ws_base.clone()`, and add:
+
+```rust
+    /// The same ARI with its WebSocket endpoints (events, media) at `ws_base` (`ws://host:port`).
+    pub fn with_ws_base(mut self, ws_base: &str) -> Ari {
+        self.ws_base = ws_base.trim_end_matches('/').to_owned();
+        self
+    }
+```
+
+- [ ] **Step 2: Write the test fakes and the failing call test**
+
+`rust/bridge/voice/tests/support/mod.rs`:
+
+```rust
+//! Fakes of Asterisk (ARI over HTTP, media over WebSocket) and of the two speech services.
+#![allow(dead_code)]
+
+use std::sync::{Arc, Mutex};
+
+use axum::Router;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::routing::{delete, get, post};
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{Value, json};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
+
+pub type Log = Arc<Mutex<Vec<String>>>;
+
+/// A fake ARI REST surface; every request is logged as `METHOD path query`.
+pub async fn fake_ari() -> (String, Log) {
+    let log: Log = Arc::default();
+    async fn record(State(log): State<Log>, line: String) {
+        log.lock().unwrap().push(line);
+    }
+    let app = Router::new()
+        .route(
+            "/ari/channels",
+            post(|State(log): State<Log>, Query(q): Query<Vec<(String, String)>>| async move {
+                record(State(log), format!("POST /ari/channels {q:?}")).await;
+                axum::Json(json!({ "id": "c-1" }))
+            })
+            .get(|| async { axum::Json(json!([])) }),
+        )
+        .route(
+            "/ari/channels/externalMedia",
+            post(|State(log): State<Log>| async move {
+                record(State(log), "POST externalMedia".into()).await;
+                axum::Json(json!({}))
+            }),
+        )
+        .route(
+            "/ari/channels/{id}/variable",
+            get(|| async { axum::Json(json!({ "value": "conn-1" })) }),
+        )
+        .route("/ari/channels/{id}", delete(|State(log): State<Log>, Path(id): Path<String>| async move {
+            record(State(log), format!("DELETE channel {id}")).await;
+            StatusCode::NO_CONTENT
+        }))
+        .route("/ari/bridges", post(|| async { axum::Json(json!({})) }))
+        .route("/ari/bridges/{id}/addChannel", post(|| async { StatusCode::NO_CONTENT }))
+        .route("/ari/bridges/{id}", delete(|| async { StatusCode::NO_CONTENT }))
+        .with_state(log.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, log)
+}
+
+/// A WebSocket server handing every accepted connection to the test.
+pub async fn ws_server() -> (String, mpsc::Receiver<WebSocketStream<TcpStream>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let (tx, rx) = mpsc::channel(8);
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            if let Ok(ws) = tokio_tungstenite::accept_async(stream).await {
+                let _ = tx.send(ws).await;
+            }
+        }
+    });
+    (addr, rx)
+}
+
+/// Answers every `synth` on every connection with 160 samples of silence and `done`.
+pub fn serve_speaker(mut conns: mpsc::Receiver<WebSocketStream<TcpStream>>) {
+    tokio::spawn(async move {
+        while let Some(mut ws) = conns.recv().await {
+            tokio::spawn(async move {
+                while let Some(Ok(Message::Text(t))) = ws.next().await {
+                    let v: Value = serde_json::from_str(&t).unwrap();
+                    if v["type"] == "synth" {
+                        let _ = ws.send(Message::Binary(vec![0u8; 320].into())).await;
+                        let done = json!({ "type": "done", "id": v["id"], "synth_ms": 5, "audio_ms": 20 });
+                        let _ = ws.send(Message::Text(done.to_string().into())).await;
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// Starts the media of the first connection (`MEDIA_START`, A-law) and answers each `MARK_MEDIA`
+/// with `MEDIA_MARK_PROCESSED`; the control commands it received go to the returned channel.
+pub fn serve_media(mut conns: mpsc::Receiver<WebSocketStream<TcpStream>>) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel(64);
+    tokio::spawn(async move {
+        let Some(mut ws) = conns.recv().await else { return };
+        let start = json!({ "event": "MEDIA_START", "connection_id": "conn-1", "channel": "WebSocket/x",
+            "channel_id": "c-1-m", "format": "alaw", "optimal_frame_size": 160, "ptime": 20 });
+        ws.send(Message::Text(start.to_string().into())).await.unwrap();
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(t) = msg {
+                let v: Value = serde_json::from_str(&t).unwrap();
+                let name = v["command"].as_str().unwrap_or_default().to_owned();
+                if name == "MARK_MEDIA" {
+                    let done = json!({ "event": "MEDIA_MARK_PROCESSED", "channel_id": "c-1-m",
+                        "correlation_id": v["correlation_id"] });
+                    ws.send(Message::Text(done.to_string().into())).await.unwrap();
+                }
+                let _ = tx.send(name).await;
+            }
+        }
+    });
+    rx
+}
+```
+
+`rust/bridge/voice/tests/call.rs`:
+
+```rust
+//! One call against fake Asterisk and speech services: dial, answer, the core's opening played to
+//! its mark, a caller turn reported and acknowledged, the agent's sentence, the closing hang-up.
+mod support;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use jeeta_voice_bridge::ari::{Ari, AriEvent};
+use jeeta_voice_bridge::call::{CallDeps, CallSetup, Report, ToCall, run_call};
+use jeeta_voice_bridge::speech::Endpoint;
+use jeeta_voice_bridge::talker::Timing;
+use jt_calls::{BridgeEvent, Command, DialScript, PhraseSet, PlayKind};
+use serde_json::json;
+use support::*;
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message;
+
+async fn next(reports: &mut mpsc::Receiver<Report>) -> Report {
+    tokio::time::timeout(Duration::from_secs(3), reports.recv()).await.expect("a report in time").expect("open")
+}
+
+#[tokio::test]
+async fn a_call_dials_plays_hears_acknowledges_and_hangs_up() {
+    let (ari_base, log) = fake_ari().await;
+    let (media_addr, media_conns) = ws_server().await;
+    let (listen_addr, mut listen_conns) = ws_server().await;
+    let (speak_addr, speak_conns) = ws_server().await;
+    serve_speaker(speak_conns);
+    let mut controls = serve_media(media_conns);
+    let cache = std::env::temp_dir().join(format!("voice-call-{}", std::process::id()));
+    let deps = Arc::new(CallDeps {
+        ari: Arc::new(Ari::new(&ari_base, "u", "p").with_ws_base(&format!("ws://{media_addr}"))),
+        listen: Endpoint::Tcp(listen_addr),
+        speak: Endpoint::Tcp(speak_addr),
+        cache_dir: cache.clone(),
+        voice: "test".into(),
+        timing: Timing::default(),
+        traces: None,
+    });
+    let (to_call, rx) = mpsc::channel(16);
+    let (reports_tx, mut reports) = mpsc::channel(64);
+    let setup = CallSetup {
+        bridge_call_id: "c-1".into(),
+        dial: "05321234567".into(),
+        script: DialScript::default(),
+        plan_lines: vec!["Ada Hanım ile mi görüşüyorum?".into()],
+    };
+    let task = tokio::spawn(run_call(deps, setup, rx, reports_tx));
+
+    // The dial goes to the PBX in national form.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let dialled = log.lock().unwrap().join("\n");
+    assert!(dialled.contains("PJSIP/05321234567@netgsm"), "{dialled}");
+
+    to_call.send(ToCall::Ari(AriEvent::Answered { channel: "c-1".into(), inbound: false })).await.unwrap();
+    assert_eq!(next(&mut reports).await.event, BridgeEvent::Answered);
+    let mut listener = tokio::time::timeout(Duration::from_secs(3), listen_conns.recv()).await.unwrap().unwrap();
+    let start = listener.next().await.unwrap().unwrap();
+    assert!(matches!(start, Message::Text(ref t) if t.contains("\"start\"")));
+    let (mut listen_tx, mut listen_rx) = listener.split();
+    tokio::spawn(async move { while listen_rx.next().await.is_some() {} });
+
+    // The core's opening plays to its mark.
+    let opening = Command::Play { seq: 2, clip: PlayKind::Opening, index: 0, text: "Ada Hanım ile mi görüşüyorum?".into() };
+    to_call.send(ToCall::Command(opening)).await.unwrap();
+    let said = next(&mut reports).await.event;
+    assert_eq!(said, BridgeEvent::Said { seq: 2, interrupted_at_char: None, tts_ms: None });
+
+    // The caller's turn is reported, then acknowledged by the bridge on its own.
+    let final_ = json!({ "type": "final", "text": "evet benim", "speech_end_ms": 0, "endpoint_ms": 260,
+        "endpoint_by": "smart_turn", "stt_ms": 40 });
+    listen_tx.send(Message::Text(final_.to_string().into())).await.unwrap();
+    let utterance = next(&mut reports).await;
+    assert!(matches!(utterance.event, BridgeEvent::Utterance { ref text, is_final: true, .. } if text == "evet benim"));
+    utterance.taken.unwrap().send(()).unwrap();
+    let ack = next(&mut reports).await.event;
+    assert_eq!(ack, BridgeEvent::Phrase { set: PhraseSet::Acknowledgement, index: 0 });
+
+    // The agent speaks, then the core hangs up.
+    to_call.send(ToCall::Command(Command::Say { seq: 4, text: "Harika.".into(), allow_barge_in: true })).await.unwrap();
+    assert_eq!(next(&mut reports).await.event, BridgeEvent::Said { seq: 4, interrupted_at_char: None, tts_ms: None });
+    to_call.send(ToCall::Command(Command::Hangup)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(log.lock().unwrap().iter().any(|l| l == "DELETE channel c-1"));
+    to_call.send(ToCall::Ari(AriEvent::Gone { channel: "c-1".into(), cause: Some(16) })).await.unwrap();
+    assert_eq!(next(&mut reports).await.event, BridgeEvent::Hangup { cause: "normal".into() });
+    let BridgeEvent::Trace { trace } = next(&mut reports).await.event else { panic!("a trace") };
+    assert_eq!(trace.endpoint_ms, 260);
+    assert!(trace.ack_ms.is_some() && trace.say_ms.is_some() && trace.first_audio_ms.is_some());
+    tokio::time::timeout(Duration::from_secs(3), task).await.unwrap().unwrap();
+    let sent: Vec<String> = std::iter::from_fn(|| controls.try_recv().ok()).collect();
+    assert!(sent.iter().any(|c| c == "MARK_MEDIA"));
+    let _ = std::fs::remove_dir_all(cache);
+}
+```
+
+Run: `cargo test -p jeeta-voice-bridge --test call`
+Expected: FAIL to compile (`could not find call in jeeta_voice_bridge`).
+
+- [ ] **Step 3: Write `call.rs`**
+
+```rust
+//! One call's task (design addendum §3): it dials through ARI, waits for the answer, connects the
+//! call's media (`chan_websocket`), the listener and the speaker, and runs the talker until the line
+//! closes, reporting each event as a [`Report`] (to the core in `run`, to the console in `slice`).
+//! It never logs a number or a word.
+
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
+use jt_calls::{BridgeEvent, Command, DialScript, PhraseSet};
+use serde::Serialize;
+use tokio::sync::{mpsc, oneshot};
+use tokio_tungstenite::tungstenite::Message;
+use tracing::{info, warn};
+
+use crate::ari::{self, Ari, AriEvent};
+use crate::cache::PhraseCache;
+use crate::g711::Codec;
+use crate::media::{self, MediaEvent};
+use crate::netgsm;
+use crate::speech::{self, Endpoint, Heard, Spoken, ToListener, ToSpeaker};
+use crate::talker::{Action, Input, Item, Source, Talker, Timing};
+use crate::text::{self, Sentence};
+use crate::trace::{AudioClock, TraceFile, TurnMarks};
+
+/// How long after the closing's end the line is hung up.
+const HANGUP_TAIL: Duration = Duration::from_millis(400);
+/// How long the answered line may take to bring its media up.
+const MEDIA_SETUP: Duration = Duration::from_secs(3);
+/// How long the PBX may ring.
+const RING_TIMEOUT_S: u32 = 45;
+const SAMPLE_RATE: u64 = 8_000;
+
+pub struct CallDeps {
+    pub ari: Arc<Ari>,
+    pub listen: Endpoint,
+    pub speak: Endpoint,
+    pub cache_dir: PathBuf,
+    pub voice: String,
+    pub timing: Timing,
+    pub traces: Option<TraceFile>,
+}
+
+pub struct CallSetup {
+    pub bridge_call_id: String,
+    /// The number as the PBX dials it (`netgsm::dial_string`).
+    pub dial: String,
+    pub script: DialScript,
+    /// The plan's sentences (opening first), synthesised ahead into this call's memory.
+    pub plan_lines: Vec<String>,
+}
+
+pub enum ToCall {
+    Command(Command),
+    Ari(AriEvent),
+    CoreLost,
+}
+
+/// An event of the call, and a way to hear when it was taken (the core answered its report).
+pub struct Report {
+    pub bridge_call_id: String,
+    pub event: BridgeEvent,
+    pub taken: Option<oneshot::Sender<()>>,
+}
+
+#[derive(Clone)]
+struct Reporter {
+    id: String,
+    tx: mpsc::Sender<Report>,
+}
+
+impl Reporter {
+    async fn send(&self, event: BridgeEvent) {
+        let _ = self.tx.send(Report { bridge_call_id: self.id.clone(), event, taken: None }).await;
+    }
+
+    async fn send_taken(&self, event: BridgeEvent) -> oneshot::Receiver<()> {
+        let (taken, rx) = oneshot::channel();
+        let _ = self.tx.send(Report { bridge_call_id: self.id.clone(), event, taken: Some(taken) }).await;
+        rx
+    }
+}
+
+fn text_message<T: Serialize>(value: &T) -> Message {
+    Message::Text(serde_json::to_string(value).unwrap_or_default().into())
+}
+
+fn pcm16(bytes: &[u8]) -> Vec<i16> {
+    bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+}
+
+fn audio_duration(samples: usize) -> Duration {
+    Duration::from_millis(samples as u64 * 1_000 / SAMPLE_RATE)
+}
+
+fn parse_mark(correlation: &str) -> Option<(u64, usize)> {
+    let (item, index) = correlation.split_once(':')?;
+    Some((item.parse().ok()?, index.parse().ok()?))
+}
+
+/// The sentences of the policy's texts: kept on disk once synthesised.
+fn policy_sentences(script: &DialScript) -> HashSet<String> {
+    script
+        .lines
+        .iter()
+        .map(String::as_str)
+        .chain(script.phrases.all())
+        .flat_map(|t| text::sentences(t).into_iter().map(|s| s.text))
+        .collect()
+}
+
+/// What to synthesise ahead, most urgent first: the plan's opening, the policy's lines, the
+/// phrases (acknowledgements first), then the rest of the plan.
+fn presynth_order(setup: &CallSetup) -> Vec<String> {
+    let mut out: Vec<String> = setup.plan_lines.iter().take(1).cloned().collect();
+    out.extend(setup.script.lines.iter().cloned());
+    out.extend(setup.script.phrases.all().map(str::to_owned));
+    out.extend(setup.plan_lines.iter().skip(1).cloned());
+    out
+}
+
+async fn presynthesize(endpoint: Endpoint, cache: Arc<Mutex<PhraseCache>>, persist: Arc<HashSet<String>>, texts: Vec<String>) {
+    let Ok(socket) = speech::connect(&endpoint).await else {
+        warn!("pre-synthesis cannot reach the speaker");
+        return;
+    };
+    let (mut tx, mut rx) = socket.split();
+    let mut n = 0u32;
+    for t in texts {
+        for sentence in text::sentences(&t) {
+            let cached = cache.lock().map(|mut c| c.get(&sentence.text).is_some()).unwrap_or(false);
+            if cached {
+                continue;
+            }
+            n += 1;
+            let id = format!("pre:{n}");
+            if tx.send(text_message(&ToSpeaker::Synth { id, text: sentence.text.clone() })).await.is_err() {
+                return;
+            }
+            let mut pcm = Vec::new();
+            loop {
+                match rx.next().await {
+                    Some(Ok(Message::Binary(b))) => pcm.extend(pcm16(&b)),
+                    Some(Ok(Message::Text(m))) => {
+                        if let Ok(spoken) = serde_json::from_str::<Spoken>(&m) {
+                            if matches!(spoken, Spoken::Done { .. }) && !pcm.is_empty() {
+                                if let Ok(mut c) = cache.lock() {
+                                    c.put(&sentence.text, std::mem::take(&mut pcm), persist.contains(&sentence.text));
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    _ => return,
+                }
+            }
+        }
+    }
+}
+
+/// Runs call `setup` until its line closes (see the module docs).
+pub async fn run_call(deps: Arc<CallDeps>, setup: CallSetup, mut rx: mpsc::Receiver<ToCall>, reports: mpsc::Sender<Report>) {
+    let id = setup.bridge_call_id.clone();
+    let reporter = Reporter { id: id.clone(), tx: reports };
+    let cache = Arc::new(Mutex::new(PhraseCache::new(deps.cache_dir.clone(), &deps.voice)));
+    let persist = Arc::new(policy_sentences(&setup.script));
+    tokio::spawn(presynthesize(deps.speak.clone(), cache.clone(), persist.clone(), presynth_order(&setup)));
+    let endpoint = format!("PJSIP/{}@netgsm", setup.dial);
+    if deps.ari.originate(&id, &endpoint, RING_TIMEOUT_S).await.is_err() {
+        warn!(call = %id, "Asterisk refused the dial");
+        reporter
+            .send(BridgeEvent::Error { failure_line: "transient: bridge: the line refused the dial".into() })
+            .await;
+        return;
+    }
+    info!(call = %id, "dialling");
+    let mut early = Vec::new();
+    loop {
+        match rx.recv().await {
+            None => {
+                let _ = deps.ari.hangup(&id).await;
+                return;
+            }
+            Some(ToCall::Ari(AriEvent::Ringing { channel })) if channel == id => reporter.send(BridgeEvent::Ringing).await,
+            Some(ToCall::Ari(AriEvent::Answered { channel, .. })) if channel == id => break,
+            Some(ToCall::Ari(AriEvent::Gone { channel, cause })) if channel == id => {
+                info!(call = %id, cause = ?cause, "the line closed before an answer");
+                reporter.send(BridgeEvent::Hangup { cause: netgsm::hangup_cause(cause, false).into() }).await;
+                return;
+            }
+            Some(ToCall::Command(Command::Hangup)) => {
+                let _ = deps.ari.hangup(&id).await;
+            }
+            Some(ToCall::Command(c)) => early.push(c),
+            Some(_) => {}
+        }
+    }
+    reporter.send(BridgeEvent::Answered).await;
+    info!(call = %id, "answered");
+    match Live::connect(&deps, &setup, cache, persist, reporter.clone()).await {
+        Ok(live) => live.run(rx, early).await,
+        Err(reason) => {
+            warn!(call = %id, reason, "the call's media did not come up");
+            reporter.send(BridgeEvent::Error { failure_line: format!("transient: bridge: {reason}") }).await;
+            let _ = deps.ari.hangup(&id).await;
+        }
+    }
+    let _ = deps.ari.destroy_bridge(&format!("{id}-b")).await;
+    let _ = deps.ari.hangup(&format!("{id}-m")).await;
+}
+
+struct InFlight {
+    index: usize,
+    id: String,
+    pcm: Vec<i16>,
+}
+
+struct Playing {
+    item: Item,
+    sentences: Vec<Sentence>,
+    next: usize,
+    in_flight: Option<InFlight>,
+    marked: usize,
+    mark_at: Instant,
+    audio_started: Option<Instant>,
+    durations: Vec<Duration>,
+}
+
+type MediaSink = SplitSink<ari::Socket, Message>;
+type SpeechSink = SplitSink<speech::Socket, Message>;
+
+struct Live {
+    deps: Arc<CallDeps>,
+    id: String,
+    reporter: Reporter,
+    cache: Arc<Mutex<PhraseCache>>,
+    persist: Arc<HashSet<String>>,
+    talker: Talker,
+    started: Instant,
+    codec: Codec,
+    frame_bytes: usize,
+    media_tx: MediaSink,
+    media_rx: Option<SplitStream<ari::Socket>>,
+    listen_tx: SpeechSink,
+    listen_rx: Option<SplitStream<speech::Socket>>,
+    speak_tx: SpeechSink,
+    speak_rx: Option<SplitStream<speech::Socket>>,
+    xoff: bool,
+    held: Vec<Message>,
+    playing: Option<Playing>,
+    clock: AudioClock,
+    marks: Option<TurnMarks>,
+    onset: Option<Instant>,
+    cut_reply: bool,
+    pending_delivered: Option<oneshot::Receiver<()>>,
+    pending_hangup: bool,
+    /// When the line was answered, and whether the first audio after it was logged.
+    answered: Instant,
+    opening_logged: bool,
+}
+
+impl Live {
+    async fn connect(
+        deps: &Arc<CallDeps>,
+        setup: &CallSetup,
+        cache: Arc<Mutex<PhraseCache>>,
+        persist: Arc<HashSet<String>>,
+        reporter: Reporter,
+    ) -> Result<Live, &'static str> {
+        let answered = Instant::now();
+        let id = setup.bridge_call_id.clone();
+        let media_id = format!("{id}-m");
+        deps.ari.external_media(&media_id, "alaw").await.map_err(|_| "external media refused")?;
+        let connection = deps
+            .ari
+            .variable(&media_id, "MEDIA_WEBSOCKET_CONNECTION_ID")
+            .await
+            .map_err(|_| "no media connection id")?;
+        deps.ari.mix(&format!("{id}-b"), &[&id, &media_id]).await.map_err(|_| "the mixing bridge was refused")?;
+        let media = deps.ari.media(&connection).await.map_err(|_| "media unreachable")?;
+        let (media_tx, mut media_rx) = media.split();
+        let started = tokio::time::timeout(MEDIA_SETUP, async {
+            while let Some(Ok(msg)) = media_rx.next().await {
+                if let Message::Text(t) = msg
+                    && let MediaEvent::Start { format, frame_bytes } = media::parse_control(&t)
+                {
+                    return Codec::from_format(&format).map(|c| (c, frame_bytes));
+                }
+            }
+            None
+        })
+        .await;
+        let (codec, frame_bytes) = started.ok().flatten().ok_or("no media start")?;
+        let listen = speech::connect(&deps.listen).await.map_err(|_| "listener unreachable")?;
+        let (mut listen_tx, listen_rx) = listen.split();
+        let start = ToListener::Start { sample_rate: 8_000, hotwords: setup.script.hotwords.clone() };
+        listen_tx.send(text_message(&start)).await.map_err(|_| "listener refused the call")?;
+        let speak = speech::connect(&deps.speak).await.map_err(|_| "speaker unreachable")?;
+        let (speak_tx, speak_rx) = speak.split();
+        Ok(Live {
+            deps: deps.clone(),
+            id,
+            reporter,
+            cache,
+            persist,
+            talker: Talker::new(deps.timing, setup.script.phrases.clone()),
+            started: Instant::now(),
+            codec,
+            frame_bytes,
+            media_tx,
+            media_rx: Some(media_rx),
+            listen_tx,
+            listen_rx: Some(listen_rx),
+            speak_tx,
+            speak_rx: Some(speak_rx),
+            xoff: false,
+            held: Vec::new(),
+            playing: None,
+            clock: AudioClock::default(),
+            marks: None,
+            onset: None,
+            cut_reply: false,
+            pending_delivered: None,
+            pending_hangup: false,
+            answered,
+            opening_logged: false,
+        })
+    }
+
+    async fn run(mut self, mut rx: mpsc::Receiver<ToCall>, early: Vec<Command>) {
+        let mut media_rx = self.media_rx.take().expect("connected");
+        let mut listen_rx = self.listen_rx.take().expect("connected");
+        let mut speak_rx = self.speak_rx.take().expect("connected");
+        for c in early {
+            self.command(c).await;
+        }
+        let mut delivered: Option<oneshot::Receiver<()>> = None;
+        let mut hangup_at: Option<tokio::time::Instant> = None;
+        let mut tick = tokio::time::interval(Duration::from_millis(20));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                m = media_rx.next() => match m {
+                    Some(Ok(Message::Binary(b))) => self.inbound_audio(&b).await,
+                    Some(Ok(Message::Text(t))) => self.media_control(&t).await,
+                    Some(Ok(_)) => {}
+                    _ => {
+                        warn!(call = %self.id, "the media closed");
+                        break;
+                    }
+                },
+                m = listen_rx.next() => match m {
+                    Some(Ok(Message::Text(t))) => {
+                        if let Ok(h) = serde_json::from_str::<Heard>(&t) {
+                            self.heard(h).await;
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    _ => {
+                        warn!(call = %self.id, "the listener closed");
+                        let failure_line = "transient: bridge: the listener stopped during the call".to_owned();
+                        self.reporter.send(BridgeEvent::Error { failure_line }).await;
+                        self.input(Input::CoreLost).await;
+                    }
+                },
+                m = speak_rx.next() => match m {
+                    Some(Ok(Message::Binary(b))) => self.synth_chunk(&b).await,
+                    Some(Ok(Message::Text(t))) => {
+                        if let Ok(s) = serde_json::from_str::<Spoken>(&t) {
+                            self.synth_event(s).await;
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    _ => {
+                        warn!(call = %self.id, "the speaker closed");
+                        break;
+                    }
+                },
+                c = rx.recv() => match c {
+                    Some(ToCall::Command(c)) => self.command(c).await,
+                    Some(ToCall::Ari(AriEvent::Dtmf { channel, digit })) if channel == self.id => {
+                        self.reporter.send(BridgeEvent::Dtmf { digit }).await;
+                    }
+                    Some(ToCall::Ari(AriEvent::Gone { channel, .. })) if channel == self.id => {
+                        self.reporter.send(BridgeEvent::Hangup { cause: "normal".into() }).await;
+                        break;
+                    }
+                    Some(ToCall::Ari(_)) => {}
+                    Some(ToCall::CoreLost) => {
+                        // Reported first, so the core ends the session as failed when it is back.
+                        let failure_line = "transient: bridge: the core was unreachable during the call".to_owned();
+                        self.reporter.send(BridgeEvent::Error { failure_line }).await;
+                        self.input(Input::CoreLost).await;
+                    }
+                    None => break,
+                },
+                r = async { delivered.as_mut().expect("guarded").await }, if delivered.is_some() => {
+                    delivered = None;
+                    if r.is_ok() && let Some(m) = self.marks.as_mut() {
+                        m.delivered = Some(Instant::now());
+                    }
+                },
+                _ = async { tokio::time::sleep_until(hangup_at.expect("guarded")).await }, if hangup_at.is_some() => {
+                    hangup_at = None;
+                    let _ = self.deps.ari.hangup(&self.id).await;
+                },
+                _ = tick.tick() => self.input(Input::Tick).await,
+            }
+            if let Some(r) = self.pending_delivered.take() {
+                delivered = Some(r);
+            }
+            if std::mem::take(&mut self.pending_hangup) {
+                hangup_at = Some(tokio::time::Instant::now() + HANGUP_TAIL);
+            }
+        }
+        self.finish_turn().await;
+        info!(call = %self.id, "ended");
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    async fn input(&mut self, input: Input) {
+        let now = self.now_ms();
+        for action in self.talker.on(input, now) {
+            self.act(action).await;
+        }
+    }
+
+    async fn act(&mut self, action: Action) {
+        match action {
+            Action::EchoGuard(active) => {
+                let _ = self.listen_tx.send(text_message(&ToListener::Playback { active })).await;
+            }
+            Action::Play(item) => {
+                if let Source::Phrase { set, index } = item.source {
+                    self.reporter.send(BridgeEvent::Phrase { set, index }).await;
+                }
+                let mut sentences = text::sentences(&item.text);
+                if sentences.is_empty() {
+                    sentences.push(Sentence { start: 0, end: item.text.chars().count(), text: item.text.clone() });
+                }
+                self.playing = Some(Playing {
+                    item,
+                    sentences,
+                    next: 0,
+                    in_flight: None,
+                    marked: 0,
+                    mark_at: Instant::now(),
+                    audio_started: None,
+                    durations: Vec::new(),
+                });
+                self.advance().await;
+            }
+            Action::Done(item) => {
+                if let Source::Core { seq, .. } = item.source {
+                    self.reporter.send(BridgeEvent::Said { seq, interrupted_at_char: None, tts_ms: None }).await;
+                }
+            }
+            Action::Cut { item, dropped } => self.cut(item, dropped).await,
+            Action::Hangup => self.pending_hangup = true,
+        }
+    }
+
+    async fn send_media(&mut self, message: Message) {
+        if self.xoff {
+            self.held.push(message);
+        } else {
+            let _ = self.media_tx.send(message).await;
+        }
+    }
+
+    /// Marks the turn's first sounds: the reply's first audio, a covering phrase's first audio.
+    fn first_audio_marks(&mut self) {
+        let Some(p) = self.playing.as_ref() else { return };
+        if p.audio_started.is_some() {
+            return;
+        }
+        let reply = matches!(p.item.source, Source::Core { agent: true, .. });
+        let cover = matches!(
+            p.item.source,
+            Source::Phrase { set: PhraseSet::Acknowledgement | PhraseSet::Filler | PhraseSet::LongWait, .. }
+        );
+        let now = Instant::now();
+        if let Some(m) = self.marks.as_mut() {
+            if reply && m.first_audio.is_none() {
+                m.first_audio = Some(now);
+                m.tts_first.get_or_insert(now);
+            }
+            if cover && m.ack.is_none() {
+                m.ack = Some(now);
+            }
+        }
+    }
+
+    async fn write_pcm(&mut self, pcm: &[i16]) {
+        self.first_audio_marks();
+        if !self.opening_logged {
+            self.opening_logged = true;
+            let ms = u64::try_from(self.answered.elapsed().as_millis()).unwrap_or(u64::MAX);
+            info!(call = %self.id, ms, "first audio after the answer");
+        }
+        if let Some(p) = self.playing.as_mut()
+            && p.audio_started.is_none()
+        {
+            let now = Instant::now();
+            p.audio_started = Some(now);
+            p.mark_at = now;
+        }
+        let frame = self.frame_bytes.max(1);
+        let bytes = self.codec.encode(&media::pad_to_frames(pcm.to_vec(), frame));
+        for chunk in bytes.chunks((media::MAX_MESSAGE_BYTES / frame).max(1) * frame) {
+            self.send_media(Message::Binary(chunk.to_vec().into())).await;
+        }
+    }
+
+    async fn mark(&mut self, item: u64, index: usize) {
+        let correlation = format!("{item}:{index}");
+        self.send_media(Message::Text(media::command("MARK_MEDIA", Some(&correlation)).into())).await;
+    }
+
+    /// Writes the playing item's next sentences from the cache, or asks the speaker for the next one
+    /// (at most one sentence ahead of what was heard).
+    async fn advance(&mut self) {
+        loop {
+            let Some(p) = self.playing.as_mut() else { return };
+            if p.in_flight.is_some() || p.next >= p.sentences.len() || p.next > p.marked + 1 {
+                return;
+            }
+            let index = p.next;
+            let sentence = p.sentences[index].text.clone();
+            let item = p.item.id;
+            let hit = self.cache.lock().ok().and_then(|mut c| c.get(&sentence));
+            match hit {
+                Some(pcm) => {
+                    if let Some(p) = self.playing.as_mut() {
+                        p.next += 1;
+                        p.durations.push(audio_duration(pcm.len()));
+                    }
+                    self.write_pcm(&pcm).await;
+                    self.mark(item, index).await;
+                }
+                None => {
+                    let id = format!("{item}:{index}");
+                    if let Some(p) = self.playing.as_mut() {
+                        p.in_flight = Some(InFlight { index, id: id.clone(), pcm: Vec::new() });
+                    }
+                    let _ = self.speak_tx.send(text_message(&ToSpeaker::Synth { id, text: sentence })).await;
+                    return;
+                }
+            }
+        }
+    }
+
+    async fn synth_chunk(&mut self, bytes: &[u8]) {
+        let pcm = pcm16(bytes);
+        let Some(f) = self.playing.as_mut().and_then(|p| p.in_flight.as_mut()) else { return };
+        f.pcm.extend_from_slice(&pcm);
+        self.write_pcm(&pcm).await;
+    }
+
+    async fn synth_event(&mut self, spoken: Spoken) {
+        let (id, ok) = match spoken {
+            Spoken::Done { id, .. } => (id, true),
+            Spoken::Error { id: Some(id), .. } => (id, false),
+            _ => return,
+        };
+        let Some(p) = self.playing.as_mut() else { return };
+        if p.in_flight.as_ref().is_none_or(|f| f.id != id) {
+            return;
+        }
+        let f = p.in_flight.take().expect("checked above");
+        let sentence = p.sentences[f.index].text.clone();
+        let item = p.item.id;
+        p.durations.push(audio_duration(f.pcm.len()));
+        p.next = f.index + 1;
+        if !ok {
+            warn!(call = %self.id, "a sentence could not be synthesised");
+        } else if !f.pcm.is_empty()
+            && let Ok(mut c) = self.cache.lock()
+        {
+            c.put(&sentence, f.pcm, self.persist.contains(&sentence));
+        }
+        self.mark(item, f.index).await;
+        self.advance().await;
+    }
+
+    async fn media_control(&mut self, control: &str) {
+        match media::parse_control(control) {
+            MediaEvent::MarkProcessed { correlation } => {
+                let Some((item, index)) = parse_mark(&correlation) else { return };
+                let finished = match self.playing.as_mut() {
+                    Some(p) if p.item.id == item => {
+                        p.marked = index + 1;
+                        p.mark_at = Instant::now();
+                        p.marked >= p.sentences.len()
+                    }
+                    _ => return,
+                };
+                if finished {
+                    self.input(Input::Played { id: item }).await;
+                } else {
+                    self.advance().await;
+                }
+            }
+            MediaEvent::Xoff => self.xoff = true,
+            MediaEvent::Xon => {
+                self.xoff = false;
+                for m in std::mem::take(&mut self.held) {
+                    let _ = self.media_tx.send(m).await;
+                }
+            }
+            // DTMF is read from ARI (`ChannelDtmfReceived`), once.
+            MediaEvent::Dtmf { .. } | MediaEvent::Start { .. } | MediaEvent::Other => {}
+        }
+    }
+
+    async fn cut(&mut self, item: Item, dropped: Vec<Item>) {
+        self.held.clear();
+        let _ = self.media_tx.send(Message::Text(media::command("FLUSH_MEDIA", None).into())).await;
+        let mut heard = 0;
+        if let Some(mut p) = self.playing.take() {
+            if p.item.id == item.id {
+                if let Some(f) = p.in_flight.take() {
+                    let _ = self.speak_tx.send(text_message(&ToSpeaker::Cancel { id: f.id })).await;
+                }
+                let fraction = match (p.audio_started, p.durations.get(p.marked)) {
+                    (Some(_), Some(d)) if !d.is_zero() => p.mark_at.elapsed().as_secs_f64() / d.as_secs_f64(),
+                    (Some(_), _) => 0.5,
+                    (None, _) => 0.0,
+                };
+                heard = text::heard_chars(&p.sentences, p.marked, fraction);
+            } else {
+                self.playing = Some(p);
+            }
+        }
+        if let Source::Core { seq, agent } = item.source {
+            self.reporter.send(BridgeEvent::Said { seq, interrupted_at_char: Some(heard), tts_ms: None }).await;
+            if agent && let (Some(onset), Some(m)) = (self.onset, self.marks.as_mut()) {
+                m.barge_in_stop_ms = Some(u32::try_from(onset.elapsed().as_millis()).unwrap_or(u32::MAX));
+                self.cut_reply = true;
+            }
+        }
+        for d in dropped {
+            if let Source::Core { seq, .. } = d.source {
+                self.reporter.send(BridgeEvent::Said { seq, interrupted_at_char: Some(0), tts_ms: None }).await;
+            }
+        }
+    }
+
+    async fn inbound_audio(&mut self, bytes: &[u8]) {
+        let pcm = self.codec.decode(bytes);
+        self.clock.push(pcm.len() as u64 * 1_000 / SAMPLE_RATE, Instant::now());
+        let out: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let _ = self.listen_tx.send(Message::Binary(out.into())).await;
+    }
+
+    async fn heard(&mut self, heard: Heard) {
+        match heard {
+            Heard::SpeechStart { audio_ms } | Heard::Resume { audio_ms } => {
+                self.onset = Some(self.clock.at(audio_ms).unwrap_or_else(Instant::now));
+                self.input(Input::SpeechStart).await;
+            }
+            Heard::SpeechEnd { .. } => self.input(Input::SpeechEnd).await,
+            Heard::Partial { .. } => {}
+            Heard::Unheard { .. } => self.input(Input::Unheard).await,
+            Heard::Final { text, confidence, speech_end_ms, endpoint_ms, endpoint_by, stt_ms } => {
+                if self.cut_reply && let Some(m) = self.marks.as_mut() {
+                    m.backchannel_cut = text::is_backchannel(&text);
+                }
+                self.finish_turn().await;
+                let now = Instant::now();
+                let speech_end = self.clock.at(speech_end_ms).unwrap_or(now);
+                let endpoint = u32::try_from(endpoint_ms.saturating_sub(speech_end_ms)).unwrap_or(u32::MAX);
+                self.marks = Some(TurnMarks::new(speech_end, endpoint, endpoint_by, now));
+                let utterance = BridgeEvent::Utterance { text, is_final: true, confidence, stt_ms: Some(stt_ms) };
+                self.pending_delivered = Some(self.reporter.send_taken(utterance).await);
+                self.input(Input::Final).await;
+            }
+        }
+    }
+
+    async fn command(&mut self, command: Command) {
+        match command {
+            Command::Say { seq, text, allow_barge_in } => {
+                if let Some(m) = self.marks.as_mut() {
+                    m.say.get_or_insert_with(Instant::now);
+                }
+                self.input(Input::Speak { seq, text, barge_in: allow_barge_in, agent: true }).await;
+            }
+            Command::Play { seq, text, .. } => {
+                self.input(Input::Speak { seq, text, barge_in: true, agent: false }).await;
+            }
+            Command::Hangup => self.input(Input::HangupWhenDone).await,
+            Command::Transfer { to } => {
+                if self.deps.ari.redirect(&self.id, &format!("PJSIP/{to}@netgsm")).await.is_err() {
+                    warn!(call = %self.id, "Asterisk refused the transfer");
+                    let failure_line = "transient: bridge: the transfer was refused".to_owned();
+                    self.reporter.send(BridgeEvent::Error { failure_line }).await;
+                }
+            }
+            Command::Record { .. } | Command::Answer { .. } | Command::Dial { .. } => {}
+        }
+    }
+
+    /// Reports the turn's trace (to the core, and to the bridge's trace file).
+    async fn finish_turn(&mut self) {
+        let Some(marks) = self.marks.take() else {
+            self.cut_reply = false;
+            return;
+        };
+        self.cut_reply = false;
+        let trace = marks.trace();
+        if let Some(file) = &self.deps.traces
+            && file.append(&self.id, &trace).is_err()
+        {
+            warn!(call = %self.id, "the trace file could not be written");
+        }
+        self.reporter.send(BridgeEvent::Trace { trace }).await;
+    }
+}
+```
+
+This task uses `DialScript`, `BridgeEvent::Phrase` and `BridgeEvent::Trace` from Task A5.
+
+- [ ] **Step 4: Write `slice.rs` and `main.rs`**
+
+`rust/bridge/voice/src/slice.rs`:
+
+```rust
+//! `jeeta-voice-bridge slice`: the vertical slice of plan task B6, without the core. It dials the
+//! number in `SLICE_TO` (+90…, read from the environment so it is in no command line), plays the
+//! opening when answered, waits for one caller turn, lets `--think-ms` pass (the bridge covers it
+//! with its own acknowledgement and filler, as with a thinking agent), plays the reply and the
+//! approved closing, hangs up, and prints every turn's trace as JSON. `--show-transcript` prints the
+//! caller's words to this terminal only (never to the log).
+
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures_util::StreamExt;
+use jt_calls::{BridgeEvent, BridgePhrases, Command, DialScript, PlayKind};
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message;
+
+use crate::ari::{self, Ari};
+use crate::call::{CallDeps, CallSetup, ToCall, run_call};
+use crate::config::Config;
+use crate::netgsm;
+use crate::trace::TraceFile;
+
+const CLOSING: &str = "Görüşmek üzere, iyi günler.";
+
+struct Args {
+    opening: String,
+    reply: String,
+    think: Duration,
+    show_transcript: bool,
+}
+
+fn parse(args: &[String]) -> Option<Args> {
+    let mut a = Args { opening: String::new(), reply: String::new(), think: Duration::from_millis(3_000), show_transcript: false };
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--opening" => a.opening = it.next()?.clone(),
+            "--reply" => a.reply = it.next()?.clone(),
+            "--think-ms" => a.think = Duration::from_millis(it.next()?.parse().ok()?),
+            "--show-transcript" => a.show_transcript = true,
+            _ => return None,
+        }
+    }
+    (!a.opening.is_empty() && !a.reply.is_empty()).then_some(a)
+}
+
+pub async fn main(args: &[String]) -> ExitCode {
+    let Some(args) = parse(args) else {
+        eprintln!("usage: jeeta-voice-bridge slice --opening TEXT --reply TEXT [--think-ms N] [--show-transcript]");
+        return ExitCode::from(2);
+    };
+    let Some(dial) = std::env::var("SLICE_TO").ok().as_deref().and_then(netgsm::dial_string) else {
+        eprintln!("SLICE_TO must hold a +90 number");
+        return ExitCode::from(2);
+    };
+    let config = match Config::from_env(|k| std::env::var(k).ok(), false) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let ari = Arc::new(Ari::new(&config.ari_url, &config.ari_user, &config.ari_password));
+    let deps = Arc::new(CallDeps {
+        ari: ari.clone(),
+        listen: config.listen.clone(),
+        speak: config.speak.clone(),
+        cache_dir: config.cache_dir.clone(),
+        voice: config.voice.clone(),
+        timing: config.timing,
+        traces: Some(TraceFile::new(config.trace_file.clone())),
+    });
+    let (to_call, rx) = mpsc::channel(64);
+    let (reports_tx, mut reports) = mpsc::channel(64);
+    let events = match ari.events().await {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("ARI events: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let forward = to_call.clone();
+    tokio::spawn(async move {
+        let mut events = events;
+        while let Some(Ok(Message::Text(t))) = events.next().await {
+            let _ = forward.send(ToCall::Ari(ari::parse_event(&t))).await;
+        }
+    });
+    let id = uuid::Uuid::now_v7().to_string();
+    let setup = CallSetup {
+        bridge_call_id: id,
+        dial,
+        script: DialScript { lines: vec![args.opening.clone()], phrases: BridgePhrases::default(), hotwords: Vec::new() },
+        plan_lines: vec![args.reply.clone(), CLOSING.to_owned()],
+    };
+    tokio::spawn(run_call(deps, setup, rx, reports_tx));
+    let mut seq = 0u32;
+    let mut replied = false;
+    while let Some(report) = reports.recv().await {
+        if let Some(taken) = report.taken {
+            let _ = taken.send(());
+        }
+        match report.event {
+            BridgeEvent::Answered => {
+                println!("answered");
+                seq += 1;
+                let play = Command::Play { seq, clip: PlayKind::Opening, index: 0, text: args.opening.clone() };
+                let _ = to_call.send(ToCall::Command(play)).await;
+            }
+            BridgeEvent::Utterance { text, .. } if !replied => {
+                replied = true;
+                if args.show_transcript {
+                    println!("caller: {text}");
+                }
+                tokio::time::sleep(args.think).await;
+                seq += 1;
+                let say = Command::Say { seq, text: args.reply.clone(), allow_barge_in: true };
+                let _ = to_call.send(ToCall::Command(say)).await;
+                seq += 1;
+                let closing = Command::Play { seq, clip: PlayKind::Closing, index: 0, text: CLOSING.to_owned() };
+                let _ = to_call.send(ToCall::Command(closing)).await;
+                let _ = to_call.send(ToCall::Command(Command::Hangup)).await;
+            }
+            BridgeEvent::Phrase { set, index } => println!("phrase {set:?} {index}"),
+            BridgeEvent::Said { seq, interrupted_at_char, .. } => println!("said {seq} cut at {interrupted_at_char:?}"),
+            BridgeEvent::Trace { trace } => println!("trace {}", serde_json::to_string(&trace).unwrap_or_default()),
+            BridgeEvent::Hangup { cause } => {
+                println!("hangup {cause}");
+            }
+            BridgeEvent::Error { failure_line } => {
+                eprintln!("error: {failure_line}");
+                return ExitCode::FAILURE;
+            }
+            _ => {}
+        }
+    }
+    ExitCode::SUCCESS
+}
+```
+
+`rust/bridge/voice/src/main.rs`:
+
+```rust
+//! `jeeta-voice-bridge [run | slice … | report [--since RFC3339] | check]`.
+//!
+//! - `run` (default): the workspace's line (task D2).
+//! - `slice`: one test call without the core (`slice.rs`).
+//! - `report`: p50/p95 of the traces in `VOICE_TRACE_FILE`, optionally since a time.
+//! - `check`: reaches ARI and both speech services, and says which answer.
+//!
+//! The log filter is `JEETA_VOICE_BRIDGE_LOG` (default `info`).
+
+use std::process::ExitCode;
+
+use jeeta_voice_bridge::config::Config;
+use jeeta_voice_bridge::trace::read_traces;
+use jeeta_voice_bridge::{ari::Ari, slice, speech};
+use time::OffsetDateTime;
+use tracing_subscriber::EnvFilter;
+
+const USAGE: &str = "usage: jeeta-voice-bridge [run | slice --opening TEXT --reply TEXT [--think-ms N] [--show-transcript] | report [--since RFC3339] | check]";
+
+fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_env("JEETA_VOICE_BRIDGE_LOG").unwrap_or_else(|_| EnvFilter::new("info")))
+        .init();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Ok(runtime) = tokio::runtime::Builder::new_multi_thread().enable_all().build() else {
+        return ExitCode::FAILURE;
+    };
+    match args.first().map(String::as_str).unwrap_or("run") {
+        "slice" => runtime.block_on(slice::main(&args[1..])),
+        "report" => report(&args[1..]),
+        "check" => runtime.block_on(check()),
+        _ => {
+            eprintln!("{USAGE}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn report(args: &[String]) -> ExitCode {
+    let since = match args {
+        [flag, at] if flag == "--since" => {
+            match OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339) {
+                Ok(t) => Some(t),
+                Err(_) => {
+                    eprintln!("--since takes an RFC 3339 time");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        [] => None,
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    let path = std::env::var("VOICE_TRACE_FILE").unwrap_or_else(|_| "/var/lib/jeeta-voice/traces.jsonl".into());
+    match read_traces(std::path::Path::new(&path), since) {
+        Ok(traces) => {
+            let summary = jt_calls::summarize(&traces, &[]);
+            println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+            ExitCode::SUCCESS
+        }
+        Err(_) => {
+            eprintln!("the trace file cannot be read");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn check() -> ExitCode {
+    let config = match Config::from_env(|k| std::env::var(k).ok(), false) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let ari = Ari::new(&config.ari_url, &config.ari_user, &config.ari_password);
+    let mut ok = true;
+    match ari.info().await {
+        Ok(v) => println!("ari: ok (Asterisk {v})"),
+        Err(e) => {
+            ok = false;
+            println!("ari: {e}");
+        }
+    }
+    for (name, endpoint) in [("listen", &config.listen), ("speak", &config.speak)] {
+        match speech::connect(endpoint).await {
+            Ok(_) => println!("{name}: ok"),
+            Err(e) => {
+                ok = false;
+                println!("{name}: {e}");
+            }
+        }
+    }
+    if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+```
+
+In `lib.rs` add `pub mod call;` and `pub mod slice;` and to the module map: "- [`call`]: one call's task; [`slice`]: the standalone test call."
+
+- [ ] **Step 5: Run the tests and lints**
+
+Run: `cargo test -p jeeta-voice-bridge` then `cargo clippy -p jeeta-voice-bridge --all-targets -- -D warnings`
+Expected: `call` 1 passed (about 3 s), every earlier test still passing, `logging` passing (the log calls of `call.rs` name only `call`, `reason`, `cause`), clippy clean.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add rust/bridge/voice
+git commit -m "feat(voice-bridge): one call's task over ARI and the speech services, and the standalone slice" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task B7: [OWNER] The vertical-slice call
+
+The go/no-go for the whole stack. Needs the owner's mobile and about 3 minutes of the NetGSM package.
+
+**Files:** none (records results in the task notes and in `docs/operations/voice-bridge.md` in E4).
+
+- [ ] **Step 1: [COORDINATOR, server] Install the worker binary**
+
+CI builds the Linux artifact (task D3 adds the job; until then build on the host with the workspace's toolchain: `docker run --rm -v /root/jeeta-voice-src/rust:/w -w /w rust:1.96.0-bookworm cargo build --locked --release -p jeeta-voice-bridge` after copying the whole `rust/` tree with `git archive HEAD rust`). Then:
+
+```bash
+SHA=<the commit's short sha>
+install -d -m 0755 /opt/jeeta-voice/releases/$SHA
+install -m 0755 <path to the built jeeta-voice-bridge> /opt/jeeta-voice/releases/$SHA/jeeta-voice-bridge
+ln -sfn /opt/jeeta-voice/releases/$SHA /opt/jeeta-voice/current
+install -d -m 0750 -o jeeta-voice-bridge -g jeeta-voice-bridge /var/lib/jeeta-voice /var/lib/jeeta-voice/cache
+set -a; . /etc/jeeta-voice/ari.env; set +a
+sudo -E -u jeeta-voice-bridge -g jeeta-voice-bridge --preserve-env=ARI_PASSWORD /opt/jeeta-voice/current/jeeta-voice-bridge check
+```
+
+Expected: `ari: ok (Asterisk 22.11.0)`, `listen: ok`, `speak: ok`. (`sudo -g` gives the `jeeta-voice` supplementary group through the user's membership; if a socket is refused, run `id jeeta-voice-bridge` and confirm `jeeta-voice` is listed.)
+
+- [ ] **Step 2: [OWNER] Agree the time; the owner gives the number for this call only**
+
+The owner tells the coordinator the mobile number privately; the coordinator writes it to a 0600 file and never echoes it:
+
+```bash
+umask 077; read -r -s TO; printf '%s' "$TO" > /root/jeeta-voice-slice-to; unset TO
+```
+
+- [ ] **Step 3: [OWNER + COORDINATOR] Place the call**
+
+```bash
+set -a; . /etc/jeeta-voice/ari.env; set +a
+SLICE_TO="$(cat /root/jeeta-voice-slice-to)" VOICE_TRACE_FILE=/var/lib/jeeta-voice/slice-traces.jsonl \
+  sudo -E -u jeeta-voice-bridge --preserve-env=ARI_PASSWORD,SLICE_TO,VOICE_TRACE_FILE \
+  /opt/jeeta-voice/current/jeeta-voice-bridge slice \
+  --opening "Merhaba, ben Jeeta'nın dijital asistanıyım. Görüşmemiz hizmet kalitesi için yazıya dökülmektedir. Bu bir deneme aramasıdır, lütfen bir cümle söyleyin." \
+  --reply "Teşekkürler, sizi duydum." --think-ms 3000 --show-transcript
+shred -u /root/jeeta-voice-slice-to
+```
+
+The owner answers, says one sentence (e.g. "Yarın saat on dörtte uygunum."), then listens to the end.
+
+Expected on the terminal, in order: `answered`; `said 1 cut at None`; `caller: …` (the owner's words, close to what was said); `phrase Acknowledgement 0` about 0.6 s after the owner stopped; `phrase Filler 0` about 2.7 s after; `said 2 cut at None`; `said 3 cut at None`; `hangup normal`; one `trace {…}` line. The owner confirms: the opening began immediately and sounded like the chosen voice; "Hı hı." and the filler were heard; the reply and the closing were heard; the line closed cleanly. Record the trace numbers (endpoint, stt_final, ack, first_audio).
+
+Go criteria: two-way audio; transcript recognisable; `ack_ms` ≤ 1 000; `endpoint_ms` ≤ 1 800. Failure handling: one-way audio → B1 Step 10 rule, retry once; no `caller:` line → `journalctl -u jeeta-voice-listen -n 50` (errors only), check the echo-guard and VAD thresholds; garbled voice → compare `alaw`/`ulaw` in `MEDIA_START` with the PJSIP codec (`docker exec jeeta-asterisk asterisk -rx 'core show channels verbose'` during a call shows the format without numbers only with `verbose=0` off: do not enable verbose; use `pjsip show channelstats` instead). If two-way audio cannot be obtained, stop and report before Phase C.
+
+### Task B8: Inbound investigation (non-blocking)
+
+Gate V1 saw the PBX answer 0850 calls itself with silence and send no INVITE to the UA. This task finds out whether Asterisk on 102 receives an inbound INVITE. Nothing else waits for it.
+
+**Files:** none (findings go to the task notes and to `docs/operations/voice-bridge.md` §Inbound in E4).
+
+- [ ] **Step 1: [COORDINATOR, server] Watch for an inbound call without logging numbers**
+
+With the worker not running (`systemctl is-active jeeta-voice-bridge` → `inactive`), open the ARI event stream in a terminal and print only the event type and the first Stasis argument:
+
+```bash
+set -a; . /etc/jeeta-voice/ari.env; set +a
+python3 - <<'EOF'
+import base64, json, os, socket
+key = base64.b64encode(b"jeeta-voice:" + os.environ["ARI_PASSWORD"].encode()).decode()
+s = socket.create_connection(("127.0.0.1", 8188))
+s.sendall(("GET /ari/events?app=jeeta-voice HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+           f"Authorization: Basic {key}\r\n\r\n").encode())
+buf = s.recv(4096)
+print("connected" if b" 101 " in buf else "refused")
+while True:
+    head = s.recv(2)
+    if len(head) < 2: break
+    n = head[1] & 0x7F
+    if n == 126: n = int.from_bytes(s.recv(2), "big")
+    elif n == 127: n = int.from_bytes(s.recv(8), "big")
+    data = b""
+    while len(data) < n: data += s.recv(n - len(data))
+    try:
+        e = json.loads(data)
+        print(e.get("type"), (e.get("args") or [None])[0])
+    except ValueError:
+        pass
+EOF
+```
+
+Expected: `connected`.
+
+- [ ] **Step 2: [OWNER] Route 0850 to 102 for the test and call it**
+
+The owner (Netsantral portal, OTP login): Çağrı akışı / gelen route → Dahili 102; then calls 0850 840 73 03 from the mobile and waits 15 seconds.
+
+Expected either `StasisStart in` in the terminal (the INVITE reached Asterisk: inbound works at the SIP level; Asterisk's dialplan sends it to the bridge application, which nothing answers yet, so the caller hears ringing until the PBX gives up) or nothing. Then the owner routes the line back to 101.
+
+- [ ] **Step 3: [COORDINATOR] If nothing arrived**
+
+Check the registration's contact as NetGSM sees it (`docker exec jeeta-asterisk asterisk -rx 'pjsip show registrations'` shows `Registered`; `pjsip show contacts` shows the AOR's qualify state) and that `identify` matches the PBX address (`pjsip show identifies`). Draft (do not send) a NetGSM support message for the owner: "Dahili 102 sip5.netsantral.com'a UDP ile kayıtlı (Registered); gelen çağrı yönlendirmesi 102'ye ayarlıyken INVITE gelmiyor. Gelen çağrıların 102'ye SIP INVITE olarak iletilmesi için hesapta bir ayar gerekiyor mu?". Record the result; V2 (inbound duty) depends on it, V1 does not.
+
+
+---
+
+## Phase C — core protocol additions (Rust core, MCP, panel; tests in Linux CI)
+
+Phase C changes what the core plays and returns; every change is additive and existing callers keep working. `jt_calls` parts run on Windows; `jt_app`, `jt_mcp` and `jt_panel_http` tests run in CI only (section 2).
+
+### Task C1: The workspace opening and the transcript notice come first
+
+**Files:**
+- Modify: `rust/crates/domain/jt_calls/src/policy.rs`
+- Create: `rust/crates/domain/jt_calls/tests/policy_opening.rs`
+- Modify: `rust/crates/jt_app/src/usecases/calls.rs` (`policy_get`, `facts`, `place_agent`, a new `policy_of`), `calls/bridge.rs` (`apply_call`), `calls/session.rs` (`tick`)
+- Modify: `rust/crates/jt_app/tests/calls_session.rs` (rig policy; two tests)
+
+- [ ] **Step 1: Write the failing domain test**
+
+`rust/crates/domain/jt_calls/tests/policy_opening.rs`:
+
+```rust
+//! The policy's own opening, notice and phrases (owner decisions of 2026-10-29).
+use jt_calls::{BridgePhrases, CallPolicy, TRANSCRIPT_NOTICE};
+use serde_json::json;
+
+#[test]
+fn the_workspace_fills_only_what_the_owner_left_unwritten() {
+    let p = CallPolicy::default().with_workspace("Acme");
+    assert_eq!(p.opening_outbound.as_deref(), Some("Merhaba, ben Acme'nin dijital asistanıyım."));
+    assert_eq!(p.transcript_notice.as_deref(), Some(TRANSCRIPT_NOTICE));
+    assert_eq!(p.disclosure_sentence, "ben Acme'nin dijital asistanıyım");
+    assert_eq!(
+        p.greeting_inbound,
+        "Merhaba, ben Acme'nin dijital asistanıyım. Size nasıl yardımcı olabilirim?"
+    );
+    let own = CallPolicy {
+        opening_outbound: Some("Merhaba, Acme asistanı ben.".into()),
+        transcript_notice: Some(String::new()),
+        disclosure_sentence: "Acme asistanı".into(),
+        ..CallPolicy::default()
+    }
+    .with_workspace("Acme");
+    assert_eq!(own.opening_outbound.as_deref(), Some("Merhaba, Acme asistanı ben."));
+    assert_eq!(own.transcript_notice.as_deref(), Some(""));
+    assert_eq!(own.disclosure_sentence, "Acme asistanı");
+}
+
+#[test]
+fn the_spoken_opening_is_the_workspaces_then_the_notice_then_the_plans() {
+    let p = CallPolicy::default().with_workspace("Acme");
+    let spoken = p.spoken_opening("Ada Hanım ile mi görüşüyorum?");
+    assert_eq!(
+        spoken,
+        format!("Merhaba, ben Acme'nin dijital asistanıyım. {TRANSCRIPT_NOTICE} Ada Hanım ile mi görüşüyorum?")
+    );
+    assert!(p.discloses(&spoken));
+    assert_eq!(
+        p.opening_lines(None),
+        ["Merhaba, ben Acme'nin dijital asistanıyım.", TRANSCRIPT_NOTICE]
+    );
+    let bare = CallPolicy {
+        opening_outbound: Some(String::new()),
+        transcript_notice: Some(String::new()),
+        ..CallPolicy::default()
+    }
+    .with_workspace("Acme");
+    assert_eq!(bare.spoken_opening("Ada Hanım?"), "Ada Hanım?");
+    assert!(!bare.discloses(&bare.spoken_opening("Ada Hanım?")));
+}
+
+#[test]
+fn openings_and_phrases_are_validated_and_read_tolerantly() {
+    assert_eq!(CallPolicy::default().validate(), Ok(()));
+    let mut p = CallPolicy::default();
+    p.phrases.fillers.push("   ".into());
+    assert_eq!(p.validate().unwrap_err().field, "phrases.fillers");
+    let mut p = CallPolicy::default();
+    p.phrases.acknowledgements = vec!["Tamam.".into(); 6];
+    assert_eq!(p.validate().unwrap_err().field, "phrases.acknowledgements");
+    let p = CallPolicy { opening_outbound: Some("x".repeat(601)), ..CallPolicy::default() };
+    assert_eq!(p.validate().unwrap_err().field, "opening_outbound");
+    let p: CallPolicy = serde_json::from_value(json!({})).unwrap();
+    assert_eq!((p.opening_outbound, p.transcript_notice), (None, None));
+    assert_eq!(p.phrases, BridgePhrases::default());
+}
+```
+
+Run: `cargo test -p jt_calls --test policy_opening`
+Expected: FAIL to compile (`with_workspace` not found).
+
+- [ ] **Step 2: Implement the policy changes**
+
+In `rust/crates/domain/jt_calls/src/policy.rs` add the imports
+
+```rust
+use crate::opening::{TRANSCRIPT_NOTICE, disclosure, inbound_greeting, outbound_opening};
+use crate::phrases::PhraseSet;
+```
+
+the fields (after `disclosure_sentence`):
+
+```rust
+    /// Played first when an outbound agent call is answered: the workspace's own opening, which
+    /// discloses the assistant. `None`: the approved opening with the workspace's name
+    /// ([`CallPolicy::with_workspace`]); empty: none (the plan's opening must then disclose).
+    pub opening_outbound: Option<String>,
+    /// Played after the opening on every agent call. `None`: the approved notice; empty: none.
+    pub transcript_notice: Option<String>,
+```
+
+`opening_outbound: None, transcript_notice: None,` in `Default`, and in `validate`, before the timers:
+
+```rust
+        if let Some(t) = &self.opening_outbound {
+            optional_line(t, "opening_outbound")?;
+        }
+        if let Some(t) = &self.transcript_notice {
+            optional_line(t, "transcript_notice")?;
+        }
+        for set in PhraseSet::ALL {
+            let field = phrase_field(set);
+            let list = self.phrases.set(set);
+            if list.len() > MAX_HOLDING_LINES {
+                return Err(refuse(field, "has more than 5 phrases"));
+            }
+            for p in list {
+                line(p, field).map_err(PolicyError::from)?;
+            }
+        }
+```
+
+with, beside `refuse`:
+
+```rust
+fn phrase_field(set: PhraseSet) -> &'static str {
+    match set {
+        PhraseSet::Acknowledgement => "phrases.acknowledgements",
+        PhraseSet::Filler => "phrases.fillers",
+        PhraseSet::LongWait => "phrases.long_wait",
+        PhraseSet::NotHeard => "phrases.not_heard",
+        PhraseSet::StillThere => "phrases.still_there",
+        PhraseSet::Fault => "phrases.fault",
+    }
+}
+```
+
+and the methods in `impl CallPolicy`:
+
+```rust
+    /// This policy with the workspace's own sentences where the owner wrote none: the approved
+    /// outbound opening and inbound greeting with `business` in them, the approved transcript
+    /// notice, and the disclosure sentence both openings contain. The owner's own texts are kept.
+    pub fn with_workspace(mut self, business: &str) -> CallPolicy {
+        if self.opening_outbound.is_none() {
+            self.opening_outbound = outbound_opening(business);
+        }
+        if self.transcript_notice.is_none() {
+            self.transcript_notice = Some(TRANSCRIPT_NOTICE.to_owned());
+        }
+        if self.disclosure_sentence.trim().is_empty()
+            && let Some(d) = disclosure(business)
+        {
+            self.disclosure_sentence = d;
+        }
+        if self.greeting_inbound.trim().is_empty()
+            && let Some(g) = inbound_greeting(business)
+        {
+            self.greeting_inbound = g;
+        }
+        self
+    }
+
+    /// What an outbound agent call plays when answered, in order: the workspace's opening, the
+    /// transcript notice, and `plan_opening` when given; empty texts left out.
+    pub fn opening_lines<'a>(&'a self, plan_opening: Option<&'a str>) -> Vec<&'a str> {
+        [self.opening_outbound.as_deref(), self.transcript_notice.as_deref(), plan_opening]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+
+    /// [`CallPolicy::opening_lines`] with the plan's opening, as one text.
+    pub fn spoken_opening(&self, plan_opening: &str) -> String {
+        self.opening_lines(Some(plan_opening)).join(" ")
+    }
+```
+
+Run: `cargo test -p jt_calls`
+Expected: all pass (`policy_opening` 3 new).
+
+- [ ] **Step 3: Write the failing core tests**
+
+In `rust/crates/jt_app/tests/calls_session.rs`, make the rig keep its single opening (every existing test relies on it): in `fn policy()` add
+
+```rust
+        opening_outbound: Some(String::new()),
+        transcript_notice: Some(String::new()),
+```
+
+and add the tests:
+
+```rust
+#[tokio::test]
+async fn the_workspace_opening_and_the_notice_precede_the_plans_opening() {
+    // No disclosure sentence of the owner's: the workspace's own opening discloses.
+    let r = rig_with(1, CallPolicy { disclosure_sentence: String::new(), ..CallPolicy::default() }).await;
+    let mut asks = plan();
+    asks.opening = "Ada Hanım ile mi görüşüyorum?".into();
+    let call = r.place_at(0, asks).await;
+    assert_eq!(kinds(&r.poll(1).await), ["dial"]);
+    r.report(5, call, json!([{ "kind": "answered" }])).await;
+    let play = r.poll(5).await;
+    assert_eq!(kinds(&play), ["play"]);
+    assert_eq!(
+        play[0].payload["text"],
+        format!(
+            "Merhaba, ben Acme'nin dijital asistanıyım. {} Ada Hanım ile mi görüşüyorum?",
+            jt_calls::TRANSCRIPT_NOTICE
+        )
+    );
+}
+
+#[tokio::test]
+async fn policy_get_shows_the_workspaces_own_sentences() {
+    let w = world().await;
+    let p = calls::policy_get(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(p.opening_outbound.as_deref(), Some("Merhaba, ben Acme'nin dijital asistanıyım."));
+    assert_eq!(p.disclosure_sentence, "ben Acme'nin dijital asistanıyım");
+    assert_eq!(p.phrases, jt_calls::BridgePhrases::default());
+}
+```
+
+CI: `cargo test --locked -p jt_app --test calls_session`
+Expected: FAIL (`the_workspace_opening…` plays only the plan's opening; `policy_get…` sees `None`).
+
+- [ ] **Step 4: Implement the core changes**
+
+In `rust/crates/jt_app/src/usecases/calls.rs` add, in the Policy section:
+
+```rust
+/// The call policy as calls use it: the stored one (the defaults while none is stored) with the
+/// workspace's own opening, notice, disclosure and greeting where the owner wrote none
+/// (`CallPolicy::with_workspace`, the owner-approved templates with the workspace's name).
+pub(crate) async fn policy_of(r: &mut dyn TenantRepos) -> Result<CallPolicy, AppError> {
+    let name = r.workspace().get().await?.name;
+    Ok(r.calls().policy().await?.with_workspace(&name))
+}
+```
+
+Replace `r.calls().policy().await` with `policy_of(r…).await` in: `policy_get` (its body becomes `policy_of(r.as_mut()).await`), `facts` (`let policy = policy_of(r).await?;`), `place_agent`, the two other reads in `calls.rs` that read the policy for a call (`grep -n "calls().policy()" rust/crates/jt_app/src/usecases/calls.rs`), `calls/bridge.rs` `apply_call` and `calls/session.rs` `tick`. Keep `policy_set`'s `let before = r.calls().policy().await?;` (it compares stored values) and `calls/say.rs`'s handoff-extension read.
+
+In `facts`, the disclosure is read over the spoken opening:
+
+```rust
+        Line::Agent { opening } => (
+            agent_line_busy(r, &capability, ctx.agent_connection_id, own).await?,
+            policy.discloses(&policy.spoken_opening(opening)),
+        ),
+```
+
+In `place_agent`, right after `plan.disclose_assistant |= policy.disclose_assistant;`:
+
+```rust
+    // The answer plays the workspace's opening and the transcript notice before the plan's own
+    // opening, as one text: the bridge splits it into sentences and plays the cached ones at once.
+    plan.opening = policy.spoken_opening(&plan.opening);
+```
+
+- [ ] **Step 5: Run the core tests (CI) and commit**
+
+CI: `cargo test --locked -p jt_app --test calls_session --test calls_place --test calls_bridge`
+Expected: all pass, including the two new tests and `every_played_text_is_authored` (the rig's empty opening and notice leave the plan's opening alone).
+
+```bash
+git add rust/crates/domain/jt_calls rust/crates/jt_app
+git commit -m "feat(calls): the workspace's approved opening and transcript notice open every agent call" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task C2: The core fills the dial's script; the agent may pass hotwords
+
+**Files:**
+- Modify: `rust/crates/jt_app/src/usecases/calls.rs` (`place_agent`, the dial)
+- Modify: `rust/crates/adapters/jt_mcp/src/tools/calls.rs` (`place_schema`, `calls.place` description)
+- Modify: `rust/crates/jt_app/tests/calls_session.rs`, `rust/crates/adapters/jt_mcp/tests/calls_mcp.rs`
+
+- [ ] **Step 1: Write the failing tests**
+
+In `calls_session.rs`:
+
+```rust
+#[tokio::test]
+async fn the_dial_carries_the_policys_lines_its_phrases_and_the_hotwords() {
+    let r = rig_with(1, CallPolicy { disclosure_sentence: String::new(), ..CallPolicy::default() }).await;
+    let mut p = plan();
+    p.opening = "Ada Hanım ile mi görüşüyorum?".into();
+    p.hotwords = vec!["Ada".into(), "perşembe".into()];
+    r.place_at(0, p).await;
+    let dial = r.poll(1).await;
+    let script = &dial[0].payload["script"];
+    assert_eq!(
+        script["lines"],
+        json!(["Merhaba, ben Acme'nin dijital asistanıyım.", jt_calls::TRANSCRIPT_NOTICE])
+    );
+    assert_eq!(script["phrases"], serde_json::to_value(jt_calls::BridgePhrases::default()).unwrap());
+    assert_eq!(script["hotwords"], json!(["Ada", "perşembe", "Acme"]));
+}
+```
+
+In `calls_mcp.rs`:
+
+```rust
+#[test]
+fn place_takes_hotwords_and_tells_the_opening_order() {
+    let tools = tools();
+    let place = tools["jeeta.calls.place"].input_schema.as_value().clone();
+    let hotwords = &place["properties"]["plan"]["properties"]["hotwords"];
+    assert_eq!(hotwords["maxItems"], 20);
+    assert_eq!(hotwords["items"]["maxLength"], 40);
+    let text = tools["jeeta.calls.place"].description;
+    assert!(text.contains("transcript notice"), "{text}");
+    assert!(text.contains("Görüşmek üzere, iyi günler."), "{text}");
+}
+```
+
+CI: `cargo test --locked -p jt_app --test calls_session the_dial_carries` and `-p jt_mcp --test calls_mcp place_takes`
+Expected: FAIL (empty script; no `hotwords` in the schema).
+
+- [ ] **Step 2: Implement**
+
+In `place_agent`'s dialing transaction, replace the dial built in Task A5 with:
+
+```rust
+    let business = r.workspace().get().await?.name;
+    let policy = r.calls().policy().await?.with_workspace(&business);
+    let script = DialScript {
+        lines: policy.opening_lines(None).into_iter().map(str::to_owned).collect(),
+        phrases: policy.phrases.clone(),
+        hotwords: jt_calls::call_hotwords(&plan.hotwords, &business),
+    };
+    let dial = Command::Dial {
+        to_e164: session.counterpart_e164.clone(),
+        plan,
+        script,
+    };
+```
+
+In `jt_mcp/src/tools/calls.rs` `place_schema`, inside `plan.properties`, add:
+
+```rust
+                    "hotwords": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 40 },
+                        "description": "Names and product words from your context the speech recognition should expect on this call."
+                    },
+```
+
+and change the plan part of the `calls.place` description to:
+
+```text
+mode agent: you talk to the person yourself through the workspace's voice bridge, with a plan
+written before you dial: opening (played right after the workspace's own opening and the transcript
+notice of the call policy, which already disclose the assistant; for example "Ada Hanım ile mi
+görüşüyorum?"; the whole spoken opening must contain the policy's disclosure_sentence), goal (never
+played), holding (1 to 5 phrases played while you think when the bridge's own fillers did not cover
+it), fallback (0 to 3 lines played when you stay silent), closing (played before the call is hung
+up; the approved one is "Görüşmek üzere, iyi günler."), max_duration_s (1 to 900), language tr,
+hotwords (at most 20 names or product words the speech recognition should expect); every sentence
+at most 600 characters.
+```
+
+(the rest of the description — the purposes, one live call per connection, the refusal reasons, the masked number, `jeeta.calls.end`, `[risk: SPEND]` — unchanged; the `plan.opening` schema description becomes "Played after the workspace's opening and the transcript notice.").
+
+- [ ] **Step 3: Run (CI) and commit**
+
+CI: `cargo test --locked -p jt_app --test calls_session` and `cargo test --locked -p jt_mcp --test calls_mcp`
+Expected: all pass.
+
+```bash
+git add rust/crates/jt_app rust/crates/adapters/jt_mcp
+git commit -m "feat(calls): the dial carries the policy's lines, its phrases and the call's hotwords" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task C3: Bridge phrases and turn traces reach the turn log and the call view
+
+**Files:**
+- Modify: `rust/crates/jt_app/src/usecases/calls.rs` (`view`)
+- Modify: `rust/crates/jt_app/tests/calls_session.rs`
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+#[tokio::test]
+async fn a_bridge_filler_is_logged_with_the_policys_text_and_the_core_plays_no_holding_over_it() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.report(12, call, json!([{ "kind": "phrase", "set": "filler", "index": 0 }])).await;
+    let shown = r.shown(call).await;
+    let last = shown.turns.last().unwrap();
+    assert_eq!(last.kind, jt_calls::TurnKind::Holding);
+    assert_eq!(last.text, "Bir saniye, hemen bakıyorum.");
+    r.timers(14).await;
+    assert!(r.poll(14).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_turns_trace_is_kept_and_summarised_in_the_call_view() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.report(
+        20,
+        call,
+        json!([{ "kind": "trace", "trace": {
+            "endpoint_ms": 260, "endpoint_by": "smart_turn", "stt_final_ms": 310, "delivered_ms": 340,
+            "say_ms": 4340, "first_audio_ms": 4760, "ack_ms": 620 } }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    assert_eq!(shown.call["metrics"]["traces"].as_array().unwrap().len(), 1);
+    assert_eq!(shown.call["latency"]["perceived"]["p50"], 620);
+    assert_eq!(shown.call["latency"]["content"]["p95"], 4760);
+    assert_eq!(shown.call["latency"]["alerts"], json!(["content_p95_over_3s"]));
+}
+```
+
+CI: `cargo test --locked -p jt_app --test calls_session a_turns_trace`
+Expected: FAIL (`latency` is null). (The filler test already passes from A5: keep it as the end-to-end guard.)
+
+- [ ] **Step 2: Implement**
+
+In `view` (calls.rs), after inserting `counterpart`:
+
+```rust
+        fields.insert(
+            "latency".into(),
+            json!(jt_calls::summarize(&session.metrics.traces, &session.metrics.agent_latency_ms)),
+        );
+```
+
+- [ ] **Step 3: Run (CI) and commit**
+
+CI: `cargo test --locked -p jt_app --test calls_session --test calls_place --test calls_end` and `-p jt_mcp --test calls_mcp`
+Expected: all pass (the view only gained a key).
+
+```bash
+git add rust/crates/jt_app
+git commit -m "feat(calls): a call's turn traces and their p50/p95 in its view" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task C4: `calls.say` may wait for the reply (say and listen merged, backward compatible)
+
+**Files:**
+- Modify: `rust/crates/jt_app/src/usecases/calls/listen.rs` (`wait_turns`)
+- Modify: `rust/crates/jt_app/src/usecases/calls/say.rs` (`SayInput.wait_reply_s`, `SayOut.events/timed_out`)
+- Modify: `rust/crates/adapters/jt_mcp/src/tools/calls.rs` (`say_schema`, the `calls.say` and `calls.listen` descriptions)
+- Modify: `rust/crates/jt_app/tests/calls_session.rs`, `rust/crates/adapters/jt_mcp/tests/calls_mcp.rs`
+
+- [ ] **Step 1: Write the failing tests**
+
+In `calls_session.rs` (also add `wait_reply_s: None,` to the `SayInput { … }` in `say_at`, and to any other literal: `grep -rn "SayInput {" rust/crates`):
+
+```rust
+#[tokio::test]
+async fn say_with_wait_reply_returns_the_callers_next_words() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Merhaba?").await;
+    let deps = r.w.deps.clone();
+    let ctx = r.agent_at(11);
+    let speaking = tokio::spawn(async move {
+        say::say(
+            &deps,
+            &ctx,
+            call,
+            SayInput {
+                text: "Perşembe uygun mu?".into(),
+                expect_reply: true,
+                allow_barge_in: true,
+                wait_reply_s: Some(10),
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // The sentence was queued before the wait began.
+    assert_eq!(kinds(&r.poll(11).await), ["say"]);
+    // A phrase of the bridge is not the reply.
+    r.report(12, call, json!([{ "kind": "phrase", "set": "acknowledgement", "index": 0 }])).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!speaking.is_finished());
+    r.utterance(13, call, "Evet, uygun.").await;
+    let out = speaking.await.unwrap().unwrap();
+    assert_eq!(out.timed_out, Some(false));
+    let events = out.events.unwrap();
+    assert_eq!(events.last().unwrap().text, "Evet, uygun.");
+    assert!(events.iter().all(|t| t.seq > out.seq));
+}
+
+#[tokio::test]
+async fn say_without_wait_reply_answers_at_once_as_before() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    let out = r.say_at(10, call, "Merhaba.").await;
+    let shown = serde_json::to_value(&out).unwrap();
+    assert!(shown.get("events").is_none() && shown.get("timed_out").is_none(), "{shown}");
+}
+```
+
+In `calls_mcp.rs`:
+
+```rust
+#[test]
+fn say_offers_wait_reply_s_and_asks_for_one_short_sentence() {
+    let tools = tools();
+    let say = tools["jeeta.calls.say"].input_schema.as_value().clone();
+    assert_eq!(say["properties"]["wait_reply_s"]["maximum"], 25);
+    assert_eq!(say["properties"]["wait_reply_s"]["minimum"], 0);
+    let text = tools["jeeta.calls.say"].description;
+    assert!(text.contains("one short sentence"), "{text}");
+    assert!(text.contains("wait_reply_s"), "{text}");
+}
+```
+
+CI: `cargo test --locked -p jt_app --test calls_session say_with` and `-p jt_mcp --test calls_mcp say_offers`
+Expected: FAIL (no field `wait_reply_s`).
+
+- [ ] **Step 2: Implement the shared wait**
+
+Replace the body of `listen` in `listen.rs` by a call to a shared wait, and add it:
+
+```rust
+/// Waits on call `id` for the turns after `after_seq`, until `enough` holds for what was read, the
+/// call ended, or `wait` passed: the call's state, the turns read, and whether the whole wait
+/// passed. Woken by the bridges' signals, read again at least every [`FALLBACK_TICK`].
+pub(crate) async fn wait_turns(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CallId,
+    after_seq: Option<u32>,
+    wait: std::time::Duration,
+    enough: fn(&[Turn]) -> bool,
+) -> Result<(CallState, Vec<Turn>, bool), AppError> {
+    let started = tokio::time::Instant::now();
+    loop {
+        // Watching before reading: a turn committed after the read still wakes the wait.
+        let watch = deps.bridge_signals.watch(signal_key(ctx.workspace_id));
+        let (state, events) = {
+            let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+            let session = r
+                .calls()
+                .get(id)
+                .await?
+                .ok_or_else(|| AppError::not_found("no such call"))?;
+            let events = r.calls().turns(id, after_seq, MAX_CALL_PAGE).await?;
+            r.commit().await?;
+            (session.state, events)
+        };
+        if enough(&events) || state == CallState::Ended {
+            return Ok((state, events, false));
+        }
+        let waited = started.elapsed();
+        if waited >= wait {
+            return Ok((state, events, true));
+        }
+        let _ = tokio::time::timeout(FALLBACK_TICK.min(wait - waited), watch).await;
+    }
+}
+
+pub async fn listen(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CallId,
+    query: ListenQuery,
+) -> Result<ListenOut, AppError> {
+    ctx.require(Permission::CallsWork)?;
+    let wait = std::time::Duration::from_secs(u64::from(
+        query.wait_s.unwrap_or(MAX_WAIT_S).min(MAX_WAIT_S),
+    ));
+    let (state, events, timed_out) =
+        wait_turns(deps, ctx, id, query.after_seq, wait, |t| !t.is_empty()).await?;
+    Ok(ListenOut {
+        call_id: id,
+        state,
+        events,
+        timed_out,
+    })
+}
+```
+
+- [ ] **Step 3: Implement the merged say**
+
+In `say.rs`: add to `SayInput`
+
+```rust
+    /// After queuing, wait up to this many seconds (at most 25) for the caller's reply and return
+    /// it; absent or 0: answer at once, as before.
+    #[serde(default)]
+    pub wait_reply_s: Option<u32>,
+```
+
+change `SayOut` (drop `Eq`: turns carry a confidence):
+
+```rust
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SayOut {
+    pub call_id: CallId,
+    pub seq: u32,
+    pub state: CallState,
+    /// With `wait_reply_s`: the turns after the sentence, up to the caller's reply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<Turn>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timed_out: Option<bool>,
+}
+```
+
+add the predicate:
+
+```rust
+/// Whether `turns` hold the caller's reply: words, a key, or the line reporting the caller's
+/// silence, a hang-up or a transfer (a phrase the bridge played is not a reply).
+fn holds_reply(turns: &[Turn]) -> bool {
+    turns.iter().any(|t| match &t.kind {
+        TurnKind::Utterance | TurnKind::Dtmf => true,
+        TurnKind::Event { name } => matches!(name.as_str(), "caller_silence" | "hangup" | "transferred"),
+        _ => false,
+    })
+}
+```
+
+and end `say` with:
+
+```rust
+    deps.bridge_signals.notify(signal_key(ctx.workspace_id));
+    let Some(wait_s) = input.wait_reply_s.filter(|s| *s > 0) else {
+        return Ok(SayOut { call_id: id, seq, state, events: None, timed_out: None });
+    };
+    let wait = std::time::Duration::from_secs(u64::from(wait_s.min(super::MAX_WAIT_S)));
+    let (state, events, timed_out) =
+        super::listen::wait_turns(deps, ctx, id, Some(seq), wait, holds_reply).await?;
+    Ok(SayOut { call_id: id, seq, state, events: Some(events), timed_out: Some(timed_out) })
+```
+
+(import `Turn, TurnKind` from `jt_calls`; update the doc comment of `say`: "With `wait_reply_s` it then waits for the caller's reply, as `calls.listen` after the sentence's turn would, and returns it.")
+
+- [ ] **Step 4: Update the MCP schema and texts**
+
+`say_schema` gains:
+
+```rust
+            "wait_reply_s": { "type": "integer", "minimum": 0, "maximum": 25, "description": "Wait this long (at most 25 s) for the person's reply and return it as events; without it the call answers at once." },
+```
+
+The `calls.say` description becomes:
+
+```text
+Say one short sentence (text, at most 600 characters) to the person on your live call; the voice
+bridge speaks it as you wrote it. It returns as soon as the sentence is queued, so send the next
+sentence right away: the first one plays while you write the next. wait_reply_s (0 to 25): after
+queuing, wait for the person's reply (their words, a key, caller_silence or the hangup) and return
+{events, timed_out} as jeeta.calls.listen would, which saves you one listen per turn. expect_reply
+(default true): false when you will speak again before the person answers. allow_barge_in (default
+true): the person may cut it by speaking (the turn then records interrupted_at_char, the characters
+heard). Reply within 10 seconds of the person's words: the bridge acknowledges and fills a wait on
+its own; after 4 s the caller hears a holding phrase if the bridge did not, after 20 s a fallback
+line from your plan, and the call ends by script. CONFLICT not_live once the call ended. Returns
+{call_id, seq, state}, and events and timed_out with wait_reply_s. [risk: WRITE]
+```
+
+and the last sentences of `calls.listen`'s description become: "After the person speaks, reply with jeeta.calls.say within 10 seconds: the bridge acknowledges and fills a wait on its own; after 4 s the caller hears a holding phrase if the bridge did not, after 20 s a fallback line from your plan, and the call ends by script once the fallback lines are spent. jeeta.calls.say with wait_reply_s returns the reply itself. [risk: READ]". Both keep the phrases `listen_long_poll_shape` checks ("within 10 seconds", "after 4 s", "after 20 s", "ends by script").
+
+- [ ] **Step 5: Run (CI) and commit**
+
+CI: `cargo test --locked -p jt_app --test calls_session` and `cargo test --locked -p jt_mcp --test calls_mcp` and `cargo test --locked -p jt_panel_http`
+Expected: all pass; `listen_long_poll_shape` still passes.
+
+```bash
+git add rust/crates/jt_app rust/crates/adapters/jt_mcp
+git commit -m "feat(calls): calls.say may wait for the reply; one short sentence per say" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task C5: The panel edits the opening and the phrases, and shows a call's latency
+
+**Files:**
+- Modify: `rust/panel/src/api/calls.ts`
+- Modify: `rust/panel/src/pages/CallsPolicy.tsx`, `rust/panel/src/pages/CallDetail.tsx`
+- Modify: `rust/panel/src/i18n/tr.json`, `rust/panel/src/i18n/en.json`
+- Modify: `rust/panel/src/pages/CallsPolicy.test.tsx`, `rust/panel/src/pages/CallDetail.test.tsx`
+
+- [ ] **Step 1: Write the failing tests**
+
+In `CallsPolicy.test.tsx`, extend `stored` with:
+
+```ts
+  opening_outbound: "Merhaba, ben Acme'nin dijital asistanıyım.",
+  transcript_notice: 'Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.',
+  phrases: {
+    acknowledgements: ['Hı hı.', 'Anladım.', 'Tamam.', 'Peki.'],
+    fillers: ['Bir saniye, hemen bakıyorum.', 'Kontrol ediyorum, kısa bir an.'],
+    long_wait: ['Biraz daha zaman alıyor, beklediğiniz için teşekkürler.'],
+    not_heard: ['Sizi tam duyamadım, tekrar eder misiniz?'],
+    still_there: ['Hâlâ orada mısınız?'],
+    fault: ['Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız.'],
+  },
+```
+
+and add:
+
+```ts
+  it('saves_openings_and_phrases', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch({
+      'GET /api/auth/me': manager,
+      'GET /api/calls': [],
+      'GET /api/calls/policy': stored,
+      'PUT /api/calls/policy': stored,
+    });
+    renderAt('/calls');
+    const notice = await screen.findByLabelText(tr.calls.policy.fields.transcript_notice);
+    await user.clear(notice);
+    await user.type(notice, 'Görüşme yazıya dökülür.');
+    await user.type(screen.getByLabelText(tr.calls.policy.phrases.fillers), '{enter}Hemen dönüyorum.');
+    await user.click(screen.getByRole('button', { name: tr.common.save }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([
+        {
+          ...stored,
+          transcript_notice: 'Görüşme yazıya dökülür.',
+          phrases: { ...stored.phrases, fillers: [...stored.phrases.fillers, 'Hemen dönüyorum.'] },
+        },
+      ]),
+    );
+  });
+```
+
+In `CallDetail.test.tsx` add (reuse the file's own manager/session fixture and call builder if it has them; otherwise this self-contained one):
+
+```ts
+it('shows_the_calls_latency', async () => {
+  const call = {
+    id: 'c-1', capability_id: 'cap-1', direction: 'outbound', purpose: 'service', person_id: null,
+    journey_id: null, mode: { kind: 'agent' }, state: 'ended', counterpart: '+90 5** *** ** 67',
+    started_at: '2026-10-29T09:00:00Z', answered_at: '2026-10-29T09:00:05Z', ended_at: '2026-10-29T09:02:00Z',
+    end_cause: { cause: 'agent_ended' }, outcome: 'connected', summary: null, duration_s: 115, cost_minor: null,
+    recording: { state: 'off' },
+    latency: {
+      turns: 2, backchannel_cuts: 0, alerts: ['content_p95_over_3s'],
+      perceived: { n: 2, p50: 620, p95: 640 }, content: { n: 2, p50: 3900, p95: 4760 },
+      endpoint: { n: 2, p50: 260, p95: 280 }, stt_final: { n: 2, p50: 310, p95: 330 },
+      core_round: { n: 2, p50: 3600, p95: 4000 }, agent: { n: 2, p50: 3200, p95: 4100 },
+      barge_in_stop: { n: 0, p50: null, p95: null },
+    },
+  };
+  mockFetch({ 'GET /api/auth/me': manager, 'GET /api/calls/c-1': { call, turns: [] } });
+  renderAt('/calls/c-1');
+  expect(await screen.findByText(tr.calls.detail.latencyTitle)).toBeInTheDocument();
+  expect(screen.getByText('620 / 640 ms')).toBeInTheDocument();
+  expect(screen.getByText(tr.calls.detail.alerts.content_p95_over_3s)).toBeInTheDocument();
+});
+```
+
+Run: `pnpm --dir rust/panel test -- CallsPolicy CallDetail`
+Expected: FAIL (labels and the latency section missing).
+
+- [ ] **Step 2: Types, page code and copy**
+
+`api/calls.ts`: add
+
+```ts
+/** `jt_calls::BridgePhrases`: what the voice bridge may play on its own. */
+export interface CallPhrases {
+  acknowledgements: string[];
+  fillers: string[];
+  long_wait: string[];
+  not_heard: string[];
+  still_there: string[];
+  fault: string[];
+}
+
+/** `jt_calls::Percentiles`. */
+export interface Percentiles {
+  n: number;
+  p50: number | null;
+  p95: number | null;
+}
+
+/** `jt_calls::LatencySummary`: a call's turn timings, in ms. */
+export interface LatencySummary {
+  turns: number;
+  perceived: Percentiles;
+  content: Percentiles;
+  endpoint: Percentiles;
+  stt_final: Percentiles;
+  core_round: Percentiles;
+  agent: Percentiles;
+  barge_in_stop: Percentiles;
+  backchannel_cuts: number;
+  alerts: string[];
+}
+```
+
+`CallPolicy` gains `opening_outbound: string | null; transcript_notice: string | null; phrases: CallPhrases;` and `CallView` gains `latency?: LatencySummary;`.
+
+`CallsPolicy.tsx`: after the `TEXTS` constants add
+
+```tsx
+type OpeningKey = 'opening_outbound' | 'transcript_notice';
+const OPENINGS: OpeningKey[] = ['opening_outbound', 'transcript_notice'];
+type PhraseKey = keyof CallPhrases;
+const PHRASE_SETS: PhraseKey[] = ['acknowledgements', 'fillers', 'long_wait', 'not_heard', 'still_there', 'fault'];
+const lines = (text: string) =>
+  text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+const joined = (p: CallPhrases) =>
+  Object.fromEntries(PHRASE_SETS.map((k) => [k, p[k].join('\n')])) as Record<PhraseKey, string>;
+```
+
+(import `type CallPhrases` from `@/api/calls`); in `PolicyForm` add `const [phrases, setPhrases] = useState(joined(stored.phrases));`, `setPhrases(joined(stored.phrases));` inside the existing `useEffect`, and in `mutationFn` the field `phrases: Object.fromEntries(PHRASE_SETS.map((k) => [k, lines(phrases[k])])) as CallPhrases,`; render after the `TEXTS` fields:
+
+```tsx
+      {OPENINGS.map((key) => (
+        <Field key={key} label={t(`calls.policy.fields.${key}`)} hint={t('calls.policy.openingHint')}>
+          {(ids) => (
+            <Textarea
+              id={ids.id}
+              aria-describedby={ids.describedBy}
+              value={policy[key] ?? ''}
+              maxLength={600}
+              onChange={(e) => setPolicy({ ...policy, [key]: e.target.value })}
+            />
+          )}
+        </Field>
+      ))}
+```
+
+and after the holding field:
+
+```tsx
+      {PHRASE_SETS.map((key) => (
+        <Field key={key} label={t(`calls.policy.phrases.${key}`)} hint={t('calls.policy.phrasesHint')}>
+          {(ids) => (
+            <Textarea
+              id={ids.id}
+              aria-describedby={ids.describedBy}
+              value={phrases[key]}
+              onChange={(e) => setPhrases({ ...phrases, [key]: e.target.value })}
+            />
+          )}
+        </Field>
+      ))}
+```
+
+`CallDetail.tsx`: add (with `import { Fragment } from 'react';` and `type LatencySummary, type Percentiles` from `@/api/calls`):
+
+```tsx
+function Latency({ latency }: { latency: LatencySummary }) {
+  const { t } = useTranslation();
+  const rows: [string, Percentiles][] = [
+    ['perceived', latency.perceived],
+    ['content', latency.content],
+    ['agent', latency.agent],
+    ['barge_in_stop', latency.barge_in_stop],
+  ];
+  const ms = (v: number | null) => (v === null ? '—' : String(v));
+  return (
+    <section className="mt-3" aria-label={t('calls.detail.latencyTitle')}>
+      <h3 className="mb-1 text-sm font-medium">{t('calls.detail.latencyTitle')}</h3>
+      <dl className="grid gap-1 text-sm sm:grid-cols-2">
+        {rows.map(([key, p]) => (
+          <Fragment key={key}>
+            <dt className="text-muted-foreground">{t(`calls.detail.latency_${key}`)}</dt>
+            <dd>{t('calls.detail.latencyValue', { p50: ms(p.p50), p95: ms(p.p95) })}</dd>
+          </Fragment>
+        ))}
+      </dl>
+      {latency.alerts.map((a) => (
+        <p key={a} className="text-sm text-destructive">
+          {t(`calls.detail.alerts.${a}`, { defaultValue: a })}
+        </p>
+      ))}
+    </section>
+  );
+}
+```
+
+and in the first card, right after `</dl>`: `{c.latency && c.latency.turns > 0 && <Latency latency={c.latency} />}`.
+
+`tr.json`, under `calls.policy`: `"openingHint": "Arama açılınca hemen çalınır; boş bırakılırsa çalınmaz."`, `"phrasesHint": "Her satıra bir cümle (en çok 5). Köprü bunları ajan düşünürken kendi başına çalar."`, in `fields`: `"opening_outbound": "Giden aramada işletmenin açılış cümlesi"`, `"transcript_notice": "Yazıya dökme bildirimi"`, and
+
+```json
+"phrases": {
+  "acknowledgements": "Onay sesleri (≈0,6 sn)",
+  "fillers": "Bekleme cümleleri (≈2,7 sn)",
+  "long_wait": "Uzun bekleme cümlesi (≈8 sn)",
+  "not_heard": "Duyulamadığında",
+  "still_there": "Karşı taraf sessiz kaldığında",
+  "fault": "Teknik sorun cümlesi"
+}
+```
+
+under `calls.detail`: `"latencyTitle": "Gecikme (p50 / p95)"`, `"latency_perceived": "İlk ses"`, `"latency_content": "Cevabın ilk sesi"`, `"latency_agent": "Ajanın cevap süresi"`, `"latency_barge_in_stop": "Söz kesmede susma"`, `"latencyValue": "{{p50}} / {{p95}} ms"`, and
+
+```json
+"alerts": {
+  "perceived_p95_over_1s": "İlk ses p95 1 saniyenin üstünde",
+  "content_p95_over_3s": "Cevap p95 3 saniyenin üstünde",
+  "barge_in_p95_over_300ms": "Söz kesmede susma p95 300 ms'nin üstünde"
+}
+```
+
+`en.json`, the same keys: `"openingHint": "Played as soon as the call is answered; left empty, nothing is played."`, `"phrasesHint": "One sentence per line (at most 5). The bridge plays these on its own while the agent thinks."`, `"opening_outbound": "Business opening on outbound calls"`, `"transcript_notice": "Transcription notice"`, phrases `"Acknowledgements (≈0.6 s)"`, `"Fillers (≈2.7 s)"`, `"Long wait (≈8 s)"`, `"When not heard"`, `"When the other side stays silent"`, `"Technical problem"`; detail `"Latency (p50 / p95)"`, `"First sound"`, `"First sound of the reply"`, `"Agent's reply time"`, `"Stopping on barge-in"`, `"{{p50}} / {{p95}} ms"`, alerts `"First sound p95 above 1 second"`, `"Reply p95 above 3 seconds"`, `"Stopping on barge-in p95 above 300 ms"`.
+
+- [ ] **Step 3: Run and commit**
+
+Run: `pnpm --dir rust/panel test` and `pnpm --dir rust/panel typecheck`
+Expected: all pass, including the i18n parity test.
+
+```bash
+git add rust/panel/src
+git commit -m "feat(panel): call opening, notice and bridge phrases in the policy; a call's latency" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+
+---
+
+## Phase D — the talker against the core
+
+### Task D1: The Jeeta client
+
+**Files:**
+- Create: `rust/bridge/voice/src/jeeta.rs`
+- Create: `rust/bridge/voice/tests/jeeta_client.rs`
+- Modify: `rust/bridge/voice/src/lib.rs` (`pub mod jeeta;`)
+
+- [ ] **Step 1: Write the failing test**
+
+`rust/bridge/voice/tests/jeeta_client.rs`:
+
+```rust
+//! The bridge's calls to Jeeta, against a fake Jeeta: the key on every route, the request header on
+//! the posts, the long-poll's query, the bodies of `jt_calls::wire`; errors without the address.
+use std::sync::{Arc, Mutex};
+
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use jeeta_voice_bridge::jeeta::{ClientError, JeetaClient};
+use jt_calls::BridgeEvent;
+use jt_calls::wire::{CommandsQuery, EventIn, EventsInput, RegisterInput, SpeechToText, TextToSpeech};
+use serde_json::{Value, json};
+use time::OffsetDateTime;
+
+type Seen = Arc<Mutex<Vec<String>>>;
+
+fn header(h: &HeaderMap, name: &str) -> String {
+    h.get(name).map_or("-".into(), |v| v.to_str().unwrap().to_owned())
+}
+
+async fn fake_jeeta() -> (String, Seen) {
+    let seen: Seen = Arc::default();
+    let app = Router::new()
+        .route(
+            "/api/voice/bridge/register",
+            post(|State(s): State<Seen>, h: HeaderMap, Json(body): Json<Value>| async move {
+                if header(&h, "authorization") == "Bearer bad" {
+                    return (StatusCode::FORBIDDEN, Json(json!({ "code": "FORBIDDEN" }))).into_response();
+                }
+                s.lock().unwrap().push(format!(
+                    "register {} {} {}",
+                    header(&h, "authorization"),
+                    header(&h, "x-requested-with"),
+                    body["extension"]
+                ));
+                Json(json!({ "capability_id": "00000000-0000-0000-0000-000000000001", "status": "verified", "heartbeat_s": 15 }))
+                    .into_response()
+            }),
+        )
+        .route(
+            "/api/voice/bridge/commands",
+            get(|State(s): State<Seen>, h: HeaderMap, Query(q): Query<Vec<(String, String)>>| async move {
+                s.lock().unwrap().push(format!("commands {q:?} {}", header(&h, "authorization")));
+                Json(json!({ "commands": [], "timed_out": true }))
+            }),
+        )
+        .route(
+            "/api/voice/bridge/events",
+            post(|State(s): State<Seen>, h: HeaderMap, Json(body): Json<Value>| async move {
+                s.lock().unwrap().push(format!("events {} {}", body["events"][0]["kind"], header(&h, "x-requested-with")));
+                Json(json!({ "accepted": 1, "duplicates": 0, "unmatched": 0 }))
+            }),
+        )
+        .with_state(seen.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, seen)
+}
+
+fn register_input() -> RegisterInput {
+    RegisterInput {
+        extension: "102".into(),
+        codecs: vec!["PCMA".into(), "PCMU".into()],
+        max_calls: 1,
+        stt: SpeechToText { engine: "seda".into(), model: "seda-v0.1".into() },
+        tts: TextToSpeech { engine: "ema".into(), voice: "ema-lightning-1.1.2".into() },
+        version: "0.1.0".into(),
+    }
+}
+
+#[tokio::test]
+async fn the_key_and_the_request_header_go_where_jeeta_expects_them() {
+    let (base, seen) = fake_jeeta().await;
+    let client = JeetaClient::new(&base, "jeeta_test_key");
+    assert_eq!(client.register(&register_input()).await.unwrap().heartbeat_s, 15);
+    let polled = client
+        .commands(&CommandsQuery { wait_s: Some(25), extension: Some("102".into()) })
+        .await
+        .unwrap();
+    assert!(polled.timed_out);
+    let batch = EventsInput {
+        events: vec![EventIn { bridge_call_id: "c-1".into(), bridge_seq: 1, at: OffsetDateTime::now_utc(), event: BridgeEvent::Ringing }],
+    };
+    assert_eq!(client.events(&batch).await.unwrap().accepted, 1);
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen[0], "register Bearer jeeta_test_key jeeta-panel \"102\"");
+    assert_eq!(seen[1], "commands [(\"wait_s\", \"25\"), (\"extension\", \"102\")] Bearer jeeta_test_key");
+    assert_eq!(seen[2], "events \"ringing\" jeeta-panel");
+}
+
+#[tokio::test]
+async fn errors_carry_a_status_or_a_kind_and_never_the_address() {
+    let (base, _) = fake_jeeta().await;
+    let refused = JeetaClient::new(&base, "bad").register(&register_input()).await.unwrap_err();
+    assert!(matches!(refused, ClientError::Status(403)));
+    assert!(!refused.retryable());
+    let unreachable = JeetaClient::new("http://127.0.0.1:9", "k").register(&register_input()).await.unwrap_err();
+    assert!(matches!(unreachable, ClientError::Transport));
+    assert!(unreachable.retryable());
+    assert!(!unreachable.to_string().contains("127.0.0.1"));
+}
+```
+
+Run: `cargo test -p jeeta-voice-bridge --test jeeta_client`
+Expected: FAIL to compile (`jeeta` not found).
+
+- [ ] **Step 2: Write `jeeta.rs`**
+
+```rust
+//! The bridge's HTTP client to Jeeta (`/api/voice/bridge/*`, `docs/operations/voice-bridge.md` §3):
+//! the bearer key on every request, `X-Requested-With: jeeta-panel` on the posts (the API's
+//! request-header check), the bodies of `jt_calls::wire`. On the host it calls the core on
+//! loopback (`JEETA_BASE_URL=http://127.0.0.1:809x`). Errors never carry the address, the key or a body.
+
+use std::time::Duration;
+
+use jt_calls::wire::{CommandsOut, CommandsQuery, EventsInput, EventsOut, RegisterInput, RegisterOut};
+use serde::de::DeserializeOwned;
+
+pub const REQUESTED_WITH: &str = "jeeta-panel";
+/// The 25-second long-poll, and room for the core's answer.
+const TIMEOUT: Duration = Duration::from_secs(40);
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClientError {
+    #[error("Jeeta answered {0}")]
+    Status(u16),
+    #[error("Jeeta is unreachable")]
+    Transport,
+    #[error("Jeeta's answer is unreadable")]
+    Decode,
+}
+
+impl ClientError {
+    /// Whether the same request may succeed later (the core is down, busy or throttling).
+    pub fn retryable(&self) -> bool {
+        match self {
+            ClientError::Status(s) => *s == 408 || *s == 429 || *s >= 500,
+            ClientError::Transport | ClientError::Decode => true,
+        }
+    }
+}
+
+pub struct JeetaClient {
+    http: reqwest::Client,
+    base: String,
+    key: String,
+}
+
+impl JeetaClient {
+    pub fn new(base: &str, key: &str) -> JeetaClient {
+        JeetaClient {
+            http: reqwest::Client::builder().timeout(TIMEOUT).build().unwrap_or_default(),
+            base: base.trim_end_matches('/').to_owned(),
+            key: key.to_owned(),
+        }
+    }
+
+    async fn send<T: DeserializeOwned>(&self, request: reqwest::RequestBuilder) -> Result<T, ClientError> {
+        let response = request.bearer_auth(&self.key).send().await.map_err(|_| ClientError::Transport)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(ClientError::Status(status.as_u16()));
+        }
+        response.json::<T>().await.map_err(|_| ClientError::Decode)
+    }
+
+    pub async fn register(&self, body: &RegisterInput) -> Result<RegisterOut, ClientError> {
+        let url = format!("{}/api/voice/bridge/register", self.base);
+        self.send(self.http.post(url).header("X-Requested-With", REQUESTED_WITH).json(body)).await
+    }
+
+    pub async fn commands(&self, query: &CommandsQuery) -> Result<CommandsOut, ClientError> {
+        let url = format!("{}/api/voice/bridge/commands", self.base);
+        self.send(self.http.get(url).query(query)).await
+    }
+
+    pub async fn events(&self, body: &EventsInput) -> Result<EventsOut, ClientError> {
+        let url = format!("{}/api/voice/bridge/events", self.base);
+        self.send(self.http.post(url).header("X-Requested-With", REQUESTED_WITH).json(body)).await
+    }
+}
+```
+
+- [ ] **Step 3: Run and commit**
+
+Run: `cargo test -p jeeta-voice-bridge --test jeeta_client`
+Expected: `2 passed`.
+
+```bash
+git add rust/bridge/voice
+git commit -m "feat(voice-bridge): the client of Jeeta's voice bridge routes" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task D2: The run loop (heartbeat, command poll, ARI events, ordered reports)
+
+**Files:**
+- Create: `rust/bridge/voice/src/run_loop.rs`
+- Create: `rust/bridge/voice/tests/run_loop.rs`
+- Modify: `rust/bridge/voice/src/main.rs` (the `run` command), `src/lib.rs` (`pub mod run_loop;`)
+
+- [ ] **Step 1: Write the failing test**
+
+`rust/bridge/voice/tests/run_loop.rs`:
+
+```rust
+//! The line end to end against a fake Jeeta and a fake ARI: a Turkish dial reaches the PBX, a
+//! foreign one is refused as a failure, every command is acknowledged, the bridge registers.
+mod support;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use axum::extract::State;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use jeeta_voice_bridge::config::Config;
+use jeeta_voice_bridge::run_loop::run;
+use jt_calls::wire::BridgeCommand;
+use jt_calls::{CallCommandId, CallId, CallPlan, Command, DialScript};
+use serde_json::{Value, json};
+use support::fake_ari;
+use tokio::sync::watch;
+use uuid::Uuid;
+
+type Seen = Arc<Mutex<Vec<String>>>;
+
+fn plan() -> CallPlan {
+    serde_json::from_value(json!({
+        "opening": "Ada Hanım ile mi görüşüyorum?", "goal": "test", "holding": ["Bir saniye."],
+        "closing": "Görüşmek üzere, iyi günler.", "max_duration_s": 120,
+    }))
+    .unwrap()
+}
+
+fn dial(call: &str, to: &str) -> BridgeCommand {
+    BridgeCommand::of(
+        CallCommandId(Uuid::now_v7()),
+        CallId(Uuid::now_v7()),
+        Some(call.into()),
+        &Command::Dial { to_e164: to.into(), plan: plan(), script: DialScript::default() },
+    )
+}
+
+async fn fake_jeeta(first: Vec<BridgeCommand>) -> (String, Seen) {
+    let seen: Seen = Arc::default();
+    let queue = Arc::new(Mutex::new(Some(first)));
+    let app = Router::new()
+        .route("/api/voice/bridge/register", post(|State((s, _)): State<(Seen, Arc<Mutex<Option<Vec<BridgeCommand>>>>)>, Json(b): Json<Value>| async move {
+            s.lock().unwrap().push(format!("register {}", b["extension"].as_str().unwrap()));
+            Json(json!({ "capability_id": "00000000-0000-0000-0000-000000000001", "status": "verified", "heartbeat_s": 15 }))
+        }))
+        .route("/api/voice/bridge/commands", get(|State((_, q)): State<(Seen, Arc<Mutex<Option<Vec<BridgeCommand>>>>)>| async move {
+            let next = q.lock().unwrap().take();
+            match next {
+                Some(commands) => Json(json!({ "commands": commands, "timed_out": false })),
+                None => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Json(json!({ "commands": [], "timed_out": true }))
+                }
+            }
+        }))
+        .route("/api/voice/bridge/events", post(|State((s, _)): State<(Seen, Arc<Mutex<Option<Vec<BridgeCommand>>>>)>, Json(b): Json<Value>| async move {
+            for e in b["events"].as_array().unwrap() {
+                s.lock().unwrap().push(format!("{} {}", e["bridge_call_id"].as_str().unwrap(), e["kind"].as_str().unwrap()));
+            }
+            Json(json!({ "accepted": 1, "duplicates": 0, "unmatched": 0 }))
+        }))
+        .with_state((seen.clone(), queue));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, seen)
+}
+
+#[tokio::test]
+async fn a_dial_reaches_the_pbx_and_every_command_is_acknowledged() {
+    let (ari_base, ari_log) = fake_ari().await;
+    let (jeeta_base, seen) = fake_jeeta(vec![dial("call-de", "+4915112345678"), dial("call-tr", "+905321234567")]).await;
+    let dir = std::env::temp_dir().join(format!("voice-run-{}", std::process::id()));
+    let env: HashMap<&str, String> = HashMap::from([
+        ("JEETA_BASE_URL", jeeta_base),
+        ("JEETA_BRIDGE_KEY", "jeeta_test".into()),
+        ("ARI_URL", ari_base),
+        ("ARI_PASSWORD", "p".into()),
+        ("LISTEN_SOCKET", "tcp:127.0.0.1:9".into()),
+        ("SPEAK_SOCKET", "tcp:127.0.0.1:9".into()),
+        ("VOICE_CACHE_DIR", dir.join("cache").display().to_string()),
+        ("VOICE_TRACE_FILE", dir.join("traces.jsonl").display().to_string()),
+    ]);
+    let config = Config::from_env(|k| env.get(k).cloned(), true).unwrap();
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let task = tokio::spawn(run(config, stop_rx));
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    stop_tx.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(8), task).await.unwrap().unwrap();
+    let ari = ari_log.lock().unwrap().join("\n");
+    assert!(ari.contains("PJSIP/05321234567@netgsm"), "{ari}");
+    assert!(!ari.contains("4915112345678"), "{ari}");
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.contains(&"register 102".to_owned()), "{seen:?}");
+    assert!(seen.contains(&"call-de error".to_owned()), "{seen:?}");
+    assert_eq!(seen.iter().filter(|e| e.ends_with("command_done")).count(), 2, "{seen:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+```
+
+Run: `cargo test -p jeeta-voice-bridge --test run_loop`
+Expected: FAIL to compile (`run_loop` not found).
+
+- [ ] **Step 2: Write `run_loop.rs`**
+
+```rust
+//! `run`: the workspace's line (design addendum §2, §4). It registers every heartbeat, keeps one
+//! command long-poll outstanding and hands each command to its call's task (a dial starts one),
+//! forwards Asterisk's events to the calls, and posts what the calls report, in order and as soon as
+//! it happens, each event once by its `(bridge_call_id, bridge_seq)`. When the core stays
+//! unreachable for five seconds the live calls are told (they play the fault sentence and hang up).
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use futures_util::StreamExt;
+use jt_calls::wire::{BridgeCommand, CommandsQuery, EventIn, EventsInput, RegisterInput, SpeechToText, TextToSpeech};
+use jt_calls::{BridgeEvent, CallCommandId, CallPlan, Command, DialScript};
+use time::OffsetDateTime;
+use tokio::sync::{mpsc, watch};
+use tokio_tungstenite::tungstenite::Message;
+use tracing::{info, warn};
+
+use crate::ari::{self, Ari, AriEvent};
+use crate::call::{CallDeps, CallSetup, Report, ToCall, run_call};
+use crate::config::Config;
+use crate::jeeta::JeetaClient;
+use crate::netgsm;
+use crate::trace::TraceFile;
+
+/// The calls on the line, by the bridge's id of the call (also its Asterisk channel id).
+pub type Registry = Arc<Mutex<HashMap<String, mpsc::Sender<ToCall>>>>;
+
+const CORE_LOST_AFTER: Duration = Duration::from_secs(5);
+const POLL_WAIT_S: u32 = 25;
+const SEEN_COMMANDS: usize = 1_000;
+
+/// What the bridge reports of itself.
+pub fn register_input(config: &Config) -> RegisterInput {
+    RegisterInput {
+        extension: config.extension.clone(),
+        codecs: vec!["PCMA".into(), "PCMU".into()],
+        max_calls: 1,
+        stt: SpeechToText { engine: "seda".into(), model: "seda-v0.1".into() },
+        tts: TextToSpeech { engine: "ema".into(), voice: "ema-lightning-1.1.2".into() },
+        version: env!("CARGO_PKG_VERSION").into(),
+    }
+}
+
+#[derive(Default)]
+struct Seen {
+    order: VecDeque<CallCommandId>,
+    set: HashSet<CallCommandId>,
+}
+
+impl Seen {
+    /// `true` the first time `id` is seen.
+    fn insert(&mut self, id: CallCommandId) -> bool {
+        if !self.set.insert(id) {
+            return false;
+        }
+        self.order.push_back(id);
+        if self.order.len() > SEEN_COMMANDS
+            && let Some(old) = self.order.pop_front()
+        {
+            self.set.remove(&old);
+        }
+        true
+    }
+}
+
+/// Runs the line until `stop` turns true.
+pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
+    let jeeta = Arc::new(JeetaClient::new(&config.jeeta_base_url, &config.bridge_key));
+    let ari = Arc::new(Ari::new(&config.ari_url, &config.ari_user, &config.ari_password));
+    // A call cannot outlive the task that ran it: whatever Asterisk still carries is hung up.
+    if let Ok(left) = ari.channel_ids().await {
+        let count = left.len();
+        for channel in left {
+            let _ = ari.hangup(&channel).await;
+        }
+        if count > 0 {
+            warn!(count, "hung up the channels left from before");
+        }
+    }
+    let deps = Arc::new(CallDeps {
+        ari: ari.clone(),
+        listen: config.listen.clone(),
+        speak: config.speak.clone(),
+        cache_dir: config.cache_dir.clone(),
+        voice: config.voice.clone(),
+        timing: config.timing,
+        traces: Some(TraceFile::new(config.trace_file.clone())),
+    });
+    let calls: Registry = Arc::default();
+    let (reports_tx, reports_rx) = mpsc::channel::<Report>(1_024);
+    let beat = tokio::spawn(heartbeat(jeeta.clone(), register_input(&config)));
+    let poster = tokio::spawn(post_reports(jeeta.clone(), reports_rx, calls.clone()));
+    let events = tokio::spawn(forward_ari(ari.clone(), calls.clone()));
+    let mut seen = Seen::default();
+    info!("the line is up");
+    loop {
+        let query = CommandsQuery { wait_s: Some(POLL_WAIT_S), extension: Some(config.extension.clone()) };
+        tokio::select! {
+            _ = stop.changed() => break,
+            out = jeeta.commands(&query) => match out {
+                Ok(out) => {
+                    for c in out.commands {
+                        dispatch(c, &deps, &calls, &reports_tx, &mut seen).await;
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "the command poll failed");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            },
+        }
+    }
+    info!("stopping");
+    if let Ok(mut c) = calls.lock() {
+        c.clear();
+    }
+    beat.abort();
+    events.abort();
+    drop(reports_tx);
+    let _ = tokio::time::timeout(Duration::from_secs(5), poster).await;
+}
+
+async fn heartbeat(jeeta: Arc<JeetaClient>, body: RegisterInput) {
+    let mut registered = false;
+    loop {
+        let pause = match jeeta.register(&body).await {
+            Ok(out) => {
+                if !registered {
+                    info!(status = ?out.status, "registered with the core");
+                }
+                registered = true;
+                Duration::from_secs(u64::from(out.heartbeat_s.max(1)))
+            }
+            Err(e) => {
+                warn!(error = %e, "registration failed");
+                registered = false;
+                Duration::from_secs(2)
+            }
+        };
+        tokio::time::sleep(pause).await;
+    }
+}
+
+async fn dispatch(c: BridgeCommand, deps: &Arc<CallDeps>, calls: &Registry, reports: &mpsc::Sender<Report>, seen: &mut Seen) {
+    let call = c.bridge_call_id.clone().unwrap_or_else(|| c.call_id.to_string());
+    if seen.insert(c.id) {
+        match c.command() {
+            Ok(Command::Dial { to_e164, plan, script }) => start_call(&call, &to_e164, plan, script, deps, calls, reports).await,
+            Ok(command) => {
+                let tx = calls.lock().ok().and_then(|m| m.get(&call).cloned());
+                if let Some(tx) = tx {
+                    let _ = tx.send(ToCall::Command(command)).await;
+                }
+            }
+            Err(_) => warn!(command = %c.id, kind = %c.kind, "a command this build cannot read"),
+        }
+    }
+    let done = Report { bridge_call_id: call, event: BridgeEvent::CommandDone { id: c.id }, taken: None };
+    let _ = reports.send(done).await;
+}
+
+async fn start_call(
+    call: &str,
+    to_e164: &str,
+    plan: CallPlan,
+    script: DialScript,
+    deps: &Arc<CallDeps>,
+    calls: &Registry,
+    reports: &mpsc::Sender<Report>,
+) {
+    let refuse = |failure_line: &str| Report {
+        bridge_call_id: call.to_owned(),
+        event: BridgeEvent::Error { failure_line: failure_line.to_owned() },
+        taken: None,
+    };
+    let Some(dial) = netgsm::dial_string(to_e164) else {
+        warn!(call, "a dial outside Türkiye was refused");
+        let _ = reports.send(refuse("permanent: bridge: this line calls Turkish numbers only")).await;
+        return;
+    };
+    if calls.lock().map(|m| !m.is_empty()).unwrap_or(true) {
+        let _ = reports.send(refuse("transient: bridge: the line is busy")).await;
+        return;
+    }
+    let (tx, rx) = mpsc::channel(64);
+    if let Ok(mut m) = calls.lock() {
+        m.insert(call.to_owned(), tx);
+    }
+    let setup = CallSetup {
+        bridge_call_id: call.to_owned(),
+        dial,
+        script,
+        plan_lines: plan.playable().map(str::to_owned).collect(),
+    };
+    let (deps, calls, reports, call) = (deps.clone(), calls.clone(), reports.clone(), call.to_owned());
+    tokio::spawn(async move {
+        run_call(deps, setup, rx, reports).await;
+        if let Ok(mut m) = calls.lock() {
+            m.remove(&call);
+        }
+    });
+}
+
+/// The first `bridge_seq` of a call: 1 for a call dialled by this process; for any other (a command
+/// of a call from before a restart) a number no earlier process used.
+fn first_seq(dialled_here: bool) -> u32 {
+    if dialled_here {
+        return 1;
+    }
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    1_000_000 + u32::try_from(secs % 1_000_000).unwrap_or(0) * 1_000
+}
+
+async fn post_reports(jeeta: Arc<JeetaClient>, mut rx: mpsc::Receiver<Report>, calls: Registry) {
+    let mut seqs: HashMap<String, u32> = HashMap::new();
+    let mut failing_since: Option<Instant> = None;
+    let mut lost = false;
+    while let Some(report) = rx.recv().await {
+        let dialled = calls.lock().map(|m| m.contains_key(&report.bridge_call_id)).unwrap_or(false);
+        let seq = seqs
+            .entry(report.bridge_call_id.clone())
+            .or_insert_with(|| first_seq(dialled).saturating_sub(1));
+        *seq += 1;
+        let body = EventsInput {
+            events: vec![EventIn {
+                bridge_call_id: report.bridge_call_id.clone(),
+                bridge_seq: *seq,
+                at: OffsetDateTime::now_utc(),
+                event: report.event,
+            }],
+        };
+        let taken = report.taken;
+        loop {
+            match jeeta.events(&body).await {
+                Ok(_) => {
+                    failing_since = None;
+                    lost = false;
+                    if let Some(t) = taken {
+                        let _ = t.send(());
+                    }
+                    break;
+                }
+                Err(e) if !e.retryable() => {
+                    warn!(error = %e, "the core refused an event; it is dropped");
+                    break;
+                }
+                Err(e) => {
+                    let since = *failing_since.get_or_insert_with(Instant::now);
+                    if !lost && since.elapsed() >= CORE_LOST_AFTER {
+                        lost = true;
+                        warn!(error = %e, "the core is unreachable");
+                        let live: Vec<mpsc::Sender<ToCall>> =
+                            calls.lock().map(|m| m.values().cloned().collect()).unwrap_or_default();
+                        for tx in live {
+                            let _ = tx.send(ToCall::CoreLost).await;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+    }
+}
+
+async fn forward_ari(ari: Arc<Ari>, calls: Registry) {
+    loop {
+        match ari.events().await {
+            Ok(mut events) => {
+                info!("connected to Asterisk's events");
+                while let Some(Ok(message)) = events.next().await {
+                    let Message::Text(t) = message else { continue };
+                    let event = ari::parse_event(&t);
+                    let channel = match &event {
+                        AriEvent::Ringing { channel }
+                        | AriEvent::Answered { channel, .. }
+                        | AriEvent::Dtmf { channel, .. }
+                        | AriEvent::Gone { channel, .. } => channel.clone(),
+                        AriEvent::Other => continue,
+                    };
+                    if let AriEvent::Answered { inbound: true, .. } = event {
+                        info!("an inbound call reached the bridge; refused until duty mode exists");
+                        let _ = ari.refuse(&channel).await;
+                        continue;
+                    }
+                    let tx = calls.lock().ok().and_then(|m| m.get(&channel).cloned());
+                    if let Some(tx) = tx {
+                        let _ = tx.send(ToCall::Ari(event)).await;
+                    }
+                }
+                warn!("Asterisk's events closed");
+            }
+            Err(e) => warn!(error = %e, "Asterisk's events are unreachable"),
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+```
+
+In `main.rs` add the `run` command (and `use jeeta_voice_bridge::run_loop;`):
+
+```rust
+        "run" => runtime.block_on(run_command()),
+```
+
+```rust
+async fn run_command() -> ExitCode {
+    let config = match Config::from_env(|k| std::env::var(k).ok(), true) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = stop_tx.send(true);
+    });
+    run_loop::run(config, stop_rx).await;
+    ExitCode::SUCCESS
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+```
+
+- [ ] **Step 3: Run and commit**
+
+Run: `cargo test -p jeeta-voice-bridge` and `cargo clippy -p jeeta-voice-bridge --all-targets -- -D warnings`
+Expected: `run_loop` 1 passed (about 2 s); `logging` now finds log calls in `run_loop.rs` and passes; every other test passes.
+
+```bash
+git add rust/bridge/voice
+git commit -m "feat(voice-bridge): the line's run loop: heartbeat, command poll, Asterisk events, ordered reports" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+### Task D3: Build artifacts and the worker's unit; the worker serves staging
+
+**Files:**
+- Modify: `.github/workflows/rust.yml` (jobs `voice-speech` and `voice-bridge-linux`)
+- Create: `rust/bridge/voice/deploy/jeeta-voice-bridge.service`, `bridge.env.example`, `images.env.example`
+
+- [ ] **Step 1: Add the CI jobs**
+
+Append to `.github/workflows/rust.yml` under `jobs:`:
+
+```yaml
+  # The voice bridge's Python speech services: unit tests without the models (plan V1-T3 B2/B3).
+  voice-speech:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/bridge/voice
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest==8.4.2 numpy==2.5.4 websockets==17.3
+      - run: python -m pytest -c speech/pytest.ini -m "not models" asterisk speech
+
+  # The voice bridge's Linux binary, for the host beside jeeta.service (plan V1-T3 D3). Build only.
+  voice-bridge-linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: voice-bridge
+      - run: cargo build --locked --release -p jeeta-voice-bridge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-voice-bridge-linux-${{ github.sha }}
+          path: rust/target/release/jeeta-voice-bridge
+          if-no-files-found: error
+          retention-days: 14
+```
+
+- [ ] **Step 2: Write the unit and the examples**
+
+`rust/bridge/voice/deploy/jeeta-voice-bridge.service`:
+
+```ini
+[Unit]
+Description=Jeeta voice bridge (the talker beside Asterisk)
+After=network-online.target jeeta-asterisk.service jeeta-voice-listen.service jeeta-voice-speak.service
+Wants=network-online.target jeeta-asterisk.service jeeta-voice-listen.service jeeta-voice-speak.service
+
+[Service]
+Type=simple
+User=jeeta-voice-bridge
+Group=jeeta-voice-bridge
+SupplementaryGroups=jeeta-voice
+WorkingDirectory=/var/lib/jeeta-voice
+EnvironmentFile=/etc/jeeta-voice/ari.env
+EnvironmentFile=/etc/jeeta-voice/bridge.env
+ExecStart=/opt/jeeta-voice/current/jeeta-voice-bridge run
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jeeta-voice
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CPUWeight=200
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`rust/bridge/voice/deploy/bridge.env.example` (copied to `/etc/jeeta-voice/bridge.staging.env` and `bridge.prod.env`, 0600 root):
+
+```ini
+# The Jeeta this bridge serves, on loopback: 8091 staging, 8090 prod. One environment at a time.
+JEETA_BASE_URL=http://127.0.0.1:8091
+# The calls.bridge key of that environment's workspace (shown once when issued).
+JEETA_BRIDGE_KEY=
+VOICE_EXTENSION=102
+ARI_URL=http://127.0.0.1:8188
+ARI_USER=jeeta-voice
+LISTEN_SOCKET=unix:/run/jeeta-voice/listen.sock
+SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock
+VOICE_CACHE_DIR=/var/lib/jeeta-voice/cache
+VOICE_TRACE_FILE=/var/lib/jeeta-voice/traces.jsonl
+JEETA_VOICE_BRIDGE_LOG=info
+```
+
+`rust/bridge/voice/deploy/images.env.example`:
+
+```ini
+LISTEN_IMAGE=jeeta-voice-listen:<tag recorded in B3>
+SPEAK_IMAGE=jeeta-voice-speak:<tag recorded in B2>
+```
+
+(this example's angle brackets are the two tags the B2/B3 server steps already appended to the real `/etc/jeeta-voice/images.env`; the file is documentation of its shape.)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add .github/workflows/rust.yml rust/bridge/voice/deploy
+git commit -m "ci(voice): speech unit tests and the voice bridge's Linux artifact; its systemd unit" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 4: [COORDINATOR, server] Serve staging**
+
+Preconditions: staging runs the Phase C release (E1 Step 2). In the staging panel, as the owner of the test workspace (proposed "Test Atölye"; never "Jeeta Demo", the Meta reviewers' workspace), issue a key: **API anahtarları** → new key, name "voice bridge 102", the one scope **Ses köprüsü olarak çalışma** (`calls.bridge`); copy the plaintext once. On the host:
+
+```bash
+umask 077
+install -m 0600 /root/jeeta-voice-src/rust/bridge/voice/deploy/bridge.env.example /etc/jeeta-voice/bridge.staging.env
+read -r -s KEY; sed -i "s|^JEETA_BRIDGE_KEY=.*|JEETA_BRIDGE_KEY=$KEY|" /etc/jeeta-voice/bridge.staging.env; unset KEY
+ln -sfn /etc/jeeta-voice/bridge.staging.env /etc/jeeta-voice/bridge.env
+gh run download <the push run id> -n jeeta-voice-bridge-linux-<sha> -D /tmp/jvb   # or scp the artifact from the dev machine
+install -d /opt/jeeta-voice/releases/<sha8>
+install -m 0755 /tmp/jvb/jeeta-voice-bridge /opt/jeeta-voice/releases/<sha8>/jeeta-voice-bridge && rm -rf /tmp/jvb
+ln -sfn /opt/jeeta-voice/releases/<sha8> /opt/jeeta-voice/current
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-bridge.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/jeeta-voice-bridge.service
+systemctl daemon-reload && systemctl enable --now jeeta-voice-bridge
+sleep 20; journalctl -u jeeta-voice-bridge -n 20 --no-pager
+```
+
+(`<sha8>` and the run id are the reviewed commit's; nothing else is substituted.) Expected journal lines: `the line is up`, `registered with the core status=Verified`, `connected to Asterisk's events`; no number, no word. In the staging panel, **Kabiliyetler** shows "Voice bridge 102" verified with engines `seda`/`ema`, version `0.1.0`, `max_calls` 1.
+
+## Phase E — release and acceptance
+
+### Task E1: [OWNER OK] Release the core changes (staging, then prod)
+
+- [ ] **Step 1: [COORDINATOR] Push and read CI** (with the owner's OK for this branch): `git push -u origin feat/voice-bridge-v1-t3`, open the PR into the release line the owner names, and wait for `Rust` to be green: `rust-test`, `release-artifact`, `voice-speech`, `voice-bridge-linux`, `device-bridge-windows`, the panel job.
+
+- [ ] **Step 2: [COORDINATOR, server] Staging first**
+
+```bash
+STAMP=$(date +%Y%m%d%H%M)
+sudo -u postgres pg_dump -p 5437 -Fc jeeta > /var/backups/jeeta-staging/pre-<sha8>-$STAMP.dump
+ls -l /var/backups/jeeta-staging/pre-<sha8>-$STAMP.dump
+/root/staging-upgrade.sh /root/jeeta-release-<sha8>.tar
+curl -fsS http://127.0.0.1:8091/readyz
+journalctl -u jeeta-staging --since "-5 min" -p warning --no-pager | head
+```
+
+Expected: a non-empty dump; `readyz` 200; no WARN/ERROR. No migration is applied (this plan adds none). The Meta reviewer workspace is untouched.
+
+- [ ] **Step 3: [OWNER OK] Prod after the e2e (E3) passed**: `/root/upgrade.sh /root/jeeta-release-<sha8>.tar` (it backs up, checks compatibility, swaps, checks `readyz`), then `curl -fsS http://127.0.0.1:8090/readyz`. Only then may the bridge be pointed at prod (E2).
+
+### Task E2: One extension, one environment: the switch
+
+**Files:**
+- Create: `rust/bridge/voice/deploy/jeeta-voice-target`
+- Create: `rust/bridge/voice/asterisk/test_target.py`
+
+- [ ] **Step 1: Write the failing test**
+
+`rust/bridge/voice/asterisk/test_target.py`:
+
+```python
+"""jeeta-voice-target refuses an unknown target and never switches while a call is on the line."""
+import os
+import pathlib
+import subprocess
+import sys
+
+import pytest
+
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "jeeta-voice-target"
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell script")
+
+
+def run(*args, env=None):
+    return subprocess.run(["sh", str(SCRIPT), *args], capture_output=True, text=True, env=env)
+
+
+def test_an_unknown_target_is_refused():
+    out = run("qa")
+    assert out.returncode == 2 and "usage" in out.stderr
+
+
+def test_a_live_call_blocks_the_switch(tmp_path):
+    (tmp_path / "bridge.staging.env").write_text("JEETA_BASE_URL=http://127.0.0.1:8091\n")
+    (tmp_path / "ari.env").write_text("ARI_PASSWORD=x\n")
+    fake = tmp_path / "curl"
+    fake.write_text('#!/bin/sh\necho \'[{"id":"c-1"}]\'\n')
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "JEETA_VOICE_ETC": str(tmp_path)}
+    out = run("staging", env=env)
+    assert out.returncode == 1 and "a call is on the line" in out.stderr
+    assert not (tmp_path / "bridge.env").exists()
+```
+
+Run: `python -m pytest -c speech/pytest.ini asterisk/test_target.py` (Linux or macOS)
+Expected: FAIL (`jeeta-voice-target` missing).
+
+- [ ] **Step 2: Write the script**
+
+`rust/bridge/voice/deploy/jeeta-voice-target` (installed as `/usr/local/sbin/jeeta-voice-target`, 0755):
+
+```sh
+#!/bin/sh
+# jeeta-voice-target staging|prod: points the voice bridge at one Jeeta. Extension 102 registers once,
+# so one environment at a time; the one left behind sees its bridge go stale (agent calls refused
+# bridge_offline). Never switches while Asterisk carries a channel.
+set -eu
+etc="${JEETA_VOICE_ETC:-/etc/jeeta-voice}"
+target="${1:-}"
+case "$target" in
+  staging|prod) ;;
+  *) echo "usage: jeeta-voice-target staging|prod" >&2; exit 2 ;;
+esac
+env_file="$etc/bridge.$target.env"
+[ -f "$env_file" ] || { echo "$env_file is missing" >&2; exit 2; }
+. "$etc/ari.env"
+channels=$(printf 'user = "jeeta-voice:%s"\n' "$ARI_PASSWORD" | curl -fsS -K - http://127.0.0.1:8188/ari/channels)
+if [ "$channels" != "[]" ]; then
+  echo "a call is on the line; switch when it ends" >&2
+  exit 1
+fi
+ln -sfn "$env_file" "$etc/bridge.env"
+if [ -z "${JEETA_VOICE_ETC:-}" ]; then
+  systemctl restart jeeta-voice-bridge
+fi
+echo "the voice bridge now serves $target"
+```
+
+Run: `python -m pytest -c speech/pytest.ini asterisk/test_target.py`
+Expected: `2 passed`.
+
+- [ ] **Step 3: Commit and install**
+
+```bash
+git add rust/bridge/voice/deploy/jeeta-voice-target rust/bridge/voice/asterisk/test_target.py
+git commit -m "feat(voice): switch the one extension between staging and prod, never mid-call" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+[COORDINATOR, server]: `install -m 0755 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-target /usr/local/sbin/`; prod gets its own `bridge.prod.env` (`JEETA_BASE_URL=http://127.0.0.1:8090`, the prod workspace's own `calls.bridge` key, issued the same way) only after E1 Step 3.
+
+### Task E3: [OWNER] End-to-end acceptance: an agent calls the owner
+
+Needs the owner's mobile, about 8 minutes of package (two calls), staging on the Phase C release, the worker serving staging (D3 Step 4).
+
+- [ ] **Step 1: [COORDINATOR] Preconditions in the staging workspace**
+
+1. `jeeta-voice-bridge check` (as in B7 Step 1) prints three `ok`.
+2. The workspace has an approved strategy; **Ayarlar → Aramalar** shows the opening "Merhaba, ben Test Atölye'nin dijital asistanıyım.", the notice and the approved phrases (the owner reads and saves them).
+3. A person "Kabul testi" with the owner's mobile as phone identity, and an explicit phone consent recorded with the owner's verbal OK (`jeeta.inbox.consent_record`, channel phone, kind explicit, source manual). `estimated_minor_per_minute` stays 0 (no spend).
+4. An agent session (the coordinator's Claude Code, its model and reasoning as they are, owner decision V-2) connected to staging's MCP with a key holding `calls.work` and inbox read scopes.
+5. Note the start time: `START=$(date -u +%Y-%m-%dT%H:%M:%SZ)`.
+
+- [ ] **Step 2: [OWNER + agent] The call**
+
+The agent places it:
+
+```json
+{ "person_id": "<the test person's id>", "purpose": "commercial", "mode": "agent",
+  "plan": { "opening": "Sesim net geliyor mu?", "goal": "Ses köprüsü kabul testi",
+            "holding": ["Bir saniye."], "fallback": ["Bağlantıda bir gecikme var, sizi birazdan geri arayacağız."],
+            "closing": "Görüşmek üzere, iyi günler.", "max_duration_s": 300,
+            "hotwords": ["Jeeta", "Test Atölye"] } }
+```
+
+Then, turn by turn (the owner improvises within this outline):
+
+1. Owner answers. Expected: the workspace opening starts at once (the worker logs `first audio after the answer ms=…`), then the notice, then "Sesim net geliyor mu?". Owner: "Evet, net geliyor."
+2. Agent: `jeeta.calls.say{ text: "Kısa bir deneme için arıyorum.", wait_reply_s: 20 }` then `jeeta.calls.say{ text: "Yarınki randevunuza bakmamı ister misiniz?", wait_reply_s: 20 }`. Owner: "Evet, bakar mısınız?"
+3. **Filler during a tool call:** the agent calls an inbox tool (e.g. `jeeta.inbox.people_get` for the test person) before answering. Expected: "Hı hı." about 0.6 s after the owner stopped, "Bir saniye, hemen bakıyorum." about 2.7 s after, then the agent's answer.
+4. **Barge-in:** the agent says three sentences in one `say` ("Yarın saat on dörtte bir randevunuz görünüyor. Adresimiz değişmedi. Gelirken kimliğinizi getirmeyi unutmayın."); the owner cuts in during the second sentence ("Tamam, anladım."). Expected: the agent's voice stops at once; the turn shows `interrupted_at_char` within the second sentence.
+5. **Closing:** the agent calls `jeeta.calls.end{ outcome: "connected", summary: "Kabul testi" }`. Expected: "Görüşmek üzere, iyi günler." then the line closes.
+
+A second, shorter call (steps 1, 2 and 5) adds turns to the percentiles.
+
+- [ ] **Step 3: [COORDINATOR] Measure and report**
+
+```bash
+sudo -u jeeta-voice-bridge VOICE_TRACE_FILE=/var/lib/jeeta-voice/traces.jsonl \
+  /opt/jeeta-voice/current/jeeta-voice-bridge report --since "$START"
+journalctl -u jeeta-voice-bridge --since "$START" --no-pager | grep -o 'first audio after the answer ms=[0-9]*'
+journalctl -u jeeta-voice-bridge -u jeeta-voice-listen -u jeeta-voice-speak -u jeeta-asterisk --since "$START" --no-pager \
+  | grep -cE '\+90[0-9]{10}|0[5][0-9]{9}' || true
+```
+
+and `jeeta.calls.get` of each call (its `call.latency` and turns). Record in the PR and `docs/operations/voice-bridge.md` §Measured:
+
+| Measure | Gate |
+|---|---|
+| Two-way audio, opening, notice, name question heard | must |
+| First audio after the answer | ≤ 300 ms (worker log) |
+| Perceived p95 (`latency.perceived.p95`) | ≤ 1 000 ms (report threshold) |
+| Filler heard during the tool call; `phrase` turns in the log | must |
+| Barge-in: playback stopped, `interrupted_at_char` set | must; `barge_in_stop` p95 reported against the 300 ms target |
+| Transport overhead: `core_round.p50 − agent.p50` | ≤ 100 ms (push-like long-poll proven) |
+| Content p95 | reported (brain-dominated; the 3 s alert is expected with the unchanged agent) |
+| Closing heard, line closed, session `agent_ended`, journey `CallMade{connected}` | must |
+| Numbers in the four units' journals | 0 |
+
+If a "must" fails, stop, file the finding, do not point the bridge at prod.
+
+### Task E4: The operations page for the new stack
+
+**Files:**
+- Modify: `docs/operations/voice-bridge.md`
+
+- [ ] **Step 1: Rewrite sections 1, 5 and add 6–8**
+
+Keep sections 2 (the key), 3 (protocol) and 4 (heartbeat) and add to §3 the additions of Task A5 (`dial.script`, `phrase`, `trace`) and C4 (`calls.say{wait_reply_s}`). Replace §1 (Gate V1) with its outcome:
+
+```markdown
+## 1. Gate V1 (done, 2026-10-28/29)
+
+Extension 102 ("jeetases", UDP, register only from this host, Dahili-Şehiriçi-GSM, recording off)
+registers with `sip5.netsantral.com` as `102-8508407303` (realm `asterisk`). Outbound 102 → mobile
+works with two-way G.711. Inbound 0850 → 102 did not reach the UA (see §8). Extension 101 stays
+WSS-only for the v1 webphone. The Eko package has one external line: one call at a time.
+```
+
+Replace §5 (host setup) with the stack as installed by tasks B1–B3 and D3:
+
+```markdown
+## 5. Host setup
+
+| Unit | What | Listens |
+|---|---|---|
+| `jeeta-asterisk` | Asterisk 22.11 in Docker (`--network host`, uid 1500) | SIP UDP 5070 (all addresses), RTP 40000–40099, ARI/HTTP 127.0.0.1:8188 |
+| `jeeta-voice-listen` | Silero VAD, Smart Turn v3.2, seda-v0.1 (`--network none`, uid 1501) | `/run/jeeta-voice/listen.sock` |
+| `jeeta-voice-speak` | Antalia normaliser + EMA Lightning 1.1.2 (`--network none`, uid 1501) | `/run/jeeta-voice/speak.sock` |
+| `jeeta-voice-bridge` | the talker (`/opt/jeeta-voice/current`), loopback only | nothing |
+
+Files: `/etc/jeeta-voice/asterisk/` (configuration; `secrets/` 0700 uid 1500 holds `pjsip_auth.conf`
+and `ari_users.conf`, 0600), `/etc/jeeta-voice/ari.env` (0600), `/etc/jeeta-voice/bridge.{staging,prod}.env`
+(0600) and the `bridge.env` symlink choosing one, `/etc/jeeta-voice/images.env` (the speech images'
+tags), `/var/lib/jeeta-voice/cache` (synthesised policy sentences only) and `traces.jsonl` (numbers
+only). No secret is in the repository, a command line or a log. Firewall: no inbound rule; the PBX's
+replies are admitted by conntrack (Gate V1); if audio is one-way, allow UDP 40000–40099 from
+185.88.7.0/24.
+
+Switch environments with `jeeta-voice-target staging|prod` (refuses while a call is on the line).
+Check the stack with `jeeta-voice-bridge check`; read latency with `jeeta-voice-bridge report --since <RFC 3339>`.
+```
+
+Add:
+
+```markdown
+## 6. What the caller hears
+
+On the answer: the workspace's opening ("Merhaba, ben {İşletme}'nın dijital asistanıyım."), the
+transcript notice, the agent's own opening. While the agent thinks: "Hı hı." / "Anladım." / "Tamam." /
+"Peki." at about 0.6 s, a filler at about 2.7 s, the long wait at about 8 s; "Hâlâ orada mısınız?"
+after 9 s of silence following the agent's sentence; "Sizi tam duyamadım…" when no words were
+recognised; the fault sentence if the core is lost. All are the call policy's text (Ayarlar →
+Aramalar), owner-approved on 2026-10-29. The caller can cut the agent by speaking.
+
+## 7. Measured (fill from tasks B7 and E3)
+
+| Date | Calls | Turns | First audio after answer | Perceived p50/p95 | Content p50/p95 | Agent p50/p95 | Barge-in stop p50/p95 | Notes |
+|---|---|---|---|---|---|---|---|---|
+
+## 8. Inbound
+
+Asterisk sends every inbound call to the bridge's application, which refuses it (busy) until duty
+mode (plan V2-T1) exists. Result of the 0850 → 102 investigation (task B8): record it here.
+```
+
+The measured table's rows are filled with the numbers B7 and E3 produced (not before).
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add docs/operations/voice-bridge.md
+git commit -m "docs(voice): the free-path voice stack on the host, what the caller hears, measured latency" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+## Self-review
+
+**1. Spec coverage** (the binding decisions and the job's requirements → tasks):
+
+| Requirement | Task |
+|---|---|
+| Free, self-hosted, existing Contabo VPS, no new server/GPU/cloud speech | B1–B3 (Docker on the host, `--network none`), constraint 1 |
+| Asterisk 22.8+ chan_websocket, ext 102 over UDP, secret in a 0600 file under `/etc/jeeta*` | B1 (22.11.0, `secrets/pjsip_auth.conf` 0600 from `/root/voicegate/p102`) |
+| Asterisk owns SIP/RTP/jitter/DTMF; 20 ms G.711; FLUSH_MEDIA / MARK_MEDIA | B1 config, B5 `media.rs`, B6 `call.rs` (`MARK_MEDIA` per sentence, `FLUSH_MEDIA` on cut) |
+| Outbound works; inbound investigated, non-blocking; one call at a time | B7, B8, `max_calls: 1` and the busy refusal in D2 |
+| Rust audio worker in `rust/bridge/voice/` (name checked: `jeeta-voice-bridge`, no clash) | B4–B6, D1–D2 |
+| Speaks the V1-T1/T2 protocol exactly; wire types found and quoted | §4 (quoted), A1 (`jt_calls::wire` shared), D1 |
+| Per-call state machine: opening, turns, barge-in, fillers, closing | B4 `talker.rs`, B6 `call.rs` |
+| Never logs numbers, audio or transcript text | lib.rs rule, B4 `tests/logging.rs`, `Heard`'s redacting `Debug`, E3 journal check |
+| seda-v0.1 on sherpa-onnx, Silero VAD 8 kHz, Smart Turn v3.2, fallback 1.2–1.8 s, per-call hotwords | B3 (fallback 1.5 s, `hotwords.py`), A5/C2 (`plan.hotwords` → `script.hotwords`) |
+| EMA Lightning 1.1.2, 8 kHz, fixed seed, Antalia normaliser (not normalizer-tr), respelling, sentence by sentence, warm process, isolated service with local API | B2, B6 (`text::sentences`, one synthesis per sentence) |
+| Pre-synthesised, cached openings per workspace; genitive suffix pure and tested; disclosure mandatory | A3, C1 (`with_workspace`, spoken-opening disclosure check), B6 (disk cache for policy sentences, pre-synthesis during ringing) |
+| The owner-approved phrase set, played by the bridge, never composed | A4, A5 (core logs the policy's text), B4 talker, C5 panel |
+| No raw audio storage; recording off | constraint 5, cache rule (policy sentences only), B8 shreds nothing needed (no recordings), addendum §5 |
+| Brain unchanged; say+listen merge backward compatible; one sentence per `say`; `say` returns when queued | C4 (`wait_reply_s` optional; descriptions; no model advice anywhere) |
+| Push transport proven or kept | addendum §4, existing `utterance_wakes_listen_immediately`, D2 (one poll always outstanding, events posted at once), E3 transport-overhead gate |
+| Per-turn monotonic trace and p50/p95 with the report's thresholds | A2, B5 `trace.rs`, B6 marks, C3 view, C5 panel, `report` command |
+| Thin vertical slice before polishing | B6 `slice`, B7 |
+| Hexagonal boundaries; catalog/exact-set/status tests; migrations; TR+EN; jt_pg tests Linux only; no deploy from workers; upgrade.sh with pg_dump first | B4 archtest + deny; constraint 7 (no row added, count 160 stays); constraint 8 (no migration needed); C5 copy; §2; constraint 10; E1 |
+| Contabo deploy: install, configs, secrets, systemd, staging vs prod, firewall/RTP, pinned images | B1–B3, D3, E2 |
+| E2E acceptance with measured latency | E3 |
+| Owner-needed tasks marked; ~95 min package | §3, B7, B8, E1, E3 |
+
+No gap found. Deliberately not in this plan: inbound duty mode (V2-T1), a digit-dictation endpoint mode, seda fine-tuning and a brand voice (report steps 6–7), WebSocket push (only if E3's transport gate fails).
+
+**2. Placeholder scan.** Searched for "TBD", "TODO", "implement later", "fill in", "similar to", "handle edge cases". The angle-bracket items that remain are run-time values a coordinator reads off the environment (the commit sha, a CI run id, the test person's id, the image tags B2/B3 record), each with the command that produces it; `images.env.example` says so. The measured table in E4 is filled from B7/E3 output by design.
+
+**3. Type consistency.** `DialScript { lines, phrases, hotwords }` (A5) is what C2 fills, B6/D2 read and the slice builds. `BridgeEvent::Phrase { set, index }` and `BridgeEvent::Trace { trace }` (A5) are what `call.rs` reports and C3 tests. `TurnTrace` fields (A2) match `TurnMarks::trace` (B5), the C3 test JSON and the C5 types (`perceived`, `content`, `agent`, `barge_in_stop`, `alerts`). `Talker::on(Input, Ms) -> Vec<Action>` (B4) is what `Live::input` calls. `Report { bridge_call_id, event, taken }` is shared by `call.rs`, `slice.rs` and `run_loop.rs`. `CallPolicy::{with_workspace, opening_lines, spoken_opening}` (C1) are what C2 uses. `SayInput.wait_reply_s` / `SayOut.{events, timed_out}` (C4) match the MCP schema and tests. `Ari::with_ws_base` (B6 Step 1) is used by the test support only.
+
+## Execution handoff
+
+Plan complete and saved to `docs/superpowers/plans/2026-10-29-voice-sidecar-free-path-plan.md`. Two execution options:
+
+**1. Subagent-Driven (recommended)** — a fresh subagent per task, review between tasks, fast iteration. Server and owner steps ([COORDINATOR], [OWNER]) stay with the coordinator.
+
+**2. Inline Execution** — execute tasks in one session using superpowers:executing-plans, batch execution with checkpoints.
+
+Which approach?
