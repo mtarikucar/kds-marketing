@@ -1,6 +1,6 @@
 //! Android phones over `adb` (spec §4.1): [`AndroidRegistry`] lists the phones attached to this
 //! computer, and an [`AndroidAdbDriver`] reports one phone and carries out its commands. Every
-//! call names the phone (`adb -s <serial>`), and every call is an argument list ([`adb`]).
+//! call names the phone (`adb -s <serial>`), and every call is an argument list ([`AdbRunner`]).
 //!
 //! - `adb`: the [`AdbRunner`] seam, the real runner ([`SystemAdb`]) and the phone's command line.
 //! - `observe`: the screen, distilled from `uiautomator dump`.
@@ -359,8 +359,9 @@ impl PhoneDriver for AndroidAdbDriver {
 
     /// Puts back the input method a cut-off Unicode `text` left on ADBKeyBoard. The first call
     /// also looks at the phone, which a bridge killed mid-command may have left on ADBKeyBoard,
-    /// and then sets the input method the phone used before it (see
-    /// [`AndroidAdbDriver::ime_to_go_back_to`]), or leaves the phone as it is when it finds none.
+    /// and then sets the input method the phone used before it (the most recent other one in
+    /// its `input_methods_subtype_history` that is still enabled, else the first enabled one that
+    /// is not a voice input method), or leaves the phone as it is when it finds none.
     /// That look counts once it has decided: a phone it could not read is looked at again at its
     /// next recovery. With nothing recorded after it, a recovery makes no call.
     async fn recover(&self) {
