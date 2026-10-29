@@ -13,6 +13,7 @@
 !turn.py
 !asr.py
 !jeeta_listen.py
+!THIRD_PARTY.md
 !pytest.ini
 !tests/*.py
 !tests/fixtures/*.alaw

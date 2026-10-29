@@ -22,17 +22,21 @@ becomes words and turns (versions, model digests, the endpoint and decoding rule
 connection, first: audio before it, a second `start`, a `playback` without a boolean or any other
 message is answered `bad_request` (audio only the first time) and changes nothing. A `start` beyond
 MAX_SESSIONS calls at once is answered `busy` and the connection closed (1013). Up to 20 hotwords
-are used; one that cannot be (hotwords.clean) is dropped and the call starts all the same, since a
-refused start would leave the call deaf. A failure while processing audio is answered `failed`, the
-turn under way is dropped and the call goes on.
+are used; one that cannot be (hotwords.clean), or hotwords that are not a list, are dropped and the
+call starts all the same, since a refused start would leave the call deaf. A failure while
+processing audio is answered `failed`, then `unheard` if a turn was under way (so the bridge does
+not wait for its final), and the call goes on.
 
 Positions are audio time since `start`, in milliseconds, at 32 ms steps (Silero's chunks): the worker
 maps them to the instants it forwarded those frames. A turn begins after 200 ms of speech (250 ms
-while the bridge plays), pauses after 200 ms of silence, when Smart Turn judges it, and ends at its
-"complete" (p >= 0.5) or after the fallback silence (1.5 s; 2.8 s while digits are dictated). Its
+while the bridge plays and for 400 ms after), pauses after 200 ms of silence, when Smart Turn judges
+it, and ends at its "complete" (p >= 0.5) or after the fallback silence (1.5 s); while digits are
+dictated only 2.8 s of silence ends it, since a digit group sounds finished. Its
 words are decoded from 500 ms before the onset, in segments cut at its pauses: at each pause the
 segment is decoded to its end beside the turn model, so a "complete" is final at once and a fallback
-has nothing left to decode. `stt_ms` is how long the turn's last decode took.
+has nothing left to decode. `stt_ms` is how long the turn's last decode took. A turn is cut at 30 s
+and reported `endpoint_by: "fallback"`: the bridge reads the field as jt_calls::EndpointBy, which
+has no third kind, and a final it cannot parse would be dropped whole.
 
 Nothing that holds a word reaches the log: no transcript, no hotword, no audio. The root handler
 passes only this service's records, which carry counts, lengths, timings and kinds.
@@ -77,7 +81,12 @@ MAX_SESSIONS = 4
 MAX_MESSAGE_BYTES = 1 << 16
 # Bump with any change to how audio becomes words and turns that the data below misses.
 PIPELINE_VERSION = 1
-DEFAULT_SOCKET = "unix:/run/jeeta-voice/listen.sock"
+# In listen's own directory (0710, its user's), so no other service can bind the name while it
+# restarts (the B3 review, I4).
+DEFAULT_SOCKET = "unix:/run/jeeta-voice/listen/listen.sock"
+# The exit status when the socket's path is held by another user: restarting cannot help (the
+# unit's RestartPreventExitStatus), so the unit fails once and the alert fires.
+EXIT_SOCKET_HELD = 78
 DEFAULT_MODELS = "/models"
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
@@ -129,8 +138,8 @@ class Session:
 
     A turn's words are decoded in segments cut at its pauses: at each pause the segment is decoded
     to its end while the turn model judges the turn, so neither waits for the other; speech after the
-    pause opens the next segment, from at most PREROLL_MS before its onset and never before the end
-    of the speech already decoded. The final transcript is the turn's segments joined."""
+    pause opens the next segment, from at most PREROLL_MS before its onset and never before the audio
+    the last segment was given. The final transcript is the turn's segments joined."""
 
     def __init__(self, ears, words):
         self.ears = ears
@@ -142,9 +151,11 @@ class Session:
         self.pending8 = np.zeros(0, dtype=np.float32)
         self.history = collections.deque()  # (first 16 kHz sample index, chunk)
         self.total16 = 0
+        self.received8 = 0
         self.stream = None
         self.segments = []
-        self.decoded_to_ms = 0  # the end of the speech already decoded
+        self.turn_open = False  # a speech_start went out and no final or unheard yet
+        self.decoded_to_ms = 0  # the end of the audio a closed segment was given
         self.onset_ms = 0
         self.stt_ms = 0
         self.last_partial = ""
@@ -152,7 +163,7 @@ class Session:
         self.stats = collections.Counter()
 
     def playback(self, active):
-        self.endpointer.guarded = bool(active)
+        self.endpointer.playback(bool(active), self.received8 * 1000 // SAMPLE_RATE)
 
     def _remember(self, x16):
         self.history.append((self.total16, x16))
@@ -177,19 +188,20 @@ class Session:
         self.ears.asr.accept(self.stream, self._since(max(onset_ms - PREROLL_MS, self.decoded_to_ms)))
         self.since_partial_ms = 0
 
-    def _close_segment(self, speech_end_ms):
+    def _close_segment(self):
         started = time.monotonic()
         text = self.ears.asr.finish(self.stream)
         self.stt_ms = int((time.monotonic() - started) * 1000)
         self.stream = None
-        self.decoded_to_ms = speech_end_ms
+        self.decoded_to_ms = self.total16 * 1000 // RATE16
         if text:
             self.segments.append(text)
 
     def feed(self, pcm):
         x8 = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
         x16 = np.asarray(self.resample(x8), dtype=np.float32)
-        self.stats["audio_ms"] += len(x8) * 1000 // SAMPLE_RATE
+        self.received8 += len(x8)
+        self.stats["audio_ms"] = self.received8 * 1000 // SAMPLE_RATE
         self._remember(x16)
         if self.stream is not None and len(x16):
             self.ears.asr.accept(self.stream, x16)
@@ -211,6 +223,7 @@ class Session:
 
     def _on(self, kind, at):
         if kind == "speech_start":
+            self.turn_open = True
             self.segments = []
             self.onset_ms = at
             self.last_partial = ""
@@ -222,7 +235,7 @@ class Session:
         if kind == "pause":
             started = time.monotonic()
             verdict = self.ears.judge(self._since(self.onset_ms - PREROLL_MS))
-            self._close_segment(at)
+            self._close_segment()
             try:
                 p = verdict.result()
             except Exception as e:  # noqa: BLE001 - the fallback silence decides instead
@@ -236,9 +249,10 @@ class Session:
             return events
         if kind == "finalize":
             if self.stream is not None:  # a turn cut at its longest, mid-speech
-                self._close_segment(at["speech_end_ms"])
+                self._close_segment()
             text = " ".join(self.segments)
             self.segments = []
+            self.turn_open = False
             self.stats["turns"] += 1
             if not text:
                 self.stats["unheard"] += 1
@@ -251,12 +265,22 @@ class Session:
         return []
 
     def drop_turn(self):
-        """After a failure: the turn under way is forgotten; positions keep counting."""
+        """After a failure: the turn under way is forgotten and positions keep counting. Returns the
+        `unheard` that closes it toward the bridge when one was open (or about to be), so the bridge
+        does not wait for a final that will never come."""
+        open_ = self.turn_open or self.endpointer.state != "idle"
         self.stream = None
         self.segments = []
+        self.turn_open = False
         self.endpointer.state = "idle"
         self.endpointer.run_ms = 0
+        self.endpointer.dictating = False
         self.vad = self.ears.vad()
+        if not open_:
+            return []
+        self.stats["turns"] += 1
+        self.stats["unheard"] += 1
+        return [{"type": "unheard", "audio_ms": self.endpointer.audio_ms}]
 
 
 # --- the service ---------------------------------------------------------------------------------
@@ -275,17 +299,20 @@ def env_int(name, default, low, high):
 
 def settings():
     """The environment's knobs (the unit sets each explicitly). The fallbacks keep to the ranges
-    the self-hosted report gives (1.2-1.8 s; 2.5-3 s while digits are dictated)."""
+    the self-hosted report gives (1.2-1.8 s; 2.5-3 s while digits are dictated); the echo guard's
+    tail covers the line's echo of the last sound (100-300 ms) with room."""
     return {
         "threads": env_int("LISTEN_THREADS", 2, 1, 8),
         "watchdog_s": env_int("LISTEN_WATCHDOG_S", 30, 10, 600),
         "fallback_ms": env_int("LISTEN_FALLBACK_MS", 1500, 1200, 1800),
         "digits_fallback_ms": env_int("LISTEN_DIGITS_FALLBACK_MS", 2800, 2500, 3000),
+        "guard_tail_ms": env_int("LISTEN_GUARD_TAIL_MS", 400, 200, 800),
     }
 
 
 def endpoint_config(knobs):
-    return EndpointConfig(fallback_ms=knobs["fallback_ms"], digits_fallback_ms=knobs["digits_fallback_ms"])
+    return EndpointConfig(fallback_ms=knobs["fallback_ms"], digits_fallback_ms=knobs["digits_fallback_ms"],
+                          guard_tail_ms=knobs["guard_tail_ms"])
 
 
 def versions():
@@ -464,6 +491,8 @@ def configure_logging(level_name):
     warnings.showwarning = _quiet_warning
     sys.excepthook = _quiet_exception
     threading.excepthook = lambda a: _quiet_exception(a.exc_type, a.exc_value, a.exc_traceback)
+    # An exception Python cannot raise (in a finaliser, say) is printed with its message otherwise.
+    sys.unraisablehook = lambda u: _quiet_exception(u.exc_type, u.exc_value, u.exc_traceback)
     return handler
 
 
@@ -483,13 +512,20 @@ def parse_endpoint(value):
 
 
 def remove_stale_socket(path):
+    """Removes our previous socket. Something else in its place, or a socket another user holds
+    (which this user may not remove), ends the process once with EXIT_SOCKET_HELD."""
     try:
         mode = os.lstat(path).st_mode
     except FileNotFoundError:
         return
     if not stat.S_ISSOCK(mode):
-        raise SystemExit(f"{path} exists and is not a socket")
-    os.unlink(path)
+        LOG.critical("the socket's path is taken by something that is not a socket: exiting")
+        raise SystemExit(EXIT_SOCKET_HELD)
+    try:
+        os.unlink(path)
+    except PermissionError:
+        LOG.critical("the socket's path is held by another user: exiting")
+        raise SystemExit(EXIT_SOCKET_HELD) from None
 
 
 SERVER_OPTIONS = {
@@ -557,8 +593,6 @@ def parse_request(message):
     if kind == "start":
         if msg.get("sample_rate", SAMPLE_RATE) != SAMPLE_RATE or isinstance(msg.get("sample_rate"), bool):
             return kind, None, "bad_request"
-        if not isinstance(msg.get("hotwords", []), list):
-            return kind, None, "bad_request"
         return kind, msg, None
     if kind == "playback":
         if not isinstance(msg.get("active"), bool):
@@ -616,8 +650,10 @@ async def connection(ws, ears, pool, slots):
                     events = await _feed(loop, pool, session, message)
                 except Exception as e:  # noqa: BLE001 - report the kind, never the audio or words
                     LOG.error("audio processing failed: %s", type(e).__name__)
-                    session.drop_turn()
+                    closing = session.drop_turn()
                     await ws.send(json.dumps({"type": "error", "reason": "failed"}))
+                    for event in closing:
+                        await ws.send(json.dumps(event))
                     continue
                 for event in events:
                     await ws.send(json.dumps(event, ensure_ascii=False))

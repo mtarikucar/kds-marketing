@@ -25,6 +25,8 @@ LM_SCALE = 0.6
 LODR_SCALE = -0.5
 HOTWORDS_SCORE = 1.5
 TAIL_PADDING_S = 0.9
+# Refusals of a stream's hotwords before no stream gets them (one may be the words, not the model).
+HOTWORD_FAILURES = 3
 FILES = {"tokens": "tokens.txt", "encoder": "encoder.int8.onnx", "decoder": "decoder.onnx",
          "joiner": "joiner.int8.onnx", "lm": "lm/rnnlm.int8.onnx", "lodr_fst": "lm/2gram.fst"}
 
@@ -59,17 +61,22 @@ class Seda:
         )
         self.lock = threading.Lock()
         self.hotwords_ok = True
+        self.hotword_failures = 0
         self.padding = np.zeros(int(TAIL_PADDING_S * RATE), dtype=np.float32)
 
     def stream(self, words):
-        """A stream biased toward `words` (hotwords.prepare's string); without them if refused."""
+        """A stream biased toward `words` (hotwords.prepare's string); this stream goes without
+        them if the recognizer refuses, and every later one after HOTWORD_FAILURES refusals."""
         with self.lock:
             if words and self.hotwords_ok:
                 try:
                     return self.rec.create_stream(hotwords=words)
-                except (TypeError, RuntimeError, ValueError):
-                    self.hotwords_ok = False
-                    LOG.warning("the recognizer refused per-stream hotwords; continuing without them")
+                except (TypeError, RuntimeError, ValueError) as e:
+                    self.hotword_failures += 1
+                    if self.hotword_failures >= HOTWORD_FAILURES:
+                        self.hotwords_ok = False
+                    LOG.warning("the recognizer refused a stream's hotwords (%s, %d so far)%s", type(e).__name__,
+                                self.hotword_failures, "; no more hotwords" if not self.hotwords_ok else "")
             return self.rec.create_stream()
 
     def _decode(self, stream):

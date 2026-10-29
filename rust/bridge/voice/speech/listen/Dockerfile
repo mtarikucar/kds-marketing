@@ -33,6 +33,7 @@ RUN pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: \
 COPY models.lock ./
 RUN python listen_pins.py fetch-models /models
 COPY endpoint.py hotwords.py features.py vad.py turn.py asr.py jeeta_listen.py ./
+COPY THIRD_PARTY.md ./
 # From here on nothing is downloaded; the recognizer's hotword vocabulary goes to the run tmpfs.
 ENV LISTEN_MODELS=/models HOME=/tmp XDG_CACHE_HOME=/tmp/cache
 # Fail the build, not the first call: the models check, their load and the self-test.

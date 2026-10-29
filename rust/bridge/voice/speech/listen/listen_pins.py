@@ -59,6 +59,8 @@ MODEL_FILES = frozenset(
 )
 HOSTS = {"huggingface.co", "files.pythonhosted.org"}
 CHUNK = 1 << 20
+# The most any download may bring: a pinned file its pinned size, a wheel or a lookup this much.
+MAX_DOWNLOAD = 64 << 20
 
 
 class PinError(Exception):
@@ -221,13 +223,16 @@ def verify(lock, dest=DEFAULT_MODELS):
     return digests
 
 
-def download(url, out, opener=urllib.request.urlopen):
-    """Streams `url` into the open binary file `out`; returns (sha256, size)."""
+def download(url, out, opener=urllib.request.urlopen, limit=MAX_DOWNLOAD):
+    """Streams `url` into the open binary file `out`, refusing more than `limit` bytes; returns
+    (sha256, size)."""
     h, size = hashlib.sha256(), 0
     with opener(urllib.request.Request(url, headers={"User-Agent": "jeeta-voice-listen-build"}), timeout=120) as r:
         for block in iter(lambda: r.read(CHUNK), b""):
-            h.update(block)
             size += len(block)
+            if size > limit:
+                raise PinError(f"a download is larger than {limit} bytes")
+            h.update(block)
             out.write(block)
     return h.hexdigest(), size
 
@@ -259,7 +264,7 @@ def fetch(lock, dest=DEFAULT_MODELS, opener=urllib.request.urlopen):
         fd, part = tempfile.mkstemp(dir=path.parent, prefix=".part-")
         try:
             with os.fdopen(fd, "wb") as out:
-                digest, size = download(entry["url"], out, opener)
+                digest, size = download(entry["url"], out, opener, limit=entry["size"])
             if size != entry["size"] or digest != entry["sha256"]:
                 raise PinError(f"{name}: the download differs from models.lock")
             # Fetched as root at build, read as the service's user: world-readable, owner-written.
@@ -289,7 +294,7 @@ def resolve():
                 if lfs:
                     digest, size = lfs["oid"], lfs["size"]
                 else:
-                    digest, size = download(url, io.BytesIO())
+                    digest, size = download(url, io.BytesIO(), limit=MAX_DOWNLOAD)
                 files[f"{target}/{name}"] = {"url": url, "sha256": digest, "size": size}
             continue
         meta = _json(f"https://pypi.org/pypi/{source['wheel']}/{source['version']}/json")

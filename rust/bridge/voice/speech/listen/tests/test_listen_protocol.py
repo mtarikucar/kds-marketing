@@ -22,7 +22,7 @@ from websockets.exceptions import ConnectionClosed  # noqa: E402
 
 import jeeta_listen  # noqa: E402
 from jeeta_listen import MAX_MESSAGE_BYTES, MAX_SESSIONS, Slots, connection, health, open_server, parse_endpoint  # noqa: E402
-from test_listen_session import LOUD, QUIET, FakeAsr, FakeTurn, ears, frames  # noqa: E402
+from test_listen_session import LOUD, QUIET, FakeAsr, FakeTurn, LevelVad, ears, frames  # noqa: E402
 
 QUIET_LOG = logging.getLogger("test-client")
 QUIET_LOG.setLevel(logging.WARNING)
@@ -130,7 +130,6 @@ def test_bad_requests_are_answered_and_the_connection_stays_usable():
             {"type": "playback", "active": True},  # before start
             {"type": "start", "sample_rate": 16000},
             {"type": "start", "sample_rate": True},
-            {"type": "start", "hotwords": "Jeeta"},
             {"type": "listen"},
             START,
             START,  # a second start
@@ -140,14 +139,60 @@ def test_bad_requests_are_answered_and_the_connection_stays_usable():
         ],
     )
     errors = [m for m in got if m["type"] == "error"]
-    assert errors == [bad] * 11
+    assert errors == [bad] * 10
     assert got[-1]["type"] == "final" and got[-1]["text"] == "sonunda"
 
 
+def test_a_start_at_another_rate_starts_nothing():
+    for rate in (16000, True, "8000"):
+        async def client(url, rate=rate):
+            async with websockets.connect(url, logger=QUIET_LOG) as ws:
+                await ws.recv()
+                await ws.send(json.dumps({"type": "start", "sample_rate": rate}))
+                for f in TURN:
+                    await ws.send(f)
+                got = []
+                while True:
+                    try:
+                        got.append(json.loads(await asyncio.wait_for(ws.recv(), 1.0)))
+                    except asyncio.TimeoutError:
+                        return got
+
+        got = asyncio.run(serving(ears(FakeAsr(["evet"]), FakeTurn(0.9)), client))
+        assert got == [{"type": "error", "reason": "bad_request"}] * 2, (rate, got)  # the start, then the audio
+
+
 def test_bad_hotwords_never_refuse_the_call():
-    start = {"type": "start", "hotwords": [7, None, "Studio 54", "x" * 500, "Ayşe"] + ["Jeeta"] * 30}
-    got = one_call(ears(FakeAsr(["evet"]), FakeTurn(0.9)), [start, *TURN])
-    assert got[-1]["type"] == "final"
+    for hot in ([7, None, "Studio 54", "x" * 500, "Ayşe"] + ["Jeeta"] * 30, "Jeeta", {"a": 1}, None):
+        got = one_call(ears(FakeAsr(["evet"]), FakeTurn(0.9)), [{"type": "start", "hotwords": hot}, *TURN])
+        assert got[-1]["type"] == "final", hot
+
+
+def test_a_failed_start_gives_its_slot_back():
+    tries = {"n": 0}
+
+    def flaky_vad():
+        tries["n"] += 1
+        if tries["n"] <= MAX_SESSIONS + 1:
+            raise RuntimeError("no vad")
+        return LevelVad()
+
+    the_ears = ears(FakeAsr(["evet"]), FakeTurn(0.9))
+    the_ears.vad = flaky_vad
+
+    async def client(url):
+        answers = []
+        async with websockets.connect(url, logger=QUIET_LOG) as ws:
+            await ws.recv()
+            for _ in range(MAX_SESSIONS + 1):
+                await ws.send(json.dumps(START))
+                answers.append(json.loads(await asyncio.wait_for(ws.recv(), 5)))
+            got = await call(ws, [START, *TURN])
+        return answers, got
+
+    answers, got = asyncio.run(serving(the_ears, client))
+    assert answers == [{"type": "error", "reason": "failed"}] * (MAX_SESSIONS + 1)
+    assert got[-1]["type"] == "final", "every failed start gave its slot back"
 
 
 def test_a_call_beyond_the_limit_is_busy_and_closed():
@@ -181,9 +226,12 @@ def test_a_call_beyond_the_limit_is_busy_and_closed():
 
 def test_a_failure_in_the_audio_is_answered_failed_and_the_call_goes_on():
     asr = FakeAsr(["ikinci"])
-    got = one_call(ears(Broken(asr), FakeTurn(0.9)), [START, *frames(LOUD, 600), *frames(QUIET, 600), *TURN])
-    assert {"type": "error", "reason": "failed"} in got
-    assert got[-1]["type"] == "final" and got[-1]["text"] == "ikinci"
+    got = one_call(ears(Broken(asr), FakeTurn(0.9)), [START, *frames(LOUD, 600), *frames(QUIET, 600), *TURN],
+                   until=("final",))
+    at = got.index({"type": "error", "reason": "failed"})
+    assert got[at + 1]["type"] == "unheard", "the dropped turn is closed toward the bridge"
+    assert [m["type"] for m in got[at + 2:] if m["type"] != "partial"] == ["speech_start", "speech_end", "final"]
+    assert got[-1]["text"] == "ikinci"
 
 
 def test_a_message_over_the_size_limit_closes_with_1009_only_that_connection():
@@ -273,7 +321,7 @@ def test_main_health_listen_id_and_a_bad_socket(monkeypatch, capsys):
     assert jeeta_listen.main(["--listen-id"]) == 0
     assert capsys.readouterr().out.strip() != printed, "the fallback is part of the listen id"
     for name, value in [("LISTEN_FALLBACK_MS", "1000"), ("LISTEN_DIGITS_FALLBACK_MS", "3500"),
-                        ("LISTEN_THREADS", "x"), ("LISTEN_WATCHDOG_S", "5")]:
+                        ("LISTEN_THREADS", "x"), ("LISTEN_WATCHDOG_S", "5"), ("LISTEN_GUARD_TAIL_MS", "100")]:
         monkeypatch.setenv(name, value)
         with pytest.raises(SystemExit, match=name):
             jeeta_listen.main(["--listen-id"])
@@ -353,3 +401,92 @@ def test_an_unsupported_numpy_frame_is_not_the_clients_concern():
     pcm = np.full(240, 16000, dtype="<i2").tobytes()
     got = one_call(ears(FakeAsr(["evet"]), FakeTurn(0.9)), [START, *([pcm] * 30), *frames(QUIET, 400)])
     assert got[-1]["type"] == "final"
+
+
+def test_the_contract_values():
+    assert (jeeta_listen.PREROLL_MS, jeeta_listen.HISTORY_MS, jeeta_listen.PARTIAL_EVERY_MS) == (500, 9000, 160)
+    assert (jeeta_listen.MAX_SESSIONS, jeeta_listen.MAX_MESSAGE_BYTES) == (4, 65536)
+    assert jeeta_listen.SERVER_OPTIONS["max_queue"] == 256
+    assert jeeta_listen.DEFAULT_SOCKET == "unix:/run/jeeta-voice/listen/listen.sock"
+    assert jeeta_listen.EXIT_SOCKET_HELD == 78
+    from endpoint import EndpointConfig
+
+    assert EndpointConfig() == EndpointConfig(
+        threshold=0.5, guarded_threshold=0.6, release=0.15, min_speech_ms=200, guarded_min_speech_ms=250,
+        guard_tail_ms=400, stop_ms=200, fallback_ms=1500, digits_fallback_ms=2800, max_turn_ms=30000,
+        smart_turn_threshold=0.5)
+    assert jeeta_listen.endpoint_config(jeeta_listen.settings()) == EndpointConfig()
+
+
+def test_only_our_records_pass():
+    flt = jeeta_listen.OnlyOurs()
+
+    def record(name, level):
+        return logging.LogRecord(name, level, __file__, 1, "Ayşe Yılmaz", (), None)
+
+    assert flt.filter(record("jeeta-listen", logging.DEBUG))
+    assert flt.filter(record("jeeta-listen.asr", logging.WARNING))
+    assert not flt.filter(record("jeeta-listener", logging.INFO)), "a prefix is not a child"
+    assert not flt.filter(record("websockets.server", logging.ERROR))
+    assert not flt.filter(record("listen.websocket", logging.DEBUG))
+
+
+def test_a_withheld_record_is_named_not_quoted(caplog):
+    caplog.set_level(logging.WARNING)
+    jeeta_listen.OnlyOurs().filter(logging.LogRecord("onnx", logging.ERROR, __file__, 1, "Ayşe", (), None))
+    assert "withheld a record (ERROR) from onnx" in caplog.text and "Ayşe" not in caplog.text
+
+
+def test_the_health_check_wants_the_hello():
+    async def run(first):
+        async def handler(ws):
+            await ws.send(json.dumps(first))
+            await asyncio.sleep(0.5)
+
+        async with websockets.serve(handler, "127.0.0.1", 0, logger=QUIET_LOG) as server:
+            port = server.sockets[0].getsockname()[1]
+            return await asyncio.to_thread(health, ("tcp", "127.0.0.1", port))
+
+    assert asyncio.run(run({"type": "hello", "listen_id": "x"})) == 0
+    assert asyncio.run(run({"type": "final", "text": "x"})) == 1
+
+
+def test_a_socket_another_user_holds_ends_the_process_once_with_78(monkeypatch, tmp_path):
+    import stat as stat_module
+
+    class Sock:
+        st_mode = stat_module.S_IFSOCK | 0o660
+
+    class File:
+        st_mode = stat_module.S_IFREG | 0o644
+
+    def refused(path):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "lstat", lambda path: Sock())
+    monkeypatch.setattr(os, "unlink", refused)
+    with pytest.raises(SystemExit) as held:
+        jeeta_listen.remove_stale_socket(str(tmp_path / "listen.sock"))
+    assert held.value.code == 78
+    monkeypatch.setattr(os, "lstat", lambda path: File())
+    with pytest.raises(SystemExit) as taken:
+        jeeta_listen.remove_stale_socket(str(tmp_path / "listen.sock"))
+    assert taken.value.code == 78
+
+
+def test_an_unraisable_exception_is_logged_by_kind_only(caplog):
+    import threading
+    import types
+    import warnings
+
+    saved = (sys.excepthook, sys.unraisablehook, threading.excepthook, warnings.showwarning)
+    handler = jeeta_listen.configure_logging("info")
+    try:
+        caplog.set_level(logging.INFO)
+        sys.unraisablehook(types.SimpleNamespace(exc_type=ValueError, exc_value=ValueError("Ayşe Yılmaz"),
+                                                 exc_traceback=None, err_msg="Exception ignored", object=None))
+    finally:
+        logging.getLogger().removeHandler(handler)
+        logging.getLogger("jeeta-listen").setLevel(logging.NOTSET)
+        sys.excepthook, sys.unraisablehook, threading.excepthook, warnings.showwarning = saved
+    assert "uncaught ValueError" in caplog.text and "Ayşe" not in caplog.text

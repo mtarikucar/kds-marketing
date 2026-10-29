@@ -9,6 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -150,6 +151,25 @@ def test_speech_after_an_incomplete_pause_is_the_same_turn_in_a_new_segment():
     assert second["fed"][0] <= (gap_ms + 300) * 16, "the new segment never re-reads decoded speech"
 
 
+def test_a_number_read_out_in_four_groups_is_one_turn_though_each_group_sounds_finished():
+    groups = ["numaram sıfır beş yüz otuz iki", "dört yüz", "on iki", "otuz üç sıfır sekiz"]
+    s = Session(ears(FakeAsr(groups), FakeTurn(0.9)), [])
+    events = []
+    for _ in groups:
+        events += run(s, frames(LOUD, 600) + frames(QUIET, 1200))
+    assert "final" not in kinds(events)
+    events += run(s, frames(QUIET, 1800))
+    finals = [e for e in events if e["type"] == "final"]
+    assert len(finals) == 1 and finals[0]["text"] == " ".join(groups)
+    assert finals[0]["endpoint_by"] == "fallback" and finals[0]["endpoint_ms"] - finals[0]["speech_end_ms"] == 2816
+
+
+def test_an_answer_that_ends_in_numbers_waits_for_the_digits_fallback():
+    s = Session(ears(FakeAsr(["saat on dört"]), FakeTurn(0.9)), [])
+    events = run(s, frames(LOUD, 600) + frames(QUIET, 3200))
+    assert events[-1]["type"] == "final" and events[-1]["endpoint_ms"] - events[-1]["speech_end_ms"] == 2816
+
+
 def test_while_digits_are_dictated_the_turn_waits_longer():
     s = Session(ears(FakeAsr(["numaram sıfır beş yüz otuz iki", "dört yüz on iki", "tamam mı"]), FakeTurn(0.1)), [])
     run(s, frames(LOUD, 600))
@@ -181,12 +201,14 @@ def test_hotwords_are_cleaned_and_open_every_segment():
     assert [st["hotwords"] for st in asr.streams] == ["ayşe yılmaz", "ayşe yılmaz"]
 
 
-def test_the_echo_guard_ignores_a_middling_level_while_the_bridge_plays():
+def test_the_echo_guard_ignores_a_middling_level_while_the_bridge_plays_and_just_after():
     s = Session(ears(FakeAsr(["x"]), FakeTurn(0.9)), [])
     s.playback(True)
     assert run(s, frames(MIDDLING, 1000)) == []
     s.playback(False)
-    assert kinds(run(s, frames(MIDDLING, 400)))[:1] == ["speech_start"]
+    assert run(s, frames(MIDDLING, 400)) == [], "the guard's 400 ms tail"
+    events = run(s, frames(MIDDLING, 400))
+    assert kinds(events)[:1] == ["speech_start"] and events[0]["audio_ms"] >= 1400
 
 
 def test_a_failing_turn_model_leaves_the_turn_to_the_fallback(caplog):
@@ -216,12 +238,35 @@ def test_a_turn_is_cut_at_its_longest_and_speech_that_goes_on_starts_the_next():
     events = run(s, frames(LOUD, 4000))
     assert kinds(events) == ["speech_start", "final", "speech_start"]
     assert events[1]["endpoint_by"] == "fallback" and events[1]["text"] == "uzun bir konuşma"
+    assert sum(sum(st["fed"]) for st in asr.streams) == 4000 * 16, "no frame is decoded twice"
 
 
-def test_after_a_failure_the_turn_is_dropped_and_positions_keep_counting():
+def test_a_pause_never_feeds_the_next_segment_what_the_last_one_had():
+    asr = FakeAsr(["şey", "salı"])
+    s = Session(ears(asr, FakeTurn(0.1)), [])
+    run(s, frames(QUIET, 1000) + frames(LOUD, 600) + frames(QUIET, 300) + frames(LOUD, 600) + frames(QUIET, 400))
+    first, second = asr.streams
+    assert sum(first["fed"]) + sum(second["fed"]) <= (2900 - 492) * 16
+
+
+def test_stt_ms_is_the_time_the_last_decode_took():
+    s = Session(ears(FakeAsr(["evet"], delay=0.1), FakeTurn(0.9)), [])
+    final = run(s, frames(LOUD, 600) + frames(QUIET, 400))[-1]
+    assert 80 <= final["stt_ms"] < 1000, "a 100 ms decode (Windows' clock ticks in 15.6 ms)"
+
+
+def test_hotwords_that_are_not_a_list_are_none():
+    s = Session(ears(FakeAsr(["evet"]), FakeTurn(0.9)), "Jeeta")
+    assert (s.hotwords, s.kept, s.dropped) == ("", 0, 1)
+    assert run(s, frames(LOUD, 600) + frames(QUIET, 400))[-1]["type"] == "final"
+
+
+def test_after_a_failure_the_turn_is_dropped_closed_and_positions_keep_counting():
     s = Session(ears(FakeAsr(["x", "y"]), FakeTurn(0.9)), [])
+    assert s.drop_turn() == [], "nothing open, nothing to close"
     run(s, frames(LOUD, 600))
-    s.drop_turn()
+    assert s.drop_turn() == [{"type": "unheard", "audio_ms": 576}], "the bridge must not wait for a final"
+    assert s.drop_turn() == []
     events = run(s, frames(QUIET, 400) + frames(LOUD, 600) + frames(QUIET, 400))
     assert kinds(events) == ["speech_start", "speech_end", "final"]
     assert events[0]["audio_ms"] == 992 and events[-1]["text"] == "x"
@@ -243,3 +288,16 @@ def test_g711_alaw_decodes_as_the_standard_table():
     x = np.array([0, 1000, -1000, 32767, -32768], dtype=np.int16)
     back = np.frombuffer(listen_audio.alaw_decode(listen_audio.alaw_encode(x)), dtype="<i2")
     assert np.all(np.abs(back.astype(int) - x.astype(int)) <= np.maximum(16, np.abs(x.astype(int)) // 16))
+
+
+def test_a_failure_in_the_last_decode_still_closes_the_turn():
+    class FailingFinish(FakeAsr):
+        def finish(self, stream):
+            raise RuntimeError("Ayşe")
+
+    # At the 30 s cut (here 3.2 s) the decode runs after the endpointer has ended the turn.
+    s = Session(ears(FailingFinish([]), FakeTurn(0.9), EndpointConfig(max_turn_ms=3200)), [])
+    with pytest.raises(RuntimeError):
+        run(s, frames(LOUD, 4000))
+    assert s.endpointer.state == "idle", "the endpointer had already ended the turn"
+    assert s.drop_turn() == [{"type": "unheard", "audio_ms": 3200}]

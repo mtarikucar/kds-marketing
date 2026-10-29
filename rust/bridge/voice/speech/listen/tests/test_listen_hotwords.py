@@ -134,5 +134,12 @@ def test_prepare_joins_up_to_twenty_once_each_and_counts_the_rest():
     many = [f"ad{'a' * n}" for n in range(30)]
     words, kept, dropped = prepare(many, VOCAB)
     assert kept == 20 and dropped == 10 and words.count("/") == 19
-    assert prepare("Jeeta", VOCAB) == ("", 0, 0)
+    assert prepare("Jeeta", VOCAB) == ("", 0, 1), "not a list: no hotwords, one dropped"
+    assert prepare(None, VOCAB) == ("", 0, 0)
     assert prepare([], VOCAB) == ("", 0, 0)
+
+
+def test_decomposed_letters_are_composed_first():
+    assert clean("Gu\u0308mu\u0308s\u0327dere", VOCAB) == "gümüşdere"
+    assert clean("I\u0307stanbul", VOCAB) == "istanbul", "a dotted capital I in two code points"
+    assert clean("Ays\u0327e", VOCAB) == clean("Ayşe", VOCAB) == "ayşe"

@@ -117,19 +117,72 @@ def test_a_turn_is_cut_at_its_longest():
 
 
 def test_a_new_turn_after_a_final_starts_from_scratch():
-    e = speaking()
+    e = speaking(EndpointConfig(digits_fallback_ms=2800))
     feed(e, SILENT, 7)
     e.dictating = True
-    e.verdict(True)
+    assert feed(e, SILENT, 81)[0][0] == "finalize"  # 88 chunks of silence: 2816 ms
     assert e.dictating is False
-    assert feed(e, VOICED, 7) == [("speech_start", 960)]
+    assert feed(e, VOICED, 7) == [("speech_start", 736 + 88 * CHUNK_MS)]
 
 
-def test_dictation_is_two_number_words_at_the_end():
+def test_dictation_is_a_number_word_at_the_end_of_numbers_being_read_out():
     assert dictating("numaram sıfır beş yüz otuz iki")
     assert dictating("saat on dört")
+    assert dictating("sıfır beş yüz otuz iki dört yüz on kuş sıfır"), "one misheard digit: two of the last three"
+    assert dictating("sıfır beş yüz otuz kuş evet iki"), "four or more numbers in the turn"
     assert not dictating("iki")
     assert not dictating("evet iki"), "one number answering a question is not dictation"
+    assert not dictating("üç kişi evet iki")
     assert not dictating("evet iki kişi")
     assert not dictating("toplam iki yüz elli lira")
     assert not dictating("")
+
+
+def test_while_digits_are_dictated_a_complete_verdict_is_not_taken():
+    e = speaking(EndpointConfig(fallback_ms=1500, digits_fallback_ms=2800))
+    feed(e, SILENT, 7)
+    e.dictating = True
+    assert e.verdict(True) == [], "a digit group sounds finished"
+    assert feed(e, SILENT, 80) == []
+    assert feed(e, SILENT, 1)[0][1]["by"] == "fallback"
+
+
+def test_the_guard_outlasts_the_playback_by_its_tail():
+    e = Endpointer(EndpointConfig(guard_tail_ms=400))
+    e.playback(True, 0)
+    feed(e, SILENT, 10)  # 320 ms
+    e.playback(False, 320)
+    assert feed(e, 0.55, 13) == [], "the line's echo of the last sound: guarded until 720 ms"
+    assert e.guarded is True, "the chunk from 704 ms straddles the end of the tail"
+    assert feed(e, 0.55, 7) == [("speech_start", 736)], "0.55 starts a run once the tail is over"
+    assert e.guarded is False
+
+
+def test_playing_again_within_the_tail_keeps_the_guard():
+    e = Endpointer(EndpointConfig(guard_tail_ms=400))
+    e.playback(True, 0)
+    e.playback(False, 0)
+    feed(e, SILENT, 5)
+    e.playback(True, 160)
+    feed(e, SILENT, 20)
+    assert e.guarded is True and e.guard_until_ms is None
+    e2 = Endpointer(EndpointConfig())
+    e2.playback(False, 0)
+    assert e2.guarded is False and e2.guard_until_ms is None, "a stop without a start changes nothing"
+
+
+def test_a_started_run_continues_down_to_the_release():
+    e = Endpointer(EndpointConfig())
+    feed(e, VOICED, 1)
+    assert feed(e, 0.40, 5) == []
+    assert feed(e, 0.40, 1) == [("speech_start", 0)], "0.40 >= 0.5 - 0.15 once the run has begun"
+    idle = Endpointer(EndpointConfig())
+    assert feed(idle, 0.40, 20) == [], "but 0.40 never begins one"
+
+
+def test_a_second_stop_does_not_stretch_the_tail():
+    e = Endpointer(EndpointConfig(guard_tail_ms=400))
+    e.playback(True, 0)
+    e.playback(False, 0)
+    e.playback(False, 300)
+    assert e.guard_until_ms == 400

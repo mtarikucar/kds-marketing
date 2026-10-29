@@ -261,3 +261,19 @@ def test_check_lock_refuses_every_drift(tmp_path):
     folder = copy_pins(tmp_path / "names")
     edit(folder / "constraints.txt", "sherpa_onnx==2.0.1", "Sherpa.ONNX==2.0.1")
     pins.check_lock(folder)  # names compare the way PyPI compares them
+
+
+def test_a_download_larger_than_pinned_is_cut_off(tmp_path):
+    files = contents()
+    opener, wheel, _ = network(files)
+    lock = lock_of(files, wheel)
+    swollen = dict(files)
+    name = "seda-v0.1/decoder.onnx"
+    swollen[name] = files[name] + b"x" * (2 << 20)  # well past the pinned size, in more than one read
+    big_opener, _, _ = network(swollen)
+    with pytest.raises(pins.PinError, match="larger than"):
+        pins.fetch(lock, tmp_path, big_opener)
+    assert not (tmp_path / name).exists() and not [p for p in tmp_path.rglob(".part-*")]
+    with pytest.raises(pins.PinError, match="larger than 10 bytes"):
+        pins.download("https://x", io.BytesIO(), lambda request, timeout: io.BytesIO(b"y" * 11), limit=10)
+    assert pins.MAX_DOWNLOAD == 64 << 20

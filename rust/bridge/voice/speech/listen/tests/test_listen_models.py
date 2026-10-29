@@ -103,6 +103,7 @@ def test_a_turkish_sentence_end_to_end(ears):
     assert words_wrong(final["text"], "evet yarın saat on dörtte geliyorum") <= 1, final["text"]
     assert final["endpoint_ms"] - final["speech_end_ms"] <= 300
     assert [e["type"] for e in events if e["type"] != "partial"] == ["speech_start", "speech_end", "final"]
+    assert 0 < final["stt_ms"] < 2000
     print(f"\nTIMING yarin turn_end_ms={final['took_ms']} stt_ms={final['stt_ms']} "
           f"endpoint_after_speech_ms={final['endpoint_ms'] - final['speech_end_ms']} rtf={rtf:.3f}")
 
@@ -220,3 +221,68 @@ def test_a_spoken_name_and_its_hotword_reach_no_log(ears, caplog, capfd):
     for piece in ["selin", "zeynep", "karaosmanoğlu", "kılıçarslan", "talas", "studio", "randevum", "şubemize"]:
         assert piece not in logged, piece
     assert any("kılıçarslan" in t for t in texts)
+
+
+def test_a_number_read_out_in_two_groups_is_one_turn_at_the_default_threshold(ears):
+    # Each group, synthesised as its own sentence, sounds finished (Smart Turn says so); while the
+    # words end in numbers only the 2.8 s silence ends the turn (B3 review, I1).
+    events, _ = call(ears, listen_audio.fixture("digits"), tail_ms=4000)
+    (final,) = finals(events)
+    assert "otuz iki" in final["text"] and "sıfır sekiz" in final["text"], final["text"]
+    assert final["endpoint_by"] == "fallback" and 2800 <= final["endpoint_ms"] - final["speech_end_ms"] <= 2840
+
+
+def decode_whole(ears, pcm):
+    """The fixture decoded in one stream, as a reference for the segments."""
+    import soxr
+
+    x8 = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    stream = ears.asr.stream("")
+    ears.asr.accept(stream, soxr.resample(x8, 8000, 16000, quality="HQ").astype(np.float32))
+    return ears.asr.finish(stream)
+
+
+def test_a_sentence_with_pauses_inside_loses_little_to_its_segments(ears):
+    reference = "şey ben aslında yarın öğleden sonra sizi aramayı düşünüyordum"
+    pcm = listen_audio.fixture("multi")
+    events, _ = call(with_cfg(ears, smart_turn_threshold=1.01), pcm)
+    (final,) = finals(events)
+    segmented, whole = words_wrong(final["text"], reference), words_wrong(decode_whole(ears, pcm), reference)
+    print(f"\nWER multi: segments {segmented}/9 words wrong, one stream {whole}/9")
+    assert segmented <= whole + 1 and segmented <= 2
+
+
+def test_smart_turns_probability_is_the_reference_pipelines(ears):
+    # fixtures/smart_turn_reference.json: transformers' features and the model card's call, same audio.
+    import soxr
+
+    reference = json.loads((listen_audio.FIXTURES / "smart_turn_reference.json").read_text(encoding="utf-8"))
+    for name, case in reference["cases"].items():
+        x8 = np.frombuffer(listen_audio.fixture(name), dtype="<i2").astype(np.float32) / 32768.0
+        if case["until_ms"]:
+            x8 = x8[: case["until_ms"] * 8]
+        p = ears.turn.complete_probability(soxr.resample(x8, 8000, 16000, quality="HQ").astype(np.float32))
+        assert abs(p - case["p"]) < 1e-4, (name, p)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the native stderr of the image's Linux build")
+def test_no_hotword_makes_the_recognizer_print_or_fail(ears, capfd):
+    # Random strings of the model's letters, with the characters sherpa-onnx's parser treats
+    # specially and decomposed letters mixed in, through clean() and a real biased stream.
+    import random
+
+    import hotwords
+
+    letters = sorted(ears.asr.vocab.letters)
+    extra = [" ", ":", "#", "@", "/", "'", "-", "1", "\n", "\u0307", "\u0327", "\u0308", "▁", "<", ">", "é", "ß"]
+    rng = random.Random(20261029)
+    capfd.readouterr()
+    for _ in range(300):
+        words = ["".join(rng.choice(letters + extra) for _ in range(rng.randint(1, 45))) for _ in range(rng.randint(1, 25))]
+        biased, kept, _ = hotwords.prepare(words, ears.asr.vocab)
+        stream = ears.asr.stream(biased)
+        ears.asr.accept(stream, np.zeros(1600, dtype=np.float32))
+        ears.asr.finish(stream)
+    out, err = capfd.readouterr()
+    assert out == "" and err == "", "sherpa-onnx printed while encoding hotwords"
+    assert ears.asr.hotwords_ok and ears.asr.hotword_failures == 0

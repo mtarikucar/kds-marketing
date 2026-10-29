@@ -27,11 +27,18 @@ RUN_OPTIONS = [
     "--memory", "1g", "--memory-swap", "1g",
     "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
     "--tmpfs", "/tmp:uid=1501,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev",
-    "--mount", "type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice",
-    "-e", "LISTEN_SOCKET=unix:/run/jeeta-voice/listen.sock", "-e", "LISTEN_THREADS=2", "-e", "LISTEN_WATCHDOG_S=30",
-    "-e", "LISTEN_FALLBACK_MS=1500", "-e", "LISTEN_DIGITS_FALLBACK_MS=2800",
+    "--mount", "type=bind,source=/run/jeeta-voice/listen,target=/run/jeeta-voice/listen",
+    "-e", "LISTEN_SOCKET=unix:/run/jeeta-voice/listen/listen.sock", "-e", "LISTEN_THREADS=2",
+    "-e", "LISTEN_WATCHDOG_S=30", "-e", "LISTEN_FALLBACK_MS=1500", "-e", "LISTEN_DIGITS_FALLBACK_MS=2800",
+    "-e", "LISTEN_GUARD_TAIL_MS=400",
     "${LISTEN_IMAGE}",
 ]
+# What .dockerignore lets through, exactly.
+ALLOWED = {
+    "requirements.txt", "constraints.txt", "wheels.sha256", "requirements.lock", "listen_pins.py", "models.lock",
+    "endpoint.py", "hotwords.py", "features.py", "vad.py", "turn.py", "asr.py", "jeeta_listen.py", "THIRD_PARTY.md",
+    "pytest.ini", "tests/*.py", "tests/fixtures/*.alaw", "tests/fixtures/*.json",
+}
 
 
 def exec_start(unit):
@@ -51,6 +58,7 @@ def test_the_container_runs_exactly_as_specified():
     assert re.search(r"^Restart=always$", UNIT, re.M)
     assert re.search(r"^StartLimitBurst=5$", UNIT, re.M)
     assert re.search(r"^EnvironmentFile=/etc/jeeta-voice/images.env$", UNIT, re.M)
+    assert re.search(r"^RestartPreventExitStatus=78$", UNIT, re.M), "a socket held by another user: fail once"
 
 
 def test_the_unit_sets_every_knob_the_service_reads():
@@ -67,8 +75,12 @@ def test_the_image_user_is_the_units_and_not_speaks():
     listen_user = RUN_OPTIONS[RUN_OPTIONS.index("--user") + 1]
     assert speak_user.split(":")[0] != listen_user.split(":")[0], "the sticky directory needs two owners"
     assert speak_user.split(":")[1] == listen_user.split(":")[1] == "1501", "one group for both sockets"
-    tmpfiles = (VOICE / "deploy" / "jeeta-voice.tmpfiles").read_text(encoding="utf-8")
-    assert tmpfiles.split() == ["d", "/run/jeeta-voice", "1770", "root", "jeeta-voice", "-"]
+    tmpfiles = (VOICE / "deploy" / "jeeta-voice.tmpfiles").read_text(encoding="utf-8").splitlines()
+    assert tmpfiles == ["d /run/jeeta-voice 1770 root jeeta-voice -",
+                        "d /run/jeeta-voice/listen 0710 jeeta-voice-svc jeeta-voice -"]
+    mount = RUN_OPTIONS[RUN_OPTIONS.index("--mount") + 1]
+    assert mount == "type=bind,source=/run/jeeta-voice/listen,target=/run/jeeta-voice/listen", \
+        "listen sees its own directory only: speak cannot bind its name, it cannot reach speak's"
 
 
 def test_the_base_image_is_pinned_by_digest_and_is_speaks():
@@ -109,6 +121,7 @@ def test_every_copied_file_passes_the_dockerignore():
         line[1:] for line in (LISTEN / ".dockerignore").read_text(encoding="utf-8").splitlines()
         if line.startswith("!")
     }
+    assert allowed == ALLOWED
     copied = [src for line in re.findall(r"^COPY (.+)$", DOCKERFILE, re.M) for src in line.split()[:-1]]
     for src in copied:
         assert src in allowed or f"{src}/*.py" in allowed, f"{src} is not let through .dockerignore"
@@ -122,7 +135,7 @@ def test_production_reads_no_override_of_its_pinned_files():
     source = (LISTEN / "jeeta_listen.py").read_text(encoding="utf-8")
     knobs = set(re.findall(r'env_int\("([A-Z_]+)"', source)) | set(re.findall(r'os\.environ\.get\("([A-Z_]+)"', source))
     assert knobs == {"LISTEN_THREADS", "LISTEN_WATCHDOG_S", "LISTEN_FALLBACK_MS", "LISTEN_DIGITS_FALLBACK_MS",
-                     "LISTEN_SOCKET", "LISTEN_LOG", "LISTEN_MODELS"}
+                     "LISTEN_GUARD_TAIL_MS", "LISTEN_SOCKET", "LISTEN_LOG", "LISTEN_MODELS"}
     for name in SERVICE_CODE:
         text = (LISTEN / name).read_text(encoding="utf-8")
         assert "os.environ" not in text or name == "jeeta_listen.py", name
@@ -148,3 +161,29 @@ def test_the_fixtures_reach_the_image_and_nothing_else_does():
     assert ignore[1] == "*"
     for path in (LISTEN / "tests" / "fixtures").iterdir():
         assert path.suffix in (".alaw", ".json"), path.name
+
+
+def test_one_blas_thread_and_a_health_check():
+    env = re.search(r"^ENV (.+?)$", code(DOCKERFILE), re.M).group(1).split()
+    assert "OPENBLAS_NUM_THREADS=1" in env and "OMP_NUM_THREADS=1" in env, "set before anything imports numpy"
+    health = " ".join(re.search(r"^HEALTHCHECK (.+)$", code(DOCKERFILE), re.M).group(1).split())
+    assert health == ('--interval=30s --timeout=10s --start-period=60s --retries=3 '
+                      'CMD ["python", "jeeta_listen.py", "--health"]')
+
+
+def test_the_third_party_notices_ship_and_name_every_model():
+    import sys
+
+    sys.path.insert(0, str(LISTEN))
+    import listen_pins
+
+    assert "COPY THIRD_PARTY.md ./" in DOCKERFILE
+    text = (LISTEN / "THIRD_PARTY.md").read_text(encoding="utf-8")
+    for source in listen_pins.SOURCES.values():
+        assert source.get("revision", source.get("version")) in text
+    for licence in ("Apache-2.0", "CC BY-SA 4.0", "BSD-2-Clause", "MIT", "LGPL-2.1-or-later"):
+        assert licence in text, licence
+    lock = listen_pins.load_lock()
+    assert lock["files"]["silero-vad/silero_vad.onnx"]["archive_sha256"] in text
+    for name in sorted(listen_pins.read_pins((LISTEN / "constraints.txt").read_text(encoding="utf-8"), "c")):
+        assert name.replace("-", "").lower() in text.replace("-", "").lower(), name

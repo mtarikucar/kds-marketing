@@ -19,6 +19,7 @@ of the model's letters (a digit, say: the model writes numbers as words). Phrase
 as sherpa-onnx's `create_stream(hotwords)` expects.
 """
 import math
+import unicodedata
 
 MARK = "▁"
 MAX_HOTWORDS = 20
@@ -92,7 +93,8 @@ def clean(hotword, vocab):
     spaces), or None."""
     if not isinstance(hotword, str):
         return None
-    text = lower_tr(hotword.translate(FOLD)[:MAX_HOTWORD_CHARS])
+    # Composed first: "ş" may arrive as "s" and a combining cedilla, "İ" as "I" and a combining dot.
+    text = lower_tr(unicodedata.normalize("NFC", hotword).translate(FOLD)[:MAX_HOTWORD_CHARS])
     if any(c.isnumeric() for c in text):
         return None
     text = "".join("" if c in APOSTROPHES else c if c.isalpha() else " " for c in text)
@@ -105,9 +107,10 @@ def clean(hotword, vocab):
 
 
 def prepare(hotwords, vocab):
-    """(the per-stream hotwords string, how many were kept, how many were dropped)."""
+    """(the per-stream hotwords string, how many were kept, how many were dropped). Anything but a
+    list is no hotwords (one dropped, unless it was absent)."""
     if not isinstance(hotwords, list):
-        return "", 0, 0
+        return "", 0, 0 if hotwords is None else 1
     kept, seen = [], set()
     for h in hotwords[:MAX_HOTWORDS]:
         c = clean(h, vocab)
