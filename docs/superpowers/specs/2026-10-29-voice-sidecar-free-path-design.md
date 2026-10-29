@@ -125,12 +125,14 @@ fills the gaps the core cannot fill fast enough, with text the policy already ho
 | A `say`/`play` is already queued | skips the acknowledgement and fillers | — |
 | Agent's sentence played, caller silent | **"Hâlâ orada mısınız?"** once; a line of the core (a holding line while the agent works on) ends that wait | 9 000 ms after the sentence ended (the core reports `caller_silence` at 6 s and closes at 15 s) |
 | Caller spoke but STT gave no words | **"Sizi tam duyamadım, tekrar eder misiniz?"** when nothing else is due | immediate |
-| Core unreachable ≥ 5 s during a live call | **fault** ("Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."), then hangs up, reports `error` when the core is back | 5 000 ms |
+| Core unreachable ≥ 5 s during a live call | **fault** ("Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."), heard to its end (it promises the call back: the caller's speech does not cut it, and it waits up to 3 s for an open turn to close), then hangs up, reports `error` when the core is back; a sentence that comes after the loss is dropped | 5 000 ms |
 
 Rules: the acknowledgement, filler, long wait and "still there" never start within 1 s of the last
 local phrase's end ("not heard" and the fault sentence answer an event and wait for no gap); none
 of the first three plays while a turn of the caller is open (from its speech start to its final or
-unheard words, its pauses included); a local phrase is always cuttable; a `say` that arrives while
+unheard words, its pauses included; a turn still open 35 s after it began, past the listener's own
+30 s cut, lost its final words and is closed as unheard); a local phrase is always cuttable but the
+fault sentence; a `say` that arrives while
 a local phrase plays waits for it (an acknowledgement is about 0.5 s and a filler about 1.7 s, but
 the long wait, 55 characters, about 3 s and the fault sentence, 77, longer still: B2's TIMING read
 520 ms of audio for 8 characters, 1 640 ms for 28 and 2 840 ms for 53). Each local phrase is
@@ -149,7 +151,8 @@ whose final transcript is only backchannel ("hı hı", "evet", "tamam", …) aft
 the trace (false barge-in rate is measured, no resume in V1).
 
 **Playback**: a text is split into sentences (abbreviations, decimals, clock times and ordinals
-kept whole; a piece of fewer than three words joins the next, as the speak service cuts, both held
+kept whole, an ordinal being a number before a word in lower case or one of a short list in
+capitals, "4. Levent", "3. Kat"; a piece of fewer than three words joins the next, as the speak service cuts, both held
 to one table), and each sentence is synthesised as one EMA stream. The next sentence is synthesised while
 the current one plays, at most one ahead.
 

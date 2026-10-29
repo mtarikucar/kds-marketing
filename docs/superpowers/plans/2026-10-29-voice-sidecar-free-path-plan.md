@@ -8327,6 +8327,18 @@ CI then runs `jt_archtest` (Expected: `voice_bridge_depends_on_no_server_crate` 
   - Design §3: the "still there" row, the rules, playback and closing.
 - Checks after the round: `cargo test -p jeeta-voice-bridge` g711 5, logging 3, netgsm 4, redaction 4, talker 22, text 10 (48); clippy, fmt and doc clean. The speech tests (Windows, a scratch venv with the pinned pytest, numpy and websockets) give 200 passed and 28 skipped, against 180 and 28 before.
 
+**B4 re-review (2026-10-30): what changed.** All 13 findings above were confirmed fixed, and `finish` hangs nothing up early. One more Important finding and four Minor ones; each fix again began with a failing test.
+- N1, the caller talking over the fault sentence hung up within half a second: a natural "Alo?" (more than the 256 ms of guarded speech) cut it, and the caller never heard the promise to call back. The fault sentence is now queued with `barge_in: false`, like the closing. When the core is lost in a pause of an open turn, the sentence waits for the turn to close, `FAULT_WAIT_MS` (3 s) at most, and then plays to its end even if the caller speaks again. The test that pinned the cut became "the fault sentence plays to its end then hangs up even if the caller talks", with two more for the wait and its cap. Design §3 notes the exception.
+- N2, a `say` that came after the loss played after the fault sentence. It is now reported as `Dropped` (B6 sends `said{seq, 0}`), and nothing is queued.
+- N3, a turn whose final or unheard words never came (B6 passed over a listener message it could not read) blocked every acknowledgement, filler, long wait and "still there" for the rest of the call. Two fixes: the talker closes a turn still open `TURN_LIMIT_MS` (35 s, beyond the listener's own 30 s cut) after it began, as unheard words; and B6 takes a listener message it cannot read inside an open turn as `Unheard` (`Talker::turn_open`; the hello comes before any turn).
+- N4, an ordinal before a capitalised word was still cut ("Bizim yeni ofisimiz 4. Levent'te …", "3. Kat"). Both cutters now also keep a number's period before one of nine words that follow ordinals in capitals in addresses and sports: kat, blok, etap, levent, bölge, lig, dünya, cadde, sokak (`text::ORDINAL_NOUNS`; `ORDINAL_NOUNS` and `PIPELINE_VERSION` 3 in the speak service, both in its pipeline and so its voice id). The shared table gains a `LISTS` line that both tests check their abbreviations and ordinal nouns against, and eight cases. The known limit is a case too: before any other capitalised word the period ends the sentence, which is right for "Kapı numarası 12. Ondan sonra …" and wrong for "Sultan 4. Murat …".
+- N5, the logging allowlist checked names, not values: `kind = ?command` (jt_calls' derived `Debug` prints the sentence), `cause = ?event`, `state = ?ari_event` (the key pressed) and `reason = %t` passed. Now:
+  - A field's value must be a bare path that ends in the field's own name or `id` (`cause`, `self.id`, `out.status`, `c.kind`), and `error` takes `%e` or `%err` alone.
+  - A span's first literal is its name, so `info_span!("call", call = %id)` passes.
+  - Calls in `{ }` and `[ ]` are scanned too.
+  - The samples (now 19, all of B6's and D2's shapes) pass, and the leaks (now 29) are caught.
+- Checks after the round: `cargo test -p jeeta-voice-bridge` g711 5, logging 3, netgsm 4, redaction 4, talker 26, text 11 (53); clippy, fmt and doc clean. The speech tests give 209 passed and 28 skipped.
+
 ### Task B5: The worker's adapters (config, phrase cache, trace, ARI, media, speech)
 
 **Files:**
@@ -10255,11 +10267,15 @@ impl Live {
                     }
                 },
                 m = listen_rx.next(), if listening => match m {
-                    Some(Ok(Message::Text(t))) => {
-                        if let Ok(h) = serde_json::from_str::<Heard>(&t) {
-                            self.heard(h).await;
-                        }
-                    }
+                    Some(Ok(Message::Text(t))) => match serde_json::from_str::<Heard>(&t) {
+                        Ok(h) => self.heard(h).await,
+                        // A message this build cannot read inside a turn (an `error`, a kind it
+                        // lacks): the turn's words are lost, so it ends as unheard (B4 re-review
+                        // N3; the talker also closes a turn left open 35 s). The hello comes
+                        // before any turn.
+                        Err(_) if self.talker.turn_open() => self.input(Input::Unheard).await,
+                        Err(_) => {}
+                    },
                     Some(Ok(_)) => {}
                     _ => {
                         listening = false;
