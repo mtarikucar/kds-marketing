@@ -40,6 +40,7 @@ import {
   VerifyDialog,
 } from './capabilities/dialogs';
 import { GroupsPanel } from './capabilities/GroupsPanel';
+import { PairBridgePanel } from './capabilities/PhoneCard';
 import { WebhookPanel } from './capabilities/WebhookPanel';
 import {
   BUDGET_ITEMS_KEY,
@@ -143,6 +144,9 @@ export function CapabilitiesPage() {
   const canManage = can(session.data, 'capabilities.manage');
   const canProbe = can(session.data, 'workspace.read');
   const canCall = can(session.data, 'calls.work');
+  const canUsePhones = can(session.data, 'devices.work');
+  // A bridge key holds exactly `devices.bridge`, which its issuer must hold too.
+  const canPair = can(session.data, 'api_keys.manage') && can(session.data, 'devices.bridge');
   const [filter, setFilter] = useState<Filter>('all');
   const [probed, setProbed] = useState<{ name: string; out: ProbeOut } | null>(null);
   const [declaring, setDeclaring] = useState(false);
@@ -240,6 +244,7 @@ export function CapabilitiesPage() {
         }
       />
       <FilterChips value={filter} onChange={setFilter} />
+      {filter === 'device' && canPair && <PairBridgePanel />}
       <QueryState query={listed}>
         {items.length === 0 ? (
           <EmptyState title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
@@ -260,6 +265,7 @@ export function CapabilitiesPage() {
                 onConnector={onConnector}
                 connectorBusy={probe.isPending || reconnect.isPending}
                 canCall={canCall}
+                canUsePhones={canUsePhones}
               />
             ))}
           </div>

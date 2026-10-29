@@ -991,6 +991,81 @@
       "heartbeat": "Last registered",
       "never": "The bridge has not registered yet.",
       "hint": "Only the bridge's own registration verifies it, never evidence. Setup:"
+    },
+    "phone": {
+      "title": "Device bridge",
+      "status": "Status",
+      "states": {
+        "online": "Online",
+        "unlisted": "Offline: its bridge no longer lists it (unplugged, or not ready in adb)",
+        "stale": "Silent: no registration in the last minute",
+        "unreachable": "Unreachable: silent for over 10 minutes"
+      },
+      "seen": "last seen {{ago}}",
+      "platform": "Platform",
+      "platforms": {
+        "android": "Android",
+        "ios": "iOS"
+      },
+      "model": "Model",
+      "os": "OS version",
+      "computer": "Computer",
+      "version": "Bridge version",
+      "unicode": "Unicode text",
+      "yes": "Yes",
+      "no": "No",
+      "unicodeHint": "To type Turkish letters or emoji, install ADBKeyBoard on the phone <b>and enable it as an input method</b>: installed alone, it is not used.",
+      "commands": "Commands",
+      "never": "No device bridge has registered this phone yet.",
+      "hint": "Only its bridge's registrations verify a phone, never evidence. Setup:",
+      "log": {
+        "title": "Recent commands",
+        "empty": "No command has been sent to this phone yet.",
+        "args": "Arguments",
+        "result": "Result",
+        "noResult": "No result.",
+        "reason": "Failed: {{reason}}",
+        "file": "Open the file (the link works for 10 minutes)",
+        "statuses": {
+          "queued": "Queued",
+          "leased": "Running",
+          "done": "Done",
+          "failed": "Failed",
+          "expired": "Expired",
+          "canceled": "Canceled"
+        },
+        "reasons": {
+          "device_offline": "the phone is offline",
+          "element_not_found": "no such element on the screen",
+          "unicode_unsupported": "the phone cannot type text outside ASCII",
+          "unsupported_on_platform": "not possible on this platform",
+          "unsupported_by_bridge": "the bridge does not run this command",
+          "adb_error": "adb error",
+          "screen_busy": "the screen kept moving",
+          "timeout": "the phone did not answer in time",
+          "bridge_error": "bridge error",
+          "file_not_found": "the file is not stored",
+          "unknown": "an unknown reason"
+        }
+      },
+      "pair": {
+        "title": "Connect a phone",
+        "body": "An Android phone plugged into a computer by USB is connected by the Jeeta device bridge program on that computer. Pairing gives the program its key.",
+        "open": "Pair a bridge",
+        "dialogTitle": "Pair a device bridge",
+        "dialogDescription": "Issues a key for one computer, with the one permission a bridge needs (devices.bridge).",
+        "defaultName": "Device bridge",
+        "nameHint": "Name it after the computer, e.g. Workshop PC.",
+        "submit": "Issue the key",
+        "keyDescription": "Copy the key now; the three steps to run the bridge are below.",
+        "stepsLabel": "Setting up the bridge",
+        "step1": "On the computer the phone is plugged into, install adb (Android SDK Platform-Tools). On the phone, turn on Developer options and USB debugging, connect it by USB and allow this computer when the phone asks.",
+        "step2": "Put the program jeeta-device-bridge.exe in a folder, and beside it a file named jeeta-device-bridge.toml with this content:",
+        "configLabel": "jeeta-device-bridge.toml",
+        "keyEnv": "You can leave the key out of the file and set it in the JEETA_DEVICE_BRIDGE_KEY environment variable instead.",
+        "step3": "Run jeeta-device-bridge.exe. Within seconds each phone it sees appears on this page, verified. To start it at every logon:",
+        "ownKey": "Each computer's bridge needs a key of its own: Jeeta tells bridges apart by their keys, and refuses a phone that another running bridge holds. For another computer, pair again."
+      }
     }
   },
   "connect": {

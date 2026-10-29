@@ -8,6 +8,7 @@ import { CapabilityStatusBadge } from '@/components/StatusBadges';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
 import { PbxPolicyPanel } from '@/pages/capabilities/PbxPolicyPanel';
+import { PhoneCard } from '@/pages/capabilities/PhoneCard';
 import { VoiceBridgePanel } from '@/pages/capabilities/VoiceBridgePanel';
 import { connectsByOAuth, isConnectable, providerOf } from '@/lib/connectors';
 import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/format';
@@ -76,7 +77,8 @@ const HEARTBEAT_KINDS = new Set(['voice_bridge', 'phone']);
  * One capability: name, kind, how it is reached, its effective status, last verification, policy,
  * the budget items it spends from and the groups it is in. Actions show only for someone who may
  * take them, and never on a retired capability; a connector is verified by its probe, a voice
- * bridge or a phone by its bridge's registrations, neither here.
+ * bridge or a phone by its bridge's registrations, neither here. A phone shows what its bridge
+ * reported of it, and its last commands to who may use phones (`canUsePhones`).
  */
 export function CapabilityCard({
   item,
@@ -91,6 +93,7 @@ export function CapabilityCard({
   onConnector,
   connectorBusy = false,
   canCall = false,
+  canUsePhones = false,
 }: {
   item: CapabilityOut;
   budgetItems: readonly BudgetItemOut[];
@@ -106,6 +109,8 @@ export function CapabilityCard({
   connectorBusy?: boolean;
   /** Whoever views it may place calls (`calls.work`): a verified PBX links to the call log. */
   canCall?: boolean;
+  /** Whoever views it may use phones (`devices.work`): a phone shows its last commands. */
+  canUsePhones?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const c = item.capability;
@@ -215,6 +220,7 @@ export function CapabilityCard({
         )}
         {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
         {bridge && !retired && <VoiceBridgePanel capability={c} />}
+        {c.kind_key === 'phone' && !retired && <PhoneCard item={item} canWork={canUsePhones} />}
         {canCall && c.kind_key === 'netgsm_pbx' && c.status === 'verified' && (
           <div>
             <Button asChild size="sm" variant="outline">
