@@ -12,7 +12,12 @@
 //!
 //! Call ids, command ids and kinds, states, counts, durations and error kinds. Never a phone
 //! number, a transcript, a sentence, audio, an audio path holding a number, the key or a password;
-//! an HTTP error is logged without its URL (`tests/logging.rs` checks the log calls).
+//! an HTTP error is logged without its URL. `tests/logging.rs` reads the sources: a log call
+//! carries only listed fields, formats with `Debug` only those whose values hold no text, and
+//! interpolates nothing into its message; `#[instrument]` skips every argument; only the console
+//! programs print, and print no text but the slice's opt-in transcript. The types that carry a
+//! sentence ([`talker::Item`], [`talker::Input`], [`text::Sentence`]) print its length in `Debug`
+//! ([`text::Redacted`]), never the words.
 
 pub mod g711;
 pub mod netgsm;

@@ -22,8 +22,11 @@
 //! the last item played to its end or was cut.
 
 use std::collections::VecDeque;
+use std::fmt;
 
 use jt_calls::{BridgePhrases, PhraseSet};
+
+use crate::text::Redacted;
 
 /// Milliseconds since the call was answered.
 pub type Ms = u64;
@@ -64,8 +67,8 @@ pub enum Source {
     Phrase { set: PhraseSet, index: u8 },
 }
 
-/// Something to play.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Something to play. `Debug` prints the text's length, not the text.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Item {
     pub id: u64,
     pub source: Source,
@@ -73,8 +76,19 @@ pub struct Item {
     pub barge_in: bool,
 }
 
-/// What happened.
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl fmt::Debug for Item {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Item")
+            .field("id", &self.id)
+            .field("source", &self.source)
+            .field("text", &Redacted(&self.text))
+            .field("barge_in", &self.barge_in)
+            .finish()
+    }
+}
+
+/// What happened. `Debug` prints a sentence's length, not the sentence.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Input {
     Speak {
         seq: u32,
@@ -98,6 +112,33 @@ pub enum Input {
     /// The core is unreachable.
     CoreLost,
     Tick,
+}
+
+impl fmt::Debug for Input {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Input::Speak {
+                seq,
+                text,
+                barge_in,
+                agent,
+            } => f
+                .debug_struct("Speak")
+                .field("seq", seq)
+                .field("text", &Redacted(text))
+                .field("barge_in", barge_in)
+                .field("agent", agent)
+                .finish(),
+            Input::Played { id } => f.debug_struct("Played").field("id", id).finish(),
+            Input::HangupWhenDone => f.write_str("HangupWhenDone"),
+            Input::SpeechStart => f.write_str("SpeechStart"),
+            Input::SpeechEnd => f.write_str("SpeechEnd"),
+            Input::Final => f.write_str("Final"),
+            Input::Unheard => f.write_str("Unheard"),
+            Input::CoreLost => f.write_str("CoreLost"),
+            Input::Tick => f.write_str("Tick"),
+        }
+    }
 }
 
 /// What to do.

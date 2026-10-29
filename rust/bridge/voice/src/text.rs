@@ -5,12 +5,35 @@
 //! (`split_sentences` of `speech/speak/jeeta_speak.py`), and both tests hold one table
 //! (`speech/speak/tests/speak_sentence_cases.py`), so a sentence sent alone is one stream there.
 
-/// A sentence: characters `[start, end)` of the original text, and its text.
-#[derive(Clone, Debug, PartialEq, Eq)]
+use std::fmt;
+
+/// A text in `Debug` as its length only (`<36 chars>`): what the bridge's types that carry a
+/// sentence print instead of it (lib.rs, Logging).
+pub struct Redacted<'a>(pub &'a str);
+
+impl fmt::Debug for Redacted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<{} chars>", self.0.chars().count())
+    }
+}
+
+/// A sentence: characters `[start, end)` of the original text, and its text. `Debug` prints the
+/// offsets and the text's length.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Sentence {
     pub start: usize,
     pub end: usize,
     pub text: String,
+}
+
+impl fmt::Debug for Sentence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sentence")
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .field("text", &Redacted(&self.text))
+            .finish()
+    }
 }
 
 /// Words a period after which ends no sentence (the speak service keeps the same list:
