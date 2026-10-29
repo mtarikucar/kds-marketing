@@ -5,7 +5,7 @@
 //! base_url = "https://jeetagrowth.com"   # the Jeeta server
 //! key = "…"                              # the bridge key; or JEETA_DEVICE_BRIDGE_KEY
 //! adb = 'C:\platform-tools\adb.exe'      # optional
-//! serials = ["18cf9fbb"]                 # optional: only these phones
+//! serials = ["0a1b2c3d"]                 # optional: only these phones
 //! bridge_id = "atolye-pc"                # optional: this computer's name
 //! ```
 //!
@@ -326,13 +326,13 @@ mod tests {
     fn a_full_file_is_read() {
         let config = parse(&format!(
             "base_url = \"https://jeeta.example/base\"\nkey = \"{KEY}\"\nadb = 'C:\\adb\\adb.exe'\n\
-             serials = [\"18cf9fbb\"]\nbridge_id = \"atolye\"\n"
+             serials = [\"0a1b2c3d\"]\nbridge_id = \"atolye\"\n"
         ))
         .unwrap();
         assert_eq!(config.base_url.as_str(), "https://jeeta.example/base/");
         assert_eq!(config.key.expose(), KEY);
         assert_eq!(config.adb, PathBuf::from("C:\\adb\\adb.exe"));
-        assert_eq!(config.serials, Some(vec!["18cf9fbb".to_owned()]));
+        assert_eq!(config.serials, Some(vec!["0a1b2c3d".to_owned()]));
         assert_eq!(config.bridge_id, "atolye");
         // Debug never shows the key.
         assert!(!format!("{config:?}").contains(KEY));

@@ -520,11 +520,20 @@ impl FileTransfer for CommandFiles {
                 "the server sent no download address for this command",
             ));
         };
-        self.client.download(url, dest).await.map_err(|error| {
-            DriverError::new(
+        self.client.download(url, dest).await.map_err(|error| match error {
+            // What the signed route answers for a file it does not have (deleted since the
+            // command was leased) and for an address past its time.
+            ClientError::Status { status: 404, .. } => DriverError::new(
+                FailReason::FileNotFound,
+                format!(
+                    "downloading the file failed: {error}; the file was deleted, or its download \
+                     address ran out"
+                ),
+            ),
+            error => DriverError::new(
                 FailReason::BridgeError,
                 format!("downloading the file failed: {error}"),
-            )
+            ),
         })
     }
 }
@@ -680,6 +689,48 @@ mod tests {
         assert_eq!(written.unwrap(), 100);
         assert_eq!(std::fs::read(&dest).unwrap(), vec![b'a'; 100]);
         std::fs::remove_file(&dest).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_file_jeeta_no_longer_has_is_file_not_found() {
+        let gone = raw_server(
+            "HTTP/1.1 404 Not Found
+Content-Length: 0
+
+",
+            Vec::new(),
+            false,
+        )
+        .await;
+        let dest = std::env::temp_dir().join(format!("jdb-unit-{}", Uuid::now_v7()));
+        let error = client()
+            .files(Some(format!("{gone}?sig=SIGNED-SECRET")))
+            .download(&dest)
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason, FailReason::FileNotFound);
+        assert_eq!(
+            error.detail,
+            "downloading the file failed: the server answered 404; the file was deleted, or its \
+             download address ran out"
+        );
+        assert!(!dest.exists());
+        // Any other failure stays the bridge's.
+        let broken = raw_server(
+            "HTTP/1.1 500 Internal Server Error
+Content-Length: 0
+
+",
+            Vec::new(),
+            false,
+        )
+        .await;
+        let error = client()
+            .files(Some(broken))
+            .download(&dest)
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason, FailReason::BridgeError);
     }
 
     #[tokio::test]

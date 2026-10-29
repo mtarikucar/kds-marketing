@@ -212,6 +212,7 @@ async fn a_command_round_trips_through_the_tools() {
                 screen: None,
                 features,
             }],
+            instance: None,
         },
     )
     .await
@@ -245,6 +246,7 @@ async fn a_command_round_trips_through_the_tools() {
             CommandsQuery {
                 wait_s: 5,
                 limit: 20,
+                instance: None,
             },
         )
         .await

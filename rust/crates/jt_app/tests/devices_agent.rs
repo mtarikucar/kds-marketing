@@ -22,7 +22,7 @@ use jt_app::error::ErrorCode;
 use jt_app::ports::UnitOfWork;
 use jt_app::ports::devices::{
     CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, DeviceKey, ElementTarget, FailReason,
-    TEXT_UNICODE,
+    KEY_WAKEUP, TEXT_UNICODE,
 };
 use jt_app::usecases::api_keys::{self, AgentPrincipal, CreateKey};
 use jt_app::usecases::capabilities;
@@ -112,6 +112,7 @@ async fn register(
         version: "0.1.0".into(),
         protocol: 1,
         phones,
+        instance: None,
     };
     bridge::register(&w.deps, &bridge_at(key, now), body)
         .await
@@ -178,6 +179,7 @@ async fn bridge_answers(
     let query = CommandsQuery {
         wait_s: 5,
         limit: 20,
+        instance: None,
     };
     let leased = bridge::commands(&w.deps, &b, query).await.unwrap().commands;
     let results = leased
@@ -303,6 +305,7 @@ async fn act_returns_queued_when_wait_ends() {
     let query = CommandsQuery {
         wait_s: 0,
         limit: 20,
+        instance: None,
     };
     assert_eq!(
         bridge::commands(&w.deps, &b, query)
@@ -322,6 +325,32 @@ async fn act_returns_queued_when_wait_ends() {
     .unwrap();
     assert_eq!((now.status, now.attempts), (CommandStatus::Leased, 1));
     assert_eq!(now.result, None);
+}
+
+#[tokio::test]
+async fn act_queues_the_wakeup_key_only_for_a_bridge_that_lists_it() {
+    // A bridge built before the key lists every kind but not `key.wakeup`; one built after does.
+    let mut newer = every_feature();
+    newer.push(KEY_WAKEUP.to_owned());
+    let (w, _, out, agent) = rig_with(vec![phone("SER1"), phone_with("SER2", newer)]).await;
+    let (older, newer) = (cap(&out, 0), cap(&out, 1));
+    let key = |key| DeviceCommand::Key { key };
+    let e = err(agent::act(&w.deps, &agent, older, input(key(DeviceKey::Wakeup), 0)).await);
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(
+        e.details,
+        json!({ "field": "command", "reason": "unsupported_by_bridge", "kind": KEY_WAKEUP })
+    );
+    assert!(queued(&w, older).await.is_empty());
+    // Every other key still reaches it.
+    let power = agent::act(&w.deps, &agent, older, input(key(DeviceKey::Power), 0))
+        .await
+        .unwrap();
+    assert_eq!(queued(&w, older).await, [power.command_id]);
+    let wakeup = agent::act(&w.deps, &agent, newer, input(key(DeviceKey::Wakeup), 0))
+        .await
+        .unwrap();
+    assert_eq!(queued(&w, newer).await, [wakeup.command_id]);
 }
 
 #[tokio::test]
@@ -633,6 +662,8 @@ async fn observe_answers_the_screen_and_a_screenshot_address() {
             rotation: 0,
         },
         foreground_app: Some("com.whatsapp".into()),
+        awake: Some(true),
+        locked: Some(false),
         elements: vec![Element {
             text: Some("Gönder".into()),
             id: Some("com.whatsapp:id/send".into()),
@@ -670,6 +701,11 @@ async fn observe_answers_the_screen_and_a_screenshot_address() {
     let result = out.result.clone().unwrap();
     assert_eq!(result["kind"], "observation");
     assert_eq!(result["elements"][0]["tap_point"], json!([650, 1550]));
+    // Whether the screen is on and locked reaches the agent as the bridge said it.
+    assert_eq!(
+        (&result["awake"], &result["locked"]),
+        (&json!(true), &json!(false))
+    );
     assert_eq!(
         result,
         serde_json::to_value(CommandResult::Observation(seen)).unwrap()
@@ -938,6 +974,7 @@ async fn a_leased_command_past_its_expiry_reads_leased_until_it_ends() {
     let query = CommandsQuery {
         wait_s: 0,
         limit: 20,
+        instance: None,
     };
     assert_eq!(
         bridge::commands(&w.deps, &b, query)

@@ -19,8 +19,19 @@
 //! - ADBKeyBoard loses a broadcast sent before it has bound to the focused field, and
 //!   `am broadcast` answers `result=0` either way. After `ime set` the driver waits, at most
 //!   [`IME_BIND_TIMEOUT`], until `dumpsys input_method` shows it bound on both sides (see
-//!   `commands::bound_to_a_field`).
+//!   `commands::bound_to_a_field`). On the Redmi it held the focused field as soon as `ime set`
+//!   returned, and text sent to it arrived whole with the input method put back right after the
+//!   broadcast (task D4): no pause is needed between the two.
 //! - Auto-rotate turns the screen: its size and rotation are read on every observation.
+//! - Asleep behind its lock screen, the phone dumps System UI's nodes only, with the focus on its
+//!   notification shade and no app in front: an observation says so (`awake`, `locked`), read
+//!   from the `dumpsys window` it runs for the focus anyway (task D4), display 0's lines only:
+//!   another display (a recording's, a cast's) is dumped first and always reads awake. `power`
+//!   toggles the
+//!   screen, turning one that is on off; `wakeup` (`KEYCODE_WAKEUP`) only turns it on. In D4 a
+//!   wake-up key did not visibly wake the Redmi: MIUI's proximity guard (its
+//!   `ScreenOnProximitySensorGuide` window showed after `power`) turns the screen back off while
+//!   the sensor is covered.
 //! - The phone keeps the input methods it used, most recent first
 //!   (`input_methods_subtype_history`): the one to put back when nothing else says.
 //!
@@ -50,8 +61,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jt_device_protocol::{
-    CommandResult, DeviceCommand, FailReason, MAX_ID_CHARS, MAX_SCREEN_PX, PhoneReport, Platform,
-    Screen, TEXT_UNICODE,
+    CommandResult, DeviceCommand, FailReason, KEY_WAKEUP, MAX_ID_CHARS, MAX_SCREEN_PX, PhoneReport,
+    Platform, Screen, TEXT_UNICODE,
 };
 use tracing::{info, warn};
 
@@ -322,6 +333,7 @@ impl AndroidAdbDriver {
             .iter()
             .map(|kind| (*kind).to_owned())
             .collect();
+        features.push(KEY_WAKEUP.to_owned());
         if facts.unicode {
             features.push(TEXT_UNICODE.to_owned());
         }
@@ -344,8 +356,8 @@ impl PhoneDriver for AndroidAdbDriver {
 
     /// The phone's model and Android version (`getprop`, kept from an earlier report when this
     /// one leaves them out), its screen in its natural orientation (`wm size`; an observation
-    /// reads the rotation), and every command kind, with [`TEXT_UNICODE`] when ADBKeyBoard is
-    /// installed and enabled. It takes no lock a command holds.
+    /// reads the rotation), and every command kind and [`KEY_WAKEUP`], with [`TEXT_UNICODE`] when
+    /// ADBKeyBoard is installed and enabled. It takes no lock a command holds.
     async fn report(&self) -> Result<PhoneReport, DriverError> {
         self.read_report().await
     }
@@ -730,11 +742,11 @@ mod tests {
 
     #[test]
     fn devices_are_read_after_the_heading() {
-        let listing = "* daemon not running; starting now at tcp:5037\r\n* daemon started successfully\r\nList of devices attached\r\n18cf9fbb               device product:fog_tr model:220333QAG device:fog transport_id:1\r\nR58N0TEST0A    no permissions (missing udev rules?)\r\n\r\n";
+        let listing = "* daemon not running; starting now at tcp:5037\r\n* daemon started successfully\r\nList of devices attached\r\n0a1b2c3d               device product:fog_tr model:220333QAG device:fog transport_id:1\r\nR58N0TEST0A    no permissions (missing udev rules?)\r\n\r\n";
         assert_eq!(
             devices(listing),
             [
-                ("18cf9fbb".to_owned(), "device".to_owned()),
+                ("0a1b2c3d".to_owned(), "device".to_owned()),
                 ("R58N0TEST0A".to_owned(), "no".to_owned()),
             ]
         );
@@ -745,7 +757,7 @@ mod tests {
     fn adb_that_cannot_reach_the_phone() {
         let gone = |stderr: &str| unreachable(&AdbOutput::new(1, "", stderr)).map(|e| e.reason);
         assert_eq!(
-            gone("adb.exe: device '18cf9fbb' not found\r\n"),
+            gone("adb.exe: device '0a1b2c3d' not found\r\n"),
             Some(FailReason::DeviceOffline)
         );
         assert_eq!(
@@ -758,7 +770,7 @@ mod tests {
         );
         // Said anywhere in a line of adb's own, after what it was doing.
         assert_eq!(
-            gone("adb: error: failed to get feature set: device '18cf9fbb' not found\n"),
+            gone("adb: error: failed to get feature set: device '0a1b2c3d' not found\n"),
             Some(FailReason::DeviceOffline)
         );
         assert_eq!(
