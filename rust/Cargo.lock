@@ -1321,6 +1321,7 @@ dependencies = [
  "async-trait",
  "axum",
  "dotenvy",
+ "futures-util",
  "hex",
  "jt_app",
  "jt_capability",
