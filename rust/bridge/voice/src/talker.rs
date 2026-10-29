@@ -15,8 +15,12 @@
 //! - The core lost: what was queued is dropped, the fault sentence plays, then the line is hung
 //!   up; once. A hangup the core already asked for goes on as it was (its closing is not
 //!   replaced), and a sentence that comes after the loss is dropped. The fault sentence carries
-//!   the promise to call back, so it is heard to its end: the caller's speech does not cut it,
-//!   and it waits for an open turn to close, [`FAULT_WAIT_MS`] at most.
+//!   the promise to call back, so it is heard to its end: the caller's speech does not cut it.
+//!   Nor does it start over the caller's speech: it waits for the caller's pause (the listener's
+//!   `SpeechEnd`, after 200 ms of silence), and in a pause of an open turn for the turn to close,
+//!   until [`FAULT_WAIT_MS`] after the loss; from then on it starts at the caller's next pause.
+//!   A caller who talks on without a pause holds it back until the listener ends the turn (its
+//!   30 s cut).
 //!
 //! The acknowledgement, the filler, the long wait and "still there" start no sooner than
 //! [`Timing::phrase_gap_ms`] after the last phrase ended; "not heard" and the fault sentence answer
@@ -35,7 +39,9 @@ use crate::text::Redacted;
 /// Milliseconds since the call was answered.
 pub type Ms = u64;
 
-/// How long the fault sentence waits for an open turn of the caller to close.
+/// How long after the loss of the core the fault sentence waits, in a pause of the caller's open
+/// turn, for the turn to close. It never starts while the caller speaks, so past this it starts
+/// at the caller's next pause.
 pub const FAULT_WAIT_MS: Ms = 3_000;
 /// A turn of the caller open this long is closed as unheard words: the listener ends every turn
 /// within 30 s, so its final or unheard words were lost.

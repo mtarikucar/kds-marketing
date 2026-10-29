@@ -125,7 +125,7 @@ fills the gaps the core cannot fill fast enough, with text the policy already ho
 | A `say`/`play` is already queued | skips the acknowledgement and fillers | — |
 | Agent's sentence played, caller silent | **"Hâlâ orada mısınız?"** once; a line of the core (a holding line while the agent works on) ends that wait | 9 000 ms after the sentence ended (the core reports `caller_silence` at 6 s and closes at 15 s) |
 | Caller spoke but STT gave no words | **"Sizi tam duyamadım, tekrar eder misiniz?"** when nothing else is due | immediate |
-| Core unreachable ≥ 5 s during a live call | **fault** ("Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."), heard to its end (it promises the call back: the caller's speech does not cut it, and it waits up to 3 s for an open turn to close), then hangs up, reports `error` when the core is back; a sentence that comes after the loss is dropped | 5 000 ms |
+| Core unreachable ≥ 5 s during a live call | **fault** ("Kısa bir teknik sorun yaşıyoruz, sizi birkaç dakika içinde geri arayacağız."), heard to its end (it promises the call back: the caller's speech does not cut it), and never started over the caller's speech: it waits for the caller's pause (200 ms of silence), in a pause of an open turn for the turn to close until 3 s after the loss, then starts at the next pause; then hangs up, reports `error` when the core is back; a sentence that comes after the loss is dropped | 5 000 ms |
 
 Rules: the acknowledgement, filler, long wait and "still there" never start within 1 s of the last
 local phrase's end ("not heard" and the fault sentence answer an event and wait for no gap); none

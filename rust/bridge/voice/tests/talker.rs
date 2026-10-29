@@ -296,6 +296,19 @@ fn the_fault_sentence_waits_three_seconds_at_most_for_a_turn() {
     assert_eq!(plays(&t.on(Input::Tick, 4_500)), [FAULT]);
 }
 
+/// The three seconds count in a pause only: past them the sentence still waits for the caller to
+/// pause, so it is never started over the caller's speech.
+#[test]
+fn the_fault_sentence_waits_for_the_callers_pause_past_three_seconds() {
+    let mut t = talker();
+    t.on(Input::SpeechStart, 0);
+    t.on(Input::CoreLost, 500);
+    for now in (520..6_000).step_by(20) {
+        assert!(plays(&t.on(Input::Tick, now)).is_empty(), "at {now}");
+    }
+    assert_eq!(plays(&t.on(Input::SpeechEnd, 6_000)), [FAULT]);
+}
+
 /// B4 re-review N2: a sentence that reaches the talker once the core was lost is never played.
 #[test]
 fn a_sentence_after_the_core_was_lost_is_dropped() {
