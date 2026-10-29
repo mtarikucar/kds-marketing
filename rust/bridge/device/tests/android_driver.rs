@@ -13,6 +13,10 @@
 //!   too fast for any state in between to be read);
 //! - put together from those two, as no capture shows it: `input_method_in_between.txt` (the
 //!   manager switched to ADBKeyBoard, the app's client still bound to the keyboard before);
+//! - read on that phone, awake and unlocked (task D4): `window_state_awake.txt`, what an
+//!   observation's `dumpsys window | grep …` gives; written in its shape with the values D4 read
+//!   on the phone asleep behind its lock screen (the focus on `NotificationShade`, the keyguard
+//!   `showing=true`): `window_state_locked_asleep.txt`;
 //! - written by hand in the shapes the plan's findings record: `dump_whatsapp.xml`,
 //!   `dump_numeric_refs.xml`, `idle_state_error.txt`, `inject_events_refusal.txt` and the other
 //!   phones of `devices_l.txt`.
@@ -32,8 +36,8 @@ use jeeta_device_bridge::driver::android::{
 };
 use jeeta_device_bridge::{ContentType, DriverError, FileTransfer, PhoneDriver, PhoneRegistry};
 use jt_device_protocol::{
-    CommandResult, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, MAX_DETAIL_CHARS,
-    Observation, Platform, Screen, TEXT_UNICODE,
+    CommandResult, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, KEY_WAKEUP,
+    MAX_DETAIL_CHARS, Observation, Platform, Screen, TEXT_UNICODE,
 };
 use uuid::Uuid;
 
@@ -48,6 +52,9 @@ const DUMP_LINE: &str =
 const CAT_LINE: &str = "exec-out cat /data/local/tmp/jeeta_ui.xml";
 const RM_LINE: &str = "shell rm -f /data/local/tmp/jeeta_ui.xml";
 const HISTORY_LINE: &str = "shell settings get secure input_methods_subtype_history";
+/// What an observation reads of the window manager: the focus, and whether the screen is on and
+/// locked.
+const WINDOW_LINE: &str = "shell dumpsys window | grep -e mCurrentFocus= -e mAwake= -e isKeyguardShowing= -e showing= -e interactiveState=";
 const FILE_ID: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0f11);
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake screen";
 const DOWNLOAD: &[u8] = b"the file the agent pushes";
@@ -231,7 +238,7 @@ impl FakeAdb {
             HISTORY_LINE => return ok(state.history.clone()),
             "shell wm size" if state.wm_size_works => return ok(state.wm_size.clone()),
             "shell wm size" => return AdbOutput::new(1, "", "wm: failure\n"),
-            "shell dumpsys window | grep mCurrentFocus" => return ok(state.focus.clone()),
+            WINDOW_LINE => return ok(state.focus.clone()),
             "shell getprop" => {
                 return match &state.getprop {
                     Some(props) => ok(props.clone()),
@@ -510,6 +517,53 @@ async fn dump_distills_elements() {
         "no element without size"
     );
     assert!(seen.elements.len() < 164, "the scaffolding is left out");
+}
+
+#[tokio::test]
+async fn observe_says_whether_the_screen_is_on_and_locked() {
+    // Awake and unlocked, as the Redmi answered.
+    let adb = Arc::new(FakeAdb::phone().with(|s| s.focus = fixture("window_state_awake.txt")));
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app.as_deref(), Some("com.android.settings"));
+    assert_eq!((seen.awake, seen.locked), (Some(true), Some(false)));
+    // One call reads the focus and the screen's state.
+    assert_eq!(adb.count(WINDOW_LINE), 1);
+    assert!(
+        adb.lines()
+            .iter()
+            .all(|l| !l.contains("dumpsys power") && !l.contains("deviceidle"))
+    );
+
+    // Asleep behind the lock screen: the notification shade has the focus, no app is in front.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.focus = fixture("window_state_locked_asleep.txt");
+    }));
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app, None);
+    assert_eq!((seen.awake, seen.locked), (Some(false), Some(true)));
+
+    // A phone that does not say: left out, and the observation stands.
+    let adb = Arc::new(FakeAdb::phone());
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app.as_deref(), Some("com.whatsapp"));
+    assert_eq!((seen.awake, seen.locked), (None, None));
+
+    // The window manager cannot be read at all: the same.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.answers.push((
+            WINDOW_LINE.to_owned(),
+            AdbOutput::new(
+                1,
+                "",
+                "Can't find service: window
+",
+            ),
+        ));
+    }));
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app, None);
+    assert_eq!((seen.awake, seen.locked), (None, None));
+    assert!(!seen.elements.is_empty());
 }
 
 #[tokio::test]
@@ -1213,6 +1267,7 @@ async fn each_kind_runs_its_adb_command() {
             "shell input keyevent 24",
             "shell input keyevent 25",
             "shell input keyevent 26",
+            "shell input keyevent 224",
             "shell am start -a android.intent.action.VIEW -d 'https://example.com/?q=a b&c'",
             "shell monkey -p com.whatsapp -c android.intent.category.LAUNCHER 1",
         ]
@@ -1581,6 +1636,7 @@ async fn report_merges_getprop() {
         .iter()
         .map(|k| (*k).to_owned())
         .collect();
+    every.push(KEY_WAKEUP.to_owned());
     every.push(TEXT_UNICODE.to_owned());
     assert_eq!(report.features, every);
     assert_eq!(report.validate(), Ok(()));
@@ -1609,7 +1665,8 @@ async fn report_merges_getprop() {
     }));
     let report = driver(&adb).report().await.unwrap();
     assert!(!report.features.iter().any(|f| f == TEXT_UNICODE));
-    assert_eq!(report.features.len(), DeviceCommand::KINDS.len());
+    // Every kind, and the `wakeup` key.
+    assert_eq!(report.features.len(), DeviceCommand::KINDS.len() + 1);
     assert_eq!(report.model.as_deref(), Some("220333QAG"));
 }
 

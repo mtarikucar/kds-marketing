@@ -2,8 +2,8 @@
 //! constructors that build valid bodies.
 use jt_device_protocol::{
     CommandError, CommandResult, CommandsOut, CommandsQuery, DeviceCommand, DeviceKey, Element,
-    ElementTarget, FailReason, FileOut, HEARTBEAT_S, LeasedCommand, LenientCommands, MAX_COMMANDS,
-    MAX_DETAIL_CHARS, MAX_ELEMENTS, MAX_FEATURE_CHARS, MAX_FEATURES, MAX_ID_CHARS,
+    ElementTarget, FailReason, FileOut, HEARTBEAT_S, KEY_WAKEUP, LeasedCommand, LenientCommands,
+    MAX_COMMANDS, MAX_DETAIL_CHARS, MAX_ELEMENTS, MAX_FEATURE_CHARS, MAX_FEATURES, MAX_ID_CHARS,
     MAX_OUTPUT_BYTES, MAX_PHONES, MAX_RESULTS, MAX_RESULTS_BODY_BYTES, MAX_SCREEN_PX,
     MAX_TEXT_CHARS, MAX_VERSION_CHARS, MAX_WAIT_S, Observation, Outcome, PHONE_RETIRED,
     PROTOCOL_VERSION, PhoneReport, Platform, ProtocolError, RefusedPhone, RegisterIn, RegisterOut,
@@ -84,6 +84,8 @@ fn observation() -> Observation {
     Observation {
         screen: screen(),
         foreground_app: Some("com.whatsapp".into()),
+        awake: None,
+        locked: None,
         elements: vec![Element {
             text: Some("Gönder".into()),
             id: None,
@@ -771,6 +773,44 @@ fn observation_ignores_unknown_fields() {
     for ignored in ["density", "checked", "extra_top"] {
         assert!(!wire.contains(ignored), "{ignored} was written back");
     }
+}
+
+/// Whether the screen is on and locked travel with the observation, and a bridge that does not
+/// say leaves them out.
+#[test]
+fn an_observation_carries_the_screens_state() {
+    let seen = Observation {
+        awake: Some(false),
+        locked: Some(true),
+        foreground_app: None,
+        ..observation()
+    };
+    let results = ResultsIn {
+        results: vec![ResultIn {
+            command_id: id(1),
+            outcome: Outcome::Done {
+                result: CommandResult::Observation(seen.clone()),
+            },
+            duration_ms: 5,
+        }],
+    };
+    assert_eq!(results.validate(), Ok(()));
+    let wire = serde_json::to_value(CommandResult::Observation(seen.clone())).unwrap();
+    assert_eq!(wire["awake"], false);
+    assert_eq!(wire["locked"], true);
+    let back: CommandResult = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, CommandResult::Observation(seen));
+    let unsaid = serde_json::to_value(CommandResult::Observation(observation())).unwrap();
+    assert!(unsaid.get("awake").is_none() && unsaid.get("locked").is_none());
+    // The `wakeup` key, and the feature it needs, are this crate's to import too.
+    let wakeup = DeviceCommand::Key {
+        key: DeviceKey::Wakeup,
+    };
+    assert!(supports(
+        &["key".to_owned(), KEY_WAKEUP.to_owned()],
+        &wakeup
+    ));
+    assert!(!supports(&["key".to_owned()], &wakeup));
 }
 
 #[test]

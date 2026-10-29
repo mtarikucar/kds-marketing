@@ -112,7 +112,11 @@ pub enum DeviceKey {
     Delete,
     VolumeUp,
     VolumeDown,
+    /// Toggles the screen: it turns a screen that is on off.
     Power,
+    /// Turns the screen on, and leaves one that is on as it is. Newer than protocol 1's first
+    /// bridges: it needs [`crate::KEY_WAKEUP`].
+    Wakeup,
 }
 
 impl DeviceKey {
@@ -126,6 +130,7 @@ impl DeviceKey {
         DeviceKey::VolumeUp,
         DeviceKey::VolumeDown,
         DeviceKey::Power,
+        DeviceKey::Wakeup,
     ];
 
     /// The wire name, e.g. `"app_switch"`.
@@ -139,6 +144,7 @@ impl DeviceKey {
             DeviceKey::VolumeUp => "volume_up",
             DeviceKey::VolumeDown => "volume_down",
             DeviceKey::Power => "power",
+            DeviceKey::Wakeup => "wakeup",
         }
     }
 

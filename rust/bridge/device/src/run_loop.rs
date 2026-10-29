@@ -1500,6 +1500,8 @@ mod tests {
                 rotation: 0,
             },
             foreground_app: Some("x".repeat(5000)),
+            awake: None,
+            locked: None,
             elements: Vec::new(),
             truncated: false,
             screenshot_file_id: None,

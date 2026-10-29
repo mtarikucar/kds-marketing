@@ -196,6 +196,8 @@ async fn tracing_never_carries_args() {
             rotation: 0,
         },
         foreground_app: Some("APP-CANARY".into()),
+        awake: None,
+        locked: None,
         elements: vec![Element {
             text: Some("SCREEN-CANARY".into()),
             id: None,

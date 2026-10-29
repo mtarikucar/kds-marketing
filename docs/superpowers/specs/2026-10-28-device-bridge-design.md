@@ -101,7 +101,7 @@ devices are built on it. No second copy of lease/redeliver logic is written.
 | `long_press` | `x, y, ms` | `input swipe x y x y ms` | `/wda/touchAndHold` |
 | `swipe` | `x1,y1,x2,y2, ms ≤ 5000` | `input swipe` | `/wda/dragfromtoforduration` |
 | `text` | `value ≤ 4000` | ASCII: `input text`; Unicode: ADBKeyBoard broadcast; else refused `unicode_unsupported` | `/wda/keys` (Unicode native) |
-| `key` | `back, home, enter, app_switch, delete, volume_up/down, power` | `input keyevent` | `/wda/pressButton` (home, volume) |
+| `key` | `back, home, enter, app_switch, delete, volume_up/down, power, wakeup` (`wakeup` needs feature `key.wakeup`) | `input keyevent` | `/wda/pressButton` (home, volume) |
 | `open_url` | any URL/intent string | `am start -a android.intent.action.VIEW -d` | Safari / deep link |
 | `launch_app` | `app_id` (package / bundle id) | `monkey -p … 1` or `am start` | `/wda/apps/launch` |
 | `shell` | `argv: [string]` (no shell string; argv array) | `adb shell` argv | `unsupported_on_platform` |
@@ -124,8 +124,10 @@ but the bridge never concatenates a string into a host shell, so a command canno
 
 ### 4.3 Observation
 
-`{ screen: {w, h, rotation}, foreground_app, elements: [{text, id, desc, class, bounds, tap_point, clickable,
+`{ screen: {w, h, rotation}, foreground_app, awake?, locked?, elements: [{text, id, desc, class, bounds, tap_point, clickable,
 editable, focused}], screenshot_file_id? }`. Elements are distilled (no XML): a model reads a list, not a tree.
+`awake` (the screen is on) and `locked` (the lock screen shows) are left out when the device does not say; an asleep,
+locked phone dumps System UI only, so without them an empty screen would not say why (task D4).
 Element count capped at 300 with `truncated: true`.
 
 ## 5. Server

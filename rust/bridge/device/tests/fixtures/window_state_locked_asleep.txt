@@ -1,0 +1,5 @@
+      showing=true
+      interactiveState=INTERACTIVE_STATE_SLEEP
+  mCurrentFocus=Window{5e1a7c2 u0 NotificationShade}
+    mAwake=false mScreenOnEarly=false mScreenOnFully=false
+    isKeyguardShowing=true

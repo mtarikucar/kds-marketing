@@ -23,6 +23,13 @@
 //!   returned, and text sent to it arrived whole with the input method put back right after the
 //!   broadcast (task D4): no pause is needed between the two.
 //! - Auto-rotate turns the screen: its size and rotation are read on every observation.
+//! - Asleep behind its lock screen, the phone dumps System UI's nodes only, with the focus on its
+//!   notification shade and no app in front: an observation says so (`awake`, `locked`), read
+//!   from the `dumpsys window` it runs for the focus anyway (task D4). `power` toggles the
+//!   screen, turning one that is on off; `wakeup` (`KEYCODE_WAKEUP`) only turns it on. In D4 a
+//!   wake-up key did not visibly wake the Redmi: MIUI's proximity guard (its
+//!   `ScreenOnProximitySensorGuide` window showed after `power`) turns the screen back off while
+//!   the sensor is covered.
 //! - The phone keeps the input methods it used, most recent first
 //!   (`input_methods_subtype_history`): the one to put back when nothing else says.
 //!
@@ -52,8 +59,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jt_device_protocol::{
-    CommandResult, DeviceCommand, FailReason, MAX_ID_CHARS, MAX_SCREEN_PX, PhoneReport, Platform,
-    Screen, TEXT_UNICODE,
+    CommandResult, DeviceCommand, FailReason, KEY_WAKEUP, MAX_ID_CHARS, MAX_SCREEN_PX, PhoneReport,
+    Platform, Screen, TEXT_UNICODE,
 };
 use tracing::{info, warn};
 
@@ -324,6 +331,7 @@ impl AndroidAdbDriver {
             .iter()
             .map(|kind| (*kind).to_owned())
             .collect();
+        features.push(KEY_WAKEUP.to_owned());
         if facts.unicode {
             features.push(TEXT_UNICODE.to_owned());
         }
@@ -346,8 +354,8 @@ impl PhoneDriver for AndroidAdbDriver {
 
     /// The phone's model and Android version (`getprop`, kept from an earlier report when this
     /// one leaves them out), its screen in its natural orientation (`wm size`; an observation
-    /// reads the rotation), and every command kind, with [`TEXT_UNICODE`] when ADBKeyBoard is
-    /// installed and enabled. It takes no lock a command holds.
+    /// reads the rotation), and every command kind and [`KEY_WAKEUP`], with [`TEXT_UNICODE`] when
+    /// ADBKeyBoard is installed and enabled. It takes no lock a command holds.
     async fn report(&self) -> Result<PhoneReport, DriverError> {
         self.read_report().await
     }

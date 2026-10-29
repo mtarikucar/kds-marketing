@@ -1,7 +1,7 @@
 //! The device command vocabulary: wire shape, bounds, lifecycle and feature negotiation.
 use jt_devices::{
     CommandError, CommandStatus, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason,
-    LifecycleError, LifecycleEvent, MAX_APP_ID_CHARS, MAX_ARG_CHARS, MAX_ELEMENTS,
+    KEY_WAKEUP, LifecycleError, LifecycleEvent, MAX_APP_ID_CHARS, MAX_ARG_CHARS, MAX_ELEMENTS,
     MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SCREEN_PX, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS,
     MAX_SWIPE_MS, MAX_TEXT_CHARS, MAX_URL_CHARS, Observation, Platform, Screen, TEXT_UNICODE,
     next_status, required_features, supports,
@@ -189,6 +189,7 @@ fn keys_have_their_snake_case_names() {
             (DeviceKey::VolumeUp, "volume_up"),
             (DeviceKey::VolumeDown, "volume_down"),
             (DeviceKey::Power, "power"),
+            (DeviceKey::Wakeup, "wakeup"),
         ],
         DeviceKey::ALL,
         DeviceKey::key,
@@ -777,6 +778,23 @@ fn supports_needs_kind_and_unicode_feature() {
     assert_eq!(required_features(&turkish), ["text", TEXT_UNICODE]);
     assert_eq!(required_features(&shell), ["shell"]);
 
+    // `wakeup` came after protocol 1's first bridges: it needs its own feature beside the kind,
+    // which no other key needs.
+    let wakeup = DeviceCommand::Key {
+        key: DeviceKey::Wakeup,
+    };
+    assert_eq!(KEY_WAKEUP, "key.wakeup");
+    assert_eq!(required_features(&wakeup), ["key", KEY_WAKEUP]);
+    assert!(!supports(&features(&["key"]), &wakeup));
+    assert!(!supports(&features(&[KEY_WAKEUP]), &wakeup));
+    assert!(supports(&features(&["key", KEY_WAKEUP]), &wakeup));
+    for key in DeviceKey::ALL.iter().filter(|k| **k != DeviceKey::Wakeup) {
+        assert_eq!(
+            required_features(&DeviceCommand::Key { key: *key }),
+            ["key"]
+        );
+    }
+
     // Every kind is matched by its own name and by nothing else.
     for (command, _) in every_kind() {
         assert_eq!(required_features(&command)[0], command.kind());
@@ -814,6 +832,34 @@ fn observation_round_trips_and_marks_truncation() {
     assert_eq!(observation.elements[0].desc, None);
     assert_eq!(serde_json::to_value(&observation).unwrap(), wire);
     assert_eq!(MAX_ELEMENTS, 300);
+    // A device that does not say whether its screen is on or locked: left out, not `null`.
+    assert_eq!(observation.awake, None);
+    assert_eq!(observation.locked, None);
+}
+
+#[test]
+fn observation_says_whether_the_screen_is_on_and_locked() {
+    let wire = json!({
+        "screen": {"w": 720, "h": 1650, "rotation": 0},
+        "foreground_app": null,
+        "awake": false,
+        "locked": true,
+        "elements": [],
+        "truncated": false,
+        "screenshot_file_id": null
+    });
+    let observation: Observation = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(observation.awake, Some(false));
+    assert_eq!(observation.locked, Some(true));
+    assert_eq!(serde_json::to_value(&observation).unwrap(), wire);
+    // One fact without the other.
+    let only_awake = Observation {
+        locked: None,
+        ..observation
+    };
+    let shown = serde_json::to_value(&only_awake).unwrap();
+    assert_eq!(shown["awake"], false);
+    assert!(shown.get("locked").is_none(), "{shown}");
 }
 
 fn element(n: usize) -> Element {
@@ -838,6 +884,8 @@ fn observation_of(count: usize) -> Observation {
             rotation: 0,
         },
         foreground_app: None,
+        awake: None,
+        locked: None,
         elements: (0..count).map(element).collect(),
         truncated: false,
         screenshot_file_id: None,

@@ -18,10 +18,14 @@
 //!   `#[serde(default, skip_serializing_if = ...)]`: a command that leaves it out serializes as
 //!   it always did, so an older bridge, which refuses unknown fields, never sees it.
 //! - A new VALUE of an existing enum field (a new [`DeviceKey`] or [`ElementTarget`] variant, say)
-//!   counts as a new field: it needs a feature name too (for example `key.camera`), and
-//!   [`supports`] must check it. An older bridge cannot read the value, so without the check it
-//!   would be handed a command it can only refuse.
+//!   counts as a new field: it needs a feature name too (as [`DeviceKey::Wakeup`] needs
+//!   [`KEY_WAKEUP`]), and [`supports`] must check it. An older bridge cannot read the value, so
+//!   without the check it would be handed a command it can only refuse.
 //! - A new [`FailReason`] needs nothing: an older reader takes it as [`FailReason::Unknown`].
+//! - A new field on an [`Observation`] needs no feature name: an observation ignores the fields
+//!   it does not know (`jt_device_protocol`), so an older server drops it. It is an `Option`
+//!   declared `#[serde(default, skip_serializing_if = "Option::is_none")]`, as `awake` and
+//!   `locked` are: an older bridge's observation reads as one that does not say.
 //!
 //! # Logging
 //!
@@ -38,7 +42,7 @@ pub use command::{
     MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SCREEN_PX, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS,
     MAX_SWIPE_MS, MAX_TEXT_CHARS, MAX_URL_CHARS,
 };
-pub use features::{Platform, TEXT_UNICODE, required_features, supports};
+pub use features::{KEY_WAKEUP, Platform, TEXT_UNICODE, required_features, supports};
 pub use lifecycle::{
     CommandStatus, DEFAULT_EXPIRES_IN, FailReason, LifecycleError, LifecycleEvent, REDELIVER_AFTER,
     next_status,

@@ -1,0 +1,5 @@
+      showing=false
+      interactiveState=INTERACTIVE_STATE_AWAKE
+  mCurrentFocus=Window{c247365 u0 com.android.settings/com.android.settings.MainSettings}
+    mAwake=true mScreenOnEarly=true mScreenOnFully=true
+    isKeyguardShowing=false

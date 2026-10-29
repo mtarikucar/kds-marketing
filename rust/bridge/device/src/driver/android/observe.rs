@@ -328,6 +328,50 @@ pub(crate) fn foreground_app(dumpsys: &str) -> Option<String> {
     })
 }
 
+/// Whether the screen is on and whether the lock screen shows, as `dumpsys window` tells them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScreenState {
+    pub(crate) awake: Option<bool>,
+    pub(crate) locked: Option<bool>,
+}
+
+/// The screen's state from `dumpsys window`'s lines, as the Redmi prints them: its display
+/// policy's `mAwake=true mScreenOnEarly=…` and `isKeyguardShowing=false`, else its keyguard's
+/// `interactiveState=INTERACTIVE_STATE_AWAKE` (or `_SLEEP`) and `showing=false`. Each is `None`
+/// when no line tells, or the line holds something else.
+pub(crate) fn screen_state(dumpsys: &str) -> ScreenState {
+    let flag = |value: &str| match value {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    };
+    let (mut awake, mut locked) = (None, None);
+    let (mut interactive, mut showing) = (None, None);
+    for line in dumpsys.lines().map(str::trim) {
+        for word in line.split_whitespace() {
+            if let Some(value) = word.strip_prefix("mAwake=") {
+                awake = awake.or(flag(value));
+            } else if let Some(value) = word.strip_prefix("isKeyguardShowing=") {
+                locked = locked.or(flag(value));
+            } else if let Some(value) = word.strip_prefix("interactiveState=") {
+                interactive = interactive.or(match value {
+                    "INTERACTIVE_STATE_AWAKE" => Some(true),
+                    "INTERACTIVE_STATE_SLEEP" => Some(false),
+                    _ => None,
+                });
+            }
+        }
+        // The keyguard's own line, alone on it.
+        if let Some(value) = line.strip_prefix("showing=") {
+            showing = showing.or(flag(value));
+        }
+    }
+    ScreenState {
+        awake: awake.or(interactive),
+        locked: locked.or(showing),
+    }
+}
+
 /// The element a `tap_on` names: an exact match first (the first one that can be pressed, else
 /// the first), then, unless `exact`, one whose value holds the target whatever its case (the
 /// shortest such value, then one that can be pressed, then the first). An id matches whole
@@ -533,5 +577,52 @@ mod tests {
             Some("com.a.b".to_owned())
         );
         assert_eq!(foreground_app(""), None);
+    }
+
+    fn fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name);
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn whether_the_screen_is_on_and_locked() {
+        let state = |awake, locked| ScreenState { awake, locked };
+        // As the Redmi answered, awake and unlocked; and in that shape, asleep and locked.
+        let awake = fixture("window_state_awake.txt");
+        assert_eq!(screen_state(&awake), state(Some(true), Some(false)));
+        assert_eq!(
+            screen_state(&awake.replace('\n', "\r\n")),
+            screen_state(&awake)
+        );
+        let asleep = fixture("window_state_locked_asleep.txt");
+        assert_eq!(screen_state(&asleep), state(Some(false), Some(true)));
+        // The display policy's lines win over the keyguard's.
+        let both = "  showing=true\n  interactiveState=INTERACTIVE_STATE_SLEEP\n  mAwake=true x=1\n  isKeyguardShowing=false\n";
+        assert_eq!(screen_state(both), state(Some(true), Some(false)));
+        // Without them, the keyguard's tell.
+        let keyguard = "      showing=true\n      interactiveState=INTERACTIVE_STATE_SLEEP\n";
+        assert_eq!(screen_state(keyguard), state(Some(false), Some(true)));
+        assert_eq!(
+            screen_state("      interactiveState=INTERACTIVE_STATE_AWAKE\n"),
+            state(Some(true), None)
+        );
+        // A state between the two, a value that is not a flag, other words that end so, or
+        // nothing: not told.
+        assert_eq!(
+            screen_state("interactiveState=INTERACTIVE_STATE_WAKING\nmAwake=maybe\n"),
+            state(None, None)
+        );
+        assert_eq!(
+            screen_state("  mIsShowing=true mShowingDream=false showingAndNotOccluded=true\n"),
+            state(None, None)
+        );
+        assert_eq!(
+            screen_state("  mCurrentFocus=Window{1 u0 com.a.b}\n"),
+            state(None, None)
+        );
+        assert_eq!(screen_state(""), state(None, None));
     }
 }

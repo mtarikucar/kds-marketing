@@ -1213,6 +1213,8 @@ async fn result_with_a_foreign_file_id_is_refused() {
                     rotation: 0,
                 },
                 foreground_app: Some("com.android.launcher3".into()),
+                awake: None,
+                locked: None,
                 elements: Vec::new(),
                 truncated: false,
                 screenshot_file_id: Some(screenshot_file_id),

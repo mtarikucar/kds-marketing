@@ -45,10 +45,14 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           wait_s seconds (at most 20, 20 when left out) for its bridge to \
                           answer. A queued command is not a done command. Status done carries \
                           result {kind: observation, screen {w, h, rotation}, foreground_app, \
-                          elements: [{text, id, desc, class, bounds, tap_point, clickable, \
-                          editable, focused}], truncated, screenshot_file_id} and file_url (the \
-                          screenshot, readable for 10 minutes); tap an element at its tap_point \
-                          or with tap_on. Status queued or leased means the wait ended first: \
+                          awake, locked, elements: [{text, id, desc, class, bounds, tap_point, \
+                          clickable, editable, focused}], truncated, screenshot_file_id} and \
+                          file_url (the screenshot, readable for 10 minutes); tap an element at \
+                          its tap_point or with tap_on. awake false: the screen is off and shows \
+                          nothing to act on, press key wakeup first; locked true: the lock \
+                          screen is showing, and a phone with a PIN or pattern needs its owner \
+                          to unlock it; either is left out when the phone does not say. Status \
+                          queued or leased means the wait ended first: \
                           follow it with jeeta.devices.command_get. Refused as \
                           jeeta.devices.act refuses. [risk: WRITE]",
             permission: Permission::DevicesWork,
@@ -65,7 +69,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           to 5000}; {kind: text, value up to 4000 characters} (types into the \
                           focused field; text outside ASCII needs the phone's text.unicode \
                           feature: ADBKeyBoard installed and enabled); {kind: key, key: back, \
-                          home, enter, app_switch, delete, volume_up, volume_down or power}; \
+                          home, enter, app_switch, delete, volume_up, volume_down, power \
+                          (toggles the screen: turns one that is on off) or wakeup (turns the \
+                          screen on; needs the phone's key.wakeup feature)}; \
                           {kind: open_url, url}; {kind: launch_app, app_id}; {kind: shell, \
                           argv: [program, arguments...]} (separate arguments, never one command \
                           line); {kind: push_file, file_id, dest}; {kind: pull_file, path}; \

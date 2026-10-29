@@ -68,8 +68,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub use jt_devices::{
-    CommandError, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, MAX_ELEMENTS,
-    MAX_TEXT_CHARS, Observation, Platform, Screen, TEXT_UNICODE, required_features, supports,
+    CommandError, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, KEY_WAKEUP,
+    MAX_ELEMENTS, MAX_TEXT_CHARS, Observation, Platform, Screen, TEXT_UNICODE, required_features,
+    supports,
 };
 
 /// The protocol this build speaks.

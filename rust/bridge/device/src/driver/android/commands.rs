@@ -97,16 +97,33 @@ impl AndroidAdbDriver {
         files: &dyn FileTransfer,
     ) -> Result<CommandResult, DriverError> {
         let size = DeviceLine::new("wm").word("size");
-        let focus = DeviceLine::new("dumpsys")
+        // One call for the app in front and the screen's state: the window manager's dump holds
+        // the focus, its display policy's state (`mAwake`, `isKeyguardShowing`) and its
+        // keyguard's (`interactiveState`, `showing`).
+        let window = DeviceLine::new("dumpsys")
             .word("window")
             .word("|")
             .word("grep")
-            .word("mCurrentFocus");
-        let (dump, size, focus) = tokio::join!(
+            .word("-e")
+            .word("mCurrentFocus=")
+            .word("-e")
+            .word("mAwake=")
+            .word("-e")
+            .word("isKeyguardShowing=")
+            .word("-e")
+            .word("showing=")
+            .word("-e")
+            .word("interactiveState=");
+        let (dump, size, window) = tokio::join!(
             self.read_screen(),
             self.shell(&size, Limits::ORDINARY),
-            self.shell(&focus, Limits::ORDINARY),
+            self.shell(&window, Limits::ORDINARY),
         );
+        // What the window manager said, if anything: what it does not say is left out.
+        let window = window
+            .map(|out| out.stdout_text().into_owned())
+            .unwrap_or_default();
+        let state = observe::screen_state(&window);
         let (dump, cut) = dump?;
         let Some(natural) = observe::screen_size(&size?.stdout_text()) else {
             return Err(DriverError::new(
@@ -127,9 +144,9 @@ impl AndroidAdbDriver {
         }
         let mut seen = Observation {
             screen,
-            foreground_app: focus
-                .ok()
-                .and_then(|out| observe::foreground_app(&out.stdout_text())),
+            foreground_app: observe::foreground_app(&window),
+            awake: state.awake,
+            locked: state.locked,
             elements: dump.elements,
             // A dump larger than the bridge reads was cut, and its last elements are missing.
             truncated: cut,
@@ -452,6 +469,7 @@ fn keycode(key: DeviceKey) -> u32 {
         DeviceKey::VolumeUp => 24,
         DeviceKey::VolumeDown => 25,
         DeviceKey::Power => 26,
+        DeviceKey::Wakeup => 224,
     }
 }
 
