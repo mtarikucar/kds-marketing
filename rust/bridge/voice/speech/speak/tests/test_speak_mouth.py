@@ -22,7 +22,7 @@ from jeeta_speak import (  # noqa: E402
     to_pcm16,
 )
 from respell import Respeller  # noqa: E402
-from speak_sentence_cases import CASES  # noqa: E402
+from speak_sentence_cases import CASES, LISTS  # noqa: E402
 
 FOLD = str.maketrans("âîûÂÎÛ", "aiuAIU")
 
@@ -159,7 +159,13 @@ def test_sentences_are_cut_where_the_worker_cuts_them(text, expected):
 
 
 def test_the_shared_table_is_not_empty():
-    assert len(CASES) >= 15
+    assert len(CASES) >= 25
+
+
+def test_the_word_lists_are_the_workers():
+    # The worker's test checks its own against the same line (rust/bridge/voice/tests/text.rs).
+    assert jeeta_speak.ABBREVIATIONS == frozenset(LISTS["abbreviations"])
+    assert jeeta_speak.ORDINAL_NOUNS == frozenset(LISTS["ordinal_nouns"])
 
 
 def test_no_cut_after_any_of_the_workers_abbreviations():

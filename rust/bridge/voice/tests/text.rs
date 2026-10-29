@@ -1,4 +1,4 @@
-use jeeta_voice_bridge::text::{heard_chars, is_backchannel, sentences};
+use jeeta_voice_bridge::text::{self, heard_chars, is_backchannel, sentences};
 
 fn texts(t: &str) -> Vec<String> {
     sentences(t).into_iter().map(|s| s.text).collect()
@@ -121,7 +121,24 @@ fn texts_are_cut_where_the_speak_service_cuts_them() {
         assert_eq!(texts(&text), expected, "{text}");
         cases += 1;
     }
-    assert!(cases >= 15, "only {cases} cases in {}", table.display());
+    assert!(cases >= 25, "only {cases} cases in {}", table.display());
+}
+
+/// The word lists both cutters keep, on the shared table's `LISTS` line.
+#[test]
+fn the_word_lists_are_the_speak_services() {
+    let table = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("speech/speak/tests/speak_sentence_cases.py");
+    let source = std::fs::read_to_string(&table).expect("the shared table");
+    let line = source
+        .lines()
+        .find(|l| l.starts_with("{\"abbreviations\""))
+        .expect("the LISTS line");
+    let lists: std::collections::HashMap<String, Vec<String>> =
+        serde_json::from_str(line).expect("the LISTS line is JSON");
+    let ours = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+    assert_eq!(lists["abbreviations"], ours(&text::ABBREVIATIONS));
+    assert_eq!(lists["ordinal_nouns"], ours(&text::ORDINAL_NOUNS));
 }
 
 #[test]

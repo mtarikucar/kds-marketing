@@ -70,9 +70,14 @@ ABBREVIATIONS = frozenset([
     "dr", "sn", "av", "prof", "doç", "yrd", "no", "tel", "vb", "vs", "ltd", "şti", "cad", "sok", "mah",
     "apt", "bul", "st",
 ])
+# Words that follow an ordinal in capitals in addresses and sports ("4. Levent", "3. Kat", "1. Lig",
+# "2. Dünya"): the worker's ORDINAL_NOUNS (plan B4 text.rs); both lists are on the shared table's
+# LISTS line (tests/speak_sentence_cases.py).
+ORDINAL_NOUNS = frozenset(["kat", "blok", "etap", "levent", "bölge", "lig", "dünya", "cadde", "sokak"])
 # Bump with any change to how a text becomes sentences or audio that the constants below miss.
 # 2: an ordinal ("3. katta") ends no sentence, and an ellipsis ("…") ends one (B4 review I5).
-PIPELINE_VERSION = 2
+# 3: nor does an ordinal before one of ORDINAL_NOUNS in capitals ("4. Levent", B4 re-review N4).
+PIPELINE_VERSION = 3
 MAX_TEXT_CHARS = 2000
 # The normalised text a request may become (numbers read out grow several times their digits).
 MAX_SPOKEN_CHARS = 4000
@@ -87,8 +92,10 @@ WARM_TEXT = "Merhaba, ben dijital asistanınız; size nasıl yardımcı olabilir
 RESIDUE = re.compile(r"[0-9%@#/+]|(?<=\d):|:(?=\d)")
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _LAST_WORD = re.compile(r"(\w+)\.$")
-# A number written in digits alone before the period: before a word in lower case, an ordinal.
+# A number written in digits alone before the period: before a word in lower case, or one of
+# ORDINAL_NOUNS, an ordinal.
 _ORDINAL = re.compile(r"(?:^|\s)[0-9]+\.$")
+_LEADING_LETTERS = re.compile(r"[^\W\d_]*")
 _RUNNING = set()
 
 # The owner-approved texts the bridge plays (jt_calls opening.rs and phrases.rs defaults, A3/A4),
@@ -126,10 +133,10 @@ def split_sentences(text):
     """The sentences of a normalised text: cut after . ! ? … and a space (after Antalia's
     normaliser numbers, times and most abbreviations are words, so a period left is a sentence's
     end), never after one of the worker's abbreviations, nor after a number in digits before a word
-    in lower case (an ordinal, "3. katta"). A piece of fewer than three words joins the next one
-    ("evet. tamam. yarın görüşürüz." stays whole), the last one the one before it. The worker cuts
-    by the same rules (plan B4 text.rs; one table, tests/speak_sentence_cases.py), so a sentence it
-    sends alone is one stream here."""
+    in lower case or one of ORDINAL_NOUNS (an ordinal, "3. katta", "4. Levent'te"). A piece of
+    fewer than three words joins the next one ("evet. tamam. yarın görüşürüz." stays whole), the
+    last one the one before it. The worker cuts by the same rules (plan B4 text.rs; one table,
+    tests/speak_sentence_cases.py), so a sentence it sends alone is one stream here."""
     out, pending = [], ""
     parts = _SENTENCE_END.split(text.strip())
     for i, part in enumerate(parts):
@@ -138,7 +145,8 @@ def split_sentences(text):
         if last and tr_lower(last.group(1)) in ABBREVIATIONS:
             continue
         following = parts[i + 1] if i + 1 < len(parts) else ""
-        if _ORDINAL.search(pending) and following[:1].islower():
+        word = _LEADING_LETTERS.match(following).group(0)
+        if _ORDINAL.search(pending) and (word[:1].islower() or tr_lower(word) in ORDINAL_NOUNS):
             continue
         if len(pending.split()) >= MIN_SENTENCE_WORDS:
             out.append(pending)
@@ -298,6 +306,7 @@ def pipeline():
         "min_words": MIN_SENTENCE_WORDS,
         "splitter": _SENTENCE_END.pattern,
         "ordinal": _ORDINAL.pattern,
+        "ordinal_nouns": sorted(ORDINAL_NOUNS),
         "abbreviations": sorted(ABBREVIATIONS),
         "rate": SAMPLE_RATE,
     }

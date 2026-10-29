@@ -39,9 +39,17 @@ impl fmt::Debug for Sentence {
 /// Words a period after which ends no sentence (the speak service keeps the same list:
 /// `speech/speak/jeeta_speak.py`, `ABBREVIATIONS`). "bul", "tel", "sok" and "no" are words too
 /// (find, wire, put in, no): a sentence that ends in one is not cut there, kept for that parity.
-const ABBREVIATIONS: [&str; 18] = [
+pub const ABBREVIATIONS: [&str; 18] = [
     "dr", "sn", "av", "prof", "doç", "yrd", "no", "tel", "vb", "vs", "ltd", "şti", "cad", "sok",
     "mah", "apt", "bul", "st",
+];
+/// Words that follow an ordinal in capitals in addresses and sports ("4. Levent", "3. Kat",
+/// "1. Lig", "2. Dünya"): a period after a number in digits before one of them ends no sentence.
+/// The speak service keeps the same list (`ORDINAL_NOUNS`); before any other capitalised word the
+/// period ends the sentence, right for "Kapı numarası 12. Ondan sonra…", wrong for "Sultan 4.
+/// Murat" (both cases of the shared table).
+pub const ORDINAL_NOUNS: [&str; 9] = [
+    "kat", "blok", "etap", "levent", "bölge", "lig", "dünya", "cadde", "sokak",
 ];
 /// A sentence longer than this is cut at its next comma.
 const MAX_SENTENCE_CHARS: usize = 220;
@@ -79,7 +87,8 @@ fn ends_abbreviation(chars: &[char], start: usize, dot: usize) -> bool {
 }
 
 /// Whether the period at `dot` (within the sentence from `start`) follows a number written in
-/// digits alone and comes before a word in lower case: an ordinal ("3. katta"), not an end.
+/// digits alone and comes before a word in lower case, or one of [`ORDINAL_NOUNS`]: an ordinal
+/// ("3. katta", "4. Levent'te"), not an end.
 fn ends_ordinal(chars: &[char], start: usize, dot: usize) -> bool {
     let token: Vec<char> = chars[start..dot]
         .iter()
@@ -88,8 +97,13 @@ fn ends_ordinal(chars: &[char], start: usize, dot: usize) -> bool {
         .copied()
         .collect();
     let number = !token.is_empty() && token.iter().all(char::is_ascii_digit);
-    let next = chars[dot + 1..].iter().find(|c| !c.is_whitespace());
-    number && next.is_some_and(|c| c.is_lowercase())
+    let next: String = chars[dot + 1..]
+        .iter()
+        .skip_while(|c| c.is_whitespace())
+        .take_while(|c| c.is_alphabetic())
+        .collect();
+    let lower = next.chars().next().is_some_and(char::is_lowercase);
+    number && (lower || ORDINAL_NOUNS.contains(&lower_tr(&next).as_str()))
 }
 
 /// Characters `[start, end)` as a sentence, without their surrounding spaces, if any are left.
