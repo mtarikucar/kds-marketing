@@ -150,6 +150,82 @@ async fn a_pulled_file_is_kept_and_a_url_may_live_shorter_than_a_day() {
     assert!(d.provider_url(ws, id, FIXED_NOW).await.is_err());
     std::fs::remove_dir_all(p).unwrap();
 }
+#[tokio::test]
+async fn a_streamed_file_is_hashed_as_it_comes_and_linked_whole() {
+    use jt_testkit::fakes::files::Chunks;
+    let p = root();
+    let ws = WorkspaceId::new_v7();
+    let d = disk(&p);
+    // A pulled file in three chunks reads back whole, with its size and hash.
+    let id = FileId::new_v7();
+    let mut source = Chunks(vec![b"ab".to_vec(), Vec::new(), b"cd\x00e".to_vec()].into());
+    let f = d
+        .put_stream(
+            ws,
+            id,
+            "application/octet-stream",
+            "pulled.bin",
+            &mut source,
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.size_bytes, 5);
+    let back = disk(&p).read(ws, id).await.unwrap();
+    assert_eq!(back.bytes, b"abcd\x00e");
+    assert_eq!(f.sha256, hex_of(&back.bytes));
+    // A PNG streams too; one that is not a PNG is refused and leaves no file behind.
+    let shot = FileId::new_v7();
+    let mut source = Chunks(vec![b"\x89PNG".to_vec(), b"\r\n\x1a\nscreen".to_vec()].into());
+    d.put_stream(ws, shot, "image/png", "shot.png", &mut source)
+        .await
+        .unwrap();
+    let fake = FileId::new_v7();
+    let mut source = Chunks::of(b"not a png");
+    assert!(
+        d.put_stream(ws, fake, "image/png", "fake.png", &mut source)
+            .await
+            .is_err()
+    );
+    let names: Vec<String> = std::fs::read_dir(p.join(ws.to_string()))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
+    // A streamed file is new: its id is not taken again.
+    let mut source = Chunks::of(b"again");
+    let e = d
+        .put_stream(
+            ws,
+            id,
+            "application/octet-stream",
+            "pulled.bin",
+            &mut source,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::Conflict);
+    // A URL for a file that is not there is NOT_FOUND; for one that is, it is signed from the
+    // file's header alone.
+    let e = d
+        .provider_url(ws, FileId::new_v7(), FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::NotFound);
+    assert!(
+        d.provider_url(ws, id, FIXED_NOW + Duration::minutes(10))
+            .await
+            .is_ok()
+    );
+    std::fs::remove_dir_all(p).unwrap();
+}
+fn hex_of(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 #[test]
 fn file_config_requires_dir_and_public_base() {
     let p = root();

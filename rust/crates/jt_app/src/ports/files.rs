@@ -20,6 +20,13 @@ pub struct StoredFile {
     pub deleted_at: Option<OffsetDateTime>,
     pub size_bytes: u64,
 }
+/// Where the bytes of a file stored as a stream come from ([`FileStore::put_stream`]): chunk
+/// after chunk, then `None`. Its error ends the upload, and nothing is stored.
+#[async_trait]
+pub trait ByteSource: Send {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError>;
+}
+
 #[async_trait]
 pub trait FileStore: Send + Sync {
     /// Verify active storage with a nonempty write, sync, readback and cleanup outside tenants.
@@ -32,6 +39,29 @@ pub trait FileStore: Send + Sync {
         upload: MediaUpload,
     ) -> Result<StoredFile, AppError>;
     async fn read(&self, ws: WorkspaceId, id: FileId) -> Result<MediaUpload, AppError>;
+    /// Stores, as [`FileStore::put`] does and with the same checks, the file of type `mime` named
+    /// `filename` whose bytes `source` yields. A store that can keeps at most a chunk in memory
+    /// (the disk store writes the chunks to a temporary file, hashing them as they come); this
+    /// default reads them all, then puts them. The caller bounds what `source` yields.
+    async fn put_stream(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        mime: &str,
+        filename: &str,
+        source: &mut dyn ByteSource,
+    ) -> Result<StoredFile, AppError> {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = source.next_chunk().await? {
+            bytes.extend_from_slice(&chunk);
+        }
+        let upload = MediaUpload {
+            bytes,
+            mime: mime.to_owned(),
+            filename: filename.to_owned(),
+        };
+        self.put(ws, id, upload).await
+    }
     async fn provider_url(
         &self,
         ws: WorkspaceId,

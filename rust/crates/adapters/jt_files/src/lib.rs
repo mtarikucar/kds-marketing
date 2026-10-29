@@ -1,4 +1,7 @@
 //! Linux local storage: descriptor-anchored tenant roots, immutable atomic files and signed transport.
+//! A file is its metadata header (length, then JSON) and its bytes; a streamed upload
+//! ([`FileStore::put_stream`]) is written chunk by chunk to a temporary file, hashed as it comes,
+//! and only then given its header and linked into place, so memory holds a chunk at a time.
 mod fetch;
 use async_trait::async_trait;
 pub use fetch::CheckedMediaFetcher;
@@ -8,9 +11,12 @@ use jt_app::{
     ports::{
         Clock,
         connectors::MediaUpload,
-        files::{FileStore, StoredFile},
+        files::{ByteSource, FileStore, StoredFile},
     },
-    usecases::files::{STORED_LIMIT, validate_stored},
+    usecases::files::{
+        HEAD_BYTES, STORED_LIMIT, filename_ok, streams, validate_stored, validate_stored_head,
+    },
+    usecases::studio::files::invalid,
 };
 use jt_studio::FileId;
 use jt_tenancy::WorkspaceId;
@@ -41,6 +47,34 @@ fn dir(p: &Path) -> Result<File, AppError> {
 }
 fn anchored(f: &File) -> PathBuf {
     PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd()))
+}
+/// A temporary file in a tenant directory, removed when dropped (a stream that failed part way, or
+/// the parts of one that was linked into place). It holds its directory open, so its path stays
+/// valid.
+struct Temp {
+    path: PathBuf,
+    _dir: Arc<File>,
+}
+impl Temp {
+    fn new(dir: &Arc<File>) -> Self {
+        Self {
+            path: anchored(dir).join(format!(".{}.tmp", uuid::Uuid::new_v4())),
+            _dir: dir.clone(),
+        }
+    }
+    fn create(&self) -> Result<File, AppError> {
+        io(OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&self.path))
+    }
+}
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 fn root(path: &Path) -> Result<File, AppError> {
     if !path.is_absolute() {
@@ -168,6 +202,47 @@ impl DiskFiles {
         }
         dir(&p)
     }
+    /// File `id`'s metadata, read from its header alone, with the file's length checked against
+    /// it: no byte of the file is read. `NOT_FOUND` when there is no such file.
+    fn load_meta(&self, ws: WorkspaceId, id: FileId) -> Result<StoredFile, AppError> {
+        let tenant = anchored(&self.root).join(ws.to_string());
+        if !tenant.try_exists().map_err(|_| storage())? {
+            return Err(AppError::not_found("file"));
+        }
+        let parent = self.tenant(ws, false)?;
+        let opened = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(anchored(&parent).join(id.to_string()));
+        let mut file = match opened {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AppError::not_found("file"));
+            }
+            Err(_) => return Err(storage()),
+        };
+        let meta = io(file.metadata())?;
+        if !meta.is_file() {
+            return Err(storage());
+        }
+        let mut len = [0u8; 4];
+        io(file.read_exact(&mut len))?;
+        let n = u32::from_be_bytes(len) as usize;
+        if n > 4096 {
+            return Err(storage());
+        }
+        let mut metadata = vec![0; n];
+        io(file.read_exact(&mut metadata))?;
+        let f: StoredFile = serde_json::from_slice(&metadata).map_err(|_| storage())?;
+        if f.id != id
+            || f.workspace_id != ws
+            || f.size_bytes > STORED_LIMIT
+            || meta.len() != 4 + n as u64 + f.size_bytes
+        {
+            return Err(storage());
+        }
+        Ok(f)
+    }
     fn load(&self, ws: WorkspaceId, id: FileId) -> Result<(StoredFile, MediaUpload), AppError> {
         let parent = self.tenant(ws, false)?;
         let path = anchored(&parent).join(id.to_string());
@@ -266,7 +341,63 @@ impl DiskFiles {
         let _ = std::fs::remove_file(&tmp);
         result?;
         io(parent.sync_all())?;
-        self.load(ws, id).map(|(f, _)| f)
+        self.load_meta(ws, id)
+    }
+    /// The first half of a streamed put: the tenant directory, and the temporary file the bytes
+    /// are written to. A file that is already there is `CONFLICT`: a streamed file is new.
+    fn stream_open(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+    ) -> Result<(Arc<File>, Temp, File), AppError> {
+        if id.0.is_nil() {
+            return Err(storage());
+        }
+        let parent = Arc::new(self.tenant(ws, true)?);
+        self.repair_temps(&parent)?;
+        if anchored(&parent)
+            .join(id.to_string())
+            .symlink_metadata()
+            .is_ok()
+        {
+            return Err(AppError::conflict("file identity is immutable"));
+        }
+        let data = Temp::new(&parent);
+        let file = data.create()?;
+        Ok((parent, data, file))
+    }
+    /// The second half of a streamed put: the header of `f` and the bytes of `data` written to a
+    /// second temporary file, which is synced and linked into place as file `f.id` (no-replace, as
+    /// [`DiskFiles::put_inner`] commits). Both temporary files go.
+    fn stream_commit(
+        &self,
+        parent: &Arc<File>,
+        data: &Temp,
+        f: StoredFile,
+    ) -> Result<StoredFile, AppError> {
+        let header = serde_json::to_vec(&f).map_err(|_| storage())?;
+        let whole = Temp::new(parent);
+        let mut out = whole.create()?;
+        io(out.write_all(&(header.len() as u32).to_be_bytes()))?;
+        io(out.write_all(&header))?;
+        let mut bytes = io(OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&data.path))?;
+        if io(std::io::copy(&mut bytes, &mut out))? != f.size_bytes {
+            return Err(storage());
+        }
+        io(out.sync_all())?;
+        drop(out);
+        match std::fs::hard_link(&whole.path, anchored(parent).join(f.id.to_string())) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(AppError::conflict("file identity is immutable"));
+            }
+            Err(_) => return Err(storage()),
+        }
+        io(parent.sync_all())?;
+        Ok(f)
     }
     fn read_inner(&self, ws: WorkspaceId, id: FileId) -> Result<MediaUpload, AppError> {
         self.load(ws, id).map(|(_, u)| u)
@@ -299,7 +430,7 @@ impl DiskFiles {
                 serde_json::json!({}),
             ));
         }
-        self.load(ws, id)?;
+        self.load_meta(ws, id)?;
         let expires = expires_at
             .unix_timestamp()
             .min((now + Duration::hours(24)).unix_timestamp());
@@ -409,6 +540,72 @@ impl FileStore for DiskFiles {
     async fn read(&self, ws: WorkspaceId, id: FileId) -> Result<MediaUpload, AppError> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || this.read_inner(ws, id))
+            .await
+            .map_err(|_| storage())?
+    }
+    async fn put_stream(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        mime: &str,
+        filename: &str,
+        source: &mut dyn ByteSource,
+    ) -> Result<StoredFile, AppError> {
+        use tokio::io::AsyncWriteExt as _;
+        if !streams(mime) {
+            // A type whose check reads the whole file: put whole.
+            let mut bytes = Vec::new();
+            while let Some(chunk) = source.next_chunk().await? {
+                if (bytes.len() + chunk.len()) as u64 > STORED_LIMIT {
+                    return Err(invalid());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            let upload = MediaUpload {
+                bytes,
+                mime: mime.to_owned(),
+                filename: filename.to_owned(),
+            };
+            return self.put(ws, id, upload).await;
+        }
+        if !filename_ok(filename) {
+            return Err(invalid());
+        }
+        let this = self.clone();
+        let (parent, data, file) = tokio::task::spawn_blocking(move || this.stream_open(ws, id))
+            .await
+            .map_err(|_| storage())??;
+        let mut out = tokio::fs::File::from_std(file);
+        let mut hasher = Sha256::new();
+        let mut size = 0u64;
+        let mut head = Vec::with_capacity(HEAD_BYTES);
+        while let Some(chunk) = source.next_chunk().await? {
+            size += chunk.len() as u64;
+            if size > STORED_LIMIT {
+                return Err(invalid());
+            }
+            let wanted = (HEAD_BYTES - head.len()).min(chunk.len());
+            head.extend_from_slice(&chunk[..wanted]);
+            hasher.update(&chunk);
+            out.write_all(&chunk).await.map_err(|_| storage())?;
+        }
+        out.flush().await.map_err(|_| storage())?;
+        out.sync_all().await.map_err(|_| storage())?;
+        drop(out);
+        validate_stored_head(mime, filename, size, &head)?;
+        let f = StoredFile {
+            id,
+            workspace_id: ws,
+            mime: mime.to_owned(),
+            filename: filename.to_owned(),
+            size_bytes: size,
+            sha256: hex::encode(hasher.finalize()),
+            created_at: self.clock.now(),
+            cleanup_due_at: None,
+            deleted_at: None,
+        };
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || this.stream_commit(&parent, &data, f))
             .await
             .map_err(|_| storage())?
     }
