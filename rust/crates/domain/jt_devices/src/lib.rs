@@ -38,7 +38,7 @@ pub use command::{
     MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS, MAX_SWIPE_MS,
     MAX_TEXT_CHARS, MAX_URL_CHARS,
 };
-pub use features::{Platform, TEXT_UNICODE, supports};
+pub use features::{Platform, TEXT_UNICODE, required_features, supports};
 pub use lifecycle::{
     CommandStatus, DEFAULT_EXPIRES_IN, FailReason, LifecycleError, LifecycleEvent, REDELIVER_AFTER,
     next_status,

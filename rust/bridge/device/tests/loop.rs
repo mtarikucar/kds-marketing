@@ -25,8 +25,8 @@ use jeeta_device_bridge::{
     Stop, Timing, run,
 };
 use jt_device_protocol::{
-    CommandResult, DeviceCommand, FailReason, MAX_PHONES, MAX_RESULTS_BODY_BYTES, PHONE_RETIRED,
-    PhoneReport, Platform, RegisterIn, ResultsIn,
+    CommandResult, DeviceCommand, FailReason, MAX_PHONES, MAX_RESULTS_BODY_BYTES,
+    PHONE_HELD_BY_ANOTHER_BRIDGE, PHONE_RETIRED, PhoneReport, Platform, RegisterIn, ResultsIn,
 };
 use serde_json::{Value, json};
 use support::Logs;
@@ -963,6 +963,41 @@ async fn registers_on_start_and_every_heartbeat() {
         assert_eq!(body["phones"][0]["model"], "Fake 1");
         assert_eq!(seen.unauthorized, 0);
     }
+    rig.stop().await;
+}
+
+#[tokio::test]
+async fn a_phone_another_bridge_holds_is_listed_again() {
+    let logs = Logs::capture();
+    // Another bridge holds the phone for now (the same serial on two PCs): the server refuses it
+    // on every register until that bridge lets go of it.
+    let script = Script {
+        heartbeat_s: 3,
+        refuse: vec![("emulator-5554", PHONE_HELD_BY_ANOTHER_BRIDGE)],
+        ..Script::default()
+    };
+    let rig = Rig::start(script, &[("R58N1", 0), ("emulator-5554", 0)]).await;
+    rig.until("three registers", |s| s.registers.len() >= 3)
+        .await;
+    {
+        // Unlike a retired phone, it is listed on every register, so it is taken once it is free.
+        let seen = rig.seen();
+        for (_, body) in &seen.registers {
+            assert_eq!(registered_serials(body), ["R58N1", "emulator-5554"]);
+        }
+    }
+    // The refusal is logged once, at warn level, with the serial and the reason.
+    let text = logs.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("emulator-5554"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{text}");
+    assert!(
+        lines[0].contains("WARN") && lines[0].contains(PHONE_HELD_BY_ANOTHER_BRIDGE),
+        "{}",
+        lines[0]
+    );
     rig.stop().await;
 }
 

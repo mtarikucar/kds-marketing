@@ -4,7 +4,7 @@ use jt_devices::{
     LifecycleError, LifecycleEvent, MAX_APP_ID_CHARS, MAX_ARG_CHARS, MAX_ELEMENTS,
     MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS, MAX_SWIPE_MS,
     MAX_TEXT_CHARS, MAX_URL_CHARS, Observation, Platform, Screen, TEXT_UNICODE, next_status,
-    supports,
+    required_features, supports,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -226,6 +226,7 @@ fn reasons_have_their_snake_case_names() {
             (FailReason::ScreenBusy, "screen_busy"),
             (FailReason::Timeout, "timeout"),
             (FailReason::BridgeError, "bridge_error"),
+            (FailReason::FileNotFound, "file_not_found"),
             (FailReason::Unknown, "unknown"),
         ],
         FailReason::ALL,
@@ -728,8 +729,14 @@ fn supports_needs_kind_and_unicode_feature() {
     assert!(supports(&features(&["tap", "shell"]), &shell));
     assert!(!supports(&[], &DeviceCommand::Screenshot {}));
 
+    // What a command needs: its kind first, and Unicode text the feature beside it.
+    assert_eq!(required_features(&ascii), ["text"]);
+    assert_eq!(required_features(&turkish), ["text", TEXT_UNICODE]);
+    assert_eq!(required_features(&shell), ["shell"]);
+
     // Every kind is matched by its own name and by nothing else.
     for (command, _) in every_kind() {
+        assert_eq!(required_features(&command)[0], command.kind());
         assert!(
             supports(&features(&[command.kind()]), &command),
             "{command:?}"
