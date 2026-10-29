@@ -507,6 +507,32 @@ What the bridge as built (D2-T1) relies on, which the server must match:
   was never leased is counted in `ResultsOut.unknown`, never answered with a 4xx. The bridge retries only
   transport errors, 5xx, 408 and 429; it splits a batch on a 422 (or 413); any other 4xx (401, 403, 404 included)
   makes it drop the batch.
+As built (D1-T5):
+- **Kernel.** `BridgeSpec` gained `redeliver_after` and `merge` (`FactsMerge::Replace`, voice's; `FactsMerge::Deep`,
+  the device bridge's: an object fact merged key by key as deep as both are objects, an array replaced). New:
+  `kernel::lease(deps, ctx, spec, waited, take) -> Option<Vec<T>>` (one read at `ctx.now + waited`, its own
+  transaction, `take(r, ctx_at_read, Lease { now, redeliver_before })`), `kernel::declare(r, ctx, ids, kind_key, name,
+  external_id, in_force)`, `kernel::of_kind(r, kind_key)`, `kernel::held(caps, external_id) -> Held::{Live, Retired,
+  Missing}` and `kernel::merge_facts`. Voice uses lease, declare, of_kind and held; `calls_bridge.rs` and
+  `calls_session.rs` unedited.
+- **Which bridge.** A poll carries only the key, so the bridge is its API key (`BridgeCaller { ctx, bridge: ApiKeyId }`,
+  `bridge::ctx_for_bridge`): one key per bridge program. `connector_public.device` keeps, beside the phone's and the
+  bridge's facts, `listed_by` (the key id of the bridge that listed it last), `listed` (`false` once that bridge's
+  registration leaves it out) and `registered_by` (`{key id: last registration time}`). Leases: phones not retired
+  with `listed_by` = this bridge and `listed`. Results: phones whose `registered_by` has this bridge. (Field names avoid
+  `key`: `connector_public` refuses secret-looking keys.)
+- **Device files.** `0017` also creates `device_files` (forced RLS; 74 tables); `DeviceCommandRepo::save_file` and
+  `::files`. The file store keeps what `usecases::files::validate_stored` allows: studio's media, and
+  `application/octet-stream` up to `DEVICE_FILE_LIMIT` (256 MiB, the bridge's download cap). Studio's daily orphan
+  sweep passes over device files (it deletes every stored file older than a day that `studio_files` does not know).
+  D1-T7's purge reads `device_files.expires_at` (index `device_files_expiry`).
+- **Download URL.** `jt_files::DiskFiles::provider_url` now signs any lifetime after now and at most 24 h ahead
+  (`verify` already accepted that); studio still asks for 24 h, `push_file` for 10 min, signed after the lease
+  commits. A `push_file` whose file cannot be signed is failed `bridge_error`, not handed out.
+- **Bodies.** Results: `DefaultBodyLimit` `MAX_RESULTS_BODY_BYTES`; an over-limit body is a `422` (the JSON extractor's
+  rejection), which the bridge splits like a `413`. Files: `DefaultBodyLimit` `DEVICE_FILE_LIMIT`; a type other than
+  the two is `422` naming `content_type`, an over-limit or unreadable body `422` naming `body`.
+
 - [ ] **Tests first (`jt_app/tests/devices_bridge.rs`):** `register_declares_phones_and_merges_facts`, `register_lists_retired_phone_as_refused`, `bridge_key_only`, `commands_long_poll_wakes_on_enqueue`, `redelivered_after_10s`, `expired_command_not_leased`, `results_idempotent_and_ledgered`, `late_result_after_expiry_is_applied_and_ledgered_again`, `push_file_gets_signed_download_url`, `files_upload_returns_id`, `register_refuses_one_bad_phone_not_the_heartbeat`, `commands_rechecks_supports_at_lease_time`, `result_for_another_bridges_command_is_unknown`, `result_with_a_foreign_file_id_is_refused`, `invalid_results_body_is_422`; `jt_panel_http/tests/device_bridge.rs::{session_cookie_refused, wrong_permission_key_refused, post_without_requested_with_is_403, files_take_a_raw_body}`; `invalid_results_body_is_422` also checks `details.field`; archtest: no MCP tool for `devices.bridge.*`.
 - [ ] CI red → implement → green; **commit** `feat(devices): the device bridge's surface`.
 
@@ -636,7 +662,7 @@ intervals (tests shorten them). `main.rs` wires a registry that reports no phone
 `deny.toml` name the bridge as the one other package with its own HTTP client. The fake Jeeta refuses what D1-T5's
 server refuses: a `POST` without the request header (403), a body that breaks a limit (422 with `details.field`; a
 register's phone that fails `PhoneReport::validate` listed as refused), a results body over its limit (413), a file
-of another type (415).
+of another type (`422` naming `content_type`, as D1-T5's server answers).
 - [ ] **Tests first (`tests/loop.rs`, run on Windows):** `registers_on_start_and_every_heartbeat`, `runs_leased_command_and_posts_result`, `same_command_id_runs_once`, `commands_for_one_phone_run_in_order`, `result_post_retried_until_accepted`, `unreadable_command_is_failed_by_id_and_dropped_is_logged`, `malformed_poll_body_backs_off_and_polls_again`, `key_never_logged` (capture tracing; covers HTTP error statuses and a refused connection), `refused_results_batch_is_not_resent_as_is`, `retired_phone_is_not_listed_again`, `file_transfer_uploads_with_the_key_and_downloads_without_it`, `posts_carry_the_requested_with_header`, `idle_polls_are_spaced_even_when_the_server_does_not_wait`, `a_driver_panic_fails_its_command_and_the_phone_keeps_working`, `only_the_configured_serials_are_listed`, `each_serial_is_listed_once_and_at_most_max_phones`, `a_failed_requests_url_is_never_logged` (fails if `without_url()` is removed), `a_failed_listing_keeps_the_last_phones`, `a_failed_report_reuses_the_last_one_for_a_few_heartbeats`, `a_register_answer_with_an_unknown_field_is_logged_by_field_and_retried`, `a_hung_command_times_out_and_the_next_runs`, `push_file_is_bounded_by_the_transfer_timeout`, `a_command_that_waited_past_its_expiry_is_failed_unrun`, `results_made_before_shutdown_are_posted`, `a_batch_over_the_body_limit_is_split`, `a_batch_refused_with_another_4xx_is_dropped`, `a_batch_the_server_keeps_failing_is_split_and_a_lone_result_dropped`; `tests/panic_hook.rs::a_panic_is_logged_by_where_it_happened_never_by_its_message`; unit tests `a_command_for_a_stopped_worker_is_failed_and_the_worker_started_again`, `the_first_task_to_end_is_named`, `a_key_that_is_not_a_string_is_not_quoted`, `a_download_goes_to_https_or_to_this_computer`, `a_plain_http_download_elsewhere_is_refused_before_any_request`, `a_download_over_the_cap_is_refused_and_leaves_no_file`, `a_download_cancelled_part_way_leaves_no_file`, `a_decoding_error_is_kept_by_its_field_only`, `a_stuck_phone_is_marked_while_its_guard_lives`; after the re-review `results_survive_a_server_outage`, `a_recover_that_hangs_is_cut_off_before_the_next_command`, `a_phone_is_recovered_once_when_first_registered`, `a_phone_whose_command_will_not_stop_is_left_out_of_registers` (a multi-thread runtime: the command holds its thread), `a_server_serial_is_logged_clean`; `tests/program.rs` (the built program): `a_configuration_that_cannot_be_used_exits_2_without_the_key`, `the_program_registers_and_stops_cleanly` (`SIGTERM` and exit 0 on Unix; on Windows the stop events need `GenerateConsoleCtrlEvent`, an `unsafe` call the workspace forbids, so there it only registers and is killed).
 - [ ] `cargo test -p jeeta-device-bridge` red → green; **commit**.
 

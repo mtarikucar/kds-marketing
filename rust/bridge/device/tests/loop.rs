@@ -353,7 +353,8 @@ async fn files(State(fake): State<Shared>, headers: HeaderMap, body: Bytes) -> R
         content_type.as_deref(),
         Some("image/png" | "application/octet-stream")
     ) {
-        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+        // Refused as the server refuses it: a 422 naming the field.
+        return refused_body("content_type");
     }
     fake.seen
         .lock()

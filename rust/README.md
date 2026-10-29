@@ -1988,6 +1988,23 @@ heartbeat, the health job's marking and the long-poll are the bridge kernel's
 | `calls.bridge.commands` | `GET /api/voice/bridge/commands?wait_s&extension` | READ | long-poll of at most 25 s; a command not acknowledged within 10 s is handed out again |
 | `calls.bridge.events` | `POST /api/voice/bridge/events` | WRITE | at most 100 events, each applied once by `(bridge_call_id, bridge_seq)` |
 
+#### The device bridge (device bridge D1)
+
+The device bridge (`jeeta-device-bridge`, spec `docs/superpowers/specs/2026-10-28-device-bridge-design.md`)
+runs on the PC a workspace's phones are plugged into, on the same kernel as the voice bridge. Its
+four use cases are panel-only rows served under `/api/devices/bridge/*` to its bearer API key
+alone, a key issued with `devices.bridge` and nothing else; no MCP tool reaches them. The key is
+also which bridge calls, so each bridge program holds a key of its own. The bodies are
+`jt_device_protocol`'s; a body that breaks a limit is a `422` whose `details.field` names the
+field.
+
+| Use case | Panel | Risk | Notes |
+|---|---|---|---|
+| `devices.bridge.register` | `POST /api/devices/bridge/register` | WRITE | a `phone` capability per phone (`{platform}:{serial}`), facts merged key by key under `connector_public.device`; a phone that fails its checks or is retired (`phone_retired`) is listed in `refused`, never the registration |
+| `devices.bridge.commands` | `GET /api/devices/bridge/commands?wait_s&limit` | READ | long-poll of at most 25 s, at most 20 commands, for the phones the bridge's latest registration lists; a command the phone's bridge no longer lists is failed `unsupported_by_bridge`; `push_file` carries a 10-minute signed `download_url` |
+| `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, for a phone the bridge ever registered, else counted `unknown`; a file id that is not one of the workspace's device files refuses the batch |
+| `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself (`image/png` or `application/octet-stream`, at most 256 MiB); a device file kept seven days; `{"file_id"}` |
+
 Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
 dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes
 through `jt_studio::time_compat`: written as RFC 3339 text (a date as `YYYY-MM-DD`), so MCP
