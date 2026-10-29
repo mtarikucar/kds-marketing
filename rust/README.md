@@ -958,6 +958,9 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `outbox_recover` | 1 dakika | 2 dakikadan eski `sending` → `unknown` (yeniden göndermez); 5 dakikadan eski `queued` kayıtlarını iki çitli gönderim adımına verir | `jeeta.jobs.outbox_recover` |
 | `call_timers` | 1 saniye | Hatta ajan araması olan alanlarda (tek bir platform okumasıyla bulunur) her aramanın zamanlayıcılarını işletir: yavaş ajana 4. ve 10. saniyede planın bekleme cümlesi, sessiz ajana her 20 saniyede planın sıradaki yedek cümlesi, yedekler bitince kapanış cümlesi ve kapatma (`agent_timeout`); en uzun süreyi aşan, arayanı sessiz kalan, 90 saniye cevapsız çalan ve köprüsü susmuş arama da senaryoyla biter. Sunucu hiçbir cümle yazmaz | `jeeta.jobs.call_timers` |
 | `purge_call_commands` | 1 gün | Ses köprüsü için 7 günden önce kuyruğa alınmış komutları (onaylanmış olsun olmasın) siler; aramalar ve konuşma kayıtları kalır | `jeeta.jobs.purge_call_commands` |
+| `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
+| `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
+| `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -2005,13 +2008,25 @@ field.
 | `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, from the bridge the command was leased to (or the one that holds its phone now), else counted `unknown`; a file id that is not a device file this bridge uploaded refuses the batch |
 | `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself, streamed (`image/png` up to 25 MB, `application/octet-stream` up to 95 MiB, under Cloudflare's 100 MB); each workspace uploads two screenshots and two pulled files at a time, a wait over 10 s is a retryable `503`; a device file kept seven days; `{"file_id"}` |
 
+A phone (`phone`, like `voice_bridge`, a kind with a heartbeat) is verified only by the
+registrations that list it: `capability.verify` refuses it (`409`, `details.reason =
+"verified_by_heartbeat"`). It reads stale a minute after the last registration that listed it,
+and the `device_bridge_health` job (every minute) marks it unreachable after ten minutes, writing
+`devices.bridge.offline`; meanwhile `work.pending` lists it as `phone_offline` (never as a voice
+bridge). The `device_command_expiry` job (every minute) ends the commands past their time limit as
+`expired`, with a `devices.command.finished` each (`leased_by` the bridge last handed it,
+`result_sha256` `null`); a leased command's late result still replaces `expired`, with a second
+entry. The `device_file_purge` job (hourly) deletes the device files past their seven days, bytes
+then record. Command rows are never deleted.
+
 #### Phones for agents (device bridge D1-T6)
 
 An agent, or a person holding `devices.work` (the owner and the manager; a rep does not), drives a
 phone through these (`jt_app::usecases::devices::agent`). `act` is the one way a command is queued:
 it checks the command's bounds, that a `push_file`'s file is stored, that the phone is online
-(verified, registered within the last minute by the bridge that holds it, and listed in that
-bridge's latest registration) and that its bridge lists what the command needs, then queues it
+(it reads verified: registered within its heartbeat's minute by the bridge that holds it, and
+listed in that bridge's latest registration) and that its bridge lists what the command needs,
+then queues it
 (it expires after five minutes), writes `devices.command.queued` with the whole command (typed
 text and shell arguments included) and waits up to 20 seconds for its result. A queued command is
 not a done one: the answer is the command as it then stands (`queued`, `leased`, `done`,

@@ -699,7 +699,7 @@ Health is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, "pho
   (`HELD_FOR`) of the bridge that holds it; with the heartbeat kind `capability.verify` refuses a phone, as it does a
   voice bridge, and only registrations move the time.
 - `work.rs` must map kind to work item. Today any heartbeat kind that goes offline is reported as `VoiceBridgeOffline`, with the voice hint and the `calls.bridge.register` tool. A phone needs its own work item, e.g. `DeviceBridgeOffline`. Test: `offline_phone_is_not_reported_as_a_voice_bridge`.
-- [ ] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`,
+- [x] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`,
   `verify_refuses_a_phone` (once `phone` has a heartbeat kind, a person's `capability.verify` on a phone is refused as
   it is for a voice bridge, so only a registration keeps a phone online: until then a verify extends `online` and the
   60 s hold). The expiry job's `devices.command.finished` carries `result_sha256: null`, as every server-decided end.
@@ -708,7 +708,43 @@ Health is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, "pho
   file whose `file_url` any holder of `devices.work` reads: so `devices.work` in effect grants reading any workspace
   file whose id is known (push, then pull, then `file_url`). A policy check in `devices.act` (spec §10) is where to
   limit it (for example, `push_file` only of files the phone's bridges uploaded).
-- [ ] CI red → green; **commit**.
+- [x] CI red → green; **commit**.
+
+As built (D1-T7):
+- **The phone's heartbeat.** `jt_capability::CapabilityKind::heartbeat` answers `phone` as it does `voice_bridge`
+  (one `BRIDGE_HEARTBEAT`: `stale_after` 60 s, `unreachable_after` 10 min; the bridge registers every `HEARTBEAT_S`,
+  15 s). `HELD_FOR` stays 60 s, pinned equal to the kind's `stale_after` and to four heartbeats
+  (`devices::bridge::tests::held_for_is_the_phone_kinds_stale_clock`). `devices::agent::online` is now
+  `effective_status == Verified && listed` (the 60 s `ONLINE_FOR` constant is gone: the kind's clock is the window);
+  "missing from the latest register = offline" is unchanged.
+- **`capability.verify` refuses a phone** as it does a voice bridge, one check for every kind with a heartbeat:
+  `409`, message `a {kind} capability is verified only by its bridge's heartbeat, never by evidence`,
+  `details {reason: "verified_by_heartbeat", kind_key}`. So only registrations move a phone's `last_verified_at`, and
+  a person can no longer extend `online` or the 60 s hold. Tests that used `phone` as a generic device verified by
+  evidence now use `computer`.
+- **Work items.** `work::offline_item(&Capability)` maps each heartbeat kind to its own item: `voice_bridge` →
+  `VoiceBridgeOffline` (hint and `cleared_by` `calls.bridge.register` unchanged), `phone` → `PhoneOffline
+  {capability_id, name, last_seen_at}` (`phone_offline` on the wire, priority 2, `cleared_by`
+  `devices.bridge.register`, a hint naming the jeeta-device-bridge program, never the voice bridge). A heartbeat kind
+  with no mapping gets no item (test `every_heartbeat_kind_has_its_own_offline_item` fails for it). The panel's
+  Home renders `phone_offline` (TR + EN); `jeeta.work.pending`'s description lists both offline kinds.
+- **Jobs** (`usecases/jobs.rs`, `bin/jeeta/src/scheduler.rs`; `Job::ALL` 25 → 28, every workspace status):
+  `device_bridge_health` (1 min) is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, PHONE_KIND, now)`
+  (`devices.bridge.offline {capability_id, last_seen_at}`, actor `scheduler:device_bridge_health`);
+  `device_command_expiry` (1 min) is `devices::sweeps::expire_commands`: `expire_due` and, in the same transaction,
+  one `devices.command.finished {command_id, kind, status: "expired", reason: null, duration_ms: null, leased_by,
+  result_sha256: null}` per row, in queue order, then the devices' signal; `device_file_purge` (hourly) is
+  `devices::sweeps::purge_files`: pages of `FILE_PURGE_PAGE` (200) files whose `expires_at <= now`, each deleted from
+  the file store, then its record in a transaction of its own (a store delete of a missing file is no error; a file
+  that fails is logged with its id and code, counted, and tried again on the next run, which stops reading at the end
+  of a page that had a failure). Command rows are never deleted.
+- **Port.** `ExpiredCommand` gained `leased_by` (so the expiry entry names the bridge, as every `finished` does);
+  `DeviceCommandRepo::expired_files(now, limit)` (by `expires_at`, then id; index `device_files_expiry`) and
+  `::delete_file(id) -> bool` (contract `expired_device_files_are_found_and_deleted`, fake and Postgres).
+  `bridge::write_finished` (with `Ended`) is the one writer of `devices.command.finished`.
+- **Tests** (`jt_app/tests/devices_jobs.rs`): the five named, plus `every_heartbeat_kind_has_its_own_offline_item`,
+  `file_purge_finishes_what_it_could_not_do` (a store whose deletes fail, and bytes already gone) and
+  `the_jobs_sweep_every_workspace`.
 
 ---
 

@@ -22,10 +22,12 @@
 //! alive, and a payment hold must not turn into reconnecting every account. A suspended
 //! workspace is left alone. The NetGSM polls go only to the workspaces holding a verified SMS
 //! line, found with one platform-wide read before any of their transactions opens. The purges
-//! run for every workspace, and so does the voice bridges' health check: it only records that a
-//! bridge stopped reporting, whatever the workspace's status. The call timers run every second
-//! for the workspaces with an agent's call on the line (one platform-wide read), whatever their
-//! status: a call already on the line is always ended by script.
+//! run for every workspace, and so do the bridges' health checks (voice bridges, phones): they
+//! only record that a bridge stopped reporting, whatever the workspace's status; and so does the
+//! expiry of the phones' commands, which only ends what no bridge can take any more. The call
+//! timers run every second for the workspaces with an agent's call on the line (one
+//! platform-wide read), whatever their status: a call already on the line is always ended by
+//! script.
 //!
 //! **Who.** What a job writes to the ledger is written by `Actor::System` with the component
 //! `scheduler:<job name>`.
@@ -134,11 +136,14 @@ pub enum Job {
     VoiceBridgeHealth,
     CallTimers,
     PurgeCallCommands,
+    DeviceBridgeHealth,
+    DeviceCommandExpiry,
+    DeviceFilePurge,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 25] = [
+    pub const ALL: [Job; 28] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -164,6 +169,9 @@ impl Job {
         Job::VoiceBridgeHealth,
         Job::CallTimers,
         Job::PurgeCallCommands,
+        Job::DeviceBridgeHealth,
+        Job::DeviceCommandExpiry,
+        Job::DeviceFilePurge,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -195,6 +203,9 @@ impl Job {
             Job::VoiceBridgeHealth => "voice_bridge_health",
             Job::CallTimers => "call_timers",
             Job::PurgeCallCommands => "purge_call_commands",
+            Job::DeviceBridgeHealth => "device_bridge_health",
+            Job::DeviceCommandExpiry => "device_command_expiry",
+            Job::DeviceFilePurge => "device_file_purge",
         }
     }
 
@@ -231,6 +242,9 @@ impl Job {
             Job::VoiceBridgeHealth => run_voice_bridge_health(deps, now).await,
             Job::CallTimers => run_call_timers(deps, now).await,
             Job::PurgeCallCommands => run_purge_call_commands(deps, now).await,
+            Job::DeviceBridgeHealth => run_device_bridge_health(deps, now).await,
+            Job::DeviceCommandExpiry => run_device_command_expiry(deps, now).await,
+            Job::DeviceFilePurge => run_device_file_purge(deps, now).await,
         }
     }
 }
@@ -948,7 +962,7 @@ fn verified_lines(capabilities: &[Capability]) -> Vec<CapabilityId> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Bridge health: voice_bridge_health
+// Bridge health: voice_bridge_health, device_bridge_health
 // ---------------------------------------------------------------------------------------------
 
 /// Marks unreachable, in every workspace, each voice bridge that still reads verified although it
@@ -962,6 +976,20 @@ pub async fn run_voice_bridge_health(deps: &Deps, now: OffsetDateTime) -> JobRep
     use super::calls::bridge::{VOICE_BRIDGE, VOICE_BRIDGE_KIND};
     let job = Job::VoiceBridgeHealth;
     run_bridge_health(deps, job, &VOICE_BRIDGE, VOICE_BRIDGE_KIND, now).await
+}
+
+/// Marks unreachable, in every workspace, each phone that still reads verified although no
+/// registration has listed it for its heartbeat's `unreachable_after` (ten minutes: its bridge
+/// stopped registering, or registers without it), writing `devices.bridge.offline` once per phone
+/// (the bridge kernel's [`kernel::mark_unreachable`], with `devices::bridge::DEVICE_BRIDGE`); the
+/// next registration that lists it verifies it again. A minute after it was last listed it
+/// already reads stale, and takes no command, without this job. Counted as
+/// [`run_voice_bridge_health`] counts.
+pub async fn run_device_bridge_health(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::devices::PHONE_KIND;
+    use super::devices::bridge::DEVICE_BRIDGE;
+    let job = Job::DeviceBridgeHealth;
+    run_bridge_health(deps, job, &DEVICE_BRIDGE, PHONE_KIND, now).await
 }
 
 /// Marks unreachable, in every workspace, each capability of kind `kind_key` that bridge `spec`
@@ -1055,6 +1083,55 @@ pub async fn run_call_timers(deps: &Deps, now: OffsetDateTime) -> JobReport {
                     report.failed += 1;
                     step_failed(job, ws, None, &Failure::App(e));
                 }
+            }
+        }
+    }
+    finish(job, report)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The phones' commands and files: device_command_expiry, device_file_purge
+// ---------------------------------------------------------------------------------------------
+
+/// Ends as `expired`, in every workspace, each phone's command still `queued` or `leased` whose
+/// time limit passed before `now`, writing `devices.command.finished` (`status: "expired"`) for
+/// each, a workspace in one transaction (`devices::sweeps::expire_commands`). The rows are kept:
+/// a leased one's late result still replaces `expired`. Run every minute. `touched` and `changed`
+/// count the commands ended, `failed` the workspaces that could not be swept.
+pub async fn run_device_command_expiry(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::devices::sweeps;
+    let job = Job::DeviceCommandExpiry;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let expired = sweeps::expire_commands(deps, &ctx).await;
+        count_purged(job, ws, expired, &mut report);
+    }
+    finish(job, report)
+}
+
+/// Deletes, in every workspace, each device file (a screenshot, a pulled file) whose seven-day
+/// retention ended before `now`, from the file store and then its record
+/// (`devices::sweeps::purge_files`); the commands that name it stay. Run hourly. `touched` counts
+/// the files found due, `changed` those deleted, `skipped` those whose record was gone meanwhile,
+/// `failed` the files (and the workspaces) that could not be purged: the next run tries them
+/// again.
+pub async fn run_device_file_purge(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::devices::sweeps;
+    let job = Job::DeviceFilePurge;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match sweeps::purge_files(deps, &ctx).await {
+            Ok(purged) => {
+                report.touched += purged.due;
+                report.changed += purged.purged;
+                report.skipped += purged.gone;
+                report.failed += purged.failed;
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
             }
         }
     }

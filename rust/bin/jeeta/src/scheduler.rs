@@ -72,6 +72,9 @@ pub struct Intervals {
     pub voice_bridge_health: Duration,
     pub call_timers: Duration,
     pub purge_call_commands: Duration,
+    pub device_bridge_health: Duration,
+    pub device_command_expiry: Duration,
+    pub device_file_purge: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -83,7 +86,9 @@ const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 impl Default for Intervals {
     /// Token renewal hourly, probes every 15 minutes, the delivery-report poll every minute, the
     /// inbox poll hourly, the raw-body, probe-run and bridge-command purges daily, the OAuth-flow
-    /// purge hourly, the call timers every second; first runs within 30 seconds of the start.
+    /// purge hourly, the call timers every second, the bridges' health checks and the phones'
+    /// command expiry every minute, the device-file purge hourly; first runs within 30 seconds of
+    /// the start.
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
@@ -111,6 +116,9 @@ impl Default for Intervals {
             voice_bridge_health: MINUTE,
             call_timers: Duration::from_secs(1),
             purge_call_commands: DAY,
+            device_bridge_health: MINUTE,
+            device_command_expiry: MINUTE,
+            device_file_purge: HOUR,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -145,6 +153,9 @@ impl Intervals {
             Job::VoiceBridgeHealth => self.voice_bridge_health,
             Job::CallTimers => self.call_timers,
             Job::PurgeCallCommands => self.purge_call_commands,
+            Job::DeviceBridgeHealth => self.device_bridge_health,
+            Job::DeviceCommandExpiry => self.device_command_expiry,
+            Job::DeviceFilePurge => self.device_file_purge,
         }
     }
 }
@@ -458,6 +469,9 @@ mod tests {
             voice_bridge_health: every,
             call_timers: every,
             purge_call_commands: every,
+            device_bridge_health: every,
+            device_command_expiry: every,
+            device_file_purge: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -563,6 +577,21 @@ mod tests {
         assert_eq!(i.of(Job::VoiceBridgeHealth), MINUTE);
         assert_eq!(i.of(Job::CallTimers), Duration::from_secs(1));
         assert_eq!(i.of(Job::PurgeCallCommands), DAY);
+        assert_eq!(i.of(Job::DeviceBridgeHealth), MINUTE);
+        assert_eq!(i.of(Job::DeviceCommandExpiry), MINUTE);
+        assert_eq!(i.of(Job::DeviceFilePurge), HOUR);
+        assert_eq!(
+            Job::DeviceBridgeHealth.lock_name(),
+            "jeeta.jobs.device_bridge_health"
+        );
+        assert_eq!(
+            Job::DeviceCommandExpiry.lock_name(),
+            "jeeta.jobs.device_command_expiry"
+        );
+        assert_eq!(
+            Job::DeviceFilePurge.lock_name(),
+            "jeeta.jobs.device_file_purge"
+        );
         assert_eq!(Job::CallTimers.lock_name(), "jeeta.jobs.call_timers");
         assert_eq!(
             Job::VoiceBridgeHealth.lock_name(),

@@ -170,6 +170,13 @@ async fn device_files_are_recorded_once_and_found_in_their_workspace() {
         .await;
 }
 
+#[tokio::test]
+async fn expired_device_files_are_found_and_deleted() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_contract::expired_device_files_are_found_and_deleted(uow).await;
+}
+
 /// Two polls open at once, each picking one command, are handed different ones: a command one
 /// bundle picked is passed over by the other until that bundle ends.
 #[tokio::test]

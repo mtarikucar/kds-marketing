@@ -249,6 +249,7 @@ impl DeviceCommandRepo for MemTenant {
                 kind: c.command.kind().to_owned(),
                 created_at: c.created_at,
                 leased_at: c.leased_at,
+                leased_by: c.leased_by,
             })
             .collect())
     }
@@ -309,5 +310,40 @@ impl DeviceCommandRepo for MemTenant {
             .collect();
         files.sort_by_key(|f| f.id);
         Ok(files)
+    }
+
+    async fn expired_files(
+        &mut self,
+        now: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<DeviceFile>, AppError> {
+        let ws = self.ws;
+        let mut files: Vec<DeviceFile> = self
+            .state()
+            .devices
+            .files
+            .iter()
+            .filter(|(of, f)| *of == ws && f.expires_at <= now)
+            .map(|(_, f)| f.clone())
+            .collect();
+        files.sort_by_key(|f| (f.expires_at, f.id));
+        files.truncate(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE) as usize);
+        Ok(files)
+    }
+
+    async fn delete_file(&mut self, id: Uuid) -> Result<bool, AppError> {
+        let ws = self.ws;
+        let held = self
+            .state()
+            .devices
+            .files
+            .iter()
+            .any(|(of, f)| *of == ws && f.id == id);
+        if held {
+            self.tx.write(move |s: &mut MemState| {
+                s.devices.files.retain(|(of, f)| !(*of == ws && f.id == id));
+            });
+        }
+        Ok(held)
     }
 }

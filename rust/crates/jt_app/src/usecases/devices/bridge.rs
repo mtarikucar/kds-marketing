@@ -23,6 +23,10 @@
 //! `model`, `os_version`, `screen`, `features`) and the bridge's (`bridge_id`, `version`,
 //! `protocol`), it keeps which bridge holds the phone: `listed_by`, that bridge's key id, and
 //! `listed`, whether that bridge's latest registration lists it (`false` once one leaves it out).
+//! The `phone` kind has a heartbeat (`jt_capability::Heartbeat`): only these registrations verify
+//! a phone (`capability.verify` refuses one), it reads stale a minute after the last one that
+//! listed it, and the `device_bridge_health` job marks it unreachable ten minutes after
+//! (`devices.bridge.offline`).
 //!
 //! A phone is one bridge's at a time. Another bridge that lists it while the holder lists it and
 //! registered it within [`HELD_FOR`] is refused with [`PHONE_HELD_BY_ANOTHER_BRIDGE`] (two PCs
@@ -69,8 +73,9 @@
 //!
 //! **Files.** An upload is the file's bytes, `image/png` (a screenshot) or
 //! `application/octet-stream` (a file pulled off a phone), streamed into the file store and
-//! recorded as the workspace's, uploaded by the bridge, for [`FILE_RETENTION`]. Each upload is a
-//! new file, a retried one included. Each workspace uploads a few files at a time, screenshots and
+//! recorded as the workspace's, uploaded by the bridge, for [`FILE_RETENTION`], after which the
+//! `device_file_purge` job deletes it (`super::sweeps`). Each upload is a new file, a retried one
+//! included. Each workspace uploads a few files at a time, screenshots and
 //! pulled files apart (`super::uploads`); one that waits too long for its turn is answered `503`
 //! (the bridge tries again), and a body that stalls is refused.
 //!
@@ -78,7 +83,8 @@
 //! (`command_id`, `kind`, `status`, `reason`, `duration_ms`: the bridge's, `null` for a failure the
 //! server decided; `leased_by`: the key id of the bridge last handed it, `null` for none;
 //! `result_sha256`: the hash of the result a done command keeps, [`result_sha256`]); its result
-//! stays on the command. A phone that passes from one bridge to another writes
+//! stays on the command. One the expiry sweep ends writes the same entry (`super::sweeps`), and a
+//! late result that replaces the expiry writes a second one. A phone that passes from one bridge to another writes
 //! `devices.phone.holder_changed` (`capability_id`, `from`, `to`: key ids). `tracing` carries ids, kinds, statuses and
 //! counts only: never a command's payload, a result, a failure's detail or a file's bytes.
 
@@ -103,8 +109,8 @@ use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::TenantRepos;
 use crate::ports::devices::{
-    DeviceCommand, DeviceCommandRow, DeviceFile, FailReason, Finish, Finished, REDELIVER_AFTER,
-    required_features, supports,
+    CommandStatus, DeviceCommand, DeviceCommandRow, DeviceFile, FailReason, Finish, Finished,
+    REDELIVER_AFTER, required_features, supports,
 };
 use crate::ports::files::ByteSource;
 use crate::usecases::api_keys::AgentPrincipal;
@@ -136,7 +142,9 @@ pub use jt_device_protocol::{
 /// How often the bridge registers, and the longest a poll for commands waits, in seconds.
 pub use jt_device_protocol::{HEARTBEAT_S, MAX_WAIT_S};
 /// How long a phone a bridge lists stays that bridge's when the bridge stops registering it: the
-/// spec's stale clock for a bridge, four missed heartbeats. Another bridge can take it over after.
+/// spec's stale clock for a bridge, four missed heartbeats, which is the `phone` kind's heartbeat
+/// `stale_after` too (pinned by `held_for_is_the_phone_kinds_stale_clock`). Another bridge can
+/// take it over after.
 pub const HELD_FOR: Duration = Duration::seconds(60);
 /// How long the download address of a `push_file` command lives: long enough for the bridge to
 /// start the download after the command waited its turn on the phone (the bridge fails a command
@@ -728,9 +736,55 @@ pub fn result_sha256(result: &Value) -> String {
         .collect()
 }
 
-/// Writes `devices.command.finished` for command `row`, which just ended, under the version in
-/// force `in_force`: `duration_ms` is the bridge's, `None` for a failure the server decided;
-/// `result_sha256` is [`result_sha256`] of the result a done command keeps, `None` for any other.
+/// What `devices.command.finished` says of a command that just ended ([`write_finished`]).
+pub(super) struct Ended<'a> {
+    pub id: Uuid,
+    /// The command's kind, e.g. `"tap"`.
+    pub kind: &'a str,
+    pub status: CommandStatus,
+    pub reason: Option<FailReason>,
+    /// The bridge's, `None` for an end the server decided (a failure, an expiry).
+    pub duration_ms: Option<u32>,
+    /// The bridge (its key) the command was last handed, `None` for none.
+    pub leased_by: Option<ApiKeyId>,
+    /// The result a done command keeps, `None` for any other.
+    pub result: Option<&'a Value>,
+}
+
+/// Writes `devices.command.finished` for the command that just ended as `ended` says, under the
+/// version in force `in_force`: `command_id`, `kind`, `status`, `reason`, `duration_ms`,
+/// `leased_by` (the key id) and `result_sha256` ([`result_sha256`] of the result, `null` without
+/// one). Every end of a command writes one, whoever decided it: the bridge's result, a failure
+/// the server decided, the expiry sweep (`super::sweeps`), and a late result that replaced an
+/// expiry, after it.
+pub(super) async fn write_finished(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    in_force: Option<StrategyVersionId>,
+    ended: Ended<'_>,
+) -> Result<(), AppError> {
+    append(
+        r,
+        ctx,
+        "devices.command.finished",
+        "device_command",
+        ended.id,
+        in_force,
+        json!({
+            "command_id": ended.id,
+            "kind": ended.kind,
+            "status": ended.status.key(),
+            "reason": ended.reason.map(FailReason::key),
+            "duration_ms": ended.duration_ms,
+            "leased_by": ended.leased_by.map(|by| by.to_string()),
+            "result_sha256": ended.result.map(result_sha256),
+        }),
+    )
+    .await
+}
+
+/// [`write_finished`] for command `row`, which just ended: `duration_ms` is the bridge's, `None`
+/// for a failure the server decided.
 async fn finished(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -738,24 +792,16 @@ async fn finished(
     row: &DeviceCommandRow,
     duration_ms: Option<u32>,
 ) -> Result<(), AppError> {
-    append(
-        r,
-        ctx,
-        "devices.command.finished",
-        "device_command",
-        row.id,
-        in_force,
-        json!({
-            "command_id": row.id,
-            "kind": row.command.kind(),
-            "status": row.status.key(),
-            "reason": row.reason.map(FailReason::key),
-            "duration_ms": duration_ms,
-            "leased_by": row.leased_by.map(|by| by.to_string()),
-            "result_sha256": row.result.as_ref().map(result_sha256),
-        }),
-    )
-    .await
+    let ended = Ended {
+        id: row.id,
+        kind: row.command.kind(),
+        status: row.status,
+        reason: row.reason,
+        duration_ms,
+        leased_by: row.leased_by,
+        result: row.result.as_ref(),
+    };
+    write_finished(r, ctx, in_force, ended).await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1027,9 +1073,23 @@ pub async fn files(
 
 #[cfg(test)]
 mod tests {
+    use jt_capability::CapabilityKind;
     use serde_json::{Value, json};
+    use time::Duration;
 
-    use super::result_sha256;
+    use super::{HEARTBEAT_S, HELD_FOR, PHONE_KIND, result_sha256};
+
+    #[test]
+    fn held_for_is_the_phone_kinds_stale_clock() {
+        // A phone reads stale, and so offline, when its bridge's hold on it lapses, and that is
+        // four missed registrations.
+        let beat = CapabilityKind::parse(PHONE_KIND)
+            .and_then(|k| k.heartbeat())
+            .expect("a phone is verified by its heartbeat");
+        assert_eq!(beat.stale_after, HELD_FOR);
+        assert_eq!(HELD_FOR, Duration::seconds(4 * i64::from(HEARTBEAT_S)));
+        assert_eq!(beat.unreachable_after, Duration::minutes(10));
+    }
 
     #[test]
     fn result_sha256_hashes_compact_json_with_sorted_keys() {

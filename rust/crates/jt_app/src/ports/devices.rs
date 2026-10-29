@@ -88,6 +88,8 @@ pub struct ExpiredCommand {
     pub created_at: OffsetDateTime,
     /// When it was last leased; `None` when it expired in the queue.
     pub leased_at: Option<OffsetDateTime>,
+    /// The bridge (its API key) it was last leased to; set exactly when `leased_at` is.
+    pub leased_by: Option<ApiKeyId>,
 }
 
 /// A file a device bridge uploaded (a screenshot, a pulled file). Its bytes are in the workspace's
@@ -183,6 +185,8 @@ pub fn failed_while_pending(current: CommandStatus, ever_leased: bool) -> Option
 /// The workspace's device commands. A command is queued once, leased to the bridge of its phone
 /// (again when a lease went unanswered), and ends with its bridge's result, a failure the server
 /// decides, or an expiry. Rows are never deleted: they are kept like ledger history (spec §5.6).
+/// The device files are recorded here too; a file's record is deleted once its retention ended
+/// and its bytes are gone ([`delete_file`](DeviceCommandRepo::delete_file)).
 ///
 /// A bridge's poll takes three calls in one bundle: [`pick_due`](DeviceCommandRepo::pick_due),
 /// then [`mark_leased`](DeviceCommandRepo::mark_leased) for the commands it hands out and
@@ -261,6 +265,19 @@ pub trait DeviceCommandRepo: Send + Sync {
     /// The workspace's device files among `ids`, by id; unknown and other workspaces' ids are
     /// passed over.
     async fn files(&mut self, ids: &[Uuid]) -> Result<Vec<DeviceFile>, AppError>;
+    /// At most `limit` (clamped to `1..=MAX_DEVICE_COMMAND_PAGE`) of the workspace's device
+    /// files whose retention ended at or before `now` (`expires_at <= now`), the earliest ended
+    /// first (by `expires_at`, then id).
+    async fn expired_files(
+        &mut self,
+        now: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<DeviceFile>, AppError>;
+    /// Deletes the record of the workspace's device file `id`: `true` when it was deleted,
+    /// `false` when there was none (another workspace's included), so deleting twice is no
+    /// error. Its bytes are the file store's to delete, first: while the record stays, the purge
+    /// finds the file again, so one that failed halfway is finished on its next run.
+    async fn delete_file(&mut self, id: Uuid) -> Result<bool, AppError>;
 }
 
 #[cfg(test)]

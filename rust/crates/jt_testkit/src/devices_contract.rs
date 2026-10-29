@@ -684,6 +684,7 @@ pub async fn finish_replaces_expired_after_lease(uow: Arc<dyn UnitOfWork>) {
                 kind: "tap".into(),
                 created_at: FIXED_NOW,
                 leased_at: Some(at(1)),
+                leased_by: Some(BRIDGE),
             })
             .collect::<Vec<_>>()
     );
@@ -1020,6 +1021,67 @@ pub async fn device_files_are_recorded_once_and_found_in_their_workspace(uow: Ar
     assert_eq!(
         t.device_commands()
             .files(&[png.id, theirs.id])
+            .await
+            .unwrap(),
+        vec![theirs]
+    );
+}
+
+/// The device files whose retention ended are found, the earliest ended first and at most the
+/// limit, within their workspace only; deleting a file's record takes it out, and deleting it
+/// again, or another workspace's, deletes nothing.
+pub async fn expired_device_files_are_found_and_deleted(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let ending = |days: i64| DeviceFile {
+        expires_at: FIXED_NOW + Duration::days(days),
+        ..device_file("image/png", 8)
+    };
+    let (later, last_week, yesterday, now) = (ending(1), ending(-7), ending(-1), ending(0));
+    let theirs = ending(-30);
+    for (ws, file) in [
+        (f.ws, &later),
+        (f.ws, &last_week),
+        (f.ws, &yesterday),
+        (f.ws, &now),
+        (f.other, &theirs),
+    ] {
+        let mut t = uow.tenant(ws).await.unwrap();
+        t.device_commands().save_file(file.clone()).await.unwrap();
+        t.commit().await.unwrap();
+    }
+
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let commands = t.device_commands();
+    let due = commands.expired_files(FIXED_NOW, 10).await.unwrap();
+    assert_eq!(due, vec![last_week.clone(), yesterday.clone(), now.clone()]);
+    assert_eq!(
+        commands.expired_files(FIXED_NOW, 1).await.unwrap(),
+        vec![last_week.clone()]
+    );
+    // Another workspace's file is not this one's to delete.
+    assert!(!commands.delete_file(theirs.id).await.unwrap());
+    assert!(commands.delete_file(last_week.id).await.unwrap());
+    assert!(!commands.delete_file(last_week.id).await.unwrap());
+    assert!(!commands.delete_file(Uuid::now_v7()).await.unwrap());
+    t.commit().await.unwrap();
+
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.device_commands()
+            .expired_files(FIXED_NOW, 10)
+            .await
+            .unwrap(),
+        vec![yesterday.clone(), now.clone()]
+    );
+    let mut kept = vec![later.clone(), yesterday, now];
+    kept.sort_by_key(|file| file.id);
+    let ids = [later.id, last_week.id, kept[0].id, kept[1].id, kept[2].id];
+    assert_eq!(t.device_commands().files(&ids).await.unwrap(), kept);
+    drop(t);
+    let mut t = uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        t.device_commands()
+            .expired_files(FIXED_NOW, 10)
             .await
             .unwrap(),
         vec![theirs]
