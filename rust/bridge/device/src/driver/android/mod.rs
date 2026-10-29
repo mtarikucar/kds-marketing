@@ -19,7 +19,9 @@
 //! - ADBKeyBoard loses a broadcast sent before it has bound to the focused field, and
 //!   `am broadcast` answers `result=0` either way. After `ime set` the driver waits, at most
 //!   [`IME_BIND_TIMEOUT`], until `dumpsys input_method` shows it bound on both sides (see
-//!   `commands::bound_to_a_field`).
+//!   `commands::bound_to_a_field`). On the Redmi it held the focused field as soon as `ime set`
+//!   returned, and text sent to it arrived whole with the input method put back right after the
+//!   broadcast (task D4): no pause is needed between the two.
 //! - Auto-rotate turns the screen: its size and rotation are read on every observation.
 //! - The phone keeps the input methods it used, most recent first
 //!   (`input_methods_subtype_history`): the one to put back when nothing else says.

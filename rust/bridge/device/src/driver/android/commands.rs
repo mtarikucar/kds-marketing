@@ -585,18 +585,20 @@ mod tests {
                 .join(name);
             std::fs::read_to_string(path).unwrap()
         };
+        // Read on the owner's phone right after `ime set`: ADBKeyBoard holds the field at once.
         assert!(bound_to_a_field(&fixture("input_method_bound.txt")));
         assert!(!bound_to_a_field(&fixture("input_method_other_ime.txt")));
-        assert!(!bound_to_a_field(&fixture(
-            "input_method_adbime_unbound.txt"
-        )));
-        // The app served a connection again, still bound to the keyboard before.
+        // Read just before: the phone's own keyboard holds the same field.
+        assert!(!bound_to_a_field(&fixture("input_method_before_set.txt")));
+        // The manager switched, the app's client still bound to the keyboard before (made up from
+        // the two above: the phone switched too fast to be read in between).
         assert!(!bound_to_a_field(&fixture("input_method_in_between.txt")));
         // The same with the client bound to nothing yet.
         let in_between = fixture("input_method_in_between.txt").replace(
-            "mBindSequence=354 mCurId=com.preff.kb.xm/com.preff.kb.LatinIME",
+            "mBindSequence=386 mCurId=com.preff.kb.xm/com.preff.kb.LatinIME",
             "mBindSequence=-1 mCurId=null",
         );
+        assert!(in_between.contains("mBindSequence=-1 mCurId=null"));
         assert!(!bound_to_a_field(&in_between));
         // The manager selected it, but has not bound to it yet.
         let selected = fixture("input_method_bound.txt")

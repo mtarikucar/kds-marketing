@@ -7,8 +7,12 @@
 //!   `getprop.txt` (a subset of non-identifying properties), `ime_list.txt`, `wm_size.txt`,
 //!   `current_focus.txt`, `dump_written.txt`, `miui_theme_stack_trace.txt`, the first phone of
 //!   `devices_l.txt`, and `input_method_other_ime.txt` (two sections of `dumpsys input_method`);
-//! - edited from that last one: `input_method_adbime_unbound.txt` (ADBKeyBoard selected, bound to
-//!   no field) and `input_method_bound.txt` (bound to a focused field);
+//! - read on that phone with a text field focused (task D4), the same two sections:
+//!   `input_method_before_set.txt` (its own keyboard holds the field) and `input_method_bound.txt`
+//!   (read at once after `ime set` to ADBKeyBoard, which already holds the field: the switch was
+//!   too fast for any state in between to be read);
+//! - put together from those two, as no capture shows it: `input_method_in_between.txt` (the
+//!   manager switched to ADBKeyBoard, the app's client still bound to the keyboard before);
 //! - written by hand in the shapes the plan's findings record: `dump_whatsapp.xml`,
 //!   `dump_numeric_refs.xml`, `idle_state_error.txt`, `inject_events_refusal.txt` and the other
 //!   phones of `devices_l.txt`.
@@ -91,11 +95,11 @@ struct State {
     current_ime: String,
     enabled_imes: Vec<String>,
     adbkeyboard_installed: bool,
-    /// After ADBKeyBoard is selected, `dumpsys input_method` says it is bound to no field this
-    /// many times.
+    /// After ADBKeyBoard is selected, `dumpsys input_method` still shows the keyboard before
+    /// holding the field this many times.
     unbound_polls: usize,
-    /// Meanwhile it shows the app's field served, but the app still bound to the keyboard
-    /// before, rather than nothing served.
+    /// Meanwhile it shows the manager switched to ADBKeyBoard but the app's client still bound
+    /// to the keyboard before, rather than the keyboard before on both sides.
     in_between: bool,
     polls_since_selected: usize,
     /// What `input_methods_subtype_history` holds.
@@ -259,7 +263,7 @@ impl FakeAdb {
                 } else if state.in_between {
                     fixture("input_method_in_between.txt")
                 } else {
-                    fixture("input_method_adbime_unbound.txt")
+                    fixture("input_method_before_set.txt")
                 });
             }
             "exec-out screencap -p" => {
