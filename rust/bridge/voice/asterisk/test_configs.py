@@ -20,7 +20,9 @@ ALLOWED_DIRECTIVES = {
     "ari.conf": ["#include secrets/ari_users.conf"],
 }
 DIALPLAN_APPS = {"stasis", "hangup"}
-# The modules the bridge cannot work without (B1 review); the Dockerfile checks each is built.
+# The modules the bridge cannot work without (B1 review); the Dockerfile checks each is built. The
+# last three no module requires, but the configuration relies on them: the 401 challenge to an
+# unidentified request, the endpoint's NAT options, and extensions.conf itself.
 REQUIRED_MODULES = [
     "chan_websocket", "chan_pjsip", "res_pjsip", "res_pjsip_session", "res_pjsip_sdp_rtp",
     "res_pjsip_outbound_registration", "res_pjsip_outbound_authenticator_digest",
@@ -28,7 +30,10 @@ REQUIRED_MODULES = [
     "res_websocket_client", "res_ari", "res_ari_asterisk", "res_ari_channels", "res_ari_bridges",
     "res_ari_events", "res_stasis", "app_stasis", "bridge_simple", "bridge_softmix",
     "res_timing_timerfd", "codec_alaw", "codec_ulaw",
+    "res_pjsip_authenticator_digest", "res_pjsip_nat", "pbx_config",
 ]
+# Files the loaded modules read, shipped so none logs a load error at start (B1 Step 9 run).
+MODULE_CONFIGS = ["chan_websocket.conf", "pjproject.conf", "websocket_client.conf"]
 
 
 def read(name: str) -> str:
@@ -200,3 +205,16 @@ def test_every_module_the_bridge_needs_is_built_and_never_disabled():
     checked = re.search(r"for m in ([^;]+);", dockerfile)
     assert checked, "the Dockerfile checks the required modules in a `for m in ...;` loop"
     assert [t for t in checked.group(1).split() if t != "\\"] == REQUIRED_MODULES
+    for name in MODULE_CONFIGS:
+        assert (ETC / name).is_file(), f"{name} is missing: its module logs a load error"
+    websocket = sections("chan_websocket.conf")
+    assert [(n, values(items, "control_message_format")) for n, _, items in websocket] == [
+        ("global", ["json"])
+    ]
+
+
+def test_the_base_images_are_pinned_by_digest():
+    froms = re.findall(r"^FROM\s+(\S+)", DOCKERFILE.read_text(encoding="utf-8"), re.M)
+    assert len(froms) == 2, froms
+    for image in froms:
+        assert re.fullmatch(r"debian:bookworm-slim@sha256:[0-9a-f]{64}", image), image

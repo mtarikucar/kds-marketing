@@ -4,8 +4,9 @@
 # the current one. The sha256 is the one downloads.asterisk.org publishes (asterisk-22.11.0.sha256),
 # checked against the tarball itself on 2026-10-29. The bundled pjproject (2.17) is fetched during
 # configure and checked against the MD5 that this verified tarball ships.
-# After the first good build, pin both base images by digest (debian:bookworm-slim@sha256:...).
-FROM debian:bookworm-slim AS build
+# Both base images are pinned by digest: debian:bookworm-slim as pulled for the first good build
+# (B1 Step 9, 2026-10-29). Move the pin with a reviewed commit, never by a floating tag.
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS build
 ARG ASTERISK_VERSION=22.11.0
 ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
 # Parallel compile jobs: 2 of the host's 6 shared vCPUs, so the neighbours keep theirs.
@@ -33,7 +34,7 @@ RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
  && make -j"${MAKE_JOBS}" && make install DESTDIR=/out \
  && rm -rf /out/var/run /out/usr/include /out/usr/share/man
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates libedit2 libjansson4 libssl3 libsqlite3-0 libxml2 libuuid1 libcurl4 \
  && rm -rf /var/lib/apt/lists/* \
@@ -50,7 +51,8 @@ RUN ldconfig \
       res_pjsip_outbound_registration res_pjsip_outbound_authenticator_digest \
       res_pjsip_endpoint_identifier_ip res_rtp_asterisk res_http_websocket res_websocket_client \
       res_ari res_ari_asterisk res_ari_channels res_ari_bridges res_ari_events res_stasis app_stasis \
-      bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw; do \
+      bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw \
+      res_pjsip_authenticator_digest res_pjsip_nat pbx_config; do \
       test -f "/usr/lib/asterisk/modules/$m.so" || { echo "module $m was not built"; exit 1; }; \
     done \
  && ! { ldd /usr/sbin/asterisk /usr/lib/libasterisk*.so* /usr/lib/asterisk/modules/*.so 2>&1 \

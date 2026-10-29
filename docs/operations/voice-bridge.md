@@ -220,3 +220,13 @@ docker exec jeeta-asterisk asterisk -rx 'pjsip show registrations'
     then it stops.
 - Recovery: fix the cause first (the secret file, the extension in the Netsantral portal, another
   UA registering 102). Then run `systemctl restart jeeta-asterisk`. Never print the secret file.
+
+Decided on the first run (2026-10-29):
+- **Keep-alive.** NetGSM answers Asterisk's OPTIONS with 200 OK, so `qualify_frequency=20` stays.
+  `pjsip show contacts` should read `Avail` (it measured about 49 ms).
+- **Stopped outside test windows.** The bundled pjproject 2.17 has published advisories without a
+  patched release (plan task B1, "As run"). Until the B7/E-phase tests are done, `jeeta-asterisk`
+  runs only during a test window. Keep it disabled at boot (`systemctl disable jeeta-asterisk`),
+  start it with `systemctl start jeeta-asterisk`, and stop it with `systemctl stop jeeta-asterisk`
+  afterwards. Rebuild the image once Asterisk ships the pjproject
+  fixes, before task E2 points production at it.

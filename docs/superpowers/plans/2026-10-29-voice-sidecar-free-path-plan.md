@@ -2455,7 +2455,7 @@ On the Windows dev machine (`core.autocrlf=true`) a plain `git archive` writes C
 
 **Files:**
 - Create: `rust/bridge/voice/asterisk/Dockerfile`
-- Create: `rust/bridge/voice/asterisk/etc/{asterisk.conf,modules.conf,logger.conf,cdr.conf,cel.conf,pjsip.conf,extensions.conf,http.conf,ari.conf,rtp.conf,manager.conf}`
+- Create: `rust/bridge/voice/asterisk/etc/{asterisk.conf,modules.conf,logger.conf,cdr.conf,cel.conf,pjsip.conf,extensions.conf,http.conf,ari.conf,rtp.conf,manager.conf,chan_websocket.conf,pjproject.conf,websocket_client.conf}`
 - Create: `rust/bridge/voice/asterisk/test_configs.py`
 - Create: `rust/bridge/voice/asterisk/.dockerignore` (`*`: the image copies nothing from its context)
 - Create: `rust/bridge/voice/asterisk/sip_probe.py` and `test_sip_probe.py` (Step 9's OPTIONS probe)
@@ -2491,6 +2491,7 @@ On the Windows dev machine (`core.autocrlf=true`) a plain `git archive` writes C
 - Options for the coordinator:
   1. Deploy 22.11.0 for the B7 slice with that exposure, and rebuild when Asterisk ships pjproject fixes (watch `asterisk/asterisk` `third-party/pjproject` and pjproject 2.18).
   2. Build the bundled pjproject from a pjproject `master` commit that holds the fixes. This is not tried here, and Asterisk's patches may not apply.
+- **Decided (coordinator, 2026-10-29): option 1 for the test phase**, with the mitigations recorded under "Steps 7–9 as run" below.
 
 **Version check (2026-10-29).** `asterisk-22.11.0.tar.gz` is the newest 22.x release on downloads.asterisk.org (22.12.0 is at rc3). Its published `asterisk-22.11.0.sha256` reads `3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94`, and the tarball fetched from both `…/asterisk/` and `…/asterisk/releases/` hashes to that value. The Dockerfile fetches from `releases/`, because the top directory keeps only the current release and drops 22.11.0 once 22.12.0 ships. The bundled pjproject is 2.17. Configure fetches it from `raw.githubusercontent.com/asterisk/third-party` and checks it against the MD5 inside the verified tarball.
 
@@ -2530,7 +2531,9 @@ ALLOWED_DIRECTIVES = {
     "ari.conf": ["#include secrets/ari_users.conf"],
 }
 DIALPLAN_APPS = {"stasis", "hangup"}
-# The modules the bridge cannot work without (B1 review); the Dockerfile checks each is built.
+# The modules the bridge cannot work without (B1 review); the Dockerfile checks each is built. The
+# last three no module requires, but the configuration relies on them: the 401 challenge to an
+# unidentified request, the endpoint's NAT options, and extensions.conf itself.
 REQUIRED_MODULES = [
     "chan_websocket", "chan_pjsip", "res_pjsip", "res_pjsip_session", "res_pjsip_sdp_rtp",
     "res_pjsip_outbound_registration", "res_pjsip_outbound_authenticator_digest",
@@ -2538,7 +2541,10 @@ REQUIRED_MODULES = [
     "res_websocket_client", "res_ari", "res_ari_asterisk", "res_ari_channels", "res_ari_bridges",
     "res_ari_events", "res_stasis", "app_stasis", "bridge_simple", "bridge_softmix",
     "res_timing_timerfd", "codec_alaw", "codec_ulaw",
+    "res_pjsip_authenticator_digest", "res_pjsip_nat", "pbx_config",
 ]
+# Files the loaded modules read, shipped so none logs a load error at start (B1 Step 9 run).
+MODULE_CONFIGS = ["chan_websocket.conf", "pjproject.conf", "websocket_client.conf"]
 
 
 def read(name: str) -> str:
@@ -2710,6 +2716,19 @@ def test_every_module_the_bridge_needs_is_built_and_never_disabled():
     checked = re.search(r"for m in ([^;]+);", dockerfile)
     assert checked, "the Dockerfile checks the required modules in a `for m in ...;` loop"
     assert [t for t in checked.group(1).split() if t != "\\"] == REQUIRED_MODULES
+    for name in MODULE_CONFIGS:
+        assert (ETC / name).is_file(), f"{name} is missing: its module logs a load error"
+    websocket = sections("chan_websocket.conf")
+    assert [(n, values(items, "control_message_format")) for n, _, items in websocket] == [
+        ("global", ["json"])
+    ]
+
+
+def test_the_base_images_are_pinned_by_digest():
+    froms = re.findall(r"^FROM\s+(\S+)", DOCKERFILE.read_text(encoding="utf-8"), re.M)
+    assert len(froms) == 2, froms
+    for image in froms:
+        assert re.fullmatch(r"debian:bookworm-slim@sha256:[0-9a-f]{64}", image), image
 ```
 
 `rust/bridge/voice/asterisk/test_sip_probe.py` (the probe of Step 9, below):
@@ -2882,6 +2901,8 @@ expiration=120
 line=yes
 endpoint=netgsm
 
+; Kept at 20 s: NetGSM answers OPTIONS with 200 (B1 Step 9, 2026-10-29), so the keep-alive costs
+; one round trip and holds the conntrack entry the inbound INVITEs need.
 [netgsm]
 type=aor
 contact=sip:sip5.netsantral.com
@@ -2973,10 +2994,35 @@ enabled = no
 webenabled = no
 ```
 
+`rust/bridge/voice/asterisk/etc/chan_websocket.conf`:
+
+```ini
+; chan_websocket's global options (Asterisk >= 22.8). The bridge asks for JSON control messages on
+; each channel (ARI externalMedia transport_data f(json)); this makes JSON the default as well, and
+; gives the module its file (without one, every start logs a load error).
+[global]
+type=global
+control_message_format=json
+```
+
+`rust/bridge/voice/asterisk/etc/pjproject.conf`:
+
+```ini
+; res_pjproject's file, present so the module loads without an error; its defaults apply.
+```
+
+`rust/bridge/voice/asterisk/etc/websocket_client.conf`:
+
+```ini
+; No outbound WebSocket client: the bridge connects to Asterisk (chan_websocket in server mode,
+; /media/<connection id> on http.conf's loopback port). The file exists so the module loads
+; without an error.
+```
+
 - [ ] **Step 4: Run the config test**
 
 Run: `python -I -m pytest -c speech/pytest.ini asterisk`
-Expected: `12 passed` (9 config, 3 probe). The probe module must exist for this run, so write `sip_probe.py` (Step 5) before it.
+Expected: `13 passed` (10 config, 3 probe). The probe module must exist for this run, so write `sip_probe.py` (Step 5) before it.
 
 The config test was mutation-tested. Each of 56 edits fails at least one assertion. The edits include: `Dial`/`System`/`Exec`/`Originate`/`include` in the dialplan; an `[anonymous]` or second endpoint; a template; http `tls*` or `bindaddr=0.0.0.0`; `g722`; `disallow=all` removed or moved after `allow`; `match=0.0.0.0/0` (also `/0.0.0.0` or `/8`); `Password`/`md5_cred`/`secret`/`password_digest`; `#exec`; an extra transport or TCP; `identify_by` removed or `username,ip`; `allow_transfer` removed; inbound `auth`; a 403 retry; `max_retries` removed; AMI on, or `manager.conf` deleted; `(!)` back; astdb off the tmpfs; the volume back; `--cap-drop`/`no-new-privileges`/`--read-only` removed; exec allowed on a tmpfs; `Restart=on-failure`; a required module noloaded or dropped from the Dockerfile check.
 
@@ -2991,8 +3037,9 @@ The config test was mutation-tested. Each of 56 edits fails at least one asserti
 # the current one. The sha256 is the one downloads.asterisk.org publishes (asterisk-22.11.0.sha256),
 # checked against the tarball itself on 2026-10-29. The bundled pjproject (2.17) is fetched during
 # configure and checked against the MD5 that this verified tarball ships.
-# After the first good build, pin both base images by digest (debian:bookworm-slim@sha256:...).
-FROM debian:bookworm-slim AS build
+# Both base images are pinned by digest: debian:bookworm-slim as pulled for the first good build
+# (B1 Step 9, 2026-10-29). Move the pin with a reviewed commit, never by a floating tag.
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS build
 ARG ASTERISK_VERSION=22.11.0
 ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
 # Parallel compile jobs: 2 of the host's 6 shared vCPUs, so the neighbours keep theirs.
@@ -3020,7 +3067,7 @@ RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
  && make -j"${MAKE_JOBS}" && make install DESTDIR=/out \
  && rm -rf /out/var/run /out/usr/include /out/usr/share/man
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates libedit2 libjansson4 libssl3 libsqlite3-0 libxml2 libuuid1 libcurl4 \
  && rm -rf /var/lib/apt/lists/* \
@@ -3037,7 +3084,8 @@ RUN ldconfig \
       res_pjsip_outbound_registration res_pjsip_outbound_authenticator_digest \
       res_pjsip_endpoint_identifier_ip res_rtp_asterisk res_http_websocket res_websocket_client \
       res_ari res_ari_asterisk res_ari_channels res_ari_bridges res_ari_events res_stasis app_stasis \
-      bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw; do \
+      bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw \
+      res_pjsip_authenticator_digest res_pjsip_nat pbx_config; do \
       test -f "/usr/lib/asterisk/modules/$m.so" || { echo "module $m was not built"; exit 1; }; \
     done \
  && ! { ldd /usr/sbin/asterisk /usr/lib/libasterisk*.so* /usr/lib/asterisk/modules/*.so 2>&1 \
@@ -3189,7 +3237,8 @@ docker ps --format '{{.Names}} {{.Ports}}' | grep -E ':400[0-9]{2}' || echo "no 
 ss -ltnp | grep -E ':8188\b' || echo "8188/tcp free"
 sysctl -n net.ipv4.ip_local_reserved_ports
 getent passwd 1500 1501; getent group 1500 1501 || true
-command -v docker docker-init python3
+command -v docker python3
+docker info --format '{{.InitBinary}}'; ls -l /usr/libexec/docker/docker-init
 ```
 
 Expected:
@@ -3199,7 +3248,8 @@ Expected:
 - 5070/udp, the RTP range and 8188/tcp are free. Asterisk owns the RTP range on the host network.
 - `ip_local_reserved_ports` is empty; Step 8 sets it.
 - uid/gid 1500 and 1501 are unused. If one is taken, change the uid in the Dockerfile, in the units and in every `1500`/`1501` below together.
-- `/usr/bin/docker` (the unit's path), `docker-init` (`--init`) and `python3` (Step 9's probe) all exist.
+- `/usr/bin/docker` (the unit's path) and `python3` (Step 9's probe) exist.
+- `docker info` names `docker-init` as the init binary, and `/usr/libexec/docker/docker-init` exists, for `--init`. On this host docker-ce keeps it outside `PATH`, so `command -v docker-init` finds nothing.
 
 - [ ] **Step 8: [COORDINATOR, server] Users, directories, secrets and the RTP reservation**
 
@@ -3256,6 +3306,7 @@ Notes:
 - `auth_type=digest` replaces `userpass`, which Asterisk 22 documents as deprecated.
 - `realm=asterisk` is the realm Gate V1's REGISTER saw.
 - A second run writes a new ARI password. Restart `jeeta-asterisk` (and later the bridge) after it.
+- `useradd` warns that `jeeta-voice-svc`'s uid 1501 is greater than `SYS_UID_MAX` 999. This is harmless: the fixed uid is deliberate, so the container's user maps to it.
 
 - [ ] **Step 9: [COORDINATOR, server] Build, start, and check**
 
@@ -3271,7 +3322,7 @@ docker ps --filter name=jeeta-asterisk --format '{{.Names}} {{.Status}}'
 docker exec jeeta-asterisk asterisk -rx 'pjsip show registrations'
 docker exec jeeta-asterisk asterisk -rx 'pjsip show contacts'
 docker exec jeeta-asterisk asterisk -rx 'pjsip show identifies'
-for m in chan_websocket chan_pjsip res_pjsip res_pjsip_session res_pjsip_sdp_rtp res_pjsip_outbound_registration res_pjsip_outbound_authenticator_digest res_pjsip_endpoint_identifier_ip res_rtp_asterisk res_http_websocket res_websocket_client res_ari res_ari_asterisk res_ari_channels res_ari_bridges res_ari_events res_stasis app_stasis bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw; do
+for m in chan_websocket chan_pjsip res_pjsip res_pjsip_session res_pjsip_sdp_rtp res_pjsip_outbound_registration res_pjsip_outbound_authenticator_digest res_pjsip_endpoint_identifier_ip res_rtp_asterisk res_http_websocket res_websocket_client res_ari res_ari_asterisk res_ari_channels res_ari_bridges res_ari_events res_stasis app_stasis bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw res_pjsip_authenticator_digest res_pjsip_nat pbx_config; do
   docker exec jeeta-asterisk asterisk -rx "module show like $m.so" | grep -q Running || echo "NOT RUNNING: $m"
 done; echo "required modules checked"
 for p in ari stasis pjsip; do docker exec jeeta-asterisk asterisk -rx "module show like $p" | tail -1; done
@@ -3294,13 +3345,16 @@ From the dev machine, the same probe from outside: `python -I rust/bridge/voice/
 
 Expected:
 - **The build** ends with `naming to docker.io/library/jeeta-asterisk:22.11.0`. Before that, the runtime stage prints `Asterisk 22.11.0` from its module check.
-  - Record `time` and the digest printed before the build. Pin both `FROM` lines to it (`debian:bookworm-slim@sha256:…`) in a follow-up commit.
+  - Record `time` and the digest printed before the build. Both `FROM` lines are pinned to the first build's digest (`debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3`). A different digest here means Docker Hub moved the tag; the pinned build is unaffected.
   - `nice` is not used: the build's processes run under dockerd. The throttle is `MAKE_JOBS=2`; override it with `--build-arg MAKE_JOBS=…`.
 - **`docker ps`** shows `Up … (healthy)` once the 30 s start period is over. The `HEALTHCHECK` is `asterisk -rx 'core waitfullybooted'`.
 - **The registration** line shows `netgsm-reg/sip:sip5.netsantral.com` and `Registered`.
 - **`pjsip show identifies`** lists `netgsm` with the match `185.88.7.227/32`. The hostname and the literal resolve to the same address today.
-- **Modules:** no `NOT RUNNING` line. The three counts list `ari`, `stasis` and `pjsip` modules.
-- **Sockets:** UDP `0.0.0.0:5070` and TCP `127.0.0.1:8188`, nothing else. RTP ports open only during a call.
+- **Modules:** no `NOT RUNNING` line for the 26 required modules. The three counts list `ari`, `stasis` and `pjsip` modules.
+- **Sockets:** UDP `0.0.0.0:5070`, TCP `127.0.0.1:8188`, and two ephemeral UDP sockets, `0.0.0.0:<n>` and `[::]:<n>`. RTP ports open only during a call.
+  - The two ephemeral sockets are pjproject's DNS resolver. res_pjsip creates it at load (`res_pjsip.c` calls `ast_sip_initialize_dns()`, which runs `pjsip_endpt_create_resolver` in `res_pjsip/config_system.c`), even though Asterisk's own resolver then takes over SIP lookups (`pjsip_resolver.c`).
+  - pjlib-util's `init_sock` binds one IPv4 and one IPv6 UDP socket to port 0 (`PJ_HAS_IPV6` is 1 in Asterisk's `config_site.h`). They exchange DNS with the system's nameservers only.
+  - Step 11 keeps them, since res_pjsip is required. ufw denies inbound to them like any port.
 - **`docker stats`:** pids well under 256 (about 60–150 expected), mem under 512 MiB. Report pids if they come near 200.
 - **ARI** answers JSON starting `{"build":`.
 - **The journal** holds only warnings and errors. Modules without a config of their own may warn once at start.
@@ -3309,12 +3363,43 @@ Expected:
   - Run the probe again after any change to `pjsip.conf` (`pjsip reload` or a restart).
 - **The probe from outside** prints `no answer`: ufw drops unsolicited SIP.
 - **NetGSM's answer** decides `qualify_frequency`. In 22.11 a qualify counts any reply as `Avail`, 401 included; only silence makes the contact `Unavail`, and the dial (`PJSIP/<n>@netgsm`) uses only a reachable contact.
-  - `SIP/2.0 200 OK`: keep `qualify_frequency=20`. The keep-alive refreshes the conntrack entry every 20 s.
-  - `401`/`407`: start at `qualify_frequency=0`. Each qualify would cost NetGSM a challenge and an authenticated OPTIONS. Without it, the REGISTER refresh (every ~110 s) and NetGSM's own OPTIONS keep the entry.
+  - `SIP/2.0 200 OK`: keep `qualify_frequency=20`. The keep-alive refreshes the conntrack entry every 20 s. **Decided on the 2026-10-29 run:** NetGSM answered 200, and 20 stays (`pjsip.conf`, `docs/operations/voice-bridge.md` §6).
+  - `401`/`407`: start at `qualify_frequency=0`. Each qualify would cost NetGSM a challenge and an authenticated OPTIONS. Without it, only NetGSM's own OPTIONS would hold the entry: NetGSM grants a registration about 600 s (`exp. 559s` as run), so the REGISTER refresh comes about every 10 minutes, which is longer than a UDP conntrack entry lives.
   - `no answer`: `qualify_frequency=0`. An `Unavail` contact would block every dial.
   - To change it: `sed -i 's/^qualify_frequency=20$/qualify_frequency=0/' /etc/jeeta-voice/asterisk/pjsip.conf && docker exec jeeta-asterisk asterisk -rx 'pjsip reload'`. Then `pjsip show contacts` reads `Unknown`, which is dialable. Report the result so the repository follows.
 
 If the registration reads `Rejected`, check the secret file without printing it, and check that no other UA registers 102. If it reads `No Response`, check `ufw` outbound and DNS. A lasting `Rejected` is the alert of `docs/operations/voice-bridge.md` §6.
+
+**Steps 7–9 as run (production host, 2026-10-29).**
+- **Step 7:**
+  - The gate printed `FIREWALL OK (ufw)`: `Default: deny (incoming)`, no rule opens 5070 or the RTP range, and every port was free.
+  - `command -v docker-init` found nothing, though `/usr/libexec/docker/docker-init` exists and `docker run --init` works. Step 7 now checks `docker info` and that path.
+- **Step 8:** completed with no `STOP`. useradd warned about uid 1501 > `SYS_UID_MAX` (harmless).
+- **Step 9 build:**
+  - `real 8m16.972s` at `MAKE_JOBS=2`; the image is 272 MB.
+  - The module check printed `Asterisk 22.11.0`.
+  - Base digest `debian@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3`, now pinned in both `FROM` lines.
+- **Runtime:**
+  - The container reads `Up (healthy)`.
+  - The registration reads `netgsm-reg/sip:sip5.netsantral.com … Registered (exp. 559s)`, so NetGSM grants more than the asked 120 s.
+  - The contact is `Avail` (RTT about 49 ms), and the identify matches `185.88.7.227/32` only.
+  - All 23 then-required modules were `Running`; the three added later are `res_pjsip_authenticator_digest`, `res_pjsip_nat` and `pbx_config`.
+  - pids 51, memory about 40 MiB. ARI answered `{"build":…`.
+- **Probes:**
+  - From the host, `From:` `netgsm`, `102-8508407303` and `probe` each got `401 Unauthorized`.
+  - NetGSM answered our OPTIONS with `200 OK`, so `qualify_frequency=20` stays (decided).
+  - The outside probe from the dev machine is the coordinator's to run.
+- **Sockets:** UDP 5070, TCP 127.0.0.1:8188, and the resolver's two ephemeral UDP sockets (explained in Step 9).
+- **Journal:** 46 "error" lines, all benign.
+  - Missing configs: pjsip_wizard, websocket_client, pjproject, chan_websocket, aeap, res_config_sqlite3, cli_aliases, calendar.
+  - Modules that declined: res_stun_monitor, res_prometheus, res_pjsip_notify, res_parking, res_hep, res_calendar.
+  - One "No such container" from `ExecStartPre`'s `docker rm -f` on the first start.
+  - The repository now ships `chan_websocket.conf` (JSON control by default), `pjproject.conf` and `websocket_client.conf`. Step 11's explicit list drops the rest.
+- **The pjproject 2.17 advisories (Security check above): option 1 for the test phase.** Mitigations:
+  - the firewall gate (Step 7);
+  - the hardened container (read-only, no capabilities, `no-new-privileges`, pids and memory limits);
+  - the service is kept stopped (and disabled at boot) outside test windows until the B7/E-phase tests are done;
+  - the image is rebuilt when Asterisk ships the pjproject fixes, before E2 points production at it.
 
 - [ ] **Step 10: [COORDINATOR, server] One-way audio fallback (only if B7 shows it)**
 
@@ -3328,18 +3413,72 @@ Apply this rule only if B7 still shows one-way audio. First confirm NetGSM's med
 
 - [ ] **Step 11: [COORDINATOR, server, later] After the first working boot: an explicit module list**
 
-Not before B7 passes. `autoload = yes` loads every module that was built, which is more than the bridge uses. Once a call has worked, record what runs (names and states only), then narrow the list:
+Not before B7 passes. `autoload = yes` loads every module that was built, and a dozen of them log a missing config or decline at each start (Steps 7–9 as run). Asterisk 22's loader does not load an unlisted requirement on its own: a module whose `.requires` is not loaded is skipped ("missing dependencies"). So the list names the 26 required modules (`REQUIRED_MODULES` of `asterisk/test_configs.py`) and their whole dependency closure.
+
+The closure comes from the 22.11.0 sources: each module's `AST_MODULE_INFO` `.requires`, and the module names in its `MODULEINFO` `<depend>`. It adds ten modules:
+- `res_ari_model`: required by the `res_ari_*` resources.
+- `res_pjproject`, `res_sorcery_astdb`, `res_sorcery_config`, `res_sorcery_memory`: required by res_pjsip.
+- `res_pjsip_pubsub`: required by chan_pjsip.
+- `res_stasis_answer`, `res_stasis_snoop`: required by res_ari_channels.
+- `res_stasis_playback`, `res_stasis_recording`: required by res_ari_bridges.
+
+`dnsmgr` and the other built-ins need no line. `res_pjsip_endpoint_identifier_user` is left out on purpose: with it gone, no From-username identification exists at all.
+
+`modules.conf` becomes (a repository commit; the config test then asserts that every `REQUIRED_MODULES` entry has a `load` line):
+
+```ini
+[modules]
+autoload = no
+load => chan_websocket.so
+load => chan_pjsip.so
+load => res_pjsip.so
+load => res_pjsip_session.so
+load => res_pjsip_sdp_rtp.so
+load => res_pjsip_outbound_registration.so
+load => res_pjsip_outbound_authenticator_digest.so
+load => res_pjsip_endpoint_identifier_ip.so
+load => res_rtp_asterisk.so
+load => res_http_websocket.so
+load => res_websocket_client.so
+load => res_ari.so
+load => res_ari_asterisk.so
+load => res_ari_channels.so
+load => res_ari_bridges.so
+load => res_ari_events.so
+load => res_stasis.so
+load => app_stasis.so
+load => bridge_simple.so
+load => bridge_softmix.so
+load => res_timing_timerfd.so
+load => codec_alaw.so
+load => codec_ulaw.so
+load => res_pjsip_authenticator_digest.so
+load => res_pjsip_nat.so
+load => pbx_config.so
+load => res_ari_model.so
+load => res_pjproject.so
+load => res_pjsip_pubsub.so
+load => res_sorcery_astdb.so
+load => res_sorcery_config.so
+load => res_sorcery_memory.so
+load => res_stasis_answer.so
+load => res_stasis_playback.so
+load => res_stasis_recording.so
+load => res_stasis_snoop.so
+```
+
+Before switching, record what runs (names and states only):
 
 ```bash
-docker exec jeeta-asterisk asterisk -rx 'module show' | awk '$NF ~ /core|extended|deprecated/ && /Running/ {print $1}' | sort > /root/jeeta-asterisk-modules.txt
+docker exec jeeta-asterisk asterisk -rx 'module show' | awk '/Running/ {print $1}' | sort > /root/jeeta-asterisk-modules.txt
 wc -l /root/jeeta-asterisk-modules.txt
 ```
 
-Then, in a repository commit:
-- `modules.conf` becomes `autoload = no`, with one `load => <module>.so` for each module the bridge needs: `REQUIRED_MODULES` of `asterisk/test_configs.py`, plus the dependencies `module show` reported (for example `res_sorcery_*`, `res_pjsip_*` helpers, `res_http_websocket`, `func_*` used by ARI).
-- The config test asserts that `REQUIRED_MODULES` is a subset of the `load` list.
-
-Deploy it with Step 8's config install. The configs are mounted, so the image is not rebuilt: run `systemctl restart jeeta-asterisk`, then Step 9's checks and one more B7-style call. Keep `autoload = yes` if anything is missing.
+To deploy it:
+1. Run Step 8's config install. The configs are mounted, so the image is not rebuilt.
+2. Run `systemctl restart jeeta-asterisk`, then Step 9's checks. Expect no `NOT RUNNING` line, and a journal error count near 1 (the first start's `No such container`).
+3. Repeat the identification probe (401 for every From user, `res_pjsip_authenticator_digest` being listed) and one more B7-style call.
+4. If a module is missing, its error names it: add it with its reason, or go back to `autoload = yes`.
 
 ### Task B2: The speak service (EMA Lightning behind Antalia's normaliser)
 
