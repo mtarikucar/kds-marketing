@@ -4,6 +4,7 @@
 # the current one. The sha256 is the one downloads.asterisk.org publishes (asterisk-22.11.0.sha256),
 # checked against the tarball itself on 2026-10-29. The bundled pjproject (2.17) is fetched during
 # configure and checked against the MD5 that this verified tarball ships.
+# After the first good build, pin both base images by digest (debian:bookworm-slim@sha256:...).
 FROM debian:bookworm-slim AS build
 ARG ASTERISK_VERSION=22.11.0
 ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
@@ -14,12 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libedit-dev libjansson-dev libssl-dev libsqlite3-dev libxml2-dev uuid-dev libcurl4-openssl-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-RUN curl -fsSLo asterisk.tar.gz \
+RUN curl --proto =https --tlsv1.2 -fsSLo asterisk.tar.gz \
       "https://downloads.asterisk.org/pub/telephony/asterisk/releases/asterisk-${ASTERISK_VERSION}.tar.gz" \
  && echo "${ASTERISK_SHA256}  asterisk.tar.gz" | sha256sum -c - \
  && tar -xzf asterisk.tar.gz --strip-components=1 && rm asterisk.tar.gz
 # make install creates a real /out/var/run; in the runtime image /var/run is a symlink to /run, and
 # the COPY below would collide with it, so it is dropped here and made through the symlink there.
+# Headers and man pages are not needed at run time.
 RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
  && make menuselect.makeopts \
  && menuselect/menuselect --disable BUILD_NATIVE --enable chan_websocket --enable chan_pjsip \
@@ -29,7 +31,7 @@ RUN ./configure --with-pjproject-bundled --without-x11 --without-gtk2 \
       --disable-category MENUSELECT_MOH --disable-category MENUSELECT_EXTRA_SOUNDS \
       menuselect.makeopts \
  && make -j"${MAKE_JOBS}" && make install DESTDIR=/out \
- && rm -rf /out/var/run
+ && rm -rf /out/var/run /out/usr/include /out/usr/share/man
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,12 +39,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 1500 asterisk && useradd --uid 1500 --gid 1500 --home-dir /var/lib/asterisk \
       --shell /usr/sbin/nologin asterisk
+# Root-owned and read-only at run time: nothing is chowned. The only writable paths are the three
+# tmpfs mounts of the unit (run, log, spool), owned 1500 by their mount options; their empty mount
+# points are made here so the image also starts without them.
 COPY --from=build /out/ /
-# Fail the build, not the first call, when a module needs a library this stage lacks.
+# Fail the build, not the first call: every module the bridge needs is built (the list is
+# asterisk/test_configs.py's REQUIRED_MODULES), no module lacks a library, and the binary runs.
 RUN ldconfig \
+ && for m in chan_websocket chan_pjsip res_pjsip res_pjsip_session res_pjsip_sdp_rtp \
+      res_pjsip_outbound_registration res_pjsip_outbound_authenticator_digest \
+      res_pjsip_endpoint_identifier_ip res_rtp_asterisk res_http_websocket res_websocket_client \
+      res_ari res_ari_asterisk res_ari_channels res_ari_bridges res_ari_events res_stasis app_stasis \
+      bridge_simple bridge_softmix res_timing_timerfd codec_alaw codec_ulaw; do \
+      test -f "/usr/lib/asterisk/modules/$m.so" || { echo "module $m was not built"; exit 1; }; \
+    done \
  && ! { ldd /usr/sbin/asterisk /usr/lib/libasterisk*.so* /usr/lib/asterisk/modules/*.so 2>&1 \
-        | grep -F 'not found'; }
-RUN mkdir -p /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk \
- && chown -R 1500:1500 /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /var/run/asterisk
+        | grep -F 'not found'; } \
+ && /usr/sbin/asterisk -V \
+ && install -d -o 1500 -g 1500 -m 0750 /var/run/asterisk /var/log/asterisk /var/spool/asterisk
 USER 1500:1500
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD ["/usr/sbin/asterisk", "-rx", "core waitfullybooted"]
 CMD ["/usr/sbin/asterisk", "-f"]
