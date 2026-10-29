@@ -32,7 +32,13 @@ describeRealDb('Digest waiting-reply count — real DB (e2e)', () => {
   const agentId = randomUUID();
   const leadId = randomUUID();
 
-  const t = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000);
+  // ONE clock reading for the whole fixture. `t` used to call Date.now() on
+  // every use, so `t(10), t(10)` were two reads — and when the millisecond
+  // ticked between them, lastInboundAt landed 1 ms BEFORE lastMessageAt, which
+  // is exactly "we replied after they wrote". A thread seeded as waiting was
+  // then counted as answered, and CI intermittently saw 2 instead of 3.
+  const BASE = Date.now();
+  const t = (minutesAgo: number) => new Date(BASE - minutesAgo * 60_000);
 
   beforeAll(async () => {
     ({ app, prisma } = await createRealDbTestApp());
