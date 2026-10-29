@@ -1,24 +1,34 @@
-//! The signed retrieval route, `GET /files/{id}?workspace&expires&signature` ([`router`]): a file
-//! the store keeps, while its address is signed for ([`crate::verify`]), served as a stream
-//! (`FileStore::read_stream`) with its length announced. Neither a large file nor many reads of
-//! one at once (a ten-minute `push_file` address that leaked, say) are held in memory whole.
+//! The signed retrieval route, `GET /files/{id}?workspace&expires&signature[&purpose]`
+//! ([`router`]): a file the store keeps, while its address is signed for ([`crate::verify_for`]),
+//! served as a stream (`FileStore::read_stream`) with its length announced. Neither a large file
+//! nor many reads of one at once (a ten-minute `push_file` address that leaked, say) are held in
+//! memory whole.
 //!
 //! - **Checked before it is answered, where it fits.** The file's first chunk (up to
 //!   [`crate::READ_CHUNK`] bytes) is read before anything is sent, and the store gives out the
 //!   chunk that completes a file only once its hash is the header's: a file that fits in one chunk
 //!   (most screenshots) and fails its check, an empty one included, is `404`. A larger one that
 //!   fails is cut off short of its announced length, which a client reads as an error.
-//! - **A few at a time.** At most [`MAX_CONCURRENT_READS`] files are served at once, process-wide;
-//!   a request waits up to [`READ_TURN_WAIT`] for a turn, then is `503` with `Retry-After`. A turn
-//!   is held until the response's last byte is taken, or the response is dropped.
+//! - **A few at a time, per workspace.** A response holds three turns until its last byte is taken
+//!   or it is dropped: one of its file's ([`READS_PER_FILE`], so one leaked address cannot take a
+//!   workspace's pool), one of its workspace's pool for its use ([`READS_PER_WORKSPACE`]; a
+//!   workspace's providers fetching its media and its devices downloading files never share a
+//!   pool, so a bridge's downloads never hold up a publish), and one of the process-wide ceiling
+//!   ([`MAX_CONCURRENT_READS`], a backstop). They are taken in that order, together within
+//!   [`READ_TURN_WAIT`]; a request that gets them not in time is `503` with `Retry-After`. One
+//!   workspace's readers never hold up another's, unless every workspace together reaches the
+//!   ceiling. The workspace is the address's own, verified before any turn is taken.
 //! - **Never held by a reader that stopped.** A response whose client takes nothing for
-//!   [`READ_IDLE`], or that runs past [`READ_DEADLINE`], is cut off: its turn and its open file are
-//!   let go then (a watchdog does it, since a client that stopped reading stops the body being
+//!   [`READ_IDLE`], or that runs past [`READ_DEADLINE`], is cut off: its turns and its open file
+//!   are let go then (a watchdog does it, since a client that stopped reading stops the body being
 //!   asked for more), and the client sees the body end short of its length.
 //!
-//! A request for anything else (an address that does not verify, a file that is not there) is
-//! `404`.
+//! An address is a provider's (signed without a purpose, as studio hands its media to Meta and
+//! TikTok) or a device's (`purpose=device`, signed with it: a `push_file` download, an agent's
+//! `file_url`). A request for anything else (an address that does not verify, another purpose, a
+//! file that is not there) is `404`.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration as StdDuration;
@@ -33,24 +43,35 @@ use jt_tenancy::WorkspaceId;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
-/// How many files the route serves at once, process-wide. Each holds an open file and a chunk of
-/// it while its client takes it.
-pub const MAX_CONCURRENT_READS: usize = 32;
-/// How long a request waits for a turn to be served before it is answered `503`.
+/// How many files one workspace is served at once in each of its pools: its providers' fetches,
+/// and its devices' downloads and file addresses.
+pub const READS_PER_WORKSPACE: usize = 8;
+/// How many reads of one file run at once.
+pub const READS_PER_FILE: usize = 3;
+/// How many files the route serves at once, process-wide: a backstop under the workspaces' pools.
+/// Each read holds an open file and a chunk of it while its client takes it.
+pub const MAX_CONCURRENT_READS: usize = 96;
+/// How long a request waits for its turns before it is answered `503`.
 pub const READ_TURN_WAIT: StdDuration = StdDuration::from_secs(10);
 /// How long a response may go without its client taking a chunk (or the store yielding one)
 /// before it is cut off.
 pub const READ_IDLE: StdDuration = StdDuration::from_secs(30);
 /// The longest one response may take, however steadily its client reads: the device bridge's own
-/// bound on a transfer (`Timing::transfer_timeout`, 30 minutes), enough for the largest stored
-/// file at under 60 KB/s.
+/// bound on a transfer (`Timing::transfer_timeout`, 30 minutes). The largest file the store keeps
+/// (studio's 200 MB video limit) is read within it at about 111 KB/s or faster.
 pub const READ_DEADLINE: StdDuration = StdDuration::from_secs(30 * 60);
+/// The purpose a device's address is signed with (`purpose=device`).
+pub const DEVICE_PURPOSE: &str = "device";
 
 /// The route's limits ([`router_with_limits`]); [`router`] uses the constants above.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReadLimits {
     /// [`MAX_CONCURRENT_READS`].
-    pub concurrent: usize,
+    pub global: usize,
+    /// [`READS_PER_WORKSPACE`].
+    pub per_workspace: usize,
+    /// [`READS_PER_FILE`].
+    pub per_file: usize,
     /// [`READ_TURN_WAIT`].
     pub turn_wait: StdDuration,
     /// [`READ_IDLE`].
@@ -62,11 +83,88 @@ pub struct ReadLimits {
 impl Default for ReadLimits {
     fn default() -> Self {
         ReadLimits {
-            concurrent: MAX_CONCURRENT_READS,
+            global: MAX_CONCURRENT_READS,
+            per_workspace: READS_PER_WORKSPACE,
+            per_file: READS_PER_FILE,
             turn_wait: READ_TURN_WAIT,
             idle: READ_IDLE,
             deadline: READ_DEADLINE,
         }
+    }
+}
+
+/// Whose read an address is: which of its workspace's pools it takes a turn from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Use {
+    /// A provider's fetch of studio media (an address signed without a purpose).
+    Provider,
+    /// A device's download, or an agent's `file_url` (`purpose=device`).
+    Device,
+}
+
+/// The turns of every read: one semaphore per file, one per workspace and [`Use`], and the
+/// ceiling. A file's or a pool's semaphore is made when it is first asked for, and dropped once no
+/// read holds or waits for it.
+struct Turns {
+    limits: ReadLimits,
+    global: Arc<Semaphore>,
+    pools: StdMutex<HashMap<(WorkspaceId, Use), Arc<Semaphore>>>,
+    files: StdMutex<HashMap<(WorkspaceId, FileId), Arc<Semaphore>>>,
+}
+
+/// The three turns a response holds (see the module docs).
+struct Turn {
+    _file: OwnedSemaphorePermit,
+    _pool: OwnedSemaphorePermit,
+    _global: OwnedSemaphorePermit,
+}
+
+/// The semaphore of `key` in `map`, with `permits` when it is made; semaphores nobody else holds
+/// (no read holds a turn of them or waits for one) are dropped on the way.
+fn semaphore<K: Eq + std::hash::Hash>(
+    map: &StdMutex<HashMap<K, Arc<Semaphore>>>,
+    key: K,
+    permits: usize,
+) -> Arc<Semaphore> {
+    let mut map = map
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.retain(|_, s| Arc::strong_count(s) > 1);
+    map.entry(key)
+        .or_insert_with(|| Arc::new(Semaphore::new(permits)))
+        .clone()
+}
+
+impl Turns {
+    fn new(limits: ReadLimits) -> Self {
+        Turns {
+            limits,
+            global: Arc::new(Semaphore::new(limits.global)),
+            pools: StdMutex::default(),
+            files: StdMutex::default(),
+        }
+    }
+
+    /// The turns of a read of file `id` of workspace `ws` for `use_`, within
+    /// [`ReadLimits::turn_wait`]; `None` when they do not come in time.
+    async fn take(&self, ws: WorkspaceId, id: FileId, use_: Use) -> Option<Turn> {
+        let file = semaphore(&self.files, (ws, id), self.limits.per_file);
+        let pool = semaphore(&self.pools, (ws, use_), self.limits.per_workspace);
+        let global = self.global.clone();
+        let all = async move {
+            let file = file.acquire_owned().await.ok()?;
+            let pool = pool.acquire_owned().await.ok()?;
+            let global = global.acquire_owned().await.ok()?;
+            Some(Turn {
+                _file: file,
+                _pool: pool,
+                _global: global,
+            })
+        };
+        tokio::time::timeout(self.limits.turn_wait, all)
+            .await
+            .ok()
+            .flatten()
     }
 }
 
@@ -76,7 +174,7 @@ struct Retrieval {
     clock: Arc<dyn Clock>,
     key: [u8; 32],
     limits: ReadLimits,
-    turns: Arc<Semaphore>,
+    turns: Arc<Turns>,
 }
 
 #[derive(serde::Deserialize)]
@@ -85,6 +183,8 @@ struct SignedQuery {
     workspace: WorkspaceId,
     expires: i64,
     signature: String,
+    #[serde(default)]
+    purpose: Option<String>,
 }
 
 /// The signed retrieval route (see the module docs), with the default [`ReadLimits`].
@@ -99,7 +199,7 @@ pub fn router_with_limits(
     key: [u8; 32],
     limits: ReadLimits,
 ) -> axum::Router {
-    let turns = Arc::new(Semaphore::new(limits.concurrent));
+    let turns = Arc::new(Turns::new(limits));
     axum::Router::new()
         .route("/files/{id}", axum::routing::get(retrieve))
         .with_state(Retrieval {
@@ -117,12 +217,25 @@ async fn retrieve(
     Query(q): Query<SignedQuery>,
 ) -> Response {
     let now = s.clock.now();
-    if crate::verify(&s.key, q.workspace, id, q.expires, &q.signature, now).is_err() {
+    let purpose = q.purpose.as_deref();
+    let use_ = match purpose {
+        None => Use::Provider,
+        Some(DEVICE_PURPOSE) => Use::Device,
+        Some(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let verified = crate::verify_for(
+        &s.key,
+        q.workspace,
+        id,
+        q.expires,
+        purpose,
+        &q.signature,
+        now,
+    );
+    if verified.is_err() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Ok(Ok(turn)) =
-        tokio::time::timeout(s.limits.turn_wait, s.turns.clone().acquire_owned()).await
-    else {
+    let Some(turn) = s.turns.take(q.workspace, id, use_).await else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             [(header::RETRY_AFTER, "5")],
@@ -167,10 +280,10 @@ async fn retrieve(
 }
 
 /// What a response being served holds while its client takes it: the rest of the file, and its
-/// turn.
+/// turns.
 struct Held {
     bytes: Box<dyn ByteSource>,
-    _turn: OwnedSemaphorePermit,
+    _turn: Turn,
 }
 
 /// When a response began, when its client last took a chunk, and whether it was cut off.

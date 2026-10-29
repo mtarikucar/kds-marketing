@@ -111,6 +111,18 @@ pub trait FileStore: Send + Sync {
         id: FileId,
         expires_at: OffsetDateTime,
     ) -> Result<Url, AppError>;
+    /// An address, as [`FileStore::provider_url`] signs one, for a device's download (a
+    /// `push_file`) or an agent's look at a file (a result's `file_url`): the store serves it from a
+    /// pool apart from its providers' fetches, so a phone's downloads never hold up a publish. This
+    /// default is the provider's address.
+    async fn device_url(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        expires_at: OffsetDateTime,
+    ) -> Result<Url, AppError> {
+        self.provider_url(ws, id, expires_at).await
+    }
     async fn delete(&self, ws: WorkspaceId, id: FileId) -> Result<(), AppError>;
 }
 /// Before T5 wires a disk adapter, every operation refuses explicitly.

@@ -27,8 +27,8 @@ use jt_app::{
 use jt_studio::FileId;
 use jt_tenancy::WorkspaceId;
 pub use serve::{
-    MAX_CONCURRENT_READS, READ_DEADLINE, READ_IDLE, READ_TURN_WAIT, ReadLimits, router,
-    router_with_limits,
+    DEVICE_PURPOSE, MAX_CONCURRENT_READS, READ_DEADLINE, READ_IDLE, READ_TURN_WAIT, READS_PER_FILE,
+    READS_PER_WORKSPACE, ReadLimits, router, router_with_limits,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -449,13 +449,15 @@ impl DiskFiles {
         }
     }
     /// A URL that reads file `id` until `expires_at`: after now and at most 24 hours (and a
-    /// second's grace) ahead, the longest [`verify`] accepts. Studio hands providers 24-hour
-    /// URLs; a device bridge's `push_file` gets a shorter one.
-    fn provider_url_inner(
+    /// second's grace) ahead, the longest [`verify_for`] accepts, signed for `purpose` (`None`: a
+    /// provider's, as studio hands its media out for 24 hours; [`DEVICE_PURPOSE`]: a device's
+    /// download or an agent's file address, served from a pool of its own).
+    fn signed_url(
         &self,
         ws: WorkspaceId,
         id: FileId,
         expires_at: OffsetDateTime,
+        purpose: Option<&str>,
     ) -> Result<Url, AppError> {
         let now = self.clock.now();
         if expires_at <= now || expires_at - now > Duration::hours(24) + Duration::seconds(1) {
@@ -468,26 +470,52 @@ impl DiskFiles {
         let expires = expires_at
             .unix_timestamp()
             .min((now + Duration::hours(24)).unix_timestamp());
-        let sig = sign(&self.key, ws, id, expires);
+        let sig = sign(&self.key, ws, id, expires, purpose);
         let mut url = self
             .base
             .join(&format!("files/{id}"))
             .map_err(|_| storage())?;
-        url.query_pairs_mut()
-            .append_pair("workspace", &ws.to_string())
-            .append_pair("expires", &expires.to_string())
-            .append_pair("signature", &sig);
+        {
+            let mut query = url.query_pairs_mut();
+            query
+                .append_pair("workspace", &ws.to_string())
+                .append_pair("expires", &expires.to_string())
+                .append_pair("signature", &sig);
+            if let Some(purpose) = purpose {
+                query.append_pair("purpose", purpose);
+            }
+        }
         Ok(url)
     }
 }
-fn mac(key: &[u8; 32], ws: WorkspaceId, id: FileId, expires: i64) -> Hmac<Sha256> {
+/// The signature of an address: `jeeta.files.v1` for a provider's (no purpose, as every address
+/// was before purposes), `jeeta.files.v2` with the purpose for any other, so an address of one
+/// purpose never verifies as another's.
+fn mac(
+    key: &[u8; 32],
+    ws: WorkspaceId,
+    id: FileId,
+    expires: i64,
+    purpose: Option<&str>,
+) -> Hmac<Sha256> {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC key");
-    mac.update(format!("jeeta.files.v1\n{ws}\n{id}\n{expires}").as_bytes());
+    let text = match purpose {
+        None => format!("jeeta.files.v1\n{ws}\n{id}\n{expires}"),
+        Some(purpose) => format!("jeeta.files.v2\n{ws}\n{id}\n{expires}\n{purpose}"),
+    };
+    mac.update(text.as_bytes());
     mac
 }
-fn sign(key: &[u8; 32], ws: WorkspaceId, id: FileId, expires: i64) -> String {
-    hex::encode(mac(key, ws, id, expires).finalize().into_bytes())
+fn sign(
+    key: &[u8; 32],
+    ws: WorkspaceId,
+    id: FileId,
+    expires: i64,
+    purpose: Option<&str>,
+) -> String {
+    hex::encode(mac(key, ws, id, expires, purpose).finalize().into_bytes())
 }
+/// [`verify_for`] a provider's address (signed without a purpose).
 pub fn verify(
     key: &[u8; 32],
     ws: WorkspaceId,
@@ -496,11 +524,24 @@ pub fn verify(
     signature: &str,
     now: OffsetDateTime,
 ) -> Result<(), AppError> {
+    verify_for(key, ws, id, expires, None, signature, now)
+}
+/// `Ok` when `signature` signs file `id` of workspace `ws` until `expires` for `purpose`, and
+/// `expires` is after `now` and at most 24 hours ahead; else `NOT_FOUND`.
+pub fn verify_for(
+    key: &[u8; 32],
+    ws: WorkspaceId,
+    id: FileId,
+    expires: i64,
+    purpose: Option<&str>,
+    signature: &str,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
     if expires <= now.unix_timestamp() || expires > (now + Duration::hours(24)).unix_timestamp() {
         return Err(AppError::not_found("file"));
     }
     let bytes = hex::decode(signature).map_err(|_| AppError::not_found("file"))?;
-    mac(key, ws, id, expires)
+    mac(key, ws, id, expires, purpose)
         .verify_slice(&bytes)
         .map_err(|_| AppError::not_found("file"))
 }
@@ -697,7 +738,18 @@ impl FileStore for DiskFiles {
         e: OffsetDateTime,
     ) -> Result<Url, AppError> {
         let this = self.clone();
-        tokio::task::spawn_blocking(move || this.provider_url_inner(ws, id, e))
+        tokio::task::spawn_blocking(move || this.signed_url(ws, id, e, None))
+            .await
+            .map_err(|_| storage())?
+    }
+    async fn device_url(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        e: OffsetDateTime,
+    ) -> Result<Url, AppError> {
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || this.signed_url(ws, id, e, Some(DEVICE_PURPOSE)))
             .await
             .map_err(|_| storage())?
     }

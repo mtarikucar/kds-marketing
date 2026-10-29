@@ -1,7 +1,7 @@
 //! The signed retrieval route as a client meets it: a file is served as a stream, a file that
 //! fails its check is never served whole (an error to a real HTTP client, a `404` when it fits in
-//! its first chunk), a few files are served at a time, and a client that stops reading does not
-//! keep its turn.
+//! its first chunk), a few files are served at a time (per file, per workspace and use, and
+//! process-wide), and a client that stops reading does not keep its turn.
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 
@@ -201,7 +201,9 @@ async fn a_few_files_are_served_at_a_time_and_a_stalled_reader_lets_go() {
     let (id, bytes) = large(&d, ws).await;
     let path = signed(&d, ws, id).await;
     let limits = ReadLimits {
-        concurrent: 1,
+        global: 1,
+        per_workspace: 1,
+        per_file: 1,
         turn_wait: StdDuration::from_millis(200),
         idle: StdDuration::from_millis(400),
         deadline: StdDuration::from_secs(60),
@@ -239,7 +241,9 @@ async fn a_few_files_are_served_at_a_time_and_a_stalled_reader_lets_go() {
 
     // However steadily it is read, a response ends at its deadline.
     let limits = ReadLimits {
-        concurrent: 4,
+        global: 4,
+        per_workspace: 4,
+        per_file: 4,
         turn_wait: StdDuration::from_millis(200),
         idle: StdDuration::from_secs(10),
         deadline: StdDuration::from_millis(300),
@@ -262,17 +266,207 @@ async fn a_few_files_are_served_at_a_time_and_a_stalled_reader_lets_go() {
 
 #[test]
 fn the_route_limits_are_named() {
-    assert_eq!(jt_files::MAX_CONCURRENT_READS, 32);
+    assert_eq!(jt_files::READS_PER_WORKSPACE, 8);
+    assert_eq!(jt_files::READS_PER_FILE, 3);
+    assert_eq!(jt_files::MAX_CONCURRENT_READS, 96);
     assert_eq!(jt_files::READ_TURN_WAIT, StdDuration::from_secs(10));
     assert_eq!(jt_files::READ_IDLE, StdDuration::from_secs(30));
     assert_eq!(jt_files::READ_DEADLINE, StdDuration::from_secs(30 * 60));
     assert_eq!(
         ReadLimits::default(),
         ReadLimits {
-            concurrent: jt_files::MAX_CONCURRENT_READS,
+            global: jt_files::MAX_CONCURRENT_READS,
+            per_workspace: jt_files::READS_PER_WORKSPACE,
+            per_file: jt_files::READS_PER_FILE,
             turn_wait: jt_files::READ_TURN_WAIT,
             idle: jt_files::READ_IDLE,
             deadline: jt_files::READ_DEADLINE,
         }
     );
+}
+
+/// Limits for the pool tests: a turn waited for 200 ms, nothing cut off while they run.
+fn pools(global: usize, per_workspace: usize, per_file: usize) -> ReadLimits {
+    ReadLimits {
+        global,
+        per_workspace,
+        per_file,
+        turn_wait: StdDuration::from_millis(200),
+        idle: StdDuration::from_secs(30),
+        deadline: StdDuration::from_secs(60),
+    }
+}
+
+/// The path and query of file `id`'s device address (a `push_file` download, a `file_url`),
+/// signed for ten minutes.
+async fn device_signed(d: &DiskFiles, ws: WorkspaceId, id: FileId) -> String {
+    let url = d
+        .device_url(ws, id, FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap();
+    format!("{}?{}", url.path(), url.query().unwrap())
+}
+
+#[tokio::test]
+async fn one_workspaces_full_pool_does_not_hold_up_another() {
+    let p = root();
+    let d = disk(&p);
+    let (a, b) = (WorkspaceId::new_v7(), WorkspaceId::new_v7());
+    let ((a1, _), (a2, _), (b1, _)) = (large(&d, a).await, large(&d, a).await, large(&d, b).await);
+    let app = jt_files::router_with_limits(
+        d.clone(),
+        Arc::new(FixedClock(FIXED_NOW)),
+        KEY,
+        pools(8, 1, 4),
+    );
+    // A's one turn is taken by a reader that takes nothing.
+    let held = app
+        .clone()
+        .oneshot(get(&signed(&d, a, a1).await))
+        .await
+        .unwrap();
+    assert_eq!(held.status(), StatusCode::OK);
+    // A's next read, of another file, waits for it and is told to come back.
+    let busy = app
+        .clone()
+        .oneshot(get(&signed(&d, a, a2).await))
+        .await
+        .unwrap();
+    assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+    // B is served at once.
+    let started = Instant::now();
+    let other = app
+        .clone()
+        .oneshot(get(&signed(&d, b, b1).await))
+        .await
+        .unwrap();
+    assert_eq!(other.status(), StatusCode::OK);
+    assert!(started.elapsed() < StdDuration::from_millis(150));
+    drop((held, other));
+    std::fs::remove_dir_all(p).unwrap();
+}
+
+#[tokio::test]
+async fn one_file_takes_at_most_its_cap() {
+    let p = root();
+    let d = disk(&p);
+    let ws = WorkspaceId::new_v7();
+    let ((leaked, _), (other, _)) = (large(&d, ws).await, large(&d, ws).await);
+    let app = jt_files::router_with_limits(
+        d.clone(),
+        Arc::new(FixedClock(FIXED_NOW)),
+        KEY,
+        pools(8, 4, 2),
+    );
+    // A leaked address read by many at once: its file's turns run out, the workspace's do not.
+    let path = signed(&d, ws, leaked).await;
+    let first = app.clone().oneshot(get(&path)).await.unwrap();
+    let second = app.clone().oneshot(get(&path)).await.unwrap();
+    assert_eq!(
+        (first.status(), second.status()),
+        (StatusCode::OK, StatusCode::OK)
+    );
+    let third = app.clone().oneshot(get(&path)).await.unwrap();
+    assert_eq!(third.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let started = Instant::now();
+    let another = app
+        .clone()
+        .oneshot(get(&signed(&d, ws, other).await))
+        .await
+        .unwrap();
+    assert_eq!(another.status(), StatusCode::OK);
+    assert!(started.elapsed() < StdDuration::from_millis(150));
+    drop((first, second, another));
+    std::fs::remove_dir_all(p).unwrap();
+}
+
+#[tokio::test]
+async fn the_ceiling_holds_across_workspaces() {
+    let p = root();
+    let d = disk(&p);
+    let (a, b) = (WorkspaceId::new_v7(), WorkspaceId::new_v7());
+    let ((a1, _), (b1, _)) = (large(&d, a).await, large(&d, b).await);
+    let app = jt_files::router_with_limits(
+        d.clone(),
+        Arc::new(FixedClock(FIXED_NOW)),
+        KEY,
+        pools(1, 8, 4),
+    );
+    let held = app
+        .clone()
+        .oneshot(get(&signed(&d, a, a1).await))
+        .await
+        .unwrap();
+    assert_eq!(held.status(), StatusCode::OK);
+    let busy = app
+        .clone()
+        .oneshot(get(&signed(&d, b, b1).await))
+        .await
+        .unwrap();
+    assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+    drop(held);
+    let after = app
+        .clone()
+        .oneshot(get(&signed(&d, b, b1).await))
+        .await
+        .unwrap();
+    assert_eq!(after.status(), StatusCode::OK);
+    drop(after);
+    std::fs::remove_dir_all(p).unwrap();
+}
+
+#[tokio::test]
+async fn device_downloads_never_hold_up_provider_fetches() {
+    let p = root();
+    let d = disk(&p);
+    let ws = WorkspaceId::new_v7();
+    let ((pushed, bytes), (media, _), (more, _)) = (
+        large(&d, ws).await,
+        large(&d, ws).await,
+        large(&d, ws).await,
+    );
+    let app = jt_files::router_with_limits(
+        d.clone(),
+        Arc::new(FixedClock(FIXED_NOW)),
+        KEY,
+        pools(8, 1, 4),
+    );
+    // A device address says so, and is signed for it.
+    let device = device_signed(&d, ws, pushed).await;
+    assert!(device.contains("purpose=device"), "{device}");
+    // A phone's download holds the workspace's device turn.
+    let download = app.clone().oneshot(get(&device)).await.unwrap();
+    assert_eq!(download.status(), StatusCode::OK);
+    // Another device read waits; a provider's fetch of the workspace's media does not.
+    let busy = app
+        .clone()
+        .oneshot(get(&device_signed(&d, ws, more).await))
+        .await
+        .unwrap();
+    assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let started = Instant::now();
+    let fetch = app
+        .clone()
+        .oneshot(get(&signed(&d, ws, media).await))
+        .await
+        .unwrap();
+    assert_eq!(fetch.status(), StatusCode::OK);
+    assert!(started.elapsed() < StdDuration::from_millis(150));
+    drop(fetch);
+    assert_eq!(drain(download.into_body()).await, (bytes, false));
+    // The purpose is signed: dropped, or changed, the address no longer verifies.
+    let plain = device.replace("&purpose=device", "");
+    let response = app.clone().oneshot(get(&plain)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let other = device.replace("purpose=device", "purpose=studio");
+    let response = app.clone().oneshot(get(&other)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    // And a provider's address does not verify as a device's.
+    let provider = signed(&d, ws, media).await;
+    let response = app
+        .oneshot(get(&format!("{provider}&purpose=device")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    std::fs::remove_dir_all(p).unwrap();
 }
