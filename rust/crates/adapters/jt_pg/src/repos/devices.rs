@@ -133,16 +133,20 @@ impl DeviceCommandRepo for PgTenantRepos {
             return Ok(Vec::new());
         }
         let caps: Vec<Uuid> = caps.iter().map(|c| c.as_uuid()).collect();
+        // The pick is a materialized CTE so that it runs once. Joined to the update as a
+        // subquery, Postgres may run it again while updating; a new run passes over the rows
+        // this statement already updated (locking skips them) and picks further ones, so more
+        // than `limit` commands were leased.
         let records: Vec<Record> = sqlx::query_as(&format!(
-            "update device_commands c set status = 'leased', leased_at = $3, \
-             attempts = c.attempts + 1 \
-             from (select q.id as picked from device_commands q \
-             where q.workspace_id = $1 and q.capability_id = any($2) \
-             and q.status in ('queued', 'leased') \
-             and (q.status = 'queued' or q.leased_at <= $4) \
-             and q.expires_at > $3 \
-             order by q.seq limit $5 for update of q skip locked) p \
-             where c.workspace_id = $1 and c.id = p.picked \
+            "with picked as materialized (select id from device_commands \
+             where workspace_id = $1 and capability_id = any($2) \
+             and status in ('queued', 'leased') \
+             and (status = 'queued' or leased_at <= $4) \
+             and expires_at > $3 \
+             order by seq limit $5 for update skip locked) \
+             update device_commands set status = 'leased', leased_at = $3, \
+             attempts = attempts + 1 \
+             where workspace_id = $1 and id in (select id from picked) \
              returning {COLUMNS}"
         ))
         .bind(self.workspace_id().as_uuid())
