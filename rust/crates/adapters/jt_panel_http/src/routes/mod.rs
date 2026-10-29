@@ -15,6 +15,7 @@ pub mod budget;
 pub mod calls;
 pub mod capabilities;
 pub mod connector;
+pub mod device_bridge;
 pub mod events;
 pub mod groups;
 pub mod inbox;
@@ -206,6 +207,10 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/voice/bridge/register"),
     ("GET", "/api/voice/bridge/commands"),
     ("POST", "/api/voice/bridge/events"),
+    ("POST", "/api/devices/bridge/register"),
+    ("GET", "/api/devices/bridge/commands"),
+    ("POST", "/api/devices/bridge/results"),
+    ("POST", "/api/devices/bridge/files"),
     ("GET", "/api/events/pending"),
     ("POST", "/api/events/ack"),
     ("GET", "/api/events"),
@@ -1017,6 +1022,30 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/voice/bridge/events",
             "calls.bridge.events",
             voice_bridge::events,
+        ),
+        api_route(
+            "POST",
+            "/devices/bridge/register",
+            "devices.bridge.register",
+            device_bridge::register,
+        ),
+        api_route(
+            "GET",
+            "/devices/bridge/commands",
+            "devices.bridge.commands",
+            device_bridge::commands,
+        ),
+        api_route(
+            "POST",
+            "/devices/bridge/results",
+            "devices.bridge.results",
+            device_bridge::results,
+        ),
+        api_route(
+            "POST",
+            "/devices/bridge/files",
+            "devices.bridge.files",
+            device_bridge::files,
         ),
         api_route("GET", "/events/pending", "events.pending", events::pending),
         api_route("POST", "/events/ack", "events.ack", events::ack),

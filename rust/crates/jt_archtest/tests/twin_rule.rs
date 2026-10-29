@@ -238,11 +238,42 @@ fn the_voice_bridge_surface_has_no_mcp_tool() {
 }
 
 #[test]
+fn the_device_bridge_surface_has_no_mcp_tool() {
+    let ids = [
+        "devices.bridge.register",
+        "devices.bridge.commands",
+        "devices.bridge.results",
+        "devices.bridge.files",
+    ];
+    for id in ids {
+        let row = jt_app::catalog::find(id).unwrap();
+        assert!(row.panel_only && row.mcp_tool.is_none(), "{id}");
+        assert!(
+            row.panel_route
+                .is_some_and(|(_, path)| path.starts_with("/api/devices/bridge/")),
+            "{id}"
+        );
+    }
+    // Those four are the whole of it.
+    let surface: Vec<&str> = CATALOG
+        .iter()
+        .filter(|row| row.id.starts_with("devices.bridge."))
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(surface, ids);
+    assert!(
+        jt_mcp::registry()
+            .iter()
+            .all(|tool| !tool.use_case.starts_with("devices.bridge."))
+    );
+}
+
+#[test]
 fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows() {
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 160);
+    assert_eq!(CATALOG.len(), 164);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

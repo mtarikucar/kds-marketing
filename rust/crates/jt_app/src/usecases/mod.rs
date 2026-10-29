@@ -13,6 +13,7 @@ pub mod budget;
 pub mod calls;
 pub mod capabilities;
 pub mod connector;
+pub mod devices;
 pub mod events;
 pub mod failure;
 pub mod files;

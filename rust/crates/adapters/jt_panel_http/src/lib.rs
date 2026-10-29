@@ -5,7 +5,8 @@
 //! - `/api/*`: the JSON API of [`ROUTES`]. Users sign in with the `jt_session` cookie
 //!   ([`session`]); the platform console's `/api/platform/*` routes take the operator's separate
 //!   `jt_platform` cookie ([`platform_session`]), and the voice bridge's `/api/voice/bridge/*`
-//!   routes its bearer API key, never a cookie ([`bearer`]). Every mutating request must carry
+//!   and the device bridge's `/api/devices/bridge/*` routes the bridge's bearer API key, never a
+//!   cookie ([`bearer`]). Every mutating request must carry
 //!   `X-Requested-With: jeeta-panel` ([`csrf`]), checked before authentication and body
 //!   parsing. Each route is then wrapped in the gate of its catalog use case ([`gate`]), which
 //!   runs before the handler whatever the handler extracts. Errors, including bad bodies,
@@ -80,6 +81,20 @@ pub fn router_with_test_route(
     build(state, api_routes, &catalog)
 }
 
+/// The body limit of use case `id`'s route, when it is not axum's default (2 MiB): studio's
+/// uploads carry media as base64; a device bridge's results batch is held to the protocol's
+/// `MAX_RESULTS_BODY_BYTES`, which the bridge splits its batches by; its file upload is the file
+/// itself, up to `DEVICE_FILE_LIMIT` (the bridge's download cap, so what one phone gave can be
+/// pushed to another).
+fn body_limit(id: &str) -> Option<usize> {
+    match id {
+        "studio.file_upload" | "studio.piece_submit" => Some(280_000_000),
+        "devices.bridge.results" => Some(jt_app::usecases::devices::bridge::MAX_RESULTS_BODY_BYTES),
+        "devices.bridge.files" => usize::try_from(jt_app::usecases::files::DEVICE_FILE_LIMIT).ok(),
+        _ => None,
+    }
+}
+
 /// [`router`] over the given API routes, resolved in `catalog`.
 fn build(state: AppState, api_routes: Vec<ApiRoute>, catalog: &[UseCase]) -> Router {
     let mut api = Router::new();
@@ -92,10 +107,9 @@ fn build(state: AppState, api_routes: Vec<ApiRoute>, catalog: &[UseCase]) -> Rou
         let handler = route
             .handler
             .route_layer(middleware::from_fn_with_state(gate, gate::require_gate));
-        let handler = if matches!(use_case.id, "studio.file_upload" | "studio.piece_submit") {
-            handler.layer(axum::extract::DefaultBodyLimit::max(280_000_000))
-        } else {
-            handler
+        let handler = match body_limit(use_case.id) {
+            Some(limit) => handler.layer(axum::extract::DefaultBodyLimit::max(limit)),
+            None => handler,
         };
         api = api.route(route.path, handler);
     }

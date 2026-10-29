@@ -46,6 +46,11 @@ const EXEMPT_IDS: &[&str] = &[
     "calls.bridge.register",
     "calls.bridge.commands",
     "calls.bridge.events",
+    // So are the phones the device bridge drives.
+    "devices.bridge.register",
+    "devices.bridge.commands",
+    "devices.bridge.results",
+    "devices.bridge.files",
 ];
 
 fn may_be_exempt(id: &str) -> bool {
