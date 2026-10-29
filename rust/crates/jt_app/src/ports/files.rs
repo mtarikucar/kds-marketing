@@ -27,6 +27,26 @@ pub trait ByteSource: Send {
     async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError>;
 }
 
+/// A stored file opened to be read as a stream ([`FileStore::read_stream`]): its type and length,
+/// and its bytes, chunk after chunk. A store checks what it read once it has read it all: a file
+/// that does not pass (its bytes are not the ones it stored) ends with an error before its last
+/// chunk, so a reader that counts the bytes against `size_bytes` never takes it for whole.
+pub struct StreamedFile {
+    pub mime: String,
+    pub size_bytes: u64,
+    pub bytes: Box<dyn ByteSource>,
+}
+
+/// Bytes held whole, yielded as one chunk: [`FileStore::read_stream`]'s default.
+struct Whole(Option<Vec<u8>>);
+
+#[async_trait]
+impl ByteSource for Whole {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        Ok(self.0.take())
+    }
+}
+
 #[async_trait]
 pub trait FileStore: Send + Sync {
     /// Verify active storage with a nonempty write, sync, readback and cleanup outside tenants.
@@ -39,6 +59,19 @@ pub trait FileStore: Send + Sync {
         upload: MediaUpload,
     ) -> Result<StoredFile, AppError>;
     async fn read(&self, ws: WorkspaceId, id: FileId) -> Result<MediaUpload, AppError>;
+    /// File `id`, as [`FileStore::read`] reads it, opened to be read as a stream: a store that can
+    /// holds a chunk of it in memory at a time (the disk store reads it in chunks, hashing them,
+    /// and checks the hash before the last one); this default reads it whole first. What serves
+    /// files to the outside (the signed retrieval route) reads them this way, so a large file, or
+    /// many reads of one at once, are never held whole.
+    async fn read_stream(&self, ws: WorkspaceId, id: FileId) -> Result<StreamedFile, AppError> {
+        let upload = self.read(ws, id).await?;
+        Ok(StreamedFile {
+            mime: upload.mime,
+            size_bytes: upload.bytes.len() as u64,
+            bytes: Box::new(Whole(Some(upload.bytes))),
+        })
+    }
     /// Stores, as [`FileStore::put`] does and with the same checks, the file of type `mime` named
     /// `filename` whose bytes `source` yields. A store that can keeps at most a chunk in memory
     /// (the disk store writes the chunks to a temporary file, hashing them as they come); this

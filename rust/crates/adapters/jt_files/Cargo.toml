@@ -20,6 +20,8 @@ hmac.workspace = true
 hex.workspace = true
 libc = "0.2"
 axum.workspace = true
+# The signed retrieval route's body is a stream of the file's chunks (`stream::unfold`).
+futures-util.workspace = true
 tokio = {workspace = true, features = ["rt", "fs", "io-util"]}
 [dev-dependencies]
 tokio = { workspace = true, features = ["net", "io-util"] }
