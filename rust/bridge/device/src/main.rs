@@ -27,7 +27,9 @@ use tracing_subscriber::EnvFilter;
 /// The environment variable that sets the log filter.
 const LOG_ENV: &str = "JEETA_DEVICE_BRIDGE_LOG";
 /// How long the bridge takes to stop when the system ends the process soon (Windows: the
-/// console closing, a log-off, a shutdown).
+/// console closing, a log-off, a shutdown). Used on Windows only; defined everywhere for the
+/// documentation's link.
+#[cfg_attr(not(windows), allow(dead_code))]
 const HURRIED_GRACE: Duration = Duration::from_secs(2);
 
 /// The configuration file: the first argument, else [`FILE_NAME`] next to the program, else in
