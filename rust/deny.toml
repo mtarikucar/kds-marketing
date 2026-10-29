@@ -54,9 +54,11 @@ skip-tree = [
   { crate = "windows-sys@0.52.0", reason = "ring 0.17 on Windows; tokio and the rest use windows-sys 0.61" },
 ]
 # Only jt_outbound may pull an HTTP client, and that client is reqwest: no other HTTP client at
-# all (spec §4.3), so the others are banned outright. Only jt_pg may pull sqlx. The one other
-# reqwest user is not the server: the device bridge, a program of its own on the computer a phone
-# is plugged into, whose HTTP peers are Jeeta and the signed addresses Jeeta hands it.
+# all (spec §4.3), so the others are banned outright. Only jt_pg may pull sqlx. The two other
+# reqwest users are not the server: the device bridge, a program of its own on the computer a phone
+# is plugged into, whose HTTP peers are Jeeta and the signed addresses Jeeta hands it; and the voice
+# bridge, a program beside the server whose peers are Jeeta's and Asterisk's loopback addresses,
+# which has its own WebSocket client too (Asterisk's events and media, the speech services).
 deny = [
   { crate = "lettre", wrappers = ["jt_mail"] },
   { crate = "async-imap", wrappers = ["jt_mail"] },
@@ -64,7 +66,8 @@ deny = [
   # HTTP already uses this TLS transport transitively; only jt_mail may name it directly
   # in the workspace (archtest). Existing HTTP and lettre TLS edges remain allowed.
   { crate = "tokio-rustls", wrappers = ["jt_mail", "lettre", "hyper-rustls", "reqwest"] },
-  { crate = "reqwest", wrappers = ["jt_outbound", "jeeta-device-bridge"] },
+  { crate = "reqwest", wrappers = ["jt_outbound", "jeeta-device-bridge", "jeeta-voice-bridge"] },
+  { crate = "tokio-tungstenite", wrappers = ["jeeta-voice-bridge"] },
   { crate = "ureq" },
   { crate = "isahc" },
   { crate = "surf" },

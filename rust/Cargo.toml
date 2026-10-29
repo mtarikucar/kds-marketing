@@ -29,6 +29,7 @@ members = [
     "crates/jt_archtest",
     "bin/jeeta",
     "bridge/device",
+    "bridge/voice",
 ]
 
 [workspace.package]
@@ -77,6 +78,9 @@ sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio
 rmcp = { version = "3.6", features = ["server", "transport-streamable-http-server", "transport-io"] }
 # `multipart`: provider uploads (NetGSM voice files, Meta media) through `jt_outbound::Prepared`.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
+# The voice bridge's WebSocket client (Asterisk's events and media, the local speech services);
+# only jeeta-voice-bridge may name it (deny.toml, archtest).
+tokio-tungstenite = "0.30"
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: a number read back from JSON text is exactly the `f64` that was written (the
 # default parser may be off by one unit in the last place), so MCP outputs, which go through
