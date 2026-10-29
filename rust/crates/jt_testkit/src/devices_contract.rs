@@ -458,6 +458,36 @@ pub async fn fail_pending_never_sets_leased_at_and_skips_finished(uow: Arc<dyn U
     );
 }
 
+/// A failure the server decides passes over a command that expired after it was leased, as over
+/// every command that ended: the expiry stands as it was written, and the bridge's late result for
+/// the lease can still replace it.
+pub async fn fail_pending_passes_over_a_command_that_expired_after_its_lease(
+    uow: Arc<dyn UnitOfWork>,
+) {
+    let f = Fixture::new(uow.clone()).await;
+    let p = phone(&uow, f.ws).await;
+    let id = enqueue(&uow, f.ws, vec![tap(p, 1, at(5))]).await[0].id;
+    lease(&uow, f.ws, &[p], at(1), 10).await;
+    assert_eq!(expired_ids(&expire_due(&uow, f.ws, at(6)).await), vec![id]);
+    let expired = get(&uow, f.ws, id).await.unwrap();
+    assert_eq!(
+        (expired.status, expired.leased_at, expired.done_at),
+        (CommandStatus::Expired, Some(at(1)), Some(at(6)))
+    );
+
+    assert!(
+        fail_pending(&uow, f.ws, &[id], "refused", at(7))
+            .await
+            .is_empty()
+    );
+    assert_eq!(get(&uow, f.ws, id).await.as_ref(), Some(&expired));
+    let late = applied(finish(&uow, f.ws, &[p], id, done(), at(8)).await);
+    assert_eq!(
+        (late.status, late.reason, late.done_at),
+        (CommandStatus::Done, None, Some(at(8)))
+    );
+}
+
 /// The first result for a leased command is applied and written (the result, or the reason with
 /// the detail cut to 300 characters, and the time) and answered with the row as it now stands;
 /// any later one is a duplicate and changes nothing.

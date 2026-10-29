@@ -38,6 +38,15 @@ async fn fail_pending_never_sets_leased_at_and_skips_finished() {
 }
 
 #[tokio::test]
+async fn fail_pending_passes_over_a_command_that_expired_after_its_lease() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::devices_contract::fail_pending_passes_over_a_command_that_expired_after_its_lease(
+        uow,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn finish_is_idempotent() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::devices_contract::finish_is_idempotent(uow).await;

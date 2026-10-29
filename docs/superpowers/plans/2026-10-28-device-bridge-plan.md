@@ -365,7 +365,7 @@ create table if not exists device_commands (
     expires_at timestamptz not null,
     result jsonb,
     reason text,                                                      -- not pinned to a list
-    detail text check (detail is null or char_length(detail) <= 300), -- Outcome::Failed.detail
+    detail text check (detail is null or char_length(detail) <= 300), -- Finish::Failed.detail
     requested_by jsonb not null check (jsonb_typeof(requested_by) = 'object'),
     created_at timestamptz not null,
     done_at timestamptz,
@@ -436,7 +436,7 @@ pub struct ExpiredCommand { pub id: Uuid, pub capability_id: CapabilityId, pub s
   that runs once: `update … from (select … limit … for update skip locked)` over-leased in CI (Postgres ran the pick
   again during the update and each run skipped the rows already updated). Voice's `take_commands` had the same shape
   and the same fault; it is fixed the same way.
-- `Outcome::Failed.detail` is stored in the `detail` column (at most `MAX_DETAIL_CHARS` = 300 characters, cut by
+- `Finish::Failed.detail` is stored in the `detail` column (at most `MAX_DETAIL_CHARS` = 300 characters, cut by
   the store whatever the caller passed); `reason` and `kind` are stored as text, not pinned to a list. A stored
   reason this version does not know reads as `FailReason::Unknown` (a `warn!` names the key, nothing else).
 - [x] **Contract tests** (`jt_testkit::devices_contract`, run against the fake and Postgres): `lease_returns_oldest_first`,

@@ -228,3 +228,32 @@ pub trait DeviceCommandRepo: Send + Sync {
         limit: u32,
     ) -> Result<Vec<DeviceCommandRow>, AppError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_while_pending_fails_only_a_pending_command() {
+        // Over every status, leased or not: only a queued or leased command is failed by the
+        // server; one that ended stays as it ended.
+        for &status in CommandStatus::ALL {
+            for ever_leased in [false, true] {
+                let expected = matches!(status, CommandStatus::Queued | CommandStatus::Leased)
+                    .then_some(CommandStatus::Failed);
+                assert_eq!(
+                    failed_while_pending(status, ever_leased),
+                    expected,
+                    "{status:?}, ever leased: {ever_leased}"
+                );
+            }
+        }
+        // Above all a command that expired, or was canceled, after a lease: a bridge's late
+        // result may still replace how it ended, a failure the server decides never does.
+        for ended in [CommandStatus::Expired, CommandStatus::Canceled] {
+            let late = Finish::failed(FailReason::AdbError, "late");
+            assert_eq!(late.status_after(ended, true), Ok(CommandStatus::Failed));
+            assert_eq!(failed_while_pending(ended, true), None, "{ended:?}");
+        }
+    }
+}

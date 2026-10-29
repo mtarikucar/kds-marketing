@@ -56,6 +56,16 @@ async fn fail_pending_never_sets_leased_at_and_skips_finished() {
 }
 
 #[tokio::test]
+async fn fail_pending_passes_over_a_command_that_expired_after_its_lease() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_contract::fail_pending_passes_over_a_command_that_expired_after_its_lease(
+        uow,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn finish_is_idempotent() {
     let db = TestDb::new().await;
     let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
@@ -247,7 +257,8 @@ async fn an_unknown_stored_reason_reads_as_unknown() {
 
     let mut tx = TenantTx::begin(&db.pool, f.ws).await.unwrap();
     sqlx::query(
-        "update device_commands set reason = 'from_a_newer_server'          where workspace_id = $1 and id = $2",
+        "update device_commands set reason = 'from_a_newer_server' \
+         where workspace_id = $1 and id = $2",
     )
     .bind(f.ws.as_uuid())
     .bind(id)
