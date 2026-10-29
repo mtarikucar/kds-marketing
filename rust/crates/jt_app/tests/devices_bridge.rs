@@ -23,9 +23,9 @@ use jt_app::usecases::capabilities::{self, DeclareInput};
 use jt_app::usecases::devices::{
     self,
     bridge::{
-        self, BridgeCaller, CommandsQuery, FileOut, MAX_CONCURRENT_UPLOADS, RegisterIn,
-        RegisterOut, ResultsIn, ResultsOut,
+        self, BridgeCaller, CommandsQuery, FileOut, RegisterIn, RegisterOut, ResultsIn, ResultsOut,
     },
+    uploads::{UploadLimits, UploadTurns},
 };
 use jt_app::usecases::files::DEVICE_FILE_LIMIT;
 use jt_app::usecases::studio::files::IMAGE_LIMIT;
@@ -723,8 +723,8 @@ async fn results_idempotent_and_ledgered() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": getprop, "kind": "shell", "status": "done", "reason": null, "duration_ms": 120 }),
-            json!({ "command_id": touch, "kind": "tap", "status": "failed", "reason": "adb_error", "duration_ms": 30 }),
+            json!({ "command_id": getprop, "kind": "shell", "status": "done", "reason": null, "duration_ms": 120, "leased_by": key.api_key_id.to_string() }),
+            json!({ "command_id": touch, "kind": "tap", "status": "failed", "reason": "adb_error", "duration_ms": 30, "leased_by": key.api_key_id.to_string() }),
         ]
     );
     let entries = w.entries("devices.command.finished");
@@ -780,7 +780,7 @@ async fn late_result_after_expiry_is_applied_and_ledgered_again() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": id, "kind": "tap", "status": "done", "reason": null, "duration_ms": 42 })
+            json!({ "command_id": id, "kind": "tap", "status": "done", "reason": null, "duration_ms": 42, "leased_by": key.api_key_id.to_string() })
         ]
     );
     // Once.
@@ -854,7 +854,7 @@ async fn push_file_gets_signed_download_url() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": lost, "kind": "push_file", "status": "failed", "reason": "file_not_found", "duration_ms": null })
+            json!({ "command_id": lost, "kind": "push_file", "status": "failed", "reason": "file_not_found", "duration_ms": null, "leased_by": key.api_key_id.to_string() })
         ]
     );
     // While the store cannot sign, the command is not handed out, and stays leased: its lease
@@ -1058,8 +1058,8 @@ async fn commands_rechecks_supports_at_lease_time() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": getprop, "kind": "shell", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null }),
-            json!({ "command_id": unicode, "kind": "text", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null }),
+            json!({ "command_id": getprop, "kind": "shell", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null }),
+            json!({ "command_id": unicode, "kind": "text", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null }),
         ]
     );
 }
@@ -1416,13 +1416,28 @@ impl ByteSource for Gated {
     }
 }
 
+/// Upload turns of one turn a pool, waited for a tenth of a second, a body idle for at most `idle`.
+fn tight(idle: StdDuration) -> Arc<UploadTurns> {
+    Arc::new(UploadTurns::new(UploadLimits {
+        screenshot_turns: 1,
+        pulled_file_turns: 1,
+        turn_wait: StdDuration::from_millis(100),
+        chunk_idle: idle,
+    }))
+}
+
 #[tokio::test]
-async fn uploads_take_turns() {
+async fn a_stalled_upload_holds_up_no_other_workspace_nor_a_screenshot() {
     let (mut w, key, _) = rig().await;
     w.deps.files = Arc::new(MemoryFiles::default());
+    w.deps.device_uploads = tight(StdDuration::from_secs(60));
+    let (_, beta_owner) = w.other_workspace().await;
+    let beta = key_in(&w, &beta_owner, "beta phones", &["devices.bridge"]).await;
     let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let go = Arc::new(tokio::sync::Semaphore::new(0));
-    let start = |w: &World| {
+
+    // A pull in workspace A stalls, holding A's one pulled-file turn.
+    let stalled = {
         let (deps, b) = (w.deps.clone(), bridge_at(&key, FIXED_NOW));
         let mut body = Gated {
             reads: reads.clone(),
@@ -1432,21 +1447,126 @@ async fn uploads_take_turns() {
             bridge::files(&deps, &b, Some("application/octet-stream"), None, &mut body).await
         })
     };
-    let read = || reads.load(std::sync::atomic::Ordering::SeqCst);
-    // As many uploads as there are turns are read at once...
-    let first: Vec<_> = (0..MAX_CONCURRENT_UPLOADS).map(|_| start(&w)).collect();
     let begun = Instant::now();
-    while read() < MAX_CONCURRENT_UPLOADS {
+    while reads.load(std::sync::atomic::Ordering::SeqCst) == 0 {
         assert!(begun.elapsed() < StdDuration::from_secs(5), "not read");
         tokio::time::sleep(StdDuration::from_millis(5)).await;
     }
-    // ...and one more waits for a turn before its body is read.
-    let last = start(&w);
-    tokio::time::sleep(StdDuration::from_millis(200)).await;
-    assert_eq!(read(), MAX_CONCURRENT_UPLOADS);
-    go.add_permits(MAX_CONCURRENT_UPLOADS + 1);
-    for upload in first.into_iter().chain([last]) {
-        upload.await.unwrap().unwrap();
+
+    // Workspace B's screenshot and pull, and A's own screenshot, are taken at once.
+    for (who, content_type, bytes) in [
+        (&beta, "image/png", PNG),
+        (&beta, "application/octet-stream", &b"pulled"[..]),
+        (&key, "image/png", PNG),
+    ] {
+        let started = Instant::now();
+        upload_as(
+            &w.deps,
+            &bridge_at(who, FIXED_NOW),
+            Some(content_type),
+            bytes,
+        )
+        .await
+        .unwrap();
+        assert!(
+            started.elapsed() < StdDuration::from_secs(1),
+            "{content_type}"
+        );
     }
-    assert_eq!(read(), MAX_CONCURRENT_UPLOADS + 1);
+    // Another pull in A waits a tenth of a second for its turn, then is answered `503`, retryable,
+    // its body not read.
+    let e = err(bridge::files(
+        &w.deps,
+        &bridge_at(&key, FIXED_NOW),
+        Some("application/octet-stream"),
+        None,
+        &mut Untouched,
+    )
+    .await);
+    assert_eq!(e.code, ErrorCode::UpstreamUnavailable, "{e:?}");
+    assert_eq!(e.details["retryable"], true);
+    assert_eq!(e.details["reason"], "upload_turns_taken");
+
+    go.add_permits(1);
+    stalled.await.unwrap().unwrap();
+    // The turn is free again.
+    upload_as(
+        &w.deps,
+        &bridge_at(&key, FIXED_NOW),
+        Some("application/octet-stream"),
+        b"next",
+    )
+    .await
+    .unwrap();
+}
+
+/// A first chunk, then nothing, ever.
+struct Stalls {
+    sent: bool,
+}
+
+#[async_trait]
+impl ByteSource for Stalls {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        if !self.sent {
+            self.sent = true;
+            return Ok(Some(b"first".to_vec()));
+        }
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn a_body_idle_past_the_timeout_is_refused_and_leaves_no_file() {
+    let (mut w, key, _) = rig().await;
+    let store = Arc::new(MemoryFiles::default());
+    w.deps.files = store.clone();
+    w.deps.device_uploads = tight(StdDuration::from_millis(100));
+    let b = bridge_at(&key, FIXED_NOW);
+    let started = Instant::now();
+    let e = err(bridge::files(
+        &w.deps,
+        &b,
+        Some("application/octet-stream"),
+        None,
+        &mut Stalls { sent: false },
+    )
+    .await);
+    assert_invalid(&e, "body");
+    assert!(started.elapsed() < StdDuration::from_secs(2));
+    // Nothing is stored or recorded, and the turn is free again.
+    assert!(store.files.lock().unwrap().is_empty());
+    assert!(w.uow.snapshot().devices.files.is_empty());
+    upload_as(&w.deps, &b, Some("application/octet-stream"), b"next")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_phone_that_passes_to_another_bridge_is_ledgered() {
+    let (w, first, p) = rig().await;
+    let second = bridge_key(&w, "other phones").await;
+    // Registering its own phone again, a bridge changes no holder.
+    register(&w, &first, later(15), vec![phone("SER1")]).await;
+    assert!(w.entries("devices.phone.holder_changed").is_empty());
+    // The first leaves it out; the second takes it over.
+    register(&w, &first, later(30), vec![]).await;
+    let out = register(&w, &second, later(31), vec![phone("SER1")]).await;
+    assert_eq!(cap(&out, 0), p);
+    let changed = w.entries("devices.phone.holder_changed");
+    assert_eq!(changed.len(), 1);
+    assert_eq!(
+        changed[0].payload,
+        json!({
+            "capability_id": p,
+            "from": first.api_key_id.to_string(),
+            "to": second.api_key_id.to_string(),
+        })
+    );
+    assert_eq!(
+        changed[0].actor,
+        Actor::System {
+            component: "device_bridge".into()
+        }
+    );
 }

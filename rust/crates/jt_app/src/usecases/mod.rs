@@ -60,6 +60,8 @@ pub struct Deps {
     /// Wakes the long-polls of the bridges and of what waits on them (the voice bridge's
     /// commands, `calls.listen`).
     pub bridge_signals: Arc<dyn crate::ports::bridges::BridgeSignals>,
+    /// How many uploads each workspace's device bridges store at once (`devices::uploads`).
+    pub device_uploads: Arc<crate::usecases::devices::uploads::UploadTurns>,
     pub billing: billing::BillingConfig,
     pub file_maintenance: Arc<dyn crate::ports::files::FileMaintenance>,
     pub media_fetch: Arc<dyn crate::ports::files::MediaFetcher>,

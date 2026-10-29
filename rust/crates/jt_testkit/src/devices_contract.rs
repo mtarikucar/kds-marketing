@@ -114,13 +114,13 @@ pub async fn finish(
     finish_by(uow, ws, BRIDGE, caps, id, outcome, now).await
 }
 
-/// Bridge `by`, holding phones `listed`, reports `outcome` for command `id` at `now`, in one
+/// Bridge `by`, holding phones `holding`, reports `outcome` for command `id` at `now`, in one
 /// bundle.
 pub async fn finish_by(
     uow: &Arc<dyn UnitOfWork>,
     ws: WorkspaceId,
     by: ApiKeyId,
-    listed: &[CapabilityId],
+    holding: &[CapabilityId],
     id: Uuid,
     outcome: Finish,
     now: OffsetDateTime,
@@ -128,7 +128,7 @@ pub async fn finish_by(
     let mut t = uow.tenant(ws).await.unwrap();
     let answer = t
         .device_commands()
-        .finish(by, listed, id, outcome, now)
+        .finish(by, holding, id, outcome, now)
         .await
         .unwrap();
     t.commit().await.unwrap();
@@ -625,9 +625,9 @@ pub async fn finish_for_another_bridges_command_is_unknown(uow: Arc<dyn UnitOfWo
 
     // Another bridge, holding another phone or none, may not report for it.
     let none: &[CapabilityId] = &[];
-    for listed in [&[other][..], none] {
+    for holding in [&[other][..], none] {
         assert_eq!(
-            finish_by(&uow, f.ws, OTHER_BRIDGE, listed, id, done(), at(2)).await,
+            finish_by(&uow, f.ws, OTHER_BRIDGE, holding, id, done(), at(2)).await,
             Finished::Unknown
         );
         assert_eq!(get(&uow, f.ws, id).await.as_ref(), Some(&leased));

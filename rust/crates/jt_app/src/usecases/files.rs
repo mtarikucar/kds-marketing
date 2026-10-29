@@ -16,9 +16,12 @@ pub const PNG: &str = "image/png";
 pub const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 /// How many first bytes of a streamed file [`validate_stored_head`] is given.
 pub const HEAD_BYTES: usize = 16;
-/// The most bytes of a file a device bridge uploads: 256 MiB, the most the bridge downloads for
-/// `push_file`, so a file pulled off one phone can be pushed to another.
-pub const DEVICE_FILE_LIMIT: u64 = 256 * 1024 * 1024;
+/// The most bytes of a file a device bridge uploads (a pulled file): 95 MiB. The servers the bridge
+/// reaches sit behind Cloudflare, whose Free and Pro plans refuse a request body over 100 MB
+/// (`413` at the edge, before this server sees it); 95 MiB stays under it. The bridge program
+/// holds `pull_file` and its uploads to the same bound (`jeeta-device-bridge`'s
+/// `MAX_UPLOAD_BYTES`).
+pub const DEVICE_FILE_LIMIT: u64 = 95 * 1024 * 1024;
 /// The most bytes the file store keeps in one file: the largest of studio's video limit and
 /// [`DEVICE_FILE_LIMIT`].
 pub const STORED_LIMIT: u64 = if DEVICE_FILE_LIMIT > VIDEO_LIMIT {

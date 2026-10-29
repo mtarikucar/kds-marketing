@@ -190,7 +190,7 @@ impl DeviceCommandRepo for MemTenant {
     async fn finish(
         &mut self,
         by: ApiKeyId,
-        listed: &[CapabilityId],
+        holding: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,
@@ -198,7 +198,7 @@ impl DeviceCommandRepo for MemTenant {
         let Some(current) = self
             .commands_in(&[id])
             .into_iter()
-            .find(|c| c.leased_by == Some(by) || listed.contains(&c.capability_id))
+            .find(|c| c.leased_by == Some(by) || holding.contains(&c.capability_id))
         else {
             return Ok(Finished::Unknown);
         };

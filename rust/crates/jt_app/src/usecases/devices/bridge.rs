@@ -56,18 +56,29 @@
 //! this bridge uploaded, is refused (`VALIDATION` naming the field) and nothing of it is applied.
 //! Then each result is applied once, by command id, when the bridge may report it: the command
 //! was last leased to it (a late result from a phone it has left out since still counts, since the
-//! command really ran), or the bridge now holds the command's phone (a bridge whose key was
-//! replaced reports for the old key's leases). A result for any other command (unknown, leased to
-//! another bridge, or never handed out) changes nothing and is counted `unknown`, never refused.
+//! command really ran), or the bridge holds the command's phone now (`listed_by`, whether or not
+//! its latest registration lists the phone: a bridge whose key was replaced reports for the old
+//! key's leases). A result for any other command (unknown, leased to another bridge, or never
+//! handed out) changes nothing and is counted `unknown`, never refused.
+//!
+//! **Replacing a bridge's key.** Start the bridge with the new key, stop the old program cleanly
+//! (it posts what it finished, with the old key), then revoke the old key. The new bridge is
+//! refused each phone the old one held until the old one has not registered it for [`HELD_FOR`]
+//! (up to a minute); then it takes it over (`devices.phone.holder_changed`), and the old key's
+//! leases of that phone are its to answer.
 //!
 //! **Files.** An upload is the file's bytes, `image/png` (a screenshot) or
-//! `application/octet-stream` (a file pulled off a phone), streamed into the file store (at most
-//! [`MAX_CONCURRENT_UPLOADS`] at a time) and recorded as the workspace's, uploaded by the bridge,
-//! for [`FILE_RETENTION`]. Each upload is a new file, a retried one included.
+//! `application/octet-stream` (a file pulled off a phone), streamed into the file store and
+//! recorded as the workspace's, uploaded by the bridge, for [`FILE_RETENTION`]. Each upload is a
+//! new file, a retried one included. Each workspace uploads a few files at a time, screenshots and
+//! pulled files apart (`super::uploads`); one that waits too long for its turn is answered `503`
+//! (the bridge tries again), and a body that stalls is refused.
 //!
 //! **Logging.** Every command that ends through this surface writes `devices.command.finished`
 //! (`command_id`, `kind`, `status`, `reason`, `duration_ms`: the bridge's, `null` for a failure the
-//! server decided); its result stays on the command. `tracing` carries ids, kinds, statuses and
+//! server decided; `leased_by`: the key id of the bridge last handed it, `null` for none); its
+//! result stays on the command. A phone that passes from one bridge to another writes
+//! `devices.phone.holder_changed` (`capability_id`, `from`, `to`: key ids). `tracing` carries ids, kinds, statuses and
 //! counts only: never a command's payload, a result, a failure's detail or a file's bytes.
 
 use std::collections::{HashMap, HashSet};
@@ -83,9 +94,9 @@ use jt_studio::FileId;
 use jt_tenancy::{ApiKeyId, Permission};
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
-use tokio::sync::Semaphore;
 use uuid::Uuid;
 
+use super::uploads::UploadKind;
 use super::{PHONE_KIND, signal_key};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -133,12 +144,6 @@ pub const HELD_FOR: Duration = Duration::seconds(60);
 pub const DOWNLOAD_URL_LIFETIME: Duration = Duration::minutes(10);
 /// How long a device file is kept (spec §5.6).
 pub const FILE_RETENTION: Duration = Duration::days(7);
-/// The most uploads ([`files`]) this server stores at once; a further one waits for its turn
-/// before its body is read.
-pub const MAX_CONCURRENT_UPLOADS: usize = 2;
-
-/// The uploads' turns ([`MAX_CONCURRENT_UPLOADS`]).
-static UPLOADS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_UPLOADS);
 
 // ---------------------------------------------------------------------------------------------
 // Who
@@ -186,6 +191,11 @@ fn external_id(phone: &PhoneReport) -> String {
 /// What a phone's capability keeps of it (`connector_public.device`).
 fn device_of(c: &Capability) -> Option<&Map<String, Value>> {
     c.connector_public.get("device")?.as_object()
+}
+
+/// The key id of the bridge that holds phone `c` (`listed_by`), listed or not.
+fn holder_of(c: &Capability) -> Option<String> {
+    device_of(c)?.get("listed_by")?.as_str().map(str::to_owned)
 }
 
 /// Whether bridge `bridge` holds phone `c` (`listed_by`), listed or not.
@@ -409,7 +419,22 @@ pub async fn register(
                     refused_phones.push(refusal(platform, &serial, PHONE_HELD_BY_ANOTHER_BRIDGE));
                     continue;
                 }
+                let before = holder_of(&current);
                 kernel::heartbeat(r.as_mut(), ctx, &DEVICE_BRIDGE, in_force, beat).await?;
+                let to = b.bridge.to_string();
+                if let Some(from) = before.filter(|from| *from != to) {
+                    let payload = json!({ "capability_id": id, "from": from, "to": to });
+                    let holder_changed = append(
+                        r.as_mut(),
+                        ctx,
+                        "devices.phone.holder_changed",
+                        "capability",
+                        id,
+                        in_force,
+                        payload,
+                    );
+                    holder_changed.await?;
+                }
                 registered.push((
                     index,
                     RegisteredPhone {
@@ -705,6 +730,7 @@ async fn finished(
             "status": row.status.key(),
             "reason": row.reason.map(FailReason::key),
             "duration_ms": duration_ms,
+            "leased_by": row.leased_by.map(|by| by.to_string()),
         }),
     )
     .await
@@ -846,18 +872,32 @@ fn too_large(limit: u64) -> AppError {
     )
 }
 
-/// `source`, refused once it yields more than `limit` bytes.
+/// `VALIDATION` naming `body`: a body that sent nothing for `idle`.
+fn stalled(idle: StdDuration) -> AppError {
+    invalid(
+        "body",
+        &format!("the body sent nothing for {} seconds", idle.as_secs()),
+    )
+}
+
+/// `source`, refused once it yields more than `limit` bytes, or sends nothing for `idle`.
 struct Bounded<'a> {
     source: &'a mut dyn ByteSource,
     read: u64,
     limit: u64,
+    idle: StdDuration,
     over: bool,
+    stalled: bool,
 }
 
 #[async_trait::async_trait]
 impl ByteSource for Bounded<'_> {
     async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
-        let Some(chunk) = self.source.next_chunk().await? else {
+        let Ok(next) = tokio::time::timeout(self.idle, self.source.next_chunk()).await else {
+            self.stalled = true;
+            return Err(stalled(self.idle));
+        };
+        let Some(chunk) = next? else {
             return Ok(None);
         };
         self.read += chunk.len() as u64;
@@ -874,10 +914,13 @@ impl ByteSource for Bounded<'_> {
 /// [`FILE_RETENTION`]; its id. A type that is neither `image/png` nor `application/octet-stream`
 /// is `VALIDATION` naming `content_type`; a body over its type's limit ([`IMAGE_LIMIT`] for a PNG,
 /// [`DEVICE_FILE_LIMIT`] for a pulled file; `declared_len` is the length the request announces,
-/// refused before anything is read), or a PNG that is not one, `VALIDATION` naming `body`. The
-/// body is read only once the bridge's turn comes ([`MAX_CONCURRENT_UPLOADS`]) and streamed into
-/// the file store; the bytes are written before the file is recorded, and removed again when it
-/// cannot be. Only the bridge's key.
+/// refused before anything is read), a body that sends nothing for the upload turns'
+/// `chunk_idle`, or a PNG that is not one, `VALIDATION` naming `body`. The body is read only once
+/// the upload has its turn (`Deps::device_uploads`, a pool per workspace for screenshots and
+/// another for pulled files); one that gets none within `turn_wait` is `UPSTREAM_UNAVAILABLE`
+/// (`503`, retryable), its body not read. The body is streamed into the file store; the bytes are
+/// written before the file is recorded, and removed again when it cannot be. Only the bridge's
+/// key.
 pub async fn files(
     deps: &Deps,
     b: &BridgeCaller,
@@ -887,9 +930,9 @@ pub async fn files(
 ) -> Result<FileOut, AppError> {
     authorize(b)?;
     let ws = b.ctx.workspace_id;
-    let (mime, limit) = match content_type.map(media_type).as_deref() {
-        Some(PNG) => (PNG, IMAGE_LIMIT),
-        Some(OCTET_STREAM) => (OCTET_STREAM, DEVICE_FILE_LIMIT),
+    let (mime, limit, kind) = match content_type.map(media_type).as_deref() {
+        Some(PNG) => (PNG, IMAGE_LIMIT, UploadKind::Screenshot),
+        Some(OCTET_STREAM) => (OCTET_STREAM, DEVICE_FILE_LIMIT, UploadKind::PulledFile),
         _ => {
             return Err(invalid(
                 "content_type",
@@ -900,10 +943,8 @@ pub async fn files(
     if declared_len.is_some_and(|len| len > limit) {
         return Err(too_large(limit));
     }
-    let _turn = UPLOADS
-        .acquire()
-        .await
-        .map_err(|_| AppError::internal("the uploads' turns are closed"))?;
+    let _turn = deps.device_uploads.take(ws, kind).await?;
+    let idle = deps.device_uploads.limits().chunk_idle;
     let id = deps.ids.uuid();
     let extension = if mime == PNG { "png" } else { "bin" };
     let filename = format!("{id}.{extension}");
@@ -911,7 +952,9 @@ pub async fn files(
         source,
         read: 0,
         limit,
+        idle,
         over: false,
+        stalled: false,
     };
     let stored = deps
         .files
@@ -920,6 +963,7 @@ pub async fn files(
     let stored = match stored {
         Ok(stored) => stored,
         Err(_) if bounded.over => return Err(too_large(limit)),
+        Err(_) if bounded.stalled => return Err(stalled(idle)),
         Err(e)
             if e.code == ErrorCode::Validation
                 && e.details.get("field") == Some(&json!("media")) =>

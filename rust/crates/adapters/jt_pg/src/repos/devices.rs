@@ -264,7 +264,7 @@ impl DeviceCommandRepo for PgTenantRepos {
     async fn finish(
         &mut self,
         by: ApiKeyId,
-        listed: &[CapabilityId],
+        holding: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,
@@ -278,7 +278,7 @@ impl DeviceCommandRepo for PgTenantRepos {
         .bind(ws.as_uuid())
         .bind(id)
         .bind(by.as_uuid())
-        .bind(uuids(listed))
+        .bind(uuids(holding))
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "lock device command"))?;

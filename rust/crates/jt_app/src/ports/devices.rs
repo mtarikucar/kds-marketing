@@ -228,15 +228,16 @@ pub trait DeviceCommandRepo: Send + Sync {
     ) -> Result<Vec<DeviceCommandRow>, AppError>;
     /// Applies the result bridge `by` reports for command `id`, received at `now`, as
     /// [`Finish::status_after`] decides. The bridge reports only for a command it was last leased
-    /// (`leased_by` = `by`), or for one of a phone it now holds (`listed`: a bridge whose key was
-    /// replaced reports for its old key's leases); for any other the answer is
+    /// (`leased_by` = `by`), or for one of a phone it holds now (`holding`: the phones whose
+    /// `listed_by` is the bridge, whether or not its latest registration lists them; a bridge
+    /// whose key was replaced reports for its old key's leases); for any other the answer is
     /// [`Finished::Unknown`]. When it is applied, writes the new status, the result (`Done`) or
     /// the reason and detail (`Failed`), and `done_at` = `now`. A second result for the same
     /// command waits for the first one's bundle to end.
     async fn finish(
         &mut self,
         by: ApiKeyId,
-        listed: &[CapabilityId],
+        holding: &[CapabilityId],
         id: Uuid,
         outcome: Finish,
         now: OffsetDateTime,

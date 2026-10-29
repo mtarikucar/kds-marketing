@@ -117,6 +117,9 @@ impl World {
             connectors: Arc::new(ScriptedRegistry::new()),
             ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
             ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+            device_uploads: std::sync::Arc::new(
+                jt_app::usecases::devices::uploads::UploadTurns::default(),
+            ),
             bridge_signals: std::sync::Arc::new(jt_app::std_impls::LocalBridgeSignals::default()),
             billing: jt_app::usecases::billing::BillingConfig {
                 price_minor: 123,

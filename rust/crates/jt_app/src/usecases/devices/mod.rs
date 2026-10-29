@@ -8,6 +8,7 @@
 //! and counts only (spec §5.5).
 
 pub mod bridge;
+pub mod uploads;
 
 use jt_tenancy::WorkspaceId;
 

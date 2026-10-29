@@ -192,6 +192,20 @@ async fn a_streamed_file_is_hashed_as_it_comes_and_linked_whole() {
         .collect();
     assert_eq!(names.len(), 2, "{names:?}");
     assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
+    // A body that fails part way (the use case's idle timeout, a dropped connection) leaves no
+    // file either, temporary or not.
+    let cut = FileId::new_v7();
+    let mut source = FailsAfterOne { sent: false };
+    assert!(
+        d.put_stream(ws, cut, "application/octet-stream", "cut.bin", &mut source)
+            .await
+            .is_err()
+    );
+    let names: Vec<String> = std::fs::read_dir(p.join(ws.to_string()))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
     // A streamed file is new: its id is not taken again.
     let mut source = Chunks::of(b"again");
     let e = d
@@ -218,6 +232,23 @@ async fn a_streamed_file_is_hashed_as_it_comes_and_linked_whole() {
             .is_ok()
     );
     std::fs::remove_dir_all(p).unwrap();
+}
+/// A first chunk, then an error.
+struct FailsAfterOne {
+    sent: bool,
+}
+#[async_trait::async_trait]
+impl jt_app::ports::files::ByteSource for FailsAfterOne {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, jt_app::error::AppError> {
+        if self.sent {
+            return Err(jt_app::error::AppError::validation(
+                "the body sent nothing for 30 seconds",
+                serde_json::json!({ "field": "body" }),
+            ));
+        }
+        self.sent = true;
+        Ok(Some(b"first".to_vec()))
+    }
 }
 fn hex_of(bytes: &[u8]) -> String {
     use sha2::Digest;
