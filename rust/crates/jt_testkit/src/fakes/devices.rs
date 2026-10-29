@@ -222,9 +222,13 @@ impl DeviceCommandRepo for MemTenant {
             .map_or(Finished::Unknown, |row| Finished::Applied(Box::new(row))))
     }
 
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError> {
+    async fn expire_due(
+        &mut self,
+        now: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ExpiredCommand>, AppError> {
         let ws = self.ws;
-        let due: Vec<Uuid> = self
+        let mut due: Vec<&DeviceCommandRow> = self
             .state()
             .devices
             .commands
@@ -234,8 +238,10 @@ impl DeviceCommandRepo for MemTenant {
                     && matches!(c.status, CommandStatus::Queued | CommandStatus::Leased)
                     && c.expires_at <= now
             })
-            .map(|c| c.id)
             .collect();
+        due.sort_by_key(|c| c.seq);
+        due.truncate(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE) as usize);
+        let due: Vec<Uuid> = due.into_iter().map(|c| c.id).collect();
         let expired = self.change_commands(due, move |c| {
             c.status = CommandStatus::Expired;
             c.done_at = Some(now);
@@ -249,6 +255,7 @@ impl DeviceCommandRepo for MemTenant {
                 kind: c.command.kind().to_owned(),
                 created_at: c.created_at,
                 leased_at: c.leased_at,
+                leased_by: c.leased_by,
             })
             .collect())
     }
@@ -269,7 +276,10 @@ impl DeviceCommandRepo for MemTenant {
             .commands
             .iter()
             .filter(|c| c.workspace_id == ws && c.capability_id == cap)
-            .cloned()
+            .map(|c| DeviceCommandRow {
+                result: None,
+                ..c.clone()
+            })
             .collect();
         rows.sort_by_key(|c| std::cmp::Reverse(c.seq));
         rows.truncate(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE) as usize);
@@ -306,5 +316,42 @@ impl DeviceCommandRepo for MemTenant {
             .collect();
         files.sort_by_key(|f| f.id);
         Ok(files)
+    }
+
+    async fn expired_files(
+        &mut self,
+        now: OffsetDateTime,
+        after: Option<(OffsetDateTime, Uuid)>,
+        limit: u32,
+    ) -> Result<Vec<DeviceFile>, AppError> {
+        let ws = self.ws;
+        let mut files: Vec<DeviceFile> = self
+            .state()
+            .devices
+            .files
+            .iter()
+            .filter(|(of, f)| *of == ws && f.expires_at <= now)
+            .filter(|(_, f)| after.is_none_or(|after| (f.expires_at, f.id) > after))
+            .map(|(_, f)| f.clone())
+            .collect();
+        files.sort_by_key(|f| (f.expires_at, f.id));
+        files.truncate(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE) as usize);
+        Ok(files)
+    }
+
+    async fn delete_file(&mut self, id: Uuid) -> Result<bool, AppError> {
+        let ws = self.ws;
+        let held = self
+            .state()
+            .devices
+            .files
+            .iter()
+            .any(|(of, f)| *of == ws && f.id == id);
+        if held {
+            self.tx.write(move |s: &mut MemState| {
+                s.devices.files.retain(|(of, f)| !(*of == ws && f.id == id));
+            });
+        }
+        Ok(held)
     }
 }

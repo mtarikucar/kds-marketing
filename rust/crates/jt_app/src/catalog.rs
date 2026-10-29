@@ -385,6 +385,15 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("devices.bridge.commands", Exempt, ("GET", "/api/devices/bridge/commands"), Read),
     panel_only("devices.bridge.results", Exempt, ("POST", "/api/devices/bridge/results"), Write),
     panel_only("devices.bridge.files", Exempt, ("POST", "/api/devices/bridge/files"), Write),
+    // The workspace's phones, for an agent or a person holding `devices.work` (spec §5.4):
+    // exempt from the strategy gate like the bridge, not from the status check. `observe` and
+    // `act` queue a command for a phone and wait up to 20 seconds for its result; `command_get`
+    // waits the same way for one command.
+    twin("devices.list", Exempt, "jeeta.devices.list", ("GET", "/api/devices"), Read),
+    twin("devices.observe", Exempt, "jeeta.devices.observe", ("POST", "/api/devices/{capability_id}/observe"), Write),
+    twin("devices.act", Exempt, "jeeta.devices.act", ("POST", "/api/devices/{capability_id}/act"), Write),
+    twin("devices.command_get", Exempt, "jeeta.devices.command_get", ("GET", "/api/devices/commands/{command_id}"), Read),
+    twin("devices.commands", Exempt, "jeeta.devices.commands", ("GET", "/api/devices/{capability_id}/commands"), Read),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

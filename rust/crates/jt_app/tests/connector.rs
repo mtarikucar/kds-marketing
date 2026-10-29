@@ -3001,7 +3001,7 @@ async fn retire_clears_sealed_config() {
 async fn pending_lists_reconnect_at_priority_one() {
     let r = rig().await;
     let page = r.connect_page().await;
-    r.w.declare("phone", "Telefon").await;
+    r.w.declare("computer", "Bilgisayar").await;
     // Marked unreachable by hand: not a login to renew, so no reconnection is asked for.
     let line = r.w.declare("sms_line", "Hat").await.capability.id;
     capabilities::mark_unreachable(&r.w.deps, &r.w.owner_ctx, line, "kapalı".into())
@@ -3025,7 +3025,7 @@ async fn pending_lists_reconnect_at_priority_one() {
             name: "Kahve".into(),
         }]
     );
-    // Priority 1, ahead of verifying the phone (2); its wire form is stable.
+    // Priority 1, ahead of verifying the computer (2); its wire form is stable.
     let position = pending
         .items
         .iter()

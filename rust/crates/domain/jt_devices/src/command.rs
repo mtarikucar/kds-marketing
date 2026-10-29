@@ -22,6 +22,9 @@ pub const MAX_URL_CHARS: usize = 8192;
 pub const MAX_APP_ID_CHARS: usize = 256;
 /// The most characters in the device path of a `push_file` destination or a `pull_file` source.
 pub const MAX_PATH_CHARS: usize = 4096;
+/// The most pixels along either side of a phone's screen, and so the largest coordinate a `tap`,
+/// `long_press` or `swipe` names (`jt_device_protocol` holds a reported screen to it too).
+pub const MAX_SCREEN_PX: u32 = 20_000;
 
 /// One command for a device. On the wire it is an object tagged by `kind`; an unknown kind or an
 /// unknown field is refused.
@@ -182,6 +185,14 @@ fn argument(
     Ok(())
 }
 
+/// Each of `points` (a field and its coordinate) at most [`MAX_SCREEN_PX`].
+fn on_screen(points: &[(&'static str, u32)]) -> Result<(), CommandError> {
+    match points.iter().find(|(_, at)| *at > MAX_SCREEN_PX) {
+        Some((field, _)) => Err(invalid(field, "must be at most 20000")),
+        None => Ok(()),
+    }
+}
+
 /// [`argument`] for a name, address or path, which must also carry something.
 fn name(
     field: &'static str,
@@ -231,28 +242,30 @@ impl DeviceCommand {
         }
     }
 
-    /// Whether the command respects its bounds and is well formed: the lengths above, and no NUL
+    /// Whether the command respects its bounds and is well formed: the lengths above, coordinates
+    /// on a screen (at most [`MAX_SCREEN_PX`]), and no NUL
     /// character in a string that becomes a process argument (text, shell arguments, address,
     /// app id, paths, target). Bounds and well-formedness only: what a command is allowed to
     /// touch is not decided here.
     pub fn validate(&self) -> Result<(), CommandError> {
         match self {
-            Self::Observe { .. } | Self::Tap { .. } | Self::Key { .. } | Self::Screenshot {} => {
-                Ok(())
-            }
+            Self::Observe { .. } | Self::Key { .. } | Self::Screenshot {} => Ok(()),
+            Self::Tap { x, y } => on_screen(&[("x", *x), ("y", *y)]),
             Self::TapOn { target, .. } => name(
                 "target",
                 target.value(),
                 MAX_TEXT_CHARS,
                 "is longer than 4000 characters",
             ),
-            Self::LongPress { ms, .. } => {
+            Self::LongPress { x, y, ms } => {
+                on_screen(&[("x", *x), ("y", *y)])?;
                 if *ms == 0 || *ms > MAX_LONG_PRESS_MS {
                     return Err(invalid("ms", "must be between 1 and 10000"));
                 }
                 Ok(())
             }
-            Self::Swipe { ms, .. } => {
+            Self::Swipe { x1, y1, x2, y2, ms } => {
+                on_screen(&[("x1", *x1), ("y1", *y1), ("x2", *x2), ("y2", *y2)])?;
                 if *ms == 0 || *ms > MAX_SWIPE_MS {
                     return Err(invalid("ms", "must be between 1 and 5000"));
                 }

@@ -40,6 +40,8 @@ jt_meta.workspace = true
 jt_netgsm.workspace = true
 jt_mail.workspace = true
 jt_testkit.workspace = true
+# `devices_agent_tracing.rs` captures what `tracing` writes.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

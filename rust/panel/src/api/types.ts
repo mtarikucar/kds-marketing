@@ -767,7 +767,9 @@ export type WorkKind =
   | { kind: 'merge_suggested'; merge_id: string }
   | { kind: 'task_due'; task_id: string }
   /** A voice bridge that has not registered within its heartbeat; `last_seen_at` is its last one. */
-  | { kind: 'voice_bridge_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null };
+  | { kind: 'voice_bridge_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null }
+  /** A phone no device bridge has listed within its heartbeat; `last_seen_at` is the last listing. */
+  | { kind: 'phone_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {

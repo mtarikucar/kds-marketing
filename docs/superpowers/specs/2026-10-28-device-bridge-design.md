@@ -185,7 +185,8 @@ every use case.
 ### 5.6 Retention
 
 Screenshots and pulled files expire after 7 days (storage hygiene, not access control); command rows are kept
-like ledger history.
+like ledger history. The file purge writes no ledger entry: the commands that named a file, and their ledger
+entries, stay as they were.
 
 ## 6. The bridge program (`jeeta-device-bridge`)
 
@@ -231,6 +232,10 @@ decide what an iPhone can do.
 Not built now (owner). The layer will hook in at three points that already exist in this design: a policy
 check in `devices.act` before queuing (allowlists, caps, approvals), the per-command ledger entries (review),
 and the `phone` capability's policy object (per-device rules).
+
+One reach it must weigh (D1-T6 review): `devices.work` in effect grants reading any file of the workspace's store
+whose id is known, since `push_file` takes any stored file and `pull_file` brings it back as a device file whose
+signed `file_url` the agent reads.
 
 ## 11. Steps
 

@@ -12,6 +12,7 @@ mod budget;
 mod calls;
 mod capabilities;
 mod connector;
+mod devices;
 mod events;
 mod inbox;
 mod ledger;
@@ -56,6 +57,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         billing::definitions(),
         connector::definitions(),
         calls::definitions(),
+        devices::definitions(),
         events::definitions(),
         inbox::definitions(),
         work::definitions(),

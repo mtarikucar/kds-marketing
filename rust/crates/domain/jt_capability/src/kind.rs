@@ -150,6 +150,18 @@ const OTHER_THIRD_PARTY: &str = "other";
 /// The key of the voice bridge: the sidecar that is the workspace's phone line for agent calls.
 const VOICE_BRIDGE: &str = "voice_bridge";
 
+/// The key of a phone: a physical phone the device bridge on the PC it is plugged into keeps
+/// alive (spec 2026-10-28-device-bridge-design.md §5.2).
+const PHONE: &str = "phone";
+
+/// How the bridges' heartbeat holds (spec 2026-10-28-device-bridge-design.md §3): a bridge
+/// registers every 15 seconds, so a minute (four missed registrations) leaves what it keeps
+/// alive stale, and ten minutes unreachable.
+const BRIDGE_HEARTBEAT: Heartbeat = Heartbeat {
+    stale_after: Duration::seconds(60),
+    unreachable_after: Duration::minutes(10),
+};
+
 /// How a kind proves it is alive by reporting itself on a schedule, instead of by a probe or the
 /// agent's evidence: its verification goes stale once the last report is older than
 /// `stale_after`, and its capability is marked unreachable once it is older than
@@ -200,7 +212,9 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::Ads, "google_ads"),
     k(KindGroup::Calendar, "google_calendar"),
     k(KindGroup::Calendar, "outlook_calendar"),
-    k(KindGroup::Device, "phone"),
+    // A phone (spec 2026-10-28-device-bridge-design.md §5.2): verified by its device bridge's
+    // heartbeat ([`CapabilityKind::heartbeat`]).
+    k(KindGroup::Device, PHONE),
     k(KindGroup::Device, "computer"),
     k(KindGroup::Device, "printer"),
     k(KindGroup::Device, "printer_3d"),
@@ -233,8 +247,8 @@ impl CapabilityKind {
     }
 
     /// How a capability of this kind is reached: its group's [`KindGroup::default_reach`], except
-    /// that a kind with a [`Heartbeat`] (the voice bridge) is reached like a device: no connector
-    /// adapter holds its credentials, and only its own reports verify it.
+    /// that a kind with a [`Heartbeat`] (the voice bridge, a phone) is reached like a device: no
+    /// connector adapter holds its credentials, and only its bridge's reports verify it.
     pub fn default_reach(&self) -> Reach {
         if self.heartbeat().is_some() {
             Reach::Device
@@ -243,14 +257,12 @@ impl CapabilityKind {
         }
     }
 
-    /// How a capability of this kind reports itself, when it does: only the voice bridge, which
-    /// registers every 15 seconds, goes stale a minute after its last report and unreachable ten
-    /// minutes after it.
+    /// How a capability of this kind reports itself, when it does: the voice bridge, and a phone
+    /// (its device bridge lists it), each registered every 15 seconds, go stale a minute after
+    /// their last report and unreachable ten minutes after it. Only those reports verify them:
+    /// `capability.verify` refuses them.
     pub fn heartbeat(&self) -> Option<Heartbeat> {
-        (self.key == VOICE_BRIDGE).then_some(Heartbeat {
-            stale_after: Duration::seconds(60),
-            unreachable_after: Duration::minutes(10),
-        })
+        matches!(self.key, VOICE_BRIDGE | PHONE).then_some(BRIDGE_HEARTBEAT)
     }
 
     /// Whether a capability of this kind needs a `key_detail` naming the tool: only the

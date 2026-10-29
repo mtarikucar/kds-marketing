@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use jt_app::ports::UnitOfWork;
-use jt_app::ports::devices::{DEFAULT_EXPIRES_IN, FailReason, Finished, REDELIVER_AFTER};
+use jt_app::ports::devices::{
+    DEFAULT_EXPIRES_IN, FailReason, Finished, MAX_DEVICE_COMMAND_PAGE, REDELIVER_AFTER,
+};
 use jt_pg::{PgUnitOfWork, TenantTx};
 use jt_testkit::TestDb;
 use jt_testkit::devices_contract::{BRIDGE, at, done, enqueue, get, ids, lease, phone, tap};
@@ -115,6 +117,13 @@ async fn list_is_newest_first_and_bounded() {
 }
 
 #[tokio::test]
+async fn list_leaves_the_results_out() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_contract::list_leaves_the_results_out(uow).await;
+}
+
+#[tokio::test]
 async fn rows_are_workspace_scoped() {
     let db = TestDb::new().await;
     let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
@@ -161,6 +170,20 @@ async fn device_files_are_recorded_once_and_found_in_their_workspace() {
     let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
     jt_testkit::devices_contract::device_files_are_recorded_once_and_found_in_their_workspace(uow)
         .await;
+}
+
+#[tokio::test]
+async fn expire_due_takes_the_oldest_up_to_the_limit() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_contract::expire_due_takes_the_oldest_up_to_the_limit(uow).await;
+}
+
+#[tokio::test]
+async fn expired_device_files_are_found_and_deleted() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::devices_contract::expired_device_files_are_found_and_deleted(uow).await;
 }
 
 /// Two polls open at once, each picking one command, are handed different ones: a command one
@@ -260,7 +283,9 @@ async fn expire_due_passes_over_a_held_command() {
     let mut sweep = uow.tenant(f.ws).await.unwrap();
     let swept = tokio::time::timeout(
         StdDuration::from_secs(5),
-        sweep.device_commands().expire_due(at(10)),
+        sweep
+            .device_commands()
+            .expire_due(at(10), MAX_DEVICE_COMMAND_PAGE),
     )
     .await
     .expect("the sweep does not wait for the held command")
@@ -273,7 +298,11 @@ async fn expire_due_passes_over_a_held_command() {
     drop(holder);
 
     let mut sweep = uow.tenant(f.ws).await.unwrap();
-    let swept = sweep.device_commands().expire_due(at(11)).await.unwrap();
+    let swept = sweep
+        .device_commands()
+        .expire_due(at(11), MAX_DEVICE_COMMAND_PAGE)
+        .await
+        .unwrap();
     assert_eq!(
         swept.iter().map(|e| e.id).collect::<Vec<_>>(),
         vec![rows[0].id]

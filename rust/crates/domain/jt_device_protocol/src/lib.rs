@@ -100,8 +100,9 @@ pub const MAX_PHONES: usize = 16;
 pub const MAX_FEATURES: usize = 64;
 /// The most characters in one feature name.
 pub const MAX_FEATURE_CHARS: usize = 64;
-/// The most pixels along either side of a phone's screen.
-pub const MAX_SCREEN_PX: u32 = 20_000;
+/// The most pixels along either side of a phone's screen (`jt_devices`', which also holds a
+/// command's coordinates to it).
+pub use jt_devices::MAX_SCREEN_PX;
 /// The [`RefusedPhone::reason`] of a phone that was retired and is still plugged in. Unlike any
 /// other refusal it is final: a bridge stops listing the phone until it restarts.
 pub const PHONE_RETIRED: &str = "phone_retired";
