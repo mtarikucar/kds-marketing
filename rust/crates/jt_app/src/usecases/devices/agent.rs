@@ -26,8 +26,9 @@
 //! (`DeviceCommand::validate`, `VALIDATION` naming the field); for a `push_file`, that its file is
 //! stored (`VALIDATION` naming `file_id`, `details.reason = "file_not_found"`); that the phone is
 //! one of the workspace's (`NOT_FOUND`), not retired (`CONFLICT`, `details.reason =
-//! "phone_retired"`) and online ([`online`]: a registration within [`ONLINE_FOR`] that lists it,
-//! else `CONFLICT`, `details.reason = "device_offline"`); and that the phone's bridge lists what
+//! "phone_retired"`) and online ([`online`]: verified by a registration within its kind's
+//! heartbeat that lists it, else `CONFLICT`, `details.reason = "device_offline"`); and that the
+//! phone's bridge lists what
 //! the command needs (`jt_devices::required_features`): a kind it does not run is `VALIDATION` with
 //! `details.reason = "unsupported_by_bridge"` and the `kind`, text outside ASCII without
 //! `text.unicode` is `VALIDATION` with `details.reason = "unicode_unsupported"` and the
@@ -55,7 +56,7 @@ use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-use super::bridge::{HELD_FOR, device_of, features_of, is_listed};
+use super::bridge::{device_of, features_of, is_listed};
 use super::{PHONE_KIND, signal_key};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -75,10 +76,6 @@ pub use jt_device_protocol::MAX_SCREEN_PX;
 /// `wait_s` waits. Below the bridge's own long-poll (`bridge::MAX_WAIT_S`, 25), so a tool call
 /// answers well within an MCP client's patience.
 pub const MAX_WAIT_S: u32 = 20;
-/// How long a phone counts as online after the last registration that listed it: the spec's
-/// stale clock for a bridge (four missed heartbeats), as long as a bridge holds a phone it stopped
-/// registering.
-pub const ONLINE_FOR: Duration = HELD_FOR;
 /// How long the address of a file a result names (a screenshot, a pulled file) lives in an
 /// answer.
 pub const FILE_URL_LIFETIME: Duration = Duration::minutes(10);
@@ -225,14 +222,14 @@ pub struct LoggedCommand {
 // Phones
 // ---------------------------------------------------------------------------------------------
 
-/// Whether phone `c` takes a command at `now`: verified (not retired, not marked unreachable), by
-/// a registration at most [`ONLINE_FOR`] ago, of the bridge that holds it and still lists it. A
-/// phone its bridge leaves out of its latest registration (a stuck phone, one unplugged) is not
-/// online, however recent that registration.
+/// Whether phone `c` takes a command at `now`: it reads verified at `now` (`effective_status`: not
+/// retired, not marked unreachable, and registered within its kind's heartbeat, the `phone`
+/// kind's `stale_after`, a minute, as long as a bridge holds a phone it stopped registering),
+/// and the bridge that holds it still lists it. A phone its bridge leaves out of its latest
+/// registration (a stuck phone, one unplugged) is not online, however recent that registration.
+/// Only a registration moves its verification: `capability.verify` refuses a phone.
 pub fn online(c: &Capability, now: OffsetDateTime) -> bool {
-    c.status == StoredStatus::Verified
-        && c.last_verified_at.is_some_and(|at| now - at <= ONLINE_FOR)
-        && is_listed(c)
+    effective_status(c, now) == EffectiveStatus::Verified && is_listed(c)
 }
 
 /// The string fact `key` of phone `c`'s `connector_public.device`.

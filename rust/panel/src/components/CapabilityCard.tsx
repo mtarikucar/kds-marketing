@@ -63,11 +63,14 @@ export function policySummary(t: TFunction, language: string, policy: Policy): s
   return lines;
 }
 
+/** The kinds verified only by their bridge's registrations (`jt_capability`'s heartbeat kinds). */
+const HEARTBEAT_KINDS = new Set(['voice_bridge', 'phone']);
+
 /**
  * One capability: name, kind, how it is reached, its effective status, last verification, policy,
  * the budget items it spends from and the groups it is in. Actions show only for someone who may
  * take them, and never on a retired capability; a connector is verified by its probe, a voice
- * bridge by its own registration, neither here.
+ * bridge or a phone by its bridge's registrations, neither here.
  */
 export function CapabilityCard({
   item,
@@ -103,6 +106,7 @@ export function CapabilityCard({
   const retired = c.status === 'retired';
   const mutable = canManage && !retired;
   const bridge = c.kind_key === 'voice_bridge';
+  const byHeartbeat = HEARTBEAT_KINDS.has(c.kind_key);
   const connection = c.reach === 'connector' && !retired && providerOf(c.kind_key) !== null;
   const connecting = onConnector ? connectorActions(item, canManage, canProbe) : [];
   const budgetName = (id: string) => budgetItems.find((b) => b.item.id === id)?.item.name ?? id;
@@ -214,7 +218,7 @@ export function CapabilityCard({
         )}
         {mutable && (
           <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
-            {c.reach !== 'connector' && !bridge && (
+            {c.reach !== 'connector' && !byHeartbeat && (
               <Button size="sm" onClick={() => onAction('verify', item)}>
                 {t('capabilities.actions.verify')}
               </Button>

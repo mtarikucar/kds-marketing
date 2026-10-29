@@ -89,9 +89,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.verify",
             description: "Mark a capability verified on your evidence: for your own \
                           agent/device capabilities; connectors are verified by their probe, \
-                          and a voice bridge by its own registration. Your own are those you declared through this connection; verifying \
+                          and a voice bridge or a phone only by its bridge's registration. Your own are those you declared through this connection; verifying \
                           one another connection or a person declared needs \
-                          capabilities.manage. evidence.text says what you ran or saw (the adb devices line, the \
+                          capabilities.manage. evidence.text says what you ran or saw (the command's output, the \
                           printer's status page); evidence.refs may name what backs it (a \
                           serial number, a file or screenshot id). The evidence is recorded as \
                           your claim and never checked; the verification lasts the policy's \

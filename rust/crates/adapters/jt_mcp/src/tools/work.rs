@@ -25,6 +25,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           {number}}. Each item has a kind (consult_strategy, approve_strategy, \
                           verify_capability with capability_id, name and stale, \
                           connect_connector and reconnect_connector with capability_id and name, \
+                          voice_bridge_offline and phone_offline with capability_id, name and \
+                          last_seen_at (its bridge does not report it: no evidence verifies it), \
                           inbound_events with count (up to 1000: unacknowledged events to read \
                           with jeeta.events.pending; listed only to a key that may acknowledge \
                           them, with capabilities.manage), declare_first_capability), a priority \

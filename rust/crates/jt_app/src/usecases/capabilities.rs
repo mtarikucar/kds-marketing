@@ -505,10 +505,11 @@ async fn update_with_hosts(
 /// The evidence is checked (`validate_evidence`; gaps are `VALIDATION` with `details.gaps`) and
 /// stored as given, never checked against the world. An unknown id is `NOT_FOUND`; a capability
 /// reached through a connector is `CONFLICT` "connector capabilities are verified by their
-/// probe", a voice bridge `CONFLICT` "a voice bridge is verified by its heartbeat" (its own
-/// registration, `calls.bridge.register`); a retired one `CONFLICT` "capability is retired"; then
-/// an agent verifying what
-/// another connection declared without `capabilities.manage` is `FORBIDDEN` naming it. Writes
+/// probe"; one of a kind verified by its heartbeat (a voice bridge, by its own registration,
+/// `calls.bridge.register`; a phone, by its device bridge's, `devices.bridge.register`) is
+/// `CONFLICT` naming its kind, with `details.reason = "verified_by_heartbeat"`; a retired one
+/// `CONFLICT` "capability is retired"; then an agent verifying what another connection declared
+/// without `capabilities.manage` is `FORBIDDEN` naming it. Writes
 /// `capability.verify` (payload `evidence_refs`: how many references the evidence has; never
 /// its text).
 pub async fn verify(
@@ -537,9 +538,17 @@ pub async fn verify(
         ));
     }
     if capability.kind().is_some_and(|k| k.heartbeat().is_some()) {
-        return Err(AppError::conflict(
-            "a voice bridge is verified by its heartbeat",
-        ));
+        return Err(AppError {
+            code: ErrorCode::Conflict,
+            message: format!(
+                "a {} capability is verified only by its bridge's heartbeat, never by evidence",
+                capability.kind_key
+            ),
+            details: json!({
+                "reason": "verified_by_heartbeat",
+                "kind_key": capability.kind_key,
+            }),
+        });
     }
     not_retired(&capability)?;
     let declared_here = ctx.agent_connection_id.is_some()
