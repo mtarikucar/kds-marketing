@@ -11,6 +11,7 @@ mod fence;
 mod ids;
 mod mask;
 mod opening;
+mod phrases;
 mod plan;
 mod policy;
 mod session;
@@ -21,6 +22,7 @@ pub use fence::{FenceInput, RelationshipEvidence, fence_call};
 pub use ids::{CallCommandId, CallId};
 pub use mask::mask_e164;
 pub use opening::{TRANSCRIPT_NOTICE, disclosure, genitive, inbound_greeting, outbound_opening};
+pub use phrases::{BridgePhrases, PhraseSet};
 pub use plan::{
     CallPlan, MAX_CALL_DURATION_S, MAX_FALLBACK_LINES, MAX_HOLDING_LINES, MAX_LINE_CHARS, PlanError,
 };
