@@ -72,3 +72,84 @@ fn a_trace_reads_tolerantly() {
     assert_eq!(t.endpoint_by, None);
     assert_eq!(t.first_audio_ms, None);
 }
+
+// Added in the A2 fix-up: the thresholds are strict (a p95 exactly at the limit is no alert).
+
+#[test]
+fn a_p95_exactly_at_a_limit_raises_no_alert_and_one_millisecond_over_does() {
+    assert_eq!(
+        (
+            PERCEIVED_P95_ALERT_MS,
+            CONTENT_P95_ALERT_MS,
+            BARGE_IN_P95_ALERT_MS
+        ),
+        (1_000, 3_000, 300)
+    );
+    let mut at = turn(Some(1_000), Some(3_000));
+    at.barge_in_stop_ms = Some(300);
+    let s = summarize(&[at], &[]);
+    assert_eq!(s.perceived.p95, Some(1_000));
+    assert_eq!(s.content.p95, Some(3_000));
+    assert_eq!(s.barge_in_stop.p95, Some(300));
+    assert!(s.alerts.is_empty(), "{:?}", s.alerts);
+
+    let mut over = turn(Some(1_001), Some(3_001));
+    over.barge_in_stop_ms = Some(301);
+    assert_eq!(
+        summarize(&[over], &[]).alerts,
+        [
+            "perceived_p95_over_1s",
+            "content_p95_over_3s",
+            "barge_in_p95_over_300ms"
+        ]
+    );
+}
+
+#[test]
+fn each_alert_is_raised_on_its_own_measure_only() {
+    // Perceived is the smaller of the acknowledgement and the reply, so a slow reply behind a
+    // quick acknowledgement alerts on content alone.
+    let quick_ack_slow_reply = turn(Some(500), Some(3_500));
+    assert_eq!(
+        summarize(&[quick_ack_slow_reply], &[]).alerts,
+        ["content_p95_over_3s"]
+    );
+    // A turn with no sound at all alerts on nothing: there is nothing to measure.
+    assert!(summarize(&[turn(None, None)], &[]).alerts.is_empty());
+}
+
+#[test]
+fn the_p95_of_twenty_turns_ignores_only_the_worst_one() {
+    let slow = |ms| turn(Some(ms), Some(ms));
+    let mut traces = vec![slow(600); 19];
+    traces.push(slow(5_000));
+    let s = summarize(&traces, &[]);
+    assert_eq!(s.perceived.p95, Some(600));
+    assert!(s.alerts.is_empty(), "{:?}", s.alerts);
+    traces[18] = slow(5_000);
+    let s = summarize(&traces, &[]);
+    assert_eq!(s.perceived.p95, Some(5_000));
+    assert_eq!(s.alerts, ["perceived_p95_over_1s", "content_p95_over_3s"]);
+}
+
+#[test]
+fn nearest_rank_is_the_smallest_rank_covering_the_share_for_every_size() {
+    // Pinned against the definition itself (the smallest k with k / n >= q), not against a
+    // formula: no rounding of a float product may move a rank by one.
+    for n in 1..=400_u32 {
+        let p = percentiles(1..=n);
+        let smallest = |num: u32, den: u32| (1..=n).find(|k| k * den >= num * n).unwrap();
+        assert_eq!(p.n, n);
+        assert_eq!(p.p50, Some(smallest(50, 100)), "n = {n}");
+        assert_eq!(p.p95, Some(smallest(95, 100)), "n = {n}");
+    }
+    assert_eq!(percentiles(1..=20).p95, Some(19));
+    assert_eq!(percentiles(1..=40).p95, Some(38));
+    assert_eq!(percentiles(1..=21).p95, Some(20));
+}
+
+#[test]
+fn percentiles_ignore_input_order_and_keep_duplicates() {
+    let p = percentiles([5, 1, 5, 5, 1, 9]);
+    assert_eq!((p.n, p.p50, p.p95), (6, Some(5), Some(9)));
+}

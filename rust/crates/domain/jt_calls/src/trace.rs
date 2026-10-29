@@ -1,7 +1,9 @@
 //! What one caller turn took, as the voice bridge measured it (design addendum
 //! `2026-10-29-voice-sidecar-free-path-design.md` §7), and the percentiles of a call's turns. Every
-//! offset is in milliseconds from the caller's end of speech (the last voiced 20 ms frame), on the
-//! bridge's monotonic clock. Numbers only: a trace never carries a word or a number dialled.
+//! field is an offset in milliseconds from the caller's end of speech (the last voiced 20 ms
+//! frame), on the bridge's monotonic clock, except `barge_in_stop_ms`: a duration from the caller's
+//! onset (the first voiced frame of the interruption) to the agent's voice stopping. Numbers only:
+//! a trace never carries a word or a number dialled.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +26,7 @@ pub enum EndpointBy {
     Fallback,
 }
 
-/// The timings of one caller turn (offsets from the end of speech).
+/// The timings of one caller turn (offsets from the end of speech, bar `barge_in_stop_ms`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TurnTrace {
@@ -43,7 +45,8 @@ pub struct TurnTrace {
     pub first_audio_ms: Option<u32>,
     /// The first frame of a phrase the bridge played on its own (acknowledgement, filler).
     pub ack_ms: Option<u32>,
-    /// When the caller cut the reply: from the caller's onset to the agent's voice stopping.
+    /// When the caller cut the reply: a duration from the caller's onset (not from the end of
+    /// speech) to the agent's voice stopping.
     pub barge_in_stop_ms: Option<u32>,
     /// The caller cut the reply with words that were only acknowledgement ("hı hı", "evet").
     pub backchannel_cut: bool,
@@ -73,21 +76,22 @@ pub struct Percentiles {
     pub p95: Option<u32>,
 }
 
-/// The nearest-rank percentiles of `values`.
+/// The nearest-rank percentiles of `values`: the value at rank `ceil(q * n)`, worked out in
+/// integers so that no rounding of a float product can move a rank by one.
 pub fn percentiles(values: impl IntoIterator<Item = u32>) -> Percentiles {
     let mut v: Vec<u32> = values.into_iter().collect();
     v.sort_unstable();
-    let rank = |q: f64| -> Option<u32> {
+    let rank = |percent: usize| -> Option<u32> {
         if v.is_empty() {
             return None;
         }
-        let k = (q * v.len() as f64).ceil() as usize;
+        let k = (percent * v.len()).div_ceil(100);
         v.get(k.clamp(1, v.len()) - 1).copied()
     };
     Percentiles {
         n: u32::try_from(v.len()).unwrap_or(u32::MAX),
-        p50: rank(0.5),
-        p95: rank(0.95),
+        p50: rank(50),
+        p95: rank(95),
     }
 }
 
