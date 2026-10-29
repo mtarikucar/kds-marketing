@@ -36,6 +36,6 @@ pub use session::{
 };
 pub use timers::{CLOSING_GRACE_S, MAX_RING_S, TimerAction, apply_timer, next_timer};
 pub use trace::{
-    BARGE_IN_P95_ALERT_MS, CONTENT_P95_ALERT_MS, EndpointBy, LatencySummary, MAX_TRACES,
-    PERCEIVED_P95_ALERT_MS, Percentiles, TurnTrace, percentiles, summarize,
+    AgentReply, BARGE_IN_P95_ALERT_MS, CONTENT_P95_ALERT_MS, EndpointBy, LatencySummary,
+    MAX_TRACES, PERCEIVED_P95_ALERT_MS, Percentiles, TurnTrace, percentiles, summarize,
 };
