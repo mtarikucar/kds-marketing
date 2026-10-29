@@ -197,3 +197,122 @@ describe('withAdvisoryXactLock — heartbeat', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+/**
+ * The lock slots.
+ *
+ * A lock pins a pooled connection for its whole body, and the body queries the
+ * same pool — so with as many locks open as the pool has connections, every body
+ * waits forever for a connection only another body can free. CI's pool is 5 and
+ * every :X0 tick starts eleven locked crons; the app stalled for the full
+ * pool_timeout each time, and whichever realdb suite was mid-query went red.
+ * test/e2e/advisory-lock-pool.realdb.e2e-spec.ts shows it on a real pool. Here:
+ * the cap itself, and that a slot is always given back.
+ */
+describe('lock slots', () => {
+  const makePooledPrisma = (poolSize: number) => {
+    const tx = { $queryRaw: jest.fn().mockResolvedValue([{ locked: true }]) };
+    const state = { open: 0, maxOpen: 0 };
+    return {
+      poolSize,
+      state,
+      $transaction: jest.fn().mockImplementation(async (cb: (t: typeof tx) => Promise<void>) => {
+        state.open += 1;
+        state.maxOpen = Math.max(state.maxOpen, state.open);
+        try {
+          return await cb(tx);
+        } finally {
+          state.open -= 1;
+        }
+      }),
+      cronHeartbeat: { upsert: jest.fn().mockResolvedValue({}) },
+    };
+  };
+  const gate = () => {
+    let open!: () => void;
+    const shut = new Promise<void>((resolve) => (open = resolve));
+    return { shut, open };
+  };
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  it.each([
+    ['withAdvisoryLock', withAdvisoryLock],
+    ['withAdvisoryXactLock', withAdvisoryXactLock],
+  ] as const)(
+    '%s never holds more lock transactions open than half the pool, and still runs every job',
+    async (_, lock) => {
+      const prisma = makePooledPrisma(5);
+      const { shut, open } = gate();
+      const ran: number[] = [];
+
+      const jobs = Array.from({ length: 11 }, (_, i) =>
+        lock(prisma as any, `tick-job-${i}`, async () => {
+          await shut;
+          ran.push(i);
+        }),
+      );
+      await settle();
+
+      // Two transactions pinned, three connections left for their bodies.
+      expect(prisma.state.open).toBe(2);
+
+      open();
+      await Promise.all(jobs);
+      expect(prisma.state.maxOpen).toBe(2);
+      expect(ran).toHaveLength(11);
+    },
+  );
+
+  it('counts both helpers against the same pool', async () => {
+    const prisma = makePooledPrisma(4);
+    const { shut, open } = gate();
+
+    const jobs = [
+      withAdvisoryLock(prisma as any, 'cron-a', () => shut),
+      withAdvisoryXactLock(prisma as any, 'routine-b', () => shut),
+      withAdvisoryLock(prisma as any, 'cron-c', () => shut),
+    ];
+    await settle();
+
+    expect(prisma.state.open).toBe(2);
+    open();
+    await Promise.all(jobs);
+  });
+
+  it('gives the slot back when the body throws', async () => {
+    const prisma = makePooledPrisma(2);
+
+    await expect(
+      withAdvisoryLock(prisma as any, 'boom', async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+
+    // One slot in all: a leaked one would park this job forever.
+    const run = jest.fn().mockResolvedValue(undefined);
+    await withAdvisoryLock(prisma as any, 'next', run);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the slot back when the transaction never starts', async () => {
+    const prisma = makePooledPrisma(2);
+    prisma.$transaction.mockRejectedValueOnce(new Error('Unable to start a transaction in the given time.'));
+
+    await expect(withAdvisoryXactLock(prisma as any, 'starved', async () => undefined)).rejects.toThrow(
+      'Unable to start a transaction',
+    );
+
+    const run = jest.fn().mockResolvedValue(undefined);
+    await withAdvisoryXactLock(prisma as any, 'next', run);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('still lets one lock through on a pool too small to halve', async () => {
+    const prisma = makePooledPrisma(1);
+    const run = jest.fn().mockResolvedValue(undefined);
+
+    await withAdvisoryLock(prisma as any, 'tiny-pool', run);
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});

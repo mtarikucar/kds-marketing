@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { AnthropicService } from '../../src/modules/marketing/ai/anthropic.service';
 import { AiCreditsService } from '../../src/modules/marketing/ai/ai-credits.service';
@@ -68,6 +69,25 @@ describeRealDb('AI reply pre-flight — real DB (e2e)', () => {
       });
     }));
     engine = app.get(ConversationAiEngineService);
+
+    // Silence every cron. The scheduler is real in this process and fires on
+    // the wall clock, so what it does mid-spec depends on when the spec runs:
+    //  - on 2026-10-29 a :X0 tick's locked crons took CI's whole pool of 5 and
+    //    `reply()` died in message.create on a pool timeout (P2024). The locks
+    //    no longer starve the pool, but the ticks still compete with this spec
+    //    for it.
+    //  - the hourly ai-reply-backfill enrols any OPEN thread whose customer
+    //    spoke last on a channel with an agent — the conversation seeded below —
+    //    and the job runner answers it through this same engine, whose model is
+    //    the `complete` double these assertions read call by call.
+    const scheduler = app.get(SchedulerRegistry);
+    for (const [, cron] of scheduler.getCronJobs()) {
+      try {
+        (cron as { stop?: () => void }).stop?.();
+      } catch {
+        /* a cron that will not stop is not this spec's problem to fix */
+      }
+    }
 
     await prisma.workspace.create({
       data: {

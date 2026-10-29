@@ -5,6 +5,7 @@ import {
   OnModuleDestroy,
 } from "@nestjs/common";
 import { PrismaClient } from "@prisma/client";
+import { poolSizeFor } from "./pool-size";
 
 @Injectable()
 export class PrismaService
@@ -12,6 +13,10 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(PrismaService.name);
+
+  /** Connections in this client's pool. The cron locks size themselves
+   *  against it — see common/scheduling/advisory-lock.ts. */
+  readonly poolSize: number;
 
   constructor() {
     // v2.8.97 — query log is gated on an EXPLICIT env flag rather than
@@ -26,14 +31,16 @@ export class PrismaService
     const enableQueryLogs =
       process.env.PRISMA_LOG_QUERIES === "true" &&
       process.env.NODE_ENV !== "production";
+    const url = process.env.DATABASE_URL;
     super({
       datasources: {
         db: {
-          url: process.env.DATABASE_URL,
+          url,
         },
       },
       log: enableQueryLogs ? ["query", "error", "warn"] : ["error", "warn"],
     });
+    this.poolSize = poolSizeFor(url);
   }
 
   async onModuleInit() {
