@@ -2,9 +2,9 @@
 use jt_devices::{
     CommandError, CommandStatus, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason,
     LifecycleError, LifecycleEvent, MAX_APP_ID_CHARS, MAX_ARG_CHARS, MAX_ELEMENTS,
-    MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS, MAX_SWIPE_MS,
-    MAX_TEXT_CHARS, MAX_URL_CHARS, Observation, Platform, Screen, TEXT_UNICODE, next_status,
-    required_features, supports,
+    MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SCREEN_PX, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS,
+    MAX_SWIPE_MS, MAX_TEXT_CHARS, MAX_URL_CHARS, Observation, Platform, Screen, TEXT_UNICODE,
+    next_status, required_features, supports,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -380,6 +380,41 @@ fn bounds_are_checked() {
     // A lone space is something to type.
     assert_eq!(text(" ").validate(), Ok(()));
 
+    // Coordinates: on a screen, at most MAX_SCREEN_PX along either side.
+    assert_eq!(
+        invalid(&DeviceCommand::Tap {
+            x: MAX_SCREEN_PX + 1,
+            y: 0
+        }),
+        "x"
+    );
+    assert_eq!(
+        invalid(&DeviceCommand::LongPress {
+            x: 0,
+            y: MAX_SCREEN_PX + 1,
+            ms: 1
+        }),
+        "y"
+    );
+    assert_eq!(
+        invalid(&DeviceCommand::Swipe {
+            x1: 0,
+            y1: 0,
+            x2: 0,
+            y2: MAX_SCREEN_PX + 1,
+            ms: 1
+        }),
+        "y2"
+    );
+    assert_eq!(
+        DeviceCommand::Tap {
+            x: MAX_SCREEN_PX,
+            y: MAX_SCREEN_PX
+        }
+        .validate(),
+        Ok(())
+    );
+
     // Swipe: 1..=5000 ms.
     let swipe = |ms| DeviceCommand::Swipe {
         x1: 0,
@@ -527,14 +562,22 @@ fn commands_without_bounds_validate() {
     for (command, _) in every_kind() {
         assert_eq!(command.validate(), Ok(()), "{command:?}");
     }
-    // Coordinates are the device's to bound: the vocabulary does not know the screen.
+    // A coordinate is bounded by the largest screen a bridge reports, not by the phone's own
+    // screen, which the vocabulary does not know: a tap beyond it is the phone's to refuse.
     assert_eq!(
         DeviceCommand::Tap {
-            x: u32::MAX,
-            y: u32::MAX
+            x: MAX_SCREEN_PX,
+            y: MAX_SCREEN_PX
         }
         .validate(),
         Ok(())
+    );
+    assert_eq!(
+        invalid(&DeviceCommand::Tap {
+            x: u32::MAX,
+            y: u32::MAX
+        }),
+        "x"
     );
 }
 

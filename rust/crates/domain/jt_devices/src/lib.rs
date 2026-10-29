@@ -35,8 +35,8 @@ mod observation;
 
 pub use command::{
     CommandError, DeviceCommand, DeviceKey, ElementTarget, MAX_APP_ID_CHARS, MAX_ARG_CHARS,
-    MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS, MAX_SWIPE_MS,
-    MAX_TEXT_CHARS, MAX_URL_CHARS,
+    MAX_LONG_PRESS_MS, MAX_PATH_CHARS, MAX_SCREEN_PX, MAX_SHELL_ARGS, MAX_SHELL_TOTAL_CHARS,
+    MAX_SWIPE_MS, MAX_TEXT_CHARS, MAX_URL_CHARS,
 };
 pub use features::{Platform, TEXT_UNICODE, required_features, supports};
 pub use lifecycle::{

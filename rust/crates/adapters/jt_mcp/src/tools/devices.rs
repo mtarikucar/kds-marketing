@@ -78,9 +78,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           device_offline), queued (no bridge has taken it yet) or leased (the \
                           phone is running it) when the wait ended first: follow it with \
                           jeeta.devices.command_get. A command no bridge takes within 5 \
-                          minutes expires. Once a command is queued the answer is always that \
-                          command, never an error, so an error means nothing was queued. \
-                          Refused before anything is queued: VALIDATION with \
+                          minutes expires; one expired with leased_at set was handed to the \
+                          phone and may still finish: check it with jeeta.devices.command_get \
+                          before running it again. Once a command is queued the answer is that \
+                          command: an error answer means nothing was queued; after a dropped \
+                          connection, check jeeta.devices.commands. Refused before anything is \
+                          queued: VALIDATION with \
                           details.field for a bound, with details.reason unsupported_by_bridge \
                           (details.kind: the phone's bridge does not run it) or \
                           unicode_unsupported (text outside ASCII without text.unicode: install \
@@ -98,6 +101,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           jeeta.devices.observe), waiting up to wait_s seconds (at most 20, 20 \
                           when left out, 0 answers at once) for it to end; answers at once when \
                           it has ended. A queued or leased command is not done yet: ask again. \
+                          A command expired with leased_at set was handed to the phone and may \
+                          still finish (its result then replaces expired): check it again \
+                          before running it again. \
                           Returns {command_id, capability_id, kind, command, status, attempts, \
                           result, reason, detail, file_url, requested_by, created_at, \
                           expires_at, leased_at, done_at}. [risk: READ]",

@@ -927,6 +927,62 @@ async fn an_unfinished_command_past_its_expiry_reads_expired() {
 }
 
 #[tokio::test]
+async fn a_leased_command_past_its_expiry_reads_leased_until_it_ends() {
+    let (w, key, p, agent) = rig().await;
+    let id = agent::act(&w.deps, &agent, p, input(tap(), 0))
+        .await
+        .unwrap()
+        .command_id;
+    // A bridge took it: the phone may run it past its expiry.
+    let b = bridge_at(&key, FIXED_NOW);
+    let query = CommandsQuery {
+        wait_s: 0,
+        limit: 20,
+    };
+    assert_eq!(
+        bridge::commands(&w.deps, &b, query)
+            .await
+            .unwrap()
+            .commands
+            .len(),
+        1
+    );
+    let after = at(
+        &agent,
+        FIXED_NOW + DEFAULT_EXPIRES_IN + Duration::seconds(30),
+    );
+    let out = agent::command_get(&w.deps, &after, id, WaitQuery { wait_s: Some(0) })
+        .await
+        .unwrap();
+    assert_eq!(out.status, CommandStatus::Leased);
+    assert!(out.leased_at.is_some());
+    let log = agent::commands(&w.deps, &after, p, LogQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(log[0].status, CommandStatus::Leased);
+    // Its result, when it comes, is the answer.
+    bridge::results(
+        &w.deps,
+        &bridge_at(&key, FIXED_NOW + DEFAULT_EXPIRES_IN + Duration::seconds(40)),
+        ResultsIn {
+            results: vec![ResultIn {
+                command_id: id,
+                outcome: Outcome::Done {
+                    result: CommandResult::Done {},
+                },
+                duration_ms: 330_000,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    let out = agent::command_get(&w.deps, &after, id, WaitQuery { wait_s: Some(0) })
+        .await
+        .unwrap();
+    assert_eq!(out.status, CommandStatus::Done);
+}
+
+#[tokio::test]
 async fn another_workspaces_phone_and_file_are_not_found() {
     let (w, key, p, _) = rig().await;
     let (beta, beta_owner) = w.other_workspace().await;

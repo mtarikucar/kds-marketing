@@ -11,8 +11,11 @@
 //! what an absent `wait_s` waits; 0 answers at once. A result its bridge reports wakes the wait at
 //! once (the devices' signals, [`super::signal_key`]); one another server instance applied is seen
 //! within `kernel::FALLBACK_TICK`. A command no bridge took within
-//! `jt_devices::DEFAULT_EXPIRES_IN` (five minutes) is never handed out: it reads `expired` from
-//! then on, even before the expiry sweep ends it.
+//! `jt_devices::DEFAULT_EXPIRES_IN` (five minutes) is never handed out: one still `queued` reads
+//! `expired` from then on, even before the expiry sweep ends it. One a bridge took (`leased`)
+//! reads as it stands until the sweep ends it: the phone may still be running it, and its result,
+//! when it comes, is applied even after the sweep (`expired` with `leased_at` set may still end
+//! `done` or `failed`: check it before queuing it again).
 //!
 //! **Once a command is queued, [`act`] answers it.** Whatever goes wrong while it waits (a read
 //! that fails), the answer is the command as queued, never an error: an agent that took an error
@@ -523,10 +526,17 @@ async fn current(
     Ok(row)
 }
 
-/// Whether command `row` has ended at `now`: its status is final, or it was never finished and
-/// its expiry has passed (the expiry sweep, which writes that, may not have run yet).
+/// Whether command `row` has ended at `now`: its status is final, or it is still `queued` and its
+/// expiry has passed (no bridge will be handed it; the expiry sweep, which writes that, may not
+/// have run yet). A `leased` command past its expiry has not ended: its phone may still be running
+/// it.
 fn over(row: &DeviceCommandRow, now: OffsetDateTime) -> bool {
-    row.status.is_final() || row.expires_at <= now
+    row.status.is_final() || expired_in_queue(row, now)
+}
+
+/// Whether command `row` is still `queued` at `now` while its expiry has passed.
+fn expired_in_queue(row: &DeviceCommandRow, now: OffsetDateTime) -> bool {
+    row.status == CommandStatus::Queued && row.expires_at <= now
 }
 
 /// Command `id` once it has ended at `now` ([`over`]), `None` before.
@@ -578,10 +588,11 @@ async fn settle(
     Ok(row)
 }
 
-/// The status command `row` reads at `now`: as stored, except that one never finished whose expiry
-/// has passed reads `expired` (no bridge is handed it any more), before the expiry sweep writes it.
+/// The status command `row` reads at `now`: as stored, except that one still `queued` whose
+/// expiry has passed reads `expired` (no bridge is handed it any more), before the expiry sweep
+/// writes it. A `leased` one reads `leased` until the sweep ends it.
 fn status_at(row: &DeviceCommandRow, now: OffsetDateTime) -> CommandStatus {
-    if !row.status.is_final() && row.expires_at <= now {
+    if expired_in_queue(row, now) {
         CommandStatus::Expired
     } else {
         row.status
@@ -658,7 +669,7 @@ async fn answer(
         return view(row, None, now);
     };
     let expires_at = deps.clock.now() + FILE_URL_LIFETIME;
-    let url = match deps.files.provider_url(ws, FileId(file), expires_at).await {
+    let url = match deps.files.device_url(ws, FileId(file), expires_at).await {
         Ok(url) => Some(url.to_string()),
         Err(e) if e.code == ErrorCode::NotFound => {
             tracing::debug!(

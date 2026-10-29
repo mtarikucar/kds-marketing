@@ -140,9 +140,15 @@ fn tools_listed_with_schemas() {
         "unicode_unsupported",
         "device_offline",
         "ledger",
-        "never an error",
+        "an error answer means nothing was queued",
+        "after a dropped connection, check jeeta.devices.commands",
+        "expired with leased_at set",
     ] {
         assert!(act.contains(word), "{word}");
+    }
+    let get = tools["jeeta.devices.command_get"].description;
+    for word in ["expired with leased_at set", "may still finish"] {
+        assert!(get.contains(word), "{word}");
     }
 }
 

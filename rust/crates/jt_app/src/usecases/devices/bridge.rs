@@ -658,7 +658,7 @@ async fn hand_out(
                 let expires_at = now + DOWNLOAD_URL_LIFETIME;
                 match deps
                     .files
-                    .provider_url(ws, FileId(*file_id), expires_at)
+                    .device_url(ws, FileId(*file_id), expires_at)
                     .await
                 {
                     Ok(url) => Some(url.to_string()),
@@ -710,9 +710,15 @@ async fn hand_out(
     Ok(handed)
 }
 
-/// The lowercase hex SHA-256 of `result` as JSON text (`serde_json` writes an object's keys in
-/// order), which `devices.command.finished` carries as `result_sha256`: the result kept on the
-/// command can be checked against the ledger, whose entries are never changed.
+/// The lowercase hex SHA-256 of `result` as compact JSON text (`serde_json::to_vec`: no
+/// whitespace), every object's keys in sorted order at every depth, which
+/// `devices.command.finished` carries as `result_sha256`: the result kept on the command can be
+/// checked against the ledger, whose entries are never changed. To check one, read the command's
+/// result, write it the same way and hash it. The key order holds while `serde_json`'s
+/// `preserve_order` feature is off, as it is in this workspace (pinned by
+/// `result_sha256_hashes_compact_json_with_sorted_keys`): with it, keys would keep the order they
+/// were read in, and a result read back from Postgres (`jsonb` orders keys its own way) would hash
+/// otherwise.
 pub fn result_sha256(result: &Value) -> String {
     use sha2::{Digest, Sha256};
     let text = serde_json::to_vec(result).unwrap_or_default();
@@ -1017,4 +1023,37 @@ pub async fn files(
         "device file uploaded"
     );
     Ok(FileOut { file_id: id })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::result_sha256;
+
+    #[test]
+    fn result_sha256_hashes_compact_json_with_sorted_keys() {
+        use sha2::{Digest, Sha256};
+        let result = json!({
+            "stdout": "x",
+            "kind": "shell",
+            "exit_code": 0,
+            "nested": { "b": 1, "a": [2, 1] },
+        });
+        // Keys sorted at every depth, no whitespace: `serde_json` without `preserve_order`, which
+        // would keep the order above.
+        let text = r#"{"exit_code":0,"kind":"shell","nested":{"a":[2,1],"b":1},"stdout":"x"}"#;
+        assert_eq!(serde_json::to_string(&result).unwrap(), text);
+        let expected: String = Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(result_sha256(&result), expected);
+        // The same result read in another key order (as `jsonb` hands it back) hashes the same.
+        let reordered: Value = serde_json::from_str(
+            r#"{"stdout":"x","nested":{"b":1,"a":[2,1]},"exit_code":0,"kind":"shell"}"#,
+        )
+        .unwrap();
+        assert_eq!(result_sha256(&reordered), expected);
+    }
 }
