@@ -23,9 +23,12 @@ pub const MAX_PLAN_HOTWORDS: usize = MAX_HOTWORDS - 1;
 /// The script of an agent-driven call: the opening (which must carry the assistant disclosure
 /// when the policy asks for it), the goal (for the transcript, never played), 1 to 5 holding
 /// phrases played while the agent thinks, 0 to 3 fallback lines played when it stays silent, and
-/// the closing played before the server hangs up.
+/// the closing played before the server hangs up (the policy's when the plan brings none).
+///
+/// Stored tolerant: a field a later release added is passed over, so a stored session or a queued
+/// dial stays readable to an older release (a rollback) and to a bridge built before it. Strictness
+/// is the input's: `calls.place` refuses a field not in [`CallPlan::FIELDS`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct CallPlan {
     pub opening: String,
     pub goal: String,
@@ -113,6 +116,20 @@ pub(crate) fn line(text: &str, field: &'static str) -> Result<(), PlanError> {
 }
 
 impl CallPlan {
+    /// Every field of a plan, as `calls.place` accepts them (an input naming another is refused;
+    /// a stored plan reads whatever a later release added).
+    pub const FIELDS: [&'static str; 9] = [
+        "opening",
+        "goal",
+        "holding",
+        "fallback",
+        "closing",
+        "max_duration_s",
+        "language",
+        "disclose_assistant",
+        "hotwords",
+    ];
+
     /// The plan when every sentence can be played and its counts and duration are in bounds.
     pub fn validate(&self) -> Result<(), PlanError> {
         line(&self.opening, "plan.opening")?;

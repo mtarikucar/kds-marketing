@@ -109,12 +109,32 @@ pub struct PlaceInput {
     pub mode: PlaceMode,
     #[serde(default)]
     pub rep_extension: Option<String>,
-    #[serde(default)]
+    /// Read strictly ([`strict_plan`]): a field the plan does not have is refused.
+    #[serde(default, deserialize_with = "strict_plan")]
     pub plan: Option<CallPlan>,
     /// The capability the call goes through: a `netgsm_pbx` for a rep's call, a `voice_bridge`
     /// for an agent's; the workspace's only live one of the kind when left out.
     #[serde(default)]
     pub capability_id: Option<CapabilityId>,
+}
+
+/// The plan as `calls.place` takes it: a field the plan does not have is refused (``unknown field
+/// `plan.<key>` ``), though a stored plan reads tolerantly (`CallPlan::FIELDS`).
+fn strict_plan<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<CallPlan>, D::Error> {
+    let Some(raw) = Option::<Value>::deserialize(d)?.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    if let Some(unknown) = raw
+        .as_object()
+        .and_then(|o| o.keys().find(|k| !CallPlan::FIELDS.contains(&k.as_str())))
+    {
+        return Err(serde::de::Error::custom(format!(
+            "unknown field `plan.{unknown}`"
+        )));
+    }
+    serde_json::from_value(raw)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 /// A follow-up task `calls.end` opens on the journey.

@@ -123,3 +123,33 @@ fn a_plan_may_leave_its_closing_to_the_policy() {
     plan.closing = "x".repeat(601);
     assert!(plan.validate().is_err());
 }
+
+#[test]
+fn a_stored_plan_reads_a_field_a_later_release_added() {
+    let mut value = json!({
+        "opening": "Ada Hanım ile mi görüşüyorum?", "goal": "Randevuyu teyit etmek",
+        "holding": ["Bir saniye."], "max_duration_s": 60,
+    });
+    value["spoken_by"] = json!("a later release");
+    assert!(serde_json::from_value::<CallPlan>(value).is_ok());
+}
+
+#[test]
+fn the_plans_field_list_is_every_field_it_writes() {
+    let p: CallPlan = serde_json::from_value(json!({
+        "opening": "a", "goal": "b", "holding": ["c"], "fallback": ["d"], "closing": "e",
+        "max_duration_s": 60, "hotwords": ["Ada"],
+    }))
+    .unwrap();
+    let mut written: Vec<String> = serde_json::to_value(&p)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    written.sort();
+    let mut fields: Vec<String> = CallPlan::FIELDS.iter().map(|f| (*f).to_owned()).collect();
+    fields.sort();
+    assert_eq!(written, fields);
+}
