@@ -1,7 +1,10 @@
 # Messages and comments everywhere, phase 1: comments and marketplace questions in the inbox (Rust)
 
 Date: 2026-10-30. Status: draft for the owner's review. Changed 2026-10-30 by the owner's delegate:
-marketplace capabilities start with "requires human approval" off (D7, §3.7, §15 Q1).
+marketplace capabilities start with "requires human approval" off (D7, §3.7, §15 Q1); after the F1–F3
+review: the agent may answer a refused (`Rejected`) item once more, receipts are facts, live comments are
+fenced, `daily_ops_cap` counts outbox rows, held rows are refused at merge and erasure, the content checks
+read normalised text, and Hepsiburada's facts are those task H0 verified (§3, §4.1, §5.3, §6, §8.3, §12).
 
 Inputs: the research report `2026-10-30-social-messages-comments-research.md` (same folder; Turkish), the
 owner's direction of 2026-10-30 (messages and comments first; official APIs and existing services; the
@@ -98,7 +101,7 @@ answers, and the phone fallback (device bridge playbooks).
 | Instagram comment | `from.id` | `from.username` |
 | Facebook comment | `from.id`; when Meta omits `from` (V-M4): `c:<comment_id>` (a one-off person) | `from.name` |
 | Trendyol question | `customerId` (V-T4); without one: `q:<questionId>` (one-off) | `userName` only when `showUserName` is true, else empty |
-| Hepsiburada question | the buyer id the API gives (V-H2); without one: `q:<questionId>` | as the API gives, else empty |
+| Hepsiburada question | `customerId`, the customer's Hepsiburada GUID (H0); without one: `q:<issueNumber>` | as the API gives, else empty |
 | Amazon relay mail | the relay address (existing `Email` namespace) | the `From` display name without the " - Amazon Marketplace" suffix (V-A2) |
 
 - All go through `people::match_or_create` (spec §7.2: one matching function), `Source::Channel(<channel>)`
@@ -134,11 +137,12 @@ pub struct PublicItem {
     pub root_external_id: String,            // the thread's top-level comment (itself when top level)
     pub created_at: OffsetDateTime,          // provider clock, clamped like activity_at
     pub deadline: Option<OffsetDateTime>,    // provider-given (Hepsiburada expireDate)
-    pub private_reply_until: Option<OffsetDateTime>, // created_at + window, when the surface allows one
+    pub private_reply_until: Option<OffsetDateTime>, // public::private_reply_until(rules, created_at, live)
+    pub live: bool,                          // a live video's comment: no public reply (§3.5)
     pub answer: AnswerState,
     pub moderation: Moderation,
     pub private_reply_message_id: Option<MessageId>,
-    pub agent_replied: bool,
+    pub agent_answers: u8,                   // the agent's public answers received; MAX_AGENT_ANSWERS = 2
     pub checked_at: Option<OffsetDateTime>,  // last reconciliation against the provider
     pub updated_at: OffsetDateTime,
 }
@@ -148,7 +152,7 @@ pub enum AnswerState {
     Awaiting,
     Pending { message_id: MessageId },                 // our answer is in the platform's review (Trendyol)
     Answered { by: AnsweredBy, message_id: Option<MessageId>, at: OffsetDateTime },
-    Rejected { reason: String, at: OffsetDateTime },   // the platform refused our answer: owed again
+    Rejected { reason: String, message_id: Option<MessageId>, at: OffsetDateTime }, // refused: owed again
     Handled { by: EventSource, reason: HandledReason, at: OffsetDateTime },
     Expired { at: OffsetDateTime },
 }
@@ -159,6 +163,8 @@ pub enum Visibility { Public, Private }
 impl PublicItem {
     /// Owed a reply: Awaiting or Rejected, and Visible.
     pub fn awaiting(&self) -> bool;
+    /// agent_answers > 0.
+    pub fn agent_replied(&self) -> bool;
 }
 ```
 
@@ -182,9 +188,9 @@ impl PublicItem {
 
 | Event | From | To | Notes |
 |---|---|---|---|
-| `AnswerSent { message_id, moderated }` | Awaiting, Rejected | Pending (moderated surface) / Answered{Us} | receipt of a public reply or answer |
+| `AnswerSent { message_id, moderated }` | any | Pending (moderated surface) / Answered{Us}; an Answered item stays Answered | receipt of a public reply or answer: a fact, never refused (a Handled or Expired item answered by a late receipt becomes answered) |
 | `AnswerConfirmed` | Pending | Answered{Us} | provider shows our text published |
-| `AnswerRejected { reason }` | Pending | Rejected | Trendyol refused our answer; owed again |
+| `AnswerRejected { reason }` | Pending | Rejected (keeps the answer's message) | Trendyol refused our answer; owed again, the agent may answer once more |
 | `AnsweredElsewhere { at }` | Awaiting, Rejected, Pending | Answered{Elsewhere} | answered outside Jeeta |
 | `MarkedHandled { by, reason }` | Awaiting, Rejected | Handled | `inbox.public.mark_handled` |
 | `Expired { at }` | Awaiting, Rejected | Expired | deadline passed or provider says expired |
@@ -192,26 +198,27 @@ impl PublicItem {
 | `Deleted` | Visible, Hidden | Deleted | by us |
 | `Removed` | Visible, Hidden | Removed | by its author or the platform |
 | `Reported` | Visible | Reported | marketplace report |
-| `PrivateReplySent { message_id }` | any with the window open and none sent | — | sets `private_reply_message_id` |
+| `PrivateReplySent { message_id }` | any | — | a receipt, a fact: sets `private_reply_message_id` (the first one kept), whatever the window |
 
 Any other pair is `ItemTransitionError` (refused, nothing written). A human may post further public
-replies on an answered comment (Instagram/Facebook allow several); those do not change the state.
+replies on an answered comment (Instagram/Facebook allow several); those do not change the state. The
+caller counts `agent_answers` on the receipt of an agent's public answer.
 
 ### 3.5 Rules per surface (`jt_inbox::public::rules(channel) -> Option<PublicRules>`)
 
 | | Instagram comment | Facebook comment | Trendyol question | Hepsiburada question |
 |---|---|---|---|---|
-| Public reply length | 1–2,200 (V-M8) | 1–8,000 (V-M8) | **10–2,000** (documented) | from the docs (V-H3) |
+| Public reply length | 1–2,200 (V-M8) | 1–8,000 (V-M8) | **10–2,000** (documented) | **1–2,000** (H0: `Answer` required, ≤ 2,000) |
 | Private reply | 7 days from the comment, once, ≤ 1,000 chars (V-M8) | 7 days, once, ≤ 2,000 (`MAX_MESSENGER_TEXT`) | — | — |
 | One answer per item | no | no | yes | yes |
-| Moderated before publishing | no | no | **yes** | V-H4 |
+| Moderated before publishing | no | no | **yes** | no (H0: no in-review status) |
 | Hide / delete | yes / yes | yes / yes (others' comments need `pages_read_user_content`) | — | — |
-| Report | — | — | V-T5 | yes ("Sorun Bildirme") |
+| Report | — | — | V-T5 | yes (`rejectIssue`) |
 | Deadline | — | — | — (V-T6) | `expireDate` |
-| Live comments | ingested; private reply during the live only (V-M9); no public reply | — | — | — |
+| Live comments | ingested (`live`); no public reply (`live_comment_public_reply`); private reply during the live only: `private_reply_until` = `created_at + LIVE_PRIVATE_REPLY_WINDOW` (4 h, VERIFY V-M9) | — | — | — |
 
-Values marked VERIFY are constants in `jt_inbox::public` set by the verification tasks; until H0 runs the
-Hepsiburada bounds are `None` and the Hepsiburada answer path refuses (`hepsiburada_unverified`).
+Values marked VERIFY are constants in `jt_inbox::public` set by the verification tasks. Every surface has
+public bounds (`PublicRules.public: TextBounds`); Hepsiburada's are H0's.
 
 ### 3.6 Reply fence for public conversations
 
@@ -225,17 +232,30 @@ generation, human holds, capability live):
 3. `item.conversation_id != conversation` → `item_not_in_conversation`.
 4. `public::reply_allowed(item, rules, visibility, by_agent, now)`:
    - moderation `Deleted | Removed` → `item_removed`;
-   - public: `Expired` or past `deadline` → `deadline_passed`; one-answer surface already `Pending | Answered`
-     → `already_answered`; by agent and `agent_replied` → `agent_already_replied`; by agent and not
+   - public: a live video's comment → `live_comment_public_reply`; `Expired` or past `deadline` →
+     `deadline_passed`; one-answer surface already `Pending | Answered` → `already_answered`; by agent and
+     `agent_replied()`, unless the item is `Rejected` and `agent_answers < MAX_AGENT_ANSWERS` (2: the agent
+     may answer a refused item once more, then only a human) → `agent_already_replied`; by agent and not
      `awaiting()` → `item_not_owed`;
    - private: surface without one → `private_reply_unsupported`; `now > private_reply_until` →
      `private_window_closed`; already sent → `private_reply_used`.
 5. `public::check_text(rules, visibility, text, person_contacts)`: bounds → `text_too_short` /
-   `text_too_long`; a public reply containing one of the person's own identity values (normalised email or
-   phone) → `contact_data_in_public_reply`; a marketplace answer containing a URL, an email address or a
-   phone-number-like run of 10+ digits → `contact_data_in_marketplace_answer` (Trendyol rejects these in
-   review, V-T7).
-6. Capability `daily_ops_cap` counts agent public replies of the day on that capability → `daily_ops_cap`.
+   `text_too_long`; then on the text **normalised** (Unicode whitespace and dashes, zero-width characters
+   dropped, keycap and full-width digits, `at`/`(at)`/`[at]` → `@` and `dot`/`nokta` → `.` joined to their
+   neighbours, Turkish and English digit words → digits): a public reply containing one of the person's own
+   identity values (an email anywhere; a phone as a digit run, any non-alphanumeric a separator, holding
+   its last ten digits) → `contact_data_in_public_reply`; a marketplace answer containing a link (a scheme,
+   `www.`, or a bare `label.tld` with a common TLD: `com`, `com.tr`, `net`, `org`, `tr`, `io`, `co`, `me`,
+   `ly`, `info`, `biz`, `shop`, `store`, `app`, `link`, … which covers `t.me`, `wa.me`, `bit.ly`,
+   `instagram.com`, `x.com`), an email address, an `@handle` or a Turkish phone number (whole digit groups
+   forming `05xx…`/`905xx…`, `0[2-4]xx…`/`90[2-4]xx…`, `0850`/`0800…`, `444 xx xx`; sizes like
+   `36 38 40 42 44`, a 13-digit barcode or a number without its leading `0` are not refused) →
+   `contact_data_in_marketplace_answer` (Trendyol rejects these in review, V-T7). The Amazon relay fence
+   (§8.4) reads text the same way.
+6. Capability `daily_ops_cap`: under the capability's lock (`CapabilityRepo::lock`, as the Studio queue
+   counts its claims), the agent's public outbox rows of the capability created since the day's start
+   (`OutboxRepo::agent_public_replies_since`: any state but `refused`, held and uncertain ones included)
+   → `daily_ops_cap`.
 
 The 24-hour DM window does not apply to public conversations; rule 4 replaces it. Refusals use the existing
 `inbox.send.refused` ledger entry and `Refused { reason }` message status.
@@ -342,6 +362,10 @@ alter table inbound_events drop constraint if exists inbound_events_provider_che
 alter table inbound_events add constraint inbound_events_provider_check
     check (provider in ('meta','netgsm','x','mail','tiktok','trendyol','hepsiburada'));
 
+-- Guarded: the key the items' composite foreign key names (dropped again by the down).
+alter table conversations add constraint conversations_id_capability_key
+    unique (id, workspace_id, capability_id);
+
 create table if not exists public_subjects (
     workspace_id uuid not null references workspaces (id),
     id uuid primary key,
@@ -354,7 +378,7 @@ create table if not exists public_subjects (
     facts jsonb not null default '{}' check (jsonb_typeof(facts) = 'object'),
     publication_id uuid,
     first_seen_at timestamptz not null, updated_at timestamptz not null,
-    unique (id, workspace_id),
+    unique (id, workspace_id, capability_id),
     unique (workspace_id, capability_id, external_id),
     foreign key (capability_id, workspace_id) references capabilities (id, workspace_id),
     foreign key (workspace_id, publication_id) references studio_publications (workspace_id, id)
@@ -369,20 +393,24 @@ create table if not exists public_items (
     external_id text not null check (char_length(external_id) between 1 and 512),
     parent_external_id text, root_external_id text not null,
     created_at timestamptz not null, deadline timestamptz, private_reply_until timestamptz,
+    live boolean not null default false,
     answer jsonb not null check (jsonb_typeof(answer) = 'object' and answer ? 'state'),
     answer_state text generated always as (answer->>'state') stored
         check (answer_state in ('awaiting','pending','answered','rejected','handled','expired')),
     moderation text not null default 'visible'
         check (moderation in ('visible','hidden','deleted','removed','reported')),
     private_reply_message_id uuid,
-    agent_replied boolean not null default false,
+    agent_answers smallint not null default 0 check (agent_answers between 0 and 255),
     checked_at timestamptz, updated_at timestamptz not null,
     unique (id, workspace_id),
     unique (workspace_id, capability_id, external_id),
     foreign key (capability_id, workspace_id) references capabilities (id, workspace_id),
-    foreign key (conversation_id, workspace_id) references conversations (id, workspace_id),
+    -- An item's conversation and subject are on its capability (keys added by this migration).
+    foreign key (conversation_id, workspace_id, capability_id)
+        references conversations (id, workspace_id, capability_id),
     foreign key (message_id, workspace_id) references messages (id, workspace_id),
-    foreign key (subject_id, workspace_id) references public_subjects (id, workspace_id),
+    foreign key (subject_id, workspace_id, capability_id)
+        references public_subjects (id, workspace_id, capability_id),
     foreign key (private_reply_message_id, workspace_id) references messages (id, workspace_id)
 );
 -- Owed items of a conversation (state derivation, context).
@@ -401,6 +429,8 @@ create index if not exists public_items_reconcile
 -- A conversation's items in order (context, merges). Added in F3.
 create index if not exists public_items_conversation
     on public_items (workspace_id, conversation_id, created_at, id);
+-- The item a message is (a message list's marks).
+create index if not exists public_items_message on public_items (workspace_id, message_id);
 
 create table if not exists public_cursors (
     workspace_id uuid not null references workspaces (id),
@@ -420,7 +450,8 @@ alter table outbox add constraint outbox_state_check
 Then: `create or replace function inbox_mask_personal(jsonb)` with the added keys of §3.9 (body copied from
 0008, or from 0018 if it changed it); `create or replace function inbox_event_person(...)` with candidate
 rows `(p#>>'{public,author,id}', <namespace by p#>>'{public,kind}' and capability kind>)` scoped with
-`c.external_id || ':'` (an author without an id is intake's one-off person: `c:<external_id>` for a
+`c.external_id || ':'` (an author without an id, or with an empty one (`nullif(…, '')`), is intake's
+one-off person: `c:<external_id>` for a
 comment, `q:<external_id>` for a question; the DM siblings `instagram_dm`/`messenger` map to their
 surface's namespace); and the three tables' `enable` + `force row level security` + `<table>_ws`
 policies in the 0006 form (archtest `sql_scoping`).
@@ -478,8 +509,11 @@ versions `1..=17, 19`).
 - `Provider::Trendyol` (`"trendyol"`, kinds `["trendyol"]`), `Provider::Hepsiburada` (`"hepsiburada"`,
   kinds `["hepsiburada"]`).
 - `Credential::TrendyolSeller { seller_id, api_key, api_secret }` (`kind = "trendyol_seller"`, public:
-  `seller_id`), `Credential::HepsiburadaMerchant { merchant_id, username, password }`
-  (`"hepsiburada_merchant"`, public: `merchant_id`; the exact pair is V-H1). `Debug` masks secrets.
+  `seller_id`), `Credential::HepsiburadaMerchant { merchant_id, service_key }`
+  (`"hepsiburada_merchant"`, public: `merchant_id`): the seller's service key for Jeeta as its integrator
+  (H0; §8.3). The Basic auth user is a platform setting, `JEETA_HEPSIBURADA_INTEGRATOR_USER` (the
+  integrator's own user), falling back to the merchant id while unset; which value goes where stays V-H1.
+  `Debug` masks secrets.
 - `EventKind::Comment` (`"comment"`), `EventKind::Question` (`"question"`).
 - New `comments.rs`: `CommentGrant { read, reply, hide, delete_others, private_reply }`,
   `comment_grant(kind_key, scopes) -> CommentGrant`, `CommentGrant::enabled() = read && reply`:
@@ -500,9 +534,12 @@ versions `1..=17, 19`).
 
 - `ports/public.rs` (re-exported from `ports::inbox`): `PublicItemRepo` (`insert` → `false` on a replay of
   `(capability, external_id)`, `get`, `lock`, `find_by_external`, `update`, `for_conversation`, `thread`,
-  `due_before`, `to_reconcile(capability, limit)` ordered by `checked_at nulls first, id`,
-  `mark_checked`, `agent_public_replies_since` for `daily_ops_cap`), `PublicSubjectRepo` (`upsert`, `get`, `find_by_external`), `PublicCursorRepo` (`get`,
-  `store`). `TenantRepos` gains `public_items()`, `public_subjects()`, `public_cursors()`.
+  `due_before` (awaiting, rejected and pending alike: callers keep `awaiting()` ones),
+  `to_reconcile(capability, limit)` ordered by `checked_at nulls first, id`, `mark_checked`,
+  `item_for_message`), `PublicSubjectRepo` (`upsert`, `get`, `find_by_external`), `PublicCursorRepo`
+  (`get`, `store`). `TenantRepos` gains `public_items()`, `public_subjects()`, `public_cursors()`.
+  `OutboxRepo::agent_public_replies_since(capability, since)` counts the agent's public-item outbox rows
+  for `daily_ops_cap` (§3.6 rule 6).
 - `ports/connectors.rs`:
 
 ```rust
@@ -541,8 +578,10 @@ fn public_poller(&self, provider: Provider) -> Option<Arc<dyn PublicPoller>> { N
 
 - `MetaApp.comment_scopes: bool`, `InstagramApp.comment_scopes: bool` (env `JEETA_META_COMMENT_SCOPES`,
   `JEETA_INSTAGRAM_COMMENT_SCOPES`; `1`/`true`; default off).
-- `CredentialInput::TrendyolSeller` / `HepsiburadaMerchant` for `connector.set_credentials`, normalised like
-  the others; for these kinds the capability's external id must equal the credential's seller/merchant id.
+- `CredentialInput::TrendyolSeller` / `HepsiburadaMerchant { merchant_id, service_key }` for
+  `connector.set_credentials`, normalised like the others; for these kinds the capability's external id must
+  equal the credential's seller/merchant id. `JEETA_HEPSIBURADA_INTEGRATOR_USER`: the platform's Hepsiburada
+  integrator user (Basic auth user; unset: the merchant id).
 
 ### 6.2 `comments_enabled`
 
@@ -578,7 +617,7 @@ Adapters store each comment/question as an inbound event of kind `Comment` or `Q
 `ports::connectors::PublicEnvelope` is the typed form (serde), built by adapters and read by the consumer.
 `external_id` of the event (the dedupe key): Meta `comment:<id>`, `comment:<id>:edited:<unix>`,
 `comment:<id>:removed`; Trendyol `q:<id>:<status>:<answer or rejection time | "">`; Hepsiburada
-`q:<id>:<status>:<time>` — every new provider state is a new event, a replayed state is a duplicate (bug
+`q:<issueNumber>:<status>:<lastModifiedAt>` — every new provider state is a new event, a replayed state is a duplicate (bug
 class "cumulative-snapshot idempotency").
 
 ### 6.4 Intake: webhook gate and consumer
@@ -620,8 +659,9 @@ class "cumulative-snapshot idempotency").
 - `claim` re-runs the full fence, including §3.6; `prepare` needs `deps.connectors.public(provider)`.
 - `send_step` dispatches by `intent.public.visibility` to `reply_public` / `reply_private`.
 - `record_result_in` for public intents, in the same transaction:
-  - `Ok`: message external id = the provider id; item `AnswerSent { moderated: rules.moderated }` (public)
-    or `PrivateReplySent` (private) and `agent_replied` when by agent; private receipt `recipient_id` →
+  - `Ok`: message external id = the provider id; item `AnswerSent { moderated: rules.moderated }` (public,
+    taken from any state) or `PrivateReplySent` (private) and `agent_answers += 1` when an agent's public
+    answer; private receipt `recipient_id` →
     identity link (D5); conversation state derivation; `Replied` only if a journey exists.
   - `Permanent` whose reason names a missing object (Graph `(#100)` subcode 33, V-M10; marketplace 404) →
     item `Removed`, outbox `failed` with `item_removed`.
@@ -637,6 +677,10 @@ class "cumulative-snapshot idempotency").
   `MERGE_SNAPSHOT_VERSION`); `apply_snapshot` moves each item to its target conversation before
   coalesced conversations are deleted; `restore_snapshot` moves them back; undo accepts versions 1 and
   2 (a version 1 snapshot has no items). In-memory fakes mirror it.
+- A `held` reply is refused like a `queued` one when a merge coalesces its conversation
+  (`conversation_merged`) and when its person is erased.
+- After `apply_snapshot` and `restore_snapshot` the use case runs `settle_state` on the moved
+  conversations (F5/F6).
 - `erasure::event_identities` adds the envelope author in the namespace of its kind and capability.
 - `erasure().scrub(person)` needs no new column (items hold no personal text).
 
@@ -796,14 +840,37 @@ and 25 comment pages per capability per run); `reconcile` lists an item's replie
 
 ### 8.3 Hepsiburada (`jt_marketplace::hepsiburada`)
 
-Known from the research: "Satıcıya Sor" lists questions by status (1 unanswered, 2 answered, 4 expired),
-gives a question's detail, accepts an answer (attachments possible; phase 1 text only), reports an issue
-("Sorun Bildirme"), and returns `expireDate` (one business day; a late answer is refused). Hosts, paths,
-auth pair, field names, statuses beyond 1/2/4, answer bounds, moderation and rate limits are **all V-H**:
-task H0 reads the developer portal by hand (it returns 403 to automated access), records request/response
-samples as test fixtures and the facts with their source in the module docs, then H1 builds the same
-contract as Trendyol (`Connector`, `PublicPoller`, `PublicSurface` incl. `Report`). The egress host is added
-in H1.
+Verified by hand for task H0 on 2026-10-30 from developers.hepsiburada.com (it refuses automated access):
+the guide "Satıcıya Sor Önemli Bilgiler", the OpenAPI document `saticiya-sor-entegrasyonu` v1.0
+(`/api/v1/public/docs/hepsiburada/saticiya-sor-entegrasyonu/v1.0/openapi`), the guide "Entegratöre Servis
+Anahtarı Ekleme/Görüntüleme" and the integration FAQ (notes: `research_notes/Sosyal mesaj ve yorum
+servisleri/hepsiburada_h0_verified.md` in the owner's workspace).
+
+- Hosts: test `api-asktoseller-merchant-sit.hepsiburada.com`, live `api-asktoseller-merchant.hepsiburada.com`.
+- Auth: Basic on every endpoint, with the headers `merchantId` and `User-Agent`. The seller copies a
+  **service key** for an integrator in the seller panel (Bilgilerim → Entegrasyon → Entegratör Bilgileri →
+  Servis Anahtarı; a new key invalidates the old one). **Jeeta must register as a Hepsiburada integrator**
+  to appear there (a business step with Hepsiburada, the gate of H1). Which value is the Basic user (the
+  integrator's own user, `JEETA_HEPSIBURADA_INTEGRATOR_USER`, falling back to the merchant id) and which the
+  password (the service key) is **still V-H1**.
+- Endpoints: `GET /api/v1.0/issues` (filters `status`, `minModifiedAt`/`maxModifiedAt`, `minCreatedAt`/
+  `maxCreatedAt`, `sortBy` (1 = last modified), `desc`, `page` from 1, `size`), `GET /api/v1.0/issues/count`,
+  `GET /api/v1.0/issues/{number}`, `POST /api/v1.0/issues/{number}/answer` (**multipart/form-data**, `Answer`
+  required, ≤ 2,000; `Files` optional; 201), `POST /api/v1.0/issues/{number}/reject` (`{rejectReason ≤ 2000,
+  rejectConversationId}`: the seller reports a problem with the question; 201). No webhooks: poll by
+  `minModifiedAt`.
+- Fields: `issueNumber` (the item's external id; the paths' `{number}`), `customerId` (a GUID: the buyer
+  identity), `createdAt`, `lastModifiedAt`, `expireDate` (the one-business-day deadline, Hepsiburada's
+  own), `status`, `subject`, `product {sku, name, imageUrl, stockCode}` (the subject), `orderNumber`/
+  `lineItemId` (asked from an order), `conversations[]`.
+- Statuses → envelope: `WaitingForAnswer` → `open`; `Answered` → `answered`; `Rejected` → **`reported`**
+  (the seller reported the question: `Moderation::Reported`, never `AnswerRejected`); `AutoClosed` →
+  `expired`. No in-review status: `HEPSIBURADA_MODERATED = false`, and an answer is confirmed by its
+  status, not by comparing texts.
+- Not in these pages: rate limits (V-H5) and the Basic mapping (V-H1).
+
+H1 builds the same contract as Trendyol (`Connector`, `PublicPoller`, `PublicSurface` incl. `Report` via
+`rejectIssue`). The egress hosts are added in H1.
 
 ### 8.4 Amazon.com.tr (`jt_inbox::relay`, consumer, replies)
 
@@ -905,7 +972,9 @@ stop; humans can still act).
 | V-T6 | Any Trendyol answer deadline | rules |
 | V-T7 | Trendyol review refuses contact data/links | fence wording |
 | V-T8 | `WAITING_FOR_APPROVE` status exists and means "answer in review" | status map |
-| V-H1–H4 | Hepsiburada hosts, paths, auth pair, fields, statuses, bounds, moderation, report reasons, rate limits | H1 |
+| V-H1 | Hepsiburada's Basic auth: which value is the user (the integrator's user or the merchant id) and which the password (the service key); Jeeta's integrator registration | H1 |
+| V-H2–H4 | Hosts, paths, fields, statuses, answer bounds, moderation: **verified in H0** (§8.3) | — |
+| V-H5 | Hepsiburada's rate limits for Satıcıya Sor | H1 budgets |
 | V-A1 | Relay sender domain for amazon.com.tr | A1 |
 | V-A2 | Relay display-name format | A1 |
 | V-A3 | Amazon's current link/contact rules for buyer-seller messages | A1 fence |
@@ -924,7 +993,8 @@ stop; humans can still act).
   proves Coexistence works in Türkiye.
 - **n11 and Çiçeksepeti (phase 2).** `jt_marketplace` modules, providers `n11`, `ciceksepeti`, channels
   `N11Question`, `CiceksepetiQuestion`; n11 SOAP `GetProductQuestionList` (1 call/min: poll ≥ 2 min) and the
-  one-shot `SaveProductAnswerRequest` (1–2,048 chars) — the kind's default policy forces approval;
+  one-shot `SaveProductAnswerRequest` (1–2,048 chars) — the kinds follow the marketplaces' default
+  (approval off, §3.7; an owner turns it on per capability);
   Çiçeksepeti's private answer maps to `Visibility::Private`. Gate: sellers' keys; endpoint verification.
 - **X DMs and mentions (phase 2).** Scopes `dm.read`, `dm.write` (re-consent of every X connection); poll
   `/2/dm_events` (30-day window) per account (Account Activity's 3 subscriptions do not scale); channels
@@ -977,7 +1047,7 @@ stop; humans can still act).
 | A comment flood on a viral post fills the agent queue | batch `mark_handled`; hidden items not owed; `daily_ops_cap` |
 | Wasted one-shot marketplace answers | contact/link fence and bounds on every answer; the one-answer refusal; approval per capability when the owner wants it (off by default, §3.7); Trendyol's own review sends a refused answer back as owed (`Rejected`) |
 | Meta review disturbed | D11 and §11 step 3: no scope, config, field or staging change before the decision |
-| Hepsiburada facts wrong | H0 verification before any HB code; the HB answer path refuses until then |
+| Hepsiburada facts wrong | H0 verified the portal by hand (§8.3); V-H1 (the Basic mapping) is checked with a live or test account before H1 merges |
 | Trendyol key not bound to the seller path | V-T1 before the kind can be verified |
 | Erased commenter's new public complaint is dropped | documented (D10); the platform still shows it; the owner can re-add the person explicitly |
 | Thumbnails expire | permalink always shown; `comments_poll` refreshes subjects older than a day |
@@ -989,5 +1059,6 @@ stop; humans can still act).
 1. **Default approval.** Decided 2026-10-30 by the owner's delegate: off for every kind, the marketplaces
    included (§3.7). Agent answers go out unless the capability's existing "requires human approval" is on
    (on Instagram/Facebook the same flag also holds Studio posts on that account).
-2. **Hepsiburada access.** H0 needs someone to read Hepsiburada's developer portal (it refuses automated
-   access) and a merchant API credential (yours or a pilot seller's) for the live checks. Who provides them?
+2. **Hepsiburada access.** H0's portal reading is done (§8.3). Open: Jeeta's registration as a
+   Hepsiburada integrator, and a merchant's service key (yours or a pilot seller's) for V-H1. Who contacts
+   Hepsiburada?

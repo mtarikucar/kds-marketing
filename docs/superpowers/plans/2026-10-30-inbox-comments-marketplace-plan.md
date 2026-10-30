@@ -106,7 +106,8 @@ pub enum AnswerState {
     Awaiting,
     Pending { message_id: MessageId },
     Answered { by: AnsweredBy, message_id: Option<MessageId>, #[serde(with = "time::serde::rfc3339")] at: OffsetDateTime },
-    Rejected { reason: String, #[serde(with = "time::serde::rfc3339")] at: OffsetDateTime },
+    Rejected { reason: String, #[serde(default)] message_id: Option<MessageId>,
+        #[serde(with = "time::serde::rfc3339")] at: OffsetDateTime },
     Handled { by: EventSource, reason: HandledReason, #[serde(with = "time::serde::rfc3339")] at: OffsetDateTime },
     Expired { #[serde(with = "time::serde::rfc3339")] at: OffsetDateTime },
 }
@@ -117,8 +118,12 @@ impl Moderation { pub fn key(self) -> &'static str; pub fn from_key(k: &str) -> 
 pub enum HandledReason { NoReplyNeeded, Spam, Duplicate, AnsweredElsewhere }
 pub enum Visibility { Public, Private }
 pub enum SubjectKind { Post, Product }
-pub struct PublicItem { /* spec §3.3, field for field */ }
-impl PublicItem { pub fn awaiting(&self) -> bool; } // Awaiting|Rejected and Visible
+pub struct PublicItem { /* spec §3.3, field for field: `live: bool` and `agent_answers: u8` (serde
+    default false / 0) in place of the draft's `agent_replied: bool` (F1–F3 review) */ }
+impl PublicItem { pub fn awaiting(&self) -> bool; // Awaiting|Rejected and Visible
+    pub fn agent_replied(&self) -> bool; }         // agent_answers > 0
+pub const MAX_AGENT_ANSWERS: u8 = 2;               // the agent may answer a Rejected item once more
+pub const MAX_EXTERNAL_ID_CHARS: usize = 512;      // + MAX_SUBJECT_URL_CHARS 2048, MAX_SUBJECT_IMAGE_URL_CHARS 4096
 pub struct PublicSubject { pub id: PublicSubjectId, pub workspace_id: WorkspaceId, pub capability_id: CapabilityId,
     pub kind: SubjectKind, pub external_id: String, pub title: String, pub url: Option<String>,
     pub image_url: Option<String>, pub facts: serde_json::Value, pub publication_id: Option<uuid::Uuid>,
@@ -126,28 +131,34 @@ pub struct PublicSubject { pub id: PublicSubjectId, pub workspace_id: WorkspaceI
 pub const MAX_SUBJECT_TITLE_CHARS: usize = 280;
 pub struct TextBounds { pub min: usize, pub max: usize }
 pub struct PrivateRule { pub window: Duration, pub max_chars: usize }
-pub struct PublicRules { pub public: Option<TextBounds>, pub private: Option<PrivateRule>,
+pub struct PublicRules { pub public: TextBounds, pub private: Option<PrivateRule>,
     pub one_answer: bool, pub moderated: bool, pub hide: bool, pub delete: bool, pub report: bool,
     pub marketplace: bool }
 pub fn rules(channel: Channel) -> Option<PublicRules>; // None for private channels
 // The bounds behind `rules`, each a named constant (F1): INSTAGRAM_COMMENT_MAX, INSTAGRAM_PRIVATE_MAX,
 // FACEBOOK_COMMENT_MAX (V-M8), FACEBOOK_PRIVATE_MAX (= jt_meta's MAX_MESSENGER_TEXT), TRENDYOL_ANSWER,
-// PRIVATE_REPLY_WINDOW, HEPSIBURADA_ANSWER_BOUNDS: Option<TextBounds> = None and
-// HEPSIBURADA_MODERATED: bool = true (V-H3/V-H4, set by H0). Trendyol `report: false` until V-T5.
+// PRIVATE_REPLY_WINDOW, HEPSIBURADA_ANSWER: TextBounds = 1..=2000 and HEPSIBURADA_MODERATED = false
+// (verified in H0), LIVE_PRIVATE_REPLY_WINDOW = 4 h (V-M9). Trendyol `report: false` until V-T5.
+pub fn private_reply_until(rules: &PublicRules, created_at: OffsetDateTime, live: bool) -> Option<OffsetDateTime>;
+// None without a private reply; created_at + window, or the shorter live window for a live comment.
 #[derive(… thiserror::Error)] #[serde(rename_all = "snake_case")]
-pub enum PublicRefusal { ItemRequired, ItemNotInConversation, ItemRemoved, DeadlinePassed, AlreadyAnswered,
-    AgentAlreadyReplied, ItemNotOwed, PrivateReplyUnsupported, PrivateWindowClosed, PrivateReplyUsed,
-    TextTooShort, TextTooLong, ContactDataInPublicReply, ContactDataInMarketplaceAnswer,
-    CommercialOnPublicSurface, CommentsNotEnabled, HepsiburadaUnverified }
+pub enum PublicRefusal { ItemRequired, ItemNotInConversation, ItemRemoved, LiveCommentPublicReply,
+    DeadlinePassed, AlreadyAnswered, AgentAlreadyReplied, ItemNotOwed, PrivateReplyUnsupported,
+    PrivateWindowClosed, PrivateReplyUsed, TextTooShort, TextTooLong, ContactDataInPublicReply,
+    ContactDataInMarketplaceAnswer, CommercialOnPublicSurface, CommentsNotEnabled }
+// (F1–F3 review: HepsiburadaUnverified removed, H0 verified the bounds; LiveCommentPublicReply added.)
 // Display = the snake_case key, e.g. "private_window_closed".
 pub fn reply_allowed(item: &PublicItem, rules: &PublicRules, visibility: Visibility, by_agent: bool,
     now: OffsetDateTime) -> Result<(), PublicRefusal>;
 pub fn check_text(rules: &PublicRules, visibility: Visibility, text: &str, person_contacts: &[String])
     -> Result<(), PublicRefusal>;
-// Both answer `HepsiburadaUnverified` for a public reply while `rules.public` is None. `check_text`
-// counts characters (the minimum without leading/trailing whitespace); `person_contacts` are the
-// person's normalised emails and E.164 phones (a phone matches by its last ten digits in any
-// digit run of the text).
+// `check_text` counts characters (the minimum without leading/trailing whitespace), then reads the text
+// normalised (spec §3.6 rule 5: Unicode spaces/dashes, zero-width, keycap and full-width digits,
+// at/dot/nokta words, Turkish and English digit words); `person_contacts` are the person's normalised
+// emails and E.164 phones (a phone matches by its last ten digits in a digit run, any non-alphanumeric a
+// separator); a marketplace answer refuses links (scheme, www., bare label.tld), emails, @handles and
+// Turkish phone shapes. `reply_allowed`: live → LiveCommentPublicReply (public); the agent may answer a
+// Rejected item while agent_answers < MAX_AGENT_ANSWERS.
 pub enum ItemEvent { AnswerSent { message_id: MessageId, moderated: bool }, AnswerConfirmed,
     AnswerRejected { reason: String }, AnsweredElsewhere { message_id: Option<MessageId> },
     MarkedHandled { by: EventSource, reason: HandledReason }, Expired, Hidden, Unhidden, Deleted, Removed,
@@ -155,8 +166,10 @@ pub enum ItemEvent { AnswerSent { message_id: MessageId, moderated: bool }, Answ
 #[derive(Debug, thiserror::Error)] #[error("{from} cannot take {event}")]
 pub struct ItemTransitionError { pub from: &'static str, pub event: &'static str } // also Clone, Copy, PartialEq, Eq
 impl ItemEvent { pub fn key(&self) -> &'static str; } // "answer_sent" … "private_reply_sent"
-// `from` is the answer key for answer events, the moderation key for moderation events, and
-// "private_reply_used" / "private_window_closed" for PrivateReplySent. `apply` never sets agent_replied.
+// `from` is the answer key for answer events, the moderation key for moderation events. The receipts are
+// facts, never refused: AnswerSent from any state (an unanswered one → Pending/Answered{Us}, an Answered
+// one stays), PrivateReplySent from any state and window (the first one kept). AnswerRejected keeps the
+// pending answer's message in Rejected. `apply` never counts agent_answers: the caller does.
 pub fn apply(item: &PublicItem, event: ItemEvent, at: OffsetDateTime) -> Result<PublicItem, ItemTransitionError>;
 /// Ours while any item is owed; else Theirs; a Snoozed or Closed state is kept.
 pub fn derived_state(items: &[PublicItem], current: &ConvState) -> ConvState;
@@ -175,7 +188,9 @@ pub fn relay_reply_allowed(text: &str, commercial: bool) -> Result<(), RelayRefu
 pub enum Provider { /* … */ Trendyol, Hepsiburada }          // keys "trendyol", "hepsiburada"
 pub enum Credential { /* … */
     #[serde(rename = "trendyol_seller")] TrendyolSeller { seller_id: String, api_key: String, api_secret: String },
-    #[serde(rename = "hepsiburada_merchant")] HepsiburadaMerchant { merchant_id: String, username: String, password: String } }
+    #[serde(rename = "hepsiburada_merchant")] HepsiburadaMerchant { merchant_id: String, service_key: String } }
+// (F1–F3 review: the seller's service key for Jeeta as its integrator; the Basic user is the platform
+// setting JEETA_HEPSIBURADA_INTEGRATOR_USER, falling back to merchant_id; V-H1 stays open.)
 pub enum EventKind { /* … */ Comment, Question }              // keys "comment", "question"
 // jt_connector::comments
 pub const FACEBOOK_COMMENT_SCOPES: &[&str] = &["instagram_manage_comments", "pages_manage_engagement", "pages_read_user_content"];
@@ -223,8 +238,12 @@ impl PublicEnvelope {
     async fn due_before(&mut self, before: OffsetDateTime, limit: u32) -> Result<Vec<PublicItem>, AppError>;
     async fn to_reconcile(&mut self, capability: CapabilityId, limit: u32) -> Result<Vec<PublicItem>, AppError>; // checked_at nulls first, id
     async fn mark_checked(&mut self, ids: &[PublicItemId], at: OffsetDateTime) -> Result<(), AppError>;
-    async fn agent_public_replies_since(&mut self, capability: CapabilityId, since: OffsetDateTime) -> Result<u32, AppError>;
+    async fn item_for_message(&mut self, message: MessageId) -> Result<Option<PublicItem>, AppError>;
 }
+// OutboxRepo (F1–F3 review; replaces PublicItemRepo::agent_public_replies_since):
+//   async fn agent_public_replies_since(&mut self, capability: CapabilityId, since: OffsetDateTime) -> Result<u32, AppError>;
+//   counts outbox rows with created_at >= since, state <> 'refused', intent.public.visibility = "public" and
+//   intent.public.drafted_by.kind = "agent"; the caller holds CapabilityRepo::lock (as the Studio queue does).
 #[async_trait] pub trait PublicSubjectRepo: Send + Sync {
     async fn upsert(&mut self, subject: PublicSubject) -> Result<PublicSubject, AppError>; // keeps id, first_seen_at
     async fn get(&mut self, id: PublicSubjectId) -> Result<Option<PublicSubject>, AppError>;
@@ -237,12 +256,15 @@ impl PublicEnvelope {
 // TenantRepos: fn public_items(&mut self) -> &mut dyn PublicItemRepo; public_subjects(); public_cursors().
 // Semantics fixed in F3 (ports/public.rs docs): insert checks capability, conversation, message,
 // subject and private-reply references (NOT_FOUND) and answers false only on a (capability,
-// external_id) replay; update writes message_id, subject_id, deadline, private_reply_until, answer,
-// moderation, private_reply_message_id, agent_replied, checked_at, updated_at (never the conversation:
-// merges move items); due_before/to_reconcile take answers awaiting|rejected|pending; mark_checked
-// leaves updated_at (the compare-and-swap version); agent_public_replies_since counts agent_replied
-// items whose answer message (Pending/Answered message_id) is at >= since; subject upsert keeps id,
-// first_seen_at and a publication_id the write leaves None; a cursor is a JSON object (INTERNAL else).
+// external_id) replay; an item's conversation and subject on another capability, or an external id
+// outside 1..=512, is INTERNAL (0019's composite foreign keys and checks; the fake mirrors them, and a
+// subject's title/url/image_url/facts bounds too); update writes message_id, subject_id, deadline,
+// private_reply_until, answer, moderation, private_reply_message_id, agent_answers, checked_at,
+// updated_at (never the conversation, which merges move, nor live); due_before/to_reconcile take answers
+// awaiting|rejected|pending (callers keep awaiting() ones); mark_checked leaves updated_at (the
+// compare-and-swap version); item_for_message finds an item by its inbound message; subject upsert keeps
+// id, first_seen_at and a publication_id the write leaves None; a cursor is a JSON object (INTERNAL else).
+// A held outbox row is refused like a queued one at merge (conversation_merged) and erasure.
 
 // jt_app::ports::inbox (F3)
 pub struct PublicItemParent { pub id: PublicItemId, pub conversation_id: ConversationId }
@@ -418,9 +440,11 @@ keys. **Risk:** medium (merge code); mitigated by the apply/undo test.
 registry defaults; `MetaApp.comment_scopes`, `InstagramApp.comment_scopes`); `ports/mod.rs`
 (`InboxPolicy` defaults and key-wise merge); `rust/crates/adapters/jt_pg/src/repos/policies.rs` (merge on
 read);
-`usecases/connector.rs` (`CredentialInput::{TrendyolSeller, HepsiburadaMerchant}`, normalisation, external id
-equals the seller/merchant id, `default_policy` at creation); `rust/bin/jeeta/src/config.rs`
-(`JEETA_META_COMMENT_SCOPES`, `JEETA_INSTAGRAM_COMMENT_SCOPES`); every `MetaApp { … }`/`InstagramApp { … }`
+`usecases/connector.rs` (`CredentialInput::{TrendyolSeller, HepsiburadaMerchant { merchant_id, service_key }}`,
+normalisation, external id equals the seller/merchant id, `default_policy` at creation);
+`rust/bin/jeeta/src/config.rs` (`JEETA_META_COMMENT_SCOPES`, `JEETA_INSTAGRAM_COMMENT_SCOPES`, and
+`JEETA_HEPSIBURADA_INTEGRATOR_USER`: the platform's Hepsiburada integrator user for Basic auth, read into
+the platform apps, falling back to the merchant id while unset); every `MetaApp { … }`/`InstagramApp { … }`
 literal (testkit `fakes/providers.rs`, `jt_meta/src/graph.rs` tests, `jt_meta/tests/support/mod.rs`,
 `jt_x/tests/x.rs`, `bin` config tests) gains `comment_scopes: false`; `jt_mcp/src/tools/connector.rs` (the
 set-credentials schema's two shapes).
@@ -471,6 +495,9 @@ warning); `jt_testkit/src/fakes/providers.rs` (a scripted `PublicSurface` with `
   - `conversation_state_is_ours_while_an_item_is_owed`
   - `private_reply_echo_is_a_duplicate_not_a_deferral` (a DM echo whose `mid` is a public conversation's
     outbound message)
+- [ ] Intake sets `live` from the envelope and `private_reply_until = public::private_reply_until(&rules,
+  created_at, live)`. Notes from the F1–F3 review: F5 and F6 call `settle_state` on the conversations a
+  merge or an undo moved (items moved with them), so their derived state follows.
 - [ ] CI red → implement → green.
 
 ```rust
@@ -517,13 +544,16 @@ create `rust/crates/jt_app/tests/inbox_public_reply.rs`; `jt_testkit/src/fakes/p
 - [ ] **Tests first:**
   - fence: `public_reply_requires_item_id`, `item_fields_refused_on_a_dm_conversation`,
     `commercial_refused_on_public`, `comments_not_enabled_refuses_reply`, one test per `PublicRefusal` reached
-    through `inbox.reply` (agent and human), `daily_ops_cap_counts_agent_public_replies`,
+    through `inbox.reply` (agent and human), `daily_ops_cap_counts_agent_public_replies` (via
+    `OutboxRepo::agent_public_replies_since` under `CapabilityRepo::lock`, counted at enqueue: held and
+    in-flight rows count), `agent_answers_a_rejected_question_once_more`,
     `fence_runs_again_at_claim` (item answered elsewhere between enqueue and claim → refused at claim).
   - approval: `agent_reply_is_held_when_capability_requires_approval`, `human_reply_is_never_held`,
     `held_rows_are_never_claimed_or_recovered`, `approve_by_human_sends_with_the_approver_as_author`,
     `approve_with_edit_replaces_the_text_and_refences`, `approve_refused_for_agents` (`human_required`),
     `approve_refused_when_the_item_stopped_being_answerable`, `discard_by_drafter_or_human_only`.
-  - receipts: `public_reply_receipt_answers_the_item` (IG: `Answered{Us}`, `agent_replied`),
+  - receipts: `public_reply_receipt_answers_the_item` (IG: `Answered{Us}`, `agent_answers` + 1 for an agent),
+    `late_receipt_answers_a_handled_or_expired_item` (receipts are facts),
     `trendyol_answer_receipt_is_pending`, `private_reply_marks_the_item_and_links_the_dm_identity`,
     `private_reply_identity_collision_suggests_a_merge`, `removed_item_error_marks_removed_and_fails_the_send`,
     `unknown_is_never_resent`, `replied_applies_only_with_a_journey`,
@@ -603,7 +633,7 @@ pins are spread: run `cargo test -p jt_archtest -p jt_mcp` in CI before review.
   - `context_of_a_question_has_the_deadline_and_the_marketplace_rules`
   - `context_of_a_dm_has_no_public_part` (output unchanged for DMs)
   - `conversation_view_has_surface_owed_items_next_deadline_and_held_replies`
-  - `messages_list_marks_item_messages`
+  - `messages_list_marks_item_messages` (by `PublicItemRepo::item_for_message`)
   - `pending_lists_public_due_and_approvals` (approvals only to human callers)
   - `work_answer_deadline_within_24h_sorted_by_urgency`, `work_approve_reply_for_humans_only`,
     `work_enable_comments_when_flag_on_and_grant_missing` (and none when the flag is off)
@@ -655,6 +685,9 @@ its namespace), `jt_testkit/src/fakes/inbox.rs` (in-memory erasure of public pay
 
 - [ ] **Before code:** V-M1/V-M8/V-M10 — read Meta's current reference for every call of spec §8.1, update the
   table in `comments.rs` docs with the source links; any difference changes the table and the tests first.
+- [ ] Note from the F1–F3 review: pin by equality, in a `jt_meta` test, `jt_inbox::public::FACEBOOK_PRIVATE_MAX`
+  against `messaging.rs`'s `MAX_MESSENGER_TEXT` (expose it, or a test-only accessor), and M3 pins
+  `jt_connector`'s `FACEBOOK_SCOPES_TODAY` test list against `jt_meta::FACEBOOK_SCOPES` (the list is a copy).
 - [ ] **Tests first:** `ig_public_reply_posts_to_replies`, `fb_public_reply_posts_to_comments`,
   `ig_login_reply_goes_to_graph_instagram`, `private_reply_targets_the_comment_id_and_returns_recipient`,
   `hide_unhide_use_each_platforms_field`, `delete_uses_delete`, `subject_fields_for_media_and_posts`,
@@ -793,7 +826,14 @@ transaction, then lock the capability, compare `updated_at` + sealed bytes + cur
 
 ## H — Hepsiburada
 
-### Task H0: verify Hepsiburada's "Satıcıya Sor" API (size S, no code)
+### Task H0: verify Hepsiburada's "Satıcıya Sor" API (size S, no code) — DONE 2026-10-30 by hand
+
+Done by the owner's delegate in a browser; the facts and their sources are in spec §8.3 (notes:
+`research_notes/Sosyal mesaj ve yorum servisleri/hepsiburada_h0_verified.md`), and
+`HEPSIBURADA_ANSWER = 1..=2000`, `HEPSIBURADA_MODERATED = false` are set in `jt_inbox::public` (F1–F3 review).
+Left open for H1: V-H1 (the Basic mapping, with a live or test account), V-H5 (rate limits), and Jeeta's
+registration as a Hepsiburada integrator (business step). The request/response fixtures are written in H1
+from the OpenAPI shapes (made-up ids, names, texts). The original task text follows.
 
 The portal refuses automated access (research). A human or an agent driving the owner's Chrome reads
 `developers.hepsiburada.com` (Soru Cevaplama, Satıcıya Sor, Sorun Bildirme) and, with a merchant API credential
@@ -813,8 +853,15 @@ The portal refuses automated access (research). A human or an agent driving the 
 `jt_outbound/src/fixed_hosts.rs` (the verified host(s) under `hepsiburada`, both pinned tests);
 `bin/jeeta/src/connectors.rs`; panel form fields in P3 follow H0.
 
+- [ ] Facts (spec §8.3): hosts `api-asktoseller-merchant(-sit).hepsiburada.com`; Basic auth (user
+  `JEETA_HEPSIBURADA_INTEGRATOR_USER` or the merchant id, password the service key: V-H1) with the headers
+  `merchantId` and `User-Agent`; external id = `issueNumber` (paths `{number}`); answer is multipart
+  (`Answer`); statuses `WaitingForAnswer` → open, `Answered` → answered, `Rejected` → **reported**
+  (`Moderation::Reported`, never `AnswerRejected`), `AutoClosed` → expired; poll by `minModifiedAt`, event
+  id `q:<issueNumber>:<status>:<lastModifiedAt>`; buyer identity `customerId`; product → subject.
 - [ ] **Tests first:** the T1/T2 set for Hepsiburada (auth/probe/errors/poll/status map/answer/bounds) plus
-  `expire_date_becomes_the_deadline`, `expired_status_is_expired`, `report_maps_reasons_to_the_documented_codes`.
+  `expire_date_becomes_the_deadline`, `auto_closed_is_expired`, `rejected_is_reported_not_an_answer_rejection`,
+  `answer_is_multipart`, `report_uses_reject_issue`.
 - [ ] `cargo test -p jt_marketplace` red → implement → green; **commit** `feat(marketplace): Hepsiburada questions`.
 
 ---
@@ -841,7 +888,8 @@ in `rust/crates/jt_app/tests/inbox_public_intake.rs` and `inbox_public_reply.rs`
 ### Task P1: types, list badges, deadlines, approvals queue (size M)
 
 **Files:** `rust/panel/src/api/{types.ts,inbox.ts}` (ConversationView, PublicItem, PublicContext, held
-replies, the six calls; capability kinds `trendyol`, `hepsiburada` and group `marketplace`),
+replies, the six calls; the capability kinds `trendyol`, `hepsiburada` and group `marketplace` with their
+en/tr labels were added in the F1–F3 review round),
 `src/pages/InboxPage.tsx`, new `src/pages/InboxApprovals.tsx`, `src/lib/capabilities.ts`, i18n, tests
 `src/pages/Inbox.test.tsx`.
 
