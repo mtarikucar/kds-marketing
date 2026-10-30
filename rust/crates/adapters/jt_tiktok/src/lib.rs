@@ -159,13 +159,17 @@
 //! of [`CANNOT_POST_CODES`]), the code in `cannot_post`; any other failure is the error. The
 //! screen and the choice it records live in `jt_app` (`usecases::studio::tiktok`).
 //!
-//! **Status** ([`Publisher::resolve`]). `PUBLISH_COMPLETE` is
+//! **Status** ([`Publisher::resolve`]). `PUBLISH_COMPLETE` with a public id is
 //! [`PublishResolution::Published`]: the receipt of the first `publicaly_available_post_id`
 //! (TikTok's own spelling), with the permalink `https://www.tiktok.com/@<username>/video/<id>`
 //! when a username is known (the first handle among `public["username"]`,
-//! `public["facts"]["username"]` and `public["asset"]["username"]`); TikTok names no public id for
-//! a post nobody else may see (`SELF_ONLY`), and the receipt then keeps the publish id, without a
-//! URL. `FAILED` is [`PublishResolution::Failed`] with "publish failed: <fail_reason>",
+//! `public["facts"]["username"]` and `public["asset"]["username"]`). TikTok names a public id only
+//! once the post is public and its moderation passed it: none ever for a post fewer may see
+//! (`SELF_ONLY`, friends, followers), none yet for a public post under review. Without one,
+//! `PUBLISH_COMPLETE` is [`PublishResolution::AwaitingPublicId`] with the receipt as sent (the
+//! publish id, no URL): posted, and the use cases wait a while for the public id of a post chosen
+//! public before they settle it as it is. `FAILED` is [`PublishResolution::Failed`] with
+//! "publish failed: <fail_reason>",
 //! `Permanent` (`auth_removed`, the creator having removed the app's access: `Auth`).
 //! `SEND_TO_USER_INBOX` (a draft: TikTok notified the creator in its inbox to finish the post in
 //! TikTok; <https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status>) is
@@ -203,6 +207,7 @@
 //! [`Publisher::resolve`]: jt_app::ports::connectors::Publisher::resolve
 //! [`Publisher::creator_info`]: jt_app::ports::connectors::Publisher::creator_info
 //! [`PublishResolution::Published`]: jt_app::ports::connectors::PublishResolution::Published
+//! [`PublishResolution::AwaitingPublicId`]: jt_app::ports::connectors::PublishResolution::AwaitingPublicId
 //! [`PublishResolution::Failed`]: jt_app::ports::connectors::PublishResolution::Failed
 //! [`PublishResolution::Pending`]: jt_app::ports::connectors::PublishResolution::Pending
 //! [`InsightsReader`]: jt_app::ports::connectors::InsightsReader

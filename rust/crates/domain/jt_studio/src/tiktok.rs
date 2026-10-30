@@ -179,6 +179,16 @@ impl TiktokPost {
         self.mode == TiktokPostMode::Draft
     }
 
+    /// Whether TikTok will name a public id for the post: a direct post everyone may see
+    /// (`PUBLIC_TO_EVERYONE`). TikTok names one only once the post is public and passed its
+    /// moderation (`publicaly_available_post_id`,
+    /// <https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status>), so
+    /// such a post's status may read complete before its public id is known; a post fewer may
+    /// see, and a draft, never has one.
+    pub fn expects_public_id(&self) -> bool {
+        !self.is_draft() && self.privacy_level == "PUBLIC_TO_EVERYONE"
+    }
+
     /// Whether this choice may be accepted on the posting screen for `creator`'s account and
     /// `media`: [`TiktokPost::check_postable`], and no interaction the screen greys out (one the
     /// creator turned off, Duet or Stitch on photos) allowed.

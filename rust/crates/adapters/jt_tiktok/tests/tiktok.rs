@@ -1534,13 +1534,32 @@ async fn status_processing_is_pending_then_complete_resolves_permalink() {
             url: None,
         }))
     );
-    // Nobody else may see it: TikTok names no public id, and the receipt keeps the publish id.
+    // Complete without a public id (nobody else may see it, or TikTok's moderation has not
+    // passed it yet): posted, the receipt keeping the publish id, awaiting a public id.
     r.mock
         .set("POST", STATUS, answer("status_complete_private"));
     assert_eq!(
         r.tt.resolve(&cred(), &public(), &receipt).await.unwrap(),
-        Some(PublishResolution::Published(self::receipt(PUBLISH_ID)))
+        Some(PublishResolution::AwaitingPublicId(self::receipt(
+            PUBLISH_ID
+        )))
     );
+    for ids in [json!(null), json!(["not-a-video-id"])] {
+        r.mock.set(
+            "POST",
+            STATUS,
+            ok(json!({
+                "data": { "status": "PUBLISH_COMPLETE", "publicaly_available_post_id": ids },
+                "error": { "code": "ok" },
+            })),
+        );
+        assert_eq!(
+            r.tt.resolve(&cred(), &public(), &receipt).await.unwrap(),
+            Some(PublishResolution::AwaitingPublicId(self::receipt(
+                PUBLISH_ID
+            ))),
+        );
+    }
     // An answer without a status is refused.
     r.mock.set(
         "POST",

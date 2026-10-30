@@ -655,20 +655,19 @@ pub(crate) async fn resolve(
     let data = &answer["data"];
     let status = words(&data["status"]).ok_or_else(|| missing("publish status"))?;
     Ok(Some(match status {
-        "PUBLISH_COMPLETE" => {
-            let receipt = match first_post_id(&data["publicaly_available_post_id"]) {
-                Some(post) => PublishReceipt {
-                    url: permalink(public, &post),
-                    external_id: post,
-                },
-                // Nobody else may see it (`SELF_ONLY`): TikTok names no public id.
-                None => PublishReceipt {
-                    external_id: id.to_owned(),
-                    url: None,
-                },
-            };
-            PublishResolution::Published(receipt)
-        }
+        "PUBLISH_COMPLETE" => match first_post_id(&data["publicaly_available_post_id"]) {
+            Some(post) => PublishResolution::Published(PublishReceipt {
+                url: permalink(public, &post),
+                external_id: post,
+            }),
+            // TikTok names a public id only once everyone may see the post and its moderation
+            // passed it: not for a post fewer may see (`SELF_ONLY`), not yet for a public one
+            // under review. Posted all the same, as its publish id.
+            None => PublishResolution::AwaitingPublicId(PublishReceipt {
+                external_id: id.to_owned(),
+                url: None,
+            }),
+        },
         // A draft: the creator was notified in TikTok's inbox; the post is theirs to make there.
         "SEND_TO_USER_INBOX" => PublishResolution::Published(PublishReceipt {
             external_id: id.to_owned(),

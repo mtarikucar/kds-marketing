@@ -13,7 +13,7 @@ use crate::{
         failure,
     },
 };
-use jt_capability::Capability;
+use jt_capability::{Capability, CapabilityId};
 use jt_connector::{ConnectorError, Credential, Provider, provider_for_kind};
 use jt_studio::{MediaAsset, Piece, PublishAttempt, PublishState, SlotState, TiktokPost};
 use jt_tenancy::WorkspaceId;
@@ -24,6 +24,14 @@ use time::{Duration, OffsetDateTime};
 /// stay unsettled after it was sent: the recovery job asks again every run until then, and then
 /// records it as failed.
 pub const RESOLVE_WINDOW: Duration = Duration::minutes(30);
+
+/// How long after it was sent a post chosen public that is posted but has no public id yet
+/// ([`PublishResolution::AwaitingPublicId`]: TikTok names one once its moderation passed the
+/// post) waits for one: until then each status read may bring it (the recovery job's, or one a
+/// webhook asks for at once); then the post settles as posted, under the id it has (no
+/// permalink, no counters). A post fewer may see, or a draft, has none to wait for and settles at
+/// once.
+pub const PUBLIC_ID_WAIT: Duration = Duration::minutes(15);
 
 fn query(until: OffsetDateTime) -> SlotQuery {
     SlotQuery {
@@ -337,18 +345,26 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                 // The small receipt checkpoint survives interruption before final bookkeeping.
                 finish(d, ws, &attempt, PublishOutcome::Observed(receipt.clone())).await?;
                 let settled = publisher.resolve(&cred, &public, &receipt).await;
+                let public_id = choice.as_ref().is_some_and(TiktokPost::expects_public_id);
                 match settled {
                     // The provider published synchronously: the receipt is the post.
                     Ok(None) => finish(d, ws, &attempt, PublishOutcome::Succeeded(receipt)).await?,
                     Ok(Some(PublishResolution::Published(post))) => {
                         finish(d, ws, &attempt, PublishOutcome::Succeeded(post)).await?
                     }
+                    // Posted, with no public id to wait for.
+                    Ok(Some(PublishResolution::AwaitingPublicId(post))) if !public_id => {
+                        finish(d, ws, &attempt, PublishOutcome::Succeeded(post)).await?
+                    }
                     Ok(Some(PublishResolution::Failed(e))) => {
                         fail(d, ws, &attempt, provider, &e).await?
                     }
-                    // Still processing, or the status could not be read: the recovery job asks
-                    // again (`recover_publications`).
-                    Ok(Some(PublishResolution::Pending)) | Err(_) => {}
+                    // Still processing, waiting for its public id, or the status could not be
+                    // read: the recovery job asks again (`recover_publications`).
+                    Ok(Some(
+                        PublishResolution::Pending | PublishResolution::AwaitingPublicId(_),
+                    ))
+                    | Err(_) => {}
                 }
             }
             Err(e) => fail(d, ws, &attempt, provider, &e).await?,
@@ -413,7 +429,8 @@ async fn fail(
 /// Where an observed post of a provider that publishes in the background stands (see
 /// [`recover_publications`]): `true` when the attempt was settled (succeeded or failed), `false`
 /// when it is left for a later run; `None` when the provider publishes synchronously, and the
-/// receipt is to be verified by reading the post back.
+/// receipt is to be verified by reading the post back. `public_id`: whether the post was chosen
+/// public, so that one posted without a public id yet waits for it ([`PUBLIC_ID_WAIT`]).
 async fn settle_observed(
     d: &Deps,
     ws: WorkspaceId,
@@ -421,11 +438,20 @@ async fn settle_observed(
     (provider, publisher): (Provider, &dyn Publisher),
     (cred, public): (&Credential, &Value),
     receipt: &PublishReceipt,
+    public_id: bool,
 ) -> Result<Option<bool>, AppError> {
     let settled = publisher.resolve(cred, public, receipt).await;
     let pending = match settled {
         Ok(None) => return Ok(None),
         Ok(Some(PublishResolution::Published(post))) => {
+            finish(d, ws, a, PublishOutcome::Succeeded(post)).await?;
+            return Ok(Some(true));
+        }
+        Ok(Some(PublishResolution::AwaitingPublicId(post))) => {
+            if public_id && d.clock.now() - a.claimed_at() < PUBLIC_ID_WAIT {
+                return Ok(Some(false));
+            }
+            // Posted: under the id it has, once no public id is to come or the wait is over.
             finish(d, ws, a, PublishOutcome::Succeeded(post)).await?;
             return Ok(Some(true));
         }
@@ -508,64 +534,132 @@ pub async fn recover_publications(d: &Deps, ws: WorkspaceId) -> Result<u32, AppE
                 r.commit().await?;
                 count += 1;
             }
-        } else if let Some(jt_studio::PublishOutcome::Observed(receipt)) = a.outcome() {
-            let prepared = {
-                let mut r = d.uow.tenant(ws).await?;
-                match chain::authorize_publication_recovery(r.as_mut(), &a, d.clock.now()).await {
-                    Ok(c) => {
-                        let cred = credential(d, r.as_mut(), &c).await?;
-                        Some((c, cred))
-                    }
-                    Err(_) => None,
-                }
-            };
-            let Some((c, cred)) = prepared else { continue };
-            let provider = provider_for_kind(&c.kind_key);
-            if let Some((provider, publisher)) =
-                provider.and_then(|p| d.connectors.publisher(p).map(|publisher| (p, publisher)))
-            {
-                let public = adapter_public(&c);
-                match settle_observed(
-                    d,
-                    ws,
-                    &a,
-                    (provider, publisher.as_ref()),
-                    (&cred, &public),
-                    receipt,
-                )
-                .await?
-                {
-                    Some(true) => {
-                        count += 1;
-                        continue;
-                    }
-                    Some(false) => continue,
-                    None => {}
-                }
-            }
-            let Some(reader) =
-                provider_for_kind(&c.kind_key).and_then(|p| d.connectors.insights(p))
-            else {
-                continue;
-            };
-            if reader
-                .post_metrics(&cred, &adapter_public(&c), &receipt.external_id)
-                .await
-                .is_ok()
-            {
-                finish(
-                    d,
-                    ws,
-                    &a,
-                    PublishOutcome::Succeeded(PublishReceipt {
-                        external_id: receipt.external_id.clone(),
-                        url: receipt.url.clone(),
-                    }),
-                )
-                .await?;
-                count += 1;
-            }
+        } else if let Some(jt_studio::PublishOutcome::Observed(receipt)) = a.outcome()
+            && recover_observed(d, ws, &a, receipt).await?
+        {
+            count += 1;
         }
     }
     Ok(count)
+}
+
+/// Recovers the observed attempt `a` (its captured `receipt`) as [`recover_publications`] does,
+/// under the attempt's historical authority: `true` once settled.
+async fn recover_observed(
+    d: &Deps,
+    ws: WorkspaceId,
+    a: &PublishAttempt,
+    receipt: &PublishReceipt,
+) -> Result<bool, AppError> {
+    let prepared = {
+        let mut r = d.uow.tenant(ws).await?;
+        match chain::authorize_publication_recovery(r.as_mut(), a, d.clock.now()).await {
+            Ok(c) => {
+                let cred = credential(d, r.as_mut(), &c).await?;
+                // The posting screen's choice approved for the revision sent, for a TikTok post.
+                let public_id = r
+                    .studio()
+                    .get_approval(ApprovalTarget::Slot(a.slot_id()), a.slot_revision())
+                    .await?
+                    .and_then(|approval| approval.tiktok)
+                    .is_some_and(|post| post.expects_public_id());
+                Some((c, cred, public_id))
+            }
+            Err(_) => None,
+        }
+    };
+    let Some((c, cred, public_id)) = prepared else {
+        return Ok(false);
+    };
+    let provider = provider_for_kind(&c.kind_key);
+    if let Some((provider, publisher)) =
+        provider.and_then(|p| d.connectors.publisher(p).map(|publisher| (p, publisher)))
+    {
+        let public = adapter_public(&c);
+        if let Some(settled) = settle_observed(
+            d,
+            ws,
+            a,
+            (provider, publisher.as_ref()),
+            (&cred, &public),
+            receipt,
+            public_id,
+        )
+        .await?
+        {
+            return Ok(settled);
+        }
+    }
+    let Some(reader) = provider_for_kind(&c.kind_key).and_then(|p| d.connectors.insights(p)) else {
+        return Ok(false);
+    };
+    if reader
+        .post_metrics(&cred, &adapter_public(&c), &receipt.external_id)
+        .await
+        .is_err()
+    {
+        return Ok(false);
+    }
+    finish(
+        d,
+        ws,
+        a,
+        PublishOutcome::Succeeded(PublishReceipt {
+            external_id: receipt.external_id.clone(),
+            url: receipt.url.clone(),
+        }),
+    )
+    .await?;
+    Ok(true)
+}
+
+/// Settles at once the observed post `external_id` (its receipt's id: TikTok's publish id) that
+/// capability `capability_id` published, when the provider's webhook says it moved (TikTok's
+/// `post.publish.*`): with the very read-back [`recover_publications`] makes, so that a webhook
+/// and the recovery job settle it alike and whichever comes second finds it settled. Only an
+/// attempt still observed is read: any other, and a post no attempt of the capability observed,
+/// is left alone (`false`). `true` once settled.
+pub async fn resolve_observed(
+    d: &Deps,
+    ws: WorkspaceId,
+    capability_id: CapabilityId,
+    external_id: &str,
+) -> Result<bool, AppError> {
+    let found = {
+        let mut r = d.uow.tenant(ws).await?;
+        chain::active(r.as_mut()).await?;
+        let mut found = None;
+        for s in r
+            .studio()
+            .list_slots(query(d.clock.now() + Duration::nanoseconds(1)))
+            .await?
+            .into_iter()
+            .filter(|s| s.capability_id == capability_id)
+        {
+            found = r
+                .studio()
+                .slot_evidence(s.id)
+                .await?
+                .0
+                .into_iter()
+                .find(|a| {
+                    a.capability_id() == capability_id
+                        && matches!(
+                            a.outcome(),
+                            Some(jt_studio::PublishOutcome::Observed(receipt))
+                                if receipt.external_id == external_id
+                        )
+                });
+            if found.is_some() {
+                break;
+            }
+        }
+        found
+    };
+    match found.as_ref().map(|a| (a, a.outcome())) {
+        Some((a, Some(jt_studio::PublishOutcome::Observed(receipt)))) => {
+            recover_observed(d, ws, a, receipt).await
+        }
+        _ => Ok(false),
+    }
 }
