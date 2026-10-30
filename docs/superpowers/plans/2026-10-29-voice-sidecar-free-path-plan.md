@@ -11739,6 +11739,8 @@ Check the registration's contact as NetGSM sees it (`docker exec jeeta-asterisk 
 
 Phase C changes what the core plays and returns; every change is additive and existing callers keep working. `jt_calls` parts run on Windows; `jt_app`, `jt_mcp` and `jt_panel_http` tests run in CI only (section 2).
 
+**Stopped here (2026-10-31, the owner's usage budget).** Done and pushed: C1 whole (`5ccd1567`, `6293c460`, `341056b2`; as-built record under C1), B7's result and `VOICE_ACK_MS=400` in D3's env (`5a969799`). CI on `5a969799` was not waited for. Half-done: nothing committed of C2; its two failing tests were written, seen failing as the plan says (empty `script.lines`; no `hotwords` in the schema), then taken back. Next step: C2 Step 1 as written (the tests are verbatim in C2), then Step 2. Not started: C3, C4, C5 (C5 also owns "a person's save of an untouched template stores it as sent": apply the "sent as shown keeps the stored value" rule to a person too, and have the panel refetch the policy after a save instead of `setQueryData` with the raw stored policy, whose `null` opening would show as empty and save as "none"). Locally, jt_app's call tests build and pass on Windows in about 4 minutes with the two unix-only lines of `jt_pg/src/wal.rs` removed (never committed).
+
 ### Task C1: The workspace opening and the transcript notice come first (and the closing has a default)
 
 **Files:**
