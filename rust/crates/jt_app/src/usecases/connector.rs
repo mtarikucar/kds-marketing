@@ -1065,23 +1065,36 @@ pub async fn hooks(deps: &Deps, ctx: &Ctx) -> Result<HooksOut, AppError> {
 }
 
 /// Records that the account of capability `id` removed the app's access at its provider
-/// (TikTok's `authorization.removed` webhook, for `reason`; the access token is revoked by then),
-/// in the open bundle `repos`: as a probe refused with `Auth` would, the capability turns
-/// `unreachable` and `reconnect_required` is set (`work.pending` then asks for a reconnection),
-/// `health` saying why as a probe's failure line; and `connector.authorization_removed`
-/// (`{kind_key, reason}`) is written. A retired capability is left alone: `false`. The sealed
-/// credential is kept, dead: a reconnection replaces it, a retirement erases it. A later probe
-/// that succeeds (the owner granted access again) clears it all, as for any lost login.
+/// (TikTok's `authorization.removed` webhook, for `reason`, the event having happened at
+/// `occurred_at` when the provider said; the access token is revoked by then), in the open bundle
+/// `repos`: as a probe refused with `Auth` would, the capability turns `unreachable` and
+/// `reconnect_required` is set (`work.pending` then asks for a reconnection), `health` saying why
+/// as a probe's failure line; and `connector.authorization_removed` (`{kind_key, reason}`) is
+/// written when that flips `reconnect_required`, once however many such events arrive. The
+/// sealed credential is kept, dead: a reconnection replaces it, a retirement erases it. A later
+/// probe that succeeds (the owner granted access again) clears it all, as for any lost login.
+///
+/// Left alone (`false`): a retired capability, and one verified after the event happened (its
+/// access was proven since: a reconnection, or an event about a grant the capability no longer
+/// holds, such as the revocation of a retired sibling's token, which TikTok reports too, or a
+/// redelivery after the owner reconnected). `true` when anything was written.
 pub(crate) async fn authorization_removed(
     repos: &mut dyn TenantRepos,
     ctx: &Ctx,
     id: CapabilityId,
     reason: &str,
+    occurred_at: Option<OffsetDateTime>,
 ) -> Result<bool, AppError> {
     let mut current = locked(repos, id).await?;
     if current.status == StoredStatus::Retired {
         return Ok(false);
     }
+    if let (Some(at), Some(verified)) = (occurred_at, current.last_verified_at)
+        && at < verified
+    {
+        return Ok(false);
+    }
+    let flipped = !reconnect_required(&current);
     let error = ConnectorError::auth(format!("the account removed the app's access ({reason})"));
     let line = super::failure::failure_reason(provider_for_kind(&current.kind_key), &error);
     current.status = status_after_probe(current.status, &ProbeResult::failure(0, error));
@@ -1102,17 +1115,19 @@ pub(crate) async fn authorization_removed(
     current.updated_at = ctx.now;
     let kind_key = current.kind_key.clone();
     repos.capabilities().update(current).await?;
-    let in_force = version_in_force(repos).await?;
-    append(
-        repos,
-        ctx,
-        "connector.authorization_removed",
-        "capability",
-        id,
-        in_force,
-        json!({ "kind_key": kind_key, "reason": reason }),
-    )
-    .await?;
+    if flipped {
+        let in_force = version_in_force(repos).await?;
+        append(
+            repos,
+            ctx,
+            "connector.authorization_removed",
+            "capability",
+            id,
+            in_force,
+            json!({ "kind_key": kind_key, "reason": reason }),
+        )
+        .await?;
+    }
     Ok(true)
 }
 

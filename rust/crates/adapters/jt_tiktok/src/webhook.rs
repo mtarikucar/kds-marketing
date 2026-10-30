@@ -28,8 +28,14 @@
 //!
 //! **Identity** ([`TiktokHook::external_id`]). TikTok's events carry no id of their own and are
 //! delivered at least once, so an event is named by what it says: the lowercase hex SHA-256 of
-//! its name, open id, `create_time` and `content` (as sent), each followed by a unit separator.
-//! A redelivery says the same and is stored once.
+//! its name, open id, `create_time` and `content` (parsed and serialized again compactly with its
+//! keys sorted, so that a redelivery spaced or ordered otherwise is the same event; content that
+//! is not JSON as sent), each followed by a unit separator. A redelivery says the same and is
+//! stored once.
+//!
+//! **Routing.** An event names its account (`user_openid`) and, about a post, the post
+//! (`content.publish_id`, [`TiktokHookEvent::publish_id`]): the use cases route it to the
+//! workspace that sent that post, else to every workspace holding the account.
 
 use jt_app::ports::connectors::InboundEventDraft;
 use jt_app::usecases::webhook::{TiktokHookEffect, TiktokHookEvent};
@@ -144,8 +150,14 @@ pub fn parse(raw: &[u8]) -> Result<TiktokHook, ParseError> {
         Some(object @ Value::Object(_)) => (object.to_string(), object.clone()),
         _ => (String::new(), Value::Null),
     };
+    // The content as it says, not as it was spaced or ordered: re-serialized compactly, its keys
+    // sorted (serde_json's maps are ordered by key); content that is not JSON, as sent.
+    let content_identity = match &content {
+        Value::Object(_) => content.to_string(),
+        _ => content_text,
+    };
     let mut digest = Sha256::new();
-    for part in [&event, &open_id, &create_text, &content_text] {
+    for part in [&event, &open_id, &create_text, &content_identity] {
         digest.update(part.as_bytes());
         digest.update([0x1f]);
     }
@@ -200,6 +212,7 @@ impl TiktokHook {
     /// The event as the use cases take it: the account it is about, its effect and its draft.
     pub fn into_event(self) -> TiktokHookEvent {
         TiktokHookEvent {
+            publish_id: field(&self.content["publish_id"]),
             effect: self.effect(),
             draft: self.draft(),
             open_id: self.open_id,
@@ -265,14 +278,51 @@ mod tests {
         let mut reordered = serde_json::to_vec_pretty(&again).unwrap();
         reordered.push(b'\n');
         assert_eq!(parse(&reordered).unwrap().external_id, a.external_id);
+        // Its content serialized otherwise (spaces, the order of its keys) says the same.
+        let id = |event: &str, content: &str| parse(&body(event, content)).unwrap().external_id;
+        assert_eq!(
+            id("post.publish.complete", r#"{"publish_id": "p1"}"#),
+            a.external_id
+        );
+        assert_eq!(
+            id(
+                "post.publish.complete",
+                r#"{ "publish_type":"DIRECT_PUBLISH" , "publish_id":"p1" }"#
+            ),
+            id(
+                "post.publish.complete",
+                r#"{"publish_id":"p1","publish_type":"DIRECT_PUBLISH"}"#
+            )
+        );
         // Anything it says differently is another.
         for other in [
             body("post.publish.failed", r#"{"publish_id":"p1"}"#),
             body("post.publish.complete", r#"{"publish_id":"p2"}"#),
-            body("post.publish.complete", r#"{"publish_id": "p1"}"#),
+            body(
+                "post.publish.complete",
+                r#"{"publish_id":"p1","post_id":"7"}"#,
+            ),
+            body("post.publish.complete", "not json"),
         ] {
             assert_ne!(parse(&other).unwrap().external_id, a.external_id);
         }
+        // Content that is not JSON counts as it is sent.
+        assert_eq!(
+            parse(&body("post.publish.complete", "not json"))
+                .unwrap()
+                .external_id,
+            parse(&body("post.publish.complete", "not json"))
+                .unwrap()
+                .external_id
+        );
+        assert_ne!(
+            parse(&body("post.publish.complete", "not json"))
+                .unwrap()
+                .external_id,
+            parse(&body("post.publish.complete", "not  json"))
+                .unwrap()
+                .external_id
+        );
         let mut later: Value = again.clone();
         later["create_time"] = json!(1_792_682_936);
         assert_ne!(
@@ -289,6 +339,39 @@ mod tests {
                 .external_id,
             a.external_id
         );
+    }
+
+    /// What `connector.hooks` tells the operator Jeeta acts on is what this parser acts on.
+    #[test]
+    fn the_hook_events_listed_are_those_acted_on() {
+        let acted: Vec<&str> = [AUTHORIZATION_REMOVED]
+            .into_iter()
+            .chain(PUBLISH_MOVED.iter().copied())
+            .collect();
+        assert_eq!(
+            jt_app::usecases::connector::TIKTOK_HOOK_EVENTS,
+            acted.as_slice()
+        );
+    }
+
+    #[test]
+    fn a_post_is_named_by_any_event_about_it() {
+        for event in [
+            "post.publish.no_longer_publicaly_available",
+            "post.publish.complete",
+            "something.new",
+        ] {
+            let named = parse(&body(event, r#"{"publish_id":"p1"}"#))
+                .unwrap()
+                .into_event();
+            assert_eq!(named.publish_id.as_deref(), Some("p1"), "{event}");
+        }
+        for content in ["{}", r#"{"publish_id":""}"#, "{\"reason\": 1}"] {
+            let event = parse(&body(AUTHORIZATION_REMOVED, content))
+                .unwrap()
+                .into_event();
+            assert_eq!(event.publish_id, None, "{content}");
+        }
     }
 
     #[test]
@@ -371,6 +454,8 @@ mod tests {
         assert!(!text.contains("tiktok-client-key") && !text.contains("open-id-test"));
         let event = hook.into_event();
         assert_eq!(event.open_id, "open-id-test");
+        // It names the post it is about, which routes it.
+        assert_eq!(event.publish_id.as_deref(), Some("p1"));
         assert_eq!(
             event.effect,
             TiktokHookEffect::PublishMoved {

@@ -576,6 +576,38 @@ fn tiktok_signature_covers_the_timestamp_and_the_raw_body() {
         );
     }
 
+    // Why a header is refused, for the operator's log (never the values).
+    let check = |header: &str, now| tiktok_signature_check(secret, body, header, now, tolerance);
+    assert_eq!(check(&good, NOW), Ok(()));
+    assert_eq!(
+        check("t=1792682940", NOW),
+        Err(TiktokSignatureError::Malformed)
+    );
+    assert_eq!(
+        check(&format!("t=1792682940,s={upper}"), NOW),
+        Err(TiktokSignatureError::Malformed)
+    );
+    assert_eq!(
+        check(&format!("t=1792682941,s={hex}"), NOW),
+        Err(TiktokSignatureError::Mismatch)
+    );
+    assert_eq!(
+        check(&good, NOW + Duration::hours(1)),
+        Err(TiktokSignatureError::Stale)
+    );
+    // A stale timestamp is told only of a signature that matches: a forged one is a mismatch.
+    assert_eq!(
+        check(&format!("t=1792682941,s={hex}"), NOW + Duration::hours(1)),
+        Err(TiktokSignatureError::Mismatch)
+    );
+    for (e, reason) in [
+        (TiktokSignatureError::Malformed, "malformed"),
+        (TiktokSignatureError::Mismatch, "mismatch"),
+        (TiktokSignatureError::Stale, "stale"),
+    ] {
+        assert_eq!(e.reason(), reason);
+    }
+
     // An unset (empty) client secret verifies nothing, even a signature made with the empty key.
     let empty = hmac_hex(b"", &[b"1792682940.".as_slice(), body].concat());
     assert!(!tiktok_signature_ok(

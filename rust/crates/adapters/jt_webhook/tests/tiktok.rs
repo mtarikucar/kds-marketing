@@ -82,6 +82,7 @@ async fn capability(w: &World, id: jt_capability::CapabilityId) -> jt_capability
 #[tokio::test]
 async fn an_unsigned_wrongly_signed_or_stale_delivery_is_refused_with_nothing_stored() {
     let (w, cap) = tiktok_world().await;
+    let before = counters().rejected_tiktok;
     let raw = body("authorization.removed", json!({ "reason": 1 }));
     let recent = FIXED_NOW - Duration::minutes(1);
     let mut tampered = raw.clone();
@@ -123,6 +124,8 @@ async fn an_unsigned_wrongly_signed_or_stale_delivery_is_refused_with_nothing_st
     );
     assert!(w.stored().is_empty());
     assert_eq!(capability(&w, cap).await.status, StoredStatus::Verified);
+    // Each refusal is counted (and warned of at most once a minute, naming only why).
+    assert!(counters().rejected_tiktok >= before + 8);
 
     // A body over the limit is refused before it is read whole.
     let big = vec![b' '; TIKTOK_BODY_LIMIT + 1];

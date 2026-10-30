@@ -36,14 +36,33 @@ pub const TIKTOK_SIGNATURE_TOLERANCE: Duration = Duration::minutes(5);
 /// the year 2286).
 const MAX_TIMESTAMP_DIGITS: usize = 12;
 
+/// Why a TikTok signature was refused ([`tiktok_signature_check`]); its [`reason`] names it in a
+/// log line without any value of the header.
+///
+/// [`reason`]: TiktokSignatureError::reason
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TiktokSignatureError {
+    /// The header is not `t=<digits>,s=<64 lowercase hex digits>`.
+    Malformed,
+    /// No signature in it is the body's under the client secret (or no client secret is set).
+    Mismatch,
+    /// The signature is the body's, but its timestamp is too far from now: a replay.
+    Stale,
+}
+
+impl TiktokSignatureError {
+    /// `malformed`, `mismatch` or `stale`.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            TiktokSignatureError::Malformed => "malformed",
+            TiktokSignatureError::Mismatch => "mismatch",
+            TiktokSignatureError::Stale => "stale",
+        }
+    }
+}
+
 /// Whether `header` (the value of [`TIKTOK_SIGNATURE_HEADER`]) signs the raw body `raw` under the
-/// client secret, as of `now`: the header is comma-separated `prefix=value` elements (spaces
-/// around them ignored), exactly one `t` (Unix seconds, decimal digits only) and at least one `s`
-/// (64 lowercase hex digits), and one of the `s` values is HMAC-SHA256 under the client secret
-/// over `"{t}.{raw}"` (the timestamp as the header writes it, a dot, the body as received),
-/// compared in constant time; and `t` is within `tolerance` of `now`, either way (an older
-/// signature is a replay). Any other element is ignored. A malformed header, and an empty (unset)
-/// client secret, verify nothing.
+/// client secret, as of `now` ([`tiktok_signature_check`]).
 pub fn tiktok_signature_ok(
     client_secret: &[u8],
     raw: &[u8],
@@ -51,21 +70,39 @@ pub fn tiktok_signature_ok(
     now: OffsetDateTime,
     tolerance: Duration,
 ) -> bool {
-    if client_secret.is_empty() {
-        return false;
-    }
+    tiktok_signature_check(client_secret, raw, header, now, tolerance).is_ok()
+}
+
+/// Checks that `header` (the value of [`TIKTOK_SIGNATURE_HEADER`]) signs the raw body `raw` under
+/// the client secret, as of `now`: the header is comma-separated `prefix=value` elements (spaces
+/// around them ignored), exactly one `t` (Unix seconds, decimal digits only) and at least one `s`
+/// (64 lowercase hex digits), else [`TiktokSignatureError::Malformed`]; one of the `s` values is
+/// HMAC-SHA256 under the client secret over `"{t}.{raw}"` (the timestamp as the header writes it,
+/// a dot, the body as received), compared in constant time, else
+/// [`TiktokSignatureError::Mismatch`]; and `t` is within `tolerance` of `now`, either way, else
+/// [`TiktokSignatureError::Stale`] (an older signature is a replay; a stale timestamp is told
+/// only of a signature that matched). Any other element is ignored. An empty (unset) client
+/// secret verifies nothing (`Mismatch`).
+pub fn tiktok_signature_check(
+    client_secret: &[u8],
+    raw: &[u8],
+    header: &str,
+    now: OffsetDateTime,
+    tolerance: Duration,
+) -> Result<(), TiktokSignatureError> {
+    use TiktokSignatureError::{Malformed, Mismatch, Stale};
     let mut timestamp: Option<&str> = None;
     let mut signatures: Vec<[u8; 32]> = Vec::new();
     for element in header.split(',') {
         let Some((prefix, value)) = element.trim().split_once('=') else {
-            return false;
+            return Err(Malformed);
         };
         match prefix {
             "t" if timestamp.is_none() => timestamp = Some(value),
-            "t" => return false,
+            "t" => return Err(Malformed),
             "s" => match from_hex::<32>(value) {
                 Some(signature) => signatures.push(signature),
-                None => return false,
+                None => return Err(Malformed),
             },
             _ => {}
         }
@@ -73,18 +110,21 @@ pub fn tiktok_signature_ok(
     let Some(timestamp) = timestamp.filter(|t| {
         (1..=MAX_TIMESTAMP_DIGITS).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_digit())
     }) else {
-        return false;
+        return Err(Malformed);
     };
     if signatures.is_empty() {
-        return false;
+        return Err(Malformed);
     }
     let Some(signed_at) = timestamp
         .parse::<i64>()
         .ok()
         .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())
     else {
-        return false;
+        return Err(Malformed);
     };
+    if client_secret.is_empty() {
+        return Err(Mismatch);
+    }
     let mut message = Vec::with_capacity(timestamp.len() + 1 + raw.len());
     message.extend_from_slice(timestamp.as_bytes());
     message.push(b'.');
@@ -94,7 +134,13 @@ pub fn tiktok_signature_ok(
     let signed = signatures
         .iter()
         .fold(false, |any, given| any | ct_eq(&expected, given));
-    signed && (now - signed_at).abs() <= tolerance
+    if !signed {
+        return Err(Mismatch);
+    }
+    if (now - signed_at).abs() > tolerance {
+        return Err(Stale);
+    }
+    Ok(())
 }
 
 /// Whether `given`, the `hub.verify_token` of Meta's webhook verification request, is the

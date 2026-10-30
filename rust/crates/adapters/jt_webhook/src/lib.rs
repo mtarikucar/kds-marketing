@@ -53,7 +53,9 @@
 //! anything is parsed (`jt_connector::tiktok_signature_ok`: HMAC-SHA256 under the app's client
 //! secret over `"{t}.{body}"`, constant time, `t` within
 //! `jt_connector::TIKTOK_SIGNATURE_TOLERANCE` of now, either way): a bad or stale one is `401`
-//! with nothing stored. A signed body the parser does not know is `200`, counted
+//! with nothing stored. Every `401` is counted ([`counters`]`().rejected_tiktok`) and warned of
+//! at most once a minute, naming only why (`no_app`, `missing_header`, `malformed`, `mismatch`,
+//! `stale`). A signed body the parser does not know is `200`, counted
 //! ([`counters`]`().unparseable_tiktok`) and stored as nothing, as is one naming another client
 //! key, and one about an account no workspace holds connected or whose workspace is suspended
 //! (counted as `unrouted_tiktok`, a warning naming only the reason and TikTok's event name). An
@@ -99,6 +101,9 @@ static UNPARSEABLE_NETGSM: AtomicU64 = AtomicU64::new(0);
 static UNROUTED_TIKTOK: AtomicU64 = AtomicU64::new(0);
 /// Signed TikTok bodies the parser does not know.
 static UNPARSEABLE_TIKTOK: AtomicU64 = AtomicU64::new(0);
+/// TikTok deliveries refused before anything was stored (`401`): no app, no signature header, or
+/// a signature malformed, not the body's, or stale.
+static REJECTED_TIKTOK: AtomicU64 = AtomicU64::new(0);
 
 /// What the gate has dropped since the process started (process metrics: they reset at every
 /// start and are never stored).
@@ -116,6 +121,9 @@ pub struct Counters {
     pub unrouted_tiktok: u64,
     /// Signed TikTok bodies that are not a webhook the parser knows.
     pub unparseable_tiktok: u64,
+    /// TikTok deliveries refused (`401`): no TikTok app, no signature header, a signature
+    /// malformed, not the body's, or stale.
+    pub rejected_tiktok: u64,
 }
 
 /// The counters now.
@@ -126,6 +134,7 @@ pub fn counters() -> Counters {
         unparseable_netgsm: UNPARSEABLE_NETGSM.load(Ordering::Relaxed),
         unrouted_tiktok: UNROUTED_TIKTOK.load(Ordering::Relaxed),
         unparseable_tiktok: UNPARSEABLE_TIKTOK.load(Ordering::Relaxed),
+        rejected_tiktok: REJECTED_TIKTOK.load(Ordering::Relaxed),
     }
 }
 
