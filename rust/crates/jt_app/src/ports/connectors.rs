@@ -234,7 +234,7 @@ impl OAuthCallback {
             Provider::X => Some(OAuthCallback::X),
             Provider::Tiktok => Some(OAuthCallback::Tiktok),
             Provider::Linkedin => Some(OAuthCallback::Linkedin),
-            Provider::Netgsm | Provider::Mail => None,
+            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
         }
     }
 }

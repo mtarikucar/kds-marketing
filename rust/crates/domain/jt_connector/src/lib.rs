@@ -1,7 +1,8 @@
 //! Connector domain (spec §4.2 rule 1, §4.4, §6.1, §6.4, §11): which provider serves which
 //! capability kind, the one error taxonomy every provider adapter returns, the shapes of sealed
-//! credentials, the signed OAuth state and PKCE, the webhook signature math, inbound events, and
-//! how a probe result moves a capability's stored status. Pure, no I/O.
+//! credentials, the signed OAuth state and PKCE, the webhook signature math, inbound events, which
+//! comment operations a Meta grant allows, and how a probe result moves a capability's stored
+//! status. Pure, no I/O.
 //!
 //! Secrets: a [`Credential`] serialises in full only so it can be sealed; its `Debug` masks every
 //! secret, and [`Credential::redact_for_public`] gives the facts that may be stored in
@@ -15,6 +16,7 @@
 //! Stored types ([`InboundEvent`], the sealed form of [`Credential`]) are tolerant on read: an
 //! unknown field is ignored and a missing optional field reads as the default named on it.
 
+mod comments;
 mod credential;
 mod crypto;
 mod error;
@@ -25,6 +27,9 @@ mod provider;
 mod redact;
 mod webhook;
 
+pub use comments::{
+    CommentGrant, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES, comment_grant,
+};
 pub use credential::{Credential, MailTls};
 pub use error::ConnectorError;
 pub use event::{EventKind, InboundEvent, InboundEventId, dedupe_key};

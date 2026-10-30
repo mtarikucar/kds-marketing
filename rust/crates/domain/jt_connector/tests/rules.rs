@@ -54,6 +54,8 @@ const EXPECTED_PROVIDERS: &[(&str, Provider)] = &[
     ("tiktok", Provider::Tiktok),
     ("linkedin_member", Provider::Linkedin),
     ("linkedin_page", Provider::Linkedin),
+    ("trendyol", Provider::Trendyol),
+    ("hepsiburada", Provider::Hepsiburada),
 ];
 
 #[test]
@@ -97,7 +99,19 @@ fn provider_for_every_connector_kind() {
 
     // Keys: stable, round trip through `parse` and serde, case-sensitive.
     let keys: Vec<&str> = Provider::all().iter().map(Provider::key).collect();
-    assert_eq!(keys, ["meta", "netgsm", "x", "mail", "tiktok", "linkedin"]);
+    assert_eq!(
+        keys,
+        [
+            "meta",
+            "netgsm",
+            "x",
+            "mail",
+            "tiktok",
+            "linkedin",
+            "trendyol",
+            "hepsiburada"
+        ]
+    );
     for p in Provider::all() {
         assert_eq!(Provider::parse(p.key()), Some(*p));
         assert_eq!(serde_json::to_value(p).unwrap(), json!(p.key()));
@@ -824,6 +838,23 @@ fn every_credential() -> Vec<(Credential, Vec<&'static str>, Vec<&'static str>)>
             vec!["iys-pass-SECRET"],
             vec!["8503001144", "654321"],
         ),
+        (
+            Credential::TrendyolSeller {
+                seller_id: "123456".to_owned(),
+                api_key: "ty-key-SECRET".to_owned(),
+                api_secret: "ty-secret-SECRET".to_owned(),
+            },
+            vec!["ty-key-SECRET", "ty-secret-SECRET"],
+            vec!["123456"],
+        ),
+        (
+            Credential::HepsiburadaMerchant {
+                merchant_id: "a1b2c3d4-0000-4000-8000-000000000001".to_owned(),
+                service_key: "hb-service-key-SECRET".to_owned(),
+            },
+            vec!["hb-service-key-SECRET"],
+            vec!["a1b2c3d4-0000-4000-8000-000000000001"],
+        ),
     ]
 }
 
@@ -839,7 +870,9 @@ fn credential_debug_is_masked() {
             "whatsapp_cloud",
             "netgsm_sms",
             "netgsm_pbx",
-            "netgsm_iys"
+            "netgsm_iys",
+            "trendyol_seller",
+            "hepsiburada_merchant"
         ]),
         "one credential of each variant"
     );
@@ -933,6 +966,75 @@ fn credential_public_facts_never_contain_secrets() {
     assert_eq!(
         no_expiry.redact_for_public(),
         json!({ "kind": "oauth", "expires_at": null, "scopes": [] })
+    );
+}
+
+/// A marketplace seller's own API credentials (spec 2026-10-30-inbox-comments-marketplace-design.md
+/// §5.3): sealed whole, shown by the seller or merchant id only.
+#[test]
+fn marketplace_credentials_mask_and_redact() {
+    let trendyol = Credential::TrendyolSeller {
+        seller_id: "123456".to_owned(),
+        api_key: "ty-key-SECRET".to_owned(),
+        api_secret: "ty-secret-SECRET".to_owned(),
+    };
+    // The seller's service key for Jeeta as its integrator (task H0).
+    let hepsiburada = Credential::HepsiburadaMerchant {
+        merchant_id: "m-42".to_owned(),
+        service_key: "hb-service-key-SECRET".to_owned(),
+    };
+    assert_eq!(trendyol.kind(), "trendyol_seller");
+    assert_eq!(hepsiburada.kind(), "hepsiburada_merchant");
+    assert_eq!(
+        format!("{trendyol:?}"),
+        "TrendyolSeller { seller_id: \"123456\", api_key: ***, api_secret: *** }"
+    );
+    assert_eq!(
+        format!("{hepsiburada:?}"),
+        "HepsiburadaMerchant { merchant_id: \"m-42\", service_key: *** }"
+    );
+    assert_eq!(
+        trendyol.redact_for_public(),
+        json!({ "kind": "trendyol_seller", "seller_id": "123456" })
+    );
+    assert_eq!(
+        hepsiburada.redact_for_public(),
+        json!({ "kind": "hepsiburada_merchant", "merchant_id": "m-42" })
+    );
+    // Sealed, tagged by kind, and read back; a blob missing a secret does not read.
+    assert_eq!(
+        serde_json::to_value(&trendyol).unwrap(),
+        json!({
+            "kind": "trendyol_seller", "seller_id": "123456",
+            "api_key": "ty-key-SECRET", "api_secret": "ty-secret-SECRET"
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(&hepsiburada).unwrap(),
+        json!({
+            "kind": "hepsiburada_merchant", "merchant_id": "m-42",
+            "service_key": "hb-service-key-SECRET"
+        })
+    );
+    for cred in [&trendyol, &hepsiburada] {
+        let sealed = serde_json::to_value(cred).unwrap();
+        assert_eq!(&serde_json::from_value::<Credential>(sealed).unwrap(), cred);
+        assert!(!cred.expires_soon(NOW, Duration::days(10_000)));
+    }
+    let read = |v: Value| serde_json::from_value::<Credential>(v);
+    assert!(read(json!({ "kind": "trendyol_seller", "seller_id": "1", "api_key": "k" })).is_err());
+    assert!(read(json!({ "kind": "hepsiburada_merchant", "merchant_id": "1" })).is_err());
+    assert_eq!(
+        read(json!({
+            "kind": "trendyol_seller", "seller_id": "1", "api_key": "k", "api_secret": "s",
+            "later_field": true
+        }))
+        .unwrap(),
+        Credential::TrendyolSeller {
+            seller_id: "1".to_owned(),
+            api_key: "k".to_owned(),
+            api_secret: "s".to_owned(),
+        }
     );
 }
 
@@ -1283,6 +1385,8 @@ fn event_kinds_round_trip_and_unknown_is_kept() {
         (EventKind::LeadGen, "lead_gen"),
         (EventKind::CallEvent, "call_event"),
         (EventKind::Consent, "consent"),
+        (EventKind::Comment, "comment"),
+        (EventKind::Question, "question"),
     ];
     for (kind, key) in &known {
         assert_eq!(kind.key(), *key);
@@ -1307,6 +1411,231 @@ fn event_kinds_round_trip_and_unknown_is_kept() {
             serde_json::from_value::<EventKind>(json!(other)).unwrap(),
             kind
         );
+    }
+}
+
+/// A comment and a marketplace question are events of their own (spec §6.3), not messages.
+#[test]
+fn comment_and_question_event_kinds_round_trip() {
+    for (kind, key) in [
+        (EventKind::Comment, "comment"),
+        (EventKind::Question, "question"),
+    ] {
+        assert_eq!(kind.key(), key);
+        assert_eq!(EventKind::parse(key), kind);
+        assert_ne!(kind, EventKind::Message);
+        let event: InboundEvent = serde_json::from_value(json!({
+            "id": InboundEventId::new_v7(), "workspace_id": ws(), "provider": "trendyol",
+            "external_id": "q:1:open:", "kind": key
+        }))
+        .unwrap();
+        assert_eq!(event.kind, kind);
+        assert_eq!(event.provider, Provider::Trendyol);
+        assert_eq!(serde_json::to_value(&event).unwrap()["kind"], json!(key));
+    }
+    assert_eq!(
+        EventKind::parse("comments"),
+        EventKind::Unknown("comments".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Comment grants
+// ---------------------------------------------------------------------------------------------
+
+/// The scopes Facebook Login asks for today (`jt_meta::FACEBOOK_SCOPES` at this change): no
+/// comment permission among them.
+const FACEBOOK_SCOPES_TODAY: &[&str] = &[
+    "pages_show_list",
+    "pages_manage_posts",
+    "pages_read_engagement",
+    "business_management",
+    "pages_messaging",
+    "pages_manage_metadata",
+    "instagram_basic",
+    "instagram_manage_messages",
+    "instagram_content_publish",
+    "whatsapp_business_management",
+    "whatsapp_business_messaging",
+    "ads_read",
+    "read_insights",
+    "instagram_manage_insights",
+    "leads_retrieval",
+    "ads_management",
+];
+
+/// The scopes Instagram Login asks for today (`jt_meta::INSTAGRAM_SCOPES` at this change).
+const INSTAGRAM_SCOPES_TODAY: &[&str] = &[
+    "instagram_business_basic",
+    "instagram_business_content_publish",
+];
+
+#[test]
+fn comment_grant_matrix() {
+    let none = CommentGrant::default();
+    let all = CommentGrant {
+        read: true,
+        reply: true,
+        hide: true,
+        delete_others: true,
+        private_reply: true,
+    };
+    assert!(!none.enabled());
+    assert!(all.enabled());
+    for (read, reply, enabled) in [
+        (true, false, false),
+        (false, true, false),
+        (true, true, true),
+    ] {
+        let grant = CommentGrant {
+            read,
+            reply,
+            ..CommentGrant::default()
+        };
+        assert_eq!(grant.enabled(), enabled);
+    }
+    assert_eq!(
+        FACEBOOK_COMMENT_SCOPES,
+        [
+            "instagram_manage_comments",
+            "pages_manage_engagement",
+            "pages_read_user_content"
+        ]
+    );
+    assert_eq!(
+        INSTAGRAM_COMMENT_SCOPES,
+        [
+            "instagram_business_manage_comments",
+            "instagram_business_manage_messages"
+        ]
+    );
+    let with = |base: &[&'static str], more: &[&'static str]| -> Vec<&'static str> {
+        base.iter().chain(more).copied().collect()
+    };
+
+    // Today's grants light nothing up, on any kind.
+    for kind in [
+        "facebook_page",
+        "instagram",
+        "messenger",
+        "instagram_dm",
+        "trendyol",
+        "x",
+    ] {
+        assert_eq!(comment_grant(kind, FACEBOOK_SCOPES_TODAY), none, "{kind}");
+        assert_eq!(comment_grant(kind, INSTAGRAM_SCOPES_TODAY), none, "{kind}");
+        assert_eq!(comment_grant(kind, &[]), none, "{kind}");
+    }
+    // Today's Facebook Login plus the comment scopes it would ask for: everything.
+    let facebook_login = with(FACEBOOK_SCOPES_TODAY, FACEBOOK_COMMENT_SCOPES);
+    assert_eq!(comment_grant("facebook_page", &facebook_login), all);
+    assert_eq!(comment_grant("instagram", &facebook_login), all);
+    // Instagram Login plus its comment scopes: everything on Instagram.
+    let instagram_login = with(INSTAGRAM_SCOPES_TODAY, INSTAGRAM_COMMENT_SCOPES);
+    assert_eq!(comment_grant("instagram", &instagram_login), all);
+    assert_eq!(comment_grant("facebook_page", &instagram_login), none);
+
+    // A Page token: read, reply and hide need both engagement scopes; deleting others' comments
+    // needs pages_read_user_content, a private reply pages_messaging.
+    let engagement = ["pages_read_engagement", "pages_manage_engagement"];
+    let page_only = CommentGrant {
+        read: true,
+        reply: true,
+        hide: true,
+        delete_others: false,
+        private_reply: false,
+    };
+    assert_eq!(comment_grant("facebook_page", &engagement), page_only);
+    assert_eq!(
+        comment_grant(
+            "facebook_page",
+            &with(&engagement, &["pages_read_user_content"])
+        ),
+        CommentGrant {
+            delete_others: true,
+            ..page_only
+        }
+    );
+    assert_eq!(
+        comment_grant("facebook_page", &with(&engagement, &["pages_messaging"])),
+        CommentGrant {
+            private_reply: true,
+            ..page_only
+        }
+    );
+    for half in [
+        &["pages_read_engagement"][..],
+        &[
+            "pages_manage_engagement",
+            "pages_read_user_content",
+            "pages_messaging",
+        ][..],
+    ] {
+        assert_eq!(comment_grant("facebook_page", half), none, "{half:?}");
+    }
+
+    // Instagram through Facebook Login: instagram_manage_comments; a private reply also
+    // instagram_manage_messages.
+    let ig_only = CommentGrant {
+        read: true,
+        reply: true,
+        hide: true,
+        delete_others: true,
+        private_reply: false,
+    };
+    assert_eq!(
+        comment_grant(
+            "instagram",
+            &["instagram_basic", "instagram_manage_comments"]
+        ),
+        ig_only
+    );
+    assert_eq!(
+        comment_grant(
+            "instagram",
+            &["instagram_manage_comments", "instagram_manage_messages"]
+        ),
+        all
+    );
+    // Instagram Login: instagram_business_manage_comments; a private reply also
+    // instagram_business_manage_messages.
+    assert_eq!(
+        comment_grant("instagram", &["instagram_business_manage_comments"]),
+        ig_only
+    );
+    assert_eq!(
+        comment_grant(
+            "instagram",
+            &[
+                "instagram_business_manage_comments",
+                "instagram_business_manage_messages"
+            ]
+        ),
+        all
+    );
+    // One login's messages scope does not give the other login's private reply.
+    for mixed in [
+        &[
+            "instagram_business_manage_comments",
+            "instagram_manage_messages",
+        ][..],
+        &[
+            "instagram_manage_comments",
+            "instagram_business_manage_messages",
+        ][..],
+    ] {
+        assert_eq!(comment_grant("instagram", mixed), ig_only, "{mixed:?}");
+    }
+    // Messages alone read no comment.
+    assert_eq!(
+        comment_grant("instagram", &["instagram_business_manage_messages"]),
+        none
+    );
+
+    // Marketplaces and every other kind: not a comment kind at all.
+    for kind in ["trendyol", "hepsiburada", "mailbox", "x", ""] {
+        assert_eq!(comment_grant(kind, &facebook_login), none, "{kind}");
+        assert_eq!(comment_grant(kind, &instagram_login), none, "{kind}");
     }
 }
 

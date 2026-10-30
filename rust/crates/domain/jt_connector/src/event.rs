@@ -33,6 +33,11 @@ pub enum EventKind {
     CallEvent,
     /// A consent change (İYS).
     Consent,
+    /// A public comment on one of the account's posts, as a public-item envelope.
+    Comment,
+    /// A customer question on one of the seller's marketplace products, as a public-item
+    /// envelope.
+    Question,
     /// Any other kind, by its original key.
     Unknown(String),
 }
@@ -47,6 +52,8 @@ impl EventKind {
             EventKind::LeadGen => "lead_gen",
             EventKind::CallEvent => "call_event",
             EventKind::Consent => "consent",
+            EventKind::Comment => "comment",
+            EventKind::Question => "question",
             EventKind::Unknown(key) => key,
         }
     }
@@ -61,6 +68,8 @@ impl EventKind {
             "lead_gen" => EventKind::LeadGen,
             "call_event" => EventKind::CallEvent,
             "consent" => EventKind::Consent,
+            "comment" => EventKind::Comment,
+            "question" => EventKind::Question,
             other => EventKind::Unknown(other.to_owned()),
         }
     }

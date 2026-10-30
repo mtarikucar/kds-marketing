@@ -42,3 +42,11 @@ define_id!(
     /// A decision in a person's consent history.
     ConsentId
 );
+define_id!(
+    /// One public item: a comment or a marketplace question.
+    PublicItemId
+);
+define_id!(
+    /// The post or product a public item is about.
+    PublicSubjectId
+);

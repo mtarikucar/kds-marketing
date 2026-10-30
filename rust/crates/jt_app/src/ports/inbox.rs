@@ -3,6 +3,7 @@
 //! or optional id. Locks last until the enclosing bundle commits or rolls back.
 
 pub use super::compliance::*;
+pub use super::public::*;
 
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
@@ -299,6 +300,9 @@ pub struct MergeRow {
     pub undone_at: Option<OffsetDateTime>,
 }
 /// Private restoration data: no message, note or identity text is copied into the ledger.
+///
+/// Version 2 adds the public items of the snapshotted conversations (migration 0019); a version 1
+/// snapshot reads with none.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MergeSnapshot {
     /// Maximum timestamp of the locked aggregates; merge checkpoints must advance it.
@@ -313,6 +317,9 @@ pub struct MergeSnapshot {
     pub tasks: Vec<TaskParent>,
     pub notes: Vec<NoteParent>,
     pub outbox: Vec<OutboxParent>,
+    /// Missing (a version 1 snapshot) reads as none.
+    #[serde(default)]
+    pub public_items: Vec<PublicItemParent>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct IdentityParent {
@@ -346,6 +353,15 @@ pub struct OutboxParent {
     pub id: Uuid,
     pub conversation_id: ConversationId,
 }
+/// A public item and the conversation it belonged to before a merge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PublicItemParent {
+    pub id: PublicItemId,
+    pub conversation_id: ConversationId,
+}
+
+/// The snapshot version adapters write: 2, with the public items.
+pub const MERGE_SNAPSHOT_VERSION: u32 = 2;
 
 #[async_trait]
 pub trait MergeRepo: Send + Sync {
@@ -353,6 +369,7 @@ pub trait MergeRepo: Send + Sync {
     /// Lock child aggregates in id order, after both people have been locked in id order.
     async fn snapshot(&mut self, a: PersonId, b: PersonId) -> Result<MergeSnapshot, AppError>;
     /// Move the snapshotted graph, preserving every message even when external IDs collide.
+    /// Public items move to their survivor before a coalesced conversation is deleted.
     async fn apply_snapshot(
         &mut self,
         snapshot: &MergeSnapshot,
@@ -505,6 +522,17 @@ pub trait OutboxRepo: Send + Sync {
         &mut self,
         messages: &[MessageId],
     ) -> Result<Vec<(MessageId, String)>, AppError>;
+    /// How many public replies the agent drafted on `capability` since `since`, as its
+    /// `daily_ops_cap` counts them: outbox rows created at or after `since` whose intent is a
+    /// public item's public reply (`intent.public.visibility` = `"public"`) drafted by an agent
+    /// (`intent.public.drafted_by.kind` = `"agent"`), in any state but `refused` (held, queued,
+    /// in flight, sent, failed or uncertain alike). The caller holds the capability's lock
+    /// (`CapabilityRepo::lock`), so the count and the row it lets in are one reservation.
+    async fn agent_public_replies_since(
+        &mut self,
+        capability: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError>;
 }
 
 impl MergeSnapshot {

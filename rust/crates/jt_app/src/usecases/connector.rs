@@ -1562,7 +1562,7 @@ fn reconnectable(capability: &Capability) -> Result<(), AppError> {
     }
     not_retired(capability)?;
     match provider_for_kind(&capability.kind_key) {
-        Some(Provider::Netgsm | Provider::Mail) => {
+        Some(Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada) => {
             return Err(AppError::validation(
                 "this capability takes new credentials by hand (connector.set_credentials)",
                 json!({ "reason": "use_set_credentials" }),

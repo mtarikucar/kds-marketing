@@ -57,8 +57,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.declare",
             description: "Declare something the workspace can act through. kind_key is one of \
                           a closed list, in these kind groups: social_account, messaging, \
-                          telephony, community, ads and calendar (accounts reached through a \
-                          connector); device (phone, computer, printer, printer_3d, audio_io, \
+                          telephony, community, ads, calendar and marketplace (accounts reached \
+                          through a connector); device (phone, computer, printer, printer_3d, audio_io, \
                           camera, screen, scanner, usb_storage); agent_connection, \
                           computer_access and third_party (reached through you, the agent). \
                           key_detail only for third_party.other (kind_key \"other\"): the \

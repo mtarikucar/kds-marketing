@@ -9,13 +9,11 @@ publish.workspace = true
 jt_tenancy.workspace = true
 jt_capability.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 uuid.workspace = true
 time.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

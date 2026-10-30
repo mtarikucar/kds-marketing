@@ -5,7 +5,7 @@ use crate::{
     error::AppError,
     ports::{
         TenantRepos,
-        inbox::{MergeRow, MergeSnapshot},
+        inbox::{MERGE_SNAPSHOT_VERSION, MergeRow, MergeSnapshot},
     },
     usecases::{Deps, invalid},
 };
@@ -182,7 +182,7 @@ pub async fn undo(
     }
     let snapshot: MergeSnapshot = serde_json::from_value(row.moved_snapshot.clone())
         .map_err(|_| AppError::internal("invalid merge snapshot"))?;
-    if snapshot.version != 1 {
+    if !(1..=MERGE_SNAPSHOT_VERSION).contains(&snapshot.version) {
         return Err(AppError::internal("unsupported merge snapshot"));
     }
     let at = ctx

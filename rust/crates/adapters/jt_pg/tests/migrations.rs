@@ -30,12 +30,42 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
-/// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge` and the
-/// device commands and device files of `0017_device_bridge`.
-const TABLES_AFTER_ALL: i64 = 74;
+/// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge`, the
+/// device commands and device files of `0017_device_bridge`, and the public items, their
+/// subjects and the poll cursors of `0019_inbox_public`.
+const TABLES_AFTER_ALL: i64 = 77;
 
-/// Migrations `0001_foundation` through `0018_tiktok_webhooks`.
-const MIGRATIONS: i64 = 18;
+/// Migrations `0001_foundation` through `0019_inbox_public`.
+const MIGRATIONS: i64 = 19;
+
+/// The tables of `0019_inbox_public`, each with its one row-level policy.
+const INBOX_PUBLIC_TABLES: [(&str, &str); 3] = [
+    ("public_subjects", "public_subjects_ws"),
+    ("public_items", "public_items_ws"),
+    ("public_cursors", "public_cursors_ws"),
+];
+
+/// The indexes of `public_items` (`0019_inbox_public`).
+const INBOX_PUBLIC_INDEXES: [&str; 6] = [
+    "public_items_owed",
+    "public_items_deadline",
+    "public_items_thread",
+    "public_items_reconcile",
+    "public_items_conversation",
+    "public_items_message",
+];
+
+/// The key `0019_inbox_public` adds to `conversations` for its items' composite foreign key.
+const CONVERSATION_CAPABILITY_KEY: &str = "conversations_id_capability_key";
+
+/// Whether a constraint named `name` exists.
+async fn constraint_exists(pool: &PgPool, name: &str) -> bool {
+    sqlx::query_scalar("select exists(select 1 from pg_constraint where conname = $1)")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -189,6 +219,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0019_inbox_public",
         "0018_tiktok_webhooks",
         "0017_device_bridge",
         "0016_voice_bridge",
@@ -696,7 +727,13 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
-    // Newest first: the call tables reference the inbox tables.
+    // Newest first: the public items and the call tables reference the inbox tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0019_inbox_public.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0018_tiktok_webhooks.down.sql"
     ))
@@ -838,6 +875,12 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
     sqlx::raw_sql(include_str!(
+        "../../../../migrations/0019_inbox_public.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../../migrations/0018_tiktok_webhooks.down.sql"
     ))
     .execute(&db.pool)
@@ -904,13 +947,16 @@ async fn studio_migration_up_down_up() {
     let (ws, _) = db.seed_workspace("studio-roundtrip").await;
     let up = include_str!("../../../../migrations/0009_studio.up.sql");
     let down = include_str!("../../../../migrations/0009_studio.down.sql");
+    // Public subjects reference Studio publications: 0019 goes first and comes back last.
+    let public_up = include_str!("../../../../migrations/0019_inbox_public.up.sql");
+    let public_down = include_str!("../../../../migrations/0019_inbox_public.down.sql");
     let id = Uuid::now_v7();
     let h = Uuid::now_v7();
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
     sqlx::query("insert into strategy_versions(id,workspace_id,number,status,sections,created_by_component,created_at) values($1,$2,1,'draft','{}','test','2026-10-24T00:00:00Z')").bind(id).bind(ws.as_uuid()).execute(tx.conn()).await.unwrap();
     sqlx::query("insert into strategy_hypotheses(version_id,workspace_id,hypothesis_id,title,segment_key,angle,channel,metric,prior_confidence,state,position) values($1,$2,$3,'keep','all','help','any','reply',0.7,'added',0)").bind(id).bind(ws.as_uuid()).bind(h).execute(tx.conn()).await.unwrap();
     tx.commit().await.unwrap();
-    for sql in [up, down, down, up, up] {
+    for sql in [up, public_down, down, down, up, up, public_up] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
@@ -926,4 +972,286 @@ async fn studio_migration_up_down_up() {
     assert!(!bypass);
     let forced: bool = sqlx::query_scalar("select relrowsecurity and relforcerowsecurity from pg_class where relname='studio_learning_applications'").fetch_one(tx.conn()).await.unwrap();
     assert!(forced);
+}
+
+/// Runs `sql` on `pool`, answering the error's text when it fails.
+async fn try_sql(pool: &PgPool, sql: &str) -> Result<(), String> {
+    sqlx::raw_sql(sql)
+        .execute(pool)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// The definition of the check constraint `name`.
+async fn check_definition(pool: &PgPool, name: &str) -> String {
+    sqlx::query_scalar("select pg_get_constraintdef(oid) from pg_constraint where conname = $1")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// A person, an `instagram` capability, a conversation and an inbound message in a new workspace
+/// (`ids` = workspace, capability, conversation, message), through the repos.
+async fn inbox_rows(db: &TestDb) -> (jt_tenancy::WorkspaceId, Uuid, Uuid, Uuid) {
+    let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+    let f = jt_testkit::inbox_contract::Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let m = f.comment_message(c.id, "c1", 0).await;
+    (f.ws, cap.as_uuid(), c.id.as_uuid(), m.as_uuid())
+}
+
+/// The three tables of `0019_inbox_public` force row-level security, each under its one policy;
+/// the indexes of `public_items` exist.
+#[tokio::test]
+async fn public_tables_force_rls_with_one_policy() {
+    let db = TestDb::new().await;
+    for (table, policy) in INBOX_PUBLIC_TABLES {
+        let forced: bool = sqlx::query_scalar(
+            "select relrowsecurity and relforcerowsecurity from pg_class where relname = $1",
+        )
+        .bind(table)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(forced, "{table}");
+        let policies: Vec<String> = sqlx::query_scalar(
+            "select policyname::text from pg_policies where schemaname = current_schema() \
+             and tablename = $1",
+        )
+        .bind(table)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(policies, [policy], "{table}");
+    }
+    for index in INBOX_PUBLIC_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    // A tenant sees only its own items.
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query(
+        "insert into public_items (workspace_id,id,capability_id,conversation_id,message_id,kind,\
+         external_id,root_external_id,created_at,answer,updated_at) \
+         values ($1,$2,$3,$4,$5,'comment','c1','c1',now(),'{\"state\":\"awaiting\"}',now())",
+    )
+    .bind(ws.as_uuid())
+    .bind(Uuid::now_v7())
+    .bind(cap)
+    .bind(conversation)
+    .bind(message)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let (other, _) = db.seed_workspace("other-public").await;
+    let mut tx = TenantTx::begin(&db.pool, other).await.unwrap();
+    let seen: i64 = sqlx::query_scalar("select count(*) from public_items")
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(seen, 0);
+    tx.rollback().await.unwrap();
+}
+
+/// `answer_state` is derived from the stored answer's `state` tag and cannot be written.
+#[tokio::test]
+async fn answer_state_is_generated() {
+    let db = TestDb::new().await;
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let id = Uuid::now_v7();
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query(
+        "insert into public_items (workspace_id,id,capability_id,conversation_id,message_id,kind,\
+         external_id,root_external_id,created_at,answer,updated_at) \
+         values ($1,$2,$3,$4,$5,'question','q1','q1',now(),$6,now())",
+    )
+    .bind(ws.as_uuid())
+    .bind(id)
+    .bind(cap)
+    .bind(conversation)
+    .bind(message)
+    .bind(serde_json::json!({"state": "pending", "message_id": message}))
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    let state: String = sqlx::query_scalar("select answer_state from public_items where id = $1")
+        .bind(id)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(state, "pending");
+    tx.commit().await.unwrap();
+    for refused in [
+        "update public_items set answer_state = 'answered' where id = $1",
+        "update public_items set answer = '{\"state\":\"lost\"}' where id = $1",
+        "update public_items set answer = '{\"by\":\"us\"}' where id = $1",
+    ] {
+        let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+        let e = sqlx::query(refused).bind(id).execute(tx.conn()).await;
+        assert!(e.is_err(), "{refused}");
+        tx.rollback().await.unwrap();
+    }
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("update public_items set answer = '{\"state\":\"expired\",\"at\":\"2026-10-30T10:00:00Z\"}' where id = $1")
+        .bind(id)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let state: String = sqlx::query_scalar("select answer_state from public_items where id = $1")
+        .bind(id)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(state, "expired");
+    tx.rollback().await.unwrap();
+}
+
+/// A reply held for approval is an outbox row of its own state.
+#[tokio::test]
+async fn outbox_accepts_held() {
+    let db = TestDb::new().await;
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let insert = |state: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let done = sqlx::query(
+                "insert into outbox (workspace_id,id,conversation_id,message_id,capability_id,intent,\
+                 expected_generation,state,created_at,updated_at) \
+                 values ($1,$2,$3,$4,$5,'{}',0,$6,now(),now())",
+            )
+            .bind(ws.as_uuid())
+            .bind(Uuid::now_v7())
+            .bind(conversation)
+            .bind(message)
+            .bind(cap)
+            .bind(state)
+            .execute(tx.conn())
+            .await;
+            match done {
+                Ok(_) => tx.commit().await.map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    };
+    insert("held").await.unwrap();
+    assert!(insert("waiting").await.is_err());
+}
+
+/// `0019_inbox_public` repeats, and its down refuses, changing nothing, while a row needs the wider
+/// checks: a marketplace inbound event (events are never deleted) or a reply held for approval.
+/// Without such rows it narrows both checks back and drops the three tables.
+#[tokio::test]
+async fn inbox_public_down_refuses_while_rows_need_the_wider_checks() {
+    let db = TestDb::new().await; // already migrated up, 0019 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0019_inbox_public.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0019_inbox_public.down.sql")).unwrap();
+    // The marketplaces' providers are allowed or not; TikTok's stays either way (0018 owns it).
+    let wide = |definition: String| {
+        ["'mail'", "'tiktok'", "'trendyol'", "'hepsiburada'"]
+            .iter()
+            .all(|p| definition.contains(p))
+    };
+    let narrow = |definition: String| {
+        definition.contains("'mail'")
+            && definition.contains("'tiktok'")
+            && !definition.contains("'trendyol'")
+            && !definition.contains("'hepsiburada'")
+    };
+    let has_held = |definition: &str| definition.contains("'held'");
+
+    // Up again, twice: nothing changes.
+    for _ in 0..2 {
+        try_sql(&db.pool, &up).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        assert!(wide(
+            check_definition(&db.pool, "inbound_events_provider_check").await
+        ));
+        assert!(has_held(
+            &check_definition(&db.pool, "outbox_state_check").await
+        ));
+        assert!(constraint_exists(&db.pool, CONVERSATION_CAPABILITY_KEY).await);
+    }
+    // Down twice, without rows that need the wider checks: they narrow and the tables go.
+    for _ in 0..2 {
+        try_sql(&db.pool, &down).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 3);
+        assert!(narrow(
+            check_definition(&db.pool, "inbound_events_provider_check").await
+        ));
+        assert!(!has_held(
+            &check_definition(&db.pool, "outbox_state_check").await
+        ));
+        for index in INBOX_PUBLIC_INDEXES {
+            assert!(!index_exists(&db.pool, index).await, "{index}");
+        }
+        assert!(!constraint_exists(&db.pool, CONVERSATION_CAPABILITY_KEY).await);
+    }
+    for _ in 0..2 {
+        try_sql(&db.pool, &up).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    }
+
+    // A held reply refuses the down.
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let held = Uuid::now_v7();
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query(
+        "insert into outbox (workspace_id,id,conversation_id,message_id,capability_id,intent,\
+         expected_generation,state,created_at,updated_at) \
+         values ($1,$2,$3,$4,$5,'{}',0,'held',now(),now())",
+    )
+    .bind(ws.as_uuid())
+    .bind(held)
+    .bind(conversation)
+    .bind(message)
+    .bind(cap)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let e = try_sql(&db.pool, &down).await.unwrap_err();
+    assert!(e.contains("held for approval"), "{e}");
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert!(has_held(
+        &check_definition(&db.pool, "outbox_state_check").await
+    ));
+    // Once it is approved or discarded, the down goes through; up brings everything back.
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("update outbox set state = 'refused' where workspace_id = $1 and id = $2")
+        .bind(ws.as_uuid())
+        .bind(held)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    try_sql(&db.pool, &down).await.unwrap();
+    try_sql(&db.pool, &up).await.unwrap();
+
+    // A marketplace event refuses it for good: events are never deleted.
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query(
+        "insert into inbound_events (id,workspace_id,provider,external_id,kind,payload,received_at) \
+         values ($1,$2,'trendyol','q:1:open:','question','{}',now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(ws.as_uuid())
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        let e = try_sql(&db.pool, &down).await.unwrap_err();
+        assert!(e.contains("marketplace events"), "{e}");
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        assert!(wide(
+            check_definition(&db.pool, "inbound_events_provider_check").await
+        ));
+    }
 }
