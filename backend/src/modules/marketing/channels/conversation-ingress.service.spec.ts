@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { ConversationIngressService } from './conversation-ingress.service';
 import { InboundMessage } from './channel-adapter.interface';
+import { installTickingClock } from '../../../common/test/ticking-clock';
 
 /**
  * The inbound funnel contract: a first-touch creates a workspace-scoped lead +
@@ -512,6 +513,26 @@ describe('ConversationIngressService — the owner replying from their phone', (
       expect(bumped().lastInboundAt).toBeInstanceOf(Date);
       expect(emitted()).toContain('marketing.conversation.message.received.v1');
       expect(stream.push.mock.calls[0][1].payload).toMatchObject({ direction: 'INBOUND' });
+    });
+  });
+
+  /**
+   * One customer message, one instant.
+   *
+   * The AI reply backfill treats a thread as waiting only when lastMessageAt
+   * EQUALS lastInboundAt. Two `new Date()` reads land 1 ms apart whenever the
+   * millisecond ticks between them, and that thread is then never backfilled —
+   * rare enough to pass every run here and still lose a real customer's
+   * question. The ticking clock makes the tick certain.
+   */
+  describe('the two recency stamps', () => {
+    let restoreClock: () => void;
+    beforeEach(() => (restoreClock = installTickingClock()));
+    afterEach(() => restoreClock());
+
+    it('stamps lastMessageAt and lastInboundAt with ONE clock reading', async () => {
+      await svc.ingest(channel as any, base);
+      expect(bumped().lastInboundAt.getTime()).toBe(bumped().lastMessageAt.getTime());
     });
   });
 });
