@@ -151,6 +151,15 @@ Target ≤ 300 ms from the caller's onset to the last agent frame (report, roadm
 whose final transcript is only backchannel ("hı hı", "evet", "tamam", …) after a cut is flagged in
 the trace (false barge-in rate is measured, no resume in V1).
 
+**Heard in full** (B6 review): the opening (`play{clip: opening}`: the workspace's opening with the
+disclosure, the transcript notice, then the plan's opening, one text since C1), the recording
+announcement and the closing are played with `barge_in: false`, like the fault sentence. The
+disclosure and the notice are legal, owner-approved text, so a natural "Alo?" must not cut them.
+The caller's speech over such a line cuts nothing; its turn is reported to the core at once, and the
+talker owes it a reply from the end of that line (the acknowledgement 600 ms after it). A cut of a
+line that may be cut drops only the queued lines that may be cut, so a line that must be heard
+stays queued and plays at the caller's next pause.
+
 **Playback**: a text is split into sentences (abbreviations, decimals, clock times and ordinals
 kept whole, an ordinal being a number before a word in lower case or one of a short list in
 capitals, "4. Levent", "3. Kat"; a piece of fewer than three words joins the next, as the speak service cuts, both held
@@ -180,6 +189,14 @@ line up and fails the call; a line never answered closes them. Every end is repo
 caller's hangup, and the media or the speaker closing during the call as a transient `error`,
 before the worker hangs the caller's channel up. Reports are never dropped (an unbounded queue:
 one call's events are few).
+
+No call waits on the line for ever (B6 review). A line that rings 55 s (the PBX's 45 s and 10 s
+more) is hung up as unanswered. A hangup ARI refuses is asked again (after 0.5 s, then 1.5 s), and
+one Asterisk does not confirm within 5 s ends the call all the same. A call that reaches its longest
+duration plays the closing itself and hangs up: the slice's `VOICE_MAX_CALL_S` (600 s by default),
+and in `run` a minute past the plan's `max_duration_s`, after which the core has closed a call it
+still holds. If the caller holds that closing back 30 s more, the line is cut. A hangup asked
+before the dial rings no phone.
 
 **Closing**: the core queues `play{clip: closing}` then `hangup`; the talker plays the closing to
 its mark (the caller's speech does not cut it), waits 400 ms, then hangs up the channel (report:
@@ -262,6 +279,9 @@ Only if the gate fails would a WebSocket push be designed (not in this plan).
   of a table word (Akpetrol), İclal (no dictionary entry) and global (listed without a front mark);
   emlak is listed with -kı, a back ending, and needs nothing. An owner whose name is read otherwise
   writes the opening by hand in the policy.
+- All three are one text, the core's `play{clip: opening}`, and the bridge plays it to its end:
+  the caller's speech does not cut it (§3, "Heard in full"; B6 review). The notice in particular
+  is heard on every call before the conversation starts.
 - Closing: the plan's `closing` is optional. Left out, the core plays the policy's `closing`
   (`None` = the approved "Görüşmek üzere, iyi günler.", `jt_calls::CLOSING`; empty = none, so every
   plan must then bring its own). It is the core's scripted ending, not one of the bridge's phrases.
