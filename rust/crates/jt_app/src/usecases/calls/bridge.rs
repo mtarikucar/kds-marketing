@@ -429,7 +429,7 @@ async fn apply_call(
         out.unmatched += count;
         return Ok(());
     };
-    let policy = r.calls().policy().await?;
+    let policy = super::policy_of(r.as_mut()).await?;
     let (was_answered, was_ended) = (
         session.answered_at.is_some(),
         session.state == CallState::Ended,

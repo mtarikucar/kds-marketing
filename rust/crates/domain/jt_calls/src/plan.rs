@@ -32,6 +32,9 @@ pub struct CallPlan {
     pub holding: Vec<String>,
     #[serde(default)]
     pub fallback: Vec<String>,
+    /// Played before the call is hung up. Empty: the call policy's `closing` (the core fills it in
+    /// when the call is placed; a plan with neither is refused).
+    #[serde(default)]
     pub closing: String,
     pub max_duration_s: u16,
     #[serde(default = "turkish")]
@@ -114,7 +117,9 @@ impl CallPlan {
     pub fn validate(&self) -> Result<(), PlanError> {
         line(&self.opening, "plan.opening")?;
         line(&self.goal, "plan.goal")?;
-        line(&self.closing, "plan.closing")?;
+        if !self.closing.is_empty() {
+            line(&self.closing, "plan.closing")?;
+        }
         if self.holding.is_empty() || self.holding.len() > MAX_HOLDING_LINES {
             return Err(PlanError::HoldingCount);
         }
@@ -148,7 +153,7 @@ impl CallPlan {
         std::iter::once(self.opening.as_str())
             .chain(self.holding.iter().map(String::as_str))
             .chain(self.fallback.iter().map(String::as_str))
-            .chain(std::iter::once(self.closing.as_str()))
+            .chain((!self.closing.is_empty()).then_some(self.closing.as_str()))
     }
 }
 

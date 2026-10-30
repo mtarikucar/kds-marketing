@@ -5,7 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::phrases::BridgePhrases;
+use crate::opening::{CLOSING, TRANSCRIPT_NOTICE, disclosure, inbound_greeting, outbound_opening};
+use crate::phrases::{BridgePhrases, PhraseSet};
 use crate::plan::{MAX_CALL_DURATION_S, MAX_HOLDING_LINES, PlanError, line};
 
 /// The longest summary a finished call keeps.
@@ -27,6 +28,16 @@ pub struct CallPolicy {
     pub disclose_assistant: bool,
     /// The sentence an agent-driven opening must contain while `disclose_assistant` holds.
     pub disclosure_sentence: String,
+    /// Played first when an outbound agent call is answered: the workspace's own opening, which
+    /// discloses the assistant. `None`: the approved opening with the workspace's name
+    /// ([`CallPolicy::with_workspace`]); empty: none (the plan's opening must then disclose).
+    pub opening_outbound: Option<String>,
+    /// Played after the opening on every agent call. `None`: the approved notice; empty: none.
+    pub transcript_notice: Option<String>,
+    /// Played before an agent's call is hung up when its plan brings no closing. `None`: the
+    /// approved closing ([`CLOSING`], filled in by [`CallPolicy::with_workspace`]); empty: none (a
+    /// plan must then bring its own).
+    pub closing: Option<String>,
     /// Holding phrases for a plan that brings none of its own.
     pub holding_default: Vec<String>,
     /// The longest call, in seconds (a plan may only ask for less).
@@ -58,6 +69,9 @@ impl Default for CallPolicy {
             recording_announcement: String::new(),
             disclose_assistant: true,
             disclosure_sentence: String::new(),
+            opening_outbound: None,
+            transcript_notice: None,
+            closing: None,
             holding_default: Vec::new(),
             max_duration_s: 360,
             slow_agent_s: 4,
@@ -84,6 +98,18 @@ fn refuse(field: &'static str, message: &'static str) -> PolicyError {
     PolicyError { field, message }
 }
 
+/// The policy field that holds the phrases of `set`.
+fn phrase_field(set: PhraseSet) -> &'static str {
+    match set {
+        PhraseSet::Acknowledgement => "phrases.acknowledgements",
+        PhraseSet::Filler => "phrases.fillers",
+        PhraseSet::LongWait => "phrases.long_wait",
+        PhraseSet::NotHeard => "phrases.not_heard",
+        PhraseSet::StillThere => "phrases.still_there",
+        PhraseSet::Fault => "phrases.fault",
+    }
+}
+
 impl From<PlanError> for PolicyError {
     fn from(e: PlanError) -> Self {
         let message = match e {
@@ -105,6 +131,53 @@ fn optional_line(text: &str, field: &'static str) -> Result<(), PolicyError> {
 }
 
 impl CallPolicy {
+    /// This policy with the workspace's own sentences where the owner wrote none: the approved
+    /// outbound opening and inbound greeting with `business` in them, the approved transcript
+    /// notice and closing, and the disclosure sentence both openings contain. The owner's own texts
+    /// are kept (an empty one is the owner's "none").
+    pub fn with_workspace(mut self, business: &str) -> CallPolicy {
+        if self.opening_outbound.is_none() {
+            self.opening_outbound = outbound_opening(business);
+        }
+        if self.transcript_notice.is_none() {
+            self.transcript_notice = Some(TRANSCRIPT_NOTICE.to_owned());
+        }
+        if self.closing.is_none() {
+            self.closing = Some(CLOSING.to_owned());
+        }
+        if self.disclosure_sentence.trim().is_empty()
+            && let Some(d) = disclosure(business)
+        {
+            self.disclosure_sentence = d;
+        }
+        if self.greeting_inbound.trim().is_empty()
+            && let Some(g) = inbound_greeting(business)
+        {
+            self.greeting_inbound = g;
+        }
+        self
+    }
+
+    /// What an outbound agent call plays when answered, in order: the workspace's opening, the
+    /// transcript notice, and `plan_opening` when given; empty texts left out.
+    pub fn opening_lines<'a>(&'a self, plan_opening: Option<&'a str>) -> Vec<&'a str> {
+        [
+            self.opening_outbound.as_deref(),
+            self.transcript_notice.as_deref(),
+            plan_opening,
+        ]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .collect()
+    }
+
+    /// [`CallPolicy::opening_lines`] with the plan's opening, as one text.
+    pub fn spoken_opening(&self, plan_opening: &str) -> String {
+        self.opening_lines(Some(plan_opening)).join(" ")
+    }
+
     /// The policy when its sentences can be played and its timers are in order.
     pub fn validate(&self) -> Result<(), PolicyError> {
         optional_line(&self.greeting_inbound, "greeting_inbound")?;
@@ -116,6 +189,25 @@ impl CallPolicy {
         }
         for h in &self.holding_default {
             line(h, "holding_default").map_err(PolicyError::from)?;
+        }
+        if let Some(t) = &self.opening_outbound {
+            optional_line(t, "opening_outbound")?;
+        }
+        if let Some(t) = &self.transcript_notice {
+            optional_line(t, "transcript_notice")?;
+        }
+        if let Some(t) = &self.closing {
+            optional_line(t, "closing")?;
+        }
+        for set in PhraseSet::ALL {
+            let field = phrase_field(set);
+            let list = self.phrases.set(set);
+            if list.len() > MAX_HOLDING_LINES {
+                return Err(refuse(field, "has more than 5 phrases"));
+            }
+            for p in list {
+                line(p, field).map_err(PolicyError::from)?;
+            }
         }
         if self.max_duration_s == 0 || self.max_duration_s > MAX_CALL_DURATION_S {
             return Err(refuse("max_duration_s", "is 1 to 900"));
