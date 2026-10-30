@@ -5,7 +5,8 @@
 //!
 //! [`TiktokConnector`] implements the connector ports of `jt_app` ([`Connector`],
 //! [`OAuthProvider`], [`Publisher`] with [`Publisher::resolve`] and [`Publisher::creator_info`],
-//! [`InsightsReader`]). Webhooks are not used: a post's status is polled.
+//! [`InsightsReader`]); [`webhook`] reads the webhooks TikTok sends (an account's lost access, a
+//! post's moves), and a post's status is also polled.
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
 //! [`jt_outbound::Egress::prepare`] and sent under `EgressScope::Connector("tiktok")`, so it can
@@ -202,11 +203,15 @@
 //! **Kinds.** TikTok serves one kind, `tiktok`. Every operation that takes `public` refuses one
 //! without it in `public["kind_key"]` (`Permanent`, "kind_key missing") and calls nothing.
 //!
-//! **Not covered** (spec §4): direct messages and comments (no public API for Login Kit apps),
-//! ads (`tiktok_ads`) and webhooks.
+//! **Webhooks** ([`webhook`]): the body of a delivery, once the gate checked its signature, read
+//! into the event the use cases store and its effect; the crate sends nothing for them.
+//!
+//! **Not covered** (spec §4): direct messages and comments (no public API for Login Kit apps)
+//! and ads (`tiktok_ads`).
 //!
 //! [`Connector`]: jt_app::ports::connectors::Connector
 //! [`Connector::refresh`]: jt_app::ports::connectors::Connector::refresh
+//! [`Connector::revoke`]: jt_app::ports::connectors::Connector::revoke
 //! [`OAuthProvider`]: jt_app::ports::connectors::OAuthProvider
 //! [`OAuthProvider::authorize_url`]: jt_app::ports::connectors::OAuthProvider::authorize_url
 //! [`OAuthProvider::exchange`]: jt_app::ports::connectors::OAuthProvider::exchange
@@ -230,6 +235,7 @@ mod insights;
 mod oauth;
 mod ports;
 mod publish;
+pub mod webhook;
 
 use std::fmt;
 use std::sync::Arc;

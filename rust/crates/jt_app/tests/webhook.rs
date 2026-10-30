@@ -9,10 +9,12 @@ mod support;
 use jt_app::error::ErrorCode;
 use jt_app::ports::UnitOfWork;
 use jt_app::ports::connectors::InboundEventDraft;
-use jt_app::usecases::connector::{self, HooksOut, MetaHook, NetgsmHook, VERIFY_TOKEN_HINT};
+use jt_app::usecases::connector::{
+    self, HooksOut, MetaHook, NetgsmHook, TiktokHook, VERIFY_TOKEN_HINT,
+};
 use jt_app::usecases::webhook::{
     self, AccountEvent, Delivery, META_HOOK_PATH, NETGSM_HOOK_PATH, NETGSM_HOOK_PURPOSE,
-    RAW_RETENTION, RawPurge,
+    RAW_RETENTION, RawPurge, TIKTOK_HOOK_PATH, TiktokHookEffect, TiktokHookEvent,
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, NetgsmPurpose, Provider, netgsm_hook_token};
@@ -769,15 +771,251 @@ async fn purge_raw_clears_old_bodies_in_every_workspace() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// TikTok
+// ---------------------------------------------------------------------------------------------
+
+/// A TikTok webhook event about `open_id`, with this effect, named `external_id`.
+fn tiktok_event(open_id: &str, effect: TiktokHookEffect, external_id: &str) -> TiktokHookEvent {
+    TiktokHookEvent {
+        open_id: open_id.into(),
+        effect,
+        draft: InboundEventDraft {
+            external_id: external_id.into(),
+            kind: EventKind::parse("authorization.removed"),
+            payload: json!({ "tiktok": { "event": "authorization.removed", "content": { "reason": 1 } } }),
+            occurred_at: None,
+        },
+    }
+}
+
+fn removed() -> TiktokHookEffect {
+    TiktokHookEffect::AuthorizationRemoved {
+        reason: "user_disconnected".into(),
+    }
+}
+
+fn moved(publish_id: &str) -> TiktokHookEffect {
+    TiktokHookEffect::PublishMoved {
+        publish_id: publish_id.into(),
+    }
+}
+
+/// A TikTok event is routed by its open id to the one workspace holding that account connected,
+/// stored there once with its body and its capability; one naming no account, or an account no
+/// workspace holds connected, or of a suspended workspace, is stored nowhere.
+#[tokio::test]
+async fn tiktok_events_are_routed_by_open_id_and_stored_once() {
+    let w = world().await;
+    activate_workspace(&w.deps, w.ws).await;
+    let beta = w.other_workspace().await.0;
+    activate_workspace(&w.deps, beta).await;
+    let cap = connected(&w, beta, "tiktok", "open-id-beta").await;
+    // Another kind holding the same id does not take TikTok's events.
+    connected(&w, w.ws, "x", "open-id-beta").await;
+
+    let raw = br#"{"event":"post.publish.complete"}"#;
+    let intake = webhook::receive_tiktok(
+        &w.deps,
+        tiktok_event("open-id-beta", TiktokHookEffect::Kept, "ev-1"),
+        raw,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(intake.delivery, Delivery::Stored(_)));
+    assert_eq!(intake.resolve, None);
+    let events = events_of(&w, beta);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].provider, Provider::Tiktok);
+    assert_eq!(events[0].capability_id, Some(cap));
+    assert_eq!(events[0].external_id, "ev-1");
+    // Kept for the agent: unprocessed.
+    assert_eq!(events[0].processed_at, None);
+    assert_eq!(stored(&w)[0].raw.as_deref(), Some(&raw[..]));
+    assert!(events_of(&w, w.ws).is_empty());
+
+    // A redelivery stores nothing more.
+    let again = webhook::receive_tiktok(
+        &w.deps,
+        tiktok_event("open-id-beta", TiktokHookEffect::Kept, "ev-1"),
+        raw,
+    )
+    .await
+    .unwrap();
+    assert_eq!(again.delivery, Delivery::Duplicate);
+    assert_eq!(stored(&w).len(), 1);
+
+    for open_id in ["", "  ", "open-id-unknown"] {
+        let out = webhook::receive_tiktok(&w.deps, tiktok_event(open_id, removed(), "ev-2"), raw)
+            .await
+            .unwrap();
+        assert_eq!(out.delivery, Delivery::Unrouted, "{open_id:?}");
+    }
+    // Held, but not connected yet (never verified by a probe): not routed either.
+    capability(
+        &w,
+        w.ws,
+        "tiktok",
+        "open-id-new",
+        StoredStatus::Declared,
+        false,
+    )
+    .await;
+    let out = webhook::receive_tiktok(&w.deps, tiktok_event("open-id-new", removed(), "ev-3"), raw)
+        .await
+        .unwrap();
+    assert_eq!(out.delivery, Delivery::Unrouted);
+    set_status(&w, beta, WorkspaceStatus::Suspended).await;
+    let out = webhook::receive_tiktok(
+        &w.deps,
+        tiktok_event("open-id-beta", removed(), "ev-4"),
+        raw,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.delivery, Delivery::Inactive);
+    assert_eq!(stored(&w).len(), 1);
+}
+
+/// `authorization.removed`: the access token is revoked by then, so the capability turns
+/// unreachable and waits for its owner to reconnect, as a probe refused with `Auth` leaves it;
+/// written once, with the event, which is processed. A redelivery changes nothing.
+#[tokio::test]
+async fn tiktok_authorization_removed_asks_for_a_reconnection_once() {
+    use jt_app::usecases::work::{self, WorkKind};
+    let w = world().await;
+    activate_workspace(&w.deps, w.ws).await;
+    let cap = connected(&w, w.ws, "tiktok", "open-id-a").await;
+    let out = webhook::receive_tiktok(&w.deps, tiktok_event("open-id-a", removed(), "ev-1"), b"{}")
+        .await
+        .unwrap();
+    assert!(matches!(out.delivery, Delivery::Stored(_)));
+    assert_eq!(out.resolve, None);
+
+    let c = {
+        let mut t = w.uow.tenant(w.ws).await.unwrap();
+        t.capabilities().find(cap).await.unwrap().unwrap()
+    };
+    assert_eq!(c.status, StoredStatus::Unreachable);
+    assert_eq!(c.connector_public["reconnect_required"], json!(true));
+    assert_eq!(c.connector_public["health"]["ok"], json!(false));
+    assert_eq!(c.connector_public["health"]["error_kind"], json!("auth"));
+    assert_eq!(
+        c.connector_public["health"]["reason"],
+        json!("auth: tiktok: the account removed the app's access (user_disconnected)")
+    );
+    let snapshot = w.uow.snapshot();
+    let entries: Vec<_> = snapshot
+        .ledger
+        .iter()
+        .filter(|row| row.entry.action.as_str() == "connector.authorization_removed")
+        .collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].entry.payload,
+        json!({ "kind_key": "tiktok", "reason": "user_disconnected" })
+    );
+    assert!(matches!(
+        &entries[0].entry.actor,
+        jt_ledger::Actor::System { component } if component == "webhook:tiktok"
+    ));
+    assert!(events_of(&w, w.ws)[0].processed_at.is_some());
+    // The owner is asked to reconnect it.
+    let pending = work::pending(&w.deps, &w.owner_ctx).await.unwrap();
+    assert!(pending.items.iter().any(|i| i.kind
+        == WorkKind::ReconnectConnector {
+            capability_id: cap,
+            name: "tiktok open-id-a".into(),
+        }));
+
+    // The same event again: a duplicate, nothing written.
+    let ledger = w.uow.snapshot().ledger.len();
+    let again =
+        webhook::receive_tiktok(&w.deps, tiktok_event("open-id-a", removed(), "ev-1"), b"{}")
+            .await
+            .unwrap();
+    assert_eq!(again.delivery, Delivery::Duplicate);
+    assert_eq!(w.uow.snapshot().ledger.len(), ledger);
+}
+
+/// A `post.publish.*` event that moved a post is processed and names the post to read back now;
+/// a redelivery names it again (reading back is idempotent).
+#[tokio::test]
+async fn tiktok_post_events_name_the_post_to_read_back() {
+    let w = world().await;
+    activate_workspace(&w.deps, w.ws).await;
+    let cap = connected(&w, w.ws, "tiktok", "open-id-a").await;
+    let hooked = webhook::HookedPublication {
+        workspace_id: w.ws,
+        capability_id: cap,
+        publish_id: "v_pub_file~v2-1.7".into(),
+    };
+    let out = webhook::receive_tiktok(
+        &w.deps,
+        tiktok_event("open-id-a", moved("v_pub_file~v2-1.7"), "ev-1"),
+        b"{}",
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out.delivery, Delivery::Stored(_)));
+    assert_eq!(out.resolve, Some(hooked.clone()));
+    assert!(events_of(&w, w.ws)[0].processed_at.is_some());
+    let again = webhook::receive_tiktok(
+        &w.deps,
+        tiktok_event("open-id-a", moved("v_pub_file~v2-1.7"), "ev-1"),
+        b"{}",
+    )
+    .await
+    .unwrap();
+    assert_eq!(again.delivery, Delivery::Duplicate);
+    assert_eq!(again.resolve, Some(hooked));
+    // Nothing is asked of the account.
+    let c = {
+        let mut t = w.uow.tenant(w.ws).await.unwrap();
+        t.capabilities().find(cap).await.unwrap().unwrap()
+    };
+    assert_eq!(c.status, StoredStatus::Verified);
+}
+
+/// TikTok's events are never a conversation: the inbox consumer is done with them at once,
+/// never deferring them (so never abandoning them either).
+#[tokio::test]
+async fn the_inbox_consumer_is_done_with_tiktok_events_at_once() {
+    use jt_app::usecases::jobs::Job;
+    let w = world().await;
+    activate_workspace(&w.deps, w.ws).await;
+    connected(&w, w.ws, "tiktok", "open-id-a").await;
+    webhook::receive_tiktok(
+        &w.deps,
+        tiktok_event("open-id-a", TiktokHookEffect::Kept, "ev-1"),
+        b"{}",
+    )
+    .await
+    .unwrap();
+    let first = Job::InboxConsume.run(&w.deps, FIXED_NOW).await;
+    assert_eq!((first.touched, first.skipped, first.failed), (1, 1, 0));
+    let second = Job::InboxConsume
+        .run(&w.deps, FIXED_NOW + Duration::hours(1))
+        .await;
+    assert_eq!((second.touched, second.failed), (0, 0));
+    assert!(
+        w.uow
+            .snapshot()
+            .ledger
+            .iter()
+            .all(|row| row.entry.action.as_str() != "inbox.event.abandoned")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
 // connector.hooks
 // ---------------------------------------------------------------------------------------------
 
 #[tokio::test]
 async fn hooks_urls_use_public_base_and_per_purpose_tokens() {
     let mut w = world().await;
-    // Without a Meta app there is no Meta hook to show.
+    // Without a Meta or a TikTok app there is no Meta or TikTok hook to show.
     let out = connector::hooks(&w.deps, &w.owner_ctx).await.unwrap();
-    assert_eq!(out.meta, None);
+    assert_eq!((out.meta, out.tiktok), (None, None));
 
     w.deps.apps = Arc::new(FakeAppConfig {
         public_base_url: Some("https://jeeta.example/panel/".parse().unwrap()),
@@ -805,6 +1043,18 @@ async fn hooks_urls_use_public_base_and_per_purpose_tokens() {
                 verify_token_hint: VERIFY_TOKEN_HINT.into(),
             }),
             netgsm,
+            tiktok: Some(TiktokHook {
+                url: "https://jeeta.example/panel/hooks/tiktok".into(),
+                events: [
+                    "authorization.removed",
+                    "post.publish.failed",
+                    "post.publish.complete",
+                    "post.publish.inbox_delivered",
+                    "post.publish.publicly_available",
+                ]
+                .map(String::from)
+                .to_vec(),
+            }),
         }
     );
     assert_eq!(out.netgsm.len(), 5);
@@ -817,6 +1067,8 @@ async fn hooks_urls_use_public_base_and_per_purpose_tokens() {
     );
     assert_eq!(META_HOOK_PATH, "/hooks/meta");
     assert_eq!(NETGSM_HOOK_PATH, "/hooks/netgsm");
+    assert_eq!(TIKTOK_HOOK_PATH, "/hooks/tiktok");
+    assert!(!wire(&out).contains("tiktok-client-secret"));
     // The verify token itself is never shown.
     assert!(!wire(&out).contains("meta-verify-token"));
     assert!(!wire(&out).contains("meta-app-secret"));
