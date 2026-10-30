@@ -1406,6 +1406,7 @@ dependencies = [
  "jt_meta",
  "jt_netgsm",
  "jt_outbound",
+ "jt_prospects",
  "jt_strategy",
  "jt_studio",
  "jt_tenancy",
@@ -1438,6 +1439,7 @@ dependencies = [
  "jt_meta",
  "jt_panel_http",
  "jt_pg",
+ "jt_prospects",
  "jt_strategy",
  "jt_studio",
  "jt_tenancy",
@@ -1625,6 +1627,7 @@ dependencies = [
  "jt_device_protocol",
  "jt_ledger",
  "jt_pg",
+ "jt_prospects",
  "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
@@ -1714,6 +1717,7 @@ dependencies = [
  "jt_ledger",
  "jt_mcp",
  "jt_pg",
+ "jt_prospects",
  "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
@@ -1739,6 +1743,7 @@ dependencies = [
  "jt_connector",
  "jt_inbox",
  "jt_ledger",
+ "jt_prospects",
  "jt_seal",
  "jt_strategy",
  "jt_studio",
@@ -1753,6 +1758,21 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "jt_prospects"
+version = "0.1.0"
+dependencies = [
+ "jt_inbox",
+ "jt_strategy",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "url",
  "uuid",
 ]
 
@@ -1828,6 +1848,7 @@ dependencies = [
  "jt_ledger",
  "jt_panel_http",
  "jt_pg",
+ "jt_prospects",
  "jt_strategy",
  "jt_studio",
  "jt_tenancy",

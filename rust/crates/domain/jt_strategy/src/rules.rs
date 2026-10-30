@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::StrategyError;
 use crate::hypothesis::{Hypothesis, HypothesisState};
-use crate::sections::{BudgetFrame, Cadence, Goals, Identity, LaneKind, Period, Sections};
+use crate::sections::{
+    BudgetFrame, Cadence, Goals, Identity, LaneKind, Period, Prospecting, Sections,
+};
 use crate::version::StrategyVersion;
 
 /// The channel name that stands for any channel; accepted wherever a channel is named.
@@ -85,6 +87,7 @@ pub fn validate_sections(s: &Sections) -> Vec<Gap> {
         prohibitions,
         cadence,
         paid_enabled,
+        prospecting,
     } = s;
     let mut gaps = Gaps::default();
 
@@ -181,7 +184,108 @@ pub fn validate_sections(s: &Sections) -> Vec<Gap> {
         );
     }
 
+    prospecting_gaps(prospecting, &segment_keys, &mut gaps);
+
     gaps.0
+}
+
+/// The most ICP entries, criteria, and a research brief's sectors and areas.
+pub const MAX_ICP_ENTRIES: usize = 10;
+pub const MAX_CRITERIA: usize = 12;
+
+/// The prospecting section's gaps, checked only while it has ICP entries (none means prospecting
+/// is off, which is no gap): each entry's key well-formed and unique, a segment of the audience,
+/// `1..=10` sectors, `1..=20` areas each with a city, at most ten signals and exclusions, a
+/// daily cap of `1..=200`, a backlog target of at most 2000; the rubric's `1..=12` criteria with
+/// unique keys and weights summing to exactly 100, and `qualify_at` in `1..=100`.
+fn prospecting_gaps(p: &Prospecting, segments: &BTreeSet<&str>, gaps: &mut Gaps) {
+    let Prospecting { icp, rubric } = p;
+    if icp.is_empty() {
+        return;
+    }
+    if icp.len() > MAX_ICP_ENTRIES {
+        gaps.add(
+            "prospecting.icp",
+            format!("at most {MAX_ICP_ENTRIES} entries, got {}", icp.len()),
+        );
+    }
+    let mut keys = BTreeSet::new();
+    for (i, e) in icp.iter().enumerate() {
+        let at = |f: &str| format!("prospecting.icp[{i}].{f}");
+        if let Err(err) = validate_segment_key(&e.key) {
+            gaps.add(at("key"), err.to_string());
+        } else if !keys.insert(e.key.as_str()) {
+            gaps.add(
+                at("key"),
+                format!("ICP key {:?} is used more than once", e.key),
+            );
+        }
+        if !segments.contains(e.segment_key.as_str()) {
+            gaps.add(
+                at("segment_key"),
+                format!("{:?} is not a segment of the audience", e.segment_key),
+            );
+        }
+        if !(1..=10).contains(&e.sectors.len()) || e.sectors.iter().any(|s| s.trim().is_empty()) {
+            gaps.add(at("sectors"), "one to ten sectors, none empty");
+        }
+        if !(1..=20).contains(&e.areas.len()) || e.areas.iter().any(|a| a.city.trim().is_empty()) {
+            gaps.add(at("areas"), "one to twenty areas, each with a city");
+        }
+        if e.signals.len() > 10 {
+            gaps.add(at("signals"), "at most ten signals");
+        }
+        if e.exclusions.len() > 10 {
+            gaps.add(at("exclusions"), "at most ten exclusions");
+        }
+        if !(1..=200).contains(&e.daily_cap) {
+            gaps.add(at("daily_cap"), format!("1..=200, got {}", e.daily_cap));
+        }
+        if e.backlog_target > 2_000 {
+            gaps.add(
+                at("backlog_target"),
+                format!("at most 2000, got {}", e.backlog_target),
+            );
+        }
+    }
+    let criteria = &rubric.criteria;
+    if !(1..=MAX_CRITERIA).contains(&criteria.len()) {
+        gaps.add(
+            "prospecting.rubric.criteria",
+            format!("1..={MAX_CRITERIA} criteria, got {}", criteria.len()),
+        );
+    }
+    let mut criterion_keys = BTreeSet::new();
+    for (i, c) in criteria.iter().enumerate() {
+        let field = format!("prospecting.rubric.criteria[{i}].key");
+        if let Err(err) = validate_segment_key(&c.key) {
+            gaps.add(field, err.to_string());
+        } else if !criterion_keys.insert(c.key.as_str()) {
+            gaps.add(
+                field,
+                format!("criterion {:?} is used more than once", c.key),
+            );
+        }
+        if c.description.trim().is_empty() {
+            gaps.add(
+                format!("prospecting.rubric.criteria[{i}].description"),
+                "a criterion needs a description",
+            );
+        }
+    }
+    let weights: u32 = criteria.iter().map(|c| u32::from(c.weight)).sum();
+    if weights != 100 {
+        gaps.add(
+            "prospecting.rubric.weights_sum",
+            format!("the weights must sum to 100, got {weights}"),
+        );
+    }
+    if !(1..=100).contains(&rubric.qualify_at) {
+        gaps.add(
+            "prospecting.rubric.qualify_at",
+            format!("1..=100, got {}", rubric.qualify_at),
+        );
+    }
 }
 
 /// Every gap that stops a draft from being approved (Review Focus 1): all of
@@ -298,6 +402,7 @@ pub fn diff(a: &Sections, b: &Sections) -> Vec<String> {
             channel_mix,
         },
         paid_enabled,
+        prospecting,
     } = a;
     let checks = [
         ("identity.product", *product != b.identity.product),
@@ -316,6 +421,7 @@ pub fn diff(a: &Sections, b: &Sections) -> Vec<String> {
         ("cadence.per_week", *per_week != b.cadence.per_week),
         ("cadence.channel_mix", *channel_mix != b.cadence.channel_mix),
         ("paid_enabled", *paid_enabled != b.paid_enabled),
+        ("prospecting", *prospecting != b.prospecting),
     ];
     let mut paths: Vec<String> = checks
         .into_iter()

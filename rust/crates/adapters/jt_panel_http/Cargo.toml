@@ -10,6 +10,7 @@ jt_tenancy.workspace = true
 jt_strategy.workspace = true
 jt_capability.workspace = true
 jt_app.workspace = true
+jt_prospects.workspace = true
 axum.workspace = true
 tower = { workspace = true, features = ["util"] }
 tower-http.workspace = true

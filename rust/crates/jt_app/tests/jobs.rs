@@ -297,6 +297,7 @@ fn every_job_has_a_lock_named_after_it() {
             "device_bridge_health",
             "device_command_expiry",
             "device_file_purge",
+            "prospects_purge",
         ]
     );
     for job in Job::ALL {

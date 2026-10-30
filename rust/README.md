@@ -83,7 +83,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. On sekiz göç vardır:
+döndürür. On dokuz göç vardır (`0019` başka bir dalındır):
 
 | Göç | Ne yapar |
 |---|---|
@@ -105,6 +105,7 @@ döndürür. On sekiz göç vardır:
 | `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
 | `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
 | `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
+| `0020_prospects` | Aday havuzu (leads L1): `research_tasks`, `prospects`, `prospect_keys`, `prospect_scores`, `prospect_blocklist` (forced RLS; 79 tables), `workspace_policies.leads_policy`, and `prospects.work` and `prospects.manage` for the system owner/manager; `rep` holds neither. Down refuses while the blocklist holds a do-not-contact or erased entry, and drops `leads_policy` only while every row is `{}`. (`0018` and `0019` are the TikTok webhooks' and the inbox comments/marketplace branches'.) |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -626,6 +627,8 @@ Sistem rollerinin izinleri:
 | `calls.bridge` (ses köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
 | `devices.work` (telefonları kullanma) | ✓ | ✓ | — |
 | `devices.bridge` (cihaz köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+| `prospects.work` (aday havuzunda çalışma) | ✓ | ✓ | — |
+| `prospects.manage` (aday havuzunu yönetme: yeniden açma, iletişim yasağını kaldırma, silme, saklama süreleri) | ✓ | ✓ | — |
 
 `calls.bridge` ve `devices.bridge` bir köprünün API anahtarının izinleridir; sahip ve yönetici onları o anahtarı
 verebilmek için taşır.
@@ -962,6 +965,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
 | `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
 | `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
+| `prospects_purge` | 1 gün | Her alanda (durumu ne olursa olsun), `purge_after` zamanı gelen adayları siler: reddedilen bir adayın anahtarları önce `rejected_memory_days` (365 gün) boyunca anahtarlı özet olarak hatırlanır; ardından süresi dolmuş red özetlerini siler. Bir şey silindiyse alan başına bir `prospects.purged {count}` sistem kaydı yazar; hiçbir değer ya da kimlik günlüğe geçmez | `jeeta.jobs.prospects_purge` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -1973,6 +1977,37 @@ removes their calls' commands and the bridge's event notes, and empties their ca
 | `calls.listen` | `GET /api/calls/{call_id}/events?after_seq&wait_s` | `jeeta.calls.listen` | READ | `calls.work`; long-poll of at most 25 s: `{call_id, state, events, timed_out}` |
 | `calls.say` | `POST /api/calls/{call_id}/say` | `jeeta.calls.say` | WRITE | `calls.work`; `{text ≤ 600, expect_reply, allow_barge_in}`; `409 not_live` off the line |
 | `calls.transfer` | `POST /api/calls/{call_id}/transfer` | `jeeta.calls.transfer` | WRITE | `calls.work`; to `to_extension` or the policy's `handoff_extension`; ends the agent's part |
+
+#### The prospect pool (`jeeta.prospects.*`, leads L1)
+
+Businesses that agents research with their own tools and record with evidence (spec
+`docs/superpowers/specs/2026-10-30-leads-pool-outreach-design.md`). Jeeta never researches and calls
+no data service; it stores, validates, dedupes and fences what is recorded. A prospect is never in
+the inbox, and is never contacted, until it is promoted (L3). Every contact field carries its source
+URL, `captured_at` and the recorder, which Jeeta takes from the caller (an agent's connection and
+issuer, or the person); input never names it. Dedupe answers, in order: `erased_identity`,
+`do_not_contact`, `previously_rejected`, `in_inbox`, `duplicate`, `possible_duplicate` (resend with
+`distinct_from`). Daily caps count in the workspace's time zone (500 a day, and each research task's
+own cap). Retention: rejected 30 days after the decision, unpromoted 180 days after the last update,
+a purged rejection's keys remembered 365 days; the do-not-contact list is per-workspace keyed
+hashes (HMAC under the `prospects.blocklist` key) and survives every purge. Ledger payloads carry
+ids, kinds, reasons and field names, never values. Gated by the strategy; `prospects.work`
+(`prospects.manage` where noted), which the rep role does not hold.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `prospects.check` | `POST /api/prospects/check` | `jeeta.prospects.check` | READ | `{ok}` or the refusal create would meet; writes nothing |
+| `prospects.create` | `POST /api/prospects` | `jeeta.prospects.create` | WRITE | one business with evidence per field; `request_key` replays 24 h |
+| `prospects.update` | `PATCH /api/prospects/{prospect_id}` | `jeeta.prospects.update` | WRITE | `{expected_revision, set, clear, distinct_from}`; new keys re-checked |
+| `prospects.list` | `GET /api/prospects` | `jeeta.prospects.list` | READ | filters, newest first, no contact values |
+| `prospects.get` | `GET /api/prospects/{prospect_id}` | `jeeta.prospects.get` | READ | evidence, latest 20 scores, duplicate candidates, history |
+| `prospects.score` | `POST /api/prospects/{prospect_id}/scores` | `jeeta.prospects.score` | WRITE | under the approved rubric's digest; `qualify_at` qualifies |
+| `prospects.decide` | `POST /api/prospects/{prospect_id}/decision` | `jeeta.prospects.decide` | WRITE | qualify, reject (fixed reasons), reopen (a person with `prospects.manage`) |
+| `prospects.do_not_contact` | `POST /api/prospects/do-not-contact` | `jeeta.prospects.do_not_contact` | DESTRUCTIVE | `confirm`; a prospect (scrubbed) or raw keys; agents too |
+| `prospects.dnc_lift` | `POST /api/prospects/do-not-contact/lift` | `jeeta.prospects.dnc_lift` | WRITE | a person with `prospects.manage`; an erasure never lifts |
+| `prospects.erase` | `POST /api/prospects/{prospect_id}/erase` | `jeeta.prospects.erase` | DESTRUCTIVE | `confirm`; a person with `prospects.manage`; keys kept as erased hashes |
+| `prospects.settings_get` | `GET /api/prospects/settings` | `jeeta.prospects.settings_get` | READ | time zone, retention, promotion cap |
+| `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded |
 
 #### The voice bridge (voice V1)
 

@@ -11,6 +11,7 @@ jt_strategy.workspace = true
 jt_capability.workspace = true
 jt_connector.workspace = true
 jt_app.workspace = true
+jt_prospects.workspace = true
 rmcp.workspace = true
 axum.workspace = true
 http.workspace = true

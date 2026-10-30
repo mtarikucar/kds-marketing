@@ -243,6 +243,7 @@ async fn status_labels_policy_contract_fake_and_pg() {
                 unreachable_threshold: 5,
                 max_response_s: [("sms".into(), 42)].into(),
             },
+            leads: jt_app::ports::LeadsPolicy::default(),
         };
         let mut r = uow.tenant(f.ws).await.unwrap();
         assert!(

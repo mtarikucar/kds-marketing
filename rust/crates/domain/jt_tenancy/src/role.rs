@@ -57,6 +57,14 @@ pub enum Permission {
     /// the manager hold it only so that they can issue that key.
     #[serde(rename = "devices.bridge")]
     DevicesBridge,
+    /// Work the prospect pool: record, update, check, score and decide prospects, and read the
+    /// research tasks and the pool's settings.
+    #[serde(rename = "prospects.work")]
+    ProspectsWork,
+    /// Manage the pool: reopen a rejection, lift a do-not-contact entry, erase a prospect and set
+    /// the pool's retention and caps.
+    #[serde(rename = "prospects.manage")]
+    ProspectsManage,
 }
 
 const ALL_PERMISSIONS: &[Permission] = &[
@@ -75,6 +83,8 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::CallsBridge,
     Permission::DevicesWork,
     Permission::DevicesBridge,
+    Permission::ProspectsWork,
+    Permission::ProspectsManage,
 ];
 
 impl Permission {
@@ -88,6 +98,8 @@ impl Permission {
             Permission::CallsBridge => "calls.bridge",
             Permission::DevicesWork => "devices.work",
             Permission::DevicesBridge => "devices.bridge",
+            Permission::ProspectsWork => "prospects.work",
+            Permission::ProspectsManage => "prospects.manage",
             Permission::WorkspaceRead => "workspace.read",
             Permission::TeamManage => "team.manage",
             Permission::ApiKeysManage => "api_keys.manage",

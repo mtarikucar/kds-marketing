@@ -30,12 +30,19 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
-/// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge` and the
-/// device commands and device files of `0017_device_bridge`.
-const TABLES_AFTER_ALL: i64 = 74;
+/// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge`, the
+/// device commands and device files of `0017_device_bridge`, and the five pool tables of
+/// `0020_prospects`.
+const TABLES_AFTER_ALL: i64 = 79;
 
-/// Migrations `0001_foundation` through `0018_tiktok_webhooks`.
-const MIGRATIONS: i64 = 18;
+/// Migrations `0001_foundation` through `0018_tiktok_webhooks`, and `0020_prospects`.
+const MIGRATIONS: i64 = 19;
+
+/// The migration versions. `0019` (inbox comments and marketplace) belongs to a parallel branch:
+/// when it merges it adds its version here.
+fn versions() -> Vec<i64> {
+    (1..=18).chain([20]).collect()
+}
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -59,6 +66,29 @@ const DEVICE_BRIDGE_INDEXES: [&str; 4] = [
     "device_commands_due",
     "device_commands_log",
     "device_files_expiry",
+];
+
+/// The tables of `0020_prospects`, each with its one row-level policy.
+const PROSPECTS_TABLES: [(&str, &str); 5] = [
+    ("research_tasks", "research_tasks_ws"),
+    ("prospects", "prospects_ws"),
+    ("prospect_keys", "prospect_keys_ws"),
+    ("prospect_scores", "prospect_scores_ws"),
+    ("prospect_blocklist", "prospect_blocklist_ws"),
+];
+
+/// The indexes of `0020_prospects` beyond its primary keys and unique constraints.
+const PROSPECTS_INDEXES: [&str; 10] = [
+    "research_tasks_one_standing",
+    "research_tasks_list",
+    "prospects_list",
+    "prospects_task",
+    "prospects_purge",
+    "prospects_person",
+    "prospect_keys_hard",
+    "prospect_keys_soft",
+    "prospect_scores_by_prospect",
+    "prospect_blocklist_expiry",
 ];
 
 /// The tables of `0017_device_bridge`, each with its one row-level policy.
@@ -189,6 +219,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0020_prospects",
         "0018_tiktok_webhooks",
         "0017_device_bridge",
         "0016_voice_bridge",
@@ -281,7 +312,8 @@ async fn every_migration_has_a_down_file() {
         .map(|n| n.split('_').next().unwrap().parse().unwrap())
         .collect();
     versions.sort();
-    assert_eq!(versions, (1..=MIGRATIONS).collect::<Vec<_>>());
+    assert_eq!(versions, self::versions());
+    assert_eq!(versions.len() as i64, MIGRATIONS);
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,
@@ -696,7 +728,13 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
-    // Newest first: the call tables reference the inbox tables.
+    // Newest first: the pool and the call tables reference the inbox tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0020_prospects.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0018_tiktok_webhooks.down.sql"
     ))
@@ -838,6 +876,12 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
     sqlx::raw_sql(include_str!(
+        "../../../../migrations/0020_prospects.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../../migrations/0018_tiktok_webhooks.down.sql"
     ))
     .execute(&db.pool)
@@ -926,4 +970,332 @@ async fn studio_migration_up_down_up() {
     assert!(!bypass);
     let forced: bool = sqlx::query_scalar("select relrowsecurity and relforcerowsecurity from pg_class where relname='studio_learning_applications'").fetch_one(tx.conn()).await.unwrap();
     assert!(forced);
+}
+
+/// Runs `sql` as one simple query (a transaction of its own), answering the server's error.
+async fn try_run(pool: &PgPool, sql: &str) -> Result<(), sqlx::Error> {
+    sqlx::raw_sql(sql).execute(pool).await.map(drop)
+}
+
+/// A pool row `0020_prospects` keeps: a prospect of `ws` with one key.
+async fn insert_prospect(
+    pool: &PgPool,
+    ws: Uuid,
+    kind: &str,
+    value: &str,
+) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::now_v7();
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    sqlx::query(
+        "insert into prospects (workspace_id, id, status, business_name, entity_kind, data, \
+         created_at, updated_at) values ($1, $2, 'new', 'Örnek Kafe', 'legal_entity', '{}', now(), now())",
+    )
+    .bind(ws)
+    .bind(id)
+    .execute(tx.conn())
+    .await?;
+    sqlx::query(
+        "insert into prospect_keys (workspace_id, prospect_id, kind, value) values ($1, $2, $3, $4)",
+    )
+    .bind(ws)
+    .bind(id)
+    .bind(kind)
+    .bind(value)
+    .execute(tx.conn())
+    .await?;
+    tx.commit().await.unwrap();
+    Ok(id)
+}
+
+/// A blocklist entry of `ws` with `reason`, expiring in a day when `expires`.
+async fn insert_blocklisted(
+    pool: &PgPool,
+    ws: Uuid,
+    reason: &str,
+    expires: bool,
+) -> Result<(), sqlx::Error> {
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    sqlx::query(
+        "insert into prospect_blocklist (workspace_id, kind, key_hash, reason, created_at, expires_at) \
+         values ($1, 'phone', $2, $3, now(), case when $4 then now() + interval '1 day' end)",
+    )
+    .bind(ws)
+    .bind(format!("{:064x}", Uuid::now_v7().as_u128()))
+    .bind(reason)
+    .bind(expires)
+    .execute(tx.conn())
+    .await?;
+    tx.commit().await.unwrap();
+    Ok(())
+}
+
+#[tokio::test]
+async fn prospects_migration_is_repeatable_and_grants_only_the_system_owner_and_manager() {
+    let db = TestDb::new().await; // already migrated up, 0020 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0020_prospects.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0020_prospects.down.sql")).unwrap();
+    let as_strings =
+        |keys: &[&str]| -> Vec<String> { keys.iter().map(|k| (*k).to_owned()).collect() };
+    let keys = ["prospects.work", "prospects.manage"];
+    let base = ["workspace.read", "team.manage"];
+
+    // A second workspace holds a custom role keyed like a system one: only `is_system` tells
+    // them apart.
+    let (ws, other_ws) = (Uuid::now_v7(), Uuid::now_v7());
+    let (owner, manager, rep, custom, custom_manager) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    for (id, name) in [(ws, "prospects"), (other_ws, "other")] {
+        sqlx::query(
+            "insert into workspaces (id, name, slug, status) values ($1, $2, $3, 'active')",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(format!("{name}-{}", id.simple()))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    let roles: [(Uuid, Uuid, &str, bool, Vec<&str>); 5] = [
+        (owner, ws, "owner", true, base.to_vec()),
+        // Already granted one of the two: it is not granted twice.
+        (
+            manager,
+            ws,
+            "manager",
+            true,
+            [&base[..], &["prospects.work"]].concat(),
+        ),
+        (rep, ws, "rep", true, vec!["workspace.read"]),
+        (custom, ws, "analyst", false, vec!["workspace.read"]),
+        (
+            custom_manager,
+            other_ws,
+            "manager",
+            false,
+            vec!["workspace.read"],
+        ),
+    ];
+    for (id, workspace, key, is_system, permissions) in &roles {
+        sqlx::query(
+            "insert into roles (id, workspace_id, key, name, permissions, is_system) \
+             values ($1, $2, $3, $3, $4, $5)",
+        )
+        .bind(id)
+        .bind(workspace)
+        .bind(key)
+        .bind(permissions)
+        .bind(is_system)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    // Up, twice: the system owner and manager gain exactly the missing keys, once, in order.
+    for _ in 0..2 {
+        try_run(&db.pool, &up).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        for role in [owner, manager] {
+            assert_eq!(
+                role_permissions(&db.pool, role).await,
+                as_strings(&[&base[..], &keys[..]].concat())
+            );
+        }
+        assert_eq!(role_permissions(&db.pool, rep).await, ["workspace.read"]);
+        assert_eq!(role_permissions(&db.pool, custom).await, ["workspace.read"]);
+        assert_eq!(
+            role_permissions(&db.pool, custom_manager).await,
+            ["workspace.read"]
+        );
+        assert!(column_exists(&db.pool, ("workspace_policies", "leads_policy")).await);
+    }
+
+    // Down, twice: the five tables and the policy column go, and the two keys leave the system
+    // owner and manager only.
+    for _ in 0..2 {
+        try_run(&db.pool, &down).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 5);
+        for index in PROSPECTS_INDEXES {
+            assert!(!index_exists(&db.pool, index).await, "{index}");
+        }
+        assert!(!column_exists(&db.pool, ("workspace_policies", "leads_policy")).await);
+        for role in [owner, manager] {
+            assert_eq!(role_permissions(&db.pool, role).await, as_strings(&base));
+        }
+        assert_eq!(role_permissions(&db.pool, rep).await, ["workspace.read"]);
+    }
+
+    // Up again: the tables are back, with their indexes, forced row-level security and exactly
+    // one policy each.
+    try_run(&db.pool, &up).await.unwrap();
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    for index in PROSPECTS_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    for (table, policy) in PROSPECTS_TABLES {
+        let forced: bool = sqlx::query_scalar(
+            "select relrowsecurity and relforcerowsecurity from pg_class where relname = $1",
+        )
+        .bind(table)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(forced, "{table}");
+        let policies: Vec<String> = sqlx::query_scalar(
+            "select policyname::text from pg_policies where schemaname = current_schema() \
+             and tablename = $1",
+        )
+        .bind(table)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(policies, [policy], "{table}");
+    }
+}
+
+#[tokio::test]
+async fn prospects_down_refuses_while_the_blocklist_holds_an_objection() {
+    let db = TestDb::new().await;
+    let down = std::fs::read_to_string(migrations_dir().join("0020_prospects.down.sql")).unwrap();
+    let (ws, _) = db.seed_workspace("prospects-down-refusal").await;
+    let ws = ws.as_uuid();
+    // Rejection memory expires anyway: it does not hold a rollback up.
+    insert_blocklisted(&db.pool, ws, "rejected", true)
+        .await
+        .unwrap();
+    for reason in ["do_not_contact", "erased"] {
+        insert_blocklisted(&db.pool, ws, reason, false)
+            .await
+            .unwrap();
+        let refused = try_run(&db.pool, &down).await.unwrap_err();
+        assert!(
+            refused.to_string().contains("0020_prospects down refused"),
+            "{refused}"
+        );
+        assert_eq!(
+            table_count(&db.pool).await,
+            TABLES_AFTER_ALL,
+            "nothing dropped"
+        );
+        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+        sqlx::query("delete from prospect_blocklist where reason = $1")
+            .bind(reason)
+            .execute(tx.conn())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+    try_run(&db.pool, &down).await.unwrap();
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 5);
+}
+
+#[tokio::test]
+async fn prospects_down_keeps_a_leads_policy_a_workspace_set() {
+    let db = TestDb::new().await;
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0020_prospects.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0020_prospects.down.sql")).unwrap();
+    let (ws, _) = db.seed_workspace("prospects-policy-kept").await;
+    let stored = serde_json::json!({"prospects": {"rejected_retention_days": 7}});
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "insert into workspace_policies (workspace_id, agent_checkin_interval_minutes, updated_at, \
+         leads_policy) values ($1, 60, now(), $2)",
+    )
+    .bind(ws.as_uuid())
+    .bind(&stored)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        try_run(&db.pool, &down).await.unwrap();
+        assert!(column_exists(&db.pool, ("workspace_policies", "leads_policy")).await);
+    }
+    try_run(&db.pool, &up).await.unwrap();
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let kept: serde_json::Value =
+        sqlx::query_scalar("select leads_policy from workspace_policies where workspace_id = $1")
+            .bind(ws.as_uuid())
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    assert_eq!(kept, stored);
+    // A policy back to `{}` lets the column go.
+    sqlx::query("update workspace_policies set leads_policy = '{}' where workspace_id = $1")
+        .bind(ws.as_uuid())
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    try_run(&db.pool, &down).await.unwrap();
+    assert!(!column_exists(&db.pool, ("workspace_policies", "leads_policy")).await);
+}
+
+#[tokio::test]
+async fn prospect_keys_hard_index_refuses_a_second_phone() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("prospect-keys").await;
+    let (other, _) = db.seed_workspace("prospect-keys-other").await;
+    let ws = ws.as_uuid();
+    insert_prospect(&db.pool, ws, "phone", "+905000000000")
+        .await
+        .unwrap();
+    let err = insert_prospect(&db.pool, ws, "phone", "+905000000000")
+        .await
+        .unwrap_err();
+    assert!(
+        err.as_database_error()
+            .is_some_and(|e| e.constraint() == Some("prospect_keys_hard")),
+        "{err}"
+    );
+    // Another workspace may hold the same number; soft keys never conflict.
+    insert_prospect(&db.pool, other.as_uuid(), "phone", "+905000000000")
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        insert_prospect(&db.pool, ws, "domain", "ornek.example.invalid")
+            .await
+            .unwrap();
+        insert_prospect(&db.pool, ws, "name_city", "ornek kafe|istanbul")
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn blocklist_reason_and_expiry_agree() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("prospect-blocklist").await;
+    let ws = ws.as_uuid();
+    insert_blocklisted(&db.pool, ws, "rejected", true)
+        .await
+        .unwrap();
+    insert_blocklisted(&db.pool, ws, "do_not_contact", false)
+        .await
+        .unwrap();
+    insert_blocklisted(&db.pool, ws, "erased", false)
+        .await
+        .unwrap();
+    for (reason, expires) in [
+        ("rejected", false),
+        ("do_not_contact", true),
+        ("erased", true),
+    ] {
+        let err = insert_blocklisted(&db.pool, ws, reason, expires)
+            .await
+            .unwrap_err();
+        assert!(
+            err.as_database_error()
+                .is_some_and(|e| e.constraint() == Some("prospect_blocklist_expiry_check")),
+            "{reason}: {err}"
+        );
+    }
 }

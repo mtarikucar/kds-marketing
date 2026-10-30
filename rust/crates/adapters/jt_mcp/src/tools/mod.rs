@@ -16,6 +16,7 @@ mod devices;
 mod events;
 mod inbox;
 mod ledger;
+mod prospects;
 mod roles;
 mod strategy;
 mod studio;
@@ -58,6 +59,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         connector::definitions(),
         calls::definitions(),
         devices::definitions(),
+        prospects::definitions(),
         events::definitions(),
         inbox::definitions(),
         work::definitions(),

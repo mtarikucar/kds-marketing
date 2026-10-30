@@ -37,6 +37,8 @@ mod operators;
 mod outbound_jobs;
 mod policies;
 mod probe_runs;
+mod prospects;
+mod research;
 pub(crate) mod roles;
 mod sessions;
 mod strategy;

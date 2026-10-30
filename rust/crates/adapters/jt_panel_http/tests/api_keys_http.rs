@@ -220,6 +220,8 @@ async fn create_refuses_bad_input_with_structured_errors() {
             "calls.bridge",
             "devices.work",
             "devices.bridge",
+            "prospects.work",
+            "prospects.manage",
         ])
     );
 }

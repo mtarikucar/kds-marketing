@@ -306,6 +306,15 @@ impl TenantRepos for FailingTenant {
     fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
         self.0.device_commands()
     }
+    fn prospects(&mut self) -> &mut dyn jt_app::ports::prospects::ProspectRepo {
+        self.0.prospects()
+    }
+    fn research_tasks(&mut self) -> &mut dyn jt_app::ports::prospects::ResearchTaskRepo {
+        self.0.research_tasks()
+    }
+    fn prospect_blocklist(&mut self) -> &mut dyn jt_app::ports::prospects::BlocklistRepo {
+        self.0.prospect_blocklist()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.0.consents()

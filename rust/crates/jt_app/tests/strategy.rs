@@ -141,6 +141,15 @@ impl TenantRepos for SpyTenant {
     fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
         self.inner.device_commands()
     }
+    fn prospects(&mut self) -> &mut dyn jt_app::ports::prospects::ProspectRepo {
+        self.inner.prospects()
+    }
+    fn research_tasks(&mut self) -> &mut dyn jt_app::ports::prospects::ResearchTaskRepo {
+        self.inner.research_tasks()
+    }
+    fn prospect_blocklist(&mut self) -> &mut dyn jt_app::ports::prospects::BlocklistRepo {
+        self.inner.prospect_blocklist()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.inner.consents()
@@ -2382,4 +2391,45 @@ async fn every_mutation_writes_one_ledger_entry_about_its_version() {
     let last = w.ledger().pop().unwrap();
     assert_eq!(last.strategy_version_id, Some(v1.id.as_uuid()));
     assert_eq!(last.subject.unwrap().id, v2.id.to_string());
+}
+
+/// The rubric digest names a rubric exactly: the same rubric gives the same digest, whatever
+/// version it is in; another order of the criteria, or another weight, gives another (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.4).
+#[test]
+fn rubric_digest_is_stable_and_order_sensitive() {
+    use jt_app::usecases::prospects::rubric_digest;
+    use jt_strategy::{Criterion, Rubric};
+    let c = |key: &str, weight: u8| Criterion {
+        key: key.into(),
+        description: format!("{key} fits"),
+        weight,
+    };
+    let rubric = Rubric {
+        criteria: vec![c("fit", 60), c("size", 40)],
+        qualify_at: 70,
+    };
+    let digest = rubric_digest(&rubric);
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    );
+    assert_eq!(rubric_digest(&rubric.clone()), digest);
+    let reordered = Rubric {
+        criteria: vec![c("size", 40), c("fit", 60)],
+        ..rubric.clone()
+    };
+    assert_ne!(rubric_digest(&reordered), digest);
+    let reweighted = Rubric {
+        criteria: vec![c("fit", 59), c("size", 41)],
+        ..rubric.clone()
+    };
+    assert_ne!(rubric_digest(&reweighted), digest);
+    let threshold = Rubric {
+        qualify_at: 71,
+        ..rubric
+    };
+    assert_ne!(rubric_digest(&threshold), digest);
 }

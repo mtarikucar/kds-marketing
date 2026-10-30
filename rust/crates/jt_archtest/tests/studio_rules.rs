@@ -93,7 +93,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 140);
+    assert_eq!(jt_mcp::registry().len(), 152);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -112,8 +112,9 @@ async fn studio_exact_catalog_and_gate_set() {
         }
     }
     // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
-    // 0016_voice_bridge and the device commands and device files of 0017_device_bridge.
-    assert_eq!(all_tables.len(), 74);
+    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge and the five
+    // pool tables of 0020_prospects.
+    assert_eq!(all_tables.len(), 79);
 
     // All fourteen Studio tables are tenant-scoped.
     assert_eq!(

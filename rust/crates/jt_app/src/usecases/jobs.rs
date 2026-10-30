@@ -139,11 +139,12 @@ pub enum Job {
     DeviceBridgeHealth,
     DeviceCommandExpiry,
     DeviceFilePurge,
+    ProspectsPurge,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 28] = [
+    pub const ALL: [Job; 29] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -172,6 +173,7 @@ impl Job {
         Job::DeviceBridgeHealth,
         Job::DeviceCommandExpiry,
         Job::DeviceFilePurge,
+        Job::ProspectsPurge,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -206,6 +208,7 @@ impl Job {
             Job::DeviceBridgeHealth => "device_bridge_health",
             Job::DeviceCommandExpiry => "device_command_expiry",
             Job::DeviceFilePurge => "device_file_purge",
+            Job::ProspectsPurge => "prospects_purge",
         }
     }
 
@@ -245,6 +248,7 @@ impl Job {
             Job::DeviceBridgeHealth => run_device_bridge_health(deps, now).await,
             Job::DeviceCommandExpiry => run_device_command_expiry(deps, now).await,
             Job::DeviceFilePurge => run_device_file_purge(deps, now).await,
+            Job::ProspectsPurge => run_prospects_purge(deps, now).await,
         }
     }
 }
@@ -1141,6 +1145,31 @@ pub async fn run_device_file_purge(deps: &Deps, now: OffsetDateTime) -> JobRepor
 // ---------------------------------------------------------------------------------------------
 // Purges
 // ---------------------------------------------------------------------------------------------
+
+/// The prospect pool's retention (spec 2026-10-30-leads-pool-outreach-design.md §3.6), in every
+/// workspace whatever its status: deletes the prospects past their `purge_after` (a rejection's
+/// keys first remembered as hashes) and the expired rejection hashes. `touched` counts the
+/// prospects due, `changed` those deleted plus the hashes expired, `failed` the workspaces that
+/// could not be purged. No identifier is logged.
+pub async fn run_prospects_purge(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::ProspectsPurge;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::prospects::purge(deps, &ctx).await {
+            Ok(purged) => {
+                report.touched += purged.due;
+                report.changed += purged.deleted + purged.expired_hashes;
+                report.skipped += purged.due - purged.deleted;
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
 
 /// Deletes, in every workspace, the voice bridge's commands queued more than
 /// `calls::session::COMMAND_RETENTION` (7 days) before `now`, acknowledged or not; the calls and

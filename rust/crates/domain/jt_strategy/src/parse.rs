@@ -15,7 +15,8 @@ use serde_json::Value;
 use crate::hypothesis::HypothesisInput;
 use crate::rules::Gap;
 use crate::sections::{
-    BudgetFrame, Cadence, ChannelChoice, Goals, Identity, Kpi, Lane, Mix, Sections, Segment,
+    Area, BudgetFrame, Cadence, ChannelChoice, Criterion, Goals, IcpEntry, Identity, Kpi, Lane,
+    Mix, Prospecting, Rubric, Sections, Segment,
 };
 
 /// The parsed payload of one section, as written under its key.
@@ -29,6 +30,7 @@ pub enum SectionValue {
     Prohibitions(Vec<String>),
     Cadence(Cadence),
     PaidEnabled(bool),
+    Prospecting(Prospecting),
 }
 
 impl SectionValue {
@@ -43,6 +45,7 @@ impl SectionValue {
             SectionValue::Prohibitions(_) => "prohibitions",
             SectionValue::Cadence(_) => "cadence",
             SectionValue::PaidEnabled(_) => "paid_enabled",
+            SectionValue::Prospecting(_) => "prospecting",
         }
     }
 
@@ -57,6 +60,7 @@ impl SectionValue {
             SectionValue::Prohibitions(v) => sections.prohibitions = v,
             SectionValue::Cadence(v) => sections.cadence = v,
             SectionValue::PaidEnabled(v) => sections.paid_enabled = v,
+            SectionValue::Prospecting(v) => sections.prospecting = v,
         }
     }
 }
@@ -146,6 +150,40 @@ const CADENCE: Shape = Shape::Object {
     fields: &[("channel_mix", Shape::List(&MIX))],
 };
 const PROHIBITION: Shape = Shape::Text(MAX_PROHIBITION_CHARS);
+const AREA: Shape = Shape::Object {
+    keys: Area::KEYS,
+    required: &["city"],
+    fields: &[("city", NAME), ("district", NAME)],
+};
+const ICP_ENTRY: Shape = Shape::Object {
+    keys: IcpEntry::KEYS,
+    required: &[],
+    fields: &[
+        ("key", NAME),
+        ("segment_key", NAME),
+        ("sectors", Shape::List(&NAME)),
+        ("areas", Shape::List(&AREA)),
+        ("signals", Shape::List(&NAME)),
+        ("exclusions", Shape::List(&NAME)),
+        ("size_hint", NAME),
+        ("language", NAME),
+    ],
+};
+const CRITERION: Shape = Shape::Object {
+    keys: Criterion::KEYS,
+    required: &[],
+    fields: &[("key", NAME), ("description", TEXT)],
+};
+const RUBRIC: Shape = Shape::Object {
+    keys: Rubric::KEYS,
+    required: &[],
+    fields: &[("criteria", Shape::List(&CRITERION))],
+};
+const PROSPECTING: Shape = Shape::Object {
+    keys: Prospecting::KEYS,
+    required: &[],
+    fields: &[("icp", Shape::List(&ICP_ENTRY)), ("rubric", RUBRIC)],
+};
 const HYPOTHESIS_INPUT: Shape = Shape::Object {
     keys: HypothesisInput::KEYS,
     required: &[],
@@ -171,6 +209,7 @@ pub fn parse_section_strict(key: &str, value: &Value) -> Result<SectionValue, Ve
         }
         "cadence" => strict(value, &CADENCE, key).map(SectionValue::Cadence),
         "paid_enabled" => strict(value, &Shape::Leaf, key).map(SectionValue::PaidEnabled),
+        "prospecting" => strict(value, &PROSPECTING, key).map(SectionValue::Prospecting),
         _ => Err(vec![Gap {
             field: key.to_owned(),
             message: format!(

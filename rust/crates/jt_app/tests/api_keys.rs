@@ -295,6 +295,8 @@ async fn create_returns_plaintext_once_and_list_hides_it() {
             "calls.bridge",
             "devices.work",
             "devices.bridge",
+            "prospects.work",
+            "prospects.manage",
         ])
     );
     assert!(created.get("key_hash").is_none());
