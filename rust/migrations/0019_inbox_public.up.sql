@@ -5,11 +5,10 @@
 -- 74 -> 77 tables. Repeatable: every statement is guarded.
 select set_config('app.platform', 'on', true);
 
--- Marketplace questions are inbound events of their own providers. TikTok's provider
--- (0018_tiktok_webhooks, another branch) is carried too, so that either migration may land first.
+-- Marketplace questions are inbound events of their own providers, beside 0018_tiktok_webhooks'.
 alter table inbound_events drop constraint if exists inbound_events_provider_check;
 alter table inbound_events add constraint inbound_events_provider_check
-    check (provider in ('meta','netgsm','x','mail','tiktok','trendyol','hepsiburada'));
+    check (provider in ('meta', 'netgsm', 'x', 'mail', 'tiktok', 'trendyol', 'hepsiburada'));
 
 -- An item's conversation and subject are on its own capability: the composite keys the items'
 -- foreign keys name.

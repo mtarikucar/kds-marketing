@@ -622,3 +622,25 @@ fn a_draft_carries_only_what_tiktok_takes_for_it() {
     );
     assert!(draft("").is_draft() && !post("SELF_ONLY").is_draft());
 }
+
+/// TikTok names a post's public id only once everyone may see it and moderation passed it
+/// (`publicaly_available_post_id`,
+/// <https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status>): only a
+/// direct post chosen public waits for one.
+#[test]
+fn only_a_direct_post_chosen_public_expects_a_public_id() {
+    assert!(post("PUBLIC_TO_EVERYONE").expects_public_id());
+    for privacy in [
+        "MUTUAL_FOLLOW_FRIENDS",
+        "FOLLOWER_OF_CREATOR",
+        "SELF_ONLY",
+        "",
+    ] {
+        assert!(!post(privacy).expects_public_id(), "{privacy}");
+    }
+    let draft = TiktokPost {
+        mode: TiktokPostMode::Draft,
+        ..post("PUBLIC_TO_EVERYONE")
+    };
+    assert!(!draft.expects_public_id());
+}

@@ -36,9 +36,9 @@ with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`). Once per PR: `c
 in CI, `pnpm --dir rust/panel test` when the panel is touched.
 
 **Base and branches:** every task branches from the latest `origin/feat/rust-panel-money-inputs` and lands by PR
-into it. **Migration `0019_inbox_public`**: `0018_tiktok_webhooks` (TikTok branch) lands first; if this work is
-ready first, it waits or the two swap numbers — whichever merges second renumbers, and both carry the union
-provider list `('meta','netgsm','x','mail','tiktok','trendyol','hepsiburada')`. Pins touched by two tasks of
+into it. **Migration `0019_inbox_public`**: `0018_tiktok_webhooks` merged first (PR #391); 0019 sits on it,
+widens the provider list to `('meta', 'netgsm', 'x', 'mail', 'tiktok', 'trendyol', 'hepsiburada')`, and its
+down restores 0018's list. Pins touched by two tasks of
 this plan (Job::ALL by M4 and T3; the catalog by F7 only) are bumped by whichever lands second on top of the
 first.
 
@@ -398,8 +398,8 @@ create `ports/public.rs` (the three repo traits only); `rust/crates/jt_testkit/s
 `rust/crates/jt_archtest/tests/studio_rules.rs` (tables 74 → 77).
 
 - [ ] **Tests first:**
-  - `jt_pg/tests/migrations.rs`: `TABLES_AFTER_ALL = 77`, `MIGRATIONS = 19` (18 if 0018 is not merged yet: the
-    versions are then `1..=17, 19`), the down list starts with `"0019_inbox_public"`;
+  - `jt_pg/tests/migrations.rs`: `TABLES_AFTER_ALL = 77`, `MIGRATIONS = 19` (0018 merged: versions 1–19), the down
+    list starts with `"0019_inbox_public"`, `"0018_tiktok_webhooks"`;
     `public_tables_force_rls_with_one_policy` (the three tables, policies `public_subjects_ws`,
     `public_items_ws`, `public_cursors_ws`); `answer_state_is_generated` (insert with
     `{"state":"pending","message_id":…}` reads `answer_state = 'pending'`; writing the column is refused);

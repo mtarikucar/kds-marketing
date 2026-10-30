@@ -365,6 +365,28 @@ impl PlatformRepos for MemPlatform {
             .map(|s| state.capability_view(s)))
     }
 
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        let state = self.state();
+        let mut held: Vec<Capability> = state
+            .capabilities
+            .iter()
+            .filter(|s| {
+                let c = &s.capability;
+                c.status != StoredStatus::Retired
+                    && s.sealed.is_some()
+                    && kind_keys.contains(&c.kind_key.as_str())
+                    && c.external_id.as_deref() == Some(external_id)
+            })
+            .map(|s| state.capability_view(s))
+            .collect();
+        held.sort_by_key(|c| (c.workspace_id, c.id));
+        Ok(held)
+    }
+
     async fn workspaces_with_verified(
         &mut self,
         kind_keys: &[&str],

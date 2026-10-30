@@ -151,6 +151,31 @@ pub(crate) async fn by_external(
     record.map(CapabilityRecord::into_capability).transpose()
 }
 
+/// Every live capability holding `external_id` under one of `kind_keys`, with sealed
+/// credentials, across workspaces (see `PlatformRepos::capabilities_holding`).
+pub(crate) async fn holding(
+    tx: &mut PlatformTx<'_>,
+    kind_keys: &[&str],
+    external_id: &str,
+) -> Result<Vec<Capability>, AppError> {
+    let records: Vec<CapabilityRecord> = sqlx::query_as(&format!(
+        // archtest: platform-wide
+        "select {COLUMNS} from capabilities c \
+         where c.kind_key = any($1) and c.external_id = $2 \
+         and c.status <> 'retired' and c.connector_sealed is not null \
+         order by c.workspace_id, c.id"
+    ))
+    .bind(kind_keys.to_vec())
+    .bind(external_id)
+    .fetch_all(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "list capabilities holding an external account"))?;
+    records
+        .into_iter()
+        .map(CapabilityRecord::into_capability)
+        .collect()
+}
+
 /// The workspaces holding a verified capability with sealed credentials of one of `kind_keys`,
 /// in id order (see `PlatformRepos::workspaces_with_verified`).
 pub(crate) async fn workspaces_with_verified(

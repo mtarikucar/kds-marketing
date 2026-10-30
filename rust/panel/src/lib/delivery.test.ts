@@ -27,6 +27,37 @@ describe('failureText', () => {
     expect(failureText(t, 'permission: x: HTTP 403 Forbidden: client not enrolled')).toBe(tr.failure.permission);
   });
 
+  it("explains TikTok's own codes, before the error kind", () => {
+    const cases: [string, string][] = [
+      [
+        'permission: tiktok: HTTP 403 unaudited_client_can_only_post_to_private_accounts: Please review our integration guidelines',
+        tr.failure.tiktokUnaudited,
+      ],
+      [
+        'permission: tiktok: privacy level PUBLIC_TO_EVERYONE not available (app not audited or private account)',
+        tr.failure.tiktokPrivacy,
+      ],
+      ['permission: tiktok: HTTP 400 privacy_level_option_mismatch: no', tr.failure.tiktokPrivacy],
+      ['throttle: tiktok: HTTP 200 spam_risk_too_many_posts: cap', tr.failure.tiktokCap],
+      ['throttle: tiktok: HTTP 403 spam_risk_too_many_pending_share: cap', tr.failure.tiktokCap],
+      ['throttle: tiktok: HTTP 200 reached_active_user_cap: app cap', tr.failure.tiktokAppCap],
+      ['permission: tiktok: HTTP 403 spam_risk_user_banned_from_posting: banned', tr.failure.tiktokBanned],
+      ['permanent: tiktok: HTTP 403 url_ownership_unverified: verify', tr.failure.tiktokDomain],
+      ['permanent: tiktok: publish failed: spam_risk_text', tr.failure.tiktokSpam],
+      ['permanent: tiktok: publish failed: spam_risk', tr.failure.tiktokSpam],
+      ['permanent: tiktok: publish failed: duration_check_failed', tr.failure.tiktokMedia],
+      ['permanent: tiktok: publish failed: picture_size_check_failed', tr.failure.tiktokMedia],
+    ];
+    for (const [line, text] of cases) expect(failureText(t, line)).toBe(text);
+    // The creator removed the app's access while it processed: reconnect, by the error kind.
+    expect(failureText(t, 'auth: tiktok: publish failed: auth_removed')).toBe(tr.failure.reconnect);
+    // Another TikTok code falls back to the kind, or TikTok's own words.
+    expect(failureText(t, 'throttle: tiktok: HTTP 429 rate_limit_exceeded: slow')).toBe(tr.failure.throttled);
+    expect(failureText(t, 'permanent: tiktok: publish failed: internal')).toBe('publish failed: internal');
+    // A code is TikTok's only on a TikTok line.
+    expect(failureText(t, 'permanent: x: spam_risk_text')).toBe('spam_risk_text');
+  });
+
   it('explains an error kind or stable reason without a known code', () => {
     expect(failureText(t, 'auth: meta: the credential was refused')).toBe(tr.failure.reconnect);
     expect(failureText(t, 'throttle: x')).toBe(tr.failure.throttled);

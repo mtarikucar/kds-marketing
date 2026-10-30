@@ -887,10 +887,20 @@ export interface NetgsmHook {
   url: string;
 }
 
-/** `jt_app::usecases::connector::HooksOut`; `meta` is `null` while the platform has no Meta app. */
+/** `jt_app::usecases::connector::TiktokHook`: the TikTok app's callback URL and the events acted on. */
+export interface TiktokHook {
+  url: string;
+  events: string[];
+}
+
+/**
+ * `jt_app::usecases::connector::HooksOut`; `meta` and `tiktok` are `null` while the platform has
+ * no Meta or TikTok app (`tiktok` is absent from a server that predates TikTok's webhooks).
+ */
 export interface HooksOut {
   meta: MetaHook | null;
   netgsm: NetgsmHook[];
+  tiktok?: TiktokHook | null;
 }
 
 /** `jt_app::usecases::connector::PbxCallMode`. */

@@ -663,6 +663,15 @@ pub trait Connector: Send + Sync {
         let _ = (cred, public);
         Ok(Value::Null)
     }
+    /// Gives back, at the provider, the access `cred` grants the platform's app, once its
+    /// capability is retired (TikTok's token revocation: the app then leaves the account's
+    /// authorized apps). Best effort: the retirement, and the credential's erasure, never wait on
+    /// it. The default does nothing (a provider that offers no revocation, or one this system does
+    /// not call).
+    async fn revoke(&self, cred: &Credential) -> Result<(), ConnectorError> {
+        let _ = cred;
+        Ok(())
+    }
 }
 
 /// Sends SMS.
@@ -688,6 +697,12 @@ pub enum PublishResolution {
     /// The post is live: its own receipt, whose id may differ from the one `publish` returned
     /// (TikTok's publish id becomes the post's id).
     Published(PublishReceipt),
+    /// The post is live but the provider names no public id for it yet: TikTok names one only
+    /// once the post is public and passed its moderation, so a post everyone may see can read
+    /// complete before it has one, and one fewer may see never does. The receipt is the post as
+    /// known now (TikTok's publish id, no URL): the publication settles as it unless a public id
+    /// may still come (see `usecases::studio::publish::PUBLIC_ID_WAIT`).
+    AwaitingPublicId(PublishReceipt),
     /// Not settled yet: ask again later.
     Pending,
     /// The provider gave up on it, for this reason.

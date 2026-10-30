@@ -12,10 +12,10 @@ physical phone only where no API exists; nothing left missing), and the Rust cod
 (`origin/feat/rust-panel-money-inputs`). Conventions follow `2026-10-22-jeeta-rust-yeniden-yazim-design.md`
 (§4.2 three rules, §4.5 panel/MCP twins, §7 inbox) and the M2a/M2b inbox plans.
 
-Branch: `feat/inbox-comments-marketplace`. Migration: **`0019_inbox_public`**. `0018` is taken by the
-TikTok webhooks work (`0018_tiktok_webhooks`, uncommitted in the `kds-marketing-tiktok2` worktree), which
-widens `inbound_events_provider_check` to `('meta','netgsm','x','mail','tiktok')`; 0019 widens the same
-constraint and must carry `tiktok` too (§4.1). Every count in this document is relative to `958fcfe3`; a
+Branch: `feat/inbox-comments-marketplace`. Migration: **`0019_inbox_public`**, on top of
+`0018_tiktok_webhooks` (merged into the base by PR #391), which widens `inbound_events_provider_check` to
+`('meta', 'netgsm', 'x', 'mail', 'tiktok')`; 0019 widens the same constraint with the marketplaces and its
+down restores 0018's list (§4.1, §4.2). Every count in this document is relative to `958fcfe3`; a
 rebase over another branch adds that branch's increments.
 
 Unverified provider facts are marked **VERIFY (V-xx)** and collected in §12. Implementers write no
@@ -462,8 +462,8 @@ generated column is never written by the repository.
 ### 4.2 Down
 
 Drops `public_items`, `public_subjects`, `public_cursors`; restores the two functions to their previous
-bodies; narrows the provider check back to `('meta','netgsm','x','mail','tiktok')` (TikTok's stays: 0018
-owns it) and the outbox-state check back to its six states. **Refused, before anything changes, while a
+bodies; narrows the provider check back to 0018's `('meta', 'netgsm', 'x', 'mail', 'tiktok')` and the
+outbox-state check back to its six states. **Refused, before anything changes, while a
 row needs the wider checks** (changed in F3 from "kept wide", following the refusing downs of 0015 and
 0018): a `trendyol`/`hepsiburada` inbound event (events are append-only and never deleted, so such a
 database keeps 0019) or a `held` outbox row (approve or discard it first). The two tables are locked
@@ -472,10 +472,8 @@ fully migrated database (0006, 0009) run 0019's down first: its tables reference
 
 ### 4.3 Tables and pins
 
-3 new tables: `public_subjects`, `public_items`, `public_cursors` (74 → 77). Migrations 17 → 19 with
-0018 merged (18 → 19 if 0018 merges after; whichever lands second renumbers and both carry the union
-provider list). Until then this branch has 18 migrations with no `0018` (the migrations test pins the
-versions `1..=17, 19`).
+3 new tables: `public_subjects`, `public_items`, `public_cursors` (74 → 77). Migrations 18 → 19
+(`0018_tiktok_webhooks` merged first).
 
 ---
 

@@ -33,6 +33,20 @@ pub struct Publication {
     pub attempt_id: PublishAttemptId,
 }
 impl Publication {
+    /// This publication under `receipt`, the public receipt its provider named once the post was
+    /// settled under a provisional one (see [`PublishAttempt::upgrade_receipt`]): the same
+    /// publication, its external id and page replaced. The same receipt again changes nothing.
+    pub fn upgrade_receipt(&self, receipt: &PublishReceipt) -> Result<Self, StudioError> {
+        let current = PublishReceipt {
+            external_id: self.external_id.clone(),
+            url: self.url.clone(),
+        };
+        upgraded(&current, receipt)?;
+        let mut next = self.clone();
+        next.external_id = receipt.external_id.clone();
+        next.url = receipt.url.clone();
+        Ok(next)
+    }
     pub fn validate_for_slot(&self, slot: &Slot) -> Result<(), StudioError> {
         slot.validate()?;
         self.chain.require_same(&slot.chain)?;
@@ -52,6 +66,17 @@ impl Publication {
             url: self.url.clone(),
         })
     }
+}
+/// Whether settled `current` may become `receipt`: the same receipt, or `current` provisional (no
+/// page) and `receipt` another, valid id. `InvalidTransition` otherwise.
+fn upgraded(current: &PublishReceipt, receipt: &PublishReceipt) -> Result<(), StudioError> {
+    if current == receipt {
+        return Ok(());
+    }
+    if current.url.is_some() || current.external_id == receipt.external_id {
+        return Err(StudioError::InvalidTransition);
+    }
+    validate_receipt(receipt)
 }
 fn validate_receipt(receipt: &PublishReceipt) -> Result<(), StudioError> {
     if receipt.external_id.trim().is_empty() {
@@ -274,6 +299,24 @@ impl PublishAttempt {
             PublishOutcome::Refused(_) => PublishState::Refused,
         };
         next.outcome = Some(outcome.clone());
+        Ok(next)
+    }
+    /// This succeeded attempt under `receipt`, the public receipt its provider named after the
+    /// post was settled under a provisional one: a provider that names a post's public id late
+    /// (TikTok, once its moderation passed the post) leaves the attempt settled under the id it
+    /// had, with no page, until then. Only a settled receipt without a page may be upgraded, once,
+    /// to another id; the same receipt again changes nothing; anything else is
+    /// `InvalidTransition` (a failed or uncertain attempt has no receipt to upgrade).
+    pub fn upgrade_receipt(&self, receipt: &PublishReceipt) -> Result<Self, StudioError> {
+        self.validate()?;
+        let (PublishState::Succeeded, Some(PublishOutcome::Succeeded(current))) =
+            (self.state, &self.outcome)
+        else {
+            return Err(StudioError::InvalidTransition);
+        };
+        upgraded(current, receipt)?;
+        let mut next = self.clone();
+        next.outcome = Some(PublishOutcome::Succeeded(receipt.clone()));
         Ok(next)
     }
     /// Observation time is supplied by the completion caller, independently of dispatch time.

@@ -458,6 +458,181 @@ fn meta_signature_constant_time_examples() {
     assert!(!meta_signature_ok(b"", body, &empty_key_sig));
 }
 
+/// TikTok signs `"{t}.{raw body}"` with the client secret and sends `TikTok-Signature:
+/// t=<unix seconds>,s=<hex>` (<https://developers.tiktok.com/doc/webhooks-verification>): the
+/// signature must match in constant time and its timestamp lie within the tolerance of now.
+#[test]
+fn tiktok_signature_covers_the_timestamp_and_the_raw_body() {
+    let secret = b"tiktok-client-secret-for-tests";
+    let body = br#"{"client_key":"tiktok-test-key","event":"authorization.removed","create_time":1792682935,"user_openid":"open-id-test","content":"{\"reason\": 1 }"}"#;
+    // NOW is 1792683000; signed a minute earlier. Reference value computed outside this crate.
+    let hex = "2c8b664e11bbe8b6959dd5f6b0f3deb148aa8aad35feee4d4417aa99e3607b8e";
+    assert_eq!(
+        hex,
+        hmac_hex(secret, &[b"1792682940.".as_slice(), body].concat())
+    );
+    let good = format!("t=1792682940,s={hex}");
+    let tolerance = TIKTOK_SIGNATURE_TOLERANCE;
+    assert_eq!(tolerance, Duration::minutes(5));
+    assert!(tiktok_signature_ok(secret, body, &good, NOW, tolerance));
+    // The parts in either order, with spaces around them.
+    assert!(tiktok_signature_ok(
+        secret,
+        body,
+        &format!(" s={hex} , t=1792682940 "),
+        NOW,
+        tolerance
+    ));
+
+    // Another secret; the body changed by one byte or a trailing newline; another timestamp.
+    assert!(!tiktok_signature_ok(
+        b"tiktok-client-secret-for-test",
+        body,
+        &good,
+        NOW,
+        tolerance
+    ));
+    let mut changed = body.to_vec();
+    changed[20] = b'X';
+    assert!(!tiktok_signature_ok(
+        secret, &changed, &good, NOW, tolerance
+    ));
+    let mut with_newline = body.to_vec();
+    with_newline.push(b'\n');
+    assert!(!tiktok_signature_ok(
+        secret,
+        &with_newline,
+        &good,
+        NOW,
+        tolerance
+    ));
+    assert!(!tiktok_signature_ok(
+        secret,
+        body,
+        &format!("t=1792682941,s={hex}"),
+        NOW,
+        tolerance
+    ));
+
+    // A valid signature whose timestamp is too old, or too far ahead, is refused (a replay);
+    // the edges of the tolerance pass.
+    let signed_at = OffsetDateTime::from_unix_timestamp(1792682940).unwrap();
+    assert!(tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        signed_at + tolerance,
+        tolerance
+    ));
+    assert!(tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        signed_at - tolerance,
+        tolerance
+    ));
+    assert!(!tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        signed_at + tolerance + Duration::seconds(1),
+        tolerance
+    ));
+    assert!(!tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        signed_at - tolerance - Duration::seconds(1),
+        tolerance
+    ));
+    assert!(!tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        NOW + Duration::days(1),
+        tolerance
+    ));
+
+    // Malformed headers are refused, never panicked on.
+    let upper = hex.to_ascii_uppercase();
+    for bad in [
+        String::new(),
+        hex.to_owned(),
+        format!("sha256={hex}"),
+        "t=1792682940".to_owned(),
+        format!("s={hex}"),
+        format!("t=,s={hex}"),
+        format!("t=-1792682940,s={hex}"),
+        format!("t=+1792682940,s={hex}"),
+        format!("t=1792682940.0,s={hex}"),
+        format!("t=99999999999999999999,s={hex}"),
+        format!("t=1792682940,t=1792682940,s={hex}"),
+        format!("T=1792682940,S={hex}"),
+        format!("t=1792682940;s={hex}"),
+        format!("t=1792682940,s={upper}"),
+        format!("t=1792682940,s={}", &hex[..63]),
+        format!("t=1792682940,s={hex}0"),
+        format!("t=1792682940,s=sha256={hex}"),
+    ] {
+        assert!(
+            !tiktok_signature_ok(secret, body, &bad, NOW, tolerance),
+            "{bad:?}"
+        );
+    }
+    // One digit changed, each position in turn.
+    for i in 0..hex.len() {
+        let mut flipped = hex.as_bytes().to_vec();
+        flipped[i] = if flipped[i] == b'0' { b'1' } else { b'0' };
+        let flipped = format!("t=1792682940,s={}", String::from_utf8(flipped).unwrap());
+        assert!(
+            !tiktok_signature_ok(secret, body, &flipped, NOW, tolerance),
+            "digit {i}"
+        );
+    }
+
+    // Why a header is refused, for the operator's log (never the values).
+    let check = |header: &str, now| tiktok_signature_check(secret, body, header, now, tolerance);
+    assert_eq!(check(&good, NOW), Ok(()));
+    assert_eq!(
+        check("t=1792682940", NOW),
+        Err(TiktokSignatureError::Malformed)
+    );
+    assert_eq!(
+        check(&format!("t=1792682940,s={upper}"), NOW),
+        Err(TiktokSignatureError::Malformed)
+    );
+    assert_eq!(
+        check(&format!("t=1792682941,s={hex}"), NOW),
+        Err(TiktokSignatureError::Mismatch)
+    );
+    assert_eq!(
+        check(&good, NOW + Duration::hours(1)),
+        Err(TiktokSignatureError::Stale)
+    );
+    // A stale timestamp is told only of a signature that matches: a forged one is a mismatch.
+    assert_eq!(
+        check(&format!("t=1792682941,s={hex}"), NOW + Duration::hours(1)),
+        Err(TiktokSignatureError::Mismatch)
+    );
+    for (e, reason) in [
+        (TiktokSignatureError::Malformed, "malformed"),
+        (TiktokSignatureError::Mismatch, "mismatch"),
+        (TiktokSignatureError::Stale, "stale"),
+    ] {
+        assert_eq!(e.reason(), reason);
+    }
+
+    // An unset (empty) client secret verifies nothing, even a signature made with the empty key.
+    let empty = hmac_hex(b"", &[b"1792682940.".as_slice(), body].concat());
+    assert!(!tiktok_signature_ok(
+        b"",
+        body,
+        &format!("t=1792682940,s={empty}"),
+        NOW,
+        tolerance
+    ));
+}
+
 /// Meta's webhook verification echoes the challenge only for the platform's verify token: an
 /// exact, constant-time match; an unset (empty) token matches nothing.
 #[test]

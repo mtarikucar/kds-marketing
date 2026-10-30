@@ -1,11 +1,11 @@
--- Reverts 0019_inbox_public: narrows the outbox state and inbound-event provider checks back,
--- restores 0008's erasure mask and event matching, and drops the public items, their subjects,
--- the poll cursors and the conversations' capability key their foreign keys named. Refused, before anything changes, while a row needs the wider checks:
+-- Reverts 0019_inbox_public: narrows the outbox state check back, and the inbound-event provider
+-- check back to 0018_tiktok_webhooks' list; restores 0008's erasure mask and event matching; drops
+-- the public items, their subjects, the poll cursors and the conversations' capability key their
+-- foreign keys named. Refused, before anything changes, while a row needs the wider checks:
 -- inbound events are never deleted (the append-only guard of 0005_connectors), so a stored
 -- Trendyol or Hepsiburada event keeps this migration; a reply held for approval must be approved
 -- or discarded first. The two tables are locked while they are checked, so no such row is
--- written between the check and the change. TikTok's provider stays (0018_tiktok_webhooks owns
--- it; this migration only carries it). A no-op when already reverted.
+-- written between the check and the change. A no-op when already reverted.
 do $$ declare previous text; begin
     previous := current_setting('app.platform', true);
     perform set_config('app.platform', 'on', true);
@@ -22,7 +22,7 @@ do $$ declare previous text; begin
         check (state in ('queued','sending','sent','failed','unknown','refused'));
     alter table inbound_events drop constraint if exists inbound_events_provider_check;
     alter table inbound_events add constraint inbound_events_provider_check
-        check (provider in ('meta','netgsm','x','mail','tiktok'));
+        check (provider in ('meta', 'netgsm', 'x', 'mail', 'tiktok'));
     perform set_config('app.platform', coalesce(previous, ''), true);
 end $$;
 
