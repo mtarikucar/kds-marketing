@@ -13,10 +13,13 @@ pub const MAX_MESSAGE_BYTES: usize = 64_000;
 /// A control message from Asterisk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MediaEvent {
-    /// The media is up: its codec (`alaw`, `ulaw`) and a frame's size in bytes.
+    /// The media is up: its codec (`alaw`, `ulaw`), a frame's size in bytes and, when given, its
+    /// length in milliseconds (`ptime`). Without a codec or a frame size it is no start: the
+    /// bridge would be guessing the line's codec.
     Start {
         format: String,
         frame_bytes: usize,
+        ptime_ms: Option<u64>,
     },
     /// Asterisk played everything written before the `MARK_MEDIA` of this correlation id.
     MarkProcessed {
@@ -38,13 +41,20 @@ pub fn parse_control(text: &str) -> MediaEvent {
         return MediaEvent::Other;
     };
     match v["event"].as_str() {
-        Some("MEDIA_START") => MediaEvent::Start {
-            format: v["format"].as_str().unwrap_or("ulaw").to_owned(),
-            frame_bytes: v["optimal_frame_size"]
+        Some("MEDIA_START") => {
+            let format = v["format"].as_str();
+            let frame_bytes = v["optimal_frame_size"]
                 .as_u64()
-                .and_then(|n| usize::try_from(n).ok())
-                .unwrap_or(160),
-        },
+                .and_then(|n| usize::try_from(n).ok());
+            match (format, frame_bytes) {
+                (Some(format), Some(frame_bytes)) => MediaEvent::Start {
+                    format: format.to_owned(),
+                    frame_bytes,
+                    ptime_ms: v["ptime"].as_u64(),
+                },
+                _ => MediaEvent::Other,
+            }
+        }
         Some("MEDIA_MARK_PROCESSED") => MediaEvent::MarkProcessed {
             correlation: v["correlation_id"].as_str().unwrap_or_default().to_owned(),
         },
@@ -82,8 +92,10 @@ pub const FRAME_MS: u64 = 20;
 /// that a barge-in's `FLUSH_MEDIA` drops at most 60 ms.
 pub const LEAD_FRAMES: u64 = 3;
 /// Owing more frames than this (the worker's loop was held up) restarts the clock: the lead is
-/// written again instead of a burst that would queue the stall's length in Asterisk.
-const MAX_OWED_FRAMES: u64 = 2 * LEAD_FRAMES;
+/// written again instead of a catch-up. Asterisk held the lead, so owing more means it ran dry,
+/// and it does not skip ahead: whatever is written beyond the lead would stay queued in it for
+/// the rest of the call, a later start and mark on every sentence (B5 review).
+const MAX_OWED_FRAMES: u64 = LEAD_FRAMES;
 
 /// What the pacer writes to Asterisk, in this order.
 #[derive(Clone, Debug, PartialEq, Eq)]

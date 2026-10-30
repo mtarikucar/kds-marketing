@@ -138,22 +138,23 @@ impl TraceFile {
         TraceFile { path }
     }
 
-    /// Appends `trace` of call `call`, stamped now (UTC).
+    /// Appends `trace` of call `call`, stamped now (UTC). The line and its newline go in one
+    /// write to a file opened for appending, so writers that share the file (`run`, a `slice`)
+    /// never interleave inside a line (B5 review); `writeln!` would write them in two. The file is
+    /// opened by its path on every append, so a rotation that renames it needs no signal (D3).
     pub fn append(&self, call: &str, trace: &TurnTrace) -> std::io::Result<()> {
         let line = Line {
             at: OffsetDateTime::now_utc(),
             call: call.to_owned(),
             trace: trace.clone(),
         };
-        let mut file = std::fs::OpenOptions::new()
+        let mut text = serde_json::to_string(&line).map_err(std::io::Error::other)?;
+        text.push('\n');
+        std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.path)?;
-        writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&line).map_err(std::io::Error::other)?
-        )
+            .open(&self.path)?
+            .write_all(text.as_bytes())
     }
 }
 

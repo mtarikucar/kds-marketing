@@ -23,6 +23,8 @@ pub enum AriError {
     Transport,
     #[error("ARI's answer is unreadable")]
     Decode,
+    #[error("the ARI client could not be built")]
+    Client,
 }
 
 /// A WebSocket to Asterisk: the application's events, or a call's media.
@@ -86,6 +88,12 @@ pub fn parse_event(text: &str) -> AriEvent {
     }
 }
 
+/// How long a REST request may take.
+const REQUEST_WAIT: Duration = Duration::from_secs(5);
+/// How long opening a WebSocket (events, media) may take, its handshake included: an Asterisk
+/// that takes the connection and never answers is unreachable after this (B5 review).
+pub const CONNECT_WAIT: Duration = Duration::from_secs(2);
+
 /// ARI at `base` (`http://127.0.0.1:8188`), as one user.
 pub struct Ari {
     http: reqwest::Client,
@@ -95,16 +103,19 @@ pub struct Ari {
 }
 
 impl Ari {
-    pub fn new(base: &str, user: &str, password: &str) -> Ari {
-        Ari {
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap_or_default(),
+    /// ARI at `base`. A client that cannot be built is an error, not a client without its
+    /// request timeout (B5 review).
+    pub fn new(base: &str, user: &str, password: &str) -> Result<Ari, AriError> {
+        let http = reqwest::Client::builder()
+            .timeout(REQUEST_WAIT)
+            .build()
+            .map_err(|_| AriError::Client)?;
+        Ok(Ari {
+            http,
             base: base.trim_end_matches('/').to_owned(),
             user: user.to_owned(),
             password: password.to_owned(),
-        }
+        })
     }
 
     async fn call(
@@ -290,10 +301,10 @@ impl Ari {
             HeaderValue::from_str(&format!("Basic {token}")).map_err(|_| AriError::Transport)?;
         header.set_sensitive(true);
         request.headers_mut().insert("Authorization", header);
-        tokio_tungstenite::connect_async(request)
-            .await
-            .map(|(s, _)| s)
-            .map_err(|_| AriError::Transport)
+        match tokio::time::timeout(CONNECT_WAIT, tokio_tungstenite::connect_async(request)).await {
+            Ok(Ok((socket, _))) => Ok(socket),
+            Ok(Err(_)) | Err(_) => Err(AriError::Transport),
+        }
     }
 
     /// The application's event stream.

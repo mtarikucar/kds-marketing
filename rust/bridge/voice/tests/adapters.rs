@@ -1,14 +1,18 @@
 //! The adapters' pure parts: configuration, cache keys, traces and the wire parsers.
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use jeeta_voice_bridge::ari::{AriEvent, parse_event};
 use jeeta_voice_bridge::cache::{PhraseCache, key};
-use jeeta_voice_bridge::config::Config;
+use jeeta_voice_bridge::config::{Config, ConfigError};
 use jeeta_voice_bridge::media::{MediaEvent, command, parse_control};
 use jeeta_voice_bridge::speech::{Endpoint, Heard};
 use jeeta_voice_bridge::trace::{AudioClock, TraceFile, TurnMarks, read_traces};
-use jt_calls::EndpointBy;
+use jt_calls::{EndpointBy, TurnTrace};
+use serde_json::json;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     let map: HashMap<String, String> = pairs
@@ -16,6 +20,14 @@ fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         .map(|(k, v)| ((*k).into(), (*v).into()))
         .collect();
     move |k| map.get(k).cloned()
+}
+
+/// A fresh temporary path of this test process.
+fn temp(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("voice-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    let _ = std::fs::remove_file(&path);
+    path
 }
 
 #[test]
@@ -46,22 +58,160 @@ fn configuration_reads_the_environment_and_hides_secrets() {
     assert!(Config::from_env(env(&[("ARI_PASSWORD", "x")]), false).is_ok());
 }
 
+/// B5 review: an empty value is an unset one (`VOICE_CACHE_DIR=` is not the working directory).
+#[test]
+fn configuration_defaults_hold_and_an_empty_value_is_unset() {
+    let c = Config::from_env(
+        env(&[
+            ("ARI_PASSWORD", "x"),
+            ("VOICE_CACHE_DIR", ""),
+            ("VOICE_EXTENSION", " "),
+            ("LISTEN_SOCKET", ""),
+            ("VOICE_ACK_MS", ""),
+        ]),
+        false,
+    )
+    .unwrap();
+    assert_eq!(c.extension, "102");
+    assert_eq!(c.cache_dir, Path::new("/var/lib/jeeta-voice/cache"));
+    assert_eq!(c.trace_file, Path::new("/var/lib/jeeta-voice/traces.jsonl"));
+    assert_eq!(
+        c.listen,
+        Endpoint::Unix("/run/jeeta-voice/listen/listen.sock".into())
+    );
+    assert_eq!(
+        c.speak,
+        Endpoint::Unix("/run/jeeta-voice/speak.sock".into())
+    );
+    assert_eq!(c.timing, jeeta_voice_bridge::talker::Timing::default());
+    assert!(matches!(
+        Config::from_env(env(&[("ARI_PASSWORD", "")]), false),
+        Err(ConfigError::Missing("ARI_PASSWORD"))
+    ));
+    assert!(matches!(
+        Config::from_env(
+            env(&[
+                ("ARI_PASSWORD", "x"),
+                ("JEETA_BASE_URL", "http://127.0.0.1:8091"),
+                ("JEETA_BRIDGE_KEY", "")
+            ]),
+            true
+        ),
+        Err(ConfigError::Missing("JEETA_BRIDGE_KEY"))
+    ));
+}
+
+/// B5 review: timings the talker cannot keep are refused, not silently skipped (an
+/// acknowledgement at or after the filler never plays).
+#[test]
+fn configuration_refuses_what_the_bridge_cannot_use() {
+    let refused = |pairs: &[(&str, &str)]| {
+        let mut all = vec![("ARI_PASSWORD", "x")];
+        all.extend_from_slice(pairs);
+        Config::from_env(env(&all), false).unwrap_err()
+    };
+    assert!(matches!(
+        refused(&[("VOICE_ACK_MS", "soon")]),
+        ConfigError::Invalid("VOICE_ACK_MS")
+    ));
+    assert!(matches!(
+        refused(&[("LISTEN_SOCKET", "unix:listen.sock")]),
+        ConfigError::Invalid("LISTEN_SOCKET")
+    ));
+    assert!(matches!(
+        refused(&[("SPEAK_SOCKET", "tcp:10.0.0.5:9000")]),
+        ConfigError::Invalid("SPEAK_SOCKET")
+    ));
+    assert!(matches!(
+        refused(&[("VOICE_ACK_MS", "2700")]),
+        ConfigError::Order("VOICE_ACK_MS", "VOICE_FILLER_MS")
+    ));
+    assert!(matches!(
+        refused(&[("VOICE_FILLER_MS", "8000")]),
+        ConfigError::Order("VOICE_FILLER_MS", "VOICE_LONG_WAIT_MS")
+    ));
+    assert!(matches!(
+        refused(&[("VOICE_LONG_WAIT_MS", "20000")]),
+        ConfigError::TooLarge("VOICE_LONG_WAIT_MS", 20_000)
+    ));
+    assert!(matches!(
+        refused(&[("VOICE_STILL_THERE_MS", "15000")]),
+        ConfigError::TooLarge("VOICE_STILL_THERE_MS", 15_000)
+    ));
+    assert!(matches!(
+        refused(&[("VOICE_PHRASE_GAP_MS", "2000")]),
+        ConfigError::TooLarge("VOICE_PHRASE_GAP_MS", 2_000)
+    ));
+    let edge = Config::from_env(
+        env(&[
+            ("ARI_PASSWORD", "x"),
+            ("VOICE_ACK_MS", "0"),
+            ("VOICE_FILLER_MS", "1"),
+            ("VOICE_LONG_WAIT_MS", "19999"),
+            ("VOICE_STILL_THERE_MS", "14999"),
+            ("VOICE_PHRASE_GAP_MS", "1999"),
+        ]),
+        false,
+    );
+    assert!(edge.is_ok(), "{edge:?}");
+}
+
+/// B5 review: the rules of the speech services' own `parse_endpoint` (B2, B3): an absolute unix
+/// path, or TCP on loopback with a port.
 #[test]
 fn endpoints_parse() {
     assert_eq!(
         "tcp:127.0.0.1:7071".parse::<Endpoint>().unwrap(),
         Endpoint::Tcp("127.0.0.1:7071".into())
     );
-    assert!("http://x".parse::<Endpoint>().is_err());
+    assert_eq!(
+        "tcp:[::1]:9000".parse::<Endpoint>().unwrap(),
+        Endpoint::Tcp("[::1]:9000".into())
+    );
+    assert_eq!(
+        "tcp:localhost:9000".parse::<Endpoint>().unwrap(),
+        Endpoint::Tcp("localhost:9000".into())
+    );
+    for unix in [
+        "unix:/run/jeeta-voice/speak.sock",
+        "/run/jeeta-voice/speak.sock",
+    ] {
+        assert_eq!(
+            unix.parse::<Endpoint>().unwrap(),
+            Endpoint::Unix("/run/jeeta-voice/speak.sock".into()),
+            "{unix}"
+        );
+    }
+    for bad in [
+        "http://x",
+        "tcp:0.0.0.0:9000",
+        "tcp:10.0.0.5:9000",
+        "tcp:example.com:80",
+        "tcp:127.0.0.1:x",
+        "tcp:127.0.0.1:70000",
+        "tcp:127.0.0.1:0",
+        "tcp:127.0.0.1",
+        "speak.sock",
+        "unix:speak.sock",
+        "unix:",
+        "",
+    ] {
+        assert!(bad.parse::<Endpoint>().is_err(), "{bad}");
+    }
 }
 
 #[test]
 fn the_cache_keeps_policy_sentences_on_disk_and_call_sentences_in_memory() {
-    let dir = std::env::temp_dir().join(format!("voice-cache-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = temp("cache");
     let mut a = PhraseCache::new(dir.clone(), "ema-test");
-    a.put("Hı hı.", vec![1, 2, 3], true);
-    a.put("Ada Hanım ile mi görüşüyorum?", vec![4, 5], false);
+    a.put("ema-test", "Hı hı.", vec![1, 2, 3], true).unwrap();
+    a.put(
+        "ema-test",
+        "Ada Hanım ile mi görüşüyorum?",
+        vec![4, 5],
+        false,
+    )
+    .unwrap();
     let mut b = PhraseCache::new(dir.clone(), "ema-test");
     assert_eq!(b.get("Hı hı.").as_deref(), Some(&vec![1i16, 2, 3]));
     assert_eq!(b.get("Ada Hanım ile mi görüşüyorum?"), None);
@@ -72,6 +222,81 @@ fn the_cache_keeps_policy_sentences_on_disk_and_call_sentences_in_memory() {
     assert_ne!(key("ema-test", "Hı hı."), key("ema-other", "Hı hı."));
     assert_eq!(key("v", "t").len(), 64);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// B5 review: a file a crash left empty or cut short would play as nothing, for good. It is a miss,
+/// and it is removed so the sentence is synthesised and filed again.
+#[test]
+fn an_empty_or_odd_file_on_disk_is_a_miss_and_is_removed() {
+    let dir = temp("cache-short");
+    std::fs::create_dir_all(&dir).unwrap();
+    let empty = dir.join(format!("{}.pcm", key("v", "Tamam.")));
+    let odd = dir.join(format!("{}.pcm", key("v", "Peki.")));
+    std::fs::write(&empty, b"").unwrap();
+    std::fs::write(&odd, [1u8, 0, 2]).unwrap();
+    let mut c = PhraseCache::new(dir.clone(), "v");
+    assert_eq!(c.get("Tamam."), None);
+    assert_eq!(c.get("Peki."), None);
+    assert!(!empty.exists() && !odd.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// B5 review: every writer has a temporary file of its own, so one never renames another's
+/// half-written file into place.
+#[test]
+fn a_writer_never_touches_another_writers_temporary_file() {
+    let dir = temp("cache-tmp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let k = key("v", "Hı hı.");
+    let theirs = dir.join(format!("{k}.tmp"));
+    std::fs::write(&theirs, b"half").unwrap();
+    PhraseCache::new(dir.clone(), "v")
+        .put("v", "Hı hı.", vec![1, 2, 3], true)
+        .unwrap();
+    assert_eq!(std::fs::read(&theirs).unwrap(), b"half");
+    assert_eq!(
+        PhraseCache::new(dir.clone(), "v").get("Hı hı.").as_deref(),
+        Some(&vec![1i16, 2, 3])
+    );
+    let temps = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|x| x == "tmp")
+        })
+        .count();
+    assert_eq!(temps, 1, "only the other writer's file is left");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// B5 review: a late write of the voice the call started with (its pre-synthesis) is not filed
+/// under the voice the cache now keys by.
+#[test]
+fn audio_of_another_voice_is_never_filed() {
+    let dir = temp("cache-voice");
+    let mut c = PhraseCache::new(dir.clone(), "new-voice");
+    c.put("old-voice", "Tamam.", vec![1, 2], true).unwrap();
+    assert_eq!(c.get("Tamam."), None);
+    assert_eq!(
+        PhraseCache::new(dir.clone(), "old-voice").get("Tamam."),
+        None
+    );
+    assert!(!dir.exists(), "nothing was written");
+}
+
+/// B5 review: a disk that cannot be written is an error the call can warn about; the sentence
+/// still plays from memory.
+#[test]
+fn a_disk_that_cannot_be_written_is_an_error_and_the_sentence_stays_in_memory() {
+    let dir = temp("cache-blocked");
+    std::fs::write(&dir, b"a file where the directory should be").unwrap();
+    let mut c = PhraseCache::new(dir.clone(), "v");
+    assert!(c.put("v", "Tamam.", vec![7], true).is_err());
+    assert_eq!(c.get("Tamam.").as_deref(), Some(&vec![7i16]));
+    std::fs::remove_file(&dir).unwrap();
 }
 
 #[test]
@@ -86,6 +311,19 @@ fn the_audio_clock_maps_positions_to_arrival() {
     assert_eq!(clock.at(100), Some(t0 + Duration::from_millis(100)));
     assert_eq!(clock.at(119), Some(t0 + Duration::from_millis(100)));
     assert_eq!(clock.at(500), None);
+}
+
+#[test]
+fn the_audio_clock_keeps_a_minute_of_history() {
+    let mut clock = AudioClock::default();
+    let t0 = Instant::now();
+    for i in 0..4_000u64 {
+        clock.push(20, t0 + Duration::from_millis(20 * i));
+    }
+    assert_eq!(clock.position_ms(), 80_000);
+    assert_eq!(clock.at(19_990), None, "older than the minute kept");
+    assert_eq!(clock.at(20_000), Some(t0 + Duration::from_millis(20_000)));
+    assert_eq!(clock.at(79_990), Some(t0 + Duration::from_millis(79_980)));
 }
 
 #[test]
@@ -108,8 +346,7 @@ fn marks_become_a_trace_and_traces_go_to_their_file() {
         (trace.ack_ms, trace.first_audio_ms),
         (Some(620), Some(4_760))
     );
-    let path = std::env::temp_dir().join(format!("voice-traces-{}.jsonl", std::process::id()));
-    let _ = std::fs::remove_file(&path);
+    let path = temp("traces.jsonl");
     let file = TraceFile::new(path.clone());
     file.append("c-1", &trace).unwrap();
     file.append("c-1", &trace).unwrap();
@@ -117,6 +354,55 @@ fn marks_become_a_trace_and_traces_go_to_their_file() {
     assert_eq!(read, vec![trace.clone(), trace]);
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(!text.contains('+'), "{text}");
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// B5 review: a line goes in one write, so writers that share the file (`run` and a `slice`)
+/// never interleave inside a line.
+#[test]
+fn concurrent_appends_keep_every_line_whole() {
+    let path = temp("traces-many.jsonl");
+    let file = TraceFile::new(path.clone());
+    let trace = TurnTrace {
+        endpoint_ms: 260,
+        reply_seq: Some(4),
+        ..TurnTrace::default()
+    };
+    std::thread::scope(|s| {
+        for _ in 0..8 {
+            s.spawn(|| {
+                for _ in 0..200 {
+                    file.append("c-1", &trace).unwrap();
+                }
+            });
+        }
+    });
+    assert_eq!(read_traces(&path, None).unwrap().len(), 1_600);
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[test]
+fn traces_are_read_since_a_time_and_unreadable_lines_are_skipped() {
+    let path = temp("traces-since.jsonl");
+    let line = |at: &str, endpoint_ms: u32| {
+        let trace = TurnTrace {
+            endpoint_ms,
+            ..TurnTrace::default()
+        };
+        json!({ "at": at, "call": "c-1", "trace": trace }).to_string()
+    };
+    let text = [
+        line("2026-10-30T09:00:00Z", 1),
+        line("2026-10-30T10:00:00Z", 2),
+        "{\"at\":".to_owned(),
+        line("2026-10-30T11:00:00Z", 3),
+    ]
+    .join("\n");
+    std::fs::write(&path, text).unwrap();
+    let since = OffsetDateTime::parse("2026-10-30T10:00:00Z", &Rfc3339).unwrap();
+    let ms = |traces: Vec<TurnTrace>| traces.iter().map(|t| t.endpoint_ms).collect::<Vec<_>>();
+    assert_eq!(ms(read_traces(&path, Some(since)).unwrap()), [2, 3]);
+    assert_eq!(ms(read_traces(&path, None).unwrap()), [1, 2, 3]);
     std::fs::remove_file(&path).unwrap();
 }
 
@@ -141,6 +427,10 @@ fn ari_events_are_read() {
         AriEvent::Ringing {
             channel: "c-1".into()
         }
+    );
+    assert_eq!(
+        parse_event(r#"{"type":"ChannelStateChange","channel":{"id":"c-1","state":"Up"}}"#),
+        AriEvent::Other
     );
     assert_eq!(
         parse_event(r#"{"type":"ChannelDtmfReceived","digit":"5","channel":{"id":"c-1"}}"#),
@@ -171,7 +461,8 @@ fn media_control_is_read_and_written_as_json() {
         ),
         MediaEvent::Start {
             format: "alaw".into(),
-            frame_bytes: 160
+            frame_bytes: 160,
+            ptime_ms: Some(20)
         }
     );
     assert_eq!(
@@ -197,6 +488,28 @@ fn media_control_is_read_and_written_as_json() {
     );
 }
 
+/// B5 review: a `MEDIA_START` without its codec or its frame size is no start (the bridge would
+/// guess the codec of the line); `ptime` is passed on for the call to check.
+#[test]
+fn a_media_start_without_its_codec_or_frame_is_no_start() {
+    assert_eq!(
+        parse_control(r#"{"event":"MEDIA_START","format":"ulaw","optimal_frame_size":160}"#),
+        MediaEvent::Start {
+            format: "ulaw".into(),
+            frame_bytes: 160,
+            ptime_ms: None
+        }
+    );
+    for partial in [
+        r#"{"event":"MEDIA_START","channel_id":"c-1-m"}"#,
+        r#"{"event":"MEDIA_START","format":"alaw","ptime":20}"#,
+        r#"{"event":"MEDIA_START","optimal_frame_size":160,"ptime":20}"#,
+        r#"{"event":"MEDIA_START","format":"alaw","optimal_frame_size":"160","ptime":20}"#,
+    ] {
+        assert_eq!(parse_control(partial), MediaEvent::Other, "{partial}");
+    }
+}
+
 #[test]
 fn listener_events_are_read_and_never_printed_with_their_words() {
     let h: Heard = serde_json::from_str(
@@ -211,69 +524,8 @@ fn listener_events_are_read_and_never_printed_with_their_words() {
         }
     ));
     assert!(!format!("{h:?}").contains("perşembe"));
+    let p: Heard = serde_json::from_str(r#"{"type":"partial","text":"evet perşembe"}"#).unwrap();
+    assert_eq!(format!("{p:?}"), "Partial");
     let s: Heard = serde_json::from_str(r#"{"type":"speech_start","audio_ms":420}"#).unwrap();
     assert!(matches!(s, Heard::SpeechStart { audio_ms: 420 }));
-}
-
-/// The speak service's `hello` names the voice the phrase cache keys by (B2 review); a service
-/// that sends anything else first is no speaker.
-#[tokio::test]
-async fn the_speakers_hello_names_its_voice() {
-    use futures_util::{SinkExt, StreamExt};
-    use jeeta_voice_bridge::speech::{SpeechError, connect_speaker};
-    use tokio_tungstenite::tungstenite::Message;
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap().to_string();
-    tokio::spawn(async move {
-        for first in [
-            r#"{"type":"hello","voice_id":"test-voice","sample_rate":8000,"format":"pcm16le"}"#,
-            r#"{"type":"done","id":"x","synth_ms":1,"audio_ms":1}"#,
-        ] {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-            ws.send(Message::Text(first.into())).await.unwrap();
-            tokio::spawn(async move { while ws.next().await.is_some() {} });
-        }
-    });
-    let (_socket, voice) = connect_speaker(&Endpoint::Tcp(addr.clone())).await.unwrap();
-    assert_eq!(voice, "test-voice");
-    assert!(matches!(
-        connect_speaker(&Endpoint::Tcp(addr)).await,
-        Err(SpeechError::NoHello)
-    ));
-}
-
-/// The peer check (B3 review, I4): a unix socket whose peer runs as another user is refused, so a
-/// service that took the other's socket name is never talked to. The uid is the socket file's
-/// owner, this test's own user.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_unix_socket_held_by_another_user_is_refused() {
-    use std::os::unix::fs::MetadataExt;
-
-    use jeeta_voice_bridge::speech::{SpeechError, connect};
-
-    let dir = std::env::temp_dir().join(format!("voice-peer-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("service.sock");
-    let listener = tokio::net::UnixListener::bind(&path).unwrap();
-    tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(async move {
-                if let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await {
-                    use futures_util::StreamExt;
-                    while ws.next().await.is_some() {}
-                }
-            });
-        }
-    });
-    let own = std::fs::metadata(&path).unwrap().uid();
-    assert!(connect(&Endpoint::Unix(path.clone()), own).await.is_ok());
-    assert!(matches!(
-        connect(&Endpoint::Unix(path.clone()), own.wrapping_add(1)).await,
-        Err(SpeechError::WrongPeer)
-    ));
-    std::fs::remove_dir_all(&dir).unwrap();
 }

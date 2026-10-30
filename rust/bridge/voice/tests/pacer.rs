@@ -23,11 +23,13 @@ fn silence_flows_from_media_start_one_frame_per_20_ms() {
         }));
     assert!(p.due(1_019).is_empty());
     assert_eq!(frames(&p.due(1_020)), [true]);
+    // Within the lead (B5 review: owing more than it is a stall, see below).
     assert_eq!(
-        frames(&p.due(1_100)),
-        [true; 4],
-        "8 written by 100 ms: 5 periods and the lead"
+        frames(&p.due(1_060)),
+        [true; 2],
+        "6 written by 60 ms: 3 periods and the lead"
     );
+    assert_eq!(frames(&p.due(1_080)), [true]);
     assert_eq!(
         Pacer::new(160, 0xFF, 0).due(0)[0],
         Out::Frame {
@@ -146,6 +148,26 @@ fn a_held_up_loop_restarts_the_clock_instead_of_bursting() {
         "a 2 s stall: the lead again, not 97 frames"
     );
     assert_eq!(frames(&p.due(2_020)).len(), 1);
+}
+
+/// B5 review: Asterisk does not skip ahead after it ran dry, so a catch-up of more than the lead
+/// would stay queued in it for the rest of the call (a later start and mark on every sentence).
+/// Owing more than the lead writes the lead again.
+#[test]
+fn a_stall_past_the_lead_writes_the_lead_again_not_a_catch_up() {
+    let mut p = Pacer::new(160, 0xD5, 0);
+    p.due(0);
+    assert_eq!(
+        frames(&p.due(100)).len(),
+        3,
+        "100 ms late: the lead, not 5 frames"
+    );
+    assert_eq!(frames(&p.due(120)).len(), 1);
+    assert_eq!(
+        frames(&p.due(180)).len(),
+        3,
+        "60 ms late: Asterisk still held the lead, so it is caught up"
+    );
 }
 
 #[test]

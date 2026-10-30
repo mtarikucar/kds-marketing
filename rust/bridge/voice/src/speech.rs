@@ -4,29 +4,61 @@
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::time::Duration;
 
 use jt_calls::EndpointBy;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::WebSocketStream;
 
-/// Where a speech service listens: `unix:/path` or `tcp:host:port`.
+/// The services' audio: PCM16 little-endian, mono, 8 kHz, both ways.
+pub const SAMPLE_RATE: u32 = 8_000;
+/// The `format` of the speak service's `hello` for [`SAMPLE_RATE`] PCM16.
+pub const PCM_FORMAT: &str = "pcm16le";
+/// The hosts a TCP endpoint may name: the speech services' own `LOOPBACK`.
+const LOOPBACK: [&str; 3] = ["127.0.0.1", "::1", "localhost"];
+
+/// Where a speech service listens. A unix socket in production, whose peer's uid [`connect`]
+/// checks; TCP carries no peer credential, so it has no peer check and is for tests and
+/// development only.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Endpoint {
     Unix(PathBuf),
+    /// `host:port`, the host on loopback (an IPv6 one in brackets).
     Tcp(String),
 }
 
 impl FromStr for Endpoint {
     type Err = ();
+
+    /// The speech services' own rules (`parse_endpoint` of B2 and B3): `unix:/path` or `/path`,
+    /// absolute; or `tcp:host:port`, the host on loopback and the port a number up to 65535 (0
+    /// aside: it is no port to connect to).
     fn from_str(s: &str) -> Result<Endpoint, ()> {
-        if let Some(path) = s.strip_prefix("unix:") {
-            return Ok(Endpoint::Unix(path.into()));
-        }
         if let Some(addr) = s.strip_prefix("tcp:") {
-            return Ok(Endpoint::Tcp(addr.to_owned()));
+            let (host, port) = addr.rsplit_once(':').ok_or(())?;
+            let host = host
+                .strip_prefix('[')
+                .and_then(|h| h.strip_suffix(']'))
+                .unwrap_or(host);
+            let port_ok = !port.is_empty()
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && port.parse::<u16>().is_ok_and(|p| p > 0);
+            if !LOOPBACK.contains(&host) || !port_ok {
+                return Err(());
+            }
+            return Ok(Endpoint::Tcp(if host.contains(':') {
+                format!("[{host}]:{port}")
+            } else {
+                format!("{host}:{port}")
+            }));
         }
-        Err(())
+        let path = s.strip_prefix("unix:").unwrap_or(s);
+        if path.starts_with('/') {
+            Ok(Endpoint::Unix(path.into()))
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -55,11 +87,23 @@ pub enum SpeechError {
 pub const LISTEN_UID: u32 = 1501;
 pub const SPEAK_UID: u32 = 1502;
 
-/// A WebSocket to the service at `endpoint`; on a unix socket its peer must run as `owner`.
+/// How long reaching a service may take, its WebSocket handshake included. A service that takes
+/// the connection and never answers is unreachable after this, instead of holding a call's media
+/// back (no RTP leaves before it) until the service's watchdog, or `check` for ever (B5 review).
+pub const CONNECT_WAIT: Duration = Duration::from_secs(2);
+
+/// A WebSocket to the service at `endpoint`, within [`CONNECT_WAIT`]; on a unix socket its peer
+/// must run as `owner`.
 pub async fn connect(endpoint: &Endpoint, owner: u32) -> Result<Socket, SpeechError> {
+    tokio::time::timeout(CONNECT_WAIT, open(endpoint, owner))
+        .await
+        .unwrap_or(Err(SpeechError::Unreachable))
+}
+
+async fn open(endpoint: &Endpoint, owner: u32) -> Result<Socket, SpeechError> {
     let stream: Pin<Box<dyn Stream>> = match endpoint {
         Endpoint::Tcp(addr) => {
-            let _ = owner; // loopback TCP is for tests only; it carries no peer credential
+            let _ = owner; // TCP carries no peer credential (tests and development only)
             Box::pin(
                 tokio::net::TcpStream::connect(addr)
                     .await
@@ -85,10 +129,12 @@ pub async fn connect(endpoint: &Endpoint, owner: u32) -> Result<Socket, SpeechEr
         .map_err(|_| SpeechError::Unreachable)
 }
 
-/// How long the speak service may take to send its `hello`.
-const HELLO_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long the speak service may take to send its `hello`, once connected.
+const HELLO_WAIT: Duration = Duration::from_secs(2);
 
-/// A WebSocket to the speak service and the voice id of its `hello`.
+/// A WebSocket to the speak service and the voice id of its `hello`, within [`CONNECT_WAIT`] and
+/// then `HELLO_WAIT` (2 s). The `hello` must name the audio the bridge plays, [`SAMPLE_RATE`]
+/// [`PCM_FORMAT`] (B5 review); any other first message, or none, is [`SpeechError::NoHello`].
 pub async fn connect_speaker(endpoint: &Endpoint) -> Result<(Socket, String), SpeechError> {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
@@ -96,7 +142,11 @@ pub async fn connect_speaker(endpoint: &Endpoint) -> Result<(Socket, String), Sp
     let mut socket = connect(endpoint, SPEAK_UID).await?;
     match tokio::time::timeout(HELLO_WAIT, socket.next()).await {
         Ok(Some(Ok(Message::Text(t)))) => match serde_json::from_str::<Spoken>(&t) {
-            Ok(Spoken::Hello { voice_id }) => Ok((socket, voice_id)),
+            Ok(Spoken::Hello {
+                voice_id,
+                sample_rate,
+                format,
+            }) if sample_rate == SAMPLE_RATE && format == PCM_FORMAT => Ok((socket, voice_id)),
             _ => Err(SpeechError::NoHello),
         },
         _ => Err(SpeechError::NoHello),
@@ -181,9 +231,12 @@ pub enum ToSpeaker {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Spoken {
-    /// The first message on every connection: the voice id keys the phrase cache.
+    /// The first message on every connection: the voice id keys the phrase cache, and the audio
+    /// it sends ([`SAMPLE_RATE`], [`PCM_FORMAT`]).
     Hello {
         voice_id: String,
+        sample_rate: u32,
+        format: String,
     },
     Done {
         id: String,
