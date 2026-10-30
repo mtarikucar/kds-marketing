@@ -8,13 +8,17 @@
 //! renamed into place, so a crash or another writer (`run` and a `slice`) never leaves a short
 //! file under a sentence's name; and a file that is empty or of an odd length all the same is a
 //! miss, and is removed, so the sentence is synthesised and filed again instead of playing as
-//! nothing for good.
+//! nothing for good. On unix the directory is synced after the rename too, so the new name
+//! survives a crash (B5 re-review). A call opens its cache with [`PhraseCache::open`], which
+//! removes the temporary files a crashed writer left: one older than ten minutes, longer than any
+//! write takes, is no other writer's at work.
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
@@ -30,8 +34,12 @@ pub fn key(voice: &str, text: &str) -> String {
 /// Numbers this process's temporary files, so no two writes share one.
 static WRITES: AtomicU64 = AtomicU64::new(0);
 
+/// A temporary file older than this was left by a writer that crashed: no write takes this long.
+const ORPHAN_AGE: Duration = Duration::from_secs(600);
+
 /// Writes `bytes` to `path`: whole under a temporary name of this write's own, synced to disk,
-/// then renamed into place. A failed write leaves no temporary file behind.
+/// then renamed into place (and, on unix, the directory synced, so the rename is kept). A failed
+/// write leaves no temporary file behind.
 fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let n = WRITES.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("{}.{n}.tmp", std::process::id()));
@@ -39,7 +47,35 @@ fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
+    #[cfg(unix)]
+    if written.is_ok()
+        && let Some(dir) = path.parent()
+        && let Ok(dir) = std::fs::File::open(dir)
+    {
+        // The file itself is synced: a rename lost to a crash is a miss, never a short sentence.
+        let _ = dir.sync_all();
+    }
     written
+}
+
+/// Removes the temporary files in `dir` older than [`ORPHAN_AGE`].
+fn remove_orphans(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let orphan = path.extension().is_some_and(|e| e == "tmp")
+            && entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age >= ORPHAN_AGE);
+        if orphan {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 /// Creates `path` with `bytes`, synced to disk before it is closed.
@@ -63,6 +99,13 @@ impl PhraseCache {
             voice: voice.to_owned(),
             memory: HashMap::new(),
         }
+    }
+
+    /// A call's cache: as [`PhraseCache::new`], once the temporary files a crashed writer left in
+    /// `dir` are removed (see the module docs).
+    pub fn open(dir: PathBuf, voice: &str) -> PhraseCache {
+        remove_orphans(&dir);
+        PhraseCache::new(dir, voice)
     }
 
     /// The voice id this cache keys by.

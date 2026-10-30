@@ -272,6 +272,35 @@ fn a_writer_never_touches_another_writers_temporary_file() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// B5 re-review: opening a call's cache removes the temporary files a crashed writer left, once
+/// they are older than any write takes; a fresh one (another writer at work) and the cached
+/// sentences stay.
+#[test]
+fn opening_a_cache_removes_temporary_files_left_by_a_crash() {
+    let dir = temp("cache-orphan");
+    std::fs::create_dir_all(&dir).unwrap();
+    let left = dir.join(format!("{}.4242.0.tmp", key("v", "Tamam.")));
+    let fresh = dir.join(format!("{}.4243.0.tmp", key("v", "Peki.")));
+    let kept = dir.join(format!("{}.pcm", key("v", "Hı hı.")));
+    for path in [&left, &fresh, &kept] {
+        std::fs::write(path, [1u8, 0]).unwrap();
+    }
+    let an_hour_ago = std::time::SystemTime::now() - Duration::from_secs(3_600);
+    for path in [&left, &kept] {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(an_hour_ago)
+            .unwrap();
+    }
+    let mut c = PhraseCache::open(dir.clone(), "v");
+    assert!(!left.exists(), "the crashed writer's file is removed");
+    assert!(fresh.exists() && kept.exists());
+    assert_eq!(c.get("Hı hı.").as_deref(), Some(&vec![1i16]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// B5 review: a late write of the voice the call started with (its pre-synthesis) is not filed
 /// under the voice the cache now keys by.
 #[test]
