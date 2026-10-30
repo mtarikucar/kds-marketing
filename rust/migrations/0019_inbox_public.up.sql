@@ -11,6 +11,18 @@ alter table inbound_events drop constraint if exists inbound_events_provider_che
 alter table inbound_events add constraint inbound_events_provider_check
     check (provider in ('meta','netgsm','x','mail','tiktok','trendyol','hepsiburada'));
 
+-- An item's conversation and subject are on its own capability: the composite keys the items'
+-- foreign keys name.
+do $$
+begin
+    if not exists (select 1 from pg_constraint where conname = 'conversations_id_capability_key'
+                   and conrelid = 'conversations'::regclass) then
+        alter table conversations add constraint conversations_id_capability_key
+            unique (id, workspace_id, capability_id);
+    end if;
+end;
+$$;
+
 -- A post or product items are about: the business's own content, never a person's. The Studio
 -- publication that made the post, when one did.
 create table if not exists public_subjects (
@@ -25,7 +37,7 @@ create table if not exists public_subjects (
     facts jsonb not null default '{}' check (jsonb_typeof(facts) = 'object'),
     publication_id uuid,
     first_seen_at timestamptz not null, updated_at timestamptz not null,
-    unique (id, workspace_id),
+    unique (id, workspace_id, capability_id),
     unique (workspace_id, capability_id, external_id),
     foreign key (capability_id, workspace_id) references capabilities (id, workspace_id),
     foreign key (workspace_id, publication_id) references studio_publications (workspace_id, id)
@@ -33,7 +45,9 @@ create table if not exists public_subjects (
 
 -- One comment or question: ids, states and times only, no personal text (the text is the
 -- inbound message's). The answer is `jt_inbox::AnswerState` as JSON; `answer_state` is derived
--- from its tag for the indexes and is never written.
+-- from its tag for the indexes and is never written. `live`: a live video's comment, which takes
+-- no public reply. `agent_answers`: the agent's public answers the platform received (it may give
+-- a second one after a refused first). Its conversation and its subject are on its capability.
 create table if not exists public_items (
     workspace_id uuid not null references workspaces (id),
     id uuid primary key,
@@ -43,20 +57,23 @@ create table if not exists public_items (
     external_id text not null check (char_length(external_id) between 1 and 512),
     parent_external_id text, root_external_id text not null,
     created_at timestamptz not null, deadline timestamptz, private_reply_until timestamptz,
+    live boolean not null default false,
     answer jsonb not null check (jsonb_typeof(answer) = 'object' and answer ? 'state'),
     answer_state text generated always as (answer->>'state') stored
         check (answer_state in ('awaiting','pending','answered','rejected','handled','expired')),
     moderation text not null default 'visible'
         check (moderation in ('visible','hidden','deleted','removed','reported')),
     private_reply_message_id uuid,
-    agent_replied boolean not null default false,
+    agent_answers smallint not null default 0 check (agent_answers between 0 and 255),
     checked_at timestamptz, updated_at timestamptz not null,
     unique (id, workspace_id),
     unique (workspace_id, capability_id, external_id),
     foreign key (capability_id, workspace_id) references capabilities (id, workspace_id),
-    foreign key (conversation_id, workspace_id) references conversations (id, workspace_id),
+    foreign key (conversation_id, workspace_id, capability_id)
+        references conversations (id, workspace_id, capability_id),
     foreign key (message_id, workspace_id) references messages (id, workspace_id),
-    foreign key (subject_id, workspace_id) references public_subjects (id, workspace_id),
+    foreign key (subject_id, workspace_id, capability_id)
+        references public_subjects (id, workspace_id, capability_id),
     foreign key (private_reply_message_id, workspace_id) references messages (id, workspace_id)
 );
 -- Owed items of a conversation (state derivation, context).
@@ -75,6 +92,8 @@ create index if not exists public_items_reconcile
 -- A conversation's items in order (context, merges).
 create index if not exists public_items_conversation
     on public_items (workspace_id, conversation_id, created_at, id);
+-- The item a message is (a message list's marks).
+create index if not exists public_items_message on public_items (workspace_id, message_id);
 
 -- Where a polled surface's next poll starts, one per capability.
 create table if not exists public_cursors (
@@ -124,7 +143,7 @@ $$;
 -- its kind and capability (a comment on an Instagram or a Facebook Page capability, or on the DM
 -- sibling a webhook was routed to; a question on a marketplace), scoped by the capability's
 -- external id like every opaque identity. An author without an id is the one-off person intake
--- made: `c:<comment id>` or `q:<question id>`.
+-- made: `c:<comment id>` or `q:<question id>`; an empty author id is no id.
 create or replace function inbox_event_person(ws uuid, cap uuid, p jsonb, person uuid)
 returns boolean language sql stable as $$
     select p->>'person_id' = person::text or exists (
@@ -167,7 +186,7 @@ returns boolean language sql stable as $$
             (p#>>'{messaging,recipient,id}', namespace.channel),
             (p#>>'{sender,id}', namespace.channel), (p#>>'{recipient,id}', namespace.channel),
             (p#>>'{status,recipient_id}', 'phone'),
-            (coalesce(p#>>'{public,author,id}',
+            (coalesce(nullif(p#>>'{public,author,id}', ''),
                 case p#>>'{public,kind}' when 'comment' then 'c:' when 'question' then 'q:' end
                     || (p#>>'{public,external_id}')), public_namespace.channel)
         ) candidates(candidate, channel)

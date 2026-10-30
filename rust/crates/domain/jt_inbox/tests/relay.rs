@@ -87,7 +87,13 @@ fn display_name_drops_the_suffix() {
 
 #[test]
 fn relay_reply_refuses_commercial_and_links() {
-    assert_eq!(relay_reply_allowed("Kargonuz yarın yolda.", false), Ok(()));
+    for fine in [
+        "Kargonuz yarın yolda.",
+        "Siparişiniz 405-1234567-7654321 numarasıyla kayıtlı, 2 gün içinde teslim edilir.",
+        "Ürün 1.5 kg; e.g. pamuk.",
+    ] {
+        assert_eq!(relay_reply_allowed(fine, false), Ok(()), "{fine}");
+    }
     assert_eq!(
         relay_reply_allowed("Kargonuz yarın yolda.", true),
         Err(RelayRefusal::CommercialOnRelay)
@@ -96,7 +102,12 @@ fn relay_reply_refuses_commercial_and_links() {
         "Takip: https://example.com/kargo",
         "Takip: http://example.com/kargo",
         "Takip: www.example.com",
+        "Takip: kargo.com.tr/takip",
+        "Takip: kargo dot com",
         "Bize destek@example.com adresinden yazın",
+        "Bize destek at example dot com adresinden yazın",
+        "Bize destek(at)example(nokta)com adresinden yazın",
+        "Bizi @magazamiz hesabından takip edin",
     ] {
         assert_eq!(
             relay_reply_allowed(link, false),

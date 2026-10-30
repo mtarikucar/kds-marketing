@@ -1061,6 +1061,11 @@ pub async fn public_items_follow_merges_and_undo(uow: Arc<dyn UnitOfWork>) {
     }
     r.merges().insert(row.clone()).await.unwrap();
     r.commit().await.unwrap();
+    // A reply waiting for approval on each: the coalesced conversation's is refused like a
+    // queued one, the survivor's waits on.
+    let agent = json!({"kind": "agent", "connection_id": uuid::Uuid::now_v7(), "user_id": f.user});
+    let held_on_older = f.public_outbox(&older, "held", "public", &agent, 2).await;
+    let held_on_newer = f.public_outbox(&newer, "held", "public", &agent, 3).await;
     let deps = deps(uow.clone());
     let ctx = Ctx {
         workspace_id: f.ws,
@@ -1105,6 +1110,13 @@ pub async fn public_items_follow_merges_and_undo(uow: Arc<dyn UnitOfWork>) {
             .collect::<Vec<_>>(),
         vec![on_older.id, on_newer.id]
     );
+    let refused = r.outbox().get(held_on_newer).await.unwrap().unwrap();
+    assert_eq!(refused.state, "refused");
+    assert_eq!(refused.last_error.as_deref(), Some("conversation_merged"));
+    assert_eq!(
+        r.outbox().get(held_on_older).await.unwrap().unwrap().state,
+        "held"
+    );
     drop(r);
 
     merge::undo(&deps, &ctx, row.id, merge::UndoInput { confirm: true })
@@ -1122,4 +1134,46 @@ pub async fn public_items_follow_merges_and_undo(uow: Arc<dyn UnitOfWork>) {
     old.as_object_mut().unwrap().remove("public_items");
     let old: MergeSnapshot = serde_json::from_value(old).unwrap();
     assert!(old.public_items.is_empty());
+}
+
+/// A merge applied before migration 0019 stored a version 1 snapshot, without public items; its
+/// undo still restores the graph.
+pub async fn undo_reads_a_version_1_snapshot(uow: Arc<dyn UnitOfWork>) {
+    let w = MergeFixture::new(uow.clone()).await;
+    let applied = w.apply().await;
+    let mut snapshot = applied.moved_snapshot.clone();
+    assert_eq!(snapshot["version"], json!(2));
+    snapshot["version"] = json!(1);
+    snapshot.as_object_mut().unwrap().remove("public_items");
+    let mut r = uow.tenant(w.f.ws).await.unwrap();
+    r.merges()
+        .save(MergeRow {
+            moved_snapshot: snapshot,
+            ..applied.clone()
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let undone = w.undo().await;
+    assert_eq!(undone.status, "undone");
+    let mut r = uow.tenant(w.f.ws).await.unwrap();
+    assert!(r.conversations().get(w.newer.id).await.unwrap().is_some());
+    assert_eq!(
+        r.conversations()
+            .get(w.older.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .person_id,
+        w.source.id
+    );
+    assert!(
+        r.people()
+            .get(w.source.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .merged_into
+            .is_none()
+    );
 }

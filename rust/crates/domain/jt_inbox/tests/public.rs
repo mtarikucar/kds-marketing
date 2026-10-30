@@ -1,6 +1,6 @@
 //! Public items (spec 2026-10-30-inbox-comments-marketplace-design.md §3): the four public
 //! channels and their namespaces, the rules per surface, the reply fence, the text checks and the
-//! item lifecycle.
+//! item lifecycle. Phone numbers, addresses and handles here are made up.
 
 use std::collections::BTreeSet;
 
@@ -163,8 +163,11 @@ fn rules_table_is_the_spec_table() {
             max: 2_000
         }
     );
+    // Task H0: `Answer` is required and at most 2,000 characters; nothing reviews it.
+    assert_eq!(HEPSIBURADA_ANSWER, TextBounds { min: 1, max: 2_000 });
+    const { assert!(!HEPSIBURADA_MODERATED) };
     assert_eq!(PRIVATE_REPLY_WINDOW, Duration::days(7));
-    assert_eq!(HEPSIBURADA_ANSWER_BOUNDS, None, "set by H0");
+    assert_eq!(MAX_AGENT_ANSWERS, 2);
     let seven_days = |max_chars| {
         Some(PrivateRule {
             window: Duration::days(7),
@@ -175,7 +178,7 @@ fn rules_table_is_the_spec_table() {
         (
             Channel::InstagramComment,
             PublicRules {
-                public: Some(TextBounds { min: 1, max: 2_200 }),
+                public: TextBounds { min: 1, max: 2_200 },
                 private: seven_days(1_000),
                 one_answer: false,
                 moderated: false,
@@ -188,7 +191,7 @@ fn rules_table_is_the_spec_table() {
         (
             Channel::FacebookComment,
             PublicRules {
-                public: Some(TextBounds { min: 1, max: 8_000 }),
+                public: TextBounds { min: 1, max: 8_000 },
                 private: seven_days(2_000),
                 one_answer: false,
                 moderated: false,
@@ -201,10 +204,10 @@ fn rules_table_is_the_spec_table() {
         (
             Channel::TrendyolQuestion,
             PublicRules {
-                public: Some(TextBounds {
+                public: TextBounds {
                     min: 10,
                     max: 2_000,
-                }),
+                },
                 private: None,
                 one_answer: true,
                 moderated: true,
@@ -217,10 +220,10 @@ fn rules_table_is_the_spec_table() {
         (
             Channel::HepsiburadaQuestion,
             PublicRules {
-                public: None,
+                public: TextBounds { min: 1, max: 2_000 },
                 private: None,
                 one_answer: true,
-                moderated: HEPSIBURADA_MODERATED,
+                moderated: false,
                 hide: false,
                 delete: false,
                 report: true,
@@ -266,9 +269,11 @@ fn answer_state_serialises_with_a_state_tag() {
         (
             AnswerState::Rejected {
                 reason: "contains a link".into(),
+                message_id: Some(message_id),
                 at: T0,
             },
-            json!({"state": "rejected", "reason": "contains a link", "at": at}),
+            json!({"state": "rejected", "reason": "contains a link",
+                   "message_id": message_id, "at": at}),
         ),
         (
             AnswerState::Handled {
@@ -302,12 +307,23 @@ fn answer_state_serialises_with_a_state_tag() {
             "awaiting", "pending", "answered", "rejected", "handled", "expired"
         ]
     );
-    // An answered state written without its message reads as none.
+    // An answered or rejected state written without its message reads as none.
     assert_eq!(
         serde_json::from_value::<AnswerState>(json!({"state": "answered", "by": "us", "at": at}))
             .unwrap(),
         AnswerState::Answered {
             by: AnsweredBy::Us,
+            message_id: None,
+            at: T0
+        }
+    );
+    assert_eq!(
+        serde_json::from_value::<AnswerState>(
+            json!({"state": "rejected", "reason": "r", "at": at})
+        )
+        .unwrap(),
+        AnswerState::Rejected {
+            reason: "r".into(),
             message_id: None,
             at: T0
         }
@@ -374,13 +390,12 @@ fn item(channel: Channel) -> PublicItem {
         root_external_id: "17890".into(),
         created_at: T0,
         deadline: None,
-        private_reply_until: rules(channel)
-            .and_then(|r| r.private)
-            .map(|p| T0 + p.window),
+        private_reply_until: rules(channel).and_then(|r| private_reply_until(&r, T0, false)),
+        live: false,
         answer: AnswerState::Awaiting,
         moderation: Moderation::Visible,
         private_reply_message_id: None,
-        agent_replied: false,
+        agent_answers: 0,
         checked_at: None,
         updated_at: T0,
     }
@@ -388,12 +403,15 @@ fn item(channel: Channel) -> PublicItem {
 
 #[test]
 fn items_and_subjects_read_tolerantly_and_round_trip() {
-    let full = item(Channel::InstagramComment);
+    let mut full = item(Channel::InstagramComment);
+    full.live = true;
+    full.agent_answers = 1;
     let encoded = serde_json::to_value(&full).unwrap();
     assert_eq!(
         serde_json::from_value::<PublicItem>(encoded.clone()).unwrap(),
         full
     );
+    assert!(full.agent_replied());
     let mut sparse = serde_json::Map::new();
     for key in [
         "id",
@@ -411,7 +429,9 @@ fn items_and_subjects_read_tolerantly_and_round_trip() {
     sparse.insert("future".into(), json!(true));
     let read: PublicItem = serde_json::from_value(sparse.clone().into()).unwrap();
     assert_eq!(read.moderation, Moderation::Visible);
-    assert!(!read.agent_replied);
+    assert_eq!(read.agent_answers, 0);
+    assert!(!read.agent_replied());
+    assert!(!read.live);
     assert_eq!(read.deadline, None);
     assert_eq!(read.created_at, OffsetDateTime::UNIX_EPOCH);
     // The answer is the item's state: never invented on read.
@@ -445,6 +465,7 @@ fn items_and_subjects_read_tolerantly_and_round_trip() {
     assert_eq!(bare.title, "");
     assert_eq!(bare.facts, json!({}));
     assert_eq!(MAX_SUBJECT_TITLE_CHARS, 280);
+    assert_eq!(MAX_EXTERNAL_ID_CHARS, 512);
 }
 
 #[test]
@@ -454,6 +475,7 @@ fn awaiting_means_owed_and_visible() {
         (
             AnswerState::Rejected {
                 reason: "r".into(),
+                message_id: None,
                 at: T0,
             },
             true,
@@ -502,6 +524,29 @@ fn awaiting_means_owed_and_visible() {
     }
 }
 
+#[test]
+fn private_reply_until_follows_the_surface_and_the_live() {
+    let ig = rules(Channel::InstagramComment).unwrap();
+    let fb = rules(Channel::FacebookComment).unwrap();
+    let ty = rules(Channel::TrendyolQuestion).unwrap();
+    assert_eq!(
+        private_reply_until(&ig, T0, false),
+        Some(T0 + Duration::days(7))
+    );
+    assert_eq!(
+        private_reply_until(&fb, T0, false),
+        Some(T0 + Duration::days(7))
+    );
+    // A live comment is answered privately only during the live.
+    assert_eq!(
+        private_reply_until(&ig, T0, true),
+        Some(T0 + LIVE_PRIVATE_REPLY_WINDOW)
+    );
+    assert!(LIVE_PRIVATE_REPLY_WINDOW < PRIVATE_REPLY_WINDOW);
+    assert_eq!(private_reply_until(&ty, T0, false), None);
+    assert_eq!(private_reply_until(&ty, T0, true), None);
+}
+
 /// One row of the reply fence's matrix: what it shows, the surface, how the owed item differs,
 /// the reply's visibility, whether the agent replies, when, and the answer.
 type Row = (
@@ -521,7 +566,7 @@ fn answered_by_agent(i: &mut PublicItem) {
         message_id: Some(MessageId::new_v7()),
         at: T0,
     };
-    i.agent_replied = true;
+    i.agent_answers = 1;
 }
 fn answered_by_human(i: &mut PublicItem) {
     i.answer = AnswerState::Answered {
@@ -542,11 +587,23 @@ fn pending(i: &mut PublicItem) {
         message_id: MessageId::new_v7(),
     };
 }
+/// A human's answer the platform refused.
 fn rejected(i: &mut PublicItem) {
     i.answer = AnswerState::Rejected {
         reason: "link".into(),
+        message_id: Some(MessageId::new_v7()),
         at: T0,
     };
+}
+/// The agent's answer, sent and then refused by the platform's review.
+fn agent_answer_rejected(i: &mut PublicItem) {
+    rejected(i);
+    i.agent_answers = 1;
+}
+/// The agent's second answer refused too.
+fn agent_answers_rejected_twice(i: &mut PublicItem) {
+    rejected(i);
+    i.agent_answers = MAX_AGENT_ANSWERS;
 }
 fn handled(i: &mut PublicItem) {
     i.answer = AnswerState::Handled {
@@ -579,6 +636,11 @@ fn private_sent(i: &mut PublicItem) {
 fn no_window(i: &mut PublicItem) {
     i.private_reply_until = None;
 }
+/// A comment on a live video, its private-reply window the live's.
+fn live(i: &mut PublicItem) {
+    i.live = true;
+    i.private_reply_until = Some(T0 + LIVE_PRIVATE_REPLY_WINDOW);
+}
 
 #[test]
 fn reply_allowed_matrix() {
@@ -588,38 +650,45 @@ fn reply_allowed_matrix() {
     use Visibility::{Private, Public};
     let soon = T0 + Duration::hours(1);
     let week = T0 + Duration::days(7);
+    let after_live = T0 + LIVE_PRIVATE_REPLY_WINDOW + Duration::seconds(1);
     #[rustfmt::skip]
-    let rows: [Row; 26] = [
+    let rows: [Row; 32] = [
         // Allowed cases.
         ("agent answers an owed comment", Ig, same, Public, true, soon, Ok(())),
         ("human answers an owed comment", Fb, same, Public, false, soon, Ok(())),
         ("human replies again on an answered comment", Ig, answered_by_agent, Public, false, soon, Ok(())),
         ("human answers a hidden comment", Ig, hidden, Public, false, soon, Ok(())),
         ("human answers a handled comment", Fb, handled, Public, false, soon, Ok(())),
-        ("agent answers a rejected question again", Ty, rejected, Public, true, soon, Ok(())),
-        ("an answer at the deadline itself", Ty, due_in_a_day, Public, true, T0 + Duration::days(1), Ok(())),
+        ("agent answers a question a human's rejected answer left owed", Ty, rejected, Public, true, soon, Ok(())),
+        ("agent answers again after its answer was rejected", Ty, agent_answer_rejected, Public, true, soon, Ok(())),
+        ("human answers after the agent's two rejected answers", Ty, agent_answers_rejected_twice, Public, false, soon, Ok(())),
+        ("agent answers a Hepsiburada question", Hb, same, Public, true, soon, Ok(())),
+        ("an answer at the deadline itself", Hb, due_in_a_day, Public, true, T0 + Duration::days(1), Ok(())),
         ("private reply on the window's last second", Ig, same, Private, true, week, Ok(())),
         ("private reply on an answered comment", Fb, answered_by_agent, Private, true, soon, Ok(())),
+        ("private reply to a live comment during the live", Ig, live, Private, true, soon, Ok(())),
         // Removed items.
         ("deleted comment", Ig, deleted, Public, false, soon, Err(ItemRemoved)),
         ("removed comment", Fb, removed, Public, true, soon, Err(ItemRemoved)),
         ("private reply to a removed comment", Ig, removed, Private, false, soon, Err(ItemRemoved)),
         // Public replies.
+        ("public reply to a live comment, by a human", Ig, live, Public, false, soon, Err(LiveCommentPublicReply)),
+        ("public reply to a live comment, by the agent", Ig, live, Public, true, soon, Err(LiveCommentPublicReply)),
         ("expired question", Ty, expired, Public, false, soon, Err(DeadlinePassed)),
-        ("past the deadline", Ty, due_in_a_day, Public, false, T0 + Duration::days(1) + Duration::seconds(1), Err(DeadlinePassed)),
+        ("past the deadline", Hb, due_in_a_day, Public, false, T0 + Duration::days(1) + Duration::seconds(1), Err(DeadlinePassed)),
         ("a Trendyol answer in review", Ty, pending, Public, false, soon, Err(AlreadyAnswered)),
-        ("a question answered elsewhere", Ty, answered_elsewhere, Public, true, soon, Err(AlreadyAnswered)),
+        ("a question answered elsewhere", Hb, answered_elsewhere, Public, true, soon, Err(AlreadyAnswered)),
         ("agent's second reply", Ig, answered_by_agent, Public, true, soon, Err(AgentAlreadyReplied)),
+        ("agent's third answer after two rejections", Ty, agent_answers_rejected_twice, Public, true, soon, Err(AgentAlreadyReplied)),
         ("agent on a comment a human answered", Ig, answered_by_human, Public, true, soon, Err(ItemNotOwed)),
         ("agent on a hidden comment", Fb, hidden, Public, true, soon, Err(ItemNotOwed)),
         ("agent on a handled comment", Ig, handled, Public, true, soon, Err(ItemNotOwed)),
-        ("agent on a reported question", Ty, reported, Public, true, soon, Err(ItemNotOwed)),
-        ("Hepsiburada before H0", Hb, same, Public, false, soon, Err(HepsiburadaUnverified)),
+        ("agent on a reported question", Hb, reported, Public, true, soon, Err(ItemNotOwed)),
         // Private replies.
         ("private reply on a marketplace", Ty, same, Private, false, soon, Err(PrivateReplyUnsupported)),
         ("private reply a second after the window", Ig, same, Private, true, week + Duration::seconds(1), Err(PrivateWindowClosed)),
+        ("private reply to a live comment after the live", Ig, live, Private, false, after_live, Err(PrivateWindowClosed)),
         ("private reply without a window", Fb, no_window, Private, false, soon, Err(PrivateWindowClosed)),
-        ("second private reply", Ig, private_sent, Private, false, soon, Err(PrivateReplyUsed)),
     ];
     let mut refusals = BTreeSet::new();
     for (name, channel, change, visibility, by_agent, now, expected) in rows {
@@ -635,17 +704,25 @@ fn reply_allowed_matrix() {
             refusals.insert(refusal.to_string());
         }
     }
+    let mut used = item(Channel::InstagramComment);
+    private_sent(&mut used);
+    let ig = rules(Channel::InstagramComment).unwrap();
+    assert_eq!(
+        reply_allowed(&used, &ig, Private, false, soon),
+        Err(PrivateReplyUsed)
+    );
+    refusals.insert(PrivateReplyUsed.to_string());
     // Every refusal of spec §3.6 rule 4 is reached, and reads as its stable key.
     assert_eq!(
         refusals,
         BTreeSet::from(
             [
                 "item_removed",
+                "live_comment_public_reply",
                 "deadline_passed",
                 "already_answered",
                 "agent_already_replied",
                 "item_not_owed",
-                "hepsiburada_unverified",
                 "private_reply_unsupported",
                 "private_window_closed",
                 "private_reply_used",
@@ -662,6 +739,7 @@ fn refusals_have_stable_keys() {
         (ItemRequired, "item_required"),
         (ItemNotInConversation, "item_not_in_conversation"),
         (ItemRemoved, "item_removed"),
+        (LiveCommentPublicReply, "live_comment_public_reply"),
         (DeadlinePassed, "deadline_passed"),
         (AlreadyAnswered, "already_answered"),
         (AgentAlreadyReplied, "agent_already_replied"),
@@ -678,7 +756,6 @@ fn refusals_have_stable_keys() {
         ),
         (CommercialOnPublicSurface, "commercial_on_public_surface"),
         (CommentsNotEnabled, "comments_not_enabled"),
-        (HepsiburadaUnverified, "hepsiburada_unverified"),
     ] {
         assert_eq!(refusal.to_string(), key);
         assert_eq!(serde_json::to_value(refusal).unwrap(), json!(key));
@@ -704,6 +781,13 @@ fn check_text_bounds_and_contact_fences() {
         check_text(&ty, Public, &text(2_001), none),
         Err(TextTooLong)
     );
+    assert_eq!(check_text(&hb, Public, "Var.", none), Ok(()));
+    assert_eq!(check_text(&hb, Public, &text(2_000), none), Ok(()));
+    assert_eq!(
+        check_text(&hb, Public, &text(2_001), none),
+        Err(TextTooLong)
+    );
+    assert_eq!(check_text(&hb, Public, " ", none), Err(TextTooShort));
     // Padding is not an answer.
     assert_eq!(
         check_text(&ty, Public, &format!("   {}   ", text(9)), none),
@@ -737,10 +821,6 @@ fn check_text_bounds_and_contact_fences() {
         check_text(&ty, Private, &text(20), none),
         Err(PrivateReplyUnsupported)
     );
-    assert_eq!(
-        check_text(&hb, Public, &text(20), none),
-        Err(HepsiburadaUnverified)
-    );
 
     // The person's own contact data is never repeated publicly, however it is written.
     let person = ["+905321234567".to_owned(), "ayse@example.com".to_owned()];
@@ -750,7 +830,18 @@ fn check_text_bounds_and_contact_fences() {
         "Sizi +90 (532) 123-45-67 numarasından arayacağız",
         "Sizi 532.123.45.67 numarasından arayacağız",
         "Sizi 90 532 123 4567'den arayacağız",
+        "Sizi 0532–123–45–67 numarasından arayacağız",
+        "Sizi 0532\u{a0}123\u{a0}45\u{a0}67 numarasından arayacağız",
+        "Sizi 0532/123/45/67 numarasından arayacağız",
+        "Sizi sıfır beş üç iki bir iki üç dört beş altı yedi numarasından arayacağız",
+        "Sizi SIFIR BEŞ ÜÇ İKİ BİR İKİ ÜÇ DÖRT BEŞ ALTI YEDİ numarasından arayacağız",
+        "We will call zero five three two one two three four five six seven",
+        "Sizi 0️⃣5️⃣3️⃣2️⃣1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣ numarasından arayacağız",
         "Ayse@Example.COM adresinize yazdık",
+        "ayse at example dot com adresinize yazdık",
+        "ayse(at)example(dot)com adresinize yazdık",
+        "ayse [at] example [nokta] com adresinize yazdık",
+        "ayse @ example . com adresinize yazdık",
     ] {
         assert_eq!(
             check_text(&ig, Public, written, &person),
@@ -775,34 +866,11 @@ fn check_text_bounds_and_contact_fences() {
         "Detaylar https://example.com/magaza sayfamızda",
         "Bize destek@example.com adresinden yazın",
         "Siparişiniz 3 gün içinde kargoda",
+        "Bize @magazamiz hesabından ulaşın",
     ] {
         assert_eq!(check_text(&ig, Public, fine, &person), Ok(()), "{fine}");
     }
-
-    // A marketplace answer carries no link, address or phone number at all.
-    for refused in [
-        "Detaylar https://example.com sayfamızda",
-        "Detaylar http://example.com sayfamızda",
-        "Detaylar HTTPS://EXAMPLE.COM sayfamızda",
-        "Detaylar www.example.com sayfamızda",
-        "Bize destek@example.com adresinden yazın",
-        "Bizi 0532 765 43 21 numarasından arayın",
-        "Bizi 05327654321 numarasından arayın",
-    ] {
-        assert_eq!(
-            check_text(&ty, Public, refused, none),
-            Err(ContactDataInMarketplaceAnswer),
-            "{refused}"
-        );
-    }
-    for fine in [
-        "Ürün 250 gram paketlerde gelir, 3 adet sipariş verebilirsiniz.",
-        "Model numarası 123 456 789, kutuda yazar.",
-        "Evet, ürün 2026 yılında üretildi ve garantilidir.",
-    ] {
-        assert_eq!(check_text(&ty, Public, fine, none), Ok(()), "{fine}");
-    }
-    // The person's own data is named first.
+    // The person's own data is named first, on a marketplace too.
     assert_eq!(
         check_text(
             &ty,
@@ -812,6 +880,84 @@ fn check_text_bounds_and_contact_fences() {
         ),
         Err(ContactDataInPublicReply)
     );
+}
+
+#[test]
+fn marketplace_answers_hold_no_link_address_handle_or_phone() {
+    let ty = rules(Channel::TrendyolQuestion).unwrap();
+    let hb = rules(Channel::HepsiburadaQuestion).unwrap();
+    let none: &[String] = &[];
+    for refused in [
+        // Links, plain and bare.
+        "Detaylar https://example.com sayfamızda",
+        "Detaylar HTTPS://EXAMPLE.COM sayfamızda",
+        "Detaylar www.example.com sayfamızda",
+        "Detaylar magaza.com.tr sayfamızda",
+        "Detaylar ornek.shop sayfamızda",
+        "Detaylar ürünler.com sayfamızda",
+        "Bize t.me/magaza üzerinden yazın",
+        "Bize wa.me/905321234567 üzerinden yazın",
+        "Bizi instagram.com/magaza adresinde bulun",
+        "Bizi x.com/magaza adresinde bulun",
+        "Kısa bağlantı: bit.ly/abc123",
+        "Detaylar magaza dot com sayfamızda",
+        "Detaylar magaza nokta com nokta tr sayfamızda",
+        "Detaylar magaza(dot)com sayfamızda",
+        "Detaylar exam\u{200b}ple.com sayfamızda",
+        // Addresses and handles.
+        "Bize destek@example.com adresinden yazın",
+        "Bize destek at example dot com adresinden yazın",
+        "Bize destek(at)example(dot)com adresinden yazın",
+        "Bize destek [at] example [nokta] com adresinden yazın",
+        "Bizi @magazamiz hesabından takip edin",
+        // Turkish phone shapes, however written.
+        "Bizi 0532 765 43 21 numarasından arayın",
+        "Bizi 05327654321 numarasından arayın",
+        "Bizi +90 532 765 43 21 numarasından arayın",
+        "Bizi (0532) 765-43-21 numarasından arayın",
+        "Bizi 0532_765_43_21 numarasından arayın",
+        "Bizi 0532–765–43–21 numarasından arayın",
+        "Bizi 0212 765 43 21 numarasından arayın",
+        "Bizi 0850 765 43 21 numarasından arayın",
+        "Bizi 0800 765 43 21 numarasından arayın",
+        "Bizi 444 12 34 numarasından arayın",
+        "Bizi sıfır beş üç iki yedi altı beş dört üç iki bir numarasından arayın",
+        "Bizi 0️⃣5️⃣3️⃣2️⃣7️⃣6️⃣5️⃣4️⃣3️⃣2️⃣1️⃣ numarasından arayın",
+        "Bizi 0532 765 43 21, 0533 765 43 21 numaralarından arayın",
+    ] {
+        for rules_of in [&ty, &hb] {
+            assert_eq!(
+                check_text(rules_of, Visibility::Public, refused, none),
+                Err(PublicRefusal::ContactDataInMarketplaceAnswer),
+                "{refused}"
+            );
+        }
+    }
+    for fine in [
+        "Bedenler: 36, 38, 40, 42, 44 mevcut.",
+        "Bedenler 36 38 40 42 44 46 48 50 stokta.",
+        "Barkod 8690000123456 kutunun üzerinde yazar.",
+        "Barkod 869 000 012 3456 kutunun üzerinde yazar.",
+        "Ürün 1.5 kg, ölçüleri 120 x 60 x 75 cm.",
+        "Örn. pamuklu kumaş, vb. ürünlerimiz var.",
+        "Model numarası 123 456 789, kutuda yazar.",
+        "Model 5321234567 kutuda yazar.",
+        "Siparişiniz 405-1234567-7654321 numarasıyla kayıtlı.",
+        "Evet, ürün 2026 yılında üretildi ve garantilidir.",
+        "Bir adet sipariş verebilirsiniz, iki gün içinde kargoda.",
+        "Ürün 250 gram paketlerde gelir, 3 adet sipariş verebilirsiniz.",
+        "Kargomuz saat 17.00'ye kadar verilen siparişlerde aynı gün çıkar.",
+        "Evet, kutunun içinde 2 yedek parça var; e.g. vida ve somun.",
+        "Fiyatımız 1.250,00 TL'dir, kampanya 15.11 tarihine kadar sürer.",
+    ] {
+        for rules_of in [&ty, &hb] {
+            assert_eq!(
+                check_text(rules_of, Visibility::Public, fine, none),
+                Ok(()),
+                "{fine}"
+            );
+        }
+    }
 }
 
 fn at(minutes: i64) -> OffsetDateTime {
@@ -833,6 +979,7 @@ fn transitions() {
     let rejected = with(
         AnswerState::Rejected {
             reason: "link".into(),
+            message_id: Some(m),
             at: at(1),
         },
         Moderation::Visible,
@@ -868,52 +1015,37 @@ fn transitions() {
         assert_eq!(e.to_string(), format!("{} cannot take {}", e.from, e.event));
     };
 
-    // AnswerSent: Awaiting or Rejected → Pending (moderated) or Answered{Us}.
-    for from in [&awaiting, &rejected] {
+    // AnswerSent is a receipt, a fact: taken from any state. An owed, settled or expired item
+    // becomes pending (moderated surface) or answered by us; an answered one stays answered.
+    let m2 = MessageId::new_v7();
+    let sent = |moderated| ItemEvent::AnswerSent {
+        message_id: m2,
+        moderated,
+    };
+    for from in [&awaiting, &rejected, &handled, &expired, &pending] {
         assert_eq!(
-            ok(
-                from,
-                ItemEvent::AnswerSent {
-                    message_id: m,
-                    moderated: true
-                }
-            )
-            .answer,
-            AnswerState::Pending { message_id: m }
+            ok(from, sent(true)).answer,
+            AnswerState::Pending { message_id: m2 },
+            "{:?}",
+            from.answer
         );
         assert_eq!(
-            ok(
-                from,
-                ItemEvent::AnswerSent {
-                    message_id: m,
-                    moderated: false
-                }
-            )
-            .answer,
+            ok(from, sent(false)).answer,
             AnswerState::Answered {
                 by: AnsweredBy::Us,
-                message_id: Some(m),
+                message_id: Some(m2),
                 at: at(5)
-            }
+            },
+            "{:?}",
+            from.answer
         );
     }
-    for (from, key) in [
-        (&pending, "pending"),
-        (&answered, "answered"),
-        (&handled, "handled"),
-        (&expired, "expired"),
-    ] {
-        refused(
-            from,
-            ItemEvent::AnswerSent {
-                message_id: m,
-                moderated: false,
-            },
-            (key, "answer_sent"),
-        );
+    for moderated in [true, false] {
+        assert_eq!(ok(&answered, sent(moderated)).answer, answered.answer);
     }
 
-    // AnswerConfirmed and AnswerRejected: from Pending only.
+    // AnswerConfirmed and AnswerRejected: from Pending only; a rejection keeps the answer's
+    // message.
     assert_eq!(
         ok(&pending, ItemEvent::AnswerConfirmed).answer,
         AnswerState::Answered {
@@ -932,6 +1064,7 @@ fn transitions() {
         .answer,
         AnswerState::Rejected {
             reason: "contains a phone number".into(),
+            message_id: Some(m),
             at: at(5)
         }
     );
@@ -1053,45 +1186,28 @@ fn transitions() {
         ] {
             refused(&from, event, (key, event_key));
         }
+        // A receipt still applies to a removed item: the platform accepted the send.
+        assert!(apply(&from, sent(false), at(5)).is_ok());
     }
 
-    // PrivateReplySent: once, while the window is open, whatever the answer state.
+    // PrivateReplySent is a receipt too: recorded whatever the state and the window; a second
+    // receipt keeps the first private reply.
     let comment = item(Channel::InstagramComment);
     let mut answered_comment = comment.clone();
     answered_comment.answer = answered.answer.clone();
-    for from in [&comment, &answered_comment] {
+    let mut closed = comment.clone();
+    closed.private_reply_until = Some(at(4));
+    for from in [&comment, &answered_comment, &closed, &base] {
         let to = ok(from, ItemEvent::PrivateReplySent { message_id: m });
         assert_eq!(to.private_reply_message_id, Some(m));
         assert_eq!(to.answer, from.answer);
-        refused(
-            &to,
-            ItemEvent::PrivateReplySent { message_id: m },
-            ("private_reply_used", "private_reply_sent"),
-        );
+        let again = ok(&to, ItemEvent::PrivateReplySent { message_id: m2 });
+        assert_eq!(again.private_reply_message_id, Some(m));
     }
-    let mut closed = comment.clone();
-    closed.private_reply_until = Some(at(4));
-    refused(
-        &closed,
-        ItemEvent::PrivateReplySent { message_id: m },
-        ("private_window_closed", "private_reply_sent"),
-    );
-    refused(
-        &base,
-        ItemEvent::PrivateReplySent { message_id: m },
-        ("private_window_closed", "private_reply_sent"),
-    );
 
     // A refused event leaves nothing changed: apply never mutates its input.
     let before = answered.clone();
-    let _ = apply(
-        &answered,
-        ItemEvent::AnswerSent {
-            message_id: m,
-            moderated: false,
-        },
-        at(5),
-    );
+    let _ = apply(&answered, ItemEvent::AnswerConfirmed, at(5));
     assert_eq!(answered, before);
 }
 

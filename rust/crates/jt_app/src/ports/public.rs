@@ -3,10 +3,16 @@
 //! and where each polled surface's next poll starts. Re-exported from [`super::inbox`]; scoped and
 //! answered like every inbox repo (see its module docs). An item holds ids, states and times
 //! only: its text is its inbound message's.
+//!
+//! The database's bounds are an adapter's to keep: an external id of 1 to 512 characters, a
+//! subject's title, links and facts within 0019's checks, and an item's conversation and subject
+//! on its own capability; breaking one is a programming error (`INTERNAL`).
 
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
-use jt_inbox::{ConversationId, PublicItem, PublicItemId, PublicSubject, PublicSubjectId};
+use jt_inbox::{
+    ConversationId, MessageId, PublicItem, PublicItemId, PublicSubject, PublicSubjectId,
+};
 use serde_json::Value;
 use time::OffsetDateTime;
 
@@ -16,7 +22,9 @@ use crate::error::AppError;
 pub trait PublicItemRepo: Send + Sync {
     /// Stores a new item. `false`, and nothing written, when its capability already holds an item
     /// with the same external id (a replay). Its capability, conversation, message, and subject
-    /// and private reply when set, must exist in the workspace (`NOT_FOUND`).
+    /// and private reply when set, must exist in the workspace (`NOT_FOUND`); its conversation
+    /// and its subject must be on its capability, its external id 1 to
+    /// [`jt_inbox::public::MAX_EXTERNAL_ID_CHARS`] characters (`INTERNAL`).
     async fn insert(&mut self, item: PublicItem) -> Result<bool, AppError>;
     async fn get(&mut self, id: PublicItemId) -> Result<Option<PublicItem>, AppError>;
     /// [`PublicItemRepo::get`], the row locked until the bundle ends.
@@ -26,11 +34,16 @@ pub trait PublicItemRepo: Send + Sync {
         capability: CapabilityId,
         external_id: &str,
     ) -> Result<Option<PublicItem>, AppError>;
+    /// The item whose inbound message (its latest revision) is `message`, if any.
+    async fn item_for_message(
+        &mut self,
+        message: MessageId,
+    ) -> Result<Option<PublicItem>, AppError>;
     /// Writes what changes over an item's life: its message (an edit's revision), subject,
-    /// deadline, private-reply window, answer, moderation, private reply, `agent_replied`,
-    /// `checked_at` and `updated_at`. The identity, the thread and the conversation stay (a merge
-    /// moves items with its snapshot). `NOT_FOUND` when the item, or a message or subject it
-    /// names, is missing.
+    /// deadline, private-reply window, answer, moderation, private reply, `agent_answers`,
+    /// `checked_at` and `updated_at`. The identity, the thread, `live` and the conversation stay
+    /// (a merge moves items with its snapshot). `NOT_FOUND` when the item, or a message or subject
+    /// it names, is missing; `INTERNAL` for a subject of another capability.
     async fn update(&mut self, item: PublicItem) -> Result<(), AppError>;
     /// A conversation's items, by `(created_at, id)`.
     async fn for_conversation(
@@ -46,7 +59,9 @@ pub trait PublicItemRepo: Send + Sync {
         limit: u32,
     ) -> Result<Vec<PublicItem>, AppError>;
     /// Items whose deadline is before `before` and whose answer is awaiting, rejected or pending,
-    /// soonest deadline first (then id), at most `limit` (clamped to `1..=MAX_INBOX_PAGE`).
+    /// soonest deadline first (then id), at most `limit` (clamped to `1..=MAX_INBOX_PAGE`). Every
+    /// such item, whatever its moderation and including those in review: a caller wanting the
+    /// owed ones keeps those for which [`PublicItem::awaiting`] holds.
     async fn due_before(
         &mut self,
         before: OffsetDateTime,
@@ -68,14 +83,6 @@ pub trait PublicItemRepo: Send + Sync {
         ids: &[PublicItemId],
         at: OffsetDateTime,
     ) -> Result<(), AppError>;
-    /// How many of a capability's items the agent has answered publicly with a message written at
-    /// or after `since` (the item's `agent_replied`, and its answer's message): the count a
-    /// capability's `daily_ops_cap` limits.
-    async fn agent_public_replies_since(
-        &mut self,
-        capability: CapabilityId,
-        since: OffsetDateTime,
-    ) -> Result<u32, AppError>;
 }
 
 #[async_trait]
@@ -83,7 +90,9 @@ pub trait PublicSubjectRepo: Send + Sync {
     /// Stores a subject by its `(capability, external_id)`: a new one as given, a known one
     /// refreshed (kind, title, links, facts, `updated_at`) keeping its id, its `first_seen_at` and
     /// a publication link this write does not name. Returns what is stored. Its capability, and
-    /// its Studio publication when set, must exist in the workspace (`NOT_FOUND`).
+    /// its Studio publication when set, must exist in the workspace (`NOT_FOUND`); its external
+    /// id, title, links and facts must be within 0019's bounds (`INTERNAL`): callers cut a title
+    /// to [`jt_inbox::public::MAX_SUBJECT_TITLE_CHARS`] and drop an over-long link.
     async fn upsert(&mut self, subject: PublicSubject) -> Result<PublicSubject, AppError>;
     async fn get(&mut self, id: PublicSubjectId) -> Result<Option<PublicSubject>, AppError>;
     async fn find_by_external(

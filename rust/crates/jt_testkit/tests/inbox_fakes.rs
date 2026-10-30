@@ -87,3 +87,21 @@ async fn public_items_follow_merges_and_undo() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_merge_contract::public_items_follow_merges_and_undo(uow).await;
 }
+
+#[tokio::test]
+async fn outbox_counts_agent_public_replies() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::outbox_counts_agent_public_replies(uow).await;
+}
+
+#[tokio::test]
+async fn erasure_refuses_held_replies() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::erasure_refuses_held_replies(uow).await;
+}
+
+#[tokio::test]
+async fn undo_reads_a_version_1_snapshot() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_merge_contract::undo_reads_a_version_1_snapshot(uow).await;
+}

@@ -465,7 +465,10 @@ impl MergeRepo for MemTenant {
                         {
                             r.conversation_merged = true;
                         }
-                        if target != o.conversation_id && r.state == "queued" {
+                        // A reply waiting for approval is refused like a queued one.
+                        if target != o.conversation_id
+                            && matches!(r.state.as_str(), "queued" | "held")
+                        {
                             r.state = "refused".into();
                             r.last_error = Some("conversation_merged".into());
                             r.updated_at = at;

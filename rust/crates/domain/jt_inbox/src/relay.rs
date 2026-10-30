@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
-use crate::public::{has_email, has_link};
+use crate::text::{has_email, has_handle, has_link, normalised};
 
 /// A marketplace whose buyer messages reach the seller's mailbox through a relay address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -84,18 +84,20 @@ pub enum RelayRefusal {
     /// Commercial intent on a relay conversation.
     #[error("commercial_on_relay")]
     CommercialOnRelay,
-    /// The reply holds a link or an email address. VERIFY V-A3 (spec §12).
+    /// The reply holds a link, an email address or a handle. VERIFY V-A3 (spec §12).
     #[error("link_in_relay_reply")]
     LinkInRelayReply,
 }
 
 /// Whether `text` may answer a relayed buyer message: never with commercial intent, never with
-/// a link (`http://`, `https://`, `www.`) or an email address.
+/// a link (with or without a scheme), an email address or a handle, read normalised as the public
+/// fence reads them (`kargo dot com`, `destek(at)example(nokta)com`).
 pub fn relay_reply_allowed(text: &str, commercial: bool) -> Result<(), RelayRefusal> {
     if commercial {
         return Err(RelayRefusal::CommercialOnRelay);
     }
-    if has_link(text) || has_email(text) {
+    let norm = normalised(text);
+    if has_link(&norm) || has_email(&norm) || has_handle(&norm) {
         return Err(RelayRefusal::LinkInRelayReply);
     }
     Ok(())

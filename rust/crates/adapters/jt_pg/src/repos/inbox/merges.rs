@@ -74,7 +74,8 @@ impl MergeRepo for PgTenantRepos {
                 let mut row = OutboxRepo::lock(self, o.id)
                     .await?
                     .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
-                if row.state == "queued" {
+                // A reply waiting for approval is refused like a queued one.
+                if matches!(row.state.as_str(), "queued" | "held") {
                     row.state = "refused".into();
                     row.last_error = Some("conversation_merged".into());
                     row.updated_at = at;

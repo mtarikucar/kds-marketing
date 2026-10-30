@@ -1,10 +1,17 @@
 //! Public items, their subjects and the polled surfaces' cursors (migration 0019) in memory,
-//! mirroring PostgreSQL's keys, references and orders. Writes are buffered and replayed by key on
-//! commit, like every inbox fake.
+//! mirroring PostgreSQL's keys, references, checks and orders: an external id of 1 to 512
+//! characters, a subject's title, links and facts within bounds, and an item's conversation and
+//! subject on its own capability (the composite foreign keys), each broken one `INTERNAL` as the
+//! database's check or key violation is. Writes are buffered and replayed by key on commit, like
+//! every inbox fake.
 
 use async_trait::async_trait;
 use jt_app::{error::AppError, ports::inbox::*};
 use jt_capability::CapabilityId;
+use jt_inbox::public::{
+    MAX_EXTERNAL_ID_CHARS, MAX_SUBJECT_IMAGE_URL_CHARS, MAX_SUBJECT_TITLE_CHARS,
+    MAX_SUBJECT_URL_CHARS,
+};
 use jt_inbox::*;
 use jt_tenancy::WorkspaceId;
 use serde_json::Value;
@@ -29,6 +36,19 @@ fn found(ok: bool, what: &str) -> Result<(), AppError> {
         Err(AppError::not_found(format!("no such {what}")))
     }
 }
+/// A check or key the database enforces, broken: `INTERNAL`, as `jt_pg` answers it.
+fn checked(ok: bool, what: &str) -> Result<(), AppError> {
+    if ok {
+        Ok(())
+    } else {
+        Err(AppError::internal(format!(
+            "public inbox row breaks {what}"
+        )))
+    }
+}
+fn chars_within(text: &str, min: usize, max: usize) -> bool {
+    (min..=max).contains(&text.chars().count())
+}
 fn capability(s: &MemState, ws: WorkspaceId, id: CapabilityId) -> Result<(), AppError> {
     found(
         s.capabilities
@@ -46,16 +66,20 @@ fn message(s: &MemState, ws: WorkspaceId, id: MessageId) -> Result<(), AppError>
         "message",
     )
 }
-/// The workspace's message and subject references of `item`, as `jt_pg` checks them.
+/// The workspace's message and subject references of `item`, as `jt_pg` checks them, and its
+/// subject on its capability (the composite foreign key).
 fn references(s: &MemState, ws: WorkspaceId, item: &PublicItem) -> Result<(), AppError> {
     message(s, ws, item.message_id)?;
     if let Some(subject) = item.subject_id {
-        found(
-            s.inbox
-                .public_subjects
-                .iter()
-                .any(|r| r.workspace_id == ws && r.id == subject),
-            "public subject",
+        let stored = s
+            .inbox
+            .public_subjects
+            .iter()
+            .find(|r| r.workspace_id == ws && r.id == subject);
+        found(stored.is_some(), "public subject")?;
+        checked(
+            stored.is_some_and(|r| r.capability_id == item.capability_id),
+            "the subject's capability key",
         )?;
     }
     if let Some(private) = item.private_reply_message_id {
@@ -69,14 +93,6 @@ fn open_or_pending(item: &PublicItem) -> bool {
         item.answer,
         AnswerState::Awaiting | AnswerState::Rejected { .. } | AnswerState::Pending { .. }
     )
-}
-/// The message an answer names, as `answer->>'message_id'` reads it.
-fn answer_message(answer: &AnswerState) -> Option<MessageId> {
-    match answer {
-        AnswerState::Pending { message_id } => Some(*message_id),
-        AnswerState::Answered { message_id, .. } => *message_id,
-        _ => None,
-    }
 }
 /// A known subject refreshed by a new write of it: its id, its first sighting and a publication
 /// link the write does not name are kept.
@@ -116,14 +132,21 @@ impl PublicItemRepo for MemTenant {
             same_workspace(ws, item.workspace_id)?;
             let s = t.state();
             capability(s, ws, item.capability_id)?;
-            found(
-                s.inbox
-                    .conversations
-                    .iter()
-                    .any(|r| r.workspace_id == ws && r.id == item.conversation_id),
-                "conversation",
-            )?;
+            let conversation = s
+                .inbox
+                .conversations
+                .iter()
+                .find(|r| r.workspace_id == ws && r.id == item.conversation_id);
+            found(conversation.is_some(), "conversation")?;
             references(s, ws, &item)?;
+            checked(
+                chars_within(&item.external_id, 1, MAX_EXTERNAL_ID_CHARS),
+                "the external id's length",
+            )?;
+            checked(
+                conversation.is_some_and(|r| r.capability_id == item.capability_id),
+                "the conversation's capability key",
+            )?;
             let replay = move |s: &MemState, item: &PublicItem| {
                 s.inbox.public_items.iter().any(|r| {
                     r.workspace_id == ws
@@ -161,6 +184,14 @@ impl PublicItemRepo for MemTenant {
             .public_items_of(|r| r.capability_id == capability && r.external_id == external_id)
             .pop())
     }
+    async fn item_for_message(
+        &mut self,
+        message: MessageId,
+    ) -> Result<Option<PublicItem>, AppError> {
+        let mut rows = self.public_items_of(|r| r.message_id == message);
+        rows.sort_by_key(|r| (r.created_at, r.id));
+        Ok(rows.into_iter().next())
+    }
     async fn update(&mut self, item: PublicItem) -> Result<(), AppError> {
         self.call(|t| {
             let ws = t.ws;
@@ -188,7 +219,7 @@ impl PublicItemRepo for MemTenant {
                     r.answer = item.answer.clone();
                     r.moderation = item.moderation;
                     r.private_reply_message_id = item.private_reply_message_id;
-                    r.agent_replied = item.agent_replied;
+                    r.agent_answers = item.agent_answers;
                     r.checked_at = item.checked_at;
                     r.updated_at = item.updated_at;
                 }
@@ -259,28 +290,6 @@ impl PublicItemRepo for MemTenant {
         });
         Ok(())
     }
-    async fn agent_public_replies_since(
-        &mut self,
-        capability: CapabilityId,
-        since: OffsetDateTime,
-    ) -> Result<u32, AppError> {
-        let s = self.state();
-        let ws = self.ws;
-        let n = s
-            .inbox
-            .public_items
-            .iter()
-            .filter(|r| r.workspace_id == ws && r.capability_id == capability && r.agent_replied)
-            .filter_map(|r| answer_message(&r.answer))
-            .filter(|id| {
-                s.inbox
-                    .messages
-                    .iter()
-                    .any(|m| m.workspace_id == ws && m.id == *id && m.at >= since)
-            })
-            .count();
-        u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
-    }
 }
 
 #[async_trait]
@@ -300,6 +309,29 @@ impl PublicSubjectRepo for MemTenant {
                     "studio publication",
                 )?;
             }
+            checked(
+                chars_within(&subject.external_id, 1, MAX_EXTERNAL_ID_CHARS),
+                "the external id's length",
+            )?;
+            checked(
+                subject.title.chars().count() <= MAX_SUBJECT_TITLE_CHARS,
+                "the title's length",
+            )?;
+            checked(
+                subject
+                    .url
+                    .as_deref()
+                    .is_none_or(|u| u.chars().count() <= MAX_SUBJECT_URL_CHARS),
+                "the url's length",
+            )?;
+            checked(
+                subject
+                    .image_url
+                    .as_deref()
+                    .is_none_or(|u| u.chars().count() <= MAX_SUBJECT_IMAGE_URL_CHARS),
+                "the image url's length",
+            )?;
+            checked(subject.facts.is_object(), "facts being an object")?;
             let same = move |r: &PublicSubject, subject: &PublicSubject| {
                 r.workspace_id == ws
                     && r.capability_id == subject.capability_id

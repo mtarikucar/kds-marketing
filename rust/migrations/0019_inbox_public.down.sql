@@ -1,6 +1,6 @@
 -- Reverts 0019_inbox_public: narrows the outbox state and inbound-event provider checks back,
--- restores 0008's erasure mask and event matching, and drops the public items, their subjects
--- and the poll cursors. Refused, before anything changes, while a row needs the wider checks:
+-- restores 0008's erasure mask and event matching, and drops the public items, their subjects,
+-- the poll cursors and the conversations' capability key their foreign keys named. Refused, before anything changes, while a row needs the wider checks:
 -- inbound events are never deleted (the append-only guard of 0005_connectors), so a stored
 -- Trendyol or Hepsiburada event keeps this migration; a reply held for approval must be approved
 -- or discarded first. The two tables are locked while they are checked, so no such row is
@@ -102,3 +102,4 @@ $$;
 drop table if exists public_items;
 drop table if exists public_cursors;
 drop table if exists public_subjects;
+alter table if exists conversations drop constraint if exists conversations_id_capability_key;

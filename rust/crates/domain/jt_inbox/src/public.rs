@@ -3,9 +3,10 @@
 //! §3.3–§3.6). A conversation stays one person on one capability; each of their comments (or
 //! questions) is an item with its own reply target, thread, window, deadline and answer state.
 //!
-//! Here, pure: the rules per surface ([`rules`]), the reply fence over an item
-//! ([`reply_allowed`]) and over a text ([`check_text`]), the item lifecycle ([`apply`]) and the
-//! conversation state the owed items imply ([`derived_state`]).
+//! Here, pure: the rules per surface ([`rules`]), when a private reply may be sent
+//! ([`private_reply_until`]), the reply fence over an item ([`reply_allowed`]) and over a text
+//! ([`check_text`]), the item lifecycle ([`apply`]) and the conversation state the owed items imply
+//! ([`derived_state`]).
 //!
 //! Provider limits that are not verified yet are named constants whose doc names their
 //! verification id (spec §12); a constant set from a provider's documentation cites it.
@@ -16,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 
+use crate::text::{has_email, has_handle, has_link, has_phone_number, normalised, repeats_contact};
 use crate::{
     Channel, ConvState, ConversationId, EventSource, MessageId, PublicItemId, PublicSubjectId,
     epoch,
@@ -58,6 +60,9 @@ pub enum AnswerState {
     Rejected {
         /// The platform's reason, as it gave it.
         reason: String,
+        /// The refused answer's message; missing reads as `None`.
+        #[serde(default)]
+        message_id: Option<MessageId>,
         /// When the refusal was seen.
         #[serde(with = "time::serde::rfc3339")]
         at: OffsetDateTime,
@@ -183,6 +188,13 @@ pub enum SubjectKind {
     Product,
 }
 
+/// The longest external id of an item or a subject, in characters (0019's checks).
+pub const MAX_EXTERNAL_ID_CHARS: usize = 512;
+
+/// How many public answers the agent may give one item: its first, and one more after the
+/// platform refused it (`Rejected`); after that only a human answers.
+pub const MAX_AGENT_ANSWERS: u8 = 2;
+
 /// One comment or one question (spec §3.3).
 ///
 /// Stored, so reading is tolerant: an unknown field is ignored and a missing field reads as the
@@ -194,7 +206,7 @@ pub struct PublicItem {
     pub id: PublicItemId,
     /// The tenant that owns the item.
     pub workspace_id: WorkspaceId,
-    /// The capability whose post or product it is on.
+    /// The capability whose post or product it is on; its conversation's and its subject's.
     pub capability_id: CapabilityId,
     /// The author's conversation on that capability.
     pub conversation_id: ConversationId,
@@ -218,10 +230,14 @@ pub struct PublicItem {
     /// The provider's answer deadline, when it gives one; missing reads as `None`.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub deadline: Option<OffsetDateTime>,
-    /// Until when one private reply may be sent, on a surface that allows one; missing reads as
-    /// `None` (no private reply).
+    /// Until when one private reply may be sent, on a surface that allows one
+    /// ([`private_reply_until`]); missing reads as `None` (no private reply).
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub private_reply_until: Option<OffsetDateTime>,
+    /// Whether it is a comment on a live video, which takes no public reply; missing reads as
+    /// `false`.
+    #[serde(default)]
+    pub live: bool,
     /// Where its answer stands; required.
     pub answer: AnswerState,
     /// Whether it is shown; missing reads as `Visible`.
@@ -230,10 +246,10 @@ pub struct PublicItem {
     /// The private reply sent, if one was; missing reads as `None`.
     #[serde(default)]
     pub private_reply_message_id: Option<MessageId>,
-    /// Whether the agent has replied publicly (the agent replies once per item); missing reads
-    /// as `false`.
+    /// How many public answers of the agent's the platform received (at most
+    /// [`MAX_AGENT_ANSWERS`] are allowed); missing reads as 0.
     #[serde(default)]
-    pub agent_replied: bool,
+    pub agent_answers: u8,
     /// The last reconciliation against the provider; missing reads as `None`.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub checked_at: Option<OffsetDateTime>,
@@ -250,10 +266,19 @@ impl PublicItem {
             AnswerState::Awaiting | AnswerState::Rejected { .. }
         ) && self.moderation == Moderation::Visible
     }
+
+    /// Whether the agent has answered it publicly at least once.
+    pub fn agent_replied(&self) -> bool {
+        self.agent_answers > 0
+    }
 }
 
 /// The longest subject title kept, in characters: a caption excerpt or a product name.
 pub const MAX_SUBJECT_TITLE_CHARS: usize = 280;
+/// The longest subject permalink kept, in characters (0019's check).
+pub const MAX_SUBJECT_URL_CHARS: usize = 2_048;
+/// The longest subject thumbnail URL kept, in characters (0019's check).
+pub const MAX_SUBJECT_IMAGE_URL_CHARS: usize = 4_096;
 
 /// The post or product items are about, unique per capability and external id (spec §3.3).
 ///
@@ -269,19 +294,20 @@ pub struct PublicSubject {
     pub capability_id: CapabilityId,
     /// A post or a product.
     pub kind: SubjectKind,
-    /// The provider's post (media) or product id.
+    /// The provider's post (media) or product id, at most [`MAX_EXTERNAL_ID_CHARS`] characters.
     pub external_id: String,
     /// A caption excerpt or the product's name, at most [`MAX_SUBJECT_TITLE_CHARS`]
     /// characters; missing reads as empty.
     #[serde(default)]
     pub title: String,
-    /// Its permalink; missing reads as `None`.
+    /// Its permalink, at most [`MAX_SUBJECT_URL_CHARS`] characters; missing reads as `None`.
     #[serde(default)]
     pub url: Option<String>,
-    /// A thumbnail on the provider's CDN, which may expire; missing reads as `None`.
+    /// A thumbnail on the provider's CDN, which may expire, at most
+    /// [`MAX_SUBJECT_IMAGE_URL_CHARS`] characters; missing reads as `None`.
     #[serde(default)]
     pub image_url: Option<String>,
-    /// Further provider facts (media product type, barcode, ...); missing reads as `{}`.
+    /// Further provider facts (media product type, barcode, ...), an object; missing reads as `{}`.
     #[serde(default = "empty_object")]
     pub facts: Value,
     /// The Studio publication that made the post, when one did; missing reads as `None`.
@@ -320,8 +346,8 @@ pub struct PrivateRule {
 /// What a surface allows (spec §3.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicRules {
-    /// The public reply's bounds; `None` while they are not verified (no public reply then).
-    pub public: Option<TextBounds>,
+    /// The public reply's bounds.
+    pub public: TextBounds,
     /// The private reply, on a surface that has one.
     pub private: Option<PrivateRule>,
     /// Whether an item takes one answer only.
@@ -354,23 +380,29 @@ pub const TRENDYOL_ANSWER: TextBounds = TextBounds {
     min: 10,
     max: 2_000,
 };
-/// A Hepsiburada answer's bounds: unknown until task H0 reads them from Hepsiburada's developer
-/// portal (VERIFY V-H3, spec §12); until then no Hepsiburada answer is sent
-/// ([`PublicRefusal::HepsiburadaUnverified`]).
-pub const HEPSIBURADA_ANSWER_BOUNDS: Option<TextBounds> = None;
-/// Whether Hepsiburada reviews an answer before publishing it. VERIFY V-H4 (spec §12): until H0
-/// says, an answer waits as pending until a poll shows it answered.
-pub const HEPSIBURADA_MODERATED: bool = true;
+/// A Hepsiburada answer's bounds: `Answer` is required and at most 2,000 characters
+/// (`answerIssue` in the `saticiya-sor-entegrasyonu` v1.0 OpenAPI,
+/// <https://developers.hepsiburada.com/api/v1/public/docs/hepsiburada/saticiya-sor-entegrasyonu/v1.0/openapi>,
+/// read by hand for task H0 on 2026-10-30).
+pub const HEPSIBURADA_ANSWER: TextBounds = TextBounds { min: 1, max: 2_000 };
+/// Hepsiburada publishes an answer without a review: its questions have no in-review status (the
+/// same document's statuses are `WaitingForAnswer`, `Answered`, `Rejected` and `AutoClosed`).
+pub const HEPSIBURADA_MODERATED: bool = false;
 /// How long after a comment one private reply may be sent. VERIFY V-M8 (spec §12).
 pub const PRIVATE_REPLY_WINDOW: Duration = Duration::days(7);
+/// How long after a live video's comment a private reply is still tried: Meta takes one only
+/// while the video is live, and when the live ends is not known to the inbox. VERIFY V-M9 (spec
+/// §12) tells whether Meta reports the end; until then a private reply Meta refuses after the end
+/// fails like any refused send.
+pub const LIVE_PRIVATE_REPLY_WINDOW: Duration = Duration::hours(4);
 
 /// What `channel` allows; `None` for a private channel.
 pub fn rules(channel: Channel) -> Option<PublicRules> {
     let comment = |public_max, private_max| PublicRules {
-        public: Some(TextBounds {
+        public: TextBounds {
             min: 1,
             max: public_max,
-        }),
+        },
         private: Some(PrivateRule {
             window: PRIVATE_REPLY_WINDOW,
             max_chars: private_max,
@@ -387,7 +419,7 @@ pub fn rules(channel: Channel) -> Option<PublicRules> {
         Channel::FacebookComment => comment(FACEBOOK_COMMENT_MAX, FACEBOOK_PRIVATE_MAX),
         // Whether a Trendyol question can be reported is VERIFY V-T5 (spec §12): not until then.
         Channel::TrendyolQuestion => PublicRules {
-            public: Some(TRENDYOL_ANSWER),
+            public: TRENDYOL_ANSWER,
             private: None,
             one_answer: true,
             moderated: true,
@@ -396,8 +428,9 @@ pub fn rules(channel: Channel) -> Option<PublicRules> {
             report: false,
             marketplace: true,
         },
+        // A question is reported with `rejectIssue` (task H0).
         Channel::HepsiburadaQuestion => PublicRules {
-            public: HEPSIBURADA_ANSWER_BOUNDS,
+            public: HEPSIBURADA_ANSWER,
             private: None,
             one_answer: true,
             moderated: HEPSIBURADA_MODERATED,
@@ -416,6 +449,24 @@ pub fn rules(channel: Channel) -> Option<PublicRules> {
     })
 }
 
+/// Until when an item written at `created_at` may take its one private reply, on a surface whose
+/// rules are `rules`: `None` where the surface has none; else the surface's window, or for a
+/// `live` video's comment the shorter [`LIVE_PRIVATE_REPLY_WINDOW`] (during the live only).
+pub fn private_reply_until(
+    rules: &PublicRules,
+    created_at: OffsetDateTime,
+    live: bool,
+) -> Option<OffsetDateTime> {
+    rules.private.map(|private| {
+        let window = if live {
+            private.window.min(LIVE_PRIVATE_REPLY_WINDOW)
+        } else {
+            private.window
+        };
+        created_at + window
+    })
+}
+
 /// Stable reasons a reply on a public conversation is refused (spec §3.6). `Display` and serde
 /// give the `snake_case` key, e.g. `"private_window_closed"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, thiserror::Error)]
@@ -430,13 +481,17 @@ pub enum PublicRefusal {
     /// The item was deleted or removed.
     #[error("item_removed")]
     ItemRemoved,
+    /// A live video's comment takes no public reply.
+    #[error("live_comment_public_reply")]
+    LiveCommentPublicReply,
     /// The item expired or its deadline passed.
     #[error("deadline_passed")]
     DeadlinePassed,
     /// A one-answer item is answered, or its answer is in review.
     #[error("already_answered")]
     AlreadyAnswered,
-    /// The agent replied publicly to this item already.
+    /// The agent gave this item its answers already (one, or [`MAX_AGENT_ANSWERS`] after a
+    /// refused one).
     #[error("agent_already_replied")]
     AgentAlreadyReplied,
     /// The agent replies only to an owed item.
@@ -460,7 +515,7 @@ pub enum PublicRefusal {
     /// A public reply repeats the person's own phone number or email address.
     #[error("contact_data_in_public_reply")]
     ContactDataInPublicReply,
-    /// A marketplace answer holds a link, an email address or a phone number.
+    /// A marketplace answer holds a link, an email address, a handle or a phone number.
     #[error("contact_data_in_marketplace_answer")]
     ContactDataInMarketplaceAnswer,
     /// Commercial intent on a public surface.
@@ -469,16 +524,14 @@ pub enum PublicRefusal {
     /// The capability's grant does not hold the comment permissions.
     #[error("comments_not_enabled")]
     CommentsNotEnabled,
-    /// Hepsiburada's answer rules are not verified yet (task H0).
-    #[error("hepsiburada_unverified")]
-    HepsiburadaUnverified,
 }
 
 /// Whether a reply of `visibility` may go to `item` now (spec §3.6 rule 4), by the agent when
-/// `by_agent`: a deleted or removed item takes none; a public reply needs verified bounds, an
-/// unexpired item before its deadline, a one-answer item not answered or in review, and from
-/// the agent an owed item it has not replied to; a private reply needs a surface that has one,
-/// its window open and none sent. A human may reply publicly again on a comment.
+/// `by_agent`: a deleted or removed item takes none; a public reply needs an item that is not a
+/// live video's comment, unexpired and before its deadline, a one-answer item not answered or in
+/// review, and from the agent an owed item it has not answered (or whose answer the platform
+/// refused, once: [`MAX_AGENT_ANSWERS`]); a private reply needs a surface that has one, its window
+/// open and none sent. A human may reply publicly again on a comment.
 pub fn reply_allowed(
     item: &PublicItem,
     rules: &PublicRules,
@@ -491,8 +544,8 @@ pub fn reply_allowed(
     }
     match visibility {
         Visibility::Public => {
-            if rules.public.is_none() {
-                return Err(PublicRefusal::HepsiburadaUnverified);
+            if item.live {
+                return Err(PublicRefusal::LiveCommentPublicReply);
             }
             if matches!(item.answer, AnswerState::Expired { .. })
                 || item.deadline.is_some_and(|deadline| now > deadline)
@@ -507,11 +560,15 @@ pub fn reply_allowed(
             {
                 return Err(PublicRefusal::AlreadyAnswered);
             }
-            if by_agent && item.agent_replied {
-                return Err(PublicRefusal::AgentAlreadyReplied);
-            }
-            if by_agent && !item.awaiting() {
-                return Err(PublicRefusal::ItemNotOwed);
+            if by_agent {
+                let retry = matches!(item.answer, AnswerState::Rejected { .. })
+                    && item.agent_answers < MAX_AGENT_ANSWERS;
+                if item.agent_replied() && !retry {
+                    return Err(PublicRefusal::AgentAlreadyReplied);
+                }
+                if !item.awaiting() {
+                    return Err(PublicRefusal::ItemNotOwed);
+                }
             }
         }
         Visibility::Private => {
@@ -532,9 +589,10 @@ pub fn reply_allowed(
 /// Whether `text` may be sent as a reply of `visibility` under `rules` (spec §3.6 rule 5):
 /// within the surface's bounds (characters; the minimum not counting leading and trailing
 /// whitespace); a public reply never repeats one of `person_contacts` (the person's own
-/// normalised email addresses and E.164 phone numbers), however the text writes it; a
-/// marketplace answer holds no link, email address or phone-number-like run of ten or more
-/// digits at all. A private reply is checked for its bounds only.
+/// normalised email addresses and E.164 phone numbers); a marketplace answer holds no link (with
+/// or without a scheme), email address, handle or Turkish phone number at all. The contact checks
+/// read the text normalised (spelled-out `at`/`dot`/`nokta`, digit words, keycap digits, Unicode
+/// spaces and dashes). A private reply is checked for its bounds only.
 pub fn check_text(
     rules: &PublicRules,
     visibility: Visibility,
@@ -542,7 +600,7 @@ pub fn check_text(
     person_contacts: &[String],
 ) -> Result<(), PublicRefusal> {
     let bounds = match visibility {
-        Visibility::Public => rules.public.ok_or(PublicRefusal::HepsiburadaUnverified)?,
+        Visibility::Public => rules.public,
         Visibility::Private => {
             let private = rules
                 .private
@@ -562,64 +620,19 @@ pub fn check_text(
     if visibility == Visibility::Private {
         return Ok(());
     }
+    let norm = normalised(text);
     if person_contacts
         .iter()
-        .any(|contact| repeats_contact(text, contact))
+        .any(|contact| repeats_contact(&norm, contact))
     {
         return Err(PublicRefusal::ContactDataInPublicReply);
     }
     if rules.marketplace
-        && (has_link(text) || has_email(text) || digit_runs(text).any(|run| run.len() >= 10))
+        && (has_link(&norm) || has_email(&norm) || has_handle(&norm) || has_phone_number(&norm))
     {
         return Err(PublicRefusal::ContactDataInMarketplaceAnswer);
     }
     Ok(())
-}
-
-/// Whether `text` repeats `contact`: an email address anywhere, case-insensitively; a phone
-/// number as a run of digits holding its last ten digits (its national number for `+90`), so
-/// that spaces, dashes, dots, brackets, a leading `0` or a country code do not hide it.
-fn repeats_contact(text: &str, contact: &str) -> bool {
-    if contact.contains('@') {
-        return text.to_lowercase().contains(&contact.to_lowercase());
-    }
-    let digits: String = contact.chars().filter(char::is_ascii_digit).collect();
-    if digits.len() < 7 {
-        return false;
-    }
-    let national = &digits[digits.len().saturating_sub(10)..];
-    digit_runs(text).any(|run| run.contains(national))
-}
-
-/// The digits of each phone-like run in `text`: ASCII digits joined by spaces, dashes, dots,
-/// brackets or a plus sign; any other character ends a run.
-pub(crate) fn digit_runs(text: &str) -> impl Iterator<Item = String> + '_ {
-    text.split(|c: char| !(c.is_ascii_digit() || matches!(c, ' ' | '-' | '.' | '(' | ')' | '+')))
-        .map(|run| run.chars().filter(char::is_ascii_digit).collect::<String>())
-        .filter(|digits| !digits.is_empty())
-}
-
-/// Whether `text` holds a web link: `http://`, `https://` or `www.`, in any case.
-pub(crate) fn has_link(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    ["http://", "https://", "www."]
-        .iter()
-        .any(|marker| lower.contains(marker))
-}
-
-/// Whether `text` holds something shaped like an email address: a word with an `@` that has
-/// something before it and a dot somewhere after it.
-pub(crate) fn has_email(text: &str) -> bool {
-    text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | ',' | ';' | '"' | '\''))
-        .any(|word| {
-            word.split_once('@').is_some_and(|(local, domain)| {
-                !local.is_empty()
-                    && domain
-                        .trim_end_matches(['.', ')', '!', '?', ':'])
-                        .split_once('.')
-                        .is_some_and(|(host, tld)| !host.is_empty() && !tld.is_empty())
-            })
-        })
 }
 
 /// What happens to an item (spec §3.4).
@@ -691,8 +704,8 @@ impl ItemEvent {
 }
 
 /// An event the item cannot take in its state: nothing is written. `from` is the answer state's
-/// key for an answer event, the moderation's key for a moderation event, and
-/// `"private_reply_used"` or `"private_window_closed"` for a private reply.
+/// key for an answer event and the moderation's key for a moderation event. The two receipts
+/// (`AnswerSent`, `PrivateReplySent`) are never refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{from} cannot take {event}")]
 pub struct ItemTransitionError {
@@ -704,8 +717,13 @@ pub struct ItemTransitionError {
 
 /// The item after `event` at `at` (spec §3.4), with `updated_at = at`; any pair the table does
 /// not list is an [`ItemTransitionError`]. Answer events move the answer state only, moderation
-/// events the moderation only; a private reply sets `private_reply_message_id` once, while the
-/// window is open. `agent_replied` is the caller's to set.
+/// events the moderation only.
+///
+/// The receipts are facts, taken from any state: the platform accepted the send. `AnswerSent`
+/// makes an unanswered item (owed, pending, settled or expired) pending on a moderated surface,
+/// else answered by us, and leaves an answered one answered; `PrivateReplySent` records the
+/// private reply, keeping the first when one is recorded already, whatever the window.
+/// `agent_answers` is the caller's to count.
 pub fn apply(
     item: &PublicItem,
     event: ItemEvent,
@@ -736,17 +754,16 @@ pub fn apply(
             message_id,
             moderated,
         } => {
-            answer_from(owed)?;
-            next.answer = if *moderated {
-                AnswerState::Pending {
+            next.answer = match &item.answer {
+                AnswerState::Answered { .. } => item.answer.clone(),
+                _ if *moderated => AnswerState::Pending {
                     message_id: *message_id,
-                }
-            } else {
-                AnswerState::Answered {
+                },
+                _ => AnswerState::Answered {
                     by: AnsweredBy::Us,
                     message_id: Some(*message_id),
                     at,
-                }
+                },
             };
         }
         ItemEvent::AnswerConfirmed => {
@@ -760,9 +777,12 @@ pub fn apply(
             };
         }
         ItemEvent::AnswerRejected { reason } => {
-            answer_from(|a| matches!(a, AnswerState::Pending { .. }))?;
+            let AnswerState::Pending { message_id } = item.answer else {
+                return Err(refuse(item.answer.key()));
+            };
             next.answer = AnswerState::Rejected {
                 reason: reason.clone(),
+                message_id: Some(message_id),
                 at,
             };
         }
@@ -814,13 +834,7 @@ pub fn apply(
             next.moderation = Moderation::Reported;
         }
         ItemEvent::PrivateReplySent { message_id } => {
-            if item.private_reply_message_id.is_some() {
-                return Err(refuse("private_reply_used"));
-            }
-            if item.private_reply_until.is_none_or(|until| at > until) {
-                return Err(refuse("private_window_closed"));
-            }
-            next.private_reply_message_id = Some(*message_id);
+            next.private_reply_message_id = item.private_reply_message_id.or(Some(*message_id));
         }
     }
     next.updated_at = at;

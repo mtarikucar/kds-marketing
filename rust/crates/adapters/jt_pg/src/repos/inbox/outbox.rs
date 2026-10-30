@@ -5,6 +5,7 @@ use jt_app::{
     error::AppError,
     ports::inbox::{MAX_INBOX_PAGE, OutboxRepo, OutboxRow},
 };
+use jt_capability::CapabilityId;
 use jt_inbox::MessageId;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -78,5 +79,24 @@ impl OutboxRepo for PgTenantRepos {
             .into_iter()
             .map(|(id, reason)| (MessageId::from(id), reason))
             .collect())
+    }
+    async fn agent_public_replies_since(
+        &mut self,
+        capability: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from outbox where workspace_id=$1 and capability_id=$2 \
+             and created_at>=$3 and state<>'refused' \
+             and intent#>>'{public,visibility}'='public' \
+             and intent#>>'{public,drafted_by,kind}'='agent'",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(capability.as_uuid())
+        .bind(since)
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count agent public replies"))?;
+        u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
     }
 }

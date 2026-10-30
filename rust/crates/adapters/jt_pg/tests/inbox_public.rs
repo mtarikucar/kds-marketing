@@ -40,6 +40,24 @@ async fn reconcile_order_rotates() {
 }
 
 #[tokio::test]
+async fn outbox_counts_agent_public_replies() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::outbox_counts_agent_public_replies(uow(&db)).await;
+}
+
+#[tokio::test]
+async fn erasure_refuses_held_replies() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::erasure_refuses_held_replies(uow(&db)).await;
+}
+
+#[tokio::test]
+async fn undo_reads_a_version_1_snapshot() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_merge_contract::undo_reads_a_version_1_snapshot(uow(&db)).await;
+}
+
+#[tokio::test]
 async fn merge_moves_items_and_undo_restores_them() {
     let db = TestDb::new().await;
     jt_testkit::inbox_merge_contract::public_items_follow_merges_and_undo(uow(&db)).await;
@@ -232,6 +250,10 @@ async fn event_person_finds_a_commenter() {
     // An author without an id is the one-off person intake made for the comment.
     let unnamed = envelope("comment", None, "9001");
     assert!(event_person(&db, &f, page, &unnamed, anonymous.id).await);
+    // An empty author id is no id.
+    let mut empty = envelope("comment", None, "9001");
+    empty["public"]["author"]["id"] = json!("");
+    assert!(event_person(&db, &f, page, &empty, anonymous.id).await);
     assert!(
         !event_person(
             &db,

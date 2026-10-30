@@ -53,13 +53,26 @@ const INBOX_PUBLIC_TABLES: [(&str, &str); 3] = [
 ];
 
 /// The indexes of `public_items` (`0019_inbox_public`).
-const INBOX_PUBLIC_INDEXES: [&str; 5] = [
+const INBOX_PUBLIC_INDEXES: [&str; 6] = [
     "public_items_owed",
     "public_items_deadline",
     "public_items_thread",
     "public_items_reconcile",
     "public_items_conversation",
+    "public_items_message",
 ];
+
+/// The key `0019_inbox_public` adds to `conversations` for its items' composite foreign key.
+const CONVERSATION_CAPABILITY_KEY: &str = "conversations_id_capability_key";
+
+/// Whether a constraint named `name` exists.
+async fn constraint_exists(pool: &PgPool, name: &str) -> bool {
+    sqlx::query_scalar("select exists(select 1 from pg_constraint where conname = $1)")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -1068,6 +1081,7 @@ async fn inbox_public_down_refuses_while_rows_need_the_wider_checks() {
         assert!(has_held(
             &check_definition(&db.pool, "outbox_state_check").await
         ));
+        assert!(constraint_exists(&db.pool, CONVERSATION_CAPABILITY_KEY).await);
     }
     // Down twice, without rows that need the wider checks: they narrow and the tables go.
     for _ in 0..2 {
@@ -1082,6 +1096,7 @@ async fn inbox_public_down_refuses_while_rows_need_the_wider_checks() {
         for index in INBOX_PUBLIC_INDEXES {
             assert!(!index_exists(&db.pool, index).await, "{index}");
         }
+        assert!(!constraint_exists(&db.pool, CONVERSATION_CAPABILITY_KEY).await);
     }
     for _ in 0..2 {
         try_sql(&db.pool, &up).await.unwrap();

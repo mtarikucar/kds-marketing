@@ -1,6 +1,7 @@
 //! Public items (0019): comments and marketplace questions. `answer` is the item's
 //! `AnswerState` as JSON; its generated `answer_state` column is read by the indexes and never
-//! written here.
+//! written here. The composite foreign keys keep an item's conversation and subject on its
+//! capability; a write breaking them, or 0019's bounds, fails `INTERNAL`.
 
 use super::{changed, map_sqlx, reference, same_workspace};
 use crate::uow::PgTenantRepos;
@@ -10,14 +11,14 @@ use jt_app::{
     ports::inbox::{MAX_INBOX_PAGE, PublicItemRepo},
 };
 use jt_capability::CapabilityId;
-use jt_inbox::{ConversationId, PublicItem, PublicItemId};
+use jt_inbox::{ConversationId, MessageId, PublicItem, PublicItemId};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// The columns an insert writes: every column but the generated `answer_state`.
 const COLUMNS: &str = "workspace_id,id,capability_id,conversation_id,message_id,subject_id,kind,\
-    external_id,parent_external_id,root_external_id,created_at,deadline,private_reply_until,answer,\
-    moderation,private_reply_message_id,agent_replied,checked_at,updated_at";
+    external_id,parent_external_id,root_external_id,created_at,deadline,private_reply_until,live,\
+    answer,moderation,private_reply_message_id,agent_answers,checked_at,updated_at";
 
 /// The workspace's message and subject references of `item`, each `NOT_FOUND` when missing.
 async fn references(r: &mut PgTenantRepos, item: &PublicItem) -> Result<(), AppError> {
@@ -107,6 +108,21 @@ impl PublicItemRepo for PgTenantRepos {
             PublicItem
         )
     }
+    async fn item_for_message(
+        &mut self,
+        message: MessageId,
+    ) -> Result<Option<PublicItem>, AppError> {
+        one!(
+            sqlx::query_scalar(
+                "select to_jsonb(i) from public_items i where workspace_id=$1 \
+                 and message_id=$2 order by created_at,id limit 1"
+            )
+            .bind(self.workspace_id().as_uuid())
+            .bind(message.as_uuid()),
+            self,
+            PublicItem
+        )
+    }
     async fn update(&mut self, item: PublicItem) -> Result<(), AppError> {
         let ws = self.workspace_id();
         same_workspace(ws, item.workspace_id)?;
@@ -115,7 +131,7 @@ impl PublicItemRepo for PgTenantRepos {
             sqlx::query(
                 "update public_items set message_id=$3,subject_id=$4,deadline=$5,\
                  private_reply_until=$6,answer=$7,moderation=$8,private_reply_message_id=$9,\
-                 agent_replied=$10,checked_at=$11,updated_at=$12 where workspace_id=$1 and id=$2",
+                 agent_answers=$10,checked_at=$11,updated_at=$12 where workspace_id=$1 and id=$2",
             )
             .bind(ws.as_uuid())
             .bind(item.id.as_uuid())
@@ -126,7 +142,7 @@ impl PublicItemRepo for PgTenantRepos {
             .bind(value!(&item.answer))
             .bind(item.moderation.key())
             .bind(item.private_reply_message_id.map(|m| m.as_uuid()))
-            .bind(item.agent_replied)
+            .bind(i16::from(item.agent_answers))
             .bind(item.checked_at)
             .bind(item.updated_at)
             .execute(self.tx.conn())
@@ -222,23 +238,5 @@ impl PublicItemRepo for PgTenantRepos {
             .await
             .map_err(|e| map_sqlx(e, "mark public items checked"))?;
         Ok(())
-    }
-    async fn agent_public_replies_since(
-        &mut self,
-        capability: CapabilityId,
-        since: OffsetDateTime,
-    ) -> Result<u32, AppError> {
-        let n: i64 = sqlx::query_scalar(
-            "select count(*) from public_items i join messages m \
-             on m.workspace_id=i.workspace_id and m.id=(i.answer->>'message_id')::uuid \
-             where i.workspace_id=$1 and i.capability_id=$2 and i.agent_replied and m.at>=$3",
-        )
-        .bind(self.workspace_id().as_uuid())
-        .bind(capability.as_uuid())
-        .bind(since)
-        .fetch_one(self.tx.conn())
-        .await
-        .map_err(|e| map_sqlx(e, "count agent public replies"))?;
-        u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
     }
 }

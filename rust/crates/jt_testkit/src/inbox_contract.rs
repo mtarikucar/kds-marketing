@@ -1501,11 +1501,17 @@ impl Fixture {
         t.commit().await.unwrap();
         c.id
     }
-    /// `p`'s conversation on the comment surface `cap` (an `instagram` capability), stored.
+    /// `p`'s conversation on the public surface `cap`, of that capability's kind, stored.
     pub async fn public_conversation(&self, p: PersonId, cap: CapabilityId) -> Conversation {
-        let mut c = self.conversation(p, cap);
-        c.kind_key = "instagram".into();
         let mut t = self.uow.tenant(self.ws).await.unwrap();
+        let mut c = self.conversation(p, cap);
+        c.kind_key = t
+            .capabilities()
+            .find(cap)
+            .await
+            .unwrap()
+            .expect("the capability is stored")
+            .kind_key;
         let c = t.conversations().upsert_on_inbound(c).await.unwrap();
         t.commit().await.unwrap();
         c
@@ -1552,19 +1558,69 @@ impl Fixture {
             answer: AnswerState::Awaiting,
             moderation: Moderation::Visible,
             private_reply_message_id: None,
-            agent_replied: false,
+            live: false,
+            agent_answers: 0,
             checked_at: None,
             updated_at: at,
         }
     }
+    /// An outbound message of `c` and its outbox row in `state`, a public-item intent of
+    /// `visibility` drafted by `drafted_by`, created `minutes` after [`FIXED_NOW`] (stored).
+    pub async fn public_outbox(
+        &self,
+        c: &Conversation,
+        state: &str,
+        visibility: &str,
+        drafted_by: &serde_json::Value,
+        minutes: i64,
+    ) -> Uuid {
+        let at = FIXED_NOW + Duration::minutes(minutes);
+        let mut m = self.message(c.id);
+        m.direction = Direction::Outbound;
+        m.author = Author::Agent;
+        m.external_id = None;
+        m.status = MsgStatus::Queued;
+        m.at = at;
+        let id = Uuid::now_v7();
+        let mut t = self.uow.tenant(self.ws).await.unwrap();
+        t.messages().insert_if_new(m.clone()).await.unwrap();
+        t.outbox()
+            .insert(OutboxRow {
+                id,
+                workspace_id: self.ws,
+                conversation_id: c.id,
+                message_id: m.id,
+                capability_id: c.capability_id,
+                intent: json!({"kind": "reply", "public": {
+                    "item_id": PublicItemId::new_v7(), "visibility": visibility,
+                    "drafted_by": drafted_by
+                }}),
+                expected_generation: c.executor_generation,
+                fence_snapshot: None,
+                conversation_merged: false,
+                state: state.into(),
+                attempts: 0,
+                last_error: None,
+                created_at: at,
+                updated_at: at,
+            })
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+        id
+    }
 }
 
-/// Insert, replay, references, reads in order, updates, deadlines and the agent's reply count.
+/// Insert, replay, references (the item's conversation and subject on its own capability),
+/// bounds, reads in order, updates, deadlines and the item a message is.
 pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
     let f = Fixture::new(uow.clone()).await;
     let cap = f.account("instagram", "ig-1").await;
+    let other_cap = f.account("instagram", "ig-2").await;
     let p = f.insert_person("Commenter").await;
     let c = f.public_conversation(p.id, cap).await;
+    assert_eq!(c.kind_key, "instagram");
+    let elsewhere = f.public_conversation(p.id, other_cap).await;
     let m1 = f.comment_message(c.id, "c1", 0).await;
     let m2 = f.comment_message(c.id, "c2", 1).await;
     let m3 = f.comment_message(c.id, "c3", 2).await;
@@ -1572,7 +1628,28 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
     let mut reply = f.public_item(&c, m2, "c2", 1);
     reply.parent_external_id = Some("c1".into());
     reply.root_external_id = "c1".into();
-    let other_thread = f.public_item(&c, m3, "c3", 2);
+    let mut other_thread = f.public_item(&c, m3, "c3", 2);
+    other_thread.live = true;
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let foreign_subject = t
+        .public_subjects()
+        .upsert(PublicSubject {
+            id: PublicSubjectId::new_v7(),
+            workspace_id: f.ws,
+            capability_id: other_cap,
+            kind: SubjectKind::Post,
+            external_id: "m-elsewhere".into(),
+            title: String::new(),
+            url: None,
+            image_url: None,
+            facts: json!({}),
+            publication_id: None,
+            first_seen_at: FIXED_NOW,
+            updated_at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
 
     let mut t = uow.tenant(f.ws).await.unwrap();
     assert!(t.public_items().insert(first.clone()).await.unwrap());
@@ -1622,6 +1699,38 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
             PublicItem {
                 workspace_id: f.other,
                 external_id: "x5".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        // The conversation, or the subject, of another capability.
+        (
+            PublicItem {
+                conversation_id: elsewhere.id,
+                external_id: "x6".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        (
+            PublicItem {
+                subject_id: Some(foreign_subject.id),
+                external_id: "x7".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        // An external id is 1 to 512 characters.
+        (
+            PublicItem {
+                external_id: String::new(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        (
+            PublicItem {
+                external_id: "x".repeat(513),
                 ..first.clone()
             },
             ErrorCode::Internal,
@@ -1688,7 +1797,7 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
         at: later,
     };
     answered.moderation = Moderation::Hidden;
-    answered.agent_replied = true;
+    answered.agent_answers = 1;
     answered.deadline = Some(later + Duration::hours(1));
     answered.updated_at = later;
     let mut t = uow.tenant(f.ws).await.unwrap();
@@ -1708,6 +1817,21 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
         .await
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::NotFound);
+    drop(t);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let e = t
+        .public_items()
+        .update(PublicItem {
+            subject_id: Some(foreign_subject.id),
+            ..answered.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.code,
+        ErrorCode::Internal,
+        "a subject of another capability"
+    );
     drop(t);
 
     // Deadlines: owed and pending items before the bound, soonest first.
@@ -1746,29 +1870,21 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
         vec![due_soon.clone()]
     );
 
-    // The agent's public replies: items it answered, by when the answer was written.
-    let at = FIXED_NOW + Duration::minutes(2);
+    // The item a message is.
     assert_eq!(
-        t.public_items()
-            .agent_public_replies_since(cap, at)
-            .await
-            .unwrap(),
-        1
+        t.public_items().item_for_message(m1).await.unwrap(),
+        Some(answered.clone())
+    );
+    assert_eq!(
+        t.public_items().item_for_message(m2).await.unwrap(),
+        Some(due_soon.clone())
     );
     assert_eq!(
         t.public_items()
-            .agent_public_replies_since(cap, at + Duration::seconds(1))
+            .item_for_message(MessageId::new_v7())
             .await
             .unwrap(),
-        0
-    );
-    let elsewhere = f.account("instagram", "ig-2").await;
-    assert_eq!(
-        t.public_items()
-            .agent_public_replies_since(elsewhere, FIXED_NOW)
-            .await
-            .unwrap(),
-        0
+        None
     );
 }
 
@@ -1872,6 +1988,53 @@ pub async fn public_subjects_contract(uow: Arc<dyn UnitOfWork>) {
             PublicSubject {
                 workspace_id: f.other,
                 external_id: "m5".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        // 0019's bounds.
+        (
+            PublicSubject {
+                title: "a".repeat(281),
+                external_id: "m6".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        (
+            PublicSubject {
+                external_id: String::new(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        (
+            PublicSubject {
+                external_id: "m".repeat(513),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        (
+            PublicSubject {
+                url: Some(format!("https://example.com/{}", "p".repeat(2_048))),
+                external_id: "m7".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        (
+            PublicSubject {
+                image_url: Some(format!("https://example.com/{}", "i".repeat(4_096))),
+                external_id: "m8".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+        (
+            PublicSubject {
+                facts: json!(["not", "an", "object"]),
+                external_id: "m9".into(),
                 ..first.clone()
             },
             ErrorCode::Internal,
@@ -2009,4 +2172,98 @@ pub async fn reconcile_order_rotates(uow: Arc<dyn UnitOfWork>) {
     other.commit().await.unwrap();
     let again = t.public_items().get(by_id[1].id).await.unwrap().unwrap();
     assert_eq!(again.checked_at, Some(FIXED_NOW));
+}
+
+/// The agent's public replies on a capability since a time, as `daily_ops_cap` counts them: its
+/// public-item outbox rows created since then, in any state but refused (held, queued and
+/// uncertain ones included), never a human's, a private reply or another capability's.
+pub async fn outbox_counts_agent_public_replies(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let other_cap = f.account("instagram", "ig-2").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let elsewhere = f.public_conversation(p.id, other_cap).await;
+    let agent = json!({"kind": "agent", "connection_id": Uuid::now_v7(), "user_id": f.user});
+    let human = json!({"kind": "human", "user_id": f.user});
+    for (conversation, state, visibility, drafted_by, minutes) in [
+        (&c, "queued", "public", &agent, 0),
+        (&c, "held", "public", &agent, 1),
+        (&c, "sending", "public", &agent, 2),
+        (&c, "sent", "public", &agent, 3),
+        (&c, "failed", "public", &agent, 4),
+        (&c, "unknown", "public", &agent, 5),
+        (&c, "refused", "public", &agent, 6),
+        (&c, "sent", "private", &agent, 7),
+        (&c, "sent", "public", &human, 8),
+        (&elsewhere, "sent", "public", &agent, 9),
+        (&c, "sent", "public", &agent, -10),
+    ] {
+        f.public_outbox(conversation, state, visibility, drafted_by, minutes)
+            .await;
+    }
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let count = |cap, minutes| {
+        let since = FIXED_NOW + Duration::minutes(minutes);
+        (cap, since)
+    };
+    for ((capability, since), expected) in [
+        (count(cap, 0), 6),
+        (count(cap, 3), 3),
+        (count(cap, -60), 7),
+        (count(cap, 60), 0),
+        (count(other_cap, 0), 1),
+    ] {
+        assert_eq!(
+            t.outbox()
+                .agent_public_replies_since(capability, since)
+                .await
+                .unwrap(),
+            expected,
+            "since {since}"
+        );
+    }
+    drop(t);
+    let mut other = uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        other
+            .outbox()
+            .agent_public_replies_since(cap, FIXED_NOW - Duration::days(1))
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+/// Erasing a person refuses their replies waiting for approval, as it refuses the queued ones.
+pub async fn erasure_refuses_held_replies(uow: Arc<dyn UnitOfWork>) {
+    use jt_app::usecases::inbox::erasure;
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let agent = json!({"kind": "agent", "connection_id": Uuid::now_v7(), "user_id": f.user});
+    let held = f.public_outbox(&c, "held", "public", &agent, 0).await;
+    let queued = f.public_outbox(&c, "queued", "public", &agent, 1).await;
+    let sent = f.public_outbox(&c, "sent", "public", &agent, 2).await;
+    let ctx = jt_app::ctx::Ctx {
+        workspace_id: f.ws,
+        actor: jt_ledger::Actor::Human { user_id: f.user },
+        permissions: SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW + Duration::hours(1),
+        agent_connection_id: None,
+    };
+    erasure::erase(
+        &deps(uow.clone()),
+        &ctx,
+        p.id,
+        erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    for (id, state) in [(held, "refused"), (queued, "refused"), (sent, "sent")] {
+        assert_eq!(t.outbox().get(id).await.unwrap().unwrap().state, state);
+    }
 }

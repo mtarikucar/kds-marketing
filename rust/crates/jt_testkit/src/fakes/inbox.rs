@@ -1736,4 +1736,25 @@ impl OutboxRepo for MemTenant {
             .filter_map(|r| r.last_error.clone().map(|e| (r.message_id, e)))
             .collect())
     }
+    async fn agent_public_replies_since(
+        &mut self,
+        capability: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let n = self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && r.capability_id == capability
+                    && r.created_at >= since
+                    && r.state != "refused"
+                    && r.intent["public"]["visibility"] == "public"
+                    && r.intent["public"]["drafted_by"]["kind"] == "agent"
+            })
+            .count();
+        u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
+    }
 }

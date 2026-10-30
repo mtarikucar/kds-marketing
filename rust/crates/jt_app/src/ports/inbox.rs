@@ -522,6 +522,17 @@ pub trait OutboxRepo: Send + Sync {
         &mut self,
         messages: &[MessageId],
     ) -> Result<Vec<(MessageId, String)>, AppError>;
+    /// How many public replies the agent drafted on `capability` since `since`, as its
+    /// `daily_ops_cap` counts them: outbox rows created at or after `since` whose intent is a
+    /// public item's public reply (`intent.public.visibility` = `"public"`) drafted by an agent
+    /// (`intent.public.drafted_by.kind` = `"agent"`), in any state but `refused` (held, queued,
+    /// in flight, sent, failed or uncertain alike). The caller holds the capability's lock
+    /// (`CapabilityRepo::lock`), so the count and the row it lets in are one reservation.
+    async fn agent_public_replies_since(
+        &mut self,
+        capability: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError>;
 }
 
 impl MergeSnapshot {

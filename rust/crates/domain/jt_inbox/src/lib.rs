@@ -32,6 +32,7 @@ pub mod relay;
 mod sms;
 mod suppression;
 mod task;
+mod text;
 
 pub use appointment::{Appointment, AppointmentError, AppointmentState, ics};
 pub use commission::{Commission, CommissionState, commission_for};
