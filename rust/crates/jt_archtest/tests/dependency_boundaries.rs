@@ -42,6 +42,10 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     ("jt_devices", &[]),
     // The wire between the server and a device bridge speaks the device vocabulary.
     ("jt_device_protocol", &["jt_devices"]),
+    // The prospect pool: phones and emails normalise through `jt_inbox::normalise` and a
+    // promotion names the inbox person and journey; `url` parses websites and does IDNA; the
+    // rubric and the research areas are the strategy's types.
+    ("jt_prospects", &["jt_inbox", "jt_strategy", "url"]),
 ];
 
 #[test]

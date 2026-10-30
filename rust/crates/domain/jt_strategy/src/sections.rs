@@ -236,3 +236,49 @@ impl Mix {
     /// The serialised field names, for the strict write-time check.
     pub const KEYS: &'static [&'static str] = &["channel", "share_pct"];
 }
+
+/// A place prospects are researched in: a city, optionally narrowed to one district. Named by a
+/// research brief (`jt_prospects::Brief`) and by an ICP entry of the `prospecting` section.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Area {
+    pub city: String,
+    pub district: Option<String>,
+}
+
+impl Area {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["city", "district"];
+}
+
+/// How a prospect is scored: criteria whose weights sum to 100, and the score at which a
+/// prospect qualifies by itself (spec 2026-10-30-leads-pool-outreach-design.md §3.4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rubric {
+    /// `1..=12` criteria, keys unique.
+    pub criteria: Vec<Criterion>,
+    /// `1..=100`.
+    pub qualify_at: u8,
+}
+
+impl Rubric {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["criteria", "qualify_at"];
+}
+
+/// One criterion of a [`Rubric`]: a score gives it at most `weight` points.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Criterion {
+    /// `[a-z0-9_]{2,32}`, unique within the rubric.
+    pub key: String,
+    /// `1..=300` characters.
+    pub description: String,
+    pub weight: u8,
+}
+
+impl Criterion {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["key", "description", "weight"];
+}

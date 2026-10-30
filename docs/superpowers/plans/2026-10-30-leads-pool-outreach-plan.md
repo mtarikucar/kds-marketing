@@ -155,6 +155,15 @@ pub struct ProspectsPolicy { pub rejected_retention_days: u16 /*30*/, pub unprom
 pub fn purge_after(policy: &ProspectsPolicy, status: ProspectStatus, decided_at: Option<OffsetDateTime>, updated_at: OffsetDateTime) -> Option<OffsetDateTime>;
 pub const MAX_DAILY_PROSPECTS: u32 = 500;
 pub const PLAYBOOK_VERSION: u32 = 1; pub const TEXT: &str;          // spec Appendix A, verbatim
+// As built (L1-T1), beyond the names above: `normalise_key(kind, raw) -> Result<String, ProspectError>`
+// (a raw value of any kind as its key: `check`, do-not-contact by raw keys); `KeyKind::parse`;
+// `ALL`/`key()`/`parse()` on ProspectStatus, RejectReason, DncReason, EntityKind, Bucket (+ `range()`),
+// TaskStatus; `FieldName::{key, touches_keys}`; `Prospect::field_names()`; `Recorder::is_agent()`;
+// `SignalInput { text, source: SourceRefInput }`; `SetFields` holds the FieldName fields as Options
+// (labels and signals as `Option<Vec<_>>`); `ContactPerson` and `SizeHint` refuse unknown fields both
+// ways (they are `FieldInput` values); `StatusError.event` is the refused event as a past participle.
+// `jt_strategy::{Area, Rubric, Criterion}` (types and KEYS only) land in L1-T1, because `Brief` and
+// `validate_score` name them; `Prospecting`, `IcpEntry` and `Sections.prospecting` stay L2-T1.
 
 // ---- jt_strategy (L2-T1) ----
 pub struct Prospecting { pub icp: Vec<IcpEntry>, pub rubric: Rubric }
@@ -278,9 +287,9 @@ Q1–Q4, and the staging dry run read by the owner. L6 is not required (v1 never
 ### Task L1-T1: `jt_prospects` domain crate
 
 **Files:** `rust/crates/domain/jt_prospects/{Cargo.toml,src/*.rs,tests/*.rs}`; workspace `Cargo.toml` members;
-`jt_archtest/tests/dependency_boundaries.rs` `DOMAIN_CRATES` gains `("jt_prospects", &["jt_inbox", "jt_capability",
-"jt_strategy", "url"])` with a comment (phones and emails normalise through `jt_inbox::normalise`; `url` parses
-websites and does IDNA; the rubric and areas are the strategy's types).
+`jt_archtest/tests/dependency_boundaries.rs` `DOMAIN_CRATES` gains `("jt_prospects", &["jt_inbox", "jt_strategy",
+"url"])` with a comment (phones and emails normalise through `jt_inbox::normalise`; `url` parses websites and does
+IDNA; the rubric and areas are the strategy's types). As built: no `jt_capability` (nothing in the crate uses it).
 
 The crate holds the contract types above and the pure rules of spec §3.1–3.4 and §3.6 (retention arithmetic
 only). `playbook::TEXT` is Appendix A verbatim (`jt_archtest` pins it to the spec in L1-T6).

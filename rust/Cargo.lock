@@ -1757,6 +1757,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_prospects"
+version = "0.1.0"
+dependencies = [
+ "jt_inbox",
+ "jt_strategy",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "jt_seal"
 version = "0.1.0"
 dependencies = [
