@@ -467,6 +467,17 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
   `prospects.*` entry payload for the fixture's phone, email and name: none).
 - [ ] `cargo test -p jt_app --test prospects_pool` red → green; **commit** `feat(prospects): record and dedupe
   prospects`.
+- As built: `ProspectOut { prospect }`; `CheckInput { business_name, city, phone, email, website, instagram,
+  tiktok, distinct_from }` → `CheckOut { ok, ...refusal details }` (`200` either way); `ListInput { status,
+  research_task_id, city, segment_key, bucket, limit, before_at, before_id }` → `ListOut { items:
+  [ProspectRow], next: {before_at, before_id} }`; `GetOut { prospect, scores, duplicate_candidates, ledger }`
+  (the pool's ledger entries about it, found among its newest 1000). Every key, hard and soft, is checked
+  against the blocklist (an objection to a business covers its domain and name too); a research task must be
+  open (`CONFLICT task_closed`); `update` refuses promoted and do-not-contact prospects (`not_editable`) and a
+  stale read before any check (`stale_revision {revision}`); request keys are stored as `prospects.create:<key>`
+  so they never meet another operation's. `usecases::hours::local_day(tz, now)` (L3 moves the calls fence's
+  hours there too) counts the caps' day from local midnight to the next one, so a clock change's day is 23 or
+  25 hours.
 
 ### Task L1-T5: score, decide, do-not-contact, lift, erase, settings, purge job
 
