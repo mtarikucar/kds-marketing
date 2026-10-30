@@ -58,6 +58,7 @@ pub const PHOTO_PUBLISH_ID: &str = "p_pub_url~v2-1.7300000000000000008";
 pub const VIDEO_ID: &str = "7300000000000000001";
 
 pub const TOKEN: &str = "/api/v2/oauth/token/";
+pub const REVOKE: &str = "/api/v2/oauth/revoke/";
 pub const USER_INFO: &str = "/api/v2/user/info/";
 pub const CREATOR_INFO: &str = "/api/v2/post/publish/creator_info/query/";
 pub const VIDEO_INIT: &str = "/api/v2/post/publish/video/init/";

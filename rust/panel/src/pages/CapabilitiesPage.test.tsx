@@ -347,6 +347,10 @@ describe('CapabilitiesPage', () => {
     const meta = within(section).getByRole('textbox', { name: tr.capabilities.hooks.metaUrl });
     expect(meta).toHaveValue(hooks.meta?.url);
     expect(within(section).getByText(tr.capabilities.hooks.verifyTokenHint)).toBeInTheDocument();
+    // The TikTok app's callback URL, with the events it acts on.
+    const tiktok = within(section).getByRole('textbox', { name: tr.capabilities.hooks.tiktokUrl });
+    expect(tiktok).toHaveValue(hooks.tiktok?.url);
+    expect(within(section).getByText(/authorization\.removed, post\.publish\.failed/)).toBeInTheDocument();
     // The first copy button copies the incoming-SMS address.
     await user.click(within(section).getAllByRole('button', { name: tr.common.copy })[0]);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(hooks.netgsm[0].url));
@@ -357,6 +361,16 @@ describe('CapabilitiesPage', () => {
     renderAt('/capabilities');
     expect(await screen.findByText(tr.capabilities.hooks.metaMissing)).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.metaUrl })).not.toBeInTheDocument();
+  });
+
+  it('shows no TikTok address while the platform has no TikTok app', async () => {
+    for (const tiktok of [null, undefined]) {
+      mockFetch({ ...routes, 'GET /api/connectors/hooks': { ...hooks, tiktok } });
+      const view = renderAt('/capabilities');
+      expect(await screen.findByText(tr.capabilities.hooks.netgsmHelp)).toBeInTheDocument();
+      expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.tiktokUrl })).not.toBeInTheDocument();
+      view.unmount();
+    }
   });
 
   it('never shows nor asks for the hook tokens without capabilities.manage', async () => {

@@ -185,6 +185,11 @@ async fn route(
     lead: Option<&super::leadgen::Fetched>,
     sender_name: Option<&str>,
 ) -> Result<&'static str, AppError> {
+    // TikTok's webhooks are about the account and its posts, never a conversation: the intake
+    // takes their effect (`webhook::receive_tiktok`); here they are done with, never deferred.
+    if event.provider == Provider::Tiktok {
+        return Ok("not_inbox");
+    }
     let mut erased = event.payload["erased_identity"] == true;
     if let Some(person) = event.payload["person_id"]
         .as_str()

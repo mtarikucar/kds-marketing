@@ -537,7 +537,7 @@ fn connector_adapters_never_name_an_http_client() {
 
 // The webhook gate: an inbound HTTP adapter like the panel's, so axum (and `http-body-util`, to
 // tell a body over its limit) is allowed here; the application core and the domain crates it
-// speaks; the provider adapters for their pure body parsers; `url` for the query of Meta's
+// speaks; the provider adapters for their pure body parsers (Meta's, NetGSM's, TikTok's); `url` for the query of Meta's
 // verification; `serde_json` to identify signed entries discarded by the parser; logging.
 // No HTTP client, no database crate: it stores through `jt_app`'s use
 // cases only.
@@ -548,6 +548,7 @@ const WEBHOOK_ALLOW: &[&str] = &[
     "jt_tenancy",
     "jt_meta",
     "jt_netgsm",
+    "jt_tiktok",
     "axum",
     "http-body-util",
     "url",

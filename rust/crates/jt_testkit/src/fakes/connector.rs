@@ -65,6 +65,22 @@ impl InboundEventRepo for MemTenant {
         Ok(rows)
     }
 
+    async fn find_external(
+        &mut self,
+        provider: Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError> {
+        Ok(self
+            .state()
+            .inbound_events
+            .iter()
+            .map(|s| &s.event)
+            .find(|e| {
+                e.workspace_id == self.ws && e.provider == provider && e.external_id == external_id
+            })
+            .cloned())
+    }
+
     async fn mail_subject(
         &mut self,
         capability: CapabilityId,

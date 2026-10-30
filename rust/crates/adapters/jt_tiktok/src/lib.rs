@@ -5,7 +5,8 @@
 //!
 //! [`TiktokConnector`] implements the connector ports of `jt_app` ([`Connector`],
 //! [`OAuthProvider`], [`Publisher`] with [`Publisher::resolve`] and [`Publisher::creator_info`],
-//! [`InsightsReader`]). Webhooks are not used: a post's status is polled.
+//! [`InsightsReader`]); [`webhook`] reads the webhooks TikTok sends (an account's lost access, a
+//! post's moves), and a post's status is also polled.
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
 //! [`jt_outbound::Egress::prepare`] and sent under `EgressScope::Connector("tiktok")`, so it can
@@ -38,7 +39,17 @@
 //! [`Connector::refresh`] is called every hour for every TikTok capability; it renews only a
 //! credential that expires within [`REFRESH_AHEAD`] (or has expired, or names no expiry), and
 //! answers `None` for the others. One without a refresh token cannot be renewed: `Auth`
-//! (reconnect).
+//! (reconnect). TikTok's refresh token "is valid for 365 days after the initial issuance": a year
+//! after the owner connected, the refresh is refused (`invalid_grant`, `Auth`) and the capability
+//! asks for a reconnection, as for any lost login.
+//!
+//! **Revocation** ([`Connector::revoke`], once the capability is retired):
+//! `POST {api}/v2/oauth/revoke/`, form `client_key, client_secret, token` (the access token):
+//! TikTok then drops the app from the account's authorized apps (the account's whole grant: the
+//! use cases revoke only when no other capability holds the account). An access token that
+//! has expired is renewed first ([`Connector::refresh`]'s call) and the fresh one revoked. Any
+//! 2xx, its empty struct included, is a success; a failure maps as the token endpoint's do.
+//! Revoking twice is harmless, so the call is tried once more when no answer arrived.
 //!
 //! **Calls.** Every call but the token calls and the upload carries the access token as
 //! `Authorization: Bearer`; a JSON body is sent as `application/json; charset=UTF-8`.
@@ -159,13 +170,17 @@
 //! of [`CANNOT_POST_CODES`]), the code in `cannot_post`; any other failure is the error. The
 //! screen and the choice it records live in `jt_app` (`usecases::studio::tiktok`).
 //!
-//! **Status** ([`Publisher::resolve`]). `PUBLISH_COMPLETE` is
+//! **Status** ([`Publisher::resolve`]). `PUBLISH_COMPLETE` with a public id is
 //! [`PublishResolution::Published`]: the receipt of the first `publicaly_available_post_id`
 //! (TikTok's own spelling), with the permalink `https://www.tiktok.com/@<username>/video/<id>`
 //! when a username is known (the first handle among `public["username"]`,
-//! `public["facts"]["username"]` and `public["asset"]["username"]`); TikTok names no public id for
-//! a post nobody else may see (`SELF_ONLY`), and the receipt then keeps the publish id, without a
-//! URL. `FAILED` is [`PublishResolution::Failed`] with "publish failed: <fail_reason>",
+//! `public["facts"]["username"]` and `public["asset"]["username"]`). TikTok names a public id only
+//! once the post is public and its moderation passed it: none ever for a post fewer may see
+//! (`SELF_ONLY`, friends, followers), none yet for a public post under review. Without one,
+//! `PUBLISH_COMPLETE` is [`PublishResolution::AwaitingPublicId`] with the receipt as sent (the
+//! publish id, no URL): posted, and the use cases wait a while for the public id of a post chosen
+//! public before they settle it as it is. `FAILED` is [`PublishResolution::Failed`] with
+//! "publish failed: <fail_reason>",
 //! `Permanent` (`auth_removed`, the creator having removed the app's access: `Auth`).
 //! `SEND_TO_USER_INBOX` (a draft: TikTok notified the creator in its inbox to finish the post in
 //! TikTok; <https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status>) is
@@ -190,11 +205,15 @@
 //! **Kinds.** TikTok serves one kind, `tiktok`. Every operation that takes `public` refuses one
 //! without it in `public["kind_key"]` (`Permanent`, "kind_key missing") and calls nothing.
 //!
-//! **Not covered** (spec §4): direct messages and comments (no public API for Login Kit apps),
-//! ads (`tiktok_ads`) and webhooks.
+//! **Webhooks** ([`webhook`]): the body of a delivery, once the gate checked its signature, read
+//! into the event the use cases store and its effect; the crate sends nothing for them.
+//!
+//! **Not covered** (spec §4): direct messages and comments (no public API for Login Kit apps)
+//! and ads (`tiktok_ads`).
 //!
 //! [`Connector`]: jt_app::ports::connectors::Connector
 //! [`Connector::refresh`]: jt_app::ports::connectors::Connector::refresh
+//! [`Connector::revoke`]: jt_app::ports::connectors::Connector::revoke
 //! [`OAuthProvider`]: jt_app::ports::connectors::OAuthProvider
 //! [`OAuthProvider::authorize_url`]: jt_app::ports::connectors::OAuthProvider::authorize_url
 //! [`OAuthProvider::exchange`]: jt_app::ports::connectors::OAuthProvider::exchange
@@ -203,6 +222,7 @@
 //! [`Publisher::resolve`]: jt_app::ports::connectors::Publisher::resolve
 //! [`Publisher::creator_info`]: jt_app::ports::connectors::Publisher::creator_info
 //! [`PublishResolution::Published`]: jt_app::ports::connectors::PublishResolution::Published
+//! [`PublishResolution::AwaitingPublicId`]: jt_app::ports::connectors::PublishResolution::AwaitingPublicId
 //! [`PublishResolution::Failed`]: jt_app::ports::connectors::PublishResolution::Failed
 //! [`PublishResolution::Pending`]: jt_app::ports::connectors::PublishResolution::Pending
 //! [`InsightsReader`]: jt_app::ports::connectors::InsightsReader
@@ -217,6 +237,7 @@ mod insights;
 mod oauth;
 mod ports;
 mod publish;
+pub mod webhook;
 
 use std::fmt;
 use std::sync::Arc;
