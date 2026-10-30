@@ -29,6 +29,7 @@ pub mod connectors;
 pub mod devices;
 pub mod files;
 pub mod inbox;
+pub mod prospects;
 pub mod studio;
 use inbox::*;
 
@@ -1095,6 +1096,77 @@ impl Default for InboxPolicy {
     }
 }
 
+/// The leads policy (spec 2026-10-30-leads-pool-outreach-design.md §6.1): the time zone the
+/// pool's daily caps count in, the pool's retention and caps, distribution and attachment
+/// retention. Stored as JSON (`workspace_policies.leads_policy`) and read key by key: a missing
+/// key, at any depth, reads as its default. The outreach part joins with the outreach phase.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LeadsPolicy {
+    /// An IANA time zone, `Europe/Istanbul` unless set.
+    pub timezone: String,
+    pub prospects: jt_prospects::ProspectsPolicy,
+    pub distribution: DistributionPolicy,
+    pub attachments: AttachmentsPolicy,
+}
+
+impl Default for LeadsPolicy {
+    fn default() -> Self {
+        Self {
+            timezone: crate::usecases::hours::DEFAULT_TZ.to_owned(),
+            prospects: jt_prospects::ProspectsPolicy::default(),
+            distribution: DistributionPolicy::default(),
+            attachments: AttachmentsPolicy::default(),
+        }
+    }
+}
+
+/// How new journeys get their owner (spec §3.9).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistributionMode {
+    /// The rules, then the implicit default rule, assign every new journey.
+    #[default]
+    Auto,
+    /// Only the listed rules assign; every other new journey waits for a manager.
+    Manual,
+}
+
+/// Distribution's part of the leads policy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DistributionPolicy {
+    pub mode: DistributionMode,
+    /// How many times an assignment past its SLA moves to the next member, `0..=10`.
+    pub max_reassignments: u8,
+}
+
+impl Default for DistributionPolicy {
+    fn default() -> Self {
+        Self {
+            mode: DistributionMode::Auto,
+            max_reassignments: 2,
+        }
+    }
+}
+
+/// Mail attachments' part of the leads policy. 180 days is the owner's decision of 2026-10-30
+/// (spec §15 Q2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AttachmentsPolicy {
+    /// Days an inbound attachment is kept.
+    pub retention_days: u16,
+}
+
+impl Default for AttachmentsPolicy {
+    fn default() -> Self {
+        Self {
+            retention_days: 180,
+        }
+    }
+}
+
 /// The workspace-wide policies.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkspacePolicy {
@@ -1103,6 +1175,8 @@ pub struct WorkspacePolicy {
     pub agent_checkin_interval_minutes: u32,
     /// Workspace display labels for the nine fixed inbox stages; absent overrides use defaults.
     pub inbox: InboxPolicy,
+    /// The prospect pool's, distribution's and attachments' settings.
+    pub leads: LeadsPolicy,
 }
 
 impl Default for WorkspacePolicy {
@@ -1110,6 +1184,7 @@ impl Default for WorkspacePolicy {
         WorkspacePolicy {
             agent_checkin_interval_minutes: DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES,
             inbox: InboxPolicy::default(),
+            leads: LeadsPolicy::default(),
         }
     }
 }
@@ -1513,6 +1588,9 @@ pub trait TenantRepos: Send + Sync {
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
     fn calls(&mut self) -> &mut dyn crate::ports::calls::CallRepo;
     fn device_commands(&mut self) -> &mut dyn crate::ports::devices::DeviceCommandRepo;
+    fn prospects(&mut self) -> &mut dyn crate::ports::prospects::ProspectRepo;
+    fn research_tasks(&mut self) -> &mut dyn crate::ports::prospects::ResearchTaskRepo;
+    fn prospect_blocklist(&mut self) -> &mut dyn crate::ports::prospects::BlocklistRepo;
 
     fn consents(&mut self) -> &mut dyn ConsentRepo;
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;

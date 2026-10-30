@@ -1,10 +1,11 @@
 //! Research tasks' briefs (spec §3.7): what to look for, where, and what disqualifies.
 
-use jt_strategy::Area;
+use jt_strategy::{Area, StrategyVersionId};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{ProspectError, Recorder, bounded, chars, invalid, language_ok};
+use crate::{ProspectError, Recorder, ResearchTaskId, bounded, chars, invalid, language_ok};
 
 /// What a research task asks agents to find. An ICP entry's brief names its segment; an ad-hoc
 /// one may not.
@@ -130,4 +131,29 @@ pub struct Claim {
     pub by: Recorder,
     #[serde(with = "time::serde::rfc3339")]
     pub until: OffsetDateTime,
+}
+
+/// A research task (spec §3.7): a brief agents fill the pool from, with its caps.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResearchTask {
+    pub id: ResearchTaskId,
+    pub workspace_id: WorkspaceId,
+    pub kind: TaskKind,
+    /// The approved strategy version it was made under.
+    pub strategy_version_id: StrategyVersionId,
+    pub brief: Brief,
+    /// The digest of that version's rubric.
+    pub rubric_digest: String,
+    /// Prospects created per local day for this task, `1..=500`.
+    pub daily_cap: u16,
+    pub status: TaskStatus,
+    #[serde(default)]
+    pub claim: Option<Claim>,
+    pub created_by: Recorder,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub closed_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub close_note: String,
 }

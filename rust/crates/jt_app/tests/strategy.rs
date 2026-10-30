@@ -141,6 +141,15 @@ impl TenantRepos for SpyTenant {
     fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
         self.inner.device_commands()
     }
+    fn prospects(&mut self) -> &mut dyn jt_app::ports::prospects::ProspectRepo {
+        self.inner.prospects()
+    }
+    fn research_tasks(&mut self) -> &mut dyn jt_app::ports::prospects::ResearchTaskRepo {
+        self.inner.research_tasks()
+    }
+    fn prospect_blocklist(&mut self) -> &mut dyn jt_app::ports::prospects::BlocklistRepo {
+        self.inner.prospect_blocklist()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.inner.consents()

@@ -18,6 +18,7 @@ pub mod events;
 pub mod failure;
 pub mod files;
 pub mod groups;
+pub mod hours;
 pub mod inbox;
 pub mod jobs;
 pub mod ledger;

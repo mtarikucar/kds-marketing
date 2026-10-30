@@ -4,7 +4,7 @@ use jt_strategy::Rubric;
 use serde::{Deserialize, Serialize};
 
 use crate::evidence::validate_source_format;
-use crate::{ProspectError, SourceRefInput, chars, invalid};
+use crate::{ProspectError, SourceRef, SourceRefInput, chars, invalid};
 
 /// A score band, the same under every rubric, so reports compare across rubric versions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -128,4 +128,26 @@ pub fn validate_score(input: &ScoreInput, rubric: &Rubric) -> Result<(), Prospec
         return Err(invalid("score", "not_the_sum_of_points"));
     }
     Ok(())
+}
+
+/// A score's reason as stored.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reason {
+    pub criterion: String,
+    pub points: u8,
+    pub evidence: String,
+    #[serde(default)]
+    pub source: Option<SourceRef>,
+}
+
+impl ReasonInput {
+    /// The stored reason: the evidence trimmed, the source as stored.
+    pub fn into_reason(self) -> Reason {
+        Reason {
+            criterion: self.criterion,
+            points: self.points,
+            evidence: self.evidence.trim().to_owned(),
+            source: self.source.map(SourceRefInput::into_source),
+        }
+    }
 }

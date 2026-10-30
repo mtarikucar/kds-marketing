@@ -188,6 +188,7 @@ const APP_ALLOW: &[&str] = &[
     "jt_calls",
     "jt_devices",
     "jt_device_protocol",
+    "jt_prospects",
     "serde",
     "serde_json",
     "uuid",

@@ -31,3 +31,5 @@ pub mod platform_access_contract;
 
 pub mod devices_bridge_contract;
 pub mod devices_contract;
+
+pub mod prospects_contract;

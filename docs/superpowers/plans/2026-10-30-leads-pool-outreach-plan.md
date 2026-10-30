@@ -392,6 +392,24 @@ pub trait ProspectRepo: Send + Sync {
 ```
 - `update` and `set_status` recompute `purge_after` from the policy passed by the use case; the repo never reads
   a clock.
+- As built (contract changes): `ProspectRepo` gains `keys_of(id) -> Vec<Key>` (update re-checks only the keys an
+  edit adds; erase and do-not-contact hash what the row holds); `set_status` takes `at: OffsetDateTime` too (it
+  sets `updated_at`, which the unpromoted retention counts from: a reopen restarts it) and refuses `Promoted`
+  (`set_promoted` does that); `record_score` moves neither the revision nor `updated_at` (a score is not an
+  edit) and makes the row the latest only when it is not older than the latest; `update` writes the whole record
+  and its keys (the stored revision becomes `expected_revision + 1`). `Page<T> { items, next: Option<ListCursor
+  { created_at, id: Uuid }> }`, `ProspectQuery { status, research_task_id, city, segment_key, bucket, limit, after
+  }`, `ProspectRow::of(&Prospect)` (no contact values: `fields` names what is held) and `prospect_matches` (the
+  one filter both adapters list by) live in `ports/prospects.rs`, with `BlockReason { Rejected, DoNotContact,
+  Erased }` and `is_key_hash`. `ScoreRow.reasons` is `Vec<jt_prospects::Reason>` (the stored form of
+  `ReasonInput`, `ReasonInput::into_reason`). `ResearchTaskRepo`: `insert(&ResearchTask) -> bool` (`false` when
+  the ICP entry already has an open standing task of that version), `get`, `lock`, `list(&ResearchTaskQuery {
+  status, limit, after }) -> Page<ResearchTask>`, `open_standing(version)`, `set_status(id, status, at, note)`,
+  `set_claim(id, Option<&Claim>)`; `jt_prospects::ResearchTask` is spec §3.7's record. `LeadsPolicy { timezone,
+  prospects, distribution: DistributionPolicy { mode: DistributionMode { Auto, Manual }, max_reassignments },
+  attachments: AttachmentsPolicy { retention_days } }`: the outreach part joins in L4-T3 with `jt_outreach`'s
+  `WarmupPolicy` and `Frequency`. The pool lock is `pg_advisory_xact_lock(hashtextextended('prospect_pool:' || ws,
+  0))`.
 - The fake keeps the same uniqueness and upgrade rules (no "count-mock drift": the fake's counts are computed from
   its rows; memory "enrollment-progress count mock drift").
 - [ ] **Contract tests** (fake and Postgres): `insert_then_get_round_trips_every_field`,

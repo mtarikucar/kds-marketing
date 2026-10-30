@@ -20,7 +20,7 @@ mod prospect;
 mod score;
 mod status;
 
-pub use brief::{Brief, Claim, TaskKind, TaskStatus, validate_brief};
+pub use brief::{Brief, Claim, ResearchTask, TaskKind, TaskStatus, validate_brief};
 pub use evidence::{Evidence, Recorder, SourceRef, SourceRefInput};
 pub use ids::{ProspectId, ResearchTaskId};
 pub use keys::{
@@ -33,7 +33,7 @@ pub use prospect::{
     Field, FieldInput, FieldName, Origin, OriginVia, Promotion, Prospect, ScoreSummary, SetFields,
     Signal, SignalInput, SizeHint, UpdateInput, apply_update, build, validate_create,
 };
-pub use score::{Bucket, ReasonInput, ScoreInput, bucket, validate_score};
+pub use score::{Bucket, Reason, ReasonInput, ScoreInput, bucket, validate_score};
 pub use status::{
     DncReason, ProspectStatus, RejectReason, StatusError, StatusEvent, next_status, scrub_for_dnc,
 };

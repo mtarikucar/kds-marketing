@@ -124,6 +124,17 @@ impl TenantRepos for PgTenantRepos {
     fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
         self
     }
+    fn prospects(&mut self) -> &mut dyn jt_app::ports::prospects::ProspectRepo {
+        self
+    }
+
+    fn research_tasks(&mut self) -> &mut dyn jt_app::ports::prospects::ResearchTaskRepo {
+        self
+    }
+
+    fn prospect_blocklist(&mut self) -> &mut dyn jt_app::ports::prospects::BlocklistRepo {
+        self
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
