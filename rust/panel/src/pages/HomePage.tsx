@@ -298,6 +298,8 @@ function itemText(t: TFunction, item: WorkItem): string {
       return t('home.pending.reconnect_connector', { name: item.name });
     case 'voice_bridge_offline':
       return t('home.pending.voice_bridge_offline', { name: item.name });
+    case 'phone_offline':
+      return t('home.pending.phone_offline', { name: item.name });
     case 'inbound_events':
       // `count` picks the plural form; `n` is what is shown, a count of the cap as at least that many.
       return t('home.pending.inbound_events', {

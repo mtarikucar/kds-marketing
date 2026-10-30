@@ -117,3 +117,9 @@ async fn binding_refresh_invalidates_old_intents() {
     let uow = jt_testkit::fakes::InMemoryUow::new();
     jt_testkit::studio_contract::binding_refresh_invalidates_old_intents(&uow).await;
 }
+
+#[tokio::test]
+async fn receipt_upgrade_and_lookup() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::receipt_upgrade_and_lookup(&uow).await;
+}

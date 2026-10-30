@@ -294,6 +294,9 @@ fn every_job_has_a_lock_named_after_it() {
             "voice_bridge_health",
             "call_timers",
             "purge_call_commands",
+            "device_bridge_health",
+            "device_command_expiry",
+            "device_file_purge",
         ]
     );
     for job in Job::ALL {

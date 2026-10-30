@@ -8,6 +8,7 @@ import { CapabilityStatusBadge } from '@/components/StatusBadges';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
 import { PbxPolicyPanel } from '@/pages/capabilities/PbxPolicyPanel';
+import { PhoneCard } from '@/pages/capabilities/PhoneCard';
 import { VoiceBridgePanel } from '@/pages/capabilities/VoiceBridgePanel';
 import { connectsByOAuth, isConnectable, providerOf } from '@/lib/connectors';
 import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/format';
@@ -36,8 +37,12 @@ export function connectorActions(item: CapabilityOut, canManage: boolean, canPro
   return actions;
 }
 
-/** A policy in a few short lines: hours, caps, human approval, how long a verification lasts. */
-export function policySummary(t: TFunction, language: string, policy: Policy): string[] {
+/**
+ * A policy in a few short lines: hours, caps, human approval, how long a verification lasts. A
+ * capability verified by its bridge's heartbeat (`byHeartbeat`) has no line for that: its policy's
+ * age does not apply, its verification lasts a minute after its bridge's last registration.
+ */
+export function policySummary(t: TFunction, language: string, policy: Policy, byHeartbeat = false): string[] {
   const lines: string[] = [];
   const hours = policy.active_hours;
   if (hours) {
@@ -55,19 +60,26 @@ export function policySummary(t: TFunction, language: string, policy: Policy): s
     lines.push(t('capabilities.policy.spendCap', { amount: formatNumber(policy.spend_cap_minor, language) }));
   }
   if (policy.requires_human_approval) lines.push(t('capabilities.policy.humanApproval'));
-  lines.push(
-    policy.verify_max_age_days === 0
-      ? t('capabilities.policy.verifyNever')
-      : t('capabilities.policy.verifyAge', { days: policy.verify_max_age_days }),
-  );
+  if (!byHeartbeat) {
+    lines.push(
+      policy.verify_max_age_days === 0
+        ? t('capabilities.policy.verifyNever')
+        : t('capabilities.policy.verifyAge', { days: policy.verify_max_age_days }),
+    );
+  }
   return lines;
 }
+
+/** The kinds verified only by their bridge's registrations (`jt_capability`'s heartbeat kinds). */
+const HEARTBEAT_KINDS = new Set(['voice_bridge', 'phone']);
 
 /**
  * One capability: name, kind, how it is reached, its effective status, last verification, policy,
  * the budget items it spends from and the groups it is in. Actions show only for someone who may
  * take them, and never on a retired capability; a connector is verified by its probe, a voice
- * bridge by its own registration, neither here.
+ * bridge or a phone by its bridge's registrations, neither here. A phone shows what its bridge
+ * reported of it, and its last commands to who may use phones (`canUsePhones`), read again every
+ * heartbeat while `livePhones` (the Devices tab is shown).
  */
 export function CapabilityCard({
   item,
@@ -82,6 +94,9 @@ export function CapabilityCard({
   onConnector,
   connectorBusy = false,
   canCall = false,
+  canUsePhones = false,
+  livePhones = false,
+  readAt,
 }: {
   item: CapabilityOut;
   budgetItems: readonly BudgetItemOut[];
@@ -97,12 +112,19 @@ export function CapabilityCard({
   connectorBusy?: boolean;
   /** Whoever views it may place calls (`calls.work`): a verified PBX links to the call log. */
   canCall?: boolean;
+  /** Whoever views it may use phones (`devices.work`): a phone shows its last commands. */
+  canUsePhones?: boolean;
+  /** The Devices tab is shown: a phone's log is read again every heartbeat. */
+  livePhones?: boolean;
+  /** When `item` was read (its query's `dataUpdatedAt`): a phone's age is told as of then. */
+  readAt?: number;
 }) {
   const { t, i18n } = useTranslation();
   const c = item.capability;
   const retired = c.status === 'retired';
   const mutable = canManage && !retired;
   const bridge = c.kind_key === 'voice_bridge';
+  const byHeartbeat = HEARTBEAT_KINDS.has(c.kind_key);
   const connection = c.reach === 'connector' && !retired && providerOf(c.kind_key) !== null;
   const connecting = onConnector ? connectorActions(item, canManage, canProbe) : [];
   const budgetName = (id: string) => budgetItems.find((b) => b.item.id === id)?.item.name ?? id;
@@ -144,7 +166,7 @@ export function CapabilityCard({
             <dt className="text-caption text-muted-foreground">{t('capabilities.policy.label')}</dt>
             <dd>
               <ul className="flex flex-col gap-0.5 text-foreground">
-                {policySummary(t, i18n.language, c.policy).map((line) => (
+                {policySummary(t, i18n.language, c.policy, byHeartbeat).map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ul>
@@ -205,6 +227,7 @@ export function CapabilityCard({
         )}
         {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
         {bridge && !retired && <VoiceBridgePanel capability={c} />}
+        {c.kind_key === 'phone' && !retired && <PhoneCard item={item} canWork={canUsePhones} live={livePhones} readAt={readAt} />}
         {canCall && c.kind_key === 'netgsm_pbx' && c.status === 'verified' && (
           <div>
             <Button asChild size="sm" variant="outline">
@@ -214,7 +237,7 @@ export function CapabilityCard({
         )}
         {mutable && (
           <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
-            {c.reach !== 'connector' && !bridge && (
+            {c.reach !== 'connector' && !byHeartbeat && (
               <Button size="sm" onClick={() => onAction('verify', item)}>
                 {t('capabilities.actions.verify')}
               </Button>

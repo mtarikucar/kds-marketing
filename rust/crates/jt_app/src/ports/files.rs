@@ -1,6 +1,6 @@
 //! Workspace-scoped binary storage, separate from provider publishing.
 use super::{connectors::MediaUpload, studio::FileId};
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use async_trait::async_trait;
 use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
@@ -27,6 +27,26 @@ pub trait ByteSource: Send {
     async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError>;
 }
 
+/// A stored file opened to be read as a stream ([`FileStore::read_stream`]): its type and length,
+/// and its bytes, chunk after chunk. A store checks what it read once it has read it all: a file
+/// that does not pass (its bytes are not the ones it stored) ends with an error before its last
+/// chunk, so a reader that counts the bytes against `size_bytes` never takes it for whole.
+pub struct StreamedFile {
+    pub mime: String,
+    pub size_bytes: u64,
+    pub bytes: Box<dyn ByteSource>,
+}
+
+/// Bytes held whole, yielded as one chunk: [`FileStore::read_stream`]'s default.
+struct Whole(Option<Vec<u8>>);
+
+#[async_trait]
+impl ByteSource for Whole {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        Ok(self.0.take())
+    }
+}
+
 #[async_trait]
 pub trait FileStore: Send + Sync {
     /// Verify active storage with a nonempty write, sync, readback and cleanup outside tenants.
@@ -39,6 +59,29 @@ pub trait FileStore: Send + Sync {
         upload: MediaUpload,
     ) -> Result<StoredFile, AppError>;
     async fn read(&self, ws: WorkspaceId, id: FileId) -> Result<MediaUpload, AppError>;
+    /// File `id`, as [`FileStore::read`] reads it, opened to be read as a stream: a store that can
+    /// holds a chunk of it in memory at a time (the disk store reads it in chunks, hashing them,
+    /// and checks the hash before the last one); this default reads it whole first. What serves
+    /// files to the outside (the signed retrieval route) reads them this way, so a large file, or
+    /// many reads of one at once, are never held whole.
+    async fn read_stream(&self, ws: WorkspaceId, id: FileId) -> Result<StreamedFile, AppError> {
+        let upload = self.read(ws, id).await?;
+        Ok(StreamedFile {
+            mime: upload.mime,
+            size_bytes: upload.bytes.len() as u64,
+            bytes: Box::new(Whole(Some(upload.bytes))),
+        })
+    }
+    /// Whether file `id` is stored: from what the store keeps of it alone where it can (the disk
+    /// store reads its header); this default reads it ([`FileStore::read`], `NOT_FOUND` read as
+    /// `false`). Another workspace's file is not this one's.
+    async fn exists(&self, ws: WorkspaceId, id: FileId) -> Result<bool, AppError> {
+        match self.read(ws, id).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.code == ErrorCode::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
     /// Stores, as [`FileStore::put`] does and with the same checks, the file of type `mime` named
     /// `filename` whose bytes `source` yields. A store that can keeps at most a chunk in memory
     /// (the disk store writes the chunks to a temporary file, hashing them as they come); this
@@ -68,6 +111,18 @@ pub trait FileStore: Send + Sync {
         id: FileId,
         expires_at: OffsetDateTime,
     ) -> Result<Url, AppError>;
+    /// An address, as [`FileStore::provider_url`] signs one, for a device's download (a
+    /// `push_file`) or an agent's look at a file (a result's `file_url`): the store serves it from a
+    /// pool apart from its providers' fetches, so a phone's downloads never hold up a publish. This
+    /// default is the provider's address.
+    async fn device_url(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        expires_at: OffsetDateTime,
+    ) -> Result<Url, AppError> {
+        self.provider_url(ws, id, expires_at).await
+    }
     async fn delete(&self, ws: WorkspaceId, id: FileId) -> Result<(), AppError>;
 }
 /// Before T5 wires a disk adapter, every operation refuses explicitly.

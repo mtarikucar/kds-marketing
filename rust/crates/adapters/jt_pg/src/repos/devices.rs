@@ -24,6 +24,10 @@ use crate::uow::PgTenantRepos;
 const COLUMNS: &str = "id, workspace_id, capability_id, seq, payload, status, attempts, \
                        leased_at, leased_by, expires_at, result, reason, detail, requested_by, \
                        created_at, done_at";
+/// [`COLUMNS`] without the result, read as null: what a phone's log reads (`list`).
+const LOG_COLUMNS: &str = "id, workspace_id, capability_id, seq, payload, status, attempts, \
+                           leased_at, leased_by, expires_at, null::jsonb as result, reason, \
+                           detail, requested_by, created_at, done_at";
 
 #[derive(sqlx::FromRow)]
 struct Record {
@@ -88,7 +92,7 @@ fn reason_from(key: &str) -> FailReason {
 }
 
 /// The columns an [`ExpiredRecord`] is read from: no payload.
-const EXPIRED_COLUMNS: &str = "id, capability_id, seq, kind, created_at, leased_at";
+const EXPIRED_COLUMNS: &str = "id, capability_id, seq, kind, created_at, leased_at, leased_by";
 
 #[derive(sqlx::FromRow)]
 struct ExpiredRecord {
@@ -98,7 +102,11 @@ struct ExpiredRecord {
     kind: String,
     created_at: OffsetDateTime,
     leased_at: Option<OffsetDateTime>,
+    leased_by: Option<Uuid>,
 }
+
+/// The columns a [`FileRecord`] is read from.
+const FILE_COLUMNS: &str = "id, mime, size_bytes, sha256, uploaded_by, created_at, expires_at";
 
 /// A `device_files` row.
 #[derive(sqlx::FromRow)]
@@ -313,19 +321,25 @@ impl DeviceCommandRepo for PgTenantRepos {
         Ok(Finished::Applied(Box::new(record.into_row()?)))
     }
 
-    async fn expire_due(&mut self, now: OffsetDateTime) -> Result<Vec<ExpiredCommand>, AppError> {
-        // The due rows are picked and locked once, in a materialized CTE: one that another bundle
-        // holds (a bridge's results, a poll) is passed over, not waited for.
+    async fn expire_due(
+        &mut self,
+        now: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ExpiredCommand>, AppError> {
+        // The due rows are picked and locked once, in a materialized CTE, the oldest first and at
+        // most `limit`: one that another bundle holds (a bridge's results, a poll) is passed
+        // over, not waited for.
         let mut records: Vec<ExpiredRecord> = sqlx::query_as(&format!(
             "with due as materialized (select id from device_commands \
              where workspace_id = $1 and status in ('queued', 'leased') and expires_at <= $2 \
-             for update skip locked) \
+             order by seq limit $3 for update skip locked) \
              update device_commands set status = 'expired', done_at = $2 \
              where workspace_id = $1 and id in (select id from due) \
              returning {EXPIRED_COLUMNS}"
         ))
         .bind(self.workspace_id().as_uuid())
         .bind(now)
+        .bind(i64::from(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE)))
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "expire device commands"))?;
@@ -339,6 +353,7 @@ impl DeviceCommandRepo for PgTenantRepos {
                 kind: r.kind,
                 created_at: r.created_at,
                 leased_at: r.leased_at,
+                leased_by: r.leased_by.map(ApiKeyId),
             })
             .collect())
     }
@@ -361,7 +376,7 @@ impl DeviceCommandRepo for PgTenantRepos {
         limit: u32,
     ) -> Result<Vec<DeviceCommandRow>, AppError> {
         let records: Vec<Record> = sqlx::query_as(&format!(
-            "select {COLUMNS} from device_commands where workspace_id = $1 \
+            "select {LOG_COLUMNS} from device_commands where workspace_id = $1 \
              and capability_id = $2 order by seq desc limit $3"
         ))
         .bind(self.workspace_id().as_uuid())
@@ -402,31 +417,67 @@ impl DeviceCommandRepo for PgTenantRepos {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let records: Vec<FileRecord> = sqlx::query_as(
-            "select id, mime, size_bytes, sha256, uploaded_by, created_at, expires_at \
-             from device_files where workspace_id = $1 and id = any($2) order by id",
-        )
+        let records: Vec<FileRecord> = sqlx::query_as(&format!(
+            "select {FILE_COLUMNS} from device_files where workspace_id = $1 and id = any($2) \
+             order by id"
+        ))
         .bind(self.workspace_id().as_uuid())
         .bind(ids)
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "read device files"))?;
-        records
-            .into_iter()
-            .map(|r| {
-                Ok(DeviceFile {
-                    id: r.id,
-                    mime: r.mime,
-                    size_bytes: stored(
-                        u64::try_from(r.size_bytes).ok(),
-                        "device_files.size_bytes",
-                    )?,
-                    sha256: r.sha256,
-                    uploaded_by: ApiKeyId(r.uploaded_by),
-                    created_at: r.created_at,
-                    expires_at: r.expires_at,
-                })
-            })
-            .collect()
+        records.into_iter().map(FileRecord::into_file).collect()
+    }
+
+    async fn expired_files(
+        &mut self,
+        now: OffsetDateTime,
+        after: Option<(OffsetDateTime, Uuid)>,
+        limit: u32,
+    ) -> Result<Vec<DeviceFile>, AppError> {
+        // `device_files_expiry` is `(workspace_id, expires_at)`; `after` is compared as a row, in
+        // the order the files are read in.
+        let records: Vec<FileRecord> = sqlx::query_as(&format!(
+            "select {FILE_COLUMNS} from device_files where workspace_id = $1 \
+             and expires_at <= $2 \
+             and ($4::timestamptz is null or (expires_at, id) > ($4::timestamptz, $5::uuid)) \
+             order by expires_at, id limit $3"
+        ))
+        .bind(self.workspace_id().as_uuid())
+        .bind(now)
+        .bind(i64::from(limit.clamp(1, MAX_DEVICE_COMMAND_PAGE)))
+        .bind(after.map(|(at, _)| at))
+        .bind(after.map(|(_, id)| id))
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read expired device files"))?;
+        records.into_iter().map(FileRecord::into_file).collect()
+    }
+
+    async fn delete_file(&mut self, id: Uuid) -> Result<bool, AppError> {
+        let deleted = sqlx::query("delete from device_files where workspace_id = $1 and id = $2")
+            .bind(self.workspace_id().as_uuid())
+            .bind(id)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "delete device file"))?;
+        Ok(deleted.rows_affected() > 0)
+    }
+}
+
+impl FileRecord {
+    fn into_file(self) -> Result<DeviceFile, AppError> {
+        Ok(DeviceFile {
+            id: self.id,
+            mime: self.mime,
+            size_bytes: stored(
+                u64::try_from(self.size_bytes).ok(),
+                "device_files.size_bytes",
+            )?,
+            sha256: self.sha256,
+            uploaded_by: ApiKeyId(self.uploaded_by),
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+        })
     }
 }

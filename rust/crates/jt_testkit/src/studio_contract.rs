@@ -1398,3 +1398,149 @@ pub async fn binding_refresh_invalidates_old_intents(uow: &dyn UnitOfWork) {
     );
     tx.commit().await.unwrap();
 }
+
+/// A post settled under a provisional receipt (no page: TikTok's publish id) takes its public
+/// receipt once (`upgrade_receipt`): the attempt's evidence and its publication's id and page
+/// change together, `studio.publish.public_id` is written, the same receipt again changes
+/// nothing; `attempt_by_receipt` finds the attempt by its observed receipt, then by its settled
+/// one, and never another capability's.
+pub async fn receipt_upgrade_and_lookup(uow: &dyn UnitOfWork) {
+    use jt_app::ports::connectors::PublishReceipt;
+    let f = ready(uow).await;
+    let cap = f.slot.capability_id;
+    let provisional = PublishReceipt {
+        external_id: "v_pub_file~v2-1.7".into(),
+        url: None,
+    };
+    let public = PublishReceipt {
+        external_id: "7300000000000000001".into(),
+        url: Some(
+            "https://www.tiktok.com/@jeeta_test/video/7300000000000000001"
+                .parse()
+                .unwrap(),
+        ),
+    };
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let a = tx
+        .studio()
+        .claim_publication(FIXED_NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tx.studio()
+            .attempt_by_receipt(cap, &provisional.external_id)
+            .await
+            .unwrap(),
+        None
+    );
+    tx.studio()
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Observed(provisional.clone()),
+            FIXED_NOW,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let observed = tx
+        .studio()
+        .attempt_by_receipt(cap, &provisional.external_id)
+        .await
+        .unwrap()
+        .expect("found by its observed receipt");
+    assert_eq!(observed.id(), a.id());
+    assert_eq!(
+        tx.studio()
+            .attempt_by_receipt(CapabilityId::new_v7(), &provisional.external_id)
+            .await
+            .unwrap(),
+        None
+    );
+    tx.studio()
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Succeeded(provisional.clone()),
+            FIXED_NOW + Duration::minutes(15),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        tx.studio()
+            .attempt_by_receipt(cap, &provisional.external_id)
+            .await
+            .unwrap()
+            .map(|a| a.id()),
+        Some(a.id())
+    );
+    let at = FIXED_NOW + Duration::minutes(40);
+    assert!(
+        tx.studio()
+            .upgrade_receipt(a.id(), public.clone(), at)
+            .await
+            .unwrap()
+    );
+    tx.commit().await.unwrap();
+
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let (attempts, _) = tx.studio().slot_evidence(f.slot.id).await.unwrap();
+    assert_eq!(
+        attempts[0].outcome(),
+        Some(&jt_studio::PublishOutcome::Succeeded(public.clone()))
+    );
+    let publications = tx.studio().list_publications().await.unwrap();
+    assert_eq!(publications.len(), 1);
+    assert_eq!(publications[0].external_id, public.external_id);
+    assert_eq!(publications[0].url, public.url);
+    assert_eq!(publications[0].attempt_id, a.id());
+    assert_eq!(
+        tx.studio()
+            .attempt_by_receipt(cap, &public.external_id)
+            .await
+            .unwrap()
+            .map(|a| a.id()),
+        Some(a.id())
+    );
+    assert_eq!(
+        tx.studio()
+            .attempt_by_receipt(cap, &provisional.external_id)
+            .await
+            .unwrap(),
+        None
+    );
+    let upgrades = tx
+        .ledger()
+        .list(jt_app::ports::LedgerFilter {
+            action_prefix: Some("studio.publish.public_id".into()),
+            actor_kind: None,
+            agent_connection_id: None,
+            limit: 10,
+            before_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(upgrades.len(), 1);
+    assert_eq!(upgrades[0].entry.at, at);
+    // The same receipt again: nothing changes, nothing is written; another one is refused.
+    assert!(
+        !tx.studio()
+            .upgrade_receipt(a.id(), public.clone(), at + Duration::hours(1))
+            .await
+            .unwrap()
+    );
+    let other = PublishReceipt {
+        external_id: "7300000000000000002".into(),
+        url: None,
+    };
+    assert!(
+        tx.studio()
+            .upgrade_receipt(a.id(), other, at)
+            .await
+            .is_err()
+    );
+}

@@ -7,8 +7,18 @@
 //!   `getprop.txt` (a subset of non-identifying properties), `ime_list.txt`, `wm_size.txt`,
 //!   `current_focus.txt`, `dump_written.txt`, `miui_theme_stack_trace.txt`, the first phone of
 //!   `devices_l.txt`, and `input_method_other_ime.txt` (two sections of `dumpsys input_method`);
-//! - edited from that last one: `input_method_adbime_unbound.txt` (ADBKeyBoard selected, bound to
-//!   no field) and `input_method_bound.txt` (bound to a focused field);
+//! - read on that phone with a text field focused (task D4), the same two sections:
+//!   `input_method_before_set.txt` (its own keyboard holds the field) and `input_method_bound.txt`
+//!   (read at once after `ime set` to ADBKeyBoard, which already holds the field: the switch was
+//!   too fast for any state in between to be read);
+//! - put together from those two, as no capture shows it: `input_method_in_between.txt` (the
+//!   manager switched to ADBKeyBoard, the app's client still bound to the keyboard before);
+//! - read on that phone, awake and unlocked (task D4): `window_state_awake.txt`, what an
+//!   observation's `dumpsys window | grep …` gives; written in its shape with the values D4 read
+//!   on the phone asleep behind its lock screen (the focus on `NotificationShade`, the keyguard
+//!   `showing=true`): `window_state_locked_asleep.txt`, and the same with a second display
+//!   dumped before the phone's own, awake as Android always reports one that is not the default:
+//!   `window_state_two_displays.txt`;
 //! - written by hand in the shapes the plan's findings record: `dump_whatsapp.xml`,
 //!   `dump_numeric_refs.xml`, `idle_state_error.txt`, `inject_events_refusal.txt` and the other
 //!   phones of `devices_l.txt`.
@@ -28,12 +38,12 @@ use jeeta_device_bridge::driver::android::{
 };
 use jeeta_device_bridge::{ContentType, DriverError, FileTransfer, PhoneDriver, PhoneRegistry};
 use jt_device_protocol::{
-    CommandResult, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, MAX_DETAIL_CHARS,
-    Observation, Platform, Screen, TEXT_UNICODE,
+    CommandResult, DeviceCommand, DeviceKey, Element, ElementTarget, FailReason, KEY_WAKEUP,
+    MAX_DETAIL_CHARS, Observation, Platform, Screen, TEXT_UNICODE,
 };
 use uuid::Uuid;
 
-const SERIAL: &str = "18cf9fbb";
+const SERIAL: &str = "0a1b2c3d";
 const ADB_IME: &str = "com.android.adbkeyboard/.AdbIME";
 /// The owner's phone's own keyboard, its input method when the tests begin.
 const PREFF: &str = "com.preff.kb.xm/com.preff.kb.LatinIME";
@@ -44,6 +54,9 @@ const DUMP_LINE: &str =
 const CAT_LINE: &str = "exec-out cat /data/local/tmp/jeeta_ui.xml";
 const RM_LINE: &str = "shell rm -f /data/local/tmp/jeeta_ui.xml";
 const HISTORY_LINE: &str = "shell settings get secure input_methods_subtype_history";
+/// What an observation reads of the window manager: the focus, and whether the screen is on and
+/// locked.
+const WINDOW_LINE: &str = "shell dumpsys window | grep -e '^WINDOW MANAGER ' -e 'Display: mDisplayId=' -e mCurrentFocus= -e mAwake= -e isKeyguardShowing= -e showing= -e interactiveState=";
 const FILE_ID: Uuid = Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0f11);
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake screen";
 const DOWNLOAD: &[u8] = b"the file the agent pushes";
@@ -91,11 +104,11 @@ struct State {
     current_ime: String,
     enabled_imes: Vec<String>,
     adbkeyboard_installed: bool,
-    /// After ADBKeyBoard is selected, `dumpsys input_method` says it is bound to no field this
-    /// many times.
+    /// After ADBKeyBoard is selected, `dumpsys input_method` still shows the keyboard before
+    /// holding the field this many times.
     unbound_polls: usize,
-    /// Meanwhile it shows the app's field served, but the app still bound to the keyboard
-    /// before, rather than nothing served.
+    /// Meanwhile it shows the manager switched to ADBKeyBoard but the app's client still bound
+    /// to the keyboard before, rather than the keyboard before on both sides.
     in_between: bool,
     polls_since_selected: usize,
     /// What `input_methods_subtype_history` holds.
@@ -227,7 +240,7 @@ impl FakeAdb {
             HISTORY_LINE => return ok(state.history.clone()),
             "shell wm size" if state.wm_size_works => return ok(state.wm_size.clone()),
             "shell wm size" => return AdbOutput::new(1, "", "wm: failure\n"),
-            "shell dumpsys window | grep mCurrentFocus" => return ok(state.focus.clone()),
+            WINDOW_LINE => return ok(state.focus.clone()),
             "shell getprop" => {
                 return match &state.getprop {
                     Some(props) => ok(props.clone()),
@@ -259,7 +272,7 @@ impl FakeAdb {
                 } else if state.in_between {
                     fixture("input_method_in_between.txt")
                 } else {
-                    fixture("input_method_adbime_unbound.txt")
+                    fixture("input_method_before_set.txt")
                 });
             }
             "exec-out screencap -p" => {
@@ -506,6 +519,62 @@ async fn dump_distills_elements() {
         "no element without size"
     );
     assert!(seen.elements.len() < 164, "the scaffolding is left out");
+}
+
+#[tokio::test]
+async fn observe_says_whether_the_screen_is_on_and_locked() {
+    // Awake and unlocked, as the Redmi answered.
+    let adb = Arc::new(FakeAdb::phone().with(|s| s.focus = fixture("window_state_awake.txt")));
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app.as_deref(), Some("com.android.settings"));
+    assert_eq!((seen.awake, seen.locked), (Some(true), Some(false)));
+    // One call reads the focus and the screen's state.
+    assert_eq!(adb.count(WINDOW_LINE), 1);
+    assert!(
+        adb.lines()
+            .iter()
+            .all(|l| !l.contains("dumpsys power") && !l.contains("deviceidle"))
+    );
+
+    // Asleep behind the lock screen: the notification shade has the focus, no app is in front.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.focus = fixture("window_state_locked_asleep.txt");
+    }));
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app, None);
+    assert_eq!((seen.awake, seen.locked), (Some(false), Some(true)));
+
+    // The same with a second display (a recording's or a cast's), dumped first and always
+    // awake: the phone's own screen is display 0.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.focus = fixture("window_state_two_displays.txt");
+    }));
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app, None);
+    assert_eq!((seen.awake, seen.locked), (Some(false), Some(true)));
+
+    // A phone that does not say: left out, and the observation stands.
+    let adb = Arc::new(FakeAdb::phone());
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app.as_deref(), Some("com.whatsapp"));
+    assert_eq!((seen.awake, seen.locked), (None, None));
+
+    // The window manager cannot be read at all: the same.
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        s.answers.push((
+            WINDOW_LINE.to_owned(),
+            AdbOutput::new(
+                1,
+                "",
+                "Can't find service: window
+",
+            ),
+        ));
+    }));
+    let seen = observe(&driver(&adb)).await;
+    assert_eq!(seen.foreground_app, None);
+    assert_eq!((seen.awake, seen.locked), (None, None));
+    assert!(!seen.elements.is_empty());
 }
 
 #[tokio::test]
@@ -1066,7 +1135,7 @@ async fn a_phone_adb_cannot_reach_is_offline() {
     let adb = Arc::new(FakeAdb::phone().with(|s| {
         s.answers.push((
             "shell input tap 1 2".to_owned(),
-            AdbOutput::new(1, "", "adb.exe: device '18cf9fbb' not found\n"),
+            AdbOutput::new(1, "", "adb.exe: device '0a1b2c3d' not found\n"),
         ));
     }));
     let error = failed(run(&driver(&adb), DeviceCommand::Tap { x: 1, y: 2 }).await);
@@ -1209,6 +1278,7 @@ async fn each_kind_runs_its_adb_command() {
             "shell input keyevent 24",
             "shell input keyevent 25",
             "shell input keyevent 26",
+            "shell input keyevent 224",
             "shell am start -a android.intent.action.VIEW -d 'https://example.com/?q=a b&c'",
             "shell monkey -p com.whatsapp -c android.intent.category.LAUNCHER 1",
         ]
@@ -1345,9 +1415,66 @@ async fn pull_file_over_the_cap_is_refused_before_the_copy() {
         error.detail
     );
     let error = failed(run(&phone, pull("/sdcard/none")).await);
-    assert_eq!(error.reason, FailReason::AdbError);
+    assert_eq!(error.reason, FailReason::FileNotFound);
     assert!(error.detail.contains("No such file"), "{}", error.detail);
     assert!(adb.lines().iter().all(|l| !l.starts_with("pull ")));
+}
+
+#[tokio::test]
+async fn pull_file_of_a_path_that_is_not_there_is_file_not_found() {
+    let adb = Arc::new(FakeAdb::phone().with(|s| {
+        // As the Redmi answered for a path that is not there.
+        s.answers.push((
+            "shell stat -L -c '%F %s' /sdcard/Download/does_not_exist.txt".to_owned(),
+            AdbOutput::new(
+                1,
+                "",
+                "stat: '/sdcard/Download/does_not_exist.txt': No such file or directory
+",
+            ),
+        ));
+        // Gone between the check and the copy: `adb pull` says so in its own words.
+        s.answers_starting.push((
+            "pull /sdcard/Download/gone.txt ",
+            AdbOutput::new(
+                1,
+                "",
+                "adb: error: failed to stat remote object '/sdcard/Download/gone.txt': No such file or directory
+",
+            ),
+        ));
+        // A path through a file, as if it were a folder: nothing is there either.
+        s.answers.push((
+            "shell stat -L -c '%F %s' /sdcard/Download/a.txt/b".to_owned(),
+            AdbOutput::new(1, "", "stat: '/sdcard/Download/a.txt/b': Not a directory\n"),
+        ));
+        // Not there for this user is not "not there".
+        s.answers.push((
+            "shell stat -L -c '%F %s' /data/secret".to_owned(),
+            AdbOutput::new(1, "", "stat: '/data/secret': Permission denied
+"),
+        ));
+    }));
+    let phone = driver(&adb);
+    let pull = |path: &str| DeviceCommand::PullFile {
+        path: path.to_owned(),
+    };
+    let error = failed(run(&phone, pull("/sdcard/Download/does_not_exist.txt")).await);
+    assert_eq!(error.reason, FailReason::FileNotFound);
+    assert!(error.detail.contains("No such file"), "{}", error.detail);
+    let error = failed(run(&phone, pull("/sdcard/Download/gone.txt")).await);
+    assert_eq!(error.reason, FailReason::FileNotFound);
+    assert!(error.detail.contains("No such file"), "{}", error.detail);
+    let error = failed(run(&phone, pull("/sdcard/Download/a.txt/b")).await);
+    assert_eq!(error.reason, FailReason::FileNotFound);
+    assert!(error.detail.contains("Not a directory"), "{}", error.detail);
+    let error = failed(run(&phone, pull("/data/secret")).await);
+    assert_eq!(error.reason, FailReason::AdbError);
+    assert!(
+        error.detail.contains("Permission denied"),
+        "{}",
+        error.detail
+    );
 }
 
 #[tokio::test]
@@ -1366,7 +1493,7 @@ async fn a_failed_push_or_pull_is_told_in_adbs_words() {
             AdbOutput::new(
                 1,
                 "",
-                "adb: error: failed to get feature set: device '18cf9fbb' not found\n",
+                "adb: error: failed to get feature set: device '0a1b2c3d' not found\n",
             ),
         ));
         s.answers_starting.push((
@@ -1528,6 +1655,7 @@ async fn report_merges_getprop() {
         .iter()
         .map(|k| (*k).to_owned())
         .collect();
+    every.push(KEY_WAKEUP.to_owned());
     every.push(TEXT_UNICODE.to_owned());
     assert_eq!(report.features, every);
     assert_eq!(report.validate(), Ok(()));
@@ -1556,7 +1684,8 @@ async fn report_merges_getprop() {
     }));
     let report = driver(&adb).report().await.unwrap();
     assert!(!report.features.iter().any(|f| f == TEXT_UNICODE));
-    assert_eq!(report.features.len(), DeviceCommand::KINDS.len());
+    // Every kind, and the `wakeup` key.
+    assert_eq!(report.features.len(), DeviceCommand::KINDS.len() + 1);
     assert_eq!(report.model.as_deref(), Some("220333QAG"));
 }
 

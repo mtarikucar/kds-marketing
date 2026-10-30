@@ -16,6 +16,7 @@ pub mod calls;
 pub mod capabilities;
 pub mod connector;
 pub mod device_bridge;
+pub mod devices;
 pub mod events;
 pub mod groups;
 pub mod inbox;
@@ -211,6 +212,11 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/devices/bridge/commands"),
     ("POST", "/api/devices/bridge/results"),
     ("POST", "/api/devices/bridge/files"),
+    ("GET", "/api/devices"),
+    ("POST", "/api/devices/{capability_id}/observe"),
+    ("POST", "/api/devices/{capability_id}/act"),
+    ("GET", "/api/devices/commands/{command_id}"),
+    ("GET", "/api/devices/{capability_id}/commands"),
     ("GET", "/api/events/pending"),
     ("POST", "/api/events/ack"),
     ("GET", "/api/events"),
@@ -1046,6 +1052,31 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/devices/bridge/files",
             "devices.bridge.files",
             device_bridge::files,
+        ),
+        api_route("GET", "/devices", "devices.list", devices::list),
+        api_route(
+            "POST",
+            "/devices/{capability_id}/observe",
+            "devices.observe",
+            devices::observe,
+        ),
+        api_route(
+            "POST",
+            "/devices/{capability_id}/act",
+            "devices.act",
+            devices::act,
+        ),
+        api_route(
+            "GET",
+            "/devices/commands/{command_id}",
+            "devices.command_get",
+            devices::command_get,
+        ),
+        api_route(
+            "GET",
+            "/devices/{capability_id}/commands",
+            "devices.commands",
+            devices::commands,
         ),
         api_route("GET", "/events/pending", "events.pending", events::pending),
         api_route("POST", "/events/ack", "events.ack", events::ack),

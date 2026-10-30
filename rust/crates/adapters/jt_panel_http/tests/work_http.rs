@@ -79,13 +79,13 @@ async fn home_data_shows_agent_overdue() {
     assert_eq!(listed[0]["overdue"], false);
     assert_eq!(listed[0]["last_seen_at"], pending["agent"]["last_seen_at"]);
 
-    // A declared phone waits for the agent's verification; the first-capability item is gone.
-    let phone = ok_json(
+    // A declared computer waits for the agent's verification; the first-capability item is gone.
+    let computer = ok_json(
         p.send(
             Method::POST,
             "/api/capabilities",
             Some(&owner),
-            Some(json!({ "kind_key": "phone", "name": "Saha telefonu" })),
+            Some(json!({ "kind_key": "computer", "name": "Saha bilgisayarı" })),
         )
         .await,
     )
@@ -93,8 +93,8 @@ async fn home_data_shows_agent_overdue() {
     let pending = ok_json(p.get("/api/work/pending", &owner).await).await;
     assert_eq!(kinds(&pending), ["consult_strategy", "verify_capability"]);
     let verify = &pending["items"][1];
-    assert_eq!(verify["capability_id"], phone["capability"]["id"]);
-    assert_eq!(verify["name"], "Saha telefonu");
+    assert_eq!(verify["capability_id"], computer["capability"]["id"]);
+    assert_eq!(verify["name"], "Saha bilgisayarı");
     assert_eq!(verify["stale"], false);
     assert_eq!(verify["priority"], 2);
 }

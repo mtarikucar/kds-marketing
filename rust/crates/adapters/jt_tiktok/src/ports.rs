@@ -31,6 +31,11 @@ impl Connector for TiktokConnector {
     async fn refresh(&self, cred: &Credential) -> Result<Option<Credential>, ConnectorError> {
         oauth::refresh(self, cred).await
     }
+
+    /// Revokes the access token (see the crate docs, "Revocation").
+    async fn revoke(&self, cred: &Credential) -> Result<(), ConnectorError> {
+        oauth::revoke(self, cred).await
+    }
 }
 
 #[async_trait]

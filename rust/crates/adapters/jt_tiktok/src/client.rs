@@ -77,6 +77,9 @@ pub(crate) enum Endpoint {
     Api,
     /// The token endpoint: an answer naming an `error` is a failure.
     Token,
+    /// The token endpoint's revocation: as [`Endpoint::Token`], and a 2xx with an empty body (the
+    /// empty struct TikTok answers a revocation with) is a success.
+    Revoke,
 }
 
 /// What a call does at TikTok: whether it may be sent again, and what a lost answer means.
@@ -481,7 +484,11 @@ async fn read(
         }
         Err(BodyError::Broken) => return Err(broken(effect)),
     };
-    let json = serde_json::from_slice::<Value>(&body).ok();
+    let json = if endpoint == Endpoint::Revoke && status.is_success() && body.is_empty() {
+        Some(Value::Object(serde_json::Map::new()))
+    } else {
+        serde_json::from_slice::<Value>(&body).ok()
+    };
     if !status.is_success() {
         return Err(classify(status, json.as_ref(), endpoint, secrets));
     }
@@ -494,7 +501,7 @@ async fn read(
         return Err(classify(status, None, endpoint, secrets));
     };
     match (endpoint, error_code(&json)) {
-        (_, Some("ok")) | (Endpoint::Token, None) => Ok(json),
+        (_, Some("ok")) | (Endpoint::Token | Endpoint::Revoke, None) => Ok(json),
         (_, Some(code)) if taken.contains(&code) => Ok(json),
         (_, Some(_)) => Err(classify(status, Some(&json), endpoint, secrets)),
         (Endpoint::Api, None) if effect == Effect::Commit => Err(ConnectorError::unknown(
@@ -519,7 +526,7 @@ pub(crate) fn classify(
     let code = json.and_then(error_code);
     let reason = || reason(status, json, secrets);
     let is = |list: &[&str]| code.is_some_and(|c| list.contains(&c));
-    if endpoint == Endpoint::Token {
+    if matches!(endpoint, Endpoint::Token | Endpoint::Revoke) {
         if status == StatusCode::TOO_MANY_REQUESTS {
             return ConnectorError::throttle(None);
         }

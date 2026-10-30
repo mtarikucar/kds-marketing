@@ -14,6 +14,16 @@ pub struct Observation {
     pub screen: Screen,
     /// The package or bundle id of the app in front, when the device says.
     pub foreground_app: Option<String>,
+    /// Whether the screen is on, when the device says. A screen that is off (asleep, or dozing
+    /// on an always-on display) shows nothing to act on: the `wakeup` key turns it on (`power`
+    /// toggles it, and turns a screen that is on off). Left out when the device does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awake: Option<bool>,
+    /// Whether the lock screen is showing, when the device says (an app shown over it, such as
+    /// an incoming call, may be in front): the elements are the lock screen's, and a phone with a
+    /// PIN, pattern or password is unlocked by a person. Left out when the device does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
     pub elements: Vec<Element>,
     /// More than [`MAX_ELEMENTS`] elements were on screen and the rest were left out.
     pub truncated: bool,

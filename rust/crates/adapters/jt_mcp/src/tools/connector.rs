@@ -144,7 +144,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           token, which lets NetGSM's calls in (keep it to the owner); and the \
                           platform's Meta webhook URL (null until the platform's Meta app is \
                           configured), whose verify token is set in the Meta app dashboard and \
-                          never shown. Returns {meta, netgsm: [{purpose, url}]}. [risk: READ]",
+                          never shown; and the platform's TikTok webhook URL with the events it \
+                          acts on (null until the platform's TikTok app is configured), the \
+                          callback URL the operator enters in TikTok's developer portal. Returns \
+                          {meta, netgsm: [{purpose, url}], tiktok: {url, events}}. [risk: READ]",
             permission: Permission::CapabilitiesManage,
             schema: schema_for::<NoArgs>,
             run: hooks,

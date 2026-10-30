@@ -97,16 +97,38 @@ impl AndroidAdbDriver {
         files: &dyn FileTransfer,
     ) -> Result<CommandResult, DriverError> {
         let size = DeviceLine::new("wm").word("size");
-        let focus = DeviceLine::new("dumpsys")
+        // One call for the app in front and the screen's state: the window manager's dump holds
+        // each display's focus and policy state (`mAwake`, `isKeyguardShowing`) under its heading,
+        // and its keyguard's (`interactiveState`, `showing`); its sections' headings tell which
+        // lines are a display's.
+        let window = DeviceLine::new("dumpsys")
             .word("window")
             .word("|")
             .word("grep")
-            .word("mCurrentFocus");
-        let (dump, size, focus) = tokio::join!(
+            .word("-e")
+            .arg("^WINDOW MANAGER ")
+            .word("-e")
+            .arg("Display: mDisplayId=")
+            .word("-e")
+            .word("mCurrentFocus=")
+            .word("-e")
+            .word("mAwake=")
+            .word("-e")
+            .word("isKeyguardShowing=")
+            .word("-e")
+            .word("showing=")
+            .word("-e")
+            .word("interactiveState=");
+        let (dump, size, window) = tokio::join!(
             self.read_screen(),
             self.shell(&size, Limits::ORDINARY),
-            self.shell(&focus, Limits::ORDINARY),
+            self.shell(&window, Limits::ORDINARY),
         );
+        // What the window manager said, if anything: what it does not say is left out.
+        let window = window
+            .map(|out| observe::default_display(&out.stdout_text()))
+            .unwrap_or_default();
+        let state = observe::screen_state(&window);
         let (dump, cut) = dump?;
         let Some(natural) = observe::screen_size(&size?.stdout_text()) else {
             return Err(DriverError::new(
@@ -127,9 +149,9 @@ impl AndroidAdbDriver {
         }
         let mut seen = Observation {
             screen,
-            foreground_app: focus
-                .ok()
-                .and_then(|out| observe::foreground_app(&out.stdout_text())),
+            foreground_app: observe::foreground_app(&window),
+            awake: state.awake,
+            locked: state.locked,
             elements: dump.elements,
             // A dump larger than the bridge reads was cut, and its last elements are missing.
             truncated: cut,
@@ -315,7 +337,7 @@ impl AndroidAdbDriver {
 
     /// `adb pull` of one regular file of at most [`MAX_PULL_BYTES`], checked on the phone first
     /// (`stat`, which follows a link as the copy does), so a folder or a huge file never fills
-    /// this computer's temporary folder.
+    /// this computer's temporary folder. A path that names nothing is `file_not_found`.
     async fn pull(
         &self,
         path: &str,
@@ -330,9 +352,15 @@ impl AndroidAdbDriver {
         let out = self.shell(&stat, Limits::ORDINARY).await?;
         if !out.success() {
             let said = String::from_utf8_lossy(&out.stderr);
+            let line = first_line(&said);
+            let reason = if not_there(line) {
+                FailReason::FileNotFound
+            } else {
+                FailReason::AdbError
+            };
             return Err(DriverError::new(
-                FailReason::AdbError,
-                format!("pull_file: {}", clean(first_line(&said))),
+                reason,
+                format!("pull_file: {}", clean(line)),
             ));
         }
         let said = out.stdout_text();
@@ -446,6 +474,7 @@ fn keycode(key: DeviceKey) -> u32 {
         DeviceKey::VolumeUp => 24,
         DeviceKey::VolumeDown => 25,
         DeviceKey::Power => 26,
+        DeviceKey::Wakeup => 224,
     }
 }
 
@@ -505,7 +534,9 @@ fn not_an_option(field: &'static str, path: &str) -> Result<(), DriverError> {
     Ok(())
 }
 
-/// An `adb push` or `adb pull` that did not exit with 0, with the line `adb` gave.
+/// An `adb push` or `adb pull` that did not exit with 0, with the line `adb` gave: a pull whose
+/// file is not on the phone (`adb: error: failed to stat remote object '…': No such file or
+/// directory`, gone since it was checked) is `file_not_found`, anything else `adb_error`.
 fn transferred(op: &str, out: &super::AdbOutput) -> Result<(), DriverError> {
     if out.success() {
         return Ok(());
@@ -515,10 +546,22 @@ fn transferred(op: &str, out: &super::AdbOutput) -> Result<(), DriverError> {
         "" => first_line(&out.stdout_text()).to_owned(),
         line => line.to_owned(),
     };
+    let reason = if op == "pull" && line.contains("remote object") && not_there(&line) {
+        FailReason::FileNotFound
+    } else {
+        FailReason::AdbError
+    };
     Err(DriverError::new(
-        FailReason::AdbError,
+        reason,
         format!("adb {op} failed: {}", clean(&line)),
     ))
+}
+
+/// Whether a line the phone or `adb` printed says a path names nothing: `stat: '…': No such file
+/// or directory`, as the Redmi answers for a path that is not there, or `Not a directory`, for a
+/// path that goes through a file.
+fn not_there(line: &str) -> bool {
+    line.contains("No such file or directory") || line.contains("Not a directory")
 }
 
 /// A path in this computer's temporary folder for one transfer, removed (a file, or a folder an
@@ -585,18 +628,20 @@ mod tests {
                 .join(name);
             std::fs::read_to_string(path).unwrap()
         };
+        // Read on the owner's phone right after `ime set`: ADBKeyBoard holds the field at once.
         assert!(bound_to_a_field(&fixture("input_method_bound.txt")));
         assert!(!bound_to_a_field(&fixture("input_method_other_ime.txt")));
-        assert!(!bound_to_a_field(&fixture(
-            "input_method_adbime_unbound.txt"
-        )));
-        // The app served a connection again, still bound to the keyboard before.
+        // Read just before: the phone's own keyboard holds the same field.
+        assert!(!bound_to_a_field(&fixture("input_method_before_set.txt")));
+        // The manager switched, the app's client still bound to the keyboard before (made up from
+        // the two above: the phone switched too fast to be read in between).
         assert!(!bound_to_a_field(&fixture("input_method_in_between.txt")));
         // The same with the client bound to nothing yet.
         let in_between = fixture("input_method_in_between.txt").replace(
-            "mBindSequence=354 mCurId=com.preff.kb.xm/com.preff.kb.LatinIME",
+            "mBindSequence=386 mCurId=com.preff.kb.xm/com.preff.kb.LatinIME",
             "mBindSequence=-1 mCurId=null",
         );
+        assert!(in_between.contains("mBindSequence=-1 mCurId=null"));
         assert!(!bound_to_a_field(&in_between));
         // The manager selected it, but has not bound to it yet.
         let selected = fixture("input_method_bound.txt")

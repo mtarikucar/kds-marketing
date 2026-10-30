@@ -324,6 +324,11 @@ pub struct ScriptedConnector {
     /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::resolve_calls`]).
     resolve: Script<Result<Option<PublishResolution>, ConnectorError>>,
     resolve_calls: Mutex<Vec<PublishReceipt>>,
+    /// Revocations answer from here, `Ok(())` (the trait's default) when nothing is queued; the
+    /// credentials revoked are kept apart from [`ScriptedConnector::calls`] (see
+    /// [`ScriptedConnector::revoke_calls`]).
+    revoke: Script<Result<(), ConnectorError>>,
+    revoke_calls: Mutex<Vec<Credential>>,
     /// The account's posting settings answer from here, `Ok(None)` (the trait's default: no
     /// posting screen) when nothing is queued; the accounts asked about (their `public`) are kept
     /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::creator_info_calls`]).
@@ -391,6 +396,8 @@ impl ScriptedConnector {
             publish: Script::default(),
             resolve: Script::default(),
             resolve_calls: Mutex::default(),
+            revoke: Script::default(),
+            revoke_calls: Mutex::default(),
             creator_info: Script::default(),
             creator_info_calls: Mutex::default(),
             post_metrics: Script::default(),
@@ -482,6 +489,16 @@ impl ScriptedConnector {
     /// The receipts [`Publisher::resolve`] was asked about, in order.
     pub fn resolve_calls(&self) -> Vec<PublishReceipt> {
         lock(&self.resolve_calls).clone()
+    }
+
+    /// Queues what the next [`Connector::revoke`] answers.
+    pub fn push_revoke(&self, result: Result<(), ConnectorError>) {
+        self.revoke.push(result);
+    }
+
+    /// The credentials [`Connector::revoke`] was asked to give back, in order.
+    pub fn revoke_calls(&self) -> Vec<Credential> {
+        lock(&self.revoke_calls).clone()
     }
 
     /// Queues what the next [`Publisher::creator_info`] answers.
@@ -635,6 +652,11 @@ impl Connector for ScriptedConnector {
             public: public.clone(),
         });
         self.on_connected.try_next().unwrap_or(Ok(Value::Null))
+    }
+
+    async fn revoke(&self, cred: &Credential) -> Result<(), ConnectorError> {
+        lock(&self.revoke_calls).push(cred.clone());
+        self.revoke.try_next().unwrap_or(Ok(()))
     }
 }
 

@@ -18,7 +18,8 @@
     "copyFailed": "Could not copy; select the text and copy it by hand.",
     "actions": "Actions",
     "none": "—",
-    "loadError": "Could not load. Please try again."
+    "loadError": "Could not load. Please try again.",
+    "refreshFailed": "Could not refresh: showing what was read last."
   },
   "kit": {
     "close": "Close",
@@ -324,7 +325,8 @@
       "reopen_question": "Decision to reopen a lost journey",
       "merge_suggested": "Contact merge suggestion",
       "task_due": "Task due",
-      "voice_bridge_offline": "{{name}} is not registering: agent calls are refused until the bridge registers again."
+      "voice_bridge_offline": "{{name}} is not registering: agent calls are refused until the bridge registers again.",
+      "phone_offline": "{{name}} is not listed by a device bridge: commands for it are refused until a bridge lists it again."
     }
   },
   "team": {
@@ -977,7 +979,10 @@
       "metaTitle": "Meta",
       "metaUrl": "Meta webhook address",
       "verifyTokenHint": "The verify token is set in the dashboard of the platform's Meta app; it is not shown here.",
-      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is."
+      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is.",
+      "tiktokTitle": "TikTok",
+      "tiktokUrl": "TikTok webhook address",
+      "tiktokHelp": "Enter it as the callback URL of the platform's TikTok app in TikTok's developer portal (the app's Webhooks). Jeeta acts on: {{events}}; other events are kept for the agent."
     },
     "bridge": {
       "title": "Voice bridge",
@@ -990,6 +995,81 @@
       "heartbeat": "Last registered",
       "never": "The bridge has not registered yet.",
       "hint": "Only the bridge's own registration verifies it, never evidence. Setup:"
+    },
+    "phone": {
+      "title": "Device bridge",
+      "status": "Status",
+      "states": {
+        "online": "Online",
+        "unlisted": "Offline: the bridge no longer lists this phone (unplugged, or not ready in adb)",
+        "stale": "Verification lapsed: no registration listed it in the last minute"
+      },
+      "seen": "last seen {{ago}}",
+      "platform": "Platform",
+      "platforms": {
+        "android": "Android",
+        "ios": "iOS"
+      },
+      "model": "Model",
+      "os": "OS version",
+      "computer": "Computer",
+      "version": "Bridge version",
+      "unicode": "Unicode text",
+      "yes": "Yes",
+      "no": "No",
+      "unicodeHint": "To type Turkish letters or emoji, install ADBKeyBoard on the phone <b>and enable it as an input method</b>: installed alone, it is not used.",
+      "commands": "Commands",
+      "never": "No device bridge has registered this phone yet.",
+      "hint": "Only its bridge's registrations verify a phone, never evidence. Setup:",
+      "log": {
+        "title": "Recent commands",
+        "empty": "No command has been sent to this phone yet.",
+        "args": "Arguments",
+        "result": "Result",
+        "noResult": "No result.",
+        "reason": "Failed: {{reason}}",
+        "file": "Open the file (the link works for 10 minutes)",
+        "statuses": {
+          "queued": "Queued",
+          "leased": "Running",
+          "done": "Done",
+          "failed": "Failed",
+          "expired": "Expired",
+          "canceled": "Canceled"
+        },
+        "reasons": {
+          "device_offline": "the phone is offline",
+          "element_not_found": "no such element on the screen",
+          "unicode_unsupported": "the phone cannot type text outside ASCII",
+          "unsupported_on_platform": "not possible on this platform",
+          "unsupported_by_bridge": "the bridge does not run this command",
+          "adb_error": "adb error",
+          "screen_busy": "the screen kept moving",
+          "timeout": "the phone did not answer in time",
+          "bridge_error": "bridge error",
+          "file_not_found": "the file is no longer stored",
+          "unknown": "an unknown reason"
+        },
+        "fileGone": "The file is no longer stored (files are kept 7 days).",
+        "fileBlocked": "The browser blocked the new tab: allow pop-ups for this site and try again."
+      },
+      "pair": {
+        "title": "Connect a phone",
+        "body": "An Android phone plugged into a computer by USB is connected by the Jeeta device bridge program on that computer. Pairing gives the program its key.",
+        "open": "Pair a bridge",
+        "dialogTitle": "Pair a device bridge",
+        "dialogDescription": "Creates a key for one computer, with the one permission a bridge needs (devices.bridge).",
+        "defaultName": "Device bridge",
+        "nameHint": "Name it after the computer, e.g. Workshop PC.",
+        "keyDescription": "Copy the key now; the three steps to run the bridge are below.",
+        "stepsLabel": "Bridge setup",
+        "step1": "On the computer the phone is plugged into, install adb (Android SDK Platform-Tools). On the phone, turn on Developer options and USB debugging, connect it by USB and allow this computer when the phone asks.",
+        "step2": "Put the program jeeta-device-bridge.exe in a folder (where to get it: section 4 of docs/operations/device-bridge.md), and beside it a file named jeeta-device-bridge.toml with this content:",
+        "configLabel": "jeeta-device-bridge.toml",
+        "keyEnv": "You can leave the key out of the file and set it in the JEETA_DEVICE_BRIDGE_KEY environment variable instead.",
+        "step3": "Run jeeta-device-bridge.exe. Within about 15 seconds each phone it sees appears under Devices on this page, verified. To start it at every logon:",
+        "ownKey": "Each computer's bridge needs a key of its own: Jeeta tells bridges apart by their keys, and refuses a phone that another running bridge holds. For another computer, pair again."
+      }
     }
   },
   "connect": {
@@ -1803,7 +1883,15 @@
     "throttled": "the provider asked us to slow down; try again a little later.",
     "configuration": "the account's sending settings could not be read; check and reconnect it.",
     "xCredits": "the X API has no credits; add credits in the X developer console (console.x.com).",
-    "xDuplicate": "X does not publish the same text twice; change the text and try again."
+    "xDuplicate": "X does not publish the same text twice; change the text and try again.",
+    "tiktokUnaudited": "TikTok has not audited this app yet, so it posts only to a private TikTok account. Until the audit passes, make the account private in TikTok (Settings and privacy → Privacy → Private account), then cancel this post and plan it again.",
+    "tiktokPrivacy": "the privacy chosen for this post is not offered for this TikTok account (an app TikTok has not audited may post as \"Only me\" only); cancel it and post it again with a privacy the posting screen offers.",
+    "tiktokCap": "the TikTok account reached its daily limit of posts, or of drafts waiting in its inbox, through apps; try again tomorrow, or post from the TikTok app.",
+    "tiktokAppCap": "the platform's TikTok app reached its daily limit of users posting through it (TikTok's cap for apps); try again tomorrow.",
+    "tiktokBanned": "TikTok does not let this account post at the moment; check the account in the TikTok app.",
+    "tiktokDomain": "TikTok pulls photos only from a domain verified for the app; verify the media domain in TikTok's developer portal (URL properties), or post a video.",
+    "tiktokSpam": "TikTok flagged the post as spam or risky and will not publish it; change the caption before posting again.",
+    "tiktokMedia": "TikTok refused the media (its format, length, frame rate or picture size); check it against TikTok's requirements and post it again."
   },
   "calls": {
     "title": "Calls",

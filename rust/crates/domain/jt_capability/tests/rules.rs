@@ -207,7 +207,8 @@ fn default_reach_per_group() {
             }
         };
         assert_eq!(g.default_reach(), expected, "{}", g.key());
-        // The voice bridge is the one kind reached otherwise than its group: like a device.
+        // The voice bridge is the one kind reached otherwise than its group: like a device (a
+        // phone, with a heartbeat too, is a device already).
         for k in kinds_in_group(*g).filter(|k| k.key != "voice_bridge") {
             assert_eq!(k.default_reach(), expected, "{}", k.key);
         }
@@ -251,8 +252,9 @@ fn default_reach_per_group() {
 
 #[test]
 fn effective_status_goes_stale_after_policy_age() {
+    // A device without a heartbeat (a phone has one: `a_bridge_kind_is_verified_by_its_heartbeat`).
     let verified_at = |at: Option<OffsetDateTime>| {
-        let mut c = declared("phone");
+        let mut c = declared("computer");
         c.status = StoredStatus::Verified;
         c.last_verified_at = at;
         c
@@ -1509,23 +1511,32 @@ fn a_meta_ad_account_is_held_by_its_number() {
 }
 
 #[test]
-fn a_voice_bridge_is_verified_by_its_heartbeat() {
-    // Only the voice bridge reports a heartbeat: stale a minute after it, unreachable ten
-    // minutes after it.
-    let beat = kind("voice_bridge")
-        .heartbeat()
-        .expect("the voice bridge has a heartbeat");
-    assert_eq!(beat.stale_after, Duration::seconds(60));
-    assert_eq!(beat.unreachable_after, Duration::minutes(10));
-    for k in KINDS.iter().filter(|k| k.key != "voice_bridge") {
+fn a_bridge_kind_is_verified_by_its_heartbeat() {
+    // The voice bridge and a phone (its device bridge lists it) report a heartbeat, and only
+    // they: stale a minute after it, unreachable ten minutes after it.
+    let bridged = ["voice_bridge", "phone"];
+    for key in bridged {
+        let beat = kind(key)
+            .heartbeat()
+            .expect("a bridge's kind has a heartbeat");
+        assert_eq!(beat.stale_after, Duration::seconds(60), "{key}");
+        assert_eq!(beat.unreachable_after, Duration::minutes(10), "{key}");
+        let c = declared(key);
+        assert_eq!(c.reach, Reach::Device, "{key}");
+        assert_eq!(c.status, StoredStatus::Declared, "{key}");
+    }
+    for k in KINDS.iter().filter(|k| !bridged.contains(&k.key)) {
         assert_eq!(k.heartbeat(), None, "{}", k.key);
     }
-    let c = declared("voice_bridge");
-    assert_eq!(c.reach, Reach::Device);
-    assert_eq!(c.status, StoredStatus::Declared);
+    for key in bridged {
+        heartbeat_holds(key);
+    }
+}
 
+/// How a verification of a capability of kind `key`, which has a heartbeat, holds.
+fn heartbeat_holds(key: &str) {
     let beat_at = |at: Option<OffsetDateTime>, max_age_days: u16| {
-        let mut c = declared("voice_bridge");
+        let mut c = declared(key);
         c.status = StoredStatus::Verified;
         c.last_verified_at = at;
         c.policy.verify_max_age_days = max_age_days;
@@ -1555,7 +1566,7 @@ fn a_voice_bridge_is_verified_by_its_heartbeat() {
         assert_eq!(beat_at(None, days), EffectiveStatus::Stale);
     }
     // Every other stored status reads as stored.
-    let mut c = declared("voice_bridge");
+    let mut c = declared(key);
     c.last_verified_at = Some(NOW);
     for (stored, effective) in [
         (StoredStatus::Declared, EffectiveStatus::Declared),

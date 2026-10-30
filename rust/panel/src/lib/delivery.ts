@@ -19,6 +19,34 @@ const KINDS = {
   send_configuration_invalid: 'configuration',
 } as const;
 
+/** The TikTok cases explained in the owner's words (`failure.*`). */
+type TiktokCase =
+  | 'tiktokUnaudited'
+  | 'tiktokPrivacy'
+  | 'tiktokCap'
+  | 'tiktokAppCap'
+  | 'tiktokBanned'
+  | 'tiktokDomain'
+  | 'tiktokSpam'
+  | 'tiktokMedia';
+
+/** TikTok's error codes (its answers' `error.code`, a post's `fail_reason`) explained, first match wins. */
+const TIKTOK_CODES: [RegExp, TiktokCase][] = [
+  [/unaudited_client_can_only_post_to_private_accounts/, 'tiktokUnaudited'],
+  [/privacy_level_option_mismatch|privacy level \S+ not available/, 'tiktokPrivacy'],
+  [/spam_risk_too_many_posts|spam_risk_too_many_pending_share/, 'tiktokCap'],
+  [/reached_active_user_cap/, 'tiktokAppCap'],
+  [/spam_risk_user_banned_from_posting/, 'tiktokBanned'],
+  [/url_ownership_unverified/, 'tiktokDomain'],
+  [/spam_risk_text|spam_risk\b/, 'tiktokSpam'],
+  [/(file_format|duration|frame_rate|picture_size)_check_failed/, 'tiktokMedia'],
+];
+
+/** What TikTok says, by its own code. */
+function tiktokCase(text: string): TiktokCase | null {
+  return TIKTOK_CODES.find(([pattern]) => pattern.test(text))?.[1] ?? null;
+}
+
 /** What X says by HTTP status, and how to tell it from a generic refusal. */
 function xCase(text: string): 'xCredits' | 'xDuplicate' | null {
   const status = /HTTP (\d{3})/.exec(text)?.[1];
@@ -41,6 +69,8 @@ export function failureText(t: TFunction, reason: string): string {
   if (code && code in CODES) return t(`failure.${CODES[code as keyof typeof CODES]}`);
   const x = provider === 'x' ? xCase(text) : null;
   if (x) return t(`failure.${x}`);
+  const tiktok = provider === 'tiktok' ? tiktokCase(text) : null;
+  if (tiktok) return t(`failure.${tiktok}`);
   if (kind in KINDS) return t(`failure.${KINDS[kind as keyof typeof KINDS]}`);
   return text || reason;
 }

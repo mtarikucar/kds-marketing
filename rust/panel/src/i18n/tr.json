@@ -18,7 +18,8 @@
     "copyFailed": "Kopyalanamadı; metni elle seçip kopyalayın.",
     "actions": "İşlemler",
     "none": "—",
-    "loadError": "Yüklenemedi. Lütfen yeniden deneyin."
+    "loadError": "Yüklenemedi. Lütfen yeniden deneyin.",
+    "refreshFailed": "Yenilenemedi: en son okunan gösteriliyor."
   },
   "kit": {
     "close": "Kapat",
@@ -324,7 +325,8 @@
       "reopen_question": "Kaybedilen yolculuğu yeniden açma kararı",
       "merge_suggested": "Kişi birleştirme önerisi",
       "task_due": "Zamanı gelen görev",
-      "voice_bridge_offline": "{{name}} kayıt göndermiyor: köprü yeniden kaydolana kadar ajan aramaları reddedilir."
+      "voice_bridge_offline": "{{name}} kayıt göndermiyor: köprü yeniden kaydolana kadar ajan aramaları reddedilir.",
+      "phone_offline": "{{name}} hiçbir cihaz köprüsünde görünmüyor: bir köprü onu yeniden listeleyene kadar ona komut gönderilemez."
     }
   },
   "team": {
@@ -977,7 +979,10 @@
       "metaTitle": "Meta",
       "metaUrl": "Meta webhook adresi",
       "verifyTokenHint": "Doğrulama anahtarı platformun Meta uygulamasının panelinde ayarlıdır; burada gösterilmez.",
-      "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür."
+      "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür.",
+      "tiktokTitle": "TikTok",
+      "tiktokUrl": "TikTok webhook adresi",
+      "tiktokHelp": "Bunu platformun TikTok uygulamasının geri çağırma adresi (callback URL) olarak TikTok geliştirici portalına girin (uygulamanın Webhooks bölümü). Jeeta şu olaylara göre işlem yapar: {{events}}; diğer olaylar ajan için saklanır."
     },
     "bridge": {
       "title": "Ses köprüsü",
@@ -990,6 +995,81 @@
       "heartbeat": "Son kayıt",
       "never": "Köprü henüz kaydolmadı.",
       "hint": "Yalnızca köprünün kendi kaydı doğrular; kanıtla doğrulanmaz. Kurulum:"
+    },
+    "phone": {
+      "title": "Cihaz köprüsü",
+      "status": "Durum",
+      "states": {
+        "online": "Çevrimiçi",
+        "unlisted": "Çevrimdışı: köprü bu telefonu artık listelemiyor (çıkarılmış ya da adb'de hazır değil)",
+        "stale": "Doğrulama eskidi: son bir dakikada hiçbir kayıt onu listelemedi"
+      },
+      "seen": "son görülme {{ago}}",
+      "platform": "Platform",
+      "platforms": {
+        "android": "Android",
+        "ios": "iOS"
+      },
+      "model": "Model",
+      "os": "İşletim sistemi sürümü",
+      "computer": "Bilgisayar",
+      "version": "Köprü sürümü",
+      "unicode": "Unicode metin",
+      "yes": "Evet",
+      "no": "Hayır",
+      "unicodeHint": "Türkçe harf ya da emoji yazmak için telefona ADBKeyBoard'u kurun <b>ve giriş yöntemi olarak etkinleştirin</b>: yalnızca kurulu olması yetmez.",
+      "commands": "Komutlar",
+      "never": "Bu telefonu henüz hiçbir cihaz köprüsü kaydetmedi.",
+      "hint": "Telefonu yalnızca köprüsünün kayıtları doğrular; kanıtla doğrulanmaz. Kurulum:",
+      "log": {
+        "title": "Son komutlar",
+        "empty": "Bu telefona henüz komut gönderilmedi.",
+        "args": "Parametreler",
+        "result": "Sonuç",
+        "noResult": "Sonuç yok.",
+        "reason": "Başarısız: {{reason}}",
+        "file": "Dosyayı aç (bağlantı 10 dakika geçerli)",
+        "statuses": {
+          "queued": "Sırada",
+          "leased": "Çalışıyor",
+          "done": "Tamamlandı",
+          "failed": "Başarısız",
+          "expired": "Süresi doldu",
+          "canceled": "İptal edildi"
+        },
+        "reasons": {
+          "device_offline": "telefon çevrimdışı",
+          "element_not_found": "ekranda böyle bir öğe yok",
+          "unicode_unsupported": "telefon ASCII dışındaki metni yazamıyor",
+          "unsupported_on_platform": "bu platformda yapılamıyor",
+          "unsupported_by_bridge": "köprü bu komutu çalıştırmıyor",
+          "adb_error": "adb hatası",
+          "screen_busy": "ekran durmadan hareket ediyordu",
+          "timeout": "telefon zamanında yanıt vermedi",
+          "bridge_error": "köprü hatası",
+          "file_not_found": "dosya artık saklanmıyor",
+          "unknown": "bilinmeyen bir neden"
+        },
+        "fileGone": "Dosya artık saklanmıyor (dosyalar 7 gün saklanır).",
+        "fileBlocked": "Tarayıcı yeni sekmeyi engelledi: bu site için açılır pencerelere izin verip yeniden deneyin."
+      },
+      "pair": {
+        "title": "Telefon bağlayın",
+        "body": "USB ile bir bilgisayara takılı Android telefonu, o bilgisayarda çalışan Jeeta cihaz köprüsü programı bağlar. Eşleştirme, programa anahtarını verir.",
+        "open": "Köprü eşleştir",
+        "dialogTitle": "Cihaz köprüsü eşleştir",
+        "dialogDescription": "Tek bir bilgisayar için, köprünün ihtiyaç duyduğu tek izinle (devices.bridge) bir anahtar oluşturur.",
+        "defaultName": "Cihaz köprüsü",
+        "nameHint": "Bilgisayarın adını verin, ör. Atölye bilgisayarı.",
+        "keyDescription": "Anahtarı şimdi kopyalayın; köprüyü çalıştırmanın üç adımı aşağıda.",
+        "stepsLabel": "Köprü kurulumu",
+        "step1": "Telefonun takılı olacağı bilgisayara adb'yi (Android SDK Platform-Tools) kurun. Telefonda Geliştirici seçeneklerini ve USB hata ayıklamayı açın, telefonu USB ile bağlayın ve telefon sorduğunda bu bilgisayara izin verin.",
+        "step2": "jeeta-device-bridge.exe programını bir klasöre koyun (nereden alınacağı: docs/operations/device-bridge.md, 4. bölüm); yanına da şu içerikle jeeta-device-bridge.toml adlı bir dosya oluşturun:",
+        "configLabel": "jeeta-device-bridge.toml",
+        "keyEnv": "Anahtarı dosyaya yazmak yerine JEETA_DEVICE_BRIDGE_KEY ortam değişkenine de koyabilirsiniz.",
+        "step3": "jeeta-device-bridge.exe'yi çalıştırın. Gördüğü her telefon yaklaşık 15 saniye içinde bu sayfada, Cihazlar altında doğrulanmış olarak görünür. Her oturum açılışında kendiliğinden başlatmak için:",
+        "ownKey": "Her bilgisayardaki köprünün kendi anahtarı olmalı: Jeeta köprüleri anahtarlarından ayırt eder ve çalışan başka bir köprünün tuttuğu telefonu reddeder. Başka bir bilgisayar için yeniden eşleştirin."
+      }
     }
   },
   "connect": {
@@ -1803,7 +1883,15 @@
     "throttled": "sağlayıcı gönderimleri yavaşlatmamızı istedi; biraz sonra tekrar deneyin.",
     "configuration": "hesabın gönderim ayarları okunamadı; hesabı kontrol edip yeniden bağlayın.",
     "xCredits": "X API kredisi yok; X developer console'dan (console.x.com) kredi yükleyin.",
-    "xDuplicate": "X aynı metni ikinci kez yayınlamıyor; metni değiştirip yeniden deneyin."
+    "xDuplicate": "X aynı metni ikinci kez yayınlamıyor; metni değiştirip yeniden deneyin.",
+    "tiktokUnaudited": "TikTok bu uygulamayı henüz denetlemedi; bu yüzden yalnızca gizli bir TikTok hesabına paylaşım yapabilir. Denetim tamamlanana kadar hesabı TikTok'ta gizli yapın (Ayarlar ve gizlilik → Gizlilik → Gizli hesap), sonra bu gönderiyi iptal edip yeniden planlayın.",
+    "tiktokPrivacy": "bu gönderi için seçilen gizlilik bu TikTok hesabına sunulmuyor (TikTok'un denetlemediği bir uygulama yalnızca \"Sadece ben\" olarak paylaşabilir); gönderiyi iptal edip paylaşım ekranının sunduğu bir gizlilikle yeniden paylaşın.",
+    "tiktokCap": "TikTok hesabı uygulamalar üzerinden günlük paylaşım sınırına ya da gelen kutusunda bekleyen taslak sınırına ulaştı; yarın tekrar deneyin ya da TikTok uygulamasından paylaşın.",
+    "tiktokAppCap": "platformun TikTok uygulaması, üzerinden paylaşım yapan kullanıcılar için günlük sınırına ulaştı (TikTok'un uygulamalara koyduğu sınır); yarın tekrar deneyin.",
+    "tiktokBanned": "TikTok bu hesabın şu anda paylaşım yapmasına izin vermiyor; hesabı TikTok uygulamasında kontrol edin.",
+    "tiktokDomain": "TikTok fotoğrafları yalnızca uygulama için doğrulanmış bir alan adından çeker; medya alan adını TikTok geliştirici portalında (URL properties) doğrulayın ya da video paylaşın.",
+    "tiktokSpam": "TikTok gönderiyi spam ya da riskli olarak işaretledi ve yayınlamayacak; yeniden paylaşmadan önce açıklamayı değiştirin.",
+    "tiktokMedia": "TikTok medyayı kabul etmedi (biçimi, süresi, kare hızı ya da resim boyutu); TikTok'un gereksinimlerine göre kontrol edip yeniden paylaşın."
   },
   "calls": {
     "title": "Aramalar",

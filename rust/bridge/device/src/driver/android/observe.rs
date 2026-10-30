@@ -328,6 +328,89 @@ pub(crate) fn foreground_app(dumpsys: &str) -> Option<String> {
     })
 }
 
+/// The lines of `dumpsys window` (as grepped, its sections' headings among them) that tell of
+/// the phone's own screen: the lines outside its displays' section (the keyguard's), and in that
+/// section display 0's alone (from its `Display: mDisplayId=0` to the next display's heading).
+/// Each display prints its own focus and policy (`mAwake`, `isKeyguardShowing`), another display
+/// (a screen recording's, a cast's) first, and one that is not the default always reads awake.
+/// Without any display's heading, every line.
+pub(crate) fn default_display(dumpsys: &str) -> String {
+    fn display_heading(line: &str) -> Option<&str> {
+        line.trim_start().strip_prefix("Display: mDisplayId=")
+    }
+    if !dumpsys.lines().any(|line| display_heading(line).is_some()) {
+        return dumpsys.to_owned();
+    }
+    let mut in_displays = false;
+    let mut display: Option<u32> = None;
+    let mut kept = String::new();
+    for line in dumpsys.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("WINDOW MANAGER ") {
+            in_displays = trimmed.starts_with("WINDOW MANAGER DISPLAY CONTENTS");
+            display = None;
+            continue;
+        }
+        if let Some(id) = display_heading(line) {
+            in_displays = true;
+            display = id
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .and_then(|id| id.parse().ok());
+            continue;
+        }
+        if !in_displays || display == Some(0) {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    kept
+}
+
+/// Whether the screen is on and whether the lock screen shows, as `dumpsys window` tells them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScreenState {
+    pub(crate) awake: Option<bool>,
+    pub(crate) locked: Option<bool>,
+}
+
+/// The screen's state from `dumpsys window`'s lines, as the Redmi prints them: its display
+/// policy's `mAwake=true mScreenOnEarly=…` and `isKeyguardShowing=false`, else its keyguard's
+/// `interactiveState=INTERACTIVE_STATE_AWAKE` (or `_SLEEP`) and `showing=false`. Each is `None`
+/// when no line tells, or the line holds something else.
+pub(crate) fn screen_state(dumpsys: &str) -> ScreenState {
+    let flag = |value: &str| match value {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    };
+    let (mut awake, mut locked) = (None, None);
+    let (mut interactive, mut showing) = (None, None);
+    for line in dumpsys.lines().map(str::trim) {
+        for word in line.split_whitespace() {
+            if let Some(value) = word.strip_prefix("mAwake=") {
+                awake = awake.or(flag(value));
+            } else if let Some(value) = word.strip_prefix("isKeyguardShowing=") {
+                locked = locked.or(flag(value));
+            } else if let Some(value) = word.strip_prefix("interactiveState=") {
+                interactive = interactive.or(match value {
+                    "INTERACTIVE_STATE_AWAKE" => Some(true),
+                    "INTERACTIVE_STATE_SLEEP" => Some(false),
+                    _ => None,
+                });
+            }
+        }
+        // The keyguard's own line, alone on it.
+        if let Some(value) = line.strip_prefix("showing=") {
+            showing = showing.or(flag(value));
+        }
+    }
+    ScreenState {
+        awake: awake.or(interactive),
+        locked: locked.or(showing),
+    }
+}
+
 /// The element a `tap_on` names: an exact match first (the first one that can be pressed, else
 /// the first), then, unless `exact`, one whose value holds the target whatever its case (the
 /// shortest such value, then one that can be pressed, then the first). An id matches whole
@@ -533,5 +616,95 @@ mod tests {
             Some("com.a.b".to_owned())
         );
         assert_eq!(foreground_app(""), None);
+    }
+
+    fn fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name);
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn whether_the_screen_is_on_and_locked() {
+        let state = |awake, locked| ScreenState { awake, locked };
+        // As the Redmi answered, awake and unlocked; and in that shape, asleep and locked.
+        let awake = fixture("window_state_awake.txt");
+        assert_eq!(screen_state(&awake), state(Some(true), Some(false)));
+        assert_eq!(
+            screen_state(&awake.replace('\n', "\r\n")),
+            screen_state(&awake)
+        );
+        let asleep = fixture("window_state_locked_asleep.txt");
+        assert_eq!(screen_state(&asleep), state(Some(false), Some(true)));
+        // The display policy's lines win over the keyguard's.
+        let both = "  showing=true\n  interactiveState=INTERACTIVE_STATE_SLEEP\n  mAwake=true x=1\n  isKeyguardShowing=false\n";
+        assert_eq!(screen_state(both), state(Some(true), Some(false)));
+        // Without them, the keyguard's tell.
+        let keyguard = "      showing=true\n      interactiveState=INTERACTIVE_STATE_SLEEP\n";
+        assert_eq!(screen_state(keyguard), state(Some(false), Some(true)));
+        assert_eq!(
+            screen_state("      interactiveState=INTERACTIVE_STATE_AWAKE\n"),
+            state(Some(true), None)
+        );
+        // A state between the two, a value that is not a flag, other words that end so, or
+        // nothing: not told.
+        assert_eq!(
+            screen_state("interactiveState=INTERACTIVE_STATE_WAKING\nmAwake=maybe\n"),
+            state(None, None)
+        );
+        assert_eq!(
+            screen_state("  mIsShowing=true mShowingDream=false showingAndNotOccluded=true\n"),
+            state(None, None)
+        );
+        assert_eq!(
+            screen_state("  mCurrentFocus=Window{1 u0 com.a.b}\n"),
+            state(None, None)
+        );
+        assert_eq!(screen_state(""), state(None, None));
+    }
+
+    #[test]
+    fn only_the_default_displays_lines_count() {
+        let state = |awake, locked| ScreenState { awake, locked };
+        // A second display (a screen recording's or a cast's) is dumped first, and its policy
+        // always reads awake: the phone's own screen is display 0's.
+        let two = default_display(&fixture("window_state_two_displays.txt"));
+        assert_eq!(screen_state(&two), state(Some(false), Some(true)));
+        assert_eq!(foreground_app(&two), None);
+        // Display 0 in front of an app, the other display showing another one.
+        let awake = fixture("window_state_awake.txt").replace(
+            "  Display: mDisplayId=0 rootTasks=5\n",
+            "  Display: mDisplayId=2 rootTasks=1\n  mCurrentFocus=Window{7a1b2c3 u0 com.example.cast/com.example.cast.Presentation}\n    mAwake=false x=1\n  Display: mDisplayId=0 rootTasks=5\n",
+        );
+        let awake = default_display(&awake);
+        assert_eq!(
+            foreground_app(&awake).as_deref(),
+            Some("com.android.settings")
+        );
+        assert_eq!(screen_state(&awake), state(Some(true), Some(false)));
+        // The keyguard's lines, outside the displays' section, count whatever the display.
+        let keyguard_only = "WINDOW MANAGER POLICY STATE (dumpsys window policy)\n      showing=true\nWINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  Display: mDisplayId=0 rootTasks=5\n";
+        assert_eq!(
+            screen_state(&default_display(keyguard_only)),
+            state(None, Some(true))
+        );
+        // A line after the displays' section is no display's: a focus printed there (as older
+        // versions print it) counts.
+        let after = "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  Display: mDisplayId=1 rootTasks=1\n    mAwake=true\nWINDOW MANAGER WINDOWS (dumpsys window windows)\n  mCurrentFocus=Window{1 u0 com.a.b/com.a.b.Main}\n";
+        let after = default_display(after);
+        assert_eq!(foreground_app(&after).as_deref(), Some("com.a.b"));
+        assert_eq!(screen_state(&after), state(None, None));
+        // Without any display's heading, every line counts, as before.
+        let flat = "  mCurrentFocus=Window{1 u0 com.a.b}\n    mAwake=true\n";
+        assert_eq!(default_display(flat), flat);
+        // Windows' line ends are read the same.
+        assert_eq!(
+            screen_state(&default_display(
+                &fixture("window_state_two_displays.txt").replace('\n', "\r\n")
+            )),
+            state(Some(false), Some(true))
+        );
     }
 }

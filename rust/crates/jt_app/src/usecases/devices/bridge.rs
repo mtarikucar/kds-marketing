@@ -22,7 +22,19 @@
 //! (`jt_capability::RESERVED_PUBLIC_KEYS`). Beside the phone's facts (`platform`, `serial`,
 //! `model`, `os_version`, `screen`, `features`) and the bridge's (`bridge_id`, `version`,
 //! `protocol`), it keeps which bridge holds the phone: `listed_by`, that bridge's key id, and
-//! `listed`, whether that bridge's latest registration lists it (`false` once one leaves it out).
+//! `listed`, whether that bridge's latest registration lists it (`false` once one leaves it out);
+//! and `instance`, the run of the bridge program that registration came from
+//! (`RegisterIn::instance`, protocol 2; `null` from a bridge of protocol 1). A restarted bridge
+//! holds the same key: the run tells it from the one that stopped, whose poll the server may
+//! still hold (behind a proxy a poll outlives its program). A phone whose latest listing names a
+//! run is that run's alone: it is leased to that run's polls only, and only that run's
+//! registrations leave it out (two runs of one bridge at once, one starting while the other
+//! stops: the latest to list a phone holds it). A phone whose latest listing names none is any
+//! poll's and any registration's of its bridge, as before protocol 2.
+//! The `phone` kind has a heartbeat (`jt_capability::Heartbeat`): only these registrations verify
+//! a phone (`capability.verify` refuses one), it reads stale a minute after the last one that
+//! listed it, and the `device_bridge_health` job marks it unreachable ten minutes after
+//! (`devices.bridge.offline`).
 //!
 //! A phone is one bridge's at a time. Another bridge that lists it while the holder lists it and
 //! registered it within [`HELD_FOR`] is refused with [`PHONE_HELD_BY_ANOTHER_BRIDGE`] (two PCs
@@ -30,12 +42,13 @@
 //! it out or stops registering, the next bridge to list it holds it. A phone that fails its own
 //! checks is refused with the reason, a retired one that is still plugged in with
 //! [`PHONE_RETIRED`] (nothing is declared or merged for any refused phone), and one phone never
-//! refuses the registration: the others register as usual. Only protocol 1 exists, so every body
-//! sent back is protocol 1's.
+//! refuses the registration: the others register as usual. Protocol 2 added only what a bridge
+//! sends (its run), so every body sent back is the same to a bridge of either protocol.
 //!
 //! **Commands.** A poll leases to the bridge the due commands
 //! (`ports::devices::DeviceCommandRepo::pick_due`) of exactly the phones it holds and its latest
-//! registration lists, oldest first, at most the poll's limit; one handed out and not answered
+//! registration lists (of those a run holds, only to that run's polls), oldest first, at most the
+//! poll's limit; one handed out and not answered
 //! within [`REDELIVER_AFTER`] is handed out again, and the bridge acts on a command id once. Each
 //! read checks every command it picked against what the phone's bridge lists now (the command's
 //! `jt_devices::required_features` against the phone's current `features`): one it does not list
@@ -63,23 +76,29 @@
 //!
 //! **Replacing a bridge's key.** Start the bridge with the new key, stop the old program cleanly
 //! (it posts what it finished, with the old key), then revoke the old key. The new bridge is
-//! refused each phone the old one held until the old one has not registered it for [`HELD_FOR`]
-//! (up to a minute); then it takes it over (`devices.phone.holder_changed`), and the old key's
-//! leases of that phone are its to answer.
+//! refused each phone the old one held while the old one lists it; a clean stop ends with a
+//! registration that lists no phone, which leaves them out at once, so the new bridge takes each
+//! over at its next registration (`devices.phone.holder_changed`). An old program that stopped
+//! without it (a crash) holds them until it has not registered them for [`HELD_FOR`] (up to a
+//! minute). The old key's leases of a phone taken over are the new bridge's to answer.
 //!
 //! **Files.** An upload is the file's bytes, `image/png` (a screenshot) or
 //! `application/octet-stream` (a file pulled off a phone), streamed into the file store and
-//! recorded as the workspace's, uploaded by the bridge, for [`FILE_RETENTION`]. Each upload is a
-//! new file, a retried one included. Each workspace uploads a few files at a time, screenshots and
+//! recorded as the workspace's, uploaded by the bridge, for [`FILE_RETENTION`], after which the
+//! `device_file_purge` job deletes it (`super::sweeps`). Each upload is a new file, a retried one
+//! included. Each workspace uploads a few files at a time, screenshots and
 //! pulled files apart (`super::uploads`); one that waits too long for its turn is answered `503`
 //! (the bridge tries again), and a body that stalls is refused.
 //!
 //! **Logging.** Every command that ends through this surface writes `devices.command.finished`
 //! (`command_id`, `kind`, `status`, `reason`, `duration_ms`: the bridge's, `null` for a failure the
-//! server decided; `leased_by`: the key id of the bridge last handed it, `null` for none); its
-//! result stays on the command. A phone that passes from one bridge to another writes
-//! `devices.phone.holder_changed` (`capability_id`, `from`, `to`: key ids). `tracing` carries ids, kinds, statuses and
-//! counts only: never a command's payload, a result, a failure's detail or a file's bytes.
+//! server decided; `leased_by`: the key id of the bridge last handed it, `null` for none;
+//! `result_sha256`: the hash of the result a done command keeps, [`result_sha256`]); its result
+//! stays on the command. One the expiry sweep ends writes the same entry (`super::sweeps`), and a
+//! late result that replaces the expiry writes a second one. A phone that passes from one bridge
+//! to another writes `devices.phone.holder_changed` (`capability_id`, `from`, `to`: key ids).
+//! `tracing` carries ids, kinds, statuses and counts only: never a command's payload, a result, a
+//! failure's detail or a file's bytes.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration as StdDuration;
@@ -102,8 +121,8 @@ use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::TenantRepos;
 use crate::ports::devices::{
-    DeviceCommand, DeviceCommandRow, DeviceFile, FailReason, Finish, Finished, REDELIVER_AFTER,
-    required_features, supports,
+    CommandStatus, DeviceCommand, DeviceCommandRow, DeviceFile, FailReason, Finish, Finished,
+    REDELIVER_AFTER, required_features, supports,
 };
 use crate::ports::files::ByteSource;
 use crate::usecases::api_keys::AgentPrincipal;
@@ -135,7 +154,9 @@ pub use jt_device_protocol::{
 /// How often the bridge registers, and the longest a poll for commands waits, in seconds.
 pub use jt_device_protocol::{HEARTBEAT_S, MAX_WAIT_S};
 /// How long a phone a bridge lists stays that bridge's when the bridge stops registering it: the
-/// spec's stale clock for a bridge, four missed heartbeats. Another bridge can take it over after.
+/// spec's stale clock for a bridge, four missed heartbeats, which is the `phone` kind's heartbeat
+/// `stale_after` too (pinned by `held_for_is_the_phone_kinds_stale_clock`). Another bridge can
+/// take it over after.
 pub const HELD_FOR: Duration = Duration::seconds(60);
 /// How long the download address of a `push_file` command lives: long enough for the bridge to
 /// start the download after the command waited its turn on the phone (the bridge fails a command
@@ -189,8 +210,16 @@ fn external_id(phone: &PhoneReport) -> String {
 }
 
 /// What a phone's capability keeps of it (`connector_public.device`).
-fn device_of(c: &Capability) -> Option<&Map<String, Value>> {
+pub(super) fn device_of(c: &Capability) -> Option<&Map<String, Value>> {
     c.connector_public.get("device")?.as_object()
+}
+
+/// Whether the latest registration of the bridge that holds phone `c` lists it (`listed`).
+pub(super) fn is_listed(c: &Capability) -> bool {
+    device_of(c)
+        .and_then(|d| d.get("listed"))
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 /// The key id of the bridge that holds phone `c` (`listed_by`), listed or not.
@@ -207,20 +236,25 @@ fn held_by(c: &Capability, bridge: ApiKeyId) -> bool {
 
 /// Whether bridge `bridge` holds phone `c` and its latest registration lists it.
 fn listed_by(c: &Capability, bridge: ApiKeyId) -> bool {
-    held_by(c, bridge)
-        && device_of(c)
-            .and_then(|d| d.get("listed"))
-            .and_then(Value::as_bool)
-            == Some(true)
+    held_by(c, bridge) && is_listed(c)
+}
+
+/// The run of the bridge program whose registration listed phone `c` last (`instance`), if it
+/// named one.
+fn instance_of(c: &Capability) -> Option<Uuid> {
+    device_of(c)?.get("instance")?.as_str()?.parse().ok()
+}
+
+/// Whether run `instance` of the bridge that holds phone `c` may act on it (be leased its
+/// commands, leave it out): the phone's latest listing named no run, or this one.
+fn of_this_run(c: &Capability, instance: Option<Uuid>) -> bool {
+    instance_of(c).is_none_or(|listed| Some(listed) == instance)
 }
 
 /// Whether a bridge other than `bridge` holds phone `c` at `now`: it lists it, and registered it
 /// at most [`HELD_FOR`] ago.
 fn held_by_another(c: &Capability, bridge: ApiKeyId, now: OffsetDateTime) -> bool {
-    let listed = device_of(c)
-        .and_then(|d| d.get("listed"))
-        .and_then(Value::as_bool)
-        == Some(true);
+    let listed = is_listed(c);
     let holder = device_of(c)
         .and_then(|d| d.get("listed_by"))
         .and_then(Value::as_str);
@@ -229,7 +263,7 @@ fn held_by_another(c: &Capability, bridge: ApiKeyId, now: OffsetDateTime) -> boo
 }
 
 /// What phone `c`'s bridge lists it can run, as its latest registration reported.
-fn features_of(c: &Capability) -> Vec<String> {
+pub(super) fn features_of(c: &Capability) -> Vec<String> {
     device_of(c)
         .and_then(|d| d.get("features"))
         .and_then(Value::as_array)
@@ -297,6 +331,8 @@ fn device_facts(b: &BridgeCaller, input: &RegisterIn, phone: &PhoneReport) -> Ma
     device.insert("protocol".into(), json!(input.protocol));
     device.insert("listed_by".into(), json!(b.bridge.to_string()));
     device.insert("listed".into(), json!(true));
+    // `null` from a bridge that names no run, in place of a run named before.
+    device.insert("instance".into(), json!(input.instance));
     device
 }
 
@@ -320,8 +356,8 @@ enum Step {
 /// `capability.declare`), its facts merged, and `devices.bridge.online` written (`capability_id`,
 /// `external_id`, `bridge_id`, `version`, `declared`) when it did not read verified until now; a
 /// retired phone, or one another bridge holds, is refused, read under its lock. Each phone this
-/// bridge's previous registration listed and this one leaves out reads as left out. Only the
-/// bridge's key.
+/// bridge's previous registration listed and this one leaves out reads as left out, unless
+/// another run of the bridge listed it since (see the module docs). Only the bridge's key.
 pub async fn register(
     deps: &Deps,
     b: &BridgeCaller,
@@ -393,7 +429,11 @@ pub async fn register(
     }
     let listing: HashSet<CapabilityId> = steps.iter().map(|(id, _)| *id).collect();
     for c in &phones {
-        if c.status != StoredStatus::Retired && listed_by(c, b.bridge) && !listing.contains(&c.id) {
+        if c.status != StoredStatus::Retired
+            && listed_by(c, b.bridge)
+            && of_this_run(c, input.instance)
+            && !listing.contains(&c.id)
+        {
             steps.push((c.id, Step::LeaveOut(c.id)));
         }
     }
@@ -443,7 +483,9 @@ pub async fn register(
                     },
                 ));
             }
-            Step::LeaveOut(id) => leave_out(r.as_mut(), ctx, id, b.bridge).await?,
+            Step::LeaveOut(id) => {
+                leave_out(r.as_mut(), ctx, id, b.bridge, input.instance).await?;
+            }
         }
     }
     r.commit().await?;
@@ -454,16 +496,18 @@ pub async fn register(
 
 /// Marks phone `id` as left out of the latest registration of bridge `bridge`, which listed it
 /// before: no command is leased for it from the next poll on, and another bridge may take it
-/// over. Read under the lock, so a phone that another bridge took over or that was retired since
-/// is left as it stands.
+/// over. Read under the lock, so a phone that another bridge took over, another run of this one
+/// listed (run `instance`'s registration leaves it out), or that was retired since, is left as it
+/// stands.
 async fn leave_out(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     id: CapabilityId,
     bridge: ApiKeyId,
+    instance: Option<Uuid>,
 ) -> Result<(), AppError> {
     let mut c = locked(r, id).await?;
-    if c.status == StoredStatus::Retired || !listed_by(&c, bridge) {
+    if c.status == StoredStatus::Retired || !listed_by(&c, bridge) || !of_this_run(&c, instance) {
         return Ok(());
     }
     kernel::merge_facts(
@@ -490,7 +534,9 @@ enum Taken {
 
 /// `devices.bridge.commands`: the bridge's poll (see the module docs), leasing at most
 /// `query.limit` commands (1 to 20) and waiting up to `query.wait_s` seconds (at most
-/// [`MAX_WAIT_S`]) for one; out-of-range values are cut to the range. Only the bridge's key.
+/// [`MAX_WAIT_S`]) for one; out-of-range values are cut to the range. A poll of run
+/// `query.instance` is leased nothing for a phone another run listed last, also when that run
+/// registered while the poll waits. Only the bridge's key.
 pub async fn commands(
     deps: &Deps,
     b: &BridgeCaller,
@@ -503,7 +549,7 @@ pub async fn commands(
         deps.bridge_signals.as_ref(),
         signal_key(b.ctx.workspace_id),
         wait,
-        move |waited| Box::pin(read(deps, b, limit, waited)),
+        move |waited| Box::pin(read(deps, b, limit, query.instance, waited)),
     )
     .await?;
     Ok(CommandsOut {
@@ -516,12 +562,13 @@ async fn read(
     deps: &Deps,
     b: &BridgeCaller,
     limit: u32,
+    instance: Option<Uuid>,
     waited: StdDuration,
 ) -> Result<Option<Vec<LeasedCommand>>, AppError> {
     let bridge = b.bridge;
     loop {
         let taken = kernel::lease(deps, &b.ctx, &DEVICE_BRIDGE, waited, move |r, ctx, at| {
-            Box::pin(take(r, ctx, bridge, limit, at))
+            Box::pin(take(r, ctx, bridge, instance, limit, at))
         })
         .await?;
         let Some(taken) = taken else {
@@ -555,20 +602,23 @@ async fn read(
 }
 
 /// The lease of one read (in its transaction): picks the due commands of the phones bridge
-/// `bridge` holds and lists now, at most `limit`, fails those their phone's bridge does not list
+/// `bridge` holds and lists now (and run `instance` of it may act on: [`of_this_run`]), at most `limit`, fails those their phone's bridge does not list
 /// what they need for (ledgered), and leases the rest to it. The phones and their features are
 /// read before anything is picked, so nothing waits on another read while rows are locked.
 async fn take(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     bridge: ApiKeyId,
+    instance: Option<Uuid>,
     limit: u32,
     at: Lease,
 ) -> Result<Vec<Taken>, AppError> {
     let phones: HashMap<CapabilityId, (String, Vec<String>)> = kernel::of_kind(r, PHONE_KIND)
         .await?
         .iter()
-        .filter(|c| c.status != StoredStatus::Retired && listed_by(c, bridge))
+        .filter(|c| {
+            c.status != StoredStatus::Retired && listed_by(c, bridge) && of_this_run(c, instance)
+        })
         .filter_map(|c| Some((c.id, (serial_of(c)?, features_of(c)))))
         .collect();
     if phones.is_empty() {
@@ -656,7 +706,7 @@ async fn hand_out(
                 let expires_at = now + DOWNLOAD_URL_LIFETIME;
                 match deps
                     .files
-                    .provider_url(ws, FileId(*file_id), expires_at)
+                    .device_url(ws, FileId(*file_id), expires_at)
                     .await
                 {
                     Ok(url) => Some(url.to_string()),
@@ -708,8 +758,73 @@ async fn hand_out(
     Ok(handed)
 }
 
-/// Writes `devices.command.finished` for command `row`, which just ended, under the version in
-/// force `in_force`: `duration_ms` is the bridge's, `None` for a failure the server decided.
+/// The lowercase hex SHA-256 of `result` as compact JSON text (`serde_json::to_vec`: no
+/// whitespace), every object's keys in sorted order at every depth, which
+/// `devices.command.finished` carries as `result_sha256`: the result kept on the command can be
+/// checked against the ledger, whose entries are never changed. To check one, read the command's
+/// result, write it the same way and hash it. The key order holds while `serde_json`'s
+/// `preserve_order` feature is off, as it is in this workspace (pinned by
+/// `result_sha256_hashes_compact_json_with_sorted_keys`): with it, keys would keep the order they
+/// were read in, and a result read back from Postgres (`jsonb` orders keys its own way) would hash
+/// otherwise.
+pub fn result_sha256(result: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let text = serde_json::to_vec(result).unwrap_or_default();
+    Sha256::digest(&text)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// What `devices.command.finished` says of a command that just ended ([`write_finished`]).
+pub(super) struct Ended<'a> {
+    pub id: Uuid,
+    /// The command's kind, e.g. `"tap"`.
+    pub kind: &'a str,
+    pub status: CommandStatus,
+    pub reason: Option<FailReason>,
+    /// The bridge's, `None` for an end the server decided (a failure, an expiry).
+    pub duration_ms: Option<u32>,
+    /// The bridge (its key) the command was last handed, `None` for none.
+    pub leased_by: Option<ApiKeyId>,
+    /// The result a done command keeps, `None` for any other.
+    pub result: Option<&'a Value>,
+}
+
+/// Writes `devices.command.finished` for the command that just ended as `ended` says, under the
+/// version in force `in_force`: `command_id`, `kind`, `status`, `reason`, `duration_ms`,
+/// `leased_by` (the key id) and `result_sha256` ([`result_sha256`] of the result, `null` without
+/// one). Every end of a command writes one, whoever decided it: the bridge's result, a failure
+/// the server decided, the expiry sweep (`super::sweeps`), and a late result that replaced an
+/// expiry, after it.
+pub(super) async fn write_finished(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    in_force: Option<StrategyVersionId>,
+    ended: Ended<'_>,
+) -> Result<(), AppError> {
+    append(
+        r,
+        ctx,
+        "devices.command.finished",
+        "device_command",
+        ended.id,
+        in_force,
+        json!({
+            "command_id": ended.id,
+            "kind": ended.kind,
+            "status": ended.status.key(),
+            "reason": ended.reason.map(FailReason::key),
+            "duration_ms": ended.duration_ms,
+            "leased_by": ended.leased_by.map(|by| by.to_string()),
+            "result_sha256": ended.result.map(result_sha256),
+        }),
+    )
+    .await
+}
+
+/// [`write_finished`] for command `row`, which just ended: `duration_ms` is the bridge's, `None`
+/// for a failure the server decided.
 async fn finished(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -717,23 +832,16 @@ async fn finished(
     row: &DeviceCommandRow,
     duration_ms: Option<u32>,
 ) -> Result<(), AppError> {
-    append(
-        r,
-        ctx,
-        "devices.command.finished",
-        "device_command",
-        row.id,
-        in_force,
-        json!({
-            "command_id": row.id,
-            "kind": row.command.kind(),
-            "status": row.status.key(),
-            "reason": row.reason.map(FailReason::key),
-            "duration_ms": duration_ms,
-            "leased_by": row.leased_by.map(|by| by.to_string()),
-        }),
-    )
-    .await
+    let ended = Ended {
+        id: row.id,
+        kind: row.command.kind(),
+        status: row.status,
+        reason: row.reason,
+        duration_ms,
+        leased_by: row.leased_by,
+        result: row.result.as_ref(),
+    };
+    write_finished(r, ctx, in_force, ended).await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1001,4 +1109,51 @@ pub async fn files(
         "device file uploaded"
     );
     Ok(FileOut { file_id: id })
+}
+
+#[cfg(test)]
+mod tests {
+    use jt_capability::CapabilityKind;
+    use serde_json::{Value, json};
+    use time::Duration;
+
+    use super::{HEARTBEAT_S, HELD_FOR, PHONE_KIND, result_sha256};
+
+    #[test]
+    fn held_for_is_the_phone_kinds_stale_clock() {
+        // A phone reads stale, and so offline, when its bridge's hold on it lapses, and that is
+        // four missed registrations.
+        let beat = CapabilityKind::parse(PHONE_KIND)
+            .and_then(|k| k.heartbeat())
+            .expect("a phone is verified by its heartbeat");
+        assert_eq!(beat.stale_after, HELD_FOR);
+        assert_eq!(HELD_FOR, Duration::seconds(4 * i64::from(HEARTBEAT_S)));
+        assert_eq!(beat.unreachable_after, Duration::minutes(10));
+    }
+
+    #[test]
+    fn result_sha256_hashes_compact_json_with_sorted_keys() {
+        use sha2::{Digest, Sha256};
+        let result = json!({
+            "stdout": "x",
+            "kind": "shell",
+            "exit_code": 0,
+            "nested": { "b": 1, "a": [2, 1] },
+        });
+        // Keys sorted at every depth, no whitespace: `serde_json` without `preserve_order`, which
+        // would keep the order above.
+        let text = r#"{"exit_code":0,"kind":"shell","nested":{"a":[2,1],"b":1},"stdout":"x"}"#;
+        assert_eq!(serde_json::to_string(&result).unwrap(), text);
+        let expected: String = Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(result_sha256(&result), expected);
+        // The same result read in another key order (as `jsonb` hands it back) hashes the same.
+        let reordered: Value = serde_json::from_str(
+            r#"{"stdout":"x","nested":{"b":1,"a":[2,1]},"exit_code":0,"kind":"shell"}"#,
+        )
+        .unwrap();
+        assert_eq!(result_sha256(&reordered), expected);
+    }
 }

@@ -83,7 +83,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. On yedi göç vardır:
+döndürür. On sekiz göç vardır:
 
 | Göç | Ne yapar |
 |---|---|
@@ -104,6 +104,7 @@ döndürür. On yedi göç vardır:
 | `0015_voice_calls` | Voice V0: `call_sessions`, `call_turns`, `call_commands`, `call_duty` (forced RLS, composite keys; 71 tables), `workspace_policies.calls`, `calls.work` for the system owner/manager/rep and `calls.manage` for owner/manager, and the retry columns of `event_consumption` (`attempts`, `retry_at`). Down refuses while a call is not ended. |
 | `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
 | `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
+| `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -714,7 +715,7 @@ panelinde birebir girilir (`{genel adres}` = `JEETA_PUBLIC_BASE_URL`):
 | Meta (Facebook Login, Graph API) | `JEETA_META_APP_ID`, `JEETA_META_APP_SECRET`, `JEETA_META_VERIFY_TOKEN`; isteğe bağlı `JEETA_META_LOGIN_CONFIG_ID`, `JEETA_META_WHATSAPP_CONFIG_ID`, `JEETA_META_GRAPH_VERSION` | developers.facebook.com → uygulama → Ayarlar → Temel: Uygulama Kimliği ve Uygulama Sırrı; Facebook Login (for Business) → Ayarlar → Geçerli OAuth Yönlendirme URI'leri; Webhooks → Sayfa, Instagram ve WhatsApp Business Hesabı nesneleri için geri çağırma adresi `{genel adres}/hooks/meta` ve doğrulama anahtarı (`JEETA_META_VERIFY_TOKEN` ile aynı değer) | `{genel adres}/oauth/callback/meta` |
 | Instagram (Instagram Login) | `JEETA_INSTAGRAM_APP_ID`, `JEETA_INSTAGRAM_APP_SECRET` | Meta uygulamasının Instagram ürünü → API setup with Instagram login: Instagram uygulama kimliği ve sırrı; "Business login settings" → OAuth redirect URIs | `{genel adres}/oauth/callback/instagram` |
 | X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret | `{genel adres}/oauth/callback/x` |
-| TikTok | `JEETA_TIKTOK_CLIENT_KEY`, `JEETA_TIKTOK_CLIENT_SECRET` | developers.tiktok.com → uygulama: ürünler **Login Kit** ve **Content Posting API** (Direct Post); Login Kit → Redirect URI; kapsamlar `user.info.basic`, `video.publish`, `video.list`, `user.info.stats`; denetimden (audit) önce yalnız `SELF_ONLY` paylaşım ve yalnız test kullanıcıları; fotoğraf paylaşımı için dosya deposunun genel alan adı URL properties altında doğrulanır | `{genel adres}/oauth/callback/tiktok` |
+| TikTok | `JEETA_TIKTOK_CLIENT_KEY`, `JEETA_TIKTOK_CLIENT_SECRET` | developers.tiktok.com → uygulama: ürünler **Login Kit** ve **Content Posting API** (Direct Post); Login Kit → Redirect URI; kapsamlar `user.info.basic`, `video.publish`, `video.upload`, `video.list`, `user.info.stats`; Webhooks → Callback URL `{genel adres}/hooks/tiktok` (imza client secret ile); denetimden (audit) önce yalnız gizli hesaplara ve yalnız test kullanıcılarıyla paylaşım; fotoğraf paylaşımı için dosya deposunun genel alan adı URL properties altında doğrulanır. Ayrıntı: [`docs/operations/tiktok.md`](../docs/operations/tiktok.md) | `{genel adres}/oauth/callback/tiktok` |
 | LinkedIn | `JEETA_LINKEDIN_CLIENT_ID`, `JEETA_LINKEDIN_CLIENT_SECRET`; isteğe bağlı `JEETA_LINKEDIN_ORG_SCOPES`, `JEETA_LINKEDIN_API_VERSION` | linkedin.com/developers → uygulama (bir Şirket Sayfasına bağlı): ürünler **Sign In with LinkedIn using OpenID Connect** ve **Share on LinkedIn** (kişisel akış, `openid profile w_member_social`); kurum sayfaları için **Community Management API** onayı → `JEETA_LINKEDIN_ORG_SCOPES=1`; Auth → Authorized redirect URLs; programatik yenileme yoksa erişim 60 günde biter ve bağlantı yeniden kurulur | `{genel adres}/oauth/callback/linkedin` |
 
 (Panel menülerinin adları sağlayıcıların arayüzüne göre değişebilir; aranan alanlar uygulama kimliği, sırrı,
@@ -958,6 +959,9 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `outbox_recover` | 1 dakika | 2 dakikadan eski `sending` → `unknown` (yeniden göndermez); 5 dakikadan eski `queued` kayıtlarını iki çitli gönderim adımına verir | `jeeta.jobs.outbox_recover` |
 | `call_timers` | 1 saniye | Hatta ajan araması olan alanlarda (tek bir platform okumasıyla bulunur) her aramanın zamanlayıcılarını işletir: yavaş ajana 4. ve 10. saniyede planın bekleme cümlesi, sessiz ajana her 20 saniyede planın sıradaki yedek cümlesi, yedekler bitince kapanış cümlesi ve kapatma (`agent_timeout`); en uzun süreyi aşan, arayanı sessiz kalan, 90 saniye cevapsız çalan ve köprüsü susmuş arama da senaryoyla biter. Sunucu hiçbir cümle yazmaz | `jeeta.jobs.call_timers` |
 | `purge_call_commands` | 1 gün | Ses köprüsü için 7 günden önce kuyruğa alınmış komutları (onaylanmış olsun olmasın) siler; aramalar ve konuşma kayıtları kalır | `jeeta.jobs.purge_call_commands` |
+| `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
+| `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
+| `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -2004,6 +2008,64 @@ field.
 | `devices.bridge.commands` | `GET /api/devices/bridge/commands?wait_s&limit` | READ | long-poll of at most 25 s, at most 20 commands, for the phones the bridge's latest registration lists; a command the phone's bridge no longer lists is failed `unsupported_by_bridge`; `push_file` carries a 10-minute signed `download_url` |
 | `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, from the bridge the command was leased to (or the one that holds its phone now), else counted `unknown`; a file id that is not a device file this bridge uploaded refuses the batch |
 | `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself, streamed (`image/png` up to 25 MB, `application/octet-stream` up to 95 MiB, under Cloudflare's 100 MB); each workspace uploads two screenshots and two pulled files at a time, a wait over 10 s is a retryable `503`; a device file kept seven days; `{"file_id"}` |
+
+A phone (`phone`, like `voice_bridge`, a kind with a heartbeat) is verified only by the
+registrations that list it: `capability.verify` refuses it (`409`, `details.reason =
+"verified_by_heartbeat"`, `details.cleared_by = "devices.bridge.register"`). It reads stale a
+minute after the last registration that listed it,
+and the `device_bridge_health` job (every minute) marks it unreachable after ten minutes, writing
+`devices.bridge.offline`; meanwhile `work.pending` lists it as `phone_offline` (never as a voice
+bridge). The `device_command_expiry` job (every minute) ends the commands past their time limit as
+`expired`, 200 per transaction, with a `devices.command.finished` each (`leased_by` the bridge
+last handed it, `result_sha256` `null`); a leased command's late result still replaces `expired`,
+with a second entry. The `device_file_purge` job (hourly) deletes the device files past their seven
+days, bytes then record, reading on past a file it cannot delete; it writes no ledger entry.
+Command rows are never deleted (an archtest refuses `delete from device_commands`).
+
+**Deploy note (device bridge D1-T7).** A `phone` verified by evidence before this release reads
+stale at once and, unless a device bridge lists it, goes unreachable within about 11 minutes (the
+`device_bridge_health` job) and stays listed as `phone_offline`: retire it. Phones are now declared
+and kept alive by their device bridge.
+
+#### Phones for agents (device bridge D1-T6)
+
+An agent, or a person holding `devices.work` (the owner and the manager; a rep does not), drives a
+phone through these (`jt_app::usecases::devices::agent`). `act` is the one way a command is queued:
+it checks the command's bounds, that a `push_file`'s file is stored, that the phone is online
+(it reads verified: registered within its heartbeat's minute by the bridge that holds it, and
+listed in that bridge's latest registration) and that its bridge lists what the command needs,
+then queues it
+(it expires after five minutes), writes `devices.command.queued` with the whole command (typed
+text and shell arguments included) and waits up to 20 seconds for its result. A queued command is
+not a done one: the answer is the command as it then stands (`queued`, `leased`, `done`,
+`failed`, `expired`, the last also for one past its expiry that the sweep has not ended yet), and
+`command_get` waits on it again. Once a command is queued, `act` answers it, never an error (a
+wait that fails answers it as queued): an error means nothing was queued.
+`devices.command.finished` carries `result_sha256`, the hash of the result kept on the command. There is no allowlist, rate cap,
+approval or address filter (owner, spec §1); `tracing` carries ids, kinds and statuses only.
+Exempt from the strategy gate, not from the status check.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `devices.list` | `GET /api/devices` | `jeeta.devices.list` | READ | the phones that are not retired: `online`, status, platform, serial, model, OS, screen, features, `unicode`, bridge, last seen |
+| `devices.observe` | `POST /api/devices/{capability_id}/observe` | `jeeta.devices.observe` | WRITE | `act` with `observe {screenshot}`: the observation, and a 10-minute `file_url` for the screenshot |
+| `devices.act` | `POST /api/devices/{capability_id}/act` | `jeeta.devices.act` | WRITE | `{command, wait_s ≤ 20}`; `422` `unsupported_by_bridge` (`details.kind`) or `unicode_unsupported` (install and enable ADBKeyBoard), `409` `device_offline` or `phone_retired` |
+| `devices.command_get` | `GET /api/devices/commands/{command_id}?wait_s` | `jeeta.devices.command_get` | READ | waits up to 20 s for the command to end; at once once it has |
+| `devices.commands` | `GET /api/devices/{capability_id}/commands?limit` | `jeeta.devices.commands` | READ | the phone's log, newest first, 1 to 200 (50), with arguments, without results (`command_get` reads one) |
+
+The signed file address (`GET /files/{id}`, which a `push_file` download and a `file_url` use) is
+served as a stream: 64 KiB read at a time, hashed as it is read, its length announced and its last
+chunk sent only once the hash is the stored one, so a large file, or many reads of one at once,
+are never held in memory whole. The first chunk is read before anything is answered, so a
+tampered file that fits in it is a `404`; a larger one is cut off short of its length. Reads take
+turns: at most 3 at once of one file, 8 of one workspace's provider fetches (studio's media) and 8
+of its devices' reads (`push_file` downloads and `file_url`s, addresses signed with
+`purpose=device`), and 96 in all; a request waits up to 10 s for its turns, then `503`. A response
+whose client takes nothing for 30 s, or that runs past 30 minutes, is cut off and lets go of its
+turns, and the server closes any connection whose write its client has taken nothing of for 60 s.
+
+`JEETA_LOG` is always followed by `rmcp=warn`: rmcp logs whole MCP requests at `debug`, tool
+arguments (typed text, shell arguments) among them.
 
 Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
 dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes

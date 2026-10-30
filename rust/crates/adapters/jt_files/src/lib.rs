@@ -1,25 +1,35 @@
 //! Linux local storage: descriptor-anchored tenant roots, immutable atomic files and signed transport.
 //! A file is its metadata header (length, then JSON) and its bytes; a streamed upload
 //! ([`FileStore::put_stream`]) is written chunk by chunk to a temporary file, hashed as it comes,
-//! and only then given its header and linked into place, so memory holds a chunk at a time.
+//! and only then given its header and linked into place, so memory holds a chunk at a time. The
+//! signed retrieval route ([`router`]) serves a file the same way: read [`READ_CHUNK`] bytes at a
+//! time ([`FileStore::read_stream`]), hashed as they are read, the last chunk given out only once
+//! the hash is the header's; a few files at a time ([`MAX_CONCURRENT_READS`]), and never held by
+//! a client that stopped reading ([`READ_IDLE`], [`READ_DEADLINE`]).
 mod fetch;
+mod serve;
 use async_trait::async_trait;
 pub use fetch::CheckedMediaFetcher;
 use hmac::{Hmac, KeyInit, Mac};
 use jt_app::{
-    error::AppError,
+    error::{AppError, ErrorCode},
     ports::{
         Clock,
         connectors::MediaUpload,
-        files::{ByteSource, FileStore, StoredFile},
+        files::{ByteSource, FileStore, StoredFile, StreamedFile},
     },
     usecases::files::{
-        HEAD_BYTES, STORED_LIMIT, filename_ok, streams, validate_stored, validate_stored_head,
+        DEVICE_FILE_LIMIT, HEAD_BYTES, OCTET_STREAM, STORED_LIMIT, filename_ok, streams,
+        validate_stored, validate_stored_head,
     },
-    usecases::studio::files::invalid,
+    usecases::studio::files::{invalid, limit},
 };
 use jt_studio::FileId;
 use jt_tenancy::WorkspaceId;
+pub use serve::{
+    DEVICE_PURPOSE, MAX_CONCURRENT_READS, READ_DEADLINE, READ_IDLE, READ_TURN_WAIT, READS_PER_FILE,
+    READS_PER_WORKSPACE, ReadLimits, router, router_with_limits,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
@@ -36,6 +46,9 @@ use url::Url;
 fn storage() -> AppError {
     AppError::internal("file storage unavailable or integrity check failed")
 }
+/// The most bytes one read of a file being served takes ([`FileStore::read_stream`]): what memory
+/// holds of it at a time, whatever its size and however many read it at once.
+pub const READ_CHUNK: usize = 64 * 1024;
 fn io<T>(r: std::io::Result<T>) -> Result<T, AppError> {
     r.map_err(|_| storage())
 }
@@ -205,6 +218,27 @@ impl DiskFiles {
     /// File `id`'s metadata, read from its header alone, with the file's length checked against
     /// it: no byte of the file is read. `NOT_FOUND` when there is no such file.
     fn load_meta(&self, ws: WorkspaceId, id: FileId) -> Result<StoredFile, AppError> {
+        self.open_checked(ws, id).map(|(f, _)| f)
+    }
+    /// File `id` opened to be served a chunk at a time ([`FileStore::read_stream`]): its header
+    /// checked as [`DiskFiles::load_meta`] checks it, and its metadata as [`validate_stored`]
+    /// would (a type the store keeps, a size within that type's limit, a name it takes); the file
+    /// positioned at its first byte, whose bytes [`Serving`] checks as they are read.
+    fn stream_inner(&self, ws: WorkspaceId, id: FileId) -> Result<(StoredFile, File), AppError> {
+        let (f, file) = self.open_checked(ws, id)?;
+        let fits = match f.mime.as_str() {
+            OCTET_STREAM => f.size_bytes <= DEVICE_FILE_LIMIT,
+            mime => limit(mime).is_ok_and(|max| f.size_bytes > 0 && f.size_bytes <= max),
+        };
+        if !fits || !filename_ok(&f.filename) {
+            return Err(storage());
+        }
+        Ok((f, file))
+    }
+    /// File `id` opened, its metadata read from its header alone and the file's length checked
+    /// against it, positioned at its first byte: no byte of the file is read. `NOT_FOUND` when
+    /// there is no such file.
+    fn open_checked(&self, ws: WorkspaceId, id: FileId) -> Result<(StoredFile, File), AppError> {
         let tenant = anchored(&self.root).join(ws.to_string());
         if !tenant.try_exists().map_err(|_| storage())? {
             return Err(AppError::not_found("file"));
@@ -241,7 +275,7 @@ impl DiskFiles {
         {
             return Err(storage());
         }
-        Ok(f)
+        Ok((f, file))
     }
     fn load(&self, ws: WorkspaceId, id: FileId) -> Result<(StoredFile, MediaUpload), AppError> {
         let parent = self.tenant(ws, false)?;
@@ -415,13 +449,15 @@ impl DiskFiles {
         }
     }
     /// A URL that reads file `id` until `expires_at`: after now and at most 24 hours (and a
-    /// second's grace) ahead, the longest [`verify`] accepts. Studio hands providers 24-hour
-    /// URLs; a device bridge's `push_file` gets a shorter one.
-    fn provider_url_inner(
+    /// second's grace) ahead, the longest [`verify_for`] accepts, signed for `purpose` (`None`: a
+    /// provider's, as studio hands its media out for 24 hours; [`DEVICE_PURPOSE`]: a device's
+    /// download or an agent's file address, served from a pool of its own).
+    fn signed_url(
         &self,
         ws: WorkspaceId,
         id: FileId,
         expires_at: OffsetDateTime,
+        purpose: Option<&str>,
     ) -> Result<Url, AppError> {
         let now = self.clock.now();
         if expires_at <= now || expires_at - now > Duration::hours(24) + Duration::seconds(1) {
@@ -434,26 +470,52 @@ impl DiskFiles {
         let expires = expires_at
             .unix_timestamp()
             .min((now + Duration::hours(24)).unix_timestamp());
-        let sig = sign(&self.key, ws, id, expires);
+        let sig = sign(&self.key, ws, id, expires, purpose);
         let mut url = self
             .base
             .join(&format!("files/{id}"))
             .map_err(|_| storage())?;
-        url.query_pairs_mut()
-            .append_pair("workspace", &ws.to_string())
-            .append_pair("expires", &expires.to_string())
-            .append_pair("signature", &sig);
+        {
+            let mut query = url.query_pairs_mut();
+            query
+                .append_pair("workspace", &ws.to_string())
+                .append_pair("expires", &expires.to_string())
+                .append_pair("signature", &sig);
+            if let Some(purpose) = purpose {
+                query.append_pair("purpose", purpose);
+            }
+        }
         Ok(url)
     }
 }
-fn mac(key: &[u8; 32], ws: WorkspaceId, id: FileId, expires: i64) -> Hmac<Sha256> {
+/// The signature of an address: `jeeta.files.v1` for a provider's (no purpose, as every address
+/// was before purposes), `jeeta.files.v2` with the purpose for any other, so an address of one
+/// purpose never verifies as another's.
+fn mac(
+    key: &[u8; 32],
+    ws: WorkspaceId,
+    id: FileId,
+    expires: i64,
+    purpose: Option<&str>,
+) -> Hmac<Sha256> {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC key");
-    mac.update(format!("jeeta.files.v1\n{ws}\n{id}\n{expires}").as_bytes());
+    let text = match purpose {
+        None => format!("jeeta.files.v1\n{ws}\n{id}\n{expires}"),
+        Some(purpose) => format!("jeeta.files.v2\n{ws}\n{id}\n{expires}\n{purpose}"),
+    };
+    mac.update(text.as_bytes());
     mac
 }
-fn sign(key: &[u8; 32], ws: WorkspaceId, id: FileId, expires: i64) -> String {
-    hex::encode(mac(key, ws, id, expires).finalize().into_bytes())
+fn sign(
+    key: &[u8; 32],
+    ws: WorkspaceId,
+    id: FileId,
+    expires: i64,
+    purpose: Option<&str>,
+) -> String {
+    hex::encode(mac(key, ws, id, expires, purpose).finalize().into_bytes())
 }
+/// [`verify_for`] a provider's address (signed without a purpose).
 pub fn verify(
     key: &[u8; 32],
     ws: WorkspaceId,
@@ -462,60 +524,86 @@ pub fn verify(
     signature: &str,
     now: OffsetDateTime,
 ) -> Result<(), AppError> {
+    verify_for(key, ws, id, expires, None, signature, now)
+}
+/// `Ok` when `signature` signs file `id` of workspace `ws` until `expires` for `purpose`, and
+/// `expires` is after `now` and at most 24 hours ahead; else `NOT_FOUND`.
+pub fn verify_for(
+    key: &[u8; 32],
+    ws: WorkspaceId,
+    id: FileId,
+    expires: i64,
+    purpose: Option<&str>,
+    signature: &str,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
     if expires <= now.unix_timestamp() || expires > (now + Duration::hours(24)).unix_timestamp() {
         return Err(AppError::not_found("file"));
     }
     let bytes = hex::decode(signature).map_err(|_| AppError::not_found("file"))?;
-    mac(key, ws, id, expires)
+    mac(key, ws, id, expires, purpose)
         .verify_slice(&bytes)
         .map_err(|_| AppError::not_found("file"))
 }
-#[derive(Clone)]
-struct Retrieval {
-    store: Arc<dyn FileStore>,
-    clock: Arc<dyn Clock>,
-    key: [u8; 32],
+/// A stored file's bytes as they are served ([`FileStore::read_stream`]): read at most
+/// [`READ_CHUNK`] bytes at a time, hashed as they come. The chunk that completes the file is given
+/// out only once nothing follows it and the hash of all of them is the header's; else, as when the
+/// file ends short of its header's length, the read ends with an error, so the reader never
+/// receives the file whole.
+struct Serving {
+    file: tokio::fs::File,
+    /// The bytes still to read.
+    left: u64,
+    hasher: Sha256,
+    /// The header's hash.
+    sha256: String,
+    done: bool,
 }
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SignedQuery {
-    workspace: WorkspaceId,
-    expires: i64,
-    signature: String,
+impl Serving {
+    /// `Ok` when what was read is the stored file: nothing follows it, and its hash is the
+    /// header's. The read is over either way.
+    async fn check_end(&mut self) -> Result<(), AppError> {
+        use tokio::io::AsyncReadExt as _;
+        self.done = true;
+        let mut extra = [0u8; 1];
+        let more = self.file.read(&mut extra).await.map_err(|_| storage())?;
+        let hash = hex::encode(std::mem::replace(&mut self.hasher, Sha256::new()).finalize());
+        if more != 0 || hash != self.sha256 {
+            return Err(storage());
+        }
+        Ok(())
+    }
 }
-pub fn router(store: Arc<dyn FileStore>, clock: Arc<dyn Clock>, key: [u8; 32]) -> axum::Router {
-    axum::Router::new()
-        .route("/files/{id}", axum::routing::get(retrieve))
-        .with_state(Retrieval { store, clock, key })
-}
-async fn retrieve(
-    axum::extract::State(s): axum::extract::State<Retrieval>,
-    axum::extract::Path(id): axum::extract::Path<FileId>,
-    axum::extract::Query(q): axum::extract::Query<SignedQuery>,
-) -> Result<impl axum::response::IntoResponse, axum::http::StatusCode> {
-    use axum::http::{StatusCode, header};
-    verify(
-        &s.key,
-        q.workspace,
-        id,
-        q.expires,
-        &q.signature,
-        s.clock.now(),
-    )
-    .map_err(|_| StatusCode::NOT_FOUND)?;
-    let u = s
-        .store
-        .read(q.workspace, id)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, u.mime),
-            (header::CACHE_CONTROL, "private, no-store".into()),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
-        ],
-        u.bytes,
-    ))
+#[async_trait]
+impl ByteSource for Serving {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        use tokio::io::AsyncReadExt as _;
+        if self.done {
+            return Ok(None);
+        }
+        if self.left == 0 {
+            // An empty file: there is only its hash to check.
+            self.check_end().await?;
+            return Ok(None);
+        }
+        let want = usize::try_from(self.left).map_or(READ_CHUNK, |left| left.min(READ_CHUNK));
+        let mut chunk = vec![0; want];
+        let n = match self.file.read(&mut chunk).await {
+            Ok(n) if n > 0 => n,
+            // Shorter than its header says, or unreadable.
+            _ => {
+                self.done = true;
+                return Err(storage());
+            }
+        };
+        chunk.truncate(n);
+        self.left -= n as u64;
+        self.hasher.update(&chunk);
+        if self.left == 0 {
+            self.check_end().await?;
+        }
+        Ok(Some(chunk))
+    }
 }
 
 #[async_trait]
@@ -542,6 +630,34 @@ impl FileStore for DiskFiles {
         tokio::task::spawn_blocking(move || this.read_inner(ws, id))
             .await
             .map_err(|_| storage())?
+    }
+    async fn exists(&self, ws: WorkspaceId, id: FileId) -> Result<bool, AppError> {
+        let this = self.clone();
+        let header = tokio::task::spawn_blocking(move || this.load_meta(ws, id))
+            .await
+            .map_err(|_| storage())?;
+        match header {
+            Ok(_) => Ok(true),
+            Err(e) if e.code == ErrorCode::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+    async fn read_stream(&self, ws: WorkspaceId, id: FileId) -> Result<StreamedFile, AppError> {
+        let this = self.clone();
+        let (f, file) = tokio::task::spawn_blocking(move || this.stream_inner(ws, id))
+            .await
+            .map_err(|_| storage())??;
+        Ok(StreamedFile {
+            mime: f.mime,
+            size_bytes: f.size_bytes,
+            bytes: Box::new(Serving {
+                file: tokio::fs::File::from_std(file),
+                left: f.size_bytes,
+                hasher: Sha256::new(),
+                sha256: f.sha256,
+                done: false,
+            }),
+        })
     }
     async fn put_stream(
         &self,
@@ -622,7 +738,18 @@ impl FileStore for DiskFiles {
         e: OffsetDateTime,
     ) -> Result<Url, AppError> {
         let this = self.clone();
-        tokio::task::spawn_blocking(move || this.provider_url_inner(ws, id, e))
+        tokio::task::spawn_blocking(move || this.signed_url(ws, id, e, None))
+            .await
+            .map_err(|_| storage())?
+    }
+    async fn device_url(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        e: OffsetDateTime,
+    ) -> Result<Url, AppError> {
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || this.signed_url(ws, id, e, Some(DEVICE_PURPOSE)))
             .await
             .map_err(|_| storage())?
     }

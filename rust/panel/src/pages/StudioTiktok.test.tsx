@@ -519,6 +519,17 @@ describe('TikTok posting screen', () => {
     expect(within(videos.children[1] as HTMLElement).getByText('Önizleme yok')).toBeInTheDocument();
   });
 
+  it('an_avatar_that_does_not_load_is_left_out', async () => {
+    mockFetch(answers());
+    renderAt('/studio');
+    const form = await postingScreen();
+    const avatar = form.querySelector('img[src="https://p16.tiktokcdn.test/avatar.jpeg"]');
+    expect(avatar).not.toBeNull();
+    // TikTok's avatar URLs are signed and expire: no broken image is shown.
+    fireEvent.error(avatar!);
+    expect(form.querySelector('img[src="https://p16.tiktokcdn.test/avatar.jpeg"]')).toBeNull();
+  });
+
   it('works_without_the_counters_when_tiktok_did_not_give_them', async () => {
     mockFetch(
       answers(true, {

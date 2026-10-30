@@ -592,11 +592,100 @@ are set up before a strategy, like the bridge; `Write` for act):
   **full** command; signal the bridge; wait up to `wait_s` for a final status; return `{command_id, status,
   result?, reason?}`.
 - `observe` = `act(Observe{screenshot})` with the observation (and a signed screenshot URL) in the answer.
-- [ ] **Before `act` takes `push_file`:** `jt_files`' signed retrieve route (`/files/{id}`) reads the whole file into
+- [x] **Before `act` takes `push_file`:** `jt_files`' signed retrieve route (`/files/{id}`) reads the whole file into
   memory for each request. A leaked ten-minute `download_url` can be fetched many times at once, so stream the
   response (or cap the concurrent reads) before D1-T6 lets an agent queue a `push_file`.
-- [ ] **Tests first (`jt_app/tests/devices_agent.rs`):** `act_queues_and_returns_result_when_bridge_answers`, `act_returns_queued_when_wait_ends`, `act_refuses_unsupported_kind`, `act_refuses_unicode_without_feature`, `act_on_offline_phone_refuses_device_offline`, `act_on_phone_missing_from_latest_register_refuses_device_offline` (a stale phone is not "live"), `ledger_carries_full_command`, `tracing_never_carries_args` (capture `tracing` output with a test subscriber; assert typed text / shell args absent), `rep_cannot_act`, `command_get_waits`; `jt_mcp/tests/devices_mcp.rs::tools_listed_with_schemas`.
-- [ ] CI red → implement → green; **commit** `feat(devices): agents act on phones`.
+- [x] **Tests first (`jt_app/tests/devices_agent.rs`):** `act_queues_and_returns_result_when_bridge_answers`, `act_returns_queued_when_wait_ends`, `act_refuses_unsupported_kind`, `act_refuses_unicode_without_feature`, `act_on_offline_phone_refuses_device_offline`, `act_on_phone_missing_from_latest_register_refuses_device_offline` (a stale phone is not "live"), `ledger_carries_full_command`, `tracing_never_carries_args` (capture `tracing` output with a test subscriber; assert typed text / shell args absent), `rep_cannot_act`, `command_get_waits`; `jt_mcp/tests/devices_mcp.rs::tools_listed_with_schemas`.
+- [x] CI red → implement → green; **commit** `feat(devices): agents act on phones`.
+
+As built (D1-T6):
+- **Use cases** (`jt_app::usecases::devices::agent`), every one `ctx.require(DevicesWork)`:
+  `list(deps, ctx) -> Vec<PhoneOut>`, `observe(deps, ctx, CapabilityId, ObserveInput{screenshot, wait_s})`,
+  `act(deps, ctx, CapabilityId, ActInput{command, wait_s}) -> CommandOut`,
+  `command_get(deps, ctx, Uuid, WaitQuery{wait_s}) -> CommandOut`,
+  `commands(deps, ctx, CapabilityId, LogQuery{limit}) -> Vec<LoggedCommand>`. `CommandOut` is the command as it stands:
+  `command_id, capability_id, kind, command` (the arguments), `status, attempts, result, reason, detail, file_url,
+  requested_by, created_at, expires_at, leased_at, done_at`.
+- **Waits.** `MAX_WAIT_S` = 20 s, also what an absent `wait_s` waits (more is cut to it, 0 answers at once), on the
+  kernel's `wait_for` over the devices' signal (woken by the bridge's results, else read every `FALLBACK_TICK`); the
+  wait answers once the command `is_final()` or its `expires_at` has passed (each read as of the call's time plus the
+  wait so far), else reads it once more and answers `queued`/`leased`.
+- **Once queued, `act` answers the command** (review of #384): a wait whose read fails is logged at `warn` (the error
+  code only) and the command is answered as queued, never as an error, which an agent would take for a refusal and
+  retry (the phone would act twice). `command_get` may answer an error: it is a read. Test
+  `act_answers_a_queued_command_when_its_wait_fails` (a unit of work whose bundles fail after the one that queues).
+- **Expiry by the clock, of queued commands only.** A command still `queued` whose `expires_at` has passed reads
+  `expired` in every answer and in the log, before D1-T7's sweep writes it (`status_at`); its `done_at` stays `null`
+  until then. A `leased` one reads `leased` until the sweep ends it (the phone may still be running it, and its result
+  replaces `expired` even after); the `act` and `command_get` descriptions say that `expired` with `leased_at` set may
+  still finish and is to be checked before running it again. Tests
+  `an_unfinished_command_past_its_expiry_reads_expired`,
+  `a_leased_command_past_its_expiry_reads_leased_until_it_ends`. The `act` description says "an error answer means
+  nothing was queued; after a dropped connection, check `jeeta.devices.commands`".
+- **Checks, in order** (before anything is queued): `validate()` (`422` naming the field); a `push_file`'s file in
+  the store (`422` `file_id`, `reason: file_not_found`; a store that cannot answer does not refuse, the lease checks
+  again); a `phone` capability of the workspace (`404`); not retired (`409 phone_retired`); `online`: stored status
+  verified, `last_verified_at` within `ONLINE_FOR` (= `HELD_FOR`, 60 s; `phone` has no heartbeat kind until D1-T7;
+  D1-T7 replaced `ONLINE_FOR` by the phone kind's heartbeat: `effective_status == Verified`, see its "As built")
+  and `listed` in its holder's latest registration (`409 device_offline`); `required_features`: the kind missing is
+  `422 {field: command, reason: unsupported_by_bridge, kind}`, `text.unicode` missing is
+  `422 {field: command, reason: unicode_unsupported, hint}` with `UNICODE_HINT` (install and enable ADBKeyBoard).
+- **Ledger.** `devices.command.queued {command_id, phone, kind, command, expires_at}`, subject `device_command`, in the
+  transaction that queues it; `devices.command.finished` stays the bridge surface's (spec §5.5: the result is
+  referenced, kept on the command row).
+- **File addresses.** An answer whose result names a file (`file.file_id`, `observation.screenshot_file_id`) carries
+  `file_url`, signed for `FILE_URL_LIFETIME` (10 min) at answer time; a file no longer stored (purged) leaves it `null`
+  with a `debug` line, any other failure with a `warn`. `pushable` asks `FileStore::exists` (the disk store reads the
+  header only; the default reads the file), not a signed address.
+- **The log leaves results out.** `commands` answers `LoggedCommand` (kind, arguments, status, attempts, reason,
+  detail, who and when; no `result`, no `file_url`): a result can be ~2 MiB and a log is up to 200 rows.
+  `DeviceCommandRepo::list` reads no result either (`null::jsonb as result` in `jt_pg`; contract test
+  `list_leaves_the_results_out`); `get` (and so `command_get`) reads it whole.
+- **Result hash.** `devices.command.finished` also carries `result_sha256` (`bridge::result_sha256`: the hex SHA-256
+  of the kept result as compact JSON with every object's keys sorted, `null` without one), so the result on the command
+  row can be checked against the append-only ledger. The key order relies on `serde_json` without `preserve_order`,
+  pinned by `result_sha256_hashes_compact_json_with_sorted_keys`.
+- **Coordinates.** `jt_devices::MAX_SCREEN_PX` (20 000, moved from `jt_device_protocol`, which re-exports it) bounds a
+  `tap`, `long_press` or `swipe` coordinate in `DeviceCommand::validate`, as the schema does.
+- **Schema bounds.** The `jeeta.devices.act` command schema takes its bounds from `jt_devices` (`MAX_TEXT_CHARS`,
+  `MAX_URL_CHARS`, `MAX_APP_ID_CHARS`, `MAX_PATH_CHARS`, `MAX_SHELL_ARGS`, `MAX_ARG_CHARS`, `MAX_SHELL_TOTAL_CHARS`,
+  `MAX_SWIPE_MS`, `MAX_LONG_PRESS_MS`) and bounds every pixel by `MAX_SCREEN_PX` (20 000); unit test
+  `every_kind_fits_its_variant` (one serialized sample per kind against its variant's properties, required and
+  bounds).
+- **Tracing.** `device command queued` (`command_id`, `capability_id`, `kind`) and `device command waited on`
+  (`command_id`, `kind`, `status`, `waited_ms`); a URL that cannot be signed is a `warn` with the error code. Pinned by
+  `jt_app/tests/devices_agent_tracing.rs::tracing_never_carries_args`, a binary of its own (it installs the global
+  subscriber), with canaries in every argument, result, detail, path and file and the signed addresses' host.
+- **Streamed retrieval.** `FileStore::read_stream(ws, id) -> StreamedFile {mime, size_bytes, bytes: Box<dyn
+  ByteSource>}` (a default that reads whole); `jt_files::DiskFiles` opens the file, checks the header and the
+  metadata as `validate_stored` would, and reads `READ_CHUNK` (64 KiB) at a time, hashing; the chunk that completes
+  the file is given out only once nothing follows it and the hash is the header's. The route announces
+  `Content-Length` and answers `Body::from_stream`, so a file that fails the check is cut short of its length.
+  Test `jt_files::a_large_file_is_served_a_chunk_at_a_time` (chunks ≤ 64 KiB, the body's size hint unknown, a
+  tampered file cut off).
+- **The route, after review** (`jt_files::serve`): the first chunk is read before anything is answered, so a file that
+  fits in one (most screenshots, an empty one) and fails its check is `404` as before; a larger one is cut off short of
+  its `Content-Length`, which a real client reads as an error (`tests/serve.rs::a_tampered_file_is_an_error_to_a_real_client`,
+  over `axum::serve` with `jt_outbound`'s reqwest client). A watchdog cuts off a response whose client took nothing
+  for `READ_IDLE` (30 s) or that ran past `READ_DEADLINE` (30 min), letting go of its file and turns
+  (`router_with_limits(.., ReadLimits)` for tests).
+- **The route's turns (re-review).** A response holds three turns, taken in this order within `READ_TURN_WAIT` (10 s,
+  else `503`, `Retry-After: 5`) and kept until its body ends or is dropped: its file's (`READS_PER_FILE`, 3: a leaked
+  address cannot take a workspace's pool), its workspace's pool for its use (`READS_PER_WORKSPACE`, 8, keyed by the
+  address's verified `workspace`), and the process-wide ceiling (`MAX_CONCURRENT_READS`, 96, a backstop). A workspace
+  has two pools: its providers' fetches (addresses signed without a purpose, `jeeta.files.v1`, as studio hands media to
+  Meta and TikTok) and its devices' reads (`purpose=device`, signed `jeeta.files.v2` with the purpose:
+  `FileStore::device_url`, which the `push_file` download and an agent's `file_url` use). So one workspace's readers
+  hold up no other workspace, and a bridge's downloads never hold up a publish (a failed provider fetch is a permanent
+  publish failure). Tests `one_workspaces_full_pool_does_not_hold_up_another`, `one_file_takes_at_most_its_cap`,
+  `the_ceiling_holds_across_workspaces`, `device_downloads_never_hold_up_provider_fetches`.
+- **Write timeout, server-wide.** `bin/jeeta` serves through `net::TimedListener`: each connection fails a write its
+  client has taken nothing of for `net::WRITE_TIMEOUT` (60 s), so a socket the watchdog cut off is closed too. The timer
+  runs only while a write waits, so long-polls (25 s bridge polls, `calls.listen`) and idle MCP event streams arm
+  nothing (tests `a_long_poll_through_the_listener_is_answered`, `a_client_that_stops_reading_loses_its_connection`).
+- **rmcp in the logs.** `bin/jeeta`'s `JEETA_LOG` is followed by `,rmcp=warn` (`config::RMCP_CAP`), which replaces any
+  directive the operator gave for `rmcp`; `ops::install_tracing` already capped every `rmcp::*` target at `warn` with a
+  `filter_fn` layer. Test `an_operator_filter_never_raises_rmcp`.
 
 ### Task D1-T7: jobs
 
@@ -611,8 +700,73 @@ Health is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, "pho
   (`HELD_FOR`) of the bridge that holds it; with the heartbeat kind `capability.verify` refuses a phone, as it does a
   voice bridge, and only registrations move the time.
 - `work.rs` must map kind to work item. Today any heartbeat kind that goes offline is reported as `VoiceBridgeOffline`, with the voice hint and the `calls.bridge.register` tool. A phone needs its own work item, e.g. `DeviceBridgeOffline`. Test: `offline_phone_is_not_reported_as_a_voice_bridge`.
-- [ ] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`.
-- [ ] CI red → green; **commit**.
+- [x] **Tests first:** `phone_unreachable_after_10m_without_heartbeat`, `expiry_job_expires_and_ledgers`, `file_purge_keeps_6_days_drops_8`,
+  `verify_refuses_a_phone` (once `phone` has a heartbeat kind, a person's `capability.verify` on a phone is refused as
+  it is for a voice bridge, so only a registration keeps a phone online: until then a verify extends `online` and the
+  60 s hold). The expiry job's `devices.command.finished` carries `result_sha256: null`, as every server-decided end.
+- **For the later security layer (not built, owner):** `devices.work` reaches more than the phones. `push_file`
+  takes any file of the workspace's store by id (studio media included) and `pull_file` brings it back as a device
+  file whose `file_url` any holder of `devices.work` reads: so `devices.work` in effect grants reading any workspace
+  file whose id is known (push, then pull, then `file_url`). A policy check in `devices.act` (spec §10) is where to
+  limit it (for example, `push_file` only of files the phone's bridges uploaded).
+- [x] CI red → green; **commit**.
+
+As built (D1-T7):
+- **The phone's heartbeat.** `jt_capability::CapabilityKind::heartbeat` answers `phone` as it does `voice_bridge`
+  (one `BRIDGE_HEARTBEAT`: `stale_after` 60 s, `unreachable_after` 10 min; the bridge registers every `HEARTBEAT_S`,
+  15 s). `HELD_FOR` stays 60 s, pinned equal to the kind's `stale_after` and to four heartbeats
+  (`devices::bridge::tests::held_for_is_the_phone_kinds_stale_clock`). `devices::agent::online` is now
+  `effective_status == Verified && listed` (the 60 s `ONLINE_FOR` constant is gone: the kind's clock is the window);
+  "missing from the latest register = offline" is unchanged.
+- **`capability.verify` refuses a phone** as it does a voice bridge, one check for every kind with a heartbeat:
+  `409`, message `a phone is verified only by the registrations of the device bridge it is plugged into
+  (devices.bridge.register), never by evidence` (`a voice bridge is verified only by its own registration
+  (calls.bridge.register), …`), `details {reason: "verified_by_heartbeat", kind_key, cleared_by}`, `cleared_by` being
+  the kind's work item's (`work::offline_item`). So only registrations move a phone's `last_verified_at`, and a
+  person can no longer extend `online` or the 60 s hold. Tests that used `phone` as a generic device verified by
+  evidence now use `computer`. The MCP descriptions of `capability.declare`, `verify` and `mark_unreachable` say a
+  `voice_bridge` or a `phone` is verified only by its bridge; the panel's capability card shows neither a Verify
+  action nor the policy's "a verification lasts N days" line for them.
+- **Work items.** `work::offline_item(&Capability)` maps each heartbeat kind to its own item: `voice_bridge` →
+  `VoiceBridgeOffline` (hint and `cleared_by` `calls.bridge.register` unchanged), `phone` → `PhoneOffline
+  {capability_id, name, last_seen_at}` (`phone_offline` on the wire, priority 2, `cleared_by`
+  `devices.bridge.register`, a hint naming the jeeta-device-bridge program, never the voice bridge). A heartbeat kind
+  with no mapping gets no item (test `every_heartbeat_kind_has_its_own_offline_item` fails for it). The panel's
+  Home renders `phone_offline` (TR + EN); `jeeta.work.pending`'s description lists both offline kinds.
+- **Jobs** (`usecases/jobs.rs`, `bin/jeeta/src/scheduler.rs`; `Job::ALL` 25 → 28, every workspace status):
+  `device_bridge_health` (1 min) is `run_bridge_health(deps, Job::DeviceBridgeHealth, &DEVICE_BRIDGE, PHONE_KIND, now)`
+  (`devices.bridge.offline {capability_id, last_seen_at}`, actor `scheduler:device_bridge_health`);
+  `device_command_expiry` (1 min) is `devices::sweeps::expire_commands`: `expire_due(now, EXPIRY_PAGE)` (200, the
+  oldest first) and, in the same transaction, one `devices.command.finished {command_id, kind, status: "expired",
+  reason: null, duration_ms: null, leased_by, result_sha256: null}` per row, in queue order, then the devices' signal
+  (a waiting `command_get` answers at once); a page at a time, each its own transaction, until a short one.
+  `device_file_purge` (hourly) is `devices::sweeps::purge_files` (`purge_files_by(page)` for tests): pages of
+  `FILE_PURGE_PAGE` (200) files whose `expires_at <= now`, each read after the last of the one before
+  (`(expires_at, id) > after`), each file deleted from the file store, then its record in a transaction of its own
+  (a store delete of a missing file is no error; a file that fails is logged with its id and code, counted, and
+  tried again on the next run; the reads go on past it, so a file that keeps failing never holds up the newer ones).
+  The purge writes no ledger entry. Command rows are never deleted: `jt_archtest/tests/device_rows.rs` fails on any
+  `delete from device_commands` (any case or spacing) under `crates/` or `migrations/` outside a `down` migration.
+- **Port.** `ExpiredCommand` gained `leased_by` (so the expiry entry names the bridge, as every `finished` does);
+  `DeviceCommandRepo::expire_due(now, limit)` takes a limit (by `seq`; contract
+  `expire_due_takes_the_oldest_up_to_the_limit`); `::expired_files(now, after, limit)` (by `expires_at`, then id,
+  after `after`; index `device_files_expiry`) and `::delete_file(id) -> bool` (contract
+  `expired_device_files_are_found_and_deleted`, fake and Postgres). `bridge::write_finished` (with `Ended`) is the
+  one writer of `devices.command.finished`.
+- **Tests** (`jt_app/tests/devices_jobs.rs`): the five named, plus `every_heartbeat_kind_has_its_own_offline_item`,
+  `the_expiry_sweep_wakes_a_waiting_command_get` (under 900 ms), `file_purge_finishes_what_it_could_not_do` (a store
+  whose deletes fail, and bytes already gone), `a_file_that_keeps_failing_holds_up_no_newer_one`,
+  `file_purge_counts_a_record_gone_meanwhile` (`FilesPurged.gone`) and `the_jobs_sweep_every_workspace` (a suspended
+  one included); `devices_agent_tracing.rs` runs the three jobs with a canary in a swept command.
+- **Deploy note.** A `phone` capability verified by evidence before this release (an agent's or a person's
+  `capability.verify`) reads stale at once and, unless a device bridge lists it, is marked unreachable by
+  `device_bridge_health` within about 11 minutes of the release (ten minutes after its `last_verified_at`, plus the
+  job's minute), and is listed as `phone_offline` pending work from then on. Retire those (`capability.retire`): a
+  phone is now a capability its device bridge declares and keeps alive (`android:{serial}`), not one verified by hand.
+- **Follow-up (not built).** The two one-minute jobs open a transaction per workspace each run, whatever it holds.
+  At scale, read first, platform-wide, the workspaces that have due device commands (`device_commands` not finished
+  with `expires_at <= now`) or phones that are verified but silent, as `run_call_timers` reads the workspaces with a
+  live call, and sweep only those.
 
 ---
 
@@ -734,8 +888,8 @@ pub enum ContentType { Png, OctetStream }
 pub trait AdbRunner: Send + Sync { async fn run(&self, serial: &str, args: &[&str]) -> Result<AdbOutput, AdbError>; } // argv only
 pub struct DriverError { pub reason: FailReason, pub detail: String }
 ```
-Mapping per spec §4.1. Real-device findings on the owner's Redmi 10C (Android 13, MIUI 14, serial
-`18cf9fbb`), which the driver and its fixtures must cover:
+Mapping per spec §4.1. Real-device findings on the owner's Redmi 10C (Android 13, MIUI 14; its serial is the made-up
+`0a1b2c3d` in the fixtures), which the driver and its fixtures must cover:
 - MIUI's `uiautomator dump` writes a Java `FileNotFoundException …/theme_compatibility.xml` stack trace and
   still dumps (`UI hierchary dumped to: …`): judge a dump by the file's `<node` content, never by stderr.
   Test `miui_theme_stack_trace_is_not_a_failure`.
@@ -823,18 +977,39 @@ Card: platform, model, OS, status with heartbeat age, bridge version, features (
 
 ### Task D4-T1: emulator, then a real phone
 
-- [ ] **Precondition.** An existing API key does not gain the new permissions: a key's scopes are snapshotted when it is issued. Before the end-to-end run, issue a fresh owner agent key with `devices.work`, and a bridge key with exactly `devices.bridge`; an older key does not carry them.
-- [ ] Emulator `jeeta_test` (`emulator.exe -avd jeeta_test -no-window -gpu swiftshader_indirect -port 5554`) + bridge against **staging** with a `devices.bridge` key; via MCP on staging: `devices.list` → `observe` → `tap_on` → `text` (ASCII) → `shell ["getprop","ro.product.model"]` → `screenshot` → `pull_file`; each appears in the ledger with its args.
-- [ ] Real Android phone over USB on the owner's PC: same sequence; Unicode text with ADBKeyBoard installed (owner approves the APK download).
-- [ ] Checks on the Redmi 10C (Android 13, MIUI 14) that D2-T2 could not make, since it ran read-only captures only:
+- [x] **Precondition.** An existing API key does not gain the new permissions: a key's scopes are snapshotted when it is issued. Before the end-to-end run, issue a fresh owner agent key with `devices.work`, and a bridge key with exactly `devices.bridge`; an older key does not carry them. *(Done: both issued on staging for the run.)*
+- [ ] Emulator `jeeta_test` (`emulator.exe -avd jeeta_test -no-window -gpu swiftshader_indirect -port 5554`) + bridge against **staging** with a `devices.bridge` key; via MCP on staging: `devices.list` → `observe` → `tap_on` → `text` (ASCII) → `shell ["getprop","ro.product.model"]` → `screenshot` → `pull_file`; each appears in the ledger with its args. *(Not run: the real phone was used instead.)*
+- [x] Real Android phone over USB on the owner's PC: same sequence; Unicode text with ADBKeyBoard installed (owner approves the APK download).
+- [x] Checks on the Redmi 10C (Android 13, MIUI 14) that D2-T2 could not make, since it ran read-only captures only:
   - Recapture `dumpsys input_method` right after `ime set com.android.adbkeyboard/.AdbIME` with a text field focused, a few times in quick succession. Confirm that the driver's bind check (`commands::bound_to_a_field`: `mCurMethodId`, the manager's `mCurId=… mBoundToMethod=true`, the client's `mBindSequence=… mCurId=…`, a served connection) passes only once a broadcast types, and replace the hand-edited fixtures `input_method_{adbime_unbound,in_between,bound}.txt` with the captures (scrubbed).
   - Unicode `text` end to end: if text goes missing (the broadcast answers, nothing is typed), add a short pause between the `am broadcast` and putting the input method back (`commands::type_unicode`), as ADBKeyBoard may still be committing the text when it is switched away.
   - `launch_app` (`monkey -p … 1`): confirm that MIUI's `theme_compatibility.xml` stack trace, if `monkey` prints it, does not fail the command (the driver ignores that trace; seen so far from `uiautomator` only).
   - `observe`: confirm `uiautomator dump /data/local/tmp/jeeta_ui.xml` writes there (the folder is the shell user's, mode 771, as read in D2-T2) and that the file is gone after the observation.
-- [ ] Manual Windows stop checks on the owner's PC. These cover what CI can't test, because `unsafe_code = "forbid"` rules out `GenerateConsoleCtrlEvent`:
+- [x] Manual Windows stop checks on the owner's PC. These cover what CI can't test, because `unsafe_code = "forbid"` rules out `GenerateConsoleCtrlEvent`:
   - Ctrl+C during a long command: the "Ctrl+C: the bridge stops" line, exit code 0, and the cut-off `bridge_error` result in the ledger.
   - Closing the console window during a command: the result is posted within `HURRIED_GRACE` (2 s).
-- [ ] Record results in `docs/operations/device-bridge.md` ("verified on").
+- [ ] Record results in `docs/operations/device-bridge.md` ("verified on"). *(The as-run list below is to be moved there; that file is another branch's.)*
+
+#### As run (2026-10-29)
+
+On the owner's Redmi 10C (Android 13, MIUI 14) over USB, bridge on the owner's Windows 11 PC against **staging**, commands sent through MCP with the fresh agent key:
+
+- `devices.list` → `observe` → `shell ["getprop", …]` → `key home` → `launch_app` (`monkey` printed no MIUI theme trace; the command was done) → `tap_on {text: "Arama ayarları"}` → `text` (ASCII) → `text` (Unicode) → `key back` → `screenshot` (a 720x1650 PNG, read through its signed `/files` address) → `pull_file` (the content matched the file on the phone): all done. Every command is in the ledger (`devices.command.queued`) with its full arguments.
+- `observe`: `uiautomator dump` wrote `/data/local/tmp/jeeta_ui.xml`, and the file was gone after the observation.
+- Input method: on this phone the bind is immediate. `dumpsys input_method` read six times back to back right after `ime set com.android.adbkeyboard/.AdbIME`, with the Settings search field focused, already showed ADBKeyBoard holding the field in the first read (`mCurMethodId` and the manager's `mCurId` on AdbIME, `mBoundToMethod=true`, the client's `mBindSequence` moved on from 386 to 388 with `mCurId` on AdbIME, a served connection); the reads 1.5 s later were the same. No state in between could be read. The fixtures are now the captures, trimmed to the two sections the bind check reads: `input_method_before_set.txt` (the phone's own keyboard holding the field, read just before) and `input_method_bound.txt` (the first read after); `input_method_adbime_unbound.txt` is gone, and `input_method_in_between.txt` is synthetic, put together from those two (the manager switched, the app's client still on the keyboard before), because the real transition was too fast to capture.
+- Unicode `text` worked end to end: `ağ şifresi ĞÜŞİÖÇ` typed into the Settings search field read back whole, and the owner's keyboard was put back. No pause is needed in `type_unicode` between the broadcast and putting the input method back.
+- Ctrl+C during `shell ["sleep", "20"]`: the "Ctrl+C: the bridge stops" line, exit code 0, and the cut-off command posted as `failed`/`bridge_error` ("the bridge stopped while the command ran") within about 0.4 s.
+
+Findings, and what was done about them (branch `fix/device-bridge-d4`):
+
+1. **A screen that is off or locked was invisible to the agent.** Asleep behind its lock screen, `observe` answered `foreground_app: null` and no elements (the dump held System UI's nodes only, with `mCurrentFocus` on `NotificationShade`) and nothing said why. An observation now carries `awake` (the screen is on) and `locked` (the lock screen shows), read from the `dumpsys window` the observation already runs for the focus: its display policy's `mAwake=` and `isKeyguardShowing=`, else its keyguard's `interactiveState=` and `showing=`. Each display prints its own focus and policy, and another display (a screen recording's, a cast's, scrcpy's) is dumped before the phone's own with `mAwake=true` whatever the phone's screen does (found in review): the grep also takes the dump's section and display headings, and the focus, `mAwake` and `isKeyguardShowing` are read from display 0's lines only. Both are left out when the phone does not say, and an observation never fails over them (`window_state_awake.txt` is a capture; `window_state_locked_asleep.txt` is written in its shape with what D4 read on the locked phone, and `window_state_two_displays.txt` adds a second display dumped first). `key` gained `wakeup` (`KEYCODE_WAKEUP`, feature `key.wakeup`, which an older bridge does not list and so is never handed), because `power` toggles the screen and turns one that is on off. On this phone `input keyevent KEYCODE_WAKEUP` sent through `shell` did not visibly wake it: MIUI's proximity guard (its `ScreenOnProximitySensorGuide` window showed after `power`) turns the screen back off while the proximity sensor is covered.
+2. **`pull_file` of a path that is not there failed as `adb_error`.** The driver checks with `stat` before `adb pull`; the phone answers `stat: '…': No such file or directory`, exit 1. That, and `adb pull`'s `adb: error: failed to stat remote object '…': No such file or directory` (a file gone since the check), now fail as `file_not_found`, as does `Not a directory` (a path through a file); `Permission denied` stays `adb_error`. A `push_file` whose download Jeeta answers 404 (the file was deleted, or its address ran out) is `file_not_found` too.
+3. **"Closing the console window loses the in-flight result" did not hold up.** Tokio's handler for the close, log-off and shutdown events never returns (it parks its thread), so Windows waits for the process until it exits or Windows' time-out runs out (about 5 s after the window closed, measured under the classic console and Windows Terminal). Replayed with the D4 binary and the D4 script (`conhost`, `WM_CLOSE` to the window) against a local fake Jeeta, the bridge posted the cut-off result and exited when the post was answered. The 33 ms in D4 was a bridge with nothing in flight: the script waits for a `go` flag file before it closes the window, and the first Ctrl+C run had left that file behind (created 19:00:28 UTC, never removed), so it did not wait for the command to reach the new bridge. That command had been leased at about 19:01:29 to the long poll the bridge stopped at 19:01:07 had left open (finding 4), and the window was closed at 19:01:32: the `leased` row was that ghost lease. What the replay did show: `adb`, attached to the bridge's console, died of the same event (and of Ctrl+C) at once, so a cut-off `shell` command could end first as `done` with exit code -1073741510 (Windows' code for such an end). `adb` is now started in a console of its own (`CREATE_NO_WINDOW`, no `unsafe`): the bridge alone hears the events, fails what it cuts off as `bridge_error` and kills `adb` itself (checked by hand for the close and for Ctrl+C; the real `adb` read the phone as before). Accepted as they stand: a bridge killed hard (Windows ending one that did not stop in time, Task Manager) leaves an `adb` it started running until that ends on its own, since closing the console no longer ends it; and the unit test (`adb::tests`) pins only the flag, since a console event cannot be generated in CI.
+4. **Ghost leases after a bridge stops.** The server log showed a long poll held open for a bridge that had stopped cleanly (behind Cloudflare and nginx the server does not see it go) leasing the next command 22 s later (`device commands handed out leased=1` on a request held 22 444 ms); the command then sat `leased` until it was handed out again 10 s later. A held poll re-reads which phones its key lists about every second for up to 25 s, and a restarted bridge holds the same key, so un-listing the phones alone does not end it: the next run lists them again while the old poll is still held. Fixed in two parts:
+   - **Each run says which it is (protocol 2).** A bridge program draws a random instance when it starts and sends it on every register (`RegisterIn::instance`; the handshake is tolerant, so a server of protocol 1 ignores it) and, once the server answered protocol 2 or later, on every poll (`CommandsQuery::instance`; a poll of protocol 1 refuses fields it does not know). The server keeps the instance of the registration that listed a phone last (`connector_public.device.instance`, `null` from a bridge of protocol 1). A phone whose latest listing names a run is that run's alone: it is leased to that run's polls only, and only that run's registrations leave it out. So once the next run has listed a phone, a poll still held for the run before leases nothing, goodbye or not; and when two runs of one key overlap (one starting while the other stops), the latest to list a phone holds it and the other's goodbye leaves it listed. A phone whose latest listing names no run behaves as before, for any poll and registration of its key.
+   - **The goodbye.** As the last step of every stop, after posting what it cut off, the bridge registers once more with no phone, best-effort within 2 s (`Timing::goodbye_timeout`), so its phones read offline at once and a poll held for this run leases nothing even before another run lists them. A register on its way when the bridge stops is answered first, within the grace (applied after the goodbye, it would list the phones again; one still unanswered when the grace runs out is cut off and may still land after the goodbye). Phones another bridge holds are left as they are.
+   - What remains: a bridge that crashes, or a computer that sleeps, says nothing. Until another run of it lists its phones, a command its held poll leases costs one redelivery (10 s).
+5. **The owner's phone serial was in the repo** (docs, tests, fixtures, `ro.serialno`): replaced by the made-up `0a1b2c3d`; no other identifying value was in the fixtures.
 
 ---
 

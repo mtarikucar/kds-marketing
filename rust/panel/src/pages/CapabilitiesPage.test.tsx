@@ -347,6 +347,10 @@ describe('CapabilitiesPage', () => {
     const meta = within(section).getByRole('textbox', { name: tr.capabilities.hooks.metaUrl });
     expect(meta).toHaveValue(hooks.meta?.url);
     expect(within(section).getByText(tr.capabilities.hooks.verifyTokenHint)).toBeInTheDocument();
+    // The TikTok app's callback URL, with the events it acts on.
+    const tiktok = within(section).getByRole('textbox', { name: tr.capabilities.hooks.tiktokUrl });
+    expect(tiktok).toHaveValue(hooks.tiktok?.url);
+    expect(within(section).getByText(/authorization\.removed, post\.publish\.failed/)).toBeInTheDocument();
     // The first copy button copies the incoming-SMS address.
     await user.click(within(section).getAllByRole('button', { name: tr.common.copy })[0]);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(hooks.netgsm[0].url));
@@ -357,6 +361,16 @@ describe('CapabilitiesPage', () => {
     renderAt('/capabilities');
     expect(await screen.findByText(tr.capabilities.hooks.metaMissing)).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.metaUrl })).not.toBeInTheDocument();
+  });
+
+  it('shows no TikTok address while the platform has no TikTok app', async () => {
+    for (const tiktok of [null, undefined]) {
+      mockFetch({ ...routes, 'GET /api/connectors/hooks': { ...hooks, tiktok } });
+      const view = renderAt('/capabilities');
+      expect(await screen.findByText(tr.capabilities.hooks.netgsmHelp)).toBeInTheDocument();
+      expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.tiktokUrl })).not.toBeInTheDocument();
+      view.unmount();
+    }
   });
 
   it('never shows nor asks for the hook tokens without capabilities.manage', async () => {
@@ -493,6 +507,19 @@ it('voice_bridge_card_shows_engines_extension_and_heartbeat_age', async () => {
   // Only its own registration verifies it: no verification by evidence here.
   expect(within(card).queryByRole('button', { name: tr.capabilities.actions.verify })).toBeNull();
   expect(within(card).getByRole('button', { name: tr.capabilities.actions.edit })).toBeInTheDocument();
+  // Nor is a phone (its device bridge's registrations verify it); a printer still is. Neither
+  // bridge's kind shows how long a verification lasts by its policy: a heartbeat's does not.
+  const phone = await cardOf('Saha telefonu');
+  expect(within(phone).queryByRole('button', { name: tr.capabilities.actions.verify })).toBeNull();
+  expect(within(phone).getByRole('button', { name: tr.capabilities.actions.edit })).toBeInTheDocument();
+  const ageLine = i18n.t('capabilities.policy.verifyAge', { days: 30 });
+  for (const heartbeat of [card, phone]) {
+    expect(within(heartbeat).queryByText(ageLine)).toBeNull();
+    expect(within(heartbeat).queryByText(tr.capabilities.policy.verifyNever)).toBeNull();
+  }
+  const printer = await cardOf('Ofis yazıcısı');
+  expect(within(printer).getByRole('button', { name: tr.capabilities.actions.verify })).toBeInTheDocument();
+  expect(within(printer).getByText(ageLine)).toBeInTheDocument();
   // A bridge declared in the panel that never registered says so.
   const never = await cardOf('Voice bridge 102');
   expect(within(never).getByText(tr.capabilities.bridge.never)).toBeInTheDocument();

@@ -19,6 +19,6 @@
 [ro.product.marketname]: [Redmi 10C]
 [ro.product.model]: [220333QAG]
 [ro.product.name]: [fog_tr]
-[ro.serialno]: [18cf9fbb]
+[ro.serialno]: [0a1b2c3d]
 [ro.sf.lcd_density]: [320]
 [sys.boot_completed]: [1]

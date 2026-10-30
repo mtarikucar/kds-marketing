@@ -767,7 +767,9 @@ export type WorkKind =
   | { kind: 'merge_suggested'; merge_id: string }
   | { kind: 'task_due'; task_id: string }
   /** A voice bridge that has not registered within its heartbeat; `last_seen_at` is its last one. */
-  | { kind: 'voice_bridge_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null };
+  | { kind: 'voice_bridge_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null }
+  /** A phone no device bridge has listed within its heartbeat; `last_seen_at` is the last listing. */
+  | { kind: 'phone_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {
@@ -882,10 +884,20 @@ export interface NetgsmHook {
   url: string;
 }
 
-/** `jt_app::usecases::connector::HooksOut`; `meta` is `null` while the platform has no Meta app. */
+/** `jt_app::usecases::connector::TiktokHook`: the TikTok app's callback URL and the events acted on. */
+export interface TiktokHook {
+  url: string;
+  events: string[];
+}
+
+/**
+ * `jt_app::usecases::connector::HooksOut`; `meta` and `tiktok` are `null` while the platform has
+ * no Meta or TikTok app (`tiktok` is absent from a server that predates TikTok's webhooks).
+ */
 export interface HooksOut {
   meta: MetaHook | null;
   netgsm: NetgsmHook[];
+  tiktok?: TiktokHook | null;
 }
 
 /** `jt_app::usecases::connector::PbxCallMode`. */
