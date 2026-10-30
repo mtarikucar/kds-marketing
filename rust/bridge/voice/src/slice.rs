@@ -6,8 +6,11 @@
 //! caller's words to this terminal only (never to the log).
 //!
 //! The reports are printed as they come, the think time included (it runs in a task of its own).
-//! Ctrl-C hangs the line up, and the call ends as at the caller's hangup; a second one quits at
-//! once. After an `error` the slice waits for the call's task to hang the line up before it exits.
+//! The opening is heard in full; the caller's turn is the first one that ends after it (words over
+//! the opening, an "Alo?", are passed over). Ctrl-C hangs the line up, before the dial too (then no
+//! phone rings), and the call ends as at the caller's hangup; a second one quits at once. After an
+//! `error` the slice waits for the call's task to hang the line up before it exits. The call ends
+//! by itself `VOICE_MAX_CALL_S` after the answer (600 s), and if Asterisk's events end.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -18,8 +21,8 @@ use jt_calls::{BridgeEvent, BridgePhrases, CLOSING, Command, DialScript, PlayKin
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::ari::{self, Ari};
-use crate::call::{CallDeps, CallSetup, ToCall, run_call};
+use crate::ari::{self, Ari, AriEvent};
+use crate::call::{CallDeps, CallSetup, LineWaits, ToCall, run_call};
 use crate::config::Config;
 use crate::netgsm;
 use crate::trace::TraceFile;
@@ -87,6 +90,7 @@ pub async fn main(args: &[String]) -> ExitCode {
         cache_dir: config.cache_dir.clone(),
         timing: config.timing,
         traces: Some(TraceFile::new(config.trace_file.clone())),
+        waits: LineWaits::default(),
     });
     let (to_call, rx) = mpsc::channel(64);
     let (reports_tx, mut reports) = mpsc::unbounded_channel();
@@ -97,23 +101,33 @@ pub async fn main(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let forward = to_call.clone();
+    let id = uuid::Uuid::now_v7().to_string();
+    let (forward, forward_id) = (to_call.clone(), id.clone());
     tokio::spawn(async move {
         let mut events = events;
-        // Asterisk's pings and other frames are passed over; the stream's end ends the forwarding.
+        // Asterisk's pings and other frames are passed over.
         while let Some(Ok(message)) = events.next().await {
             if let Message::Text(t) = message {
                 let _ = forward.send(ToCall::Ari(ari::parse_event(&t))).await;
             }
         }
+        // Without Asterisk's events the call would wait for a hangup it never hears: it ends now,
+        // and its task hangs the line up (B6 review).
+        eprintln!("Asterisk's events ended: the call ends");
+        let gone = AriEvent::Gone {
+            channel: forward_id,
+            cause: None,
+        };
+        let _ = forward.send(ToCall::Ari(gone)).await;
     });
-    let id = uuid::Uuid::now_v7().to_string();
-    let (hang_ari, hang_id) = (ari.clone(), id.clone());
+    let (hang_ari, hang_id, hang_call) = (ari.clone(), id.clone(), to_call.clone());
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_err() {
             return;
         }
         eprintln!("hanging up (Ctrl-C again quits at once)");
+        // Asked of the call too: before the dial it then dials nobody (B6 review).
+        let _ = hang_call.try_send(ToCall::Command(Command::Hangup));
         tokio::spawn(async move {
             let _ = hang_ari.hangup(&hang_id).await;
         });
@@ -129,10 +143,17 @@ pub async fn main(args: &[String]) -> ExitCode {
             phrases: BridgePhrases::default(),
             hotwords: Vec::new(),
         },
-        plan_lines: vec![args.reply.clone(), CLOSING.to_owned()],
+        // The opening first: it is what the answer plays, so it is synthesised ahead first (B6
+        // review); as a policy line it is also kept on disk.
+        plan_lines: vec![args.opening.clone(), args.reply.clone(), CLOSING.to_owned()],
+        closing: CLOSING.to_owned(),
+        max_duration: Duration::from_secs(config.max_call_s),
     };
     tokio::spawn(run_call(deps, setup, rx, reports_tx));
     let mut seq = 0u32;
+    // The opening's seq, once it is asked, and whether it has been heard to its end.
+    let mut opening: Option<u32> = None;
+    let mut opened = false;
     let mut replied = false;
     let mut failed = false;
     while let Some(report) = reports.recv().await {
@@ -143,6 +164,7 @@ pub async fn main(args: &[String]) -> ExitCode {
             BridgeEvent::Answered => {
                 println!("answered");
                 seq += 1;
+                opening = Some(seq);
                 let play = Command::Play {
                     seq,
                     clip: PlayKind::Opening,
@@ -150,6 +172,10 @@ pub async fn main(args: &[String]) -> ExitCode {
                     text: args.opening.clone(),
                 };
                 let _ = to_call.send(ToCall::Command(play)).await;
+            }
+            // Words over the opening are no answer to its request for a sentence.
+            BridgeEvent::Utterance { .. } if !opened => {
+                println!("the caller spoke over the opening: the turn waits for its end");
             }
             BridgeEvent::Utterance { text, .. } if !replied => {
                 replied = true;
@@ -184,7 +210,10 @@ pub async fn main(args: &[String]) -> ExitCode {
                 seq,
                 interrupted_at_char,
                 ..
-            } => println!("said {seq} cut at {interrupted_at_char:?}"),
+            } => {
+                opened |= Some(seq) == opening;
+                println!("said {seq} cut at {interrupted_at_char:?}");
+            }
             BridgeEvent::Trace { trace } => {
                 println!(
                     "trace {}",

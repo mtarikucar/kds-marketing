@@ -1,7 +1,9 @@
 //! One call against fake Asterisk and speech services: dial, answer, the core's opening played to
 //! its mark, a caller turn reported and acknowledged, the agent's sentence, the closing hang-up;
 //! and the ways a call ends early (B5 re-review): the speech services are connected before the
-//! dial, and a line whose media or speaker closes is reported as failed and hung up.
+//! dial, and a line whose media or speaker closes is reported as failed and hung up. The B6 review:
+//! the opening is heard in full, and no call waits on the line for ever (the ring, the hangup, the
+//! longest duration, a hangup asked before the dial).
 mod support;
 
 use std::path::PathBuf;
@@ -11,7 +13,7 @@ use std::time::Duration;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use jeeta_voice_bridge::ari::{Ari, AriEvent};
-use jeeta_voice_bridge::call::{CallDeps, CallSetup, Report, ToCall, run_call};
+use jeeta_voice_bridge::call::{CallDeps, CallSetup, LineWaits, Report, ToCall, run_call};
 use jeeta_voice_bridge::speech::Endpoint;
 use jeeta_voice_bridge::talker::Timing;
 use jt_calls::{BridgeEvent, Command, DialScript, PhraseSet, PlayKind};
@@ -38,6 +40,14 @@ struct Options {
     speaker_dies_on: Option<&'static str>,
     /// The listener's address takes no connection.
     listener_unreachable: bool,
+    /// Each sentence takes this long to play (the fake media answers its mark this much later).
+    mark_delay: Option<Duration>,
+    /// The first channel hangups ARI answers 500.
+    refused_hangups: usize,
+    /// The call's waits on the line (ring 5 s and gone 2 s without).
+    waits: Option<LineWaits>,
+    /// The call's longest duration (60 s without).
+    max_duration: Option<Duration>,
 }
 
 /// A call on its way: its fakes, its channels and its task.
@@ -58,12 +68,18 @@ async fn closed_port() -> String {
 }
 
 async fn rig(name: &str, options: Options) -> Rig {
-    let (ari_base, log) = fake_ari().await;
+    let (ari_base, log) = fake_ari_refusing_hangups(options.refused_hangups).await;
     let (media_addr, media_conns) = ws_server().await;
     let (listen_addr, listen_conns) = ws_server().await;
     let (speak_addr, speak_conns) = ws_server().await;
     serve_speaker_until(speak_conns, options.speaker_dies_on);
-    let controls = serve_media_until(media_conns, options.media_closes_after);
+    let controls = serve_media_with(
+        media_conns,
+        MediaFake {
+            closes_after: options.media_closes_after,
+            mark_delay: options.mark_delay,
+        },
+    );
     let listen = if options.listener_unreachable {
         closed_port().await
     } else {
@@ -81,6 +97,10 @@ async fn rig(name: &str, options: Options) -> Rig {
         cache_dir: cache.clone(),
         timing: Timing::default(),
         traces: None,
+        waits: options.waits.unwrap_or(LineWaits {
+            ring: Duration::from_secs(5),
+            gone: Duration::from_secs(2),
+        }),
     });
     let (to_call, rx) = mpsc::channel(16);
     let (reports_tx, reports) = mpsc::unbounded_channel();
@@ -89,6 +109,8 @@ async fn rig(name: &str, options: Options) -> Rig {
         dial: "05321234567".into(),
         script: DialScript::default(),
         plan_lines: vec!["Ada Hanım ile mi görüşüyorum?".into()],
+        closing: "Görüşmek üzere, iyi günler.".into(),
+        max_duration: options.max_duration.unwrap_or(Duration::from_secs(60)),
     };
     let task = tokio::spawn(run_call(deps, setup, rx, reports_tx));
     Rig {
@@ -120,8 +142,24 @@ impl Rig {
         listener
     }
 
-    /// Answers the line; the listener's sink (what the bridge sends it is read and dropped).
+    /// Answers the line once it was dialled; the listener's sink (what the bridge sends it is read
+    /// and dropped).
     async fn answer(&mut self) -> ListenSink {
+        let (listen_tx, mut listen_rx) = self.answer_whole().await.split();
+        tokio::spawn(async move { while listen_rx.next().await.is_some() {} });
+        listen_tx
+    }
+
+    /// As [`Rig::answer`], with the listener's whole connection: dropping it is the listen
+    /// service's crash.
+    async fn answer_whole(&mut self) -> WebSocketStream<TcpStream> {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !self.ari().contains("POST /ari/channels") {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the line is dialled");
         self.to_call
             .send(ToCall::Ari(AriEvent::Answered {
                 channel: "c-1".into(),
@@ -130,9 +168,17 @@ impl Rig {
             .await
             .unwrap();
         assert_eq!(next(&mut self.reports).await.event, BridgeEvent::Answered);
-        let (listen_tx, mut listen_rx) = self.listener().await.split();
-        tokio::spawn(async move { while listen_rx.next().await.is_some() {} });
-        listen_tx
+        self.listener().await
+    }
+
+    /// How many times ARI was asked to hang the caller's channel up.
+    fn hangups(&self) -> usize {
+        let log = self.log.lock().unwrap();
+        log.iter().filter(|l| *l == "DELETE channel c-1").count()
+    }
+
+    async fn send(&self, message: ToCall) {
+        self.to_call.send(message).await.unwrap();
     }
 
     /// Waits for the call's task to end, and removes its cache.
@@ -379,4 +425,240 @@ async fn a_call_whose_speaker_closes_is_reported_failed_and_hung_up() {
         "{}",
         r.ari()
     );
+}
+
+fn said(seq: u32, interrupted_at_char: Option<u32>) -> BridgeEvent {
+    BridgeEvent::Said {
+        seq,
+        interrupted_at_char,
+        tts_ms: None,
+    }
+}
+
+fn hangup(cause: &str) -> BridgeEvent {
+    BridgeEvent::Hangup {
+        cause: cause.into(),
+    }
+}
+
+/// B6 review C: the opening (with the workspace's opening, the disclosure and the transcript
+/// notice in it) is heard in full: the caller's "Alo?" over it cuts nothing, and the turn is kept
+/// and covered once the opening has played.
+#[tokio::test]
+async fn the_callers_alo_over_the_opening_cuts_nothing_and_is_answered_after_it() {
+    let mut r = rig(
+        "alo",
+        Options {
+            mark_delay: Some(Duration::from_millis(800)),
+            ..Options::default()
+        },
+    )
+    .await;
+    let mut listen_tx = r.answer().await;
+    let opening = Command::Play {
+        seq: 2,
+        clip: PlayKind::Opening,
+        index: 0,
+        text: "Ada Hanım ile mi görüşüyorum?".into(),
+    };
+    r.send(ToCall::Command(opening)).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    for heard in [
+        json!({ "type": "speech_start", "audio_ms": 0 }),
+        json!({ "type": "final", "text": "Alo?", "speech_end_ms": 0, "endpoint_ms": 200,
+            "endpoint_by": "smart_turn", "stt_ms": 30 }),
+    ] {
+        listen_tx
+            .send(Message::Text(heard.to_string().into()))
+            .await
+            .unwrap();
+    }
+    let utterance = next(&mut r.reports).await;
+    assert!(matches!(utterance.event, BridgeEvent::Utterance { ref text, .. } if text == "Alo?"));
+    assert_eq!(
+        next(&mut r.reports).await.event,
+        said(2, None),
+        "heard in full"
+    );
+    assert_eq!(
+        next(&mut r.reports).await.event,
+        BridgeEvent::Phrase {
+            set: PhraseSet::Acknowledgement,
+            index: 0
+        },
+        "the turn is covered after the opening"
+    );
+    r.send(ToCall::Ari(AriEvent::Gone {
+        channel: "c-1".into(),
+        cause: Some(16),
+    }))
+    .await;
+    r.ended().await;
+}
+
+/// B6 review D: a line that rings past its deadline (the PBX's own 45 s and 10 s more) is hung up
+/// as unanswered.
+#[tokio::test]
+async fn a_line_that_rings_past_its_deadline_is_hung_up_as_unanswered() {
+    let mut r = rig(
+        "rings",
+        Options {
+            waits: Some(LineWaits {
+                ring: Duration::from_millis(500),
+                gone: Duration::from_secs(2),
+            }),
+            ..Options::default()
+        },
+    )
+    .await;
+    assert_eq!(next(&mut r.reports).await.event, hangup("no_answer"));
+    r.ended().await;
+    assert!(r.hangups() >= 1, "{}", r.ari());
+}
+
+/// B6 review D: a hangup asked before the dial (the slice's Ctrl-C) rings no phone.
+#[tokio::test]
+async fn a_hangup_asked_before_the_dial_rings_no_phone() {
+    let mut r = rig("never", Options::default()).await;
+    r.send(ToCall::Command(Command::Hangup)).await;
+    assert_eq!(next(&mut r.reports).await.event, hangup("no_answer"));
+    r.ended().await;
+    assert!(!r.ari().contains("POST /ari/channels"), "{}", r.ari());
+}
+
+/// B6 review D: a hangup ARI refuses is asked again.
+#[tokio::test]
+async fn a_hangup_ari_refuses_is_asked_again() {
+    let mut r = rig(
+        "retry",
+        Options {
+            refused_hangups: 1,
+            waits: Some(LineWaits {
+                ring: Duration::from_secs(5),
+                gone: Duration::from_secs(4),
+            }),
+            ..Options::default()
+        },
+    )
+    .await;
+    let _listen = r.answer().await;
+    r.send(ToCall::Command(Command::Hangup)).await;
+    // The hangup comes 400 ms after nothing is left to play; the second try 500 ms after the first.
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert_eq!(r.hangups(), 2, "{}", r.ari());
+    r.send(ToCall::Ari(AriEvent::Gone {
+        channel: "c-1".into(),
+        cause: Some(16),
+    }))
+    .await;
+    assert_eq!(next(&mut r.reports).await.event, hangup("normal"));
+    r.ended().await;
+}
+
+/// B6 review D: a hangup Asterisk never confirms (its events lost) ends the call all the same: the
+/// task reports the hangup and cleans the line up.
+#[tokio::test]
+async fn a_hangup_never_confirmed_ends_the_call_all_the_same() {
+    let mut r = rig(
+        "unconfirmed",
+        Options {
+            waits: Some(LineWaits {
+                ring: Duration::from_secs(5),
+                gone: Duration::from_millis(300),
+            }),
+            ..Options::default()
+        },
+    )
+    .await;
+    let _listen = r.answer().await;
+    r.send(ToCall::Command(Command::Hangup)).await;
+    assert_eq!(next(&mut r.reports).await.event, hangup("normal"));
+    r.ended().await;
+    assert!(r.ari().contains("DELETE channel c-1-m"), "{}", r.ari());
+}
+
+/// B6 review D: a call that reaches its longest duration plays the closing and hangs up, without
+/// the core.
+#[tokio::test]
+async fn a_call_at_its_longest_duration_plays_the_closing_and_hangs_up() {
+    let mut r = rig(
+        "longest",
+        Options {
+            max_duration: Some(Duration::from_millis(600)),
+            ..Options::default()
+        },
+    )
+    .await;
+    let _listen = r.answer().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while r.hangups() == 0 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the line is hung up");
+    r.send(ToCall::Ari(AriEvent::Gone {
+        channel: "c-1".into(),
+        cause: Some(16),
+    }))
+    .await;
+    // The closing is the bridge's own line: nothing of it is reported but the end.
+    assert_eq!(next(&mut r.reports).await.event, hangup("normal"));
+    r.ended().await;
+}
+
+/// B6 review E: a listener that answers the call's `start` with an error fails the call before
+/// the answer, and the ringing line is hung up.
+#[tokio::test]
+async fn a_listener_that_refuses_the_call_hangs_the_ringing_line_up() {
+    let mut r = rig("refused", Options::default()).await;
+    let mut listener = r.listener().await;
+    let refusal = json!({ "type": "error", "reason": "busy" });
+    listener
+        .send(Message::Text(refusal.to_string().into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        next(&mut r.reports).await.event,
+        BridgeEvent::Error {
+            failure_line: "transient: bridge: the listener refused the call".into()
+        }
+    );
+    r.ended().await;
+    assert!(r.hangups() >= 1, "{}", r.ari());
+}
+
+/// B6 review E: a listener that stops while the caller speaks closes the caller's turn, so the
+/// fault sentence plays at once instead of waiting for a pause the listener can no longer report.
+#[tokio::test]
+async fn a_listener_that_stops_mid_turn_lets_the_fault_sentence_play() {
+    let mut r = rig("mid-turn", Options::default()).await;
+    let mut listener = r.answer_whole().await;
+    let start = json!({ "type": "speech_start", "audio_ms": 0 });
+    listener
+        .send(Message::Text(start.to_string().into()))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The listen service crashes: its socket closes with no close frame.
+    drop(listener);
+    assert_eq!(
+        next(&mut r.reports).await.event,
+        BridgeEvent::Error {
+            failure_line: "transient: bridge: the listener stopped during the call".into()
+        }
+    );
+    assert_eq!(
+        next(&mut r.reports).await.event,
+        BridgeEvent::Phrase {
+            set: PhraseSet::Fault,
+            index: 0
+        }
+    );
+    r.send(ToCall::Ari(AriEvent::Gone {
+        channel: "c-1".into(),
+        cause: Some(16),
+    }))
+    .await;
+    r.ended().await;
 }

@@ -6,18 +6,31 @@
 //! The speech services are connected before the dial (B5 re-review): only ARI's media setup on
 //! loopback sits between the answer and the first frame, and a service that cannot be reached
 //! fails the call before anyone's phone rings. While the line rings the call watches them: one
-//! that closes fails the call, and a line that is never answered closes them.
+//! that closes, or sends anything but its `hello` (the listener refusing the call), fails the
+//! call, and a line that is never answered closes them.
 //!
 //! The media is written by a task of its own (`pace_media`): one frame every 20 ms for the whole
 //! call, silence when nothing plays, since Asterisk >= 22.9 sends nothing to the line otherwise
 //! (B1 review). The call's loop only hands that task audio, marks and flushes, so nothing the
 //! loop waits on (the speech services, a slow consumer of reports) can leave a hole in the line's
-//! RTP; ARI calls made during the call are spawned (B5 review).
+//! RTP; ARI calls made during the call are spawned (B5 review), and a sentence is written to the
+//! phrase cache's disk off the loop (B6 review).
 //!
 //! Every end of the line is reported (B5 re-review): the caller's hangup, and the media or the
 //! speaker closing during the call as a transient `error`, before the task hangs the caller's
 //! channel up. Reports go on an unbounded queue: one call's events are few, and none may be
 //! dropped (a lost utterance would lose its turn's reply, and its `taken` with it).
+//!
+//! No call waits on the line for ever (B6 review, [`LineWaits`]): a line that rings past its
+//! deadline is hung up as unanswered; a hangup ARI refuses is asked again, and one Asterisk never
+//! confirms ends the call all the same; a call at its longest duration (`CallSetup::max_duration`)
+//! plays its closing and hangs up, and is cut 30 s later if the caller holds the closing back; a
+//! hangup asked before the dial rings no phone.
+//!
+//! The opening (the workspace's opening with the disclosure and the transcript notice in it, then
+//! the plan's), the recording announcement and the closing are heard in full: the caller's speech
+//! does not cut them, and a turn spoken over them is reported and answered once they end (B6
+//! review; design §3).
 //!
 //! A turn's `first_audio_ms` and `ack_ms` time the frame written to Asterisk, which holds the
 //! pacer's lead (`media::LEAD_FRAMES`, 60 ms) ahead of the line: the caller hears it about that
@@ -25,6 +38,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -32,12 +46,15 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use jt_calls::{BridgeEvent, Command, DialScript, PhraseSet, PlayKind};
 use serde::Serialize;
+use serde_json::Value;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::tungstenite::Message;
+use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::{self, Message};
 use tracing::{info, warn};
 
 use crate::ari::{self, Ari, AriEvent};
-use crate::cache::PhraseCache;
+use crate::cache::{Filing, PhraseCache};
 use crate::g711::Codec;
 use crate::media::{self, MediaEvent, Out, Pacer};
 use crate::netgsm;
@@ -52,9 +69,38 @@ const HANGUP_TAIL: Duration = Duration::from_millis(400);
 const MEDIA_SETUP: Duration = Duration::from_secs(3);
 /// How long the PBX may ring.
 const RING_TIMEOUT_S: u32 = 45;
+/// The pauses before each try to hang a channel up: ARI may be away a moment (B6 review).
+const HANGUP_TRIES: [Duration; 3] = [
+    Duration::ZERO,
+    Duration::from_millis(500),
+    Duration::from_millis(1_500),
+];
+/// How long past its longest duration a call may take to play its closing (the caller may hold it
+/// back) before the line is cut.
+const CLOSE_GRACE: Duration = Duration::from_secs(30);
 const SAMPLE_RATE: u64 = 8_000;
 /// G.711 in 20 ms frames: the only media the pacer writes (B5 review).
 const FRAME_BYTES: usize = 160;
+
+/// How long a call waits on the line (B6 review).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineWaits {
+    /// From the dial to the answer: then the line is hung up as unanswered.
+    pub ring: Duration,
+    /// From the bridge's hangup to Asterisk's word that the line is gone: then the call ends all
+    /// the same.
+    pub gone: Duration,
+}
+
+impl Default for LineWaits {
+    /// The PBX's own ring timeout and 10 s more; 5 s for the hangup.
+    fn default() -> Self {
+        LineWaits {
+            ring: Duration::from_secs(u64::from(RING_TIMEOUT_S) + 10),
+            gone: Duration::from_secs(5),
+        }
+    }
+}
 
 pub struct CallDeps {
     pub ari: Arc<Ari>,
@@ -63,6 +109,7 @@ pub struct CallDeps {
     pub cache_dir: PathBuf,
     pub timing: Timing,
     pub traces: Option<TraceFile>,
+    pub waits: LineWaits,
 }
 
 pub struct CallSetup {
@@ -72,6 +119,11 @@ pub struct CallSetup {
     pub script: DialScript,
     /// The plan's sentences (opening first), synthesised ahead into this call's memory.
     pub plan_lines: Vec<String>,
+    /// The closing the bridge plays itself when the call reaches `max_duration`.
+    pub closing: String,
+    /// The call's longest duration from the answer: the slice's `VOICE_MAX_CALL_S`; in `run`, a
+    /// minute past the plan's own, after which the core has closed a call it still holds (D2).
+    pub max_duration: Duration,
 }
 
 #[expect(
@@ -119,6 +171,13 @@ impl Reporter {
         });
     }
 
+    /// Reports that the line closed (after the answer, always `normal` to the core).
+    fn hung_up(&self, cause: &str) {
+        self.send(BridgeEvent::Hangup {
+            cause: cause.to_owned(),
+        });
+    }
+
     fn put(&self, event: BridgeEvent, taken: Option<oneshot::Sender<()>>) {
         let report = Report {
             bridge_call_id: self.id.clone(),
@@ -128,6 +187,48 @@ impl Reporter {
         if self.tx.send(report).is_err() {
             warn!(call = %self.id, "a report was dropped: its consumer stopped");
         }
+    }
+}
+
+/// The call's phrase cache, with what it keeps on disk and whether a disk error was logged.
+#[derive(Clone)]
+struct CallCache {
+    phrases: Arc<Mutex<PhraseCache>>,
+    /// The policy's sentences: kept on disk once synthesised.
+    persist: Arc<HashSet<String>>,
+    /// A disk error is logged once a call.
+    warned: Arc<AtomicBool>,
+}
+
+impl CallCache {
+    /// Keeps `pcm` of `sentence`, spoken by `voice`, and writes a policy sentence to disk outside
+    /// the lock and off the call's loop (a blocking write and its sync; B6 review).
+    fn file(&self, call: &str, voice: &str, sentence: &str, pcm: Vec<i16>) {
+        let persist = self.persist.contains(sentence);
+        let filing: Option<Filing> = self
+            .phrases
+            .lock()
+            .ok()
+            .and_then(|mut c| c.keep(voice, sentence, pcm, persist));
+        let Some(filing) = filing else {
+            return;
+        };
+        let (id, warned) = (call.to_owned(), self.warned.clone());
+        tokio::spawn(async move {
+            let written = tokio::task::spawn_blocking(move || filing.write()).await;
+            if !matches!(written, Ok(Ok(()))) && !warned.swap(true, Ordering::Relaxed) {
+                warn!(call = %id, "the phrase cache could not be written");
+            }
+        });
+    }
+}
+
+/// Aborts its task when dropped: the call's pre-synthesis ends with the call (B6 review).
+struct AbortOnDrop(JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -167,22 +268,23 @@ fn policy_sentences(script: &DialScript) -> HashSet<String> {
 }
 
 /// What to synthesise ahead, most urgent first: the plan's opening, the policy's lines, the
-/// phrases (acknowledgements first), then the rest of the plan.
+/// phrases (acknowledgements first), the closing, then the rest of the plan.
 fn presynth_order(setup: &CallSetup) -> Vec<String> {
     let mut out: Vec<String> = setup.plan_lines.iter().take(1).cloned().collect();
     out.extend(setup.script.lines.iter().cloned());
     out.extend(setup.script.phrases.all().map(str::to_owned));
+    out.push(setup.closing.clone());
     out.extend(setup.plan_lines.iter().skip(1).cloned());
     out
 }
 
 /// Synthesises `texts` ahead into the call's cache, filed under `voice`, the one this socket's
 /// `hello` named: if the call's cache moved to another voice meanwhile, the cache drops them (B5
-/// review). A disk error is the live path's to log.
+/// review).
 async fn presynthesize(
     socket: speech::Socket,
-    cache: Arc<Mutex<PhraseCache>>,
-    persist: Arc<HashSet<String>>,
+    cache: CallCache,
+    call: String,
     voice: String,
     texts: Vec<String>,
 ) {
@@ -191,6 +293,7 @@ async fn presynthesize(
     for t in texts {
         for sentence in text::sentences(&t) {
             let cached = cache
+                .phrases
                 .lock()
                 .map(|mut c| c.get(&sentence.text).is_some())
                 .unwrap_or(false);
@@ -216,13 +319,8 @@ async fn presynthesize(
                     },
                     Some(Ok(Message::Text(m))) => {
                         if let Ok(spoken) = serde_json::from_str::<Spoken>(&m) {
-                            if matches!(spoken, Spoken::Done { .. })
-                                && !pcm.is_empty()
-                                && let Ok(mut c) = cache.lock()
-                            {
-                                let keep = persist.contains(&sentence.text);
-                                let _ =
-                                    c.put(&voice, &sentence.text, std::mem::take(&mut pcm), keep);
+                            if matches!(spoken, Spoken::Done { .. }) && !pcm.is_empty() {
+                                cache.file(&call, &voice, &sentence.text, std::mem::take(&mut pcm));
                             }
                             break;
                         }
@@ -233,6 +331,18 @@ async fn presynthesize(
             }
         }
     }
+}
+
+/// Hangs `channel` up, asking again after an error (`HANGUP_TRIES`); whether ARI took it. A
+/// channel already gone is taken.
+async fn hang_up(ari: &Ari, channel: &str) -> bool {
+    for pause in HANGUP_TRIES {
+        tokio::time::sleep(pause).await;
+        if ari.hangup(channel).await.is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 type MediaSink = SplitSink<ari::Socket, Message>;
@@ -277,11 +387,32 @@ impl Services {
     }
 }
 
+/// What a speech service sent while the line rang.
+enum Early {
+    /// Its `hello`, a ping: nothing else is due before the call's audio.
+    Fine,
+    /// Anything else: the listener's `error` (busy, a failed start) refuses the call (B6 review).
+    Refused,
+    Closed,
+}
+
+fn early(message: Option<Result<Message, tungstenite::Error>>) -> Early {
+    match message {
+        Some(Ok(Message::Text(t))) => {
+            let hello = serde_json::from_str::<Value>(&t).is_ok_and(|v| v["type"] == "hello");
+            if hello { Early::Fine } else { Early::Refused }
+        }
+        Some(Ok(Message::Binary(_))) => Early::Refused,
+        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => Early::Closed,
+        Some(Ok(_)) => Early::Fine,
+    }
+}
+
 /// Ends a call that has not been answered for `reason`: the line is hung up (nobody is on it yet,
 /// so the call may wait for ARI) and the call reported failed.
 async fn fail_before_answer(deps: &CallDeps, id: &str, reporter: &Reporter, reason: &'static str) {
     warn!(call = %id, reason, "the call failed before the answer");
-    let _ = deps.ari.hangup(id).await;
+    hang_up(&deps.ari, id).await;
     reporter.fail(reason);
 }
 
@@ -303,18 +434,21 @@ pub async fn run_call(
         reporter.fail("the speaker is unreachable");
         return;
     };
-    let cache = Arc::new(Mutex::new(PhraseCache::open(
-        deps.cache_dir.clone(),
-        &voice,
-    )));
-    let persist = Arc::new(policy_sentences(&setup.script));
-    tokio::spawn(presynthesize(
+    let cache = CallCache {
+        phrases: Arc::new(Mutex::new(PhraseCache::open(
+            deps.cache_dir.clone(),
+            &voice,
+        ))),
+        persist: Arc::new(policy_sentences(&setup.script)),
+        warned: Arc::default(),
+    };
+    let _presynthesis = AbortOnDrop(tokio::spawn(presynthesize(
         pre,
         cache.clone(),
-        persist.clone(),
+        id.clone(),
         voice,
         presynth_order(&setup),
-    ));
+    )));
     // The live services before the dial (B5 re-review; the module docs).
     let mut services = match Services::connect(&deps, &setup).await {
         Ok(s) => s,
@@ -324,13 +458,33 @@ pub async fn run_call(
             return;
         }
     };
-    if let Ok(mut c) = cache.lock()
+    if let Ok(mut c) = cache.phrases.lock()
         && c.voice() != services.voice
     {
         // The speak service was replaced since the pre-synthesis connected: this call's audio is
         // the new voice's.
         warn!(call = %id, "the speaker's voice changed before the dial");
         *c = PhraseCache::new(deps.cache_dir.clone(), &services.voice);
+    }
+    // What came before the dial: a hangup rings no phone (the slice's Ctrl-C; B6 review).
+    let mut early_commands = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(ToCall::Command(Command::Hangup)) => {
+                info!(call = %id, "hung up before the dial");
+                reporter.hung_up("no_answer");
+                return;
+            }
+            Ok(ToCall::Command(c)) => early_commands.push(c),
+            Ok(ToCall::CoreLost) => {
+                warn!(call = %id, "the core was lost before the dial");
+                reporter.fail("the core was unreachable during the call");
+                return;
+            }
+            Ok(ToCall::Ari(_)) => {}
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => return,
+        }
     }
     let endpoint = format!("PJSIP/{}@netgsm", setup.dial);
     if deps
@@ -341,20 +495,20 @@ pub async fn run_call(
     {
         // A request that timed out may still ring: the id is hung up all the same (404 when no
         // channel was made; B5 review).
-        let _ = deps.ari.hangup(&id).await;
+        hang_up(&deps.ari, &id).await;
         warn!(call = %id, "Asterisk refused the dial");
         reporter.fail("the line refused the dial");
         return;
     }
     info!(call = %id, "dialling");
-    let mut early = Vec::new();
+    let ring_until = tokio::time::Instant::now() + deps.waits.ring;
     // While the line rings, the speech services are watched too: the listener's `hello` is the only
     // message either sends before the call's audio, and a service that closes fails the call.
     loop {
         tokio::select! {
             c = rx.recv() => match c {
                 None => {
-                    let _ = deps.ari.hangup(&id).await;
+                    hang_up(&deps.ari, &id).await;
                     return;
                 }
                 Some(ToCall::Ari(AriEvent::Ringing { channel })) if channel == id => {
@@ -363,6 +517,9 @@ pub async fn run_call(
                 Some(ToCall::Ari(AriEvent::Answered { channel, .. })) if channel == id => break,
                 Some(ToCall::Ari(AriEvent::Gone { channel, cause })) if channel == id => {
                     info!(call = %id, cause = ?cause, "the line closed before an answer");
+                    // A Gone the slice made up when Asterisk's events ended: the line may still
+                    // ring (404 when it is gone; B6 review).
+                    let _ = deps.ari.hangup(&id).await;
                     // A number that cannot be called at all fails for good (B4 review M5).
                     let event = match netgsm::permanent_failure(cause, false) {
                         Some(line) => BridgeEvent::Error {
@@ -376,9 +533,9 @@ pub async fn run_call(
                     return;
                 }
                 Some(ToCall::Command(Command::Hangup)) => {
-                    let _ = deps.ari.hangup(&id).await;
+                    hang_up(&deps.ari, &id).await;
                 }
-                Some(ToCall::Command(c)) => early.push(c),
+                Some(ToCall::Command(c)) => early_commands.push(c),
                 // Lost while the line rings: nobody would hear the fault sentence yet, so the
                 // ringing line is hung up (the talker, which would play it, starts at the answer).
                 Some(ToCall::CoreLost) => {
@@ -387,24 +544,40 @@ pub async fn run_call(
                 }
                 Some(ToCall::Ari(_)) => {}
             },
-            m = services.listen_rx.next() => {
-                if !matches!(m, Some(Ok(_))) {
+            m = services.listen_rx.next() => match early(m) {
+                Early::Fine => {}
+                Early::Refused => {
+                    let reason = "the listener refused the call";
+                    return fail_before_answer(&deps, &id, &reporter, reason).await;
+                }
+                Early::Closed => {
                     let reason = "the listener closed before the answer";
                     return fail_before_answer(&deps, &id, &reporter, reason).await;
                 }
             },
-            m = services.speak_rx.next() => {
-                if !matches!(m, Some(Ok(_))) {
+            m = services.speak_rx.next() => match early(m) {
+                Early::Fine => {}
+                Early::Refused => {
+                    let reason = "the speaker refused the call";
+                    return fail_before_answer(&deps, &id, &reporter, reason).await;
+                }
+                Early::Closed => {
                     let reason = "the speaker closed before the answer";
                     return fail_before_answer(&deps, &id, &reporter, reason).await;
                 }
+            },
+            () = tokio::time::sleep_until(ring_until) => {
+                info!(call = %id, "the line rang past its deadline");
+                hang_up(&deps.ari, &id).await;
+                reporter.hung_up("no_answer");
+                return;
             },
         }
     }
     reporter.send(BridgeEvent::Answered);
     info!(call = %id, "answered");
-    match Live::connect(&deps, &setup, services, cache, persist, reporter.clone()).await {
-        Ok(live) => live.run(rx, early).await,
+    match Live::connect(&deps, &setup, services, cache, reporter.clone()).await {
+        Ok(live) => live.run(rx, early_commands).await,
         Err(reason) => {
             warn!(call = %id, reason, "the call's media did not come up");
             reporter.fail(reason);
@@ -412,7 +585,7 @@ pub async fn run_call(
     }
     // The caller's own channel too: the media or the speaker may have closed while the caller was
     // still on the line (404 when the caller already hung up; B5 review).
-    let _ = deps.ari.hangup(&id).await;
+    hang_up(&deps.ari, &id).await;
     let _ = deps.ari.destroy_bridge(&format!("{id}-b")).await;
     let _ = deps.ari.hangup(&format!("{id}-m")).await;
 }
@@ -550,10 +723,13 @@ struct Live {
     deps: Arc<CallDeps>,
     id: String,
     reporter: Reporter,
-    cache: Arc<Mutex<PhraseCache>>,
-    persist: Arc<HashSet<String>>,
+    cache: CallCache,
     /// The voice id of the live speaker's hello: this call files its audio under it.
     voice: String,
+    /// The closing the bridge plays itself at `longest`.
+    closing: String,
+    /// When the call reaches its longest duration.
+    longest: tokio::time::Instant,
     talker: Talker,
     started: Instant,
     codec: Codec,
@@ -580,8 +756,6 @@ struct Live {
     /// When the line was answered, and whether the first audio after it was logged.
     answered: Instant,
     opening_logged: bool,
-    /// Whether the phrase cache's disk error was logged (once a call).
-    cache_warned: bool,
 }
 
 impl Live {
@@ -591,11 +765,11 @@ impl Live {
         deps: &Arc<CallDeps>,
         setup: &CallSetup,
         services: Services,
-        cache: Arc<Mutex<PhraseCache>>,
-        persist: Arc<HashSet<String>>,
+        cache: CallCache,
         reporter: Reporter,
     ) -> Result<Live, &'static str> {
         let answered = Instant::now();
+        let longest = tokio::time::Instant::now() + setup.max_duration;
         let id = setup.bridge_call_id.clone();
         let media_id = format!("{id}-m");
         deps.ari
@@ -650,8 +824,9 @@ impl Live {
             id,
             reporter,
             cache,
-            persist,
             voice: services.voice,
+            closing: setup.closing.clone(),
+            longest,
             talker: Talker::new(deps.timing, setup.script.phrases.clone()),
             started: Instant::now(),
             codec,
@@ -673,7 +848,6 @@ impl Live {
             pending_hangup: false,
             answered,
             opening_logged: false,
-            cache_warned: false,
         })
     }
 
@@ -687,11 +861,14 @@ impl Live {
         }
         let mut delivered: Option<oneshot::Receiver<()>> = None;
         let mut hangup_at: Option<tokio::time::Instant> = None;
+        // The call's longest duration, then the cut of a closing the caller holds back past it,
+        // then the end of a hangup Asterisk does not confirm (B6 review).
+        let mut longest = Some(self.longest);
+        let mut cut_at: Option<tokio::time::Instant> = None;
+        let mut gone_by: Option<tokio::time::Instant> = None;
         // A closed listener's stream resolves at once on every pass: its arm is disabled once it
         // ends, so the fault sentence it asks for plays instead of a tight loop (B4 review I2).
         let mut listening = true;
-        // So is the pacing task's, which ends with the media socket (whose own arm ends the call).
-        let mut pacing = true;
         let mut tick = tokio::time::interval(Duration::from_millis(20));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -723,7 +900,14 @@ impl Live {
                         listening = false;
                         warn!(call = %self.id, "the listener closed");
                         self.reporter.fail("the listener stopped during the call");
+                        // A turn the caller had open ends as unheard words, after the loss (so no
+                        // "not heard" is queued): the fault sentence would otherwise wait for a
+                        // pause the listener can no longer report (B6 review).
+                        let open = self.talker.turn_open();
                         self.input(Input::CoreLost).await;
+                        if open {
+                            self.input(Input::Unheard).await;
+                        }
                     }
                 },
                 m = speak_rx.next() => match m {
@@ -740,9 +924,14 @@ impl Live {
                         break;
                     }
                 },
-                s = sounding_rx.recv(), if pacing => match s {
+                s = sounding_rx.recv() => match s {
                     Some(at) => self.sounding(at),
-                    None => pacing = false,
+                    // The pacing task ended: its socket failed, and no RTP leaves any more.
+                    None => {
+                        warn!(call = %self.id, "the media writer stopped");
+                        self.reporter.fail("the media closed during the call");
+                        break;
+                    }
                 },
                 c = rx.recv() => match c {
                     Some(ToCall::Command(c)) => self.command(c).await,
@@ -750,7 +939,7 @@ impl Live {
                         self.reporter.send(BridgeEvent::Dtmf { digit });
                     }
                     Some(ToCall::Ari(AriEvent::Gone { channel, .. })) if channel == self.id => {
-                        self.reporter.send(BridgeEvent::Hangup { cause: "normal".into() });
+                        self.reporter.hung_up("normal");
                         break;
                     }
                     Some(ToCall::Ari(_)) => {}
@@ -770,6 +959,26 @@ impl Live {
                 _ = async { tokio::time::sleep_until(hangup_at.expect("guarded")).await }, if hangup_at.is_some() => {
                     hangup_at = None;
                     self.spawn_hangup();
+                    gone_by = Some(tokio::time::Instant::now() + self.deps.waits.gone);
+                },
+                _ = async { tokio::time::sleep_until(longest.expect("guarded")).await }, if longest.is_some() => {
+                    longest = None;
+                    cut_at = Some(tokio::time::Instant::now() + CLOSE_GRACE);
+                    info!(call = %self.id, "the call reached its longest duration");
+                    let text = self.closing.clone();
+                    self.input(Input::Close { text }).await;
+                },
+                _ = async { tokio::time::sleep_until(cut_at.expect("guarded")).await }, if cut_at.is_some() => {
+                    warn!(call = %self.id, "the closing was held back past the longest duration");
+                    self.reporter.hung_up("normal");
+                    break;
+                },
+                _ = async { tokio::time::sleep_until(gone_by.expect("guarded")).await }, if gone_by.is_some() => {
+                    // Asterisk's events may be lost: the call ends, and its cleanup hangs the line
+                    // up again.
+                    warn!(call = %self.id, "Asterisk did not confirm the hangup");
+                    self.reporter.hung_up("normal");
+                    break;
                 },
                 _ = tick.tick() => self.input(Input::Tick).await,
             }
@@ -854,11 +1063,14 @@ impl Live {
         }
     }
 
-    /// Hangs the caller's channel up without holding the loop: ARI may take its 5 s (B5 review).
+    /// Hangs the caller's channel up without holding the loop: ARI may take its 5 s (B5 review),
+    /// and a refusal is asked again (B6 review).
     fn spawn_hangup(&self) {
         let (ari, id) = (self.deps.ari.clone(), self.id.clone());
         tokio::spawn(async move {
-            let _ = ari.hangup(&id).await;
+            if !hang_up(&ari, &id).await {
+                warn!(call = %id, "Asterisk refused the hangup");
+            }
         });
     }
 
@@ -939,7 +1151,12 @@ impl Live {
             let index = p.next;
             let sentence = p.sentences[index].text.clone();
             let item = p.item.id;
-            let hit = self.cache.lock().ok().and_then(|mut c| c.get(&sentence));
+            let hit = self
+                .cache
+                .phrases
+                .lock()
+                .ok()
+                .and_then(|mut c| c.get(&sentence));
             match hit {
                 Some(pcm) => {
                     if let Some(p) = self.playing.as_mut() {
@@ -1039,24 +1256,12 @@ impl Live {
         if !ok {
             warn!(call = %self.id, "a sentence could not be synthesised");
         } else if !f.pcm.is_empty() {
-            self.file(&sentence, f.pcm);
+            // Kept under the live speaker's voice; a disk error is logged once a call, and the
+            // sentence still plays from memory (B5 review).
+            self.cache.file(&self.id, &self.voice, &sentence, f.pcm);
         }
         self.mark(item, f.index);
         self.advance().await;
-    }
-
-    /// Files a synthesised sentence in the call's cache under the live speaker's voice. A disk
-    /// error is logged once a call; the sentence still plays from memory (B5 review).
-    fn file(&mut self, sentence: &str, pcm: Vec<i16>) {
-        let persist = self.persist.contains(sentence);
-        let filed = match self.cache.lock() {
-            Ok(mut c) => c.put(&self.voice, sentence, pcm, persist),
-            Err(_) => Ok(()),
-        };
-        if filed.is_err() && !self.cache_warned {
-            self.cache_warned = true;
-            warn!(call = %self.id, "the phrase cache could not be written");
-        }
     }
 
     async fn media_control(&mut self, control: &str) {
@@ -1209,9 +1414,14 @@ impl Live {
             Command::Play {
                 seq, clip, text, ..
             } => {
-                // The closing is heard to its end (B4 review C1; the talker hangs up after a cut
-                // one all the same); every other line of the core may be cut.
-                let barge_in = clip != PlayKind::Closing;
+                // Heard in full: the opening (the workspace's opening, the disclosure and the
+                // transcript notice, then the plan's; B6 review), the recording announcement and
+                // the closing (B4 review C1; the talker hangs up after a cut one all the same).
+                // The holding and fallback lines may be cut.
+                let barge_in = !matches!(
+                    clip,
+                    PlayKind::Opening | PlayKind::Announcement | PlayKind::Closing
+                );
                 self.input(Input::Speak {
                     seq,
                     text,

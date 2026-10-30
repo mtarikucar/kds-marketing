@@ -22,12 +22,20 @@
 //!   A caller who talks on without a pause holds it back until the listener ends the turn (its
 //!   30 s cut).
 //!
+//! - The call at its longest duration ([`Input::Close`]): what plays is cut, what is queued
+//!   dropped, the closing plays to its end, then the line is hung up; once, and not at all when the
+//!   line is closing already.
+//!
 //! The acknowledgement, the filler, the long wait and "still there" start no sooner than
 //! [`Timing::phrase_gap_ms`] after the last phrase ended; "not heard" and the fault sentence answer
 //! an event and wait for no gap. Nothing starts while the caller speaks, and the caller's speech
 //! cuts what plays unless it asked to be heard through (every phrase but the fault sentence may be
-//! cut). Once the core asked to hang up (or was lost), the line is hung up as soon as nothing is
-//! left to play, whether the last item played to its end or was cut.
+//! cut). A line that asked to be heard through (the opening with the disclosure and the transcript
+//! notice, the recording announcement, the closing) is never dropped by a cut of the line before
+//! it either: it stays queued and plays once the caller pauses; and a turn of the caller that ends
+//! while such a line plays is owed its reply from the end of that line (B6 review). Once the core
+//! asked to hang up (or was lost), the line is hung up as soon as nothing is left to play, whether
+//! the last item played to its end or was cut.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -81,6 +89,8 @@ pub enum Source {
     Core { seq: u32, agent: bool },
     /// One of the policy's phrases.
     Phrase { set: PhraseSet, index: u8 },
+    /// The bridge's own line: the closing it plays when the call reaches its longest duration.
+    Bridge,
 }
 
 /// Something to play. `Debug` prints the text's length, not the text.
@@ -127,6 +137,10 @@ pub enum Input {
     },
     /// The core is unreachable.
     CoreLost,
+    /// The call reached its longest duration: `text` (the plan's closing) ends it.
+    Close {
+        text: String,
+    },
     Tick,
 }
 
@@ -146,6 +160,10 @@ impl fmt::Debug for Input {
                 .field("agent", agent)
                 .finish(),
             Input::Played { id } => f.debug_struct("Played").field("id", id).finish(),
+            Input::Close { text } => f
+                .debug_struct("Close")
+                .field("text", &Redacted(text))
+                .finish(),
             Input::HangupWhenDone => f.write_str("HangupWhenDone"),
             Input::SpeechStart => f.write_str("SpeechStart"),
             Input::SpeechEnd => f.write_str("SpeechEnd"),
@@ -186,6 +204,9 @@ pub struct Talker {
     guard: bool,
     /// Since when the caller's turn waits for a reply.
     owed_since: Option<Ms>,
+    /// The turn ended while a line that must be heard played: its wait starts again when the last
+    /// such line ends.
+    owed_in_line: bool,
     /// How many of the wait's phrases played: 1 the acknowledgement, 2 the filler, 3 the long wait.
     stage: u8,
     /// Since when the agent's sentence waits for the caller.
@@ -217,6 +238,7 @@ impl Talker {
             playing: None,
             guard: false,
             owed_since: None,
+            owed_in_line: false,
             stage: 0,
             awaiting_since: None,
             still_there_done: false,
@@ -278,6 +300,7 @@ impl Talker {
             } => {
                 if agent {
                     self.owed_since = None;
+                    self.owed_in_line = false;
                     self.stage = 0;
                     self.still_there_done = false;
                 }
@@ -311,6 +334,7 @@ impl Talker {
                 self.speaking = false;
                 self.turn_open = false;
                 self.owed_since = Some(now);
+                self.owed_in_line = self.playing.as_ref().is_some_and(|p| !p.barge_in);
                 self.stage = 0;
                 self.awaiting_since = None;
                 self.still_there_done = false;
@@ -329,6 +353,13 @@ impl Talker {
                         self.still_there_done = false;
                     }
                     self.start_next(&mut out);
+                    if self.owed_in_line {
+                        // The caller heard nothing of a reply yet: the wait counts from here, or
+                        // from the end of the next line that must be heard, if one follows.
+                        self.owed_since = self.owed_since.map(|_| now);
+                        self.stage = 0;
+                        self.owed_in_line = self.playing.as_ref().is_some_and(|p| !p.barge_in);
+                    }
                     self.lower_guard_if_silent(&mut out);
                 }
             }
@@ -346,6 +377,28 @@ impl Talker {
                     self.awaiting_since = None;
                     self.phrase(PhraseSet::Fault, &mut out);
                     self.hangup_when_done = true;
+                }
+            }
+            Input::Close { text } => {
+                // Once, and never over a closing (or a fault sentence) already on its way.
+                if !self.hangup_when_done {
+                    self.cut(true, &mut out);
+                    let dropped: Vec<Item> = self.queue.drain(..).collect();
+                    if !dropped.is_empty() {
+                        out.push(Action::Dropped(dropped));
+                    }
+                    self.owed_since = None;
+                    self.owed_in_line = false;
+                    self.awaiting_since = None;
+                    let id = self.id();
+                    self.queue.push_back(Item {
+                        id,
+                        source: Source::Bridge,
+                        text,
+                        barge_in: false,
+                    });
+                    self.hangup_when_done = true;
+                    self.start_next(&mut out);
                 }
             }
             Input::Tick => {
@@ -417,7 +470,9 @@ impl Talker {
         }
     }
 
-    /// Cuts what plays when the caller speaks over it (or always, with `force`).
+    /// Cuts what plays when the caller speaks over it, and drops what may be cut of the queue: a
+    /// line that must be heard stays queued (B6 review). With `force` (the core lost, the call's
+    /// longest duration) it cuts whatever plays and drops the whole queue.
     fn cut(&mut self, force: bool, out: &mut Vec<Action>) {
         let Some(item) = self.playing.take_if(|p| force || p.barge_in) else {
             return;
@@ -425,7 +480,9 @@ impl Talker {
         if matches!(item.source, Source::Phrase { .. }) {
             self.last_phrase_end = None;
         }
-        let dropped: Vec<Item> = self.queue.drain(..).collect();
+        let (dropped, kept): (Vec<Item>, Vec<Item>) =
+            self.queue.drain(..).partition(|q| force || q.barge_in);
+        self.queue.extend(kept);
         out.push(Action::Cut { item, dropped });
         self.lower_guard_if_silent(out);
     }

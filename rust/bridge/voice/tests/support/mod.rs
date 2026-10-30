@@ -1,6 +1,7 @@
 //! Fakes of Asterisk (ARI over HTTP, media over WebSocket) and of the two speech services.
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,16 +20,35 @@ pub type Log = Arc<Mutex<Vec<String>>>;
 
 /// A fake ARI REST surface; every request is logged as `METHOD path query`.
 pub async fn fake_ari() -> (String, Log) {
-    let log: Log = Arc::default();
-    async fn record(State(log): State<Log>, line: String) {
-        log.lock().unwrap().push(line);
+    fake_ari_refusing_hangups(0).await
+}
+
+#[derive(Clone)]
+struct Fake {
+    log: Log,
+    /// Channel hangups still to answer 500 (ARI briefly away).
+    refusals: Arc<AtomicUsize>,
+}
+
+impl Fake {
+    fn record(&self, line: String) {
+        self.log.lock().unwrap().push(line);
     }
+}
+
+/// As [`fake_ari`], but the first `refusals` channel hangups answer 500 (each logged all the same).
+pub async fn fake_ari_refusing_hangups(refusals: usize) -> (String, Log) {
+    let fake = Fake {
+        log: Arc::default(),
+        refusals: Arc::new(AtomicUsize::new(refusals)),
+    };
+    let log = fake.log.clone();
     let app = Router::new()
         .route(
             "/ari/channels",
             post(
-                |State(log): State<Log>, Query(q): Query<Vec<(String, String)>>| async move {
-                    record(State(log), format!("POST /ari/channels {q:?}")).await;
+                |State(f): State<Fake>, Query(q): Query<Vec<(String, String)>>| async move {
+                    f.record(format!("POST /ari/channels {q:?}"));
                     axum::Json(json!({ "id": "c-1" }))
                 },
             )
@@ -36,8 +56,8 @@ pub async fn fake_ari() -> (String, Log) {
         )
         .route(
             "/ari/channels/externalMedia",
-            post(|State(log): State<Log>| async move {
-                record(State(log), "POST externalMedia".into()).await;
+            post(|State(f): State<Fake>| async move {
+                f.record("POST externalMedia".into());
                 axum::Json(json!({}))
             }),
         )
@@ -47,12 +67,18 @@ pub async fn fake_ari() -> (String, Log) {
         )
         .route(
             "/ari/channels/{id}",
-            delete(
-                |State(log): State<Log>, Path(id): Path<String>| async move {
-                    record(State(log), format!("DELETE channel {id}")).await;
+            delete(|State(f): State<Fake>, Path(id): Path<String>| async move {
+                f.record(format!("DELETE channel {id}"));
+                let refused = f
+                    .refusals
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .is_ok();
+                if refused {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                } else {
                     StatusCode::NO_CONTENT
-                },
-            ),
+                }
+            }),
         )
         .route("/ari/bridges", post(|| async { axum::Json(json!({})) }))
         .route(
@@ -63,7 +89,7 @@ pub async fn fake_ari() -> (String, Log) {
             "/ari/bridges/{id}",
             delete(|| async { StatusCode::NO_CONTENT }),
         )
-        .with_state(log.clone());
+        .with_state(fake);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -125,15 +151,27 @@ pub fn serve_speaker_until(
 /// `silence frame` the first time a frame of all 0xD5 arrives and `frame of N bytes` for any frame
 /// that is not 160 bytes.
 pub fn serve_media(conns: mpsc::Receiver<WebSocketStream<TcpStream>>) -> mpsc::Receiver<String> {
-    serve_media_until(conns, None)
+    serve_media_with(conns, MediaFake::default())
 }
 
-/// As [`serve_media`], but the media closes `closes_after` its start (Asterisk restarted, or the
-/// media channel failed).
-pub fn serve_media_until(
+/// How the fake media behaves.
+#[derive(Clone, Copy, Default)]
+pub struct MediaFake {
+    /// The media closes this long after its start (Asterisk restarted, the media channel failed).
+    pub closes_after: Option<Duration>,
+    /// Each mark is answered this much later: the sentence before it takes that long to play.
+    pub mark_delay: Option<Duration>,
+}
+
+/// As [`serve_media`], as `fake` says.
+pub fn serve_media_with(
     mut conns: mpsc::Receiver<WebSocketStream<TcpStream>>,
-    closes_after: Option<Duration>,
+    fake: MediaFake,
 ) -> mpsc::Receiver<String> {
+    let MediaFake {
+        closes_after,
+        mark_delay,
+    } = fake;
     let (tx, rx) = mpsc::channel(64);
     tokio::spawn(async move {
         let Some(mut ws) = conns.recv().await else {
@@ -166,6 +204,9 @@ pub fn serve_media_until(
                     let v: Value = serde_json::from_str(&t).unwrap();
                     let name = v["command"].as_str().unwrap_or_default().to_owned();
                     if name == "MARK_MEDIA" {
+                        if let Some(delay) = mark_delay {
+                            tokio::time::sleep(delay).await;
+                        }
                         let done = json!({ "event": "MEDIA_MARK_PROCESSED", "channel_id": "c-1-m",
                             "correlation_id": v["correlation_id"] });
                         ws.send(Message::Text(done.to_string().into()))

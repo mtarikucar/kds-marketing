@@ -63,6 +63,8 @@ fn a_spoken_input_prints_no_text() {
     );
     assert_eq!(format!("{:?}", Input::Played { id: 4 }), "Played { id: 4 }");
     assert_eq!(format!("{:?}", Input::CoreLost), "CoreLost");
+    // The bridge's own closing (B6 review D).
+    shows_no_text(&format!("{:?}", Input::Close { text: SAID.into() }));
 }
 
 #[test]

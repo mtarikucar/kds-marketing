@@ -468,3 +468,113 @@ fn no_still_there_while_the_core_holds_the_line() {
         assert!(plays(&t.on(Input::Tick, now)).is_empty(), "at {now}");
     }
 }
+
+/// B6 review C: a barge-in cuts only what may be cut. A line that must be heard in full (the
+/// opening with its notice, the recording announcement) stays queued behind the cut one, and
+/// plays once the caller pauses.
+#[test]
+fn a_barge_in_never_drops_a_queued_line_that_must_be_heard() {
+    let mut t = talker();
+    t.on(line(2, "Bir saniye lütfen, hemen bağlıyorum.", true), 0);
+    t.on(
+        line(
+            3,
+            "Görüşmemiz hizmet kalitesi için yazıya dökülmektedir.",
+            false,
+        ),
+        5,
+    );
+    t.on(line(4, "Kısa bir bilgi daha var.", true), 6);
+    let (item, dropped) = cut_of(&t.on(Input::SpeechStart, 500)).expect("a cut");
+    assert_eq!(
+        item.source,
+        Source::Core {
+            seq: 2,
+            agent: false
+        }
+    );
+    let dropped: Vec<Source> = dropped.into_iter().map(|d| d.source).collect();
+    assert_eq!(
+        dropped,
+        [Source::Core {
+            seq: 4,
+            agent: false
+        }]
+    );
+    assert_eq!(
+        plays(&t.on(Input::SpeechEnd, 900)),
+        ["Görüşmemiz hizmet kalitesi için yazıya dökülmektedir."]
+    );
+}
+
+/// B6 review C: the caller's turn over a line that must be heard ("Alo?" over the opening) cuts
+/// nothing; it is kept, and the wait for its reply counts from the end of that line.
+#[test]
+fn a_turn_over_a_line_that_must_be_heard_is_covered_after_it() {
+    let mut t = talker();
+    let opening = t.on(
+        line(1, "Merhaba, ben Jeeta'nın dijital asistanıyım.", false),
+        0,
+    );
+    assert!(cut_of(&t.on(Input::SpeechStart, 300)).is_none());
+    t.on(Input::SpeechEnd, 700);
+    t.on(Input::Final, 900);
+    assert!(plays(&t.on(Input::Tick, 2_000)).is_empty());
+    let done = finish(&mut t, &opening, 4_000);
+    assert!(done.iter().any(|a| matches!(
+        a,
+        Action::Done(i) if i.source == Source::Core { seq: 1, agent: false }
+    )));
+    assert!(plays(&t.on(Input::Tick, 4_580)).is_empty());
+    assert_eq!(plays(&t.on(Input::Tick, 4_600)), ["Hı hı."]);
+}
+
+const LAST: &str = "Görüşmek üzere, iyi günler.";
+
+/// B6 review D: at the call's longest duration the bridge cuts what plays, drops what is queued,
+/// plays the closing to its end and hangs up; once.
+#[test]
+fn the_bridge_closes_a_call_at_its_longest_duration() {
+    let mut t = talker();
+    t.on(line(3, "Uzun bir cümle daha.", true), 0);
+    t.on(say(4, "Ve bir cümle daha."), 5);
+    let close = t.on(Input::Close { text: LAST.into() }, 1_000);
+    let (item, dropped) = cut_of(&close).expect("a cut");
+    assert_eq!(
+        item.source,
+        Source::Core {
+            seq: 3,
+            agent: false
+        }
+    );
+    assert_eq!(dropped.len(), 1);
+    assert_eq!(plays(&close), [LAST]);
+    let closing = close
+        .iter()
+        .find_map(|a| match a {
+            Action::Play(i) => Some(i.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (closing.source.clone(), closing.barge_in),
+        (Source::Bridge, false)
+    );
+    assert!(
+        cut_of(&t.on(Input::SpeechStart, 1_200)).is_none(),
+        "heard in full"
+    );
+    t.on(Input::SpeechEnd, 1_500);
+    assert!(t.on(Input::Close { text: LAST.into() }, 1_600).is_empty());
+    let end = t.on(Input::Played { id: closing.id }, 3_000);
+    assert!(end.contains(&Action::Hangup), "{end:?}");
+}
+
+/// B6 review D: a closing the core already asked for is not replaced by the bridge's.
+#[test]
+fn the_bridge_does_not_close_a_call_already_closing() {
+    let mut t = talker();
+    t.on(line(9, LAST, false), 0);
+    t.on(Input::HangupWhenDone, 5);
+    assert!(t.on(Input::Close { text: LAST.into() }, 100).is_empty());
+}
