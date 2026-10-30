@@ -696,14 +696,20 @@ export class ConversationIngressService {
     // it is not inbound: `lastInboundAt` is what the provider's 24-hour reply
     // window is measured from, so stamping it here would show a window this
     // account does not actually have, and a send inside it fails at Meta.
+    //
+    // ONE clock reading for both stamps. The AI reply backfill reads "the
+    // customer spoke last" as lastMessageAt EQUALS lastInboundAt, and two
+    // `new Date()` calls land 1 ms apart whenever the millisecond ticks between
+    // them — leaving that thread looking answered, so it was never backfilled.
+    const now = new Date();
     await tx.conversation.update({
       where: { id: convo.id },
       data: inbound.echo
-        ? { lastMessageAt: new Date() }
+        ? { lastMessageAt: now }
         : {
             unreadCount: { increment: 1 },
-            lastMessageAt: new Date(),
-            lastInboundAt: new Date(),
+            lastMessageAt: now,
+            lastInboundAt: now,
           },
     });
 
