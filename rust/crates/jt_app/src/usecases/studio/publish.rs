@@ -615,41 +615,16 @@ async fn recover_observed(
 }
 
 /// The attempt of capability `capability_id` whose receipt, observed or settled, is
-/// `external_id` (TikTok's publish id), in the open bundle `r`; `None` when none is.
+/// `external_id` (TikTok's publish id), in the open bundle `r` (one read:
+/// `StudioRepo::attempt_by_receipt`); `None` when none is.
 pub(crate) async fn attempt_by_receipt(
     r: &mut dyn TenantRepos,
     capability_id: CapabilityId,
     external_id: &str,
-    now: OffsetDateTime,
 ) -> Result<Option<PublishAttempt>, AppError> {
-    for s in r
-        .studio()
-        .list_slots(query(now + Duration::nanoseconds(1)))
-        .await?
-        .into_iter()
-        .filter(|s| s.capability_id == capability_id)
-    {
-        let found = r
-            .studio()
-            .slot_evidence(s.id)
-            .await?
-            .0
-            .into_iter()
-            .find(|a| {
-                a.capability_id() == capability_id
-                    && matches!(
-                        a.outcome(),
-                        Some(
-                            jt_studio::PublishOutcome::Observed(receipt)
-                            | jt_studio::PublishOutcome::Succeeded(receipt)
-                        ) if receipt.external_id == external_id
-                    )
-            });
-        if found.is_some() {
-            return Ok(found);
-        }
-    }
-    Ok(None)
+    r.studio()
+        .attempt_by_receipt(capability_id, external_id)
+        .await
 }
 
 /// Reads back at once the post `external_id` (its receipt's id: TikTok's publish id) that
@@ -677,7 +652,7 @@ pub async fn resolve_observed(
     let found = {
         let mut r = d.uow.tenant(ws).await?;
         chain::active(r.as_mut()).await?;
-        attempt_by_receipt(r.as_mut(), capability_id, external_id, d.clock.now()).await?
+        attempt_by_receipt(r.as_mut(), capability_id, external_id).await?
     };
     let Some(a) = found else {
         return Ok(false);

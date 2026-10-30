@@ -228,6 +228,14 @@ pub trait StudioRepo: Send + Sync {
         outcome: PublishOutcome,
         observed_at: OffsetDateTime,
     ) -> Result<(), AppError>;
+    /// The attempt of capability `capability` whose receipt, observed or settled (succeeded), is
+    /// `external_id` (a provider's id for the post: TikTok's publish id), in one read whatever
+    /// the number of slots; `None` when none is.
+    async fn attempt_by_receipt(
+        &mut self,
+        capability: jt_capability::CapabilityId,
+        external_id: &str,
+    ) -> Result<Option<PublishAttempt>, AppError>;
     /// Upgrades succeeded attempt `attempt`, and its publication, to `receipt`, the public
     /// receipt its provider named after the post was settled under a provisional one
     /// (`PublishAttempt::upgrade_receipt`), writing `studio.publish.public_id` at `at`: `true`

@@ -757,6 +757,29 @@ impl StudioRepo for MemTenant {
     ) -> Result<Option<PublishAttempt>, AppError> {
         self.claim_studio(now, Some(slot)).await
     }
+    async fn attempt_by_receipt(
+        &mut self,
+        capability: jt_capability::CapabilityId,
+        external_id: &str,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .studio
+            .attempts
+            .iter()
+            .filter(|a| a.piece().chain.workspace_id == ws && a.capability_id() == capability)
+            .find(|a| {
+                matches!(
+                    a.outcome(),
+                    Some(
+                        jt_studio::PublishOutcome::Observed(r)
+                        | jt_studio::PublishOutcome::Succeeded(r)
+                    ) if r.external_id == external_id
+                )
+            })
+            .cloned())
+    }
     async fn upgrade_receipt(
         &mut self,
         id: PublishAttemptId,
