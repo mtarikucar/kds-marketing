@@ -330,7 +330,7 @@ async fn budget_exhausted_refused() {
         estimated_minor_per_minute: 150,
         ..CallPolicy::default()
     };
-    calls::policy_set(&r.w.deps, &r.w.owner_ctx, calls::PolicyInput(policy))
+    calls::policy_set(&r.w.deps, &r.w.owner_ctx, calls::PolicyInput::from(policy))
         .await
         .unwrap();
     // A known tariff and no budget item linked to the PBX: nothing can pay for a minute.

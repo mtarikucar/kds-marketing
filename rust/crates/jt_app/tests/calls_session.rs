@@ -142,7 +142,7 @@ async fn rig_with(max_calls: u8, policy: CallPolicy) -> Rig {
         .await
         .unwrap();
     r.commit().await.unwrap();
-    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput(policy))
+    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput::from(policy))
         .await
         .unwrap();
     let key = api_keys::create(

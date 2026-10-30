@@ -29,7 +29,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           holding_default, the timers (slow_agent_s, holding_again_s, \
                           fallback_after_s, caller_silence_s, caller_silence_close_s), \
                           max_duration_s, handoff_extension and estimated_minor_per_minute (the \
-                          tariff per started minute, 0 when unknown). [risk: READ]",
+                          tariff per started minute, 0 when unknown), and the texts only a \
+                          person changes (you may read them): opening_outbound, \
+                          transcript_notice, closing, phrases (the six lists of sentences the \
+                          voice bridge plays on its own), disclosure_sentence and \
+                          greeting_inbound, shown with the workspace's name filled into the \
+                          approved templates the owner left unwritten. [risk: READ]",
             permission: Permission::CallsWork,
             schema: schema_for::<NoArgs>,
             run: policy_get,
@@ -38,8 +43,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "calls.policy_set",
             description: "Replace the workspace's call policy with the given one (every field \
                           as jeeta.calls.policy_get returns it; a field left out takes its \
-                          default). Only a person may turn disclose_assistant off (FORBIDDEN \
-                          for you). Returns the stored policy. [risk: WRITE]",
+                          default, except opening_outbound, transcript_notice, closing, \
+                          phrases, disclosure_sentence and greeting_inbound, which only a \
+                          person changes: left out or sent as read, they keep their stored \
+                          values; a different value is FORBIDDEN, details.reason person_only \
+                          naming the field). Only a person may turn disclose_assistant off \
+                          (FORBIDDEN for you). Returns the stored policy. [risk: WRITE]",
             permission: Permission::CallsManage,
             schema: policy_schema,
             run: policy_set,
@@ -194,15 +203,35 @@ fn seconds(description: &str) -> Value {
     json!({ "type": "integer", "minimum": 1, "description": description })
 }
 
+/// One of the call policy's six lists of bridge phrases: at most 5 sentences.
+fn phrase_list() -> Value {
+    json!({ "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 600 } })
+}
+
 fn policy_schema() -> Schema {
     json_schema!({
         "type": "object",
         "properties": {
-            "greeting_inbound": text("Played when an agent on duty answers an inbound call."),
+            "greeting_inbound": text("Played when an agent on duty answers an inbound call (empty: the approved greeting with the workspace's name). Person-only; agents may read."),
             "voicemail_text": text("Played before a voicemail is recorded."),
             "recording_announcement": text("Played before anything is recorded."),
             "disclose_assistant": { "type": "boolean" },
-            "disclosure_sentence": text("The sentence an agent-driven opening must contain."),
+            "disclosure_sentence": text("The sentence an agent-driven opening must contain (empty: the approved one with the workspace's name). Person-only; agents may read."),
+            "opening_outbound": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played first when an outbound agent call is answered (null: the approved opening with the workspace's name; empty: none). Person-only; agents may read." },
+            "transcript_notice": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played after the opening on every agent call (null: the approved notice; empty: none). Person-only; agents may read." },
+            "closing": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played before an agent's call is hung up when its plan brings no closing (null: the approved closing). Person-only; agents may read." },
+            "phrases": {
+                "type": "object",
+                "description": "The phrases the voice bridge plays on its own, six lists. Person-only; agents may read.",
+                "properties": {
+                    "acknowledgements": phrase_list(), "fillers": phrase_list(), "long_wait": phrase_list(),
+                    "not_heard": phrase_list(), "still_there": phrase_list(), "fault": phrase_list(),
+                },
+                "additionalProperties": false,
+            },
             "holding_default": { "type": "array", "maxItems": 5, "items": { "type": "string" } },
             "max_duration_s": { "type": "integer", "minimum": 1, "maximum": 900 },
             "slow_agent_s": seconds("Agent silence before the first holding phrase."),

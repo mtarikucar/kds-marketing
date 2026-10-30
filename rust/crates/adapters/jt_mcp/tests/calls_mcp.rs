@@ -74,6 +74,46 @@ fn calls_tools_have_their_permissions_risks_and_strict_schemas() {
     }
 }
 
+#[test]
+fn the_policy_schema_names_every_policy_field_and_marks_the_approved_texts_person_only() {
+    let tools = tools();
+    let schema = tools["jeeta.calls.policy_set"]
+        .input_schema
+        .as_value()
+        .clone();
+    let props = &schema["properties"];
+    let policy = serde_json::to_value(jt_app::ports::calls::CallPolicy::default()).unwrap();
+    for key in policy.as_object().unwrap().keys() {
+        assert!(props.get(key).is_some(), "policy_schema lacks {key}");
+    }
+    let phrases = serde_json::to_value(jt_app::ports::calls::BridgePhrases::default()).unwrap();
+    for key in phrases.as_object().unwrap().keys() {
+        assert!(
+            props["phrases"]["properties"].get(key).is_some(),
+            "phrases lacks {key}"
+        );
+    }
+    assert_eq!(props["phrases"]["additionalProperties"], false);
+    let get = tools["jeeta.calls.policy_get"].description;
+    let person_only = [
+        "opening_outbound",
+        "transcript_notice",
+        "closing",
+        "phrases",
+        "disclosure_sentence",
+        "greeting_inbound",
+    ];
+    assert_eq!(jt_app::usecases::calls::PERSON_ONLY, person_only);
+    for key in person_only {
+        let text = props[key]["description"].as_str().unwrap();
+        assert!(
+            text.contains("Person-only; agents may read."),
+            "{key}: {text}"
+        );
+        assert!(get.contains(key), "calls.policy_get does not name {key}");
+    }
+}
+
 #[tokio::test]
 async fn place_and_end_through_the_dispatcher_keep_numbers_masked() {
     let uow = Arc::new(InMemoryUow::new());
