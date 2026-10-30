@@ -100,12 +100,29 @@ pub enum Credential {
         password: String,
         brand_code: String,
     },
+    /// A Trendyol seller's own API key and secret (Basic auth), and the seller id they are
+    /// bound to. The key and the secret are private.
+    #[serde(rename = "trendyol_seller")]
+    TrendyolSeller {
+        seller_id: String,
+        api_key: String,
+        api_secret: String,
+    },
+    /// A Hepsiburada merchant's API user and password, and the merchant id. The exact pair the
+    /// API takes is VERIFY V-H1 (spec 2026-10-30-inbox-comments-marketplace-design.md §12). The
+    /// user and the password are private.
+    #[serde(rename = "hepsiburada_merchant")]
+    HepsiburadaMerchant {
+        merchant_id: String,
+        username: String,
+        password: String,
+    },
 }
 
 impl Credential {
     /// The stable key of the variant, which is also the `kind` tag of the sealed form:
-    /// `"oauth"`, `"page_token"`, `"whatsapp_cloud"`, `"netgsm_sms"`, `"netgsm_pbx"` or
-    /// `"netgsm_iys"`.
+    /// `"mailbox"`, `"oauth"`, `"page_token"`, `"whatsapp_cloud"`, `"netgsm_sms"`,
+    /// `"netgsm_pbx"`, `"netgsm_iys"`, `"trendyol_seller"` or `"hepsiburada_merchant"`.
     pub fn kind(&self) -> &'static str {
         match self {
             Credential::Mailbox { .. } => "mailbox",
@@ -115,6 +132,8 @@ impl Credential {
             Credential::NetgsmSms { .. } => "netgsm_sms",
             Credential::NetgsmPbx { .. } => "netgsm_pbx",
             Credential::NetgsmIys { .. } => "netgsm_iys",
+            Credential::TrendyolSeller { .. } => "trendyol_seller",
+            Credential::HepsiburadaMerchant { .. } => "hepsiburada_merchant",
         }
     }
 
@@ -141,9 +160,11 @@ impl Credential {
     /// - `WhatsAppCloud`: `phone_number_id`, and `waba_id` and `expires_at` (RFC 3339) when known;
     /// - `NetgsmSms`: `usercode` and `msgheader`;
     /// - `NetgsmPbx`: `username`, and `trunk` and `pbxnum` when known;
-    /// - `NetgsmIys`: `usercode` and `brand_code`.
+    /// - `NetgsmIys`: `usercode` and `brand_code`;
+    /// - `TrendyolSeller`: `seller_id`;
+    /// - `HepsiburadaMerchant`: `merchant_id`.
     ///
-    /// Never a token, a refresh token or a password.
+    /// Never a token, a refresh token, an API key or secret, a login or a password.
     pub fn redact_for_public(&self) -> Value {
         let mut facts = Map::new();
         facts.insert("kind".to_owned(), json!(self.kind()));
@@ -217,6 +238,10 @@ impl Credential {
                 put("usercode", json!(usercode));
                 put("brand_code", json!(brand_code));
             }
+            Credential::TrendyolSeller { seller_id, .. } => put("seller_id", json!(seller_id)),
+            Credential::HepsiburadaMerchant { merchant_id, .. } => {
+                put("merchant_id", json!(merchant_id));
+            }
         }
         Value::Object(facts)
     }
@@ -227,7 +252,8 @@ fn masked(secret: &Option<String>) -> Option<Masked> {
     secret.as_ref().map(|_| Masked)
 }
 
-/// Every secret field (tokens, refresh tokens, passwords) prints as `***`; the rest as is.
+/// Every secret field (tokens, refresh tokens, API keys and secrets, logins, passwords) prints
+/// as `***`; the rest as is.
 impl fmt::Debug for Credential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -310,6 +336,26 @@ impl fmt::Debug for Credential {
                 .field("usercode", usercode)
                 .field("password", &Masked)
                 .field("brand_code", brand_code)
+                .finish(),
+            Credential::TrendyolSeller {
+                seller_id,
+                api_key: _,
+                api_secret: _,
+            } => f
+                .debug_struct("TrendyolSeller")
+                .field("seller_id", seller_id)
+                .field("api_key", &Masked)
+                .field("api_secret", &Masked)
+                .finish(),
+            Credential::HepsiburadaMerchant {
+                merchant_id,
+                username: _,
+                password: _,
+            } => f
+                .debug_struct("HepsiburadaMerchant")
+                .field("merchant_id", merchant_id)
+                .field("username", &Masked)
+                .field("password", &Masked)
                 .finish(),
         }
     }

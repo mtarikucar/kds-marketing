@@ -186,7 +186,8 @@ pub fn comment_grant(kind_key: &str, scopes: &[&str]) -> CommentGrant;   // spec
 
 // jt_capability
 pub enum KindGroup { /* … */ Marketplace }                    // key "marketplace", reach Connector
-impl CapabilityKind { pub fn default_policy(&self) -> Policy; } // Marketplace: requires_human_approval = true
+impl CapabilityKind { pub fn default_policy(&self) -> Policy; } // Policy::default() for every kind: the
+// marketplaces start WITHOUT approval (decision 2026-10-30 by the owner's delegate, spec §3.7)
 
 // jt_app::ports::connectors (spec §6.1 for PublicSurface, PublicPoller, PublicTarget, PrivateReceipt,
 // ModerationAction, ReportReason, SubjectFacts; the registry's two default methods)
@@ -304,12 +305,20 @@ the new variants in its exhaustive lists. **Risk:** low.
 
 **Files:** `rust/crates/domain/jt_capability/src/kind.rs`, `tests/rules.rs`;
 `rust/crates/domain/jt_connector/src/{provider.rs,credential.rs,event.rs,lib.rs}`, new `src/comments.rs`,
-`tests/rules.rs`.
+`tests/rules.rs`. The two new `Provider` variants and the new group reach further (done in F2): the
+exhaustive provider matches in `jt_app/src/ports/connectors.rs` (`OAuthCallback::of_flow`: none) and
+`jt_app/src/usecases/connector.rs` (`reconnect`: `use_set_credentials`, like NetGSM and mail);
+`bin/jeeta/src/connectors.rs` (no adapter yet: `connector` and the rest answer `None`; its registry tests
+list the two providers with no operations and skip them as `NOT_YET_SERVED`, as does the adapter test of
+`bin/jeeta/src/serve.rs`; **T1 and H1 remove their provider from both**); the `jeeta.capability.declare`
+description in `jt_mcp/src/tools/capabilities.rs` names `marketplace` (pinned by `jt_mcp/tests/registry.rs`).
 
 - [ ] **Tests first:**
   - `jt_capability/tests/rules.rs`: `EXPECTED_KINDS` gains `(KindGroup::Marketplace, &["trendyol", "hepsiburada"])`;
-    `KINDS.len() == 53`; `marketplace_kinds_default_to_human_approval` (`default_policy().requires_human_approval`
-    true for both, false for `instagram`); `marketplace_group_is_reached_by_connector`.
+    `KINDS.len() == 53`; `count(Reach::Connector)` 26 → 28 and `feeds(Cash)` 47 → 49;
+    `marketplace_kinds_answer_without_approval_by_default` (`default_policy().requires_human_approval` false
+    for both and for `instagram`; every kind's default policy is `Policy::default()`: decision 2026-10-30,
+    spec §3.7); `marketplace_group_is_reached_by_connector`.
   - `jt_connector/tests/rules.rs`: the provider-coverage test sees `trendyol` → `Trendyol`, `hepsiburada` →
     `Hepsiburada`; `provider_keys_round_trip` includes both; `marketplace_credentials_mask_and_redact`
     (`Debug` shows `***` for `api_key`, `api_secret`, `password`; `redact_for_public` = `{kind, seller_id}` /
@@ -396,7 +405,7 @@ set-credentials schema's two shapes).
   - `jt_app/src/ports/connectors.rs` unit tests: `envelope_round_trips_through_a_payload`,
     `envelope_from_payload_ignores_unknown_fields`, `envelope_requires_its_identity_fields`,
     `meta_app_debug_shows_comment_scopes_flag`.
-  - `jt_app/tests/connector.rs`: `trendyol_credentials_seal_and_the_kind_starts_with_approval`,
+  - `jt_app/tests/connector.rs`: `trendyol_credentials_seal_and_the_kind_starts_without_approval`,
     `trendyol_external_id_must_equal_the_seller_id`, `hepsiburada_credentials_seal`,
     `marketplace_credential_errors_never_repeat_the_secret`.
   - `jt_pg` policies test `stored_policy_without_new_keys_gets_their_defaults` (a stored
@@ -851,8 +860,9 @@ cargo test --locked -p jt_app --test smoke_inbox_public`).
 
 - [ ] Scenario 1: scripted Meta comment (granted) → consumer → `inbox.context` → agent `inbox.reply` (public;
   capability requires approval) → `held` → human `inbox.public.approve` → receipt → item `answered`, ledger
-  lines in order. Scenario 2: scripted Trendyol poll → question → agent answer (approval on by default) →
-  approve → `pending` → poll `ANSWERED` → `answered`. Scenario 3: comment without grant → nothing stored.
+  lines in order. Scenario 2: scripted Trendyol poll → question → agent answer (the scenario turns approval
+  on for the capability; the default is off, spec §3.7) → approve → `pending` → poll `ANSWERED` →
+  `answered`. Scenario 3: comment without grant → nothing stored.
 - [ ] CI green; **commit** `test(inbox): smoke for comments and questions`.
 
 ### Task R2: operations doc and live verification (size S, after everything merged)

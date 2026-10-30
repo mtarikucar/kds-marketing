@@ -862,6 +862,14 @@ mod tests {
         // public address: an OAuth flow cannot start (the missing address is named first, before
         // any app, and nothing reaches a provider), and no webhook address is shown.
         for provider in jt_connector::Provider::all() {
+            // The marketplaces' adapters come with their own tasks (T1, H1).
+            if matches!(
+                provider,
+                jt_connector::Provider::Trendyol | jt_connector::Provider::Hepsiburada
+            ) {
+                assert!(deps.connectors.connector(*provider).is_none());
+                continue;
+            }
             let connector = deps.connectors.connector(*provider).expect("an adapter");
             assert_eq!(connector.provider(), *provider);
             assert_eq!(

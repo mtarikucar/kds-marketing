@@ -1,6 +1,7 @@
 # Messages and comments everywhere, phase 1: comments and marketplace questions in the inbox (Rust)
 
-Date: 2026-10-30. Status: draft for the owner's review.
+Date: 2026-10-30. Status: draft for the owner's review. Changed 2026-10-30 by the owner's delegate:
+marketplace capabilities start with "requires human approval" off (D7, §3.7, §15 Q1).
 
 Inputs: the research report `2026-10-30-social-messages-comments-research.md` (same folder; Turkish), the
 owner's direction of 2026-10-30 (messages and comments first; official APIs and existing services; the
@@ -55,7 +56,7 @@ answers, and the phone fallback (device bridge playbooks).
 | D4 | People created from public items **have no journey**. A journey opens when the person writes a DM (the existing path), or when the agent or a human opens one (`inbox.journeys.open`). | The journey is the sales funnel (spec §7.3). Most comments are not leads and marketplace sales happen on the marketplace. The agent decides what is a lead (rule 1); a private reply that is answered by DM opens a journey through the existing DM path, attributed to the comment (first touch). |
 | D5 | A commenter is **linked to their DM identity through the private-reply receipt** (`recipient_id`): the identity is added to the commenter's person; a collision becomes the existing merge suggestion. | Deterministic; never a guess. Uses `people` identity collision handling as it is. |
 | D6 | Public replies go through **the existing outbox pipeline** (`inbox.reply` with `item_id` and `visibility`): durable intent, two fences, provider call without locks, receipt in one transaction, uncertain results never retried. | One send path, one set of guarantees (spec §7.4 M2a). |
-| D7 | **Approval** is a new outbox state `held`. A reply is held when its capability's `requires_human_approval` is on (the existing policy flag: "every action through it waits for a human's approval"). **Marketplace kinds are created with it on**; comment surfaces keep the account's current policy (off by default, K8). Approval is a human act (`inbox.work`, actor human) that may edit the text; a held reply may be discarded by a human or by the agent that drafted it. | Research §"Dört pazar yeri": a pre-send approval queue is the market standard and Trendyol's moderation and one-answer rule make wasted answers costly; K8 keeps publication autonomous by default, so comments follow the account's existing flag. One flag per account, no second knob. Approving is no more power than writing the reply, which `inbox.work` already allows. |
+| D7 | **Approval** is a new outbox state `held`. A reply is held when its capability's `requires_human_approval` is on (the existing policy flag: "every action through it waits for a human's approval"). **Every kind is created with it off, the marketplaces included** (changed 2026-10-30 by the owner's delegate, §3.7): the agent answers comments and marketplace questions on its own within the fences of §3.6; an owner turns the flag on per capability. Approval is a human act (`inbox.work`, actor human) that may edit the text; a held reply may be discarded by a human or by the agent that drafted it. | The owner's standing rule is that the AI completes processes, and Hepsiburada's one-business-day deadline makes holding answers by default risky; K8 keeps actions autonomous by default. The costly mistakes of a one-shot, moderated marketplace answer (links, contact details, the person's own data) are refused deterministically either way (§3.6 rule 5), and the market's pre-send approval queue (research §"Dört pazar yeri") stays one switch away per account. One flag per account, no second knob. Approving is no more power than writing the reply, which `inbox.work` already allows. |
 | D8 | **Agent limits** on public surfaces: one public reply per item, no deletion, hiding allowed (reversible), commercial intent refused, the person's own contact data never echoed publicly, no links/contact data in marketplace answers. Humans: no per-item reply limit on comments; deletion with `inbox.manage` and `confirm`. | Brand-visible and partly irreversible actions; deterministic fences only (rule 2), the content decision stays the agent's (rule 1). |
 | D9 | **İYS/ETK**: a public reply is not a commercial electronic message; no İYS check. `commercial` intent is refused on public surfaces and on Amazon relay conversations. A private reply is a `reply` within its platform window (it answers the person's own comment). | Spec §7.6: a one-to-one reply to a customer-initiated contact is not a commercial send. |
 | D10 | **KVKK**: store what the inbox needs (ids, text, handle); person erasure scrubs it with the existing machinery plus new masks; an erased commenter's later comments are dropped like any erased identity; content on the platform is not touched by erasure (the panel says so and offers the moderation actions first). | Same erasure model as DMs (spec §7.6 M2b); the platform copy is the platform's. |
@@ -241,6 +242,14 @@ The 24-hour DM window does not apply to public conversations; rule 4 replaces it
 
 ### 3.7 Approval (held replies)
 
+- **Default (decided 2026-10-30 by the owner's delegate).** `requires_human_approval` starts **off** for
+  every capability kind, the marketplaces (`trendyol`, `hepsiburada`) included, as for the comment
+  surfaces: the agent answers on its own. The content checks still hold on every agent and human answer
+  (§3.6 rule 5): no link, email address or phone number in a marketplace answer, and no public reply that
+  repeats the person's own phone or email. An owner turns the flag on per capability; from then on every
+  agent answer on it waits here. Reason: the owner's standing rule that the AI completes processes, and
+  Hepsiburada's one-business-day answer deadline, which a default hold would put at risk. This replaces
+  the draft's "marketplace kinds are created with it on".
 - At enqueue, after the fence: `capability.policy.requires_human_approval && !actor.is_human()` → the outbox
   row is written with state **`held`**, the message `Queued`; ledger `inbox.public.held`; no provider call.
   `reply` answers `{message_id, state: "held"}`.
@@ -449,8 +458,9 @@ provider list).
 
 - `KindGroup::Marketplace` (`"marketplace"`, default reach `Connector`), kinds `trendyol`, `hepsiburada`
   (KINDS 51 → 53).
-- `CapabilityKind::default_policy()`: `requires_human_approval: true` for the Marketplace group, else
-  `Policy::default()`; used where a capability is first created.
+- `CapabilityKind::default_policy()`: `Policy::default()` for every kind, the marketplaces included
+  (`requires_human_approval` off, §3.7); used where a capability is first created, and the one place a
+  kind's own default would go (phase 2's n11, §13).
 
 ### 5.3 `jt_connector`
 
@@ -840,8 +850,9 @@ in H1.
 
 1. **Merge dark.** Everything lands; Meta comments stay inert (D11); `trendyol`/`hepsiburada` can be
    connected by any workspace (credentials are the switch); Amazon relay applies to every mailbox.
-2. **Marketplace pilot.** The owner connects his own Trendyol store (and Hepsiburada after H0/H1), watches a
-   week of questions with approval on, then decides the default (§15 Q1).
+2. **Marketplace pilot.** The owner connects his own Trendyol store (and Hepsiburada after H0/H1) and
+   watches a week of questions; the agent answers on its own (approval off by default, §3.7), and he may
+   turn approval on for the store while he watches.
 3. **Current Meta review decided** (submitted 2026-10-27). Until then: no change to the live app's
    permissions, login configuration, webhook fields, or to the staging instance the reviewers use (the
    review's webhook points at staging); no comment-scope flag set anywhere the reviewers sign in.
@@ -952,7 +963,7 @@ stop; humans can still act).
 |---|---|
 | Merge/coalesce breaks with items pointing at a deleted conversation | items in the merge snapshot; persistence tests for apply and undo (§6.6) |
 | A comment flood on a viral post fills the agent queue | batch `mark_handled`; hidden items not owed; `daily_ops_cap` |
-| Wasted one-shot marketplace answers | approval on by default for marketplace kinds; contact/link fence; bounds |
+| Wasted one-shot marketplace answers | contact/link fence and bounds on every answer; the one-answer refusal; approval per capability when the owner wants it (off by default, §3.7); Trendyol's own review sends a refused answer back as owed (`Rejected`) |
 | Meta review disturbed | D11 and §11 step 3: no scope, config, field or staging change before the decision |
 | Hepsiburada facts wrong | H0 verification before any HB code; the HB answer path refuses until then |
 | Trendyol key not bound to the seller path | V-T1 before the kind can be verified |
@@ -963,8 +974,8 @@ stop; humans can still act).
 
 ## 15. Open questions for the owner
 
-1. **Default approval.** This design holds agent answers for approval on marketplace capabilities by default
-   and lets agent comment replies go out unless the Instagram/Facebook capability's existing "requires human
-   approval" is on (the same flag also holds Studio posts on that account). Keep these defaults?
+1. **Default approval.** Decided 2026-10-30 by the owner's delegate: off for every kind, the marketplaces
+   included (§3.7). Agent answers go out unless the capability's existing "requires human approval" is on
+   (on Instagram/Facebook the same flag also holds Studio posts on that account).
 2. **Hepsiburada access.** H0 needs someone to read Hepsiburada's developer portal (it refuses automated
    access) and a merchant API credential (yours or a pilot seller's) for the live checks. Who provides them?
