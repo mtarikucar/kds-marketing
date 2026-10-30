@@ -520,6 +520,13 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
 
 ### Task L1-T6: catalog rows, MCP tools, panel routes, pins
 
+As built: **12 rows, not 14**: `prospects.playbook` answers the ICP, the rubric digest and the research tasks'
+remaining caps, which exist only with L2, so L2-T3 registers it with its handler; `prospects.report` reads
+promotions and outreach, so L4-T6 registers it with `prospects/report.rs`. The pins move by 12 here (catalog
+169 → 181, registry 140 → 152, `("prospects", 12)`), by one more in L2-T3 and in L4-T6, and by the plan's own
+counts elsewhere. MCP schemas are written out by hand (the domain crates do not depend on `schemars`), with
+`confirm` a boolean the use case requires true.
+
 **Files:** `jt_app/src/catalog.rs` (the 14 `prospects.*` rows of spec §7.1 other than `prospects.promote`, which
 L3-T5 registers with its handler), `jt_mcp/src/tools/{prospects,mod}.rs`, `jt_panel_http/src/routes/{prospects,mod}.rs`;
 pins: `jt_app/tests/catalog.rs` (169 → 183 at this step), `jt_archtest/tests/m4_productisation.rs`

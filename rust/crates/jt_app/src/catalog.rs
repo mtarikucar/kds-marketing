@@ -394,6 +394,23 @@ pub static CATALOG: &[UseCase] = &[
     twin("devices.act", Exempt, "jeeta.devices.act", ("POST", "/api/devices/{capability_id}/act"), Write),
     twin("devices.command_get", Exempt, "jeeta.devices.command_get", ("GET", "/api/devices/commands/{command_id}"), Read),
     twin("devices.commands", Exempt, "jeeta.devices.commands", ("GET", "/api/devices/{capability_id}/commands"), Read),
+    // The prospect pool (spec 2026-10-30-leads-pool-outreach-design.md §7.1), for an agent or a
+    // person holding `prospects.work` (`prospects.manage` for the settings, lifting and erasing).
+    // `check` and the do-not-contact lift are `POST`: their bodies carry contact values, which never
+    // go into a URL. `prospects.playbook` comes with the research tasks, `prospects.promote` with
+    // distribution and `prospects.report` with outreach.
+    twin("prospects.check", GateMode::Gated, "jeeta.prospects.check", ("POST", "/api/prospects/check"), Read),
+    twin("prospects.create", GateMode::Gated, "jeeta.prospects.create", ("POST", "/api/prospects"), Write),
+    twin("prospects.update", GateMode::Gated, "jeeta.prospects.update", ("PATCH", "/api/prospects/{prospect_id}"), Write),
+    twin("prospects.list", GateMode::Gated, "jeeta.prospects.list", ("GET", "/api/prospects"), Read),
+    twin("prospects.get", GateMode::Gated, "jeeta.prospects.get", ("GET", "/api/prospects/{prospect_id}"), Read),
+    twin("prospects.score", GateMode::Gated, "jeeta.prospects.score", ("POST", "/api/prospects/{prospect_id}/scores"), Write),
+    twin("prospects.decide", GateMode::Gated, "jeeta.prospects.decide", ("POST", "/api/prospects/{prospect_id}/decision"), Write),
+    twin("prospects.do_not_contact", GateMode::Gated, "jeeta.prospects.do_not_contact", ("POST", "/api/prospects/do-not-contact"), Destructive),
+    twin("prospects.dnc_lift", GateMode::Gated, "jeeta.prospects.dnc_lift", ("POST", "/api/prospects/do-not-contact/lift"), Write),
+    twin("prospects.erase", GateMode::Gated, "jeeta.prospects.erase", ("POST", "/api/prospects/{prospect_id}/erase"), Destructive),
+    twin("prospects.settings_get", GateMode::Gated, "jeeta.prospects.settings_get", ("GET", "/api/prospects/settings"), Read),
+    twin("prospects.settings_set", GateMode::Gated, "jeeta.prospects.settings_set", ("PUT", "/api/prospects/settings"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

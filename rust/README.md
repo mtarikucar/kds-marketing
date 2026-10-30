@@ -1977,6 +1977,37 @@ removes their calls' commands and the bridge's event notes, and empties their ca
 | `calls.say` | `POST /api/calls/{call_id}/say` | `jeeta.calls.say` | WRITE | `calls.work`; `{text ≤ 600, expect_reply, allow_barge_in}`; `409 not_live` off the line |
 | `calls.transfer` | `POST /api/calls/{call_id}/transfer` | `jeeta.calls.transfer` | WRITE | `calls.work`; to `to_extension` or the policy's `handoff_extension`; ends the agent's part |
 
+#### The prospect pool (`jeeta.prospects.*`, leads L1)
+
+Businesses that agents research with their own tools and record with evidence (spec
+`docs/superpowers/specs/2026-10-30-leads-pool-outreach-design.md`). Jeeta never researches and calls
+no data service; it stores, validates, dedupes and fences what is recorded. A prospect is never in
+the inbox, and is never contacted, until it is promoted (L3). Every contact field carries its source
+URL, `captured_at` and the recorder, which Jeeta takes from the caller (an agent's connection and
+issuer, or the person); input never names it. Dedupe answers, in order: `erased_identity`,
+`do_not_contact`, `previously_rejected`, `in_inbox`, `duplicate`, `possible_duplicate` (resend with
+`distinct_from`). Daily caps count in the workspace's time zone (500 a day, and each research task's
+own cap). Retention: rejected 30 days after the decision, unpromoted 180 days after the last update,
+a purged rejection's keys remembered 365 days; the do-not-contact list is per-workspace keyed
+hashes (HMAC under the `prospects.blocklist` key) and survives every purge. Ledger payloads carry
+ids, kinds, reasons and field names, never values. Gated by the strategy; `prospects.work`
+(`prospects.manage` where noted), which the rep role does not hold.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `prospects.check` | `POST /api/prospects/check` | `jeeta.prospects.check` | READ | `{ok}` or the refusal create would meet; writes nothing |
+| `prospects.create` | `POST /api/prospects` | `jeeta.prospects.create` | WRITE | one business with evidence per field; `request_key` replays 24 h |
+| `prospects.update` | `PATCH /api/prospects/{prospect_id}` | `jeeta.prospects.update` | WRITE | `{expected_revision, set, clear, distinct_from}`; new keys re-checked |
+| `prospects.list` | `GET /api/prospects` | `jeeta.prospects.list` | READ | filters, newest first, no contact values |
+| `prospects.get` | `GET /api/prospects/{prospect_id}` | `jeeta.prospects.get` | READ | evidence, latest 20 scores, duplicate candidates, history |
+| `prospects.score` | `POST /api/prospects/{prospect_id}/scores` | `jeeta.prospects.score` | WRITE | under the approved rubric's digest; `qualify_at` qualifies |
+| `prospects.decide` | `POST /api/prospects/{prospect_id}/decision` | `jeeta.prospects.decide` | WRITE | qualify, reject (fixed reasons), reopen (a person with `prospects.manage`) |
+| `prospects.do_not_contact` | `POST /api/prospects/do-not-contact` | `jeeta.prospects.do_not_contact` | DESTRUCTIVE | `confirm`; a prospect (scrubbed) or raw keys; agents too |
+| `prospects.dnc_lift` | `POST /api/prospects/do-not-contact/lift` | `jeeta.prospects.dnc_lift` | WRITE | a person with `prospects.manage`; an erasure never lifts |
+| `prospects.erase` | `POST /api/prospects/{prospect_id}/erase` | `jeeta.prospects.erase` | DESTRUCTIVE | `confirm`; a person with `prospects.manage`; keys kept as erased hashes |
+| `prospects.settings_get` | `GET /api/prospects/settings` | `jeeta.prospects.settings_get` | READ | time zone, retention, promotion cap |
+| `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded |
+
 #### The voice bridge (voice V1)
 
 The voice bridge (`docs/operations/voice-bridge.md`) is the sidecar that is a workspace's phone

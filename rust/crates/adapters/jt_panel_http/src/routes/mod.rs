@@ -25,6 +25,7 @@ pub mod oauth_callback;
 pub mod ops;
 pub mod platform;
 pub mod platform_payments;
+pub mod prospects;
 pub mod roles;
 pub mod strategy;
 pub mod studio;
@@ -217,6 +218,18 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/devices/{capability_id}/act"),
     ("GET", "/api/devices/commands/{command_id}"),
     ("GET", "/api/devices/{capability_id}/commands"),
+    ("POST", "/api/prospects/check"),
+    ("POST", "/api/prospects"),
+    ("PATCH", "/api/prospects/{prospect_id}"),
+    ("GET", "/api/prospects"),
+    ("GET", "/api/prospects/{prospect_id}"),
+    ("POST", "/api/prospects/{prospect_id}/scores"),
+    ("POST", "/api/prospects/{prospect_id}/decision"),
+    ("POST", "/api/prospects/do-not-contact"),
+    ("POST", "/api/prospects/do-not-contact/lift"),
+    ("POST", "/api/prospects/{prospect_id}/erase"),
+    ("GET", "/api/prospects/settings"),
+    ("PUT", "/api/prospects/settings"),
     ("GET", "/api/events/pending"),
     ("POST", "/api/events/ack"),
     ("GET", "/api/events"),
@@ -1077,6 +1090,68 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/devices/{capability_id}/commands",
             "devices.commands",
             devices::commands,
+        ),
+        api_route(
+            "POST",
+            "/prospects/check",
+            "prospects.check",
+            prospects::check,
+        ),
+        api_route("POST", "/prospects", "prospects.create", prospects::create),
+        api_route(
+            "PATCH",
+            "/prospects/{prospect_id}",
+            "prospects.update",
+            prospects::update,
+        ),
+        api_route("GET", "/prospects", "prospects.list", prospects::list),
+        api_route(
+            "GET",
+            "/prospects/{prospect_id}",
+            "prospects.get",
+            prospects::get,
+        ),
+        api_route(
+            "POST",
+            "/prospects/{prospect_id}/scores",
+            "prospects.score",
+            prospects::score,
+        ),
+        api_route(
+            "POST",
+            "/prospects/{prospect_id}/decision",
+            "prospects.decide",
+            prospects::decide,
+        ),
+        api_route(
+            "POST",
+            "/prospects/do-not-contact",
+            "prospects.do_not_contact",
+            prospects::do_not_contact,
+        ),
+        api_route(
+            "POST",
+            "/prospects/do-not-contact/lift",
+            "prospects.dnc_lift",
+            prospects::dnc_lift,
+        ),
+        api_route(
+            "POST",
+            "/prospects/{prospect_id}/erase",
+            "prospects.erase",
+            prospects::erase,
+        ),
+        api_route(
+            "GET",
+            "/prospects/settings",
+            "prospects.settings_get",
+            prospects::settings_get,
+        ),
+        api_route(
+            "PUT",
+            "/prospects/settings",
+            "prospects.settings_set",
+            prospects::settings_set,
         ),
         api_route("GET", "/events/pending", "events.pending", events::pending),
         api_route("POST", "/events/ack", "events.ack", events::ack),

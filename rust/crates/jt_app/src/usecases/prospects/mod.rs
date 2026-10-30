@@ -3,7 +3,7 @@
 //! promoted. Jeeta stores, checks, dedupes and fences what is recorded; it never researches.
 //!
 //! Rules every use case here keeps:
-//! - The recorder of every value is the authenticated actor ([`recorder`]): an agent's
+//! - The recorder of every value is the authenticated actor (`recorder`): an agent's
 //!   connection and issuer, or a person. The system records nothing in the pool.
 //! - Errors are `FORBIDDEN {reason}` for fences, `CONFLICT {reason, ...}` for duplicates, caps
 //!   and stale writes, `VALIDATION {field, reason}` for input.

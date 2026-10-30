@@ -4580,3 +4580,118 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
         }
     }
 }
+
+#[tokio::test]
+async fn prospects_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("pool").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    let body = json!({
+        "business_name": "Örnek Kafe",
+        "entity_kind": "legal_entity",
+        "city": "İstanbul",
+        "phone": {
+            "value": "0500 000 00 00",
+            "sources": [{"kind": "url", "url": "https://ornek.example.invalid/iletisim"}],
+            "captured_at": "2026-10-20T10:00:00Z",
+        },
+    });
+    let resp = send(
+        &app,
+        panel(Method::POST, "/api/prospects", Some(&cookie), Some(body)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created = json_body(resp).await;
+    let id = created["prospect"]["id"].as_str().unwrap().to_owned();
+
+    // Reads answer the same.
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/prospects/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.get",
+        json!({ "prospect_id": id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(
+        human["prospect"]["contact"]["phone"]["value"],
+        "+905000000000"
+    );
+
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/prospects?limit=10", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.list",
+        json!({ "limit": 10 }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["items"].as_array().unwrap().len(), 1);
+
+    let check = json!({ "phone": "+90 500 000 00 00" });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/prospects/check",
+            Some(&cookie),
+            Some(check.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.prospects.check", check).await;
+    assert_eq!(human, agent);
+    assert_eq!(
+        human,
+        json!({"ok": false, "reason": "duplicate", "prospect_id": id})
+    );
+
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/prospects/settings", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.settings_get",
+        json!({}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["rejected_retention_days"], 30);
+    assert_eq!(human["timezone"], "Europe/Istanbul");
+}
