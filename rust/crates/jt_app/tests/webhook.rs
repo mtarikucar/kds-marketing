@@ -1066,7 +1066,8 @@ async fn tiktok_events_reach_every_holder_and_a_post_its_sender() {
 }
 
 /// A `post.publish.*` event that moved a post names the post to read back now, and the read
-/// marks the event processed; a redelivery names it again (reading back is idempotent).
+/// marks the event processed; a redelivery names it again (reading back is idempotent), with the
+/// event stored first while that one is still unprocessed.
 #[tokio::test]
 async fn tiktok_post_events_name_the_post_to_read_back() {
     let w = world().await;
@@ -1099,8 +1100,23 @@ async fn tiktok_post_events_name_the_post_to_read_back() {
     .await
     .unwrap();
     assert_eq!(delivery(&again), Delivery::Duplicate);
+    // The first delivery's read-back never ran: the redelivery names the event stored first, and
+    // its read-back marks it processed.
+    assert_eq!(again.resolve, vec![hooked.clone()]);
+    webhook::resolve_hooked(&w.deps, &again.resolve[0])
+        .await
+        .unwrap();
+    assert!(events_of(&w, w.ws)[0].processed_at.is_some());
+    // Processed, a later redelivery has no event left to mark.
+    let later = webhook::receive_tiktok(
+        &w.deps,
+        tiktok_event("open-id-a", moved("v_pub_file~v2-1.7"), "ev-1"),
+        b"{}",
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        again.resolve,
+        later.resolve,
         vec![webhook::HookedPublication {
             event_id: None,
             ..hooked.clone()

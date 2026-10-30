@@ -199,9 +199,13 @@ impl TiktokIntake {
 /// holder.
 ///
 /// In each workspace, in one transaction: the capability is locked first when the effect is on it
-/// (a probe holding it across its call is waited for before anything else is taken), the event
-/// stored once (TikTok's events are about the account and its posts, never a person: no
-/// erasure lock or scrub is involved), and, when newly stored, its effect taken:
+/// (a probe holding it across its call is waited for before anything else is taken, the erasure
+/// lock included), the event stored once (with `InboundEventRepo::insert_if_new`, which takes
+/// the erasure lock and scrubs as every inbound insert does; the delivery-level
+/// erasure step of [`receive_for_accounts`] is not needed, TikTok's events being about the
+/// account and its posts, never a person: `jt_tiktok::webhook` keeps no identity in them, and an
+/// event that names a person, such as a comment, must go through [`receive_for_accounts`]), and,
+/// when newly stored, its effect taken:
 /// `authorization.removed` is `super::connector::authorization_removed` (left alone when the
 /// event is older than the capability's last verification: a reconnection since, or the
 /// revocation of a retired sibling, which TikTok reports too) and marks the event processed; a
@@ -272,7 +276,7 @@ pub async fn receive_tiktok(
             let mut sent = Vec::new();
             for c in &holders {
                 let mut r = deps.uow.tenant(c.workspace_id).await?;
-                if super::studio::publish::attempt_by_receipt(r.as_mut(), c.id, publish_id, now)
+                if super::studio::publish::attempt_by_receipt(r.as_mut(), c.id, publish_id)
                     .await?
                     .is_some()
                 {
@@ -335,14 +339,22 @@ pub async fn receive_tiktok(
                 TiktokHookEffect::PublishMoved { publish_id },
                 Delivery::Stored(_) | Delivery::Duplicate,
             ) => {
+                // A redelivery's event is the one stored first: still unprocessed when that
+                // delivery's read-back never ran or failed, this read-back marks it.
+                let event_id = match delivery {
+                    Delivery::Stored(event_id) => Some(event_id),
+                    _ => repos
+                        .inbound_events()
+                        .find_external(Provider::Tiktok, &draft.external_id)
+                        .await?
+                        .filter(|e| e.processed_at.is_none())
+                        .map(|e| e.id),
+                };
                 out.resolve.push(HookedPublication {
                     workspace_id: ws,
                     capability_id: id,
                     publish_id: publish_id.clone(),
-                    event_id: match delivery {
-                        Delivery::Stored(event_id) => Some(event_id),
-                        _ => None,
-                    },
+                    event_id,
                 });
             }
             _ => {}

@@ -427,6 +427,17 @@ impl TenantRepos for FailingTenant {
 
 #[async_trait]
 impl InboundEventRepo for FailingTenant {
+    async fn find_external(
+        &mut self,
+        provider: jt_connector::Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError> {
+        self.0
+            .inbound_events()
+            .find_external(provider, external_id)
+            .await
+    }
+
     async fn call_events(
         &mut self,
         unique_id: &str,

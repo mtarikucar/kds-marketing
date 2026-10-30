@@ -341,6 +341,44 @@ mod tests {
         );
     }
 
+    /// TikTok's events are about the account and its posts, never a person: a draft keeps
+    /// nothing that names one (only `payload.tiktok`, its event, time and content), so the intake
+    /// stores it without the delivery-level erasure step. An event that names a person (a
+    /// comment, should TikTok ever send one) must go through `receive_for_accounts` instead.
+    #[test]
+    fn a_draft_names_no_person() {
+        let events = [AUTHORIZATION_REMOVED]
+            .into_iter()
+            .chain(PUBLISH_MOVED.iter().copied())
+            .chain([
+                "post.publish.no_longer_publicaly_available",
+                "something.new",
+            ]);
+        for event in events {
+            let draft = parse(&body(
+                event,
+                r#"{"publish_id":"p1","reason":1,"person_id":"x"}"#,
+            ))
+            .unwrap()
+            .draft();
+            let top: Vec<&String> = draft.payload.as_object().unwrap().keys().collect();
+            assert_eq!(top, ["tiktok"], "{event}");
+            let item: Vec<&String> = draft.payload["tiktok"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect();
+            assert_eq!(item, ["content", "create_time", "event"], "{event}");
+            for person in ["person_id", "erased_identity", "user_openid", "client_key"] {
+                assert!(draft.payload.get(person).is_none(), "{event} {person}");
+                assert!(
+                    draft.payload["tiktok"].get(person).is_none(),
+                    "{event} {person}"
+                );
+            }
+        }
+    }
+
     /// What `connector.hooks` tells the operator Jeeta acts on is what this parser acts on.
     #[test]
     fn the_hook_events_listed_are_those_acted_on() {

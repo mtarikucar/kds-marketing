@@ -1213,6 +1213,14 @@ pub trait InboundEventRepo: Send + Sync {
         event: InboundEvent,
         raw: Option<Vec<u8>>,
     ) -> Result<Option<InboundEventId>, AppError>;
+    /// The workspace's event of `provider` with the provider's id `external_id` (the dedupe key
+    /// [`InboundEventRepo::insert_if_new`] refuses a replay by), without its raw body; `None` when
+    /// the workspace holds none.
+    async fn find_external(
+        &mut self,
+        provider: jt_connector::Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError>;
     /// The events not yet processed, oldest (`received_at`, then id) first, at most `limit`
     /// (clamped to `1..=MAX_EVENT_PAGE`).
     async fn list_pending(&mut self, limit: u32) -> Result<Vec<InboundEvent>, AppError>;

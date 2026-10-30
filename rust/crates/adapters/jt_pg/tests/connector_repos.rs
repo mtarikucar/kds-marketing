@@ -1514,3 +1514,55 @@ async fn capability_by_external_needs_an_account_proven_once() {
     set_status(&uow, &owned, StoredStatus::Unreachable).await;
     assert_eq!(routed(&uow, meta, "page-5").await, Some(owned.id));
 }
+
+/// An event is found again by its provider and provider id, in its workspace only, without its
+/// raw body (a TikTok redelivery finds the event its first delivery stored).
+#[tokio::test]
+async fn an_inbound_event_is_found_by_its_provider_id() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("find-a").await;
+    let (b, _) = db.seed_workspace("find-b").await;
+    let stored = event(a, Provider::Tiktok, "ev-hash-1", None, T0);
+    let mut t = uow.tenant(a).await.unwrap();
+    t.inbound_events()
+        .insert_if_new(stored.clone(), Some(b"raw".to_vec()))
+        .await
+        .unwrap()
+        .expect("stored");
+    t.commit().await.unwrap();
+
+    let mut t = uow.tenant(a).await.unwrap();
+    let found = t
+        .inbound_events()
+        .find_external(Provider::Tiktok, "ev-hash-1")
+        .await
+        .unwrap()
+        .expect("found");
+    assert_eq!(found.id, stored.id);
+    assert_eq!(found.processed_at, None);
+    assert_eq!(
+        t.inbound_events()
+            .find_external(Provider::Meta, "ev-hash-1")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        t.inbound_events()
+            .find_external(Provider::Tiktok, "ev-hash-2")
+            .await
+            .unwrap(),
+        None
+    );
+    drop(t);
+    let mut other = uow.tenant(b).await.unwrap();
+    assert_eq!(
+        other
+            .inbound_events()
+            .find_external(Provider::Tiktok, "ev-hash-1")
+            .await
+            .unwrap(),
+        None
+    );
+}
