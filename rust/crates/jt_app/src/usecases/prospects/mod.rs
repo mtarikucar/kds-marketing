@@ -11,13 +11,22 @@
 //! - Lock order: the inbox lock (`people().lock_workspace()`) before the pool lock
 //!   (`prospects().lock_pool()`) before rows.
 
+mod blocklist;
 mod dedupe;
 pub mod pool;
+mod score;
+mod settings;
 
+pub use blocklist::{
+    DncInput, DncOut, EraseInput, EraseOut, LiftInput, LiftOut, PURGE_BATCH, Purged, RawKey,
+    dnc_lift, do_not_contact, erase, purge,
+};
 pub use pool::{
     CheckInput, CheckOut, DuplicateCandidate, GetOut, ListInput, ListOut, NextPage, ProspectOut,
     check, create, get, list, update,
 };
+pub use score::{DecideInput, DecideKind, ScoreOut, decide, rubric_digest, score};
+pub use settings::{SettingsInput, SettingsOut, settings_get, settings_set};
 
 use hmac::{Hmac, KeyInit, Mac};
 use jt_ledger::Actor;

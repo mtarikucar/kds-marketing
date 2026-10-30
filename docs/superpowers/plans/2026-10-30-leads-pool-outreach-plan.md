@@ -508,6 +508,15 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
   `purge_deletes_rejected_after_retention_and_remembers_keys_for_a_year`,
   `purge_deletes_stale_unpromoted_but_not_promoted`, `rejected_memory_expires`, `purge_runs_in_suspended_workspaces`.
 - [ ] Green; **commit** `feat(prospects): scores, decisions, do-not-contact, erasure and purge`.
+- As built: needs the strategy's `prospecting` section, so L2-T1 lands before this task. `score` takes
+  `ScoreInput`, scores `new` and `qualified` prospects only (`not_scorable`) and answers `{score, status,
+  qualified}`; `decide` takes `{decision: qualify|reject|reopen, reason?, note?, expected_revision}` (notes at
+  most 500 characters); `human_only` (`FORBIDDEN {reason: human_only}`) guards reopen, lift and erase;
+  do-not-contact on a promoted prospect is `CONFLICT {reason: promoted, person_id}` (the objection belongs to the
+  inbox person); `erase`, `do_not_contact`, `dnc_lift` and `purge` live in `prospects/blocklist.rs`;
+  `settings_set` also takes `timezone` (an IANA zone) and writes `prospects.settings_set {fields}`;
+  `rejected_memory_days = 0` remembers nothing. Entries about no one prospect (raw keys, a lift, a purge, the
+  settings) have the subject `prospect_pool:<workspace>`.
 
 ### Task L1-T6: catalog rows, MCP tools, panel routes, pins
 
