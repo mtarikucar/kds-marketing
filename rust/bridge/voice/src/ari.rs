@@ -319,6 +319,11 @@ impl Ari {
         request.headers_mut().insert("Authorization", header);
         match tokio::time::timeout(CONNECT_WAIT, tokio_tungstenite::connect_async(request)).await {
             Ok(Ok((socket, _))) => Ok(socket),
+            // Asterisk answered the upgrade with an HTTP error: its status is kept (B7), the
+            // response itself is not.
+            Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) => {
+                Err(AriError::Status(response.status().as_u16()))
+            }
             Ok(Err(_)) | Err(_) => Err(AriError::Transport),
         }
     }

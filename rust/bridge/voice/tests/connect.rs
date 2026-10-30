@@ -121,3 +121,20 @@ async fn a_unix_socket_held_by_another_user_is_refused() {
     ));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// B7: an upgrade Asterisk refuses with an HTTP error keeps its status, so a failed media connect
+/// says what Asterisk answered (no route here: 404).
+#[tokio::test]
+async fn a_refused_websocket_upgrade_keeps_its_status() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        let app = axum::Router::new();
+        axum::serve(listener, app).await.unwrap();
+    });
+    let ari = Ari::new(&format!("http://{addr}"), "u", "p").unwrap();
+    assert!(matches!(
+        ari.media("no-such-connection").await,
+        Err(AriError::Status(404))
+    ));
+}
