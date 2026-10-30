@@ -235,6 +235,21 @@ impl PublicEnvelope {
     async fn store(&mut self, capability: CapabilityId, cursor: Value, at: OffsetDateTime) -> Result<(), AppError>;
 }
 // TenantRepos: fn public_items(&mut self) -> &mut dyn PublicItemRepo; public_subjects(); public_cursors().
+// Semantics fixed in F3 (ports/public.rs docs): insert checks capability, conversation, message,
+// subject and private-reply references (NOT_FOUND) and answers false only on a (capability,
+// external_id) replay; update writes message_id, subject_id, deadline, private_reply_until, answer,
+// moderation, private_reply_message_id, agent_replied, checked_at, updated_at (never the conversation:
+// merges move items); due_before/to_reconcile take answers awaiting|rejected|pending; mark_checked
+// leaves updated_at (the compare-and-swap version); agent_public_replies_since counts agent_replied
+// items whose answer message (Pending/Answered message_id) is at >= since; subject upsert keeps id,
+// first_seen_at and a publication_id the write leaves None; a cursor is a JSON object (INTERNAL else).
+
+// jt_app::ports::inbox (F3)
+pub struct PublicItemParent { pub id: PublicItemId, pub conversation_id: ConversationId }
+pub const MERGE_SNAPSHOT_VERSION: u32 = 2; // MergeSnapshot.public_items: #[serde(default)] Vec<PublicItemParent>
+// jt_testkit::inbox_contract::Fixture (F3): account(kind, external_id), public_conversation(person, cap),
+// comment_message(conversation, external_id, minutes), public_item(&conversation, message, external_id, minutes);
+// jt_testkit::fakes::StoredCursor; MemInbox.{public_items, public_subjects, public_cursors}.
 ```
 
 ---
@@ -361,27 +376,36 @@ create `ports/public.rs` (the three repo traits only); `rust/crates/jt_testkit/s
 `rust/crates/jt_archtest/tests/studio_rules.rs` (tables 74 → 77).
 
 - [ ] **Tests first:**
-  - `jt_pg/tests/migrations.rs`: `TABLES_AFTER_ALL = 77`, `MIGRATIONS = 19` (18 if 0018 is not merged yet), the
-    down list starts with `"0019_inbox_public"`; `public_tables_force_rls_with_one_policy` (the three tables,
-    policies `public_subjects_ws`, `public_items_ws`, `public_cursors_ws`); `answer_state_is_generated`
-    (insert with `{"state":"pending","message_id":…}` reads `answer_state = 'pending'`; writing the column is
-    refused); `outbox_accepts_held`; `down_keeps_wider_constraints_while_rows_need_them` (a `trendyol` inbound
-    event and a `held` outbox row survive `down`, constraints stay wide; without rows they narrow); up/down/up
-    twice changes nothing.
+  - `jt_pg/tests/migrations.rs`: `TABLES_AFTER_ALL = 77`, `MIGRATIONS = 19` (18 if 0018 is not merged yet: the
+    versions are then `1..=17, 19`), the down list starts with `"0019_inbox_public"`;
+    `public_tables_force_rls_with_one_policy` (the three tables, policies `public_subjects_ws`,
+    `public_items_ws`, `public_cursors_ws`); `answer_state_is_generated` (insert with
+    `{"state":"pending","message_id":…}` reads `answer_state = 'pending'`; writing the column is refused);
+    `outbox_accepts_held`; `inbox_public_down_refuses_while_rows_need_the_wider_checks` (done in F3 in place
+    of "down keeps the wider constraints": a `held` outbox row or a `trendyol` inbound event makes `down`
+    raise and change nothing; without them it narrows both checks and drops the tables; up/down/up twice
+    changes nothing). The tests that run 0006's or 0009's down on a fully migrated database
+    (`migrations.rs`, `inbox_schema.rs`, `studio_repos.rs`) run 0019's down first.
   - `jt_pg/tests/inbox_public.rs`: `mask_personal_blanks_the_envelope` (`author`, `provider_item`, `text`,
     `username`, `userName`, string `message` blanked; a WhatsApp `message` object keeps its `id` and loses
     `text.body`); `event_person_finds_a_commenter` (an IG comment event payload matches its
     `instagram_commenter` identity, scoped by the capability's external id); `merge_moves_items_and_undo_restores_them`
     (two commenters on one `instagram` capability merged: their conversations coalesce, both items point at
     the survivor; undo puts each back); `reconcile_order_rotates` (after `mark_checked` the next call returns
-    the next least-recently-checked items, never the same first N).
+    the next least-recently-checked items, never the same first N). The merge and rotation tests are
+    contracts (`inbox_merge_contract::public_items_follow_merges_and_undo`,
+    `inbox_contract::reconcile_order_rotates`) run on the fake and on PostgreSQL.
   - `jt_testkit/src/inbox_contract.rs`: `public_items_contract` (insert replay → false, find_by_external,
     for_conversation order, thread, due_before, to_reconcile order, agent_public_replies_since),
     `public_subjects_contract` (upsert keeps id and first_seen_at), `public_cursors_contract`; run against the
     fake and Postgres.
 - [ ] CI red → implement → green. `MergeSnapshot` gains `#[serde(default)] public_items: Vec<PublicItemParent>`
   and `version: 2`; `apply_snapshot` runs `update public_items set conversation_id = target` **before** the
-  coalesced conversations are deleted; `restore_snapshot` puts them back; the fake mirrors both.
+  coalesced conversations are deleted; `restore_snapshot` puts them back; the fake mirrors both; the undo
+  use case (`usecases/inbox/merge.rs`) accepts snapshot versions 1 and 2. Every `TenantRepos`
+  implementation gains the three accessors (also the delegating test bundles in
+  `jt_webhook/tests/support`, `jt_app/tests/{capability_locks,strategy}.rs`,
+  `jt_testkit/src/activation_control.rs`).
 - [ ] **Commit** `feat(inbox): 0019 public items, subjects, cursors and held replies`.
 
 **Acceptance:** the migration repeats; the three tables are tenant-scoped; merges never trip the new foreign

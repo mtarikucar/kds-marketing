@@ -54,6 +54,8 @@ mod devices;
 pub use devices::MemDevices;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
+mod public;
+pub use public::StoredCursor;
 mod platform;
 mod providers;
 mod services;

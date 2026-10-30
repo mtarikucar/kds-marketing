@@ -368,6 +368,15 @@ impl TenantRepos for FailingTenant {
     fn outbox(&mut self) -> &mut dyn jt_app::ports::inbox::OutboxRepo {
         self.0.outbox()
     }
+    fn public_items(&mut self) -> &mut dyn jt_app::ports::inbox::PublicItemRepo {
+        self.0.public_items()
+    }
+    fn public_subjects(&mut self) -> &mut dyn jt_app::ports::inbox::PublicSubjectRepo {
+        self.0.public_subjects()
+    }
+    fn public_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::PublicCursorRepo {
+        self.0.public_cursors()
+    }
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self.0.roles()
     }

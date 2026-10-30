@@ -29,6 +29,7 @@ pub mod connectors;
 pub mod devices;
 pub mod files;
 pub mod inbox;
+pub mod public;
 pub mod studio;
 use inbox::*;
 
@@ -1535,6 +1536,9 @@ pub trait TenantRepos: Send + Sync {
     fn consumption(&mut self) -> &mut dyn ConsumptionRepo;
     fn request_keys(&mut self) -> &mut dyn RequestKeyRepo;
     fn outbox(&mut self) -> &mut dyn OutboxRepo;
+    fn public_items(&mut self) -> &mut dyn PublicItemRepo;
+    fn public_subjects(&mut self) -> &mut dyn PublicSubjectRepo;
+    fn public_cursors(&mut self) -> &mut dyn PublicCursorRepo;
 
     fn roles(&mut self) -> &mut dyn RoleRepo;
     fn memberships(&mut self) -> &mut dyn MembershipRepo;

@@ -8,7 +8,7 @@ use jt_app::{
     error::ErrorCode,
     ports::{
         UnitOfWork,
-        inbox::{MergeRow, MergeSnapshot},
+        inbox::{MergeRow, MergeSnapshot, PublicItemParent},
     },
     usecases::{
         Deps,
@@ -1025,4 +1025,101 @@ pub async fn merge_during_provider_io_reconciles_without_conversation_effects(
         assert_eq!(report.touched, 0);
         assert_eq!(connector.calls().len(), 1);
     }
+}
+
+/// Two commenters on one Instagram account merged: their conversations coalesce and both items
+/// point at the survivor; undo puts each item back on its own conversation (spec
+/// 2026-10-30-inbox-comments-marketplace-design.md §6.6). The snapshot is version 2.
+pub async fn public_items_follow_merges_and_undo(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let keep = f.insert_person("Keeper").await;
+    let source = f.insert_person("Source").await;
+    let cap = f.account("instagram", "ig-1").await;
+    // The source's conversation is the older one: it survives, now the keeper's.
+    let older = f.public_conversation(source.id, cap).await;
+    let newer = f.public_conversation(keep.id, cap).await;
+    let m_older = f.comment_message(older.id, "c1", 0).await;
+    let m_newer = f.comment_message(newer.id, "c2", 1).await;
+    let on_older = f.public_item(&older, m_older, "c1", 0);
+    let on_newer = f.public_item(&newer, m_newer, "c2", 1);
+    let row = MergeRow {
+        id: MergeId::new_v7(),
+        workspace_id: f.ws,
+        source_id: source.id,
+        target_id: keep.id,
+        decision: MergeDecision::Suggest(vec![MergeConflict::DisplayName]),
+        conflicts: vec![MergeConflict::DisplayName],
+        status: "suggested".into(),
+        moved_snapshot: json!({}),
+        at: FIXED_NOW,
+        applied_by: None,
+        undone_at: None,
+    };
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    for item in [&on_older, &on_newer] {
+        assert!(r.public_items().insert(item.clone()).await.unwrap());
+    }
+    r.merges().insert(row.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    let deps = deps(uow.clone());
+    let ctx = Ctx {
+        workspace_id: f.ws,
+        actor: Actor::Human { user_id: f.user },
+        permissions: SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW + Duration::hours(2),
+        agent_connection_id: None,
+    };
+
+    let applied = merge::apply(&deps, &ctx, row.id, merge::ApplyInput { keep: keep.id })
+        .await
+        .unwrap();
+    let saved: MergeSnapshot = serde_json::from_value(applied.moved_snapshot).unwrap();
+    assert_eq!(saved.version, 2);
+    let mut parents = vec![
+        PublicItemParent {
+            id: on_older.id,
+            conversation_id: older.id,
+        },
+        PublicItemParent {
+            id: on_newer.id,
+            conversation_id: newer.id,
+        },
+    ];
+    parents.sort_by_key(|p| p.id);
+    assert_eq!(saved.public_items, parents);
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(r.conversations().get(newer.id).await.unwrap().is_none());
+    for item in [&on_older, &on_newer] {
+        let moved = r.public_items().get(item.id).await.unwrap().unwrap();
+        assert_eq!(moved.conversation_id, older.id);
+        assert_eq!(moved.answer, item.answer);
+    }
+    assert_eq!(
+        r.public_items()
+            .for_conversation(older.id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.id)
+            .collect::<Vec<_>>(),
+        vec![on_older.id, on_newer.id]
+    );
+    drop(r);
+
+    merge::undo(&deps, &ctx, row.id, merge::UndoInput { confirm: true })
+        .await
+        .unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(r.conversations().get(newer.id).await.unwrap().is_some());
+    for (item, conversation) in [(&on_older, older.id), (&on_newer, newer.id)] {
+        let back = r.public_items().get(item.id).await.unwrap().unwrap();
+        assert_eq!(back.conversation_id, conversation);
+    }
+    // A version 1 snapshot, written before public items, reads with none.
+    let mut old: serde_json::Value = serde_json::to_value(&saved).unwrap();
+    old["version"] = json!(1);
+    old.as_object_mut().unwrap().remove("public_items");
+    let old: MergeSnapshot = serde_json::from_value(old).unwrap();
+    assert!(old.public_items.is_empty());
 }

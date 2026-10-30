@@ -72,6 +72,9 @@ pub struct MemInbox {
     pub consumption: Vec<StoredConsumption>,
     pub request_keys: Vec<StoredRequestKey>,
     pub outbox: Vec<OutboxRow>,
+    pub public_items: Vec<PublicItem>,
+    pub public_subjects: Vec<PublicSubject>,
+    pub public_cursors: Vec<super::public::StoredCursor>,
 }
 
 pub(super) fn initialize_defaults(state: &mut MemInbox, ws: WorkspaceId) {
@@ -1623,7 +1626,10 @@ impl RequestKeyRepo for MemTenant {
     }
 }
 fn check_outbox(row: &OutboxRow) -> Result<(), AppError> {
-    if !["queued", "sending", "sent", "failed", "unknown", "refused"].contains(&row.state.as_str())
+    if ![
+        "queued", "sending", "sent", "failed", "unknown", "refused", "held",
+    ]
+    .contains(&row.state.as_str())
         || row.attempts > i32::MAX as u32
     {
         return Err(AppError::internal("invalid outbox state or attempts"));

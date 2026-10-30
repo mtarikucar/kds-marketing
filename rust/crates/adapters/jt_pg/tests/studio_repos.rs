@@ -28,8 +28,9 @@ async fn studio_schema_exact_table_delta() {
     );
     let count: i64 = sqlx::query_scalar("select count(*) from pg_tables where schemaname='public' and tablename <> '_sqlx_migrations'").fetch_one(&db.pool).await.unwrap();
     // 48 inbox-era tables, 14 Studio, 5 billing, 4 calls (0015_voice_calls), the bridge's event
-    // notes (0016_voice_bridge), the device commands and device files (0017_device_bridge).
-    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2);
+    // notes (0016_voice_bridge), the device commands and device files (0017_device_bridge), the
+    // public items, subjects and cursors (0019_inbox_public).
+    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 3);
 }
 
 #[tokio::test]
@@ -116,6 +117,8 @@ async fn accepted_publish_response_lost_never_blindly_retries() {
 
 const UP: &str = include_str!("../../../../migrations/0009_studio.up.sql");
 const DOWN: &str = include_str!("../../../../migrations/0009_studio.down.sql");
+/// Public subjects reference Studio publications: their migration goes first.
+const PUBLIC_DOWN: &str = include_str!("../../../../migrations/0019_inbox_public.down.sql");
 #[tokio::test]
 async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     use jt_pg::TenantTx;
@@ -211,6 +214,7 @@ async fn roles(pool: &sqlx::PgPool, ws: jt_tenancy::WorkspaceId) -> Vec<(String,
 #[tokio::test]
 async fn studio_role_backfill_new_workspace_parity() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (old, _) = db.seed_workspace("old-studio").await;
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
@@ -229,6 +233,7 @@ async fn studio_role_backfill_new_workspace_parity() {
 #[tokio::test]
 async fn studio_backfill_down_preserves_existing_grants() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (ws, _) = db.seed_workspace("grants").await;
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();

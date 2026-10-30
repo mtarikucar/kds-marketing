@@ -1476,3 +1476,537 @@ pub async fn mail_subject_is_the_newest_received_mail_of_the_capability(uow: Arc
         None
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Public items, subjects and cursors (migration 0019)
+// ---------------------------------------------------------------------------------------------
+
+impl Fixture {
+    /// A capability of `kind_key` on the made-up provider account `external_id`.
+    pub async fn account(&self, kind_key: &str, external_id: &str) -> CapabilityId {
+        let c = Capability::new(
+            CapabilityId::new_v7(),
+            self.ws,
+            NewCapability {
+                kind_key: kind_key.into(),
+                name: kind_key.into(),
+                external_id: Some(external_id.into()),
+                ..NewCapability::default()
+            },
+            FIXED_NOW,
+        )
+        .unwrap();
+        let mut t = self.uow.tenant(self.ws).await.unwrap();
+        t.capabilities().insert(c.clone(), None).await.unwrap();
+        t.commit().await.unwrap();
+        c.id
+    }
+    /// `p`'s conversation on the comment surface `cap` (an `instagram` capability), stored.
+    pub async fn public_conversation(&self, p: PersonId, cap: CapabilityId) -> Conversation {
+        let mut c = self.conversation(p, cap);
+        c.kind_key = "instagram".into();
+        let mut t = self.uow.tenant(self.ws).await.unwrap();
+        let c = t.conversations().upsert_on_inbound(c).await.unwrap();
+        t.commit().await.unwrap();
+        c
+    }
+    /// An inbound comment message of `c`, `minutes` after [`FIXED_NOW`], stored.
+    pub async fn comment_message(
+        &self,
+        c: ConversationId,
+        external_id: &str,
+        minutes: i64,
+    ) -> MessageId {
+        let mut m = self.message(c);
+        m.external_id = Some(format!("comment:{external_id}"));
+        m.at = FIXED_NOW + Duration::minutes(minutes);
+        let mut t = self.uow.tenant(self.ws).await.unwrap();
+        t.messages().insert_if_new(m.clone()).await.unwrap();
+        t.commit().await.unwrap();
+        m.id
+    }
+    /// An owed, top-level comment `external_id` of `c` with its message, written `minutes` after
+    /// [`FIXED_NOW`] (not stored).
+    pub fn public_item(
+        &self,
+        c: &Conversation,
+        message_id: MessageId,
+        external_id: &str,
+        minutes: i64,
+    ) -> PublicItem {
+        let at = FIXED_NOW + Duration::minutes(minutes);
+        PublicItem {
+            id: PublicItemId::new_v7(),
+            workspace_id: self.ws,
+            capability_id: c.capability_id,
+            conversation_id: c.id,
+            message_id,
+            subject_id: None,
+            kind: PublicKind::Comment,
+            external_id: external_id.into(),
+            parent_external_id: None,
+            root_external_id: external_id.into(),
+            created_at: at,
+            deadline: None,
+            private_reply_until: Some(at + Duration::days(7)),
+            answer: AnswerState::Awaiting,
+            moderation: Moderation::Visible,
+            private_reply_message_id: None,
+            agent_replied: false,
+            checked_at: None,
+            updated_at: at,
+        }
+    }
+}
+
+/// Insert, replay, references, reads in order, updates, deadlines and the agent's reply count.
+pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let m1 = f.comment_message(c.id, "c1", 0).await;
+    let m2 = f.comment_message(c.id, "c2", 1).await;
+    let m3 = f.comment_message(c.id, "c3", 2).await;
+    let first = f.public_item(&c, m1, "c1", 0);
+    let mut reply = f.public_item(&c, m2, "c2", 1);
+    reply.parent_external_id = Some("c1".into());
+    reply.root_external_id = "c1".into();
+    let other_thread = f.public_item(&c, m3, "c3", 2);
+
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert!(t.public_items().insert(first.clone()).await.unwrap());
+    // A replay of the same comment is refused quietly, whatever its id.
+    let mut replay = first.clone();
+    replay.id = PublicItemId::new_v7();
+    assert!(!t.public_items().insert(replay.clone()).await.unwrap());
+    assert!(t.public_items().insert(reply.clone()).await.unwrap());
+    assert!(t.public_items().insert(other_thread.clone()).await.unwrap());
+    t.commit().await.unwrap();
+
+    // References are the workspace's own.
+    for (broken, code) in [
+        (
+            PublicItem {
+                message_id: MessageId::new_v7(),
+                external_id: "x1".into(),
+                ..first.clone()
+            },
+            ErrorCode::NotFound,
+        ),
+        (
+            PublicItem {
+                conversation_id: ConversationId::new_v7(),
+                external_id: "x2".into(),
+                ..first.clone()
+            },
+            ErrorCode::NotFound,
+        ),
+        (
+            PublicItem {
+                subject_id: Some(PublicSubjectId::new_v7()),
+                external_id: "x3".into(),
+                ..first.clone()
+            },
+            ErrorCode::NotFound,
+        ),
+        (
+            PublicItem {
+                private_reply_message_id: Some(MessageId::new_v7()),
+                external_id: "x4".into(),
+                ..first.clone()
+            },
+            ErrorCode::NotFound,
+        ),
+        (
+            PublicItem {
+                workspace_id: f.other,
+                external_id: "x5".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+    ] {
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        let e = t.public_items().insert(broken.clone()).await.unwrap_err();
+        assert_eq!(e.code, code, "{}", broken.external_id);
+    }
+
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_items().get(first.id).await.unwrap(),
+        Some(first.clone())
+    );
+    assert_eq!(
+        t.public_items().lock(reply.id).await.unwrap(),
+        Some(reply.clone())
+    );
+    assert_eq!(t.public_items().get(replay.id).await.unwrap(), None);
+    assert_eq!(
+        t.public_items().find_by_external(cap, "c1").await.unwrap(),
+        Some(first.clone())
+    );
+    assert_eq!(
+        t.public_items()
+            .find_by_external(cap, "nope")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        t.public_items().for_conversation(c.id).await.unwrap(),
+        vec![first.clone(), reply.clone(), other_thread.clone()]
+    );
+    assert_eq!(
+        t.public_items().thread(cap, "c1", 10).await.unwrap(),
+        vec![first.clone(), reply.clone()]
+    );
+    assert_eq!(
+        t.public_items().thread(cap, "c1", 1).await.unwrap(),
+        vec![first.clone()]
+    );
+    drop(t);
+    // Another workspace sees none of it.
+    let mut other = uow.tenant(f.other).await.unwrap();
+    assert_eq!(other.public_items().get(first.id).await.unwrap(), None);
+    assert!(
+        other
+            .public_items()
+            .for_conversation(c.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(other);
+
+    // An update writes the item's changing state; its identity and thread stay.
+    let later = FIXED_NOW + Duration::minutes(10);
+    let mut answered = first.clone();
+    answered.answer = AnswerState::Answered {
+        by: AnsweredBy::Us,
+        message_id: Some(m3),
+        at: later,
+    };
+    answered.moderation = Moderation::Hidden;
+    answered.agent_replied = true;
+    answered.deadline = Some(later + Duration::hours(1));
+    answered.updated_at = later;
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.public_items().update(answered.clone()).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_items().get(first.id).await.unwrap(),
+        Some(answered.clone())
+    );
+    let e = t
+        .public_items()
+        .update(PublicItem {
+            id: PublicItemId::new_v7(),
+            ..answered.clone()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    drop(t);
+
+    // Deadlines: owed and pending items before the bound, soonest first.
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let mut due_soon = reply.clone();
+    due_soon.answer = AnswerState::Pending { message_id: m3 };
+    due_soon.deadline = Some(FIXED_NOW + Duration::minutes(30));
+    let mut due_later = other_thread.clone();
+    due_later.deadline = Some(FIXED_NOW + Duration::minutes(50));
+    for item in [&due_soon, &due_later] {
+        t.public_items().update(item.clone()).await.unwrap();
+    }
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_items()
+            .due_before(FIXED_NOW + Duration::hours(3), 10)
+            .await
+            .unwrap(),
+        vec![due_soon.clone(), due_later.clone()],
+        "the answered item is not due"
+    );
+    assert_eq!(
+        t.public_items()
+            .due_before(FIXED_NOW + Duration::minutes(30), 10)
+            .await
+            .unwrap(),
+        vec![],
+        "strictly before the bound"
+    );
+    assert_eq!(
+        t.public_items()
+            .due_before(FIXED_NOW + Duration::hours(3), 1)
+            .await
+            .unwrap(),
+        vec![due_soon.clone()]
+    );
+
+    // The agent's public replies: items it answered, by when the answer was written.
+    let at = FIXED_NOW + Duration::minutes(2);
+    assert_eq!(
+        t.public_items()
+            .agent_public_replies_since(cap, at)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        t.public_items()
+            .agent_public_replies_since(cap, at + Duration::seconds(1))
+            .await
+            .unwrap(),
+        0
+    );
+    let elsewhere = f.account("instagram", "ig-2").await;
+    assert_eq!(
+        t.public_items()
+            .agent_public_replies_since(elsewhere, FIXED_NOW)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+/// A subject is stored once per capability and external id; a refresh keeps its id and first
+/// sighting.
+pub async fn public_subjects_contract(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let first = PublicSubject {
+        id: PublicSubjectId::new_v7(),
+        workspace_id: f.ws,
+        capability_id: cap,
+        kind: SubjectKind::Post,
+        external_id: "m1".into(),
+        title: "Yeni sezon".into(),
+        url: Some("https://example.com/p/1".into()),
+        image_url: None,
+        facts: json!({"media_product_type": "FEED"}),
+        publication_id: None,
+        first_seen_at: FIXED_NOW,
+        updated_at: FIXED_NOW,
+    };
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_subjects().upsert(first.clone()).await.unwrap(),
+        first
+    );
+    t.commit().await.unwrap();
+    let later = FIXED_NOW + Duration::days(1);
+    let refresh = PublicSubject {
+        id: PublicSubjectId::new_v7(),
+        title: "Yeni sezon geldi".into(),
+        image_url: Some("https://example.com/i/1.jpg".into()),
+        facts: json!({"media_product_type": "REELS"}),
+        first_seen_at: later,
+        updated_at: later,
+        ..first.clone()
+    };
+    let expected = PublicSubject {
+        id: first.id,
+        first_seen_at: FIXED_NOW,
+        ..refresh.clone()
+    };
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_subjects().upsert(refresh.clone()).await.unwrap(),
+        expected
+    );
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_subjects().get(first.id).await.unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(t.public_subjects().get(refresh.id).await.unwrap(), None);
+    assert_eq!(
+        t.public_subjects()
+            .find_by_external(cap, "m1")
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        t.public_subjects()
+            .find_by_external(cap, "m2")
+            .await
+            .unwrap(),
+        None
+    );
+    drop(t);
+
+    // An item may name the stored subject.
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let m = f.comment_message(c.id, "c1", 0).await;
+    let mut item = f.public_item(&c, m, "c1", 0);
+    item.subject_id = Some(first.id);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert!(t.public_items().insert(item).await.unwrap());
+    t.commit().await.unwrap();
+
+    // References are the workspace's own.
+    for (broken, code) in [
+        (
+            PublicSubject {
+                capability_id: CapabilityId::new_v7(),
+                external_id: "m3".into(),
+                ..first.clone()
+            },
+            ErrorCode::NotFound,
+        ),
+        (
+            PublicSubject {
+                publication_id: Some(Uuid::now_v7()),
+                external_id: "m4".into(),
+                ..first.clone()
+            },
+            ErrorCode::NotFound,
+        ),
+        (
+            PublicSubject {
+                workspace_id: f.other,
+                external_id: "m5".into(),
+                ..first.clone()
+            },
+            ErrorCode::Internal,
+        ),
+    ] {
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        let e = t
+            .public_subjects()
+            .upsert(broken.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, code, "{}", broken.external_id);
+    }
+    let mut other = uow.tenant(f.other).await.unwrap();
+    assert_eq!(other.public_subjects().get(first.id).await.unwrap(), None);
+    assert_eq!(
+        other
+            .public_subjects()
+            .find_by_external(cap, "m1")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+/// One cursor per capability, replaced on each store; an object only.
+pub async fn public_cursors_contract(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("trendyol", "seller-1").await;
+    let other_cap = f.account("hepsiburada", "merchant-1").await;
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(t.public_cursors().get(cap).await.unwrap(), None);
+    t.public_cursors()
+        .store(cap, json!({"scanned_until_ms": 1}), FIXED_NOW)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.public_cursors()
+        .store(
+            cap,
+            json!({"scanned_until_ms": 2}),
+            FIXED_NOW + Duration::minutes(5),
+        )
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_cursors().get(cap).await.unwrap(),
+        Some(json!({"scanned_until_ms": 2}))
+    );
+    assert_eq!(t.public_cursors().get(other_cap).await.unwrap(), None);
+    drop(t);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let e = t
+        .public_cursors()
+        .store(cap, json!([1]), FIXED_NOW)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Internal);
+    drop(t);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let e = t
+        .public_cursors()
+        .store(CapabilityId::new_v7(), json!({}), FIXED_NOW)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    drop(t);
+    let mut other = uow.tenant(f.other).await.unwrap();
+    assert_eq!(other.public_cursors().get(cap).await.unwrap(), None);
+}
+
+/// Reconciliation takes the least recently checked items first, so a sweep of N rotates through
+/// every open item instead of pinning to the oldest N.
+pub async fn reconcile_order_rotates(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let mut items = Vec::new();
+    for n in 0..5 {
+        let external = format!("c{n}");
+        let m = f.comment_message(c.id, &external, n).await;
+        items.push(f.public_item(&c, m, &external, n));
+    }
+    // One settled item is never reconciled.
+    let m = f.comment_message(c.id, "settled", 9).await;
+    let mut settled = f.public_item(&c, m, "settled", 9);
+    settled.answer = AnswerState::Handled {
+        by: EventSource::Agent,
+        reason: HandledReason::Spam,
+        at: FIXED_NOW,
+    };
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    for item in items.iter().chain([&settled]) {
+        assert!(t.public_items().insert(item.clone()).await.unwrap());
+    }
+    t.commit().await.unwrap();
+    let mut by_id = items.clone();
+    by_id.sort_by_key(|i| i.id);
+    let ids = |rows: &[PublicItem]| rows.iter().map(|i| i.id).collect::<Vec<_>>();
+
+    let mut seen = Vec::new();
+    for round in 0..3 {
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        let batch = t.public_items().to_reconcile(cap, 2).await.unwrap();
+        assert_eq!(batch.len(), 2, "round {round}");
+        assert!(batch.iter().all(|i| i.id != settled.id));
+        let checked = ids(&batch);
+        t.public_items()
+            .mark_checked(&checked, FIXED_NOW + Duration::minutes(round))
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+        seen.push(checked);
+    }
+    // Never-checked items first, by id; then the least recently checked.
+    assert_eq!(seen[0], ids(&by_id[0..2]));
+    assert_eq!(seen[1], ids(&by_id[2..4]));
+    assert_eq!(seen[2], vec![by_id[4].id, by_id[0].id]);
+    // `checked_at` is set; the item's version (`updated_at`) is not.
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let first = t.public_items().get(by_id[0].id).await.unwrap().unwrap();
+    assert_eq!(first.checked_at, Some(FIXED_NOW + Duration::minutes(2)));
+    assert_eq!(first.updated_at, by_id[0].updated_at);
+    // Another workspace's ids are ignored.
+    let mut other = uow.tenant(f.other).await.unwrap();
+    other
+        .public_items()
+        .mark_checked(&[by_id[1].id], FIXED_NOW + Duration::days(1))
+        .await
+        .unwrap();
+    other.commit().await.unwrap();
+    let again = t.public_items().get(by_id[1].id).await.unwrap().unwrap();
+    assert_eq!(again.checked_at, Some(FIXED_NOW));
+}

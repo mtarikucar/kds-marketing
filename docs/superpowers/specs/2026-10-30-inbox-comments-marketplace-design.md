@@ -397,6 +397,9 @@ create index if not exists public_items_thread
 create index if not exists public_items_reconcile
     on public_items (workspace_id, capability_id, checked_at nulls first, id)
     where answer_state in ('awaiting','rejected','pending');
+-- A conversation's items in order (context, merges). Added in F3.
+create index if not exists public_items_conversation
+    on public_items (workspace_id, conversation_id, created_at, id);
 
 create table if not exists public_cursors (
     workspace_id uuid not null references workspaces (id),
@@ -416,7 +419,9 @@ alter table outbox add constraint outbox_state_check
 Then: `create or replace function inbox_mask_personal(jsonb)` with the added keys of §3.9 (body copied from
 0008, or from 0018 if it changed it); `create or replace function inbox_event_person(...)` with candidate
 rows `(p#>>'{public,author,id}', <namespace by p#>>'{public,kind}' and capability kind>)` scoped with
-`c.external_id || ':'`; and the three tables' `enable` + `force row level security` + `<table>_ws`
+`c.external_id || ':'` (an author without an id is intake's one-off person: `c:<external_id>` for a
+comment, `q:<external_id>` for a question; the DM siblings `instagram_dm`/`messenger` map to their
+surface's namespace); and the three tables' `enable` + `force row level security` + `<table>_ws`
 policies in the 0006 form (archtest `sql_scoping`).
 
 The answer is stored as JSON (`AnswerState` serde) with a generated `answer_state` column for indexes; the
@@ -425,15 +430,20 @@ generated column is never written by the repository.
 ### 4.2 Down
 
 Drops `public_items`, `public_subjects`, `public_cursors`; restores the two functions to their previous
-bodies. The provider and outbox-state constraints are narrowed **only when no row needs the wider ones**
-(`inbound_events` rows are append-only and never deleted; `held` outbox rows may exist): the 0014 pattern
-(`do $$ … if not exists (…) then … end if; … $$`). Re-running changes nothing.
+bodies; narrows the provider check back to `('meta','netgsm','x','mail','tiktok')` (TikTok's stays: 0018
+owns it) and the outbox-state check back to its six states. **Refused, before anything changes, while a
+row needs the wider checks** (changed in F3 from "kept wide", following the refusing downs of 0015 and
+0018): a `trendyol`/`hepsiburada` inbound event (events are append-only and never deleted, so such a
+database keeps 0019) or a `held` outbox row (approve or discard it first). The two tables are locked
+while they are checked. Re-running changes nothing. Tests that run an earlier migration's down on a
+fully migrated database (0006, 0009) run 0019's down first: its tables reference theirs.
 
 ### 4.3 Tables and pins
 
 3 new tables: `public_subjects`, `public_items`, `public_cursors` (74 → 77). Migrations 17 → 19 with
 0018 merged (18 → 19 if 0018 merges after; whichever lands second renumbers and both carry the union
-provider list).
+provider list). Until then this branch has 18 migrations with no `0018` (the migrations test pins the
+versions `1..=17, 19`).
 
 ---
 
@@ -622,9 +632,10 @@ class "cumulative-snapshot idempotency").
 
 ### 6.6 Merges and erasure
 
-- `MergeSnapshot` gains `public_items: Vec<PublicItemParent>` (`#[serde(default)]`, snapshot version 2);
-  `apply_snapshot` moves each item to its target conversation before coalesced conversations are deleted;
-  `restore_snapshot` moves them back. In-memory fakes mirror it.
+- `MergeSnapshot` gains `public_items: Vec<PublicItemParent>` (`#[serde(default)]`, snapshot version 2,
+  `MERGE_SNAPSHOT_VERSION`); `apply_snapshot` moves each item to its target conversation before
+  coalesced conversations are deleted; `restore_snapshot` moves them back; undo accepts versions 1 and
+  2 (a version 1 snapshot has no items). In-memory fakes mirror it.
 - `erasure::event_identities` adds the envelope author in the namespace of its kind and capability.
 - `erasure().scrub(person)` needs no new column (items hold no personal text).
 

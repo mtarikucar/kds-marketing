@@ -70,6 +70,10 @@ pub(super) async fn reference(
         "capabilities" => "select 1 from capabilities where workspace_id = $1 and id = $2",
         "messages" => "select 1 from messages where workspace_id = $1 and id = $2",
         "inbound_events" => "select 1 from inbound_events where workspace_id = $1 and id = $2",
+        "public_subjects" => "select 1 from public_subjects where workspace_id = $1 and id = $2",
+        "studio_publications" => {
+            "select 1 from studio_publications where workspace_id = $1 and id = $2"
+        }
         _ => return Err(AppError::internal("unknown inbox reference")),
     };
     let found: Option<i32> = sqlx::query_scalar(sql)
@@ -92,6 +96,9 @@ mod merges;
 mod messages;
 mod outbox;
 mod people;
+mod public_cursors;
+mod public_items;
+mod public_subjects;
 mod request_keys;
 mod tasks_notes;
 

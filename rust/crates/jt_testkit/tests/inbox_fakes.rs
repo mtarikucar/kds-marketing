@@ -57,3 +57,33 @@ async fn initial_journey_is_scoped_and_immutable() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::initial_journey_is_scoped_and_immutable(uow).await;
 }
+
+#[tokio::test]
+async fn public_items_contract() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::public_items_contract(uow).await;
+}
+
+#[tokio::test]
+async fn public_subjects_contract() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::public_subjects_contract(uow).await;
+}
+
+#[tokio::test]
+async fn public_cursors_contract() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::public_cursors_contract(uow).await;
+}
+
+#[tokio::test]
+async fn reconcile_order_rotates() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::reconcile_order_rotates(uow).await;
+}
+
+#[tokio::test]
+async fn public_items_follow_merges_and_undo() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_merge_contract::public_items_follow_merges_and_undo(uow).await;
+}

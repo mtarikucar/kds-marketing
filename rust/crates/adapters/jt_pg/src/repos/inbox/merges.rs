@@ -33,12 +33,13 @@ impl MergeRepo for PgTenantRepos {
         let latest_write_at:OffsetDateTime=sqlx::query_scalar("select max(updated_at) from (select updated_at from people where workspace_id=$1 and id=any($2) union all select updated_at from journeys where workspace_id=$1 and person_id=any($2) union all select updated_at from conversations where workspace_id=$1 and person_id=any($2)) aggregates").bind(ws).bind(&people).fetch_one(self.tx.conn()).await.map_err(|e|map_sqlx(e,"merge checkpoint"))?;
         Ok(MergeSnapshot {
             latest_write_at,
-            people:[a,b], version:1, journeys, conversations,
+            people:[a,b], version:MERGE_SNAPSHOT_VERSION, journeys, conversations,
             identities:many!(sqlx::query_scalar("select to_jsonb(i) from identities i where workspace_id=$1 and person_id=any($2) order by id for update").bind(ws).bind(&people),self,IdentityParent)?,
             messages:many!(sqlx::query_scalar("select to_jsonb(m) from messages m where workspace_id=$1 and conversation_id=any($2) order by at,id for update").bind(ws).bind(&conversation_ids),self,MessageParent)?,
             tasks:many!(sqlx::query_scalar("select to_jsonb(t) from tasks t where workspace_id=$1 and journey_id=any($2) order by id for update").bind(ws).bind(&journey_ids),self,TaskParent)?,
             notes:many!(sqlx::query_scalar("select to_jsonb(n) from notes n where workspace_id=$1 and journey_id=any($2) order by id for update").bind(ws).bind(&journey_ids),self,NoteParent)?,
             outbox:many!(sqlx::query_scalar("select to_jsonb(o) from outbox o where workspace_id=$1 and conversation_id=any($2) order by id for update").bind(ws).bind(&conversation_ids),self,OutboxParent)?,
+            public_items:many!(sqlx::query_scalar("select jsonb_build_object('id',id,'conversation_id',conversation_id) from public_items where workspace_id=$1 and conversation_id=any($2) order by id for update").bind(ws).bind(&conversation_ids),self,PublicItemParent)?,
         })
     }
     async fn edited_since(
@@ -98,6 +99,23 @@ impl MergeRepo for PgTenantRepos {
                 .await
                 .map_err(|e| map_sqlx(e, "merge outbox"))?;
         }
+        // Items reference their conversation: they move before a coalesced one is deleted.
+        for i in &snapshot.public_items {
+            let target = *targets.get(&i.conversation_id).ok_or_else(|| {
+                AppError::internal("a merged item's conversation is not in the snapshot")
+            })?;
+            if target != i.conversation_id {
+                changed(
+                    sqlx::query("update public_items set conversation_id=$3 where workspace_id=$1 and id=$2")
+                        .bind(ws)
+                        .bind(i.id.as_uuid())
+                        .bind(target.as_uuid())
+                        .execute(self.tx.conn())
+                        .await
+                        .map_err(|e| map_sqlx(e, "merge public item"))?,
+                )?;
+            }
+        }
         for (&id, &target) in &targets {
             if id != target {
                 sqlx::query("delete from conversations where workspace_id=$1 and id=$2")
@@ -134,6 +152,19 @@ impl MergeRepo for PgTenantRepos {
         clear_external_ids(self, snapshot).await?;
         for m in &snapshot.messages {
             changed(sqlx::query("update messages set conversation_id=$3,external_id=$4 where workspace_id=$1 and id=$2").bind(ws).bind(m.id.as_uuid()).bind(m.conversation_id.as_uuid()).bind(&m.external_id).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"restore message"))?)?;
+        }
+        for i in &snapshot.public_items {
+            changed(
+                sqlx::query(
+                    "update public_items set conversation_id=$3 where workspace_id=$1 and id=$2",
+                )
+                .bind(ws)
+                .bind(i.id.as_uuid())
+                .bind(i.conversation_id.as_uuid())
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "restore public item"))?,
+            )?;
         }
         for o in &snapshot.outbox {
             changed(
