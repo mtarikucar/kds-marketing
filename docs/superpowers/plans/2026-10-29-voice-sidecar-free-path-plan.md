@@ -11679,6 +11679,10 @@ After the call, a count-only check that no phone number reached Asterisk's journ
 
 Failure handling: one-way audio → B1 Step 10 rule, retry once; no `caller:` line → `journalctl -u jeeta-voice-listen -n 50` (errors only), check the echo-guard and VAD thresholds; garbled voice → compare `alaw`/`ulaw` in `MEDIA_START` with the PJSIP codec (`docker exec jeeta-asterisk asterisk -rx 'core show channels verbose'` during a call shows the format without numbers only with `verbose=0` off: do not enable verbose; use `pjsip show channelstats` instead). If two-way audio cannot be obtained, stop and report before Phase C.
 
+**B7 result (2026-10-30, as the coordinator reported it to Phase C): PASSED.** The live vertical-slice call ran with the bridge after the fix below. Its numbers: first audio 8 ms after the answer, `endpoint_ms` 224 (≤ 1 800), `stt_final_ms` 467, `ack_ms` 1 071, just over the ≤ 1 000 criterion, as the B6 review foresaw (the endpoint and the final words come before the talker's 600 ms timer starts). D3's `bridge.env.example` therefore sets `VOICE_ACK_MS=400`, the tuning the B6 review named; E3 checks it. The commits B7 brought, the first after an attempt that failed at the answer:
+- `f6966de3`: Asterisk 22.11 puts a `chan_websocket` media channel (`connection_type=server`) into the application only once its WebSocket is connected, and refuses `addChannel` before that (422 "Channel not in Stasis application"). `Live::connect` now connects the media's WebSocket first, then creates the mixing bridge, adds the caller, and adds the media channel, asking again on 422 for up to 2 s. The fake ARI refuses an unconnected media channel the same way.
+- `4e04451d`: a WebSocket upgrade Asterisk refuses keeps its HTTP status in the failure line (`media unreachable (ARI answered 400)`), never the response itself.
+
 ### Task B8: Inbound investigation (non-blocking)
 
 Gate V1 saw the PBX answer 0850 calls itself with silence and send no INVITE to the UA. This task finds out whether Asterisk on 102 receives an inbound INVITE. Nothing else waits for it.
@@ -12440,6 +12444,15 @@ git commit -m "feat(calls): the workspace's approved opening and transcript noti
 ```
 
 (Steps 5 and 6 may be their own commits: `fix(calls): a stored plan reads tolerantly, calls.place reads it strictly` and `feat(calls): the approved texts are a person's to change`.)
+
+**C1 as built (2026-10-31, commits `5ccd1567` Steps 1–4, `6293c460` Step 5, `341056b2` Step 6).** `origin/feat/rust-panel-money-inputs` (52 commits, no conflict) was merged first (`bfe7db17`). The steps ran test first, the code is the plan's reflowed by rustfmt; each failing test was seen failing (the domain test with E0599/E0560; the four `calls_session` tests with the core change taken back; `a_place_body_refuses_…` with the tolerant plan and no `strict_plan`). What differs:
+- **The second fence reads the stored opening as it is.** `Line::Agent` gains `spoken: bool`. The first fence reads the plan's own opening after the policy's lines (`spoken_opening`, as the plan says); a placed call stores the whole spoken opening, so the second fence (`facts_for`, `spoken: true`) reads that text as it is. Wrapping it again would prefix the policy's lines twice and, if the owner edited the policy between the two fences, check lines the answer never plays.
+- `charge` reads `policy_of` too: the plan's "two other reads" in `calls.rs` are one by now (`charge`). Its tariff is not a template, so nothing changes there.
+- `policy_get`'s doc and `PlaceInput.plan`'s doc name `CallPolicy::with_workspace` and the refusal instead of linking `policy_of` and `strict_plan`: `cargo doc -D warnings` refuses a public doc that links a private item.
+- The MCP parity test reads `CallPolicy` and `BridgePhrases` through `jt_app::ports::calls` (which re-exports `jt_calls::*`): `jt_mcp` has no `jt_calls` dependency, and adding one would change `Cargo.lock` (CI builds `--locked`).
+- `policy_set` opens its transaction before validating, since the agent's merge reads the stored policy and the workspace's name first; a refusal or an invalid policy drops the transaction.
+- Not done here (C5's): a person's save of an untouched template still stores it as sent (the plan's "C5's to avoid").
+- Checks on Windows (the two unix-only lines of `jt_pg/src/wal.rs` removed locally, never committed): `cargo test -p jt_calls` 98 (lib 1, bridge_additions 16, fence 3, opening 25, phrases 7, policy_opening 6, session 11, timers 8, trace 16, wire 5); `jt_app` `calls_session` 22, `calls_place` 13, `calls_bridge` 9, `calls_end` 2, `calls_policy` 3; `jt_mcp` `calls_mcp` 4, `registry` 12; `jt_archtest` `dependency_boundaries` 17, `gate_rule` 7, `twin_rule` 9. Clippy `-D warnings` (jt_calls all targets, jt_app lib with `tokio/time` and its call tests, jt_mcp all targets), `cargo fmt --all -- --check` and `cargo doc --no-deps -D warnings` (jt_calls, jt_app, jt_mcp) are clean. (`cargo clippy -p jt_app --all-targets` alone fails on two unrelated tests, `inbox_replies` and `studio_permissions`, whose `uuid::Uuid::new_v4` needs a feature only the workspace build unifies.)
 
 ### Task C2: The core fills the dial's script; the agent may pass hotwords
 
@@ -14013,6 +14026,10 @@ LISTEN_SOCKET=unix:/run/jeeta-voice/listen/listen.sock
 SPEAK_SOCKET=unix:/run/jeeta-voice/speak/speak.sock
 VOICE_CACHE_DIR=/var/lib/jeeta-voice/cache
 VOICE_TRACE_FILE=/var/lib/jeeta-voice/traces.jsonl
+# B7 read ack_ms 1 071 against its 1 000 ms criterion with the talker's 600 ms default: the
+# endpoint and the final words (about 300 ms) come before the timer starts. 400 is the tuning the
+# B6 review named; E3 confirms it (a turn's ack_ms ≤ 1 000) or moves it.
+VOICE_ACK_MS=400
 JEETA_VOICE_BRIDGE_LOG=info
 ```
 
