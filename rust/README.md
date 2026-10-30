@@ -83,7 +83,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. On yedi göç vardır:
+döndürür. On sekiz göç vardır (`0018` ve `0019` başka dallarındır):
 
 | Göç | Ne yapar |
 |---|---|
@@ -104,6 +104,7 @@ döndürür. On yedi göç vardır:
 | `0015_voice_calls` | Voice V0: `call_sessions`, `call_turns`, `call_commands`, `call_duty` (forced RLS, composite keys; 71 tables), `workspace_policies.calls`, `calls.work` for the system owner/manager/rep and `calls.manage` for owner/manager, and the retry columns of `event_consumption` (`attempts`, `retry_at`). Down refuses while a call is not ended. |
 | `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
 | `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
+| `0020_prospects` | Aday havuzu (leads L1): `research_tasks`, `prospects`, `prospect_keys`, `prospect_scores`, `prospect_blocklist` (forced RLS; 79 tables), `workspace_policies.leads_policy`, and `prospects.work` and `prospects.manage` for the system owner/manager; `rep` holds neither. Down refuses while the blocklist holds a do-not-contact or erased entry, and drops `leads_policy` only while every row is `{}`. (`0018` and `0019` are the TikTok webhooks' and the inbox comments/marketplace branches'.) |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -625,6 +626,8 @@ Sistem rollerinin izinleri:
 | `calls.bridge` (ses köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
 | `devices.work` (telefonları kullanma) | ✓ | ✓ | — |
 | `devices.bridge` (cihaz köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+| `prospects.work` (aday havuzunda çalışma) | ✓ | ✓ | — |
+| `prospects.manage` (aday havuzunu yönetme: yeniden açma, iletişim yasağını kaldırma, silme, saklama süreleri) | ✓ | ✓ | — |
 
 `calls.bridge` ve `devices.bridge` bir köprünün API anahtarının izinleridir; sahip ve yönetici onları o anahtarı
 verebilmek için taşır.

@@ -344,6 +344,11 @@ fn fold(s: &str) -> String {
   repeatability test runs 0020 up/down twice; `role_backfill_adds_prospects_permissions_to_owner_and_manager`;
   `rep_role_has_no_prospects_permissions`; `prospect_keys_hard_index_refuses_a_second_phone` (Postgres, CI);
   `blocklist_reason_and_expiry_agree` (check constraint).
+  As built: the down refuses while the blocklist holds `do_not_contact`/`erased` entries (spec D27,
+  `prospects_down_refuses_while_the_blocklist_holds_an_objection`) and keeps a `leads_policy` a workspace set
+  (`prospects_down_keeps_a_leads_policy_a_workspace_set`); `every_migration_has_a_down_file` lists the versions
+  (`1..=17` and `20`: 0018/0019 are the parallel branches'); every round-trip test that runs older downs runs
+  0020's first (its tables reference `people`, `journeys` and `strategy_versions`).
 - [ ] CI red → implement → green; **commit** `feat(prospects): tables, RLS and the prospects permissions`.
 
 ### Task L1-T3: ports, Postgres repos, fakes, contract tests

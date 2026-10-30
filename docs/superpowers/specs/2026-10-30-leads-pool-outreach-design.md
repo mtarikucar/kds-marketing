@@ -85,6 +85,8 @@ attachments (§14); cold DMs on any social platform (the parallel design forbids
 | D23 | **v1 import routes by evidence**: leads past `NEW`, leads with any contact evidence, and leads from inbound sources go to the inbox (today's path); never-contacted research-staged leads go to the pool. Dry run first; provenance kept; rollback covers both. | Owner scope 7. Today the importer sends all 1,143 leads to the inbox. |
 | D24 | Platform kill switch **`JEETA_OUTREACH_ENABLED`** (default off): campaigns can be prepared, but launch refuses until the operator turns it on (after L5 is deployed and the lawyer's points are answered). | Merge dark; nothing is sent before the legal gate. |
 | D25 | Four new permissions: `prospects.work`, `prospects.manage`, `outreach.work`, `outreach.manage`. Owner and manager hold them; the rep role holds none by default. Distribution uses the existing `inbox.work`/`inbox.manage`. | Data minimisation inside the team: the pool is not everyone's; a custom role can grant it. |
+| D26 | **Retention, decided 2026-10-30 by the owner's delegate** (answers §15 Q2): rejected prospects are purged 30 days after the rejection, unpromoted ones 180 days after their last update, a purged rejection's keys are remembered 365 days, inbound attachments are kept 180 days; the do-not-contact list is per-workspace keyed hashes (HMAC) and survives every purge. These are the policy defaults (`ProspectsPolicy`, `LeadsPolicy.attachments`); a workspace manager may change the pool's within the bounds of §7.1. L-05 still asks the lawyer to confirm them. | The owner's delegate took the proposed numbers; the lawyer's answer can still move them without code. |
+| D27 | **`0020` down refuses while the blocklist holds a `do_not_contact` or `erased` entry** (built in L1-T2; stricter than §4.1's first draft): the operator exports those hashes and deletes them by hand before a schema rollback. Rejection memory does not hold a rollback up. | An objection must outlive deletion (D9), a rollback included; a refusing down is the repository's pattern for unsafe states (0015). |
 
 ---
 
@@ -770,9 +772,16 @@ A blocklist hit on a `do_not_contact`/`erased` entry overrides an existing `reje
 (`insert … on conflict (workspace_id, kind, key_hash) do update set reason = excluded.reason, expires_at = null
 where prospect_blocklist.reason = 'rejected'`).
 
-Down: drops the five tables (blocklist included: down is a schema rollback, not a data-retention act; the
-operator's runbook says to export the blocklist before a down in production), removes the two permissions from
-the system roles, and drops `leads_policy` only when every row holds `{}` (the 0014 pattern), else keeps it.
+Down: **refuses while the blocklist holds a `do_not_contact` or `erased` entry** (D27: the operator's runbook
+exports those hashes and deletes them by hand first; rejection memory does not hold it up), then removes the two
+permissions from the system roles, drops the five tables and drops `leads_policy` only when every row holds `{}`
+(the 0014 pattern), else keeps it.
+
+As built (L1-T2): `prospects` also has `latest_scored_at` (the `ScoreSummary.at`), checked null together with
+`latest_score` and `latest_digest` (`prospects_latest_check`); `promoted_journey_id` and `promoted_at` are set
+exactly when `promoted_person_id` is (`prospects_promoted_check`); `research_tasks` is closed exactly when it is
+not open (`research_tasks_closed_check`) and has the list index `research_tasks_list`; the column checks bound
+`sector`, `city`, `district` (1..=80), `country` (`^[A-Z]{2}$`), `language` (2..=8) and `segment_key` (2..=32).
 
 ### 4.2 `0021_distribution`
 
@@ -1295,7 +1304,7 @@ Not legal advice; each item blocks what is named until answered.
 1. **B2B basis.** Until your lawyer answers L-01/L-03, outreach can email only people who consented, which in
    practice means almost no cold outreach. Will you get that answer, and should the İYS lookup stay mandatory?
 2. **Retention numbers.** Rejected 30 days, unpromoted 180 days, rejected memory 365 days, inbound attachments
-   180 days — keep them?
+   180 days — keep them? **Answered 2026-10-30 by the owner's delegate: kept (D26).**
 3. **Your sender identity and privacy notice.** For your own workspace: the company title, address and the
    privacy notice (aydınlatma metni) URL the footer links to.
 4. **v1 specifics.** (a) Import v1 research candidates still `PENDING` into the pool, or drop them? (b) Map v1

@@ -134,6 +134,10 @@
     "devices": {
       "work": "Use phones",
       "bridge": "Act as the device bridge (the bridge's key only)"
+    },
+    "prospects": {
+      "work": "Work the prospect pool",
+      "manage": "Manage the prospect pool: reopen, lift do-not-contact, erase, retention"
     }
   },
   "roleNames": {

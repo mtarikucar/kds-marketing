@@ -134,6 +134,11 @@ fn tenant_tables_are_read_from_the_migrations() {
         "activation_codes",
         "device_commands",
         "device_files",
+        "research_tasks",
+        "prospects",
+        "prospect_keys",
+        "prospect_scores",
+        "prospect_blocklist",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

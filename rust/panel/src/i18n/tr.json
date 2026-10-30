@@ -134,6 +134,10 @@
     "devices": {
       "work": "Telefonları kullanma",
       "bridge": "Cihaz köprüsü olarak çalışma (yalnızca köprünün anahtarı)"
+    },
+    "prospects": {
+      "work": "Aday havuzunda çalışma",
+      "manage": "Aday havuzunu yönetme: yeniden açma, iletişim yasağını kaldırma, silme, saklama süreleri"
     }
   },
   "roleNames": {
