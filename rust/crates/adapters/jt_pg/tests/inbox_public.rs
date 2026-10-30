@@ -76,8 +76,8 @@ async fn mask_personal_blanks_the_envelope() {
     assert_eq!(public["text"], json!(""));
     assert_eq!(masked["provider_item"], json!(""));
     assert_eq!(public["answer"]["text"], json!(""));
-    assert_eq!(public["subject"]["title"], json!(""));
-    assert_eq!(public["subject"]["url"], json!(""));
+    // `subject` was a masked key already (a mail's subject): the post or product goes whole.
+    assert_eq!(public["subject"], json!(""));
     // Ids, states and times stay.
     for key in [
         "kind",
@@ -89,7 +89,6 @@ async fn mask_personal_blanks_the_envelope() {
     ] {
         assert_ne!(public[key], json!(""), "{key}");
     }
-    assert_eq!(public["subject"]["external_id"], json!("m1"));
     assert_eq!(public["answer"]["at"], json!("2026-10-30T11:00:00Z"));
 
     // Names under every spelling the providers use, and Facebook's string comment text.
@@ -166,7 +165,8 @@ async fn event_person(
     person: PersonId,
 ) -> bool {
     let mut tx = TenantTx::begin(&db.pool, f.ws).await.unwrap();
-    let found: bool = sqlx::query_scalar("select inbox_event_person($1,$2,$3,$4)")
+    // No match is SQL `null` (`null or false`), which its `where` callers read as false.
+    let found: bool = sqlx::query_scalar("select coalesce(inbox_event_person($1,$2,$3,$4), false)")
         .bind(f.ws.as_uuid())
         .bind(cap.as_uuid())
         .bind(p)

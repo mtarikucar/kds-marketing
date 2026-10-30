@@ -289,7 +289,8 @@ The 24-hour DM window does not apply to public conversations; rule 4 replaces it
     personal text (ids, states, times only); subjects hold the business's own post text and product data.
   - `inbox_mask_personal` (0019) also masks `author`, `provider_item`, `username`, `userName`,
     `customerName` and **string-valued** `message` (Facebook's comment text; WhatsApp's `message` is an
-    object and keeps recursing as before).
+    object and keeps recursing as before). The envelope's `subject` goes whole, `subject` being a masked
+    key since 0008 (a mail's subject).
   - `inbox_event_person` (0019) matches the public envelope's author against the four new namespaces.
   - `erased_identities` hashes use the new namespace names (`instagram_commenter`, …); a later comment by an
     erased commenter is dropped (`erased_identity_drop`), as for DMs.
