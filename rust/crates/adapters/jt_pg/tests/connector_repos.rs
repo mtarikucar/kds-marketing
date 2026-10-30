@@ -1448,18 +1448,21 @@ async fn capabilities_holding_lists_every_live_sealed_holder_across_workspaces()
     let uow = uow(&db);
     let (a, _) = db.seed_workspace("holding-a").await;
     let (b, _) = db.seed_workspace("holding-b").await;
+    let (c, _) = db.seed_workspace("holding-c").await;
+    let (d, _) = db.seed_workspace("holding-d").await;
     let verified = capability(a, "tiktok", "open-1", T0);
     connect(&uow, &verified, true).await;
     let unverified = capability(b, "tiktok", "open-1", T0 + Duration::days(1));
     connect(&uow, &unverified, false).await;
-    // Not holders: declared without credentials, another account, another kind, retired.
-    let declared = capability(b, "tiktok", "open-1", T0 + Duration::days(2));
+    // Not holders (a workspace holds an account once per kind): declared without credentials,
+    // retired, another account, another kind.
+    let declared = capability(c, "tiktok", "open-1", T0 + Duration::days(2));
     insert_capability(&uow, &declared).await;
-    connect(&uow, &capability(a, "tiktok", "open-2", T0), true).await;
-    connect(&uow, &capability(a, "x", "open-1", T0), true).await;
-    let gone = capability(a, "tiktok", "open-1", T0 + Duration::days(3));
+    let gone = capability(d, "tiktok", "open-1", T0 + Duration::days(3));
     connect(&uow, &gone, true).await;
     set_status(&uow, &gone, StoredStatus::Retired).await;
+    connect(&uow, &capability(a, "tiktok", "open-2", T0), true).await;
+    connect(&uow, &capability(a, "x", "open-1", T0), true).await;
     let held = |kinds: &'static [&'static str], id: &'static str| {
         let uow = uow.clone();
         async move {
