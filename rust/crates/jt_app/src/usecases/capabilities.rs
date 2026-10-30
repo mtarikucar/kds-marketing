@@ -864,7 +864,8 @@ fn revoke_at_provider(deps: &Deps, ctx: &Ctx, capability: &Capability, sealed: &
                         workspace_id = %ws,
                         capability_id = %id,
                         kind_key = %kind_key,
-                        "a retired capability's access was not given back: another capability                          still holds the account, and the grant is the account's"
+                        "a retired capability's access was not given back: another capability \
+                         still holds the account, and the grant is the account's"
                     );
                     return;
                 }
@@ -874,7 +875,8 @@ fn revoke_at_provider(deps: &Deps, ctx: &Ctx, capability: &Capability, sealed: &
                         workspace_id = %ws,
                         capability_id = %id,
                         code = e.code.as_str(),
-                        "a retired capability's access was not given back: whether another                          capability holds the account could not be read"
+                        "a retired capability's access was not given back: whether another \
+                         capability holds the account could not be read"
                     );
                     return;
                 }
@@ -892,7 +894,8 @@ fn revoke_at_provider(deps: &Deps, ctx: &Ctx, capability: &Capability, sealed: &
                 capability_id = %id,
                 kind_key = %kind_key,
                 error_kind = e.kind(),
-                "a retired capability's access could not be given back at its provider; it stays                  granted there until the account's owner removes it"
+                "a retired capability's access could not be given back at its provider; it stays \
+                 granted there until the account's owner removes it"
             ),
         }
     });
