@@ -162,7 +162,10 @@ function wrapper({ children }: { children: React.ReactNode }) {
 }
 
 /** The panel only exists once the catalogue has arrived — it is what decides
- *  which controls exist at all. */
+ *  which controls exist at all. This resolves on the technique buttons, which
+ *  arrive with the catalogue; the default technique's own controls (prompt,
+ *  tiers, "Avoid") are seeded by an effect and land a render later, so a test
+ *  that reaches for one of those first has to find it, not get it. */
 const waitForPanel = () => screen.findByRole('button', { name: /create an image/i });
 
 describe('AiStudioPage', () => {
@@ -183,7 +186,7 @@ describe('AiStudioPage', () => {
   it('submitting the prompt calls generateMedia with the panel values', async () => {
     render(<AiStudioPage />, { wrapper });
     await waitForPanel();
-    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    await userEvent.type(await screen.findByRole('textbox', { name: /prompt/i }), 'a dog');
     await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
     await waitFor(() =>
       expect(mediaService.generateMedia).toHaveBeenCalledWith(
@@ -207,7 +210,7 @@ describe('AiStudioPage', () => {
 
     render(<AiStudioPage />, { wrapper });
     await waitForPanel();
-    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    await userEvent.type(await screen.findByRole('textbox', { name: /prompt/i }), 'a dog');
     fireEvent.change(screen.getByRole('spinbutton', { name: /how many/i }), {
       target: { value: '2' },
     });
@@ -226,7 +229,7 @@ describe('AiStudioPage', () => {
 
     render(<AiStudioPage />, { wrapper });
     await waitForPanel();
-    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    await userEvent.type(await screen.findByRole('textbox', { name: /prompt/i }), 'a dog');
     await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
     // The card polls the failing status endpoint once...
@@ -273,7 +276,7 @@ describe('AiStudioPage — technique-first, contract-driven panel', () => {
 
     // Cheapest IMAGE_CREATE tier is selected by default: qwen, which documents a
     // negative prompt and NO aspect ratio.
-    expect(screen.getByRole('textbox', { name: /avoid/i })).toBeInTheDocument();
+    expect(await screen.findByRole('textbox', { name: /avoid/i })).toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: /aspect ratio/i })).not.toBeInTheDocument();
 
     // Seedream v4 is the other way round: an image_size preset, no negative prompt.
@@ -486,7 +489,7 @@ describe('AiStudioPage — running out of AI credits', () => {
     render(<AiStudioPage />, { wrapper });
     await waitForPanel();
 
-    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    await userEvent.type(await screen.findByRole('textbox', { name: /prompt/i }), 'a dog');
     await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
@@ -503,7 +506,7 @@ describe('AiStudioPage — running out of AI credits', () => {
     render(<AiStudioPage />, { wrapper });
     await waitForPanel();
 
-    await userEvent.type(screen.getByRole('textbox', { name: /prompt/i }), 'a dog');
+    await userEvent.type(await screen.findByRole('textbox', { name: /prompt/i }), 'a dog');
     await userEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Generation failed'));
