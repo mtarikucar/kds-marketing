@@ -29,11 +29,13 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
-/// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest.
-const TABLES_AFTER_ALL: i64 = 67;
+/// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
+/// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge` and the
+/// device commands and device files of `0017_device_bridge`.
+const TABLES_AFTER_ALL: i64 = 74;
 
-/// Migrations `0001_foundation` through `0012_m4_grandfathered_backfill`.
-const MIGRATIONS: i64 = 12;
+/// Migrations `0001_foundation` through `0018_tiktok_webhooks`.
+const MIGRATIONS: i64 = 18;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -48,6 +50,21 @@ const CONNECTOR_INDEXES: [&str; 3] = [
     "capabilities_connected_account_idx",
     "inbound_events_raw_received_idx",
     "inbound_events_history_idx",
+];
+
+/// The indexes of `device_commands` and `device_files` (`0017_device_bridge`): the queue a bridge
+/// reads, the expiry sweep, a phone's command log, and the files' retention sweep.
+const DEVICE_BRIDGE_INDEXES: [&str; 4] = [
+    "device_commands_queue",
+    "device_commands_due",
+    "device_commands_log",
+    "device_files_expiry",
+];
+
+/// The tables of `0017_device_bridge`, each with its one row-level policy.
+const DEVICE_BRIDGE_TABLES: [(&str, &str); 2] = [
+    ("device_commands", "device_commands_ws"),
+    ("device_files", "device_files_ws"),
 ];
 
 /// The column `0005_connectors` adds to a table of an earlier migration: a budget item's
@@ -172,6 +189,12 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0018_tiktok_webhooks",
+        "0017_device_bridge",
+        "0016_voice_bridge",
+        "0015_voice_calls",
+        "0014_social_providers",
+        "0013_probe_reason",
         "0012_m4_grandfathered_backfill",
         "0011_m4_activation_codes",
         "0010_m4_billing",
@@ -258,7 +281,7 @@ async fn every_migration_has_a_down_file() {
         .map(|n| n.split('_').next().unwrap().parse().unwrap())
         .collect();
     versions.sort();
-    assert_eq!(versions, (1..=12).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=MIGRATIONS).collect::<Vec<_>>());
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,
@@ -430,9 +453,274 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
     }
 }
 
+/// `0018_tiktok_webhooks` lets inbound events be TikTok's; its up and its down are repeatable,
+/// and its down is refused, changing nothing, once a TikTok event is stored (events are never
+/// deleted, so the narrower check could not hold it).
+#[tokio::test]
+async fn tiktok_webhooks_migration_is_repeatable_and_its_down_refuses_stored_events() {
+    let db = TestDb::new().await; // already migrated up, 0018 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0018_tiktok_webhooks.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0018_tiktok_webhooks.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await }
+    };
+    let check = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "select pg_get_constraintdef(oid) from pg_constraint \
+                 where conname = 'inbound_events_provider_check'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let (ws, _) = db.seed_workspace("tiktok-hooks").await;
+    let insert = |provider: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at) \
+                 values($1,$2,$3,$4,'authorization.removed','{}',now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(provider)
+            .bind(Uuid::now_v7().to_string())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+
+    // Without TikTok events the down narrows the check, twice over; the up widens it again.
+    assert!(check().await.contains("'tiktok'"));
+    for _ in 0..2 {
+        run(&down).await.unwrap();
+        let narrowed = check().await;
+        assert!(!narrowed.contains("tiktok"), "{narrowed}");
+        assert!(narrowed.contains("'mail'"), "{narrowed}");
+        assert_eq!(insert("tiktok").await.as_deref(), Some("23514"));
+    }
+    for _ in 0..2 {
+        run(&up).await.unwrap();
+        assert!(check().await.contains("'tiktok'"));
+    }
+    assert_eq!(insert("tiktok").await, None);
+    assert_eq!(insert("unknown").await.as_deref(), Some("23514"));
+
+    // With one stored, the down is refused and leaves the check and the event as they were.
+    let refused = run(&down).await.unwrap_err().to_string();
+    assert!(
+        refused.contains("tiktok webhooks rollback refused"),
+        "{refused}"
+    );
+    assert!(check().await.contains("'tiktok'"));
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    let kept: i64 =
+        sqlx::query_scalar("select count(*) from inbound_events where provider = 'tiktok'")
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(kept, 1);
+}
+
+#[tokio::test]
+async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_and_manager() {
+    let db = TestDb::new().await; // already migrated up, 0017 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0017_device_bridge.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0017_device_bridge.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
+    let as_strings =
+        |keys: &[&str]| -> Vec<String> { keys.iter().map(|k| (*k).to_owned()).collect() };
+    let keys = ["devices.work", "devices.bridge"];
+    let base = ["workspace.read", "team.manage"];
+
+    // A second workspace holds a custom role keyed like a system one: only `is_system` tells
+    // them apart.
+    let (ws, other_ws) = (Uuid::now_v7(), Uuid::now_v7());
+    let (owner, manager, rep, custom, custom_manager) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    for (id, name) in [(ws, "devices"), (other_ws, "other")] {
+        sqlx::query(
+            "insert into workspaces (id, name, slug, status) values ($1, $2, $3, 'active')",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(format!("{name}-{}", id.simple()))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    let roles: [(Uuid, Uuid, &str, bool, Vec<&str>); 5] = [
+        (owner, ws, "owner", true, base.to_vec()),
+        // Already granted one of the two (say, by hand): it is not granted twice.
+        (
+            manager,
+            ws,
+            "manager",
+            true,
+            [&base[..], &["devices.work"]].concat(),
+        ),
+        (rep, ws, "rep", true, vec!["workspace.read"]),
+        (
+            custom,
+            ws,
+            "analyst",
+            false,
+            [&base[..], &["devices.work"]].concat(),
+        ),
+        (
+            custom_manager,
+            other_ws,
+            "manager",
+            false,
+            vec!["workspace.read"],
+        ),
+    ];
+    for (id, workspace, key, is_system, permissions) in &roles {
+        sqlx::query(
+            "insert into roles (id, workspace_id, key, name, permissions, is_system) \
+             values ($1, $2, $3, $3, $4, $5)",
+        )
+        .bind(id)
+        .bind(workspace)
+        .bind(key)
+        .bind(permissions)
+        .bind(is_system)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    // Up, twice: the system owner and manager gain exactly the missing keys, once, in order.
+    for _ in 0..2 {
+        run(&up).await;
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        for role in [owner, manager] {
+            assert_eq!(
+                role_permissions(&db.pool, role).await,
+                as_strings(&[&base[..], &keys[..]].concat())
+            );
+        }
+        assert_eq!(role_permissions(&db.pool, rep).await, ["workspace.read"]);
+        assert_eq!(
+            role_permissions(&db.pool, custom).await,
+            as_strings(&[&base[..], &["devices.work"]].concat())
+        );
+        assert_eq!(
+            role_permissions(&db.pool, custom_manager).await,
+            ["workspace.read"]
+        );
+    }
+
+    // Down, twice: the two tables go, and the two keys leave the system owner and manager only.
+    for _ in 0..2 {
+        run(&down).await;
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 2);
+        for index in DEVICE_BRIDGE_INDEXES {
+            assert!(!index_exists(&db.pool, index).await, "{index}");
+        }
+        for role in [owner, manager] {
+            assert_eq!(role_permissions(&db.pool, role).await, as_strings(&base));
+        }
+        assert_eq!(role_permissions(&db.pool, rep).await, ["workspace.read"]);
+        assert_eq!(
+            role_permissions(&db.pool, custom).await,
+            as_strings(&[&base[..], &["devices.work"]].concat())
+        );
+        assert_eq!(
+            role_permissions(&db.pool, custom_manager).await,
+            ["workspace.read"]
+        );
+    }
+
+    // Up again: the tables are back, with their indexes, forced row-level security and one policy
+    // each.
+    run(&up).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    for index in DEVICE_BRIDGE_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    for (table, policy) in DEVICE_BRIDGE_TABLES {
+        let forced: bool = sqlx::query_scalar(
+            "select relrowsecurity and relforcerowsecurity from pg_class where relname = $1",
+        )
+        .bind(table)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(forced, "{table}");
+        let policies: i64 = sqlx::query_scalar(
+            "select count(*) from pg_policies where schemaname = current_schema() \
+             and tablename = $1 and policyname = $2",
+        )
+        .bind(table)
+        .bind(policy)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(policies, 1, "{table}");
+    }
+}
+
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
+    // Newest first: the call tables reference the inbox tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0018_tiktok_webhooks.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0017_device_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0016_voice_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0015_voice_calls.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!("../../../../migrations/0009_studio.down.sql"))
         .execute(&db.pool)
         .await
@@ -549,6 +837,30 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0018_tiktok_webhooks.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0017_device_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0016_voice_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0015_voice_calls.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!("../../../../migrations/0009_studio.down.sql"))
         .execute(&db.pool)
         .await
@@ -601,7 +913,7 @@ async fn studio_migration_up_down_up() {
     for sql in [up, down, down, up, up] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
-    assert_eq!(table_count(&db.pool).await, 67);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     let saved: (String,f32,serde_json::Value) = sqlx::query_as("select title,prior_confidence,cadence from strategy_hypotheses where workspace_id = $1 and hypothesis_id = $2").bind(ws.as_uuid()).bind(h).fetch_one(tx.conn()).await.unwrap();
     assert_eq!(saved, ("keep".into(), 0.7, serde_json::json!({})));

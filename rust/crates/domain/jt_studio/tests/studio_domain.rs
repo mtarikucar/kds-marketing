@@ -390,6 +390,7 @@ fn approval_bound_to_piece_or_move_revision() {
         revision: 3,
         by: UserId::new_v7(),
         at: NOW,
+        tiktok: None,
     };
     for (lane, capability) in [(true, false), (false, true), (true, true)] {
         let mut rules = StudioPolicy {
@@ -537,6 +538,84 @@ fn publication_claim_freezes_piece_and_late_evidence_does_not_reopen_slot() {
     assert!(unknown.publication(PublicationId::new_v7(), NOW).is_err());
 }
 
+/// A post settled under the provider's provisional id (TikTok's publish id, no page: its public
+/// id came after the wait) takes its public receipt once the provider names it, once; nothing else
+/// ever changes a settled receipt.
+#[test]
+fn a_provisional_receipt_is_upgraded_once_to_the_public_one() {
+    let f = Fixture::new();
+    let mut slot = f.slot();
+    slot.state = SlotState::Ready;
+    slot.revision = 1;
+    let attempt = PublishAttempt::claim(
+        PublishAttemptId::new_v7(),
+        &slot,
+        &f.piece(1),
+        f.current.id,
+        7,
+        actor(),
+        NOW,
+    )
+    .unwrap();
+    let provisional = PublishReceipt {
+        external_id: "v_pub_file~v2-1.7".into(),
+        url: None,
+    };
+    let public = PublishReceipt {
+        external_id: "7300000000000000001".into(),
+        url: Some(
+            "https://www.tiktok.com/@jeeta_test/video/7300000000000000001"
+                .parse()
+                .unwrap(),
+        ),
+    };
+    // Only a settled attempt has a receipt to upgrade.
+    assert!(attempt.upgrade_receipt(&public).is_err());
+    let settled = attempt
+        .finish(&PublishOutcome::Succeeded(provisional.clone()))
+        .unwrap();
+    let publication = settled.publication(PublicationId::new_v7(), NOW).unwrap();
+    let upgraded = settled.upgrade_receipt(&public).unwrap();
+    assert_eq!(
+        upgraded.outcome(),
+        Some(&PublishOutcome::Succeeded(public.clone()))
+    );
+    assert_eq!(upgraded.state(), PublishState::Succeeded);
+    let moved = publication.upgrade_receipt(&public).unwrap();
+    assert_eq!(
+        (moved.external_id.as_str(), moved.url.as_ref()),
+        ("7300000000000000001", public.url.as_ref())
+    );
+    assert_eq!(
+        (moved.id, moved.attempt_id),
+        (publication.id, publication.attempt_id)
+    );
+    // Again with the same receipt: unchanged. Any other change is refused: a receipt with a page
+    // is the post, and an upgrade never names the same id.
+    assert_eq!(upgraded.upgrade_receipt(&public).unwrap(), upgraded);
+    assert_eq!(moved.upgrade_receipt(&public).unwrap(), moved);
+    let other = PublishReceipt {
+        external_id: "7300000000000000002".into(),
+        url: None,
+    };
+    assert!(upgraded.upgrade_receipt(&other).is_err());
+    assert!(moved.upgrade_receipt(&other).is_err());
+    let same_id = PublishReceipt {
+        external_id: provisional.external_id.clone(),
+        url: public.url.clone(),
+    };
+    assert!(settled.upgrade_receipt(&same_id).is_err());
+    let blank = PublishReceipt {
+        external_id: " ".into(),
+        url: None,
+    };
+    assert!(settled.upgrade_receipt(&blank).is_err());
+    let failed = attempt
+        .finish(&PublishOutcome::Failed(RedactedPublishError::Permanent))
+        .unwrap();
+    assert!(failed.upgrade_receipt(&public).is_err());
+}
+
 #[test]
 fn serde_round_trips_and_bytes_are_not_persistable() {
     let f = Fixture::new();
@@ -560,10 +639,33 @@ fn serde_round_trips_and_bytes_are_not_persistable() {
             text: "Per account".into(),
             media: vec![],
             link: None,
+            privacy: None,
         },
     );
     round_trip(&piece);
     piece.validate_persisted().unwrap();
+    // A stored adaptation written before `privacy` existed reads back without one, and one
+    // without it is written without the key.
+    let stored = serde_json::to_value(&piece).unwrap();
+    assert!(
+        stored["adaptations"][f.target.id.to_string()]
+            .get("privacy")
+            .is_none()
+    );
+    let mut private = piece.clone();
+    private
+        .adaptations
+        .get_mut(&f.target.id.to_string())
+        .unwrap()
+        .privacy = Some("SELF_ONLY".into());
+    round_trip(&private);
+    private.validate_persisted().unwrap();
+    private
+        .adaptations
+        .get_mut(&f.target.id.to_string())
+        .unwrap()
+        .privacy = Some("self_only".into());
+    assert!(private.validate_persisted().is_err());
     round_trip(&f.publication(&f.slot(), &piece));
     let upload = MediaUpload {
         bytes: b"secret bytes".to_vec(),
@@ -615,6 +717,7 @@ fn paid_move_checks_binding_revision_currency_and_execution_fence() {
         revision: 1,
         by: UserId::new_v7(),
         at: NOW,
+        tiktok: None,
     });
     movement.check_approval(&rules).unwrap();
     movement.revision = 2;

@@ -1,0 +1,8 @@
+{
+  "data": {},
+  "error": {
+    "code": "spam_risk_too_many_posts",
+    "message": "The daily post cap from the API is reached for the current user.",
+    "log_id": "20261027000000TEST0017"
+  }
+}

@@ -198,6 +198,42 @@ pub(super) fn scrub(s: &mut MemState, ws: WorkspaceId, person: PersonId) {
                         || r.response["quote"]["journey_id"] == json!(j)
                 }))
     });
+    // Calls keep their times, states and turn numbers; the number, the plan, the summary, the
+    // recording reference and every turn's words go, and so do the voice bridge's commands of
+    // those calls and the notes of the events it reported on them (as `jt_pg` scrubs them).
+    let calls: Vec<_> = s
+        .calls
+        .sessions
+        .iter()
+        .filter(|c| c.workspace_id == ws && c.person_id == Some(person))
+        .map(|c| c.id)
+        .collect();
+    let bridge_ids: Vec<String> = s
+        .calls
+        .sessions
+        .iter()
+        .filter(|c| calls.contains(&c.id))
+        .filter_map(|c| c.bridge_call_id.clone())
+        .collect();
+    for c in &mut s.calls.sessions {
+        if calls.contains(&c.id) {
+            c.counterpart_e164.clear();
+            c.plan = None;
+            c.summary = None;
+            c.recording = jt_calls::RecordingState::Off;
+        }
+    }
+    for (w, call, turn) in &mut s.calls.turns {
+        if *w == ws && calls.contains(call) {
+            turn.text.clear();
+        }
+    }
+    s.calls
+        .commands
+        .retain(|c| c.workspace_id != ws || !calls.contains(&c.call_id));
+    s.calls
+        .bridge_events
+        .retain(|(w, id, _)| *w != ws || !bridge_ids.contains(id));
     for p in &mut s.inbox.people {
         if p.workspace_id == ws && (p.id == person || p.merged_into == Some(person)) {
             p.display_name = "silinmiş kişi".into();

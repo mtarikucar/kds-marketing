@@ -35,9 +35,9 @@ interface Answer {
 
 /**
  * The callback addresses a flow comes back to, one per provider app (`connector::OAuthCallback`):
- * `meta` (Facebook Login), `instagram` (Instagram Login) and `x`.
+ * `meta` (Facebook Login), `instagram` (Instagram Login), `x`, `tiktok` and `linkedin`.
  */
-const CALLBACKS = ['meta', 'instagram', 'x'] as const;
+const CALLBACKS = ['meta', 'instagram', 'x', 'tiktok', 'linkedin'] as const;
 
 function isCallback(segment: string): boolean {
   return (CALLBACKS as readonly string[]).includes(segment);
@@ -70,28 +70,52 @@ function facts(asset: AssetPublic): { scopes: string[]; expiresAt: string | null
   return { scopes, expiresAt, plain };
 }
 
+/**
+ * The assets in the order found, those of one provider id together: choosing an id connects every
+ * asset it has (`connector::confirm_assets`), so a Page and its Messenger are one choice.
+ */
+function byAccount(assets: AssetPublic[]): AssetPublic[][] {
+  const accounts = new Map<string, AssetPublic[]>();
+  for (const asset of assets) accounts.set(asset.external_id, [...(accounts.get(asset.external_id) ?? []), asset]);
+  return [...accounts.values()];
+}
+
 function AssetRow({
-  asset,
+  assets,
   checked,
   onChange,
 }: {
-  asset: AssetPublic;
+  /** The assets of one provider id, at least one. */
+  assets: AssetPublic[];
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const id = `asset-${asset.kind_key}-${asset.external_id}`;
-  const { scopes, expiresAt, plain } = facts(asset);
+  const account = assets[0].external_id;
+  const id = `asset-${account}`;
+  const each = assets.map(facts);
+  const scopes = [...new Set(each.flatMap((f) => f.scopes))];
+  const expiresAt = each.flatMap((f) => (f.expiresAt ? [f.expiresAt] : [])).sort()[0] ?? null;
+  const plain = [...new Map(each.flatMap((f) => f.plain).map((kv) => [kv.join('='), kv] as const)).values()];
+  const names = [...new Set(assets.map((asset) => asset.name))];
+  const kinds = assets.map((asset) => kindLabel(t, asset.kind_key));
   return (
     <li className="flex items-start gap-3 py-3">
       <Checkbox id={id} checked={checked} onCheckedChange={(v) => onChange(v === true)} className="mt-1" />
       <div className="flex min-w-0 flex-col gap-1">
         <label htmlFor={id} className="flex flex-wrap items-center gap-2 text-sm font-medium text-foreground">
-          {asset.name}
-          <Badge size="sm">{kindLabel(t, asset.kind_key)}</Badge>
+          {names.join(' · ')}
+          {assets.map((asset, i) => (
+            <Badge key={asset.kind_key} size="sm">
+              {kinds[i]}
+            </Badge>
+          ))}
         </label>
+        {assets.length > 1 && (
+          <p className="text-caption text-muted-foreground">{t('oauthCallback.together', { kinds: kinds.join(' + ') })}</p>
+        )}
         <p className="font-mono text-micro text-muted-foreground">
-          {t('oauthCallback.externalId', { id: asset.external_id })}
+          {t('oauthCallback.externalId', { id: account })}
         </p>
         {scopes.length > 0 && (
           <p className="text-caption text-muted-foreground">{t('oauthCallback.scopes', { scopes: scopes.join(', ') })}</p>
@@ -104,7 +128,7 @@ function AssetRow({
         {plain.length > 0 && (
           <dl className="flex flex-wrap gap-x-3 gap-y-0.5 text-caption text-muted-foreground">
             {plain.map(([key, value]) => (
-              <div key={key} className="flex gap-1">
+              <div key={`${key}=${value}`} className="flex gap-1">
                 <dt>{key}:</dt>
                 <dd className="text-foreground">{value}</dd>
               </div>
@@ -170,7 +194,8 @@ export function OAuthCallbackPage() {
     gcTime: 0,
     onSuccess: (out) => {
       setCompletion({ kind: 'done', out });
-      if (out.assets.length === 1) setSelected([out.assets[0].external_id]);
+      // One account found (a Page with its Messenger, say): nothing to choose between.
+      if (new Set(out.assets.map((asset) => asset.external_id)).size === 1) setSelected([out.assets[0].external_id]);
       complete.reset();
     },
     onError: (error) => {
@@ -246,12 +271,12 @@ export function OAuthCallbackPage() {
               {bound && <Callout tone="info">{t('oauthCallback.firstBinds')}</Callout>}
               <ErrorCallout error={confirm.error} />
               <ul aria-label={t('oauthCallback.assetsLabel')} className="flex flex-col divide-y divide-border">
-                {assets.map((asset) => (
+                {byAccount(assets).map((account) => (
                   <AssetRow
-                    key={`${asset.kind_key}-${asset.external_id}`}
-                    asset={asset}
-                    checked={selected.includes(asset.external_id)}
-                    onChange={(on) => toggle(asset.external_id, on)}
+                    key={account[0].external_id}
+                    assets={account}
+                    checked={selected.includes(account[0].external_id)}
+                    onChange={(on) => toggle(account[0].external_id, on)}
                   />
                 ))}
               </ul>

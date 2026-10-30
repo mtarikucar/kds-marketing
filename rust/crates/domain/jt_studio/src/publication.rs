@@ -27,11 +27,26 @@ pub struct Publication {
     pub executed_version_id: StrategyVersionId,
     pub external_id: String,
     pub url: Option<Url>,
+    #[serde(with = "crate::time_compat")]
     pub published_at: OffsetDateTime,
     pub actor: Actor,
     pub attempt_id: PublishAttemptId,
 }
 impl Publication {
+    /// This publication under `receipt`, the public receipt its provider named once the post was
+    /// settled under a provisional one (see [`PublishAttempt::upgrade_receipt`]): the same
+    /// publication, its external id and page replaced. The same receipt again changes nothing.
+    pub fn upgrade_receipt(&self, receipt: &PublishReceipt) -> Result<Self, StudioError> {
+        let current = PublishReceipt {
+            external_id: self.external_id.clone(),
+            url: self.url.clone(),
+        };
+        upgraded(&current, receipt)?;
+        let mut next = self.clone();
+        next.external_id = receipt.external_id.clone();
+        next.url = receipt.url.clone();
+        Ok(next)
+    }
     pub fn validate_for_slot(&self, slot: &Slot) -> Result<(), StudioError> {
         slot.validate()?;
         self.chain.require_same(&slot.chain)?;
@@ -51,6 +66,17 @@ impl Publication {
             url: self.url.clone(),
         })
     }
+}
+/// Whether settled `current` may become `receipt`: the same receipt, or `current` provisional (no
+/// page) and `receipt` another, valid id. `InvalidTransition` otherwise.
+fn upgraded(current: &PublishReceipt, receipt: &PublishReceipt) -> Result<(), StudioError> {
+    if current == receipt {
+        return Ok(());
+    }
+    if current.url.is_some() || current.external_id == receipt.external_id {
+        return Err(StudioError::InvalidTransition);
+    }
+    validate_receipt(receipt)
 }
 fn validate_receipt(receipt: &PublishReceipt) -> Result<(), StudioError> {
     if receipt.external_id.trim().is_empty() {
@@ -110,12 +136,20 @@ pub struct PublishAttempt {
     executed_version_id: StrategyVersionId,
     control_revision: u64,
     actor: Actor,
+    #[serde(with = "crate::time_compat")]
     claimed_at: OffsetDateTime,
-    #[serde(default)]
+    #[serde(default, with = "crate::time_compat::option")]
     observed_at: Option<OffsetDateTime>,
     state: PublishState,
     outcome: Option<PublishOutcome>,
+    /// Why a failed or uncertain attempt failed, as the provider said it (bounded, secret-free):
+    /// display text for the owner, never evidence; learning and attribution read only the closed
+    /// categories of `outcome`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<String>,
 }
+/// The longest failure reason an attempt keeps.
+pub const MAX_FAILURE_REASON: usize = 300;
 impl PublishAttempt {
     pub fn claim(
         id: PublishAttemptId,
@@ -145,9 +179,33 @@ impl PublishAttempt {
             observed_at: None,
             state: PublishState::Sending,
             outcome: None,
+            failure_reason: None,
         };
         attempt.validate()?;
         Ok(attempt)
+    }
+    /// Keep the provider's failure line on a failed, uncertain or refused attempt, without
+    /// control characters and cut to [`MAX_FAILURE_REASON`]; `None` keeps the one it has. Any
+    /// other attempt keeps none.
+    pub fn with_failure_reason(mut self, reason: Option<String>) -> Self {
+        if !matches!(
+            self.state,
+            PublishState::Failed | PublishState::Unknown | PublishState::Refused
+        ) {
+            self.failure_reason = None;
+        } else if let Some(reason) = reason {
+            self.failure_reason = Some(
+                reason
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(MAX_FAILURE_REASON)
+                    .collect(),
+            );
+        }
+        self
+    }
+    pub fn failure_reason(&self) -> Option<&str> {
+        self.failure_reason.as_deref()
     }
     /// Freeze the connector account before persisting this new Sending attempt.
     pub fn with_account(mut self, account_id: Option<String>) -> Self {
@@ -241,6 +299,24 @@ impl PublishAttempt {
             PublishOutcome::Refused(_) => PublishState::Refused,
         };
         next.outcome = Some(outcome.clone());
+        Ok(next)
+    }
+    /// This succeeded attempt under `receipt`, the public receipt its provider named after the
+    /// post was settled under a provisional one: a provider that names a post's public id late
+    /// (TikTok, once its moderation passed the post) leaves the attempt settled under the id it
+    /// had, with no page, until then. Only a settled receipt without a page may be upgraded, once,
+    /// to another id; the same receipt again changes nothing; anything else is
+    /// `InvalidTransition` (a failed or uncertain attempt has no receipt to upgrade).
+    pub fn upgrade_receipt(&self, receipt: &PublishReceipt) -> Result<Self, StudioError> {
+        self.validate()?;
+        let (PublishState::Succeeded, Some(PublishOutcome::Succeeded(current))) =
+            (self.state, &self.outcome)
+        else {
+            return Err(StudioError::InvalidTransition);
+        };
+        upgraded(current, receipt)?;
+        let mut next = self.clone();
+        next.outcome = Some(PublishOutcome::Succeeded(receipt.clone()));
         Ok(next)
     }
     /// Observation time is supplied by the completion caller, independently of dispatch time.

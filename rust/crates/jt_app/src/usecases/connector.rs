@@ -34,7 +34,8 @@
 //!   token renewal keeps: for an OAuth flow's, the app that flow signed in with; a pasted Meta
 //!   token names `meta`; hand-entered NetGSM credentials name no app;
 //! - `asset`: the provider's public facts of an asset connected through OAuth;
-//! - `health`: the last probe, `{ok, at, latency_ms, error_kind}`, and `on_connected_error` while
+//! - `health`: the last probe, `{ok, at, latency_ms, error_kind, reason}` (`reason` the failure
+//!   line of [`crate::usecases::failure::failure_reason`]), and `on_connected_error` while
 //!   the adapter's connection step last failed (see below); `facts`: what the last successful
 //!   probe reported;
 //! - `reconnect_required`: `true` once a probe found the login no longer accepted (`Auth`),
@@ -105,8 +106,8 @@ use super::capabilities::{
     CapabilityOut, append, capability_error, checked_external_id, checked_external_id_of, find,
     locked, not_retired, version_in_force,
 };
-use super::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH, netgsm_hook_token};
-use super::{Deps, acting_user, hash_token, invalid};
+use super::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH, TIKTOK_HOOK_PATH, netgsm_hook_token};
+use super::{Deps, acting_user, hash_token, invalid, nothing_to_change};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 pub use crate::ports::connectors::OAuthCallback;
@@ -161,6 +162,12 @@ const OLD_ACCOUNT_FACTS: &[&str] = &["health", "facts", "asset", "account"];
 
 const NO_SUCH_FLOW: &str = "no such pending connection";
 const APP_NOT_CONFIGURED: &str = "provider app not configured";
+const PRODUCT_NOT_ENABLED: &str = "provider product not enabled";
+
+/// The LinkedIn kind whose flows need the organization scopes ([`LinkedinApp::organization_scopes`]).
+///
+/// [`LinkedinApp::organization_scopes`]: crate::ports::connectors::LinkedinApp::organization_scopes
+const LINKEDIN_PAGE: &str = "linkedin_page";
 const PUBLIC_URL_NOT_CONFIGURED: &str = "public base url not configured";
 const NO_ADAPTER: &str = "provider adapter not available";
 
@@ -168,7 +175,8 @@ const NO_ADAPTER: &str = "provider adapter not available";
 // Inputs and outputs
 // ---------------------------------------------------------------------------------------------
 
-/// What starting an OAuth flow takes: the kind of capability to connect (a Meta kind or `x`).
+/// What starting an OAuth flow takes: the kind of capability to connect (a Meta kind, `x`,
+/// `tiktok`, `linkedin_member` or `linkedin_page`).
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartOAuth {
@@ -374,6 +382,10 @@ pub struct ConnectorHealth {
     pub last_probe_at: Option<OffsetDateTime>,
     pub ok: Option<bool>,
     pub error_kind: Option<String>,
+    /// Why the last probe failed: its failure line (`kind: provider: reason`, at most 300
+    /// characters, redacted), `None` after a success or for a probe recorded before reasons
+    /// were kept.
+    pub reason: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub token_expires_at: Option<OffsetDateTime>,
     pub reconnect_required: bool,
@@ -388,7 +400,27 @@ pub struct HooksOut {
     pub meta: Option<MetaHook>,
     /// The workspace's NetGSM callback URL for each purpose, in [`NetgsmPurpose::all`]'s order.
     pub netgsm: Vec<NetgsmHook>,
+    /// The platform's TikTok webhook (one for every workspace, as Meta's), when the platform's
+    /// TikTok app is configured.
+    pub tiktok: Option<TiktokHook>,
 }
+
+/// The TikTok webhook's address, to be entered as the TikTok app's callback URL in TikTok's
+/// developer portal (Webhooks), and the events it acts on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TiktokHook {
+    pub url: String,
+    pub events: Vec<String>,
+}
+
+/// The TikTok events the webhook acts on (`jt_tiktok::webhook`); any other is kept for the agent.
+pub const TIKTOK_HOOK_EVENTS: &[&str] = &[
+    "authorization.removed",
+    "post.publish.failed",
+    "post.publish.complete",
+    "post.publish.inbox_delivered",
+    "post.publish.publicly_available",
+];
 
 /// The Meta webhook's address and where its verify token is set. The token itself is never
 /// shown.
@@ -422,13 +454,18 @@ pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 /// base URL must be configured, else `CONFLICT` "public base url not configured"
 /// (`details.reason = "public_base_url_not_configured"`), whichever apps are configured; the
 /// provider's app must be configured (`instagram` signs in with the Instagram app, the other Meta
-/// kinds with the Meta app, `x` with the X app), else `CONFLICT` "provider app not configured"
-/// (`details.reason = "provider_app_not_configured"`, `details.provider`); and its adapter
-/// present, else `CONFLICT`. The state is signed for the workspace
+/// kinds with the Meta app, `x` with the X app, `tiktok` with the TikTok app, the LinkedIn kinds
+/// with the LinkedIn app), else `CONFLICT` "provider app not configured"
+/// (`details.reason = "provider_app_not_configured"`, `details.provider`); a `linkedin_page`
+/// flow needs the LinkedIn app's organization scopes (`JEETA_LINKEDIN_ORG_SCOPES`, set once
+/// LinkedIn approved the Community Management API), else `CONFLICT` "provider product not
+/// enabled" (`details.reason = "provider_product_not_enabled"`, `details.provider`); and its
+/// adapter present, else `CONFLICT`. The state is signed for the workspace
 /// and holds the provider, the
 /// kind, the time and a nonce; for X a PKCE pair is made and its verifier sealed with the flow.
 /// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the key of the
-/// flow's app ([`OAuthCallback`]: `meta`, `instagram` or `x`), and the code exchange sends the
+/// flow's app ([`OAuthCallback`]: `meta`, `instagram`, `x`, `tiktok` or `linkedin`), and the
+/// code exchange sends the
 /// same one. `expires_at` is when the state stops being accepted ([`STATE_TTL`]).
 ///
 /// Writes `connector.oauth_started` about the flow (`subject.kind = "oauth_pending"`, payload
@@ -945,6 +982,7 @@ pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppE
             last_probe_at: at(&last["at"]),
             ok: last["ok"].as_bool(),
             error_kind: last["error_kind"].as_str().map(str::to_owned),
+            reason: last["reason"].as_str().map(str::to_owned),
             token_expires_at,
             reconnect_required: reconnect_required(&c),
             kind_key: c.kind_key,
@@ -980,7 +1018,9 @@ pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<Start
 /// NetGSM callback URL for each purpose, `{NETGSM_HOOK_PATH}/{workspace_id}/{token}/{purpose}`,
 /// whose token ([`super::webhook::netgsm_hook_token`]) is what lets NetGSM's calls in. The token
 /// is a capability of the URL, not a sealed secret, but it lets anyone who holds it store events
-/// in the workspace: only who may manage capabilities sees it. Needs `capabilities.manage`.
+/// in the workspace: only who may manage capabilities sees it; and the platform's TikTok webhook
+/// ([`TIKTOK_HOOK_PATH`]) when the TikTok app is configured, with the events it acts on
+/// ([`TIKTOK_HOOK_EVENTS`]). Needs `capabilities.manage`.
 ///
 /// Without a configured public base URL there is no address to show: `CONFLICT` "public base url
 /// not configured" (`details.reason = "public_base_url_not_configured"`), whichever apps are
@@ -1010,7 +1050,181 @@ pub async fn hooks(deps: &Deps, ctx: &Ctx) -> Result<HooksOut, AppError> {
             url: public_url(apps, &path)?.to_string(),
         });
     }
-    Ok(HooksOut { meta, netgsm })
+    let tiktok = match apps.tiktok_app() {
+        Some(_) => Some(TiktokHook {
+            url: public_url(apps, TIKTOK_HOOK_PATH)?.to_string(),
+            events: TIKTOK_HOOK_EVENTS.iter().map(|e| (*e).to_owned()).collect(),
+        }),
+        None => None,
+    };
+    Ok(HooksOut {
+        meta,
+        netgsm,
+        tiktok,
+    })
+}
+
+/// Records that the account of capability `id` removed the app's access at its provider
+/// (TikTok's `authorization.removed` webhook, for `reason`, the event having happened at
+/// `occurred_at` when the provider said; the access token is revoked by then), in the open bundle
+/// `repos`: as a probe refused with `Auth` would, the capability turns `unreachable` and
+/// `reconnect_required` is set (`work.pending` then asks for a reconnection), `health` saying why
+/// as a probe's failure line; and `connector.authorization_removed` (`{kind_key, reason}`) is
+/// written when that flips `reconnect_required`, once however many such events arrive. The
+/// sealed credential is kept, dead: a reconnection replaces it, a retirement erases it. A later
+/// probe that succeeds (the owner granted access again) clears it all, as for any lost login.
+///
+/// Left alone (`false`): a retired capability, and one verified after the event happened (its
+/// access was proven since: a reconnection, or an event about a grant the capability no longer
+/// holds, such as the revocation of a retired sibling's token, which TikTok reports too, or a
+/// redelivery after the owner reconnected). `true` when anything was written.
+pub(crate) async fn authorization_removed(
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    id: CapabilityId,
+    reason: &str,
+    occurred_at: Option<OffsetDateTime>,
+) -> Result<bool, AppError> {
+    let mut current = locked(repos, id).await?;
+    if current.status == StoredStatus::Retired {
+        return Ok(false);
+    }
+    if let (Some(at), Some(verified)) = (occurred_at, current.last_verified_at)
+        && at < verified
+    {
+        return Ok(false);
+    }
+    let flipped = !reconnect_required(&current);
+    let error = ConnectorError::auth(format!("the account removed the app's access ({reason})"));
+    let line = super::failure::failure_reason(provider_for_kind(&current.kind_key), &error);
+    current.status = status_after_probe(current.status, &ProbeResult::failure(0, error));
+    let mut public = object(&current.connector_public);
+    let mut health = json!({
+        "ok": false,
+        "at": rfc3339(ctx.now)?,
+        "latency_ms": 0,
+        "error_kind": "auth",
+        "reason": line,
+    });
+    if let Some(failure) = public.get("health").and_then(|h| h.get(ON_CONNECTED_ERROR)) {
+        health[ON_CONNECTED_ERROR] = failure.clone();
+    }
+    public.insert("health".to_owned(), health);
+    public.insert(RECONNECT_REQUIRED.to_owned(), json!(true));
+    current.connector_public = Value::Object(public);
+    current.updated_at = ctx.now;
+    let kind_key = current.kind_key.clone();
+    repos.capabilities().update(current).await?;
+    if flipped {
+        let in_force = version_in_force(repos).await?;
+        append(
+            repos,
+            ctx,
+            "connector.authorization_removed",
+            "capability",
+            id,
+            in_force,
+            json!({ "kind_key": kind_key, "reason": reason }),
+        )
+        .await?;
+    }
+    Ok(true)
+}
+
+/// The `connector_public` key of the PBX's call mode (the NetGSM adapter reads it).
+pub const PBX_CALL_MODE: &str = "call_mode";
+/// The `connector_public` key of whether PBX calls may be recorded (the NetGSM adapter reads it,
+/// and passes the recording flags only when it is the boolean `true`).
+pub const PBX_RECORDING_ALLOWED: &str = "recording_allowed";
+
+/// How the PBX places a click-to-call: `originate` rings the rep's extension, then the customer;
+/// `linkup` rings the rep's own phone number, then the customer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PbxCallMode {
+    #[default]
+    Originate,
+    Linkup,
+}
+
+/// `connector.set_pbx_policy`: what to change; a field left out keeps its stored value. At least
+/// one is given.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PbxPolicyInput {
+    #[serde(default)]
+    pub call_mode: Option<PbxCallMode>,
+    #[serde(default)]
+    pub recording_allowed: Option<bool>,
+}
+
+/// A `netgsm_pbx` capability's call policy as its adapter reads it: an absent or unreadable
+/// `call_mode` is `originate`, and recording is allowed only when stored as the boolean `true`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct PbxPolicyOut {
+    pub capability_id: CapabilityId,
+    pub call_mode: PbxCallMode,
+    pub recording_allowed: bool,
+}
+
+/// The call policy `capability` carries (see [`PbxPolicyOut`]).
+pub fn pbx_policy_of(capability: &Capability) -> PbxPolicyOut {
+    let public = &capability.connector_public;
+    PbxPolicyOut {
+        capability_id: capability.id,
+        call_mode: serde_json::from_value(public[PBX_CALL_MODE].clone()).unwrap_or_default(),
+        recording_allowed: public[PBX_RECORDING_ALLOWED] == Value::Bool(true),
+    }
+}
+
+/// Sets the call policy of the `netgsm_pbx` capability `id`: merged into its `connector_public`
+/// (`call_mode`, `recording_allowed`) under the capability's lock, the other public fields kept.
+/// These two keys are reserved: no declaration and no connection step writes them, so whether
+/// calls are recorded is decided here alone, and logged (`connector.pbx_policy_set`, payload the
+/// policy after the change). Another kind is `CONFLICT`; a retired capability is `CONFLICT`; an
+/// edit naming nothing is `VALIDATION`. Needs `capabilities.manage`.
+pub async fn set_pbx_policy(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    input: PbxPolicyInput,
+) -> Result<PbxPolicyOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    if input.call_mode.is_none() && input.recording_allowed.is_none() {
+        return Err(nothing_to_change(&[PBX_CALL_MODE, PBX_RECORDING_ALLOWED]));
+    }
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut capability = locked(repos.as_mut(), id).await?;
+    not_retired(&capability)?;
+    if capability.kind_key != "netgsm_pbx" {
+        return Err(AppError::conflict(
+            "only a netgsm_pbx capability has a PBX call policy",
+        ));
+    }
+    let mut public = object(&capability.connector_public);
+    if let Some(mode) = input.call_mode {
+        public.insert(PBX_CALL_MODE.to_owned(), json!(mode));
+    }
+    if let Some(allowed) = input.recording_allowed {
+        public.insert(PBX_RECORDING_ALLOWED.to_owned(), json!(allowed));
+    }
+    capability.connector_public = Value::Object(public);
+    capability.updated_at = ctx.now;
+    let out = pbx_policy_of(&capability);
+    repos.capabilities().update(capability).await?;
+    let in_force = version_in_force(repos.as_mut()).await?;
+    append(
+        repos.as_mut(),
+        ctx,
+        "connector.pbx_policy_set",
+        "capability",
+        id,
+        in_force,
+        json!({ "call_mode": out.call_mode, "recording_allowed": out.recording_allowed }),
+    )
+    .await?;
+    repos.commit().await?;
+    Ok(out)
 }
 
 /// Whether `capability` must be reconnected: `connector_public.reconnect_required` is `true`.
@@ -1050,6 +1264,11 @@ async fn begin_oauth(
     let redirect = callback_url(deps.apps.as_ref(), callback)?;
     let app =
         oauth_app(deps.apps.as_ref(), callback).ok_or_else(|| app_not_configured(provider))?;
+    if kind_key == LINKEDIN_PAGE
+        && matches!(&app, OAuthApp::Linkedin(linkedin) if !linkedin.organization_scopes)
+    {
+        return Err(product_not_enabled(provider));
+    }
     let bound = bound.map(|capability| capability.id);
     let oauth = deps
         .connectors
@@ -1158,12 +1377,20 @@ fn connector_kind(kind_key: &str) -> Result<&'static CapabilityKind, AppError> {
     Ok(kind)
 }
 
-/// The configured app a flow signed in with `app` runs under, if it is configured.
+/// The configured app a flow signed in with `app` runs under, if it is configured. Every LinkedIn
+/// flow asks for the same scopes, the organization scopes included once the platform's app may
+/// ([`LinkedinApp::organization_scopes`]): LinkedIn invalidates a member's earlier tokens when a
+/// flow asks for another set of scopes, so a page connected after the member's own feed would
+/// otherwise cut the feed's capability off.
+///
+/// [`LinkedinApp::organization_scopes`]: crate::ports::connectors::LinkedinApp::organization_scopes
 fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback) -> Option<OAuthApp> {
     match app {
         OAuthCallback::Meta => apps.meta_app().map(OAuthApp::Meta),
         OAuthCallback::Instagram => apps.instagram_app().map(OAuthApp::Instagram),
         OAuthCallback::X => apps.x_app().map(OAuthApp::X),
+        OAuthCallback::Tiktok => apps.tiktok_app().map(OAuthApp::Tiktok),
+        OAuthCallback::Linkedin => apps.linkedin_app().map(OAuthApp::Linkedin),
     }
 }
 
@@ -1277,6 +1504,17 @@ fn app_not_configured(provider: Provider) -> AppError {
     }
 }
 
+/// `CONFLICT` "provider product not enabled" for a flow of `provider` that needs a product the
+/// platform's app has not been granted (LinkedIn's Community Management API for a
+/// `linkedin_page`), naming the reason (`provider_product_not_enabled`) and the provider.
+fn product_not_enabled(provider: Provider) -> AppError {
+    AppError {
+        code: ErrorCode::Conflict,
+        message: PRODUCT_NOT_ENABLED.into(),
+        details: json!({ "reason": "provider_product_not_enabled", "provider": provider.key() }),
+    }
+}
+
 /// `FORBIDDEN` for every refused OAuth state, with the same message whatever the reason.
 fn refused_state() -> AppError {
     AppError::forbidden("the OAuth state is not valid for this workspace, or was already used")
@@ -1331,7 +1569,7 @@ fn reconnectable(capability: &Capability) -> Result<(), AppError> {
             ));
         }
         None => return Err(AppError::conflict("no provider connects this kind yet")),
-        Some(Provider::Meta | Provider::X) => {}
+        Some(Provider::Meta | Provider::X | Provider::Tiktok | Provider::Linkedin) => {}
     }
     // A declared capability is connected for the first time through a flow bound to it; any
     // other must name the account it reconnects.
@@ -1588,7 +1826,9 @@ fn fitted_name(name: &str, external_id: &str) -> String {
 /// The provider whose credentials `kind` takes by hand, else `VALIDATION` naming `kind_key`.
 fn manual_provider(kind: &CapabilityKind) -> Result<Provider, AppError> {
     match provider_for_kind(kind.key) {
-        Some(Provider::X) => Err(invalid("kind_key", "this kind connects through OAuth")),
+        Some(Provider::X | Provider::Tiktok | Provider::Linkedin) => {
+            Err(invalid("kind_key", "this kind connects through OAuth"))
+        }
         Some(provider) => Ok(provider),
         None => Err(invalid("kind_key", "no provider connects this kind yet")),
     }
@@ -2135,16 +2375,16 @@ async fn apply_probe(
     result.facts = screened(&result.facts);
     let result = bound_to_account(repos, &mut capability, result).await?;
     let run_id = ProbeRunId(deps.ids.uuid());
-    repos
-        .probe_runs()
-        .append(ProbeRun::from_result(
-            run_id,
-            ctx.workspace_id,
-            capability.id,
-            ctx.now,
-            &result,
-        ))
-        .await?;
+    let run = ProbeRun::from_result(
+        run_id,
+        ctx.workspace_id,
+        capability.id,
+        ctx.now,
+        provider_for_kind(&capability.kind_key),
+        &result,
+    );
+    let reason = run.reason.clone();
+    repos.probe_runs().append(run).await?;
     let previous = capability.status;
     let status = status_after_probe(previous, &result);
     let error = if result.ok {
@@ -2160,6 +2400,7 @@ async fn apply_probe(
         "at": rfc3339(ctx.now)?,
         "latency_ms": result.latency_ms,
         "error_kind": error_kind,
+        "reason": reason,
     });
     // The connection step's failure outlives the probes until the step runs again.
     if let Some(failure) = public.get("health").and_then(|h| h.get(ON_CONNECTED_ERROR)) {

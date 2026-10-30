@@ -10,9 +10,12 @@ import { AcceptInvitePage } from '@/pages/AcceptInvitePage';
 import { AgentsPage } from '@/pages/AgentsPage';
 import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { BudgetPage } from '@/pages/BudgetPage';
+import { CallDetail } from '@/pages/CallDetail';
+import { CallsPage } from '@/pages/CallsPage';
 import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { ConnectPage } from '@/pages/ConnectPage';
 import { InboxPage } from '@/pages/InboxPage';
+import { PeoplePage } from '@/pages/PeoplePage';
 import { InboxMerges } from '@/pages/InboxMerges';
 import { InboxCommissions } from '@/pages/InboxCommissions';
 import { HomePage } from '@/pages/HomePage';
@@ -76,6 +79,9 @@ export const routes: RouteObject[] = [
           { path: 'inbox/:conversationId', element: <InboxPage /> },
           { path: 'inbox/merges', element: <InboxMerges /> },
           { path: 'inbox/commissions', element: <InboxCommissions /> },
+          { path: 'people', element: <PeoplePage /> },
+          { path: 'calls', element: <CallsPage /> },
+          { path: 'calls/:callId', element: <CallDetail /> },
           { path: 'strategy', element: <StrategyPage /> },
           { path: 'capabilities', element: <CapabilitiesPage /> },
           { path: 'connect', element: <ConnectPage /> },

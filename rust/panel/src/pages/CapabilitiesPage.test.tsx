@@ -5,6 +5,7 @@ import tr from '@/i18n/tr.json';
 import { EFFECTIVE_STATUSES } from '@/api/types';
 import i18n from '@/i18n/config';
 import { browser } from '@/lib/browser';
+import { formatRelative } from '@/lib/format';
 import { rememberedFlow } from '@/lib/oauthFlow';
 import {
   PAGE_ID,
@@ -346,6 +347,10 @@ describe('CapabilitiesPage', () => {
     const meta = within(section).getByRole('textbox', { name: tr.capabilities.hooks.metaUrl });
     expect(meta).toHaveValue(hooks.meta?.url);
     expect(within(section).getByText(tr.capabilities.hooks.verifyTokenHint)).toBeInTheDocument();
+    // The TikTok app's callback URL, with the events it acts on.
+    const tiktok = within(section).getByRole('textbox', { name: tr.capabilities.hooks.tiktokUrl });
+    expect(tiktok).toHaveValue(hooks.tiktok?.url);
+    expect(within(section).getByText(/authorization\.removed, post\.publish\.failed/)).toBeInTheDocument();
     // The first copy button copies the incoming-SMS address.
     await user.click(within(section).getAllByRole('button', { name: tr.common.copy })[0]);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(hooks.netgsm[0].url));
@@ -356,6 +361,16 @@ describe('CapabilitiesPage', () => {
     renderAt('/capabilities');
     expect(await screen.findByText(tr.capabilities.hooks.metaMissing)).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.metaUrl })).not.toBeInTheDocument();
+  });
+
+  it('shows no TikTok address while the platform has no TikTok app', async () => {
+    for (const tiktok of [null, undefined]) {
+      mockFetch({ ...routes, 'GET /api/connectors/hooks': { ...hooks, tiktok } });
+      const view = renderAt('/capabilities');
+      expect(await screen.findByText(tr.capabilities.hooks.netgsmHelp)).toBeInTheDocument();
+      expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.tiktokUrl })).not.toBeInTheDocument();
+      view.unmount();
+    }
   });
 
   it('never shows nor asks for the hook tokens without capabilities.manage', async () => {
@@ -391,3 +406,156 @@ describe('CapabilitiesPage', () => {
     expect(screen.queryByLabelText(tr.connect.credentials.password)).not.toBeInTheDocument();
     expect(screen.queryByRole('button',{name:tr.connect.credentials.submit})).not.toBeInTheDocument();
   });
+
+it('pbx_policy_toggle: saves recording and call mode on the PBX card', async () => {
+    const user = userEvent.setup();
+    const pbx = {
+      ...smsLine,
+      capability: {
+        ...smsLine.capability,
+        id: '0193a000-0000-7000-8000-0000000000b1',
+        kind_key: 'netgsm_pbx',
+        name: 'Santral',
+        connector_public: { ...smsLine.capability.connector_public, provider: 'netgsm' },
+      },
+    };
+    const calls = mockFetch({
+      ...routes,
+      'GET /api/capabilities': [...capabilities, pbx],
+      [`PUT /api/connectors/${pbx.capability.id}/pbx-policy`]: {
+        capability_id: pbx.capability.id,
+        call_mode: 'originate',
+        recording_allowed: true,
+      },
+    });
+    renderAt('/capabilities');
+    const card = await cardOf('Santral');
+    const panel = within(card).getByRole('group', { name: tr.capabilities.pbx.title });
+    const recording = within(panel).getByRole('switch', { name: tr.capabilities.pbx.recording });
+    // Off until the owner turns it on; originate is the default mode.
+    expect(recording).toHaveAttribute('aria-checked', 'false');
+    expect(within(panel).getByRole('radio', { name: tr.capabilities.pbx.modes.originate })).toBeChecked();
+    await user.click(recording);
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === 'PUT')).toEqual([
+        expect.objectContaining({
+          path: `/api/connectors/${pbx.capability.id}/pbx-policy`,
+          body: { recording_allowed: true },
+        }),
+      ]),
+    );
+    await user.click(within(panel).getByRole('radio', { name: tr.capabilities.pbx.modes.linkup }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([
+        { recording_allowed: true },
+        { call_mode: 'linkup' },
+      ]),
+    );
+    // Another kind has no such panel.
+    const other = await cardOf('Atölye Instagram');
+    expect(within(other).queryByRole('group', { name: tr.capabilities.pbx.title })).toBeNull();
+  });
+
+it('voice_bridge_card_shows_engines_extension_and_heartbeat_age', async () => {
+  const at = new Date(Date.now() - 30_000).toISOString();
+  const bridge = {
+    ...smsLine,
+    capability: {
+      ...smsLine.capability,
+      id: '0193a000-0000-7000-8000-0000000000b3',
+      kind_key: 'voice_bridge',
+      name: 'Voice bridge 101',
+      reach: 'device' as const,
+      external_id: '101',
+      has_sealed_config: false,
+      last_verified_at: at,
+      connector_public: {
+        bridge: {
+          extension: '101',
+          codecs: ['PCMA', 'PCMU'],
+          max_calls: 1,
+          stt: { engine: 'vosk', model: 'vosk-model-small-tr-0.3' },
+          tts: { engine: 'piper', voice: 'tr_TR-fahrettin-medium' },
+          version: '0.1.0',
+        },
+      },
+    },
+  };
+  const silent = {
+    ...bridge,
+    capability: {
+      ...bridge.capability,
+      id: '0193a000-0000-7000-8000-0000000000b4',
+      name: 'Voice bridge 102',
+      external_id: '102',
+      status: 'declared' as const,
+      last_verified_at: null,
+      connector_public: {},
+    },
+    effective_status: 'declared' as const,
+  };
+  mockFetch({ ...routes, 'GET /api/capabilities': [...capabilities, bridge, silent] });
+  renderAt('/capabilities');
+  const card = await cardOf('Voice bridge 101');
+  const panel = within(card).getByRole('group', { name: tr.capabilities.bridge.title });
+  expect(within(panel).getByText('101')).toBeInTheDocument();
+  expect(within(panel).getByText('vosk · vosk-model-small-tr-0.3')).toBeInTheDocument();
+  expect(within(panel).getByText('piper · tr_TR-fahrettin-medium')).toBeInTheDocument();
+  expect(within(panel).getByText('0.1.0')).toBeInTheDocument();
+  expect(within(panel).getByText('PCMA, PCMU')).toBeInTheDocument();
+  expect(within(panel).getByText(formatRelative(at, 'tr'))).toBeInTheDocument();
+  // Only its own registration verifies it: no verification by evidence here.
+  expect(within(card).queryByRole('button', { name: tr.capabilities.actions.verify })).toBeNull();
+  expect(within(card).getByRole('button', { name: tr.capabilities.actions.edit })).toBeInTheDocument();
+  // Nor is a phone (its device bridge's registrations verify it); a printer still is. Neither
+  // bridge's kind shows how long a verification lasts by its policy: a heartbeat's does not.
+  const phone = await cardOf('Saha telefonu');
+  expect(within(phone).queryByRole('button', { name: tr.capabilities.actions.verify })).toBeNull();
+  expect(within(phone).getByRole('button', { name: tr.capabilities.actions.edit })).toBeInTheDocument();
+  const ageLine = i18n.t('capabilities.policy.verifyAge', { days: 30 });
+  for (const heartbeat of [card, phone]) {
+    expect(within(heartbeat).queryByText(ageLine)).toBeNull();
+    expect(within(heartbeat).queryByText(tr.capabilities.policy.verifyNever)).toBeNull();
+  }
+  const printer = await cardOf('Ofis yazıcısı');
+  expect(within(printer).getByRole('button', { name: tr.capabilities.actions.verify })).toBeInTheDocument();
+  expect(within(printer).getByText(ageLine)).toBeInTheDocument();
+  // A bridge declared in the panel that never registered says so.
+  const never = await cardOf('Voice bridge 102');
+  expect(within(never).getByText(tr.capabilities.bridge.never)).toBeInTheDocument();
+  // Another kind has no bridge panel.
+  const other = await cardOf('Atölye Instagram');
+  expect(within(other).queryByRole('group', { name: tr.capabilities.bridge.title })).toBeNull();
+});
+
+it('offers a verified PBX\'s "Place a call" only to whoever holds calls.work', async () => {
+  const pbx = {
+    ...smsLine,
+    capability: {
+      ...smsLine.capability,
+      id: '0193a000-0000-7000-8000-0000000000b2',
+      kind_key: 'netgsm_pbx',
+      name: 'Santral',
+      connector_public: { ...smsLine.capability.connector_public, provider: 'netgsm' },
+    },
+  };
+  const caller = {
+    ...repMe,
+    memberships: [
+      { ...repMe.memberships[0], permissions: [...repMe.memberships[0].permissions, 'calls.work' as const] },
+    ],
+  };
+  mockFetch({ ...routes, 'GET /api/auth/me': caller, 'GET /api/capabilities': [...capabilities, smsLine, pbx] });
+  const { unmount } = renderAt('/capabilities');
+  const card = await cardOf('Santral');
+  expect(within(card).getByRole('link', { name: tr.calls.place.open })).toHaveAttribute('href', '/calls');
+  // The SMS line is no PBX.
+  const line = await cardOf('Kampanya hattı');
+  expect(within(line).queryByRole('link', { name: tr.calls.place.open })).toBeNull();
+  unmount();
+
+  mockFetch({ ...routes, 'GET /api/auth/me': repMe, 'GET /api/capabilities': [...capabilities, pbx] });
+  renderAt('/capabilities');
+  const without = await cardOf('Santral');
+  expect(within(without).queryByRole('link', { name: tr.calls.place.open })).toBeNull();
+});

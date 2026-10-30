@@ -106,16 +106,30 @@ pub(crate) async fn pending_in(
     }
 
     for s in slots {
+        // Only unstarted work is pending. A published, measured or retired slot is never sent
+        // (again), so its attempts are history in its detail, not blockers.
+        if !matches!(s.state, SlotState::Planned | SlotState::Ready) {
+            continue;
+        }
         let target = ApprovalTarget::Slot(s.id);
-        for a in r.studio().slot_evidence(s.id).await?.0 {
+        let attempts = r.studio().slot_evidence(s.id).await?.0;
+        for a in &attempts {
             let category = match a.outcome() {
                 Some(
                     jt_studio::PublishOutcome::Failed(e)
                     | jt_studio::PublishOutcome::Unknown(e)
                     | jt_studio::PublishOutcome::Refused(e),
                 ) => Some(*e),
+                // The receipt is captured: the provider is still processing the post (TikTok
+                // publishes in the background), or its bookkeeping is being finished. It is
+                // asked about, never sent again: no duplicate to review.
                 Some(jt_studio::PublishOutcome::Observed(_)) => {
-                    Some(jt_studio::RedactedPublishError::Unknown)
+                    out.blockers.push(Blocker {
+                        target,
+                        reason: "publish_processing".into(),
+                        next_action: None,
+                    });
+                    None
                 }
                 _ => None,
             };
@@ -143,9 +157,6 @@ pub(crate) async fn pending_in(
             }
         }
 
-        if !matches!(s.state, SlotState::Planned | SlotState::Ready) {
-            continue;
-        }
         let arm = r
             .studio()
             .get_arm(s.chain.arm_id)
@@ -171,18 +182,28 @@ pub(crate) async fn pending_in(
                 reason: e.message,
             });
         }
-        let required = cap.policy.requires_human_approval
+        // A TikTok piece waits for a human on its posting screen whatever the policies say,
+        // and only an approval carrying the screen's choice releases it.
+        let screen = jt_studio::requires_posting_screen(&cap.kind_key);
+        let required = screen
+            || cap.policy.requires_human_approval
             || control
                 .lanes
                 .get(&arm.key.lane)
                 .is_some_and(|l| l.requires_human_approval);
+        // A slot with an attempt is never claimed again, whatever revision it reaches: no
+        // approval can send it.
         if s.state == SlotState::Ready
+            && attempts.is_empty()
             && required
-            && r.studio().get_approval(target, s.revision).await?.is_none()
+            && r.studio()
+                .get_approval(target, s.revision)
+                .await?
+                .is_none_or(|a| screen && a.tiktok.is_none())
         {
             out.approvals.push(target);
             out.blockers.push(Blocker {
-                next_action: None,
+                next_action: screen.then(|| "tiktok_posting_screen".into()),
                 target,
                 reason: "human_approval_required".into(),
             });

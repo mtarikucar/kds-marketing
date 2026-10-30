@@ -4,7 +4,7 @@ pub use crate::ports::studio::ApprovalTarget;
 use crate::{
     ctx::Ctx,
     error::{AppError, ErrorCode},
-    ports::{connectors::AdStatus as ConnectorStatus, studio::*},
+    ports::{TenantRepos, connectors::AdStatus as ConnectorStatus, studio::*},
     usecases::{
         Deps,
         connector::{adapter_public, open_credential},
@@ -12,9 +12,9 @@ use crate::{
     },
 };
 use jt_ledger::Actor;
-use jt_strategy::LaneKind;
+use jt_strategy::{LaneKind, StrategyVersionId};
 use jt_studio::{AdStatus, BindingStatusOutcome, ChainContext, validate_chain};
-use jt_tenancy::{Permission, WorkspaceId};
+use jt_tenancy::{Permission, UserId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -102,7 +102,9 @@ pub async fn policy_set(
     r.commit().await?;
     Ok(c)
 }
-pub async fn approve(d: &Deps, ctx: &Ctx, input: ApprovalInput) -> Result<ApprovalOut, AppError> {
+/// The owner or manager approving in person: `studio.manage`, a human actor of the owner or
+/// manager role, not acting through an agent connection.
+pub(crate) fn human_approver(ctx: &Ctx) -> Result<UserId, AppError> {
     ctx.require(Permission::StudioManage)?;
     let Actor::Human { user_id } = ctx.actor else {
         return Err(human_required());
@@ -110,6 +112,30 @@ pub async fn approve(d: &Deps, ctx: &Ctx, input: ApprovalInput) -> Result<Approv
     if !ctx.is_owner_or_manager() || ctx.agent_connection_id.is_some() {
         return Err(human_required());
     }
+    Ok(user_id)
+}
+/// `hypothesis_inactive` unless `chain`'s hypothesis is live in the strategy in force (`frame`).
+pub(crate) async fn hypothesis_live(
+    r: &mut dyn TenantRepos,
+    frame: StrategyVersionId,
+    chain: &jt_studio::Chain,
+) -> Result<(), AppError> {
+    if !r
+        .hypotheses()
+        .list(frame)
+        .await?
+        .iter()
+        .any(|h| h.id == chain.hypothesis_id && h.state.is_live())
+    {
+        return Err(refuse("hypothesis_inactive"));
+    }
+    Ok(())
+}
+/// Records a human's consent to a revision. A TikTok piece is refused
+/// (`tiktok_posting_screen_required`): it is approved only on its posting screen, with the choice
+/// made there (`tiktok::tiktok_post`).
+pub async fn approve(d: &Deps, ctx: &Ctx, input: ApprovalInput) -> Result<ApprovalOut, AppError> {
+    let user_id = human_approver(ctx)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
     let frame = r
         .strategy()
@@ -120,11 +146,20 @@ pub async fn approve(d: &Deps, ctx: &Ctx, input: ApprovalInput) -> Result<Approv
     r.studio_control().lock_control().await?;
     let chain = match input.target {
         ApprovalTarget::Slot(id) => {
-            r.studio()
+            let slot = r
+                .studio()
                 .get_slot(id)
                 .await?
-                .ok_or_else(|| AppError::not_found("slot"))?
-                .chain
+                .ok_or_else(|| AppError::not_found("slot"))?;
+            let capability = r
+                .capabilities()
+                .find(slot.capability_id)
+                .await?
+                .ok_or_else(|| AppError::not_found("capability"))?;
+            if jt_studio::requires_posting_screen(&capability.kind_key) {
+                return Err(refuse("tiktok_posting_screen_required"));
+            }
+            slot.chain
         }
         ApprovalTarget::BudgetMove(id) => {
             r.studio()
@@ -134,19 +169,12 @@ pub async fn approve(d: &Deps, ctx: &Ctx, input: ApprovalInput) -> Result<Approv
                 .chain
         }
     };
-    if !r
-        .hypotheses()
-        .list(frame.id)
-        .await?
-        .iter()
-        .any(|h| h.id == chain.hypothesis_id && h.state.is_live())
-    {
-        return Err(refuse("hypothesis_inactive"));
-    }
+    hypothesis_live(r.as_mut(), frame.id, &chain).await?;
     let receipt = ApprovalReceipt {
         revision: input.expected_revision,
         by: user_id,
         at: ctx.now,
+        tiktok: None,
     };
     if !receipt.approves(input.expected_revision) {
         return Err(refuse("invalid_approval_revision"));

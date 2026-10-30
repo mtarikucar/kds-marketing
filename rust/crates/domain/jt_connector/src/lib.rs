@@ -35,8 +35,9 @@ pub use oauth::{
 pub use provider::{Provider, UNSUPPORTED_CONNECTOR_KINDS, provider_for_kind};
 pub use redact::redact_reason;
 pub use webhook::{
-    META_SIGNATURE_HEADER, NetgsmPurpose, meta_signature_ok, meta_verify_token_ok,
-    netgsm_hook_token, netgsm_token_ok,
+    META_SIGNATURE_HEADER, NetgsmPurpose, TIKTOK_SIGNATURE_HEADER, TIKTOK_SIGNATURE_TOLERANCE,
+    TiktokSignatureError, meta_signature_ok, meta_verify_token_ok, netgsm_hook_token,
+    netgsm_token_ok, tiktok_signature_check, tiktok_signature_ok,
 };
 
 /// Stands in for a secret in `Debug` output.

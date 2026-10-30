@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
+import { gapText } from '@/components/GapList';
 import type { MeOut } from '@/api/types';
 import {
   APPROVED_ID,
@@ -46,7 +47,9 @@ describe('StrategyPage', () => {
     renderAt('/strategy');
     expect(await screen.findByText(tr.strategy.gapsTitle)).toBeInTheDocument();
     for (const gap of draftGaps) {
-      expect(screen.getAllByText(gap.message).length).toBeGreaterThan(0);
+      // Each gap in the panel's own words; the server's English message never reaches a person.
+      expect(screen.getAllByText(gapText(i18n.t, gap)).length).toBeGreaterThan(0);
+      expect(screen.queryByText(gap.message)).not.toBeInTheDocument();
     }
     expect(screen.getByRole('button', { name: tr.strategy.approve })).toBeDisabled();
     expect(screen.getByText(tr.strategy.approveOwnerOnly)).toBeInTheDocument();
@@ -133,7 +136,7 @@ describe('StrategyPage', () => {
     });
     renderAt('/strategy');
     await user.click(await screen.findByRole('button', { name: tr.strategy.submit }));
-    expect(await screen.findByText('at least one channel is required')).toBeInTheDocument();
+    expect(await screen.findByText(tr.strategy.gaps.channel)).toBeInTheDocument();
     expect(screen.getByText(tr.strategy.submitRefused)).toBeInTheDocument();
   });
 

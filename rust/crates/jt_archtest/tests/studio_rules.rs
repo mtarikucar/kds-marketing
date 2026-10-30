@@ -8,7 +8,7 @@ use jt_app::{
     ports::UnitOfWork,
     usecases::{
         jobs::Job,
-        studio::{ads, chain::dispatch_execution, publish},
+        studio::{ads, chain::dispatch_execution, publish, tiktok},
     },
 };
 use jt_archtest::{direct_deps, rust_sources_in, workspace_dir};
@@ -39,6 +39,9 @@ const ACTIONS: &[&str] = &[
     "ledger_export",
 ];
 const EXEMPT: &[&str] = &["brake", "ledger", "ledger_export"];
+/// The TikTok posting screen: panel routes without an MCP tool, since only a human passes it
+/// (TikTok's Content Sharing Guidelines), and its published post's counters.
+const PANEL_ONLY: &[&str] = &["tiktok_posting", "tiktok_post", "tiktok_metrics"];
 fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     values.into_iter().collect()
 }
@@ -49,11 +52,16 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 18);
+    assert_eq!(rows.len(), 21);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
-        set(ACTIONS.iter().copied())
+        set(ACTIONS.iter().chain(PANEL_ONLY).copied())
     );
+    for row in &rows {
+        let panel_only = PANEL_ONLY.contains(&row.id.strip_prefix("studio.").unwrap());
+        assert_eq!(row.panel_only, panel_only, "{}", row.id);
+        assert_eq!(row.mcp_tool.is_none(), panel_only, "{}", row.id);
+    }
     assert_eq!(
         set(rows
             .iter()
@@ -85,7 +93,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 125);
+    assert_eq!(jt_mcp::registry().len(), 140);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -103,7 +111,9 @@ async fn studio_exact_catalog_and_gate_set() {
             all_tables.insert(name.to_owned());
         }
     }
-    assert_eq!(all_tables.len(), 67);
+    // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
+    // 0016_voice_bridge and the device commands and device files of 0017_device_bridge.
+    assert_eq!(all_tables.len(), 74);
 
     // All fourteen Studio tables are tenant-scoped.
     assert_eq!(
@@ -205,6 +215,22 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
             );
         }
     }
+    // The panel's own rows: a route whose handler calls the service, and no tool at all.
+    for action in PANEL_ONLY {
+        let row = CATALOG
+            .iter()
+            .find(|r| r.id == format!("studio.{action}"))
+            .unwrap();
+        assert!(jt_panel_http::ROUTES.contains(&row.panel_route.unwrap()));
+        let handlers = functions(&http);
+        let handler = handlers.iter().find(|f| f.sig.ident == *action).unwrap();
+        assert!(
+            calls(handler).iter().any(|n| n == action),
+            "missing service dispatch: {action}"
+        );
+        assert!(functions(&mcp).iter().all(|f| f.sig.ident != *action));
+        assert!(registry.iter().all(|t| t.use_case != row.id));
+    }
 }
 fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
     let id = w.f.slot.id;
@@ -305,9 +331,41 @@ async fn every_studio_write_reaches_shared_execution_gate() {
                 "{action}: {e:?}"
             );
         }
+        // The panel-only write, the TikTok posting screen's publish button, meets the same gate.
+        let e = tiktok::tiktok_post(
+            &w.d,
+            &w.ctx,
+            tiktok::TiktokPostInput {
+                slot_id: w.f.slot.id,
+                expected_revision: 1,
+                post: serde_json::from_value(json!({
+                    "title": "test",
+                    "privacy_level": "SELF_ONLY",
+                    "allow_comment": false,
+                    "allow_duet": false,
+                    "allow_stitch": false,
+                    "disclose_commercial": false,
+                    "your_brand": false,
+                    "branded_content": false,
+                }))
+                .unwrap(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            e.code,
+            if inactive {
+                ErrorCode::WorkspaceInactive
+            } else {
+                ErrorCode::StrategyRequired
+            },
+            "tiktok_post: {e:?}"
+        );
         let after = w.uow.snapshot();
         assert_eq!(after.ledger.len(), before.ledger.len());
         assert_eq!(after.studio.slots, before.studio.slots);
+        assert!(after.studio.approvals.is_empty());
         assert!(w.ads.calls().is_empty());
     }
 }
@@ -518,7 +576,7 @@ fn no_paid_creation_api() {
         .map(str::to_owned)
         .collect()
     );
-    // Product catalog's exhaustive 18-name assertion above precludes creation/commission/setup tools.
+    // Product catalog's exhaustive 21-name assertion above precludes creation/commission/setup tools.
 }
 #[tokio::test]
 async fn only_learning_updates_derived_confidence() {

@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import * as api from '@/api/inbox';
 import type { InboxConversationRow, InboxQueue } from '@/api/types';
 import { useSession } from '@/auth/useSession';
+import { kindLabel } from '@/lib/capabilities';
+import { personName } from '@/lib/people';
 import { can } from '@/lib/roles';
 import { QueryState } from '@/components/QueryState';
 import { Button, Callout, Disclosure, Input, PageHeader } from '@/components/ui';
@@ -28,9 +30,9 @@ function ConversationLink({ row }: { row: InboxConversationRow }) {
       aria-current={conversationId === row.id ? 'page' : undefined}
       className={`block min-w-0 rounded-lg border p-3 text-sm focus-visible:ring-2 focus-visible:ring-ring ${conversationId === row.id ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted'}`}
     >
-      <span className="block font-medium">{person.data?.person.display_name || row.person_id}</span>
+      <span className="block font-medium">{personName(t, person.data?.person, person.data?.identities)}</span>
       <span className="text-xs text-muted-foreground">
-        {row.kind_key} · {t(`inbox.state.${typeof row.state === 'string' ? row.state : 'snoozed'}`)}
+        {kindLabel(t, row.kind_key)} · {t(`inbox.state.${typeof row.state === 'string' ? row.state : 'snoozed'}`)}
       </span>
     </Link>
   );
@@ -124,7 +126,7 @@ export function InboxPage() {
                   className="rounded-lg border p-3 text-sm hover:bg-muted"
                   to={`/inbox?person=${encodeURIComponent(person.id)}`}
                 >
-                  {person.display_name || person.id}
+                  {personName(t, person)}
                   <span className="block text-xs text-muted-foreground">{person.company}</span>
                 </Link>
               ))}
@@ -163,12 +165,13 @@ export function InboxPage() {
           <>
             <section className={columnClass} aria-label={t('inbox.thread')}>
               <h2 className="font-semibold">
-                {selectedPerson.data?.person.display_name || t('inbox.thread')}
+                {selectedPerson.data
+                  ? personName(t, selectedPerson.data.person, selectedPerson.data.identities)
+                  : t('inbox.thread')}
               </h2>
               <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>
               {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into && <>
                 <Disclosure key={selectedPerson.data.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={selectedPerson.data.person.id} /></Disclosure>
-                <InboxErasure key={`erase:${selectedPerson.data.person.id}`} personId={selectedPerson.data.person.id} />
               </>}
               {personId && (
                 <QueryState query={selectedPerson}>
@@ -178,6 +181,8 @@ export function InboxPage() {
                   {selectedPerson.data?.conversations.length === 0 && <p>{t('inbox.noConversations')}</p>}
                 </QueryState>
               )}
+              {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into &&
+                <InboxErasure key={`erase:${selectedPerson.data.person.id}`} personId={selectedPerson.data.person.id} />}
               {taskId && (
                 <QueryState query={tasks}>
                   {tasks.data && !task && <p>{t('inbox.taskNotFound')}</p>}

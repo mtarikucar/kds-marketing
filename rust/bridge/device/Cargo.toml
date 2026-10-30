@@ -1,0 +1,37 @@
+[package]
+name = "jeeta-device-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The PC-side program that connects the phones plugged into a computer to Jeeta (spec
+# `2026-10-28-device-bridge-design.md` §6). It builds and tests on Windows, the owner's PC, so it
+# names no server crate: only the device vocabulary and its wire protocol (archtest).
+[dependencies]
+jt_device_protocol.workspace = true
+jt_devices.workspace = true
+tokio = { workspace = true, features = ["time", "fs", "io-util", "process"] }
+# The bridge's own HTTP client to Jeeta (rustls). The server's provider traffic goes through
+# `jt_outbound`; this program is not the server and talks to Jeeta alone. `stream`: a pulled file
+# is uploaded from disk without holding it in memory.
+reqwest = { workspace = true, features = ["stream"] }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# `PhoneDriver`, `PhoneRegistry`, `FileTransfer` and `AdbRunner` are used as trait objects.
+async-trait.workspace = true
+# Text outside ASCII goes to ADBKeyBoard in base64.
+base64.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# The fake Jeeta of `tests/loop.rs`.
+axum.workspace = true
+# `test-util`: the Android driver's waits run on paused time.
+tokio = { workspace = true, features = ["net", "test-util"] }
+
+[lints]
+workspace = true

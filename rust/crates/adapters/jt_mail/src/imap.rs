@@ -135,20 +135,36 @@ pub(crate) async fn poll(
             .uid_validity
             .filter(|v| *v != 0)
             .ok_or_else(|| ConnectorError::transient("IMAP UIDVALIDITY missing"))?;
-        let last = cursor
-            .mailboxes
-            .get(mailbox)
-            .filter(|p| p.uidvalidity == validity)
-            .map_or(0, |p| p.last_uid);
-        let mut position = MailboxPosition {
-            uidvalidity: validity,
-            last_uid: last,
-        };
         let upper = info
             .uid_next
             .filter(|n| *n != 0)
             .ok_or_else(|| ConnectorError::transient("IMAP UIDNEXT missing"))?
             - 1;
+        let known = cursor
+            .mailboxes
+            .get(mailbox)
+            .filter(|p| p.uidvalidity == validity)
+            .map(|p| p.last_uid);
+        // A mailbox without a position in this UIDVALIDITY generation starts at its current end
+        // (see `MailboxCursor`): only mail arriving from now on is ingested, not its history.
+        let last = match known {
+            Some(last) => last,
+            None if cursor.read_history => 0,
+            None => {
+                next.mailboxes.insert(
+                    mailbox.to_owned(),
+                    MailboxPosition {
+                        uidvalidity: validity,
+                        last_uid: upper,
+                    },
+                );
+                continue;
+            }
+        };
+        let mut position = MailboxPosition {
+            uidvalidity: validity,
+            last_uid: last,
+        };
         let mut selected = std::collections::BTreeSet::new();
         let mut scanned = last;
         let mut last_empty_end = last;

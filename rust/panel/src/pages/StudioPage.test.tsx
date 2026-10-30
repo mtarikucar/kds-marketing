@@ -227,6 +227,9 @@ it('panel_actions_match_every_studio_tool', async () => {
     ['POST', '/api/studio/budget-moves'],
     ['POST', '/api/studio/slots/s1/piece'],
     ['POST', '/api/studio/files'],
+    ['GET', '/api/studio/slots/s1/tiktok'],
+    ['POST', '/api/studio/slots/s1/tiktok'],
+    ['GET', '/api/studio/slots/s1/tiktok/metrics'],
   ];
   const calls = mockFetch(Object.fromEntries(expected.map(([m, p]) => [`${m} ${p}`, {}])));
   await api.overview(q);
@@ -287,13 +290,107 @@ it('panel_actions_match_every_studio_tool', async () => {
     content: { kind: 'bytes_base64', data: 'eA==' },
     request_key: 'file',
   });
+  await api.tiktokPosting('s1');
+  const post = {
+    mode: 'direct_post' as const,
+    title: 'Merhaba',
+    privacy_level: 'SELF_ONLY',
+    allow_comment: false,
+    allow_duet: false,
+    allow_stitch: false,
+    disclose_commercial: false,
+    your_brand: false,
+    branded_content: false,
+  };
+  await api.tiktokPost('s1', 3, post);
+  await api.tiktokMetrics('s1');
   expect(calls.map((c) => [c.method, c.path])).toEqual(expected);
+  expect(calls.at(-2)?.body).toEqual({ expected_revision: 3, post });
   expect(calls[2].body).toEqual({ filter: q });
   expect(
     calls
       .filter((c) => c.method !== 'GET')
       .every((c) => c.headers.get('X-Requested-With') === 'jeeta-panel'),
   ).toBe(true);
+});
+
+it("slot_detail_explains_a_failed_publication_in_the_owner's_words", async () => {
+  const detail = answers['GET /api/studio/slots/s1'] as Record<string, unknown>;
+  mockFetch({
+    ...answers,
+    'GET /api/studio/slots/s1': {
+      ...detail,
+      attempts: [{ state: 'failed', failure_reason: 'permanent: x: HTTP 402 CreditsDepleted: no credits' }],
+    },
+  });
+  renderAt('/studio');
+  const user = userEvent.setup();
+  const plan = await screen.findByRole('region', { name: 'Plan' });
+  await user.click(
+    await within(plan)
+      .findByTestId('slot-s1')
+      .then((e) => within(e).getByRole('button')),
+  );
+  const editor = await screen.findByTestId('slot-detail');
+  expect(await within(editor).findByRole('status')).toHaveTextContent(
+    'Yayınlanamadı: X API kredisi yok; X developer console',
+  );
+});
+
+/** Answers for s1 whose publication failed: it stays Ready, and is never sent again. */
+const failed = (extra: Record<string, unknown> = {}) => ({
+  ...answers,
+  'GET /api/studio/overview': {
+    ...overview,
+    today: {
+      ...overview.today,
+      approvals: [],
+      blockers: [
+        {
+          target: { slot: 's1' },
+          reason: 'publish_permanent',
+          next_action: 'review_publication_duplicate_risk',
+        },
+      ],
+    },
+  },
+  'GET /api/studio/slots/s1': {
+    ...(answers['GET /api/studio/slots/s1'] as Record<string, unknown>),
+    attempts: [{ state: 'failed', failure_reason: 'permanent: x: HTTP 402 CreditsDepleted: no credits' }],
+  },
+  ...extra,
+});
+
+it('a_failed_publication_is_not_sent_again_and_today_offers_to_cancel_it', async () => {
+  const calls = mockFetch(failed({ 'POST /api/studio/slots/s1/cancel': {} }));
+  renderAt('/studio');
+  const user = userEvent.setup();
+  const card = await screen.findByTestId('today-s1');
+  expect(
+    within(card).getByText("Jeeta bu paylaşımı yeniden göndermez. Bugün'den kaldırmak için iptal edin."),
+  ).toBeInTheDocument();
+  await user.type(within(card).getByLabelText('İptal nedeni'), 'Kredi bitti');
+  await user.click(within(card).getByRole('button', { name: 'İçeriği iptal et' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path.endsWith('/cancel'))?.body).toEqual({
+      expected_revision: 1,
+      reason: 'Kredi bitti',
+    }),
+  );
+});
+
+it('a_sent_slot_opens_on_why_it_failed_and_its_cancel_not_on_new_content', async () => {
+  mockFetch(failed());
+  renderAt('/studio');
+  const user = userEvent.setup();
+  const card = await screen.findByTestId('today-s1');
+  await user.click(within(card).getByRole('button', { name: 'Kısa hikâyeler' }));
+  const editor = await within(card).findByTestId('slot-detail');
+  expect(await within(editor).findByRole('status')).toHaveTextContent('Yayınlanamadı: X API kredisi yok');
+  // New content would be a revision no run sends; cancelling is the way out, offered once.
+  expect(within(editor).queryByLabelText('İçerik metni')).not.toBeInTheDocument();
+  expect(within(editor).getByLabelText('İptal nedeni')).toBeInTheDocument();
+  expect(within(card).getAllByLabelText('İptal nedeni')).toHaveLength(1);
 });
 
 it('slot_detail_submits_and_cancels_the_current_revision', async () => {
@@ -366,4 +463,83 @@ it('strategy_hypothesis_click_filters_regions_and_plan_names_channel_and_type', 
   );
   const row = await within(screen.getByRole('region', { name: 'Plan' })).findByTestId('slot-s1');
   expect(row).toHaveTextContent('text / x');
+});
+
+it('approval_card_previews_the_drafted_text_media_target_and_time', async () => {
+  const detail = answers['GET /api/studio/slots/s1'] as Record<string, unknown>;
+  // Studio instants may arrive as `time` tuples: 2026, day 300 (27 October), 09:30 UTC.
+  const awaiting = { ...slot, scheduled_at: [2026, 300, 9, 30, 0, 0, 0, 0, 0] };
+  mockFetch({
+    ...answers,
+    'GET /api/studio/overview': {
+      ...overview,
+      today: { ...overview.today, slots: [{ slot: awaiting, overdue: false }] },
+    },
+    'GET /api/capabilities': [
+      { capability: { id: 'c1', name: 'Jeeta resmi hesap', kind_key: 'x' }, effective_status: 'verified' },
+    ],
+    'GET /api/studio/slots/s1': {
+      ...detail,
+      slot: awaiting,
+      piece: {
+        text: 'Yeni koleksiyon yarın sabah mağazada.',
+        media: [
+          { kind: 'hosted_url', url: 'https://cdn.example.com/p/kapak.jpg', mime: 'image/jpeg', size_bytes: 1200 },
+          { kind: 'hosted_url', url: 'https://cdn.example.com/p/tanitim.mp4', mime: 'video/mp4', size_bytes: 9000 },
+          { kind: 'file', id: 'file-1' },
+        ],
+        adaptations: {},
+      },
+    },
+  });
+  renderAt('/studio');
+  const card = await screen.findByTestId('today-s1');
+  const preview = within(card).getByRole('group', { name: 'Onaya sunulan taslak' });
+  expect(await within(preview).findByText('Yeni koleksiyon yarın sabah mağazada.')).toBeInTheDocument();
+  expect(within(preview).getByRole('img', { name: 'Görsel 1: kapak.jpg' })).toHaveAttribute(
+    'src',
+    'https://cdn.example.com/p/kapak.jpg',
+  );
+  const media = within(preview).getByRole('list', { name: 'Taslaktaki medya' });
+  expect(within(media).getByText('tanitim.mp4')).toBeInTheDocument();
+  expect(within(media).getByText('Yüklenmiş dosya')).toBeInTheDocument();
+  expect(await within(preview).findByText('Jeeta resmi hesap · X')).toBeInTheDocument();
+  expect(preview.querySelector('time')).toHaveAttribute('dateTime', '2026-10-27T09:30:00.000Z');
+  // The preview sits in the same card as the approve button it informs.
+  expect(within(card).getByRole('button', { name: 'Onayla' })).toBeInTheDocument();
+});
+
+it('approval_card_without_a_draft_says_so_and_names_the_channel', async () => {
+  const detail = answers['GET /api/studio/slots/s1'] as Record<string, unknown>;
+  mockFetch({ ...answers, 'GET /api/studio/slots/s1': { ...detail, piece: null } });
+  renderAt('/studio');
+  const card = await screen.findByTestId('today-s1');
+  const preview = within(card).getByRole('group', { name: 'Onaya sunulan taslak' });
+  expect(await within(preview).findByText('Ajan henüz bir taslak teslim etmedi.')).toBeInTheDocument();
+  expect(within(preview).getByText('X')).toBeInTheDocument();
+});
+
+it('clicking_an_approval_title_opens_its_editor_inside_that_card', async () => {
+  mockFetch(answers);
+  renderAt('/studio');
+  const user = userEvent.setup();
+  const card = await screen.findByTestId('today-s1');
+  const title = within(card).getByRole('button', { name: 'Kısa hikâyeler' });
+  expect(title).toHaveAttribute('aria-expanded', 'false');
+  await user.click(title);
+  const editor = await within(card).findByRole('group', { name: 'Kısa hikâyeler' });
+  expect(editor).toBe(screen.getByTestId('slot-detail'));
+  expect(title).toHaveAttribute('aria-expanded', 'true');
+  expect(title).toHaveAttribute('aria-controls', editor.id);
+  const preview = within(card).getByRole('group', { name: 'Onaya sunulan taslak' });
+  const approveButton = within(card).getByRole('button', { name: 'Onayla' });
+  // Under the card's own preview and approve button, not at the end of the region.
+  expect(preview.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(approveButton.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(editor).getByRole('heading', { name: 'Kısa hikâyeler' })).toHaveFocus();
+  expect(await within(editor).findByLabelText('İçerik metni')).toHaveValue('Örnek içerik');
+  await user.click(within(editor).getByRole('button', { name: 'Kapat' }));
+  expect(screen.queryByTestId('slot-detail')).not.toBeInTheDocument();
+  expect(title).toHaveFocus();
+  expect(title).toHaveAttribute('aria-expanded', 'false');
 });

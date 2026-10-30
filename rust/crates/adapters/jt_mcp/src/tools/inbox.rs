@@ -163,7 +163,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.messages.list",
-            description: "messages.list for workspace conversations. [risk: READ]",
+            description: "messages.list for workspace conversations. An outbound message that failed, or whose outcome is unknown, carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list\"); null otherwise. [risk: READ]",
             permission: Permission::InboxWork,
             schema: || Schema::try_from(schema::tool("messages.list")).expect("inbox schema"),
             run: messages_list,

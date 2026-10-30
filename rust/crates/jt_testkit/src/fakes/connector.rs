@@ -26,9 +26,19 @@ use super::state::{
 };
 use super::tenant::MemTenant;
 
-/// The `error_kind` values the check constraint of `probe_runs` accepts (migration 0005): the
-/// `jt_connector::ConnectorError::kind` keys.
-const ERROR_KINDS: [&str; 5] = ["auth", "permission", "throttle", "transient", "permanent"];
+/// The `error_kind` values the check constraint of `probe_runs` accepts (migrations 0005 and
+/// 0013): the `jt_connector::ConnectorError::kind` keys.
+const ERROR_KINDS: [&str; 6] = [
+    "auth",
+    "permission",
+    "throttle",
+    "transient",
+    "unknown",
+    "permanent",
+];
+
+/// The longest `probe_runs.reason` its check constraint accepts (migration 0013).
+const MAX_REASON_CHARS: usize = 300;
 
 #[async_trait]
 impl InboundEventRepo for MemTenant {
@@ -53,6 +63,43 @@ impl InboundEventRepo for MemTenant {
             .collect();
         rows.sort_by_key(|e| (e.received_at, e.id));
         Ok(rows)
+    }
+
+    async fn find_external(
+        &mut self,
+        provider: Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError> {
+        Ok(self
+            .state()
+            .inbound_events
+            .iter()
+            .map(|s| &s.event)
+            .find(|e| {
+                e.workspace_id == self.ws && e.provider == provider && e.external_id == external_id
+            })
+            .cloned())
+    }
+
+    async fn mail_subject(
+        &mut self,
+        capability: CapabilityId,
+        message_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        Ok(self
+            .state()
+            .inbound_events
+            .iter()
+            .map(|s| &s.event)
+            .filter(|e| {
+                e.workspace_id == self.ws
+                    && e.capability_id == Some(capability)
+                    && e.provider == Provider::Mail
+                    && e.kind == EventKind::Message
+                    && e.payload["message_id"].as_str() == Some(message_id)
+            })
+            .max_by_key(|e| (e.received_at, e.id))
+            .and_then(|e| e.payload["subject"].as_str().map(str::to_owned)))
     }
 
     async fn list_for_consumer(
@@ -361,6 +408,15 @@ impl ProbeRunRepo for MemTenant {
             {
                 return Err(AppError::internal(
                     "probe_runs.error_kind breaks its check constraint",
+                ));
+            }
+            if run
+                .reason
+                .as_ref()
+                .is_some_and(|r| r.chars().count() > MAX_REASON_CHARS)
+            {
+                return Err(AppError::internal(
+                    "probe_runs.reason breaks its check constraint",
                 ));
             }
             unique(

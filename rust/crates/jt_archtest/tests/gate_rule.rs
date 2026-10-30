@@ -41,6 +41,21 @@ const EXEMPT_IDS: &[&str] = &[
     "studio.brake",
     "studio.ledger",
     "studio.ledger_export",
+    "calls.policy_get",
+    // The voice bridge's line is set up before any strategy.
+    "calls.bridge.register",
+    "calls.bridge.commands",
+    "calls.bridge.events",
+    // So are the phones the device bridge drives, and what an agent does with them.
+    "devices.bridge.register",
+    "devices.bridge.commands",
+    "devices.bridge.results",
+    "devices.bridge.files",
+    "devices.list",
+    "devices.observe",
+    "devices.act",
+    "devices.command_get",
+    "devices.commands",
 ];
 
 fn may_be_exempt(id: &str) -> bool {
@@ -118,7 +133,7 @@ fn connection_and_event_use_cases_are_strategy_exempt_but_status_checked() {
         .iter()
         .filter(|uc| uc.id.starts_with("connector.") || uc.id.starts_with("events."))
         .collect();
-    // Eight connection use cases (seven tools and the panel's OAuth callback) and three event
+    // Nine connection use cases (eight tools and the panel's OAuth callback) and three event
     // ones: not vacuous.
     let ids: Vec<&str> = rows.iter().map(|uc| uc.id).collect();
     assert_eq!(
@@ -132,6 +147,7 @@ fn connection_and_event_use_cases_are_strategy_exempt_but_status_checked() {
             "connector.health",
             "connector.reconnect",
             "connector.hooks",
+            "connector.set_pbx_policy",
             "events.pending",
             "events.ack",
             "events.list",

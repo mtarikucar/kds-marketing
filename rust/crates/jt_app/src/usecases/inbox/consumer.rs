@@ -4,7 +4,11 @@ use crate::{
     ctx::Ctx,
     error::AppError,
     ports::{CapabilityFilter, TenantRepos, inbox::ConsumptionOutcome},
-    usecases::{Deps, jobs::JobReport},
+    usecases::{
+        Deps,
+        connector::{adapter_public, open_credential},
+        jobs::JobReport,
+    },
 };
 use jt_capability::{Capability, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, Provider};
@@ -17,10 +21,16 @@ use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 pub const CONSUMER: &str = "inbox@2";
 // Stable across inbox consumer versions: activity must not reopen a conversation twice.
 const PBX_ACTIVITY: &str = "inbox.pbx_activity";
+/// The longest sender name kept from a provider, in characters.
+const MAX_SENDER_NAME: usize = 200;
 
 /// Sweep with a cursor even after failures; the next sweep starts over to retry rollbacks.
 pub async fn consume_workspace(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> JobReport {
     let mut report = JobReport::default();
+    if let Err(e) = release_deferrals(deps, ws, now).await {
+        warn(ws, &e);
+        report.failed += 1;
+    }
     let mut cursor = None;
     loop {
         let page = async {
@@ -62,6 +72,38 @@ pub async fn consume_workspace(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime
     }
     report
 }
+/// Makes the deferred events whose retry is due claimable again, and gives up on those older
+/// than `DEFERRAL_GIVE_UP` (C5): each abandoned event writes `inbox.event.abandoned` once.
+async fn release_deferrals(
+    deps: &Deps,
+    ws: WorkspaceId,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    let mut r = deps.uow.tenant(ws).await?;
+    let abandoned = r.consumption().release_due_deferrals(CONSUMER, now).await?;
+    let ctx = Ctx {
+        workspace_id: ws,
+        actor: Actor::System {
+            component: "scheduler:inbox_consume".into(),
+        },
+        permissions: Default::default(),
+        role_key: None,
+        now,
+        agent_connection_id: None,
+    };
+    for id in abandoned {
+        record(
+            r.as_mut(),
+            &ctx,
+            "inbox.event.abandoned",
+            "inbound_event",
+            id,
+            json!({ "event_id": id }),
+        )
+        .await?;
+    }
+    r.commit().await
+}
 fn warn(ws: WorkspaceId, e: &AppError) {
     // Adapter errors can contain SQL or personal data: only a structured code reaches logs.
     tracing::warn!(job="inbox_consume",workspace_id=%ws,code=e.code.as_str(),"inbound consumption failed");
@@ -73,6 +115,7 @@ pub async fn consume_event(
     now: OffsetDateTime,
 ) -> Result<&'static str, AppError> {
     let lead = super::leadgen::fetch(deps, event).await?;
+    let name = sender_name(deps, event).await;
     let mut r = deps.uow.tenant(event.workspace_id).await?;
     r.people().lock_workspace().await?;
     if !matches!(
@@ -99,7 +142,16 @@ pub async fn consume_event(
         now,
         agent_connection_id: None,
     };
-    let outcome = match route(deps, &ctx, r.as_mut(), event, lead.as_ref()).await {
+    let outcome = match route(
+        deps,
+        &ctx,
+        r.as_mut(),
+        event,
+        lead.as_ref(),
+        name.as_deref(),
+    )
+    .await
+    {
         Err(e) if claim_after_intake && e.details["reason"] == "identity_split" => {
             // match_or_create detects a split before mutating any person or identity.
             // Only its idempotent review suggestion and ledger entry have been written.
@@ -131,7 +183,13 @@ async fn route(
     r: &mut dyn TenantRepos,
     event: &InboundEvent,
     lead: Option<&super::leadgen::Fetched>,
+    sender_name: Option<&str>,
 ) -> Result<&'static str, AppError> {
+    // TikTok's webhooks are about the account and its posts, never a conversation: the intake
+    // takes their effect (`webhook::receive_tiktok`); here they are done with, never deferred.
+    if event.provider == Provider::Tiktok {
+        return Ok("not_inbox");
+    }
     let mut erased = event.payload["erased_identity"] == true;
     if let Some(person) = event.payload["person_id"]
         .as_str()
@@ -143,8 +201,14 @@ async fn route(
     if erased && !(event.provider == Provider::Mail && event.kind == EventKind::Status) {
         return Ok("erased_identity_drop");
     }
-    let Some(id) = event.capability_id else {
-        return Ok("deferred");
+    let id = match event.capability_id {
+        Some(id) => id,
+        // Stored while none or several capabilities of its kind were live: attached now that
+        // exactly one is (the event itself keeps no capability).
+        None => match netgsm_capability_now(r, event).await? {
+            Some(id) => id,
+            None => return Ok("deferred"),
+        },
     };
     let Some(mut cap) = r.capabilities().find(id).await? else {
         return Ok("deferred");
@@ -209,7 +273,7 @@ async fn route(
                     | (Provider::Mail, Channel::Email)
             ) =>
         {
-            message(deps, ctx, r, event, &cap, channel).await
+            message(deps, ctx, r, event, &cap, channel, sender_name).await
         }
         EventKind::MessageEcho
             if event.provider == Provider::Meta
@@ -229,8 +293,133 @@ async fn route(
         EventKind::CallEvent if event.provider == Provider::Netgsm && channel == Channel::Phone => {
             call(deps, ctx, r, event, &cap).await
         }
+        // Voice-message and auto-call reports: read, ledgered, no journey effect (V0-T3).
+        EventKind::Status if event.provider == Provider::Netgsm && channel == Channel::Phone => {
+            netgsm_report(ctx, r, event).await
+        }
         _ => Ok("deferred"),
     }
+}
+/// The single live capability of the kind a NetGSM event belongs to (`sms_line` for an SMS,
+/// `netgsm_pbx` for a call event or a voice report), if exactly one is live.
+async fn netgsm_capability_now(
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+) -> Result<Option<jt_capability::CapabilityId>, AppError> {
+    if event.provider != Provider::Netgsm {
+        return Ok(None);
+    }
+    let kind = match event.kind {
+        EventKind::Message | EventKind::Consent => "sms_line",
+        EventKind::CallEvent | EventKind::Status => "netgsm_pbx",
+        _ => return Ok(None),
+    };
+    let live: Vec<_> = r
+        .capabilities()
+        .list(CapabilityFilter {
+            kind: Some(kind),
+            ..Default::default()
+        })
+        .await?
+        .into_iter()
+        .filter(|c| c.status != StoredStatus::Retired)
+        .collect();
+    Ok(match live[..] {
+        [ref only] => Some(only.id),
+        _ => None,
+    })
+}
+/// A NetGSM voice-message or auto-call report: consumed with a ledger line naming its kind and
+/// state, never a number.
+async fn netgsm_report(
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+) -> Result<&'static str, AppError> {
+    let report = if event.payload.get("relation_id").is_some() {
+        "voice-report"
+    } else if event.payload.get("job_id").is_some() {
+        "autocall-report"
+    } else {
+        return Ok("deferred");
+    };
+    let state = text(&event.payload, "state")
+        .or_else(|| text(&event.payload, "status"))
+        .map(|s| s.chars().take(40).collect::<String>());
+    record(
+        r,
+        ctx,
+        "inbox.netgsm_report",
+        "inbound_event",
+        event.id,
+        json!({ "report": report, "state": state }),
+    )
+    .await?;
+    Ok("consumed")
+}
+/// Lock-free and best-effort, like the lead-gen read: the name Meta shows for the sender of a
+/// direct message whose identity no person holds yet (a known sender keeps the name it has).
+/// Never asked for an erased sender or in a workspace that does not receive; every failure
+/// reads as no name, so ingest never waits on the provider.
+async fn sender_name(deps: &Deps, event: &InboundEvent) -> Option<String> {
+    if event.provider != Provider::Meta
+        || event.kind != EventKind::Message
+        || event.payload["erased_identity"] == true
+    {
+        return None;
+    }
+    let sender = text(&event.payload["messaging"]["sender"], "id")?;
+    let (cap, credential) = {
+        let mut r = deps.uow.tenant(event.workspace_id).await.ok()?;
+        if !matches!(
+            r.workspace().get().await.ok()?.status,
+            WorkspaceStatus::Active | WorkspaceStatus::PendingPayment
+        ) {
+            return None;
+        }
+        let cap = r.capabilities().find(event.capability_id?).await.ok()??;
+        let channel = match cap.kind_key.as_str() {
+            "messenger" | "facebook_page" => Channel::Messenger,
+            "instagram_dm" | "instagram" => Channel::InstagramDm,
+            _ => return None,
+        };
+        if cap.status == StoredStatus::Retired {
+            return None;
+        }
+        let key = sender_key(&cap, channel, sender).ok()?;
+        super::erasure::check_identity(r.as_mut(), channel.identity_channel(), &key)
+            .await
+            .ok()?;
+        if r.people()
+            .find_by_identity(channel.identity_channel(), &key)
+            .await
+            .ok()?
+            .is_some()
+        {
+            return None;
+        }
+        let sealed = r.capabilities().read_sealed(cap.id).await.ok()??;
+        let credential = open_credential(deps, event.workspace_id, &sealed).ok()?;
+        (cap, credential)
+    };
+    let name = deps
+        .connectors
+        .messaging(Provider::Meta)?
+        .sender_name(&credential, &adapter_public(&cap), sender)
+        .await
+        .ok()??;
+    Some(clean_name(&name)).filter(|name| !name.is_empty())
+}
+/// A sender's name as a person's display name: trimmed, without control characters, at most
+/// [`MAX_SENDER_NAME`] characters.
+fn clean_name(name: &str) -> String {
+    let name: String = name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_SENDER_NAME)
+        .collect();
+    name.trim().to_owned()
 }
 fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key)
@@ -281,7 +470,7 @@ fn decode(event: &InboundEvent, channel: Channel, echo: bool) -> Result<Content,
             text(p, "from"),
             text(p, "text"),
             text(p, "message_id").or(Some(event.external_id.as_str())),
-            None,
+            text(p, "name"),
         ),
         (Provider::Netgsm, Channel::Sms) => (
             text(p, "from"),
@@ -295,7 +484,7 @@ fn decode(event: &InboundEvent, channel: Channel, echo: bool) -> Result<Content,
         sender: sender.ok_or_else(malformed)?.into(),
         body: body.unwrap_or_default().into(),
         external_id: id.ok_or_else(malformed)?.into(),
-        name: name.unwrap_or_default().into(),
+        name: name.map(clean_name).unwrap_or_default(),
     })
 }
 async fn contact(
@@ -349,7 +538,7 @@ async fn conversation(
         })
         .await
 }
-pub(super) async fn journey(
+pub(crate) async fn journey(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
@@ -380,6 +569,25 @@ async fn apply(
     key: String,
     kind: JourneyEventKind,
 ) -> Result<(), AppError> {
+    apply_from(deps, ctx, r, journey, key, kind, EventSource::System).await
+}
+
+/// Applies journey event `kind` keyed `key` to `journey` as `source` reported it, with its
+/// effects and the `inbox.event.reported` ledger entry (a call's outcome comes through here).
+pub(crate) async fn apply_from(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    journey: Journey,
+    key: String,
+    kind: JourneyEventKind,
+    source: EventSource,
+) -> Result<(), AppError> {
+    let origin = if matches!(source, EventSource::System) {
+        "inbound"
+    } else {
+        "call"
+    };
     let j = r
         .journeys()
         .lock(journey.id)
@@ -389,7 +597,7 @@ async fn apply(
         id: JourneyEventId::from(deps.ids.uuid()),
         workspace_id: ctx.workspace_id,
         journey_id: j.id,
-        source: EventSource::System,
+        source,
         idempotency_key: key,
         kind,
         reason_label: None,
@@ -416,7 +624,7 @@ async fn apply(
         "inbox.event.reported",
         "journey",
         j.id,
-        json!({"source":"inbound"}),
+        json!({ "source": origin }),
     )
     .await
 }
@@ -427,12 +635,18 @@ async fn message(
     event: &InboundEvent,
     cap: &Capability,
     channel: Channel,
+    sender_name: Option<&str>,
 ) -> Result<&'static str, AppError> {
     let key = format!("inbound:{}", event.id);
     if r.journeys().event_by_key(&key).await?.is_some() {
         return Ok("duplicate");
     }
-    let content = decode(event, channel, false)?;
+    let mut content = decode(event, channel, false)?;
+    if content.name.is_empty()
+        && let Some(name) = sender_name
+    {
+        content.name = name.to_owned();
+    }
     super::erasure::check_identity(
         r,
         channel.identity_channel(),
@@ -616,13 +830,24 @@ async fn call(
     let Some(id) = text(&event.payload, "unique_id") else {
         return Ok("deferred");
     };
+    let scenario = text(&event.payload, "scenario").ok_or_else(malformed)?;
+    // A call placed from Jeeta follows the PBX: its session is answered, hung up and, from the
+    // call record, given its duration, recording and cost (V0-T3).
+    let session = follow_session(deps, ctx, r, event, id, scenario).await?;
     let key = format!("call:{id}");
     if r.journeys().event_by_key(&key).await?.is_some() {
         return Ok("duplicate");
     }
-    let scenario = text(&event.payload, "scenario").ok_or_else(malformed)?;
+    if scenario == "cdr" {
+        // A call record only fills in a session; the journey hears of a call at its hangup.
+        return Ok("consumed");
+    }
     if !matches!(scenario, "inbound_call" | "answer" | "hangup") {
         return Ok("deferred");
+    }
+    // The rep already reported how the call went (`calls.end`): the journey has it.
+    if scenario == "hangup" && session.as_ref().is_some_and(|s| s.outcome.is_some()) {
+        return Ok("consumed");
     }
     let mut sender = text(&event.payload, "customer_num").map(str::to_owned);
     let mut answered = false;
@@ -643,14 +868,31 @@ async fn call(
         name: String::new(),
     };
     let person = contact(deps, ctx, r, cap, Channel::Phone, &content).await?;
-    // Terminal-call semantics require a coordinator decision: the reducer refuses CallMade
-    // on Lost. Defer without partially reopening/fencing the conversation or inventing a decision.
+    // The reducer refuses CallMade on a lost journey, and reopening it is a person's decision:
+    // the call surfaces the conversation (ours, on a lost journey: a reopen question in
+    // `work.pending`) and the journey is left as it is (C5).
     if r.journeys()
         .latest_for(person.id)
         .await?
         .is_some_and(|j| j.status == JourneyStatus::Lost)
     {
-        return Ok("deferred");
+        if scenario != "hangup" && !r.consumption().try_claim(PBX_ACTIVITY, event.id).await? {
+            return Ok("duplicate");
+        }
+        conversation(deps, ctx, r, event, cap, person.id).await?;
+        if scenario != "hangup" {
+            r.consumption()
+                .record(
+                    PBX_ACTIVITY,
+                    event.id,
+                    ConsumptionOutcome {
+                        consumed_at: ctx.now,
+                        outcome: "consumed".into(),
+                    },
+                )
+                .await?;
+        }
+        return Ok("consumed");
     }
     if scenario != "hangup" && !r.consumption().try_claim(PBX_ACTIVITY, event.id).await? {
         return Ok("duplicate");
@@ -683,6 +925,86 @@ async fn call(
             .await?;
     }
     Ok("consumed")
+}
+
+/// The call session a NetGSM call event belongs to (by the `crm_id` the PBX was given when the
+/// call was placed, else by the PBX's call id it learned from an earlier event), brought up to
+/// date: answered, hung up (the PBX's status word as the cause), or, from a call record, ended
+/// with its duration and recording and charged ([`crate::usecases::calls::charge`]). `None` for a
+/// call Jeeta did not place.
+async fn follow_session(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    unique_id: &str,
+    scenario: &str,
+) -> Result<Option<jt_calls::CallSession>, AppError> {
+    let by_crm = match text(&event.payload, "crm_id") {
+        Some(crm) => r.calls().lock_by_crm_id(crm).await?,
+        None => None,
+    };
+    let Some(mut session) = (match by_crm {
+        Some(s) => Some(s),
+        None => r.calls().lock_by_pbx_id(unique_id).await?,
+    }) else {
+        return Ok(None);
+    };
+    session
+        .pbx_unique_id
+        .get_or_insert_with(|| unique_id.to_owned());
+    let policy = r.calls().policy().await?;
+    let at = activity_at(event);
+    let duration = event.payload["duration_sec"]
+        .as_f64()
+        .or_else(|| text(&event.payload, "duration_sec").and_then(|d| d.parse().ok()))
+        .filter(|d| d.is_finite() && *d >= 0.0)
+        .map(|d| d.round().min(f64::from(u32::MAX)) as u32);
+    let recording = text(&event.payload, "recording")
+        .filter(|r| !r.is_empty())
+        .map(str::to_owned);
+    let step = match scenario {
+        "answer" => jt_calls::reduce(&mut session, &jt_calls::BridgeEvent::Answered, at, &policy),
+        "hangup" | "cdr" => {
+            let cause = text(&event.payload, "status")
+                .unwrap_or("normal")
+                .to_owned();
+            if scenario == "cdr" && session.answered_at.is_none() && duration.is_some_and(|d| d > 0)
+            {
+                // The call record says it was talked through: answered that long before its end.
+                let talked = time::Duration::seconds(i64::from(duration.unwrap_or(0)));
+                jt_calls::reduce(
+                    &mut session,
+                    &jt_calls::BridgeEvent::Answered,
+                    at - talked,
+                    &policy,
+                );
+            }
+            jt_calls::reduce(
+                &mut session,
+                &jt_calls::BridgeEvent::Hangup { cause },
+                at,
+                &policy,
+            )
+        }
+        _ => jt_calls::Step::default(),
+    };
+    if let Some(d) = duration.filter(|_| matches!(scenario, "hangup" | "cdr")) {
+        session.duration_s = Some(d);
+    }
+    if let Some(link) = recording.filter(|_| session.recording != jt_calls::RecordingState::Off) {
+        session.recording = jt_calls::RecordingState::Recording {
+            file_ref: Some(link),
+        };
+    }
+    if !step.turns.is_empty() {
+        r.calls().append_turns(session.id, step.turns).await?;
+    }
+    if scenario == "cdr" {
+        crate::usecases::calls::charge(deps, ctx, r, &mut session).await?;
+    }
+    r.calls().update(session.clone(), ctx.now).await?;
+    Ok(Some(session))
 }
 
 /// Correlation requires the exact persisted Message-ID and capability. Never match text, an

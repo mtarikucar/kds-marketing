@@ -282,6 +282,7 @@ pub async fn mail_cursor_and_drafts_atomic(uow: Arc<dyn UnitOfWork>) {
             ),
         ]
         .into(),
+        read_history: false,
     };
     let event = InboundEvent {
         id: InboundEventId::new_v7(),
@@ -336,6 +337,7 @@ pub async fn mail_cursor_and_drafts_atomic(uow: Arc<dyn UnitOfWork>) {
             },
         )]
         .into(),
+        read_history: false,
     };
     t.mail_cursors().store(cap, reset).await.unwrap();
     let read = t.mail_cursors().get(cap).await.unwrap();
@@ -790,4 +792,144 @@ pub async fn deferred_leadgen_claim_is_narrow_and_transactional(uow: Arc<dyn Uni
             .unwrap()
             .is_empty()
     );
+}
+
+/// A deferred event of any provider is due again an hour per deferral later, and is abandoned,
+/// once, when it was received more than seven days ago (C5).
+pub async fn deferred_events_retry_with_backoff_then_abandon(uow: Arc<dyn UnitOfWork>) {
+    use jt_app::ports::TenantRepos;
+    use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
+    use jt_tenancy::WorkspaceId;
+    use time::OffsetDateTime;
+    async fn defer(r: &mut dyn TenantRepos, id: InboundEventId, at: OffsetDateTime) {
+        r.consumption()
+            .record(
+                "inbox@2",
+                id,
+                ConsumptionOutcome {
+                    consumed_at: at,
+                    outcome: "deferred".into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    async fn release(
+        uow: &Arc<dyn UnitOfWork>,
+        ws: WorkspaceId,
+        at: OffsetDateTime,
+    ) -> Vec<InboundEventId> {
+        let mut r = uow.tenant(ws).await.unwrap();
+        let out = r
+            .consumption()
+            .release_due_deferrals("inbox@2", at)
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+        out
+    }
+    async fn listed(uow: &Arc<dyn UnitOfWork>, ws: WorkspaceId) -> Vec<InboundEventId> {
+        let mut r = uow.tenant(ws).await.unwrap();
+        r.inbound_events()
+            .list_for_consumer("inbox@2", None, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.id)
+            .collect()
+    }
+    let f = Fixture::new(uow.clone()).await;
+    let (fresh, old) = (InboundEventId::new_v7(), InboundEventId::new_v7());
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    for (id, received_at) in [(fresh, FIXED_NOW), (old, FIXED_NOW - Duration::days(8))] {
+        r.inbound_events()
+            .insert_if_new(
+                InboundEvent {
+                    id,
+                    workspace_id: f.ws,
+                    capability_id: None,
+                    provider: Provider::Netgsm,
+                    kind: EventKind::CallEvent,
+                    external_id: id.to_string(),
+                    payload: serde_json::json!({}),
+                    received_at,
+                    processed_at: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(r.consumption().try_claim("inbox@2", id).await.unwrap());
+        defer(&mut *r, id, FIXED_NOW).await;
+    }
+    r.commit().await.unwrap();
+    assert!(listed(&uow, f.ws).await.is_empty());
+
+    // Before the first hour: the old event is given up on, the fresh one waits.
+    assert_eq!(
+        release(&uow, f.ws, FIXED_NOW + Duration::minutes(30)).await,
+        vec![old]
+    );
+    assert!(listed(&uow, f.ws).await.is_empty());
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(!r.consumption().try_claim("inbox@2", fresh).await.unwrap());
+    drop(r);
+
+    // An hour after the first deferral it is listed and claimable again; deferred a second
+    // time, it is due two hours after that.
+    assert!(
+        release(&uow, f.ws, FIXED_NOW + Duration::hours(1))
+            .await
+            .is_empty()
+    );
+    assert_eq!(listed(&uow, f.ws).await, vec![fresh]);
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(r.consumption().try_claim("inbox@2", fresh).await.unwrap());
+    defer(&mut *r, fresh, FIXED_NOW + Duration::hours(1)).await;
+    r.commit().await.unwrap();
+    assert!(
+        release(&uow, f.ws, FIXED_NOW + Duration::hours(2))
+            .await
+            .is_empty()
+    );
+    assert!(listed(&uow, f.ws).await.is_empty());
+    assert!(
+        release(&uow, f.ws, FIXED_NOW + Duration::hours(3))
+            .await
+            .is_empty()
+    );
+    assert_eq!(listed(&uow, f.ws).await, vec![fresh]);
+
+    // The abandoned event stays abandoned, and another workspace's run touches nothing.
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(!r.consumption().try_claim("inbox@2", old).await.unwrap());
+    drop(r);
+    assert!(
+        release(&uow, f.other, FIXED_NOW + Duration::days(9))
+            .await
+            .is_empty()
+    );
+    assert!(listed(&uow, f.other).await.is_empty());
+
+    // Consumed at last, it is never released nor abandoned.
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    assert!(r.consumption().try_claim("inbox@2", fresh).await.unwrap());
+    r.consumption()
+        .record(
+            "inbox@2",
+            fresh,
+            ConsumptionOutcome {
+                consumed_at: FIXED_NOW + Duration::hours(3),
+                outcome: "consumed".into(),
+            },
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    assert!(
+        release(&uow, f.ws, FIXED_NOW + Duration::days(9))
+            .await
+            .is_empty()
+    );
+    assert!(listed(&uow, f.ws).await.is_empty());
 }

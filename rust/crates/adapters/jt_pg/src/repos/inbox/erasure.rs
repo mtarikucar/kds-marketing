@@ -140,6 +140,14 @@ impl PgTenantRepos {
             "update merges set moved_snapshot='{}',conflicts='[]',decision='{\"suggest\":[]}' where workspace_id=$1 and (source_id=$2 or target_id=$2)",
             // Responses are nested (quote/reply/send); ids scope cache deletion without touching other people.
             "delete from request_keys where workspace_id=$1 and (response->>'person_id'=$2::uuid::text or exists (select 1 from conversations c where c.workspace_id=$1 and c.person_id=$2 and (response->>'conversation_id'=c.id::text or response#>>'{reply,conversation_id}'=c.id::text)) or exists (select 1 from journeys j where j.workspace_id=$1 and j.person_id=$2 and (response#>>'{quote,journey_id}'=j.id::text or response->>'journey_id'=j.id::text)))",
+            // Calls keep their times, states and turn numbers; the number, the plan (its
+            // sentences name the person), the summary, the recording reference and every turn's
+            // words go, and so do the voice bridge's commands of those calls (a dial carries the
+            // number, a sentence its words) and the notes of the events it reported on them.
+            "update call_turns set text='' where workspace_id=$1 and call_id in (select id from call_sessions where workspace_id=$1 and person_id=$2)",
+            "delete from call_commands where workspace_id=$1 and call_id in (select id from call_sessions where workspace_id=$1 and person_id=$2)",
+            "delete from call_bridge_events where workspace_id=$1 and bridge_call_id in (select bridge_call_id from call_sessions where workspace_id=$1 and person_id=$2 and bridge_call_id is not null)",
+            "update call_sessions set counterpart_e164='',data=jsonb_set(jsonb_set(jsonb_set(jsonb_set(data,'{counterpart_e164}','\"\"'),'{summary}','null'),'{plan}','null'),'{recording}','{\"state\":\"off\"}') where workspace_id=$1 and person_id=$2",
             "update people set display_name='silinmiş kişi',company='' where workspace_id=$1 and id=$2",
         ] {
             sqlx::query(statement)

@@ -43,7 +43,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::config::{self, Bootstrap, Config};
-use crate::{connectors, scheduler};
+use crate::{connectors, net, scheduler};
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -284,6 +284,10 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
     let deps = Deps {
         ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
         ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+        device_uploads: std::sync::Arc::new(
+            jt_app::usecases::devices::uploads::UploadTurns::default(),
+        ),
+        bridge_signals: std::sync::Arc::new(jt_app::std_impls::LocalBridgeSignals::default()),
         billing: config.billing.clone(),
         uow: uow.clone(),
         clock: Arc::new(SystemClock),
@@ -425,7 +429,9 @@ fn panel_status(dir: Option<&Path>) -> String {
 
 /// Serves until SIGINT or SIGTERM, then calls `on_signal` (which stops the scheduled jobs from
 /// starting new runs), stops accepting and lets open connections finish for at most
-/// [`DRAIN_TIMEOUT`].
+/// [`DRAIN_TIMEOUT`]. Every connection gives up a write its client has not taken for
+/// [`net::WRITE_TIMEOUT`] ([`net::TimedListener`]): a client that stopped reading does not keep
+/// its socket.
 async fn serve(
     listener: TcpListener,
     app: Router,
@@ -433,7 +439,7 @@ async fn serve(
 ) -> Result<()> {
     let mut signals = Signals::install()?;
     let (stop, stopped) = oneshot::channel::<()>();
-    let server = axum::serve(listener, app)
+    let server = axum::serve(net::TimedListener::new(listener, net::WRITE_TIMEOUT), app)
         .with_graceful_shutdown(async move {
             // A dropped sender stops the server too.
             let _ = stopped.await;
@@ -552,6 +558,10 @@ mod tests {
             connectors: Arc::new(ScriptedRegistry::new()),
             ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
             ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+            device_uploads: std::sync::Arc::new(
+                jt_app::usecases::devices::uploads::UploadTurns::default(),
+            ),
+            bridge_signals: std::sync::Arc::new(jt_app::std_impls::LocalBridgeSignals::default()),
             billing: jt_app::usecases::billing::BillingConfig {
                 price_minor: 123,
                 price_currency: "TRY".into(),
@@ -871,11 +881,23 @@ mod tests {
         assert!(deps.connectors.oauth(jt_connector::Provider::X).is_some());
         assert!(
             deps.connectors
+                .oauth(jt_connector::Provider::Tiktok)
+                .is_some()
+        );
+        assert!(
+            deps.connectors
+                .oauth(jt_connector::Provider::Linkedin)
+                .is_some()
+        );
+        assert!(
+            deps.connectors
                 .sms(jt_connector::Provider::Netgsm)
                 .is_some()
         );
         assert_eq!(deps.apps.meta_app(), None);
         assert_eq!(deps.apps.x_app(), None);
+        assert_eq!(deps.apps.tiktok_app(), None);
+        assert_eq!(deps.apps.linkedin_app(), None);
         assert_eq!(deps.apps.public_base_url(), None);
         let (status, _, body) = call(
             &app,
@@ -908,6 +930,10 @@ mod tests {
             (config::INSTAGRAM_APP_SECRET, "ig-secret-1"),
             (config::X_CLIENT_ID, "x-id-1"),
             (config::X_CLIENT_SECRET, "x-secret-1"),
+            (config::TIKTOK_CLIENT_KEY, "tt-key-1"),
+            (config::TIKTOK_CLIENT_SECRET, "tt-secret-1"),
+            (config::LINKEDIN_CLIENT_ID, "li-id-1"),
+            (config::LINKEDIN_CLIENT_SECRET, "li-secret-1"),
             (config::PUBLIC_BASE_URL, "https://jeeta.example"),
         ]);
         let (mut deps, _) = ports(db.pool.clone(), &config);
@@ -932,10 +958,13 @@ mod tests {
         let cookie = cookie.unwrap();
         let session = cookie.split(';').next().unwrap();
 
-        for (kind, client_id, callback) in [
-            ("facebook_page", "meta-id-1", "meta"),
-            ("instagram", "ig-id-1", "instagram"),
-            ("x", "x-id-1", "x"),
+        for (kind, id_param, client_id, callback) in [
+            ("facebook_page", "client_id", "meta-id-1", "meta"),
+            ("instagram", "client_id", "ig-id-1", "instagram"),
+            ("x", "client_id", "x-id-1", "x"),
+            // TikTok names its client id the client key.
+            ("tiktok", "client_key", "tt-key-1", "tiktok"),
+            ("linkedin_member", "client_id", "li-id-1", "linkedin"),
         ] {
             let (status, _, body) = call(
                 &app,
@@ -953,13 +982,20 @@ mod tests {
                     .find(|(k, _)| k == name)
                     .map(|(_, v)| v.into_owned())
             };
-            assert_eq!(param("client_id").as_deref(), Some(client_id), "{kind}");
+            assert_eq!(param(id_param).as_deref(), Some(client_id), "{kind}");
             assert_eq!(
                 param("redirect_uri"),
                 Some(format!("https://jeeta.example/oauth/callback/{callback}")),
                 "{kind}"
             );
-            for secret in ["meta-secret-1", "ig-secret-1", "x-secret-1", "verify-1"] {
+            for secret in [
+                "meta-secret-1",
+                "ig-secret-1",
+                "x-secret-1",
+                "tt-secret-1",
+                "li-secret-1",
+                "verify-1",
+            ] {
                 assert!(!body.to_string().contains(secret), "{kind}: {body}");
             }
         }

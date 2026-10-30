@@ -86,8 +86,12 @@ impl PgTenantRepos {
             .studio_record("studio_publish_attempts", id.0)
             .await?
             .ok_or_else(|| AppError::not_found("publish attempt"))?;
+        let reason = outcome.failure_reason();
         let outcome = outcome.into_redacted();
-        let next = old.finish_at(&outcome, observed_at).map_err(invalid)?;
+        let next = old
+            .finish_at(&outcome, observed_at)
+            .map_err(invalid)?
+            .with_failure_reason(reason);
         if old == next {
             return Ok(());
         }
@@ -132,6 +136,55 @@ impl PgTenantRepos {
         self.studio_attempt_ledger(&next, "studio.publish.finished", observed_at)
             .await?;
         Ok(())
+    }
+    pub(super) async fn studio_upgrade_receipt(
+        &mut self,
+        id: PublishAttemptId,
+        receipt: PublishReceipt,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        // The locks of a completion, in its order.
+        StrategyRepo::lock_execution_frame(self).await?;
+        StudioControlRepo::lock_control(self).await?;
+        let old: PublishAttempt = self
+            .studio_record("studio_publish_attempts", id.0)
+            .await?
+            .ok_or_else(|| AppError::not_found("publish attempt"))?;
+        let next = old.upgrade_receipt(&receipt).map_err(invalid)?;
+        if old == next {
+            return Ok(false);
+        }
+        let row: Value = sqlx::query_scalar(
+            "select data from studio_publications where workspace_id=$1 and attempt_id=$2 for update",
+        )
+        .bind(self.workspace_id().0)
+        .bind(id.0)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read publication evidence"))?
+        .ok_or_else(|| AppError::not_found("publication"))?;
+        let publication: Publication = decode(row)?;
+        let upgraded = publication.upgrade_receipt(&receipt).map_err(invalid)?;
+        sqlx::query(
+            "update studio_publications set data=$3,external_id=$4 where workspace_id=$1 and id=$2",
+        )
+        .bind(self.workspace_id().0)
+        .bind(upgraded.id.0)
+        .bind(encode(&upgraded)?)
+        .bind(&upgraded.external_id)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "upgrade publication evidence"))?;
+        sqlx::query("update studio_publish_attempts set data=$3 where workspace_id=$1 and id=$2")
+            .bind(self.workspace_id().0)
+            .bind(id.0)
+            .bind(encode(&next)?)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "upgrade Studio receipt"))?;
+        self.studio_attempt_ledger(&next, "studio.publish.public_id", at)
+            .await?;
+        Ok(true)
     }
     async fn studio_attempt_ledger(
         &mut self,

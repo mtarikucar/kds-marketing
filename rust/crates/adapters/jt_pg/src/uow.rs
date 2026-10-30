@@ -21,7 +21,9 @@ use jt_tenancy::{Email, MembershipId, RoleDef, RoleId, UserId, WorkspaceId, Work
 use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 
-use crate::repos::{api_keys, capabilities, ledger, map_sqlx, memberships, roles, workspaces};
+use crate::repos::{
+    api_keys, calls, capabilities, ledger, map_sqlx, memberships, roles, workspaces,
+};
 use crate::tx::{PlatformTx, TenantTx, UserTx};
 
 /// Opens repo bundles on a pool. Clones share the pool.
@@ -112,6 +114,14 @@ impl TenantRepos for PgTenantRepos {
     }
 
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
+        self
+    }
+
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self
+    }
+
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
         self
     }
 
@@ -532,11 +542,23 @@ impl PlatformRepos for PgPlatformRepos {
         capabilities::by_external(&mut self.tx, kind_keys, external_id).await
     }
 
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        capabilities::holding(&mut self.tx, kind_keys, external_id).await
+    }
+
     async fn workspaces_with_verified(
         &mut self,
         kind_keys: &[&str],
     ) -> Result<Vec<WorkspaceId>, AppError> {
         capabilities::workspaces_with_verified(&mut self.tx, kind_keys).await
+    }
+
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        calls::workspaces_with_live_agent_calls(&mut self.tx).await
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

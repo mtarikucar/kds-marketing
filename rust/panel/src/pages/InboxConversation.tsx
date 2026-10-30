@@ -6,10 +6,20 @@ import { isApiError } from '@/api/client';
 import { QueryState } from '@/components/QueryState';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { Badge, Button, Callout, Disclosure, Input, Textarea } from '@/components/ui';
+import { kindLabel } from '@/lib/capabilities';
+import { deliveryText } from '@/lib/delivery';
+import { personName } from '@/lib/people';
 import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
-import { columnClass, InboxActorLabel, InboxTime, useInboxKey, useInboxMutation } from './InboxShared';
+import {
+  columnClass,
+  InboxActorLabel,
+  InboxTime,
+  useInboxKey,
+  useInboxMutation,
+  useMemberName,
+} from './InboxShared';
 
 export function InboxConversation({ id }: { id: string }) {
   const { t } = useTranslation();
@@ -19,6 +29,13 @@ export function InboxConversation({ id }: { id: string }) {
     queryFn: () => api.getConversation(id),
   });
   const context = useQuery({ queryKey: [...key, 'context', id], queryFn: () => api.getContext(id) });
+  const personId = conversation.data?.person_id;
+  const person = useQuery({
+    queryKey: [...key, 'person', personId],
+    queryFn: () => api.getPerson(personId!),
+    enabled: !!personId,
+  });
+  const memberName = useMemberName();
   const messages = useInfiniteQuery({
     queryKey: [...key, 'messages', id],
     queryFn: ({ pageParam }) => api.listMessages(id, pageParam),
@@ -31,7 +48,8 @@ export function InboxConversation({ id }: { id: string }) {
   const request = useRef<{ text: string; subject?: string; key: string }>();
   const send = useInboxMutation(
     async () => {
-      const emailSubject = conversation.data?.kind_key === 'mailbox' ? subject.trim() || 'Re:' : undefined;
+      // An empty subject lets the server answer the original one ("Re: <subject>").
+      const emailSubject = conversation.data?.kind_key === 'mailbox' ? subject.trim() || undefined : undefined;
       if (!request.current || request.current.text !== text.trim() || request.current.subject !== emailSubject)
         request.current = { text: text.trim(), subject: emailSubject, key: crypto.randomUUID() };
       return api.reply(id, request.current.text, request.current.key, request.current.subject);
@@ -77,14 +95,16 @@ export function InboxConversation({ id }: { id: string }) {
             <>
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <h2 className="font-semibold">{ctx?.person.display_name || t('inbox.thread')}</h2>
-                  <p className="text-xs text-muted-foreground">{row.kind_key}</p>
+                  <h2 className="font-semibold">
+                    {ctx ? personName(t, ctx.person, person.data?.identities) : t('inbox.thread')}
+                  </h2>
+                  <p className="text-xs text-muted-foreground">{kindLabel(t, row.kind_key)}</p>
                 </div>
                 <Badge tone={row.executor === 'agent' ? 'neutral' : 'warning'}>
                   {row.executor === 'agent'
                     ? t('inbox.agentExecutor')
                     : row.executor.human.user_id
-                      ? t('inbox.humanExecutor', { user: row.executor.human.user_id })
+                      ? t('inbox.humanExecutor', { user: memberName(row.executor.human.user_id) })
                       : t('inbox.unassignedExecutor')}
                 </Badge>
               </div>
@@ -159,10 +179,8 @@ export function InboxConversation({ id }: { id: string }) {
                         <p className="my-2 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">
                           {message.body}
                         </p>
-                        <p className="text-xs text-muted-foreground">
-                          {typeof message.status === 'string'
-                            ? t(`inbox.delivery.${message.status}`)
-                            : t('inbox.delivery.refused', { reason: message.status.refused.reason })}
+                        <p className={`text-xs ${message.failure_reason ? 'text-danger' : 'text-muted-foreground'}`}>
+                          {deliveryText(t, message)}
                         </p>
                       </li>
                     ))}

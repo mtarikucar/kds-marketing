@@ -1,6 +1,7 @@
 //! Direct messages: Messenger and Instagram through the Page (`POST /me/messages`, Page token,
 //! `messaging_type: RESPONSE`), and WhatsApp Cloud (`POST /{phone_number_id}/messages`, a text
-//! message).
+//! message). The sender's name: `GET /{psid}?fields=name` (Messenger), `GET /{igsid}?fields=
+//! name,username` (Instagram, on `graph.instagram.com` for an Instagram Login token).
 
 use jt_app::ports::connectors::SendReceipt;
 use jt_connector::{ConnectorError, Credential};
@@ -106,4 +107,39 @@ pub(crate) async fn send_text(
             "this capability does not send direct messages",
         )),
     }
+}
+
+/// The name Meta shows for `sender`, who wrote to the capability (see the module docs): its
+/// `name`, else (Instagram) its `username`. `None` for a WhatsApp number (its name comes with
+/// the webhook) or another kind, without a call.
+pub(crate) async fn sender_name(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    sender: &str,
+) -> Result<Option<String>, ConnectorError> {
+    let instagram = match kind_of(public)? {
+        "messenger" | "facebook_page" => false,
+        "instagram_dm" | "instagram" => true,
+        _ => return Ok(None),
+    };
+    let fields = if instagram { "name,username" } else { "name" };
+    let answer = match MetaCred::of(cred, "read a sender's name")? {
+        MetaCred::Page { token, .. } | MetaCred::User { token } => {
+            let app = connector.graph_app()?;
+            connector
+                .graph_get(&app, token, &[node(sender)?], &[("fields", fields)])
+                .await?
+        }
+        MetaCred::Instagram { token } if instagram => {
+            connector
+                .instagram_get(token, &[node(sender)?], &[("fields", fields)])
+                .await?
+        }
+        _ => return Ok(None),
+    };
+    Ok(text(&answer["name"])
+        .or_else(|| instagram.then(|| text(&answer["username"])).flatten())
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty()))
 }

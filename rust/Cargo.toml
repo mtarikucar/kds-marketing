@@ -8,6 +8,9 @@ members = [
     "crates/domain/jt_connector",
     "crates/domain/jt_inbox",
     "crates/domain/jt_studio",
+    "crates/domain/jt_calls",
+    "crates/domain/jt_devices",
+    "crates/domain/jt_device_protocol",
     "crates/jt_app",
     "crates/adapters/jt_files",
     "crates/adapters/jt_pg",
@@ -19,10 +22,13 @@ members = [
     "crates/adapters/jt_netgsm",
     "crates/adapters/jt_mail",
     "crates/adapters/jt_x",
+    "crates/adapters/jt_tiktok",
+    "crates/adapters/jt_linkedin",
     "crates/adapters/jt_webhook",
     "crates/jt_testkit",
     "crates/jt_archtest",
     "bin/jeeta",
+    "bridge/device",
 ]
 
 [workspace.package]
@@ -40,6 +46,9 @@ jt_capability = { path = "crates/domain/jt_capability" }
 jt_connector = { path = "crates/domain/jt_connector" }
 jt_inbox = { path = "crates/domain/jt_inbox" }
 jt_studio = { path = "crates/domain/jt_studio" }
+jt_calls = { path = "crates/domain/jt_calls" }
+jt_devices = { path = "crates/domain/jt_devices" }
+jt_device_protocol = { path = "crates/domain/jt_device_protocol" }
 jt_app = { path = "crates/jt_app" }
 jt_files = { path = "crates/adapters/jt_files" }
 jt_pg = { path = "crates/adapters/jt_pg" }
@@ -51,6 +60,8 @@ jt_meta = { path = "crates/adapters/jt_meta" }
 jt_netgsm = { path = "crates/adapters/jt_netgsm" }
 jt_mail = { path = "crates/adapters/jt_mail" }
 jt_x = { path = "crates/adapters/jt_x" }
+jt_tiktok = { path = "crates/adapters/jt_tiktok" }
+jt_linkedin = { path = "crates/adapters/jt_linkedin" }
 jt_webhook = { path = "crates/adapters/jt_webhook" }
 jt_testkit = { path = "crates/jt_testkit" }
 jt_archtest = { path = "crates/jt_archtest" }

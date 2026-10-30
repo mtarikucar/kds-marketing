@@ -79,6 +79,12 @@ impl TenantRepos for Tenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.inner.studio_control()
     }
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self.inner.calls()
+    }
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self.inner.device_commands()
+    }
     fn consents(&mut self) -> &mut dyn ConsentRepo {
         self.inner.consents()
     }
@@ -388,11 +394,23 @@ impl PlatformRepos for Platform {
             .capability_by_external(kind_keys, external_id)
             .await
     }
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        self.inner
+            .capabilities_holding(kind_keys, external_id)
+            .await
+    }
     async fn workspaces_with_verified(
         &mut self,
         kind_keys: &[&str],
     ) -> Result<Vec<WorkspaceId>, AppError> {
         self.inner.workspaces_with_verified(kind_keys).await
+    }
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        self.inner.workspaces_with_live_agent_calls().await
     }
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
         self.inner.ledger_append(entry).await

@@ -1,4 +1,5 @@
-//! The provider adapters the server runs: Meta (`jt_meta`), NetGSM (`jt_netgsm`), X (`jt_x`) and mail (`jt_mail`),
+//! The provider adapters the server runs: Meta (`jt_meta`), NetGSM (`jt_netgsm`), X (`jt_x`),
+//! TikTok (`jt_tiktok`), LinkedIn (`jt_linkedin`) and mail (`jt_mail`),
 //! each sending to its production hosts through the one egress client the server builds, behind
 //! the use cases' [`ConnectorRegistry`] port.
 //!
@@ -9,6 +10,8 @@
 //! | Meta | ✓ | ✓ | — | ✓ | ✓ |
 //! | NetGSM | ✓ | — (credentials by hand) | ✓ | — | — |
 //! | X | ✓ | ✓ | — | ✓ | — |
+//! | TikTok | ✓ | ✓ | — | ✓ | — |
+//! | LinkedIn | ✓ | ✓ | — | ✓ | — |
 //!
 //! Mail additionally offers `MailSender` and `MailboxPoller`, each scoped by the call's workspace.
 //!
@@ -25,10 +28,12 @@ use jt_app::ports::connectors::{
     Publisher, SmsSender, Telephony,
 };
 use jt_connector::Provider;
+use jt_linkedin::{LinkedinBases, LinkedinConnector};
 use jt_mail::MailConnector;
 use jt_meta::{MetaBases, MetaConnector};
 use jt_netgsm::{NetgsmBases, NetgsmConnector};
 use jt_outbound::Egress;
+use jt_tiktok::{TiktokBases, TiktokConnector};
 use jt_x::{XBases, XConnector};
 
 /// The registry of the production adapters over `egress` (the client whose tenant tier
@@ -49,7 +54,21 @@ pub fn registry(
             NetgsmBases::production(),
         )),
         mail: Arc::new(MailConnector::new(Arc::clone(&egress))),
-        x: Arc::new(XConnector::new(egress, XBases::production(), apps)),
+        x: Arc::new(XConnector::new(
+            Arc::clone(&egress),
+            XBases::production(),
+            Arc::clone(&apps),
+        )),
+        tiktok: Arc::new(TiktokConnector::new(
+            Arc::clone(&egress),
+            TiktokBases::production(),
+            Arc::clone(&apps),
+        )),
+        linkedin: Arc::new(LinkedinConnector::new(
+            egress,
+            LinkedinBases::production(),
+            apps,
+        )),
     })
 }
 
@@ -59,6 +78,8 @@ struct ProviderRegistry {
     mail: Arc<MailConnector>,
     netgsm: Arc<NetgsmConnector>,
     x: Arc<XConnector>,
+    tiktok: Arc<TiktokConnector>,
+    linkedin: Arc<LinkedinConnector>,
 }
 
 impl ConnectorRegistry for ProviderRegistry {
@@ -68,6 +89,8 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Netgsm => self.netgsm.clone(),
             Provider::X => self.x.clone(),
             Provider::Mail => self.mail.clone(),
+            Provider::Tiktok => self.tiktok.clone(),
+            Provider::Linkedin => self.linkedin.clone(),
         })
     }
 
@@ -75,6 +98,8 @@ impl ConnectorRegistry for ProviderRegistry {
         match provider {
             Provider::Meta => Some(self.meta.clone()),
             Provider::X => Some(self.x.clone()),
+            Provider::Tiktok => Some(self.tiktok.clone()),
+            Provider::Linkedin => Some(self.linkedin.clone()),
             Provider::Netgsm | Provider::Mail => None,
         }
     }
@@ -95,6 +120,8 @@ impl ConnectorRegistry for ProviderRegistry {
         match provider {
             Provider::Meta => Some(self.meta.clone()),
             Provider::X => Some(self.x.clone()),
+            Provider::Tiktok => Some(self.tiktok.clone()),
+            Provider::Linkedin => Some(self.linkedin.clone()),
             Provider::Netgsm | Provider::Mail => None,
         }
     }
@@ -103,6 +130,8 @@ impl ConnectorRegistry for ProviderRegistry {
         match provider {
             Provider::Meta => Some(self.meta.clone()),
             Provider::X => Some(self.x.clone()),
+            Provider::Tiktok => Some(self.tiktok.clone()),
+            Provider::Linkedin => Some(self.linkedin.clone()),
             Provider::Netgsm | Provider::Mail => None,
         }
     }
@@ -209,6 +238,14 @@ mod tests {
                 Provider::Mail,
                 vec!["connector", "mail_sender", "mailbox_poller"],
             ),
+            (
+                Provider::Tiktok,
+                vec!["connector", "oauth", "publisher", "insights"],
+            ),
+            (
+                Provider::Linkedin,
+                vec!["connector", "oauth", "publisher", "insights"],
+            ),
         ];
         assert_eq!(expected.len(), Provider::all().len());
         assert_eq!(
@@ -235,7 +272,10 @@ mod tests {
         let mut scripted = ScriptedRegistry::new();
         for provider in Provider::all().iter().copied() {
             scripted = scripted.with_connector(Arc::new(ScriptedConnector::new(provider)));
-            if matches!(provider, Provider::Meta | Provider::X) {
+            if matches!(
+                provider,
+                Provider::Meta | Provider::X | Provider::Tiktok | Provider::Linkedin
+            ) {
                 scripted = scripted.with_oauth(Arc::new(ScriptedOAuth::new(provider)));
             }
         }

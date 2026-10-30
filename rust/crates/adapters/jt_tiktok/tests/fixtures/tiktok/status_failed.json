@@ -1,0 +1,4 @@
+{
+  "data": { "status": "FAILED", "fail_reason": "duration_check_failed" },
+  "error": { "code": "ok", "message": "", "log_id": "20261027000000TEST0012" }
+}

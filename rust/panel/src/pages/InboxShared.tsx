@@ -1,9 +1,11 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Bot, MessageCircle, Settings, User } from 'lucide-react';
 import { useSession } from '@/auth/useSession';
+import { listTeam } from '@/api/team';
 import type { InboxActor } from '@/api/types';
 import { formatDateTime } from '@/lib/format';
+import { can } from '@/lib/roles';
 
 export const selectClass = 'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm';
 export const columnClass =
@@ -37,8 +39,30 @@ export function InboxTime({ at }: { at: string }) {
     </time>
   );
 }
+/** The workspace's members, shared by every inbox view that names one. */
+export function useInboxTeam() {
+  const key = useInboxKey();
+  const session = useSession();
+  return useQuery({
+    queryKey: [...key, 'team'],
+    queryFn: listTeam,
+    enabled: can(session.data, 'workspace.read'),
+  });
+}
+/** A workspace user as shown: "You", a member's name or e-mail, else "Team member"; never an id. */
+export function useMemberName() {
+  const { t } = useTranslation();
+  const session = useSession();
+  const team = useInboxTeam();
+  return (userId: string) => {
+    if (userId === session.data?.user_id) return t('inbox.you');
+    const member = team.data?.find((m) => m.user_id === userId);
+    return member?.display_name || member?.email || t('inbox.teamMember');
+  };
+}
 export function InboxActorLabel({ actor }: { actor: InboxActor | 'customer' }) {
   const { t } = useTranslation();
+  const memberName = useMemberName();
   const kind = typeof actor === 'object' ? 'human' : actor;
   const Icon =
     kind === 'human' ? User : kind === 'agent' ? Bot : kind === 'customer' ? MessageCircle : Settings;
@@ -46,7 +70,7 @@ export function InboxActorLabel({ actor }: { actor: InboxActor | 'customer' }) {
     <span className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
       <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       {t(`inbox.actor.${kind}`)}
-      {typeof actor === 'object' ? ` · ${actor.human}` : ''}
+      {typeof actor === 'object' ? ` · ${memberName(actor.human)}` : ''}
     </span>
   );
 }

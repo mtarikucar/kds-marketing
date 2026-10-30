@@ -226,6 +226,11 @@ pub static CATALOG: &[UseCase] = &[
     twin("studio.brake", Exempt, "jeeta.studio.brake", ("POST", "/api/studio/brake"), Write),
     twin("studio.policy_set", GateMode::Gated, "jeeta.studio.policy_set", ("PUT", "/api/studio/policy"), Write),
     twin("studio.approve", GateMode::Gated, "jeeta.studio.approve", ("POST", "/api/studio/approvals"), Write),
+    // The TikTok posting screen: a human's alone (TikTok's Content Sharing Guidelines), so no agent tool.
+    panel_only("studio.tiktok_posting", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok"), Read),
+    panel_only("studio.tiktok_post", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/tiktok"), Write),
+    // A published TikTok post's counters, beside the screen in the slot's detail.
+    panel_only("studio.tiktok_metrics", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"), Read),
     twin("inbox.pending", GateMode::Exempt, "jeeta.inbox.pending", ("GET", "/api/inbox/pending"), Read),
     twin("inbox.context", GateMode::Exempt, "jeeta.inbox.context", ("GET", "/api/inbox/conversations/{conversation_id}/context"), Read),
     twin("inbox.conversations.list", GateMode::Gated, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),
@@ -349,6 +354,46 @@ pub static CATALOG: &[UseCase] = &[
     // The webhook addresses to register at the providers; the NetGSM ones carry the workspace's
     // hook tokens, so `capabilities.manage` reads them.
     twin("connector.hooks", Exempt, "jeeta.connector.hooks", ("GET", "/api/connectors/hooks"), Read),
+    // A PBX's call policy (call mode, whether calls are recorded): reserved public keys only this
+    // writes, with a ledger entry.
+    twin("connector.set_pbx_policy", Exempt, "jeeta.connector.set_pbx_policy", ("PUT", "/api/connectors/{capability_id}/pbx-policy"), Write),
+    // Phone calls (voice V0, V1): gated by the strategy, except reading the policy. Placing a
+    // call spends the line's tariff; an agent's call is then driven turn by turn (listen, say,
+    // transfer).
+    twin("calls.policy_get", Exempt, "jeeta.calls.policy_get", ("GET", "/api/calls/policy"), Read),
+    twin("calls.policy_set", GateMode::Gated, "jeeta.calls.policy_set", ("PUT", "/api/calls/policy"), Write),
+    twin("calls.place", GateMode::Gated, "jeeta.calls.place", ("POST", "/api/calls"), Spend),
+    twin("calls.get", GateMode::Gated, "jeeta.calls.get", ("GET", "/api/calls/{call_id}"), Read),
+    twin("calls.list", GateMode::Gated, "jeeta.calls.list", ("GET", "/api/calls"), Read),
+    twin("calls.end", GateMode::Gated, "jeeta.calls.end", ("POST", "/api/calls/{call_id}/end"), Write),
+    // A long-poll of at most 25 seconds: `?after_seq&wait_s`.
+    twin("calls.listen", GateMode::Gated, "jeeta.calls.listen", ("GET", "/api/calls/{call_id}/events"), Read),
+    twin("calls.say", GateMode::Gated, "jeeta.calls.say", ("POST", "/api/calls/{call_id}/say"), Write),
+    twin("calls.transfer", GateMode::Gated, "jeeta.calls.transfer", ("POST", "/api/calls/{call_id}/transfer"), Write),
+    // The voice bridge's own surface (voice V1): served under /api/voice/bridge/* to the bridge's
+    // API key alone (`calls.bridge`, nothing else), never to a panel session and never as an MCP
+    // tool; exempt from the strategy gate, since the line is set up before any strategy.
+    panel_only("calls.bridge.register", Exempt, ("POST", "/api/voice/bridge/register"), Write),
+    panel_only("calls.bridge.commands", Exempt, ("GET", "/api/voice/bridge/commands"), Read),
+    panel_only("calls.bridge.events", Exempt, ("POST", "/api/voice/bridge/events"), Write),
+    // The device bridge's own surface (spec 2026-10-28-device-bridge-design.md §5.4): served
+    // under /api/devices/bridge/* to the bridge's API key alone (`devices.bridge`, nothing else),
+    // never to a panel session and never as an MCP tool; exempt from the strategy gate, since
+    // phones are set up before any strategy. `commands` is a long-poll of at most 25 seconds;
+    // `files` takes the file's own bytes as its body.
+    panel_only("devices.bridge.register", Exempt, ("POST", "/api/devices/bridge/register"), Write),
+    panel_only("devices.bridge.commands", Exempt, ("GET", "/api/devices/bridge/commands"), Read),
+    panel_only("devices.bridge.results", Exempt, ("POST", "/api/devices/bridge/results"), Write),
+    panel_only("devices.bridge.files", Exempt, ("POST", "/api/devices/bridge/files"), Write),
+    // The workspace's phones, for an agent or a person holding `devices.work` (spec §5.4):
+    // exempt from the strategy gate like the bridge, not from the status check. `observe` and
+    // `act` queue a command for a phone and wait up to 20 seconds for its result; `command_get`
+    // waits the same way for one command.
+    twin("devices.list", Exempt, "jeeta.devices.list", ("GET", "/api/devices"), Read),
+    twin("devices.observe", Exempt, "jeeta.devices.observe", ("POST", "/api/devices/{capability_id}/observe"), Write),
+    twin("devices.act", Exempt, "jeeta.devices.act", ("POST", "/api/devices/{capability_id}/act"), Write),
+    twin("devices.command_get", Exempt, "jeeta.devices.command_get", ("GET", "/api/devices/commands/{command_id}"), Read),
+    twin("devices.commands", Exempt, "jeeta.devices.commands", ("GET", "/api/devices/{capability_id}/commands"), Read),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

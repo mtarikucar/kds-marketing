@@ -20,6 +20,43 @@ const ADDED: [&str; 11] = [
     "platform.operators.reset_password",
 ];
 
+/// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
+/// device bridge's agent tools, D1-T6).
+const POST_M4_ADDED: [(&str, &str); 15] = [
+    ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
+    ("calls.policy_get", "jeeta.calls.policy_get"),
+    ("calls.policy_set", "jeeta.calls.policy_set"),
+    ("calls.place", "jeeta.calls.place"),
+    ("calls.get", "jeeta.calls.get"),
+    ("calls.list", "jeeta.calls.list"),
+    ("calls.end", "jeeta.calls.end"),
+    ("calls.listen", "jeeta.calls.listen"),
+    ("calls.say", "jeeta.calls.say"),
+    ("calls.transfer", "jeeta.calls.transfer"),
+    ("devices.list", "jeeta.devices.list"),
+    ("devices.observe", "jeeta.devices.observe"),
+    ("devices.act", "jeeta.devices.act"),
+    ("devices.command_get", "jeeta.devices.command_get"),
+    ("devices.commands", "jeeta.devices.commands"),
+];
+
+/// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
+/// passes (TikTok's Content Sharing Guidelines), so no MCP tool, and its published post's
+/// counters; and the voice and device bridges' own surfaces, each served to its bridge's key,
+/// never as an MCP tool.
+const POST_M4_PANEL_ONLY: [&str; 10] = [
+    "studio.tiktok_posting",
+    "studio.tiktok_post",
+    "studio.tiktok_metrics",
+    "calls.bridge.register",
+    "calls.bridge.commands",
+    "calls.bridge.events",
+    "devices.bridge.register",
+    "devices.bridge.commands",
+    "devices.bridge.results",
+    "devices.bridge.files",
+];
+
 fn baseline(key: &str) -> BTreeSet<String> {
     let baseline: Value = serde_json::from_str(include_str!("fixtures/m3_surface.json")).unwrap();
     baseline[key]
@@ -124,7 +161,18 @@ fn catalog_and_handlers_match_ratified_m4_surface_set() {
     for id in ADDED {
         assert!(expected.insert(id.into()));
     }
-    assert_eq!(CATALOG.len(), 144);
+    for (id, _) in POST_M4_ADDED {
+        assert!(expected.insert(id.into()));
+    }
+    for id in POST_M4_PANEL_ONLY {
+        assert!(expected.insert(id.into()));
+        let row = jt_app::catalog::find(id).unwrap();
+        assert!(row.panel_only && row.mcp_tool.is_none(), "{id}");
+    }
+    assert_eq!(
+        CATALOG.len(),
+        144 + POST_M4_ADDED.len() + POST_M4_PANEL_ONLY.len()
+    );
     assert_eq!(
         CATALOG
             .iter()
@@ -135,8 +183,11 @@ fn catalog_and_handlers_match_ratified_m4_surface_set() {
     let mut tools = baseline("tools");
     assert_eq!(tools.len(), 124);
     assert!(tools.insert("jeeta.billing.report_payment".into()));
+    for (_, tool) in POST_M4_ADDED {
+        assert!(tools.insert(tool.into()));
+    }
     let registry = jt_mcp::registry();
-    assert_eq!(registry.len(), 125);
+    assert_eq!(registry.len(), 125 + POST_M4_ADDED.len());
     assert_eq!(
         registry
             .iter()

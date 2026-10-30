@@ -505,8 +505,12 @@ async fn update_with_hosts(
 /// The evidence is checked (`validate_evidence`; gaps are `VALIDATION` with `details.gaps`) and
 /// stored as given, never checked against the world. An unknown id is `NOT_FOUND`; a capability
 /// reached through a connector is `CONFLICT` "connector capabilities are verified by their
-/// probe"; a retired one `CONFLICT` "capability is retired"; then an agent verifying what
-/// another connection declared without `capabilities.manage` is `FORBIDDEN` naming it. Writes
+/// probe"; one of a kind verified by its heartbeat (a voice bridge, by its own registration,
+/// `calls.bridge.register`; a phone, by its device bridge's, `devices.bridge.register`) is
+/// `CONFLICT` saying so, with `details.reason = "verified_by_heartbeat"`, its `kind_key` and the
+/// step that verifies it, `cleared_by` (`verified_by_heartbeat`); a retired one
+/// `CONFLICT` "capability is retired"; then an agent verifying what another connection declared
+/// without `capabilities.manage` is `FORBIDDEN` naming it. Writes
 /// `capability.verify` (payload `evidence_refs`: how many references the evidence has; never
 /// its text).
 pub async fn verify(
@@ -534,6 +538,9 @@ pub async fn verify(
             "connector capabilities are verified by their probe",
         ));
     }
+    if capability.kind().is_some_and(|k| k.heartbeat().is_some()) {
+        return Err(verified_by_heartbeat(&capability));
+    }
     not_retired(&capability)?;
     let declared_here = ctx.agent_connection_id.is_some()
         && capability.declared_by_connection == ctx.agent_connection_id;
@@ -558,6 +565,35 @@ pub async fn verify(
     .await?;
     repos.commit().await?;
     Ok(CapabilityOut::at(capability, ctx.now))
+}
+
+/// The refusal of `capability.verify` on `c`, of a kind verified by its heartbeat: `CONFLICT`
+/// saying what verifies it and how, with `details.reason = "verified_by_heartbeat"`, its
+/// `kind_key` and `cleared_by`, the step that verifies it (its bridge's registration,
+/// `calls.bridge.register` or `devices.bridge.register`: what clears its pending item,
+/// `work::offline_item`; `null` for a kind with none).
+fn verified_by_heartbeat(c: &Capability) -> AppError {
+    use super::calls::bridge::VOICE_BRIDGE_KIND;
+    use super::devices::PHONE_KIND;
+    let cleared_by = super::work::offline_item(c).map(|item| item.kind.cleared_by());
+    let (what, by) = match c.kind_key.as_str() {
+        VOICE_BRIDGE_KIND => ("a voice bridge", "its own registration"),
+        PHONE_KIND => (
+            "a phone",
+            "the registrations of the device bridge it is plugged into",
+        ),
+        _ => ("this capability", "its bridge's registrations"),
+    };
+    let step = cleared_by.map(|s| format!(" ({s})")).unwrap_or_default();
+    AppError {
+        code: ErrorCode::Conflict,
+        message: format!("{what} is verified only by {by}{step}, never by evidence"),
+        details: json!({
+            "reason": "verified_by_heartbeat",
+            "kind_key": c.kind_key,
+            "cleared_by": cleared_by,
+        }),
+    }
 }
 
 /// Marks capability `id` unreachable for `reason` and returns it. Needs `capabilities.manage`.
@@ -650,7 +686,12 @@ pub async fn set_policy(
 /// left, `hosts_revoked`: how many tenant hosts go). Once committed, each host it named that no
 /// other live connector capability of the workspace names is revoked; a host that cannot be
 /// revoked then is logged as a warning and the retirement is answered all the same, since it
-/// holds.
+/// holds. And a connection's access is given back at its provider (`Connector::revoke`: TikTok
+/// revokes the access token, so the app leaves the account's authorized apps), with the
+/// credential read before it was erased, in a task of its own, unless another live capability
+/// (of any workspace) still holds the same account: best effort, every outcome is logged (a
+/// failure by its kind only), and a grant not given back stays at the provider until the
+/// account's owner removes it there.
 pub async fn retire(
     deps: &Deps,
     ctx: &Ctx,
@@ -686,6 +727,13 @@ async fn retire_with_hosts(
         .capabilities()
         .set_status(id, StoredStatus::Retired, ctx.now)
         .await?;
+    // The connection's credential, read before it is erased, to give its access back at the
+    // provider once the retirement holds.
+    let sealed = if capability.has_sealed_config && capability.reach == Reach::Connector {
+        repos.capabilities().read_sealed(id).await?
+    } else {
+        None
+    };
     if capability.has_sealed_config {
         repos.capabilities().set_sealed(id, None, ctx.now).await?;
     }
@@ -766,7 +814,91 @@ async fn retire_with_hosts(
             );
         }
     }
+    if let Some(sealed) = sealed {
+        revoke_at_provider(deps, ctx, &capability, &sealed);
+    }
     Ok(out)
+}
+
+/// Gives back at its provider the access the retired `capability`'s credential (`sealed`, read
+/// before it was erased) granted, in a task of its own (see [`retire`]), unless another live
+/// capability, in any workspace, still holds the same account with sealed credentials: the
+/// provider's grant is the account's (TikTok's revocation ends the account's whole authorization
+/// of the app), so revoking it would cut that one off too. Each outcome is logged (never the
+/// account): given back, kept for its other holders, or refused.
+fn revoke_at_provider(deps: &Deps, ctx: &Ctx, capability: &Capability, sealed: &[u8]) {
+    let Some(provider) = jt_connector::provider_for_kind(&capability.kind_key) else {
+        return;
+    };
+    let Some(adapter) = deps.connectors.connector(provider) else {
+        return;
+    };
+    let (ws, id, kind_key) = (ctx.workspace_id, capability.id, capability.kind_key.clone());
+    let credential = match connector::open_credential(deps, ws, sealed) {
+        Ok(credential) => credential,
+        Err(e) => {
+            tracing::warn!(
+                workspace_id = %ws,
+                capability_id = %id,
+                code = e.code.as_str(),
+                "a retired capability's credential could not be opened to give its access back"
+            );
+            return;
+        }
+    };
+    let account = capability.external_id.clone();
+    let deps = deps.clone();
+    tokio::spawn(async move {
+        if let Some(account) = account.as_deref() {
+            let holders = match deps.uow.platform().await {
+                Ok(mut platform) => {
+                    platform
+                        .capabilities_holding(provider.kinds(), account)
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+            match holders {
+                Ok(holders) if holders.iter().any(|c| c.id != id) => {
+                    tracing::info!(
+                        workspace_id = %ws,
+                        capability_id = %id,
+                        kind_key = %kind_key,
+                        "a retired capability's access was not given back: another capability \
+                         still holds the account, and the grant is the account's"
+                    );
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        workspace_id = %ws,
+                        capability_id = %id,
+                        code = e.code.as_str(),
+                        "a retired capability's access was not given back: whether another \
+                         capability holds the account could not be read"
+                    );
+                    return;
+                }
+            }
+        }
+        match adapter.revoke(&credential).await {
+            Ok(()) => tracing::info!(
+                workspace_id = %ws,
+                capability_id = %id,
+                kind_key = %kind_key,
+                "a retired capability's access was given back at its provider"
+            ),
+            Err(e) => tracing::warn!(
+                workspace_id = %ws,
+                capability_id = %id,
+                kind_key = %kind_key,
+                error_kind = e.kind(),
+                "a retired capability's access could not be given back at its provider; it stays \
+                 granted there until the account's owner removes it"
+            ),
+        }
+    });
 }
 
 /// Links capability `id` to budget item `item`, the one it spends from, and returns it; linking

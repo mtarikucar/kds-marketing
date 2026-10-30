@@ -120,6 +120,8 @@ pub struct MemState {
     pub activation_codes: Vec<jt_app::ports::billing::ActivationCodeRow>,
     pub billing_references: Vec<(WorkspaceId, String)>,
     pub studio: super::studio::MemStudio,
+    pub calls: super::calls::MemCalls,
+    pub devices: super::devices::MemDevices,
     pub inbox: super::inbox::MemInbox,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
@@ -410,11 +412,26 @@ pub struct InMemoryUow {
     mail_cursor_faults: Arc<AtomicUsize>,
     studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
+    after_call_insert: Arc<Mutex<Option<CallInsertHook>>>,
 }
+
+/// A change made to the tables inside the bundle that next stores a call session.
+pub(super) type CallInsertHook = Arc<dyn Fn(&mut MemState) + Send + Sync>;
 
 impl InMemoryUow {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Changes the committed tables directly (test setup a use case has no path for).
+    pub fn edit(&self, f: impl FnOnce(&mut MemState)) {
+        f(&mut lock(&self.state));
+    }
+
+    /// Runs `hook` on the tables inside the bundle that next stores a call session, as a write of
+    /// that bundle: something that changes right after the first call fence passed.
+    pub fn after_call_insert(&self, hook: impl Fn(&mut MemState) + Send + Sync + 'static) {
+        *lock(&self.after_call_insert) = Some(Arc::new(hook));
     }
 
     /// A copy of the committed tables, for assertions.
@@ -490,6 +507,7 @@ pub(super) struct MemTx {
     mail_cursor_faults: Arc<AtomicUsize>,
     studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
+    pub(super) after_call_insert: Arc<Mutex<Option<CallInsertHook>>>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
     ops: Vec<Op>,
@@ -522,6 +540,7 @@ impl MemTx {
             mail_cursor_faults: Arc::clone(&uow.mail_cursor_faults),
             studio_brake_faults: Arc::clone(&uow.studio_brake_faults),
             capability_after_list: Arc::clone(&uow.capability_after_list),
+            after_call_insert: Arc::clone(&uow.after_call_insert),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
             ops: Vec::new(),

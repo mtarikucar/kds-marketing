@@ -23,6 +23,8 @@ export interface KindSelectProps {
   only?: readonly string[];
   disabled?: boolean;
   className?: string;
+  /** Show each kind's key beside its name (operator/agent screens); people-facing pickers hide it. */
+  showKeys?: boolean;
 }
 
 /** A capability kind picker, grouped by kind group, each kind with its key beside its name. */
@@ -36,6 +38,7 @@ export function KindSelect({
   only,
   disabled,
   className,
+  showKeys = true,
 }: KindSelectProps) {
   const { t } = useTranslation();
   const allowed = (key: string) => !only || only.includes(key);
@@ -57,7 +60,7 @@ export function KindSelect({
               {kinds.map((kind) => (
                 <SelectItem key={kind.key} value={kind.key}>
                   {t(`capabilities.kinds.${kind.key}`)}
-                  <span className="ms-2 font-mono text-micro text-muted-foreground">{kind.key}</span>
+                  {showKeys && <span className="ms-2 font-mono text-micro text-muted-foreground">{kind.key}</span>}
                 </SelectItem>
               ))}
             </SelectGroup>

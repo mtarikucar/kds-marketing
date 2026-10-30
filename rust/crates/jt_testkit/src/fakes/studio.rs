@@ -10,7 +10,9 @@ use jt_app::{
 };
 use jt_ledger::{Action, Actor, LedgerEntry};
 use jt_strategy::LaneKind;
-use jt_studio::{RetirementReason, SlotEvent, StudioError, StudioPolicy, transition_slot};
+use jt_studio::{
+    PublishReceipt, RetirementReason, SlotEvent, StudioError, StudioPolicy, transition_slot,
+};
 use jt_tenancy::WorkspaceId;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -755,6 +757,78 @@ impl StudioRepo for MemTenant {
     ) -> Result<Option<PublishAttempt>, AppError> {
         self.claim_studio(now, Some(slot)).await
     }
+    async fn attempt_by_receipt(
+        &mut self,
+        capability: jt_capability::CapabilityId,
+        external_id: &str,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .studio
+            .attempts
+            .iter()
+            .filter(|a| a.piece().chain.workspace_id == ws && a.capability_id() == capability)
+            .find(|a| {
+                matches!(
+                    a.outcome(),
+                    Some(
+                        jt_studio::PublishOutcome::Observed(r)
+                        | jt_studio::PublishOutcome::Succeeded(r)
+                    ) if r.external_id == external_id
+                )
+            })
+            .cloned())
+    }
+    async fn upgrade_receipt(
+        &mut self,
+        id: PublishAttemptId,
+        receipt: PublishReceipt,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        StrategyRepo::lock_execution_frame(self).await?;
+        self.lock_control().await?;
+        let old = self
+            .state()
+            .studio
+            .attempts
+            .iter()
+            .find(|a| a.piece().chain.workspace_id == self.ws && a.id() == id)
+            .cloned()
+            .ok_or_else(|| AppError::not_found("attempt"))?;
+        let a = old.upgrade_receipt(&receipt).map_err(invalid)?;
+        if a == old {
+            return Ok(false);
+        }
+        let ws = self.ws;
+        self.studio_write(|state, _| {
+            let p = state
+                .publications
+                .iter()
+                .position(|p| p.chain.workspace_id == ws && p.attempt_id == id)
+                .ok_or_else(|| AppError::not_found("publication"))?;
+            let next = state.publications[p]
+                .upgrade_receipt(&receipt)
+                .map_err(invalid)?;
+            if state.publications.iter().any(|r| {
+                r.chain.workspace_id == ws
+                    && r.id != next.id
+                    && r.capability_id == next.capability_id
+                    && r.external_id == next.external_id
+            }) {
+                return Err(AppError::conflict("publication identity"));
+            }
+            state.publications[p] = next;
+            *state
+                .attempts
+                .iter_mut()
+                .find(|r| r.id() == id)
+                .expect("loaded") = a.clone();
+            Ok(())
+        })?;
+        self.attempt_ledger(&a, "studio.publish.public_id", at)?;
+        Ok(true)
+    }
     async fn finish_publication(
         &mut self,
         id: PublishAttemptId,
@@ -771,8 +845,12 @@ impl StudioRepo for MemTenant {
             .find(|a| a.piece().chain.workspace_id == self.ws && a.id() == id)
             .cloned()
             .ok_or_else(|| AppError::not_found("attempt"))?;
+        let reason = o.failure_reason();
         let outcome = o.into_redacted();
-        let a = old.finish_at(&outcome, observed_at).map_err(invalid)?;
+        let a = old
+            .finish_at(&outcome, observed_at)
+            .map_err(invalid)?
+            .with_failure_reason(reason);
         if a == old {
             return Ok(());
         }

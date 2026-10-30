@@ -71,6 +71,14 @@ impl TenantRepos for MemTenant {
         self
     }
 
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self
+    }
+
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
     }

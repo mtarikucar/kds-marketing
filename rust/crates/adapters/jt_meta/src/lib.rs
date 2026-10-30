@@ -86,7 +86,7 @@ use jt_outbound::Egress;
 use url::Url;
 
 pub use graph::DEFAULT_GRAPH_VERSION;
-pub use oauth::{FACEBOOK_SCOPES, INSTAGRAM_SCOPES, PAGE_SUBSCRIBED_FIELDS};
+pub use oauth::{FACEBOOK_SCOPES, INSTAGRAM_SCOPES, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS};
 pub use webhook::{
     InboundEventDraft, Origin, ParseError, ParsedEvent, WebhookError, parse, scoped_body,
     verify_and_parse,

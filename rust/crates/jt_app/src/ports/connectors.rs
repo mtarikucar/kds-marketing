@@ -91,6 +91,54 @@ impl fmt::Debug for XApp {
     }
 }
 
+/// The platform's TikTok app (Login Kit and the Content Posting API). TikTok names its client id
+/// the client key. `Debug` masks the client secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TiktokApp {
+    pub client_key: String,
+    pub client_secret: String,
+}
+
+impl fmt::Debug for TiktokApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TiktokApp")
+            .field("client_key", &self.client_key)
+            .field("client_secret", &Masked)
+            .finish()
+    }
+}
+
+/// The platform's LinkedIn app (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn
+/// and, once LinkedIn approves it, the Community Management API). `Debug` masks the client
+/// secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LinkedinApp {
+    pub client_id: String,
+    pub client_secret: String,
+    /// Whether flows may ask for the organization scopes (`r_organization_social`,
+    /// `w_organization_social`, `rw_organization_admin`): set by the operator once LinkedIn has
+    /// approved the Community Management API for the app (`JEETA_LINKEDIN_ORG_SCOPES`), since
+    /// LinkedIn refuses a whole authorize request that names a scope the app was not granted.
+    /// Every LinkedIn flow then asks for them (LinkedIn invalidates a member's earlier tokens
+    /// when a flow asks for another set of scopes); without them, `linkedin_page` flows are
+    /// refused.
+    pub organization_scopes: bool,
+    /// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (`JEETA_LINKEDIN_API_VERSION`);
+    /// `None` lets the adapter use its pinned default.
+    pub api_version: Option<String>,
+}
+
+impl fmt::Debug for LinkedinApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkedinApp")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &Masked)
+            .field("organization_scopes", &self.organization_scopes)
+            .field("api_version", &self.api_version)
+            .finish()
+    }
+}
+
 /// The platform's provider apps and its public address, read-only. The binary implements it from
 /// the environment; an app that is not configured is `None`, and the kinds it serves cannot be
 /// connected by OAuth.
@@ -98,6 +146,14 @@ pub trait PlatformAppConfig: Send + Sync {
     fn meta_app(&self) -> Option<MetaApp>;
     fn instagram_app(&self) -> Option<InstagramApp>;
     fn x_app(&self) -> Option<XApp>;
+    /// The TikTok app; `None` (the default) while it is not configured.
+    fn tiktok_app(&self) -> Option<TiktokApp> {
+        None
+    }
+    /// The LinkedIn app; `None` (the default) while it is not configured.
+    fn linkedin_app(&self) -> Option<LinkedinApp> {
+        None
+    }
     /// Where the panel is reached from outside, for OAuth redirect URIs and webhook URLs; `None`
     /// while it is not configured, and then no flow starts and no webhook URL is shown (the
     /// binary requires it whenever a provider app is configured).
@@ -115,12 +171,16 @@ pub trait PlatformAppConfig: Send + Sync {
 /// | `meta` | the Meta app (Facebook Login) | every Meta kind but `instagram` | every Meta capability the Meta app issued, `instagram` ones included (through their Page) |
 /// | `instagram` | the Instagram app (Instagram Login) | `instagram` | an `instagram` capability the Instagram app issued |
 /// | `x` | the X app | `x` | `x` |
+/// | `tiktok` | the TikTok app | `tiktok` | `tiktok` |
+/// | `linkedin` | the LinkedIn app | `linkedin_member`, `linkedin_page` (the latter only with the organization scopes) | the same |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthCallback {
     Meta,
     Instagram,
     X,
+    Tiktok,
+    Linkedin,
 }
 
 impl OAuthCallback {
@@ -130,15 +190,20 @@ impl OAuthCallback {
             OAuthCallback::Meta,
             OAuthCallback::Instagram,
             OAuthCallback::X,
+            OAuthCallback::Tiktok,
+            OAuthCallback::Linkedin,
         ]
     }
 
-    /// The redirect URI's last segment, also what is stored: `meta`, `instagram` or `x`.
+    /// The redirect URI's last segment, also what is stored: `meta`, `instagram`, `x`, `tiktok`
+    /// or `linkedin`.
     pub fn key(self) -> &'static str {
         match self {
             OAuthCallback::Meta => "meta",
             OAuthCallback::Instagram => "instagram",
             OAuthCallback::X => "x",
+            OAuthCallback::Tiktok => "tiktok",
+            OAuthCallback::Linkedin => "linkedin",
         }
     }
 
@@ -155,6 +220,8 @@ impl OAuthCallback {
         match self {
             OAuthCallback::Meta | OAuthCallback::Instagram => Provider::Meta,
             OAuthCallback::X => Provider::X,
+            OAuthCallback::Tiktok => Provider::Tiktok,
+            OAuthCallback::Linkedin => Provider::Linkedin,
         }
     }
 
@@ -165,27 +232,36 @@ impl OAuthCallback {
             Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
             Provider::Meta => Some(OAuthCallback::Meta),
             Provider::X => Some(OAuthCallback::X),
+            Provider::Tiktok => Some(OAuthCallback::Tiktok),
+            Provider::Linkedin => Some(OAuthCallback::Linkedin),
             Provider::Netgsm | Provider::Mail => None,
         }
     }
 }
 
 /// The app an OAuth flow runs under. Meta serves two login flows: Facebook Login with the Meta
-/// app, and Instagram Login with the Instagram app; the variant tells the adapter which.
+/// app, and Instagram Login with the Instagram app; the variant tells the adapter which. A
+/// LinkedIn flow's app says whether the flow asks for the organization scopes
+/// ([`LinkedinApp::organization_scopes`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OAuthApp {
     Meta(MetaApp),
     Instagram(InstagramApp),
     X(XApp),
+    Tiktok(TiktokApp),
+    Linkedin(LinkedinApp),
 }
 
 impl OAuthApp {
-    /// The public client id: the Meta or Instagram app id, or the X client id.
+    /// The public client id: the Meta or Instagram app id, the X or LinkedIn client id, or the
+    /// TikTok client key.
     pub fn client_id(&self) -> &str {
         match self {
             OAuthApp::Meta(app) => &app.app_id,
             OAuthApp::Instagram(app) => &app.app_id,
             OAuthApp::X(app) => &app.client_id,
+            OAuthApp::Tiktok(app) => &app.client_key,
+            OAuthApp::Linkedin(app) => &app.client_id,
         }
     }
 
@@ -195,6 +271,8 @@ impl OAuthApp {
             OAuthApp::Meta(app) => &app.app_secret,
             OAuthApp::Instagram(app) => &app.app_secret,
             OAuthApp::X(app) => &app.client_secret,
+            OAuthApp::Tiktok(app) => &app.client_secret,
+            OAuthApp::Linkedin(app) => &app.client_secret,
         }
     }
 }
@@ -254,9 +332,28 @@ pub struct MailboxPosition {
 
 /// Independent positions for mailbox names (INBOX and Sent). The caller persists the returned
 /// cursor atomically with the inbound drafts, so a failed transaction can safely poll again.
+///
+/// A mailbox the cursor holds no position for (a newly connected mailbox, a Sent folder found
+/// later) or whose UIDVALIDITY changed (renumbering every message) starts at its current end: the
+/// poll records its position and ingests only mail that arrives afterwards, never the history
+/// already in it, which would otherwise land in the reply-owed queue as if it were new.
+/// `read_history` reads such a mailbox from its first message instead; it is a call-time option
+/// (an explicit import, the adapter tests) that is never persisted, so no connected mailbox sets it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailboxCursor {
     pub mailboxes: BTreeMap<String, MailboxPosition>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_history: bool,
+}
+
+impl MailboxCursor {
+    /// An empty cursor that reads every mailbox from its first message.
+    pub fn reading_history() -> MailboxCursor {
+        MailboxCursor {
+            read_history: true,
+            ..MailboxCursor::default()
+        }
+    }
 }
 
 /// A post to publish: its text, the media to attach and an optional link.
@@ -269,6 +366,16 @@ pub struct MailboxCursor {
 ///
 /// `media` is never serialised: a request written out carries no bytes, and one read back has
 /// none (`media` empty), so the bytes are supplied again where they are needed.
+///
+/// `privacy` is who may see the post, by the provider's own name (TikTok's `privacy_level`:
+/// `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR` or `SELF_ONLY`); `None`
+/// lets the adapter post publicly. An adapter that cannot honour it refuses the post rather than
+/// posting to another audience; one without such a setting ignores it.
+///
+/// `tiktok` is what a human chose on the TikTok posting screen (`jt_studio::TiktokPost`): the
+/// caption (then `text`, with no `link`), the privacy (then also `privacy`), the interactions and
+/// the commercial content disclosure. The TikTok adapter posts nothing without it and never
+/// picks a privacy itself; every other adapter ignores it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub text: String,
@@ -277,10 +384,19 @@ pub struct PublishRequest {
     /// The files to upload, in the order they are attached. Never serialised.
     #[serde(skip)]
     pub media: Vec<MediaUpload>,
+    /// Who may see the post (see above); `None`: public.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
+    /// The TikTok posting screen's choice (see above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiktok: Option<TiktokPost>,
 }
 
 // Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
-pub use jt_studio::{MediaUpload, PublishReceipt};
+pub use jt_studio::{
+    MediaUpload, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost, TiktokPostFlags,
+    TiktokPostMode, TiktokPostRefusal,
+};
 
 /// One post's counters, by the provider's metric name (e.g. `"impressions"`, `"likes"`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +407,20 @@ pub struct PostMetrics {
 /// An account's counters, by the provider's metric name (e.g. `"followers"`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountMetrics {
+    pub metrics: BTreeMap<String, i64>,
+}
+
+/// One of an account's recent public posts, as its provider lists them
+/// ([`InsightsReader::recent_posts`]): its id, title, cover image and page (browser URLs, never
+/// fetched), when it was posted, and its counters by the provider's metric name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentPost {
+    pub id: String,
+    pub title: Option<String>,
+    pub cover_image_url: Option<Url>,
+    pub share_url: Option<Url>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub created_at: Option<OffsetDateTime>,
     pub metrics: BTreeMap<String, i64>,
 }
 
@@ -533,6 +663,15 @@ pub trait Connector: Send + Sync {
         let _ = (cred, public);
         Ok(Value::Null)
     }
+    /// Gives back, at the provider, the access `cred` grants the platform's app, once its
+    /// capability is retired (TikTok's token revocation: the app then leaves the account's
+    /// authorized apps). Best effort: the retirement, and the credential's erasure, never wait on
+    /// it. The default does nothing (a provider that offers no revocation, or one this system does
+    /// not call).
+    async fn revoke(&self, cred: &Credential) -> Result<(), ConnectorError> {
+        let _ = cred;
+        Ok(())
+    }
 }
 
 /// Sends SMS.
@@ -551,6 +690,25 @@ pub trait SmsSender: Send + Sync {
     ) -> Result<SendReceipt, ConnectorError>;
 }
 
+/// Where a post stands at the provider once [`Publisher::publish`] returned its receipt, for a
+/// provider that publishes in the background (TikTok processes a video after accepting it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublishResolution {
+    /// The post is live: its own receipt, whose id may differ from the one `publish` returned
+    /// (TikTok's publish id becomes the post's id).
+    Published(PublishReceipt),
+    /// The post is live but the provider names no public id for it yet: TikTok names one only
+    /// once the post is public and passed its moderation, so a post everyone may see can read
+    /// complete before it has one, and one fewer may see never does. The receipt is the post as
+    /// known now (TikTok's publish id, no URL): the publication settles as it unless a public id
+    /// may still come (see `usecases::studio::publish::PUBLIC_ID_WAIT`).
+    AwaitingPublicId(PublishReceipt),
+    /// Not settled yet: ask again later.
+    Pending,
+    /// The provider gave up on it, for this reason.
+    Failed(ConnectorError),
+}
+
 /// Publishes posts.
 #[async_trait]
 pub trait Publisher: Send + Sync {
@@ -560,6 +718,31 @@ pub trait Publisher: Send + Sync {
         public: &Value,
         request: &PublishRequest,
     ) -> Result<PublishReceipt, ConnectorError>;
+    /// Where the post `receipt` names stands at the provider (`public` as [`Connector::probe`]
+    /// gets it). `None`, the default, for a provider whose `publish` answers only once the post is
+    /// live: its receipt is the post. A read: it never publishes anything.
+    async fn resolve(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<Option<PublishResolution>, ConnectorError> {
+        let _ = (cred, public, receipt);
+        Ok(None)
+    }
+    /// What the provider says, right now, about the account a post goes to, for a provider whose
+    /// posts a human makes on its posting screen (TikTok's `creator_info`, read fresh each time
+    /// the screen is shown and before a choice is accepted; an account that may not post at this
+    /// moment says why in [`TiktokCreator::cannot_post`] rather than failing). `None`, the
+    /// default, for a provider without such a screen. A read: it never publishes anything.
+    async fn creator_info(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<TiktokCreator>, ConnectorError> {
+        let _ = (cred, public);
+        Ok(None)
+    }
 }
 
 /// Reads the counters of posts and accounts.
@@ -578,6 +761,18 @@ pub trait InsightsReader: Send + Sync {
         cred: &Credential,
         public: &Value,
     ) -> Result<AccountMetrics, ConnectorError>;
+    /// The account's most recent public posts, newest first, at most `limit` (the provider may
+    /// cap it), each with its counters, for a provider that lists them (TikTok's
+    /// `/v2/video/list/`). `None`, the default, for one that does not.
+    async fn recent_posts(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        limit: u32,
+    ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
+        let _ = (cred, public, limit);
+        Ok(None)
+    }
 }
 
 /// Sends direct messages (Messenger, Instagram, WhatsApp).
@@ -591,6 +786,18 @@ pub trait MessagingSender: Send + Sync {
         recipient_id: &str,
         text: &str,
     ) -> Result<SendReceipt, ConnectorError>;
+    /// The name the provider shows for `sender_id`, the provider's id of a person who wrote to
+    /// the capability (`public` as [`Connector::probe`] gets it); `None` when it tells none.
+    /// Best-effort: the inbox only asks for a person it has no name for, and goes on without one.
+    async fn sender_name(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        sender_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        let _ = (cred, public, sender_id);
+        Ok(None)
+    }
 }
 
 /// Sends typed mail within `ws`, preserving the caller's Message-ID, thread headers and attachments.
@@ -730,6 +937,14 @@ pub trait Telephony: Send + Sync {
     /// (NetGSM: the `unique_id`). That is not always the receipt's correlation id: a NetGSM
     /// receipt carries the `crm_id`, which the call events carry beside the `unique_id`.
     async fn hangup(&self, cred: &Credential, call_id: &str) -> Result<(), ConnectorError>;
+    /// The PBX's call records between `from` and `to`, as call events whose `external_id` is
+    /// the one its webhook gives the same record, so a poll never duplicates a push.
+    async fn call_records(
+        &self,
+        cred: &Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
 }
 
 /// Records consent changes in the consent registry (İYS).
@@ -810,21 +1025,42 @@ mod tests {
             client_id: "x-id".into(),
             client_secret: "x-secret-value".into(),
         };
+        let tiktok = TiktokApp {
+            client_key: "tt-key".into(),
+            client_secret: "tt-secret-value".into(),
+        };
+        let linkedin = LinkedinApp {
+            client_id: "li-id".into(),
+            client_secret: "li-secret-value".into(),
+            organization_scopes: true,
+            api_version: Some("202610".into()),
+        };
         let printed = format!(
-            "{meta:?} {instagram:?} {x:?} {:?}",
-            OAuthApp::Meta(meta.clone())
+            "{meta:?} {instagram:?} {x:?} {tiktok:?} {linkedin:?} {:?} {:?} {:?}",
+            OAuthApp::Meta(meta.clone()),
+            OAuthApp::Tiktok(tiktok.clone()),
+            OAuthApp::Linkedin(linkedin.clone())
         );
         for secret in [
             "meta-secret-value",
             "verify-token-value",
             "ig-secret-value",
             "x-secret-value",
+            "tt-secret-value",
+            "li-secret-value",
         ] {
             assert!(!printed.contains(secret), "{printed}");
         }
-        for public in ["meta-id", "cfg-1", "v19.0", "ig-id", "x-id"] {
+        for public in [
+            "meta-id", "cfg-1", "v19.0", "ig-id", "x-id", "tt-key", "li-id", "202610",
+        ] {
             assert!(printed.contains(public), "{printed}");
         }
+        assert_eq!(OAuthApp::Tiktok(tiktok).client_id(), "tt-key");
+        assert_eq!(
+            OAuthApp::Linkedin(linkedin).client_secret(),
+            "li-secret-value"
+        );
         assert_eq!(OAuthApp::X(x).client_id(), "x-id");
         assert_eq!(
             OAuthApp::Instagram(instagram).client_secret(),
@@ -870,6 +1106,8 @@ mod tests {
                 mime: "image/png".into(),
                 filename: "a.png".into(),
             }],
+            privacy: None,
+            tiktok: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(

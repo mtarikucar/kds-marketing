@@ -192,7 +192,7 @@ async fn full_productisation_smoke() {
         key,
         &session,
         "jeeta.capability.declare",
-        json!({"kind_key":"phone","name":"Synthetic agent phone"}),
+        json!({"kind_key":"computer","name":"Synthetic agent computer"}),
     )
     .await;
     let cap_id = cap["capability"]["id"].as_str().unwrap();

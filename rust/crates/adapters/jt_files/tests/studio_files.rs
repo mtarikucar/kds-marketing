@@ -110,6 +110,267 @@ async fn provider_url_expires_at_24_hours_and_is_tenant_signed() {
     );
     std::fs::remove_dir_all(p).unwrap();
 }
+#[tokio::test]
+async fn a_pulled_file_is_kept_and_a_url_may_live_shorter_than_a_day() {
+    let p = root();
+    let ws = WorkspaceId::new_v7();
+    let d = disk(&p);
+    // A file a device bridge pulled off a phone: any bytes, none too, kept as uploaded.
+    for (bytes, filename) in [
+        (b"\x00\x01any bytes".to_vec(), "pulled.bin"),
+        (Vec::new(), "empty.bin"),
+    ] {
+        let id = FileId::new_v7();
+        let u = MediaUpload {
+            bytes,
+            mime: "application/octet-stream".into(),
+            filename: filename.into(),
+        };
+        d.put(ws, id, u.clone()).await.unwrap();
+        assert_eq!(disk(&p).read(ws, id).await.unwrap(), u);
+    }
+    // A ten-minute URL (a device bridge's `push_file`) reads the file until it expires.
+    let id = FileId::new_v7();
+    d.put(ws, id, upload()).await.unwrap();
+    let url = d
+        .provider_url(ws, id, FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap();
+    assert_eq!(url.scheme(), "https");
+    let q: std::collections::HashMap<_, _> = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    let expiry: i64 = q["expires"].parse().unwrap();
+    assert_eq!(expiry, (FIXED_NOW + Duration::minutes(10)).unix_timestamp());
+    let verify = |now| jt_files::verify(&[42; 32], ws, id, expiry, &q["signature"], now);
+    assert!(verify(FIXED_NOW + Duration::minutes(9)).is_ok());
+    assert!(verify(FIXED_NOW + Duration::minutes(10)).is_err());
+    // A URL that would be over already is refused.
+    assert!(d.provider_url(ws, id, FIXED_NOW).await.is_err());
+    std::fs::remove_dir_all(p).unwrap();
+}
+#[tokio::test]
+async fn a_streamed_file_is_hashed_as_it_comes_and_linked_whole() {
+    use jt_testkit::fakes::files::Chunks;
+    let p = root();
+    let ws = WorkspaceId::new_v7();
+    let d = disk(&p);
+    // A pulled file in three chunks reads back whole, with its size and hash.
+    let id = FileId::new_v7();
+    let mut source = Chunks(vec![b"ab".to_vec(), Vec::new(), b"cd\x00e".to_vec()].into());
+    let f = d
+        .put_stream(
+            ws,
+            id,
+            "application/octet-stream",
+            "pulled.bin",
+            &mut source,
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.size_bytes, 6);
+    let back = disk(&p).read(ws, id).await.unwrap();
+    assert_eq!(back.bytes, b"abcd\x00e");
+    assert_eq!(f.sha256, hex_of(&back.bytes));
+    // A PNG streams too; one that is not a PNG is refused and leaves no file behind.
+    let shot = FileId::new_v7();
+    let mut source = Chunks(vec![b"\x89PNG".to_vec(), b"\r\n\x1a\nscreen".to_vec()].into());
+    d.put_stream(ws, shot, "image/png", "shot.png", &mut source)
+        .await
+        .unwrap();
+    let fake = FileId::new_v7();
+    let mut source = Chunks::of(b"not a png");
+    assert!(
+        d.put_stream(ws, fake, "image/png", "fake.png", &mut source)
+            .await
+            .is_err()
+    );
+    let names: Vec<String> = std::fs::read_dir(p.join(ws.to_string()))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
+    // A body that fails part way (the use case's idle timeout, a dropped connection) leaves no
+    // file either, temporary or not.
+    let cut = FileId::new_v7();
+    let mut source = FailsAfterOne { sent: false };
+    assert!(
+        d.put_stream(ws, cut, "application/octet-stream", "cut.bin", &mut source)
+            .await
+            .is_err()
+    );
+    let names: Vec<String> = std::fs::read_dir(p.join(ws.to_string()))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    // A streamed file is new: its id is not taken again.
+    let mut source = Chunks::of(b"again");
+    let e = d
+        .put_stream(
+            ws,
+            id,
+            "application/octet-stream",
+            "pulled.bin",
+            &mut source,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::Conflict);
+    // A URL for a file that is not there is NOT_FOUND; for one that is, it is signed from the
+    // file's header alone.
+    let e = d
+        .provider_url(ws, FileId::new_v7(), FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::NotFound);
+    assert!(
+        d.provider_url(ws, id, FIXED_NOW + Duration::minutes(10))
+            .await
+            .is_ok()
+    );
+    std::fs::remove_dir_all(p).unwrap();
+}
+#[tokio::test]
+async fn a_large_file_is_served_a_chunk_at_a_time() {
+    use futures_util::StreamExt;
+    use jt_files::READ_CHUNK;
+    use jt_testkit::fakes::files::Chunks;
+    use tower::ServiceExt;
+    let p = root();
+    let ws = WorkspaceId::new_v7();
+    let d = Arc::new(disk(&p));
+    // A pulled file of a mebibyte and a bit, uploaded in 256 KiB parts.
+    let bytes: Vec<u8> = (0..(1024 * 1024 + 5)).map(|i| (i % 251) as u8).collect();
+    let id = FileId::new_v7();
+    let mut source = Chunks(bytes.chunks(256 * 1024).map(<[u8]>::to_vec).collect());
+    d.put_stream(
+        ws,
+        id,
+        "application/octet-stream",
+        "pulled.bin",
+        &mut source,
+    )
+    .await
+    .unwrap();
+
+    // Read as a stream: never more than READ_CHUNK bytes at a time, the whole file in the end.
+    let mut opened = d.read_stream(ws, id).await.unwrap();
+    assert_eq!(opened.mime, "application/octet-stream");
+    assert_eq!(opened.size_bytes, bytes.len() as u64);
+    let (mut read, mut chunks) = (Vec::new(), 0);
+    while let Some(chunk) = opened.bytes.next_chunk().await.unwrap() {
+        assert!(chunk.len() <= READ_CHUNK, "{}", chunk.len());
+        read.extend_from_slice(&chunk);
+        chunks += 1;
+    }
+    assert!(chunks > bytes.len() / READ_CHUNK, "{chunks}");
+    assert_eq!(read, bytes);
+    // An empty file streams too: no chunk, its hash checked.
+    let empty = FileId::new_v7();
+    d.put_stream(
+        ws,
+        empty,
+        "application/octet-stream",
+        "empty.bin",
+        &mut Chunks(Default::default()),
+    )
+    .await
+    .unwrap();
+    let mut opened = d.read_stream(ws, empty).await.unwrap();
+    assert_eq!(opened.size_bytes, 0);
+    assert_eq!(opened.bytes.next_chunk().await.unwrap(), None);
+    // A file that is not there is NOT_FOUND.
+    let e = d.read_stream(ws, FileId::new_v7()).await.err().unwrap();
+    assert_eq!(e.code, jt_app::error::ErrorCode::NotFound);
+    // Whether a file is stored is read from its header: another workspace has none of it.
+    assert!(d.exists(ws, id).await.unwrap());
+    assert!(!d.exists(ws, FileId::new_v7()).await.unwrap());
+    assert!(!d.exists(WorkspaceId::new_v7(), id).await.unwrap());
+
+    // Served the same way: the body is a stream, not bytes held whole (it does not know its own
+    // length, which the response announces), arriving in chunks of at most READ_CHUNK bytes.
+    let url = d
+        .provider_url(ws, id, FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap();
+    let app = jt_files::router(d.clone(), Arc::new(FixedClock(FIXED_NOW)), [42; 32]);
+    let get = || {
+        axum::http::Request::get(format!("{}?{}", url.path(), url.query().unwrap()))
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+    let response = app.clone().oneshot(get()).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let length = bytes.len().to_string();
+    assert_eq!(response.headers()["content-length"], length.as_str());
+    assert_eq!(
+        response.headers()["content-type"],
+        "application/octet-stream"
+    );
+    assert_eq!(response.headers()["cache-control"], "private, no-store");
+    let body = response.into_body();
+    assert_eq!(axum::body::HttpBody::size_hint(&body).exact(), None);
+    let mut stream = body.into_data_stream();
+    let (mut served, mut frames) = (Vec::new(), 0);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.unwrap();
+        assert!(chunk.len() <= READ_CHUNK, "{}", chunk.len());
+        served.extend_from_slice(&chunk);
+        frames += 1;
+    }
+    assert!(frames > 1, "{frames}");
+    assert_eq!(served, bytes);
+
+    // A file whose bytes changed on disk is cut off before its last chunk: never served whole.
+    let path = p.join(ws.to_string()).join(id.to_string());
+    let mut stored = std::fs::read(&path).unwrap();
+    let at = stored.len() - 200_000;
+    stored[at] ^= 0xff;
+    std::fs::write(&path, &stored).unwrap();
+    let response = app.oneshot(get()).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let (mut got, mut failed) = (0, false);
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(chunk) => got += chunk.len(),
+            Err(_) => {
+                failed = true;
+                break;
+            }
+        }
+    }
+    assert!(failed);
+    assert!(got < bytes.len(), "{got}");
+    std::fs::remove_dir_all(p).unwrap();
+}
+/// A first chunk, then an error.
+struct FailsAfterOne {
+    sent: bool,
+}
+#[async_trait::async_trait]
+impl jt_app::ports::files::ByteSource for FailsAfterOne {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, jt_app::error::AppError> {
+        if self.sent {
+            return Err(jt_app::error::AppError::validation(
+                "the body sent nothing for 30 seconds",
+                serde_json::json!({ "field": "body" }),
+            ));
+        }
+        self.sent = true;
+        Ok(Some(b"first".to_vec()))
+    }
+}
+fn hex_of(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 #[test]
 fn file_config_requires_dir_and_public_base() {
     let p = root();
@@ -225,10 +486,10 @@ async fn hosted_url_remains_direct_and_x_fetch_is_bounded() {
         mime: "image/png".into(),
         size_bytes: 13,
     }];
-    let (urls, bytes) = resolve_media(&d, ws, &media, false).await.unwrap();
+    let (urls, bytes) = resolve_media(&d, ws, &media, "instagram").await.unwrap();
     assert_eq!(urls, vec![url]);
     assert!(bytes.is_empty());
-    let (urls, bytes) = resolve_media(&d, ws, &media, true).await.unwrap();
+    let (urls, bytes) = resolve_media(&d, ws, &media, "x").await.unwrap();
     assert!(urls.is_empty());
     assert_eq!(bytes[0].bytes, b"\x89PNG\r\n\x1a\nasset");
     let bad = [jt_studio::MediaAsset::HostedUrl {
@@ -236,7 +497,7 @@ async fn hosted_url_remains_direct_and_x_fetch_is_bounded() {
         mime: "image/png".into(),
         size_bytes: 25_000_001,
     }];
-    assert!(resolve_media(&d, ws, &bad, true).await.is_err());
+    assert!(resolve_media(&d, ws, &bad, "x").await.is_err());
     task.abort();
 }
 #[tokio::test]

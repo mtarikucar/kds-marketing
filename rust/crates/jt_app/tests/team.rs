@@ -1145,6 +1145,11 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
         "inbox.manage",
         "studio.work",
         "studio.manage",
+        "calls.work",
+        "calls.manage",
+        "calls.bridge",
+        "devices.work",
+        "devices.bridge",
     ];
 
     // invite and set_role to a role wider than the lead's own.
@@ -1158,7 +1163,7 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
     let e = err(team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "manager").await);
     assert_exceeds(&e, &missing);
     let e = err(team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "auditor").await);
-    assert_exceeds(&e, &["ledger.read", "inbox.work"]);
+    assert_exceeds(&e, &["ledger.read", "inbox.work", "calls.work"]);
 
     // roles.create and roles.update with permissions the lead lacks.
     let e = err(roles::create(
@@ -1182,16 +1187,16 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
     assert_eq!(t.w.entries("roles.create").len(), 2);
     assert_eq!(t.w.membership(bob.membership_id).role_id, t.role_id("rep"));
 
-    // The unchanged custom role cannot grant or strip a Rep's new inbox permission.
+    // The unchanged custom role cannot grant or strip a Rep's inbox and calls permissions.
     let e = err(team::invite(
         &t.w.deps,
         &lead.ctx,
         invite_input("carol@example.com", "rep"),
     )
     .await);
-    assert_exceeds(&e, &["inbox.work"]);
+    assert_exceeds(&e, &["inbox.work", "calls.work"]);
     let e = err(team::set_role(&t.w.deps, &lead.ctx, bob.membership_id, "team_lead").await);
-    assert_exceeds(&e, &["inbox.work"]);
+    assert_exceeds(&e, &["inbox.work", "calls.work"]);
     assert_eq!(t.w.membership(bob.membership_id).role_id, t.role_id("rep"));
     assert!(t.w.entries("team.set_role").is_empty());
 
@@ -1258,6 +1263,11 @@ async fn custom_role_cannot_demote_or_remove_a_manager() {
         "inbox.manage",
         "studio.work",
         "studio.manage",
+        "calls.work",
+        "calls.manage",
+        "calls.bridge",
+        "devices.work",
+        "devices.bridge",
     ];
     for role_key in ["rep", "team_lead"] {
         let e = err(team::set_role(&t.w.deps, &lead.ctx, manager.membership_id, role_key).await);
@@ -1362,13 +1372,13 @@ async fn manager_can_change_a_rep() {
     team::set_role(&t.w.deps, &manager.ctx, rep.membership_id, "rep")
         .await
         .unwrap();
-    // The unchanged custom lead lacks InboxWork, so cannot change or remove a Rep.
+    // The unchanged custom lead lacks InboxWork and CallsWork, so cannot change or remove a Rep.
     for role_key in ["team_lead", "rep"] {
         let e = err(team::set_role(&t.w.deps, &lead.ctx, rep.membership_id, role_key).await);
-        assert_exceeds(&e, &["inbox.work"]);
+        assert_exceeds(&e, &["inbox.work", "calls.work"]);
     }
     let e = err(team::remove(&t.w.deps, &lead.ctx, rep.membership_id).await);
-    assert_exceeds(&e, &["inbox.work"]);
+    assert_exceeds(&e, &["inbox.work", "calls.work"]);
     assert_eq!(t.w.membership(rep.membership_id).role_id, t.role_id("rep"));
     team::remove(&t.w.deps, &manager.ctx, rep.membership_id)
         .await

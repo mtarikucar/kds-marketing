@@ -22,7 +22,12 @@ export type Permission =
   | 'inbox.work'
   | 'inbox.manage'
   | 'studio.work'
-  | 'studio.manage';
+  | 'studio.manage'
+  | 'calls.work'
+  | 'calls.manage'
+  | 'calls.bridge'
+  | 'devices.work'
+  | 'devices.bridge';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -34,6 +39,11 @@ export const PERMISSIONS: readonly Permission[] = [
   'inbox.manage',
   'studio.work',
   'studio.manage',
+  'calls.work',
+  'calls.manage',
+  'calls.bridge',
+  'devices.work',
+  'devices.bridge',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */
@@ -461,6 +471,7 @@ export const KINDS = [
   { group: 'social_account', key: 'facebook_page' },
   { group: 'social_account', key: 'x' },
   { group: 'social_account', key: 'linkedin_page' },
+  { group: 'social_account', key: 'linkedin_member' },
   { group: 'social_account', key: 'tiktok' },
   { group: 'social_account', key: 'pinterest' },
   { group: 'social_account', key: 'youtube' },
@@ -472,6 +483,7 @@ export const KINDS = [
   { group: 'messaging', key: 'mailbox' },
   { group: 'messaging', key: 'webchat' },
   { group: 'telephony', key: 'netgsm_pbx' },
+  { group: 'telephony', key: 'voice_bridge' },
   { group: 'community', key: 'discord' },
   { group: 'community', key: 'reddit' },
   { group: 'community', key: 'review_google' },
@@ -753,7 +765,11 @@ export type WorkKind =
   | { kind: 'reply_due'; conversation_id: string }
   | { kind: 'reopen_question'; conversation_id: string }
   | { kind: 'merge_suggested'; merge_id: string }
-  | { kind: 'task_due'; task_id: string };
+  | { kind: 'task_due'; task_id: string }
+  /** A voice bridge that has not registered within its heartbeat; `last_seen_at` is its last one. */
+  | { kind: 'voice_bridge_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null }
+  /** A phone no device bridge has listed within its heartbeat; `last_seen_at` is the last listing. */
+  | { kind: 'phone_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {
@@ -792,8 +808,8 @@ export const MAX_CHECKIN_INTERVAL_MINUTES = 10_080;
 // ---------------------------------------------------------------------------------------------
 
 /** `jt_connector::Provider`. */
-export type Provider = 'meta' | 'netgsm' | 'x' | 'mail';
-export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail'];
+export type Provider = 'meta' | 'netgsm' | 'x' | 'mail' | 'tiktok' | 'linkedin';
+export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail', 'tiktok', 'linkedin'];
 
 /** `jt_app::usecases::connector::StartOut`: where to send the browser, until when. */
 export interface StartOut {
@@ -841,7 +857,7 @@ export interface ProbeResultPublic {
   latency_ms: number;
   /** `jt_connector::ConnectorError` kind of a failure. */
   error_kind: string | null;
-  /** Redacted by the server; for logs and agents, not shown. */
+  /** The provider's reason, redacted by the server; shown under the kind's sentence. */
   error_reason: string | null;
   facts: unknown;
 }
@@ -868,10 +884,36 @@ export interface NetgsmHook {
   url: string;
 }
 
-/** `jt_app::usecases::connector::HooksOut`; `meta` is `null` while the platform has no Meta app. */
+/** `jt_app::usecases::connector::TiktokHook`: the TikTok app's callback URL and the events acted on. */
+export interface TiktokHook {
+  url: string;
+  events: string[];
+}
+
+/**
+ * `jt_app::usecases::connector::HooksOut`; `meta` and `tiktok` are `null` while the platform has
+ * no Meta or TikTok app (`tiktok` is absent from a server that predates TikTok's webhooks).
+ */
 export interface HooksOut {
   meta: MetaHook | null;
   netgsm: NetgsmHook[];
+  tiktok?: TiktokHook | null;
+}
+
+/** `jt_app::usecases::connector::PbxCallMode`. */
+export type PbxCallMode = 'originate' | 'linkup';
+
+/** `jt_app::usecases::connector::PbxPolicyInput`: at least one field. */
+export interface PbxPolicyInput {
+  call_mode?: PbxCallMode;
+  recording_allowed?: boolean;
+}
+
+/** `jt_app::usecases::connector::PbxPolicyOut`. */
+export interface PbxPolicyOut {
+  capability_id: Uuid;
+  call_mode: PbxCallMode;
+  recording_allowed: boolean;
 }
 
 /** `jt_app::usecases::connector::ConnectorHealth`. */
@@ -885,6 +927,8 @@ export interface ConnectorHealth {
   last_probe_at: Rfc3339 | null;
   ok: boolean | null;
   error_kind: string | null;
+  /** The last failed probe's line, `kind: provider: reason` (≤ 300 chars, redacted); `null` after a success. */
+  reason: string | null;
   token_expires_at: Rfc3339 | null;
   reconnect_required: boolean;
 }
@@ -936,6 +980,8 @@ export interface InboxMessage {
     | { refused: { reason: string } };
   cost_minor: number | null;
   at: Rfc3339;
+  /** For a failed or uncertain outbound message, the recorded `kind: provider reason`. */
+  failure_reason?: string | null;
 }
 export type JourneyStatus =
   | 'new'
@@ -1012,7 +1058,10 @@ export interface InboxNote {
 }
 export interface InboxJourneyOut {
   appointments: InboxAppointment[];
+  /** All nine stages: the fixed Turkish defaults extended by the workspace's overrides. */
   status_labels: Record<JourneyStatus, string>;
+  /** Only the labels the workspace set itself; the panel shows its own language for the rest. */
+  status_label_overrides: Partial<Record<JourneyStatus, string>>;
   journey: InboxJourney;
   events: InboxEvent[];
   tasks: InboxTask[];
@@ -1020,6 +1069,7 @@ export interface InboxJourneyOut {
 }
 export interface InboxContext {
   status_labels: Record<JourneyStatus, string>;
+  status_label_overrides: Partial<Record<JourneyStatus, string>>;
   person: InboxPerson;
   journey: InboxJourney | null;
   events: InboxEvent[];

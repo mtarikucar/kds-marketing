@@ -300,6 +300,12 @@ impl TenantRepos for FailingTenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.0.studio_control()
     }
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self.0.calls()
+    }
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self.0.device_commands()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.0.consents()
@@ -421,12 +427,34 @@ impl TenantRepos for FailingTenant {
 
 #[async_trait]
 impl InboundEventRepo for FailingTenant {
+    async fn find_external(
+        &mut self,
+        provider: jt_connector::Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError> {
+        self.0
+            .inbound_events()
+            .find_external(provider, external_id)
+            .await
+    }
+
     async fn call_events(
         &mut self,
         unique_id: &str,
         until: OffsetDateTime,
     ) -> Result<Vec<InboundEvent>, AppError> {
         self.0.inbound_events().call_events(unique_id, until).await
+    }
+
+    async fn mail_subject(
+        &mut self,
+        capability: CapabilityId,
+        message_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        self.0
+            .inbound_events()
+            .mail_subject(capability, message_id)
+            .await
     }
 
     async fn list_for_consumer(

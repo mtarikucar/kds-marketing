@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "url_ownership_unverified",
+    "message": "To use PULL_FROM_URL, the developer must verify the ownership of the URL prefix or domain.",
+    "log_id": "20261027000000TEST0019"
+  }
+}

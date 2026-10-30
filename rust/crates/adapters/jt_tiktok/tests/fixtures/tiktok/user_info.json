@@ -1,0 +1,9 @@
+{
+  "data": {
+    "user": {
+      "open_id": "0f0e0d0c-0000-4000-8000-000000000001-test",
+      "display_name": "Jeeta Test"
+    }
+  },
+  "error": { "code": "ok", "message": "", "log_id": "20261027000000TEST0003" }
+}

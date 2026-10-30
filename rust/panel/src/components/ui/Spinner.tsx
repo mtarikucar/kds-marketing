@@ -1,14 +1,17 @@
 import { useTranslation } from 'react-i18next';
 import { cn } from './cn';
 
-/** Inline loading spinner; inherits `currentColor` so it matches its context. */
+/**
+ * Inline loading spinner; inherits `currentColor` so it matches its context. It has its own
+ * default size: an unsized SVG stretches to its container (a screen-wide arc while a card loads).
+ */
 export function Spinner({ className }: { className?: string }) {
   const { t } = useTranslation();
   return (
     <svg
       role="status"
       aria-label={t('kit.loading')}
-      className={cn('animate-spin text-current', className)}
+      className={cn('h-5 w-5 shrink-0 animate-spin text-current', className)}
       viewBox="0 0 24 24"
       fill="none"
     >
@@ -18,7 +21,6 @@ export function Spinner({ className }: { className?: string }) {
         fill="currentColor"
         d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
       />
-      <span className="sr-only">{t('kit.loading')}</span>
     </svg>
   );
 }

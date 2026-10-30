@@ -131,6 +131,21 @@ const TOOLS: &[&str] = &[
     "jeeta.connector.health",
     "jeeta.connector.reconnect",
     "jeeta.connector.hooks",
+    "jeeta.connector.set_pbx_policy",
+    "jeeta.calls.policy_get",
+    "jeeta.calls.policy_set",
+    "jeeta.calls.place",
+    "jeeta.calls.get",
+    "jeeta.calls.list",
+    "jeeta.calls.end",
+    "jeeta.calls.listen",
+    "jeeta.calls.say",
+    "jeeta.calls.transfer",
+    "jeeta.devices.list",
+    "jeeta.devices.observe",
+    "jeeta.devices.act",
+    "jeeta.devices.command_get",
+    "jeeta.devices.commands",
     "jeeta.events.pending",
     "jeeta.events.ack",
     "jeeta.events.list",
@@ -141,7 +156,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 125);
+    assert_eq!(TOOLS.len(), 140);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -447,6 +462,43 @@ fn requires_nothing(schema: &Value) -> bool {
 }
 
 /// The `required` property names of an object schema.
+#[test]
+fn start_oauth_offers_every_kind_an_oauth_provider_serves() {
+    let specs = registry();
+    let start = specs
+        .iter()
+        .find(|s| s.name == "jeeta.connector.start_oauth")
+        .unwrap();
+    let schema = start.input_schema.clone().to_value();
+    let kinds: BTreeSet<&str> = schema["properties"]["kind_key"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k.as_str().unwrap())
+        .collect();
+    let expected: BTreeSet<&str> = [
+        jt_connector::Provider::Meta,
+        jt_connector::Provider::X,
+        jt_connector::Provider::Tiktok,
+        jt_connector::Provider::Linkedin,
+    ]
+    .iter()
+    .flat_map(|p| p.kinds().iter().copied())
+    .collect();
+    assert_eq!(kinds, expected);
+    for kind in [
+        "tiktok",
+        "linkedin_member",
+        "linkedin_page",
+        "x",
+        "instagram",
+    ] {
+        assert!(kinds.contains(kind), "{kind}");
+        assert!(start.description.contains(kind), "{kind}");
+    }
+    assert!(!kinds.contains("sms_line") && !kinds.contains("mailbox"));
+}
+
 fn required(schema: &Value) -> BTreeSet<&str> {
     schema["required"]
         .as_array()
@@ -542,6 +594,11 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
                 "jeeta.connector.hooks",
                 Permission::CapabilitiesManage,
                 Risk::Read
+            ),
+            (
+                "jeeta.connector.set_pbx_policy",
+                Permission::CapabilitiesManage,
+                Risk::Write
             ),
         ]
     );

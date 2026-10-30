@@ -13,7 +13,7 @@ use jt_app::ports::connectors::{
 use jt_connector::{ConnectorError, Credential, Provider};
 use jt_meta::{
     ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_SCOPES, META_HOSTS, MetaBases, MetaConnector,
-    PAGE_SUBSCRIBED_FIELDS,
+    PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
 };
 use jt_outbound::FIXED_HOSTS;
 use serde_json::{Value, json};
@@ -72,6 +72,29 @@ fn public(kind: &str, account: Option<&str>) -> Value {
         p["external_id"] = json!(account);
     }
     p
+}
+
+/// [`public`] of a capability of `kind` holding [`PAGE`], connected through Facebook Login whose
+/// grant held `scopes`: the use cases record them with the Page token (`access.scopes`).
+fn granted(kind: &str, scopes: &[&str]) -> Value {
+    let mut p = public(kind, Some(PAGE));
+    p["access"] = json!({ "kind": "page_token", "page_id": PAGE, "app": "meta", "scopes": scopes });
+    p
+}
+
+/// A Facebook Login user token granted `scopes`.
+fn user_cred_granted(scopes: &[&str]) -> Credential {
+    Credential::OAuth {
+        access_token: USER_TOKEN.into(),
+        refresh_token: None,
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(50)),
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+    }
+}
+
+/// The fields a page is subscribed to with its lead-gen submissions.
+fn fields_with_leadgen() -> String {
+    format!("{PAGE_MESSAGING_FIELDS},{PAGE_LEADGEN_FIELD}")
 }
 
 fn redirect() -> Url {
@@ -644,6 +667,8 @@ async fn no_appsecret_proof_on_instagram_graph() {
                 media_urls: vec![Url::parse("https://cdn.test/a.jpg").unwrap()],
                 link: None,
                 media: vec![],
+                privacy: None,
+                tiktok: None,
             },
         )
         .await
@@ -1086,21 +1111,23 @@ async fn on_connected_subscribes_page_fields() {
             .on_connected(&page_cred(), &public(kind, Some(PAGE)))
             .await
             .unwrap();
-        assert_eq!(facts, json!({ "subscribed": true }), "{kind}");
+        assert_eq!(
+            facts,
+            json!({ "subscribed": true, "leadgen": false }),
+            "{kind}"
+        );
     }
     let calls = m.requests("POST", "/fb/v19.0/1234567890/subscribed_apps");
     assert_eq!(calls.len(), 3);
     for call in &calls {
-        assert_eq!(
-            call.param("subscribed_fields"),
-            Some(PAGE_SUBSCRIBED_FIELDS)
-        );
+        assert_eq!(call.param("subscribed_fields"), Some(PAGE_MESSAGING_FIELDS));
         assert_graph_auth(call, PAGE_TOKEN);
     }
     assert_eq!(
-        PAGE_SUBSCRIBED_FIELDS,
-        "messages,message_echoes,messaging_postbacks,message_reactions,leadgen"
+        PAGE_MESSAGING_FIELDS,
+        "messages,message_echoes,messaging_postbacks,message_reactions"
     );
+    assert_eq!(PAGE_LEADGEN_FIELD, "leadgen");
     // Kinds without a connection step do nothing.
     m.clear();
     for (cred, kind) in [
@@ -1129,6 +1156,175 @@ async fn on_connected_subscribes_page_fields() {
         .await
         .unwrap_err();
     assert_eq!(e.kind(), "permission");
+}
+
+#[tokio::test]
+async fn on_connected_subscribes_leadgen_only_when_the_grant_holds_leads_retrieval() {
+    let r = rig().await;
+    let m = &r.mock;
+    let page = "/fb/v19.0/1234567890/subscribed_apps";
+    let me = "/fb/v19.0/me/subscribed_apps";
+    for path in [page, me] {
+        m.on("POST", path, ok(json!({ "success": true })));
+    }
+    let leads = ["pages_messaging", "leads_retrieval"];
+    let mut stale_asset = public("messenger", Some(PAGE));
+    stale_asset["asset"] = json!({ "page_id": PAGE, "granted_scopes": leads });
+    for (cred, p, path, leadgen) in [
+        // A Page token: the scopes of the grant it came from, recorded with it.
+        (page_cred(), granted("messenger", &leads), page, true),
+        (page_cred(), granted("facebook_page", &leads), page, true),
+        (page_cred(), granted("instagram_dm", &leads), page, true),
+        (
+            page_cred(),
+            granted("messenger", &["pages_messaging"]),
+            page,
+            false,
+        ),
+        // A pasted Page token: its grant is not known. An earlier connection's asset facts
+        // outlive the token they came with, so they are not its grant.
+        (page_cred(), public("messenger", Some(PAGE)), page, false),
+        (page_cred(), stale_asset, page, false),
+        // A Facebook Login token: its own scopes decide, whatever is recorded beside it.
+        (
+            user_cred_granted(&leads),
+            public("messenger", None),
+            me,
+            true,
+        ),
+        (user_cred(), public("messenger", None), me, false),
+        (user_cred(), granted("messenger", &leads), me, false),
+    ] {
+        m.clear();
+        let facts = r.meta.on_connected(&cred, &p).await.unwrap();
+        assert_eq!(
+            facts,
+            json!({ "subscribed": true, "leadgen": leadgen }),
+            "{p}"
+        );
+        let call = m.request("POST", path);
+        let fields = if leadgen {
+            fields_with_leadgen()
+        } else {
+            PAGE_MESSAGING_FIELDS.to_owned()
+        };
+        assert_eq!(
+            call.param("subscribed_fields"),
+            Some(fields.as_str()),
+            "{p}"
+        );
+        assert_graph_auth(&call, if path == page { PAGE_TOKEN } else { USER_TOKEN });
+    }
+}
+
+#[tokio::test]
+async fn on_connected_subscribes_the_messaging_fields_alone_when_leadgen_is_refused() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    let p = granted("messenger", &["pages_messaging", "leads_retrieval"]);
+    // Meta refuses the whole subscription for the lead-gen field (seen live: HTTP 403, #200), and
+    // accepts the messaging fields asked again without it.
+    m.on(
+        "POST",
+        path,
+        status(403, graph_fixture(m, "error_leadgen_permission")),
+    );
+    m.on("POST", path, ok(json!({ "success": true })));
+    let facts = r.meta.on_connected(&page_cred(), &p).await.unwrap();
+    assert_eq!(facts, json!({ "subscribed": true, "leadgen": false }));
+    let calls = m.requests("POST", path);
+    let fields: Vec<Option<&str>> = calls.iter().map(|c| c.param("subscribed_fields")).collect();
+    let with_leadgen = fields_with_leadgen();
+    assert_eq!(
+        fields,
+        [Some(with_leadgen.as_str()), Some(PAGE_MESSAGING_FIELDS)]
+    );
+    for call in &calls {
+        assert_graph_auth(call, PAGE_TOKEN);
+    }
+
+    // Asked again once only: when the messaging fields are refused in turn, that is the error.
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        path,
+        status(403, graph_fixture(m, "error_leadgen_permission")),
+    );
+    m.on(
+        "POST",
+        path,
+        status(403, graph_fixture(m, "error_permission")),
+    );
+    let e = r.meta.on_connected(&page_cred(), &p).await.unwrap_err();
+    assert_eq!(e.kind(), "permission");
+    assert!(e.reason().unwrap().contains("pages_messaging"), "{e}");
+    assert_eq!(m.requests("POST", path).len(), 2);
+    // A refusal naming the lead-gen field again is not followed by a third request.
+    m.set(
+        "POST",
+        path,
+        status(403, graph_fixture(m, "error_leadgen_permission")),
+    );
+    m.clear();
+    let e = r.meta.on_connected(&page_cred(), &p).await.unwrap_err();
+    assert_eq!(e.kind(), "permission");
+    assert_eq!(m.requests("POST", path).len(), 2);
+}
+
+#[tokio::test]
+async fn on_connected_keeps_every_other_failure_of_the_subscription() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    let leads = granted("facebook_page", &["pages_messaging", "leads_retrieval"]);
+    let without = granted("facebook_page", &["pages_messaging"]);
+    for (p, reply, kind, reason) in [
+        // Another permission is missing: dropping the lead-gen field would not help.
+        (
+            &leads,
+            status(403, graph_fixture(m, "error_permission")),
+            "permission",
+            Some(
+                "HTTP 403 OAuthException (#200): (#200) Requires pages_messaging permission to manage the object",
+            ),
+        ),
+        (
+            &leads,
+            status(400, graph_fixture(m, "error_token_expired")),
+            "auth",
+            None,
+        ),
+        (
+            &leads,
+            status(400, graph_fixture(m, "error_invalid_parameter")),
+            "permanent",
+            None,
+        ),
+        (
+            &leads,
+            ok(json!({ "success": false })),
+            "permanent",
+            Some("the page subscription was not accepted"),
+        ),
+        // The lead-gen field was not asked for: a refusal naming it is the error, not asked again.
+        (
+            &without,
+            status(403, graph_fixture(m, "error_leadgen_permission")),
+            "permission",
+            None,
+        ),
+    ] {
+        m.set("POST", path, reply);
+        m.clear();
+        let e = r.meta.on_connected(&page_cred(), p).await.unwrap_err();
+        assert_eq!(e.kind(), kind, "{e}");
+        if let Some(reason) = reason {
+            assert_eq!(e.reason(), Some(reason));
+        }
+        assert_eq!(m.requests("POST", path).len(), 1, "asked once: {e}");
+    }
 }
 
 #[tokio::test]
@@ -1191,6 +1387,8 @@ fn post(text: &str, media: &[&str], link: Option<&str>) -> PublishRequest {
         media_urls: media.iter().map(|m| Url::parse(m).unwrap()).collect(),
         link: link.map(|l| Url::parse(l).unwrap()),
         media: vec![],
+        privacy: None,
+        tiktok: None,
     }
 }
 
@@ -1828,6 +2026,76 @@ async fn whatsapp_send_body() {
         ),
         "throttle"
     );
+}
+
+#[tokio::test]
+async fn sender_name_reads_the_profile_by_kind() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/2000000000000001",
+        ok(json!({ "name": " Ada Messenger ", "id": "2000000000000001" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/3000000000000001",
+        ok(json!({ "username": "ada.ig", "id": "3000000000000001" })),
+    );
+    m.on(
+        "GET",
+        "/ig/3000000000000002",
+        ok(json!({ "name": "Ada IG", "username": "ada.ig" })),
+    );
+    let name = |cred: Credential, kind: &'static str, sender: &'static str| {
+        let meta = &r.meta;
+        async move {
+            meta.sender_name(&cred, &public(kind, Some(PAGE)), sender)
+                .await
+        }
+    };
+    assert_eq!(
+        name(page_cred(), "messenger", "2000000000000001")
+            .await
+            .unwrap(),
+        Some("Ada Messenger".into())
+    );
+    let asked = m.request("GET", "/fb/v19.0/2000000000000001");
+    assert_eq!(asked.param("fields"), Some("name"));
+    assert_graph_auth(&asked, PAGE_TOKEN);
+    // Instagram through the Page: the username stands in for a missing name.
+    assert_eq!(
+        name(page_cred(), "instagram_dm", "3000000000000001")
+            .await
+            .unwrap(),
+        Some("ada.ig".into())
+    );
+    assert_eq!(
+        m.request("GET", "/fb/v19.0/3000000000000001")
+            .param("fields"),
+        Some("name,username")
+    );
+    // An Instagram Login token reads graph.instagram.com.
+    assert_eq!(
+        name(ig_login_cred(), "instagram_dm", "3000000000000002")
+            .await
+            .unwrap(),
+        Some("Ada IG".into())
+    );
+    // WhatsApp and other kinds: no name, no call; a bad sender id is refused before a call.
+    m.clear();
+    assert_eq!(
+        name(wa_cred(None), "whatsapp_cloud", "905551111111")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(name(page_cred(), "meta_ads", "1").await.unwrap(), None);
+    assert_eq!(
+        kind_of(name(page_cred(), "messenger", "../me").await),
+        "permanent"
+    );
+    assert!(m.recorded().is_empty());
 }
 
 // ---------------------------------------------------------------------------------------------

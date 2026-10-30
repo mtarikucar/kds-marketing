@@ -26,12 +26,15 @@
 //! secret prints it as `***`.
 //!
 //! **Errors.** NetGSM answers a status code (`"code"` in a JSON body, or a bare code as the whole
-//! body); `00` is success. The mapping, first match wins:
+//! body); `00` is success. The call records read their own codes first (`40` no call in the
+//! window, so no record; `50` and `60` the window refused, `Permanent`; `100` and `101` the limit
+//! of two queries a minute, `Throttle`). The mapping, first match wins:
 //!
 //! | Answer | Error |
 //! |---|---|
 //! | code `80` (rate limit); HTTP 429 without a code; a call over the [`RateBudgeter`]'s budget (refused before any call) | `Throttle`, `retry_after` from `Retry-After` or the budget |
 //! | code `30` (the credentials, or the server's IP address not on the account's allowlist); HTTP 401 without a code; Netsantral's "Kullanici dogrulanamadi" | `Auth`, its reason naming the credentials or IP allowlist |
+//! | Netsantral's code `30` with "Eksik yada yanlis parametre" (a request it cannot read, after the credentials passed) | `Permanent`; for the probe's `queuestats`, HTTP 400 without "Kullanici dogrulanamadi" proves the credentials |
 //! | code `40` (sender name not defined or not approved), `51` (brand not registered in İYS), `60` (no package or authority); HTTP 403 without a code | `Permission` |
 //! | code `100` (system error); HTTP 5xx without a code; a read transport failure or broken response, a connect failure, a host resolving to no public address | `Transient` |
 //! | A non-idempotent write may have reached the provider, but its answer was lost or broke off | `Unknown` (never retry blindly) |

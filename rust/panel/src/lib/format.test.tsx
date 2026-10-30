@@ -18,6 +18,22 @@ describe('money in minor units', () => {
     expect(parseMinor('10,50', 2)).toBe(1050);
   });
 
+  it('reads the thousands grouping of the panel language, never a decimal as grouping', () => {
+    expect(parseMinor('14.900', 2, 'tr')).toBe(1_490_000);
+    expect(parseMinor('14.900,50', 2, 'tr')).toBe(1_490_050);
+    expect(parseMinor('1.490.000', 2, 'tr')).toBe(149_000_000);
+    expect(parseMinor('12,50', 2, 'tr')).toBe(1250);
+    expect(parseMinor('12.5', 2, 'tr')).toBe(1250);
+    expect(parseMinor('14,900', 2, 'en')).toBe(1_490_000);
+    expect(parseMinor('14,900.50', 2, 'en')).toBe(1_490_050);
+    expect(parseMinor('12,50', 2, 'en')).toBe(1250);
+    expect(parseMinor('1.000', 0, 'tr')).toBe(1000);
+    // Without a language, grouping stays unreadable rather than guessed.
+    expect(parseMinor('14.900', 2)).toBeNull();
+    expect(parseMinor('14.90.0', 2, 'tr')).toBeNull();
+    expect(parseMinor('14.9000', 2, 'tr')).toBeNull();
+  });
+
   it('fills the money input with the amount as typed', () => {
     render(
       <>

@@ -953,8 +953,9 @@ pub async fn merge_during_provider_io_reconciles_without_conversation_effects(
         assert_eq!(
             stored.last_error.as_deref(),
             match expected {
-                "failed" => Some("auth"),
-                "unknown" => Some("unknown"),
+                // The failure line: kind, provider and the adapter's reason.
+                "failed" => Some("auth: netgsm: rejected"),
+                "unknown" => Some("unknown: netgsm: uncertain write"),
                 _ => None,
             }
         );

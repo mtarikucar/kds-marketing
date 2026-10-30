@@ -32,10 +32,10 @@ use jt_connector::{ConnectorError, Credential, ProbeResult};
 use serde_json::{Map, Value, json};
 
 use crate::MetaConnector;
-use crate::PAGE_SUBSCRIBED_FIELDS;
 use crate::assets::ad_account_number;
 use crate::credential::{MetaCred, account_of, kind_of};
 use crate::graph::{GraphApp, integer, missing, node, text};
+use crate::oauth::{LEADS_RETRIEVAL, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS};
 
 /// The probe of `cred` for the capability whose public fields are `public` (never fails: a
 /// failure is the result).
@@ -210,9 +210,13 @@ async fn ad_account_facts(
 
 /// The connection step (see [`jt_app::ports::connectors::Connector::on_connected`]):
 /// - `facebook_page`, `messenger`, `instagram_dm` (a Page token, or a pasted one): subscribes the
-///   page to [`PAGE_SUBSCRIBED_FIELDS`] (`POST /{page}/subscribed_apps`; Instagram messages
-///   arrive through the linked page's subscription) and reports `{"subscribed": true}`; a
-///   failure is the error;
+///   page (`POST /{page}/subscribed_apps`; Instagram messages arrive through the linked page's
+///   subscription) to [`PAGE_MESSAGING_FIELDS`], and to [`PAGE_LEADGEN_FIELD`] too when the
+///   grant holds [`LEADS_RETRIEVAL`] ([`grants_leads`]), and reports
+///   `{"subscribed": true, "leadgen": bool}`. Meta refuses the whole subscription when one field
+///   lacks its permission, so a refusal of the lead-gen field ([`refuses_leadgen`]) is asked
+///   again once without it (`"leadgen": false`): the messages arrive whatever becomes of the
+///   leads. Any other failure is the error;
 /// - `whatsapp_cloud`: subscribes the WhatsApp Business Account when its id is known
 ///   (`POST /{waba}/subscribed_apps`) and registers the number for the Cloud API
 ///   (`POST /{phone_number_id}/register`), each best effort, and reports
@@ -225,13 +229,14 @@ pub(crate) async fn on_connected(
     public: &Value,
 ) -> Result<Value, ConnectorError> {
     let kind = kind_of(public)?;
+    let leads = grants_leads(cred, public);
     let cred = MetaCred::of(cred, "be connected")?;
     match (kind, cred) {
         ("facebook_page" | "messenger" | "instagram_dm", MetaCred::Page { page_id, token }) => {
-            subscribe_page(connector, node(page_id)?, token).await
+            subscribe_page(connector, node(page_id)?, token, leads).await
         }
         ("facebook_page" | "messenger" | "instagram_dm", MetaCred::User { token }) => {
-            subscribe_page(connector, "me", token).await
+            subscribe_page(connector, "me", token, leads).await
         }
         (
             "whatsapp_cloud",
@@ -275,19 +280,70 @@ pub(crate) async fn on_connected(
     }
 }
 
-/// Subscribes `page` (an id, or `me` for the token's own page) to the platform app's webhooks.
+/// Whether the grant behind `cred` holds [`LEADS_RETRIEVAL`]: a Facebook Login token's own
+/// scopes; a Page token's are those of the grant it came from, which the use cases record with it
+/// in `public["access"]["scopes"]` (written anew with every credential sealed). A pasted token's
+/// grant is not known, so it does not hold it; nor do an earlier connection's scopes kept in
+/// `public["asset"]`, which outlive the token they came with.
+fn grants_leads(cred: &Credential, public: &Value) -> bool {
+    match cred {
+        Credential::OAuth { scopes, .. } => scopes.iter().any(|s| s == LEADS_RETRIEVAL),
+        _ => public["access"]["scopes"]
+            .as_array()
+            .is_some_and(|scopes| scopes.iter().any(|s| s.as_str() == Some(LEADS_RETRIEVAL))),
+    }
+}
+
+/// Whether `e` is Meta refusing the lead-gen field for want of its permission: a `Permission`
+/// error whose reason names [`PAGE_LEADGEN_FIELD`] or [`LEADS_RETRIEVAL`] (Graph `(#200) To
+/// subscribe to the leadgen field, one of these permissions is needed: leads_retrieval`).
+fn refuses_leadgen(e: &ConnectorError) -> bool {
+    matches!(
+        e,
+        ConnectorError::Permission { reason, .. }
+            if reason.contains(PAGE_LEADGEN_FIELD) || reason.contains(LEADS_RETRIEVAL)
+    )
+}
+
+/// Subscribes `page` (an id, or `me` for the token's own page) to the platform app's webhooks,
+/// its lead-gen submissions included when `leads` (see [`on_connected`]).
 async fn subscribe_page(
     connector: &MetaConnector,
     page: &str,
     token: &str,
+    leads: bool,
 ) -> Result<Value, ConnectorError> {
     let app = connector.graph_app()?;
+    if leads {
+        let fields = format!("{PAGE_MESSAGING_FIELDS},{PAGE_LEADGEN_FIELD}");
+        match subscribe_fields(connector, &app, page, token, &fields).await {
+            Ok(()) => return Ok(json!({ "subscribed": true, "leadgen": true })),
+            Err(e) if refuses_leadgen(&e) => tracing::warn!(
+                error_kind = e.kind(),
+                "Meta refused the lead-gen webhook field; the page is subscribed without it"
+            ),
+            Err(e) => return Err(e),
+        }
+    }
+    subscribe_fields(connector, &app, page, token, PAGE_MESSAGING_FIELDS).await?;
+    Ok(json!({ "subscribed": true, "leadgen": false }))
+}
+
+/// `POST /{page}/subscribed_apps` with `fields`; an answer saying it did not succeed is
+/// `Permanent`.
+async fn subscribe_fields(
+    connector: &MetaConnector,
+    app: &GraphApp,
+    page: &str,
+    token: &str,
+    fields: &str,
+) -> Result<(), ConnectorError> {
     let answer = connector
         .graph_post(
-            &app,
+            app,
             token,
             &[page, "subscribed_apps"],
-            &[("subscribed_fields", PAGE_SUBSCRIBED_FIELDS)],
+            &[("subscribed_fields", fields)],
             json!({}),
         )
         .await?;
@@ -296,5 +352,5 @@ async fn subscribe_page(
             "the page subscription was not accepted",
         ));
     }
-    Ok(json!({ "subscribed": true }))
+    Ok(())
 }

@@ -7,8 +7,10 @@ import {
   Inbox,
   KeyRound,
   LogOut,
+  Phone,
   Plug,
   ShieldCheck,
+  UserRound,
   Users,
   Wallet,
   type LucideIcon,
@@ -40,6 +42,8 @@ import { Brand } from './Brand';
 type NavKey =
   | 'studio'
   | 'inbox'
+  | 'people'
+  | 'calls'
   | 'home'
   | 'strategy'
   | 'capabilities'
@@ -53,6 +57,8 @@ type NavKey =
 const NAV: { to: string; key: NavKey; Icon: LucideIcon }[] = [
   { to: '/', key: 'home', Icon: Home },
   { to: '/inbox', key: 'inbox', Icon: Inbox },
+  { to: '/people', key: 'people', Icon: UserRound },
+  { to: '/calls', key: 'calls', Icon: Phone },
   { to: '/strategy', key: 'strategy', Icon: Compass },
   { to: '/capabilities', key: 'capabilities', Icon: Plug },
   { to: '/budget', key: 'budget', Icon: Wallet },

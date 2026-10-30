@@ -1,0 +1,37 @@
+{
+  "data": {
+    "videos": [
+      {
+        "id": "7300000000000000002",
+        "title": "Bugünün menüsü",
+        "video_description": "Bugünün menüsü #yemek",
+        "cover_image_url": "https://p16-sign.tiktokcdn.test/cover-2.image",
+        "share_url": "https://www.tiktok.com/@jeeta_test/video/7300000000000000002",
+        "create_time": 1761638400,
+        "view_count": 1520,
+        "like_count": 98,
+        "comment_count": 4,
+        "share_count": 2
+      },
+      {
+        "id": 7300000000000000001,
+        "title": "",
+        "video_description": "Yeni şube açıldı",
+        "cover_image_url": "javascript:alert(1)",
+        "share_url": "https://www.tiktok.com/@jeeta_test/video/7300000000000000001",
+        "create_time": 1761552000,
+        "view_count": 9400,
+        "like_count": 250,
+        "comment_count": 12,
+        "share_count": 7
+      },
+      {
+        "id": "not-a-video-id",
+        "title": "skipped"
+      }
+    ],
+    "cursor": 1761552000000,
+    "has_more": true
+  },
+  "error": { "code": "ok", "message": "", "log_id": "20261028000000TEST0021" }
+}

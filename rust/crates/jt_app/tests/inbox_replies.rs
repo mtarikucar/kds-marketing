@@ -1,7 +1,7 @@
 mod support;
 use jt_app::{
     ports::{UnitOfWork, connectors::SendReceipt},
-    usecases::inbox::{people, replies},
+    usecases::inbox::{conversations, people, replies},
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{Credential, Provider};
@@ -127,6 +127,65 @@ async fn successful_send_atomically_records_replied() {
         }
         _ => panic!("messaging sender expected"),
     }
+}
+
+#[tokio::test]
+async fn a_failed_send_shows_the_provider_reason_and_the_ledger_keeps_only_its_kind() {
+    let (w, id, c) = setup().await;
+    c.push_send_text(Err(jt_connector::ConnectorError::permanent(
+        "HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list",
+    )));
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "failed");
+    let reason = "permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list";
+    assert_eq!(
+        w.uow.snapshot().inbox.outbox[0].last_error.as_deref(),
+        Some(reason)
+    );
+    let page = conversations::messages(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        conversations::MessagesInput {
+            cursor: None,
+            limit: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].message.status, MsgStatus::Failed);
+    assert_eq!(page.items[0].failure_reason.as_deref(), Some(reason));
+    let shown = serde_json::to_value(&page).unwrap();
+    assert_eq!(shown["items"][0]["failure_reason"], reason);
+    assert_eq!(shown["items"][0]["status"], "failed");
+    // The append-only ledger keeps the stable kind, never the provider's prose.
+    let results = w.entries("inbox.reply.result");
+    assert_eq!(results.last().unwrap().payload["reason"], "permanent");
+}
+
+#[tokio::test]
+async fn a_failure_reason_is_bounded_and_single_line() {
+    let (w, id, c) = setup().await;
+    c.push_send_text(Err(jt_connector::ConnectorError::transient(format!(
+        "line one\nline two {}",
+        "x".repeat(400)
+    ))));
+    replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    let stored = w.uow.snapshot().inbox.outbox[0].last_error.clone().unwrap();
+    assert!(
+        stored.starts_with("transient: meta: line one line two"),
+        "{stored}"
+    );
+    assert_eq!(
+        stored.chars().count(),
+        jt_app::usecases::failure::MAX_FAILURE_CHARS
+    );
+    assert!(!stored.chars().any(char::is_control));
 }
 
 async fn queued(w: &World, id: ConversationId) -> uuid::Uuid {
@@ -1100,6 +1159,65 @@ async fn late_receipt_after_closure_and_reopen_preserves_newer_attempts() {
     assert_eq!(after, before);
     assert_eq!(after.status, JourneyStatus::Unreachable);
     assert_eq!(after.unreachable_attempts, 3);
+}
+
+#[tokio::test]
+async fn mail_reply_without_subject_answers_the_original_subject() {
+    use jt_connector::{EventKind, InboundEvent, InboundEventId};
+    let (w, id, c) = setup_channel("mailbox").await;
+    let capability = w.uow.snapshot().inbox.conversations[0].capability_id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.messages()
+        .insert_if_new(Message {
+            id: MessageId::new_v7(),
+            workspace_id: w.ws,
+            conversation_id: id,
+            direction: Direction::Inbound,
+            author: Author::Customer,
+            body: "Help please".into(),
+            external_id: Some("<original@example.com>".into()),
+            status: MsgStatus::Received,
+            cost_minor: None,
+            at: w.owner_ctx.now,
+        })
+        .await
+        .unwrap();
+    r.inbound_events()
+        .insert_if_new(
+            InboundEvent {
+                id: InboundEventId::new_v7(),
+                workspace_id: w.ws,
+                capability_id: Some(capability),
+                provider: Provider::Mail,
+                external_id: "imap:account:INBOX:1:7".into(),
+                kind: EventKind::Message,
+                payload: json!({"from":"ada@example.com", "subject":"Help\r\n needed", "text":"Help please", "message_id":"<original@example.com>"}),
+                received_at: w.owner_ctx.now,
+                processed_at: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    c.push_mail(accepted());
+    replies::reply(&w.deps, &w.owner_ctx, id, input(Some("mail-subject")))
+        .await
+        .unwrap();
+    match &c.calls()[0] {
+        jt_testkit::fakes::ConnectorCall::SendMail { message, .. } => {
+            assert_eq!(message.subject, "Re: Help needed");
+            assert_eq!(
+                message.in_reply_to.as_deref(),
+                Some("<original@example.com>")
+            );
+            assert_eq!(
+                message.references,
+                vec!["<original@example.com>".to_owned()]
+            );
+        }
+        other => panic!("mail expected: {other:?}"),
+    }
 }
 
 #[tokio::test]

@@ -71,9 +71,14 @@ impl PersonRepo for PgTenantRepos {
         one!(sqlx::query_scalar("select to_jsonb(p) from people p join identities i on i.person_id=p.id and i.workspace_id=p.workspace_id where p.workspace_id=$1 and i.channel=$2 and i.value_normalized=$3 and i.active and p.merged_into is null and p.erased_at is null")
             .bind(self.workspace_id().as_uuid()).bind(value!(channel).as_str()).bind(normalized),self,Person)
     }
-    async fn search(&mut self, query: &str, limit: u32) -> Result<Vec<Person>, AppError> {
-        many!(sqlx::query_scalar("select to_jsonb(p) from people p where workspace_id=$1 and merged_into is null and erased_at is null and (strpos(lower(display_name),lower($2))>0 or strpos(lower(company),lower($2))>0) order by created_at,id limit $3")
-            .bind(self.workspace_id().as_uuid()).bind(query).bind(i64::from(limit.clamp(1,MAX_INBOX_PAGE))),self,Person)
+    async fn search(
+        &mut self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Person>, AppError> {
+        many!(sqlx::query_scalar("select to_jsonb(p) from people p where workspace_id=$1 and merged_into is null and erased_at is null and (strpos(lower(display_name),lower($2))>0 or strpos(lower(company),lower($2))>0) order by created_at,id limit $3 offset $4")
+            .bind(self.workspace_id().as_uuid()).bind(query).bind(i64::from(limit.clamp(1,MAX_INBOX_PAGE))).bind(i64::from(offset)),self,Person)
     }
     async fn mark_merged(
         &mut self,

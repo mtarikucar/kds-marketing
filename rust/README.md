@@ -83,7 +83,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. Sekiz göç vardır:
+döndürür. On sekiz göç vardır:
 
 | Göç | Ne yapar |
 |---|---|
@@ -99,6 +99,12 @@ döndürür. Sekiz göç vardır:
 | `0010_m4_billing` | Payment evidence, permanent entitlement history, stable workspace reference and a platform-only backfill manifest; 66 tables. Schema rollback refuses live rows. |
 | `0011_m4_activation_codes` | Workspace-locked keyed activation challenges, attempt cap and replay history; 67 tables. No plaintext or recipient binding. |
 | `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
+| `0013_probe_reason` | `probe_runs.reason` (the failure line, at most 300 characters) and `unknown` as a legal `error_kind`; down restores the old check only while no `unknown` run is stored. No new table. |
+| `0014_social_providers` | `oauth_pending.provider` and `oauth_pending.app` accept `tiktok` and `linkedin`, for their OAuth flows. No new table; `inbound_events` is untouched. |
+| `0015_voice_calls` | Voice V0: `call_sessions`, `call_turns`, `call_commands`, `call_duty` (forced RLS, composite keys; 71 tables), `workspace_policies.calls`, `calls.work` for the system owner/manager/rep and `calls.manage` for owner/manager, and the retry columns of `event_consumption` (`attempts`, `retry_at`). Down refuses while a call is not ended. |
+| `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
+| `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
+| `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -168,6 +174,12 @@ hiçbir günlük satırında görünmez.
 | `JEETA_INSTAGRAM_APP_SECRET` | — | Instagram uygulamasının sırrı; kimlikle birlikte verilir |
 | `JEETA_X_CLIENT_ID` | — | Platformun X uygulamasının (OAuth 2.0 gizli istemci) kimliği; sırla birlikte verilir |
 | `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
+| `JEETA_TIKTOK_CLIENT_KEY` | — | Platformun TikTok uygulamasının (Login Kit, Content Posting API) client key'i; sırla birlikte verilir |
+| `JEETA_TIKTOK_CLIENT_SECRET` | — | TikTok uygulamasının client secret'ı; anahtarla birlikte verilir |
+| `JEETA_LINKEDIN_CLIENT_ID` | — | Platformun LinkedIn uygulamasının (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn) istemci kimliği; sırla birlikte verilir |
+| `JEETA_LINKEDIN_CLIENT_SECRET` | — | LinkedIn uygulamasının istemci sırrı; kimlikle birlikte verilir |
+| `JEETA_LINKEDIN_ORG_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları kurum kapsamlarını da ister (`r_organization_social`, `w_organization_social`, `rw_organization_admin`) ve `linkedin_page` bağlanabilir. Yalnız LinkedIn uygulamaya Community Management API'yi onayladıktan sonra açılır (onaysız kapsam isteyen yetkilendirmeyi LinkedIn tümden reddeder); kapalıyken `linkedin_page` akışı `409` `details.reason = "provider_product_not_enabled"`. LinkedIn uygulaması olmadan verilemez |
+| `JEETA_LINKEDIN_API_VERSION` | adaptörün sabit sürümü | REST çağrılarının `LinkedIn-Version` başlığı, `YYYYMM`. Sürüm emekliye ayrılınca hata satırı `426` ile sürümü adıyla söyler; LinkedIn uygulaması olmadan verilemez |
 | `JEETA_PUBLIC_BASE_URL` | — | Panelin dışarıdan ulaşılan genel adresi: `https://alan-adi` ya da `https://alan-adi:port`; yol, sorgu, parça ya da kullanıcı yok (yalnız yerel geliştirmede `http://localhost:port`). Herhangi bir sağlayıcı uygulaması yapılandırılmışsa **zorunlu**. OAuth yönlendirme adresleri ve webhook adresleri bundan kurulur; boşken akış başlamaz ve webhook adresi gösterilmez (`409`, `details.reason = "public_base_url_not_configured"`) |
 
 **Sağlayıcı değişkenleri.** Her uygulama isteğe bağlıdır ama ancak bütün olarak yapılandırılır:
@@ -358,6 +370,7 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | | `jeeta.connector.health` | Bütün bağlayıcıların sağlığı: durum, son yoklama, jetonun bitişi, yeniden bağlama gereği | READ |
 | | `jeeta.connector.reconnect` | Girişi düşen ya da hiç bağlanmamış (`declared`) Meta ya da X kabiliyeti için ona bağlı bir giriş başlatır (`handoff` ile); onayda ilk seçilen varlık o kabiliyet olur | WRITE |
 | | `jeeta.connector.hooks` | Sağlayıcılara girilecek webhook adresleri: alanın her amaç için NetGSM adresi (alanın anahtarıyla) ve platformun Meta adresi (doğrulama anahtarı asla) | READ |
+| | `jeeta.connector.set_pbx_policy` | NetGSM santralinin çağrı politikası: `call_mode` (`originate` ya da `linkup`) ve `recording_allowed` (görüşmeler santralde kaydedilsin mi); verilmeyen alan değişmez | WRITE |
 | olaylar | `jeeta.events.pending` | İşlenmemiş gelen olaylar, en eskisi başta, sayfa sayfa (`next` ile ileri) | READ |
 | | `jeeta.events.ack` | İşlenen olayları işaretler (1–200 kimlik, hepsi ya da hiçbiri); `{acked}` | WRITE |
 | | `jeeta.events.list` | Bütün gelen olaylar, en yenisi başta; işlenenler dahil, sağlayıcı ve tür süzgeçleri | READ |
@@ -473,7 +486,7 @@ alanı durumu denetiminden muaf değildir.
 
 | Grup (ulaşım yolu) | Türler (anahtar: paneldeki ad) |
 |---|---|
-| `social_account` Sosyal hesaplar (bağlayıcı) | `instagram`: Instagram, `facebook_page`: Facebook sayfası, `x`: X, `linkedin_page`: LinkedIn sayfası, `tiktok`: TikTok, `pinterest`: Pinterest, `youtube`: YouTube, `google_business`: Google İşletme Profili |
+| `social_account` Sosyal hesaplar (bağlayıcı) | `instagram`: Instagram, `facebook_page`: Facebook sayfası, `x`: X, `linkedin_page`: LinkedIn sayfası, `linkedin_member`: LinkedIn kişisel hesap, `tiktok`: TikTok, `pinterest`: Pinterest, `youtube`: YouTube, `google_business`: Google İşletme Profili |
 | `messaging` Mesajlaşma (bağlayıcı) | `whatsapp_cloud`: WhatsApp Business, `instagram_dm`: Instagram mesajları, `messenger`: Messenger, `sms_line`: SMS hattı, `mailbox`: E-posta kutusu, `webchat`: Web sohbeti |
 | `telephony` Telefon (bağlayıcı) | `netgsm_pbx`: NetGSM santrali |
 | `community` Topluluk (bağlayıcı) | `discord`: Discord, `reddit`: Reddit, `review_google`: Google yorumları, `review_facebook`: Facebook yorumları |
@@ -606,6 +619,16 @@ Sistem rollerinin izinleri:
 | `budget.manage` (bütçe kalemi açma, düzenleme, emekliye ayırma) | ✓ | ✓ | — |
 | `inbox.work` (gelen kutusunda çalışma) | ✓ | ✓ | ✓ |
 | `inbox.manage` (kayıp nedenleri ve yetkili yolculuk işlemleri) | ✓ | ✓ | — |
+| `studio.work` (stüdyoda çalışma) | ✓ | ✓ | — |
+| `studio.manage` (stüdyoyu yönetme) | ✓ | ✓ | — |
+| `calls.work` (arama yapma ve görüşme kaydını görme) | ✓ | ✓ | ✓ |
+| `calls.manage` (arama politikasını yönetme, görüşmenin numarasını görme) | ✓ | ✓ | — |
+| `calls.bridge` (ses köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+| `devices.work` (telefonları kullanma) | ✓ | ✓ | — |
+| `devices.bridge` (cihaz köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+
+`calls.bridge` ve `devices.bridge` bir köprünün API anahtarının izinleridir; sahip ve yönetici onları o anahtarı
+verebilmek için taşır.
 
 `capabilities.manage` ve `budget.manage` M1a ile geldi. Yeni bir alanın sahip ve yönetici rolleri onları
 açılışta alır; M1a'dan önce açılmış alanlarınkine `0004_role_permissions_backfill` göçü ekler (bkz.
@@ -681,7 +704,7 @@ uygulama istemez.
 
 ### Sağlayıcı uygulamaları
 
-Meta, Instagram ve X hesapları platformun kendi OAuth uygulamalarına bağlanır: uygulamalar kiracı başına
+Meta, Instagram, X, TikTok ve LinkedIn hesapları platformun kendi OAuth uygulamalarına bağlanır: uygulamalar kiracı başına
 değil platform başınadır, ortamdan okunur (bkz. [Yapılandırma](#yapılandırma)), kiracılar kendi
 hesaplarını bu uygulamalara bağlar. Uygulamaları açmak, ayarlamak ve onaylatmak **platform sahibinin
 işidir**; Jeeta yalnız aşağıdaki değerleri okur. Kayıtlı yönlendirme adresleri, her biri sağlayıcının
@@ -692,6 +715,8 @@ panelinde birebir girilir (`{genel adres}` = `JEETA_PUBLIC_BASE_URL`):
 | Meta (Facebook Login, Graph API) | `JEETA_META_APP_ID`, `JEETA_META_APP_SECRET`, `JEETA_META_VERIFY_TOKEN`; isteğe bağlı `JEETA_META_LOGIN_CONFIG_ID`, `JEETA_META_WHATSAPP_CONFIG_ID`, `JEETA_META_GRAPH_VERSION` | developers.facebook.com → uygulama → Ayarlar → Temel: Uygulama Kimliği ve Uygulama Sırrı; Facebook Login (for Business) → Ayarlar → Geçerli OAuth Yönlendirme URI'leri; Webhooks → Sayfa, Instagram ve WhatsApp Business Hesabı nesneleri için geri çağırma adresi `{genel adres}/hooks/meta` ve doğrulama anahtarı (`JEETA_META_VERIFY_TOKEN` ile aynı değer) | `{genel adres}/oauth/callback/meta` |
 | Instagram (Instagram Login) | `JEETA_INSTAGRAM_APP_ID`, `JEETA_INSTAGRAM_APP_SECRET` | Meta uygulamasının Instagram ürünü → API setup with Instagram login: Instagram uygulama kimliği ve sırrı; "Business login settings" → OAuth redirect URIs | `{genel adres}/oauth/callback/instagram` |
 | X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret | `{genel adres}/oauth/callback/x` |
+| TikTok | `JEETA_TIKTOK_CLIENT_KEY`, `JEETA_TIKTOK_CLIENT_SECRET` | developers.tiktok.com → uygulama: ürünler **Login Kit** ve **Content Posting API** (Direct Post); Login Kit → Redirect URI; kapsamlar `user.info.basic`, `video.publish`, `video.upload`, `video.list`, `user.info.stats`; Webhooks → Callback URL `{genel adres}/hooks/tiktok` (imza client secret ile); denetimden (audit) önce yalnız gizli hesaplara ve yalnız test kullanıcılarıyla paylaşım; fotoğraf paylaşımı için dosya deposunun genel alan adı URL properties altında doğrulanır. Ayrıntı: [`docs/operations/tiktok.md`](../docs/operations/tiktok.md) | `{genel adres}/oauth/callback/tiktok` |
+| LinkedIn | `JEETA_LINKEDIN_CLIENT_ID`, `JEETA_LINKEDIN_CLIENT_SECRET`; isteğe bağlı `JEETA_LINKEDIN_ORG_SCOPES`, `JEETA_LINKEDIN_API_VERSION` | linkedin.com/developers → uygulama (bir Şirket Sayfasına bağlı): ürünler **Sign In with LinkedIn using OpenID Connect** ve **Share on LinkedIn** (kişisel akış, `openid profile w_member_social`); kurum sayfaları için **Community Management API** onayı → `JEETA_LINKEDIN_ORG_SCOPES=1`; Auth → Authorized redirect URLs; programatik yenileme yoksa erişim 60 günde biter ve bağlantı yeniden kurulur | `{genel adres}/oauth/callback/linkedin` |
 
 (Panel menülerinin adları sağlayıcıların arayüzüne göre değişebilir; aranan alanlar uygulama kimliği, sırrı,
 OAuth yönlendirme adresleri ve Meta için webhook geri çağırma adresi ile doğrulama anahtarıdır.)
@@ -705,7 +730,9 @@ OAuth yönlendirme adresleri ve Meta için webhook geri çağırma adresi ile do
   ancak Meta'nın incelemesinden (Advanced Access) ve iş doğrulamasından sonra çalışır; inceleme sürecinde
   uygulama yalnız rolü olan hesaplarla (yönetici, geliştirici, test kullanıcısı) denenebilir. İnceleme ve
   iş doğrulaması **sahibin işidir** (tasarım §14); Jeeta'nın kodu bunu beklemez, eksik bir izin yoklamada
-  `permission` olarak görünür.
+  `permission` olarak görünür. `leads_retrieval` verilmemişse (ya da Meta `leadgen` alanını reddederse)
+  bağlanan Sayfa yalnız mesajlaşma alanlarına abone edilir (`connector_public.leadgen = false`): mesajlar
+  gelir, lead formu gönderimleri gelmez.
 - **Webhook yalnız Meta uygulamasıyla açılır.** `/hooks/meta` Meta uygulaması (ve doğrulama anahtarı)
   yapılandırılmadıkça kapalıdır; Instagram Login webhook'ları Instagram uygulamasının sırrıyla da
   imzalanabildiği için kapı iki sırrı da dener, ama yalnız Instagram uygulaması yapılandırılmış bir
@@ -730,10 +757,12 @@ olmalıdır; değilse `permission` ("account mismatch") sayılır. Yoklamanın s
 Doğrulanmış bir kabiliyet, son başarılı yoklamasından politikanın `verify_max_age_days` süresi (varsayılan
 30 gün) geçince `stale` okunur; zamanlayıcının `probe_all` işi etkin alanlarda her canlı bağlayıcıyı
 saatte bir yokladığı için sağlıklı bir bağlantı tazeliğini korur (ödeme bekleyen bir alanın bağlantıları
-yoklanmaz, jetonları yine yenilenir). Her yoklama `probe_runs` kaydına yazılır (yalnız sonuç sınıfı ve
-genel bilgiler, 30 gün tutulur); günlüğe (`connector.probe`) yalnız durum değiştiğinde yazılır. Sağlık
-(`connector.health`) her bağlayıcı kabiliyetinin şimdiki durumunu, son yoklamasını, jetonun bitişini ve
-yeniden bağlama gereğini mühür açmadan okur. Yeniden bağlama (`connector.reconnect`) Meta ve X için
+yoklanmaz, jetonları yine yenilenir). Her yoklama `probe_runs` kaydına yazılır (sonuç sınıfı, başarısızlık
+satırı `kind: provider: reason` (en çok 300 karakter, sağlayıcı hatasının kurucusunda maskelenmiş) ve genel
+bilgiler, 30 gün tutulur; `unknown` da geçerli bir sınıftır, migration 0013); günlüğe (`connector.probe`)
+yalnız durum değiştiğinde yazılır. Sağlık (`connector.health`) her bağlayıcı kabiliyetinin şimdiki
+durumunu, son yoklamasını (başarısızsa `reason` satırıyla), jetonun bitişini ve yeniden bağlama gereğini
+mühür açmadan okur; panel bu satırı hata türünün cümlesinin altında gösterir. Yeniden bağlama (`connector.reconnect`) Meta ve X için
 kabiliyete bağlı yeni bir OAuth akışı başlatır; NetGSM kabiliyeti yeni kimlik bilgisi alır.
 
 **Hangi uygulamayla yeniden bağlanır.** Bir OAuth akışının verdiği kimlik bilgisi, akışın oturum açtığı
@@ -880,6 +909,7 @@ yazma izni yoktur; `workspace.read` olayları yalnız okur.
 | Yoklama (gövdesiz; yanıt `{result, status}`) | `POST /api/connectors/{capability_id}/probe` | `jeeta.connector.probe` | `workspace.read` |
 | Sağlık (yanıt liste, araçta `{connectors}`) | `GET /api/connectors/health` | `jeeta.connector.health` | `workspace.read` |
 | Kabiliyete bağlı giriş: yeniden bağlama ya da `declared` bir kabiliyetin ilk bağlanması (gövdesiz; yanıt başlatma gibi) | `POST /api/connectors/{capability_id}/reconnect` | `jeeta.connector.reconnect` | `capabilities.manage` |
+| Santralin çağrı politikası (gövde `{call_mode?, recording_allowed?}`, en az biri; yalnız `netgsm_pbx`, başka tür `409`; yanıt `{capability_id, call_mode, recording_allowed}`; günlük `connector.pbx_policy_set`). Bu iki `connector_public` anahtarı ayrılmıştır: bildirim ve bağlantı adımı yazamaz, kaydın açılması tek ve günlüklü bir karardır | `PUT /api/connectors/{capability_id}/pbx-policy` | `jeeta.connector.set_pbx_policy` | `capabilities.manage` |
 
 Kimlik bilgisi biçimleri (`credential.kind`): `netgsm_sms` (`usercode`, `password`, `msgheader`;
 `sms_line` için), `netgsm_pbx` (`username`, `password`, isteğe bağlı `trunk`, `pbxnum`; `netgsm_pbx` için)
@@ -918,14 +948,20 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `probe_all` | 15 dakika | Son yoklaması (`connector_public.health.at`) en az bir saatlik olan ya da hiç yoklanmamış her canlı bağlayıcı kabiliyetini (mühürlü kimlik bilgisi olan; kimlik bilgisi olmayan bir `declared` kabiliyet asla) `connector.probe`'un yaptığının aynısıyla yoklar; en çok dördü aynı anda (yoklama sağlayıcıyı beklerken kabiliyetin satır kilidini ve bir veritabanı bağlantısını tutar) | `jeeta.jobs.probe_all` |
 | `netgsm_dlr_poll` | 1 dakika | İletimi kesinleşmemiş gönderilerin iş kimliklerini (en çok 50) alanın doğrulanmış SMS hatlarının kimlik bilgisiyle NetGSM iletim raporuna sorar ve duyduğu durumları kaydeder. Gönderiler M2'nin tablosundadır; o gelene dek bekleyen iş yoktur ve sağlayıcıya hiç gidilmez | `jeeta.jobs.netgsm_dlr_poll` |
 | `netgsm_inbox_poll` | 1 saat | Her doğrulanmış SMS hattının NetGSM gelen kutusunu son iki saat için okur (başlangıç ve bitiş tarihi her zaman verilir) ve webhook'un kaçırdığı mesajları o hatta bağlı gelen olay olarak saklar. Kimlik webhook'unkiyle aynıdır (`netgsm-mo:<gorevid>`): webhook'un ya da önceki yoklamanın sakladığı mesaj ikinci kez yazılmaz. Yoklamanın ham gövdesi yoktur | `jeeta.jobs.netgsm_inbox_poll` |
+| `netgsm_cdr_poll` | 1 saat | Her doğrulanmış `netgsm_pbx` için santralin görüşme kayıtlarını (CDR, `/netsantral/report`) son iki saat için okur ve `cdr` çağrı olayı olarak saklar; kimlik webhook'unkiyle aynıdır (`netgsm-call:<id>:cdr`), itilen kayıt ikinci kez yazılmaz. Tüketici, Jeeta'dan yapılmış bir aramanın oturumunu süre, kayıt bağlantısı ve maliyetle tamamlar. Sunucunun IP'si NetGSM hesabının izinli listesinde olmalıdır | `jeeta.jobs.netgsm_cdr_poll` |
 | `iys_sync` | 1 saat | İYS izin kararlarını eşitler; beş hatadan sonra insan takip görevi açar | `jeeta.jobs.iys_sync` |
 | `refresh_tenant_hosts` | 1 dakika | Active/pending_payment çalışma alanlarının canlı connector host listesinden bu instance'ın tenant egress katmanını yeniler | `jeeta.jobs.refresh_tenant_hosts` |
 | `mail_inbox_poll` | 2 dakika | Doğrulanmış posta kutularında INBOX/Sent UID imleçlerini okur; olaylarla imleçleri aynı işlemde kaydeder ve gelen kutusu tüketicisini çalıştırır | `jeeta.jobs.mail_inbox_poll` |
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
-| `inbox_consume` | 10 saniye | Gelen olayları tek işlemde gelen kutusu kayıtlarına dönüştürür; active ve pending_payment alanlar | `jeeta.jobs.inbox_consume` |
+| `inbox_consume` | 10 saniye | Gelen olayları tek işlemde gelen kutusu kayıtlarına dönüştürür; active ve pending_payment alanlar. Ertelenen (`deferred`) bir olay, erteleme başına bir saat (en çok bir gün) sonra yeniden denenir; yedi günden eski olan bırakılır (`abandoned`, günlükte `inbox.event.abandoned`). Kaybedilmiş bir yolculuktaki arama yolculuğa işlenmez ama konuşmayı yeniden açar: `work.pending` bunu yeniden açma sorusu olarak gösterir. Bağlayıcısı olmadan saklanmış bir NetGSM olayı, türünün tek canlı kabiliyeti olunca ona bağlanır. Sesli mesaj ve otomatik arama raporları `inbox.netgsm_report` ile tüketilir | `jeeta.jobs.inbox_consume` |
 | `outbox_recover` | 1 dakika | 2 dakikadan eski `sending` → `unknown` (yeniden göndermez); 5 dakikadan eski `queued` kayıtlarını iki çitli gönderim adımına verir | `jeeta.jobs.outbox_recover` |
+| `call_timers` | 1 saniye | Hatta ajan araması olan alanlarda (tek bir platform okumasıyla bulunur) her aramanın zamanlayıcılarını işletir: yavaş ajana 4. ve 10. saniyede planın bekleme cümlesi, sessiz ajana her 20 saniyede planın sıradaki yedek cümlesi, yedekler bitince kapanış cümlesi ve kapatma (`agent_timeout`); en uzun süreyi aşan, arayanı sessiz kalan, 90 saniye cevapsız çalan ve köprüsü susmuş arama da senaryoyla biter. Sunucu hiçbir cümle yazmaz | `jeeta.jobs.call_timers` |
+| `purge_call_commands` | 1 gün | Ses köprüsü için 7 günden önce kuyruğa alınmış komutları (onaylanmış olsun olmasın) siler; aramalar ve konuşma kayıtları kalır | `jeeta.jobs.purge_call_commands` |
+| `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
+| `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
+| `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -1427,7 +1463,9 @@ A conversation's executor defaults to Agent and is separate from the journey own
 handover increments its generation; Human(None) is the unassigned queue. Human replies do not
 change the executor and do not require holding it. Agent replies refuse human-held conversations.
 `context` and `journeys.get` return all nine effective `status_labels`: fixed Turkish defaults
-with workspace policy overrides. Keys remain fixed; the panel renders the returned label.
+with workspace policy overrides. Keys remain fixed. They also return `status_label_overrides`,
+only the workspace's own labels: the panel renders an override when one exists and otherwise its
+own translation of the stage, so the English panel does not show the Turkish defaults.
 
 Reply uses a durable outbox: commit queued intent after the first fence, recheck under locks
 immediately before sending and persist the fence snapshot, release all locks for provider I/O,
@@ -1894,6 +1932,147 @@ budget moves and controls. Its dependencies are pure domain types, serialization
 UUID/time/error types and the URL parser; it performs no I/O. Existing application
 port paths re-export the shared records, including connector `MediaUpload` and
 `PublishReceipt`, without changing repository or provider method signatures.
+
+### Calls (voice V0, V1)
+
+`crates/domain/jt_calls` holds the call session and its state machine, the plan and the policy,
+the fence and the timers (spec `docs/superpowers/specs/2026-10-27-agent-voice-calls-design.md`).
+V0 places a rep's call through the NetGSM PBX (`Telephony::click_to_call`: the rep's extension
+rings, then the person) and keeps the call log. V1 lets the connected agent talk on the call
+itself through the workspace's voice bridge: `calls.place{mode: "agent", plan}`, then
+`calls.listen` → think → `calls.say` until `calls.end` (or `calls.transfer` to a rep). Every
+placed call passes the fence twice, the second time in the transaction that dials (right before
+the PBX is asked; for an agent's call, the one that queues the bridge's `dial`); numbers are
+masked in every output and ledger payload (`calls.get` shows a person holding `calls.manage` the
+number; the bridge is handed the number it dials).
+
+The server never composes a sentence: the bridge plays only the plan's opening, holding phrases,
+fallback lines and closing, the policy's recording announcement, and the agent's own `say`
+texts. The `call_timers` job (every second, only for workspaces with an agent's call on the
+line) covers a slow agent with a holding phrase after 4 s and 10 s, a silent one with the next
+fallback line every 20 s, and then plays the closing and hangs up (`agent_timeout`); it also
+ends a call at its maximum duration, a caller who stays silent (`caller_silent`), a line left
+ringing for 90 s (`no_answer`), and a call whose bridge stopped reporting (`bridge_offline`; a
+closing never reported played is taken for done after 60 s). Every end of an agent's call (the
+caller's hangup, the timers, a transfer) is settled once: the journey's `CallMade{connected}`,
+the spend at the policy's tariff on the bridge's budget item, `calls.ended`; `calls.end` then
+records the outcome (`calls.outcome_recorded`). The long-polls (`calls.listen`, the bridge's
+commands) are woken at once by an in-process signal (`BridgeSignals`, on the calls' key) and
+read again at least every second, so a second server instance only adds up to a second. The
+bridge's commands are purged after 7 days (`purge_call_commands`, daily); erasing a person
+removes their calls' commands and the bridge's event notes, and empties their calls' plans.
+
+| Use case | Panel | MCP | Risk | Permission |
+|---|---|---|---|---|
+| `calls.policy_get` | `GET /api/calls/policy` | `jeeta.calls.policy_get` | READ | `calls.work` |
+| `calls.policy_set` | `PUT /api/calls/policy` | `jeeta.calls.policy_set` | WRITE | `calls.manage` (only a person turns the disclosure off) |
+| `calls.place` | `POST /api/calls` | `jeeta.calls.place` | SPEND | `calls.work`; refusals are `409` with `details.reason` and one `calls.refused` |
+| `calls.get` | `GET /api/calls/{call_id}` | `jeeta.calls.get` | READ | `calls.work` |
+| `calls.list` | `GET /api/calls` | `jeeta.calls.list` | READ | `calls.work` |
+| `calls.end` | `POST /api/calls/{call_id}/end` | `jeeta.calls.end` | WRITE | `calls.work`; journey `CallMade`, note, task, spend once |
+| `calls.listen` | `GET /api/calls/{call_id}/events?after_seq&wait_s` | `jeeta.calls.listen` | READ | `calls.work`; long-poll of at most 25 s: `{call_id, state, events, timed_out}` |
+| `calls.say` | `POST /api/calls/{call_id}/say` | `jeeta.calls.say` | WRITE | `calls.work`; `{text ≤ 600, expect_reply, allow_barge_in}`; `409 not_live` off the line |
+| `calls.transfer` | `POST /api/calls/{call_id}/transfer` | `jeeta.calls.transfer` | WRITE | `calls.work`; to `to_extension` or the policy's `handoff_extension`; ends the agent's part |
+
+#### The voice bridge (voice V1)
+
+The voice bridge (`docs/operations/voice-bridge.md`) is the sidecar that is a workspace's phone
+line for agent calls. Its three use cases are panel-only rows served under `/api/voice/bridge/*`
+to its bearer API key alone, a key issued with `calls.bridge` and nothing else (any other key,
+and every session cookie, is refused); no MCP tool reaches them. Its registration every 15
+seconds verifies its `voice_bridge` capability (reached like a device, verified only by this
+heartbeat): stale after 60 seconds, unreachable after 10 minutes (the `voice_bridge_health` job,
+every minute), listed as `voice_bridge_offline` pending work meanwhile. The key check, the
+heartbeat, the health job's marking and the long-poll are the bridge kernel's
+(`jt_app::usecases::bridges::kernel`), which every bridge shares; the voice bridge is its first.
+
+| Use case | Panel | Risk | Notes |
+|---|---|---|---|
+| `calls.bridge.register` | `POST /api/voice/bridge/register` | WRITE | declares the extension's bridge on its first registration; `calls.bridge.online` when it comes back |
+| `calls.bridge.commands` | `GET /api/voice/bridge/commands?wait_s&extension` | READ | long-poll of at most 25 s; a command not acknowledged within 10 s is handed out again |
+| `calls.bridge.events` | `POST /api/voice/bridge/events` | WRITE | at most 100 events, each applied once by `(bridge_call_id, bridge_seq)` |
+
+#### The device bridge (device bridge D1)
+
+The device bridge (`jeeta-device-bridge`, spec `docs/superpowers/specs/2026-10-28-device-bridge-design.md`)
+runs on the PC a workspace's phones are plugged into, on the same kernel as the voice bridge. Its
+four use cases are panel-only rows served under `/api/devices/bridge/*` to its bearer API key
+alone, a key issued with `devices.bridge` and nothing else; no MCP tool reaches them. The key is
+also which bridge calls, so each bridge program holds a key of its own. The bodies are
+`jt_device_protocol`'s; a body that breaks a limit is a `422` whose `details.field` names the
+field.
+
+| Use case | Panel | Risk | Notes |
+|---|---|---|---|
+| `devices.bridge.register` | `POST /api/devices/bridge/register` | WRITE | a `phone` capability per phone (`{platform}:{serial}`), facts merged key by key under `connector_public.device` (only the bridge writes it); a phone that fails its checks, is retired (`phone_retired`) or is held by another bridge that registered it within 60 s (`phone_held_by_another_bridge`) is listed in `refused`, never the registration |
+| `devices.bridge.commands` | `GET /api/devices/bridge/commands?wait_s&limit` | READ | long-poll of at most 25 s, at most 20 commands, for the phones the bridge's latest registration lists; a command the phone's bridge no longer lists is failed `unsupported_by_bridge`; `push_file` carries a 10-minute signed `download_url` |
+| `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, from the bridge the command was leased to (or the one that holds its phone now), else counted `unknown`; a file id that is not a device file this bridge uploaded refuses the batch |
+| `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself, streamed (`image/png` up to 25 MB, `application/octet-stream` up to 95 MiB, under Cloudflare's 100 MB); each workspace uploads two screenshots and two pulled files at a time, a wait over 10 s is a retryable `503`; a device file kept seven days; `{"file_id"}` |
+
+A phone (`phone`, like `voice_bridge`, a kind with a heartbeat) is verified only by the
+registrations that list it: `capability.verify` refuses it (`409`, `details.reason =
+"verified_by_heartbeat"`, `details.cleared_by = "devices.bridge.register"`). It reads stale a
+minute after the last registration that listed it,
+and the `device_bridge_health` job (every minute) marks it unreachable after ten minutes, writing
+`devices.bridge.offline`; meanwhile `work.pending` lists it as `phone_offline` (never as a voice
+bridge). The `device_command_expiry` job (every minute) ends the commands past their time limit as
+`expired`, 200 per transaction, with a `devices.command.finished` each (`leased_by` the bridge
+last handed it, `result_sha256` `null`); a leased command's late result still replaces `expired`,
+with a second entry. The `device_file_purge` job (hourly) deletes the device files past their seven
+days, bytes then record, reading on past a file it cannot delete; it writes no ledger entry.
+Command rows are never deleted (an archtest refuses `delete from device_commands`).
+
+**Deploy note (device bridge D1-T7).** A `phone` verified by evidence before this release reads
+stale at once and, unless a device bridge lists it, goes unreachable within about 11 minutes (the
+`device_bridge_health` job) and stays listed as `phone_offline`: retire it. Phones are now declared
+and kept alive by their device bridge.
+
+#### Phones for agents (device bridge D1-T6)
+
+An agent, or a person holding `devices.work` (the owner and the manager; a rep does not), drives a
+phone through these (`jt_app::usecases::devices::agent`). `act` is the one way a command is queued:
+it checks the command's bounds, that a `push_file`'s file is stored, that the phone is online
+(it reads verified: registered within its heartbeat's minute by the bridge that holds it, and
+listed in that bridge's latest registration) and that its bridge lists what the command needs,
+then queues it
+(it expires after five minutes), writes `devices.command.queued` with the whole command (typed
+text and shell arguments included) and waits up to 20 seconds for its result. A queued command is
+not a done one: the answer is the command as it then stands (`queued`, `leased`, `done`,
+`failed`, `expired`, the last also for one past its expiry that the sweep has not ended yet), and
+`command_get` waits on it again. Once a command is queued, `act` answers it, never an error (a
+wait that fails answers it as queued): an error means nothing was queued.
+`devices.command.finished` carries `result_sha256`, the hash of the result kept on the command. There is no allowlist, rate cap,
+approval or address filter (owner, spec §1); `tracing` carries ids, kinds and statuses only.
+Exempt from the strategy gate, not from the status check.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `devices.list` | `GET /api/devices` | `jeeta.devices.list` | READ | the phones that are not retired: `online`, status, platform, serial, model, OS, screen, features, `unicode`, bridge, last seen |
+| `devices.observe` | `POST /api/devices/{capability_id}/observe` | `jeeta.devices.observe` | WRITE | `act` with `observe {screenshot}`: the observation, and a 10-minute `file_url` for the screenshot |
+| `devices.act` | `POST /api/devices/{capability_id}/act` | `jeeta.devices.act` | WRITE | `{command, wait_s ≤ 20}`; `422` `unsupported_by_bridge` (`details.kind`) or `unicode_unsupported` (install and enable ADBKeyBoard), `409` `device_offline` or `phone_retired` |
+| `devices.command_get` | `GET /api/devices/commands/{command_id}?wait_s` | `jeeta.devices.command_get` | READ | waits up to 20 s for the command to end; at once once it has |
+| `devices.commands` | `GET /api/devices/{capability_id}/commands?limit` | `jeeta.devices.commands` | READ | the phone's log, newest first, 1 to 200 (50), with arguments, without results (`command_get` reads one) |
+
+The signed file address (`GET /files/{id}`, which a `push_file` download and a `file_url` use) is
+served as a stream: 64 KiB read at a time, hashed as it is read, its length announced and its last
+chunk sent only once the hash is the stored one, so a large file, or many reads of one at once,
+are never held in memory whole. The first chunk is read before anything is answered, so a
+tampered file that fits in it is a `404`; a larger one is cut off short of its length. Reads take
+turns: at most 3 at once of one file, 8 of one workspace's provider fetches (studio's media) and 8
+of its devices' reads (`push_file` downloads and `file_url`s, addresses signed with
+`purpose=device`), and 96 in all; a request waits up to 10 s for its turns, then `503`. A response
+whose client takes nothing for 30 s, or that runs past 30 minutes, is cut off and lets go of its
+turns, and the server closes any connection whose write its client has taken nothing of for 60 s.
+
+`JEETA_LOG` is always followed by `rmcp=warn`: rmcp logs whole MCP requests at `debug`, tool
+arguments (typed text, shell arguments) among them.
+
+Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
+dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes
+through `jt_studio::time_compat`: written as RFC 3339 text (a date as `YYYY-MM-DD`), so MCP
+outputs and panel answers carry text; read as that text or as `time`'s compact tuple, which rows
+and ledger payloads stored before it keep. See the deployment release note for the 24-hour
+request-key replay effect.
 The T0 application `PublishOutcome` still transports `AppError`; persistence must
 map it to the domain's closed redacted outcome codes, never store diagnostic text.
 
@@ -2846,7 +3025,7 @@ late responses cannot repopulate an exited page. Activation codes never enter UR
 storage or logs. API-key plaintext is component-local, copied only on an explicit
 click, and lost on dialog close/navigation; creation responses are not cached.
 
-Provider guidance derives `${JEETA_PUBLIC_BASE_URL}/oauth/callback/{meta|instagram|x}`
+Provider guidance derives `${JEETA_PUBLIC_BASE_URL}/oauth/callback/{meta|instagram|x|tiktok|linkedin}`
 from the existing hooks API's configured public base, preserving any path prefix.
 It displays actual webhook addresses, reconnection requirements and access expiry.
 The missing-app `CONFLICT` reason is shown as “Sağlayıcı uygulaması yapılandırılmadı”;

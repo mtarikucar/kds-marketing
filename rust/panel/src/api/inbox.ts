@@ -36,7 +36,9 @@ export const snooze = (id: string, until: string) =>
   request<InboxConversationRow>('POST', `${conv(id)}/snooze`, { body: { until } });
 export const reply = (id: string, text: string, request_key?: string, subject?: string) =>
   request<InboxReplyOut>('POST', `${conv(id)}/reply`, { body: { text, intent: 'reply', request_key, ...(subject === undefined ? {} : { subject }) } });
-export const searchPeople = (q: string) => request<InboxPerson[]>('GET', `${root}/people`, { query: { q } });
+/** People by name/company; an empty query pages through everyone (`limit`/`offset`, oldest first). */
+export const searchPeople = (q: string, limit?: number, offset?: number) =>
+  request<InboxPerson[]>('GET', `${root}/people`, { query: { q, limit, offset } });
 export const getPerson = (id: string) => request<InboxPersonOut>('GET', `${root}/people/${seg(id)}`);
 export const getJourney = (id: string) => request<InboxJourneyOut>('GET', journey(id));
 export const reportEvent = (id: string, input: ReportInput) =>

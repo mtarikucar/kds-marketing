@@ -97,6 +97,10 @@ fn deps_with(db: &TestDb, connectors: Arc<dyn ConnectorRegistry>) -> Deps {
         connectors,
         ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
         ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+        device_uploads: std::sync::Arc::new(
+            jt_app::usecases::devices::uploads::UploadTurns::default(),
+        ),
+        bridge_signals: std::sync::Arc::new(jt_app::std_impls::LocalBridgeSignals::default()),
         billing: jt_app::usecases::billing::BillingConfig {
             price_minor: 123,
             price_currency: "TRY".into(),
@@ -289,6 +293,11 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
             "inbox.manage",
             "studio.work",
             "studio.manage",
+            "calls.work",
+            "calls.manage",
+            "calls.bridge",
+            "devices.work",
+            "devices.bridge",
         ])
     );
 
@@ -2016,6 +2025,10 @@ async fn inbox_pending_and_context_have_http_mcp_parity_without_strategy() {
     assert_eq!(human["status_labels"].as_object().unwrap().len(), 9);
     assert_eq!(human["status_labels"]["new"], "Özel başlangıç");
     assert_eq!(human["status_labels"]["won"], "Kazanıldı");
+    assert_eq!(
+        human["status_label_overrides"],
+        json!({"new":"Özel başlangıç"})
+    );
     assert!(human["strategy_guidance"].is_null());
     assert_eq!(human["person"]["id"], person["person"]["id"]);
     let mut r = deps.uow.tenant(ws).await.unwrap();

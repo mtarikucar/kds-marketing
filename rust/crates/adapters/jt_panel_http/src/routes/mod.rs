@@ -12,8 +12,11 @@ pub mod api_keys;
 pub mod auth;
 pub mod billing;
 pub mod budget;
+pub mod calls;
 pub mod capabilities;
 pub mod connector;
+pub mod device_bridge;
+pub mod devices;
 pub mod events;
 pub mod groups;
 pub mod inbox;
@@ -26,6 +29,7 @@ pub mod roles;
 pub mod strategy;
 pub mod studio;
 pub mod team;
+pub mod voice_bridge;
 pub mod work;
 pub mod workspace;
 
@@ -60,6 +64,9 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/studio/brake"),
     ("PUT", "/api/studio/policy"),
     ("POST", "/api/studio/approvals"),
+    ("GET", "/api/studio/slots/{slot_id}/tiktok"),
+    ("POST", "/api/studio/slots/{slot_id}/tiktok"),
+    ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"),
     ("GET", "/api/inbox/pending"),
     ("POST", "/api/inbox/people/{person_id}/consents"),
     ("GET", "/api/inbox/people/{person_id}/consents"),
@@ -188,6 +195,28 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/connectors/health"),
     ("POST", "/api/connectors/{capability_id}/reconnect"),
     ("GET", "/api/connectors/hooks"),
+    ("PUT", "/api/connectors/{capability_id}/pbx-policy"),
+    ("GET", "/api/calls/policy"),
+    ("PUT", "/api/calls/policy"),
+    ("POST", "/api/calls"),
+    ("GET", "/api/calls/{call_id}"),
+    ("GET", "/api/calls"),
+    ("POST", "/api/calls/{call_id}/end"),
+    ("GET", "/api/calls/{call_id}/events"),
+    ("POST", "/api/calls/{call_id}/say"),
+    ("POST", "/api/calls/{call_id}/transfer"),
+    ("POST", "/api/voice/bridge/register"),
+    ("GET", "/api/voice/bridge/commands"),
+    ("POST", "/api/voice/bridge/events"),
+    ("POST", "/api/devices/bridge/register"),
+    ("GET", "/api/devices/bridge/commands"),
+    ("POST", "/api/devices/bridge/results"),
+    ("POST", "/api/devices/bridge/files"),
+    ("GET", "/api/devices"),
+    ("POST", "/api/devices/{capability_id}/observe"),
+    ("POST", "/api/devices/{capability_id}/act"),
+    ("GET", "/api/devices/commands/{command_id}"),
+    ("GET", "/api/devices/{capability_id}/commands"),
     ("GET", "/api/events/pending"),
     ("POST", "/api/events/ack"),
     ("GET", "/api/events"),
@@ -368,6 +397,24 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/studio/approvals",
             "studio.approve",
             studio::approve,
+        ),
+        api_route(
+            "GET",
+            "/studio/slots/{slot_id}/tiktok",
+            "studio.tiktok_posting",
+            studio::tiktok_posting,
+        ),
+        api_route(
+            "POST",
+            "/studio/slots/{slot_id}/tiktok",
+            "studio.tiktok_post",
+            studio::tiktok_post,
+        ),
+        api_route(
+            "GET",
+            "/studio/slots/{slot_id}/tiktok/metrics",
+            "studio.tiktok_metrics",
+            studio::tiktok_metrics,
         ),
         api_route("GET", "/inbox/pending", "inbox.pending", inbox::pending),
         api_route(
@@ -929,6 +976,108 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "connector.hooks",
             connector::hooks,
         ),
+        api_route(
+            "PUT",
+            "/connectors/{capability_id}/pbx-policy",
+            "connector.set_pbx_policy",
+            connector::set_pbx_policy,
+        ),
+        api_route(
+            "GET",
+            "/calls/policy",
+            "calls.policy_get",
+            calls::policy_get,
+        ),
+        api_route(
+            "PUT",
+            "/calls/policy",
+            "calls.policy_set",
+            calls::policy_set,
+        ),
+        api_route("POST", "/calls", "calls.place", calls::place),
+        api_route("GET", "/calls/{call_id}", "calls.get", calls::get),
+        api_route("GET", "/calls", "calls.list", calls::list),
+        api_route("POST", "/calls/{call_id}/end", "calls.end", calls::end),
+        api_route(
+            "GET",
+            "/calls/{call_id}/events",
+            "calls.listen",
+            calls::listen,
+        ),
+        api_route("POST", "/calls/{call_id}/say", "calls.say", calls::say),
+        api_route(
+            "POST",
+            "/calls/{call_id}/transfer",
+            "calls.transfer",
+            calls::transfer,
+        ),
+        api_route(
+            "POST",
+            "/voice/bridge/register",
+            "calls.bridge.register",
+            voice_bridge::register,
+        ),
+        api_route(
+            "GET",
+            "/voice/bridge/commands",
+            "calls.bridge.commands",
+            voice_bridge::commands,
+        ),
+        api_route(
+            "POST",
+            "/voice/bridge/events",
+            "calls.bridge.events",
+            voice_bridge::events,
+        ),
+        api_route(
+            "POST",
+            "/devices/bridge/register",
+            "devices.bridge.register",
+            device_bridge::register,
+        ),
+        api_route(
+            "GET",
+            "/devices/bridge/commands",
+            "devices.bridge.commands",
+            device_bridge::commands,
+        ),
+        api_route(
+            "POST",
+            "/devices/bridge/results",
+            "devices.bridge.results",
+            device_bridge::results,
+        ),
+        api_route(
+            "POST",
+            "/devices/bridge/files",
+            "devices.bridge.files",
+            device_bridge::files,
+        ),
+        api_route("GET", "/devices", "devices.list", devices::list),
+        api_route(
+            "POST",
+            "/devices/{capability_id}/observe",
+            "devices.observe",
+            devices::observe,
+        ),
+        api_route(
+            "POST",
+            "/devices/{capability_id}/act",
+            "devices.act",
+            devices::act,
+        ),
+        api_route(
+            "GET",
+            "/devices/commands/{command_id}",
+            "devices.command_get",
+            devices::command_get,
+        ),
+        api_route(
+            "GET",
+            "/devices/{capability_id}/commands",
+            "devices.commands",
+            devices::commands,
+        ),
         api_route("GET", "/events/pending", "events.pending", events::pending),
         api_route("POST", "/events/ack", "events.ack", events::ack),
         api_route("GET", "/events", "events.list", events::list),
@@ -1088,6 +1237,12 @@ mod tests {
                 connectors: Arc::new(ScriptedRegistry::new()),
                 ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
                 ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+                device_uploads: std::sync::Arc::new(
+                    jt_app::usecases::devices::uploads::UploadTurns::default(),
+                ),
+                bridge_signals: std::sync::Arc::new(
+                    jt_app::std_impls::LocalBridgeSignals::default(),
+                ),
                 billing: jt_app::usecases::billing::BillingConfig {
                     price_minor: 123,
                     price_currency: "TRY".into(),

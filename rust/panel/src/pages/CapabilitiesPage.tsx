@@ -40,12 +40,14 @@ import {
   VerifyDialog,
 } from './capabilities/dialogs';
 import { GroupsPanel } from './capabilities/GroupsPanel';
+import { PairBridgePanel } from './capabilities/PhoneCard';
 import { WebhookPanel } from './capabilities/WebhookPanel';
 import {
   BUDGET_ITEMS_KEY,
   CAPABILITIES_KEY,
   CONNECTOR_HEALTH_KEY,
   GROUPS_KEY,
+  PHONE_REFRESH_MS,
   invalidateCapabilities,
 } from './capabilities/queries';
 
@@ -100,7 +102,14 @@ function ProbeDialog({ probed, onClose }: { probed: { name: string; out: ProbeOu
             {result.ok ? (
               <Callout tone="success">{t('capabilities.connector.probeDialog.ok')}</Callout>
             ) : (
-              <Callout tone="danger">{t('capabilities.connector.probeDialog.failed', { reason })}</Callout>
+              <Callout tone="danger">
+                <p>{t('capabilities.connector.probeDialog.failed', { reason })}</p>
+                {result.error_reason && (
+                  <p className="mt-1 break-words text-caption" data-probe-reason="">
+                    {t('capabilities.connector.reasonLine', { reason: result.error_reason })}
+                  </p>
+                )}
+              </Callout>
             )}
             <dl className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-0.5">
@@ -135,15 +144,23 @@ export function CapabilitiesPage() {
   const navigate = useNavigate();
   const canManage = can(session.data, 'capabilities.manage');
   const canProbe = can(session.data, 'workspace.read');
+  const canCall = can(session.data, 'calls.work');
+  const canUsePhones = can(session.data, 'devices.work');
+  // A bridge key holds exactly `devices.bridge`, which its issuer must hold too.
+  const canPair = can(session.data, 'api_keys.manage') && can(session.data, 'devices.bridge');
   const [filter, setFilter] = useState<Filter>('all');
   const [probed, setProbed] = useState<{ name: string; out: ProbeOut } | null>(null);
   const [declaring, setDeclaring] = useState(false);
   const [action, setAction] = useState<{ kind: CapabilityAction; item: CapabilityOut } | null>(null);
 
   // The filter is the server's `group` parameter; the unfiltered list also feeds the groups panel.
+  // The Devices tab follows its phones: their bridges register every heartbeat, so it reads them
+  // (and each card its log) again as often, while it is shown.
+  const devices = filter === 'device';
   const listed = useQuery({
     queryKey: [...CAPABILITIES_KEY, filter],
     queryFn: () => listCapabilities(filter === 'all' ? {} : { group: filter }),
+    refetchInterval: devices ? PHONE_REFRESH_MS : false,
   });
   const all = useQuery({ queryKey: [...CAPABILITIES_KEY, 'all'], queryFn: () => listCapabilities() });
   const groups = useQuery({ queryKey: GROUPS_KEY, queryFn: listGroups });
@@ -232,7 +249,9 @@ export function CapabilitiesPage() {
         }
       />
       <FilterChips value={filter} onChange={setFilter} />
-      <QueryState query={listed}>
+      {devices && canPair && <PairBridgePanel />}
+      {/* A refresh that fails keeps the cards (and an open command row) on screen. */}
+      <QueryState query={listed} keepOnError>
         {items.length === 0 ? (
           <EmptyState title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
         ) : (
@@ -251,6 +270,10 @@ export function CapabilitiesPage() {
                 canProbe={canProbe}
                 onConnector={onConnector}
                 connectorBusy={probe.isPending || reconnect.isPending}
+                canCall={canCall}
+                canUsePhones={canUsePhones}
+                livePhones={devices}
+                readAt={listed.dataUpdatedAt}
               />
             ))}
           </div>

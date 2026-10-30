@@ -56,8 +56,14 @@ pub trait PersonRepo: Send + Sync {
         channel: IdentityChannel,
         normalized: &str,
     ) -> Result<Option<Person>, AppError>;
-    /// Literal, case-insensitive substring of name/company, ordered by (created_at,id).
-    async fn search(&mut self, query: &str, limit: u32) -> Result<Vec<Person>, AppError>;
+    /// Literal, case-insensitive substring of name/company, ordered by (created_at,id); `offset`
+    /// rows are skipped first, so an empty query pages through every person.
+    async fn search(
+        &mut self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Person>, AppError>;
     /// `None` clears the merge marker during an authorized undo.
     async fn mark_merged(
         &mut self,
@@ -406,12 +412,33 @@ pub trait ConsumptionRepo: Send + Sync {
         consumer: &str,
         event_id: InboundEventId,
     ) -> Result<bool, AppError>;
+    /// Records the claim's outcome. A `deferred` outcome counts one more deferral and is due
+    /// again an hour per deferral after `consumed_at`, at most a day later
+    /// ([`ConsumptionRepo::release_due_deferrals`]).
     async fn record(
         &mut self,
         consumer: &str,
         event_id: InboundEventId,
         outcome: ConsumptionOutcome,
     ) -> Result<(), AppError>;
+    /// Makes `consumer`'s deferred events whose retry is due at `now` claimable and listable
+    /// again (outcome `retry_due`), and gives up on those received more than
+    /// [`DEFERRAL_GIVE_UP`] before `now` (outcome `abandoned`), answering their ids. A deferral
+    /// recorded before migration 0015 has no retry time and is due at once.
+    async fn release_due_deferrals(
+        &mut self,
+        consumer: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<InboundEventId>, AppError>;
+}
+
+/// How long a deferred event is retried before it is abandoned.
+pub const DEFERRAL_GIVE_UP: time::Duration = time::Duration::days(7);
+
+/// When a deferral recorded at `at`, the `attempts`-th, is due again: an hour per deferral, at
+/// most a day.
+pub fn deferral_due(at: OffsetDateTime, attempts: u32) -> OffsetDateTime {
+    at + time::Duration::hours(i64::from(attempts.clamp(1, 24)))
 }
 
 #[async_trait]
@@ -472,6 +499,12 @@ pub trait OutboxRepo: Send + Sync {
     ) -> Result<Vec<OutboxRow>, AppError>;
     /// Update only processing state; identity, intent and relationships stay immutable.
     async fn update(&mut self, row: OutboxRow) -> Result<(), AppError>;
+    /// The recorded `last_error` of the failed or uncertain outbound intents of `messages`
+    /// (state `failed` or `unknown`), one per message that has one, in no particular order.
+    async fn failure_reasons(
+        &mut self,
+        messages: &[MessageId],
+    ) -> Result<Vec<(MessageId, String)>, AppError>;
 }
 
 impl MergeSnapshot {

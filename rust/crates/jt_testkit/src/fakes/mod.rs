@@ -45,9 +45,13 @@
 //! unit of work; `tenant`, `strategy`, `capability`, `connector`, `user` and `platform` the
 //! bundles' repos.
 
+mod calls;
+pub use calls::MemCalls;
 mod capability;
 mod compliance;
 mod connector;
+mod devices;
+pub use devices::MemDevices;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
 mod platform;

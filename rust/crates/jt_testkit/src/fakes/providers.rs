@@ -21,10 +21,11 @@ use async_trait::async_trait;
 use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
     Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus,
-    InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, MailMessage,
-    MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp, OAuthApp, OAuthProvider,
-    PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt,
-    SmsSender, Telephony, Url, XApp,
+    InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, LinkedinApp,
+    MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp, OAuthApp,
+    OAuthProvider, PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest,
+    PublishResolution, Publisher, RecentPost, SendReceipt, SmsSender, Telephony, TiktokApp,
+    TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -41,13 +42,15 @@ use super::state::lock;
 pub const TEST_PUBLIC_BASE_URL: &str = "https://panel.test";
 
 /// A platform app configuration a test sets field by field. The default has no app at all and
-/// the public address [`TEST_PUBLIC_BASE_URL`]; [`FakeAppConfig::with_all_apps`] has all three.
+/// the public address [`TEST_PUBLIC_BASE_URL`]; [`FakeAppConfig::with_all_apps`] has them all.
 /// `public_base_url: None` stands for a server whose public address is not configured.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FakeAppConfig {
     pub meta: Option<MetaApp>,
     pub instagram: Option<InstagramApp>,
     pub x: Option<XApp>,
+    pub tiktok: Option<TiktokApp>,
+    pub linkedin: Option<LinkedinApp>,
     pub public_base_url: Option<Url>,
 }
 
@@ -57,6 +60,8 @@ impl Default for FakeAppConfig {
             meta: None,
             instagram: None,
             x: None,
+            tiktok: None,
+            linkedin: None,
             public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
         }
     }
@@ -65,7 +70,9 @@ impl Default for FakeAppConfig {
 impl FakeAppConfig {
     /// Every app configured, with test values (`meta-app-id`/`meta-app-secret`, verify token
     /// `meta-verify-token`; `instagram-app-id`/`instagram-app-secret`;
-    /// `x-client-id`/`x-client-secret`) and no optional Meta settings.
+    /// `x-client-id`/`x-client-secret`; `tiktok-client-key`/`tiktok-client-secret`;
+    /// `linkedin-client-id`/`linkedin-client-secret`, without the organization scopes) and no
+    /// optional Meta or LinkedIn settings.
     pub fn with_all_apps() -> Self {
         FakeAppConfig {
             meta: Some(MetaApp {
@@ -84,6 +91,16 @@ impl FakeAppConfig {
                 client_id: "x-client-id".into(),
                 client_secret: "x-client-secret".into(),
             }),
+            tiktok: Some(TiktokApp {
+                client_key: "tiktok-client-key".into(),
+                client_secret: "tiktok-client-secret".into(),
+            }),
+            linkedin: Some(LinkedinApp {
+                client_id: "linkedin-client-id".into(),
+                client_secret: "linkedin-client-secret".into(),
+                organization_scopes: false,
+                api_version: None,
+            }),
             ..FakeAppConfig::default()
         }
     }
@@ -100,6 +117,14 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn x_app(&self) -> Option<XApp> {
         self.x.clone()
+    }
+
+    fn tiktok_app(&self) -> Option<TiktokApp> {
+        self.tiktok.clone()
+    }
+
+    fn linkedin_app(&self) -> Option<LinkedinApp> {
+        self.linkedin.clone()
     }
 
     fn public_base_url(&self) -> Option<Url> {
@@ -251,6 +276,11 @@ pub enum ConnectorCall {
         credential: Credential,
         call_id: String,
     },
+    CallRecords {
+        credential: Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    },
     ConsentAdd {
         credential: Credential,
         rows: Vec<ConsentRow>,
@@ -289,9 +319,33 @@ pub struct ScriptedConnector {
     send_hooks: Script<SendHook>,
     ad_read_hooks: Script<SendHook>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
+    /// Publication statuses answer from here, `Ok(None)` (the trait's default: the receipt is the
+    /// post) when nothing is queued; the receipts asked about are kept apart from
+    /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::resolve_calls`]).
+    resolve: Script<Result<Option<PublishResolution>, ConnectorError>>,
+    resolve_calls: Mutex<Vec<PublishReceipt>>,
+    /// Revocations answer from here, `Ok(())` (the trait's default) when nothing is queued; the
+    /// credentials revoked are kept apart from [`ScriptedConnector::calls`] (see
+    /// [`ScriptedConnector::revoke_calls`]).
+    revoke: Script<Result<(), ConnectorError>>,
+    revoke_calls: Mutex<Vec<Credential>>,
+    /// The account's posting settings answer from here, `Ok(None)` (the trait's default: no
+    /// posting screen) when nothing is queued; the accounts asked about (their `public`) are kept
+    /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::creator_info_calls`]).
+    creator_info: Script<Result<Option<TiktokCreator>, ConnectorError>>,
+    creator_info_calls: Mutex<Vec<Value>>,
     post_metrics: Script<Result<PostMetrics, ConnectorError>>,
     account_metrics: Script<Result<AccountMetrics, ConnectorError>>,
+    /// An account's recent posts answer from here, `Ok(None)` (the trait's default: not listed)
+    /// when nothing is queued; the limits asked for are kept apart from
+    /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::recent_posts_calls`]).
+    recent_posts: Script<Result<Option<Vec<RecentPost>>, ConnectorError>>,
+    recent_posts_calls: Mutex<Vec<u32>>,
     send_text: Script<Result<SendReceipt, ConnectorError>>,
+    /// Sender-name lookups answer from here, `Ok(None)` when nothing is queued; they are kept
+    /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::sender_name_calls`]).
+    sender_name: Script<Result<Option<String>, ConnectorError>>,
+    sender_name_calls: Mutex<Vec<String>>,
     set_status: Script<Result<(), ConnectorError>>,
     account_context: Script<Result<AdAccountContext, ConnectorError>>,
     adset_insights: Script<Result<Vec<AdSetInsights>, ConnectorError>>,
@@ -302,6 +356,7 @@ pub struct ScriptedConnector {
     leadgen: Script<Result<LeadGenRecord, ConnectorError>>,
     click_to_call: Script<Result<SendReceipt, ConnectorError>>,
     hangup: Script<Result<(), ConnectorError>>,
+    call_records: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
     consent_add: Script<Result<SendReceipt, ConnectorError>>,
     report: Script<Result<Vec<DeliveryStatus>, ConnectorError>>,
     inbox: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
@@ -339,9 +394,19 @@ impl ScriptedConnector {
             send_hooks: Script::default(),
             ad_read_hooks: Script::default(),
             publish: Script::default(),
+            resolve: Script::default(),
+            resolve_calls: Mutex::default(),
+            revoke: Script::default(),
+            revoke_calls: Mutex::default(),
+            creator_info: Script::default(),
+            creator_info_calls: Mutex::default(),
             post_metrics: Script::default(),
             account_metrics: Script::default(),
+            recent_posts: Script::default(),
+            recent_posts_calls: Mutex::default(),
             send_text: Script::default(),
+            sender_name: Script::default(),
+            sender_name_calls: Mutex::default(),
             set_status: Script::default(),
             account_context: Script::default(),
             adset_insights: Script::default(),
@@ -352,6 +417,7 @@ impl ScriptedConnector {
             leadgen: Script::default(),
             click_to_call: Script::default(),
             hangup: Script::default(),
+            call_records: Script::default(),
             consent_add: Script::default(),
             report: Script::default(),
             inbox: Script::default(),
@@ -415,12 +481,52 @@ impl ScriptedConnector {
         self.publish.push(result);
     }
 
+    /// Queues what the next [`Publisher::resolve`] answers.
+    pub fn push_resolve(&self, result: Result<Option<PublishResolution>, ConnectorError>) {
+        self.resolve.push(result);
+    }
+
+    /// The receipts [`Publisher::resolve`] was asked about, in order.
+    pub fn resolve_calls(&self) -> Vec<PublishReceipt> {
+        lock(&self.resolve_calls).clone()
+    }
+
+    /// Queues what the next [`Connector::revoke`] answers.
+    pub fn push_revoke(&self, result: Result<(), ConnectorError>) {
+        self.revoke.push(result);
+    }
+
+    /// The credentials [`Connector::revoke`] was asked to give back, in order.
+    pub fn revoke_calls(&self) -> Vec<Credential> {
+        lock(&self.revoke_calls).clone()
+    }
+
+    /// Queues what the next [`Publisher::creator_info`] answers.
+    pub fn push_creator_info(&self, result: Result<Option<TiktokCreator>, ConnectorError>) {
+        self.creator_info.push(result);
+    }
+
+    /// The accounts (their `public`) [`Publisher::creator_info`] was asked about, in order.
+    pub fn creator_info_calls(&self) -> Vec<Value> {
+        lock(&self.creator_info_calls).clone()
+    }
+
     pub fn push_post_metrics(&self, result: Result<PostMetrics, ConnectorError>) {
         self.post_metrics.push(result);
     }
 
     pub fn push_account_metrics(&self, result: Result<AccountMetrics, ConnectorError>) {
         self.account_metrics.push(result);
+    }
+
+    /// Queues what the next [`InsightsReader::recent_posts`] answers.
+    pub fn push_recent_posts(&self, result: Result<Option<Vec<RecentPost>>, ConnectorError>) {
+        self.recent_posts.push(result);
+    }
+
+    /// The limits [`InsightsReader::recent_posts`] was asked for, in order.
+    pub fn recent_posts_calls(&self) -> Vec<u32> {
+        lock(&self.recent_posts_calls).clone()
     }
 
     /// Run after recording a provider write, before its result. Supports races and crashes.
@@ -463,8 +569,21 @@ impl ScriptedConnector {
         self.leadgen.push(result);
     }
 
+    pub fn push_sender_name(&self, result: Result<Option<String>, ConnectorError>) {
+        self.sender_name.push(result);
+    }
+
+    /// The sender ids whose names were asked for, in order.
+    pub fn sender_name_calls(&self) -> Vec<String> {
+        lock(&self.sender_name_calls).clone()
+    }
+
     pub fn push_click_to_call(&self, result: Result<SendReceipt, ConnectorError>) {
         self.click_to_call.push(result);
+    }
+
+    pub fn push_call_records(&self, result: Result<Vec<InboundEventDraft>, ConnectorError>) {
+        self.call_records.push(result);
     }
 
     pub fn push_hangup(&self, result: Result<(), ConnectorError>) {
@@ -533,6 +652,11 @@ impl Connector for ScriptedConnector {
             public: public.clone(),
         });
         self.on_connected.try_next().unwrap_or(Ok(Value::Null))
+    }
+
+    async fn revoke(&self, cred: &Credential) -> Result<(), ConnectorError> {
+        lock(&self.revoke_calls).push(cred.clone());
+        self.revoke.try_next().unwrap_or(Ok(()))
     }
 }
 
@@ -611,6 +735,25 @@ impl Publisher for ScriptedConnector {
         self.after_send().await;
         self.next(&self.publish, "publish result")
     }
+
+    async fn resolve(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<Option<PublishResolution>, ConnectorError> {
+        lock(&self.resolve_calls).push(receipt.clone());
+        self.resolve.try_next().unwrap_or(Ok(None))
+    }
+
+    async fn creator_info(
+        &self,
+        _cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<TiktokCreator>, ConnectorError> {
+        lock(&self.creator_info_calls).push(public.clone());
+        self.creator_info.try_next().unwrap_or(Ok(None))
+    }
 }
 
 #[async_trait]
@@ -640,6 +783,16 @@ impl InsightsReader for ScriptedConnector {
         });
         self.next(&self.account_metrics, "account metrics result")
     }
+
+    async fn recent_posts(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        limit: u32,
+    ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
+        lock(&self.recent_posts_calls).push(limit);
+        self.recent_posts.try_next().unwrap_or(Ok(None))
+    }
 }
 
 #[async_trait]
@@ -659,6 +812,16 @@ impl MessagingSender for ScriptedConnector {
         });
         self.after_send().await;
         self.next(&self.send_text, "send_text result")
+    }
+
+    async fn sender_name(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        sender_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        lock(&self.sender_name_calls).push(sender_id.to_owned());
+        self.sender_name.try_next().unwrap_or(Ok(None))
     }
 }
 
@@ -814,6 +977,20 @@ impl Telephony for ScriptedConnector {
             call_id: call_id.to_owned(),
         });
         self.next(&self.hangup, "hangup result")
+    }
+
+    async fn call_records(
+        &self,
+        cred: &Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError> {
+        self.record(ConnectorCall::CallRecords {
+            credential: cred.clone(),
+            from,
+            to,
+        });
+        self.next(&self.call_records, "call_records result")
     }
 }
 
@@ -977,6 +1154,11 @@ impl OAuthProvider for ScriptedOAuth {
                     .append_pair("code_challenge", challenge)
                     .append_pair("code_challenge_method", "S256");
             }
+            // A LinkedIn flow that asks for the organization scopes says so, so the use cases'
+            // tests can tell the two flavours apart.
+            if matches!(app, OAuthApp::Linkedin(linkedin) if linkedin.organization_scopes) {
+                query.append_pair("organization_scopes", "true");
+            }
         }
         Ok(url)
     }
@@ -1015,8 +1197,14 @@ impl OAuthProvider for ScriptedOAuth {
 // 7); the binary's real registry (`bin/jeeta/src/connectors.rs`) is tested against this fake, so
 // this fake never offers more than production does.
 
-/// The providers whose adapters publish posts and read their counters (Meta, X).
-const PUBLISHING: &[Provider] = &[Provider::Meta, Provider::X];
+/// The providers whose adapters publish posts and read their counters (Meta, X, TikTok,
+/// LinkedIn).
+const PUBLISHING: &[Provider] = &[
+    Provider::Meta,
+    Provider::X,
+    Provider::Tiktok,
+    Provider::Linkedin,
+];
 /// The providers whose adapters send direct messages, write ad budgets and fetch lead-gen
 /// submissions (Meta).
 const META_ONLY: &[Provider] = &[Provider::Meta];
@@ -1028,8 +1216,8 @@ const NETGSM_ONLY: &[Provider] = &[Provider::Netgsm];
 /// `jt_app::std_impls::EmptyConnectorRegistry`); [`with_connector`](Self::with_connector) and
 /// [`with_oauth`](Self::with_oauth) register adapters by their provider. A registered
 /// [`ScriptedConnector`] is handed out for its provider's operations where the real adapter offers
-/// them: SMS, calls, consent and delivery reports for NetGSM; publishing and counters for Meta and
-/// X; messaging, ad budgets and lead-gen for Meta. Clones share the adapters.
+/// them: SMS, calls, consent and delivery reports for NetGSM; publishing and counters for Meta,
+/// X, TikTok and LinkedIn; messaging, ad budgets and lead-gen for Meta. Clones share the adapters.
 #[derive(Clone, Default)]
 pub struct ScriptedRegistry {
     connectors: BTreeMap<Provider, Arc<ScriptedConnector>>,

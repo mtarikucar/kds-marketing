@@ -43,11 +43,7 @@ pub fn validate_upload(u: &MediaUpload) -> Result<(), AppError> {
     let max = limit(&u.mime)?;
     if u.bytes.is_empty()
         || u.bytes.len() as u64 > max
-        || u.filename.is_empty()
-        || u.filename.len() > 255
-        || u.filename.contains(['/', '\\'])
-        || u.filename.chars().any(char::is_control)
-        || matches!(u.filename.as_str(), "." | "..")
+        || !crate::usecases::files::filename_ok(&u.filename)
     {
         return Err(invalid());
     }
@@ -285,12 +281,24 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     // A 24-hour grace separates abandoned submissions from writes still in progress.
     // The shared control lock prevents a delayed metadata commit from racing reconciliation.
     let known: std::collections::HashSet<_> = usage.files.iter().map(|f| f.id).collect();
-    for id in d
+    let candidates: Vec<FileId> = d
         .file_maintenance
         .orphan_candidates(ws, now - Duration::hours(24))
         .await?
-    {
-        if !known.contains(&id) {
+        .into_iter()
+        .filter(|id| !known.contains(id))
+        .collect();
+    // A device bridge's files are recorded apart (`ports::devices::DeviceFile`): not orphans.
+    let ids: Vec<uuid::Uuid> = candidates.iter().map(|id| id.0).collect();
+    let device: std::collections::HashSet<uuid::Uuid> = r
+        .device_commands()
+        .files(&ids)
+        .await?
+        .into_iter()
+        .map(|f| f.id)
+        .collect();
+    for id in candidates {
+        if !device.contains(&id.0) {
             d.files.delete(ws, id).await?;
         }
     }
@@ -335,12 +343,36 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     r.commit().await?;
     Ok(count)
 }
-/// Build provider transport at dispatch time, reloading durable bytes for X.
+/// How a capability's provider takes a medium: its bytes, uploaded by the adapter, or a URL the
+/// provider fetches itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaDelivery {
+    /// The bytes, read from the file store (or fetched once from a hosted URL): the provider
+    /// takes uploads (X, LinkedIn, a TikTok video).
+    Bytes,
+    /// A URL: a signed file-store URL, or the hosted URL as is (Instagram, Facebook Pages, a
+    /// TikTok photo, which TikTok pulls from a verified domain).
+    SignedUrl,
+}
+
+impl MediaDelivery {
+    /// How a capability of kind `kind_key` takes a medium of type `mime`.
+    pub fn of(kind_key: &str, mime: &str) -> MediaDelivery {
+        match kind_key {
+            "x" | "linkedin_member" | "linkedin_page" => MediaDelivery::Bytes,
+            "tiktok" if mime.trim().eq_ignore_ascii_case("video/mp4") => MediaDelivery::Bytes,
+            _ => MediaDelivery::SignedUrl,
+        }
+    }
+}
+
+/// Build provider transport at dispatch time for a capability of kind `kind_key`: each medium as
+/// [`MediaDelivery::of`] says, durable bytes reloaded from the file store.
 pub async fn resolve_media(
     d: &Deps,
     ws: WorkspaceId,
     media: &[MediaAsset],
-    for_x: bool,
+    kind_key: &str,
 ) -> Result<(Vec<Url>, Vec<MediaUpload>), AppError> {
     let mut urls = vec![];
     let mut bytes = vec![];
@@ -357,7 +389,7 @@ pub async fn resolve_media(
                     return Err(AppError::not_found("file"));
                 }
                 drop(r);
-                if for_x {
+                if MediaDelivery::of(kind_key, &f.mime) == MediaDelivery::Bytes {
                     let u = d.files.read(ws, *id).await?;
                     validate_upload(&u)?;
                     bytes.push(u)
@@ -379,7 +411,7 @@ pub async fn resolve_media(
                 if u.bytes.len() as u64 != *size_bytes {
                     return Err(invalid());
                 }
-                if for_x {
+                if MediaDelivery::of(kind_key, mime) == MediaDelivery::Bytes {
                     bytes.push(u)
                 } else {
                     urls.push(url.clone())

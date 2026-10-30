@@ -104,6 +104,7 @@ fn probe_run(c: &Capability, at: OffsetDateTime, ok: bool) -> ProbeRun {
         at,
         ok,
         error_kind: (!ok).then(|| "auth".to_owned()),
+        reason: None,
         latency_ms: 120,
         facts: if ok {
             json!({ "name": "Kahve Dükkanı" })
@@ -897,6 +898,94 @@ async fn oauth_pending_state_hash_is_unique_and_purgeable() {
     );
 }
 
+/// `0014_social_providers`: TikTok and LinkedIn flows are stored under their own provider and
+/// app; its down keeps the widened checks while such a flow remains, and narrows them once none
+/// does.
+#[tokio::test]
+async fn tiktok_and_linkedin_flows_are_stored_and_survive_a_rollback() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, owner) = db.seed_workspace("a").await;
+    let tiktok = OAuthPendingRow {
+        provider: Provider::Tiktok,
+        kind_key: "tiktok".into(),
+        app: OAuthCallback::Tiktok,
+        pkce_verifier_sealed: None,
+        ..pending(a, owner, "hash-tiktok", T0 + Duration::minutes(30))
+    };
+    let linkedin = OAuthPendingRow {
+        provider: Provider::Linkedin,
+        kind_key: "linkedin_page".into(),
+        app: OAuthCallback::Linkedin,
+        pkce_verifier_sealed: None,
+        ..pending(a, owner, "hash-linkedin", T0 + Duration::minutes(30))
+    };
+    let mut t = uow.tenant(a).await.unwrap();
+    t.oauth_pending().insert(tiktok.clone()).await.unwrap();
+    t.oauth_pending().insert(linkedin.clone()).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(a).await.unwrap();
+    for row in [&tiktok, &linkedin] {
+        assert_eq!(
+            t.oauth_pending()
+                .find_by_state_hash(&row.state_hash)
+                .await
+                .unwrap()
+                .as_ref(),
+            Some(row)
+        );
+    }
+    drop(t);
+
+    let down = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../migrations/0014_social_providers.down.sql"),
+    )
+    .unwrap();
+    let constraint = |name: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "select pg_get_constraintdef(oid) from pg_constraint where conname = $1",
+            )
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // With flows of the new providers pending, the down keeps the widened checks.
+    sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
+    assert!(
+        constraint("oauth_pending_provider_check")
+            .await
+            .contains("tiktok")
+    );
+    assert!(
+        constraint("oauth_pending_app_check")
+            .await
+            .contains("linkedin")
+    );
+    // Once none remains, it narrows them back.
+    let mut p = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("delete from oauth_pending where provider in ('tiktok', 'linkedin')")
+        .execute(p.conn())
+        .await
+        .unwrap();
+    p.commit().await.unwrap();
+    sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
+    assert!(
+        !constraint("oauth_pending_provider_check")
+            .await
+            .contains("tiktok")
+    );
+    assert!(
+        !constraint("oauth_pending_app_check")
+            .await
+            .contains("linkedin")
+    );
+}
+
 #[tokio::test]
 async fn oauth_pending_lock_waits_and_a_reconnection_names_its_own_capability() {
     let db = TestDb::new().await;
@@ -1351,6 +1440,51 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
     assert_eq!(routed(&uow, meta, "page-3").await, Some(second.id));
 }
 
+/// Every live holder of an account with sealed credentials, across workspaces, whatever its
+/// status: what one provider-side change of the account's grant reaches.
+#[tokio::test]
+async fn capabilities_holding_lists_every_live_sealed_holder_across_workspaces() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("holding-a").await;
+    let (b, _) = db.seed_workspace("holding-b").await;
+    let (c, _) = db.seed_workspace("holding-c").await;
+    let (d, _) = db.seed_workspace("holding-d").await;
+    let verified = capability(a, "tiktok", "open-1", T0);
+    connect(&uow, &verified, true).await;
+    let unverified = capability(b, "tiktok", "open-1", T0 + Duration::days(1));
+    connect(&uow, &unverified, false).await;
+    // Not holders (a workspace holds an account once per kind): declared without credentials,
+    // retired, another account, another kind.
+    let declared = capability(c, "tiktok", "open-1", T0 + Duration::days(2));
+    insert_capability(&uow, &declared).await;
+    let gone = capability(d, "tiktok", "open-1", T0 + Duration::days(3));
+    connect(&uow, &gone, true).await;
+    set_status(&uow, &gone, StoredStatus::Retired).await;
+    connect(&uow, &capability(a, "tiktok", "open-2", T0), true).await;
+    connect(&uow, &capability(a, "x", "open-1", T0), true).await;
+    let held = |kinds: &'static [&'static str], id: &'static str| {
+        let uow = uow.clone();
+        async move {
+            let mut p = uow.platform().await.unwrap();
+            p.capabilities_holding(kinds, id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|c| c.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    let mut expected = vec![(a, verified.id), (b, unverified.id)];
+    expected.sort();
+    assert_eq!(
+        held(&["tiktok"], "open-1").await,
+        expected.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+    );
+    assert!(held(&["tiktok"], "open-9").await.is_empty());
+    assert!(held(&[], "open-1").await.is_empty());
+}
+
 /// Only a binding proven at least once routes events: a credential pasted for someone else's
 /// account (sealed, its probe failed or reached another account, so `unreachable` and never
 /// verified) takes nothing, while a connection verified once and unreachable since keeps its
@@ -1379,4 +1513,56 @@ async fn capability_by_external_needs_an_account_proven_once() {
     connect(&uow, &owned, true).await;
     set_status(&uow, &owned, StoredStatus::Unreachable).await;
     assert_eq!(routed(&uow, meta, "page-5").await, Some(owned.id));
+}
+
+/// An event is found again by its provider and provider id, in its workspace only, without its
+/// raw body (a TikTok redelivery finds the event its first delivery stored).
+#[tokio::test]
+async fn an_inbound_event_is_found_by_its_provider_id() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("find-a").await;
+    let (b, _) = db.seed_workspace("find-b").await;
+    let stored = event(a, Provider::Tiktok, "ev-hash-1", None, T0);
+    let mut t = uow.tenant(a).await.unwrap();
+    t.inbound_events()
+        .insert_if_new(stored.clone(), Some(b"raw".to_vec()))
+        .await
+        .unwrap()
+        .expect("stored");
+    t.commit().await.unwrap();
+
+    let mut t = uow.tenant(a).await.unwrap();
+    let found = t
+        .inbound_events()
+        .find_external(Provider::Tiktok, "ev-hash-1")
+        .await
+        .unwrap()
+        .expect("found");
+    assert_eq!(found.id, stored.id);
+    assert_eq!(found.processed_at, None);
+    assert_eq!(
+        t.inbound_events()
+            .find_external(Provider::Meta, "ev-hash-1")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        t.inbound_events()
+            .find_external(Provider::Tiktok, "ev-hash-2")
+            .await
+            .unwrap(),
+        None
+    );
+    drop(t);
+    let mut other = uow.tenant(b).await.unwrap();
+    assert_eq!(
+        other
+            .inbound_events()
+            .find_external(Provider::Tiktok, "ev-hash-1")
+            .await
+            .unwrap(),
+        None
+    );
 }

@@ -33,6 +33,8 @@ pub struct SearchInput {
     #[serde(default)]
     pub q: String,
     pub limit: Option<u32>,
+    /// People to skip first (paging an empty query through the whole workspace).
+    pub offset: Option<u32>,
 }
 #[derive(Debug, Serialize)]
 pub struct CreateOut {
@@ -53,7 +55,11 @@ pub async fn search(deps: &Deps, ctx: &Ctx, input: SearchInput) -> Result<Vec<Pe
         .tenant(ctx.workspace_id)
         .await?
         .people()
-        .search(&input.q, input.limit.unwrap_or(50))
+        .search(
+            &input.q,
+            input.limit.unwrap_or(50),
+            input.offset.unwrap_or(0),
+        )
         .await
 }
 pub async fn get(deps: &Deps, ctx: &Ctx, id: PersonId) -> Result<PersonOut, AppError> {

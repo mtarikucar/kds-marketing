@@ -13,7 +13,7 @@ it('console_confirmation_retry_keeps_current_status', async () => {
   mockFetch({'GET /api/platform/workspaces':[], 'GET /api/platform/payments':[row], [`POST ${base}/payments/payment/confirm`]:{workspace:{...workspace,status:'suspended'},entitlement:{...entitlement,activated_at:row.paid_at},activation:null}});
   const user=userEvent.setup(); renderAt('/platform/payments');
   expect(await screen.findByText('SYNTHETIC-TRANSFER')).toBeInTheDocument();
-  await user.click(screen.getByRole('button',{name:'Havale doğrulandı'}));
+  await user.click(screen.getByRole('button',{name:'Havaleyi onayla'}));
   expect(await screen.findByText('Askıda')).toBeInTheDocument();
   expect(screen.queryByLabelText('Etkinleştirme kodu')).not.toBeInTheDocument();
 });
@@ -23,7 +23,7 @@ it('console_code_reissue_and_reason_forms', async () => {
     [`POST ${base}/payments/payment/reissue`]:{workspace,entitlement,activation:{code:'WXYZ5678',expires_at:'2026-10-28T09:00:00Z'}},
     [`POST ${base}/revoke-activation`]:workspace };
   const calls=mockFetch(answers); const user=userEvent.setup(); const {client,router}=renderAt('/platform/payments');
-  await user.click(await screen.findByRole('button',{name:'Havale doğrulandı'}));
+  await user.click(await screen.findByRole('button',{name:'Havaleyi onayla'}));
   expect(await screen.findByText('ABCD1234')).toBeInTheDocument();
   expect(screen.getByText(/27 Eki 2026/)).toBeInTheDocument();
   expect(JSON.stringify(client.getQueryCache().getAll().map(q=>q.state.data))).not.toContain('ABCD1234');
@@ -42,7 +42,7 @@ it('console_code_reissue_and_reason_forms', async () => {
   await user.click(screen.getByRole('button',{name:'Onayla'}));
   await waitFor(()=>expect(calls.find(c=>c.path.endsWith('revoke-activation'))?.body).toEqual({reason:'Synthetic cancellation'}));
   expect(screen.queryByText('WXYZ5678')).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button',{name:'Havale doğrulandı'}));
+  await user.click(screen.getByRole('button',{name:'Havaleyi onayla'}));
   await screen.findByText('ABCD1234');
   await act(()=>router.navigate('/platform/workspaces'));
   expect(screen.queryByText('ABCD1234')).not.toBeInTheDocument();
@@ -68,7 +68,7 @@ it('console_distinguishes_revoked_from_pending_and_reconfirmed_payments', async 
   expect(within(card).getByRole('button', { name: 'Kodu yeniden oluştur' })).toBeDisabled();
   expect(within(pendingCard).getByText('Onay bekliyor')).toBeInTheDocument();
   expect(screen.queryByText('Onay bekliyor veya geri alındı')).not.toBeInTheDocument();
-  await user.click(within(card).getByRole('button', { name: 'Havale doğrulandı' }));
+  await user.click(within(card).getByRole('button', { name: 'Havaleyi onayla' }));
   await waitFor(() => expect(within(card).queryByText('Geri alındı')).not.toBeInTheDocument());
   expect(within(card).getByRole('button', { name: 'Kodu yeniden oluştur' })).toBeEnabled();
   expect(within(card).getByText('Havale doğrulandı', { selector: 'dd' })).toBeInTheDocument();
@@ -115,7 +115,7 @@ it.each(['confirmPayment', 'reissueCode'] as const)('console_discards_late_%s_de
   const issue = vi.spyOn(platform, operation).mockImplementation(() => response.promise);
   const user = userEvent.setup();
   const { client, router } = renderAt('/platform/payments');
-  await user.click(await screen.findByRole('button', { name: operation === 'confirmPayment' ? 'Havale doğrulandı' : 'Kodu yeniden oluştur' }));
+  await user.click(await screen.findByRole('button', { name: operation === 'confirmPayment' ? 'Havaleyi onayla' : 'Kodu yeniden oluştur' }));
   expect(issue).toHaveBeenCalledWith('ws', 'payment');
   await act(() => router.navigate('/platform/workspaces'));
   await act(async () => {

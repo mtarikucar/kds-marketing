@@ -132,7 +132,7 @@ fn with_access(credential: &Credential, mut public: Value) -> Value {
 
 /// The last probe, `at`, as a probe writes it into `connector_public.health`.
 fn probed_at(at: OffsetDateTime) -> Value {
-    json!({ "ok": true, "at": rfc3339(at), "latency_ms": 12, "error_kind": null })
+    json!({ "ok": true, "at": rfc3339(at), "latency_ms": 12, "error_kind": null, "reason": null })
 }
 
 impl Rig {
@@ -274,6 +274,7 @@ fn every_job_has_a_lock_named_after_it() {
             "probe_all",
             "netgsm_dlr_poll",
             "netgsm_inbox_poll",
+            "netgsm_cdr_poll",
             "mail_inbox_poll",
             "iys_sync",
             "purge_raw_bodies",
@@ -290,6 +291,12 @@ fn every_job_has_a_lock_named_after_it() {
             "studio_publish_recover",
             "studio_measure",
             "studio_reweight",
+            "voice_bridge_health",
+            "call_timers",
+            "purge_call_commands",
+            "device_bridge_health",
+            "device_command_expiry",
+            "device_file_purge",
         ]
     );
     for job in Job::ALL {
@@ -1350,6 +1357,7 @@ async fn purges_remove_only_what_is_past_its_time() {
                 at: NOW - Duration::days(days),
                 ok: true,
                 error_kind: None,
+                reason: None,
                 latency_ms: 10,
                 facts: json!({}),
             })
@@ -1456,6 +1464,7 @@ async fn purges_go_on_past_a_failing_workspace_and_cover_every_status() {
                 at: NOW - Duration::days(31),
                 ok: true,
                 error_kind: None,
+                reason: None,
                 latency_ms: 10,
                 facts: json!({}),
             })
@@ -1748,6 +1757,7 @@ async fn poll_crash_keeps_cursor_and_events_consistent() {
         )]
         .into_iter()
         .collect(),
+        read_history: false,
     };
     let job = *Job::ALL
         .iter()
@@ -1855,4 +1865,67 @@ async fn tenant_host_refresh_covers_receiving_workspaces_and_live_connector_host
                 .collect()
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// netgsm_cdr_poll
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cdr_poll_dedups_against_push() {
+    let r = rig().await;
+    let creds = Credential::NetgsmPbx {
+        username: "8508850000".into(),
+        password: "netgsm-pass".into(),
+        trunk: None,
+        pbxnum: None,
+    };
+    let pbx = r
+        .connected(
+            "netgsm_pbx",
+            "8508850000",
+            StoredStatus::Verified,
+            &creds,
+            json!({}),
+        )
+        .await;
+    let record = jt_app::ports::connectors::InboundEventDraft {
+        external_id: "netgsm-call:1700000000.401:cdr".into(),
+        kind: EventKind::CallEvent,
+        payload: json!({ "scenario": "cdr", "unique_id": "1700000000.401", "duration_sec": 30 }),
+        occurred_at: None,
+    };
+    // The PBX pushed the record first.
+    webhook::receive_netgsm(
+        &r.w.deps,
+        r.ws(),
+        NetgsmPurpose::Events,
+        vec![record.clone()],
+        b"[]",
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.events().len(), 1);
+    // The hourly poll reads the last two hours and finds the same record: a duplicate.
+    r.netgsm.push_call_records(Ok(vec![record]));
+    let out = jobs::run_netgsm_cdr_poll(&r.w.deps, NOW).await;
+    assert_eq!(out, report(1, 0, 1, 0));
+    assert_eq!(
+        r.netgsm.calls(),
+        [ConnectorCall::CallRecords {
+            credential: creds,
+            from: NOW - Duration::hours(2),
+            to: NOW,
+        }]
+    );
+    let events = r.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].capability_id, Some(pbx));
+    // A provider refusal (the server's IP not on the account's list) is a failed step.
+    r.netgsm
+        .push_call_records(Err(ConnectorError::permission("IP not allowed")));
+    assert_eq!(
+        jobs::run_netgsm_cdr_poll(&r.w.deps, NOW).await,
+        report(1, 0, 0, 1)
+    );
 }

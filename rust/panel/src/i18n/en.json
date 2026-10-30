@@ -18,7 +18,8 @@
     "copyFailed": "Could not copy; select the text and copy it by hand.",
     "actions": "Actions",
     "none": "—",
-    "loadError": "Could not load. Please try again."
+    "loadError": "Could not load. Please try again.",
+    "refreshFailed": "Could not refresh: showing what was read last."
   },
   "kit": {
     "close": "Close",
@@ -50,7 +51,9 @@
     "capabilities": "Capabilities",
     "budget": "Budget",
     "inbox": "Inbox",
-    "studio": "Growth studio"
+    "studio": "Growth studio",
+    "people": "People",
+    "calls": "Calls"
   },
   "shell": {
     "workspace": "Workspace",
@@ -65,7 +68,7 @@
   },
   "status": {
     "workspace": {
-      "pending_payment": "Awaiting payment",
+      "pending_payment": "Awaiting activation",
       "active": "Active",
       "suspended": "Suspended"
     },
@@ -122,6 +125,15 @@
     "studio": {
       "work": "Work in the studio",
       "manage": "Manage the studio"
+    },
+    "calls": {
+      "work": "Place calls and read the call log",
+      "manage": "Manage the call policy",
+      "bridge": "Act as the voice bridge (the bridge's key only)"
+    },
+    "devices": {
+      "work": "Use phones",
+      "bridge": "Act as the device bridge (the bridge's key only)"
     }
   },
   "roleNames": {
@@ -272,14 +284,14 @@
       "hypotheses": "Hypotheses: {{count}}."
     },
     "inactive": {
-      "pending_payment": "Your workspace becomes active once payment is received.",
+      "pending_payment": "Your workspace opens once the payment is confirmed and the activation code is entered.",
       "active": "Your workspace is active.",
       "suspended": "Your workspace is suspended. Contact us for details."
     },
     "agent": {
       "title": "Agent",
       "lastSeen": "Last seen",
-      "never": "No agent has connected yet.",
+      "never": "Create an API key to connect an agent such as Claude; the steps are on the keys page.",
       "interval": "Expected check-in interval",
       "editInterval": "Change the interval",
       "intervalLabel": "Interval (minutes)",
@@ -287,10 +299,12 @@
       "intervalSaved": "Check-in interval updated.",
       "overdueTitle": "The agent is overdue",
       "overdueBody": "The agent has not checked in within the expected interval; pending work is waiting.",
-      "schedulerNote": "The agent's scheduler is the tenant's responsibility: Jeeta never wakes the agent; you set up the schedule that runs it at regular intervals.",
+      "schedulerNote": "Jeeta does not wake the agent: you (or the agent's own scheduler) run it at regular intervals.",
       "onTime": "The agent is checking in on time.",
       "hours": "{{count}} h",
-      "minutes": "{{count}} min"
+      "minutes": "{{count}} min",
+      "neverTitle": "No agent connected yet",
+      "connectLink": "Connect an agent"
     },
     "pending": {
       "title": "Pending work",
@@ -310,7 +324,9 @@
       "reply_due": "Conversation awaiting reply",
       "reopen_question": "Decision to reopen a lost journey",
       "merge_suggested": "Contact merge suggestion",
-      "task_due": "Task due"
+      "task_due": "Task due",
+      "voice_bridge_offline": "{{name}} is not registering: agent calls are refused until the bridge registers again.",
+      "phone_offline": "{{name}} is not listed by a device bridge: commands for it are refused until a bridge lists it again."
     }
   },
   "team": {
@@ -395,7 +411,16 @@
       "scopesHint": "If you choose none, the key carries all of your permissions.",
       "submit": "Create key",
       "plaintextTitle": "Your new key",
-      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again."
+      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again.",
+      "plaintextDescription": "Copy the key now; the steps to connect an agent are below."
+    },
+    "connect": {
+      "title": "Connect an agent",
+      "url": "MCP address",
+      "claudeCode": "In Claude Code, run this command:",
+      "command": "Claude Code command",
+      "needKey": "Create a key to connect; the ready-made command appears when you do.",
+      "otherClients": "Other MCP clients connect with this address, the streamable HTTP transport and an “Authorization: Bearer <key>” header. claude.ai connectors (OAuth) are not supported yet."
     }
   },
   "agents": {
@@ -475,7 +500,7 @@
       "activated": "Activated",
       "revoked": "Revoked",
       "pending": "Awaiting confirmation",
-      "confirm": "Transfer confirmed",
+      "confirm": "Confirm transfer",
       "code": "Activation code",
       "reissue": "Reissue code",
       "revoke": "Revoke activation",
@@ -668,7 +693,27 @@
       "noSection": "No section",
       "text": "Text",
       "recorded": "Entry recorded."
-    }
+    },
+    "gaps": {
+      "product": "Name the product in the Identity section.",
+      "segment": "Add at least one segment to the Audience section.",
+      "segmentKey": "Audience: segment {{n}} has an invalid or duplicate key.",
+      "channel": "Add at least one channel to the Channels section.",
+      "channelUnavailable": "Channels: channel {{n}} has no connected account. Connect it or choose “Any channel”.",
+      "budget": "Check the budget frame: every lane needs a kind, cap and currency; paid channels need a paid lane.",
+      "cadence": "Cadence: the channel mix may only use the strategy's channels, each once, with shares summing to 100.",
+      "hypothesis": "Add at least one active hypothesis.",
+      "hypothesisField": "Hypothesis {{n}}: the {{field}} is required.",
+      "hypothesisFields": {
+        "title": "title",
+        "angle": "angle",
+        "metric": "metric"
+      },
+      "hypothesisSegment": "Hypothesis {{n}}: its segment is not in the audience.",
+      "hypothesisChannel": "Hypothesis {{n}}: its channel has no connected account.",
+      "hypothesisDuplicate": "Hypothesis {{n}} is listed more than once."
+    },
+    "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected."
   },
   "capabilities": {
     "title": "Capabilities",
@@ -695,6 +740,7 @@
       "facebook_page": "Facebook page",
       "x": "X",
       "linkedin_page": "LinkedIn page",
+      "linkedin_member": "LinkedIn profile",
       "tiktok": "TikTok",
       "pinterest": "Pinterest",
       "youtube": "YouTube",
@@ -706,6 +752,7 @@
       "mailbox": "Mailbox",
       "webchat": "Web chat",
       "netgsm_pbx": "NetGSM PBX",
+      "voice_bridge": "Voice bridge",
       "discord": "Discord",
       "reddit": "Reddit",
       "review_google": "Google reviews",
@@ -866,6 +913,21 @@
       "memberAdded": "Member added.",
       "memberRemoved": "Member removed."
     },
+    "pbx": {
+      "title": "PBX call policy",
+      "saved": "PBX policy saved.",
+      "recording": "Record calls at the PBX",
+      "recordingHint": "Turn on only with the KVKK recording announcement in place: recording must start after the caller has heard it.",
+      "mode": "How calls are placed",
+      "modes": {
+        "originate": "From the extension",
+        "linkup": "From the rep's phone"
+      },
+      "modeHints": {
+        "originate": "The rep's extension rings first; once answered, the customer is called.",
+        "linkup": "The rep's own phone number rings first; once answered, the customer is called."
+      }
+    },
     "connector": {
       "label": "Connection",
       "actionsLabel": "Connection actions",
@@ -882,13 +944,14 @@
         "expired": "The access token has expired"
       },
       "errorKinds": {
-        "auth": "login refused",
-        "permission": "no permission",
-        "throttle": "provider busy",
-        "transient": "a temporary problem",
-        "permanent": "a permanent problem",
-        "unknown": "an unknown problem"
+        "auth": "sign-in refused: check the user name or code and the password",
+        "permission": "the account lacks permission: check its permissions at the provider",
+        "throttle": "the provider is busy: try again in a few minutes",
+        "transient": "could not reach the provider: check the server name and connection, then retry",
+        "permanent": "the provider rejected the details: check the user code, password, sender header and server names",
+        "unknown": "the provider's answer did not say whether it worked: probe again in a moment"
       },
+      "reasonLine": "The provider said: {{reason}}",
       "probeDialog": {
         "title": "Probe: {{name}}",
         "description": "The system made a small trial call to the provider with the credentials.",
@@ -916,7 +979,97 @@
       "metaTitle": "Meta",
       "metaUrl": "Meta webhook address",
       "verifyTokenHint": "The verify token is set in the dashboard of the platform's Meta app; it is not shown here.",
-      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is."
+      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is.",
+      "tiktokTitle": "TikTok",
+      "tiktokUrl": "TikTok webhook address",
+      "tiktokHelp": "Enter it as the callback URL of the platform's TikTok app in TikTok's developer portal (the app's Webhooks). Jeeta acts on: {{events}}; other events are kept for the agent."
+    },
+    "bridge": {
+      "title": "Voice bridge",
+      "extension": "Extension",
+      "stt": "Speech to text",
+      "tts": "Text to speech",
+      "version": "Version",
+      "lines": "Calls at once",
+      "codecs": "Codecs",
+      "heartbeat": "Last registered",
+      "never": "The bridge has not registered yet.",
+      "hint": "Only the bridge's own registration verifies it, never evidence. Setup:"
+    },
+    "phone": {
+      "title": "Device bridge",
+      "status": "Status",
+      "states": {
+        "online": "Online",
+        "unlisted": "Offline: the bridge no longer lists this phone (unplugged, or not ready in adb)",
+        "stale": "Verification lapsed: no registration listed it in the last minute"
+      },
+      "seen": "last seen {{ago}}",
+      "platform": "Platform",
+      "platforms": {
+        "android": "Android",
+        "ios": "iOS"
+      },
+      "model": "Model",
+      "os": "OS version",
+      "computer": "Computer",
+      "version": "Bridge version",
+      "unicode": "Unicode text",
+      "yes": "Yes",
+      "no": "No",
+      "unicodeHint": "To type Turkish letters or emoji, install ADBKeyBoard on the phone <b>and enable it as an input method</b>: installed alone, it is not used.",
+      "commands": "Commands",
+      "never": "No device bridge has registered this phone yet.",
+      "hint": "Only its bridge's registrations verify a phone, never evidence. Setup:",
+      "log": {
+        "title": "Recent commands",
+        "empty": "No command has been sent to this phone yet.",
+        "args": "Arguments",
+        "result": "Result",
+        "noResult": "No result.",
+        "reason": "Failed: {{reason}}",
+        "file": "Open the file (the link works for 10 minutes)",
+        "statuses": {
+          "queued": "Queued",
+          "leased": "Running",
+          "done": "Done",
+          "failed": "Failed",
+          "expired": "Expired",
+          "canceled": "Canceled"
+        },
+        "reasons": {
+          "device_offline": "the phone is offline",
+          "element_not_found": "no such element on the screen",
+          "unicode_unsupported": "the phone cannot type text outside ASCII",
+          "unsupported_on_platform": "not possible on this platform",
+          "unsupported_by_bridge": "the bridge does not run this command",
+          "adb_error": "adb error",
+          "screen_busy": "the screen kept moving",
+          "timeout": "the phone did not answer in time",
+          "bridge_error": "bridge error",
+          "file_not_found": "the file is no longer stored",
+          "unknown": "an unknown reason"
+        },
+        "fileGone": "The file is no longer stored (files are kept 7 days).",
+        "fileBlocked": "The browser blocked the new tab: allow pop-ups for this site and try again."
+      },
+      "pair": {
+        "title": "Connect a phone",
+        "body": "An Android phone plugged into a computer by USB is connected by the Jeeta device bridge program on that computer. Pairing gives the program its key.",
+        "open": "Pair a bridge",
+        "dialogTitle": "Pair a device bridge",
+        "dialogDescription": "Creates a key for one computer, with the one permission a bridge needs (devices.bridge).",
+        "defaultName": "Device bridge",
+        "nameHint": "Name it after the computer, e.g. Workshop PC.",
+        "keyDescription": "Copy the key now; the three steps to run the bridge are below.",
+        "stepsLabel": "Bridge setup",
+        "step1": "On the computer the phone is plugged into, install adb (Android SDK Platform-Tools). On the phone, turn on Developer options and USB debugging, connect it by USB and allow this computer when the phone asks.",
+        "step2": "Put the program jeeta-device-bridge.exe in a folder (where to get it: section 4 of docs/operations/device-bridge.md), and beside it a file named jeeta-device-bridge.toml with this content:",
+        "configLabel": "jeeta-device-bridge.toml",
+        "keyEnv": "You can leave the key out of the file and set it in the JEETA_DEVICE_BRIDGE_KEY environment variable instead.",
+        "step3": "Run jeeta-device-bridge.exe. Within about 15 seconds each phone it sees appears under Devices on this page, verified. To start it at every logon:",
+        "ownKey": "Each computer's bridge needs a key of its own: Jeeta tells bridges apart by their keys, and refuses a phone that another running bridge holds. For another computer, pair again."
+      }
     }
   },
   "connect": {
@@ -942,14 +1095,16 @@
       "tls": "TLS mode"
     },
     "title": "Connect an account",
-    "description": "Connect your provider accounts to the workspace. For Meta and X you sign in at the provider; for NetGSM you enter your credentials.",
+    "description": "Connect your provider accounts to the workspace. For Meta, X, TikTok and LinkedIn you sign in at the provider; for NetGSM you enter your credentials.",
     "open": "Connect an account",
     "kindsLabel": "Kind of account to connect",
     "chooseKind": "Choose the kind of account to connect first.",
     "providers": {
+      "linkedin": "LinkedIn",
       "mail": "Email",
       "meta": "Meta",
       "netgsm": "NetGSM",
+      "tiktok": "TikTok",
       "x": "X"
     },
     "forCapability": "For {{name}}",
@@ -984,7 +1139,11 @@
       "externalId": "Account id",
       "externalIdHint": "The provider's id of the page or the WhatsApp phone number.",
       "externalIdOptional": "Account id (optional)",
-      "submit": "Save the token and probe"
+      "submit": "Save the token and probe",
+      "title": "Connect with an access token"
+    },
+    "secret": {
+      "show": "Show {{field}}"
     },
     "result": {
       "verified": "The connection was probed and verified.",
@@ -1004,6 +1163,7 @@
     "externalId": "Id: {{id}}",
     "scopes": "Permissions: {{scopes}}",
     "expires": "Access ends: {{at}}",
+    "together": "One account; connected together: {{kinds}}",
     "none": "This account reaches nothing that can be connected.",
     "confirm": "Connect the selected",
     "connected": "Accounts connected: {{count}}.",
@@ -1152,6 +1312,8 @@
     "noJourney": "No journey to show.",
     "agentExecutor": "Executor: Agent",
     "humanExecutor": "Executor: {{user}}",
+    "you": "You",
+    "teamMember": "Team member",
     "unassignedExecutor": "Executor: Unassigned human",
     "takeOver": "Take over",
     "handBack": "Hand back to agent",
@@ -1170,7 +1332,7 @@
     "connected": "Call connected",
     "notConnected": "Call not connected",
     "product": "Product",
-    "amount": "Amount (minor units)",
+    "amount": "Amount",
     "currency": "Currency",
     "lostReason": "Lost reason",
     "chooseReason": "Choose a reason",
@@ -1215,7 +1377,9 @@
       "delivered": "Delivered",
       "failed": "Failed",
       "unknown": "Delivery uncertain; do not resend.",
-      "refused": "Send refused: {{reason}}"
+      "refused": "Send refused: {{reason}}",
+      "failedBecause": "Not sent: {{reason}}",
+      "unknownBecause": "Delivery is uncertain; do not resend ({{reason}})."
     },
     "status": {
       "new": "New",
@@ -1464,7 +1628,8 @@
     "arm": "Content arm",
     "budgetMove": "Change daily budget",
     "binding": "Bound ad set",
-    "dailyBudget": "Daily budget (minor units)",
+    "dailyBudget": "Daily budget",
+    "invalidBudget": "The daily budget could not be read. Enter an amount above zero, e.g. 1,500 or 1500.50.",
     "currency": "Currency",
     "budgetHelp": "Externally created sets. Daily budget is not actual spend.",
     "queued": "Queued",
@@ -1489,7 +1654,132 @@
     "success": "Saved.",
     "loading": "Loading…",
     "entryHypothesis": "Hypothesis for entry",
-    "minorUnits": "minor units"
+    "minorUnits": "minor units",
+    "publishFailed": "Not published: {{reason}}",
+    "publishUncertain": "Publication is uncertain; do not resend ({{reason}}).",
+    "notResent": "Jeeta does not send this post again. Cancel it to clear it from Today.",
+    "budgetState": {
+      "queued": "Queued",
+      "sending": "Sending",
+      "succeeded": "Applied",
+      "failed": "Not applied",
+      "unknown": "Budget outcome unknown",
+      "refused": "Refused",
+      "cancelled": "Cancelled"
+    },
+    "preview": "Draft awaiting approval",
+    "publishTo": "Publishes to",
+    "scheduledFor": "Scheduled for",
+    "noDraft": "The agent has not submitted a draft yet.",
+    "media": "Media in the draft",
+    "mediaImage": "Image {{n}}: {{name}}",
+    "uploadedFile": "Uploaded file",
+    "processing": "The provider is processing the post; it may take a few minutes to appear.",
+    "postLink": "View the published post",
+    "tiktok": {
+      "screen": "Post to TikTok",
+      "loading": "Reading the TikTok account…",
+      "postingAs": "Posting to {{nickname}}",
+      "postingAsUser": "Posting to {{nickname}} (@{{username}})",
+      "cannotPost": "This TikTok account cannot post right now. Try again later.",
+      "preview": "Preview of the post",
+      "video": "Video to post",
+      "photo": "Photo {{n}} to post",
+      "noPreview": "This post has no media TikTok can take: one MP4 video or 1 to 35 photos.",
+      "tooLong": "This video is {{length}} s long; this account can post videos of up to {{max}} s.",
+      "caption": "Caption",
+      "captionHelp": "You can edit the caption and its hashtags before posting.",
+      "captionCount": "{{count}} / {{max}}",
+      "privacy": "Who can view this post",
+      "privacyPlaceholder": "Select who can view this post",
+      "privacyLevel": {
+        "PUBLIC_TO_EVERYONE": "Everyone",
+        "MUTUAL_FOLLOW_FRIENDS": "Friends",
+        "FOLLOWER_OF_CREATOR": "Followers",
+        "SELF_ONLY": "Only me"
+      },
+      "interactions": "Allow users to",
+      "comment": "Comment",
+      "duet": "Duet",
+      "stitch": "Stitch",
+      "interactionOff": "Turned off in this account's TikTok settings",
+      "disclose": "Disclose commercial content",
+      "discloseHelp": "Indicate whether this content promotes yourself, a brand, a product or a service.",
+      "yourBrand": "Your brand",
+      "yourBrandHelp": "You are promoting yourself or your own business.",
+      "brandedContent": "Branded content",
+      "brandedContentHelp": "You are promoting another brand or a third party.",
+      "promotionalLabel": "Your photo/video will be labeled as 'Promotional content'",
+      "paidLabel": "Your photo/video will be labeled as 'Paid partnership'",
+      "commercialRequired": "You need to indicate if your content promotes yourself, a third party, or both.",
+      "brandedNotPrivate": "Branded content visibility cannot be set to private.",
+      "declarationMusic": "By posting, you agree to TikTok's <music>Music Usage Confirmation</music>.",
+      "declarationBranded": "By posting, you agree to TikTok's <branded>Branded Content Policy</branded> and <music>Music Usage Confirmation</music>.",
+      "post": "Post to TikTok",
+      "posting": "Posting…",
+      "processing": "After it is published, it may take a few minutes for the post to be processed and appear on the TikTok profile.",
+      "approved": "Posted from this screen: it is sent to TikTok at {{time}}, or right away once that time has passed.",
+      "status": {
+        "waiting": "Post status: waiting for its scheduled time",
+        "due": "Post status: its scheduled time has passed; it is being sent to TikTok…",
+        "sending": "Post status: sending to TikTok…",
+        "processing": "Post status: TikTok is processing the post…",
+        "published": "Post status: published on TikTok",
+        "failed": "Post status: not published ({{reason}})"
+      },
+      "viewPost": "View the post on TikTok",
+      "refused": {
+        "tiktok_cannot_post_now": "This TikTok account cannot post right now. Try again later.",
+        "tiktok_privacy_not_chosen": "Select who can view this post.",
+        "tiktok_privacy_not_offered": "This account no longer offers that privacy option. Choose again.",
+        "tiktok_branded_content_private": "Branded content visibility cannot be set to private.",
+        "tiktok_commercial_unspecified": "You need to indicate if your content promotes yourself, a third party, or both.",
+        "tiktok_commercial_not_disclosed": "Turn on the commercial content disclosure to choose your brand or branded content.",
+        "tiktok_interaction_disabled": "An interaction you allowed is turned off in this account's TikTok settings.",
+        "tiktok_photo_interaction": "Photo posts offer comments only.",
+        "tiktok_video_too_long": "This video is longer than this account can post.",
+        "tiktok_title_too_long": "The caption is too long for TikTok.",
+        "tiktok_media_unsupported": "This post has no media TikTok can take: one MP4 video or 1 to 35 photos.",
+        "tiktok_creator_info_unavailable": "The TikTok account could not be read. Check its connection.",
+        "tiktok_reconnect_for_drafts": "Reconnect TikTok to enable drafts.",
+        "tiktok_draft_settings": "A draft carries only what TikTok takes for it: a video nothing but the file, photos their caption."
+      },
+      "accountCounters": "TikTok account counters",
+      "counter": {
+        "follower_count": "Followers",
+        "following_count": "Following",
+        "likes_count": "Likes",
+        "video_count": "Videos",
+        "view_count": "Views",
+        "like_count": "Likes",
+        "comment_count": "Comments",
+        "share_count": "Shares"
+      },
+      "recentVideos": "Recent videos",
+      "noRecentVideos": "No public videos yet.",
+      "untitled": "Untitled video",
+      "postCounters": "The post's TikTok counters",
+      "liveCounters": "Read live from TikTok",
+      "measuredCounters": "From the latest measurement ({{time}})",
+      "noCounters": "TikTok gives no counters for this post yet; a post only its creator can see has none.",
+      "mode": "How to send it",
+      "modeDirect": "Post directly",
+      "modeDraft": "Send to TikTok as a draft (finish in the TikTok app)",
+      "reconnectForDrafts": "Reconnect TikTok to enable drafts.",
+      "draftHelp": "TikTok will send a notification to your TikTok inbox: open it to finish editing and post. Who can view the post, comments, Duet, Stitch and the commercial content disclosure are chosen there.",
+      "draftNoCaption": "A video draft takes no caption: you write it in TikTok when you finish the post.",
+      "sendDraft": "Send to TikTok drafts",
+      "draftSent": "Sent: once TikTok has processed it, a notification in your TikTok inbox lets you finish editing and post it.",
+      "approvedDraft": "Approved on this screen: it is sent to your TikTok drafts at {{time}}, or right away once that time has passed.",
+      "draftStatus": {
+        "due": "Post status: its scheduled time has passed; it is being sent to your TikTok drafts…",
+        "sending": "Post status: sending to your TikTok drafts…",
+        "processing": "Post status: TikTok is processing the draft…",
+        "sent": "Post status: sent to your TikTok drafts"
+      },
+      "sentToDrafts": "Sent to your TikTok drafts: open the notification in your TikTok inbox to finish editing and post it. A draft has no counters.",
+      "noCover": "No preview"
+    }
   },
   "billing": {
     "title": "Payment and activation",
@@ -1504,14 +1794,17 @@
     "price": "One-time price",
     "bank": "Bank transfer instructions",
     "reference": "Workspace payment reference",
-    "amount": "Amount paid (minor units)",
+    "amount": "Amount paid ({{currency}})",
+    "amountHint": "Enter the amount you transferred; the fee is {{price}}. Example: 14,900 or 14900.00.",
     "paidAt": "Payment time",
     "report": "Send bank transfer notification",
+    "reported": "Your transfer notification was received: {{amount}}, {{paidAt}}. Once the operator matches it with the bank record you will receive an activation code to enter on this page. If anything is wrong, correct the form and send it again.",
     "code": "Enter the activation code",
     "activate": "Activate workspace",
     "codeHelp": "Any current owner can redeem the code. It expires after 72 hours and locks after 5 failed attempts. Ask the operator to reissue an expired, lost or locked code. Reissue invalidates the previous code.",
     "ownerOnly": "Only a current workspace owner can report payment or activate access.",
-    "invalidEvidence": "Enter a positive amount and a payment time that is not in the future.",
+    "invalidAmount": "The amount could not be read. Enter an amount above zero, e.g. 14,900 or 14900.50.",
+    "invalidPaidAt": "Choose the payment time; it cannot be in the future.",
     "revoked": "Activation revoked",
     "grandfathered": "Grandfathered permanent entitlement",
     "paidEntitlement": "Paid entitlement"
@@ -1540,14 +1833,201 @@
     "agentRecent": "Agent connected recently",
     "agentNeeded": "No recent agent connection. Your own agent scheduler must run for work to proceed.",
     "agents": "View agents",
-    "suspendedChecks": "This step is not checked while the workspace is suspended."
+    "suspendedChecks": "This step is not checked while the workspace is suspended.",
+    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X, TikTok, LinkedIn and email accounts."
   },
   "providerSetup": {
     "title": "Provider application setup",
     "missing": "Provider application is not configured",
+    "productNotEnabled": "This needs a provider product the platform's application has not been approved for yet (LinkedIn pages: the Community Management API). The operator enables it once the provider approves.",
     "help": "Register these callback addresses in the provider application. The operator configures app credentials and webhook verification.",
     "callback": "{{provider}} callback address",
     "reconnect": "Reconnection required",
     "expires": "Access expires at"
+  },
+  "gates": {
+    "strategyBody": "This opens once a strategy is approved. Prepare and approve it with your agent or on the strategy page.",
+    "strategyLink": "Go to strategy",
+    "inactiveBody": "This opens once the workspace is active.",
+    "inactiveLink": "Payment and activation"
+  },
+  "people": {
+    "title": "People",
+    "description": "Everyone in the workspace, including imported or hand-added people who have no conversation yet.",
+    "search": "Search by name or company",
+    "empty": "No people yet.",
+    "noMatch": "No matching people.",
+    "emptyBody": "Inbound messages, forms and imported leads are listed here.",
+    "added": "Added {{at}}",
+    "range": "{{first}}–{{last}}",
+    "previous": "Previous",
+    "next": "Next",
+    "unnamed": "Unnamed person",
+    "unnamedOn": "{{channel}} contact",
+    "erased": "Erased person",
+    "channels": {
+      "whats_app": "WhatsApp",
+      "instagram_dm": "Instagram",
+      "messenger": "Messenger",
+      "sms": "SMS",
+      "email": "Email",
+      "webchat": "Web chat",
+      "phone": "Phone"
+    }
+  },
+  "failure": {
+    "recipientNotAllowed": "the recipient is not on the Meta test number's allowed list. Add the number as a recipient in Meta under WhatsApp → API Setup, or connect a real WhatsApp number.",
+    "windowClosed": "more than 24 hours have passed since the customer's last message; only an approved template can be sent now.",
+    "reconnect": "the account's sign-in expired or was refused; reconnect it on the Connect page.",
+    "permission": "the account lacks the permission for this; grant the requested permissions or reconnect it.",
+    "throttled": "the provider asked us to slow down; try again a little later.",
+    "configuration": "the account's sending settings could not be read; check and reconnect it.",
+    "xCredits": "the X API has no credits; add credits in the X developer console (console.x.com).",
+    "xDuplicate": "X does not publish the same text twice; change the text and try again.",
+    "tiktokUnaudited": "TikTok has not audited this app yet, so it posts only to a private TikTok account. Until the audit passes, make the account private in TikTok (Settings and privacy → Privacy → Private account), then cancel this post and plan it again.",
+    "tiktokPrivacy": "the privacy chosen for this post is not offered for this TikTok account (an app TikTok has not audited may post as \"Only me\" only); cancel it and post it again with a privacy the posting screen offers.",
+    "tiktokCap": "the TikTok account reached its daily limit of posts, or of drafts waiting in its inbox, through apps; try again tomorrow, or post from the TikTok app.",
+    "tiktokAppCap": "the platform's TikTok app reached its daily limit of users posting through it (TikTok's cap for apps); try again tomorrow.",
+    "tiktokBanned": "TikTok does not let this account post at the moment; check the account in the TikTok app.",
+    "tiktokDomain": "TikTok pulls photos only from a domain verified for the app; verify the media domain in TikTok's developer portal (URL properties), or post a video.",
+    "tiktokSpam": "TikTok flagged the post as spam or risky and will not publish it; change the caption before posting again.",
+    "tiktokMedia": "TikTok refused the media (its format, length, frame rate or picture size); check it against TikTok's requirements and post it again."
+  },
+  "calls": {
+    "title": "Calls",
+    "description": "Calls reps place through the PBX, and how they went. Numbers are masked.",
+    "empty": "No calls yet",
+    "emptyBody": "When a rep calls, the call is listed here.",
+    "noPermission": "Seeing calls needs the calls permission.",
+    "columns": {
+      "started": "Started",
+      "direction": "Direction",
+      "number": "Number",
+      "purpose": "Purpose",
+      "state": "State",
+      "duration": "Duration",
+      "outcome": "Outcome",
+      "who": "Who"
+    },
+    "directions": {
+      "inbound": "Inbound",
+      "outbound": "Outbound"
+    },
+    "purposes": {
+      "service": "Service",
+      "commercial": "Commercial",
+      "callback": "Callback"
+    },
+    "purposeHints": {
+      "service": "An existing customer: a won journey, an appointment or quote in the last 180 days, or an open appointment.",
+      "commercial": "Sales or promotion: needs İYS consent for phone calls.",
+      "callback": "Calling back someone who called in the last 7 days."
+    },
+    "states": {
+      "planned": "Planned",
+      "dialing": "Dialing",
+      "ringing": "Ringing",
+      "live": "In call",
+      "holding": "Holding",
+      "ending": "Ending",
+      "ended": "Ended"
+    },
+    "outcomes": {
+      "connected": "Talked",
+      "no_answer": "No answer",
+      "voicemail": "Voicemail",
+      "refused_by_customer": "Customer refused",
+      "appointment": "Appointment booked",
+      "callback_requested": "Asked for a callback",
+      "other": "Other"
+    },
+    "causes": {
+      "caller_hangup": "The other side hung up",
+      "agent_ended": "Ended",
+      "agent_timeout": "The agent did not answer",
+      "max_duration": "Maximum duration reached",
+      "no_answer": "No answer",
+      "busy": "Busy",
+      "failed": "Failed",
+      "transferred": "Transferred",
+      "bridge_offline": "The line is not connected",
+      "refused": "Refused",
+      "caller_silent": "The other side stayed silent"
+    },
+    "modes": {
+      "human": "Rep (extension {{ext}})",
+      "agent": "Agent"
+    },
+    "refusals": {
+      "workspace_inactive": "the workspace is not active",
+      "strategy_required": "an approved strategy is required",
+      "bridge_offline": "the PBX is not connected and verified",
+      "bridge_busy": "this extension is in another call",
+      "person_erased": "the person was erased",
+      "person_merged": "the person was merged into another",
+      "no_phone_identity": "the person has no phone number",
+      "suppressed": "the person blocked phone contact",
+      "journey_lost": "the person's journey is lost",
+      "consent_missing": "a commercial call needs İYS phone consent",
+      "no_relationship": "a service call needs an existing relationship",
+      "no_recent_inbound": "a callback needs an inbound call in the last 7 days",
+      "outside_work_hours": "outside the PBX's working hours",
+      "daily_ops_cap": "the daily call limit is reached",
+      "budget_exhausted": "the budget has no minute left",
+      "disclosure_missing": "the opening lacks the assistant disclosure"
+    },
+    "place": {
+      "open": "Place a call",
+      "title": "Place a call",
+      "description": "Your extension rings first; once you answer, the person is called.",
+      "target": "Person or phone",
+      "targetHint": "The person's id, or a phone number one of your people holds.",
+      "extension": "Your extension",
+      "extensionHint": "Your extension at the PBX, e.g. 101.",
+      "purpose": "Purpose of the call",
+      "submit": "Call",
+      "placed": "Call started: your extension is ringing.",
+      "refused": "The call could not be placed: {{reason}}."
+    },
+    "detail": {
+      "title": "Call",
+      "turns": "Call flow",
+      "noTurns": "Nothing was recorded on this call's flow.",
+      "event": "Line: {{name}}",
+      "latency": "{{s}} s",
+      "speakers": {
+        "counterpart": "Other side",
+        "agent": "Agent",
+        "script": "Script",
+        "line": "Line"
+      },
+      "endCause": "End cause",
+      "summary": "Summary",
+      "outcome": "Outcome",
+      "endTitle": "Close the call",
+      "end": "Record the outcome",
+      "ended": "The call was closed."
+    },
+    "policy": {
+      "title": "Call policy",
+      "saved": "Call policy saved.",
+      "holdingHint": "One holding phrase per line (at most 5).",
+      "fields": {
+        "greeting_inbound": "Inbound greeting",
+        "voicemail_text": "Voicemail sentence",
+        "recording_announcement": "Recording announcement (KVKK)",
+        "disclosure_sentence": "Assistant disclosure sentence",
+        "disclose_assistant": "The agent must disclose it is an assistant in every opening",
+        "holding_default": "Default holding phrases",
+        "max_duration_s": "Maximum call duration (s)",
+        "slow_agent_s": "Until the first holding phrase (s)",
+        "holding_again_s": "Until the second holding phrase (s)",
+        "fallback_after_s": "Until a fallback line (s)",
+        "caller_silence_s": "Other side's silence reported after (s)",
+        "caller_silence_close_s": "Other side's silence closes after (s)",
+        "estimated_minor_per_minute": "Estimated tariff per minute (minor units)",
+        "handoff_extension": "Transfer extension"
+      }
+    }
   }
 }

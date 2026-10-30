@@ -66,6 +66,11 @@ pub async fn world() -> World {
             rationale: "test".into(),
             group_id: None,
         },
+        ChannelChoice {
+            channel: "tiktok".into(),
+            rationale: "test".into(),
+            group_id: None,
+        },
     ];
     v.sections.paid_enabled = true;
     v.sections.budget_frame.lanes.push(jt_strategy::Lane {

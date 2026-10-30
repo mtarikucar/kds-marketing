@@ -22,7 +22,12 @@
 //! alive, and a payment hold must not turn into reconnecting every account. A suspended
 //! workspace is left alone. The NetGSM polls go only to the workspaces holding a verified SMS
 //! line, found with one platform-wide read before any of their transactions opens. The purges
-//! run for every workspace.
+//! run for every workspace, and so do the bridges' health checks (voice bridges, phones): they
+//! only record that a bridge stopped reporting, whatever the workspace's status; and so does the
+//! expiry of the phones' commands, which only ends what no bridge can take any more. The call
+//! timers run every second for the workspaces with an agent's call on the line (one
+//! platform-wide read), whatever their status: a call already on the line is always ended by
+//! script.
 //!
 //! **Who.** What a job writes to the ledger is written by `Actor::System` with the component
 //! `scheduler:<job name>`.
@@ -43,6 +48,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use super::Deps;
+use super::bridges::kernel::{self, BridgeSpec};
 use super::capabilities::{append, locked, version_in_force};
 use super::connector::{
     RECONNECT_REQUIRED, object, open_credential, probe_locked, reconnect_required, seal_credential,
@@ -50,7 +56,7 @@ use super::connector::{
 use super::webhook::{self, Delivery};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
-use crate::ports::connectors::{Connector, DeliveryReports, DeliveryStatus};
+use crate::ports::connectors::{Connector, DeliveryReports, DeliveryStatus, Telephony};
 use crate::ports::{CapabilityFilter, MAX_PENDING_JOBS, PROBE_RUN_RETENTION, TenantRepos};
 
 /// A token is renewed once it expires within this time (or has expired).
@@ -110,6 +116,7 @@ pub enum Job {
     ProbeAll,
     NetgsmDlrPoll,
     NetgsmInboxPoll,
+    NetgsmCdrPoll,
     MailInboxPoll,
     IysSync,
     PurgeRawBodies,
@@ -126,16 +133,23 @@ pub enum Job {
     StudioPublishRecover,
     StudioMeasure,
     StudioReweight,
+    VoiceBridgeHealth,
+    CallTimers,
+    PurgeCallCommands,
+    DeviceBridgeHealth,
+    DeviceCommandExpiry,
+    DeviceFilePurge,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 21] = [
+    pub const ALL: [Job; 28] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
         Job::NetgsmDlrPoll,
         Job::NetgsmInboxPoll,
+        Job::NetgsmCdrPoll,
         Job::MailInboxPoll,
         Job::IysSync,
         Job::PurgeRawBodies,
@@ -152,6 +166,12 @@ impl Job {
         Job::StudioPublishRecover,
         Job::StudioMeasure,
         Job::StudioReweight,
+        Job::VoiceBridgeHealth,
+        Job::CallTimers,
+        Job::PurgeCallCommands,
+        Job::DeviceBridgeHealth,
+        Job::DeviceCommandExpiry,
+        Job::DeviceFilePurge,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -163,6 +183,7 @@ impl Job {
             Job::ProbeAll => "probe_all",
             Job::NetgsmDlrPoll => "netgsm_dlr_poll",
             Job::NetgsmInboxPoll => "netgsm_inbox_poll",
+            Job::NetgsmCdrPoll => "netgsm_cdr_poll",
             Job::MailInboxPoll => "mail_inbox_poll",
             Job::IysSync => "iys_sync",
             Job::PurgeRawBodies => "purge_raw_bodies",
@@ -179,6 +200,12 @@ impl Job {
             Job::StudioPublishRecover => "studio_publish_recover",
             Job::StudioMeasure => "studio_measure",
             Job::StudioReweight => "studio_reweight",
+            Job::VoiceBridgeHealth => "voice_bridge_health",
+            Job::CallTimers => "call_timers",
+            Job::PurgeCallCommands => "purge_call_commands",
+            Job::DeviceBridgeHealth => "device_bridge_health",
+            Job::DeviceCommandExpiry => "device_command_expiry",
+            Job::DeviceFilePurge => "device_file_purge",
         }
     }
 
@@ -195,6 +222,7 @@ impl Job {
             Job::ProbeAll => run_probe_all(deps, now).await,
             Job::NetgsmDlrPoll => run_netgsm_dlr_poll(deps, now).await,
             Job::NetgsmInboxPoll => run_netgsm_inbox_poll(deps, now).await,
+            Job::NetgsmCdrPoll => run_netgsm_cdr_poll(deps, now).await,
             Job::MailInboxPoll => run_mail_inbox_poll(deps, now).await,
             Job::IysSync => run_iys_sync(deps, now).await,
             Job::PurgeRawBodies => run_purge_raw_bodies(deps, now).await,
@@ -211,6 +239,12 @@ impl Job {
             Job::StudioPublish | Job::StudioPublishRecover => {
                 run_studio_publications(deps, *self).await
             }
+            Job::VoiceBridgeHealth => run_voice_bridge_health(deps, now).await,
+            Job::CallTimers => run_call_timers(deps, now).await,
+            Job::PurgeCallCommands => run_purge_call_commands(deps, now).await,
+            Job::DeviceBridgeHealth => run_device_bridge_health(deps, now).await,
+            Job::DeviceCommandExpiry => run_device_command_expiry(deps, now).await,
+            Job::DeviceFilePurge => run_device_file_purge(deps, now).await,
         }
     }
 }
@@ -223,12 +257,16 @@ impl Job {
 /// connector capability (not retired, sealed credentials, a provider adapter here) whose token
 /// expires within [`REFRESH_WITHIN`] of `now` by its public facts
 /// (`connector_public.access.expires_at`; no sealed credential is opened to choose), and every
-/// `x` capability whatever its expiry (X rotates its refresh token at each use).
+/// `x` and `tiktok` capability whatever its expiry (X rotates its refresh token at each use;
+/// TikTok's adapter renews a day-long access token when it nears its end).
 ///
 /// A capability waiting for its owner to reconnect (`connector_public.reconnect_required`) is
-/// left alone, unless it is X's: an X access token lives two hours, so a probe made after it
-/// lapsed (the server was down, the platform's client secret was wrong for a while) flags the
-/// capability although its refresh token still holds; renewing is what brings it back.
+/// left alone, unless it is X's or TikTok's: their access tokens live two hours and a day, so a
+/// probe made after one lapsed (the server was down, the platform's client secret was wrong for a
+/// while) flags the capability although its refresh token still holds; renewing is what brings
+/// it back. A LinkedIn credential has a refresh token only when LinkedIn grants the app
+/// programmatic refresh; without one the adapter has nothing to renew, and the capability lapses
+/// into a reconnection when its 60 days are up.
 ///
 /// **Compare and swap.** The sealed credential is read in a transaction of its own, the provider
 /// is asked with no transaction open, and the answer is written in a second transaction that
@@ -305,8 +343,12 @@ pub async fn run_refresh_tokens(deps: &Deps, now: OffsetDateTime) -> JobReport {
 
 /// Whether `capability`'s token is due for renewal at `now` (see [`run_refresh_tokens`]).
 fn due_for_refresh(capability: &Capability, now: OffsetDateTime) -> bool {
-    // X: every run, flagged or not (its refresh token outlives a lapsed access token).
-    if provider_for_kind(&capability.kind_key) == Some(Provider::X) {
+    // X and TikTok: every run, flagged or not (a refresh token outlives a lapsed access token:
+    // X's live two hours, TikTok's a day; the TikTok adapter renews only near expiry).
+    if matches!(
+        provider_for_kind(&capability.kind_key),
+        Some(Provider::X | Provider::Tiktok)
+    ) {
         return true;
     }
     if reconnect_required(capability) {
@@ -616,7 +658,7 @@ pub async fn run_netgsm_dlr_poll(deps: &Deps, _now: OffsetDateTime) -> JobReport
     let Some(reports) = deps.connectors.delivery_reports(Provider::Netgsm) else {
         return finish(job, report);
     };
-    for ws in netgsm_workspaces(deps, job, ACTIVE, &mut report).await {
+    for ws in netgsm_workspaces(deps, job, ACTIVE, SMS_LINE, &mut report).await {
         let lines = match live_connector_capabilities(deps, ws).await {
             Ok(capabilities) => verified_lines(&capabilities),
             Err(e) => {
@@ -723,7 +765,7 @@ pub async fn run_netgsm_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobRepor
     let Some(reports) = deps.connectors.delivery_reports(Provider::Netgsm) else {
         return finish(job, report);
     };
-    for ws in netgsm_workspaces(deps, job, RECEIVING, &mut report).await {
+    for ws in netgsm_workspaces(deps, job, RECEIVING, SMS_LINE, &mut report).await {
         let lines = match live_connector_capabilities(deps, ws).await {
             Ok(capabilities) => verified_lines(&capabilities),
             Err(e) => {
@@ -784,12 +826,14 @@ async fn poll_inbox(
     Ok(out)
 }
 
-/// The workspaces in one of `statuses` holding a verified SMS line with sealed credentials, read
-/// in one platform-wide transaction; none (and one failure counted) when they cannot be read.
+/// The workspaces in one of `statuses` holding a verified capability of `kind` (an SMS line, the
+/// PBX) with sealed credentials, read in one platform-wide transaction; none (and one failure
+/// counted) when they cannot be read.
 async fn netgsm_workspaces(
     deps: &Deps,
     job: Job,
     statuses: &[WorkspaceStatus],
+    kind: &str,
     report: &mut JobReport,
 ) -> Vec<WorkspaceId> {
     let listed = async {
@@ -801,7 +845,7 @@ async fn netgsm_workspaces(
             .filter(|w| statuses.contains(&w.status))
             .map(|w| w.id)
             .collect();
-        let with_line = platform.workspaces_with_verified(&[SMS_LINE]).await?;
+        let with_line = platform.workspaces_with_verified(&[kind]).await?;
         Ok::<_, AppError>(
             with_line
                 .into_iter()
@@ -823,6 +867,91 @@ async fn netgsm_workspaces(
     }
 }
 
+/// How far back the PBX's call records are read on each poll.
+pub const CDR_WINDOW: Duration = Duration::hours(2);
+
+/// Reads, in every receiving workspace with a verified `netgsm_pbx`, the PBX's call records of
+/// the [`CDR_WINDOW`] ending at `now` (`Telephony::call_records`, outside any transaction) and
+/// stores each as a `cdr` call event of that capability. A record the PBX also pushed has the
+/// same external id (`netgsm-call:<id>:cdr`) and is skipped as a duplicate; the inbox consumer
+/// then fills the call's session in (duration, recording, cost). The poll needs the server's IP
+/// on the NetGSM account's allowed list; a refusal is counted as a failed step.
+pub async fn run_netgsm_cdr_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::NetgsmCdrPoll;
+    let mut report = JobReport::default();
+    let Some(telephony) = deps.connectors.telephony(Provider::Netgsm) else {
+        return finish(job, report);
+    };
+    for ws in netgsm_workspaces(deps, job, RECEIVING, PBX, &mut report).await {
+        let pbxes: Vec<CapabilityId> = match live_connector_capabilities(deps, ws).await {
+            Ok(capabilities) => capabilities
+                .iter()
+                .filter(|c| c.kind_key == PBX && c.status == StoredStatus::Verified)
+                .map(|c| c.id)
+                .collect(),
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for pbx in pbxes {
+            report.touched += 1;
+            match poll_call_records(deps, telephony.as_ref(), ws, pbx, now).await {
+                Ok(deliveries) => {
+                    for delivery in deliveries {
+                        match delivery {
+                            Delivery::Stored(_) => report.changed += 1,
+                            Delivery::Duplicate | Delivery::Unrouted | Delivery::Inactive => {
+                                report.skipped += 1
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(pbx), &e);
+                }
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// The kind of the PBX capability.
+const PBX: &str = "netgsm_pbx";
+
+/// Reads PBX `pbx`'s call records for the window ending at `now` and stores them.
+async fn poll_call_records(
+    deps: &Deps,
+    telephony: &dyn Telephony,
+    ws: WorkspaceId,
+    pbx: CapabilityId,
+    now: OffsetDateTime,
+) -> Result<Vec<Delivery>, Failure> {
+    let Some(credential) = read_credential(deps, ws, pbx).await? else {
+        return Ok(Vec::new());
+    };
+    let drafts = telephony
+        .call_records(&credential, now - CDR_WINDOW, now)
+        .await;
+    drop(credential);
+    let drafts = drafts.map_err(Failure::Provider)?;
+    let mut repos = deps.uow.tenant(ws).await?;
+    let out = webhook::store_polled(
+        deps,
+        repos.as_mut(),
+        ws,
+        Provider::Netgsm,
+        Some(pbx),
+        drafts,
+        now,
+    )
+    .await?;
+    repos.commit().await?;
+    Ok(out)
+}
+
 /// The verified SMS lines among `capabilities` (all live, with credentials), in their order.
 fn verified_lines(capabilities: &[Capability]) -> Vec<CapabilityId> {
     capabilities
@@ -833,8 +962,201 @@ fn verified_lines(capabilities: &[Capability]) -> Vec<CapabilityId> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Bridge health: voice_bridge_health, device_bridge_health
+// ---------------------------------------------------------------------------------------------
+
+/// Marks unreachable, in every workspace, each voice bridge that still reads verified although it
+/// has not registered for its heartbeat's `unreachable_after` (ten minutes), writing
+/// `calls.bridge.offline` once per bridge (the bridge kernel's
+/// [`kernel::mark_unreachable`], with `calls::bridge::VOICE_BRIDGE`); its next registration
+/// verifies it again. A minute after its last heartbeat it already reads stale, without this
+/// job. `touched` counts the silent bridges found, `changed` those marked, `skipped` those that
+/// registered meanwhile.
+pub async fn run_voice_bridge_health(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::calls::bridge::{VOICE_BRIDGE, VOICE_BRIDGE_KIND};
+    let job = Job::VoiceBridgeHealth;
+    run_bridge_health(deps, job, &VOICE_BRIDGE, VOICE_BRIDGE_KIND, now).await
+}
+
+/// Marks unreachable, in every workspace, each phone that still reads verified although no
+/// registration has listed it for its heartbeat's `unreachable_after` (ten minutes: its bridge
+/// stopped registering, or registers without it), writing `devices.bridge.offline` once per phone
+/// (the bridge kernel's [`kernel::mark_unreachable`], with `devices::bridge::DEVICE_BRIDGE`); the
+/// next registration that lists it verifies it again. A minute after it was last listed it
+/// already reads stale, and takes no command, without this job. Counted as
+/// [`run_voice_bridge_health`] counts.
+pub async fn run_device_bridge_health(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::devices::PHONE_KIND;
+    use super::devices::bridge::DEVICE_BRIDGE;
+    let job = Job::DeviceBridgeHealth;
+    run_bridge_health(deps, job, &DEVICE_BRIDGE, PHONE_KIND, now).await
+}
+
+/// Marks unreachable, in every workspace, each capability of kind `kind_key` that bridge `spec`
+/// keeps alive and that went silent ([`kernel::silent`]), each in a step of its own
+/// ([`kernel::mark_unreachable`]), as job `job`.
+async fn run_bridge_health(
+    deps: &Deps,
+    job: Job,
+    spec: &BridgeSpec,
+    kind_key: &'static str,
+    now: OffsetDateTime,
+) -> JobReport {
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let silent = async {
+            let mut repos = deps.uow.tenant(ws).await?;
+            kernel::silent(repos.as_mut(), kind_key, now).await
+        };
+        let silent = match silent.await {
+            Ok(silent) => silent,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        let ctx = system_ctx(job, ws, now);
+        for id in silent {
+            report.touched += 1;
+            match kernel::mark_unreachable(deps, &ctx, spec, kind_key, id).await {
+                Ok(true) => report.changed += 1,
+                Ok(false) => report.skipped += 1,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(id), &Failure::App(e));
+                }
+            }
+        }
+    }
+    finish(job, report)
+}
+
+// ---------------------------------------------------------------------------------------------
+// call_timers
+// ---------------------------------------------------------------------------------------------
+
+/// Runs what is due at `now` on every agent call on the line (`calls::session::tick`: holding
+/// phrases, fallback lines, the scripted closing, the caller's silence, the maximum duration, a
+/// line that rang too long or whose bridge went silent), in every workspace with one, each call in
+/// a transaction of its own. Run every second. `touched` and `changed` count the calls something
+/// was due on (a call with nothing due is not counted, so a quiet second logs at `debug`).
+pub async fn run_call_timers(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::calls::session;
+    let job = Job::CallTimers;
+    let mut report = JobReport::default();
+    let listed = async {
+        let mut platform = deps.uow.platform().await?;
+        platform.workspaces_with_live_agent_calls().await
+    };
+    let workspaces = match listed.await {
+        Ok(ws) => ws,
+        Err(e) => {
+            report.failed += 1;
+            tracing::warn!(
+                job = job.name(),
+                code = e.code.as_str(),
+                "the workspaces with live calls could not be listed"
+            );
+            Vec::new()
+        }
+    };
+    for ws in workspaces {
+        let ctx = system_ctx(job, ws, now);
+        let calls = match session::live_agent_calls(deps, &ctx).await {
+            Ok(calls) => calls,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for id in calls {
+            match session::tick(deps, &ctx, id).await {
+                Ok(true) => {
+                    report.touched += 1;
+                    report.changed += 1;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    report.touched += 1;
+                    report.failed += 1;
+                    step_failed(job, ws, None, &Failure::App(e));
+                }
+            }
+        }
+    }
+    finish(job, report)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The phones' commands and files: device_command_expiry, device_file_purge
+// ---------------------------------------------------------------------------------------------
+
+/// Ends as `expired`, in every workspace, each phone's command still `queued` or `leased` whose
+/// time limit passed before `now`, writing `devices.command.finished` (`status: "expired"`) for
+/// each, a workspace in one transaction (`devices::sweeps::expire_commands`). The rows are kept:
+/// a leased one's late result still replaces `expired`. Run every minute. `touched` and `changed`
+/// count the commands ended, `failed` the workspaces that could not be swept.
+pub async fn run_device_command_expiry(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::devices::sweeps;
+    let job = Job::DeviceCommandExpiry;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let expired = sweeps::expire_commands(deps, &ctx).await;
+        count_purged(job, ws, expired, &mut report);
+    }
+    finish(job, report)
+}
+
+/// Deletes, in every workspace, each device file (a screenshot, a pulled file) whose seven-day
+/// retention ended before `now`, from the file store and then its record
+/// (`devices::sweeps::purge_files`); the commands that name it stay. Run hourly. `touched` counts
+/// the files found due, `changed` those deleted, `skipped` those whose record was gone meanwhile,
+/// `failed` the files (and the workspaces) that could not be purged: the next run tries them
+/// again.
+pub async fn run_device_file_purge(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::devices::sweeps;
+    let job = Job::DeviceFilePurge;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match sweeps::purge_files(deps, &ctx).await {
+            Ok(purged) => {
+                report.touched += purged.due;
+                report.changed += purged.purged;
+                report.skipped += purged.gone;
+                report.failed += purged.failed;
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+// ---------------------------------------------------------------------------------------------
 // Purges
 // ---------------------------------------------------------------------------------------------
+
+/// Deletes, in every workspace, the voice bridge's commands queued more than
+/// `calls::session::COMMAND_RETENTION` (7 days) before `now`, acknowledged or not; the calls and
+/// their turns stay. `touched` and `changed` count the commands deleted, `failed` the workspaces
+/// that could not be purged.
+pub async fn run_purge_call_commands(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::calls::session;
+    let job = Job::PurgeCallCommands;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let purged = session::purge_commands(deps, &ctx, now).await;
+        count_purged(job, ws, purged, &mut report);
+    }
+    finish(job, report)
+}
 
 /// Removes, in every workspace, the raw body of every inbound event received more than
 /// [`webhook::RAW_RETENTION`] (30 days) before `now` ([`webhook::purge_raw_in`]); the events
@@ -940,6 +1262,7 @@ fn step_failed(job: Job, ws: WorkspaceId, capability: Option<CapabilityId>, fail
             workspace_id = %ws,
             capability_id = capability.as_deref().unwrap_or("-"),
             error_kind = e.kind(),
+            reason = %super::failure::failure_reason(None, e),
             "a job step failed at the provider"
         ),
     }

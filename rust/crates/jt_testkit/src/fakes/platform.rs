@@ -365,6 +365,28 @@ impl PlatformRepos for MemPlatform {
             .map(|s| state.capability_view(s)))
     }
 
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        let state = self.state();
+        let mut held: Vec<Capability> = state
+            .capabilities
+            .iter()
+            .filter(|s| {
+                let c = &s.capability;
+                c.status != StoredStatus::Retired
+                    && s.sealed.is_some()
+                    && kind_keys.contains(&c.kind_key.as_str())
+                    && c.external_id.as_deref() == Some(external_id)
+            })
+            .map(|s| state.capability_view(s))
+            .collect();
+        held.sort_by_key(|c| (c.workspace_id, c.id));
+        Ok(held)
+    }
+
     async fn workspaces_with_verified(
         &mut self,
         kind_keys: &[&str],
@@ -380,6 +402,18 @@ impl PlatformRepos for MemPlatform {
                     && kind_keys.contains(&c.kind_key.as_str())
             })
             .map(|s| s.capability.workspace_id)
+            .collect();
+        Ok(ids.into_iter().collect())
+    }
+
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        let ids: BTreeSet<WorkspaceId> = self
+            .state()
+            .calls
+            .sessions
+            .iter()
+            .filter(|s| s.mode == jt_calls::CallMode::Agent && s.state.is_live())
+            .map(|s| s.workspace_id)
             .collect();
         Ok(ids.into_iter().collect())
     }

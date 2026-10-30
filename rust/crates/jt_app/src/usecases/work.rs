@@ -13,7 +13,14 @@
 //!   `unreachable` because its provider no longer accepts its login (a probe failed with `Auth`:
 //!   `connector_public.reconnect_required`);
 //! - `VerifyCapability` (2): each capability reached through an agent or a device that reads
-//!   `declared` or `stale` (a lapsed verification is asked for again);
+//!   `declared` or `stale` (a lapsed verification is asked for again), but one of a kind verified
+//!   by its heartbeat (a voice bridge, a phone);
+//! - `VoiceBridgeOffline` (2): each voice bridge that reads `declared`, `stale` or `unreachable`:
+//!   only its own registration verifies it, so no evidence is asked for;
+//! - `PhoneOffline` (2): each phone that reads `declared`, `stale` or `unreachable`: only its
+//!   device bridge's registration verifies it, so no evidence is asked for either. Each kind
+//!   verified by its heartbeat has its own item ([`offline_item`]), so a phone is never reported
+//!   as a voice bridge;
 //! - `ConnectConnector` (2): each capability reached through a connector that reads `declared`
 //!   (M1b sets connectors up);
 //! - `InboundEvents` (2): inbound events (webhooks, polls) not yet acknowledged, with how many
@@ -40,7 +47,7 @@
 //! the caller seen at its own time, so an agent that was late is not told it is overdue by the
 //! very call that ends its lateness.
 
-use jt_capability::{CapabilityId, EffectiveStatus, Reach};
+use jt_capability::{Capability, CapabilityId, EffectiveStatus, Reach};
 use jt_ledger::Actor;
 use jt_strategy::{Gap, StrategyVersionId};
 use jt_tenancy::{AgentConnectionId, Permission};
@@ -48,7 +55,9 @@ use serde::Serialize;
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
+use super::calls::bridge::VOICE_BRIDGE_KIND;
 use super::capabilities::CapabilityOut;
+use super::devices::PHONE_KIND;
 use super::strategy::{self, StrategyOut};
 use super::{Deps, agents, connector, events, invalid, ledger_entry};
 use crate::catalog::status_exemption;
@@ -169,6 +178,23 @@ pub enum WorkKind {
     /// Read and acknowledge the inbound events not yet processed: `count` of them, counted up to
     /// [`INBOUND_EVENTS_COUNT_CAP`].
     InboundEvents { count: u32 },
+    /// A voice bridge has not registered within its heartbeat, or never has: agent calls through
+    /// it are refused until it does. `last_seen_at` is its last heartbeat.
+    VoiceBridgeOffline {
+        capability_id: CapabilityId,
+        name: String,
+        #[serde(with = "time::serde::rfc3339::option")]
+        last_seen_at: Option<OffsetDateTime>,
+    },
+    /// A phone its device bridge has not listed within its heartbeat, or never has: commands for
+    /// it are refused (`device_offline`) until a bridge lists it again. `last_seen_at` is the last
+    /// registration that listed it.
+    PhoneOffline {
+        capability_id: CapabilityId,
+        name: String,
+        #[serde(with = "time::serde::rfc3339::option")]
+        last_seen_at: Option<OffsetDateTime>,
+    },
 }
 
 impl WorkKind {
@@ -190,6 +216,8 @@ impl WorkKind {
             WorkKind::ConnectConnector { .. } => "connector.start_oauth",
             WorkKind::ReconnectConnector { .. } => "connector.reconnect",
             WorkKind::InboundEvents { .. } => "events.ack",
+            WorkKind::VoiceBridgeOffline { .. } => "calls.bridge.register",
+            WorkKind::PhoneOffline { .. } => "devices.bridge.register",
         }
     }
 }
@@ -472,13 +500,61 @@ fn strategy_items(state: &StrategyState, may_approve: bool) -> Vec<WorkItem> {
     .collect()
 }
 
+/// The item of capability `c`, of a kind verified by its heartbeat, while it reads `declared`,
+/// `stale` or `unreachable` (its bridge does not report it): each such kind has its own, cleared
+/// by its own bridge's registration. `None` for any other kind.
+pub fn offline_item(c: &Capability) -> Option<WorkItem> {
+    let (name, last_seen_at) = (c.name.clone(), c.last_verified_at);
+    let (kind, hint) = match c.kind_key.as_str() {
+        VOICE_BRIDGE_KIND => (
+            WorkKind::VoiceBridgeOffline {
+                capability_id: c.id,
+                name,
+                last_seen_at,
+            },
+            "The voice bridge has not registered in the last minute (or never has), so agent \
+             calls through it are refused: ask the operator to check the jeeta-voice-bridge \
+             service on the server (docs/operations/voice-bridge.md). It cannot be verified by \
+             evidence.",
+        ),
+        PHONE_KIND => (
+            WorkKind::PhoneOffline {
+                capability_id: c.id,
+                name,
+                last_seen_at,
+            },
+            "No device bridge has listed this phone in the last minute (or ever), so commands for \
+             it are refused (device_offline): ask the owner to check that it is plugged into the \
+             PC, unlocked, with USB debugging allowed, and that the jeeta-device-bridge program \
+             runs there. It cannot be verified by evidence; retire it with \
+             jeeta.capability.retire if it is no longer used.",
+        ),
+        _ => return None,
+    };
+    Some(WorkItem {
+        kind,
+        priority: 2,
+        hint: hint.to_owned(),
+    })
+}
+
 /// The capabilities' items, in their order: each agent or device capability to verify, each
-/// connector to connect; and, when none is live, declaring the first.
+/// connector to connect, each capability verified by its heartbeat that does not report (a voice
+/// bridge, a phone: [`offline_item`]); and, when none is live, declaring the first.
 fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
     let mut items = Vec::new();
     for out in capabilities {
         let c = &out.capability;
         let status = out.effective_status;
+        if c.kind().is_some_and(|k| k.heartbeat().is_some()) {
+            if matches!(
+                status,
+                EffectiveStatus::Declared | EffectiveStatus::Stale | EffectiveStatus::Unreachable
+            ) {
+                items.extend(offline_item(c));
+            }
+            continue;
+        }
         match c.reach {
             Reach::Agent | Reach::Device
                 if matches!(status, EffectiveStatus::Declared | EffectiveStatus::Stale) =>

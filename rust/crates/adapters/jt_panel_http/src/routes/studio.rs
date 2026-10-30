@@ -31,6 +31,50 @@ pub async fn approve(
     Ok(Json(control::approve(&s.deps, &ctx, body).await?))
 }
 
+use jt_app::usecases::studio::tiktok;
+/// The TikTok posting screen's publish button: the choice, for the slot of the path.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TiktokPostBody {
+    pub expected_revision: u64,
+    pub post: jt_app::ports::connectors::TiktokPost,
+}
+pub async fn tiktok_posting(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<SlotId>,
+    ApiQuery(_): ApiQuery<work::EmptyInput>,
+) -> Result<Json<tiktok::TiktokPostingOut>, ApiError> {
+    Ok(Json(tiktok::tiktok_posting(&s.deps, &ctx, id).await?))
+}
+pub async fn tiktok_metrics(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<SlotId>,
+    ApiQuery(_): ApiQuery<work::EmptyInput>,
+) -> Result<Json<tiktok::TiktokMetricsOut>, ApiError> {
+    Ok(Json(tiktok::tiktok_metrics(&s.deps, &ctx, id).await?))
+}
+pub async fn tiktok_post(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<SlotId>,
+    ApiJson(body): ApiJson<TiktokPostBody>,
+) -> Result<Json<ApprovalOut>, ApiError> {
+    Ok(Json(
+        tiktok::tiktok_post(
+            &s.deps,
+            &ctx,
+            tiktok::TiktokPostInput {
+                slot_id: id,
+                expected_revision: body.expected_revision,
+                post: body.post,
+            },
+        )
+        .await?,
+    ))
+}
+
 use crate::error::{ApiPath, ApiQuery};
 use jt_app::ports::studio::SlotId;
 use jt_app::usecases::studio::{trends, work};

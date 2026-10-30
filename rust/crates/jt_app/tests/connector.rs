@@ -19,7 +19,8 @@ use jt_app::usecases::auth::{self, LoginInput, Principal};
 use jt_app::usecases::capabilities::{self, CapabilityOut, DeclareInput, UpdateCapability};
 use jt_app::usecases::connector::{
     self, CompleteOAuth, ConfirmAssets, ConnectorHealth, CredentialInput, OAUTH_STATE_PURPOSE,
-    OAuthCallback, PendingAssetsOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
+    OAuthCallback, PbxCallMode, PbxPolicyInput, PbxPolicyOut, PendingAssetsOut, ProbeOut,
+    SetCredentials, StartOAuth, StartOut,
 };
 use jt_app::usecases::hash_token;
 use jt_app::usecases::work::{self, WorkKind};
@@ -43,6 +44,12 @@ use zeroize::Zeroizing;
 const META_HOSTS: &[&str] = &["graph.facebook.com", "rupload.facebook.com"];
 const NETGSM_HOSTS: &[&str] = &["api.netgsm.com.tr", "crmsntrl.netgsm.com.tr:9111"];
 const X_HOSTS: &[&str] = &["api.x.com"];
+const TIKTOK_HOSTS: &[&str] = &[
+    "open.tiktokapis.com",
+    "open-upload.tiktokapis.com",
+    "open-upload-sg.tiktokapis.com",
+];
+const LINKEDIN_HOSTS: &[&str] = &["api.linkedin.com", "www.linkedin.com"];
 
 /// Every secret the flows below hand to the system; none may come back out.
 const SECRETS: &[&str] = &[
@@ -74,6 +81,8 @@ struct Rig {
     meta_oauth: Arc<ScriptedOAuth>,
     netgsm: Arc<ScriptedConnector>,
     x_oauth: Arc<ScriptedOAuth>,
+    tiktok_oauth: Arc<ScriptedOAuth>,
+    linkedin_oauth: Arc<ScriptedOAuth>,
 }
 
 async fn rig() -> Rig {
@@ -82,14 +91,22 @@ async fn rig() -> Rig {
     let meta = Arc::new(ScriptedConnector::new(Provider::Meta).with_hosts(META_HOSTS));
     let netgsm = Arc::new(ScriptedConnector::new(Provider::Netgsm).with_hosts(NETGSM_HOSTS));
     let x = Arc::new(ScriptedConnector::new(Provider::X).with_hosts(X_HOSTS));
+    let tiktok = Arc::new(ScriptedConnector::new(Provider::Tiktok).with_hosts(TIKTOK_HOSTS));
+    let linkedin = Arc::new(ScriptedConnector::new(Provider::Linkedin).with_hosts(LINKEDIN_HOSTS));
     let meta_oauth = Arc::new(ScriptedOAuth::new(Provider::Meta));
     let x_oauth = Arc::new(ScriptedOAuth::new(Provider::X));
+    let tiktok_oauth = Arc::new(ScriptedOAuth::new(Provider::Tiktok));
+    let linkedin_oauth = Arc::new(ScriptedOAuth::new(Provider::Linkedin));
     let registry = ScriptedRegistry::new()
         .with_connector(meta.clone())
         .with_connector(netgsm.clone())
         .with_connector(x)
+        .with_connector(tiktok)
+        .with_connector(linkedin)
         .with_oauth(meta_oauth.clone())
-        .with_oauth(x_oauth.clone());
+        .with_oauth(x_oauth.clone())
+        .with_oauth(tiktok_oauth.clone())
+        .with_oauth(linkedin_oauth.clone());
     w.deps.apps = Arc::new(FakeAppConfig::with_all_apps());
     w.deps.connectors = Arc::new(registry);
     Rig {
@@ -98,6 +115,8 @@ async fn rig() -> Rig {
         meta_oauth,
         netgsm,
         x_oauth,
+        tiktok_oauth,
+        linkedin_oauth,
     }
 }
 
@@ -301,12 +320,24 @@ async fn start_oauth_requires_a_configured_app_and_seals_the_pkce_verifier() {
     // Without the provider's app, nothing can start: CONFLICT, nothing written.
     let mut bare = r.w.deps.clone();
     bare.apps = Arc::new(FakeAppConfig::default());
-    for kind in ["facebook_page", "instagram", "x"] {
+    for kind in [
+        "facebook_page",
+        "instagram",
+        "x",
+        "tiktok",
+        "linkedin_member",
+        "linkedin_page",
+    ] {
         let e = err(connector::start_oauth(&bare, o, start(kind)).await);
         assert_eq!(e.code, ErrorCode::Conflict, "{kind}");
         assert_eq!(e.message, "provider app not configured", "{kind}");
         // The reason and the provider are named, so the panel shows its own copy.
-        let provider = if kind == "x" { "x" } else { "meta" };
+        let provider = match kind {
+            "x" => "x",
+            "tiktok" => "tiktok",
+            "linkedin_member" | "linkedin_page" => "linkedin",
+            _ => "meta",
+        };
         assert_eq!(
             e.details,
             json!({ "reason": "provider_app_not_configured", "provider": provider }),
@@ -476,6 +507,18 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
             "x-client-id",
             "https://panel.test/oauth/callback/x",
         ),
+        (
+            "tiktok",
+            OAuthCallback::Tiktok,
+            "tiktok-client-key",
+            "https://panel.test/oauth/callback/tiktok",
+        ),
+        (
+            "linkedin_member",
+            OAuthCallback::Linkedin,
+            "linkedin-client-id",
+            "https://panel.test/oauth/callback/linkedin",
+        ),
     ] {
         let out = r.start(kind).await;
         assert_eq!(redirect_of(&out), expected, "{kind}: authorize");
@@ -484,10 +527,11 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
             Some(client_id),
             "{kind}"
         );
-        let oauth = if kind == "x" {
-            &r.x_oauth
-        } else {
-            &r.meta_oauth
+        let oauth = match kind {
+            "x" => &r.x_oauth,
+            "tiktok" => &r.tiktok_oauth,
+            "linkedin_member" => &r.linkedin_oauth,
+            _ => &r.meta_oauth,
         };
         oauth.push_exchange(Ok(user_token("EAAB-user-1")));
         oauth.push_assets(Ok(Vec::new()));
@@ -521,9 +565,91 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
             ("meta", Provider::Meta),
             ("instagram", Provider::Meta),
             ("x", Provider::X),
+            ("tiktok", Provider::Tiktok),
+            ("linkedin", Provider::Linkedin),
         ]
     );
     assert_eq!(OAuthCallback::of_flow(Provider::Netgsm, "sms_line"), None);
+    // Both LinkedIn kinds come back to the one LinkedIn callback.
+    for kind in ["linkedin_member", "linkedin_page"] {
+        assert_eq!(
+            OAuthCallback::of_flow(Provider::Linkedin, kind),
+            Some(OAuthCallback::Linkedin)
+        );
+    }
+}
+
+/// TikTok and LinkedIn web flows take no PKCE: no challenge rides the authorize URL and no
+/// verifier is sealed with the flow, which is kept under its own provider and app.
+#[tokio::test]
+async fn tiktok_and_linkedin_start_oauth_build_redirect() {
+    let r = rig().await;
+    for (kind, provider, app) in [
+        ("tiktok", Provider::Tiktok, OAuthCallback::Tiktok),
+        (
+            "linkedin_member",
+            Provider::Linkedin,
+            OAuthCallback::Linkedin,
+        ),
+    ] {
+        let out = r.start(kind).await;
+        assert_eq!(query(&out, "code_challenge"), None, "{kind}");
+        assert_eq!(query(&out, "organization_scopes"), None, "{kind}");
+        let row = r
+            .pending_rows()
+            .into_iter()
+            .find(|p| p.state_hash == hash_token(&state_of(&out)))
+            .expect("a pending flow");
+        assert_eq!((row.provider, row.app), (provider, app), "{kind}");
+        assert_eq!(row.kind_key, kind);
+        assert!(row.pkce_verifier_sealed.is_none(), "{kind}");
+    }
+    let started = r.w.ledger("connector.oauth_started");
+    assert_eq!(started.len(), 2);
+    assert_eq!(started[0].payload["provider"], "tiktok");
+    assert_eq!(started[1].payload["provider"], "linkedin");
+}
+
+/// A LinkedIn page needs the organization scopes, which LinkedIn grants only once it approved
+/// the Community Management API for the platform's app: until the operator enables them, a
+/// `linkedin_page` flow is `CONFLICT` "provider product not enabled", and nothing is written nor
+/// asked of LinkedIn. Once enabled, every LinkedIn flow asks for them (the member's feed too:
+/// LinkedIn invalidates earlier tokens when the scopes asked for change).
+#[tokio::test]
+async fn linkedin_page_refused_without_org_scopes() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let e = err(connector::start_oauth(&r.w.deps, o, start("linkedin_page")).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(e.message, "provider product not enabled");
+    assert_eq!(
+        e.details,
+        json!({ "reason": "provider_product_not_enabled", "provider": "linkedin" })
+    );
+    assert!(r.pending_rows().is_empty());
+    assert!(r.linkedin_oauth.calls().is_empty());
+    assert!(r.w.ledger("connector.").is_empty());
+    // The member's own feed connects meanwhile, without the organization scopes.
+    let member = r.start("linkedin_member").await;
+    assert_eq!(query(&member, "organization_scopes"), None);
+
+    let mut enabled = FakeAppConfig::with_all_apps();
+    enabled.linkedin.as_mut().unwrap().organization_scopes = true;
+    let mut deps = r.w.deps.clone();
+    deps.apps = Arc::new(enabled);
+    for kind in ["linkedin_page", "linkedin_member"] {
+        let out = connector::start_oauth(&deps, o, start(kind)).await.unwrap();
+        assert_eq!(
+            query(&out, "organization_scopes").as_deref(),
+            Some("true"),
+            "{kind}"
+        );
+        assert_eq!(
+            redirect_of(&out),
+            "https://panel.test/oauth/callback/linkedin",
+            "{kind}"
+        );
+    }
 }
 
 /// Without a configured public base URL there is no redirect URI and no webhook address: starting
@@ -1590,6 +1716,13 @@ async fn set_credentials_refuses_oauth_only_kinds() {
     )
     .await);
     assert_invalid(&e, "kind_key");
+    // Nor do TikTok and LinkedIn: hand-entered credentials are refused for every OAuth-only kind.
+    for kind in ["tiktok", "linkedin_member", "linkedin_page"] {
+        let e =
+            err(connector::set_credentials(&r.w.deps, o, creating(kind, "Hesap", token())).await);
+        assert_invalid(&e, "kind_key");
+        assert_eq!(e.message, "this kind connects through OAuth", "{kind}");
+    }
     // Mail has its own credential shape; a pasted Meta token cannot configure it.
     let e = err(connector::set_credentials(&r.w.deps, o, creating("mailbox", "H", token())).await);
     assert_invalid(&e, "credential.kind");
@@ -1679,6 +1812,7 @@ async fn probe_auth_failure_marks_unreachable_and_pending_lists_reconnect() {
             "at": later.format(&Rfc3339).unwrap(),
             "latency_ms": 55,
             "error_kind": "auth",
+            "reason": "auth: meta: token expired",
         })
     );
     // The last verification stands as it was; the credential is kept for the record.
@@ -1687,6 +1821,7 @@ async fn probe_auth_failure_marks_unreachable_and_pending_lists_reconnect() {
     let runs = r.w.uow.snapshot().probe_runs;
     assert_eq!(runs.len(), 2);
     assert_eq!(runs[1].error_kind.as_deref(), Some("auth"));
+    assert_eq!(runs[1].reason.as_deref(), Some("auth: meta: token expired"));
     assert_eq!(
         r.w.entries("connector.probe").last().unwrap().payload,
         json!({ "ok": false, "error_kind": "auth" })
@@ -1918,6 +2053,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 last_probe_at: Some(FIXED_NOW),
                 ok: Some(true),
                 error_kind: None,
+                reason: None,
                 token_expires_at: Some(expires),
                 reconnect_required: false,
             },
@@ -1930,6 +2066,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 last_probe_at: Some(FIXED_NOW),
                 ok: Some(false),
                 error_kind: Some("auth".into()),
+                reason: Some("auth: meta: revoked".into()),
                 token_expires_at: None,
                 reconnect_required: true,
             },
@@ -1942,6 +2079,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 last_probe_at: None,
                 ok: None,
                 error_kind: None,
+                reason: None,
                 token_expires_at: None,
                 reconnect_required: false,
             },
@@ -1958,6 +2096,258 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
         &err(connector::health(&r.w.deps, &blind).await),
         "workspace.read",
     );
+}
+
+#[tokio::test]
+async fn probe_failure_reason_is_persisted_and_served_by_health() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    let health_of = |health: Vec<ConnectorHealth>| {
+        health
+            .into_iter()
+            .find(|h| h.capability_id == page.id)
+            .expect("the page's health")
+    };
+
+    // A provider refusal: the failure line names kind, provider and the redacted reason, and is
+    // kept in the probe log and the capability's health alike.
+    r.meta.push_probe(ProbeResult::failure(
+        20,
+        ConnectorError::permanent(
+            r#"HTTP 400 OAuthException (#100): page removed {"access_token":"EAAB-page-1"}"#,
+        ),
+    ));
+    let out = r.probe(page.id).await;
+    assert_eq!(out.result.error_kind.as_deref(), Some("permanent"));
+    let line = r.capability(page.id).connector_public["health"]["reason"]
+        .as_str()
+        .expect("a reason in health")
+        .to_owned();
+    assert!(
+        line.starts_with("permanent: meta: HTTP 400 OAuthException (#100): page removed"),
+        "{line}"
+    );
+    assert_no_secret("health reason", &line);
+    let runs = r.w.uow.snapshot().probe_runs;
+    assert_eq!(runs.last().unwrap().reason.as_deref(), Some(line.as_str()));
+    let health = health_of(connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap());
+    assert_eq!(health.error_kind.as_deref(), Some("permanent"));
+    assert_eq!(health.reason.as_deref(), Some(line.as_str()));
+    let wire = serde_json::to_value(&health).unwrap();
+    assert_eq!(wire["reason"], line.as_str());
+
+    // An adapter answering `Unknown` is stored, not refused by the log's check constraint.
+    r.meta.push_probe(ProbeResult::failure(
+        30,
+        ConnectorError::unknown("timed out"),
+    ));
+    let out = r.probe(page.id).await;
+    assert_eq!(out.result.error_kind.as_deref(), Some("unknown"));
+    let runs = r.w.uow.snapshot().probe_runs;
+    assert_eq!(runs.last().unwrap().error_kind.as_deref(), Some("unknown"));
+    let health = health_of(connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap());
+    assert_eq!(health.reason.as_deref(), Some("unknown: meta: timed out"));
+
+    // A success clears the reason.
+    r.meta.push_probe(ok_probe("page-1"));
+    r.probe(page.id).await;
+    let health = health_of(connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap());
+    assert_eq!((health.ok, health.reason), (Some(true), None));
+    assert_eq!(r.w.uow.snapshot().probe_runs.last().unwrap().reason, None);
+}
+
+#[tokio::test]
+async fn set_credentials_failure_keeps_reason_in_health() {
+    let r = rig().await;
+    r.netgsm.push_probe(ProbeResult::failure(
+        15,
+        ConnectorError::auth("HTTP 401 Kullanici dogrulanamadi"),
+    ));
+    let line = connector::set_credentials(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        creating("sms_line", "SMS hattı", netgsm_sms("netgsm-pass-1")),
+    )
+    .await
+    .unwrap();
+    let id = line.capability.id;
+    assert_eq!(
+        r.capability(id).connector_public["health"]["reason"],
+        "auth: netgsm: HTTP 401 Kullanici dogrulanamadi"
+    );
+    let health = connector::health(&r.w.deps, &r.w.owner_ctx)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|h| h.capability_id == id)
+        .unwrap();
+    assert_eq!(
+        health.reason.as_deref(),
+        Some("auth: netgsm: HTTP 401 Kullanici dogrulanamadi")
+    );
+    assert_no_secret("health", &serde_json::to_string(&health).unwrap());
+}
+
+#[tokio::test]
+async fn pbx_policy_is_written_into_connector_public_and_read_by_adapter() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    r.netgsm.push_probe(ok_probe("santral-kullanici"));
+    let pbx = connector::set_credentials(
+        &r.w.deps,
+        o,
+        creating(
+            "netgsm_pbx",
+            "Santral",
+            CredentialInput::NetgsmPbx {
+                username: "santral-kullanici".into(),
+                password: "pbx-pass-1".into(),
+                trunk: Some("8508401234".into()),
+                pbxnum: None,
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(pbx.status, StoredStatus::Verified);
+    let before = r.capability(pbx.id).connector_public;
+
+    // Recording on: merged in, nothing else in the public fields changes.
+    let out = connector::set_pbx_policy(
+        &r.w.deps,
+        o,
+        pbx.id,
+        PbxPolicyInput {
+            recording_allowed: Some(true),
+            ..PbxPolicyInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out,
+        PbxPolicyOut {
+            capability_id: pbx.id,
+            call_mode: PbxCallMode::Originate,
+            recording_allowed: true,
+        }
+    );
+    let public = r.capability(pbx.id).connector_public;
+    assert_eq!(public["recording_allowed"], true);
+    for (key, value) in before.as_object().unwrap() {
+        assert_eq!(&public[key], value, "{key}");
+    }
+    assert_eq!(
+        r.w.entries("connector.pbx_policy_set")[0].payload,
+        json!({ "call_mode": "originate", "recording_allowed": true })
+    );
+
+    // Linkup next: the recording flag stays. The adapter is handed both (here, on a probe).
+    let out = connector::set_pbx_policy(
+        &r.w.deps,
+        o,
+        pbx.id,
+        PbxPolicyInput {
+            call_mode: Some(PbxCallMode::Linkup),
+            ..PbxPolicyInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (out.call_mode, out.recording_allowed),
+        (PbxCallMode::Linkup, true)
+    );
+    r.netgsm.push_probe(ok_probe("santral-kullanici"));
+    r.probe(pbx.id).await;
+    let probed = r
+        .netgsm
+        .calls()
+        .into_iter()
+        .rev()
+        .find_map(|c| match c {
+            ConnectorCall::Probe { public, .. } => Some(public),
+            _ => None,
+        })
+        .expect("a probe");
+    assert_eq!(probed["call_mode"], "linkup");
+    assert_eq!(probed["recording_allowed"], true);
+    assert_eq!(probed["kind_key"], "netgsm_pbx");
+    assert_eq!(
+        connector::pbx_policy_of(&r.capability(pbx.id)),
+        PbxPolicyOut {
+            capability_id: pbx.id,
+            call_mode: PbxCallMode::Linkup,
+            recording_allowed: true,
+        }
+    );
+
+    // Off again; an edit naming nothing is refused; so is another kind, and a declaration that
+    // tries to write the reserved keys itself.
+    connector::set_pbx_policy(
+        &r.w.deps,
+        o,
+        pbx.id,
+        PbxPolicyInput {
+            recording_allowed: Some(false),
+            ..PbxPolicyInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        r.capability(pbx.id).connector_public["recording_allowed"],
+        false
+    );
+    assert_eq!(
+        code(connector::set_pbx_policy(&r.w.deps, o, pbx.id, PbxPolicyInput::default()).await),
+        ErrorCode::Validation
+    );
+    let phone = r.w.declare("phone", "Telefon").await.capability;
+    assert_eq!(
+        code(
+            connector::set_pbx_policy(
+                &r.w.deps,
+                o,
+                phone.id,
+                PbxPolicyInput {
+                    recording_allowed: Some(true),
+                    ..PbxPolicyInput::default()
+                },
+            )
+            .await
+        ),
+        ErrorCode::Conflict
+    );
+    for key in ["recording_allowed", "call_mode"] {
+        let declared = capabilities::declare(
+            &r.w.deps,
+            o,
+            DeclareInput {
+                connector_public: json!({ key: true }),
+                ..declaring("netgsm_pbx", "İkinci santral")
+            },
+        )
+        .await;
+        assert_eq!(code(declared), ErrorCode::Validation, "{key}");
+    }
+    // It needs capabilities.manage.
+    let reader = r.w.agent(&["workspace.read"]).await;
+    assert_forbidden(
+        &err(connector::set_pbx_policy(
+            &r.w.deps,
+            &reader,
+            pbx.id,
+            PbxPolicyInput {
+                recording_allowed: Some(true),
+                ..PbxPolicyInput::default()
+            },
+        )
+        .await),
+        "capabilities.manage",
+    );
+    assert_eq!(r.w.entries("connector.pbx_policy_set").len(), 3);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2555,6 +2945,25 @@ async fn bound_confirm_binds_first_asset_and_creates_the_rest() {
 // Retiring, pending work
 // ---------------------------------------------------------------------------------------------
 
+/// Giving the access back at the provider is best effort: a refusal is logged, and the
+/// retirement holds all the same.
+#[tokio::test]
+async fn a_refused_revocation_does_not_undo_a_retirement() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    r.meta
+        .push_revoke(Err(ConnectorError::transient("the provider is down")));
+    let out = capabilities::retire(&r.w.deps, &r.w.owner_ctx, page.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls().len(), 1);
+    assert_eq!(out.capability.status, StoredStatus::Retired);
+    assert_eq!(r.stored(page.id).sealed, None);
+}
+
 #[tokio::test]
 async fn retire_clears_sealed_config() {
     let r = rig().await;
@@ -2563,12 +2972,19 @@ async fn retire_clears_sealed_config() {
         .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
     r.probe(page.id).await;
     assert!(r.stored(page.id).sealed.is_some());
+    let held = r.sealed_credential(page.id);
 
     let later = at(&r.w.owner_ctx, FIXED_NOW + Duration::hours(2));
     let out = capabilities::retire(&r.w.deps, &later, page.id, true)
         .await
         .unwrap();
     assert_eq!(out.capability.status, StoredStatus::Retired);
+    // Its access is given back at the provider, with the credential it held (in a task of its
+    // own, once the retirement holds).
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls(), vec![held]);
     assert!(!out.capability.has_sealed_config);
     assert_eq!(r.stored(page.id).sealed, None);
     assert_eq!(out.capability.updated_at, FIXED_NOW + Duration::hours(2));
@@ -2611,7 +3027,7 @@ async fn retire_clears_sealed_config() {
 async fn pending_lists_reconnect_at_priority_one() {
     let r = rig().await;
     let page = r.connect_page().await;
-    r.w.declare("phone", "Telefon").await;
+    r.w.declare("computer", "Bilgisayar").await;
     // Marked unreachable by hand: not a login to renew, so no reconnection is asked for.
     let line = r.w.declare("sms_line", "Hat").await.capability.id;
     capabilities::mark_unreachable(&r.w.deps, &r.w.owner_ctx, line, "kapalı".into())
@@ -2635,7 +3051,7 @@ async fn pending_lists_reconnect_at_priority_one() {
             name: "Kahve".into(),
         }]
     );
-    // Priority 1, ahead of verifying the phone (2); its wire form is stable.
+    // Priority 1, ahead of verifying the computer (2); its wire form is stable.
     let position = pending
         .items
         .iter()
@@ -3675,6 +4091,7 @@ async fn mailbox_rebind_revokes_hosts_and_resets_cursor() {
                 ]
                 .into_iter()
                 .collect(),
+                read_history: false,
             },
         )
         .await
@@ -3733,4 +4150,62 @@ async fn host_mutations_wait_for_workspace_guard() {
             .calls()
             .contains(&HostCall::Allow(w.ws, "imap.example.com".into()))
     );
+}
+
+/// The provider's grant is the account's (TikTok's revocation ends the account's whole
+/// authorization of the app): while another workspace still holds the account, retiring one
+/// holder gives nothing back, which would cut the other off; retiring the last one does.
+#[tokio::test]
+async fn a_shared_account_is_revoked_only_when_its_last_holder_retires() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    let (beta, beta_ctx) = r.w.other_workspace().await;
+    jt_testkit::flows::activate_workspace(&r.w.deps, beta).await;
+    let theirs = Credential::PageToken {
+        page_id: "page-1".into(),
+        token: "EAAB-beta-page-1".into(),
+    };
+    let mut held = Capability::new(
+        CapabilityId::new_v7(),
+        beta,
+        NewCapability {
+            kind_key: "facebook_page".into(),
+            name: "Kahve".into(),
+            external_id: Some("page-1".into()),
+            ..NewCapability::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    held.status = StoredStatus::Verified;
+    held.last_verified_at = Some(FIXED_NOW);
+    let sealed =
+        r.w.deps
+            .seal
+            .seal(beta, &serde_json::to_vec(&theirs).unwrap())
+            .unwrap();
+    {
+        let mut t = r.w.uow.tenant(beta).await.unwrap();
+        t.capabilities()
+            .insert(held.clone(), Some(sealed))
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+
+    capabilities::retire(&r.w.deps, &r.w.owner_ctx, page.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(r.meta.revoke_calls().is_empty());
+
+    capabilities::retire(&r.w.deps, &beta_ctx, held.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls(), vec![theirs]);
 }

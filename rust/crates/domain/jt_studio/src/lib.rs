@@ -6,11 +6,14 @@ mod control;
 mod ids;
 mod learning;
 mod measurement;
+mod mp4;
 mod paid;
 mod piece;
 mod planning;
 mod publication;
 mod slot;
+mod tiktok;
+pub mod time_compat;
 mod trend;
 
 pub use chain::*;
@@ -23,6 +26,7 @@ pub use piece::*;
 pub use planning::*;
 pub use publication::*;
 pub use slot::*;
+pub use tiktok::*;
 pub use trend::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -47,6 +51,8 @@ pub enum StudioError {
     RevisionOverflow,
     #[error("human approval is required for this revision")]
     ApprovalRequired,
+    #[error("the TikTok posting screen is required for this revision")]
+    PostingScreenRequired,
     #[error("invalid slot transition")]
     InvalidTransition,
     #[error("invalid studio evidence: {0}")]

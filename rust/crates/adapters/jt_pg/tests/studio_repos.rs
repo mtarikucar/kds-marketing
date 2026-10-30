@@ -27,7 +27,9 @@ async fn studio_schema_exact_table_delta() {
         ]
     );
     let count: i64 = sqlx::query_scalar("select count(*) from pg_tables where schemaname='public' and tablename <> '_sqlx_migrations'").fetch_one(&db.pool).await.unwrap();
-    assert_eq!(count, 48 + 14 + 5);
+    // 48 inbox-era tables, 14 Studio, 5 billing, 4 calls (0015_voice_calls), the bridge's event
+    // notes (0016_voice_bridge), the device commands and device files (0017_device_bridge).
+    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2);
 }
 
 #[tokio::test]
@@ -311,6 +313,13 @@ async fn outcome_categories_survive_redaction() {
 }
 
 #[tokio::test]
+async fn failure_reason_is_kept_beside_the_category() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::failure_reason_is_kept_beside_the_category(&uow).await;
+}
+
+#[tokio::test]
 async fn completion_time_differs_from_claim_time() {
     let db = jt_testkit::TestDb::new().await;
     let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
@@ -345,4 +354,12 @@ async fn binding_refresh_invalidates_old_intents() {
     let db = jt_testkit::TestDb::new().await;
     let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
     jt_testkit::studio_contract::binding_refresh_invalidates_old_intents(&uow).await;
+}
+
+/// `studio_upgrade_receipt`'s and `attempt_by_receipt`'s SQL, against PostgreSQL.
+#[tokio::test]
+async fn receipt_upgrade_and_lookup() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::receipt_upgrade_and_lookup(&uow).await;
 }

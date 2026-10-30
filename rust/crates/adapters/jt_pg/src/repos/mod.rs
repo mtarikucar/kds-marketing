@@ -22,8 +22,10 @@
 mod agent_connections;
 pub(crate) mod api_keys;
 mod budget;
+pub(crate) mod calls;
 pub(crate) mod capabilities;
 mod consultation;
+mod devices;
 mod events;
 mod groups;
 mod hypotheses;

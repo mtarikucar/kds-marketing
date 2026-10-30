@@ -34,6 +34,19 @@ describe('HomePage', () => {
     expect(screen.getByRole('button', { name: tr.home.strategy.start })).toBeInTheDocument();
   });
 
+  it('treats a never-connected agent as a setup step, with the way to connect one', async () => {
+    mockFetch({
+      'GET /api/auth/me': me,
+      'GET /api/workspace': workspace,
+      'GET /api/work/pending': { ...pendingOverdue, agent: { last_seen_at: null, interval_minutes: 1440, overdue: true } },
+    });
+    renderAt('/');
+    const note = await screen.findByText(tr.home.agent.neverTitle);
+    expect(note.closest('[role="alert"]')).toBeNull();
+    expect(screen.queryByText(tr.home.agent.overdueTitle)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: tr.home.agent.connectLink })).toHaveAttribute('href', '/api-keys');
+  });
+
   it('warns in red when the agent is overdue, and lists each pending item in its own words', async () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': pendingOverdue });
     renderAt('/');
@@ -179,6 +192,51 @@ describe('HomePage', () => {
     expect(screen.queryByText('reconnect it')).not.toBeInTheDocument();
   });
 
+  it('voice_bridge_offline: names the silent bridge and opens the capabilities', async () => {
+    const offline = {
+      ...pendingOverdue,
+      items: [
+        {
+          kind: 'voice_bridge_offline' as const,
+          capability_id: PAGE_ID,
+          name: 'Voice bridge 101',
+          last_seen_at: '2026-10-22T08:00:00Z',
+          priority: 2,
+          hint: 'check the bridge',
+        },
+      ],
+    };
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': offline });
+    renderAt('/');
+    const text = await screen.findByText(i18n.t('home.pending.voice_bridge_offline', { name: 'Voice bridge 101' }));
+    const row = text.closest('li') as HTMLElement;
+    expect(within(row).getByRole('link', { name: tr.home.pending.open })).toHaveAttribute('href', '/capabilities');
+    expect(screen.queryByText('check the bridge')).not.toBeInTheDocument();
+  });
+
+  it('phone_offline: names the unlisted phone, never as a voice bridge, and opens the capabilities', async () => {
+    const offline = {
+      ...pendingOverdue,
+      items: [
+        {
+          kind: 'phone_offline' as const,
+          capability_id: PAGE_ID,
+          name: 'Redmi 10C (SER1)',
+          last_seen_at: '2026-10-22T08:00:00Z',
+          priority: 2,
+          hint: 'check the device bridge',
+        },
+      ],
+    };
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': offline });
+    renderAt('/');
+    const text = await screen.findByText(i18n.t('home.pending.phone_offline', { name: 'Redmi 10C (SER1)' }));
+    const row = text.closest('li') as HTMLElement;
+    expect(within(row).getByRole('link', { name: tr.home.pending.open })).toHaveAttribute('href', '/capabilities');
+    expect(screen.queryByText(i18n.t('home.pending.voice_bridge_offline', { name: 'Redmi 10C (SER1)' }))).not.toBeInTheDocument();
+    expect(screen.queryByText('check the device bridge')).not.toBeInTheDocument();
+  });
+
   it('shows the draft gaps and the version in force', async () => {
     const draft = {
       ...pendingOverdue,
@@ -189,7 +247,9 @@ describe('HomePage', () => {
     renderAt('/');
     expect(await screen.findByText(tr.home.strategy.draftTitle)).toBeInTheDocument();
     expect(screen.getByText(i18n.t('home.strategy.draftBody', { count: 1 }))).toBeInTheDocument();
-    expect(screen.getByText('the product is required')).toBeInTheDocument();
+    // The panel's own sentence, never the server's English message.
+    expect(screen.getByText(tr.strategy.gaps.product)).toBeInTheDocument();
+    expect(screen.queryByText('the product is required')).not.toBeInTheDocument();
     expect(screen.queryByText(tr.home.agent.overdueTitle)).not.toBeInTheDocument();
     expect(screen.getByText(tr.home.agent.onTime)).toBeInTheDocument();
   });

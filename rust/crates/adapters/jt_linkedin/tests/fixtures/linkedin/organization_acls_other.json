@@ -1,0 +1,27 @@
+{
+  "paging": {
+    "start": 0,
+    "count": 50,
+    "links": []
+  },
+  "elements": [
+    {
+      "role": "ADMINISTRATOR",
+      "organization": "urn:li:organization:90000002",
+      "roleAssignee": "urn:li:person:a1B2c3D4e5",
+      "state": "APPROVED"
+    },
+    {
+      "role": "ADMINISTRATOR",
+      "organization": "urn:li:organization:90000001",
+      "roleAssignee": "urn:li:person:a1B2c3D4e5",
+      "state": "REVOKED"
+    },
+    {
+      "role": "ANALYST",
+      "organization": "urn:li:organization:90000001",
+      "roleAssignee": "urn:li:person:a1B2c3D4e5",
+      "state": "APPROVED"
+    }
+  ]
+}

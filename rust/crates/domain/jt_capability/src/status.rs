@@ -81,20 +81,22 @@ impl EffectiveStatus {
 /// - `Verified` stays `Verified` while `now - last_verified_at` is at most
 ///   `policy.verify_max_age_days` days (a verification time ahead of `now` is fresh), and turns
 ///   `Stale` once it is older, or when there is no verification time at all;
-/// - a `verify_max_age_days` of 0 means a verification never goes stale.
+/// - a `verify_max_age_days` of 0 means a verification never goes stale;
+/// - for a kind verified by its heartbeat (the voice bridge, a phone), the heartbeat's
+///   `stale_after` takes the policy's place, 0 days included: `last_verified_at` is its last
+///   report.
 pub fn effective_status(c: &Capability, now: OffsetDateTime) -> EffectiveStatus {
     match c.status {
         StoredStatus::Declared => EffectiveStatus::Declared,
         StoredStatus::Unreachable => EffectiveStatus::Unreachable,
         StoredStatus::Retired => EffectiveStatus::Retired,
         StoredStatus::Verified => {
-            let max_age_days = c.policy.verify_max_age_days;
-            if max_age_days == 0 {
-                return EffectiveStatus::Verified;
-            }
-            let fresh = c
-                .last_verified_at
-                .is_some_and(|at| now - at <= Duration::days(i64::from(max_age_days)));
+            let max_age = match c.kind().and_then(|k| k.heartbeat()) {
+                Some(beat) => beat.stale_after,
+                None if c.policy.verify_max_age_days == 0 => return EffectiveStatus::Verified,
+                None => Duration::days(i64::from(c.policy.verify_max_age_days)),
+            };
+            let fresh = c.last_verified_at.is_some_and(|at| now - at <= max_age);
             if fresh {
                 EffectiveStatus::Verified
             } else {

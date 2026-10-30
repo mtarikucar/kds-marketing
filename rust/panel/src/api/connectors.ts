@@ -4,6 +4,8 @@ import type {
   ConnectorHealth,
   CredentialInput,
   HooksOut,
+  PbxPolicyInput,
+  PbxPolicyOut,
   PendingAssetsOut,
   ProbeOut,
   SetCredentialsInput,
@@ -15,6 +17,17 @@ import type {
 // (`connectorHooks`) are read by a query, but their URLs carry the workspace's hook tokens: the
 // one panel that reads them (`WebhookPanel`) asks with `staleTime: 0, gcTime: 0`, so they are
 // fetched afresh each time it shows and leave the cache as soon as it is gone.
+
+/**
+ * `PUT /api/connectors/{capability_id}/pbx-policy`: the NetGSM PBX's call mode and whether calls
+ * are recorded; a field left out keeps its value.
+ */
+export function setPbxPolicy(capabilityId: string, input: PbxPolicyInput): Promise<PbxPolicyOut> {
+  const body: Record<string, unknown> = {};
+  if (input.call_mode !== undefined) body.call_mode = input.call_mode;
+  if (input.recording_allowed !== undefined) body.recording_allowed = input.recording_allowed;
+  return request('PUT', `/api/connectors/${seg(capabilityId)}/pbx-policy`, { body });
+}
 
 /** `POST /api/connectors/oauth/start`: an OAuth flow for a Meta kind or `x`. */
 export function startOAuth(kindKey: string): Promise<StartOut> {

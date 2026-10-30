@@ -29,6 +29,18 @@ pub enum PublishOutcome {
 }
 
 impl PublishOutcome {
+    /// The provider's failure line a failed or uncertain outcome carries
+    /// (`details.provider_reason`, built by `usecases::failure`), kept on the attempt for the owner
+    /// beside the closed category, never as evidence.
+    pub fn failure_reason(&self) -> Option<String> {
+        match self {
+            Self::Failed(e) | Self::Unknown(e) | Self::Refused(e) => e.details["provider_reason"]
+                .as_str()
+                .filter(|r| !r.trim().is_empty())
+                .map(str::to_owned),
+            Self::Observed(_) | Self::Succeeded(_) => None,
+        }
+    }
     /// Retain only closed categories and public receipt fields, never diagnostic text.
     pub fn into_redacted(self) -> jt_studio::PublishOutcome {
         use jt_studio::PublishOutcome as O;
@@ -216,6 +228,25 @@ pub trait StudioRepo: Send + Sync {
         outcome: PublishOutcome,
         observed_at: OffsetDateTime,
     ) -> Result<(), AppError>;
+    /// The attempt of capability `capability` whose receipt, observed or settled (succeeded), is
+    /// `external_id` (a provider's id for the post: TikTok's publish id), in one read whatever
+    /// the number of slots; `None` when none is.
+    async fn attempt_by_receipt(
+        &mut self,
+        capability: jt_capability::CapabilityId,
+        external_id: &str,
+    ) -> Result<Option<PublishAttempt>, AppError>;
+    /// Upgrades succeeded attempt `attempt`, and its publication, to `receipt`, the public
+    /// receipt its provider named after the post was settled under a provisional one
+    /// (`PublishAttempt::upgrade_receipt`), writing `studio.publish.public_id` at `at`: `true`
+    /// when it changed; the same receipt again is `false` and writes nothing. Under the same locks
+    /// as [`StudioRepo::finish_publication`].
+    async fn upgrade_receipt(
+        &mut self,
+        attempt: PublishAttemptId,
+        receipt: PublishReceipt,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError>;
     async fn record_measurement(&mut self, measurement: Measurement) -> Result<bool, AppError>;
     async fn apply_learning(&mut self, update: LearningUpdate) -> Result<bool, AppError>;
 }
