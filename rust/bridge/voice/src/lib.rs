@@ -10,7 +10,7 @@
 //! - [`config`], [`cache`], [`trace`]: the environment, the phrase cache, the turn traces.
 //! - [`ari`], [`media`], [`speech`]: Asterisk's REST and events, `chan_websocket` media control,
 //!   the local speech services.
-//! - [`call`]: one call's task; [`slice`]: the standalone test call.
+//! - [`call`]: one call's task; [`slice`](mod@slice): the standalone test call.
 //!
 //! # Logging
 //!
