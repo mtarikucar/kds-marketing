@@ -108,7 +108,8 @@ impl ContentType {
 /// The loop hands each command its own transfer, which holds that command's signed download
 /// address, if it has one: a driver never sees the address, so it cannot leak it into a log or a
 /// failure's detail. A failed transfer is a [`FailReason::BridgeError`] whose detail names no
-/// address.
+/// address; a download Jeeta answers 404 (the file was deleted, or its address ran out) is a
+/// [`FailReason::FileNotFound`].
 #[async_trait]
 pub trait FileTransfer: Send + Sync {
     /// Uploads `bytes` (a screenshot, say) as a Jeeta file and answers its id.

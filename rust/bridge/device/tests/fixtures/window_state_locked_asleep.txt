@@ -1,0 +1,17 @@
+WINDOW MANAGER LAST ANR (dumpsys window lastanr)
+WINDOW MANAGER POLICY STATE (dumpsys window policy)
+      showing=true
+      interactiveState=INTERACTIVE_STATE_SLEEP
+WINDOW MANAGER ANIMATOR STATE (dumpsys window animator)
+WINDOW MANAGER SESSIONS (dumpsys window sessions)
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 rootTasks=5
+  mCurrentFocus=Window{5e1a7c2 u0 NotificationShade}
+    mAwake=false mScreenOnEarly=false mScreenOnFully=false
+    isKeyguardShowing=true
+WINDOW MANAGER TOKENS (dumpsys window tokens)
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+WINDOW MANAGER TRACE (dumpsys window trace)
+WINDOW MANAGER LOGGING (dumpsys window logging)
+WINDOW MANAGER HIGH REFRESH RATE BLACKLIST (dumpsys window refresh)
+WINDOW MANAGER CONSTANTS (dumpsys window constants):

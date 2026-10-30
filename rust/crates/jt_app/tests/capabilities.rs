@@ -357,21 +357,21 @@ async fn the_same_external_account_is_held_once_until_retired() {
 #[tokio::test]
 async fn list_and_get_compute_the_effective_status() {
     let w = world().await;
-    let phone = w.declare("phone", "Telefon").await.capability.id;
+    let computer = w.declare("computer", "Bilgisayar").await.capability.id;
     capabilities::verify(
         &w.deps,
         &w.owner_ctx,
-        phone,
+        computer,
         evidence("adb devices listed it", &[]),
     )
     .await
     .unwrap();
 
     let rep = w.member("rep").await;
-    let now = capabilities::get(&w.deps, &rep, phone).await.unwrap();
+    let now = capabilities::get(&w.deps, &rep, computer).await.unwrap();
     assert_eq!(now.effective_status, EffectiveStatus::Verified);
     // 30 days later still fresh, 31 days later stale; the stored status stays `verified`.
-    let fresh = capabilities::get(&w.deps, &at(&rep, days_later(30)), phone)
+    let fresh = capabilities::get(&w.deps, &at(&rep, days_later(30)), computer)
         .await
         .unwrap();
     assert_eq!(fresh.effective_status, EffectiveStatus::Verified);
@@ -390,7 +390,7 @@ async fn list_and_get_compute_the_effective_status() {
     assert_eq!(e.code, ErrorCode::NotFound);
     let auditor = w.agent(&["ledger.read"]).await;
     assert_forbidden(
-        &err(capabilities::get(&w.deps, &auditor, phone).await),
+        &err(capabilities::get(&w.deps, &auditor, computer).await),
         "workspace.read",
     );
     assert_forbidden(
@@ -403,9 +403,9 @@ async fn list_and_get_compute_the_effective_status() {
 async fn list_filters_by_group_kind_status_and_capability_group() {
     let w = world().await;
     let ig = w.declare("instagram", "Acme IG").await.capability.id;
-    let phone = w.declare("phone", "Telefon").await.capability.id;
+    let computer = w.declare("computer", "Bilgisayar").await.capability.id;
     let inbox = w.declare("mailbox", "Destek").await.capability.id;
-    capabilities::verify(&w.deps, &w.owner_ctx, phone, evidence("ok", &[]))
+    capabilities::verify(&w.deps, &w.owner_ctx, computer, evidence("ok", &[]))
         .await
         .unwrap();
     let group = groups::create(&w.deps, &w.owner_ctx, "Marka A".into(), None)
@@ -429,16 +429,16 @@ async fn list_filters_by_group_kind_status_and_capability_group() {
                 .collect::<Vec<_>>()
         }
     };
-    assert_eq!(ids(CapabilityQuery::default()).await, [ig, phone, inbox]);
+    assert_eq!(ids(CapabilityQuery::default()).await, [ig, computer, inbox]);
     let by = |group: Option<&str>, kind: Option<&str>, status: Option<&str>| CapabilityQuery {
         group: group.map(str::to_owned),
         kind: kind.map(str::to_owned),
         status: status.map(str::to_owned),
         group_id: None,
     };
-    assert_eq!(ids(by(None, Some("phone"), None)).await, [phone]);
+    assert_eq!(ids(by(None, Some("computer"), None)).await, [computer]);
     assert_eq!(ids(by(Some("messaging"), None, None)).await, [inbox]);
-    assert_eq!(ids(by(None, None, Some("verified"))).await, [phone]);
+    assert_eq!(ids(by(None, None, Some("verified"))).await, [computer]);
     assert_eq!(
         ids(by(Some("social_account"), None, Some("declared"))).await,
         [ig]
@@ -477,12 +477,18 @@ async fn list_filters_by_group_kind_status_and_capability_group() {
 #[tokio::test]
 async fn agent_can_verify_only_what_its_connection_declared() {
     let w = world().await;
-    // The agent declares its own phone and shell through its connection ...
+    // The agent declares its own computer and shell through its connection ...
     let declarer = w.agent(&["workspace.read", "capabilities.manage"]).await;
     let declare = |kind, name| capabilities::declare(&w.deps, &declarer, declaring(kind, name));
-    let phone = declare("phone", "Satış telefonu").await.unwrap().capability;
+    let computer = declare("computer", "Satış bilgisayarı")
+        .await
+        .unwrap()
+        .capability;
     let shell = declare("shell", "Kabuk").await.unwrap().capability;
-    assert_eq!(phone.declared_by_connection, declarer.agent_connection_id);
+    assert_eq!(
+        computer.declared_by_connection,
+        declarer.agent_connection_id
+    );
     assert!(declarer.agent_connection_id.is_some());
     // ... and a person's declaration names no connection.
     let printer = w.declare("printer", "Yazıcı").await.capability;
@@ -493,7 +499,7 @@ async fn agent_can_verify_only_what_its_connection_declared() {
         permissions: BTreeSet::from([Permission::WorkspaceRead]),
         ..declarer.clone()
     };
-    for id in [phone.id, shell.id] {
+    for id in [computer.id, shell.id] {
         let out = capabilities::verify(
             &w.deps,
             &agent,
@@ -536,7 +542,7 @@ async fn agent_can_verify_only_what_its_connection_declared() {
         ..declarer.clone()
     };
     assert_forbidden(
-        &err(capabilities::verify(&w.deps, &auditor, phone.id, evidence("x", &[])).await),
+        &err(capabilities::verify(&w.deps, &auditor, computer.id, evidence("x", &[])).await),
         "workspace.read",
     );
     assert_eq!(w.entries("capability.verify").len(), 2);
@@ -546,7 +552,7 @@ async fn agent_can_verify_only_what_its_connection_declared() {
 async fn another_agent_connection_needs_capabilities_manage() {
     let w = world().await;
     let declarer = w.agent(&["workspace.read", "capabilities.manage"]).await;
-    let phone = capabilities::declare(&w.deps, &declarer, declaring("phone", "Telefon"))
+    let computer = capabilities::declare(&w.deps, &declarer, declaring("computer", "Bilgisayar"))
         .await
         .unwrap()
         .capability
@@ -556,18 +562,18 @@ async fn another_agent_connection_needs_capabilities_manage() {
     let other = w.agent(&["workspace.read"]).await;
     assert_ne!(other.agent_connection_id, declarer.agent_connection_id);
     assert_forbidden(
-        &err(capabilities::verify(&w.deps, &other, phone, evidence("bende", &[])).await),
+        &err(capabilities::verify(&w.deps, &other, computer, evidence("bende", &[])).await),
         "capabilities.manage",
     );
     assert!(w.entries("capability.verify").is_empty());
-    let c = capabilities::get(&w.deps, &w.owner_ctx, phone)
+    let c = capabilities::get(&w.deps, &w.owner_ctx, computer)
         .await
         .unwrap();
     assert_eq!(c.capability.status, StoredStatus::Declared);
 
     // Another connection holding capabilities.manage may, as a person holding it may.
     let manager = w.agent(&["workspace.read", "capabilities.manage"]).await;
-    let out = capabilities::verify(&w.deps, &manager, phone, evidence("bende", &[]))
+    let out = capabilities::verify(&w.deps, &manager, computer, evidence("bende", &[]))
         .await
         .unwrap();
     assert_eq!(out.capability.status, StoredStatus::Verified);
@@ -581,14 +587,14 @@ async fn another_agent_connection_needs_capabilities_manage() {
 #[tokio::test]
 async fn a_person_verifies_only_with_capabilities_manage() {
     let w = world().await;
-    let phone = w.declare("phone", "Telefon").await.capability.id;
+    let computer = w.declare("computer", "Bilgisayar").await.capability.id;
     let rep = w.member("rep").await;
     assert_forbidden(
-        &err(capabilities::verify(&w.deps, &rep, phone, evidence("bende", &[])).await),
+        &err(capabilities::verify(&w.deps, &rep, computer, evidence("bende", &[])).await),
         "capabilities.manage",
     );
     let manager = w.member("manager").await;
-    let out = capabilities::verify(&w.deps, &manager, phone, evidence("bende", &[]))
+    let out = capabilities::verify(&w.deps, &manager, computer, evidence("bende", &[]))
         .await
         .unwrap();
     assert_eq!(out.capability.status, StoredStatus::Verified);
@@ -622,11 +628,12 @@ async fn connector_kind_cannot_be_verified_by_claim() {
 #[tokio::test]
 async fn verify_checks_the_evidence_and_refuses_a_retired_capability() {
     let w = world().await;
-    let phone = w.declare("phone", "Telefon").await.capability.id;
-    let e = err(capabilities::verify(&w.deps, &w.owner_ctx, phone, evidence("  ", &["  "])).await);
+    let computer = w.declare("computer", "Bilgisayar").await.capability.id;
+    let e =
+        err(capabilities::verify(&w.deps, &w.owner_ctx, computer, evidence("  ", &["  "])).await);
     assert_eq!(gap_fields(&e), ["evidence.text", "evidence.refs[0]"]);
-    retire(&w, phone).await;
-    let e = err(capabilities::verify(&w.deps, &w.owner_ctx, phone, evidence("ok", &[])).await);
+    retire(&w, computer).await;
+    let e = err(capabilities::verify(&w.deps, &w.owner_ctx, computer, evidence("ok", &[])).await);
     assert_eq!(e.code, ErrorCode::Conflict);
     assert_eq!(e.message, "capability is retired");
     let e = err(capabilities::verify(
@@ -917,7 +924,7 @@ async fn update_changes_only_the_named_fields_and_ledgers_them() {
                 daily_ops_cap: Some(40),
                 ..Policy::default()
             }),
-            ..declaring("phone", "Telefon")
+            ..declaring("computer", "Bilgisayar")
         },
     )
     .await
@@ -940,13 +947,13 @@ async fn update_changes_only_the_named_fields_and_ledgers_them() {
         &w.deps,
         &later,
         id,
-        edit(Some("  Saha telefonu  "), None, None),
+        edit(Some("  Saha bilgisayarı  "), None, None),
     )
     .await
     .unwrap();
     assert!(!out.verification_reset);
     let c = &out.current.capability;
-    assert_eq!(c.name, "Saha telefonu");
+    assert_eq!(c.name, "Saha bilgisayarı");
     assert_eq!(c.updated_at, days_later(1));
     assert_eq!(
         json_without(c, &["name", "updated_at"]),
@@ -955,13 +962,13 @@ async fn update_changes_only_the_named_fields_and_ledgers_them() {
     assert_eq!(out.current.effective_status, EffectiveStatus::Verified);
     let wire = serde_json::to_value(&out).unwrap();
     assert_eq!(wire["verification_reset"], false);
-    assert_eq!(wire["capability"]["name"], "Saha telefonu");
+    assert_eq!(wire["capability"]["name"], "Saha bilgisayarı");
     assert_eq!(wire["effective_status"], "verified");
     let entries = w.entries("capability.update");
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].payload,
-        json!({ "fields": ["name"], "name": "Saha telefonu" })
+        json!({ "fields": ["name"], "name": "Saha bilgisayarı" })
     );
     assert_eq!(entries[0].strategy_version_id, Some(version.as_uuid()));
     let subject = entries[0].subject.as_ref().unwrap();
@@ -1002,7 +1009,11 @@ async fn update_changes_only_the_named_fields_and_ledgers_them() {
         &w.deps,
         &at(&w.owner_ctx, days_later(2)),
         id,
-        edit(Some("Saha telefonu"), Some("yeni açıklama"), Some("SN-2")),
+        edit(
+            Some("Saha bilgisayarı"),
+            Some("yeni açıklama"),
+            Some("SN-2"),
+        ),
     )
     .await
     .unwrap();
@@ -1795,9 +1806,9 @@ async fn groups_are_named_uniquely_and_deleting_detaches_members() {
 async fn group_members_come_with_their_effective_status() {
     let w = world().await;
     let (d, o) = (&w.deps, &w.owner_ctx);
-    let phone = w.declare("phone", "Telefon").await.capability.id;
+    let computer = w.declare("computer", "Bilgisayar").await.capability.id;
     let ig = w.declare("instagram", "Acme IG").await.capability.id;
-    capabilities::verify(d, o, phone, evidence("ok", &[]))
+    capabilities::verify(d, o, computer, evidence("ok", &[]))
         .await
         .unwrap();
     let group = groups::create(d, o, "Saha".into(), None)
@@ -1805,7 +1816,7 @@ async fn group_members_come_with_their_effective_status() {
         .unwrap()
         .group
         .id;
-    groups::add_member(d, o, group, phone).await.unwrap();
+    groups::add_member(d, o, group, computer).await.unwrap();
     let out = groups::add_member(d, o, group, ig).await.unwrap();
     assert_eq!(out.members.len(), 2);
     // Adding again changes nothing.
@@ -1820,7 +1831,7 @@ async fn group_members_come_with_their_effective_status() {
         .map(|m| (m.capability.id, m.effective_status))
         .collect();
     let mut expected = vec![
-        (phone, EffectiveStatus::Stale),
+        (computer, EffectiveStatus::Stale),
         (ig, EffectiveStatus::Declared),
     ];
     expected.sort();

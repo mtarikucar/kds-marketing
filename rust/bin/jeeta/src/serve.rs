@@ -45,7 +45,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::config::{self, Bootstrap, Config};
-use crate::{connectors, scheduler};
+use crate::{connectors, net, scheduler};
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -434,7 +434,9 @@ fn panel_status(dir: Option<&Path>) -> String {
 
 /// Serves until SIGINT or SIGTERM (one received since `signals` were installed counts), then
 /// calls `on_signal` (which stops the scheduled jobs from starting new runs), stops accepting and
-/// lets open connections finish for at most [`DRAIN_TIMEOUT`].
+/// lets open connections finish for at most [`DRAIN_TIMEOUT`]. Every connection gives up a write
+/// its client has not taken for [`net::WRITE_TIMEOUT`] ([`net::TimedListener`]): a client that
+/// stopped reading does not keep its socket.
 async fn serve(
     listener: TcpListener,
     app: Router,
@@ -442,7 +444,7 @@ async fn serve(
     on_signal: impl FnOnce() + Send + 'static,
 ) -> Result<()> {
     let (stop, stopped) = oneshot::channel::<()>();
-    let server = axum::serve(listener, app)
+    let server = axum::serve(net::TimedListener::new(listener, net::WRITE_TIMEOUT), app)
         .with_graceful_shutdown(async move {
             // A dropped sender stops the server too.
             let _ = stopped.await;

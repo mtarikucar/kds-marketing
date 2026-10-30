@@ -20,8 +20,9 @@ const ADDED: [&str; 11] = [
     "platform.operators.reset_password",
 ];
 
-/// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan).
-const POST_M4_ADDED: [(&str, &str); 10] = [
+/// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
+/// device bridge's agent tools, D1-T6).
+const POST_M4_ADDED: [(&str, &str); 15] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -32,6 +33,11 @@ const POST_M4_ADDED: [(&str, &str); 10] = [
     ("calls.listen", "jeeta.calls.listen"),
     ("calls.say", "jeeta.calls.say"),
     ("calls.transfer", "jeeta.calls.transfer"),
+    ("devices.list", "jeeta.devices.list"),
+    ("devices.observe", "jeeta.devices.observe"),
+    ("devices.act", "jeeta.devices.act"),
+    ("devices.command_get", "jeeta.devices.command_get"),
+    ("devices.commands", "jeeta.devices.commands"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human

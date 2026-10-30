@@ -14,7 +14,7 @@ use jt_app::ports::UnitOfWork;
 use jt_app::ports::connectors::MediaUpload;
 use jt_app::ports::devices::{
     CommandStatus, DEFAULT_EXPIRES_IN, DeviceCommand, DeviceCommandRow, FailReason,
-    NewDeviceCommand, TEXT_UNICODE,
+    MAX_DEVICE_COMMAND_PAGE, NewDeviceCommand, TEXT_UNICODE,
 };
 use jt_app::ports::files::{ByteSource, FileMaintenance, FileStore, StoredFile};
 use jt_app::usecases::Deps;
@@ -116,6 +116,7 @@ fn register_in(phones: Vec<PhoneReport>) -> RegisterIn {
         version: "0.1.0".into(),
         protocol: 1,
         phones,
+        instance: None,
     }
 }
 
@@ -129,6 +130,48 @@ async fn register(
     bridge::register(&w.deps, &bridge_at(key, now), register_in(phones))
         .await
         .unwrap()
+}
+
+/// A registration of `phones` by run `instance` of the bridge of `key` at `now` (protocol 2; a
+/// run of protocol 1 says none), which must succeed.
+async fn register_as(
+    w: &World,
+    key: &AgentPrincipal,
+    now: OffsetDateTime,
+    instance: Option<Uuid>,
+    phones: Vec<PhoneReport>,
+) -> RegisterOut {
+    let body = RegisterIn {
+        instance,
+        ..register_in(phones)
+    };
+    bridge::register(&w.deps, &bridge_at(key, now), body)
+        .await
+        .unwrap()
+}
+
+/// A poll by run `instance` of the bridge of `key` at `now`, waiting up to `wait_s` seconds, in a
+/// task of its own.
+fn held_poll(
+    w: &World,
+    key: &AgentPrincipal,
+    now: OffsetDateTime,
+    instance: Option<Uuid>,
+    wait_s: u32,
+) -> tokio::task::JoinHandle<Vec<LeasedCommand>> {
+    let deps = w.deps.clone();
+    let caller = bridge_at(key, now);
+    tokio::spawn(async move {
+        let query = CommandsQuery {
+            wait_s,
+            limit: 20,
+            instance,
+        };
+        bridge::commands(&deps, &caller, query)
+            .await
+            .unwrap()
+            .commands
+    })
 }
 
 /// The capability of the `i`-th phone a registration registered.
@@ -199,7 +242,11 @@ async fn poll(
     bridge::commands(
         &w.deps,
         &bridge_at(key, now),
-        CommandsQuery { wait_s: 0, limit },
+        CommandsQuery {
+            wait_s: 0,
+            limit,
+            instance: None,
+        },
     )
     .await
     .unwrap()
@@ -258,6 +305,12 @@ async fn row(w: &World, id: Uuid) -> DeviceCommandRow {
 async fn stored(w: &World, id: CapabilityId) -> Capability {
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     r.capabilities().find(id).await.unwrap().unwrap()
+}
+
+/// What `devices.command.finished` carries as `result_sha256` for a command done with `result`:
+/// the hash of the result as the command keeps it.
+fn hash_of(result: &CommandResult) -> String {
+    bridge::result_sha256(&serde_json::to_value(result).unwrap())
 }
 
 /// The payloads of the workspace's `devices.command.finished` entries, oldest first.
@@ -339,7 +392,8 @@ async fn register_declares_phones_and_merges_facts() {
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
     let key = bridge_key(&w, "phones").await;
     let out = register(&w, &key, FIXED_NOW, vec![phone("SER1"), phone("SER2")]).await;
-    assert_eq!((out.heartbeat_s, out.max_wait_s, out.protocol), (15, 25, 1));
+    // The server's own protocol, whatever the bridge's.
+    assert_eq!((out.heartbeat_s, out.max_wait_s, out.protocol), (15, 25, 2));
     assert!(out.refused.is_empty());
     let serials: Vec<&str> = out.phones.iter().map(|p| p.serial.as_str()).collect();
     assert_eq!(serials, ["SER1", "SER2"]);
@@ -372,6 +426,8 @@ async fn register_declares_phones_and_merges_facts() {
         "protocol": 1,
         "listed_by": bridge,
         "listed": true,
+        // A bridge of protocol 1 names no run.
+        "instance": null,
     });
     assert_eq!(c.connector_public["device"], expected);
 
@@ -544,6 +600,7 @@ async fn bridge_key_only() {
                 CommandsQuery {
                     wait_s: 0,
                     limit: 1,
+                    instance: None,
                 },
             )
             .await),
@@ -591,6 +648,7 @@ async fn commands_long_poll_wakes_on_enqueue() {
             CommandsQuery {
                 wait_s: 5,
                 limit: 20,
+                instance: None,
             },
         )
         .await
@@ -627,6 +685,7 @@ async fn commands_long_poll_wakes_on_enqueue() {
         CommandsQuery {
             wait_s: 600,
             limit: 500,
+            instance: None,
         },
     )
     .await
@@ -723,8 +782,9 @@ async fn results_idempotent_and_ledgered() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": getprop, "kind": "shell", "status": "done", "reason": null, "duration_ms": 120, "leased_by": key.api_key_id.to_string() }),
-            json!({ "command_id": touch, "kind": "tap", "status": "failed", "reason": "adb_error", "duration_ms": 30, "leased_by": key.api_key_id.to_string() }),
+            json!({ "command_id": getprop, "kind": "shell", "status": "done", "reason": null, "duration_ms": 120, "leased_by": key.api_key_id.to_string(), "result_sha256": hash_of(&CommandResult::shell(0, b"Redmi 10C
+", b"")) }),
+            json!({ "command_id": touch, "kind": "tap", "status": "failed", "reason": "adb_error", "duration_ms": 30, "leased_by": key.api_key_id.to_string(), "result_sha256": null }),
         ]
     );
     let entries = w.entries("devices.command.finished");
@@ -762,7 +822,10 @@ async fn late_result_after_expiry_is_applied_and_ledgered_again() {
     assert_eq!(ids(&poll(&w, &key, later(1), 20).await), [id]);
     // The expiry sweep ends it while the bridge works on it (D1-T7's job ledgers that ending).
     let mut r = w.uow.tenant(w.ws).await.unwrap();
-    r.device_commands().expire_due(later(6)).await.unwrap();
+    r.device_commands()
+        .expire_due(later(6), MAX_DEVICE_COMMAND_PAGE)
+        .await
+        .unwrap();
     r.commit().await.unwrap();
     assert_eq!(row(&w, id).await.status, CommandStatus::Expired);
 
@@ -780,7 +843,7 @@ async fn late_result_after_expiry_is_applied_and_ledgered_again() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": id, "kind": "tap", "status": "done", "reason": null, "duration_ms": 42, "leased_by": key.api_key_id.to_string() })
+            json!({ "command_id": id, "kind": "tap", "status": "done", "reason": null, "duration_ms": 42, "leased_by": key.api_key_id.to_string(), "result_sha256": hash_of(&CommandResult::Done {}) })
         ]
     );
     // Once.
@@ -854,7 +917,7 @@ async fn push_file_gets_signed_download_url() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": lost, "kind": "push_file", "status": "failed", "reason": "file_not_found", "duration_ms": null, "leased_by": key.api_key_id.to_string() })
+            json!({ "command_id": lost, "kind": "push_file", "status": "failed", "reason": "file_not_found", "duration_ms": null, "leased_by": key.api_key_id.to_string(), "result_sha256": null })
         ]
     );
     // While the store cannot sign, the command is not handed out, and stays leased: its lease
@@ -1058,8 +1121,8 @@ async fn commands_rechecks_supports_at_lease_time() {
     assert_eq!(
         finished(&w),
         [
-            json!({ "command_id": getprop, "kind": "shell", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null }),
-            json!({ "command_id": unicode, "kind": "text", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null }),
+            json!({ "command_id": getprop, "kind": "shell", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null, "result_sha256": null }),
+            json!({ "command_id": unicode, "kind": "text", "status": "failed", "reason": "unsupported_by_bridge", "duration_ms": null, "leased_by": null, "result_sha256": null }),
         ]
     );
 }
@@ -1122,6 +1185,186 @@ async fn leases_follow_the_latest_register() {
         true
     );
     assert_eq!(ids(&poll(&w, &key, later(31), 20).await), [second]);
+}
+
+/// What a stopping bridge's last register (one that lists no phone) does, which its program relies
+/// on: a poll the server still holds for it (behind a proxy the server may not see the program go)
+/// leases nothing from then on, its phones read offline at once, and the phones another bridge
+/// holds are left as they are.
+#[tokio::test]
+async fn a_bridge_that_lists_no_phone_is_leased_nothing_and_leaves_other_bridges_alone() {
+    let w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let (a, b) = (bridge_key(&w, "pc-a").await, bridge_key(&w, "pc-b").await);
+    let mine = cap(&register(&w, &a, FIXED_NOW, vec![phone("SER1")]).await, 0);
+    let theirs = cap(&register(&w, &b, FIXED_NOW, vec![phone("SER2")]).await, 0);
+    let online = |c: &Capability| devices::agent::online(c, later(1));
+    assert!(online(&stored(&w, mine).await) && online(&stored(&w, theirs).await));
+
+    // Bridge B says goodbye: bridge A's phone is not B's to leave out.
+    register(&w, &b, later(1), Vec::new()).await;
+    assert!(online(&stored(&w, mine).await));
+    assert!(!online(&stored(&w, theirs).await));
+    assert_eq!(
+        stored(&w, theirs).await.connector_public["device"]["listed"],
+        false
+    );
+    let first = enqueue(&w, mine, tap(), expires()).await;
+    assert_eq!(ids(&poll(&w, &a, later(2), 20).await), [first]);
+    post(&w, &a, later(2), vec![done(first)]).await.unwrap();
+
+    // A poll of bridge A is held when A says goodbye; a command queued after is leased to nobody.
+    let deps = w.deps.clone();
+    let held_as = bridge_at(&a, later(3));
+    let held = tokio::spawn(async move {
+        bridge::commands(
+            &deps,
+            &held_as,
+            CommandsQuery {
+                wait_s: 2,
+                limit: 20,
+                instance: None,
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    register(&w, &a, later(3), Vec::new()).await;
+    assert!(!online(&stored(&w, mine).await));
+    let second = enqueue(&w, mine, tap(), expires()).await;
+    assert!(held.await.unwrap().unwrap().commands.is_empty());
+    assert_eq!(row(&w, second).await.status, CommandStatus::Queued);
+    // Registered again, A is handed it.
+    register(&w, &a, later(10), vec![phone("SER1")]).await;
+    assert_eq!(ids(&poll(&w, &a, later(10), 20).await), [second]);
+}
+
+/// A restarted bridge holds the same key: what tells its new run from the one that stopped is
+/// the run's instance (protocol 2). A poll the server still holds for the run that stopped
+/// leases nothing once the new run has listed the phone, goodbye or not.
+#[tokio::test]
+async fn a_poll_held_for_a_run_that_stopped_leases_nothing_once_the_next_run_registers() {
+    let w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let key = bridge_key(&w, "pc").await;
+    let (old, new) = (Some(Uuid::now_v7()), Some(Uuid::now_v7()));
+    let p = cap(
+        &register_as(&w, &key, FIXED_NOW, old, vec![phone("SER1")]).await,
+        0,
+    );
+    // The old run's poll is held; the run stops (its goodbye) and the next one registers and
+    // polls while the old poll is still held.
+    let ghost = held_poll(&w, &key, later(1), old, 3);
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    register_as(&w, &key, later(1), old, Vec::new()).await;
+    register_as(&w, &key, later(2), new, vec![phone("SER1")]).await;
+    let fresh = held_poll(&w, &key, later(2), new, 3);
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    let id = enqueue(&w, p, tap(), expires()).await;
+    assert_eq!(ids(&fresh.await.unwrap()), [id]);
+    assert!(ghost.await.unwrap().is_empty());
+    assert_eq!(
+        stored(&w, p).await.connector_public["device"]["instance"],
+        json!(new.unwrap())
+    );
+
+    // A run that crashed says no goodbye: its poll is leased nothing all the same once the next
+    // run listed the phone.
+    let second = enqueue(&w, p, tap(), expires()).await;
+    assert!(
+        held_poll(&w, &key, later(5), old, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(row(&w, second).await.status, CommandStatus::Queued);
+    assert_eq!(
+        ids(&held_poll(&w, &key, later(5), new, 0).await.unwrap()),
+        [second]
+    );
+}
+
+/// Two runs of one bridge at once (one starting while the other stops): the latest to list a
+/// phone holds it, and the other's registers, its goodbye included, leave it listed.
+#[tokio::test]
+async fn a_runs_goodbye_leaves_the_phones_another_run_listed_since() {
+    let w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let key = bridge_key(&w, "pc").await;
+    let (old, new) = (Some(Uuid::now_v7()), Some(Uuid::now_v7()));
+    let out = register_as(&w, &key, FIXED_NOW, old, vec![phone("SER1"), phone("SER2")]).await;
+    let (one, two) = (cap(&out, 0), cap(&out, 1));
+    // The new run sees SER1 only, so far.
+    register_as(&w, &key, later(1), new, vec![phone("SER1")]).await;
+    // The old run's goodbye leaves out what it listed last (SER2), not SER1.
+    register_as(&w, &key, later(2), old, Vec::new()).await;
+    let listed = |c: &Capability| c.connector_public["device"]["listed"].clone();
+    assert_eq!(listed(&stored(&w, one).await), true);
+    assert!(devices::agent::online(&stored(&w, one).await, later(2)));
+    assert_eq!(listed(&stored(&w, two).await), false);
+    // The new run is handed SER1's commands; the old run none.
+    let id = enqueue(&w, one, tap(), expires()).await;
+    assert!(
+        held_poll(&w, &key, later(3), old, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        ids(&held_poll(&w, &key, later(3), new, 0).await.unwrap()),
+        [id]
+    );
+}
+
+/// A bridge of protocol 1 says no instance: its registers and polls work as they did, and a
+/// phone it listed last is leased to any poll of its key.
+#[tokio::test]
+async fn runs_that_do_not_say_which_they_are_work_as_before() {
+    let w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let key = bridge_key(&w, "pc").await;
+    let p = cap(
+        &register_as(&w, &key, FIXED_NOW, None, vec![phone("SER1")]).await,
+        0,
+    );
+    assert_eq!(
+        stored(&w, p).await.connector_public["device"]["instance"],
+        Value::Null
+    );
+    let first = enqueue(&w, p, tap(), expires()).await;
+    assert_eq!(
+        ids(&held_poll(&w, &key, later(1), None, 0).await.unwrap()),
+        [first]
+    );
+    post(&w, &key, later(1), vec![done(first)]).await.unwrap();
+    // Upgraded: a run that says which it is lists the phone, and from then on holds it.
+    let run = Some(Uuid::now_v7());
+    register_as(&w, &key, later(2), run, vec![phone("SER1")]).await;
+    let second = enqueue(&w, p, tap(), expires()).await;
+    assert!(
+        held_poll(&w, &key, later(3), None, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        ids(&held_poll(&w, &key, later(3), run, 0).await.unwrap()),
+        [second]
+    );
+    post(&w, &key, later(3), vec![done(second)]).await.unwrap();
+    // Downgraded again: the run that does not say lists the phone, and any poll takes it.
+    register_as(&w, &key, later(4), None, vec![phone("SER1")]).await;
+    let third = enqueue(&w, p, tap(), expires()).await;
+    assert_eq!(
+        ids(&held_poll(&w, &key, later(5), run, 0).await.unwrap()),
+        [third]
+    );
+    // And a register that does not say leaves the phone out as before.
+    register_as(&w, &key, later(6), None, Vec::new()).await;
+    assert_eq!(
+        stored(&w, p).await.connector_public["device"]["listed"],
+        false
+    );
 }
 
 #[tokio::test]
@@ -1203,6 +1446,8 @@ async fn result_with_a_foreign_file_id_is_refused() {
                     rotation: 0,
                 },
                 foreground_app: Some("com.android.launcher3".into()),
+                awake: None,
+                locked: None,
                 elements: Vec::new(),
                 truncated: false,
                 screenshot_file_id: Some(screenshot_file_id),

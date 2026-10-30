@@ -1,6 +1,7 @@
 //! Capabilities, their groups and the budget on the panel, end to end through Postgres: an owner
-//! declares, groups, links, spends and retires; a rep only reads; an agent verifies its own phone
-//! over MCP and the panel shows it verified; a workspace awaiting payment is locked out.
+//! declares, groups, links, spends and retires; a rep only reads; an agent verifies its own
+//! computer over MCP and the panel shows it verified (a phone is verified only by its bridge's
+//! registrations); a workspace awaiting payment is locked out.
 
 use std::sync::Arc;
 
@@ -538,16 +539,16 @@ async fn issue_key(p: &Panel, owner: &str, name: &str, scopes: &[&str]) -> Strin
 }
 
 #[tokio::test]
-async fn agent_verifies_a_phone_over_mcp_and_panel_shows_verified() {
+async fn agent_verifies_a_computer_over_mcp_and_panel_shows_verified() {
     let p = Panel::new().await;
     let (owner, _) = p.register(OWNER, "Alpha").await;
 
     // The owner issues the agent a key that may declare capabilities; the agent declares the
-    // phone it holds through its connection.
+    // computer it holds through its connection.
     let key = issue_key(
         &p,
         &owner,
-        "telefon ajanı",
+        "bilgisayar ajanı",
         &["workspace.read", "capabilities.manage"],
     )
     .await;
@@ -558,18 +559,18 @@ async fn agent_verifies_a_phone_over_mcp_and_panel_shows_verified() {
         &key,
         &session,
         "jeeta.capability.declare",
-        json!({ "kind_key": "phone", "name": "Saha telefonu" }),
+        json!({ "kind_key": "computer", "name": "Saha bilgisayarı" }),
     )
     .await;
     assert_ne!(declared["isError"], json!(true), "{declared}");
-    let phone = declared["structuredContent"]["capability"]["id"]
+    let computer = declared["structuredContent"]["capability"]["id"]
         .as_str()
         .unwrap()
         .to_owned();
     assert!(declared["structuredContent"]["capability"]["declared_by_connection"].is_string());
 
     // A key that may only read the workspace, on a connection of its own: it may not declare,
-    // nor verify a phone another connection declared.
+    // nor verify a computer another connection declared.
     let reader = issue_key(&p, &owner, "okuyucu", &["workspace.read"]).await;
     let reader_session = mcp_session(&app, &reader).await;
     let refused = call_tool(
@@ -587,7 +588,7 @@ async fn agent_verifies_a_phone_over_mcp_and_panel_shows_verified() {
         &reader,
         &reader_session,
         "jeeta.capability.verify",
-        json!({ "capability_id": phone, "evidence": { "text": "bende" } }),
+        json!({ "capability_id": computer, "evidence": { "text": "bende" } }),
     )
     .await;
     assert_eq!(refused["isError"], json!(true), "{refused}");
@@ -596,24 +597,28 @@ async fn agent_verifies_a_phone_over_mcp_and_panel_shows_verified() {
         json!({ "permission": "capabilities.manage" })
     );
 
-    // The declaring agent proves the phone is in its hands: its claim, recorded as given.
+    // The declaring agent proves the computer is in its hands: its claim, recorded as given.
     let evidence = json!({
-        "text": "adb devices listed the phone and a test SMS was sent",
-        "refs": ["serial:R58M12345", "screenshot:0f3a"],
+        "text": "ssh reached the computer and uname answered",
+        "refs": ["serial:PC-12345", "screenshot:0f3a"],
     });
     let result = call_tool(
         &app,
         &key,
         &session,
         "jeeta.capability.verify",
-        json!({ "capability_id": phone, "evidence": evidence }),
+        json!({ "capability_id": computer, "evidence": evidence }),
     )
     .await;
     assert_ne!(result["isError"], json!(true), "{result}");
     assert_eq!(result["structuredContent"]["effective_status"], "verified");
 
-    // The panel shows the phone verified, with the agent's evidence.
-    let got = ok_json(p.get(&format!("/api/capabilities/{phone}"), &owner).await).await;
+    // The panel shows the computer verified, with the agent's evidence.
+    let got = ok_json(
+        p.get(&format!("/api/capabilities/{computer}"), &owner)
+            .await,
+    )
+    .await;
     assert_eq!(got["effective_status"], "verified");
     assert_eq!(got["capability"]["status"], "verified");
     assert_eq!(got["capability"]["evidence"], evidence);

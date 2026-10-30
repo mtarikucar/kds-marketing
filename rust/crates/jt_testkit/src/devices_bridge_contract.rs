@@ -70,6 +70,7 @@ async fn register(d: &Deps, b: &BridgeCaller, serials: &[&str]) -> RegisterOut {
         version: "0.1.0".into(),
         protocol: 1,
         phones: serials.iter().map(|s| phone(s)).collect(),
+        instance: None,
     };
     bridge::register(d, b, input).await.unwrap()
 }
@@ -111,6 +112,7 @@ async fn poll(d: &Deps, b: &BridgeCaller) -> Vec<Uuid> {
     let query = CommandsQuery {
         wait_s: 0,
         limit: 20,
+        instance: None,
     };
     let out = bridge::commands(d, b, query).await.unwrap();
     out.commands.iter().map(|c| c.id).collect()

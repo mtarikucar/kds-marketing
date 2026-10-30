@@ -233,6 +233,120 @@ async fn a_streamed_file_is_hashed_as_it_comes_and_linked_whole() {
     );
     std::fs::remove_dir_all(p).unwrap();
 }
+#[tokio::test]
+async fn a_large_file_is_served_a_chunk_at_a_time() {
+    use futures_util::StreamExt;
+    use jt_files::READ_CHUNK;
+    use jt_testkit::fakes::files::Chunks;
+    use tower::ServiceExt;
+    let p = root();
+    let ws = WorkspaceId::new_v7();
+    let d = Arc::new(disk(&p));
+    // A pulled file of a mebibyte and a bit, uploaded in 256 KiB parts.
+    let bytes: Vec<u8> = (0..(1024 * 1024 + 5)).map(|i| (i % 251) as u8).collect();
+    let id = FileId::new_v7();
+    let mut source = Chunks(bytes.chunks(256 * 1024).map(<[u8]>::to_vec).collect());
+    d.put_stream(
+        ws,
+        id,
+        "application/octet-stream",
+        "pulled.bin",
+        &mut source,
+    )
+    .await
+    .unwrap();
+
+    // Read as a stream: never more than READ_CHUNK bytes at a time, the whole file in the end.
+    let mut opened = d.read_stream(ws, id).await.unwrap();
+    assert_eq!(opened.mime, "application/octet-stream");
+    assert_eq!(opened.size_bytes, bytes.len() as u64);
+    let (mut read, mut chunks) = (Vec::new(), 0);
+    while let Some(chunk) = opened.bytes.next_chunk().await.unwrap() {
+        assert!(chunk.len() <= READ_CHUNK, "{}", chunk.len());
+        read.extend_from_slice(&chunk);
+        chunks += 1;
+    }
+    assert!(chunks > bytes.len() / READ_CHUNK, "{chunks}");
+    assert_eq!(read, bytes);
+    // An empty file streams too: no chunk, its hash checked.
+    let empty = FileId::new_v7();
+    d.put_stream(
+        ws,
+        empty,
+        "application/octet-stream",
+        "empty.bin",
+        &mut Chunks(Default::default()),
+    )
+    .await
+    .unwrap();
+    let mut opened = d.read_stream(ws, empty).await.unwrap();
+    assert_eq!(opened.size_bytes, 0);
+    assert_eq!(opened.bytes.next_chunk().await.unwrap(), None);
+    // A file that is not there is NOT_FOUND.
+    let e = d.read_stream(ws, FileId::new_v7()).await.err().unwrap();
+    assert_eq!(e.code, jt_app::error::ErrorCode::NotFound);
+    // Whether a file is stored is read from its header: another workspace has none of it.
+    assert!(d.exists(ws, id).await.unwrap());
+    assert!(!d.exists(ws, FileId::new_v7()).await.unwrap());
+    assert!(!d.exists(WorkspaceId::new_v7(), id).await.unwrap());
+
+    // Served the same way: the body is a stream, not bytes held whole (it does not know its own
+    // length, which the response announces), arriving in chunks of at most READ_CHUNK bytes.
+    let url = d
+        .provider_url(ws, id, FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap();
+    let app = jt_files::router(d.clone(), Arc::new(FixedClock(FIXED_NOW)), [42; 32]);
+    let get = || {
+        axum::http::Request::get(format!("{}?{}", url.path(), url.query().unwrap()))
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+    let response = app.clone().oneshot(get()).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let length = bytes.len().to_string();
+    assert_eq!(response.headers()["content-length"], length.as_str());
+    assert_eq!(
+        response.headers()["content-type"],
+        "application/octet-stream"
+    );
+    assert_eq!(response.headers()["cache-control"], "private, no-store");
+    let body = response.into_body();
+    assert_eq!(axum::body::HttpBody::size_hint(&body).exact(), None);
+    let mut stream = body.into_data_stream();
+    let (mut served, mut frames) = (Vec::new(), 0);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.unwrap();
+        assert!(chunk.len() <= READ_CHUNK, "{}", chunk.len());
+        served.extend_from_slice(&chunk);
+        frames += 1;
+    }
+    assert!(frames > 1, "{frames}");
+    assert_eq!(served, bytes);
+
+    // A file whose bytes changed on disk is cut off before its last chunk: never served whole.
+    let path = p.join(ws.to_string()).join(id.to_string());
+    let mut stored = std::fs::read(&path).unwrap();
+    let at = stored.len() - 200_000;
+    stored[at] ^= 0xff;
+    std::fs::write(&path, &stored).unwrap();
+    let response = app.oneshot(get()).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let (mut got, mut failed) = (0, false);
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(chunk) => got += chunk.len(),
+            Err(_) => {
+                failed = true;
+                break;
+            }
+        }
+    }
+    assert!(failed);
+    assert!(got < bytes.len(), "{got}");
+    std::fs::remove_dir_all(p).unwrap();
+}
 /// A first chunk, then an error.
 struct FailsAfterOne {
     sent: bool,

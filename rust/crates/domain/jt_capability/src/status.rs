@@ -82,8 +82,9 @@ impl EffectiveStatus {
 ///   `policy.verify_max_age_days` days (a verification time ahead of `now` is fresh), and turns
 ///   `Stale` once it is older, or when there is no verification time at all;
 /// - a `verify_max_age_days` of 0 means a verification never goes stale;
-/// - for a kind verified by its heartbeat (the voice bridge), the heartbeat's `stale_after` takes
-///   the policy's place, 0 days included: `last_verified_at` is its last report.
+/// - for a kind verified by its heartbeat (the voice bridge, a phone), the heartbeat's
+///   `stale_after` takes the policy's place, 0 days included: `last_verified_at` is its last
+///   report.
 pub fn effective_status(c: &Capability, now: OffsetDateTime) -> EffectiveStatus {
     match c.status {
         StoredStatus::Declared => EffectiveStatus::Declared,
