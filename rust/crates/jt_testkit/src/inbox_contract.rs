@@ -1736,6 +1736,12 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
             ErrorCode::Internal,
         ),
     ] {
+        // A new item each time: PostgreSQL checks foreign keys after the primary key, so a
+        // reused id would answer CONFLICT before the reference is looked at.
+        let broken = PublicItem {
+            id: PublicItemId::new_v7(),
+            ..broken
+        };
         let mut t = uow.tenant(f.ws).await.unwrap();
         let e = t.public_items().insert(broken.clone()).await.unwrap_err();
         assert_eq!(e.code, code, "{}", broken.external_id);
