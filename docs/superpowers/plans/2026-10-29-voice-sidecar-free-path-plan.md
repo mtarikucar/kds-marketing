@@ -6272,7 +6272,7 @@ Expected: `srw-rw---- 1 jeeta-voice-speak jeeta-voice … speak.sock`; the journ
 - I1, digits: while the words end in numbers being read out, Smart Turn's "complete" is not taken (a digit group sounds finished) and only 2.8 s of silence ends the turn. `dictating` widened: the last word a number word and two of the last three number words, or four or more in the turn, so one misheard digit does not end it. A separate, shorter hold after a "complete" (1.8 s) was considered and not taken: the digits fixture's groups are 2 s apart, as a number read from a card can be, and one rule is one knob (`LISTEN_DIGITS_FALLBACK_MS`). Tests: four digit groups under a turn model that always says complete are one final; the `digits` fixture at the default threshold is one final. The cost: an answer that ends in two number words ("saat on dört") waits about 2.8 s (design §10).
 - I2: a failure while processing audio is answered `error{failed}` and then `unheard{audio_ms}` when a turn was open toward the bridge (a `speech_start` out and no final, or the endpointer mid-turn), so the talker asks again instead of waiting.
 - I3: the echo guard outlasts `playback{false}` by `guard_tail_ms` = 400 of audio (`LISTEN_GUARD_TAIL_MS`, 200-800), the line's echo of the last sound; playing again within the tail keeps it; a second stop does not stretch it. B7 records the guarded barge-in against the 300 ms alert.
-- I4: listen's socket moved into a directory of its own, `/run/jeeta-voice/listen` (0710 `jeeta-voice-svc:jeeta-voice`, tmpfiles), mounted alone into the listen container: the group (speak, the bridge) may reach the socket but create nothing there, and listen no longer sees speak's socket. Tried locally: uid 1502 with speak's mount of `/run/jeeta-voice` could not list, create or bind in `listen/` (Permission denied), and connected (`health=0`). Speak keeps its place in the shared sticky directory for now (it is deployed; it moves with B5). B5's `speech::connect` now checks the peer's uid (listen 1501, speak 1502) and refuses `WrongPeer`. A socket path held by another user, or by something that is not a socket, ends listen once with status 78, which the unit does not restart (`RestartPreventExitStatus=78`): the unit fails and the alert fires instead of a restart loop.
+- I4: listen's socket moved into a directory of its own, `/run/jeeta-voice/listen` (0710 `jeeta-voice-svc:jeeta-voice`, tmpfiles), mounted alone into the listen container: the group (speak, the bridge) may reach the socket but create nothing there, and listen no longer sees speak's socket. Tried locally: uid 1502 with speak's mount of `/run/jeeta-voice` could not list, create or bind in `listen/` (Permission denied), and connected (`health=0`). Speak keeps its place in the shared sticky directory for now (it is deployed; it moves in D3's Step 2b, as the B5 review placed it). B5's `speech::connect` now checks the peer's uid (listen 1501, speak 1502) and refuses `WrongPeer`. A socket path held by another user, or by something that is not a socket, ends listen once with status 78, which the unit does not restart (`RestartPreventExitStatus=78`): the unit fails and the alert fires instead of a restart loop.
 - M1: a segment's end is the audio it was given, so the 30 s cut decodes no frame twice; the cut stays `endpoint_by: "fallback"`: B5's `Heard::Final` reads `jt_calls::EndpointBy`, which has two kinds, and a final the bridge cannot parse would be dropped whole (a third kind means jt_calls, the core's trace and the panel).
 - M2: a stream whose hotwords the recognizer refuses goes without them; hotwords are given up only after three refusals.
 - M3: hotwords are NFC-composed first; a Linux test pushes 300 rounds of random strings of the model's letters and sherpa-onnx's special characters through `clean` and a real biased stream: native stdout and stderr stay empty.
@@ -9270,7 +9270,7 @@ impl Pacer {
 }
 ```
 
-`pad_to_frames` stays for its callers, but B6 no longer pads before the pacer: the pacer pads at the sentence's end.
+B6 deletes `pad_to_frames` and `MAX_MESSAGE_BYTES` when it wires the pacer in (B5 review): the pacer pads at the sentence's end and writes one whole frame per message.
 
 `rust/bridge/voice/tests/pacer.rs`:
 
@@ -9647,9 +9647,32 @@ git commit -m "feat(voice-bridge): configuration, phrase cache, turn traces, ARI
   - Docs only: `config.rs` lists every variable and its default, each public item has a doc line, and `lib.rs`'s Logging paragraph names `speech::Heard` (no word) and `config::Config` (no key, no password).
 - No manifest change: B4's `Cargo.toml` already holds every dependency B5 uses.
 - B5 makes no log call yet, and `tests/logging.rs` passes on the six new files. `AriEvent` and `MediaEvent` keep their derived `Debug`, which holds the key pressed, as `tests/logging.rs` expects: its `?` rule keeps them out of the logs.
-- Not done here: design §2 and the B3 review (I4) say speak's socket moves to a directory of its own "with B5". B5's steps have no such step, and D2's `bridge.env.example` keeps `SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock`, the config's default. The move is server work (speak's unit, tmpfiles, its mount and its tests), so it stays open for the coordinator. Until then the bridge finds speak through `SPEAK_SOCKET`, and the peer check (uid 1502) holds.
+- Not done here: design §2 and the B3 review (I4) say speak's socket moves to a directory of its own "with B5". B5's steps have no such step, and D2's `bridge.env.example` keeps `SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock`, the config's default. The move is server work (speak's unit, tmpfiles, its mount and its tests); the B5 review made it D3's Step 2b. Until then the bridge finds speak through `SPEAK_SOCKET`, and the peer check (uid 1502) holds.
 - Carried over from B4's re-review (commit `a2aaa925`): the talker's docs and design §3 said the fault sentence waits "3 s at most". In fact `start_next` starts nothing while the caller speaks. So the sentence waits for the caller's pause (200 ms of silence). In a pause of an open turn, it waits for the turn to close, until `FAULT_WAIT_MS` after the loss; after that it starts at the next pause. A caller who never pauses holds it back until the listener's 30 s cut. The behaviour stays (playing over a talking caller is worse). The docs now say so, and `the_fault_sentence_waits_for_the_callers_pause_past_three_seconds` pins it.
 - Checks on Windows: `cargo test -p jeeta-voice-bridge` gives adapters 9, g711 5, logging 3, netgsm 4, pacer 7, redaction 4, talker 27 and text 11 (70). Clippy (`--all-targets -D warnings`), `cargo fmt --all -- --check` and `cargo doc --no-deps` (`-D warnings`) are clean. On Linux (CI on PR #382, run 40963551097), `rust-checks` (fmt, workspace clippy, doc, deny) and `rust-test` pass, with adapters 10 (the unix peer test included) and the same counts otherwise (71).
+
+**B5 review (2026-10-30): what changed.** Spec ✅. Each code fix began with a failing test (commit `4d2badf5`). The plan text of B6, D2 and D3 and design §2 and §3 were corrected in the same round, so later tasks keep the fixes. The committed files supersede Steps 1 to 4 above.
+- I1, the phrase cache wrote and renamed without a sync, and every writer used the same `{k}.tmp`. After a crash an empty or short `{k}.pcm` was a hit for good: the opening or the notice "played" as nothing, and `said` was reported. Two writers (`run` and a `slice`) could also rename each other's half-written file. Now each write has a temporary name of its own (pid and a counter), is written whole and synced, then renamed. An empty or odd-length file is a miss, and is removed. Tests: `an_empty_or_odd_file_on_disk_is_a_miss_and_is_removed`, `a_writer_never_touches_another_writers_temporary_file` (another writer's `{k}.tmp` survives a put).
+- I2, nothing bounded a connect but the hello's 2 s. A service that took the connection and never answered the WebSocket handshake held the call's media back (no RTP at all on 22.9+) until its watchdog, and `check` hung. `speech::connect` (connection, peer check, handshake) and ARI's WebSockets (events, media) now give up after `CONNECT_WAIT`, 2 s; `connect_speaker` then waits 2 s for the hello. Tests in the new `tests/connect.rs`, with a listener that never accepts: unreachable in 2 s, where the old code hung.
+- I3 is B6's plan text: the media is paced by a task of its own, ARI during the call is spawned, and reports go with `try_send` (B6, "The call's loop never waits on the line").
+- M4: `MAX_OWED_FRAMES` is `LEAD_FRAMES`. Owing more than the lead means Asterisk ran dry, and it does not skip ahead, so the old catch-up of up to 6 frames stayed queued in it for the rest of the call. Test: `a_stall_past_the_lead_writes_the_lead_again_not_a_catch_up`. The review expected the seven earlier tests to pass unchanged; one did not. `silence_flows_from_media_start_one_frame_per_20_ms` stepped 80 ms at once, owing 4 frames with a lead of 3, which is a stall under the new rule. It now steps within the lead (60 ms, then 20).
+- M5: a `MEDIA_START` without `format` or `optimal_frame_size` is `Other`, no longer A-law guessed as μ-law at 160 bytes. `ptime` is passed on as `ptime_ms`, and B6 accepts only 160-byte frames with a ptime of 20 or none. Test: `a_media_start_without_its_codec_or_frame_is_no_start`.
+- M6: endpoints follow the speech services' own `parse_endpoint`: `unix:/abs` or `/abs`, or `tcp:` with a loopback host (`127.0.0.1`, `::1`, `localhost`) and a port. Port 0 is refused too (no port to connect to), and an IPv6 host is kept in brackets. TCP has no peer check, which the docs say: it is for tests and development only.
+- M7: the hello must name `sample_rate` 8000 and `format` `pcm16le` (`speech::SAMPLE_RATE`, `PCM_FORMAT`), else `NoHello`.
+- M8: a variable set to nothing is unset. Timings must be ack < filler < long wait < 20 000 ms (`ConfigError::Order`, `TooLarge`), and the phrase gap below 2 000 ms. "Still there" must be below 15 000 ms too: the same class, since the core closes a silent call at 15 s. Tests: defaults (speak, cache, trace, extension), empty values, `Missing`, `Invalid`, both orders, every limit and its edge.
+- M9: a trace line and its newline go in one write. With `writeln!`, concurrent appends kept 913 of 1 600 lines whole on Windows (`concurrent_appends_keep_every_line_whole`). The file's rotation is D3's (Step 2b).
+- M10: `PhraseCache::put(voice, text, pcm, persist)` returns the disk's error, the sentence kept in memory (B6 logs it once a call). Audio of a voice that is not the cache's is dropped, so a late pre-synthesis after the speak service was replaced is not filed under the new voice.
+- M11: `Ari::new` returns `AriError::Client` when its client cannot be built, instead of a client without its 5 s timeout. B6's slice and check, and D2's `run`, handle the error. B6 hangs the id up after any `originate` error.
+- M12: PCM16 of an odd length is a protocol error: a cache miss here. In B6 it stops pre-synthesis and fails the live synthesis (cancelled, drained, marked).
+- B6's other fixes, all in its plan text:
+  - The listener and the speaker connect before `external_media`.
+  - `run_call` ends by hanging up the caller's channel too.
+  - `pad_to_frames` and `MAX_MESSAGE_BYTES` go when the pacer is wired.
+  - `ToCall` takes `#[expect(clippy::large_enum_variant)]`, as `jt_calls::Command` does: the draft failed clippy.
+  - B6's code (`call.rs`, `slice.rs`, `main.rs`, its test and support, Step 1's changes) was checked in a throwaway build that was never committed. It compiles, B6's call test passes in about 2 s, `logging` passes over the three new sources, and clippy and doc are clean.
+- Speak's socket: design §2 said it moves "with B5". The move is now D3's Step 2b: the tmpfiles line, speak's unit and image test, listen's tmpfiles test, `DEFAULT_SOCKET`, the config default and `bridge.env.example` change together. D3's server step moves it and checks it with B2's `stat` before the bridge first starts.
+- Test gaps closed: `read_traces`' `since` and its unreadable lines, the audio clock's one-minute eviction, `Heard::Partial`'s `Debug`, the config defaults and `Invalid`, and a `ChannelStateChange` that is not `Ringing`.
+- Checks after the round, on Windows: `cargo test -p jeeta-voice-bridge` gives adapters 18, connect 3, g711 5, logging 3, netgsm 4, pacer 8, redaction 4, talker 27 and text 11 (83). Clippy (`--all-targets -D warnings`), fmt and doc (`-D warnings`) are clean. On Linux, `connect` also runs the unix peer test.
 
 
 ### Task B6: One call's task, and the standalone `slice`
@@ -9661,11 +9684,12 @@ git commit -m "feat(voice-bridge): configuration, phrase cache, turn traces, ARI
 - Create: `rust/bridge/voice/tests/support/mod.rs`
 - Create: `rust/bridge/voice/tests/call.rs`
 - Modify: `rust/bridge/voice/src/ari.rs` (a separate WebSocket base for tests)
+- Modify: `rust/bridge/voice/src/media.rs` (`pad_to_frames` and `MAX_MESSAGE_BYTES` go: the pacer writes one whole frame per message)
 - Modify: `rust/bridge/voice/src/lib.rs`
 
 - [ ] **Step 1: Let ARI's WebSocket base be set apart (tests serve REST and WebSocket on two ports)**
 
-In `ari.rs`, add a field `ws_base: String` to `Ari`, set it in `new` to `base.trim_end_matches('/').replacen("http", "ws", 1)`, replace the body of `fn ws_base(&self)` with `self.ws_base.clone()`, and add:
+In `ari.rs`, add a field `ws_base: String` to `Ari`, set it in `new` (inside the `Ok(Ari { … })` of B5's fallible `new`) to `base.trim_end_matches('/').replacen("http", "ws", 1)`, replace the body of `fn ws_base(&self)` with `self.ws_base.clone()`, and add:
 
 ```rust
     /// The same ARI with its WebSocket endpoints (events, media) at `ws_base` (`ws://host:port`).
@@ -9674,6 +9698,8 @@ In `ari.rs`, add a field `ws_base: String` to `Ari`, set it in `new` to `base.tr
         self
     }
 ```
+
+In `media.rs`, delete `MAX_MESSAGE_BYTES` and `pad_to_frames`, and the module docs' "at most [`MAX_MESSAGE_BYTES`] (Asterisk closes the call above 65 500 bytes)": the pacer writes one whole frame per message, so nothing pads or splits audio before it (B5 review).
 
 - [ ] **Step 2: Write the test fakes and the failing call test**
 
@@ -9774,7 +9800,9 @@ pub fn serve_speaker(mut conns: mpsc::Receiver<WebSocketStream<TcpStream>>) {
 }
 
 /// Starts the media of the first connection (`MEDIA_START`, A-law) and answers each `MARK_MEDIA`
-/// with `MEDIA_MARK_PROCESSED`; the control commands it received go to the returned channel.
+/// with `MEDIA_MARK_PROCESSED`; the control commands it received go to the returned channel, with
+/// `silence frame` the first time a frame of all 0xD5 arrives and `frame of N bytes` for any frame
+/// that is not 160 bytes.
 pub fn serve_media(mut conns: mpsc::Receiver<WebSocketStream<TcpStream>>) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel(64);
     tokio::spawn(async move {
@@ -9782,16 +9810,30 @@ pub fn serve_media(mut conns: mpsc::Receiver<WebSocketStream<TcpStream>>) -> mps
         let start = json!({ "event": "MEDIA_START", "connection_id": "conn-1", "channel": "WebSocket/x",
             "channel_id": "c-1-m", "format": "alaw", "optimal_frame_size": 160, "ptime": 20 });
         ws.send(Message::Text(start.to_string().into())).await.unwrap();
+        let mut silence_seen = false;
         while let Some(Ok(msg)) = ws.next().await {
-            if let Message::Text(t) = msg {
-                let v: Value = serde_json::from_str(&t).unwrap();
-                let name = v["command"].as_str().unwrap_or_default().to_owned();
-                if name == "MARK_MEDIA" {
-                    let done = json!({ "event": "MEDIA_MARK_PROCESSED", "channel_id": "c-1-m",
-                        "correlation_id": v["correlation_id"] });
-                    ws.send(Message::Text(done.to_string().into())).await.unwrap();
+            match msg {
+                // 50 frames a second: reported once (the first silence) or when one is not whole.
+                Message::Binary(b) => {
+                    if !silence_seen && b.iter().all(|&x| x == 0xD5) {
+                        silence_seen = true;
+                        let _ = tx.try_send("silence frame".to_owned());
+                    }
+                    if b.len() != 160 {
+                        let _ = tx.try_send(format!("frame of {} bytes", b.len()));
+                    }
                 }
-                let _ = tx.send(name).await;
+                Message::Text(t) => {
+                    let v: Value = serde_json::from_str(&t).unwrap();
+                    let name = v["command"].as_str().unwrap_or_default().to_owned();
+                    if name == "MARK_MEDIA" {
+                        let done = json!({ "event": "MEDIA_MARK_PROCESSED", "channel_id": "c-1-m",
+                            "correlation_id": v["correlation_id"] });
+                        ws.send(Message::Text(done.to_string().into())).await.unwrap();
+                    }
+                    let _ = tx.send(name).await;
+                }
+                _ => {}
             }
         }
     });
@@ -9834,7 +9876,7 @@ async fn a_call_dials_plays_hears_acknowledges_and_hangs_up() {
     let mut controls = serve_media(media_conns);
     let cache = std::env::temp_dir().join(format!("voice-call-{}", std::process::id()));
     let deps = Arc::new(CallDeps {
-        ari: Arc::new(Ari::new(&ari_base, "u", "p").with_ws_base(&format!("ws://{media_addr}"))),
+        ari: Arc::new(Ari::new(&ari_base, "u", "p").unwrap().with_ws_base(&format!("ws://{media_addr}"))),
         listen: Endpoint::Tcp(listen_addr),
         speak: Endpoint::Tcp(speak_addr),
         cache_dir: cache.clone(),
@@ -9895,6 +9937,8 @@ async fn a_call_dials_plays_hears_acknowledges_and_hangs_up() {
     tokio::time::timeout(Duration::from_secs(3), task).await.unwrap().unwrap();
     let sent: Vec<String> = std::iter::from_fn(|| controls.try_recv().ok()).collect();
     assert!(sent.iter().any(|c| c == "MARK_MEDIA"));
+    assert!(sent.iter().any(|c| c == "silence frame"), "silence fills the gaps: {sent:?}");
+    assert!(!sent.iter().any(|c| c.starts_with("frame of")), "whole 160-byte frames only: {sent:?}");
     let _ = std::fs::remove_dir_all(cache);
 }
 ```
@@ -9906,9 +9950,16 @@ Expected: FAIL to compile (`could not find call in jeeta_voice_bridge`).
 
 ```rust
 //! One call's task (design addendum §3): it dials through ARI, waits for the answer, connects the
-//! call's media (`chan_websocket`), the listener and the speaker, and runs the talker until the line
-//! closes, reporting each event as a [`Report`] (to the core in `run`, to the console in `slice`).
-//! It never logs a number or a word.
+//! listener and the speaker, then the call's media (`chan_websocket`), and runs the talker until
+//! the line closes, reporting each event as a [`Report`] (to the core in `run`, to the console in
+//! `slice`). It never logs a number or a word.
+//!
+//! The media is written by a task of its own (`pace_media`): one frame every 20 ms for the whole
+//! call, silence when nothing plays, since Asterisk >= 22.9 sends nothing to the line otherwise
+//! (B1 review). The call's loop only hands that task audio, marks and flushes, so nothing the
+//! loop waits on (the speech services, a slow consumer of reports) can leave a hole in the line's
+//! RTP; ARI calls made during the call are spawned, and reports are handed on without waiting
+//! (B5 review).
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -9926,7 +9977,7 @@ use tracing::{info, warn};
 use crate::ari::{self, Ari, AriEvent};
 use crate::cache::PhraseCache;
 use crate::g711::Codec;
-use crate::media::{self, MediaEvent};
+use crate::media::{self, MediaEvent, Out, Pacer};
 use crate::netgsm;
 use crate::speech::{self, Endpoint, Heard, Spoken, ToListener, ToSpeaker};
 use crate::talker::{Action, Input, Item, Source, Talker, Timing};
@@ -9940,6 +9991,8 @@ const MEDIA_SETUP: Duration = Duration::from_secs(3);
 /// How long the PBX may ring.
 const RING_TIMEOUT_S: u32 = 45;
 const SAMPLE_RATE: u64 = 8_000;
+/// G.711 in 20 ms frames: the only media the pacer writes (B5 review).
+const FRAME_BYTES: usize = 160;
 
 pub struct CallDeps {
     pub ari: Arc<Ari>,
@@ -9959,6 +10012,10 @@ pub struct CallSetup {
     pub plan_lines: Vec<String>,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a call's messages are few and short-lived, as jt_calls' Command"
+)]
 pub enum ToCall {
     Command(Command),
     Ari(AriEvent),
@@ -9979,14 +10036,30 @@ struct Reporter {
 }
 
 impl Reporter {
-    async fn send(&self, event: BridgeEvent) {
-        let _ = self.tx.send(Report { bridge_call_id: self.id.clone(), event, taken: None }).await;
+    /// Hands `event` on without waiting (B5 review): a consumer that is slow to take reports (the
+    /// core away, the poster retrying) never holds the call's loop up. The queue (`run`'s holds
+    /// 1 024 reports) is full only when the core has been away that long; the report is then
+    /// dropped, with a warning.
+    fn send(&self, event: BridgeEvent) {
+        self.put(event, None);
     }
 
-    async fn send_taken(&self, event: BridgeEvent) -> oneshot::Receiver<()> {
+    /// As `send`, with a way to hear when the core took the report.
+    fn send_taken(&self, event: BridgeEvent) -> oneshot::Receiver<()> {
         let (taken, rx) = oneshot::channel();
-        let _ = self.tx.send(Report { bridge_call_id: self.id.clone(), event, taken: Some(taken) }).await;
+        self.put(event, Some(taken));
         rx
+    }
+
+    fn put(&self, event: BridgeEvent, taken: Option<oneshot::Sender<()>>) {
+        let report = Report {
+            bridge_call_id: self.id.clone(),
+            event,
+            taken,
+        };
+        if self.tx.try_send(report).is_err() {
+            warn!(call = %self.id, "a report was dropped: its queue is full or closed");
+        }
     }
 }
 
@@ -9994,8 +10067,15 @@ fn text_message<T: Serialize>(value: &T) -> Message {
     Message::Text(serde_json::to_string(value).unwrap_or_default().into())
 }
 
-fn pcm16(bytes: &[u8]) -> Vec<i16> {
-    bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+/// PCM16 little-endian samples. The speak service's frames are always of an even length, so an
+/// odd one is a protocol error, not a sample to drop (B5 review).
+fn pcm16(bytes: &[u8]) -> Option<Vec<i16>> {
+    bytes.len().is_multiple_of(2).then(|| {
+        bytes
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect()
+    })
 }
 
 fn audio_duration(samples: usize) -> Duration {
@@ -10028,30 +10108,52 @@ fn presynth_order(setup: &CallSetup) -> Vec<String> {
     out
 }
 
-async fn presynthesize(socket: speech::Socket, cache: Arc<Mutex<PhraseCache>>, persist: Arc<HashSet<String>>, texts: Vec<String>) {
+/// Synthesises `texts` ahead into the call's cache, filed under `voice`, the one this socket's
+/// `hello` named: if the call's cache moved to another voice meanwhile, the cache drops them (B5
+/// review). A disk error is the live path's to log.
+async fn presynthesize(
+    socket: speech::Socket,
+    cache: Arc<Mutex<PhraseCache>>,
+    persist: Arc<HashSet<String>>,
+    voice: String,
+    texts: Vec<String>,
+) {
     let (mut tx, mut rx) = socket.split();
     let mut n = 0u32;
     for t in texts {
         for sentence in text::sentences(&t) {
-            let cached = cache.lock().map(|mut c| c.get(&sentence.text).is_some()).unwrap_or(false);
+            let cached = cache
+                .lock()
+                .map(|mut c| c.get(&sentence.text).is_some())
+                .unwrap_or(false);
             if cached {
                 continue;
             }
             n += 1;
             let id = format!("pre:{n}");
-            if tx.send(text_message(&ToSpeaker::Synth { id, text: sentence.text.clone() })).await.is_err() {
+            let synth = ToSpeaker::Synth {
+                id,
+                text: sentence.text.clone(),
+            };
+            if tx.send(text_message(&synth)).await.is_err() {
                 return;
             }
             let mut pcm = Vec::new();
             loop {
                 match rx.next().await {
-                    Some(Ok(Message::Binary(b))) => pcm.extend(pcm16(&b)),
+                    Some(Ok(Message::Binary(b))) => match pcm16(&b) {
+                        Some(samples) => pcm.extend(samples),
+                        // A broken frame: pre-synthesis stops; the call synthesises what it needs.
+                        None => return,
+                    },
                     Some(Ok(Message::Text(m))) => {
                         if let Ok(spoken) = serde_json::from_str::<Spoken>(&m) {
-                            if matches!(spoken, Spoken::Done { .. }) && !pcm.is_empty() {
-                                if let Ok(mut c) = cache.lock() {
-                                    c.put(&sentence.text, std::mem::take(&mut pcm), persist.contains(&sentence.text));
-                                }
+                            if matches!(spoken, Spoken::Done { .. })
+                                && !pcm.is_empty()
+                                && let Ok(mut c) = cache.lock()
+                            {
+                                let keep = persist.contains(&sentence.text);
+                                let _ = c.put(&voice, &sentence.text, std::mem::take(&mut pcm), keep);
                             }
                             break;
                         }
@@ -10065,24 +10167,43 @@ async fn presynthesize(socket: speech::Socket, cache: Arc<Mutex<PhraseCache>>, p
 }
 
 /// Runs call `setup` until its line closes (see the module docs).
-pub async fn run_call(deps: Arc<CallDeps>, setup: CallSetup, mut rx: mpsc::Receiver<ToCall>, reports: mpsc::Sender<Report>) {
+pub async fn run_call(
+    deps: Arc<CallDeps>,
+    setup: CallSetup,
+    mut rx: mpsc::Receiver<ToCall>,
+    reports: mpsc::Sender<Report>,
+) {
     let id = setup.bridge_call_id.clone();
-    let reporter = Reporter { id: id.clone(), tx: reports };
+    let reporter = Reporter {
+        id: id.clone(),
+        tx: reports,
+    };
     // The speaker's hello names the voice this call's cache keys by; without a speaker, no dial.
     let Ok((pre, voice)) = speech::connect_speaker(&deps.speak).await else {
         warn!(call = %id, "the speaker is unreachable");
-        reporter.send(BridgeEvent::Error { failure_line: "transient: bridge: the speaker is unreachable".into() }).await;
+        reporter.send(BridgeEvent::Error {
+            failure_line: "transient: bridge: the speaker is unreachable".into(),
+        });
         return;
     };
     let cache = Arc::new(Mutex::new(PhraseCache::new(deps.cache_dir.clone(), &voice)));
     let persist = Arc::new(policy_sentences(&setup.script));
-    tokio::spawn(presynthesize(pre, cache.clone(), persist.clone(), presynth_order(&setup)));
+    tokio::spawn(presynthesize(
+        pre,
+        cache.clone(),
+        persist.clone(),
+        voice,
+        presynth_order(&setup),
+    ));
     let endpoint = format!("PJSIP/{}@netgsm", setup.dial);
     if deps.ari.originate(&id, &endpoint, RING_TIMEOUT_S).await.is_err() {
+        // A request that timed out may still ring: the id is hung up all the same (404 when no
+        // channel was made; B5 review).
+        let _ = deps.ari.hangup(&id).await;
         warn!(call = %id, "Asterisk refused the dial");
-        reporter
-            .send(BridgeEvent::Error { failure_line: "transient: bridge: the line refused the dial".into() })
-            .await;
+        reporter.send(BridgeEvent::Error {
+            failure_line: "transient: bridge: the line refused the dial".into(),
+        });
         return;
     }
     info!(call = %id, "dialling");
@@ -10093,16 +10214,22 @@ pub async fn run_call(deps: Arc<CallDeps>, setup: CallSetup, mut rx: mpsc::Recei
                 let _ = deps.ari.hangup(&id).await;
                 return;
             }
-            Some(ToCall::Ari(AriEvent::Ringing { channel })) if channel == id => reporter.send(BridgeEvent::Ringing).await,
+            Some(ToCall::Ari(AriEvent::Ringing { channel })) if channel == id => {
+                reporter.send(BridgeEvent::Ringing);
+            }
             Some(ToCall::Ari(AriEvent::Answered { channel, .. })) if channel == id => break,
             Some(ToCall::Ari(AriEvent::Gone { channel, cause })) if channel == id => {
                 info!(call = %id, cause = ?cause, "the line closed before an answer");
                 // A number that cannot be called at all fails for good (B4 review M5).
                 let event = match netgsm::permanent_failure(cause, false) {
-                    Some(line) => BridgeEvent::Error { failure_line: line.into() },
-                    None => BridgeEvent::Hangup { cause: netgsm::hangup_cause(cause, false).into() },
+                    Some(line) => BridgeEvent::Error {
+                        failure_line: line.into(),
+                    },
+                    None => BridgeEvent::Hangup {
+                        cause: netgsm::hangup_cause(cause, false).into(),
+                    },
                 };
-                reporter.send(event).await;
+                reporter.send(event);
                 return;
             }
             Some(ToCall::Command(Command::Hangup)) => {
@@ -10112,16 +10239,20 @@ pub async fn run_call(deps: Arc<CallDeps>, setup: CallSetup, mut rx: mpsc::Recei
             Some(_) => {}
         }
     }
-    reporter.send(BridgeEvent::Answered).await;
+    reporter.send(BridgeEvent::Answered);
     info!(call = %id, "answered");
     match Live::connect(&deps, &setup, cache, persist, reporter.clone()).await {
         Ok(live) => live.run(rx, early).await,
         Err(reason) => {
             warn!(call = %id, reason, "the call's media did not come up");
-            reporter.send(BridgeEvent::Error { failure_line: format!("transient: bridge: {reason}") }).await;
-            let _ = deps.ari.hangup(&id).await;
+            reporter.send(BridgeEvent::Error {
+                failure_line: format!("transient: bridge: {reason}"),
+            });
         }
     }
+    // The caller's own channel too: the media or the speaker may have closed while the caller was
+    // still on the line (404 when the caller already hung up; B5 review).
+    let _ = deps.ari.hangup(&id).await;
     let _ = deps.ari.destroy_bridge(&format!("{id}-b")).await;
     let _ = deps.ari.hangup(&format!("{id}-m")).await;
 }
@@ -10146,17 +10277,108 @@ struct Playing {
 type MediaSink = SplitSink<ari::Socket, Message>;
 type SpeechSink = SplitSink<speech::Socket, Message>;
 
+/// What the call asks of its pacing task, in order.
+enum PaceOp {
+    /// Encoded audio of the playing sentence, unpadded: the pacer pads at the sentence's end.
+    Audio(Vec<u8>),
+    /// The sentence's end: `MARK_MEDIA` with this correlation id after its last frame.
+    Mark(String),
+    /// A barge-in: what is queued is dropped, `FLUSH_MEDIA` drops what Asterisk holds, and the
+    /// lead of silence goes at once.
+    Flush,
+    /// `MEDIA_XOFF` and `MEDIA_XON`.
+    Pause,
+    Resume,
+}
+
+/// The pacing task's word that a real frame left after silence or a mark. `flushes` counts the
+/// flushes it had done by then: one of an earlier count is a cut item's.
+struct Sounding {
+    flushes: u64,
+}
+
+/// The call's media writer. It alone owns the media socket's sink and the [`Pacer`], and writes
+/// what the pacer has due every 20 ms for the whole call (silence when nothing plays, each mark
+/// after its sentence's last frame), whatever the call's loop is waiting on. It ends when the call
+/// drops its sender or the socket closes.
+async fn pace_media(
+    mut sink: MediaSink,
+    silence: u8,
+    mut ops: mpsc::UnboundedReceiver<PaceOp>,
+    sounding: mpsc::UnboundedSender<Sounding>,
+) {
+    let started = Instant::now();
+    let now_ms = || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut pacer = Pacer::new(FRAME_BYTES, silence, now_ms());
+    let mut tick = tokio::time::interval(Duration::from_millis(media::FRAME_MS));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let (mut flushes, mut real) = (0u64, false);
+    loop {
+        tokio::select! {
+            op = ops.recv() => match op {
+                Some(PaceOp::Audio(bytes)) => {
+                    pacer.audio(&bytes);
+                    continue;
+                }
+                Some(PaceOp::Mark(correlation)) => {
+                    pacer.mark(correlation);
+                    continue;
+                }
+                Some(PaceOp::Flush) => {
+                    pacer.flush(now_ms());
+                    flushes += 1;
+                    real = false;
+                    let flush = media::command("FLUSH_MEDIA", None);
+                    if sink.send(Message::Text(flush.into())).await.is_err() {
+                        return;
+                    }
+                }
+                Some(PaceOp::Pause) => {
+                    pacer.pause();
+                    continue;
+                }
+                Some(PaceOp::Resume) => pacer.resume(now_ms()),
+                None => return,
+            },
+            _ = tick.tick() => {}
+        }
+        for out in pacer.due(now_ms()) {
+            let message = match out {
+                Out::Frame { bytes, silence } => {
+                    if !silence && !real {
+                        let _ = sounding.send(Sounding { flushes });
+                    }
+                    real = !silence;
+                    Message::Binary(bytes.into())
+                }
+                Out::Mark(correlation) => {
+                    real = false;
+                    Message::Text(media::command("MARK_MEDIA", Some(&correlation)).into())
+                }
+            };
+            if sink.send(message).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
 struct Live {
     deps: Arc<CallDeps>,
     id: String,
     reporter: Reporter,
     cache: Arc<Mutex<PhraseCache>>,
     persist: Arc<HashSet<String>>,
+    /// The voice id of the live speaker's hello: this call files its audio under it.
+    voice: String,
     talker: Talker,
     started: Instant,
     codec: Codec,
-    frame_bytes: usize,
-    media_tx: MediaSink,
+    /// The pacing task's orders (`pace_media`, which owns the media socket's sink).
+    pace: mpsc::UnboundedSender<PaceOp>,
+    sounding_rx: Option<mpsc::UnboundedReceiver<Sounding>>,
+    /// The flushes asked of the pacing task: a `Sounding` of an earlier count is a cut item's.
+    flushes: u64,
     media_rx: Option<SplitStream<ari::Socket>>,
     listen_tx: SpeechSink,
     listen_rx: Option<SplitStream<speech::Socket>>,
@@ -10165,8 +10387,6 @@ struct Live {
     /// The id of a cancelled synthesis whose terminal message has not come yet: until it does,
     /// every binary frame from the speaker is that synthesis's and is dropped.
     draining: Option<String>,
-    xoff: bool,
-    held: Vec<Message>,
     playing: Option<Playing>,
     clock: AudioClock,
     marks: Option<TurnMarks>,
@@ -10177,6 +10397,8 @@ struct Live {
     /// When the line was answered, and whether the first audio after it was logged.
     answered: Instant,
     opening_logged: bool,
+    /// Whether the phrase cache's disk error was logged (once a call).
+    cache_warned: bool,
 }
 
 impl Live {
@@ -10189,60 +10411,94 @@ impl Live {
     ) -> Result<Live, &'static str> {
         let answered = Instant::now();
         let id = setup.bridge_call_id.clone();
+        // The speech services first, the media last (B5 review): no RTP leaves this host before
+        // the pacer starts, and until it does the firewall drops NetGSM's, so the caller's first
+        // words would be lost while the services connect.
+        let listen = speech::connect(&deps.listen, speech::LISTEN_UID)
+            .await
+            .map_err(|_| "listener unreachable")?;
+        let (mut listen_tx, listen_rx) = listen.split();
+        let start = ToListener::Start {
+            sample_rate: speech::SAMPLE_RATE,
+            hotwords: setup.script.hotwords.clone(),
+        };
+        listen_tx
+            .send(text_message(&start))
+            .await
+            .map_err(|_| "listener refused the call")?;
+        let (speak, voice) = speech::connect_speaker(&deps.speak)
+            .await
+            .map_err(|_| "speaker unreachable")?;
+        if let Ok(mut c) = cache.lock()
+            && c.voice() != voice
+        {
+            // The speak service was replaced while the line rang: this call's audio is the new voice's.
+            warn!(call = %id, "the speaker's voice changed during the call");
+            *c = PhraseCache::new(deps.cache_dir.clone(), &voice);
+        }
+        let (speak_tx, speak_rx) = speak.split();
         let media_id = format!("{id}-m");
-        deps.ari.external_media(&media_id, "alaw").await.map_err(|_| "external media refused")?;
+        deps.ari
+            .external_media(&media_id, "alaw")
+            .await
+            .map_err(|_| "external media refused")?;
         let connection = deps
             .ari
             .variable(&media_id, "MEDIA_WEBSOCKET_CONNECTION_ID")
             .await
             .map_err(|_| "no media connection id")?;
-        deps.ari.mix(&format!("{id}-b"), &[&id, &media_id]).await.map_err(|_| "the mixing bridge was refused")?;
-        let media = deps.ari.media(&connection).await.map_err(|_| "media unreachable")?;
+        deps.ari
+            .mix(&format!("{id}-b"), &[&id, &media_id])
+            .await
+            .map_err(|_| "the mixing bridge was refused")?;
+        let media = deps
+            .ari
+            .media(&connection)
+            .await
+            .map_err(|_| "media unreachable")?;
         let (media_tx, mut media_rx) = media.split();
         let started = tokio::time::timeout(MEDIA_SETUP, async {
             while let Some(Ok(msg)) = media_rx.next().await {
                 if let Message::Text(t) = msg
-                    && let MediaEvent::Start { format, frame_bytes } = media::parse_control(&t)
+                    && let MediaEvent::Start {
+                        format,
+                        frame_bytes,
+                        ptime_ms,
+                    } = media::parse_control(&t)
                 {
-                    return Codec::from_format(&format).map(|c| (c, frame_bytes));
+                    // G.711 in 20 ms frames only: the pacer's frame and clock (B5 review).
+                    let fits = frame_bytes == FRAME_BYTES
+                        && ptime_ms.is_none_or(|p| p == media::FRAME_MS);
+                    return Codec::from_format(&format).filter(|_| fits);
                 }
             }
             None
         })
         .await;
-        let (codec, frame_bytes) = started.ok().flatten().ok_or("no media start")?;
-        let listen = speech::connect(&deps.listen, speech::LISTEN_UID).await.map_err(|_| "listener unreachable")?;
-        let (mut listen_tx, listen_rx) = listen.split();
-        let start = ToListener::Start { sample_rate: 8_000, hotwords: setup.script.hotwords.clone() };
-        listen_tx.send(text_message(&start)).await.map_err(|_| "listener refused the call")?;
-        let (speak, live_voice) = speech::connect_speaker(&deps.speak).await.map_err(|_| "speaker unreachable")?;
-        if let Ok(mut c) = cache.lock()
-            && c.voice() != live_voice
-        {
-            // The speak service was replaced while the line rang: this call's audio is the new voice's.
-            warn!(call = %id, "the speaker's voice changed during the call");
-            *c = PhraseCache::new(deps.cache_dir.clone(), &live_voice);
-        }
-        let (speak_tx, speak_rx) = speak.split();
+        let codec = started.ok().flatten().ok_or("no media start")?;
+        // The pacing task starts at once: RTP leaves from the media's start (B1 review).
+        let (pace, ops) = mpsc::unbounded_channel();
+        let (sounding_tx, sounding_rx) = mpsc::unbounded_channel();
+        tokio::spawn(pace_media(media_tx, codec.encode(&[0])[0], ops, sounding_tx));
         Ok(Live {
             deps: deps.clone(),
             id,
             reporter,
             cache,
             persist,
+            voice,
             talker: Talker::new(deps.timing, setup.script.phrases.clone()),
             started: Instant::now(),
             codec,
-            frame_bytes,
-            media_tx,
+            pace,
+            sounding_rx: Some(sounding_rx),
+            flushes: 0,
             media_rx: Some(media_rx),
             listen_tx,
             listen_rx: Some(listen_rx),
             speak_tx,
             speak_rx: Some(speak_rx),
             draining: None,
-            xoff: false,
-            held: Vec::new(),
             playing: None,
             clock: AudioClock::default(),
             marks: None,
@@ -10252,6 +10508,7 @@ impl Live {
             pending_hangup: false,
             answered,
             opening_logged: false,
+            cache_warned: false,
         })
     }
 
@@ -10259,6 +10516,7 @@ impl Live {
         let mut media_rx = self.media_rx.take().expect("connected");
         let mut listen_rx = self.listen_rx.take().expect("connected");
         let mut speak_rx = self.speak_rx.take().expect("connected");
+        let mut sounding_rx = self.sounding_rx.take().expect("connected");
         for c in early {
             self.command(c).await;
         }
@@ -10267,6 +10525,8 @@ impl Live {
         // A closed listener's stream resolves at once on every pass: its arm is disabled once it
         // ends, so the fault sentence it asks for plays instead of a tight loop (B4 review I2).
         let mut listening = true;
+        // So is the pacing task's, which ends with the media socket (whose own arm ends the call).
+        let mut pacing = true;
         let mut tick = tokio::time::interval(Duration::from_millis(20));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -10295,7 +10555,7 @@ impl Live {
                         listening = false;
                         warn!(call = %self.id, "the listener closed");
                         let failure_line = "transient: bridge: the listener stopped during the call".to_owned();
-                        self.reporter.send(BridgeEvent::Error { failure_line }).await;
+                        self.reporter.send(BridgeEvent::Error { failure_line });
                         self.input(Input::CoreLost).await;
                     }
                 },
@@ -10312,20 +10572,26 @@ impl Live {
                         break;
                     }
                 },
+                s = sounding_rx.recv(), if pacing => match s {
+                    // The playing item's first real frame left (and not one of an item cut since).
+                    Some(s) if s.flushes == self.flushes => self.first_real_frame(),
+                    Some(_) => {}
+                    None => pacing = false,
+                },
                 c = rx.recv() => match c {
                     Some(ToCall::Command(c)) => self.command(c).await,
                     Some(ToCall::Ari(AriEvent::Dtmf { channel, digit })) if channel == self.id => {
-                        self.reporter.send(BridgeEvent::Dtmf { digit }).await;
+                        self.reporter.send(BridgeEvent::Dtmf { digit });
                     }
                     Some(ToCall::Ari(AriEvent::Gone { channel, .. })) if channel == self.id => {
-                        self.reporter.send(BridgeEvent::Hangup { cause: "normal".into() }).await;
+                        self.reporter.send(BridgeEvent::Hangup { cause: "normal".into() });
                         break;
                     }
                     Some(ToCall::Ari(_)) => {}
                     Some(ToCall::CoreLost) => {
                         // Reported first, so the core ends the session as failed when it is back.
                         let failure_line = "transient: bridge: the core was unreachable during the call".to_owned();
-                        self.reporter.send(BridgeEvent::Error { failure_line }).await;
+                        self.reporter.send(BridgeEvent::Error { failure_line });
                         self.input(Input::CoreLost).await;
                     }
                     None => break,
@@ -10338,7 +10604,7 @@ impl Live {
                 },
                 _ = async { tokio::time::sleep_until(hangup_at.expect("guarded")).await }, if hangup_at.is_some() => {
                     hangup_at = None;
-                    let _ = self.deps.ari.hangup(&self.id).await;
+                    self.spawn_hangup();
                 },
                 _ = tick.tick() => self.input(Input::Tick).await,
             }
@@ -10349,7 +10615,7 @@ impl Live {
                 hangup_at = Some(tokio::time::Instant::now() + HANGUP_TAIL);
             }
         }
-        self.finish_turn().await;
+        self.finish_turn();
         info!(call = %self.id, "ended");
     }
 
@@ -10367,15 +10633,22 @@ impl Live {
     async fn act(&mut self, action: Action) {
         match action {
             Action::EchoGuard(active) => {
-                let _ = self.listen_tx.send(text_message(&ToListener::Playback { active })).await;
+                let _ = self
+                    .listen_tx
+                    .send(text_message(&ToListener::Playback { active }))
+                    .await;
             }
             Action::Play(item) => {
                 if let Source::Phrase { set, index } = item.source {
-                    self.reporter.send(BridgeEvent::Phrase { set, index }).await;
+                    self.reporter.send(BridgeEvent::Phrase { set, index });
                 }
                 let mut sentences = text::sentences(&item.text);
                 if sentences.is_empty() {
-                    sentences.push(Sentence { start: 0, end: item.text.chars().count(), text: item.text.clone() });
+                    sentences.push(Sentence {
+                        start: 0,
+                        end: item.text.chars().count(),
+                        text: item.text.clone(),
+                    });
                 }
                 self.playing = Some(Playing {
                     item,
@@ -10391,7 +10664,11 @@ impl Live {
             }
             Action::Done(item) => {
                 if let Source::Core { seq, .. } = item.source {
-                    self.reporter.send(BridgeEvent::Said { seq, interrupted_at_char: None, tts_ms: None }).await;
+                    self.reporter.send(BridgeEvent::Said {
+                        seq,
+                        interrupted_at_char: None,
+                        tts_ms: None,
+                    });
                 }
             }
             Action::Cut { item, dropped } => self.cut(item, dropped).await,
@@ -10399,7 +10676,11 @@ impl Live {
             Action::Dropped(items) => {
                 for d in items {
                     if let Source::Core { seq, .. } = d.source {
-                        self.reporter.send(BridgeEvent::Said { seq, interrupted_at_char: Some(0), tts_ms: None }).await;
+                        self.reporter.send(BridgeEvent::Said {
+                            seq,
+                            interrupted_at_char: Some(0),
+                            tts_ms: None,
+                        });
                     }
                 }
             }
@@ -10407,24 +10688,29 @@ impl Live {
         }
     }
 
-    async fn send_media(&mut self, message: Message) {
-        if self.xoff {
-            self.held.push(message);
-        } else {
-            let _ = self.media_tx.send(message).await;
-        }
+    /// Hangs the caller's channel up without holding the loop: ARI may take its 5 s (B5 review).
+    fn spawn_hangup(&self) {
+        let (ari, id) = (self.deps.ari.clone(), self.id.clone());
+        tokio::spawn(async move {
+            let _ = ari.hangup(&id).await;
+        });
     }
 
     /// Marks the turn's first sounds: the reply's first audio, a covering phrase's first audio.
     fn first_audio_marks(&mut self) {
-        let Some(p) = self.playing.as_ref() else { return };
+        let Some(p) = self.playing.as_ref() else {
+            return;
+        };
         if p.audio_started.is_some() {
             return;
         }
         let reply = matches!(p.item.source, Source::Core { agent: true, .. });
         let cover = matches!(
             p.item.source,
-            Source::Phrase { set: PhraseSet::Acknowledgement | PhraseSet::Filler | PhraseSet::LongWait, .. }
+            Source::Phrase {
+                set: PhraseSet::Acknowledgement | PhraseSet::Filler | PhraseSet::LongWait,
+                ..
+            }
         );
         let now = Instant::now();
         if let Some(m) = self.marks.as_mut() {
@@ -10434,304 +10720,6 @@ impl Live {
             }
             if cover && m.ack.is_none() {
                 m.ack = Some(now);
-            }
-        }
-    }
-
-    async fn write_pcm(&mut self, pcm: &[i16]) {
-        self.first_audio_marks();
-        if !self.opening_logged {
-            self.opening_logged = true;
-            let ms = u64::try_from(self.answered.elapsed().as_millis()).unwrap_or(u64::MAX);
-            info!(call = %self.id, ms, "first audio after the answer");
-        }
-        if let Some(p) = self.playing.as_mut()
-            && p.audio_started.is_none()
-        {
-            let now = Instant::now();
-            p.audio_started = Some(now);
-            p.mark_at = now;
-        }
-        let frame = self.frame_bytes.max(1);
-        let bytes = self.codec.encode(&media::pad_to_frames(pcm.to_vec(), frame));
-        for chunk in bytes.chunks((media::MAX_MESSAGE_BYTES / frame).max(1) * frame) {
-            self.send_media(Message::Binary(chunk.to_vec().into())).await;
-        }
-    }
-
-    async fn mark(&mut self, item: u64, index: usize) {
-        let correlation = format!("{item}:{index}");
-        self.send_media(Message::Text(media::command("MARK_MEDIA", Some(&correlation)).into())).await;
-    }
-
-    /// Writes the playing item's next sentences from the cache, or asks the speaker for the next one
-    /// (at most one sentence ahead of what was heard).
-    async fn advance(&mut self) {
-        loop {
-            let Some(p) = self.playing.as_mut() else { return };
-            if p.in_flight.is_some() || p.next >= p.sentences.len() || p.next > p.marked + 1 {
-                return;
-            }
-            let index = p.next;
-            let sentence = p.sentences[index].text.clone();
-            let item = p.item.id;
-            let hit = self.cache.lock().ok().and_then(|mut c| c.get(&sentence));
-            match hit {
-                Some(pcm) => {
-                    if let Some(p) = self.playing.as_mut() {
-                        p.next += 1;
-                        p.durations.push(audio_duration(pcm.len()));
-                    }
-                    self.write_pcm(&pcm).await;
-                    self.mark(item, index).await;
-                }
-                None => {
-                    let id = format!("{item}:{index}");
-                    if let Some(p) = self.playing.as_mut() {
-                        p.in_flight = Some(InFlight { index, id: id.clone(), pcm: Vec::new() });
-                    }
-                    let _ = self.speak_tx.send(text_message(&ToSpeaker::Synth { id, text: sentence })).await;
-                    return;
-                }
-            }
-        }
-    }
-
-    async fn synth_chunk(&mut self, bytes: &[u8]) {
-        if self.draining.is_some() {
-            return; // a cancelled synthesis's frame (its terminal message has not come yet)
-        }
-        let pcm = pcm16(bytes);
-        let Some(f) = self.playing.as_mut().and_then(|p| p.in_flight.as_mut()) else { return };
-        f.pcm.extend_from_slice(&pcm);
-        self.write_pcm(&pcm).await;
-    }
-
-    async fn synth_event(&mut self, spoken: Spoken) {
-        let terminal = match &spoken {
-            Spoken::Done { id, .. } | Spoken::Cancelled { id } => Some(id.as_str()),
-            Spoken::Error { id, .. } => id.as_deref(),
-            Spoken::Hello { .. } => None,
-        };
-        if terminal.is_some() && terminal == self.draining.as_deref() {
-            // The cancelled synthesis has ended: done, cancelled or error (a cancel can lose the race).
-            self.draining = None;
-            return;
-        }
-        let (id, ok) = match spoken {
-            Spoken::Done { id, .. } => (id, true),
-            Spoken::Error { id: Some(id), .. } => (id, false),
-            _ => return,
-        };
-        let Some(p) = self.playing.as_mut() else { return };
-        if p.in_flight.as_ref().is_none_or(|f| f.id != id) {
-            return;
-        }
-        let f = p.in_flight.take().expect("checked above");
-        let sentence = p.sentences[f.index].text.clone();
-        let item = p.item.id;
-        p.durations.push(audio_duration(f.pcm.len()));
-        p.next = f.index + 1;
-        if !ok {
-            warn!(call = %self.id, "a sentence could not be synthesised");
-        } else if !f.pcm.is_empty()
-            && let Ok(mut c) = self.cache.lock()
-        {
-            c.put(&sentence, f.pcm, self.persist.contains(&sentence));
-        }
-        self.mark(item, f.index).await;
-        self.advance().await;
-    }
-
-    async fn media_control(&mut self, control: &str) {
-        match media::parse_control(control) {
-            MediaEvent::MarkProcessed { correlation } => {
-                let Some((item, index)) = parse_mark(&correlation) else { return };
-                let finished = match self.playing.as_mut() {
-                    Some(p) if p.item.id == item => {
-                        p.marked = index + 1;
-                        p.mark_at = Instant::now();
-                        p.marked >= p.sentences.len()
-                    }
-                    _ => return,
-                };
-                if finished {
-                    self.input(Input::Played { id: item }).await;
-                } else {
-                    self.advance().await;
-                }
-            }
-            MediaEvent::Xoff => self.xoff = true,
-            MediaEvent::Xon => {
-                self.xoff = false;
-                for m in std::mem::take(&mut self.held) {
-                    let _ = self.media_tx.send(m).await;
-                }
-            }
-            // DTMF is read from ARI (`ChannelDtmfReceived`), once.
-            MediaEvent::Dtmf { .. } | MediaEvent::Start { .. } | MediaEvent::Other => {}
-        }
-    }
-
-    async fn cut(&mut self, item: Item, dropped: Vec<Item>) {
-        self.held.clear();
-        let _ = self.media_tx.send(Message::Text(media::command("FLUSH_MEDIA", None).into())).await;
-        let mut heard = 0;
-        if let Some(mut p) = self.playing.take() {
-            if p.item.id == item.id {
-                if let Some(f) = p.in_flight.take() {
-                    let _ = self.speak_tx.send(text_message(&ToSpeaker::Cancel { id: f.id.clone() })).await;
-                    self.draining = Some(f.id);
-                }
-                let fraction = match (p.audio_started, p.durations.get(p.marked)) {
-                    (Some(_), Some(d)) if !d.is_zero() => p.mark_at.elapsed().as_secs_f64() / d.as_secs_f64(),
-                    (Some(_), _) => 0.5,
-                    (None, _) => 0.0,
-                };
-                heard = text::heard_chars(&p.sentences, p.marked, fraction);
-            } else {
-                self.playing = Some(p);
-            }
-        }
-        if let Source::Core { seq, agent } = item.source {
-            self.reporter.send(BridgeEvent::Said { seq, interrupted_at_char: Some(heard), tts_ms: None }).await;
-            if agent && let (Some(onset), Some(m)) = (self.onset, self.marks.as_mut()) {
-                m.barge_in_stop_ms = Some(u32::try_from(onset.elapsed().as_millis()).unwrap_or(u32::MAX));
-                self.cut_reply = true;
-            }
-        }
-        for d in dropped {
-            if let Source::Core { seq, .. } = d.source {
-                self.reporter.send(BridgeEvent::Said { seq, interrupted_at_char: Some(0), tts_ms: None }).await;
-            }
-        }
-    }
-
-    async fn inbound_audio(&mut self, bytes: &[u8]) {
-        let pcm = self.codec.decode(bytes);
-        self.clock.push(pcm.len() as u64 * 1_000 / SAMPLE_RATE, Instant::now());
-        let out: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
-        let _ = self.listen_tx.send(Message::Binary(out.into())).await;
-    }
-
-    async fn heard(&mut self, heard: Heard) {
-        match heard {
-            Heard::SpeechStart { audio_ms } | Heard::Resume { audio_ms } => {
-                self.onset = Some(self.clock.at(audio_ms).unwrap_or_else(Instant::now));
-                self.input(Input::SpeechStart).await;
-            }
-            Heard::SpeechEnd { .. } => self.input(Input::SpeechEnd).await,
-            Heard::Partial { .. } => {}
-            Heard::Unheard { .. } => self.input(Input::Unheard).await,
-            Heard::Final { text, confidence, speech_end_ms, endpoint_ms, endpoint_by, stt_ms } => {
-                if self.cut_reply && let Some(m) = self.marks.as_mut() {
-                    m.backchannel_cut = text::is_backchannel(&text);
-                }
-                self.finish_turn().await;
-                let now = Instant::now();
-                let speech_end = self.clock.at(speech_end_ms).unwrap_or(now);
-                let endpoint = u32::try_from(endpoint_ms.saturating_sub(speech_end_ms)).unwrap_or(u32::MAX);
-                self.marks = Some(TurnMarks::new(speech_end, endpoint, endpoint_by, now));
-                let utterance = BridgeEvent::Utterance { text, is_final: true, confidence, stt_ms: Some(stt_ms) };
-                self.pending_delivered = Some(self.reporter.send_taken(utterance).await);
-                self.input(Input::Final).await;
-            }
-        }
-    }
-
-    async fn command(&mut self, command: Command) {
-        match command {
-            Command::Say { seq, text, allow_barge_in } => {
-                if let Some(m) = self.marks.as_mut() {
-                    m.say.get_or_insert_with(Instant::now);
-                    // The key the core matches its own latency for this sentence by (`summarize`).
-                    m.reply_seq.get_or_insert(seq);
-                }
-                self.input(Input::Speak { seq, text, barge_in: allow_barge_in, agent: true }).await;
-            }
-            Command::Play { seq, clip, text, .. } => {
-                // The closing is heard to its end (B4 review C1; the talker hangs up after a cut
-                // one all the same); every other line of the core may be cut.
-                let barge_in = clip != PlayKind::Closing;
-                self.input(Input::Speak { seq, text, barge_in, agent: false }).await;
-            }
-            Command::Hangup => self.input(Input::HangupWhenDone).await,
-            Command::Transfer { to } => {
-                if self.deps.ari.redirect(&self.id, &format!("PJSIP/{to}@netgsm")).await.is_err() {
-                    warn!(call = %self.id, "Asterisk refused the transfer");
-                    let failure_line = "transient: bridge: the transfer was refused".to_owned();
-                    self.reporter.send(BridgeEvent::Error { failure_line }).await;
-                }
-            }
-            Command::Record { .. } | Command::Answer { .. } | Command::Dial { .. } => {}
-        }
-    }
-
-    /// Reports the turn's trace (to the core, and to the bridge's trace file).
-    async fn finish_turn(&mut self) {
-        let Some(marks) = self.marks.take() else {
-            self.cut_reply = false;
-            return;
-        };
-        self.cut_reply = false;
-        let trace = marks.trace();
-        if let Some(file) = &self.deps.traces
-            && file.append(&self.id, &trace).is_err()
-        {
-            warn!(call = %self.id, "the trace file could not be written");
-        }
-        self.reporter.send(BridgeEvent::Trace { trace }).await;
-    }
-}
-```
-
-This task uses `DialScript`, `BridgeEvent::Phrase` and `BridgeEvent::Trace` from Task A5.
-
-**The speaker's contract in the call (B2 review, 2026-10-29).** The code above already follows it:
-- The voice id comes from the speak service, never from a constant: `speech::connect_speaker` reads the `hello` each connection starts with. `run_call` connects the pre-synthesis socket first, keys the call's `PhraseCache` by its voice id, and reports `error` without dialling when the speaker is unreachable. `Live::connect` compares the live socket's voice id and starts a fresh cache if the service was replaced while the line rang. Config has no `VOICE_ID`.
-- A cancel can lose the race to `done`. `cut` remembers the cancelled id in `draining`; `synth_chunk` drops every binary frame while `draining` is set, and `synth_event` clears it on that id's terminal message, whichever it is (`done`, `cancelled` or `error`). One slot suffices: the service sends a synthesis's frames before its terminal message and starts the next only after it, so while the newest cancelled id is draining, every frame is stale.
-
-**The pacer in the call (B1 review, 2026-10-29).** Where these differ from the code above, they win. They wire B5's `media::Pacer` in: the call writes one frame every 20 ms for its whole life, silence when nothing plays.
-- `use crate::media::{self, MediaEvent, Out, Pacer};`
-- `Live` loses `xoff` and `held` and gains `pacer: Pacer`. In `connect`, `pacer: Pacer::new(frame_bytes, codec.encode(&[0])[0], 0),` sits beside `started: Instant::now()` (the pacer's clock is `now_ms()`, 0 at `started`). `codec.encode(&[0])[0]` is 0xD5 for A-law and 0xFF for μ-law.
-- In `run`, the tick arm paces before the talker ticks:
-
-```rust
-                _ = tick.tick() => {
-                    self.pace().await;
-                    self.input(Input::Tick).await;
-                }
-```
-
-- `send_media` is deleted. `write_pcm` and `mark` only queue, and become plain `fn`s; their callers (`advance`, `synth_chunk`, `synth_event`) drop the `.await`:
-
-```rust
-    /// Queues the sentence's audio with the pacer, unpadded: the pacer pads at the sentence's end.
-    fn write_pcm(&mut self, pcm: &[i16]) {
-        let bytes = self.codec.encode(pcm);
-        self.pacer.audio(&bytes);
-    }
-
-    fn mark(&mut self, item: u64, index: usize) {
-        self.pacer.mark(format!("{item}:{index}"));
-    }
-
-    /// Writes what the pacer has due: one frame per 20 ms for the whole call, silence when
-    /// nothing plays (Asterisk >= 22.9 sends nothing otherwise), each mark after its last frame.
-    async fn pace(&mut self) {
-        let now = self.now_ms();
-        for out in self.pacer.due(now) {
-            match out {
-                Out::Frame { bytes, silence } => {
-                    if !silence {
-                        self.first_real_frame();
-                    }
-                    let _ = self.media_tx.send(Message::Binary(bytes.into())).await;
-                }
-                Out::Mark(correlation) => {
-                    let mark = media::command("MARK_MEDIA", Some(&correlation));
-                    let _ = self.media_tx.send(Message::Text(mark.into())).await;
-                }
             }
         }
     }
@@ -10753,42 +10741,360 @@ This task uses `DialScript`, `BridgeEvent::Phrase` and `BridgeEvent::Trace` from
             p.mark_at = now;
         }
     }
-```
 
-- In `media_control`: `MediaEvent::Xoff => self.pacer.pause(),` and `MediaEvent::Xon => { let now = self.now_ms(); self.pacer.resume(now); }`.
-- `cut` opens with the flush, then writes the fresh lead of silence at once, in place of `self.held.clear();` and its `FLUSH_MEDIA` send:
+    /// Hands the sentence's audio to the pacing task, unpadded: the pacer pads at the sentence's end.
+    fn write_pcm(&self, pcm: &[i16]) {
+        let _ = self.pace.send(PaceOp::Audio(self.codec.encode(pcm)));
+    }
 
-```rust
-        let now = self.now_ms();
-        self.pacer.flush(now);
-        let _ = self.media_tx.send(Message::Text(media::command("FLUSH_MEDIA", None).into())).await;
-        self.pace().await;
-```
+    /// Ends the sentence for the pacer: its `MARK_MEDIA` goes after its last frame.
+    fn mark(&self, item: u64, index: usize) {
+        let _ = self.pace.send(PaceOp::Mark(format!("{item}:{index}")));
+    }
 
-- Tests. `serve_media` (in `tests/support/mod.rs`) matches binary messages as well, with `let mut silence_seen = false;` before its loop. It reports `silence frame` the first time a frame of all 0xD5 arrives, and `frame of N bytes` (`try_send`, never blocking) for any frame that is not 160 bytes. At 50 frames a second, it never reports each frame: the channel holds 64.
-
-```rust
-            match msg {
-                Message::Binary(b) => {
-                    if !silence_seen && b.iter().all(|&x| x == 0xD5) {
-                        silence_seen = true;
-                        let _ = tx.try_send("silence frame".to_owned());
-                    }
-                    if b.len() != 160 {
-                        let _ = tx.try_send(format!("frame of {} bytes", b.len()));
-                    }
-                }
-                Message::Text(t) => { /* as before: answer MARK_MEDIA, send the command's name */ }
-                _ => {}
+    /// Writes the playing item's next sentences from the cache, or asks the speaker for the next one
+    /// (at most one sentence ahead of what was heard).
+    async fn advance(&mut self) {
+        loop {
+            let Some(p) = self.playing.as_mut() else {
+                return;
+            };
+            if p.in_flight.is_some() || p.next >= p.sentences.len() || p.next > p.marked + 1 {
+                return;
             }
+            let index = p.next;
+            let sentence = p.sentences[index].text.clone();
+            let item = p.item.id;
+            let hit = self.cache.lock().ok().and_then(|mut c| c.get(&sentence));
+            match hit {
+                Some(pcm) => {
+                    if let Some(p) = self.playing.as_mut() {
+                        p.next += 1;
+                        p.durations.push(audio_duration(pcm.len()));
+                    }
+                    self.write_pcm(&pcm);
+                    self.mark(item, index);
+                }
+                None => {
+                    let id = format!("{item}:{index}");
+                    if let Some(p) = self.playing.as_mut() {
+                        p.in_flight = Some(InFlight {
+                            index,
+                            id: id.clone(),
+                            pcm: Vec::new(),
+                        });
+                    }
+                    let synth = ToSpeaker::Synth { id, text: sentence };
+                    let _ = self.speak_tx.send(text_message(&synth)).await;
+                    return;
+                }
+            }
+        }
+    }
+
+    async fn synth_chunk(&mut self, bytes: &[u8]) {
+        if self.draining.is_some() {
+            return; // a cancelled synthesis's frame (its terminal message has not come yet)
+        }
+        if self
+            .playing
+            .as_ref()
+            .and_then(|p| p.in_flight.as_ref())
+            .is_none()
+        {
+            return;
+        }
+        let Some(pcm) = pcm16(bytes) else {
+            warn!(call = %self.id, "the speaker sent a frame that is no PCM16");
+            self.fail_synthesis().await;
+            return;
+        };
+        if let Some(f) = self.playing.as_mut().and_then(|p| p.in_flight.as_mut()) {
+            f.pcm.extend_from_slice(&pcm);
+        }
+        self.write_pcm(&pcm);
+    }
+
+    /// Ends the synthesis in flight as failed (B5 review): it is cancelled at the speaker (its
+    /// frames dropped until its terminal message, as after a cut), and its sentence is marked
+    /// with what was written of it, so the item goes on.
+    async fn fail_synthesis(&mut self) {
+        let Some(p) = self.playing.as_mut() else {
+            return;
+        };
+        let Some(f) = p.in_flight.take() else {
+            return;
+        };
+        p.durations.push(audio_duration(f.pcm.len()));
+        p.next = f.index + 1;
+        let item = p.item.id;
+        let cancel = ToSpeaker::Cancel { id: f.id.clone() };
+        let _ = self.speak_tx.send(text_message(&cancel)).await;
+        self.draining = Some(f.id);
+        self.mark(item, f.index);
+        self.advance().await;
+    }
+
+    async fn synth_event(&mut self, spoken: Spoken) {
+        let terminal = match &spoken {
+            Spoken::Done { id, .. } | Spoken::Cancelled { id } => Some(id.as_str()),
+            Spoken::Error { id, .. } => id.as_deref(),
+            Spoken::Hello { .. } => None,
+        };
+        if terminal.is_some() && terminal == self.draining.as_deref() {
+            // The cancelled synthesis has ended: done, cancelled or error (a cancel can lose the race).
+            self.draining = None;
+            return;
+        }
+        let (id, ok) = match spoken {
+            Spoken::Done { id, .. } => (id, true),
+            Spoken::Error { id: Some(id), .. } => (id, false),
+            _ => return,
+        };
+        let Some(p) = self.playing.as_mut() else {
+            return;
+        };
+        if p.in_flight.as_ref().is_none_or(|f| f.id != id) {
+            return;
+        }
+        let f = p.in_flight.take().expect("checked above");
+        let sentence = p.sentences[f.index].text.clone();
+        let item = p.item.id;
+        p.durations.push(audio_duration(f.pcm.len()));
+        p.next = f.index + 1;
+        if !ok {
+            warn!(call = %self.id, "a sentence could not be synthesised");
+        } else if !f.pcm.is_empty() {
+            self.file(&sentence, f.pcm);
+        }
+        self.mark(item, f.index);
+        self.advance().await;
+    }
+
+    /// Files a synthesised sentence in the call's cache under the live speaker's voice. A disk
+    /// error is logged once a call; the sentence still plays from memory (B5 review).
+    fn file(&mut self, sentence: &str, pcm: Vec<i16>) {
+        let persist = self.persist.contains(sentence);
+        let filed = match self.cache.lock() {
+            Ok(mut c) => c.put(&self.voice, sentence, pcm, persist),
+            Err(_) => Ok(()),
+        };
+        if filed.is_err() && !self.cache_warned {
+            self.cache_warned = true;
+            warn!(call = %self.id, "the phrase cache could not be written");
+        }
+    }
+
+    async fn media_control(&mut self, control: &str) {
+        match media::parse_control(control) {
+            MediaEvent::MarkProcessed { correlation } => {
+                let Some((item, index)) = parse_mark(&correlation) else {
+                    return;
+                };
+                let finished = match self.playing.as_mut() {
+                    Some(p) if p.item.id == item => {
+                        p.marked = index + 1;
+                        p.mark_at = Instant::now();
+                        p.marked >= p.sentences.len()
+                    }
+                    _ => return,
+                };
+                if finished {
+                    self.input(Input::Played { id: item }).await;
+                } else {
+                    self.advance().await;
+                }
+            }
+            MediaEvent::Xoff => {
+                let _ = self.pace.send(PaceOp::Pause);
+            }
+            MediaEvent::Xon => {
+                let _ = self.pace.send(PaceOp::Resume);
+            }
+            // DTMF is read from ARI (`ChannelDtmfReceived`), once.
+            MediaEvent::Dtmf { .. } | MediaEvent::Start { .. } | MediaEvent::Other => {}
+        }
+    }
+
+    async fn cut(&mut self, item: Item, dropped: Vec<Item>) {
+        // The pacing task drops what it holds, sends `FLUSH_MEDIA` and the lead of silence at
+        // once; a `Sounding` it sent before the flush is a cut item's.
+        self.flushes += 1;
+        let _ = self.pace.send(PaceOp::Flush);
+        let mut heard = 0;
+        if let Some(mut p) = self.playing.take() {
+            if p.item.id == item.id {
+                if let Some(f) = p.in_flight.take() {
+                    let cancel = ToSpeaker::Cancel { id: f.id.clone() };
+                    let _ = self.speak_tx.send(text_message(&cancel)).await;
+                    self.draining = Some(f.id);
+                }
+                let fraction = match (p.audio_started, p.durations.get(p.marked)) {
+                    (Some(_), Some(d)) if !d.is_zero() => {
+                        p.mark_at.elapsed().as_secs_f64() / d.as_secs_f64()
+                    }
+                    (Some(_), _) => 0.5,
+                    (None, _) => 0.0,
+                };
+                heard = text::heard_chars(&p.sentences, p.marked, fraction);
+            } else {
+                self.playing = Some(p);
+            }
+        }
+        if let Source::Core { seq, agent } = item.source {
+            self.reporter.send(BridgeEvent::Said {
+                seq,
+                interrupted_at_char: Some(heard),
+                tts_ms: None,
+            });
+            if agent && let (Some(onset), Some(m)) = (self.onset, self.marks.as_mut()) {
+                m.barge_in_stop_ms = Some(u32::try_from(onset.elapsed().as_millis()).unwrap_or(u32::MAX));
+                self.cut_reply = true;
+            }
+        }
+        for d in dropped {
+            if let Source::Core { seq, .. } = d.source {
+                self.reporter.send(BridgeEvent::Said {
+                    seq,
+                    interrupted_at_char: Some(0),
+                    tts_ms: None,
+                });
+            }
+        }
+    }
+
+    async fn inbound_audio(&mut self, bytes: &[u8]) {
+        let pcm = self.codec.decode(bytes);
+        self.clock
+            .push(pcm.len() as u64 * 1_000 / SAMPLE_RATE, Instant::now());
+        let out: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let _ = self.listen_tx.send(Message::Binary(out.into())).await;
+    }
+
+    async fn heard(&mut self, heard: Heard) {
+        match heard {
+            Heard::SpeechStart { audio_ms } | Heard::Resume { audio_ms } => {
+                self.onset = Some(self.clock.at(audio_ms).unwrap_or_else(Instant::now));
+                self.input(Input::SpeechStart).await;
+            }
+            Heard::SpeechEnd { .. } => self.input(Input::SpeechEnd).await,
+            Heard::Partial { .. } => {}
+            Heard::Unheard { .. } => self.input(Input::Unheard).await,
+            Heard::Final {
+                text,
+                confidence,
+                speech_end_ms,
+                endpoint_ms,
+                endpoint_by,
+                stt_ms,
+            } => {
+                if self.cut_reply
+                    && let Some(m) = self.marks.as_mut()
+                {
+                    m.backchannel_cut = text::is_backchannel(&text);
+                }
+                self.finish_turn();
+                let now = Instant::now();
+                let speech_end = self.clock.at(speech_end_ms).unwrap_or(now);
+                let endpoint = u32::try_from(endpoint_ms.saturating_sub(speech_end_ms)).unwrap_or(u32::MAX);
+                self.marks = Some(TurnMarks::new(speech_end, endpoint, endpoint_by, now));
+                let utterance = BridgeEvent::Utterance {
+                    text,
+                    is_final: true,
+                    confidence,
+                    stt_ms: Some(stt_ms),
+                };
+                self.pending_delivered = Some(self.reporter.send_taken(utterance));
+                self.input(Input::Final).await;
+            }
+        }
+    }
+
+    async fn command(&mut self, command: Command) {
+        match command {
+            Command::Say {
+                seq,
+                text,
+                allow_barge_in,
+            } => {
+                if let Some(m) = self.marks.as_mut() {
+                    m.say.get_or_insert_with(Instant::now);
+                    // The key the core matches its own latency for this sentence by (`summarize`).
+                    m.reply_seq.get_or_insert(seq);
+                }
+                self.input(Input::Speak {
+                    seq,
+                    text,
+                    barge_in: allow_barge_in,
+                    agent: true,
+                })
+                .await;
+            }
+            Command::Play { seq, clip, text, .. } => {
+                // The closing is heard to its end (B4 review C1; the talker hangs up after a cut
+                // one all the same); every other line of the core may be cut.
+                let barge_in = clip != PlayKind::Closing;
+                self.input(Input::Speak {
+                    seq,
+                    text,
+                    barge_in,
+                    agent: false,
+                })
+                .await;
+            }
+            Command::Hangup => self.input(Input::HangupWhenDone).await,
+            Command::Transfer { to } => {
+                // Spawned: ARI may take its 5 s, and the call's loop never waits on it (B5 review).
+                let (ari, id, reporter) = (self.deps.ari.clone(), self.id.clone(), self.reporter.clone());
+                tokio::spawn(async move {
+                    if ari.redirect(&id, &format!("PJSIP/{to}@netgsm")).await.is_err() {
+                        warn!(call = %id, "Asterisk refused the transfer");
+                        let failure_line = "transient: bridge: the transfer was refused".to_owned();
+                        reporter.send(BridgeEvent::Error { failure_line });
+                    }
+                });
+            }
+            Command::Record { .. } | Command::Answer { .. } | Command::Dial { .. } => {}
+        }
+    }
+
+    /// Reports the turn's trace (to the core, and to the bridge's trace file).
+    fn finish_turn(&mut self) {
+        let Some(marks) = self.marks.take() else {
+            self.cut_reply = false;
+            return;
+        };
+        self.cut_reply = false;
+        let trace = marks.trace();
+        if let Some(file) = &self.deps.traces
+            && file.append(&self.id, &trace).is_err()
+        {
+            warn!(call = %self.id, "the trace file could not be written");
+        }
+        self.reporter.send(BridgeEvent::Trace { trace });
+    }
+}
 ```
 
-`a_call_dials_plays_hears_acknowledges_and_hangs_up` ends with:
+This task uses `DialScript`, `BridgeEvent::Phrase` and `BridgeEvent::Trace` from Task A5.
 
-```rust
-    assert!(sent.iter().any(|c| c == "silence frame"), "silence fills the gaps: {sent:?}");
-    assert!(!sent.iter().any(|c| c.starts_with("frame of")), "whole 160-byte frames only: {sent:?}");
-```
+**The speaker's contract in the call (B2 review, 2026-10-29).** The code above already follows it:
+- The voice id comes from the speak service, never from a constant: `speech::connect_speaker` reads the `hello` each connection starts with. `run_call` connects the pre-synthesis socket first, keys the call's `PhraseCache` by its voice id, and reports `error` without dialling when the speaker is unreachable. `Live::connect` compares the live socket's voice id and starts a fresh cache if the service was replaced while the line rang. Config has no `VOICE_ID`.
+- A cancel can lose the race to `done`. `cut` remembers the cancelled id in `draining`; `synth_chunk` drops every binary frame while `draining` is set, and `synth_event` clears it on that id's terminal message, whichever it is (`done`, `cancelled` or `error`). One slot suffices: the service sends a synthesis's frames before its terminal message and starts the next only after it, so while the newest cancelled id is draining, every frame is stale.
+- Audio is filed under the voice that made it (B5 review): `presynthesize` puts with the voice of its own socket's `hello`, `Live` with the live socket's, and `PhraseCache::put` drops audio of a voice that is not the cache's, so a late pre-synthesis after the service was replaced is never filed under the new voice.
+
+**The call's loop never waits on the line (B1 review 2026-10-29, B5 review 2026-10-30).** The code above is the whole of it. It replaces an earlier list of changes to a loop that wrote its own media on its 20 ms tick, where any await longer than the 60 ms lead (an ARI call with its 5 s timeout, a report on a full queue, a slow listener) emptied Asterisk's queue: a hole in the RTP on 22.9+.
+- `pace_media`, a task of the call's own, owns the media socket's sink and B5's `media::Pacer`. From `MEDIA_START` to the call's end it writes what the pacer has due every 20 ms: the queued audio's next frame or a silence frame (`codec.encode(&[0])[0]`: 0xD5 A-law, 0xFF μ-law), each `MARK_MEDIA` after its sentence's last frame. The call's loop sends it `PaceOp`s on an unbounded channel (audio, mark, flush, pause, resume), so nothing the loop awaits can hold the line's audio up.
+- `write_pcm` and `mark` only send an op. `cut` counts a flush and sends `Flush`: the task drops its queue, sends `FLUSH_MEDIA` and writes the lead of silence at once. `MEDIA_XOFF` and `MEDIA_XON` become `Pause` and `Resume`.
+- The task says when a real frame leaves after silence or a mark (`Sounding`, with the number of flushes it had done). On the first one of the playing item, the loop starts the item's audio clock, the turn's first-audio marks and the opening's log line (`first_real_frame`). So they start when the audio left, not when it was queued; one sent before a cut is passed over.
+- ARI during the call is spawned (`spawn_hangup`; the transfer's `redirect` and its error report), since ARI may take its 5 s. Reports are handed on with `try_send` (`Reporter::send` is a plain function): D2's queue holds 1 024, and a report that finds it full is dropped with a warning.
+- The listener and the speaker are connected before `external_media`. No RTP leaves before the pacer starts, and the firewall drops NetGSM's until this host has sent first, so the caller's first words would be lost while the services connect. `MEDIA_START` must name a codec the bridge knows, 160-byte frames and a ptime of 20 ms or none; anything else is "no media start".
+- `run_call` ends by hanging up the caller's own channel `id` (404 when the caller left first), then the bridge and the media channel, so a media socket or speaker that closed during the call never leaves the caller on a silent line. It also hangs `id` up after any `originate` error: a request that timed out may still ring.
+- An odd-length binary frame from the speaker is a protocol error (`pcm16` gives `None`). Pre-synthesis stops; in the call, `fail_synthesis` cancels the synthesis, drains it as after a cut and marks its sentence with what was written, so the item goes on.
+- A disk error of the phrase cache is logged once a call (`file`); the sentence plays from memory.
+- `ToCall` keeps `Command` unboxed, under `#[expect(clippy::large_enum_variant)]` as `jt_calls::Command` itself is: a call's messages are few. (The draft failed clippy here.)
+- Tests: `serve_media` (in `tests/support/mod.rs`) reports `silence frame` the first time a frame of all 0xD5 arrives, and `frame of N bytes` for any frame not of 160 bytes. It uses `try_send`: at 50 frames a second it never reports each one, and the channel holds 64. `a_call_dials_plays_hears_acknowledges_and_hangs_up` ends by asserting that silence filled the gaps and that every frame was whole.
+- The code of this task was checked during the B5 review in a throwaway build that was never committed: `call.rs`, `slice.rs`, `main.rs`, the test and its support, with Step 1's changes to `ari.rs` and `media.rs`. It compiles, `call` passes in about 2 s, `logging` passes over `call.rs`, `slice.rs` and `main.rs`, and clippy and doc are clean.
 
 - [ ] **Step 4: Write `slice.rs` and `main.rs`**
 
@@ -10855,7 +11161,13 @@ pub async fn main(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let ari = Arc::new(Ari::new(&config.ari_url, &config.ari_user, &config.ari_password));
+    let ari = match Ari::new(&config.ari_url, &config.ari_user, &config.ari_password) {
+        Ok(a) => Arc::new(a),
+        Err(e) => {
+            eprintln!("ARI: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let deps = Arc::new(CallDeps {
         ari: ari.clone(),
         listen: config.listen.clone(),
@@ -11014,7 +11326,13 @@ async fn check() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let ari = Ari::new(&config.ari_url, &config.ari_user, &config.ari_password);
+    let ari = match Ari::new(&config.ari_url, &config.ari_user, &config.ari_password) {
+        Ok(a) => a,
+        Err(e) => {
+            println!("ari: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let mut ok = true;
     match ari.info().await {
         Ok(v) => println!("ari: ok (Asterisk {v})"),
@@ -11046,7 +11364,7 @@ In `lib.rs` add `pub mod call;` and `pub mod slice;` and to the module map: "- [
 - [ ] **Step 5: Run the tests and lints**
 
 Run: `cargo test -p jeeta-voice-bridge` then `cargo clippy -p jeeta-voice-bridge --all-targets -- -D warnings`
-Expected: `call` 1 passed (about 3 s), every earlier test still passing, `logging` passing (the log calls of `call.rs` name only `call`, `reason`, `cause`), clippy clean.
+Expected: `call` 1 passed (about 2 s), every earlier test still passing, `logging` passing (the log calls of `call.rs` name only `call`, `reason`, `cause`, `ms`), clippy clean.
 
 - [ ] **Step 6: Commit**
 
@@ -13041,7 +13359,13 @@ impl Seen {
 /// Runs the line until `stop` turns true.
 pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
     let jeeta = Arc::new(JeetaClient::new(&config.jeeta_base_url, &config.bridge_key));
-    let ari = Arc::new(Ari::new(&config.ari_url, &config.ari_user, &config.ari_password));
+    let ari = match Ari::new(&config.ari_url, &config.ari_user, &config.ari_password) {
+        Ok(a) => Arc::new(a),
+        Err(e) => {
+            warn!(error = %e, "the ARI client could not be built");
+            return;
+        }
+    };
     // A call cannot outlive the task that ran it: whatever Asterisk still carries is hung up.
     if let Ok(left) = ari.channel_ids().await {
         let count = left.len();
@@ -13061,6 +13385,8 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
         traces: Some(TraceFile::new(config.trace_file.clone())),
     });
     let calls: Registry = Arc::default();
+    // The calls hand their reports on with `try_send` (B6): this queue is what lets a slow core
+    // never hold a call's loop up.
     let (reports_tx, reports_rx) = mpsc::channel::<Report>(1_024);
     let beat = tokio::spawn(heartbeat(jeeta.clone(), register_input(&config)));
     let poster = tokio::spawn(post_reports(jeeta.clone(), reports_rx, calls.clone()));
@@ -13337,6 +13663,8 @@ git commit -m "feat(voice-bridge): the line's run loop: heartbeat, command poll,
 **Files:**
 - Modify: `.github/workflows/rust.yml` (jobs `voice-speech` and `voice-bridge-linux`)
 - Create: `rust/bridge/voice/deploy/jeeta-voice-bridge.service`, `bridge.env.example`, `images.env.example`
+- Create: `rust/bridge/voice/deploy/jeeta-voice-bridge.logrotate` (the trace file's rotation, B5 review)
+- Modify (speak's socket in a directory of its own, B3 review I4 and B5 review): `rust/bridge/voice/deploy/jeeta-voice.tmpfiles`, `deploy/jeeta-voice-speak.service`, `speech/speak/jeeta_speak.py` (`DEFAULT_SOCKET`), `speech/speak/Dockerfile` (its comment), `speech/speak/tests/test_speak_image.py`, `speech/listen/tests/test_listen_image.py` (the tmpfiles lines), `src/config.rs` (the default and its table), `tests/adapters.rs` (the default's assertion)
 
 - [ ] **Step 1: Add the CI jobs**
 
@@ -13429,7 +13757,7 @@ VOICE_EXTENSION=102
 ARI_URL=http://127.0.0.1:8188
 ARI_USER=jeeta-voice
 LISTEN_SOCKET=unix:/run/jeeta-voice/listen/listen.sock
-SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock
+SPEAK_SOCKET=unix:/run/jeeta-voice/speak/speak.sock
 VOICE_CACHE_DIR=/var/lib/jeeta-voice/cache
 VOICE_TRACE_FILE=/var/lib/jeeta-voice/traces.jsonl
 JEETA_VOICE_BRIDGE_LOG=info
@@ -13444,16 +13772,68 @@ SPEAK_IMAGE=jeeta-voice-speak:<tag recorded in B2>
 
 (this example's angle brackets are the two tags the B2/B3 server steps already appended to the real `/etc/jeeta-voice/images.env`; the file is documentation of its shape.)
 
+- [ ] **Step 2b: Speak's socket in a directory of its own, and the trace file's rotation**
+
+Speak's socket moves out of the shared sticky directory, as listen's did in the B3 review (I4). It goes to `/run/jeeta-voice/speak` (0710 `jeeta-voice-speak:jeeta-voice`), the only directory speak's container mounts. So listen cannot bind speak's name while speak restarts, and speak no longer sees anything of listen's; the bridge (group `jeeta-voice`) still reaches both sockets, and checks each peer's uid (B5). These change together, in this task's commit, so nothing reads the old path afterwards:
+- `deploy/jeeta-voice.tmpfiles` gains `d /run/jeeta-voice/speak 0710 jeeta-voice-speak jeeta-voice -`, and `speech/listen/tests/test_listen_image.py` (which pins the file's lines) gains it too.
+- `deploy/jeeta-voice-speak.service`: `--mount type=bind,source=/run/jeeta-voice/speak,target=/run/jeeta-voice/speak` and `-e SPEAK_SOCKET=unix:/run/jeeta-voice/speak/speak.sock`. Its comment says what listen's says: the container sees its own directory only. `speech/speak/tests/test_speak_image.py`'s `RUN_OPTIONS` takes the same two values.
+- `speech/speak/jeeta_speak.py`'s `DEFAULT_SOCKET` and the Dockerfile's comment name the new path. The image needs no rebuild for the move, since the unit sets `SPEAK_SOCKET`; the next build carries it. The voice id does not change (it names no path).
+- `src/config.rs`: the default `unix:/run/jeeta-voice/speak/speak.sock` and the module docs' table; `tests/adapters.rs`' `configuration_defaults_hold_and_an_empty_value_is_unset` asserts it.
+- `bridge.env.example` (Step 2) names the new path.
+
+The trace file grows by one line a caller turn (numbers and call ids only, about 300 bytes) and was never rotated (B5 review). `rust/bridge/voice/deploy/jeeta-voice-bridge.logrotate` (installed as `/etc/logrotate.d/jeeta-voice-bridge`):
+
+```
+# The voice bridge's turn traces (numbers and call ids only), read by `jeeta-voice-bridge report`,
+# which reads the current file only. The bridge opens the file by its path on every append, so a
+# rename needs no signal, and it creates the next file itself (0600, its UMask).
+/var/lib/jeeta-voice/traces.jsonl {
+    su jeeta-voice-bridge jeeta-voice-bridge
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    nocreate
+}
+```
+
+Run: `python -I -m pytest -c speech/pytest.ini -m "not models" speech` (in `rust/bridge/voice`) and `cargo test -p jeeta-voice-bridge --test adapters`
+Expected: pass, with the new path in the unit, the tests and the default.
+
 - [ ] **Step 3: Commit**
 
 ```bash
-git add .github/workflows/rust.yml rust/bridge/voice/deploy
-git commit -m "ci(voice): speech unit tests and the voice bridge's Linux artifact; its systemd unit" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add .github/workflows/rust.yml rust/bridge/voice/deploy rust/bridge/voice/speech rust/bridge/voice/src/config.rs rust/bridge/voice/tests/adapters.rs
+git commit -m "ci(voice): speech unit tests and the voice bridge's Linux artifact; its systemd unit; speak's own socket directory; trace rotation" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 4: [COORDINATOR, server] Serve staging**
 
 Preconditions: staging runs the Phase C release (E1 Step 2). In the staging panel, as the owner of the test workspace (proposed "Test Atölye"; never "Jeeta Demo", the Meta reviewers' workspace), issue a key: **API anahtarları** → new key, name "voice bridge 102", the one scope **Ses köprüsü olarak çalışma** (`calls.bridge`); copy the plaintext once. On the host:
+
+Before the bridge first starts, speak's socket moves (Step 2b) and the trace rotation goes in. Root removes the old socket while speak is stopped:
+
+```bash
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice.tmpfiles /etc/tmpfiles.d/jeeta-voice.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/jeeta-voice.conf
+systemctl stop jeeta-voice-speak; rm -f /run/jeeta-voice/speak.sock
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-speak.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/jeeta-voice-speak.service
+systemctl daemon-reload && systemctl start jeeta-voice-speak
+sleep 60
+stat -c '%a %U:%G %n' /run/jeeta-voice /run/jeeta-voice/speak /run/jeeta-voice/speak/speak.sock /run/jeeta-voice/listen/listen.sock
+sudo -u jeeta-voice-bridge test -w /run/jeeta-voice/speak/speak.sock && echo "bridge can connect"
+docker exec jeeta-voice-speak ls /run/jeeta-voice
+journalctl -u jeeta-voice-speak -n 6 --no-pager
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-bridge.logrotate /etc/logrotate.d/jeeta-voice-bridge
+logrotate --debug /etc/logrotate.d/jeeta-voice-bridge 2>&1 | tail -3
+```
+
+Expected: `1770 root:jeeta-voice /run/jeeta-voice`, `710 jeeta-voice-speak:jeeta-voice /run/jeeta-voice/speak`, `660 jeeta-voice-speak:jeeta-voice …speak/speak.sock` and listen's `660 jeeta-voice-svc:jeeta-voice …listen.sock` unchanged; `bridge can connect`; the container lists `speak` alone; the journal shows `loaded in …`, the voice id of the running image (the move does not change it) and `listening`, and no text; logrotate's dry run names the file and makes no error.
+
+Then the bridge:
 
 ```bash
 umask 077

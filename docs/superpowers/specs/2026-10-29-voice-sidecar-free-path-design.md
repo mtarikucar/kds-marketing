@@ -87,7 +87,8 @@ superseded by this addendum.
   Listen's socket sits in a directory of its own, `/run/jeeta-voice/listen` (0710, its user's), the
   only one its container mounts, so speak cannot bind that name while listen restarts and listen
   cannot reach speak's socket; the worker also checks each socket's peer uid (B3 review). Speak
-  moves to a directory of its own with B5.
+  moves to a directory of its own, `/run/jeeta-voice/speak` (0710, its user's), in plan task D3
+  before the worker first serves a call; until then the peer check holds (B5 review).
 - **The worker reaches loopback only** (`IPAddressAllow=localhost`, `IPAddressDeny=any`): the core
   (`JEETA_BASE_URL=http://127.0.0.1:809x`, not the Cloudflare address, so no proxy hop), ARI and the
   sockets. It opens no listening socket.
@@ -167,6 +168,9 @@ What reaches Asterisk is paced by the worker (plan B5 `media::Pacer`, B1 review)
   sentence's tail is padded with silence.
 - `MARK_MEDIA` goes right after a sentence's last real frame. Silence frames carry no mark and do
   not count toward what the caller heard.
+- Written by a task of the call's own, which nothing else the call waits on (ARI, the core, the
+  speech services) can hold up. A stall longer than the lead writes the lead again, not a
+  catch-up Asterisk would keep queued for the rest of the call (B5 review).
 
 **Closing**: the core queues `play{clip: closing}` then `hangup`; the talker plays the closing to
 its mark (the caller's speech does not cut it), waits 400 ms, then hangs up the channel (report:
