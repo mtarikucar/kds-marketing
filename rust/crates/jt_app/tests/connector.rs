@@ -2945,6 +2945,25 @@ async fn bound_confirm_binds_first_asset_and_creates_the_rest() {
 // Retiring, pending work
 // ---------------------------------------------------------------------------------------------
 
+/// Giving the access back at the provider is best effort: a refusal is logged, and the
+/// retirement holds all the same.
+#[tokio::test]
+async fn a_refused_revocation_does_not_undo_a_retirement() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    r.meta
+        .push_revoke(Err(ConnectorError::transient("the provider is down")));
+    let out = capabilities::retire(&r.w.deps, &r.w.owner_ctx, page.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls().len(), 1);
+    assert_eq!(out.capability.status, StoredStatus::Retired);
+    assert_eq!(r.stored(page.id).sealed, None);
+}
+
 #[tokio::test]
 async fn retire_clears_sealed_config() {
     let r = rig().await;
@@ -2953,12 +2972,19 @@ async fn retire_clears_sealed_config() {
         .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
     r.probe(page.id).await;
     assert!(r.stored(page.id).sealed.is_some());
+    let held = r.sealed_credential(page.id);
 
     let later = at(&r.w.owner_ctx, FIXED_NOW + Duration::hours(2));
     let out = capabilities::retire(&r.w.deps, &later, page.id, true)
         .await
         .unwrap();
     assert_eq!(out.capability.status, StoredStatus::Retired);
+    // Its access is given back at the provider, with the credential it held (in a task of its
+    // own, once the retirement holds).
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls(), vec![held]);
     assert!(!out.capability.has_sealed_config);
     assert_eq!(r.stored(page.id).sealed, None);
     assert_eq!(out.capability.updated_at, FIXED_NOW + Duration::hours(2));
@@ -4124,4 +4150,62 @@ async fn host_mutations_wait_for_workspace_guard() {
             .calls()
             .contains(&HostCall::Allow(w.ws, "imap.example.com".into()))
     );
+}
+
+/// The provider's grant is the account's (TikTok's revocation ends the account's whole
+/// authorization of the app): while another workspace still holds the account, retiring one
+/// holder gives nothing back, which would cut the other off; retiring the last one does.
+#[tokio::test]
+async fn a_shared_account_is_revoked_only_when_its_last_holder_retires() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    let (beta, beta_ctx) = r.w.other_workspace().await;
+    jt_testkit::flows::activate_workspace(&r.w.deps, beta).await;
+    let theirs = Credential::PageToken {
+        page_id: "page-1".into(),
+        token: "EAAB-beta-page-1".into(),
+    };
+    let mut held = Capability::new(
+        CapabilityId::new_v7(),
+        beta,
+        NewCapability {
+            kind_key: "facebook_page".into(),
+            name: "Kahve".into(),
+            external_id: Some("page-1".into()),
+            ..NewCapability::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    held.status = StoredStatus::Verified;
+    held.last_verified_at = Some(FIXED_NOW);
+    let sealed =
+        r.w.deps
+            .seal
+            .seal(beta, &serde_json::to_vec(&theirs).unwrap())
+            .unwrap();
+    {
+        let mut t = r.w.uow.tenant(beta).await.unwrap();
+        t.capabilities()
+            .insert(held.clone(), Some(sealed))
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+
+    capabilities::retire(&r.w.deps, &r.w.owner_ctx, page.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(r.meta.revoke_calls().is_empty());
+
+    capabilities::retire(&r.w.deps, &beta_ctx, held.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls(), vec![theirs]);
 }

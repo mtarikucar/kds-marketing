@@ -1288,6 +1288,14 @@ pub trait InboundEventRepo: Send + Sync {
         event: InboundEvent,
         raw: Option<Vec<u8>>,
     ) -> Result<Option<InboundEventId>, AppError>;
+    /// The workspace's event of `provider` with the provider's id `external_id` (the dedupe key
+    /// [`InboundEventRepo::insert_if_new`] refuses a replay by), without its raw body; `None` when
+    /// the workspace holds none.
+    async fn find_external(
+        &mut self,
+        provider: jt_connector::Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError>;
     /// The events not yet processed, oldest (`received_at`, then id) first, at most `limit`
     /// (clamped to `1..=MAX_EVENT_PAGE`).
     async fn list_pending(&mut self, limit: u32) -> Result<Vec<InboundEvent>, AppError>;
@@ -1805,6 +1813,16 @@ pub trait PlatformRepos: Send + Sync {
         kind_keys: &[&str],
         external_id: &str,
     ) -> Result<Option<Capability>, AppError>;
+    /// Every capability, in every workspace, of one of `kind_keys` that holds the provider account
+    /// `external_id` with sealed credentials and is not retired, whatever else its status: all
+    /// that a provider-side change of the account's one grant reaches (TikTok's token revocation
+    /// ends the account's whole authorization of the app; a lost access reaches every workspace
+    /// holding it). In workspace order, then id. Read as [`CapabilityRepo::find`] reads it.
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError>;
     /// The workspaces, in id order, holding at least one capability of one of `kind_keys` that
     /// is `Verified` and has sealed credentials: those a poll of the kinds' provider has a
     /// connected account to ask with (the NetGSM polls ask with a verified `sms_line`). Lets a

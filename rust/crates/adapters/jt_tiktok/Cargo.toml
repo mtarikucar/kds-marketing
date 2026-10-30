@@ -14,6 +14,8 @@ jt_app.workspace = true
 jt_connector.workspace = true
 jt_outbound.workspace = true
 serde_json.workspace = true
+# `sha2`: a webhook event's identity (TikTok's events carry no id of their own).
+sha2.workspace = true
 time.workspace = true
 url.workspace = true
 tracing.workspace = true

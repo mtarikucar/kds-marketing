@@ -560,4 +560,14 @@ export const hooks: HooksOut = {
     purpose,
     url: `https://panel.example.invalid/hooks/netgsm/${WS_ID}/${HOOK_TOKEN}/${purpose}`,
   })),
+  tiktok: {
+    url: 'https://panel.example.invalid/hooks/tiktok',
+    events: [
+      'authorization.removed',
+      'post.publish.failed',
+      'post.publish.complete',
+      'post.publish.inbox_delivered',
+      'post.publish.publicly_available',
+    ],
+  },
 };

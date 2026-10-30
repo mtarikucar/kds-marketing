@@ -9,6 +9,7 @@
 //! | `GET /hooks/meta` | Meta's verification: the `hub.challenge` as `text/plain` when `hub.mode` is `subscribe` and `hub.verify_token` is the platform's (constant time); else `403`; `404` while no Meta app is configured |
 //! | `POST /hooks/meta` | `200 EVENT_RECEIVED` once every event is stored or dropped; see **Meta** below |
 //! | `POST /hooks/netgsm/{workspace_id}/{token}/{purpose}` | `202` once every event is stored; see **NetGSM** below |
+//! | `POST /hooks/tiktok` | `200` once the event is stored or dropped; see **TikTok** below |
 //!
 //! **Meta** (synchronous: a delivery is answered only after its events are stored, so a lost
 //! answer is a redelivery, never a lost event): no Meta app configured, or no
@@ -45,12 +46,32 @@
 //! a database failure is `503`, which NetGSM redelivers. An authenticated callback whose parse
 //! yields no events is also counted once as operational `unresolved`, with `202` unchanged.
 //!
+//! **TikTok** (synchronous, as Meta's: the event is answered only once it is stored; TikTok
+//! retries anything but a `200` for up to 72 hours, <https://developers.tiktok.com/doc/webhooks-overview>):
+//! no TikTok app configured, or no `TikTok-Signature` header, is `401` before the body is read; a
+//! body over [`TIKTOK_BODY_LIMIT`] is `413`; the signature is checked over the raw body before
+//! anything is parsed (`jt_connector::tiktok_signature_ok`: HMAC-SHA256 under the app's client
+//! secret over `"{t}.{body}"`, constant time, `t` within
+//! `jt_connector::TIKTOK_SIGNATURE_TOLERANCE` of now, either way): a bad or stale one is `401`
+//! with nothing stored. Every `401` is counted ([`counters`]`().rejected_tiktok`) and warned of
+//! at most once a minute, naming only why (`no_app`, `missing_header`, `malformed`, `mismatch`,
+//! `stale`). A signed body the parser does not know is `200`, counted
+//! ([`counters`]`().unparseable_tiktok`) and stored as nothing, as is one naming another client
+//! key, and one about an account no workspace holds connected or whose workspace is suspended
+//! (counted as `unrouted_tiktok`, a warning naming only the reason and TikTok's event name). An
+//! event routed by its open id is stored once in that workspace with its body, and takes its
+//! effect there (`jt_app::usecases::webhook::receive_tiktok`); once answered, a post it says
+//! moved is read back in a task of its own (`webhook::spawn_resolve`). A database failure is
+//! `500`: TikTok redelivers.
+//!
 //! Replays store nothing new (Review Focus 2): events are unique per workspace, provider and
-//! provider id. No answer, log line or counter carries a body, an account id or a token.
+//! provider id (TikTok's: the event's identity, `jt_tiktok::webhook`). No answer, log line or
+//! counter carries a body, an account id, a signature or a secret.
 
 mod meta;
 mod netgsm;
 mod raw;
+mod tiktok;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -58,13 +79,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::Router;
 use axum::routing::{get, post};
 use jt_app::usecases::Deps;
-use jt_app::usecases::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH};
+use jt_app::usecases::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH, TIKTOK_HOOK_PATH};
 
 /// The largest Meta delivery read (WhatsApp Cloud API payloads reach 3 MB); a larger one is
 /// `413`.
 pub const META_BODY_LIMIT: usize = 3 * 1024 * 1024;
 /// The largest NetGSM callback body read; a larger one is `413`.
 pub const NETGSM_BODY_LIMIT: usize = 256 * 1024;
+/// The largest TikTok delivery read (one event, a few hundred bytes); a larger one is `413`.
+pub const TIKTOK_BODY_LIMIT: usize = 64 * 1024;
 
 /// Meta events dropped because no workspace holds their account connected, or because the one
 /// that does is suspended.
@@ -73,6 +96,14 @@ static UNROUTED_META: AtomicU64 = AtomicU64::new(0);
 static UNPARSEABLE_META: AtomicU64 = AtomicU64::new(0);
 /// NetGSM callback bodies the parser cannot read.
 static UNPARSEABLE_NETGSM: AtomicU64 = AtomicU64::new(0);
+/// TikTok events dropped: naming another client key, an account no workspace holds connected, or
+/// one of a suspended workspace.
+static UNROUTED_TIKTOK: AtomicU64 = AtomicU64::new(0);
+/// Signed TikTok bodies the parser does not know.
+static UNPARSEABLE_TIKTOK: AtomicU64 = AtomicU64::new(0);
+/// TikTok deliveries refused before anything was stored (`401`): no app, no signature header, or
+/// a signature malformed, not the body's, or stale.
+static REJECTED_TIKTOK: AtomicU64 = AtomicU64::new(0);
 
 /// What the gate has dropped since the process started (process metrics: they reset at every
 /// start and are never stored).
@@ -85,6 +116,14 @@ pub struct Counters {
     pub unparseable_meta: u64,
     /// NetGSM callback bodies the parser cannot read.
     pub unparseable_netgsm: u64,
+    /// TikTok events dropped: naming another client key, for an account no workspace holds
+    /// connected, or of a suspended workspace.
+    pub unrouted_tiktok: u64,
+    /// Signed TikTok bodies that are not a webhook the parser knows.
+    pub unparseable_tiktok: u64,
+    /// TikTok deliveries refused (`401`): no TikTok app, no signature header, a signature
+    /// malformed, not the body's, or stale.
+    pub rejected_tiktok: u64,
 }
 
 /// The counters now.
@@ -93,6 +132,9 @@ pub fn counters() -> Counters {
         unrouted_meta: UNROUTED_META.load(Ordering::Relaxed),
         unparseable_meta: UNPARSEABLE_META.load(Ordering::Relaxed),
         unparseable_netgsm: UNPARSEABLE_NETGSM.load(Ordering::Relaxed),
+        unrouted_tiktok: UNROUTED_TIKTOK.load(Ordering::Relaxed),
+        unparseable_tiktok: UNPARSEABLE_TIKTOK.load(Ordering::Relaxed),
+        rejected_tiktok: REJECTED_TIKTOK.load(Ordering::Relaxed),
     }
 }
 
@@ -111,5 +153,6 @@ pub fn router(state: WebhookState) -> Router {
             &format!("{NETGSM_HOOK_PATH}/{{workspace_id}}/{{token}}/{{purpose}}"),
             post(netgsm::receive),
         )
+        .route(TIKTOK_HOOK_PATH, post(tiktok::receive))
         .with_state(state)
 }

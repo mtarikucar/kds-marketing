@@ -167,6 +167,25 @@ impl InboundEventRepo for PgTenantRepos {
         }
     }
 
+    async fn find_external(
+        &mut self,
+        provider: Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError> {
+        // The unique key `(workspace_id, provider, external_id)` serves it.
+        let record: Option<EventRecord> = sqlx::query_as(&format!(
+            "select {COLUMNS} from inbound_events \
+             where workspace_id = $1 and provider = $2 and external_id = $3"
+        ))
+        .bind(self.workspace_id().as_uuid())
+        .bind(provider.key())
+        .bind(external_id)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "find an inbound event by its provider id"))?;
+        record.map(EventRecord::into_event).transpose()
+    }
+
     async fn list_pending(&mut self, limit: u32) -> Result<Vec<InboundEvent>, AppError> {
         let ws = self.workspace_id();
         let records: Vec<EventRecord> = sqlx::query_as(&format!(

@@ -553,6 +553,14 @@ impl PlatformRepos for PgPlatformRepos {
         capabilities::by_external(&mut self.tx, kind_keys, external_id).await
     }
 
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        capabilities::holding(&mut self.tx, kind_keys, external_id).await
+    }
+
     async fn workspaces_with_verified(
         &mut self,
         kind_keys: &[&str],

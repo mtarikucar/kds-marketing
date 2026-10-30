@@ -225,13 +225,16 @@ function TiktokError({ error }: { error: unknown }) {
 function Creator({ creator }: { creator: api.TiktokCreator }) {
   const { t } = useTranslation();
   const nickname = creator.nickname ?? creator.username ?? '—';
+  // TikTok's avatar URLs are signed and expire: one that no longer loads is left out.
+  const [avatarFailed, setAvatarFailed] = useState(false);
   return (
     <div className="flex items-center gap-2 text-sm">
-      {creator.avatar_url && (
+      {creator.avatar_url && !avatarFailed && (
         <img
           src={creator.avatar_url}
           alt=""
           referrerPolicy="no-referrer"
+          onError={() => setAvatarFailed(true)}
           className="h-8 w-8 rounded-full border border-border object-cover"
         />
       )}

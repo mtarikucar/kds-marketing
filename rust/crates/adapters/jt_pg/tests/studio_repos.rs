@@ -356,3 +356,11 @@ async fn binding_refresh_invalidates_old_intents() {
     let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
     jt_testkit::studio_contract::binding_refresh_invalidates_old_intents(&uow).await;
 }
+
+/// `studio_upgrade_receipt`'s and `attempt_by_receipt`'s SQL, against PostgreSQL.
+#[tokio::test]
+async fn receipt_upgrade_and_lookup() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::receipt_upgrade_and_lookup(&uow).await;
+}

@@ -13,7 +13,9 @@ use jt_app::{
     error::AppError,
     ports::{files::StoredFile, studio::*},
 };
-use jt_studio::{RetirementReason, SlotEvent, StudioError, StudioPolicy, transition_slot};
+use jt_studio::{
+    PublishReceipt, RetirementReason, SlotEvent, StudioError, StudioPolicy, transition_slot,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -526,6 +528,38 @@ impl StudioRepo for PgTenantRepos {
     }
     async fn save_budget_move(&mut self, m: BudgetMove, key: &str) -> Result<BudgetMove, AppError> {
         self.studio_move(m, key).await
+    }
+    async fn attempt_by_receipt(
+        &mut self,
+        capability: jt_capability::CapabilityId,
+        external_id: &str,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        // One statement: the workspace's attempts of the capability with a receipt, by the
+        // receipt's id (an observed attempt reads `unknown`, a succeeded one `succeeded`).
+        let row: Option<Value> = sqlx::query_scalar(
+            "select a.data from studio_publish_attempts a \
+             join studio_slots s on s.workspace_id = a.workspace_id and s.id = a.slot_id \
+             where a.workspace_id = $1 and s.capability_id = $2 \
+             and a.state in ('unknown', 'succeeded') \
+             and a.data->'outcome'->>'status' in ('observed', 'succeeded') \
+             and a.data->'outcome'->'evidence'->>'external_id' = $3 \
+             order by a.id limit 1",
+        )
+        .bind(self.workspace_id().0)
+        .bind(capability.0)
+        .bind(external_id)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "find a Studio attempt by its receipt"))?;
+        row.map(decode).transpose()
+    }
+    async fn upgrade_receipt(
+        &mut self,
+        attempt: PublishAttemptId,
+        receipt: PublishReceipt,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        self.studio_upgrade_receipt(attempt, receipt, at).await
     }
     async fn record_measurement(&mut self, m: Measurement) -> Result<bool, AppError> {
         self.studio_measure(m).await

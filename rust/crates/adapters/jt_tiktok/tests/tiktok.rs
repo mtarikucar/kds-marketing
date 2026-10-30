@@ -429,6 +429,108 @@ async fn refresh_rotates_refresh_token() {
     }
 }
 
+/// Retiring a capability revokes its access token
+/// (<https://developers.tiktok.com/doc/oauth-user-access-token-management>, "Revoke access"):
+/// TikTok answers an empty struct; a refusal maps as the token endpoint's do, without a secret.
+#[tokio::test]
+async fn revoke_gives_back_the_access_token() {
+    let r = rig().await;
+    r.mock.on("POST", REVOKE, raw(200, ""));
+    r.tt.revoke(&cred()).await.unwrap();
+    let call = r.mock.request("POST", REVOKE);
+    assert_eq!(
+        call.header("content-type"),
+        Some("application/x-www-form-urlencoded")
+    );
+    assert_eq!(call.bearer(), None);
+    assert_eq!(
+        call.form(),
+        owned(&[
+            ("client_key", CLIENT_KEY),
+            ("client_secret", CLIENT_SECRET),
+            ("token", ACCESS_TOKEN),
+        ])
+    );
+    // An empty JSON object is a success too.
+    r.mock.set("POST", REVOKE, ok(json!({})));
+    r.tt.revoke(&cred()).await.unwrap();
+
+    for (reply, expected) in [
+        (
+            status(
+                400,
+                json!({ "error": "invalid_request", "error_description": "The request parameters are malformed." }),
+            ),
+            "permanent",
+        ),
+        (answer_with(401, "token_invalid_client"), "permanent"),
+        (raw(401, "<html>no</html>"), "auth"),
+        (raw(429, "slow down"), "throttle"),
+        (raw(503, "<html>unavailable</html>"), "transient"),
+        (raw(200, "not json"), "permanent"),
+    ] {
+        r.mock.set("POST", REVOKE, reply.clone());
+        let e = r.tt.revoke(&cred()).await.unwrap_err();
+        assert_eq!(e.kind(), expected, "{reply:?}: {e}");
+        assert_no_secret(&format!("{e} {e:?}"));
+    }
+    // An expired access token cannot be revoked: it is renewed first, and the fresh one revoked.
+    r.mock.set("POST", REVOKE, raw(200, ""));
+    r.mock.on("POST", TOKEN, answer("token_refreshed"));
+    let before = r.mock.requests("POST", REVOKE).len();
+    r.tt.revoke(&cred_expiring_in(-Duration::minutes(5)))
+        .await
+        .unwrap();
+    let refresh = r.mock.request("POST", TOKEN);
+    assert_eq!(
+        refresh.form(),
+        owned(&[
+            ("client_key", CLIENT_KEY),
+            ("client_secret", CLIENT_SECRET),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", REFRESH_TOKEN),
+        ])
+    );
+    let revoked = r.mock.requests("POST", REVOKE);
+    assert_eq!(revoked.len(), before + 1);
+    assert_eq!(
+        revoked.last().unwrap().form(),
+        owned(&[
+            ("client_key", CLIENT_KEY),
+            ("client_secret", CLIENT_SECRET),
+            ("token", "act.tt-access-SECRET-2"),
+        ])
+    );
+    // A renewal TikTok refuses: the expired token is revoked all the same (it may still be
+    // accepted), and its refusal is the error.
+    r.mock.set(
+        "POST",
+        TOKEN,
+        status(400, json!({ "error": "invalid_grant" })),
+    );
+    r.mock
+        .set("POST", REVOKE, answer_with(401, "token_invalid_client"));
+    let e =
+        r.tt.revoke(&cred_expiring_in(-Duration::minutes(5)))
+            .await
+            .unwrap_err();
+    assert_eq!(e.kind(), "permanent");
+    assert_eq!(
+        r.mock.requests("POST", REVOKE).last().unwrap().form()[2],
+        ("token".to_owned(), ACCESS_TOKEN.to_owned())
+    );
+    r.mock.set("POST", REVOKE, raw(200, ""));
+
+    // Only an OAuth credential has a token to revoke; nothing is sent for another.
+    let calls = r.mock.requests("POST", REVOKE).len();
+    let foreign = Credential::PageToken {
+        page_id: "1".into(),
+        token: "EAAB-SECRET".into(),
+    };
+    assert_eq!(kind_of(r.tt.revoke(&foreign).await), "permanent");
+    assert_eq!(r.mock.requests("POST", REVOKE).len(), calls);
+}
+
 #[tokio::test]
 async fn refresh_waits_until_near_expiry() {
     let r = rig().await;
@@ -1534,13 +1636,32 @@ async fn status_processing_is_pending_then_complete_resolves_permalink() {
             url: None,
         }))
     );
-    // Nobody else may see it: TikTok names no public id, and the receipt keeps the publish id.
+    // Complete without a public id (nobody else may see it, or TikTok's moderation has not
+    // passed it yet): posted, the receipt keeping the publish id, awaiting a public id.
     r.mock
         .set("POST", STATUS, answer("status_complete_private"));
     assert_eq!(
         r.tt.resolve(&cred(), &public(), &receipt).await.unwrap(),
-        Some(PublishResolution::Published(self::receipt(PUBLISH_ID)))
+        Some(PublishResolution::AwaitingPublicId(self::receipt(
+            PUBLISH_ID
+        )))
     );
+    for ids in [json!(null), json!(["not-a-video-id"])] {
+        r.mock.set(
+            "POST",
+            STATUS,
+            ok(json!({
+                "data": { "status": "PUBLISH_COMPLETE", "publicaly_available_post_id": ids },
+                "error": { "code": "ok" },
+            })),
+        );
+        assert_eq!(
+            r.tt.resolve(&cred(), &public(), &receipt).await.unwrap(),
+            Some(PublishResolution::AwaitingPublicId(self::receipt(
+                PUBLISH_ID
+            ))),
+        );
+    }
     // An answer without a status is refused.
     r.mock.set(
         "POST",

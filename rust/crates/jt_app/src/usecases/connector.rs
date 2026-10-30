@@ -106,7 +106,7 @@ use super::capabilities::{
     CapabilityOut, append, capability_error, checked_external_id, checked_external_id_of, find,
     locked, not_retired, version_in_force,
 };
-use super::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH, netgsm_hook_token};
+use super::webhook::{META_HOOK_PATH, NETGSM_HOOK_PATH, TIKTOK_HOOK_PATH, netgsm_hook_token};
 use super::{Deps, acting_user, hash_token, invalid, nothing_to_change};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -400,7 +400,27 @@ pub struct HooksOut {
     pub meta: Option<MetaHook>,
     /// The workspace's NetGSM callback URL for each purpose, in [`NetgsmPurpose::all`]'s order.
     pub netgsm: Vec<NetgsmHook>,
+    /// The platform's TikTok webhook (one for every workspace, as Meta's), when the platform's
+    /// TikTok app is configured.
+    pub tiktok: Option<TiktokHook>,
 }
+
+/// The TikTok webhook's address, to be entered as the TikTok app's callback URL in TikTok's
+/// developer portal (Webhooks), and the events it acts on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TiktokHook {
+    pub url: String,
+    pub events: Vec<String>,
+}
+
+/// The TikTok events the webhook acts on (`jt_tiktok::webhook`); any other is kept for the agent.
+pub const TIKTOK_HOOK_EVENTS: &[&str] = &[
+    "authorization.removed",
+    "post.publish.failed",
+    "post.publish.complete",
+    "post.publish.inbox_delivered",
+    "post.publish.publicly_available",
+];
 
 /// The Meta webhook's address and where its verify token is set. The token itself is never
 /// shown.
@@ -998,7 +1018,9 @@ pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<Start
 /// NetGSM callback URL for each purpose, `{NETGSM_HOOK_PATH}/{workspace_id}/{token}/{purpose}`,
 /// whose token ([`super::webhook::netgsm_hook_token`]) is what lets NetGSM's calls in. The token
 /// is a capability of the URL, not a sealed secret, but it lets anyone who holds it store events
-/// in the workspace: only who may manage capabilities sees it. Needs `capabilities.manage`.
+/// in the workspace: only who may manage capabilities sees it; and the platform's TikTok webhook
+/// ([`TIKTOK_HOOK_PATH`]) when the TikTok app is configured, with the events it acts on
+/// ([`TIKTOK_HOOK_EVENTS`]). Needs `capabilities.manage`.
 ///
 /// Without a configured public base URL there is no address to show: `CONFLICT` "public base url
 /// not configured" (`details.reason = "public_base_url_not_configured"`), whichever apps are
@@ -1028,7 +1050,85 @@ pub async fn hooks(deps: &Deps, ctx: &Ctx) -> Result<HooksOut, AppError> {
             url: public_url(apps, &path)?.to_string(),
         });
     }
-    Ok(HooksOut { meta, netgsm })
+    let tiktok = match apps.tiktok_app() {
+        Some(_) => Some(TiktokHook {
+            url: public_url(apps, TIKTOK_HOOK_PATH)?.to_string(),
+            events: TIKTOK_HOOK_EVENTS.iter().map(|e| (*e).to_owned()).collect(),
+        }),
+        None => None,
+    };
+    Ok(HooksOut {
+        meta,
+        netgsm,
+        tiktok,
+    })
+}
+
+/// Records that the account of capability `id` removed the app's access at its provider
+/// (TikTok's `authorization.removed` webhook, for `reason`, the event having happened at
+/// `occurred_at` when the provider said; the access token is revoked by then), in the open bundle
+/// `repos`: as a probe refused with `Auth` would, the capability turns `unreachable` and
+/// `reconnect_required` is set (`work.pending` then asks for a reconnection), `health` saying why
+/// as a probe's failure line; and `connector.authorization_removed` (`{kind_key, reason}`) is
+/// written when that flips `reconnect_required`, once however many such events arrive. The
+/// sealed credential is kept, dead: a reconnection replaces it, a retirement erases it. A later
+/// probe that succeeds (the owner granted access again) clears it all, as for any lost login.
+///
+/// Left alone (`false`): a retired capability, and one verified after the event happened (its
+/// access was proven since: a reconnection, or an event about a grant the capability no longer
+/// holds, such as the revocation of a retired sibling's token, which TikTok reports too, or a
+/// redelivery after the owner reconnected). `true` when anything was written.
+pub(crate) async fn authorization_removed(
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    id: CapabilityId,
+    reason: &str,
+    occurred_at: Option<OffsetDateTime>,
+) -> Result<bool, AppError> {
+    let mut current = locked(repos, id).await?;
+    if current.status == StoredStatus::Retired {
+        return Ok(false);
+    }
+    if let (Some(at), Some(verified)) = (occurred_at, current.last_verified_at)
+        && at < verified
+    {
+        return Ok(false);
+    }
+    let flipped = !reconnect_required(&current);
+    let error = ConnectorError::auth(format!("the account removed the app's access ({reason})"));
+    let line = super::failure::failure_reason(provider_for_kind(&current.kind_key), &error);
+    current.status = status_after_probe(current.status, &ProbeResult::failure(0, error));
+    let mut public = object(&current.connector_public);
+    let mut health = json!({
+        "ok": false,
+        "at": rfc3339(ctx.now)?,
+        "latency_ms": 0,
+        "error_kind": "auth",
+        "reason": line,
+    });
+    if let Some(failure) = public.get("health").and_then(|h| h.get(ON_CONNECTED_ERROR)) {
+        health[ON_CONNECTED_ERROR] = failure.clone();
+    }
+    public.insert("health".to_owned(), health);
+    public.insert(RECONNECT_REQUIRED.to_owned(), json!(true));
+    current.connector_public = Value::Object(public);
+    current.updated_at = ctx.now;
+    let kind_key = current.kind_key.clone();
+    repos.capabilities().update(current).await?;
+    if flipped {
+        let in_force = version_in_force(repos).await?;
+        append(
+            repos,
+            ctx,
+            "connector.authorization_removed",
+            "capability",
+            id,
+            in_force,
+            json!({ "kind_key": kind_key, "reason": reason }),
+        )
+        .await?;
+    }
+    Ok(true)
 }
 
 /// The `connector_public` key of the PBX's call mode (the NetGSM adapter reads it).

@@ -7,7 +7,8 @@
 //! a provider does, through the gate.
 //!
 //! **Routing (Review Focus 1).** Meta's events name the provider account they arrived for (a
-//! page, an Instagram account, a WhatsApp number). [`receive_for_accounts`] finds, across every
+//! page, an Instagram account, a WhatsApp number), and TikTok's the account's open id.
+//! [`receive_for_accounts`] (and [`receive_tiktok`], for TikTok's) finds, across every
 //! workspace, the one capability that holds that account *connected*
 //! ([`crate::ports::PlatformRepos::capability_by_external`]: sealed credentials, verified at
 //! least once by a probe, not retired; a verified one before an unreachable one, then the newest)
@@ -41,6 +42,21 @@
 //! provider said when the event happened, the payload (an object) also carries `occurred_at`
 //! (RFC 3339), unless the provider's item already names that key. Inbound events are records of
 //! the outside world: no ledger entry.
+//!
+//! **TikTok** ([`receive_tiktok`]). One event per delivery, routed by its open id to every
+//! workspace holding that `tiktok` account connected (an event naming a post: to the workspace
+//! that sent it) and stored there once (by the event's identity: `jt_tiktok::webhook`), its body
+//! kept beside it. In the same transaction, an event newly stored takes its effect:
+//! `authorization.removed` turns the capability unreachable and asks for a reconnection
+//! (`super::connector::authorization_removed`, unless the event predates the capability's last
+//! verification), and the event is marked processed; a `post.publish.*` event that moved a post
+//! names the post to read back ([`TiktokIntake::resolve`]), which the gate does after answering
+//! ([`resolve_hooked`]: the recovery job's own read-back, so the two settle a post alike, and the
+//! upgrade of a post settled before TikTok named its public id), and that read marks the event
+//! processed (a redelivery names the post again, the read being idempotent). Any other event is
+//! left unprocessed, for the agent (`events.pending`). The status poll (`studio_publish_recover`)
+//! and the hourly probe stay: a delivery that never arrives changes only how soon a post settles
+//! or a lost access shows.
 
 use std::collections::BTreeMap;
 
@@ -61,6 +77,10 @@ pub const META_HOOK_PATH: &str = "/hooks/meta";
 /// Where NetGSM delivers its callbacks, under the public base URL; followed by
 /// `/{workspace_id}/{token}/{purpose}`.
 pub const NETGSM_HOOK_PATH: &str = "/hooks/netgsm";
+/// Where TikTok delivers its webhooks (the callback URL of the platform's TikTok app, one for
+/// every workspace: TikTok signs each delivery and the system routes it by account), under the
+/// public base URL.
+pub const TIKTOK_HOOK_PATH: &str = "/hooks/tiktok";
 /// The purpose of the workspace MAC key NetGSM hook tokens are computed under
 /// (`SecretBox::hmac_key`).
 pub const NETGSM_HOOK_PURPOSE: &str = "netgsm-hook";
@@ -104,6 +124,293 @@ pub struct AccountEvent {
     pub kind_keys: &'static [&'static str],
     pub external_account_id: String,
     pub draft: InboundEventDraft,
+}
+
+/// What a TikTok webhook event asks of the system once stored (see the module docs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TiktokHookEffect {
+    /// `authorization.removed`: the account removed the app's access; TikTok's reason, by its key
+    /// (`jt_tiktok::webhook::AUTHORIZATION_REASONS`).
+    AuthorizationRemoved { reason: String },
+    /// A `post.publish.*` event that moved a post (failed, posted, delivered to the creator's
+    /// inbox, made public): its publish id, the receipt id of the attempt that sent it.
+    PublishMoved { publish_id: String },
+    /// Nothing: kept for the agent to read.
+    Kept,
+}
+
+/// One TikTok webhook event, read and authenticated by the gate.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TiktokHookEvent {
+    /// The account it is about (`user_openid`): a `tiktok` capability's external id; empty when
+    /// the event names none (it is then routed nowhere).
+    pub open_id: String,
+    /// The post it is about (`content.publish_id`), when it names one: it routes the event to the
+    /// workspace that sent that post.
+    pub publish_id: Option<String>,
+    pub effect: TiktokHookEffect,
+    pub draft: InboundEventDraft,
+}
+
+/// A post a TikTok webhook said moved: what [`resolve_hooked`] reads back, and the event to mark
+/// processed once it did (`None` for a redelivery).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookedPublication {
+    pub workspace_id: WorkspaceId,
+    pub capability_id: CapabilityId,
+    pub publish_id: String,
+    pub event_id: Option<InboundEventId>,
+}
+
+/// What became of a TikTok webhook event ([`receive_tiktok`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TiktokIntake {
+    /// Each workspace it was routed to, in workspace order, and what became of it there; empty
+    /// when it was routed nowhere.
+    pub stored: Vec<(WorkspaceId, Delivery)>,
+    /// Why it was routed nowhere ([`Delivery::Unrouted`] or [`Delivery::Inactive`]); `None` once
+    /// it was routed.
+    pub dropped: Option<Delivery>,
+    /// The posts to read back now, once the delivery is answered: for a `post.publish.*` event
+    /// stored, or delivered again, in a workspace.
+    pub resolve: Vec<HookedPublication>,
+}
+
+impl TiktokIntake {
+    fn dropped(delivery: Delivery) -> TiktokIntake {
+        TiktokIntake {
+            stored: Vec::new(),
+            dropped: Some(delivery),
+            resolve: Vec::new(),
+        }
+    }
+}
+
+/// Stores TikTok's `event` (see the module docs) in each workspace it is routed to, with the raw
+/// body `raw`, takes its effect there when it is newly stored, and answers what became of it.
+///
+/// Routing: the capabilities holding the event's account connected (sealed credentials, verified
+/// once by a probe, not retired: `PlatformRepos::capabilities_holding`), in every workspace that
+/// takes routed events; an event naming no account, or one nobody holds connected, is
+/// [`Delivery::Unrouted`], and one whose holders' workspaces are all suspended
+/// [`Delivery::Inactive`], written nowhere. An event naming a post goes to the workspaces whose
+/// capability sent it (an attempt whose receipt is that publish id), else to every holder; any
+/// other (`authorization.removed` among them: a lost access reaches every holder) to every
+/// holder.
+///
+/// In each workspace, in one transaction: the capability is locked first when the effect is on it
+/// (a probe holding it across its call is waited for before anything else is taken, the erasure
+/// lock included), the event stored once (with `InboundEventRepo::insert_if_new`, which takes
+/// the erasure lock and scrubs as every inbound insert does; the delivery-level
+/// erasure step of [`receive_for_accounts`] is not needed, TikTok's events being about the
+/// account and its posts, never a person: `jt_tiktok::webhook` keeps no identity in them, and an
+/// event that names a person, such as a comment, must go through [`receive_for_accounts`]), and,
+/// when newly stored, its effect taken:
+/// `authorization.removed` is `super::connector::authorization_removed` (left alone when the
+/// event is older than the capability's last verification: a reconnection since, or the
+/// revocation of a retired sibling, which TikTok reports too) and marks the event processed; a
+/// post event names the post to read back, the event being marked processed by that read
+/// ([`resolve_hooked`]). A failure writes nothing in its workspace, and TikTok's redelivery then
+/// stores it there.
+pub async fn receive_tiktok(
+    deps: &Deps,
+    event: TiktokHookEvent,
+    raw: &[u8],
+) -> Result<TiktokIntake, AppError> {
+    use crate::ports::ops::WebhookOutcome;
+    let TiktokHookEvent {
+        open_id,
+        publish_id,
+        effect,
+        draft,
+    } = event;
+    let open_id = open_id.trim();
+    let now = deps.clock.now();
+    let unrouted = |delivery| {
+        deps.ops_signals.webhook(WebhookOutcome::Unrouted);
+        Ok(TiktokIntake::dropped(delivery))
+    };
+    if open_id.is_empty() {
+        return unrouted(Delivery::Unrouted);
+    }
+    let holders = {
+        let mut platform = deps.uow.platform().await?;
+        let connected: Vec<_> = platform
+            .capabilities_holding(Provider::Tiktok.kinds(), open_id)
+            .await?
+            .into_iter()
+            .filter(|c| {
+                matches!(c.status, StoredStatus::Verified | StoredStatus::Unreachable)
+                    && c.last_verified_at.is_some()
+            })
+            .collect();
+        if connected.is_empty() {
+            return unrouted(Delivery::Unrouted);
+        }
+        let mut open: BTreeMap<WorkspaceId, bool> = BTreeMap::new();
+        let mut taking = Vec::new();
+        for c in connected {
+            let takes = match open.get(&c.workspace_id) {
+                Some(takes) => *takes,
+                None => {
+                    let takes = platform
+                        .workspace_get(c.workspace_id)
+                        .await?
+                        .is_some_and(|w| takes_routed_events(w.status));
+                    open.insert(c.workspace_id, takes);
+                    takes
+                }
+            };
+            if takes {
+                taking.push(c);
+            }
+        }
+        if taking.is_empty() {
+            return unrouted(Delivery::Inactive);
+        }
+        taking
+    };
+    // An event about a post goes where the post was sent from, when any holder sent it.
+    let targets = match publish_id.as_deref() {
+        Some(publish_id) => {
+            let mut sent = Vec::new();
+            for c in &holders {
+                let mut r = deps.uow.tenant(c.workspace_id).await?;
+                if super::studio::publish::attempt_by_receipt(r.as_mut(), c.id, publish_id)
+                    .await?
+                    .is_some()
+                {
+                    sent.push(c.clone());
+                }
+            }
+            if sent.is_empty() { holders } else { sent }
+        }
+        None => holders,
+    };
+    let mut out = TiktokIntake {
+        stored: Vec::new(),
+        dropped: None,
+        resolve: Vec::new(),
+    };
+    for c in targets {
+        let (ws, id) = (c.workspace_id, c.id);
+        let mut repos = deps.uow.tenant(ws).await?;
+        let on_capability = matches!(effect, TiktokHookEffect::AuthorizationRemoved { .. });
+        if on_capability {
+            super::capabilities::locked(repos.as_mut(), id).await?;
+        }
+        let at = Stamp {
+            ws,
+            provider: Provider::Tiktok,
+            received_at: now,
+        };
+        let delivery = store(
+            deps,
+            repos.as_mut(),
+            at,
+            Some(id),
+            draft.clone(),
+            Some(raw.to_vec()),
+        )
+        .await?;
+        match (&effect, delivery) {
+            (TiktokHookEffect::AuthorizationRemoved { reason }, Delivery::Stored(event_id)) => {
+                let ctx = crate::ctx::Ctx {
+                    workspace_id: ws,
+                    actor: jt_ledger::Actor::System {
+                        component: "webhook:tiktok".into(),
+                    },
+                    permissions: Default::default(),
+                    role_key: None,
+                    now,
+                    agent_connection_id: None,
+                };
+                super::connector::authorization_removed(
+                    repos.as_mut(),
+                    &ctx,
+                    id,
+                    reason,
+                    draft.occurred_at,
+                )
+                .await?;
+                repos.inbound_events().mark_processed(event_id, now).await?;
+            }
+            (
+                TiktokHookEffect::PublishMoved { publish_id },
+                Delivery::Stored(_) | Delivery::Duplicate,
+            ) => {
+                // A redelivery's event is the one stored first: still unprocessed when that
+                // delivery's read-back never ran or failed, this read-back marks it.
+                let event_id = match delivery {
+                    Delivery::Stored(event_id) => Some(event_id),
+                    _ => repos
+                        .inbound_events()
+                        .find_external(Provider::Tiktok, &draft.external_id)
+                        .await?
+                        .filter(|e| e.processed_at.is_none())
+                        .map(|e| e.id),
+                };
+                out.resolve.push(HookedPublication {
+                    workspace_id: ws,
+                    capability_id: id,
+                    publish_id: publish_id.clone(),
+                    event_id,
+                });
+            }
+            _ => {}
+        }
+        repos.commit().await?;
+        deps.ops_signals.webhook(WebhookOutcome::Accepted);
+        out.stored.push((ws, delivery));
+    }
+    Ok(out)
+}
+
+/// Reads back the post a TikTok webhook said moved ([`TiktokIntake::resolve`]), as the recovery
+/// job would, a late public id included (`super::studio::publish::resolve_observed`), and then
+/// marks its event processed: `true` when the post settled or was upgraded now. A read that
+/// fails is the error and leaves the event unprocessed, for the agent.
+pub async fn resolve_hooked(deps: &Deps, hooked: &HookedPublication) -> Result<bool, AppError> {
+    let changed = super::studio::publish::resolve_observed(
+        deps,
+        hooked.workspace_id,
+        hooked.capability_id,
+        &hooked.publish_id,
+    )
+    .await?;
+    if let Some(event_id) = hooked.event_id {
+        let mut repos = deps.uow.tenant(hooked.workspace_id).await?;
+        if repos
+            .inbound_events()
+            .mark_processed(event_id, deps.clock.now())
+            .await?
+        {
+            repos.commit().await?;
+        }
+    }
+    Ok(changed)
+}
+
+/// Reads `hooked` back ([`resolve_hooked`]) in a task of its own, so that TikTok's delivery is
+/// answered first. A read that fails is logged (the workspace and the error code, never the post's
+/// id) and left to the recovery job, which reads the post again.
+pub fn spawn_resolve(deps: std::sync::Arc<Deps>, hooked: HookedPublication) {
+    tokio::spawn(async move {
+        match resolve_hooked(&deps, &hooked).await {
+            Ok(settled) => tracing::debug!(
+                provider = "tiktok",
+                workspace_id = %hooked.workspace_id,
+                settled,
+                "a post a webhook named was read back"
+            ),
+            Err(e) => tracing::warn!(
+                provider = "tiktok",
+                workspace_id = %hooked.workspace_id,
+                code = e.code.as_str(),
+                "a post a webhook named could not be read back now; the recovery job reads an unsettled one again"
+            ),
+        }
+    });
 }
 
 /// Stores each of `events` of `provider` in the workspace that holds its account connected (see
