@@ -172,6 +172,15 @@ What reaches Asterisk is paced by the worker (plan B5 `media::Pacer`, B1 review)
   speech services) can hold up. A stall longer than the lead writes the lead again, not a
   catch-up Asterisk would keep queued for the rest of the call (B5 review).
 
+**A call's start and end** (plan B6, B5 re-review): the worker connects the listener (its `start`
+sent) and the speaker before it dials, so only ARI's media setup on loopback sits between the
+answer and the first frame, and a service it cannot reach fails the call before any phone rings.
+While the line rings it watches both: one that closes, or a loss of the core, hangs the ringing
+line up and fails the call; a line never answered closes them. Every end is reported: the
+caller's hangup, and the media or the speaker closing during the call as a transient `error`,
+before the worker hangs the caller's channel up. Reports are never dropped (an unbounded queue:
+one call's events are few).
+
 **Closing**: the core queues `play{clip: closing}` then `hangup`; the talker plays the closing to
 its mark (the caller's speech does not cut it), waits 400 ms, then hangs up the channel (report:
 drain + 300–500 ms before BYE). Once a hangup is asked for, or the fault sentence is queued, the
@@ -288,7 +297,10 @@ positions in audio time, which the worker maps to the instants it forwarded thos
 `endpoint_ms`, `endpoint_by` (smart_turn | fallback), `stt_final_ms`, `delivered_ms` (the core
 answered the utterance POST), `say_ms` (the reply's first `say`/`play` received), `tts_first_ms`,
 `reply_seq` (the `seq` of the agent `say` that `say_ms` timed), `first_audio_ms` (first reply frame written to Asterisk), `ack_ms` (first frame of a local phrase),
-`barge_in_stop_ms` (caller onset → `FLUSH_MEDIA`, when the reply was cut).
+`barge_in_stop_ms` (caller onset → `FLUSH_MEDIA`, when the reply was cut). `first_audio_ms` and
+`ack_ms` time the frame's write: Asterisk holds the pacer's lead (§3, 60 ms) ahead of the line, so
+the caller hears it about that much later. A frame counts for the item playing only once every mark
+queued before that item was written, and not across a flush (plan B6, B5 re-review).
 
 Derived: perceived = min(ack, first audio); content = first audio; core round = say − delivered;
 agent (core-side) = `CallMetrics.agent_latency_ms`; transport = per turn, core round less the core's latency for the `say` `reply_seq` names, matched by `seq`. `jt_calls::summarize` gives n/p50/p95 (nearest

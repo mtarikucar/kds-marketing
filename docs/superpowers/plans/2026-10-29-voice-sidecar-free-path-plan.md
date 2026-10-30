@@ -11373,11 +11373,149 @@ git add rust/bridge/voice
 git commit -m "feat(voice-bridge): one call's task over ARI and the speech services, and the standalone slice" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**B6 as built (2026-10-30, commits `16ceb810`, `13325d02`, `4433e810` and `3be0e20a`).** The steps ran test first. The committed files supersede Steps 1 to 4 above, which are reflowed by rustfmt. The B5 re-review's four findings on B6 and D2, and two of its nits, were folded in (coordinator, 2026-10-30), each behind a test written first. What differs:
+- Step 1 ran as written (`16ceb810`). Step 2 failed with E0432 (`could not find call in jeeta_voice_bridge`), and the new cache test with E0599 (no `PhraseCache::open`).
+- **Re-review 1: the speech services connect before the dial.** Connecting them before `external_media` still left both connects between the answer and the first frame: 2 s each at worst, plus the hello's 2 s.
+  - `run_call` now connects the listener (its `start` sent) and the live speaker together (`Services::connect`, `tokio::join!`), after the pre-synthesis speaker and before `originate`. Only ARI's media setup on loopback is left after the answer (`Live::connect`).
+  - The coordinator asked for "while the line rings". Before the dial is the same on the answer path, and a service that cannot be reached then fails the call before any phone rings, with no missed call from a line that hangs up at once.
+  - While the line rings, `run_call` watches both sockets. One that closes hangs the ringing line up and fails the call (`transient: bridge: the listener closed before the answer`, or the speaker's). A line that is never answered drops them, which closes them.
+  - A `CoreLost` while the line rings hangs it up too (`transient: bridge: the core was unreachable during the call`). The plan's ring loop passed it over, so the talker, which starts at the answer, never heard of the loss.
+  - Tests: `the_speech_services_are_connected_before_the_answer_and_closed_when_none_comes`, and `an_unreachable_listener_fails_the_call_before_the_dial` (no `POST /ari/channels`).
+- **Re-review 2: every end of the call is reported.** The media or the speaker closing during the call broke the loop without a report. The ARI `Gone` that follows reaches D2 after the call's task is gone, so the core never heard that the call ended.
+  - Both now report a transient `error` (`the media closed during the call`, `the speaker stopped during the call`) before the loop ends. `run_call` then hangs the caller's channel up, as before.
+  - No `hangup` is added: `jt_calls::reduce` ends the session on `error` (`EndCause::Failed`, first cause kept) and queues a hangup of its own.
+  - Tests: `a_call_whose_media_closes_is_reported_failed_and_hung_up` and `a_call_whose_speaker_closes_is_reported_failed_and_hung_up`, over two new fakes in `tests/support` (`serve_media_until`, `serve_speaker_until`). With the two reports removed, both fail (`a report in time`).
+- **Re-review 3: reports are never dropped.** `run_call` takes an `mpsc::UnboundedSender<Report>`. Nothing waits on it, and no report is lost: a dropped utterance would have dropped its `taken` with it, and D2 numbers `bridge_seq` after the queue, so the core could not see the gap. One call's events bound the queue in practice.
+  - D2's text follows: `unbounded_channel`, the plain `send` of `dispatch` and `start_call`, and `post_reports`' receiver.
+  - D2's test pointed both speech services at port 9. B6 (already in the plan) dials nothing then, so the test's dial never reached the fake ARI. It now serves a fake listener and speaker (`support::ws_server`, `serve_speaker`).
+- **Re-review 4: a frame is the playing item's only once every earlier mark is written.** A `Sounding` carried only a count of flushes. If the loop read item A's last `MEDIA_MARK_PROCESSED` before the notice of A's last sentence, B began, and A's stale notice stamped B's first audio (`first_audio_ms`, `ack_ms` too early, a cut's heard characters too many).
+  - A `Sounding` now holds the flushes and the marks since the last flush: the pacing task's as written, the call's as queued (`Live::queued`).
+  - Each item keeps the call's count from when it began (`Playing::start`). A notice counts for it only if `Sounding::is_of` it: the same flush, and every mark queued before the item written.
+  - Unit test `a_frame_is_the_playing_items_once_every_earlier_mark_is_written`, in `call.rs`. The race itself hangs on `select!`'s order, which the fakes cannot force.
+  - The module docs and design §7 say that `first_audio_ms` and `ack_ms` time the frame's write: the caller hears it about the 60 ms lead later.
+- **Nits taken.** On unix the cache syncs its directory after a rename. `PhraseCache::open`, which the call uses, first removes temporary files older than ten minutes: a crashed writer's (a fresh one is another writer's at work). Test: `opening_a_cache_removes_temporary_files_left_by_a_crash` (an old `.tmp` goes; a fresh `.tmp` and an old `.pcm` stay).
+- **The slice, against Step 4:**
+  - The think time runs in a task of its own, so B7's lines print as they happen. The plan's `sleep` held the report loop, so the acknowledgement, filler and long wait printed together, 9 s late.
+  - After an `error` the slice reads on until the call's task ends, so that task hangs the line up before the process exits. Returning at once dropped the runtime, and the call's cleanup with it.
+  - Ctrl-C hangs the line up through ARI, and the call ends as at a hangup; a second Ctrl-C exits with 130.
+  - Its ARI forwarder passes over frames that are not text. The plan's `while let Some(Ok(Message::Text(t)))` stopped at the first ping.
+- `cargo doc -D warnings` refused the plan's module map line, whose ``[`slice`]`` is both a module and a primitive type. It links `mod@slice` now (`3be0e20a`).
+- `Reporter::fail` writes every `transient: bridge: …` line, and `fail_before_answer` ends a ringing call. Design §3 gains "A call's start and end"; §7 the first-audio note.
+- B7's runbook (below, at the head of B7) was written from this build: the whole `rust/` tree, the build on the host, the Asterisk configs and start, `check`, the call, the after-checks.
+- Checks on Windows: `cargo test -p jeeta-voice-bridge` gives the lib's unit test 1, adapters 19, call 5 (about 2 s), connect 3, g711 5, logging 3 (it now scans `call.rs`, `slice.rs` and `main.rs`), netgsm 4, pacer 8, redaction 4, talker 27 and text 11 (90). Clippy (`--all-targets -D warnings`), `cargo fmt --all -- --check` and `cargo doc --no-deps` (`-D warnings`) are clean.
+- On Linux (CI at `3be0e20a`: the push's Rust run 41058039606, and PR #382's Rust 41058048234 and CI 41058048221, all green): `rust-checks` (fmt, workspace clippy, doc, deny) and `rust-test` pass, with connect 4 (the unix peer test included) and the same counts otherwise (91).
+
 ### Task B7: [OWNER] The vertical-slice call
 
 The go/no-go for the whole stack. Needs the owner's mobile and about 3 minutes of the NetGSM package.
 
 **Files:** none (records results in the task notes and in `docs/operations/voice-bridge.md` in E4).
+
+**The B7 runbook (B6 as built, 2026-10-30).** Steps 1 to 3 below in one sequence, with what they leave out: the whole `rust/` tree on the host (the bridge builds against `jt_calls`), the Asterisk configs added since B1's install, and Asterisk itself, which is stopped and disabled outside test windows (B1, the pjproject advisories). Run it top to bottom; each block says what to expect. Nothing here prints a secret or a number. Until D3's `voice-bridge-linux` job exists, the binary is built on the host in the workspace's toolchain image, as Step 1 says.
+
+R1. On the dev machine, from the repository root, at the pushed head of `feat/voice-bridge-v1-t3`. The archive is the whole `rust/` tree (about 13 MB); it replaces the `rust/bridge/voice` copy of B1 to B3, whose paths stay the same inside it:
+
+```bash
+git -c core.autocrlf=false archive --format=tar HEAD rust | ssh root@38.242.233.166 \
+  'rm -rf /root/jeeta-voice-src && mkdir -p /root/jeeta-voice-src && tar -x -C /root/jeeta-voice-src'
+git rev-parse --short HEAD      # the SHA of R3
+```
+
+R2. On the host, as root: the preconditions, then the build.
+
+```bash
+systemctl is-active jeeta-voice-speak jeeta-voice-listen       # active, active
+systemctl is-active jeeta-asterisk || true                       # inactive (R4 starts it)
+id jeeta-voice-bridge                                            # its groups include jeeta-voice
+stat -c '%u %g %a %n' /run/jeeta-voice/speak.sock /run/jeeta-voice/listen /run/jeeta-voice/listen/listen.sock
+                                                                 # speak.sock uid 1502; listen/ and listen.sock 1501
+{ ufw status verbose | grep -q '^Default: deny (incoming)' && echo "FIREWALL OK"; } || echo "STOP: no default-deny firewall"
+df -h /var/lib/docker | tail -1                                  # 3 GB free or more (the toolchain image)
+cd /root/jeeta-voice-src/rust
+time docker run --rm --cpus 3 -v /root/jeeta-voice-src/rust:/w -w /w \
+  -v jeeta-voice-cargo:/usr/local/cargo/registry -v jeeta-voice-target:/target -e CARGO_TARGET_DIR=/target \
+  rust:1.96.0-bookworm \
+  sh -c 'cargo build --locked --release -p jeeta-voice-bridge && install -m 0755 /target/release/jeeta-voice-bridge /w/jeeta-voice-bridge'
+ls -l /root/jeeta-voice-src/rust/jeeta-voice-bridge
+```
+
+Expected: `FIREWALL OK`; the build ends with `Finished release`, and the binary is a few MB. `--cpus 3` leaves the speech services and the production containers their share. The two named volumes keep the downloaded crates and the build between runs, so a rebuild after a fix compiles only what changed.
+
+R3. Install it (Step 1), and check that it loads with this host's libc:
+
+```bash
+SHA=<the SHA of R1>
+install -d -m 0755 /opt/jeeta-voice/releases/$SHA
+install -m 0755 /root/jeeta-voice-src/rust/jeeta-voice-bridge /opt/jeeta-voice/releases/$SHA/jeeta-voice-bridge
+ln -sfn /opt/jeeta-voice/releases/$SHA /opt/jeeta-voice/current
+install -d -m 0750 -o jeeta-voice-bridge -g jeeta-voice-bridge /var/lib/jeeta-voice /var/lib/jeeta-voice/cache
+/opt/jeeta-voice/current/jeeta-voice-bridge report --since now; echo "exit $?"
+```
+
+Expected: `--since takes an RFC 3339 time`, then `exit 2`. A `GLIBC_2.xx not found` line instead means the host's libc is older than bookworm's (2.36): rebuild in R2 with `rust:1.96.0-bullseye` (2.31) and install again.
+
+R4. The Asterisk configs, then the start. `chan_websocket.conf`, `pjproject.conf` and `websocket_client.conf` came after B1's install (B1, "Steps 7–9 as run"). `install` copies every `.conf` and leaves `secrets/` alone:
+
+```bash
+diff -r --exclude=secrets /root/jeeta-voice-src/rust/bridge/voice/asterisk/etc /etc/jeeta-voice/asterisk || true
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/asterisk/etc/*.conf /etc/jeeta-voice/asterisk/
+ls -l /etc/jeeta-voice/asterisk/secrets                         # both files -rw------- 1500 1500
+systemctl start jeeta-asterisk
+sleep 30
+docker ps --filter name=jeeta-asterisk --format '{{.Names}} {{.Status}}'                     # Up … (healthy)
+docker exec jeeta-asterisk asterisk -rx 'pjsip show registrations' | grep netgsm-reg         # Registered
+docker exec jeeta-asterisk asterisk -rx 'pjsip show contacts' | grep -c Avail                # 1
+docker exec jeeta-asterisk asterisk -rx 'module show like chan_websocket' | grep -c Running  # 1
+```
+
+The `diff` shows what the host's copy lacks; the configs hold no secret (those are in `secrets/`). If the registration is not `Registered` after a minute, stop here: B1 Step 9 says what to check.
+
+R5. The bridge's own check (Step 1):
+
+```bash
+cd /
+set -a; . /etc/jeeta-voice/ari.env; set +a
+sudo -E -u jeeta-voice-bridge -g jeeta-voice-bridge --preserve-env=ARI_PASSWORD /opt/jeeta-voice/current/jeeta-voice-bridge check
+```
+
+Expected: `ari: ok (Asterisk 22.11.0)`, `listen: ok`, `speak: ok (voice 11e6c1aaf254)`, the voice of the speak journal. `the speech service's socket is held by another user` means a peer uid other than 1501 (listen) or 1502 (speak): compare with R2's `stat`.
+
+R6. The number (Step 2). The owner gives it privately; it is typed as `+905…` (E.164, no spaces). The slice refuses any other form with exit 2, and never echoes it:
+
+```bash
+umask 077; read -r -s TO; printf '%s' "$TO" > /root/jeeta-voice-slice-to; unset TO
+```
+
+R7. In a second root terminal, just before the call: Step 3's two watches (`tcpdump`, and the `channelstats` loop).
+
+R8. The call (Step 3), in R5's shell (`ARI_PASSWORD` exported):
+
+```bash
+SLICE_TO="$(cat /root/jeeta-voice-slice-to)" VOICE_TRACE_FILE=/var/lib/jeeta-voice/slice-traces.jsonl \
+  sudo -E -u jeeta-voice-bridge -g jeeta-voice-bridge --preserve-env=ARI_PASSWORD,SLICE_TO,VOICE_TRACE_FILE \
+  /opt/jeeta-voice/current/jeeta-voice-bridge slice \
+  --opening "Merhaba, ben Jeeta'nın dijital asistanıyım. Görüşmemiz hizmet kalitesi için yazıya dökülmektedir. Bu bir deneme aramasıdır, lütfen bir cümle söyleyin." \
+  --reply "Teşekkürler, sizi duydum." --think-ms 9000 --show-transcript
+shred -u /root/jeeta-voice-slice-to
+unset ARI_PASSWORD
+```
+
+Expected, as Step 3 lists: `answered`, `said 1 cut at None`, `caller: …`, `phrase Acknowledgement 0`, `phrase Filler 0`, `phrase LongWait 0`, `said 2 cut at None`, `said 3 cut at None`, `hangup normal`, `trace {…}`.
+- Each line comes as it happens: the think time runs in a task of its own.
+- The bridge's own log lines (`dialling`, `answered`, `first audio after the answer` with its `ms`, `ended`, each with the call's uuid) go to the same terminal.
+- Ctrl-C hangs the line up, and the call ends as at the caller's hangup; a second Ctrl-C quits at once.
+- After an `error: …` line the slice waits for the call to hang the line up, then exits 1. `listener unreachable` or `speaker unreachable` comes before any dial: rerun R5.
+- The `caller:` line stays in this terminal. Do not copy it into notes or chat; record only whether it was recognisable.
+
+R9. After the call: Step 3's journal check, the turn's numbers, and Asterisk stopped again.
+
+```bash
+journalctl -u jeeta-asterisk | grep -cE '[0-9]{10}'             # 0; else Step 3's masked look
+VOICE_TRACE_FILE=/var/lib/jeeta-voice/slice-traces.jsonl /opt/jeeta-voice/current/jeeta-voice-bridge report
+systemctl stop jeeta-asterisk
+```
+
+`report` prints the p50/p95 of the slice's turns; for one turn these are its own numbers. Record endpoint, stt_final, ack and first_audio from the `trace` line or from this. Stop Asterisk unless another call follows in the same window (B1: the service stays stopped outside test windows).
 
 - [ ] **Step 1: [COORDINATOR, server] Install the worker binary**
 
@@ -13198,7 +13336,7 @@ use jeeta_voice_bridge::run_loop::run;
 use jt_calls::wire::BridgeCommand;
 use jt_calls::{CallCommandId, CallId, CallPlan, Command, DialScript};
 use serde_json::{Value, json};
-use support::fake_ari;
+use support::{fake_ari, serve_speaker, ws_server};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -13257,13 +13395,18 @@ async fn a_dial_reaches_the_pbx_and_every_command_is_acknowledged() {
     let (ari_base, ari_log) = fake_ari().await;
     let (jeeta_base, seen) = fake_jeeta(vec![dial("call-de", "+4915112345678"), dial("call-tr", "+905321234567")]).await;
     let dir = std::env::temp_dir().join(format!("voice-run-{}", std::process::id()));
+    // B6 dials only once both speech services answer (B6 as built): a listener that takes the
+    // connection, and a speaker that says hello.
+    let (listen_addr, _listen_conns) = ws_server().await;
+    let (speak_addr, speak_conns) = ws_server().await;
+    serve_speaker(speak_conns);
     let env: HashMap<&str, String> = HashMap::from([
         ("JEETA_BASE_URL", jeeta_base),
         ("JEETA_BRIDGE_KEY", "jeeta_test".into()),
         ("ARI_URL", ari_base),
         ("ARI_PASSWORD", "p".into()),
-        ("LISTEN_SOCKET", "tcp:127.0.0.1:9".into()),
-        ("SPEAK_SOCKET", "tcp:127.0.0.1:9".into()),
+        ("LISTEN_SOCKET", format!("tcp:{listen_addr}")),
+        ("SPEAK_SOCKET", format!("tcp:{speak_addr}")),
         ("VOICE_CACHE_DIR", dir.join("cache").display().to_string()),
         ("VOICE_TRACE_FILE", dir.join("traces.jsonl").display().to_string()),
     ]);
@@ -13385,9 +13528,10 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
         traces: Some(TraceFile::new(config.trace_file.clone())),
     });
     let calls: Registry = Arc::default();
-    // The calls hand their reports on with `try_send` (B6): this queue is what lets a slow core
-    // never hold a call's loop up.
-    let (reports_tx, reports_rx) = mpsc::channel::<Report>(1_024);
+    // Unbounded (B5 re-review, B6 as built): a call hands its reports on without waiting, so a
+    // slow core never holds a call's loop up, and none is dropped (a lost utterance would lose its
+    // turn's reply, and `bridge_seq` would leave the core no gap to see). One call's events bound it.
+    let (reports_tx, reports_rx) = mpsc::unbounded_channel::<Report>();
     let beat = tokio::spawn(heartbeat(jeeta.clone(), register_input(&config)));
     let poster = tokio::spawn(post_reports(jeeta.clone(), reports_rx, calls.clone()));
     let events = tokio::spawn(forward_ari(ari.clone(), calls.clone()));
@@ -13441,7 +13585,7 @@ async fn heartbeat(jeeta: Arc<JeetaClient>, body: RegisterInput) {
     }
 }
 
-async fn dispatch(c: BridgeCommand, deps: &Arc<CallDeps>, calls: &Registry, reports: &mpsc::Sender<Report>, seen: &mut Seen) {
+async fn dispatch(c: BridgeCommand, deps: &Arc<CallDeps>, calls: &Registry, reports: &mpsc::UnboundedSender<Report>, seen: &mut Seen) {
     let call = c.bridge_call_id.clone().unwrap_or_else(|| c.call_id.to_string());
     if seen.insert(c.id) {
         match c.command() {
@@ -13456,7 +13600,7 @@ async fn dispatch(c: BridgeCommand, deps: &Arc<CallDeps>, calls: &Registry, repo
         }
     }
     let done = Report { bridge_call_id: call, event: BridgeEvent::CommandDone { id: c.id }, taken: None };
-    let _ = reports.send(done).await;
+    let _ = reports.send(done);
 }
 
 async fn start_call(
@@ -13466,7 +13610,7 @@ async fn start_call(
     script: DialScript,
     deps: &Arc<CallDeps>,
     calls: &Registry,
-    reports: &mpsc::Sender<Report>,
+    reports: &mpsc::UnboundedSender<Report>,
 ) {
     let refuse = |failure_line: &str| Report {
         bridge_call_id: call.to_owned(),
@@ -13476,13 +13620,11 @@ async fn start_call(
     let Some(dial) = netgsm::dial_string(to_e164) else {
         // Geographic, mobile, 0800 and 0850 numbers only (B4 review I6).
         warn!(call, "a number the line may not call was refused");
-        let _ = reports
-            .send(refuse("permanent: bridge: this line calls Turkish geographic, mobile, 0800 and 0850 numbers only"))
-            .await;
+        let _ = reports.send(refuse("permanent: bridge: this line calls Turkish geographic, mobile, 0800 and 0850 numbers only"));
         return;
     };
     if calls.lock().map(|m| !m.is_empty()).unwrap_or(true) {
-        let _ = reports.send(refuse("transient: bridge: the line is busy")).await;
+        let _ = reports.send(refuse("transient: bridge: the line is busy"));
         return;
     }
     let (tx, rx) = mpsc::channel(64);
@@ -13514,7 +13656,7 @@ fn first_seq(dialled_here: bool) -> u32 {
     1_000_000 + u32::try_from(secs % 1_000_000).unwrap_or(0) * 1_000
 }
 
-async fn post_reports(jeeta: Arc<JeetaClient>, mut rx: mpsc::Receiver<Report>, calls: Registry) {
+async fn post_reports(jeeta: Arc<JeetaClient>, mut rx: mpsc::UnboundedReceiver<Report>, calls: Registry) {
     let mut seqs: HashMap<String, u32> = HashMap::new();
     let mut failing_since: Option<Instant> = None;
     let mut lost = false;
