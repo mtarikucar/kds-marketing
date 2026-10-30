@@ -65,7 +65,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           \"any\"); goals {objective, kpis: [{name, target}]}; budget_frame \
                           {lanes: [{lane: organic|paid, period: weekly|monthly, cap_minor, \
                           currency}]}; prohibitions [text]; cadence {per_week, channel_mix: \
-                          [{channel, share_pct}]}; paid_enabled true|false. An unknown field, a \
+                          [{channel, share_pct}]}; paid_enabled true|false; prospecting {icp: \
+                          [{key, segment_key, sectors, areas: [{city, district?}], signals, \
+                          exclusions, size_hint, language?, daily_cap 1-200, backlog_target}], \
+                          rubric: {criteria: [{key, description, weight}] (weights sum to 100), \
+                          qualify_at 1-100}} (no icp entry: prospecting is off). An unknown \
+                          field, a \
                           lane without lane or period, and a text over its cap (identity fields, \
                           rationale, description and objective 2000 characters; names, keys, \
                           channels and KPI targets 200; each prohibition 500) are refused with \

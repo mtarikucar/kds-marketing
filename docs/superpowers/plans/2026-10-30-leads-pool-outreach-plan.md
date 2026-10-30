@@ -551,6 +551,11 @@ Inputs are the domain input types (schemars derive on them, `deny_unknown_fields
   `diff_reports_prospecting`, the `Sections::KEYS` tests updated; (`jt_app/tests/strategy.rs`)
   `rubric_digest_is_stable_and_order_sensitive`.
 - [ ] Green; **commit** `feat(strategy): the prospecting section (ICP and rubric)`.
+- As built: pulled forward before L1-T5, whose score reads the approved strategy's rubric. `rubric_digest` and
+  `rubric_digest_is_stable_and_order_sensitive` land with L1-T5 (`usecases/prospects/score.rs`), where the
+  digest is first used. The gaps also bound each entry's signals and exclusions (ten each) and
+  `backlog_target` (2000) and need a criterion's description; `Area` requires `city` at the strict parse; the
+  `jeeta.strategy.write_section` description names the section's shape.
 
 ### Task L2-T2: research tasks and the `research_plan` job
 

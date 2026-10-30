@@ -23,8 +23,8 @@ pub use rules::{
     validate_currency, validate_for_approval, validate_sections, validate_segment_key,
 };
 pub use sections::{
-    Area, BudgetFrame, Cadence, ChannelChoice, Criterion, Goals, Identity, Kpi, Lane, LaneKind,
-    Mix, Period, Rubric, Sections, Segment,
+    Area, BudgetFrame, Cadence, ChannelChoice, Criterion, Goals, IcpEntry, Identity, Kpi, Lane,
+    LaneKind, Mix, Period, Prospecting, Rubric, Sections, Segment,
 };
 pub use version::{StrategyVersion, StrategyVersionId, VersionStatus};
 
