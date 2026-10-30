@@ -24,6 +24,14 @@ pub enum Channel {
     Webchat,
     /// Telephone calls, matched by phone number.
     Phone,
+    /// Public comments on the account's Instagram posts, matched within the provider account.
+    InstagramComment,
+    /// Public comments on the Facebook Page's posts, matched within the provider account.
+    FacebookComment,
+    /// Customer questions on the seller's Trendyol products, matched within the seller.
+    TrendyolQuestion,
+    /// Customer questions on the merchant's Hepsiburada products, matched within the merchant.
+    HepsiburadaQuestion,
 }
 
 impl Channel {
@@ -35,7 +43,23 @@ impl Channel {
             Self::InstagramDm => IdentityChannel::InstagramDm,
             Self::Messenger => IdentityChannel::Messenger,
             Self::Webchat => IdentityChannel::Webchat,
+            Self::InstagramComment => IdentityChannel::InstagramCommenter,
+            Self::FacebookComment => IdentityChannel::FacebookCommenter,
+            Self::TrendyolQuestion => IdentityChannel::TrendyolBuyer,
+            Self::HepsiburadaQuestion => IdentityChannel::HepsiburadaBuyer,
         }
+    }
+
+    /// Whether the channel is a public surface: a comment or a marketplace question, answered
+    /// in front of everyone, item by item (`crate::public`). The other channels are private.
+    pub const fn is_public(self) -> bool {
+        matches!(
+            self,
+            Self::InstagramComment
+                | Self::FacebookComment
+                | Self::TrendyolQuestion
+                | Self::HepsiburadaQuestion
+        )
     }
 }
 
@@ -53,6 +77,14 @@ pub enum IdentityChannel {
     Messenger,
     /// An account-scoped web chat id.
     Webchat,
+    /// An account-scoped Instagram commenter id; not assumed to equal their direct-message id.
+    InstagramCommenter,
+    /// An account-scoped Facebook commenter id; not a Messenger id.
+    FacebookCommenter,
+    /// A seller-scoped Trendyol customer id.
+    TrendyolBuyer,
+    /// A merchant-scoped Hepsiburada customer id.
+    HepsiburadaBuyer,
 }
 
 /// The contact channel of a messaging or telephone capability; `None` for other kinds.
@@ -67,6 +99,25 @@ pub fn channel_for_kind(kind_key: &str) -> Option<Channel> {
         "netgsm_pbx" => Some(Channel::Phone),
         _ => None,
     }
+}
+
+/// The public channel of a kind whose account owns posts or products that people comment on or
+/// ask about: `instagram`, `facebook_page`, `trendyol`, `hepsiburada`; `None` for other kinds.
+/// [`channel_for_kind`] keeps the private contact channel; neither kind has one.
+pub fn public_channel_for_kind(kind_key: &str) -> Option<Channel> {
+    match kind_key {
+        "instagram" => Some(Channel::InstagramComment),
+        "facebook_page" => Some(Channel::FacebookComment),
+        "trendyol" => Some(Channel::TrendyolQuestion),
+        "hepsiburada" => Some(Channel::HepsiburadaQuestion),
+        _ => None,
+    }
+}
+
+/// The channel of a conversation on a capability of `kind_key`: its private contact channel, or
+/// else its public one; `None` for a kind with neither.
+pub fn conversation_channel(kind_key: &str) -> Option<Channel> {
+    channel_for_kind(kind_key).or_else(|| public_channel_for_kind(kind_key))
 }
 
 /// A rejected identity value. Errors never include the personal value itself.
@@ -116,7 +167,13 @@ pub fn normalise(channel: IdentityChannel, raw: &str) -> Result<String, Identity
             }
             Ok(raw.to_lowercase())
         }
-        IdentityChannel::InstagramDm | IdentityChannel::Messenger | IdentityChannel::Webchat => {
+        IdentityChannel::InstagramDm
+        | IdentityChannel::Messenger
+        | IdentityChannel::Webchat
+        | IdentityChannel::InstagramCommenter
+        | IdentityChannel::FacebookCommenter
+        | IdentityChannel::TrendyolBuyer
+        | IdentityChannel::HepsiburadaBuyer => {
             if raw.is_empty() {
                 Err(IdentityError::Invalid)
             } else {
@@ -128,7 +185,8 @@ pub fn normalise(channel: IdentityChannel, raw: &str) -> Result<String, Identity
 
 /// Scope a normalised opaque id to a capability's canonical provider account external id.
 ///
-/// Call after [`normalise`] for Instagram, Messenger and web chat, before storing or matching.
+/// Call after [`normalise`] for every opaque namespace (Instagram, Messenger, web chat, the
+/// commenters and the marketplace buyers), before storing or matching.
 /// Both arguments must already be validated; this preserves their case and content exactly.
 /// Phone numbers and email addresses are shared identities and must not be scoped this way.
 pub fn scope_opaque(external_id: &str, raw: &str) -> String {

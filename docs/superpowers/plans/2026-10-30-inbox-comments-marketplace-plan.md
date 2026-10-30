@@ -98,7 +98,8 @@ pub fn conversation_channel(kind_key: &str) -> Option<Channel>;    // channel_fo
 // jt_inbox::ids
 define_id!(PublicItemId); define_id!(PublicSubjectId);
 
-// jt_inbox::public
+// jt_inbox::public (`pub mod public`; its types are also re-exported at the crate root, its
+// functions and constants are reached as `jt_inbox::public::…`)
 pub enum PublicKind { Comment, Question }
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum AnswerState {
@@ -129,6 +130,10 @@ pub struct PublicRules { pub public: Option<TextBounds>, pub private: Option<Pri
     pub one_answer: bool, pub moderated: bool, pub hide: bool, pub delete: bool, pub report: bool,
     pub marketplace: bool }
 pub fn rules(channel: Channel) -> Option<PublicRules>; // None for private channels
+// The bounds behind `rules`, each a named constant (F1): INSTAGRAM_COMMENT_MAX, INSTAGRAM_PRIVATE_MAX,
+// FACEBOOK_COMMENT_MAX (V-M8), FACEBOOK_PRIVATE_MAX (= jt_meta's MAX_MESSENGER_TEXT), TRENDYOL_ANSWER,
+// PRIVATE_REPLY_WINDOW, HEPSIBURADA_ANSWER_BOUNDS: Option<TextBounds> = None and
+// HEPSIBURADA_MODERATED: bool = true (V-H3/V-H4, set by H0). Trendyol `report: false` until V-T5.
 #[derive(… thiserror::Error)] #[serde(rename_all = "snake_case")]
 pub enum PublicRefusal { ItemRequired, ItemNotInConversation, ItemRemoved, DeadlinePassed, AlreadyAnswered,
     AgentAlreadyReplied, ItemNotOwed, PrivateReplyUnsupported, PrivateWindowClosed, PrivateReplyUsed,
@@ -139,18 +144,27 @@ pub fn reply_allowed(item: &PublicItem, rules: &PublicRules, visibility: Visibil
     now: OffsetDateTime) -> Result<(), PublicRefusal>;
 pub fn check_text(rules: &PublicRules, visibility: Visibility, text: &str, person_contacts: &[String])
     -> Result<(), PublicRefusal>;
+// Both answer `HepsiburadaUnverified` for a public reply while `rules.public` is None. `check_text`
+// counts characters (the minimum without leading/trailing whitespace); `person_contacts` are the
+// person's normalised emails and E.164 phones (a phone matches by its last ten digits in any
+// digit run of the text).
 pub enum ItemEvent { AnswerSent { message_id: MessageId, moderated: bool }, AnswerConfirmed,
     AnswerRejected { reason: String }, AnsweredElsewhere { message_id: Option<MessageId> },
     MarkedHandled { by: EventSource, reason: HandledReason }, Expired, Hidden, Unhidden, Deleted, Removed,
     Reported, PrivateReplySent { message_id: MessageId } }
 #[derive(Debug, thiserror::Error)] #[error("{from} cannot take {event}")]
-pub struct ItemTransitionError { pub from: &'static str, pub event: &'static str }
+pub struct ItemTransitionError { pub from: &'static str, pub event: &'static str } // also Clone, Copy, PartialEq, Eq
+impl ItemEvent { pub fn key(&self) -> &'static str; } // "answer_sent" … "private_reply_sent"
+// `from` is the answer key for answer events, the moderation key for moderation events, and
+// "private_reply_used" / "private_window_closed" for PrivateReplySent. `apply` never sets agent_replied.
 pub fn apply(item: &PublicItem, event: ItemEvent, at: OffsetDateTime) -> Result<PublicItem, ItemTransitionError>;
 /// Ours while any item is owed; else Theirs; a Snoozed or Closed state is kept.
 pub fn derived_state(items: &[PublicItem], current: &ConvState) -> ConvState;
 
-// jt_inbox::relay
-pub enum Relay { AmazonTr }
+// jt_inbox::relay (`pub mod relay`; Relay and RelayRefusal also at the crate root)
+pub enum Relay { AmazonTr }                                          // serde "amazon_tr"
+pub const AMAZON_TR_RELAY_DOMAIN: &str = "marketplace.amazon.com.tr"; // V-A1
+pub enum RelayRefusal { CommercialOnRelay, LinkInRelayReply }        // Display/serde = snake_case key
 pub const RELAY_DEADLINE: Duration = Duration::hours(24);
 pub fn marketplace_relay(email_normalized: &str) -> Option<Relay>;   // "@marketplace.amazon.com.tr" (V-A1)
 pub fn amazon_order_id(text: &str) -> Option<String>;               // \d{3}-\d{7}-\d{7}
