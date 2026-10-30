@@ -1,14 +1,11 @@
 //! `chan_websocket`'s control messages in JSON mode (`f(json)`; Asterisk ≥ 22.8): the events the
-//! bridge reads and the commands it writes. Audio goes as binary messages of whole frames, at most
-//! [`MAX_MESSAGE_BYTES`] (Asterisk closes the call above 65 500 bytes), paced by [`Pacer`]: one
-//! frame every 20 ms for the whole call, silence when nothing plays (since 22.9 Asterisk sends
-//! nothing to the line when the bridge writes nothing).
+//! bridge reads and the commands it writes. Audio goes as binary messages of one whole frame
+//! each, paced by [`Pacer`]: one frame every 20 ms for the whole call, silence when nothing plays
+//! (since 22.9 Asterisk sends nothing to the line when the bridge writes nothing).
 
 use std::collections::VecDeque;
 
 use serde_json::{Value, json};
-
-pub const MAX_MESSAGE_BYTES: usize = 64_000;
 
 /// A control message from Asterisk.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,16 +71,6 @@ pub fn command(name: &str, correlation: Option<&str>) -> String {
         None => json!({ "command": name }),
     }
     .to_string()
-}
-
-/// `pcm` padded with silence to whole frames of `frame_samples`.
-pub fn pad_to_frames(mut pcm: Vec<i16>, frame_samples: usize) -> Vec<i16> {
-    let frame = frame_samples.max(1);
-    let rest = pcm.len() % frame;
-    if rest != 0 {
-        pcm.resize(pcm.len() + frame - rest, 0);
-    }
-    pcm
 }
 
 /// The line's frame: 20 ms, `MEDIA_START`'s `optimal_frame_size` bytes (160 for G.711).

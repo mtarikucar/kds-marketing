@@ -98,6 +98,8 @@ pub const CONNECT_WAIT: Duration = Duration::from_secs(2);
 pub struct Ari {
     http: reqwest::Client,
     base: String,
+    /// Where the WebSocket endpoints (events, media) are: `base` as `ws://`, unless set apart.
+    ws_base: String,
     user: String,
     password: String,
 }
@@ -110,9 +112,11 @@ impl Ari {
             .timeout(REQUEST_WAIT)
             .build()
             .map_err(|_| AriError::Client)?;
+        let base = base.trim_end_matches('/').to_owned();
         Ok(Ari {
             http,
-            base: base.trim_end_matches('/').to_owned(),
+            ws_base: base.replacen("http", "ws", 1),
+            base,
             user: user.to_owned(),
             password: password.to_owned(),
         })
@@ -289,8 +293,14 @@ impl Ari {
         Ok(v["system"]["version"].as_str().unwrap_or("?").to_owned())
     }
 
+    /// The same ARI with its WebSocket endpoints (events, media) at `ws_base` (`ws://host:port`).
+    pub fn with_ws_base(mut self, ws_base: &str) -> Ari {
+        self.ws_base = ws_base.trim_end_matches('/').to_owned();
+        self
+    }
+
     fn ws_base(&self) -> String {
-        self.base.replacen("http", "ws", 1)
+        self.ws_base.clone()
     }
 
     async fn connect(&self, url: String) -> Result<Socket, AriError> {
